@@ -3,7 +3,8 @@
 Run: `cargo run --release -p meshlets` (options `--side N`, `--detail N`, `--roughness R`,
 `--vsync`, `--validate`, `--no-occlusion`, `--lod-error PX` (1.0), `--no-lod`, `--orbit`,
 `--frames N`, `--capture file.png --capture-frame N`, `--overlay`, `--ev100 EV` (15),
-`--tonemap agx|aces|neutral`, `--force-fallback`).
+`--tonemap agx|aces|neutral`, `--force-fallback`, `--mip-check`: see "Textures and the mip check"
+below).
 Controls: WASD/QE move, Shift fast, right mouse drag to look, **F1** profiler, **F** freeze
 culling (move the camera to see what was culled), **C** cone culling, **V** frustum culling,
 **O** occlusion culling, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold,
@@ -498,6 +499,38 @@ the default row at 1 049 k clusters; since #27 it draws all 1 140 k again, in 6.
   cycles the curves) replaces the blit: 17 passes, 32 image + 3 memory barriers, GPU
   0.18 ms unchanged. Occlusion on vs off while orbiting: 0 pixels.
 
+## Textures and the mip check (issue #20, 2026-09-25)
+
+The resolve samples textures with `SampleGrad`, from derivatives it reconstructs:
+- the analytic derivatives of the barycentrics give those of the object-space position;
+- the triplanar projection turns those into texture derivatives (D-026).
+
+A fragment shader takes its derivatives from 2×2 quads instead. `--mip-check` runs, next to
+the bench, a ground quad 160 m × 400 m seen from 1.6 m up, drawn both ways:
+- **The reference** rasterises the quad and samples with the hardware's derivatives.
+- **The analytic pass** does what the resolve does, in compute.
+
+Both sample a mip ramp: a 1024² texture whose level k holds k / 16. With trilinear filtering,
+every sample is therefore the level of detail the sampler chose. A third pass reduces the
+difference, and the bench logs it at exit:
+
+```
+cargo run --release -p meshlets -- --mip-check --frames 60
+mip check passed: the resolve's derivatives pick the fragment shader's level max_levels=0.062 mean_levels=0.0085 pixels=781624
+```
+
+At most 0.062 of a level apart, over 781 624 pixels, on both paths, with the validation
+layers silent. The residue is the quads' finite differences against the exact derivative at
+the pixel centre, largest near the horizon.
+
+The bench's rocks are two rows of the material table, rock and ice (a fifth of the
+instances, by the rule the shader used before). The standard pass shades the rock and lists
+the tiles that hold ice; the ice pass shades those. The bench costs 0.197 ms instead of
+0.177 (`shading/standard` 0.040 and `shading/ice` 0.009, against one 0.029 resolve). Its
+default view colours the clusters (**M**). There, ice instances now keep the ice's highlight
+and rim, so 1.4 % of the pixels moved against the old captures. With the colours off, the
+ballad's captures are identical to the single resolve's (`docs/demos/asteroids.md`).
+
 ## Next steps (from the research recommendation)
 
 1. ✅ (issue #5, 2026-09-24) Culling in compute, shared by the mesh-shader path and the
@@ -506,8 +539,8 @@ the default row at 1 049 k clusters; since #27 it draws all 1 140 k again, in 6.
    per-cluster screen-space error selection ✅, and a software rasteriser for dense
    clusters ✅ (issue #3, above).
 3. Visibility buffer: done (a 32-bit id next to the hardware depth, analytic barycentrics in
-   compute, issue #6; the software rasteriser merges into it, #3); next the material
-   classification and the material table (#20).
+   compute, issue #6; the software rasteriser merges into it, #3), shading by material class
+   ✅ (issue #20, D-026, above); next material sections within a mesh (#41).
 4. Streaming of cluster pages ✅ (issue #36, D-025: `docs/demos/city-blocks.md`) and, on
    RTX hardware, cluster acceleration structures (`VK_NV_cluster_acceleration_structure`)
    so the same clusters feed ray tracing.

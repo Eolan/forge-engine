@@ -16,7 +16,9 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
 
+use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::streaming::{PageSource, PageStore, PageStreamer, Residency, StreamingStats};
+use forge_core::material::{MaterialId, MaterialTable, ShadingClass};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, FullscreenPipelineDesc, GpuError, GraphBuffer, GraphImage, ImageAccess, ImageDesc,
@@ -166,7 +168,8 @@ struct GpuMesh {
     root_error_max: f32,
     /// How far the roots' `self` spheres reach from the mesh centre.
     root_reach_max: f32,
-    pad_roots: u32,
+    /// The material its instances take unless they name their own (GPU placement reads it).
+    material: u32,
 }
 
 impl GpuMesh {
@@ -194,7 +197,9 @@ struct GpuInstance {
     radius: f32,
     mesh: u32,
     id: u32,
-    pad: [u32; 2],
+    /// Its row in the material table.
+    material: u32,
+    pad: u32,
 }
 
 /// Mirrors `Frame` in `meshlet.slang`.
@@ -267,6 +272,8 @@ struct GpuFrame {
     roots: u64,
     /// A streamed scene's page needs (a float's bits per page), 0 otherwise.
     page_need: u64,
+    /// The material table ([`GpuMaterial`] rows).
+    materials: u64,
 }
 
 // Both passes' blocks share one buffer at this stride.
@@ -291,13 +298,52 @@ struct Push {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ResolvePush {
     frame: u64,
+    /// Per class, `tile_capacity` tiles (x | y << 16) that show it.
+    tiles: u64,
+    /// Per class: its dispatch (`TILE_GROUPS_X`, rows, 1) and its tile count.
+    class_args: u64,
     vis_image: u32,
     color_image: u32,
     width: u32,
     height: u32,
     use_background: u32,
-    pad: u32,
+    tile_capacity: u32,
     background: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<ResolvePush>() == 64);
+
+/// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
+/// it grows in rows, so a class can hold more tiles than one dimension of a grid allows.
+const TILE_GROUPS_X: u32 = 64;
+
+/// Shading classes: one resolve pipeline each (`MATERIAL_CLASSES` in `meshlet.slang`).
+const MATERIAL_CLASSES: usize = ShadingClass::ALL.len();
+
+/// The shading tiles of a target: 8 × 8 pixels each.
+fn tile_count(extent: vk::Extent2D) -> u32 {
+    extent.width.div_ceil(8) * extent.height.div_ceil(8)
+}
+
+/// The tile lists (every class can list every tile) and the classes' dispatches.
+fn create_shading_tiles(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphBuffer; 2]> {
+    let tiles = device.create_buffer(BufferDesc {
+        size: MATERIAL_CLASSES as u64 * u64::from(tile_count(extent)) * 4,
+        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+        location: MemoryLocation::GpuOnly,
+        category: MemoryCategory::Work,
+        name: "shading tiles",
+    })?;
+    let args = device.create_buffer(BufferDesc {
+        size: MATERIAL_CLASSES as u64 * 16,
+        usage: vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::INDIRECT_BUFFER
+            | vk::BufferUsageFlags::TRANSFER_DST,
+        location: MemoryLocation::GpuOnly,
+        category: MemoryCategory::Work,
+        name: "shading class dispatches",
+    })?;
+    Ok([GraphBuffer::new(tiles), GraphBuffer::new(args)])
 }
 
 /// Slots the visible-cluster list starts with per frame slot, both passes together (512 KiB;
@@ -385,8 +431,8 @@ pub struct DrawTargets {
     /// The visibility buffer (a transient), `R32_UINT`: `visible_slot << 7 | triangle`, or
     /// `u32::MAX` where nothing was drawn (see `forge_render::visibility`).
     pub visibility: ImageHandle,
-    /// The visible-cluster list the ids index (this frame slot's): `(instance, meshlet)` per
-    /// slot, pass 1 then pass 2.
+    /// The visible-cluster list the ids index (this frame slot's): `(instance, meshlet | flags)`
+    /// per slot, pass 1 then pass 2.
     pub visible_list: forge_gpu::BufferHandle,
     /// The scene's page pool and page table, which hold the clusters' vertices.
     pub pages: forge_gpu::BufferHandle,
@@ -436,6 +482,10 @@ pub struct MeshletSceneBuilder {
     work_bound: u64,
     /// Clusters over all instances.
     instance_meshlets: u64,
+    /// The material table (the default row when none is set).
+    materials: Vec<GpuMaterial>,
+    /// The textures its rows sample.
+    textures: Option<TextureSet>,
 }
 
 impl MeshletSceneBuilder {
@@ -537,15 +587,34 @@ impl MeshletSceneBuilder {
             root_count: root_count as u32,
             root_error_max,
             root_reach_max,
-            pad_roots: 0,
+            material: MaterialTable::DEFAULT.0,
         });
         self.mesh_finest
             .push(mesh.meshlets.iter().filter(|m| m.lod_level == 0).count() as u32);
         id
     }
 
-    /// Adds an instance of `mesh` with a uniform-scale transform.
+    /// Sets the material the instances of `mesh` take unless they name their own: those
+    /// added after this call, and those the GPU placement writes.
+    pub fn set_mesh_material(&mut self, mesh: MeshId, material: MaterialId) {
+        self.meshes[mesh.0 as usize].material = material.0;
+    }
+
+    /// Sets the material table and the textures its rows sample (the default table, a
+    /// single grey row, otherwise). The scene keeps the textures alive.
+    pub fn set_materials(&mut self, table: &MaterialTable, textures: Option<TextureSet>) {
+        self.materials = gpu_rows(table, textures.as_ref());
+        self.textures = textures;
+    }
+
+    /// Adds an instance of `mesh` with a uniform-scale transform, in its mesh's material.
     pub fn add_instance(&mut self, mesh: MeshId, model: Mat4) {
+        let material = MaterialId(self.meshes[mesh.0 as usize].material);
+        self.add_instance_with_material(mesh, model, material);
+    }
+
+    /// Adds an instance of `mesh` with a uniform-scale transform, in `material`.
+    pub fn add_instance_with_material(&mut self, mesh: MeshId, model: Mat4, material: MaterialId) {
         let info = self.meshes[mesh.0 as usize];
         let scale = model.x_axis.truncate().length();
         let center = model.transform_point3(Vec3::from(info.center));
@@ -559,7 +628,8 @@ impl MeshletSceneBuilder {
             radius: info.radius * scale,
             mesh: mesh.0,
             id: self.instances.len() as u32,
-            pad: [0; 2],
+            material: material.0,
+            pad: 0,
         });
     }
 
@@ -588,7 +658,8 @@ impl MeshletSceneBuilder {
                     radius: 0.0,
                     mesh: mesh.0,
                     id: 0,
-                    pad: [0; 2],
+                    material: info.material,
+                    pad: 0,
                 },
                 count as usize,
             ));
@@ -685,6 +756,9 @@ impl MeshletSceneBuilder {
                 (pool, page_table, Some(streamer))
             }
         };
+        if self.materials.is_empty() {
+            self.materials = gpu_rows(&MaterialTable::new(), None);
+        }
         let max_meshlets = self
             .meshes
             .iter()
@@ -755,6 +829,14 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
+            materials: device.create_buffer_with_data(
+                &self.materials,
+                usage,
+                MemoryCategory::Geometry,
+                "materials",
+            )?,
+            material_count: self.materials.len() as u32,
+            textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             work_bound: self.work_bound,
             instance_meshlets: self.instance_meshlets,
@@ -790,6 +872,11 @@ pub struct MeshletScene {
     /// Per frame slot: the status words that keep the instance cull's appends in a fixed
     /// order (one per instance-cull workgroup; the cluster culls' are the renderer's).
     lookback: Vec<GraphBuffer>,
+    /// The material table ([`GpuMaterial`] rows) and the textures they sample.
+    materials: Buffer,
+    /// Rows in `materials`.
+    pub material_count: u32,
+    textures: Option<TextureSet>,
     /// Instances.
     pub instance_count: u32,
     /// Work items if every instance were visible with every LOD level possible (groups of 32
@@ -811,6 +898,11 @@ pub struct MeshletScene {
 }
 
 impl MeshletScene {
+    /// Bytes of texture the materials sample (every mip level).
+    pub fn texture_bytes(&self) -> u64 {
+        self.textures.as_ref().map_or(0, TextureSet::bytes)
+    }
+
     /// Meshlets over all instances (the culling universe).
     pub fn instance_meshlets(&self) -> u64 {
         self.instance_meshlets
@@ -1144,7 +1236,11 @@ pub struct MeshletRenderer {
     /// The software rasteriser and its merge, on devices with 64-bit buffer atomics.
     pipeline_sw_raster: Option<Pipeline>,
     pipeline_merge: Option<Pipeline>,
-    pipeline_resolve: Pipeline,
+    /// The shading passes, one per material class: the standard one over the whole target
+    /// (it also lists the tiles of the others), each other over its tiles.
+    pipeline_resolve: [Pipeline; MATERIAL_CLASSES],
+    /// Per class, the tiles that show it, and every class's dispatch ([`create_shading_tiles`]).
+    shading_tiles: [GraphBuffer; 2],
     /// The two depth pyramids ([`create_pyramids`]).
     hzb: [GraphImage; 2],
     /// The previous frame's culling view and pyramid, when pass 1 can test against them (not
@@ -1368,15 +1464,24 @@ impl MeshletRenderer {
             tracing::info!("no 64-bit buffer atomics: software rasteriser off");
             (None, None)
         };
-        let resolve = device.create_shader_module(
-            &shaders.compile("meshlet.slang", "resolve_main", ShaderStage::Compute)?,
-            "visibility resolve",
-        )?;
-        let pipeline_resolve = device.create_compute_pipeline(&ComputePipelineDesc {
-            shader: (resolve, "resolve_main"),
-            push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
-            name: "visibility resolve",
-        })?;
+        // The shading passes share their push constants.
+        let shading_pipeline = |entry: &str, name: &str| -> Result<Pipeline> {
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                name,
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
+                name,
+            });
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let pipeline_resolve = [
+            shading_pipeline("resolve_standard_main", "shading standard")?,
+            shading_pipeline("resolve_ice_main", "shading ice")?,
+        ];
         for module in [
             geometry,
             frag,
@@ -1384,7 +1489,6 @@ impl MeshletRenderer {
             cull,
             cluster_cull,
             cluster_cull_streamed,
-            resolve,
         ] {
             device.destroy_shader_module(module);
         }
@@ -1458,6 +1562,7 @@ impl MeshletRenderer {
             pipeline_sw_raster,
             pipeline_merge,
             pipeline_resolve,
+            shading_tiles: create_shading_tiles(device, extent)?,
             hzb,
             prev: Cell::new(None),
             work_lists,
@@ -1561,6 +1666,7 @@ impl MeshletRenderer {
         if self.vis64.is_some() {
             self.vis64 = Some(create_vis64(&self.device, extent)?);
         }
+        self.shading_tiles = create_shading_tiles(&self.device, extent)?;
         self.extent = extent;
         Ok(())
     }
@@ -1777,6 +1883,7 @@ impl MeshletRenderer {
                 .streamer
                 .as_ref()
                 .map_or(0, |s| s.need_buffer.address()),
+            materials: scene.materials.address(),
         }
     }
 
@@ -2059,10 +2166,14 @@ impl MeshletRenderer {
             .run(|_, _| Ok(()));
     }
 
-    /// Declares the pass that shades the visibility buffer once per pixel into `color` (a
-    /// storage-capable colour image of `extent`): the triangle behind each pixel is fetched,
-    /// its attributes reconstructed at the pixel centre from analytic barycentrics, and lit.
-    /// Empty pixels get `background`, or are left for a later pass (the sky) when `None`.
+    /// Declares the passes that shade the visibility buffer once per pixel into `color` (a
+    /// storage-capable colour image of `extent`, at most the renderer's size), one per
+    /// material class. The standard pass covers the target: it shades the standard pixels,
+    /// writes `background` into empty ones (or leaves them for a later pass, the sky, when
+    /// `None`) and lists the 8×8 tiles that show each other class; each other class then
+    /// shades its pixels in its tiles. A pixel's triangle is fetched, its attributes
+    /// reconstructed at the pixel centre from analytic barycentrics, and lit with the
+    /// instance's row of the material table.
     pub fn resolve<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -2072,34 +2183,76 @@ impl MeshletRenderer {
         extent: vk::Extent2D,
         background: Option<[f32; 4]>,
     ) {
+        debug_assert!(tile_count(extent) <= tile_count(self.extent));
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        let pipeline = &self.pipeline_resolve;
+        let [tiles_buffer, args_buffer]: &'f [GraphBuffer; 2] = &self.shading_tiles;
+        let tiles = graph.import_buffer(tiles_buffer);
+        let args = graph.import_buffer(args_buffer);
         let frame_address = self.frame_buffers[slot.index].address();
+        let push = move |resources: &forge_gpu::Resources<'_>| ResolvePush {
+            frame: frame_address,
+            tiles: tiles_buffer.address(),
+            class_args: args_buffer.address(),
+            vis_image: resources.sampled(targets.visibility).0,
+            color_image: resources.storage(color, 0).0,
+            width: extent.width,
+            height: extent.height,
+            use_background: u32::from(background.is_some()),
+            tile_capacity: tile_count(self.extent),
+            background: background.unwrap_or([0.0; 4]),
+        };
+
+        // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
         graph
-            .pass("shading/visibility resolve")
+            .pass("shading/standard")
+            .buffer(args, BufferAccess::TransferDst)
+            .run(move |_, commands| {
+                for class in 0..MATERIAL_CLASSES as u64 {
+                    commands.fill_buffer(args_buffer, class * 16, 4, TILE_GROUPS_X);
+                    commands.fill_buffer(args_buffer, class * 16 + 4, 4, 0);
+                    commands.fill_buffer(args_buffer, class * 16 + 8, 4, 1);
+                    commands.fill_buffer(args_buffer, class * 16 + 12, 4, 0);
+                }
+                Ok(())
+            });
+        let standard = &self.pipeline_resolve[ShadingClass::Standard.index() as usize];
+        graph
+            .pass("shading/standard")
             .image(targets.visibility, ImageAccess::Sampled(compute))
             .image(color, ImageAccess::StorageWrite(compute))
             .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
             .buffer(targets.pages, BufferAccess::ShaderRead(compute))
             .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+            .buffer(tiles, BufferAccess::ShaderWrite(compute))
+            .buffer(args, BufferAccess::ShaderReadWrite(compute))
             .run(move |resources, commands| {
-                commands.bind_pipeline(pipeline);
-                commands.push_constants(
-                    pipeline,
-                    &ResolvePush {
-                        frame: frame_address,
-                        vis_image: resources.sampled(targets.visibility).0,
-                        color_image: resources.storage(color, 0).0,
-                        width: extent.width,
-                        height: extent.height,
-                        use_background: u32::from(background.is_some()),
-                        pad: 0,
-                        background: background.unwrap_or([0.0; 4]),
-                    },
-                );
+                commands.bind_pipeline(standard);
+                commands.push_constants(standard, &push(resources));
                 commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
                 Ok(())
             });
+        for class in &ShadingClass::ALL[1..] {
+            let pipeline = &self.pipeline_resolve[class.index() as usize];
+            let offset = u64::from(class.index()) * 16;
+            graph
+                .pass(match class {
+                    ShadingClass::Standard => "shading/standard",
+                    ShadingClass::Ice => "shading/ice",
+                })
+                .image(targets.visibility, ImageAccess::Sampled(compute))
+                .image(color, ImageAccess::StorageWrite(compute))
+                .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+                .buffer(targets.pages, BufferAccess::ShaderRead(compute))
+                .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+                .buffer(tiles, BufferAccess::ShaderRead(compute))
+                .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute))
+                .run(move |resources, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &push(resources));
+                    commands.dispatch_indirect(args_buffer, offset);
+                    Ok(())
+                });
+        }
     }
 
     /// One cluster cull over the work list: every work item's 32 clusters are culled and the

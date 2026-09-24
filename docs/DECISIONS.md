@@ -310,7 +310,7 @@ samples only where they beat the hardware's pixel, with the same rule (nearer, o
 depth the larger id: the depth test keeps the last drawn and the hardware draws in id
 order), and a merge pass writes them into the id and the depth (amended 2026-09-24).
 Material classification and per-material
-dispatches (#20) sit on top of this resolve and read the D-007 table. Chosen over shading
+dispatches sit on top of this resolve and read the D-007 table (D-026, issue #20). Chosen over shading
 in the mesh passes because it makes shading cost independent of overdraw and triangle
 size, gives the mesh-shader, software and fallback rasterisers one shading path and is the
 input the material table needs; chosen over `VK_KHR_fragment_shader_barycentric` in a
@@ -479,3 +479,74 @@ is uploaded only when it is needed more than the page it replaces. The upload is
 Left for later: compressed vertices (quantised to a per-mesh grid) and D-018's container
 (BLAKE3 chunks, zstd), IOCP reads, and a transfer-queue upload. *(research:
 memory-streaming.md §4, gpu-geometry.md; demo: city-blocks)*
+
+## D-026 — Materials on the GPU: a row per instance, shading by class ✅ (2026-09-25)
+
+D-007's record is `forge_core::material::Material`:
+- a render layer: the shading class, two base colours, a cavity term, roughness, the
+  highlight's weight, emission, the ice's scattering, and two textures with their scale;
+- a physics layer: density, static and dynamic friction, restitution;
+- gameplay tags.
+
+Physics and audio will read the same rows. The renderer uploads the render layers as a table
+of 80-byte rows (`forge_render::material`), and every instance names its row: its mesh's by
+default (`set_mesh_material`), or its own (`add_instance_with_material`). GPU placement copies
+the mesh's (issue #20).
+
+**Shading by class.** The resolve runs one pass per shading class:
+- **The standard class** covers the target. It shades its own pixels, writes the background
+  into empty ones, and ORs, per 8×8 tile, the other classes the tile shows (a wave OR, then a
+  group OR).
+- **Every other class** (the ice today) keeps a list of those tiles and shades its pixels there
+  in an indirect dispatch, 64 groups wide and as many rows as the list needs. A class can
+  therefore hold more tiles than one dimension of a grid allows.
+
+Each class compiles only its own code.
+
+**Textures without coordinates.** Cluster pages hold no texture coordinates (D-025), so
+textures are projected along the object's three axes:
+- the weights are the normal's components to the fourth power;
+- normal maps use the whiteout blend (Golus 2017);
+- `SampleGrad` takes the derivatives of the object-space position, which the analytic
+  barycentric derivatives give (D-021);
+- a value noise over a few repeats varies the brightness, so the repeat does not show.
+
+The demos' textures are procedural: rock, concrete, brick and grass, 512 × 512, tileable,
+their mips averaged in linear light. The city generates them in 140 ms at start-up.
+
+**Why the standard class does the classifying.** A separate classify pass was built first
+and measured. It cost what the old resolve cost (0.026 ms on the bench at 1600×900, 0.077 at
+1440p), because it reads the visibility buffer just as the shading does. Carrying the class
+in the visible list, so the classify skipped two dependent loads, saved nothing and cost the
+cull 0.008 ms. Folding the classification into the class that covers most pixels leaves
+one pass over the buffer for a frame of standard materials.
+
+**Why not an übershader.** The ice pays for its code only in its own tiles, and a new class
+(translucent ice #12, foliage, terrain layers #42) adds a pass rather than registers to
+every pixel.
+
+**Why a row per instance, not per triangle.** The visibility id already leads to the
+instance. Per-triangle materials, such as a building's glass, need material sections through
+the cluster DAG (#41).
+
+*Measured* (RTX 5070 Ti, 1600×900 unless noted):
+
+| View | Old single resolve | Shading passes | Whole frame |
+|---|---|---|---|
+| bench | 0.029 | standard 0.040 + ice 0.009 | 0.177 → 0.197 |
+| ballad | 0.024 | standard 0.035 + ice 0.011 | 0.318 → 0.340 |
+| city (now textured) | 0.052 | standard 0.099 | 1.257 → 1.249 |
+| city flight at 1440p (textured) | 0.090 | standard 0.215 | 1.652 → 1.788 |
+
+- **The ballad's rock and ice** are two rows that reproduce the Phase 0 shading. Its
+  captures without TAA are identical to the single resolve's (0 pixels at frames 100, 240,
+  300, 500 and 600, both paths). With TAA, sub-8-bit float differences accumulate in the
+  history: 0.08 % of pixels differ by more than two levels at frame 600. Each build is
+  identical to itself from run to run.
+- **The mip check** (`meshlets --mip-check`) compares the level `SampleGrad` picks from the
+  reconstructed derivatives with the level a fragment shader picks from its 2×2 quads, over
+  a ground quad at a grazing angle: at most 0.062 of a level apart (mean 0.0085) over
+  781 624 pixels.
+
+*(research: gpu-geometry.md, vegetation-materials.md §8; D-007, D-021; demos: meshlets,
+asteroids, city-blocks)*

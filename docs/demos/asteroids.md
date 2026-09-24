@@ -91,7 +91,7 @@ timings when it would push the counters off the screen, and turns red when a hea
 |---|---|
 | scene | 3000 asteroids, 7 meshes, 195 M leaf triangles; DAG tables 28 k clusters, 4.6 M cluster slots over all instances |
 | drawn per frame, LOD 1 px (moving, default path) | 6–8 k meshlets, **0.5–0.6 M triangles**, mean LOD level 6.3 |
-| GPU per frame, LOD 1 px | **0.325 ms** along the path with TAA (0.60–0.77 ms with DLSS, below), 0.34 facing the planet (full split in [PROFILE.md](../PROFILE.md): geometry 0.12, resolve 0.03, sky 0.11, or 0.14–0.16 with the planet, exposure 0.02, TAA 0.06) |
+| GPU per frame, LOD 1 px | **0.325 ms** along the path with TAA (0.60–0.77 ms with DLSS, below), 0.34 facing the planet (full split in [PROFILE.md](../PROFILE.md): geometry 0.12, shading 0.05 since #20 (0.03 as one resolve), sky 0.11, or 0.14–0.16 with the planet, exposure 0.02, TAA 0.06) |
 | GPU per frame, LOD 0.5 px / 2 px | 0.39 ms (1.24 M triangles) / 0.28 ms (0.30 M) |
 | GPU per frame, full detail (`--no-lod`) | 5.15 ms (852 k + 33 k meshlets, 82 M triangles) |
 | CPU per frame (main thread) | 0.16 ms |
@@ -260,9 +260,37 @@ isolated single pixels on sliver triangles at silhouettes, where the hardware in
 Validation and synchronization validation are silent. One capability detail: a fragment
 shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which needs the
 `geometryShader` device feature although no geometry shader runs; the device enables it.
-Not in this step: material classification and the material table (#20). The software
+Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Rock and ice as material rows (2026-09-25, issue #20)
+
+The ballad's two looks were two branches of the resolve, chosen by a hash of the instance
+id. Now they are two rows of the material table (D-007, D-026), `stock::rock()` and
+`stock::ice()`. The field gives each instance its row when it places it, by the same rule:
+a fifth of the rocks are ice. The resolve is two passes:
+- **`shading/standard`** covers the frame. It shades the rock and lists the 8×8 tiles that
+  hold ice.
+- **`shading/ice`** shades the ice in those tiles: its colour from how the surface faces
+  the rock's centre, the sharp highlight, and the rim where it turns from the sun.
+
+**Proof.**
+- The captures without TAA are identical to the single resolve's: 0 pixels at frames 100,
+  240, 300, 500 and 600, both paths.
+- The culling harness stays at 0 pixels.
+- With TAA, frame 600 differs in 1.7 % of pixels (0.08 % by more than two levels). The
+  refactored shading rounds its floats differently below 8 bits, and the history carries
+  that forward: the first difference appears at frame 10, in two pixels, by one level.
+  Each build is identical to itself from run to run.
+- Validation and synchronization validation are silent.
+
+**Cost.** GPU 0.318 → 0.340 ms: `shading/standard` 0.035 and `shading/ice` 0.011 against one
+0.024 resolve. The ice pays for its code only in its own tiles, and a new class adds a pass
+rather than registers to every pixel.
+
+Next: the rows are ready for textures (the city's rock, `docs/demos/city-blocks.md`).
+Translucent ice and fractured rock are #12.
 
 ## Physical light, automatic exposure, tone curves (2026-09-24, issue #7)
 

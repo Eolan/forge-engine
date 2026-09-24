@@ -27,7 +27,7 @@ crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedur
 crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indirect-count fallback, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
                       physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
-shaders/              Slang sources (bindless, meshlet, hzb, starfield, atmosphere, taa, exposure, tonemap, display, overlay)
+shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, taa, exposure, tonemap, display, overlay, mipcheck)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
@@ -116,7 +116,8 @@ wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
 `--no-occlusion`, `--lod-error PX`, `--no-lod`, `--orbit` (scripted motion), `--overlay`,
 `--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral` (AgX), `--force-fallback`
 (the indirect-count path of GPUs without mesh shaders), `--sw-raster auto|on|off`,
-`--sw-raster-area PX`, `--show-raster`.
+`--sw-raster-area PX`, `--show-raster`, `--mip-check` (the resolve's texture level of detail
+against a fragment shader's, logged at exit).
 Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
 
 ### `city-blocks` — the Phase 1 closing demo, in steps

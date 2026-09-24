@@ -52,7 +52,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   allocations by category, uploads per frame; 359 MiB of a 14.9 GiB budget), the software
   rasteriser for dense clusters ✅ (issue #3: off at the ballad's 1 px LOD, where it would
   not pay; full detail 4.37 → 2.02 ms), cluster pages ✅ (issue #36: 16-byte vertices in
-  128 KiB pages, 0.316 ms; streamed in city-blocks).
+  128 KiB pages, 0.316 ms; streamed in city-blocks), rock and ice as rows of the material
+  table, shaded by class ✅ (issue #20, D-026: 0.34 ms).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -113,9 +114,12 @@ Goal: the renderer skeleton every later system draws through.
    Metrics: DAG roots reached, cluster fill.
 5. Visibility buffer ✅ (2026-09-24: the mesh passes write `visible cluster << 7 | triangle`
    next to the hardware depth, a compute resolve reconstructs the attributes with analytic
-   barycentrics and shades once per pixel; `docs/ARCHITECTURE.md` §4). Still to come:
-   material classification and per-material shading (#20), the material table (D-007) as the
-   shading input. The software rasteriser's 64-bit depth|id samples are merged into it (#3).
+   barycentrics and shades once per pixel; `docs/ARCHITECTURE.md` §4). Material
+   classification ✅ (issue #20, 2026-09-25, D-026: the D-007 table on the GPU, a classify
+   pass over 8×8 tiles and one dispatch per shading class, procedural textures projected
+   triplanar and sampled with the reconstructed derivatives, within 0.06 of a level of a
+   fragment shader's). Still to come: material sections within a mesh (#41), terrain layers
+   (#42). The software rasteriser's 64-bit depth|id samples are merged into it (#3).
 6. HDR pipeline ✅ (2026-09-24, D-022): physical light units (the sun in lux, its disc from
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
@@ -133,7 +137,8 @@ Goal: the renderer skeleton every later system draws through.
    in 4.96 ms), culling at scale ✅ (#37: 1.06 ms, instance occlusion next in #38),
    streaming ✅ (#36, D-025: 128 KiB cluster pages, the flight at 300 m/s through a 48 MiB
    pool with no holes), the flight at 1440p ✅ (#13, 2026-09-25: 1.64 ms GPU with TAA, worst
-   frame 2.58 ms on the 5070 Ti; the 3080 run is #39).
+   frame 2.58 ms on the 5070 Ti; the 3080 run is #39), materials ✅ (#20: brick, plaster,
+   concrete, glass, grass and rock, textured; the flight 1.79 ms).
 
 ## Phase 2 — World
 

@@ -20,6 +20,7 @@
 // the draw of what it kept.
 import bindless;
 import vis64;
+import barycentrics;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -85,8 +86,32 @@ public struct Mesh
     public uint root_count;        // 0: more than four roots, no shortcut (`instance_roots`)
     public float root_error_max;
     public float root_reach_max;
-    public uint pad_roots;
+    public uint material;          // the material its instances take unless they name their own (placement)
 };
+
+// A row of the material table (`GpuMaterial` in crates/forge-render/src/material.rs, from
+// the D-007 record in crates/forge-core/src/material.rs). Colours are in units of a white
+// Lambertian surface facing the sun.
+public struct Material
+{
+    public float3 color_a;          // standard: each instance mixes a and b; ice: hollows to crests
+    public uint class_index;        // MATERIAL_CLASS_*: the resolve pass that shades it
+    public float3 color_b;
+    public float cavity;            // standard: how much darker the surface gets facing its object's centre
+    public float3 emissive;
+    public float specular_power;    // Blinn-Phong exponent (from the roughness)
+    public float3 scatter;          // ice: light scattered back where the surface turns from the sun
+    public float specular;          // weight of the highlight
+    public uint albedo_texture;     // sampled-image indices, TEXTURE_NONE for none
+    public uint normal_texture;
+    public float inv_texture_scale; // texture repeats per metre of object space
+    public float normal_strength;
+};
+
+public static const uint MATERIAL_CLASS_STANDARD = 0;
+public static const uint MATERIAL_CLASS_ICE = 1;
+public static const uint MATERIAL_CLASSES = 2;
+static const uint TEXTURE_NONE = 0xFFFFFFFFu;
 
 public struct Instance
 {
@@ -95,7 +120,8 @@ public struct Instance
     public float radius;
     public uint mesh;
     public uint id;
-    public uint2 pad;
+    public uint material; // its row in `Frame::materials`
+    public uint pad;
 };
 
 public static const uint FLAG_FREEZE_CULLING = 1;
@@ -203,6 +229,7 @@ public struct Frame
     public float prev_p11;
     public uint2* roots;            // (instance, local cluster) per root entry of the instance cull, `work_capacity` of them
     public uint* page_need;         // streaming: per page, the largest error in pixels it takes away (a float's bits)
+    public Material* materials;     // the material table (D-007), indexed by `Instance::material`
 };
 
 struct Push
@@ -1385,41 +1412,22 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
 }
 
 // ------------------------------------------------------------------ shading ---
+//
+// Every pixel is shaded by the pass of its material's class (issue #20, D-026), reading the
+// instance's row of the material table (D-007, crates/forge-core/src/material.rs): the
+// standard class in the full-screen pass, which also lists the 8×8 tiles showing any other
+// class, and each other class in a dispatch over its tiles. The lighting is the space model the rocks have had
+// since Phase 0 (a hard sun, a little wrap and fill, a Blinn-Phong highlight); it waits for
+// the lighting phase.
 
-float3 shade(Frame* f, float3 n, float3 object_position, uint instance_id, uint meshlet_index, uint lod_level, bool culled_debug)
+// The sun's light on a surface of `albedo` with normal `n`, in units of a white Lambertian
+// surface facing the sun. Returns the light and `ndl`, which the ice's scattering needs.
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
-    float3 instance_hash = hash_color(instance_id);
-    // A fifth of the rocks are ice: brighter, bluish, with a real specular highlight.
-    bool ice = instance_hash.y < 0.2;
-    float3 albedo;
-    float specular_power = 14.0;
-    float specular_weight = 0.06;
-    if ((f[0].flags & FLAG_LOD_COLORS) != 0)
-    {
-        albedo = lod_color(min(lod_level, 63u));
-    }
-    else if ((f[0].flags & FLAG_MESHLET_COLORS) != 0)
-    {
-        albedo = hash_color(meshlet_index & 0x00FFFFFFu) * 0.6 + 0.3;
-    }
-    else if (ice)
-    {
-        float cavity = saturate(0.5 + 0.5 * dot(normalize(object_position), n));
-        albedo = lerp(float3(0.50, 0.62, 0.78), float3(0.70, 0.82, 0.92), cavity);
-        specular_power = 48.0;
-        specular_weight = 0.5;
-    }
-    else
-    {
-        // Rock: a per-instance tint between grey and rust, slightly darker in the noise cavities.
-        float3 tint = lerp(float3(0.42, 0.40, 0.38), float3(0.45, 0.33, 0.25), instance_hash.x);
-        float cavity = saturate(0.5 + 0.5 * dot(normalize(object_position), n));
-        albedo = tint * (0.8 + 0.2 * cavity);
-    }
     // The sun is far, so a half vector from the light and the camera-to-surface direction
     // approximated by the object's outward normal is close enough for a highlight this soft.
-    float ndl = dot(n, light);
+    ndl = dot(n, light);
     float diffuse = max(ndl, 0.0);
     float3 view = normalize(f[0].camera_pos - (object_position + 0.0)); // object space ≈ world offset
     float3 half_vector = normalize(light + view);
@@ -1428,12 +1436,161 @@ float3 shade(Frame* f, float3 n, float3 object_position, uint instance_id, uint 
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
     float3 fill = float3(0.10, 0.12, 0.18) * 0.25 * (0.5 + 0.5 * n.y);
     float3 sun = float3(1.0, 0.96, 0.9);
-    float3 color = albedo * (diffuse * sun + wrap + fill) + specular * sun;
-    if (ice)
-        color += float3(0.05, 0.10, 0.18) * saturate(1.0 - abs(ndl)) * 0.6; // rim scatter
-    if (culled_debug)
-        color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
-    return color;
+    return albedo * (diffuse * sun + wrap + fill) + specular * sun;
+}
+
+// The debug colourings (M, L) replace the material's albedo.
+bool debug_albedo(Frame* f, uint meshlet_index, uint lod_level, out float3 albedo)
+{
+    albedo = float3(0.0);
+    if ((f[0].flags & FLAG_LOD_COLORS) != 0)
+        albedo = lod_color(min(lod_level, 63u));
+    else if ((f[0].flags & FLAG_MESHLET_COLORS) != 0)
+        albedo = hash_color(meshlet_index & 0x00FFFFFFu) * 0.6 + 0.3;
+    else
+        return false;
+    return true;
+}
+
+// Triplanar projection (the textures have no coordinates): the object-space position seen
+// along each axis, weighted by how much the normal faces that axis.
+float3 triplanar_weights(float3 n)
+{
+    float3 w = n * n;
+    w *= w;
+    return w / (w.x + w.y + w.z);
+}
+
+// `image` sampled at the object-space point `p` (in texture repeats) along the three axes,
+// with the derivatives of `p` across the pixel choosing the level of detail.
+float4 sample_triplanar(uint image, float3 w, float3 p, float3 dpdx, float3 dpdy)
+{
+    float4 c = float4(0.0);
+    if (w.x > 0.01)
+        c += w.x * sample_image_grad(image, SAMPLER_ANISOTROPIC_REPEAT, p.zy, dpdx.zy, dpdy.zy);
+    if (w.y > 0.01)
+        c += w.y * sample_image_grad(image, SAMPLER_ANISOTROPIC_REPEAT, p.xz, dpdx.xz, dpdy.xz);
+    if (w.z > 0.01)
+        c += w.z * sample_image_grad(image, SAMPLER_ANISOTROPIC_REPEAT, p.xy, dpdx.xy, dpdy.xy);
+    return c / max(w.x * float(w.x > 0.01) + w.y * float(w.y > 0.01) + w.z * float(w.z > 0.01), 1e-4);
+}
+
+float3 unpack_normal(float4 texel, float strength)
+{
+    float3 t = texel.xyz * 2.0 - 1.0;
+    return float3(t.xy * strength, t.z);
+}
+
+// The object-space normal `n` bent by a tangent-space normal map projected along the three
+// axes, each projection's normal blended into `n` with the whiteout blend (after Golus,
+// "Normal Mapping for a Triplanar Shader", 2017).
+float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p, float3 dpdx, float3 dpdy)
+{
+    float3 x = float3(0.0), y = float3(0.0), z = float3(0.0);
+    if (w.x > 0.01)
+    {
+        float3 t = unpack_normal(sample_image_grad(image, SAMPLER_ANISOTROPIC_REPEAT, p.zy, dpdx.zy, dpdy.zy), strength);
+        x = float3(t.xy + n.zy, abs(t.z) * n.x).zyx;
+    }
+    if (w.y > 0.01)
+    {
+        float3 t = unpack_normal(sample_image_grad(image, SAMPLER_ANISOTROPIC_REPEAT, p.xz, dpdx.xz, dpdy.xz), strength);
+        y = float3(t.xy + n.xz, abs(t.z) * n.y).xzy;
+    }
+    if (w.z > 0.01)
+    {
+        float3 t = unpack_normal(sample_image_grad(image, SAMPLER_ANISOTROPIC_REPEAT, p.xy, dpdx.xy, dpdy.xy), strength);
+        z = float3(t.xy + n.xy, abs(t.z) * n.z);
+    }
+    return normalize(x * w.x + y * w.y + z * w.z);
+}
+
+// What the resolve knows of the surface behind a pixel.
+struct Surface
+{
+    float3 n;               // world-space normal, interpolated
+    float3 object_normal;   // object-space normal, interpolated
+    float3 object_position; // object-space position
+    float3 dpdx;            // its change per pixel to the right and down
+    float3 dpdy;
+    float4x4 model;
+    uint instance_id;
+    uint meshlet_index;
+    uint lod_level;
+};
+
+// Smooth value noise in [0, 1) over lattice cells of size 1.
+float value_noise3(float3 p)
+{
+    float3 i = floor(p);
+    float3 t = p - i;
+    t = t * t * (3.0 - 2.0 * t);
+    int3 c = int3(i);
+    float corner[8];
+    [unroll]
+    for (uint k = 0; k < 8; k++)
+    {
+        int3 q = c + int3(k & 1u, (k >> 1) & 1u, k >> 2);
+        uint h = asuint(q.x) * 0x8da6b343u ^ asuint(q.y) * 0xd8163841u ^ asuint(q.z) * 0xcb1ab31fu;
+        h ^= h >> 16;
+        h *= 0x7feb352du;
+        h ^= h >> 15;
+        corner[k] = float(h >> 8) * (1.0 / 16777216.0);
+    }
+    float x00 = lerp(corner[0], corner[1], t.x);
+    float x10 = lerp(corner[2], corner[3], t.x);
+    float x01 = lerp(corner[4], corner[5], t.x);
+    float x11 = lerp(corner[6], corner[7], t.x);
+    return lerp(lerp(x00, x10, t.y), lerp(x01, x11, t.y), t.z);
+}
+
+float3 shade_standard(Frame* f, Material mat, Surface s)
+{
+    float3 albedo;
+    float3 n = s.n;
+    if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
+    {
+        // Each instance its own mix of the two colours, darker where the surface faces the
+        // object's centre (rocks' hollows).
+        float3 instance_hash = hash_color(s.instance_id);
+        float3 tint = lerp(mat.color_a, mat.color_b, instance_hash.x);
+        float cavity = saturate(0.5 + 0.5 * dot(normalize(s.object_position), n));
+        albedo = tint * ((1.0 - mat.cavity) + mat.cavity * cavity);
+        if (mat.albedo_texture != TEXTURE_NONE || mat.normal_texture != TEXTURE_NONE)
+        {
+            float3 w = triplanar_weights(s.object_normal);
+            float3 p = s.object_position * mat.inv_texture_scale;
+            float3 dpdx = s.dpdx * mat.inv_texture_scale;
+            float3 dpdy = s.dpdy * mat.inv_texture_scale;
+            if (mat.albedo_texture != TEXTURE_NONE)
+            {
+                // Against visible repeats: a brightness that drifts over several repeats.
+                float broad = 0.65 * value_noise3(p * 0.137) + 0.35 * value_noise3(p * 0.41 + 17.0);
+                albedo *= sample_triplanar(mat.albedo_texture, w, p, dpdx, dpdy).rgb * (0.7 + 0.6 * broad);
+            }
+            if (mat.normal_texture != TEXTURE_NONE)
+            {
+                float3 bent = triplanar_normal(mat.normal_texture, mat.normal_strength, s.object_normal, w, p, dpdx, dpdy);
+                n = normalize(mul(s.model, float4(bent, 0)).xyz);
+            }
+        }
+    }
+    float ndl;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, ndl) + mat.emissive;
+}
+
+float3 shade_ice(Frame* f, Material mat, Surface s)
+{
+    float3 albedo;
+    if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
+    {
+        // Ice: bluish, brighter on the crests than in the hollows.
+        float cavity = saturate(0.5 + 0.5 * dot(normalize(s.object_position), s.n));
+        albedo = lerp(mat.color_a, mat.color_b, cavity);
+    }
+    float ndl;
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, ndl);
+    return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
 
 // ------------------------------------------------------------------ resolve ---
@@ -1441,77 +1598,43 @@ float3 shade(Frame* f, float3 n, float3 object_position, uint instance_id, uint 
 struct ResolvePush
 {
     Frame* frame;
+    uint* tiles;         // per class but the standard one, `tile_capacity` tiles (x | y << 16) showing it
+    uint* class_args;    // per class: its dispatch (TILE_GROUPS_X, rows, 1) and its tile count
     uint vis_image;      // sampled-image index of the visibility buffer (R32_UINT)
     uint color_image;    // storage-image index of the colour target (RGBA16F)
     uint width;
     uint height;
     uint use_background; // write `background` to empty pixels (else leave them for the sky)
-    uint pad;
+    uint tile_capacity;
     float4 background;
 };
 
 [[vk::push_constant]]
 ResolvePush resolve_push;
 
-struct Barycentrics
-{
-    float3 lambda; // perspective-correct barycentric coordinates of the pixel centre
-    float3 ddx;    // their change per pixel to the right
-    float3 ddy;    // their change per pixel down
-};
+// The standard class shades in the full-screen pass that classifies (`resolve_standard_main`),
+// so a frame of standard materials costs one pass over the visibility buffer. Every other
+// class keeps a list of the 8×8 tiles that show it, and its own dispatch shades them
+// (TILE_GROUPS_X groups wide and as many rows as its tiles need; `MeshletRenderer::resolve`
+// starts every list at (TILE_GROUPS_X, 0, 1) and no tiles).
+static const uint TILE_GROUPS_X = 64;
 
-// Perspective-correct barycentrics of a screen point from the three clip-space vertices, with
-// analytic screen-space derivatives (Schied & Dachsbacher 2015; the form used by Hable 2021):
-// b_i / w_i is affine in screen space, so it is reconstructed from its value at vertex 0 and
-// its gradient; the sum gives 1 / w at the pixel, and lambda_i = w * b_i / w_i. Mirrored on
-// the CPU in `forge_render::visibility` with a unit test.
-Barycentrics barycentrics(float4 c0, float4 c1, float4 c2, float2 ndc, float2 size)
+// Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
+// of class `class_index` (a compile-time constant at every call). Returns the class it has.
+uint shade_pixel(uint class_index, uint2 pixel, uint vis)
 {
-    float3 inv_w = 1.0 / float3(c0.w, c1.w, c2.w);
-    float2 n0 = c0.xy * inv_w.x;
-    float2 n1 = c1.xy * inv_w.y;
-    float2 n2 = c2.xy * inv_w.z;
-    float inv_det = 1.0 / determinant(float2x2(n2 - n1, n0 - n1));
-    float3 dbdx = float3(n1.y - n2.y, n2.y - n0.y, n0.y - n1.y) * inv_det * inv_w;
-    float3 dbdy = float3(n2.x - n1.x, n0.x - n2.x, n1.x - n0.x) * inv_det * inv_w;
-    float ddx_sum = dbdx.x + dbdx.y + dbdx.z;
-    float ddy_sum = dbdy.x + dbdy.y + dbdy.z;
-    float2 delta = ndc - n0;
-    float interp_inv_w = inv_w.x + delta.x * ddx_sum + delta.y * ddy_sum;
-    float interp_w = 1.0 / interp_inv_w;
-    Barycentrics b;
-    b.lambda.x = interp_w * (inv_w.x + delta.x * dbdx.x + delta.y * dbdy.x);
-    b.lambda.y = interp_w * (delta.x * dbdx.y + delta.y * dbdy.y);
-    b.lambda.z = interp_w * (delta.x * dbdx.z + delta.y * dbdy.z);
-    b.ddx = interp_w * (dbdx - ddx_sum * b.lambda) * (2.0 / size.x);
-    b.ddy = interp_w * (dbdy - ddy_sum * b.lambda) * (-2.0 / size.y);
-    return b;
-}
-
-// One thread per pixel: read the visibility id, fetch the triangle, reconstruct the
-// attributes at the pixel centre and shade once.
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void resolve_main(uint3 id : SV_DispatchThreadID)
-{
-    if (id.x >= resolve_push.width || id.y >= resolve_push.height)
-        return;
     Frame* f = resolve_push.frame;
-    uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(id.xy, 0));
-    if (vis == VISIBILITY_EMPTY)
-    {
-        if (resolve_push.use_background != 0)
-            g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][id.xy] = resolve_push.background;
-        return;
-    }
     uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
     uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
     uint2 record = f[0].visible[slot];
+    Instance inst = f[0].instances[record.x];
+    Material mat = f[0].materials[inst.material];
+    if (mat.class_index != class_index)
+        return mat.class_index;
     uint meshlet_index = record.y & MESHLET_INDEX_MASK;
     bool culled_debug = (record.y & CULLED_BIT) != 0;
     bool software = (record.y & SOFTWARE_BIT) != 0;
     Meshlet m = f[0].meshlets[meshlet_index];
-    Instance inst = f[0].instances[record.x];
     uint base = payload_base(f, m);
     PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
     PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
@@ -1520,20 +1643,96 @@ void resolve_main(uint3 id : SV_DispatchThreadID)
     float4 c1 = mul(f[0].view_proj, mul(inst.model, float4(v1.position, 1)));
     float4 c2 = mul(f[0].view_proj, mul(inst.model, float4(v2.position, 1)));
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
-    float2 ndc = float2((float(id.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(id.y) + 0.5) / size.y * 2.0);
+    float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
     Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
-    float3 n0 = normalize(mul(inst.model, float4(decode_normal(v0.normal), 0)).xyz);
-    float3 n1 = normalize(mul(inst.model, float4(decode_normal(v1.normal), 0)).xyz);
-    float3 n2 = normalize(mul(inst.model, float4(decode_normal(v2.normal), 0)).xyz);
-    float3 n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
-    float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
-    // `shade` works in units of a white Lambertian surface facing the sun; the frame stores
-    // luminance (cd/m²) times the exposure.
-    float3 color = shade(f, n, object_position, inst.id, meshlet_index, m.lod_level, culled_debug);
+    float3 o0 = decode_normal(v0.normal);
+    float3 o1 = decode_normal(v1.normal);
+    float3 o2 = decode_normal(v2.normal);
+    float3 n0 = normalize(mul(inst.model, float4(o0, 0)).xyz);
+    float3 n1 = normalize(mul(inst.model, float4(o1, 0)).xyz);
+    float3 n2 = normalize(mul(inst.model, float4(o2, 0)).xyz);
+    Surface s;
+    s.n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
+    s.object_normal = normalize(b.lambda.x * o0 + b.lambda.y * o1 + b.lambda.z * o2);
+    s.object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
+    s.dpdx = b.ddx.x * v0.position + b.ddx.y * v1.position + b.ddx.z * v2.position;
+    s.dpdy = b.ddy.x * v0.position + b.ddy.y * v1.position + b.ddy.z * v2.position;
+    s.model = inst.model;
+    s.instance_id = inst.id;
+    s.meshlet_index = meshlet_index;
+    s.lod_level = m.lod_level;
+    // The classes work in units of a white Lambertian surface facing the sun; the frame
+    // stores luminance (cd/m²) times the exposure.
+    float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s) : shade_standard(f, mat, s);
+    if (culled_debug)
+        color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
     if (software && (f[0].flags & FLAG_SHOW_RASTER) != 0)
         color = lerp(color, float3(0.1, 0.9, 0.3), 0.6); // the software rasteriser's pixels
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
-    g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][id.xy] = float4(color, 1.0);
+    g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
+    return class_index;
+}
+
+// One thread per pixel of an 8×8 tile: empty pixels get the background (when there is one),
+// standard pixels are shaded, and the tile joins the list of every other class it shows.
+groupshared uint g_tile_classes;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_standard_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID, uint index : SV_GroupIndex)
+{
+    if (index == 0)
+        g_tile_classes = 0;
+    GroupMemoryBarrierWithGroupSync();
+    uint2 pixel = group.xy * 8 + thread.xy;
+    uint others = 0;
+    if (pixel.x < resolve_push.width && pixel.y < resolve_push.height)
+    {
+        uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(pixel, 0));
+        if (vis != VISIBILITY_EMPTY)
+        {
+            uint class_index = shade_pixel(MATERIAL_CLASS_STANDARD, pixel, vis);
+            if (class_index != MATERIAL_CLASS_STANDARD)
+                others = 1u << class_index;
+        }
+        else if (resolve_push.use_background != 0)
+        {
+            g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = resolve_push.background;
+        }
+    }
+    others = WaveActiveBitOr(others);
+    if (WaveIsFirstLane() && others != 0)
+        InterlockedOr(g_tile_classes, others);
+    GroupMemoryBarrierWithGroupSync();
+    if (index > MATERIAL_CLASS_STANDARD && index < MATERIAL_CLASSES && ((g_tile_classes >> index) & 1u) != 0)
+    {
+        uint slot;
+        InterlockedAdd(resolve_push.class_args[index * 4 + 3], 1u, slot);
+        InterlockedMax(resolve_push.class_args[index * 4 + 1], slot / TILE_GROUPS_X + 1u);
+        resolve_push.tiles[index * resolve_push.tile_capacity + slot] = group.x | (group.y << 16);
+    }
+}
+
+// One thread per pixel of one of `class_index`'s tiles: its pixels of that class are shaded.
+void resolve_tiles(uint class_index, uint3 group, uint3 thread)
+{
+    uint tile_index = group.y * TILE_GROUPS_X + group.x;
+    if (tile_index >= resolve_push.class_args[class_index * 4 + 3])
+        return;
+    uint tile = resolve_push.tiles[class_index * resolve_push.tile_capacity + tile_index];
+    uint2 pixel = uint2(tile & 0xFFFFu, tile >> 16) * 8 + thread.xy;
+    if (pixel.x >= resolve_push.width || pixel.y >= resolve_push.height)
+        return;
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(pixel, 0));
+    if (vis != VISIBILITY_EMPTY)
+        shade_pixel(class_index, pixel, vis);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_ice_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    resolve_tiles(MATERIAL_CLASS_ICE, group, thread);
 }
 
 // ---------------------------------------------------------------- placement ---
@@ -1620,7 +1819,7 @@ float ground(Placement* p, float x, float z)
 }
 
 // Writes the instance of `slot`: `mesh` at `position`, turned by `yaw` about +Y and then by
-// `tilt` about the turned X axis, scaled by `scale`.
+// `tilt` about the turned X axis, scaled by `scale`, in the mesh's material.
 void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float tilt, float scale)
 {
     float cy = cos(yaw), sy = sin(yaw), ct = cos(tilt), st = sin(tilt);
@@ -1640,7 +1839,8 @@ void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float
     inst.radius = m[0].radius * scale;
     inst.mesh = mesh;
     inst.id = p[0].first + slot;
-    inst.pad = uint2(0u, 0u);
+    inst.material = m[0].material;
+    inst.pad = 0u;
     p[0].instances[p[0].first + slot] = inst;
 }
 

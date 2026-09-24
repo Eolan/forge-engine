@@ -19,9 +19,10 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
-use forge_core::{Seed, SplitMix64};
+use forge_core::{MaterialTable, Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::SwRaster;
+use forge_render::material::stock;
 use forge_render::meshlet::DrawParams;
 use forge_render::{
     Atmosphere, AtmosphereParams, AutoExposure, CullCamera, CullFlags, Display, DlssMode,
@@ -800,6 +801,11 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         }
     });
     let mut builder = MeshletSceneBuilder::new();
+    // Rock and ice: a fifth of the asteroids are ice (the rule since Phase 0).
+    let mut materials = MaterialTable::new();
+    let rock = materials.add(stock::rock());
+    let ice = materials.add(stock::ice());
+    builder.set_materials(&materials, None);
     let mesh_ids: Vec<_> = meshes
         .iter()
         .map(|m| builder.add_mesh(m.as_ref().expect("mesh built")))
@@ -915,9 +921,11 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
             rng.range_f32(0.0, std::f32::consts::TAU),
             rng.range_f32(0.0, std::f32::consts::TAU),
         );
-        builder.add_instance(
+        let id = builder.instance_count() as u32;
+        builder.add_instance_with_material(
             mesh_ids[mesh],
             Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
+            if stock::is_ice(id) { ice } else { rock },
         );
         placed += 1;
     }

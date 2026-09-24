@@ -15,10 +15,12 @@ use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
 use forge_app::{TransientDesc, vk};
-use forge_core::Seed;
+use forge_core::{MaterialTable, Seed};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::SwRaster;
+use forge_render::material::stock;
 use forge_render::meshlet::DrawParams;
+use forge_render::mipcheck::MipCheck;
 use forge_render::{
     CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, Tonemap, exposure_from_ev100,
@@ -29,6 +31,10 @@ use winit::keyboard::KeyCode;
 #[derive(Parser, Debug, Clone)]
 #[command(about = "GPU-driven meshlet culling test bench")]
 struct Args {
+    /// Also run the mip check each frame: textures sampled with the resolve's reconstructed
+    /// derivatives against a fragment shader's (issue #20); the result is logged at exit.
+    #[arg(long)]
+    mip_check: bool,
     /// Instances per side of the grid (total = side × side × 2 layers).
     #[arg(long, default_value_t = 24)]
     side: u32,
@@ -105,10 +111,12 @@ struct Bench {
     gpu_ms: Vec<f64>,
     cpu_ms: Vec<f64>,
     title_updates: u32,
+    mip_check: Option<MipCheck>,
 }
 
 impl Bench {
     fn new(ctx: &mut Context, args: Args) -> Result<Self> {
+        let args_mip_check = args.mip_check;
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
         let tonemap = args.tonemap;
@@ -146,6 +154,11 @@ impl Bench {
             gpu_ms: Vec::new(),
             cpu_ms: Vec::new(),
             title_updates: 0,
+            mip_check: if args_mip_check {
+                Some(MipCheck::new(&ctx.device, &ctx.shaders)?)
+            } else {
+                None
+            },
         })
     }
 
@@ -156,6 +169,31 @@ impl Bench {
             self.camera.position,
             self.camera.near,
         )
+    }
+}
+
+// The mip check's verdict, once the device is idle (the app waits for it before dropping the
+// demo).
+impl Drop for Bench {
+    fn drop(&mut self) {
+        if let Some(check) = &self.mip_check {
+            let result = check.result();
+            if result.passes() {
+                tracing::info!(
+                    max_levels = %format_args!("{:.3}", result.max_levels),
+                    mean_levels = %format_args!("{:.4}", result.mean_levels),
+                    pixels = result.pixels,
+                    "mip check passed: the resolve's derivatives pick the fragment shader's level"
+                );
+            } else {
+                tracing::error!(
+                    max_levels = result.max_levels,
+                    mean_levels = result.mean_levels,
+                    pixels = result.pixels,
+                    "mip check FAILED: a pixel is a level or more from the fragment shader's"
+                );
+            }
+        }
     }
 }
 
@@ -267,6 +305,9 @@ impl Demo for Bench {
             extent,
             Some([0.02, 0.02, 0.03, 1.0]),
         );
+        if let Some(check) = &self.mip_check {
+            check.record(&mut frame.graph, frame.slot, extent);
+        }
         self.display
             .draw(&mut frame.graph, color, frame.target, extent, self.tonemap);
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
@@ -367,6 +408,11 @@ fn build_scene(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         "asteroid mesh built"
     );
     let mut builder = MeshletSceneBuilder::new();
+    // Rock and ice: a fifth of the asteroids are ice (the rule since Phase 0).
+    let mut materials = MaterialTable::new();
+    let rock = materials.add(stock::rock());
+    let ice = materials.add(stock::ice());
+    builder.set_materials(&materials, None);
     let mesh_id = builder.add_mesh(&built);
     let mut rng = Seed::new(99).rng();
     let side = args.side;
@@ -391,9 +437,11 @@ fn build_scene(ctx: &Context, args: &Args) -> Result<MeshletScene> {
                     rng.range_f32(0.0, std::f32::consts::TAU),
                     rng.range_f32(0.0, std::f32::consts::TAU),
                 );
-                builder.add_instance(
+                let id = builder.instance_count() as u32;
+                builder.add_instance_with_material(
                     mesh_id,
                     Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
+                    if stock::is_ice(id) { ice } else { rock },
                 );
             }
         }

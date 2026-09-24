@@ -13,17 +13,22 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
+use forge_core::material::{Material, MaterialId, MaterialTable, RenderLayer, TextureId};
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{PropKind, PropSpec, Terrain, city_props};
-use forge_render::meshlet::DrawParams;
+use forge_render::material::TextureSet;
+use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
+use forge_render::textures::{self, TextureData};
 use forge_render::{
     CullCamera, CullFlags, FrameStats, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
     Residency, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100,
@@ -529,6 +534,225 @@ fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<M
     (meshes, total_ms)
 }
 
+/// The city's materials (issue #20): what each prop is made of, from textures generated at
+/// start-up (512 × 512, tileable, with their mips).
+struct CityMaterials {
+    table: MaterialTable,
+    textures: TextureSet,
+    /// Row per prop name.
+    by_prop: HashMap<&'static str, MaterialId>,
+}
+
+impl CityMaterials {
+    fn new(device: &Arc<forge_gpu::Device>) -> Result<Self> {
+        let start = Instant::now();
+        let mut textures = TextureSet::new(device);
+        // Generated in parallel: each set is a few hundred thousand noise lookups per map.
+        let pool = TaskPool::client();
+        let mut sets: [Option<[TextureData; 2]>; 4] = Default::default();
+        pool.scope(|s| {
+            for (i, slot) in sets.iter_mut().enumerate() {
+                s.spawn(move |_| {
+                    *slot = Some(match i {
+                        0 => textures::rock(11, 512),
+                        1 => textures::concrete(12, 512),
+                        2 => textures::brick(13, 512),
+                        _ => textures::grass(14, 512),
+                    });
+                });
+            }
+        });
+        let mut ids = Vec::new();
+        for set in sets.iter().flatten() {
+            ids.push((textures.add(&set[0])?, textures.add(&set[1])?));
+        }
+        let [rock, concrete, brick, grass] = [ids[0], ids[1], ids[2], ids[3]];
+        tracing::info!(
+            textures = textures.len(),
+            mib = textures.bytes() >> 20,
+            ms = start.elapsed().as_millis(),
+            "city textures"
+        );
+
+        // `tint` multiplies the texture; each instance mixes `a` and `b` by its hash.
+        let textured = |(albedo, normal): (TextureId, TextureId),
+                        a: [f32; 3],
+                        b: [f32; 3],
+                        scale: f32,
+                        power: f32,
+                        specular: f32| RenderLayer {
+            color_a: a,
+            color_b: b,
+            albedo_texture: Some(albedo),
+            normal_texture: Some(normal),
+            texture_scale: scale,
+            roughness: RenderLayer::roughness_for_power(power),
+            specular,
+            ..RenderLayer::default()
+        };
+        let mut table = MaterialTable::new();
+        let mut add = |name: &str, layer: RenderLayer| table.add(Material::new(name, layer));
+        let grass = add(
+            "grass",
+            textured(grass, [1.0; 3], [1.1, 1.05, 0.9], 12.0, 6.0, 0.02),
+        );
+        let brick_red = add(
+            "brick (red)",
+            textured(brick, [1.0; 3], [1.1, 0.95, 0.9], 2.0, 10.0, 0.04),
+        );
+        let brick_brown = add(
+            "brick (brown)",
+            textured(brick, [0.8, 0.8, 0.85], [0.75, 0.7, 0.65], 2.0, 10.0, 0.04),
+        );
+        let concrete_grey = add(
+            "concrete",
+            textured(
+                concrete,
+                [0.95, 0.95, 0.93],
+                [0.8, 0.8, 0.8],
+                4.0,
+                12.0,
+                0.05,
+            ),
+        );
+        let plaster_ochre = add(
+            "plaster (ochre)",
+            textured(
+                concrete,
+                [1.1, 0.85, 0.5],
+                [1.2, 0.75, 0.45],
+                3.0,
+                10.0,
+                0.04,
+            ),
+        );
+        let plaster_cream = add(
+            "plaster (cream)",
+            textured(
+                concrete,
+                [1.25, 1.17, 1.0],
+                [1.15, 1.12, 1.05],
+                3.0,
+                10.0,
+                0.04,
+            ),
+        );
+        let sandstone = add(
+            "sandstone",
+            textured(
+                concrete,
+                [1.05, 0.82, 0.58],
+                [0.95, 0.78, 0.6],
+                2.5,
+                10.0,
+                0.04,
+            ),
+        );
+        let glass = add(
+            "dark glass",
+            textured(
+                concrete,
+                [0.18, 0.21, 0.26],
+                [0.15, 0.17, 0.2],
+                6.0,
+                90.0,
+                0.35,
+            ),
+        );
+        let stone = add(
+            "stone",
+            textured(
+                concrete,
+                [1.1, 1.05, 0.95],
+                [1.0, 0.98, 0.92],
+                2.0,
+                16.0,
+                0.06,
+            ),
+        );
+        let marble = add(
+            "marble",
+            textured(
+                concrete,
+                [1.5, 1.47, 1.42],
+                [1.45, 1.45, 1.45],
+                1.5,
+                40.0,
+                0.15,
+            ),
+        );
+        // The rock texture averages about 0.37: the ballad's two rock colours over that.
+        let rock = add(
+            "rock",
+            RenderLayer {
+                cavity: 0.2,
+                ..textured(
+                    rock,
+                    [1.13, 1.08, 1.03],
+                    [1.22, 0.89, 0.68],
+                    3.0,
+                    14.0,
+                    0.06,
+                )
+            },
+        );
+        let metal = add(
+            "painted metal",
+            RenderLayer {
+                color_a: [0.04, 0.05, 0.045],
+                color_b: [0.05, 0.05, 0.05],
+                roughness: RenderLayer::roughness_for_power(60.0),
+                specular: 0.25,
+                ..RenderLayer::default()
+            },
+        );
+        let by_prop = HashMap::from([
+            ("terrain", grass),
+            ("house-narrow", brick_red),
+            ("house-wide", plaster_ochre),
+            ("corner-block", brick_brown),
+            ("terrace", brick_red),
+            ("apartments", plaster_cream),
+            ("office", concrete_grey),
+            ("hotel", sandstone),
+            ("warehouse", concrete_grey),
+            ("school", brick_brown),
+            ("clinic", plaster_cream),
+            ("tower-slim", glass),
+            ("tower-wide", concrete_grey),
+            ("boulder-1", rock),
+            ("boulder-2", rock),
+            ("boulder-3", rock),
+            ("rubble-1", rock),
+            ("rubble-2", rock),
+            ("column", marble),
+            ("fountain", stone),
+            ("lamp-post", metal),
+        ]);
+        Ok(Self {
+            table,
+            textures,
+            by_prop,
+        })
+    }
+
+    /// The row `prop` is made of (the default grey for a prop the table does not know).
+    fn of(&self, prop: &str) -> MaterialId {
+        self.by_prop
+            .get(prop)
+            .copied()
+            .unwrap_or(MaterialTable::DEFAULT)
+    }
+
+    /// Gives every mesh its prop's row and hands the table and the textures to the scene.
+    fn apply(self, builder: &mut MeshletSceneBuilder, props: &[PropSpec], ids: &[MeshId]) {
+        for (spec, &id) in props.iter().zip(ids) {
+            builder.set_mesh_material(id, self.of(&spec.name));
+        }
+        builder.set_materials(&self.table, Some(self.textures));
+    }
+}
+
 /// The city: the terrain and the twenty props cooked (or loaded), the terrain placed once
 /// at the origin and `args.instances` props placed over it by the GPU.
 fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
@@ -543,6 +767,7 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
     let (meshes, cook_ms) = cook_props(&props, args.recook, !streamed);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
+    CityMaterials::new(&ctx.device)?.apply(&mut builder, &props, &ids);
     let id = |name: &str| ids[props.iter().position(|p| p.name == name).expect("prop")];
     let terrain_id = id("terrain");
     builder.add_instance(terrain_id, Mat4::IDENTITY);
@@ -635,8 +860,10 @@ fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed
     let (meshes, total_ms) = cook_props(&props, args.recook, true);
     let mut builder = MeshletSceneBuilder::new();
     let mut placed = Vec::with_capacity(props.len());
+    let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
+    CityMaterials::new(&ctx.device)?.apply(&mut builder, &props, &ids);
     for (i, (spec, mesh)) in props.iter().zip(&meshes).enumerate() {
-        let id = builder.add_mesh(mesh);
+        let id = ids[i];
         let (column, row) = (i as u32 % COLUMNS, i as u32 / COLUMNS);
         let position = Vec3::new(
             (column as f32 - (COLUMNS - 1) as f32 * 0.5) * SPACING,

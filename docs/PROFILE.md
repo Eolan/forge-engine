@@ -13,7 +13,7 @@ is the truth, the zones are the split. With `--features profiling` the same GPU 
 in Tracy's GPU timeline next to the CPU zones. At exit every demo logs the GPU zones (`gpu:`)
 and the CPU zones (`cpu:`) averaged over the whole run, unsmoothed, and the memory counters.
 
-Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24.
+Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24 (shading rows updated 2026-09-25, #20).
 
 ## `asteroids` — the ballad with the planet's atmosphere (frame 400, LOD 1 px, TAA on, ACES, overlay in full mode)
 
@@ -37,7 +37,7 @@ exposure (EV100, target, compensation, curve) the last.
 | geometry | instance cull | 0.02 | 5 % | One thread per instance: frustum, per-level LOD window, work-list append in instance order. At this size the timestamps' own granularity shows. |
 | geometry | depth pyramid | 0.02 | 7 % | Eleven graph passes, one zone. Negligible; stays. |
 | geometry | meshlet pass 2 (newly visible) | 0.01 | 2 % | Almost nothing becomes newly visible per frame at 1 px. |
-| shading | visibility resolve | 0.03 | 8 % | One 8×8 compute group per tile, shading once per covered pixel, now in cd/m² times the exposure. Where shading cost will grow; material classification (#20) keeps it per material. |
+| shading | standard / ice | 0.035 / 0.011 | 13 % | By material class since #20 (D-026): the standard pass covers the target, shades the rock, writes nothing where the sky goes and lists the 8×8 tiles holding ice; the ice pass shades those. 0.024 as one resolve; the split costs 0.02 ms here and keeps each class's code (and registers) to its own pixels as shading grows. |
 | sky | starfield + planet | 0.11 (0.14–0.16 with the planet in view) | 30 % | **Still the largest single item.** Drawn after the rocks with a depth test, so its noise runs only on the uncovered pixels. Since #8 the planet is a ground under Earth's air, marched per pixel in 16 segments through Hillaire's tables (D-023); pixels outside the atmosphere's cone skip it, so the planet costs only where it is: +0.01 ms out of view, +0.04–0.06 in view, 0.31 ms for a planet filling the screen. The planet-view table (#26) turns that into a lookup. The tables themselves are built once (`sky/atmosphere tables`, first frame only). |
 | exposure | luminance histogram | 0.02 | 7 % | Four passes in one zone: clear 1 KB, count every pixel into 256 log2 bins (shared-memory atomics, one global atomic per non-empty bin and group), copy to the slot's cached readback, host read. Could meter a quarter-resolution image if it ever matters; it does not now. |
 | temporal | motion / TAA resolve | 0.01 / 0.05 | 16 % | The resolve rescales the history by the exposure ratio and writes the display image through the tone curve in the same pass: the curve is free. DLSS replaces the resolve on NVIDIA. |
@@ -110,17 +110,18 @@ posts, 180 plaza props and 988 k rocks placed by a compute pass), streamed throu
 | geometry | instance cull | 0.31 | 27 % | A thread per instance, a million of them, no hierarchy: cells would skip whole hills (#38). It was 0.54 before it stopped writing 526 k work items. |
 | geometry | cluster cull 1 / 2 | 0.26 / 0.27 | 47 % | 30 k work items and 791 k roots (25 k items) for 48 k drawn clusters: most rocks are hidden behind the hills or the buildings, which instance occlusion would drop before any work (#38). They were 2.0 and 2.1 ms; the streamed cut adds 0.03 each (0.23 with every page resident). |
 | geometry | meshlet pass 1 | 0.20 | 18 % | 3.3 M triangles in hardware: a streamed start is coarse and leaves the auto software raster off (0.16 + 0.03 with it). |
-| shading | visibility resolve | 0.05 | 4 % | |
+| shading | standard | 0.10 | 8 % | Textured since #20 (D-026): brick, concrete, plaster, glass, grass and rock rows, two triplanar textures and an anti-tiling noise per pixel (0.05 untextured). No ice in the city, so the ice pass dispatches nothing. |
 | streaming | upload | 0.00 | 0 % | Nothing to upload once the view has settled (39 frames). The flight at 300 m/s uploads 0–1.6 pages a frame. |
 
 **At 1440p with TAA** (#13) the flight at 300 m/s takes 1.64 ms of GPU, its worst frame
 2.58 ms against the 8.33 of the 120 fps target; the south edge 1.58 ms, the orbit 2.19.
+With the textured materials of #20 the flight takes 1.79 ms (shading 0.09 → 0.22).
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
 next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
-GPU **0.18 ms** (0.177 since the cluster pages of #36; 0.15 with the rocks shaded in the
+GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the
 mesh passes): the bench resolves the
 visibility buffer into a pre-exposed HDR image at a fixed EV100 of 15 and the display pass
 (AgX) writes the swapchain: 20 passes, 32 image + 6 memory barriers (issue #5 added the

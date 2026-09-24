@@ -12,6 +12,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Culling at a million instances | #37 | ✅ far instances' roots 32 to an item: the city in 1.06 ms instead of 4.90 |
 | Streaming of cluster pages | #36 | ✅ 128 KiB pages from the cache files; the flight at 300 m/s in a 48 MiB pool, no holes |
 | The flight, 1440p, numbers | #13 | ✅ the flight at 300 m/s at 1440p: worst frame 2.6 ms (385 fps) on the 5070 Ti |
+| Materials: brick, plaster, concrete, glass, grass, rock | #20 | ✅ a row per prop, textured, 1.79 ms for the 1440p flight |
 
 ```
 cargo run --release -p city-blocks
@@ -35,6 +36,52 @@ Options:
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## Materials (issue #20, 2026-09-25)
+
+Every prop is made of a row of the material table (D-007, D-026) instead of the ballad's rock
+and ice. Each mesh names its row, and every instance of it mixes the row's two colours by its
+own hash:
+
+| Prop | Material |
+|---|---|
+| terrain | grass |
+| house-narrow, terrace | red brick |
+| corner-block, school | brown brick |
+| house-wide | ochre plaster |
+| apartments, clinic | cream plaster |
+| hotel | sandstone |
+| office, warehouse, tower-wide | concrete |
+| tower-slim | dark glass (a sharper highlight) |
+| boulders, rubble | rock |
+| column | marble |
+| fountain | stone |
+| lamp post | painted metal |
+
+**Textures.** The textures are procedural: rock, concrete, brick and grass, albedo and normal
+maps, 512 × 512 with their mips. They are generated in parallel at start-up in 140 ms and
+take 10.7 MiB. Cluster pages hold no texture coordinates, so the textures are projected along
+each object's axes (triplanar) and sampled with the derivatives the visibility resolve
+reconstructs. A value noise over several repeats varies their brightness, so the grass does
+not show its 12 m tile. The texture level of detail is checked against a fragment shader's
+in `docs/demos/meshlets.md` ("Textures and the mip check").
+
+![Close-ups from the gallery: red brick, ochre plaster, dark glass next to concrete, rock](images/city-blocks-materials.png)
+
+**What it costs** (RTX 5070 Ti):
+
+| View | Shading before (one untextured pass) | `shading/standard` | GPU per frame |
+|---|---|---|---|
+| the south edge, 1600×900 | 0.052 ms | 0.099 ms | 1.257 → 1.249 ms |
+| the flight at 1440p, TAA | 0.090 ms | 0.215 ms | 1.652 → 1.788 ms |
+
+The flight's frame stays under 1.8 ms against the 8.33 ms of the 120 fps target.
+
+**Left for later:**
+- **Streets.** The terrain is one material, so the streets are grass like the hills; terrain
+  layers are #42.
+- **Glass.** A building is one material, so its windows are recesses in the facade rather
+  than glass; material sections within a mesh are #41.
 
 ## The flight (issue #13, 2026-09-25)
 
@@ -66,10 +113,11 @@ cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
 - **The RTX 3080** half of the target (60 fps at 1440p) waits for a run on the server PC
   (#39).
 
-![The flight at 300 m/s at 1440p with the F1 overlay: the streaming group and its counter line, geometry 1.32 of 1.58 ms, 621 fps](images/city-blocks-profile.png)
+![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials of #20: geometry 1.32 and shading 0.20 of 1.70 ms, 576 fps](images/city-blocks-profile.png)
 
 **Golden captures** (1600 × 900, every page resident, so that a capture does not depend on
-the I/O's timing). Two runs of each are identical to the pixel.
+the I/O's timing; re-taken with the materials of #20). Two runs of each are identical to
+the pixel.
 
 | The south edge, frame 60 | The orbit, frame 240 |
 |---|---|

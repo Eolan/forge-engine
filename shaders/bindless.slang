@@ -39,3 +39,8 @@ public float sample_depth_level(uint image, uint sampler, float2 uv, float level
 {
     return g_sampled_images_r[NonUniformResourceIndex(image)].SampleLevel(g_samplers[NonUniformResourceIndex(sampler)], uv, level);
 }
+
+public float4 sample_image_grad(uint image, uint sampler, float2 uv, float2 ddx, float2 ddy)
+{
+    return g_sampled_images[NonUniformResourceIndex(image)].SampleGrad(g_samplers[NonUniformResourceIndex(sampler)], uv, ddx, ddy);
+}

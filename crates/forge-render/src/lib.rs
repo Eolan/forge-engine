@@ -12,11 +12,14 @@ pub mod atmosphere;
 pub mod blit;
 pub mod display;
 pub mod exposure;
+pub mod material;
 pub mod meshlet;
+pub mod mipcheck;
 pub mod placement;
 pub mod starfield;
 pub mod streaming;
 pub mod taa;
+pub mod textures;
 pub mod upscale;
 pub mod visibility;
 

@@ -431,24 +431,63 @@ impl Device {
         desc: ImageDesc<'_>,
         data: &[u8],
     ) -> Result<Image> {
+        self.create_image_with_mips(
+            ImageDesc {
+                mip_levels: 1,
+                ..desc
+            },
+            &[data],
+        )
+    }
+
+    /// Creates a colour image with one mip level per entry of `levels` (each tightly packed
+    /// rows of the image's format, level 0 first) and leaves it in
+    /// `SHADER_READ_ONLY_OPTIMAL`. `TRANSFER_DST` is added to the usage.
+    pub fn create_image_with_mips(
+        self: &Arc<Self>,
+        desc: ImageDesc<'_>,
+        levels: &[&[u8]],
+    ) -> Result<Image> {
         let desc = ImageDesc {
             usage: desc.usage | vk::ImageUsageFlags::TRANSFER_DST,
-            mip_levels: 1,
+            mip_levels: levels.len().max(1) as u32,
             ..desc
         };
         let image = self.allocate_image(&desc, MemoryCategory::Textures)?;
+        let total: usize = levels.iter().map(|l| l.len()).sum();
         let staging = self.create_buffer(BufferDesc {
-            size: data.len() as u64,
+            size: total.max(4) as u64,
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             location: MemoryLocation::CpuToGpu,
             category: MemoryCategory::Transfer,
             name: "image upload staging",
         })?;
-        staging.write(0, data);
+        let mut regions = Vec::with_capacity(levels.len());
+        let mut offset = 0_u64;
+        for (level, data) in levels.iter().enumerate() {
+            staging.write(offset, data);
+            let extent = image.mip_extent(level as u32);
+            regions.push(
+                vk::BufferImageCopy::default()
+                    .buffer_offset(offset)
+                    .image_subresource(vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: level as u32,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .image_extent(vk::Extent3D {
+                        width: extent.width,
+                        height: extent.height,
+                        depth: 1,
+                    }),
+            );
+            offset += data.len() as u64;
+        }
         let range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
-            level_count: 1,
+            level_count: desc.mip_levels,
             base_array_layer: 0,
             layer_count: 1,
         };
@@ -481,18 +520,6 @@ impl Device {
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         )];
-        let region = vk::BufferImageCopy::default()
-            .image_subresource(vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            })
-            .image_extent(vk::Extent3D {
-                width: image.extent().width,
-                height: image.extent().height,
-                depth: 1,
-            });
         self.execute_transient(|raw, cb| {
             // SAFETY: recorded into the transient command buffer; the staging buffer outlives
             // the call (it is dropped after the fence wait inside `execute_transient` returns).
@@ -506,7 +533,7 @@ impl Device {
                     staging.raw(),
                     image.raw(),
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &[region],
+                    &regions,
                 );
                 raw.cmd_pipeline_barrier2(
                     cb,
