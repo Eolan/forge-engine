@@ -67,7 +67,14 @@ capture) before and after, and update `docs/PROFILE.md`.
 
 ## Commits and PRs
 
-- Small, focused commits with imperative messages; end each commit message with
-  `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` and each PR description (when
-  PRs are in use) with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- Small, focused commits with imperative messages. Sessions alternate between Claude Fable
+  5.1 and Claude Opus 5.5: end each commit message with the line of the model that wrote
+  it, and with both lines when both worked on it:
+  `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`
+  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
+  End each PR description (when PRs are in use) with
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- `docs/TODO.md` is the owner's inbox of passing ideas, not a task list. When the owner
+  asks, file its items as issues labelled `idea` (milestone "Later", the owner's words
+  quoted) and remove them from the file, keeping its heading.
 - Never push a state that does not build or whose tests fail; CI runs on every push.
