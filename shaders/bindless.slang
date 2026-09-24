@@ -6,6 +6,8 @@ module bindless;
 public Texture2D<float4> g_sampled_images[];
 [[vk::binding(0, 0)]]
 public Texture2D<float> g_sampled_images_r[];
+[[vk::binding(0, 0)]]
+public Texture2D<uint> g_sampled_images_u32[];
 
 [[vk::binding(1, 0)]]
 [[vk::image_format("r32f")]]

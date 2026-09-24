@@ -93,7 +93,7 @@ and the date next to every number.
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
 | `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones; D-020) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
-| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, statistics), `Taa` (jittered HDR target, motion vectors, clipped history), `Starfield` (stars, nebula, sun, planet); every renderer declares graph passes, none writes a barrier. Next: visibility buffer, material resolve, lighting tiers, atmosphere, post, upscalers |
+| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history), `Starfield` (stars, nebula, sun, planet); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), lighting tiers, atmosphere, post, upscalers |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
 | `forge-anim` | planned | clips, blend graph, motion matching, IK, powered ragdoll tracking, contact events |
@@ -139,6 +139,25 @@ camera; shaders walk the scene from there. Textures and storage images sit in on
 update-after-bind set indexed by integer handles, so a later switch to descriptor heaps or
 descriptor buffers is a back-end change. Layouts are `std430`, mirrored by `#[repr(C)]`
 structs in Rust and checked by tests.
+
+**Geometry reaches the screen through a visibility buffer** (issue #6, 2026-09-24). The
+mesh passes rasterise only positions: the task shader appends every drawn cluster to the
+frame's visible-cluster list (`(instance, cluster)`, one atomic per task group), the mesh
+shader emits the cluster's triangles with `visible_slot << 7 | triangle` as the per-primitive
+id, and the fragment shader writes that id into an `R32_UINT` target next to the hardware
+depth (`u32::MAX` = nothing drawn). A compute pass then shades once per pixel: it reads the
+id, fetches the triangle's three vertices through the visible list, projects them with the
+frame's jittered camera and reconstructs the attributes at the pixel centre from
+**analytic perspective-correct barycentrics**: `b_i / w_i` is affine in screen space, so it
+is rebuilt from its value at vertex 0 and its gradient, the sum gives `1 / w` at the pixel,
+and `lambda_i = w · b_i / w_i`; the screen-space derivatives of `lambda`, needed for texture
+LOD later, follow from the same gradients (`∂lambda_i/∂x = w · (∂(b_i/w_i)/∂x − lambda_i ·
+∂(1/w)/∂x)`) with no `ddx`/`ddy`, no 2×2 quads and no helper lanes (Schied & Dachsbacher
+2015; Hable 2021). The formula lives in `shaders/meshlet.slang` and, mirrored with a unit
+test, in `forge_render::visibility`. Empty pixels are left to the sky pass (or filled with a
+background colour). What this buys: shading cost independent of overdraw and triangle size,
+one shading code path for the mesh-shader, software and fallback rasterisers, and the entry
+point for material classification (D-007) and the 64-bit depth|id software rasteriser.
 
 ## 5. Conventions
 

@@ -136,12 +136,46 @@ struct GpuFrame {
     pad_end: u32,
     work: u64,
     indirect: u64,
+    /// The visible-cluster list: slot 0 holds the count, then (instance, meshlet | flags).
+    visible: u64,
+    visible_capacity: u32,
+    pad_visible: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Push {
     frame: u64,
+}
+
+/// Mirrors `ResolvePush` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct ResolvePush {
+    frame: u64,
+    vis_image: u32,
+    color_image: u32,
+    width: u32,
+    height: u32,
+    use_background: u32,
+    pad: u32,
+    background: [f32; 4],
+}
+
+/// Clusters the visible-cluster list can hold per frame (8 MB per frame slot); the task
+/// shader drops and counts what does not fit (`FrameStats::visible_overflow`).
+pub const VISIBLE_CAPACITY: u32 = 1 << 20;
+
+/// What a frame's draw leaves behind for the passes after it.
+#[derive(Clone, Copy, Debug)]
+pub struct DrawTargets {
+    /// The depth buffer (a transient), `D32_SFLOAT`.
+    pub depth: ImageHandle,
+    /// The visibility buffer (a transient), `R32_UINT`: `visible_slot << 7 | triangle`, or
+    /// `u32::MAX` where nothing was drawn (see `forge_render::visibility`).
+    pub visibility: ImageHandle,
+    /// The visible-cluster list the ids index (this frame slot's).
+    pub visible_list: forge_gpu::BufferHandle,
 }
 
 /// Mirrors `Push` in `hzb.slang`.
@@ -337,6 +371,18 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
+            visible: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device
+                        .create_buffer(BufferDesc {
+                            size: u64::from(VISIBLE_CAPACITY + 1) * 8,
+                            usage,
+                            location: MemoryLocation::GpuOnly,
+                            name: &format!("visible clusters {i}"),
+                        })
+                        .map(GraphBuffer::new)
+                })
+                .collect::<Result<Vec<_>>>()?,
             instance_count: self.instances.len() as u32,
             total_groups: self.group_table.len() as u32,
             total_bits: self.total_bits,
@@ -364,6 +410,8 @@ pub struct MeshletScene {
     work: Vec<GraphBuffer>,
     /// Per frame slot: the indirect mesh-task command (x = work count).
     indirect: Vec<GraphBuffer>,
+    /// Per frame slot: the visible-cluster list the task shader appends to (slot 0 counts).
+    visible: Vec<GraphBuffer>,
     /// Instances.
     pub instance_count: u32,
     /// Task groups per pass (every instance's clusters in groups of 32).
@@ -452,6 +500,8 @@ pub struct FrameStats {
     pub instances_visible: u32,
     /// Sum of the LOD level of every drawn meshlet (mean = sum / drawn).
     pub lod_level_sum: u32,
+    /// Clusters dropped because the visible-cluster list was full (must stay 0).
+    pub visible_overflow: u32,
 }
 
 /// The hierarchical-Z pyramid: power-of-two, one storage view per level, sampled in
@@ -483,6 +533,7 @@ pub struct MeshletRenderer {
     pipeline_wire: Pipeline,
     pipeline_hzb: Pipeline,
     pipeline_cull: Pipeline,
+    pipeline_resolve: Pipeline,
     hzb: GraphImage,
     frame_buffers: Vec<Buffer>,
     stats_buffers: Vec<GraphBuffer>,
@@ -507,36 +558,25 @@ pub struct DrawParams<'a> {
     pub lod_threshold_px: f32,
     /// Culling flags.
     pub flags: CullFlags,
-    /// Colour target (a graph handle; the passes declare it as a colour attachment).
-    pub color: ImageHandle,
     /// Target size.
     pub extent: vk::Extent2D,
-    /// What the first pass does with the colour target's previous contents.
-    pub color_load: ColorLoad,
     /// Wireframe.
     pub wireframe: bool,
-}
-
-/// Load operation of the colour target in the first mesh pass.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ColorLoad {
-    /// Clear to this colour.
-    Clear([f32; 4]),
-    /// Keep what an earlier pass drew.
-    Load,
-    /// Nothing drawn before and a later pass covers every pixel the rocks leave (the sky).
-    DontCare,
 }
 
 /// The graph handles one mesh pass touches.
 #[derive(Clone, Copy)]
 struct MeshPassIo {
-    color: ImageHandle,
+    /// The visibility buffer (colour attachment of the mesh passes).
+    visibility: ImageHandle,
     depth: ImageHandle,
     hzb: ImageHandle,
     work: forge_gpu::BufferHandle,
     indirect: forge_gpu::BufferHandle,
-    visibility: forge_gpu::BufferHandle,
+    /// The per-cluster "visible last frame" bits.
+    visibility_bits: forge_gpu::BufferHandle,
+    /// The visible-cluster list of this frame slot.
+    visible: forge_gpu::BufferHandle,
     stats: forge_gpu::BufferHandle,
 }
 
@@ -545,7 +585,6 @@ impl MeshletRenderer {
     pub fn new(
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
-        color_format: vk::Format,
         extent: vk::Extent2D,
     ) -> Result<Self> {
         let task = device.create_shader_module(
@@ -573,7 +612,7 @@ impl MeshletRenderer {
                 task: Some((task, "task_main")),
                 mesh: (mesh, "mesh_main"),
                 fragment: (frag, "frag_main"),
-                color_formats: &[color_format],
+                color_formats: &[vk::Format::R32_UINT],
                 depth_format: Some(vk::Format::D32_SFLOAT),
                 push_constant_bytes: std::mem::size_of::<Push>() as u32,
                 cull_mode: vk::CullModeFlags::BACK,
@@ -598,7 +637,16 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             name: "instance cull + LOD window",
         })?;
-        for module in [task, mesh, frag, hzb, cull] {
+        let resolve = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "resolve_main", ShaderStage::Compute)?,
+            "visibility resolve",
+        )?;
+        let pipeline_resolve = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (resolve, "resolve_main"),
+            push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
+            name: "visibility resolve",
+        })?;
+        for module in [task, mesh, frag, hzb, cull, resolve] {
             device.destroy_shader_module(module);
         }
         let hzb = create_pyramid(device, extent)?;
@@ -630,6 +678,7 @@ impl MeshletRenderer {
             pipeline_wire,
             pipeline_hzb,
             pipeline_cull,
+            pipeline_resolve,
             hzb,
             frame_buffers,
             stats_buffers,
@@ -661,6 +710,7 @@ impl MeshletRenderer {
             occluded: raw[3],
             instances_visible: raw[4],
             lod_level_sum: raw[5],
+            visible_overflow: raw[6],
         })
     }
 
@@ -699,19 +749,22 @@ impl MeshletRenderer {
             pad_end: 0,
             work: scene.work[slot.index].address(),
             indirect: scene.indirect[slot.index].address(),
+            visible: scene.visible[slot.index].address(),
+            visible_capacity: VISIBLE_CAPACITY,
+            pad_visible: 0,
         }
     }
 
     /// Declares the passes of this frame's draw: instance cull, the first mesh pass, the
     /// depth pyramid and the second mesh pass (with occlusion), all reading and writing
-    /// through declared graph accesses. Returns the frame's depth buffer (a transient) for
-    /// passes that need it afterwards (temporal anti-aliasing).
+    /// through declared graph accesses. The mesh passes write the visibility buffer and the
+    /// depth (both transients); [`MeshletRenderer::resolve`] shades the result.
     pub fn draw<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
         slot: FrameSlot,
         params: DrawParams<'f>,
-    ) -> Result<ImageHandle> {
+    ) -> Result<DrawTargets> {
         let occlusion = params.flags.has(CullFlags::OCCLUSION);
         let frozen = params.flags.has(CullFlags::FREEZE);
         let first_pass = if occlusion {
@@ -737,18 +790,29 @@ impl MeshletRenderer {
             aspect: vk::ImageAspectFlags::DEPTH,
             mip_levels: 1,
         });
+        let visibility = graph.transient(TransientDesc {
+            name: "visibility",
+            width: extent.width,
+            height: extent.height,
+            format: vk::Format::R32_UINT,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
         let io = MeshPassIo {
-            color: params.color,
+            visibility,
             depth,
             hzb: graph.import(&self.hzb),
             work: graph.import_buffer(&scene.work[slot.index]),
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
-            visibility: graph.import_buffer(&scene.visibility),
+            visibility_bits: graph.import_buffer(&scene.visibility),
+            visible: graph.import_buffer(&scene.visible[slot.index]),
             stats: graph.import_buffer(&self.stats_buffers[slot.index]),
         };
         let frame_address = self.frame_buffers[slot.index].address();
 
-        // Instance culling and LOD level windows in compute: the task-group work list.
+        // Instance culling and LOD level windows in compute: the task-group work list. It
+        // also resets the visible-cluster counter.
         let cull_pipeline = &self.pipeline_cull;
         let instance_count = scene.instance_count;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -756,6 +820,7 @@ impl MeshletRenderer {
             .pass("geometry/instance cull")
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
             .buffer(io.indirect, BufferAccess::ShaderWrite(compute))
+            .buffer(io.visible, BufferAccess::ShaderWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderWrite(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(cull_pipeline);
@@ -795,11 +860,56 @@ impl MeshletRenderer {
             };
             self.mesh_pass(graph, second, &params, slot);
         }
-        Ok(depth)
+        Ok(DrawTargets {
+            depth,
+            visibility,
+            visible_list: io.visible,
+        })
     }
 
-    /// One mesh-shader pass over the work list: clears the targets when `first`, tests the
-    /// depth pyramid when `reads_hzb`.
+    /// Declares the pass that shades the visibility buffer once per pixel into `color` (a
+    /// storage-capable colour image of `extent`): the triangle behind each pixel is fetched,
+    /// its attributes reconstructed at the pixel centre from analytic barycentrics, and lit.
+    /// Empty pixels get `background`, or are left for a later pass (the sky) when `None`.
+    pub fn resolve<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        targets: DrawTargets,
+        color: ImageHandle,
+        extent: vk::Extent2D,
+        background: Option<[f32; 4]>,
+    ) {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let pipeline = &self.pipeline_resolve;
+        let frame_address = self.frame_buffers[slot.index].address();
+        graph
+            .pass("shading/visibility resolve")
+            .image(targets.visibility, ImageAccess::Sampled(compute))
+            .image(color, ImageAccess::StorageWrite(compute))
+            .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(
+                    pipeline,
+                    &ResolvePush {
+                        frame: frame_address,
+                        vis_image: resources.sampled(targets.visibility).0,
+                        color_image: resources.storage(color, 0).0,
+                        width: extent.width,
+                        height: extent.height,
+                        use_background: u32::from(background.is_some()),
+                        pad: 0,
+                        background: background.unwrap_or([0.0; 4]),
+                    },
+                );
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
+    }
+
+    /// One mesh-shader pass over the work list: clears the visibility buffer and the depth
+    /// when `first`, tests the depth pyramid when `reads_hzb`.
     fn mesh_pass<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -815,11 +925,6 @@ impl MeshletRenderer {
         };
         let indirect: &'f GraphBuffer = &params.scene.indirect[slot.index];
         let extent = params.extent;
-        let color_load = if pass.first {
-            params.color_load
-        } else {
-            ColorLoad::Load
-        };
         let MeshPass {
             label,
             io,
@@ -832,42 +937,42 @@ impl MeshletRenderer {
             .buffer(io.work, BufferAccess::ShaderRead(S::TASK_SHADER_EXT))
             .buffer(io.indirect, BufferAccess::IndirectArgs)
             .buffer(
-                io.visibility,
+                io.visibility_bits,
+                BufferAccess::ShaderReadWrite(S::TASK_SHADER_EXT),
+            )
+            .buffer(
+                io.visible,
                 BufferAccess::ShaderReadWrite(S::TASK_SHADER_EXT),
             )
             .buffer(
                 io.stats,
-                BufferAccess::ShaderWrite(
-                    S::TASK_SHADER_EXT | S::MESH_SHADER_EXT | S::FRAGMENT_SHADER,
-                ),
+                BufferAccess::ShaderWrite(S::TASK_SHADER_EXT | S::MESH_SHADER_EXT),
             )
-            .image(io.color, ImageAccess::ColorAttachment)
+            .image(io.visibility, ImageAccess::ColorAttachment)
             .image(io.depth, ImageAccess::DepthAttachment);
         if reads_hzb {
             builder = builder.image(io.hzb, ImageAccess::Sampled(S::TASK_SHADER_EXT));
         }
         builder.run(move |resources, commands| {
-            let (load_op, clear) = match color_load {
-                ColorLoad::Clear(color) => (vk::AttachmentLoadOp::CLEAR, color),
-                ColorLoad::Load => (vk::AttachmentLoadOp::LOAD, [0.0; 4]),
-                ColorLoad::DontCare => (vk::AttachmentLoadOp::DONT_CARE, [0.0; 4]),
+            let load = if first {
+                vk::AttachmentLoadOp::CLEAR
+            } else {
+                vk::AttachmentLoadOp::LOAD
             };
             let color = [vk::RenderingAttachmentInfo::default()
-                .image_view(resources.view(io.color))
+                .image_view(resources.view(io.visibility))
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(load_op)
+                .load_op(load)
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(vk::ClearValue {
-                    color: vk::ClearColorValue { float32: clear },
+                    color: vk::ClearColorValue {
+                        uint32: [crate::visibility::EMPTY; 4],
+                    },
                 })];
             let depth = vk::RenderingAttachmentInfo::default()
                 .image_view(resources.view(io.depth))
                 .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                .load_op(if first {
-                    vk::AttachmentLoadOp::CLEAR
-                } else {
-                    vk::AttachmentLoadOp::LOAD
-                })
+                .load_op(load)
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue {
@@ -944,7 +1049,7 @@ struct MeshPass {
     label: &'static str,
     io: MeshPassIo,
     frame_address: u64,
-    /// Clears colour (when asked) and depth; the second pass loads both.
+    /// Clears the visibility buffer and the depth; the second pass loads both.
     first: bool,
     /// Tests clusters against the depth pyramid.
     reads_hzb: bool,

@@ -181,7 +181,9 @@ the barriers from what each pass declared and from the state the previous frame 
 |---|---|---|---|---|
 | ballad (TAA on, occlusion on), at the migration | 19 | 37 | 3 | colour 12.8 MB, depth 6.4 MB, motion 6.4 MB |
 | ballad after #19 and #18 (sky last, no blit) | 18 | 37 | 2 | the same |
-| bench (occlusion on) | 15 | 28 | 2 | depth 6.4 MB |
+| ballad with the visibility buffer (#6) | 19 | 39 | 3 | + visibility 6.4 MB; 32 MB requested in a 25.6 MB heap (visibility and motion share memory) |
+| bench (occlusion on), at the migration | 15 | 28 | 2 | depth 6.4 MB |
+| bench with the visibility buffer (#6) | 17 | 32 | 4 | depth 6.4 MB, visibility 6.4 MB, colour 12.8 MB; 25.6 MB in a 19.2 MB heap |
 
 **The sky is drawn last (issue #19, same day).** With the graph in place the starfield moved
 after the mesh passes: it reads the depth transient as a read-only attachment and its
@@ -204,6 +206,42 @@ present. The display value is the same number converted to sRGB by the attachmen
 instead of by the transfer engine: 747 of 1 440 000 pixels differ by exactly one level
 (0.05 %, none by more), which is the rounding difference between the two paths. GPU frame
 0.28 → 0.27 ms.
+
+## Through the visibility buffer (2026-09-24, issue #6)
+
+The mesh passes no longer shade. The task shader appends each drawn cluster to a per-frame
+visible-cluster list (one atomic per task group, capacity 1 M with an overflow counter in
+the statistics), the mesh shader emits positions only with `visible slot << 7 | triangle`
+as the per-primitive id, and the fragment stage writes that id into an `R32_UINT` transient
+next to the depth buffer (cleared to `0xFFFFFFFF`). The new `shading/visibility resolve`
+compute pass (8×8 tiles) reads the id, walks the visible list to the instance, cluster and
+triangle, projects the three vertices with the frame's jittered camera, reconstructs the
+perspective-correct barycentrics and their screen-space derivatives analytically (no
+`ddx`, no helper lanes; the derivation is in `docs/ARCHITECTURE.md` §4 and its CPU mirror
+is unit-tested in `forge_render::visibility`), interpolates the normal and shades once per
+pixel into the HDR colour transient; the pixels with no rock are left to the sky pass. The
+bench does the same into a bench colour image with a background colour and blits it to the
+swapchain, so both demos share one shading path.
+
+Numbers (same frame 400): mesh pass 1 0.07 → 0.06 ms, resolve 0.03 ms, GPU frame
+0.27 → **0.30 ms** over the 6000-frame run; bench 0.15 → 0.18 ms. On a lit rock with one
+light the resolve costs more than the forward shading saved: this step is structure, the
+saving arrives with expensive materials and small triangles (Hable 2021 measured the
+crossover at about 8–10 px triangles). The graph now has an aliasing customer: the
+visibility buffer dies at the resolve and the motion vectors are born after it, so they
+share 6.4 MB of the heap.
+
+Proof: the culling harness (occlusion on/off, cone on/off, `--show-culled`, the bench
+orbiting) stays at **0 pixels**. Against the forward-shaded captures the resolve differs in
+39 of 1 440 000 pixels by more than two levels at frame 600 without TAA (28 at frame 240;
+with TAA 1 276, the history amplifying the same pixels), max 36 levels, mean error 0.01:
+isolated single pixels on sliver triangles at silhouettes, where the hardware interpolator
+(snapped vertex positions) and the analytic form (exact float positions) round differently.
+Validation and synchronization validation are silent. One capability detail: a fragment
+shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which needs the
+`geometryShader` device feature although no geometry shader runs; the device enables it.
+Not in this step: material classification and the material table (#20), the 64-bit
+depth|id target of the software rasteriser (#3).
 
 ## Resolved: TAA history is bit-exact between runs since the render graph (issue #10)
 
@@ -246,9 +284,10 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
 
 ## Next for the ballad
 
-1. Cluster LOD DAG and the instance cull pass: done (above). Next in geometry: streaming of
-   cluster pages, the software rasteriser for the smallest clusters once triangle counts
-   rise again (a million-triangle city, not a rock field), the visibility buffer.
+1. Cluster LOD DAG, the instance cull pass and the visibility buffer: done (above). Next in
+   geometry: material classification of the visibility buffer (#20), streaming of cluster
+   pages, the software rasteriser for the smallest clusters once triangle counts rise again
+   (a million-triangle city, not a rock field).
 2. HDR exposure and tonemapping, DLSS; a proper sun with ray-traced shadows on the RTX
    tiers; volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,

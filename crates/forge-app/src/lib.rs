@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 pub use camera::FlyCamera;
+/// Re-exported for demos that declare their own per-frame targets.
+pub use forge_gpu::TransientDesc;
 /// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
 pub use forge_gpu::vk;
 use forge_gpu::{

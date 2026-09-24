@@ -374,13 +374,49 @@ Everything above now draws through `forge_gpu::graph`. What the migration taught
   the next frame's sky) all get their barrier from the state the previous frame left, not
   from a conservative wait. Transients start from `UNDEFINED` every frame but keep the
   stage/access of whatever last touched their memory, in either frame in flight.
-- **Aliasing has no customer yet.** Colour, depth and motion vectors are all alive at the
-  resolve, so the heap equals the sum (25.6 MB). The first-fit layout and the aliasing
-  barrier are unit-tested; the memory win arrives with post-processing chains and the
-  visibility-buffer passes.
+- **Aliasing found its first customer the same day.** At the migration colour, depth and
+  motion vectors were all alive at the resolve, so the heap equalled the sum (25.6 MB).
+  With the visibility buffer (below) the id image dies at the resolve and the motion
+  vectors are born after it, so they share memory: 32 MB requested, 25.6 MB heap; in the
+  bench the colour image reuses the depth buffer (25.6 → 19.2 MB).
 - **The bindless set and layouts.** A sampled-image descriptor carries a layout, so the
   graph asks the image which layout its `Sampled` reads use (`GENERAL` for storage-capable
   images such as the pyramid, `SHADER_READ_ONLY_OPTIMAL` otherwise) instead of the pass.
 - **Cost.** Compiling and recording 19 passes moved the CPU record zone from 0.07 to
   0.08 ms; the GPU frame is unchanged (0.33 ms against 0.34 before), which is expected since
   the same work runs behind barriers of the same kinds.
+
+### The visibility buffer in Forge (2026-09-24, issue #6)
+
+Steps (3) and (5) of the Phase 1 plan above on the hardware path, minus the 64-bit target
+and the per-material passes, which come with the software rasteriser (#3) and material
+classification (#20). What was learned:
+
+- **A 32-bit id needs a per-frame visible list.** Nanite packs 25 bits of cluster and 7 of
+  triangle because its clusters live in one global table. Forge's clusters are per mesh and
+  drawn per instance, so `(instance, cluster)` does not fit; the task shader appends each
+  drawn cluster to a per-frame list (one atomic per task group, `WaveReadLaneAt` for the
+  base, 1 M entries with an overflow counter in the statistics) and the id is
+  `slot << 7 | triangle`. The list doubles as the record of what was drawn, which the
+  material classification pass will read.
+- **`SV_PrimitiveID` in the fragment stage costs a feature bit.** Slang emits the SPIR-V
+  `Geometry` capability for it, and the validation layer then requires
+  `VkPhysicalDeviceFeatures::geometryShader` although no geometry shader exists. Enabling
+  the feature (every desktop GPU has it) beats routing the id through a mesh-shader
+  per-primitive output that the fragment stage reads as a flat varying.
+- **Analytic barycentrics are a dozen lines** (Schied & Dachsbacher 2015 as Hable writes
+  it): `b_i / w_i` is affine on screen, so its value at vertex 0 and its two gradients give
+  it at any pixel; the sum is `1 / w`; `lambda_i = w · b_i / w_i`; the derivatives follow by
+  the quotient rule. Mirrored on the CPU with a unit test (recovery within 2e-5, gradients
+  against finite differences), which is how the sign conventions of the Y-up NDC and the
+  jittered projection were pinned down without staring at pixels.
+- **Slivers disagree by design.** The hardware interpolator works from vertex positions
+  snapped to the sub-pixel grid; the analytic form uses the exact float positions. On
+  near-degenerate triangles at silhouettes the two round differently: 39 of 1.44 M pixels by
+  more than two levels in the ballad, isolated, max 36 levels. Every culling A/B stays at 0
+  because both sides of those comparisons go through the same resolve.
+- **Cost at this scale is a small loss.** Mesh pass 1 0.07 → 0.06 ms (positions only),
+  resolve 0.03 ms, frame 0.27 → 0.30 ms; bench 0.15 → 0.18. One normal and one light are
+  too cheap for deferred shading to win; Hable measured the crossover at 8–10 px triangles
+  with a real material graph. The step buys one shading path for three rasterisers and the
+  entry point for materials, not milliseconds.

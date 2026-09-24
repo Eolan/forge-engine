@@ -98,7 +98,11 @@ impl Device {
             .shader_int16(true)
             .sampler_anisotropy(true)
             .multi_draw_indirect(true)
-            .fill_mode_non_solid(true);
+            .fill_mode_non_solid(true)
+            // No geometry shaders are ever used (D-003), but a fragment shader that reads
+            // `SV_PrimitiveID` (the visibility buffer's) declares the SPIR-V `Geometry`
+            // capability, which the validation layer ties to this feature.
+            .geometry_shader(true);
         let mut v11 = vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
         let mut v12 = vk::PhysicalDeviceVulkan12Features::default()
             .timeline_semaphore(true)

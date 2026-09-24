@@ -273,3 +273,27 @@ is 19 passes, 37 image barriers and 3 memory barriers, its three transients 25.6
 aliases in that frame yet (colour, depth and motion vectors are all alive at the resolve);
 the heap pays once post-processing chains arrive. *(research: task-system.md §F,
 memory-streaming.md §2; issue #1)*
+
+## D-021 — Visibility buffer: a 32-bit id next to the hardware depth, shading in compute ✅ (2026-09-24)
+
+The rasterisers write no attributes. The hardware path writes a 32-bit id
+(`visible slot << 7 | triangle`, the slot indexing a per-frame visible-cluster list of
+`(instance, cluster)` filled by the task shader) into an `R32_UINT` target next to the
+hardware depth, and a compute pass shades once per pixel from the id, reconstructing the
+perspective-correct barycentrics and their derivatives analytically (no `ddx`, no helper
+lanes; `docs/ARCHITECTURE.md` §4). The 64-bit `depth | id` atomic target of the plan is
+deferred to the software rasteriser (#3), which needs it; the hardware path will write the
+same word then so the two merge in one image. Material classification and per-material
+dispatches (#20) sit on top of this resolve and read the D-007 table. Chosen over shading
+in the mesh passes because it makes shading cost independent of overdraw and triangle
+size, gives the mesh-shader, software and fallback rasterisers one shading path and is the
+input the material table needs; chosen over `VK_KHR_fragment_shader_barycentric` in a
+fullscreen fragment pass because the compute form has no 2×2 quads to waste on small
+triangles and is the form the material passes will take.
+*Measured:* ballad frame 0.27 → 0.30 ms (mesh pass 1 0.07 → 0.06, resolve 0.03), bench
+0.15 → 0.18: a small loss with one light and one normal, expected until materials get
+expensive. Culling A/B at 0 pixels; against the forward-shaded captures 39 of 1.44 M pixels
+differ by more than two levels (slivers at silhouettes). The visibility transient is the
+graph's first aliasing customer (it shares memory with the motion vectors).
+*(research: gpu-geometry.md, Burns & Hunt 2013, Schied & Dachsbacher 2015, Hable 2021;
+issue #6)*

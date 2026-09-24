@@ -19,7 +19,7 @@ use forge_core::{Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    ColorLoad, CullCamera, CullFlags, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
+    CullCamera, CullFlags, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, Starfield, Taa,
 };
 use forge_task::TaskPool;
@@ -164,8 +164,9 @@ impl Ballad {
                 ctx.device.name()
             );
         }
-        // The scene is drawn into the TAA's HDR target; the swapchain only receives the resolve.
-        let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, HDR_FORMAT, ctx.extent())?;
+        // The scene is drawn into a visibility buffer and shaded into the TAA's HDR target;
+        // the swapchain only receives the resolve.
+        let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let mut starfield = Starfield::new(&ctx.device, &ctx.shaders, HDR_FORMAT)?;
         // A large planet low on the horizon, lit from the side by the sun.
         starfield.planet_angle = args.planet_angle.to_radians();
@@ -378,7 +379,7 @@ impl Demo for Ballad {
             cull.view_proj,
         );
         let draw_view_proj = taa_frame.jittered_projection * self.camera.view();
-        let depth = self.renderer.draw(
+        let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
             DrawParams {
@@ -389,22 +390,28 @@ impl Demo for Ballad {
                 draw_jitter: taa_frame.jitter
                     / glam::Vec2::new(extent.width as f32, extent.height as f32),
                 flags: self.flags,
-                color: taa_frame.color,
                 extent,
-                color_load: ColorLoad::DontCare,
                 wireframe: self.wireframe,
             },
         )?;
+        self.renderer.resolve(
+            &mut frame.graph,
+            frame.slot,
+            targets,
+            taa_frame.color,
+            extent,
+            None,
+        );
         self.starfield.draw(
             &mut frame.graph,
             taa_frame.color,
-            depth,
+            targets.depth,
             extent,
             draw_view_proj,
             self.renderer.sun_dir,
         );
         self.taa
-            .resolve(&mut frame.graph, &taa_frame, depth, frame.target);
+            .resolve(&mut frame.graph, &taa_frame, targets.depth, frame.target);
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())
     }

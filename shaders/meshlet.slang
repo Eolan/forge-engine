@@ -91,8 +91,7 @@ public static const uint FLAG_LOD = 64;
 public static const uint FLAG_LOD_COLORS = 128;
 // Debug: disable the per-group LOD window (every group tests its clusters); for the A/B harness.
 public static const uint FLAG_GROUP_WINDOW_OFF = 256;
-static const uint CULLED_BIT = 0x80000000u; // top bit of a payload / varying meshlet index
-static const uint LOD_SHIFT = 24;           // varying meshlet index bits 24-29: LOD level
+static const uint CULLED_BIT = 0x80000000u; // top bit of a payload / visible-list meshlet index
 
 public static const uint PASS_PREVIOUSLY_VISIBLE = 1;
 public static const uint PASS_REMAINDER = 2;
@@ -105,6 +104,13 @@ public static const uint STAT_TRIANGLES = 2;
 public static const uint STAT_OCCLUDED = 3;
 public static const uint STAT_INSTANCES_VISIBLE = 4;
 public static const uint STAT_LOD_LEVEL_SUM = 5; // sum of the LOD level of every drawn meshlet
+public static const uint STAT_VISIBLE_OVERFLOW = 6; // clusters dropped because the visible list was full
+
+// The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
+// `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, appended by the
+// task shader) and `triangle` the cluster's triangle; `VISIBILITY_EMPTY` is the clear value.
+public static const uint VISIBILITY_EMPTY = 0xFFFFFFFFu;
+public static const uint VISIBILITY_TRIANGLE_BITS = 7;
 
 public struct Frame
 {
@@ -139,6 +145,9 @@ public struct Frame
     public uint pad_end;
     public uint2* work;             // (instance, local group) per task group, built by `cull_main`
     public uint* indirect;          // VkDrawMeshTasksIndirectCommandEXT: x = work count, y = z = 1
+    public uint2* visible;          // slot 0: (count, 0); then (instance, meshlet | CULLED_BIT) per drawn cluster
+    public uint visible_capacity;   // slots after the counter
+    public uint pad_visible;
 };
 
 struct Push
@@ -316,6 +325,7 @@ struct Payload
 {
     uint meshlet_index[TASK_GROUP_SIZE];
     uint instance;
+    uint visible_base; // first slot of this group's clusters in the visible-cluster list
 };
 
 groupshared Payload s_payload;
@@ -417,12 +427,31 @@ void task_main(uint thread : SV_GroupThreadID, uint group : SV_GroupID)
 
     uint draw_count = WaveActiveCountBits(draw);
     uint slot = WavePrefixCountBits(draw);
+    // Reserve this group's slots in the visible-cluster list (one atomic per group; the list
+    // starts at slot 1, slot 0 holds the counter). A full list drops the clusters and counts
+    // them, so the resolve never reads past the end.
+    uint visible_base = 0;
+    if (thread == 0 && draw_count > 0)
+        InterlockedAdd(f[0].visible[0].x, draw_count, visible_base);
+    visible_base = WaveReadLaneAt(visible_base, 0);
+    if (visible_base + draw_count > f[0].visible_capacity)
+    {
+        if (thread == 0 && draw_count > 0)
+            InterlockedAdd(f[0].stats[STAT_VISIBLE_OVERFLOW], draw_count);
+        draw_count = 0;
+        draw = false;
+    }
+    uint packed = meshlet_index | (culled_debug ? CULLED_BIT : 0u);
     if (draw)
-        s_payload.meshlet_index[slot] = meshlet_index | (culled_debug ? CULLED_BIT : 0u);
+    {
+        s_payload.meshlet_index[slot] = packed;
+        f[0].visible[1 + visible_base + slot] = uint2(instance_index, packed);
+    }
     uint occluded_count = WaveActiveCountBits(occluded);
     if (thread == 0)
     {
         s_payload.instance = instance_index;
+        s_payload.visible_base = visible_base;
         if (draw_count > 0)
             InterlockedAdd(f[0].stats[pass == PASS_REMAINDER ? STAT_MESHLETS_PASS2 : STAT_MESHLETS_PASS1], draw_count);
         if (occluded_count > 0)
@@ -456,6 +485,8 @@ void cull_main(uint3 id : SV_DispatchThreadID)
 {
     Frame* f = push.frame;
     uint instance_index = id.x;
+    if (instance_index == 0)
+        f[0].visible[0] = uint2(0, 0); // the visible-cluster counter, before the mesh passes
     if (instance_index >= f[0].instance_count)
         return;
     Instance* inst = f[0].instances + instance_index;
@@ -502,10 +533,12 @@ static const uint MESH_GROUP_SIZE = 64;
 struct VertexOut
 {
     float4 position : SV_Position;
-    float3 world_normal : NORMAL;
-    float3 object_position : OBJPOS;
-    nointerpolation uint meshlet_id : MESHLET_ID;
-    nointerpolation uint instance_id : INSTANCE_ID;
+};
+
+// The whole visibility id travels as the primitive id: no per-vertex attributes at all.
+struct PrimitiveOut
+{
+    uint id : SV_PrimitiveID;
 };
 
 [shader("mesh")]
@@ -516,13 +549,14 @@ void mesh_main(
     uint group : SV_GroupID,
     in payload Payload payload,
     out vertices VertexOut verts[MAX_VERTICES],
-    out indices uint3 tris[MAX_TRIANGLES])
+    out indices uint3 tris[MAX_TRIANGLES],
+    out primitives PrimitiveOut prims[MAX_TRIANGLES])
 {
     Frame* f = push.frame;
-    uint packed_index = payload.meshlet_index[group];
-    uint meshlet_index = packed_index & ~CULLED_BIT;
+    uint meshlet_index = payload.meshlet_index[group] & ~CULLED_BIT;
     Meshlet m = f[0].meshlets[meshlet_index];
     Instance inst = f[0].instances[payload.instance];
+    uint visible_slot = payload.visible_base + group;
 
     SetMeshOutputCounts(m.vertex_count, m.triangle_count);
 
@@ -532,11 +566,6 @@ void mesh_main(
         Vertex v = f[0].vertices[vertex_index];
         float4 world = mul(inst.model, float4(v.position, 1));
         verts[thread].position = mul(f[0].view_proj, world);
-        verts[thread].world_normal = normalize(mul(inst.model, float4(v.normal, 0)).xyz);
-        verts[thread].object_position = v.position;
-        // Bits 0-23 meshlet, 24-29 LOD level, 31 culled (debug view).
-        verts[thread].meshlet_id = (packed_index & (CULLED_BIT | 0x00FFFFFFu)) | (min(m.lod_level, 63u) << LOD_SHIFT);
-        verts[thread].instance_id = inst.id;
     }
     if (thread == 0)
     {
@@ -551,18 +580,25 @@ void mesh_main(
             load_byte(f[0].meshlet_triangles, base),
             load_byte(f[0].meshlet_triangles, base + 1),
             load_byte(f[0].meshlet_triangles, base + 2));
+        prims[t].id = (visible_slot << VISIBILITY_TRIANGLE_BITS) | t;
     }
 }
 
 // ------------------------------------------------------------ fragment stage ---
 
+// Writes the visibility id; the depth test already decided who owns the pixel.
 [shader("fragment")]
-float4 frag_main(VertexOut input, float4 screen : SV_Position) : SV_Target
+uint frag_main(uint id : SV_PrimitiveID) : SV_Target
 {
-    Frame* f = push.frame;
-    float3 n = normalize(input.world_normal);
+    return id;
+}
+
+// ------------------------------------------------------------------ shading ---
+
+float3 shade(Frame* f, float3 n, float3 object_position, uint instance_id, uint meshlet_index, uint lod_level, bool culled_debug)
+{
     float3 light = normalize(f[0].sun_dir);
-    float3 instance_hash = hash_color(input.instance_id);
+    float3 instance_hash = hash_color(instance_id);
     // A fifth of the rocks are ice: brighter, bluish, with a real specular highlight.
     bool ice = instance_hash.y < 0.2;
     float3 albedo;
@@ -570,15 +606,15 @@ float4 frag_main(VertexOut input, float4 screen : SV_Position) : SV_Target
     float specular_weight = 0.06;
     if ((f[0].flags & FLAG_LOD_COLORS) != 0)
     {
-        albedo = lod_color((input.meshlet_id >> LOD_SHIFT) & 0x3Fu);
+        albedo = lod_color(min(lod_level, 63u));
     }
     else if ((f[0].flags & FLAG_MESHLET_COLORS) != 0)
     {
-        albedo = hash_color(input.meshlet_id & 0x00FFFFFFu) * 0.6 + 0.3;
+        albedo = hash_color(meshlet_index & 0x00FFFFFFu) * 0.6 + 0.3;
     }
     else if (ice)
     {
-        float cavity = saturate(0.5 + 0.5 * dot(normalize(input.object_position), n));
+        float cavity = saturate(0.5 + 0.5 * dot(normalize(object_position), n));
         albedo = lerp(float3(0.50, 0.62, 0.78), float3(0.70, 0.82, 0.92), cavity);
         specular_power = 48.0;
         specular_weight = 0.5;
@@ -587,15 +623,14 @@ float4 frag_main(VertexOut input, float4 screen : SV_Position) : SV_Target
     {
         // Rock: a per-instance tint between grey and rust, slightly darker in the noise cavities.
         float3 tint = lerp(float3(0.42, 0.40, 0.38), float3(0.45, 0.33, 0.25), instance_hash.x);
-        float cavity = saturate(0.5 + 0.5 * dot(normalize(input.object_position), n));
+        float cavity = saturate(0.5 + 0.5 * dot(normalize(object_position), n));
         albedo = tint * (0.8 + 0.2 * cavity);
     }
-    // View direction from the camera through this pixel is not in the varyings; the sun is
-    // far, so a half vector from the light and the camera-to-surface direction approximated by
-    // the object's outward normal is close enough for a highlight this soft.
+    // The sun is far, so a half vector from the light and the camera-to-surface direction
+    // approximated by the object's outward normal is close enough for a highlight this soft.
     float ndl = dot(n, light);
     float diffuse = max(ndl, 0.0);
-    float3 view = normalize(f[0].camera_pos - (input.object_position + 0.0)); // object space ≈ world offset
+    float3 view = normalize(f[0].camera_pos - (object_position + 0.0)); // object space ≈ world offset
     float3 half_vector = normalize(light + view);
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? 1.0 : 0.0);
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
@@ -605,7 +640,104 @@ float4 frag_main(VertexOut input, float4 screen : SV_Position) : SV_Target
     float3 color = albedo * (diffuse * sun + wrap + fill) + specular * sun;
     if (ice)
         color += float3(0.05, 0.10, 0.18) * saturate(1.0 - abs(ndl)) * 0.6; // rim scatter
-    if ((input.meshlet_id & CULLED_BIT) != 0)
+    if (culled_debug)
         color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
-    return float4(color, 1.0);
+    return color;
+}
+
+// ------------------------------------------------------------------ resolve ---
+
+struct ResolvePush
+{
+    Frame* frame;
+    uint vis_image;      // sampled-image index of the visibility buffer (R32_UINT)
+    uint color_image;    // storage-image index of the colour target (RGBA16F)
+    uint width;
+    uint height;
+    uint use_background; // write `background` to empty pixels (else leave them for the sky)
+    uint pad;
+    float4 background;
+};
+
+[[vk::push_constant]]
+ResolvePush resolve_push;
+
+struct Barycentrics
+{
+    float3 lambda; // perspective-correct barycentric coordinates of the pixel centre
+    float3 ddx;    // their change per pixel to the right
+    float3 ddy;    // their change per pixel down
+};
+
+// Perspective-correct barycentrics of a screen point from the three clip-space vertices, with
+// analytic screen-space derivatives (Schied & Dachsbacher 2015; the form used by Hable 2021):
+// b_i / w_i is affine in screen space, so it is reconstructed from its value at vertex 0 and
+// its gradient; the sum gives 1 / w at the pixel, and lambda_i = w * b_i / w_i. Mirrored on
+// the CPU in `forge_render::visibility` with a unit test.
+Barycentrics barycentrics(float4 c0, float4 c1, float4 c2, float2 ndc, float2 size)
+{
+    float3 inv_w = 1.0 / float3(c0.w, c1.w, c2.w);
+    float2 n0 = c0.xy * inv_w.x;
+    float2 n1 = c1.xy * inv_w.y;
+    float2 n2 = c2.xy * inv_w.z;
+    float inv_det = 1.0 / determinant(float2x2(n2 - n1, n0 - n1));
+    float3 dbdx = float3(n1.y - n2.y, n2.y - n0.y, n0.y - n1.y) * inv_det * inv_w;
+    float3 dbdy = float3(n2.x - n1.x, n0.x - n2.x, n1.x - n0.x) * inv_det * inv_w;
+    float ddx_sum = dbdx.x + dbdx.y + dbdx.z;
+    float ddy_sum = dbdy.x + dbdy.y + dbdy.z;
+    float2 delta = ndc - n0;
+    float interp_inv_w = inv_w.x + delta.x * ddx_sum + delta.y * ddy_sum;
+    float interp_w = 1.0 / interp_inv_w;
+    Barycentrics b;
+    b.lambda.x = interp_w * (inv_w.x + delta.x * dbdx.x + delta.y * dbdy.x);
+    b.lambda.y = interp_w * (delta.x * dbdx.y + delta.y * dbdy.y);
+    b.lambda.z = interp_w * (delta.x * dbdx.z + delta.y * dbdy.z);
+    b.ddx = interp_w * (dbdx - ddx_sum * b.lambda) * (2.0 / size.x);
+    b.ddy = interp_w * (dbdy - ddy_sum * b.lambda) * (-2.0 / size.y);
+    return b;
+}
+
+// One thread per pixel: read the visibility id, fetch the triangle, reconstruct the
+// attributes at the pixel centre and shade once.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= resolve_push.width || id.y >= resolve_push.height)
+        return;
+    Frame* f = resolve_push.frame;
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(id.xy, 0));
+    if (vis == VISIBILITY_EMPTY)
+    {
+        if (resolve_push.use_background != 0)
+            g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][id.xy] = resolve_push.background;
+        return;
+    }
+    uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
+    uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
+    uint2 record = f[0].visible[1 + slot];
+    uint meshlet_index = record.y & ~CULLED_BIT;
+    bool culled_debug = (record.y & CULLED_BIT) != 0;
+    Meshlet m = f[0].meshlets[meshlet_index];
+    Instance inst = f[0].instances[record.x];
+    uint base = m.triangle_offset + tri * 3;
+    uint i0 = f[0].meshlet_vertices[m.vertex_offset + load_byte(f[0].meshlet_triangles, base)];
+    uint i1 = f[0].meshlet_vertices[m.vertex_offset + load_byte(f[0].meshlet_triangles, base + 1)];
+    uint i2 = f[0].meshlet_vertices[m.vertex_offset + load_byte(f[0].meshlet_triangles, base + 2)];
+    Vertex v0 = f[0].vertices[i0];
+    Vertex v1 = f[0].vertices[i1];
+    Vertex v2 = f[0].vertices[i2];
+    float4 c0 = mul(f[0].view_proj, mul(inst.model, float4(v0.position, 1)));
+    float4 c1 = mul(f[0].view_proj, mul(inst.model, float4(v1.position, 1)));
+    float4 c2 = mul(f[0].view_proj, mul(inst.model, float4(v2.position, 1)));
+    float2 size = float2(float(resolve_push.width), float(resolve_push.height));
+    float2 ndc = float2((float(id.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(id.y) + 0.5) / size.y * 2.0);
+    Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
+    float3 n0 = normalize(mul(inst.model, float4(v0.normal, 0)).xyz);
+    float3 n1 = normalize(mul(inst.model, float4(v1.normal, 0)).xyz);
+    float3 n2 = normalize(mul(inst.model, float4(v2.normal, 0)).xyz);
+    float3 n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
+    float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
+    float3 color = shade(f, n, object_position, inst.id, meshlet_index, m.lod_level, culled_debug);
+    g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][id.xy] = float4(color, 1.0);
 }

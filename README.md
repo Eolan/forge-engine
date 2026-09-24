@@ -24,7 +24,7 @@ crates/forge-core     deterministic math, seeds, hashes, handles
 crates/forge-task     job system (work stealing, counters, scopes, task graphs, blocking pool)
 crates/forge-gpu      Vulkan layer: device, memory, swapchain, Slang shaders, bindless set, pipelines, frames
 crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedural test meshes, shared GPU layouts
-crates/forge-render   meshlet renderer (task/mesh shaders, two-pass HZB occlusion), starfield
+crates/forge-render   meshlet renderer (task/mesh shaders, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield, blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
 shaders/              Slang sources (bindless, meshlet, hzb, starfield)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration

@@ -42,9 +42,10 @@ It always shows the best the engine can do at that moment and carries its own pr
 - Phase 1: cluster LOD DAG ✅ and instance cull pass ✅ (2026-09-24: 78 M → 0.6 M
   triangles, GPU 5.5 → 0.34 ms, pixel-exact A/B), profiler overlay ✅, render graph ✅
   (2026-09-24: every pass declared, every barrier derived, transients in one heap,
-  pixel-identical), the sky drawn last behind the rocks ✅ (0.33 → 0.28 ms); next the
-  visibility buffer, HDR exposure and tonemapping, streaming of cluster pages, the software
-  rasteriser when triangle counts rise again, DLSS.
+  pixel-identical), the sky drawn last behind the rocks ✅ (0.33 → 0.28 ms), the
+  visibility buffer ✅ (shading once per pixel in compute, 0.30 ms); next HDR exposure and
+  tonemapping, streaming of cluster pages, the software rasteriser when triangle counts
+  rise again, DLSS.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -92,8 +93,11 @@ Goal: the renderer skeleton every later system draws through.
    screen-space error, streaming of cluster pages from disk through a GPU request buffer,
    software rasteriser for sub-pixel clusters (64-bit atomics). Metrics: DAG roots reached,
    cluster fill.
-5. Visibility buffer (64-bit depth | cluster | triangle), material classification and
-   per-material shading in compute, the material table (D-007) as the shading input.
+5. Visibility buffer ✅ (2026-09-24: the mesh passes write `visible cluster << 7 | triangle`
+   next to the hardware depth, a compute resolve reconstructs the attributes with analytic
+   barycentrics and shades once per pixel; `docs/ARCHITECTURE.md` §4). Still to come:
+   material classification and per-material shading (#20), the material table (D-007) as the
+   shading input, the 64-bit combined depth|id for the software rasteriser (#3).
 6. HDR pipeline: physical light units, histogram exposure, tonemapping as data (AgX, ACES,
    Khronos PBR Neutral), golden images. Lift Hillaire atmosphere, TAA and the DLSS/Streamline
    hook from the previous project.

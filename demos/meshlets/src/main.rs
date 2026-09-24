@@ -12,12 +12,13 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
+use forge_app::{TransientDesc, vk};
 use forge_core::Seed;
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    ColorLoad, CullCamera, CullFlags, FrameStats, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder,
+    CullCamera, CullFlags, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder, blit,
 };
 use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
@@ -88,12 +89,7 @@ impl Bench {
                 ctx.device.name()
             );
         }
-        let renderer = MeshletRenderer::new(
-            &ctx.device,
-            &ctx.shaders,
-            ctx.swapchain.format(),
-            ctx.extent(),
-        )?;
+        let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let scene = build_scene(ctx, &args)?;
         let side = args.side as f32;
         let camera = FlyCamera {
@@ -197,7 +193,21 @@ impl Demo for Bench {
             Some(frozen) if self.flags.has(CullFlags::FREEZE) => frozen,
             _ => live,
         };
-        self.renderer.draw(
+        // Visibility buffer → shaded HDR colour (with a clear colour behind the rocks) → blit
+        // to the swapchain: no anti-aliasing on purpose, this bench measures culling.
+        let extent = ctx.extent();
+        let color = frame.graph.transient(TransientDesc {
+            name: "bench color",
+            width: extent.width,
+            height: extent.height,
+            format: HDR_FORMAT,
+            usage: vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
             DrawParams {
@@ -207,12 +217,25 @@ impl Demo for Bench {
                 lod_threshold_px: self.args.lod_error,
                 draw_jitter: glam::Vec2::ZERO,
                 flags: self.flags,
-                color: frame.target,
-                extent: ctx.extent(),
-                color_load: ColorLoad::Clear([0.02, 0.02, 0.03, 1.0]),
+                extent,
                 wireframe: self.wireframe,
             },
         )?;
+        self.renderer.resolve(
+            &mut frame.graph,
+            frame.slot,
+            targets,
+            color,
+            extent,
+            Some([0.02, 0.02, 0.03, 1.0]),
+        );
+        blit(
+            &mut frame.graph,
+            "app/blit to swapchain",
+            color,
+            frame.target,
+            extent,
+        );
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())
     }

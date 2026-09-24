@@ -6,12 +6,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod blit;
 pub mod meshlet;
 pub mod starfield;
 pub mod taa;
+pub mod visibility;
 
+pub use blit::blit;
 pub use meshlet::{
-    ColorLoad, CullCamera, CullFlags, FrameStats, MeshId, MeshletRenderer, MeshletScene,
+    CullCamera, CullFlags, DrawTargets, FrameStats, MeshId, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder,
 };
 pub use starfield::Starfield;

@@ -249,7 +249,11 @@ impl Taa {
             width: extent.width,
             height: extent.height,
             format: HDR_FORMAT,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            // Written by the visibility resolve (storage) and the sky (attachment), sampled
+            // by the resolve passes.
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::STORAGE,
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });

@@ -6,14 +6,16 @@ Run: `cargo run --release -p meshlets` (options `--side N`, `--detail N`, `--rou
 Controls: WASD/QE move, Shift fast, right mouse drag to look, **F1** profiler, **F** freeze
 culling (move the camera to see what was culled), **C** cone culling, **V** frustum culling,
 **O** occlusion culling, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold,
-**M** meshlet colours (on by default here), **Tab** wireframe. The bench draws straight to
-the swapchain without anti-aliasing on purpose: it measures culling, not looks; the
-`asteroids` demo is where TAA and the sky live.
+**M** meshlet colours (on by default here), **Tab** wireframe. The bench draws without
+anti-aliasing or a sky on purpose: it measures culling, not looks; since 2026-09-24 it
+shades through the visibility buffer like the ballad (a compute resolve into an HDR image,
+blitted to the swapchain); the `asteroids` demo is where TAA and the sky live.
 
 With the cluster LOD DAG and the instance cull pass (2026-09-24, see
 [asteroids.md](asteroids.md)) the static view draws 15 k meshlets and 1.09 M triangles in
-**0.15 ms** at a 1 px threshold; the numbers below are the full-detail (`--no-lod`) figures
-that measure culling alone.
+**0.18 ms** at a 1 px threshold (0.15 before the visibility buffer's resolve pass); the
+numbers below are the full-detail (`--no-lod`) figures that measure culling alone, taken
+before the visibility buffer.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 Research behind it: [research/gpu-geometry.md](../research/gpu-geometry.md).
 
@@ -101,6 +103,11 @@ detail 96, welded seams), 1194 meshlets per instance → **1.4 M meshlets, 127 M
   the pyramid) and the graph derives the 28 image barriers and 2 memory barriers of a frame;
   the depth buffer is a transient. `FORGE_GRAPH_LOG=1` prints the plan. Captures are
   identical to the hand-written barriers (0 pixels, static and orbiting, occlusion on and off).
+- Since 2026-09-24 the bench shades through the visibility buffer (issue #6): the mesh
+  passes write the 32-bit id, the resolve shades into a bench colour transient (a background
+  colour where nothing was drawn) and a blit pass copies it to the swapchain: 17 passes, 32
+  image + 4 memory barriers, three transients in a 19.2 MB heap (the colour image aliases
+  the depth buffer). Occlusion on vs off while orbiting: still 0 pixels.
 
 ## Next steps (from the research recommendation)
 
@@ -108,6 +115,8 @@ detail 96, welded seams), 1194 meshlets per instance → **1.4 M meshlets, 127 M
    path for GPUs without mesh shaders, pixel-diffed against this path with `imgdiff`.
 2. Cluster LOD DAG with meshoptimizer's `clusterlod` (QEM with locked group borders) and
    per-cluster screen-space error selection, plus a software rasteriser for sub-pixel clusters.
-3. Visibility buffer (64-bit depth | cluster | triangle) and material resolve in compute.
+3. Visibility buffer: done for the hardware path (a 32-bit id next to the hardware depth,
+   analytic barycentrics in compute, issue #6); next the material classification and the
+   material table (#20), and the 64-bit depth | id target with the software rasteriser.
 4. Streaming of cluster pages and, on RTX hardware, cluster acceleration structures
    (`VK_NV_cluster_acceleration_structure`) so the same clusters feed ray tracing.
