@@ -16,6 +16,8 @@ mod commands;
 mod device;
 mod error;
 mod frame;
+#[forbid(unsafe_code)]
+pub mod graph;
 mod instance;
 mod memory;
 mod pipeline;
@@ -34,8 +36,12 @@ pub use device::{Device, DeviceFeatures, MeshShaderLimits};
 pub use error::{GpuError, Result};
 pub use frame::{FRAMES_IN_FLIGHT, FrameSlot, Frames};
 pub use gpu_allocator::MemoryLocation;
+pub use graph::{
+    BufferAccess, BufferHandle, FrameGraph, GraphBuffer, GraphImage, GraphStats, ImageAccess,
+    ImageHandle, RawImage, RenderGraph, ResolvedImage, ResourceState, Resources, TransientDesc,
+};
 pub use instance::{Instance, Surface};
-pub use memory::{Buffer, BufferDesc, Image, ImageDesc};
+pub use memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};
 pub use pipeline::{ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline};
 pub use shader::{ShaderCompiler, ShaderStage};
 pub use swapchain::Swapchain;

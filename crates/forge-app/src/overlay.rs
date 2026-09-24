@@ -14,8 +14,9 @@ use std::sync::Arc;
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Buffer, BufferDesc, Commands, Device, FRAMES_IN_FLIGHT, FullscreenPipelineDesc, Image,
-    ImageDesc, MemoryLocation, Pipeline, Result, SampledImageId, ShaderCompiler, ShaderStage, vk,
+    Buffer, BufferDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FullscreenPipelineDesc, GraphImage,
+    ImageAccess, ImageDesc, ImageHandle, MemoryLocation, Pipeline, Result, ShaderCompiler,
+    ShaderStage, vk,
 };
 
 /// Cells per slot buffer: enough for 4K at 8×16 (480 × 135).
@@ -157,10 +158,8 @@ struct Push {
 
 /// The overlay pass, its font atlas and per-slot cell buffers.
 pub struct Overlay {
-    device: Arc<Device>,
     pipeline: Pipeline,
-    _atlas: Image,
-    atlas_id: SampledImageId,
+    atlas: GraphImage,
     cells: Vec<Buffer>,
     canvas: Canvas,
     cell_w: u32,
@@ -206,7 +205,8 @@ impl Overlay {
                 }
             })
             .unwrap_or_else(rasterize_builtin);
-        let image = device.create_image_with_data(
+        let image = GraphImage::uploaded(
+            device,
             ImageDesc {
                 width: atlas.cell_w * GLYPHS as u32,
                 height: atlas.cell_h,
@@ -218,8 +218,6 @@ impl Overlay {
             },
             &atlas.pixels,
         )?;
-        let atlas_id =
-            device.register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         let cells = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -236,10 +234,8 @@ impl Overlay {
             "overlay font ready"
         );
         Ok(Self {
-            device: Arc::clone(device),
             pipeline,
-            _atlas: image,
-            atlas_id,
+            atlas: image,
             cells,
             canvas: Canvas::new(),
             cell_w: atlas.cell_w,
@@ -257,12 +253,13 @@ impl Overlay {
         &mut self.canvas
     }
 
-    /// Draws the canvas over `view`, a colour attachment in `COLOR_ATTACHMENT_OPTIMAL`.
-    pub fn draw(
-        &self,
-        commands: &Commands<'_>,
+    /// Declares the pass that draws the canvas over `target` (blended over whatever the
+    /// frame drew there).
+    pub fn draw<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
         slot: usize,
-        view: vk::ImageView,
+        target: ImageHandle,
         extent: vk::Extent2D,
     ) {
         if self.canvas.cells.is_empty() {
@@ -270,48 +267,45 @@ impl Overlay {
         }
         let cells = &self.cells[slot];
         cells.write(0, &self.canvas.cells);
-        let color = [vk::RenderingAttachmentInfo::default()
-            .image_view(view)
-            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(vk::AttachmentLoadOp::LOAD)
-            .store_op(vk::AttachmentStoreOp::STORE)];
-        let info = vk::RenderingInfo::default()
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D::default(),
-                extent,
-            })
-            .layer_count(1)
-            .color_attachments(&color);
-        // Order the overlay after whatever the demo drew into the swapchain image.
-        commands.memory_barrier(
-            vk::PipelineStageFlags2::ALL_COMMANDS,
-            vk::AccessFlags2::MEMORY_WRITE,
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        );
-        commands.begin_rendering(&info);
-        commands.bind_pipeline(&self.pipeline);
-        commands.set_viewport_full(extent);
-        commands.push_constants(
-            &self.pipeline,
-            &Push {
-                cells: cells.address(),
-                cols: self.canvas.cols as u32,
-                rows: self.canvas.rows as u32,
-                cell_w: self.cell_w,
-                cell_h: self.cell_h,
-                atlas: self.atlas_id.0,
-                pad: 0,
-            },
-        );
-        commands.draw(3, 1);
-        commands.end_rendering();
-    }
-}
-
-impl Drop for Overlay {
-    fn drop(&mut self) {
-        self.device.release_sampled_image(self.atlas_id);
+        let push = Push {
+            cells: cells.address(),
+            cols: self.canvas.cols as u32,
+            rows: self.canvas.rows as u32,
+            cell_w: self.cell_w,
+            cell_h: self.cell_h,
+            atlas: self.atlas.sampled().0,
+            pad: 0,
+        };
+        let atlas = graph.import(&self.atlas);
+        let pipeline = &self.pipeline;
+        graph
+            .pass("app/overlay")
+            .image(target, ImageAccess::ColorAttachment)
+            .image(
+                atlas,
+                ImageAccess::Sampled(vk::PipelineStageFlags2::FRAGMENT_SHADER),
+            )
+            .run(move |resources, commands| {
+                let color = [vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(target))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE)];
+                let info = vk::RenderingInfo::default()
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent,
+                    })
+                    .layer_count(1)
+                    .color_attachments(&color);
+                commands.begin_rendering(&info);
+                commands.bind_pipeline(pipeline);
+                commands.set_viewport_full(extent);
+                commands.push_constants(pipeline, &push);
+                commands.draw(3, 1);
+                commands.end_rendering();
+                Ok(())
+            });
     }
 }
 

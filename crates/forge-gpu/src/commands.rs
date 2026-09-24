@@ -63,7 +63,22 @@ impl<'a> Commands<'a> {
 
     /// Records image layout transitions / memory barriers (synchronization2).
     pub fn image_barriers(&self, barriers: &[vk::ImageMemoryBarrier2<'_>]) {
-        let info = vk::DependencyInfo::default().image_memory_barriers(barriers);
+        self.barriers(&[], barriers);
+    }
+
+    /// Records global memory barriers and image barriers in one `vkCmdPipelineBarrier2`
+    /// (what the render graph emits before a pass). A no-op when both are empty.
+    pub fn barriers(
+        &self,
+        memory: &[vk::MemoryBarrier2<'_>],
+        images: &[vk::ImageMemoryBarrier2<'_>],
+    ) {
+        if memory.is_empty() && images.is_empty() {
+            return;
+        }
+        let info = vk::DependencyInfo::default()
+            .memory_barriers(memory)
+            .image_memory_barriers(images);
         // SAFETY: recording state; the barriers reference live images owned by the caller.
         unsafe { self.device.raw().cmd_pipeline_barrier2(self.cb, &info) };
     }

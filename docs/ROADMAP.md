@@ -40,9 +40,10 @@ It always shows the best the engine can do at that moment and carries its own pr
   verified pixel-exact against brute force by the A/B harness (`--no-occlusion`,
   `--no-cone`, `--show-culled`, `imgdiff`), which found and closed two silent culling bugs.
 - Phase 1: cluster LOD DAG ✅ and instance cull pass ✅ (2026-09-24: 78 M → 0.6 M
-  triangles, GPU 5.5 → 0.34 ms, pixel-exact A/B), profiler overlay ✅; next the render
-  graph, a cheaper sky, streaming of cluster pages, the software rasteriser when triangle
-  counts rise again, visibility buffer, HDR exposure and tonemapping, DLSS.
+  triangles, GPU 5.5 → 0.34 ms, pixel-exact A/B), profiler overlay ✅, render graph ✅
+  (2026-09-24: every pass declared, every barrier derived, transients in one heap,
+  pixel-identical); next a cheaper sky, streaming of cluster pages, the software rasteriser
+  when triangle counts rise again, visibility buffer, HDR exposure and tonemapping, DLSS.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -79,10 +80,11 @@ a verdict per item on what is expensive and how to attack it.
 Goal: the renderer skeleton every later system draws through.
 
 1. `forge-app`: window, input, frame loop, capture, debug overlay (egui), shared by demos.
-2. `forge-render` render graph: passes declare reads/writes, barriers derived, transient
-   resources aliased, deferred deletion by frame slot, async compute and transfer queues,
-   Tracy GPU zones. (Lesson from the previous project: undeclared buffer uses made NVIDIA
-   replay stale indirect arguments.)
+2. Render graph ✅ (2026-09-24, `forge-gpu::graph`, D-020): passes declare reads/writes,
+   barriers derived, transient images aliased in one heap, deferred deletion by frame slot,
+   a profiler zone per pass. Still to come on it: async compute and transfer queues,
+   transient buffers, parallel recording of pass bodies. (Lesson from the previous project:
+   undeclared buffer uses made NVIDIA replay stale indirect arguments.)
 3. Compute culling shared by both paths + `vkCmdDrawIndexedIndirectCount` fallback,
    pixel-diffed against the mesh-shader path.
 4. Cluster LOD DAG (meshoptimizer `clusterlod` through FFI), GPU LOD selection by

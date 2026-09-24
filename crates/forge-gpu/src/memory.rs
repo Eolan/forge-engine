@@ -142,9 +142,42 @@ pub struct Image {
     raw: vk::Image,
     view: vk::ImageView,
     mip_views: Vec<vk::ImageView>,
+    /// Own memory, or `None` when the image is placed in a [`TransientHeap`].
     allocation: Option<Allocation>,
+    /// The heap a placed image lives in (kept alive by the image).
+    heap: Option<Arc<TransientHeap>>,
     format: vk::Format,
     extent: vk::Extent2D,
+}
+
+/// One block of device memory that several images share by living at different offsets
+/// (the render graph's transient images, whose lifetimes never overlap when they alias).
+/// The heap outlives every image placed in it: images hold an `Arc` to it.
+pub struct TransientHeap {
+    device: Arc<Device>,
+    allocation: Option<Allocation>,
+    size: u64,
+    memory_type_bits: u32,
+}
+
+impl TransientHeap {
+    /// Size in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The memory types the heap is compatible with (a mask of type indices).
+    pub fn memory_type_bits(&self) -> u32 {
+        self.memory_type_bits
+    }
+}
+
+impl Drop for TransientHeap {
+    fn drop(&mut self) {
+        if let Some(allocation) = self.allocation.take() {
+            let _ = self.device.with_allocator(|a| a.free(allocation));
+        }
+    }
 }
 
 impl Image {
@@ -171,6 +204,10 @@ impl Image {
     /// Size of level 0.
     pub fn extent(&self) -> vk::Extent2D {
         self.extent
+    }
+    /// The transient heap a placed image lives in (`None` for an image with its own memory).
+    pub fn heap(&self) -> Option<&Arc<TransientHeap>> {
+        self.heap.as_ref()
     }
     /// Size of mip `level`.
     pub fn mip_extent(&self, level: u32) -> vk::Extent2D {
@@ -400,27 +437,7 @@ impl Device {
 
     /// Creates a 2-D image in device memory with a full view.
     pub fn create_image(self: &Arc<Self>, desc: ImageDesc<'_>) -> Result<Image> {
-        let extent = vk::Extent2D {
-            width: desc.width.max(1),
-            height: desc.height.max(1),
-        };
-        let mip_levels = desc.mip_levels.max(1);
-        let info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(desc.format)
-            .extent(vk::Extent3D {
-                width: extent.width,
-                height: extent.height,
-                depth: 1,
-            })
-            .mip_levels(mip_levels)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(desc.usage)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-        // SAFETY: valid create info.
-        let raw = unsafe { self.raw().create_image(&info, None)? };
+        let (raw, extent, mip_levels) = self.create_unbound_image(&desc)?;
         // SAFETY: `raw` is live.
         let requirements = unsafe { self.raw().get_image_memory_requirements(raw) };
         let allocation = match self.with_allocator(|a| {
@@ -440,10 +457,123 @@ impl Device {
             }
         };
         // SAFETY: the allocation satisfies the image's requirements.
+        if let Err(e) = unsafe {
+            self.raw()
+                .bind_image_memory(raw, allocation.memory(), allocation.offset())
+        } {
+            // SAFETY: binding failed, so nothing references the image or the allocation.
+            unsafe { self.raw().destroy_image(raw, None) };
+            let _ = self.with_allocator(|a| a.free(allocation));
+            return Err(e.into());
+        }
+        self.finish_image(raw, &desc, extent, mip_levels, Some(allocation), None)
+    }
+
+    /// The memory an image of `desc` needs (size, alignment, compatible memory types),
+    /// without creating it (`vkGetDeviceImageMemoryRequirements`, Vulkan 1.3).
+    pub fn image_memory_requirements(&self, desc: &ImageDesc<'_>) -> vk::MemoryRequirements {
+        let (info, _, _) = image_create_info(desc);
+        let query = vk::DeviceImageMemoryRequirements::default().create_info(&info);
+        let mut requirements = vk::MemoryRequirements2::default();
+        // SAFETY: valid create info; the out structure is a plain default.
         unsafe {
             self.raw()
-                .bind_image_memory(raw, allocation.memory(), allocation.offset())?
+                .get_device_image_memory_requirements(&query, &mut requirements)
         };
+        requirements.memory_requirements
+    }
+
+    /// Allocates a block of device-local memory for placed images: `size` bytes aligned to
+    /// `alignment`, in a memory type of `memory_type_bits` (the AND of the requirements of
+    /// every image that will live in it).
+    pub fn create_transient_heap(
+        self: &Arc<Self>,
+        size: u64,
+        alignment: u64,
+        memory_type_bits: u32,
+        name: &str,
+    ) -> Result<Arc<TransientHeap>> {
+        let allocation = self.with_allocator(|a| {
+            a.allocate(&AllocationCreateDesc {
+                name,
+                requirements: vk::MemoryRequirements {
+                    size: size.max(1),
+                    alignment: alignment.max(1),
+                    memory_type_bits,
+                },
+                location: MemoryLocation::GpuOnly,
+                linear: false,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            })
+        })?;
+        Ok(Arc::new(TransientHeap {
+            device: Arc::clone(self),
+            allocation: Some(allocation),
+            size,
+            memory_type_bits,
+        }))
+    }
+
+    /// Creates an image whose memory is `heap` at `offset`. The caller laid the heap out from
+    /// [`Device::image_memory_requirements`]: the range must fit, `offset` must honour the
+    /// image's alignment and the heap's memory type must be one the image accepts.
+    pub fn create_image_in(
+        self: &Arc<Self>,
+        desc: ImageDesc<'_>,
+        heap: &Arc<TransientHeap>,
+        offset: u64,
+    ) -> Result<Image> {
+        let (raw, extent, mip_levels) = self.create_unbound_image(&desc)?;
+        // SAFETY: `raw` is live.
+        let requirements = unsafe { self.raw().get_image_memory_requirements(raw) };
+        let fits = offset.is_multiple_of(requirements.alignment.max(1))
+            && offset + requirements.size <= heap.size
+            && requirements.memory_type_bits & heap.memory_type_bits != 0;
+        let allocation = heap.allocation.as_ref().filter(|_| fits);
+        let Some(allocation) = allocation else {
+            // SAFETY: nothing references the image.
+            unsafe { self.raw().destroy_image(raw, None) };
+            return Err(crate::error::GpuError::Unsupported(format!(
+                "image '{}' does not fit its transient heap (offset {offset}, size {}, alignment {}, heap {} bytes, types {:#x} vs {:#x})",
+                desc.name,
+                requirements.size,
+                requirements.alignment,
+                heap.size,
+                requirements.memory_type_bits,
+                heap.memory_type_bits
+            )));
+        };
+        // SAFETY: the range was checked against the requirements above; the heap's memory is
+        // one the image accepts and outlives the image (it holds an `Arc` to the heap).
+        if let Err(e) = unsafe {
+            self.raw()
+                .bind_image_memory(raw, allocation.memory(), allocation.offset() + offset)
+        } {
+            // SAFETY: binding failed, so nothing references the image.
+            unsafe { self.raw().destroy_image(raw, None) };
+            return Err(e.into());
+        }
+        self.finish_image(raw, &desc, extent, mip_levels, None, Some(Arc::clone(heap)))
+    }
+
+    /// Creates the Vulkan image of `desc` without memory.
+    fn create_unbound_image(&self, desc: &ImageDesc<'_>) -> Result<(vk::Image, vk::Extent2D, u32)> {
+        let (info, extent, mip_levels) = image_create_info(desc);
+        // SAFETY: valid create info.
+        let raw = unsafe { self.raw().create_image(&info, None)? };
+        Ok((raw, extent, mip_levels))
+    }
+
+    /// Creates the views and names a bound image.
+    fn finish_image(
+        self: &Arc<Self>,
+        raw: vk::Image,
+        desc: &ImageDesc<'_>,
+        extent: vk::Extent2D,
+        mip_levels: u32,
+        allocation: Option<Allocation>,
+        heap: Option<Arc<TransientHeap>>,
+    ) -> Result<Image> {
         let make_view = |base_mip_level: u32, level_count: u32| {
             let view_info = vk::ImageViewCreateInfo::default()
                 .image(raw)
@@ -469,9 +599,34 @@ impl Device {
             raw,
             view,
             mip_views,
-            allocation: Some(allocation),
+            allocation,
+            heap,
             format: desc.format,
             extent,
         })
     }
+}
+
+/// The create info of a 2-D optimal-tiling image, with the clamped extent and mip count.
+fn image_create_info(desc: &ImageDesc<'_>) -> (vk::ImageCreateInfo<'static>, vk::Extent2D, u32) {
+    let extent = vk::Extent2D {
+        width: desc.width.max(1),
+        height: desc.height.max(1),
+    };
+    let mip_levels = desc.mip_levels.max(1);
+    let info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(desc.format)
+        .extent(vk::Extent3D {
+            width: extent.width,
+            height: extent.height,
+            depth: 1,
+        })
+        .mip_levels(mip_levels)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(desc.usage)
+        .initial_layout(vk::ImageLayout::UNDEFINED);
+    (info, extent, mip_levels)
 }

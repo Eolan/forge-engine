@@ -2,8 +2,9 @@
 //! `forge_gpu::Frames`, swapchain recreation, PNG capture and a fly camera.
 //!
 //! A demo implements [`Demo`] and calls [`run`]. The shell owns the GPU context and the
-//! swapchain image transitions (undefined → colour attachment before `render`, colour
-//! attachment → present after); the demo records everything in between.
+//! render graph of every frame: it imports the swapchain image, lets the demo declare its
+//! passes, adds the overlay, the capture and the present transition, and executes the
+//! graph, which derives every barrier.
 
 #![forbid(unsafe_code)]
 
@@ -18,11 +19,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 pub use camera::FlyCamera;
-/// Re-exported so demos can record barriers without depending on `forge-gpu` directly.
+/// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
 pub use forge_gpu::vk;
 use forge_gpu::{
-    Buffer, BufferDesc, Commands, Device, FrameSlot, Frames, Instance, MemoryLocation,
-    ShaderCompiler, Surface, Swapchain,
+    Buffer, BufferDesc, Commands, Device, FrameGraph, FrameSlot, Frames, GraphStats, ImageAccess,
+    ImageHandle, Instance, MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler,
+    Surface, Swapchain,
 };
 pub use input::Input;
 pub use overlay::{Canvas, Color, Overlay};
@@ -95,6 +97,8 @@ pub struct Context {
     pub frames_rendered: u64,
     /// The frame profile behind the overlay; demos add counter lines to it.
     pub profile: Profile,
+    /// The render graph's persistent side (transient heap, statistics).
+    pub graph: RenderGraph,
     _surface: Arc<Surface>,
     _instance: Arc<Instance>,
 }
@@ -113,12 +117,15 @@ impl Context {
 }
 
 /// One frame handed to [`Demo::render`].
-pub struct FrameInfo<'a> {
-    /// Recording commands for this frame.
-    pub commands: Commands<'a>,
+pub struct FrameInfo<'f> {
+    /// The frame's render graph: the demo declares its passes into it.
+    pub graph: FrameGraph<'f>,
+    /// The swapchain image (contents undefined on entry). The demo's last pass on it must
+    /// write it; the shell adds the overlay, the capture and the present transition after.
+    pub target: ImageHandle,
     /// The frame slot (index, number, previous GPU time).
     pub slot: FrameSlot,
-    /// Swapchain image being rendered, already in `COLOR_ATTACHMENT_OPTIMAL`.
+    /// Index of the swapchain image being rendered.
     pub image_index: u32,
     /// Seconds since the previous frame (clamped to 0.1).
     pub dt: f32,
@@ -138,9 +145,9 @@ pub trait Demo: Sized + 'static {
     /// Per-frame simulation with the current input.
     fn update(&mut self, _ctx: &mut Context, _input: &Input, _dt: f32) {}
 
-    /// Records the frame. The swapchain image is a colour attachment on entry and must be
-    /// left in `COLOR_ATTACHMENT_OPTIMAL`.
-    fn render(&mut self, ctx: &mut Context, frame: &FrameInfo<'_>) -> Result<()>;
+    /// Declares the frame's passes into `frame.graph`. The pass bodies borrow the demo for
+    /// the frame (`'f`), so per-frame mutable state is updated here, before the passes run.
+    fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()>;
 
     /// Statistics line for the window title, polled four times per second.
     fn title(&mut self, _ctx: &Context) -> Option<String> {
@@ -236,6 +243,8 @@ struct State<D: Demo> {
     /// `FORGE_STALL_MS=N`: sleep N ms after every frame (debugging).
     debug_stall_ms: u64,
     overlay: Overlay,
+    /// The render graph's counters of the previous frame (shown in the overlay).
+    graph_stats: GraphStats,
     #[cfg(feature = "profiling")]
     tracy_gpu: Option<tracy_client::GpuContext>,
 }
@@ -287,6 +296,7 @@ impl<D: Demo> State<D> {
             _ if config.overlay.unwrap_or(config.frame_limit.is_none()) => OverlayMode::Compact,
             _ => OverlayMode::Off,
         };
+        let graph = RenderGraph::new(&device);
         let mut ctx = Context {
             device,
             swapchain,
@@ -295,6 +305,7 @@ impl<D: Demo> State<D> {
             window,
             frames_rendered: 0,
             profile: Profile::new(overlay_mode),
+            graph,
             _surface: surface,
             _instance: instance,
         };
@@ -315,6 +326,7 @@ impl<D: Demo> State<D> {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
             overlay,
+            graph_stats: GraphStats::default(),
             #[cfg(feature = "profiling")]
             tracy_gpu: None,
         })
@@ -378,6 +390,19 @@ impl<D: Demo> State<D> {
         self.last_frame = now;
         self.ctx.profile.begin_frame();
         self.ctx.profile.frame_time(frame_ms);
+        let g = self.graph_stats;
+        self.ctx.profile.counter(format!(
+            "graph: {} passes, {} image + {} memory barriers; transients {} images, {:.1} MB in a {:.1} MB heap{}; {} rebuilds, {} retired",
+            g.passes,
+            g.image_barriers,
+            g.memory_barriers,
+            g.transient_images,
+            g.transient_bytes as f64 / 1e6,
+            g.heap_bytes as f64 / 1e6,
+            if g.aliased { " (aliased)" } else { "" },
+            g.heap_rebuilds,
+            g.pending_destructions
+        ));
         let update_start = Instant::now();
         {
             #[cfg(feature = "profiling")]
@@ -448,27 +473,59 @@ impl<D: Demo> State<D> {
             .transpose()?;
 
         let cb = self.ctx.frames.begin(slot)?;
-        let color_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        let swap_image = self.ctx.swapchain.image(image_index);
-        let barrier = || {
-            vk::ImageMemoryBarrier2::default()
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(swap_image)
-                .subresource_range(color_range)
-        };
         let device = Arc::clone(&self.ctx.device);
         let timer_slot = self.ctx.frames.timer_slot(slot);
         let record_start = Instant::now();
         {
             #[cfg(feature = "profiling")]
             let _zone = tracy_client::span!("record");
+            let mut graph = FrameGraph::new(extent);
+            // The acquired swapchain image: contents undefined, usable once the acquire
+            // semaphore's stage (colour output) has passed.
+            let target = graph.import_raw(RawImage {
+                image: self.ctx.swapchain.image(image_index),
+                view: self.ctx.swapchain.view(image_index),
+                extent,
+                format: self.ctx.swapchain.format(),
+                aspect: vk::ImageAspectFlags::COLOR,
+                state: ResourceState {
+                    layout: vk::ImageLayout::UNDEFINED,
+                    stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    access: vk::AccessFlags2::NONE,
+                    write: false,
+                },
+                name: "swapchain",
+            });
+            let mut frame = FrameInfo {
+                graph,
+                target,
+                slot,
+                image_index,
+                dt,
+            };
+            self.demo.render(&mut self.ctx, &mut frame)?;
+            if self.ctx.profile.is_visible() {
+                let title = self.config.title.clone();
+                let canvas = self.overlay.begin(extent);
+                self.ctx.profile.layout(canvas, &title, extent);
+                self.overlay
+                    .draw(&mut frame.graph, slot.index, target, extent);
+            }
+            if let Some((_, buffer)) = &capture {
+                frame
+                    .graph
+                    .pass("app/capture")
+                    .image(target, ImageAccess::TransferSrc)
+                    .run(move |resources, commands| {
+                        commands.copy_image_to_buffer(resources.image(target).raw, extent, buffer);
+                        Ok(())
+                    });
+            }
+            frame
+                .graph
+                .pass("app/present")
+                .image(target, ImageAccess::Present)
+                .run(|_, _| Ok(()));
             let commands = Commands::new(&device, cb).with_timers(&timer_slot);
             if self.debug_frame_barrier {
                 // Debugging aid (`FORGE_FRAME_BARRIER=1`): serialise frames on the GPU.
@@ -479,56 +536,10 @@ impl<D: Demo> State<D> {
                     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
                 );
             }
-            commands.image_barriers(&[barrier()
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)]);
-            let frame = FrameInfo {
-                commands,
-                slot,
-                image_index,
-                dt,
-            };
-            self.demo.render(&mut self.ctx, &frame)?;
-            let commands = frame.commands;
-            commands.mark("app/unmarked demo work");
-            if self.ctx.profile.is_visible() {
-                let title = self.config.title.clone();
-                let canvas = self.overlay.begin(extent);
-                self.ctx.profile.layout(canvas, &title, extent);
-                self.overlay.draw(
-                    &commands,
-                    slot.index,
-                    self.ctx.swapchain.view(image_index),
-                    extent,
-                );
-                commands.mark("app/overlay");
-            }
-            if let Some((_, buffer)) = &capture {
-                commands.image_barriers(&[barrier()
-                    .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                    .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                    .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)]);
-                commands.copy_image_to_buffer(swap_image, extent, buffer);
-                commands.image_barriers(&[barrier()
-                    .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                    .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
-                    .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
-                    .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)]);
-            } else {
-                commands.image_barriers(&[barrier()
-                    .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                    .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
-                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)]);
-            }
+            self.graph_stats =
+                self.ctx
+                    .graph
+                    .execute(frame.graph, &commands, &mut self.ctx.frames)?;
         }
         self.ctx
             .profile

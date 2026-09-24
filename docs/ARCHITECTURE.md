@@ -91,9 +91,9 @@ and the date next to every number.
 |---|---|---|
 | `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle` |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
-| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps), safe `Commands` |
+| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones; D-020) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
-| `forge-render` | phase 0 built | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (two-pass HZB occlusion, statistics), `Taa` (jittered HDR target, motion vectors, clipped history), `Starfield` (stars, nebula, sun, planet). Next: render graph (declared barriers, deferred deletion), cluster LOD DAG, visibility buffer, material resolve, lighting tiers, atmosphere, post, upscalers |
+| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, statistics), `Taa` (jittered HDR target, motion vectors, clipped history), `Starfield` (stars, nebula, sun, planet); every renderer declares graph passes, none writes a barrier. Next: visibility buffer, material resolve, lighting tiers, atmosphere, post, upscalers |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
 | `forge-anim` | planned | clips, blend graph, motion matching, IK, powered ragdoll tracking, contact events |
@@ -101,7 +101,7 @@ and the date next to every number.
 | `forge-net` | planned | transport, replication, prediction, interest management, replay |
 | `forge-sim` | planned | `bevy_ecs` storage with the Forge executor, gameplay systems, simulation LOD |
 | `forge-procgen` | planned | terrain genesis (uplift, erosion, hydrology), ecosystems, settlements, grammars, noise/SDF library |
-| `forge-app` | built | window, input, frame loop on `Frames`, swapchain transitions, PNG capture, fly camera, Tracy frame marks/zones (`profiling`). Next: debug UI overlay |
+| `forge-app` | built | window, input, frame loop that owns each frame's `FrameGraph` (swapchain import, demo passes, overlay, capture, present), PNG capture, fly camera, the profiler overlay (F1) and Tracy frame marks/zones (`profiling`) |
 | `tools/imgdiff` | built | pixel comparison of captures (the golden-image check; exit code for CI) |
 
 ## 3. Frame model
@@ -110,12 +110,23 @@ and the date next to every number.
 - **Workers** (`PoolConfig::client()`: physical cores − 2): simulation, culling preparation,
   streaming decode, procedural generation at `Low` priority in ≤ 200 µs jobs.
 - **Render thread**: one per frame slot at first (the main thread), later a dedicated
-  submitter; record from workers in parallel once the render graph exists.
+  submitter; pass bodies are the unit that workers will record in parallel.
+- **The frame on the GPU is a render graph** (D-020): the shell imports the swapchain image
+  into a `FrameGraph`, every renderer declares passes with the images and buffers it reads
+  and writes (per mip level where it matters), and `RenderGraph::execute` derives every
+  barrier and layout transition from the tracked state of each resource, lays out the
+  frame's transient images (depth, HDR colour, motion vectors) in one heap where lifetimes
+  allow aliasing, records the passes in declaration order with a profiler zone each, and
+  carries the final states into the next frame. Persistent images (`GraphImage`: depth
+  pyramid, TAA histories) and buffers (`GraphBuffer`: visibility bits, work lists, indirect
+  arguments) keep their state between frames; resources a frame in flight may still use go
+  through `Frames::destroy_later`. Nobody outside `forge-gpu` records a barrier.
 - **Audio thread**: real-time priority, never touches the pool, communicates by lock-free
   queues.
 - **Network thread**: `tokio` runtime for I/O only; packets are handed to the simulation.
-- **GPU**: one graphics queue now; async compute and a transfer queue when the render graph
-  lands. Two frames in flight on a timeline semaphore; the CPU never waits on the whole queue.
+- **GPU**: one graphics queue now; async compute and a transfer queue are the graph's next
+  extension (a queue per pass, timeline waits and ownership transfers on crossing edges).
+  Two frames in flight on a timeline semaphore; the CPU never waits on the whole queue.
 - **Pipelining**: simulation of frame N+1 overlaps rendering of frame N through an immutable
   frame packet (positions, transforms, visibility inputs) written by the simulation and read
   by the renderer.

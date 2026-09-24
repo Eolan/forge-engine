@@ -41,6 +41,9 @@ pub struct Frames {
     timers: GpuTimers,
     last_zones: Vec<GpuZone>,
     frame_number: u64,
+    /// Resources retired by [`Frames::destroy_later`], tagged with the frame that may still
+    /// use them; dropped once that frame has completed on the GPU.
+    garbage: Vec<(u64, Box<dyn std::any::Any>)>,
 }
 
 impl Frames {
@@ -93,7 +96,20 @@ impl Frames {
             timers,
             last_zones: Vec::new(),
             frame_number: 0,
+            garbage: Vec::new(),
         })
+    }
+
+    /// Keeps `item` alive until the frame being recorded (or about to be) has completed on
+    /// the GPU, then drops it: the deferred deletion every resource that a frame in flight
+    /// may still reference goes through (images and buffers are RAII, so dropping frees).
+    pub fn destroy_later<T: 'static>(&mut self, item: T) {
+        self.garbage.push((self.frame_number, Box::new(item)));
+    }
+
+    /// Resources waiting in the deferred-deletion queue.
+    pub fn pending_destructions(&self) -> usize {
+        self.garbage.len()
     }
 
     /// Recreates the per-image semaphores after a swapchain rebuild (device must be idle).
@@ -131,6 +147,9 @@ impl Frames {
             if !self.last_zones.is_empty() {
                 previous_gpu_ms = Some(self.last_zones.iter().map(|z| z.ms).sum());
             }
+            // Every frame up to that one has completed: its retired resources can go.
+            let completed = self.frame_number - FRAMES_IN_FLIGHT as u64;
+            self.garbage.retain(|(frame, _)| *frame > completed);
         }
         Ok(FrameSlot {
             index,
@@ -219,6 +238,8 @@ impl Frames {
 impl Drop for Frames {
     fn drop(&mut self) {
         self.device.wait_idle();
+        // Nothing is in flight any more: retired resources can go now.
+        self.garbage.clear();
         let raw = self.device.raw();
         // SAFETY: the GPU is idle, nothing references these objects any more.
         unsafe {

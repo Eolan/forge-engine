@@ -45,8 +45,11 @@ capture) before and after, and update `docs/PROFILE.md`.
 - Coordinates: right-handed, +Y up, −Z forward, 1 unit = 1 metre, reversed-Z infinite
   projection; f64 frames and camera-relative f32 (D-004). Determinism rules in D-016.
 - Shaders: one Slang file per pass in `shaders/`, buffers by device address (`T*` in a
-  per-frame block), one global bindless set for images/samplers. Every pass ends with
-  `commands.mark("group/name")` so it appears in the profiler.
+  per-frame block), one global bindless set for images/samplers.
+- Every pass is a render-graph pass (`graph.pass("group/name")`, D-020) declaring the images
+  and buffers it reads and writes; the graph derives the barriers and the profiler zone.
+  Nobody outside `forge-gpu` records a barrier; if a pass needs a resource the graph cannot
+  express, extend the graph. `FORGE_GRAPH_LOG=1` shows the derived plan.
 - Docs are part of the change: a new system gets a research file, a decision entry, a demo
   page with numbers; a changed number gets updated where it is quoted.
 - Never copy credentials into the repo or the docs (`server-auth.md`, `.env`,

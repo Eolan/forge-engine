@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
+use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
 use forge_core::{Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
@@ -284,7 +284,7 @@ impl Demo for Ballad {
         self.camera.pitch = forward.y.asin().clamp(-1.2, 1.2);
     }
 
-    fn render(&mut self, ctx: &mut Context, frame: &FrameInfo<'_>) -> Result<()> {
+    fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
         if let Some(stats) = self.renderer.take_stats(frame.slot) {
             self.stats.push(stats);
@@ -364,31 +364,26 @@ impl Demo for Ballad {
                 );
             }
         }
-        // Draw jittered into the HDR target; cull with the unjittered camera.
+        // Draw jittered into the HDR target; cull with the unjittered camera. The sky, the
+        // rocks and the resolve are graph passes: the graph orders their colour writes.
         self.taa.enabled = self.taa_enabled;
-        let taa_frame = self
-            .taa
-            .begin(&frame.commands, self.camera.projection(ctx.aspect()));
+        let taa_frame = self.taa.begin(
+            &mut frame.graph,
+            self.camera.projection(ctx.aspect()),
+            cull.view_proj,
+        );
         let draw_view_proj = taa_frame.jittered_projection * self.camera.view();
         self.starfield.draw(
-            &frame.commands,
-            taa_frame.color_view,
+            &mut frame.graph,
+            taa_frame.color,
             extent,
             draw_view_proj,
             self.renderer.sun_dir,
         );
-        // The rocks are drawn over the sky in a second rendering scope: order the two sets of
-        // colour writes (dynamic rendering has no implicit dependencies between scopes).
-        frame.commands.memory_barrier(
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        );
-        self.renderer.draw(
-            &frame.commands,
+        let depth = self.renderer.draw(
+            &mut frame.graph,
             frame.slot,
-            &DrawParams {
+            DrawParams {
                 scene: &self.scene,
                 view_proj: draw_view_proj,
                 cull,
@@ -396,19 +391,14 @@ impl Demo for Ballad {
                 draw_jitter: taa_frame.jitter
                     / glam::Vec2::new(extent.width as f32, extent.height as f32),
                 flags: self.flags,
-                color_view: taa_frame.color_view,
+                color: taa_frame.color,
                 extent,
                 clear_color: None,
                 wireframe: self.wireframe,
             },
         )?;
-        self.taa.resolve(
-            &frame.commands,
-            &taa_frame,
-            self.renderer.depth(),
-            cull.view_proj,
-            ctx.swapchain.image(frame.image_index),
-        );
+        self.taa
+            .resolve(&mut frame.graph, &taa_frame, depth, frame.target);
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())
     }

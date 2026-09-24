@@ -26,7 +26,7 @@ Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-
 
 ![Passing the planet](images/asteroids-planet.png)
 
-![The profiling overlay (F1, full view): GPU time per pass, CPU time per zone, counters](images/asteroids-profile.png)
+![The profiling overlay (F1, full view): GPU time per graph pass, CPU time per zone, the render graph's counters (passes, barriers, transient heap) and the demo's](images/asteroids-profile.png)
 
 ![Clusters coloured by LOD level (K): grey 0, green 1, yellow 2, orange 3, red 4, magenta 5, blue 6, cyan 7+](images/asteroids-lod-levels.png)
 
@@ -168,20 +168,47 @@ at several frames along the path — **0 of 1 440 000 pixels differ** every time
 back-facing or hidden and leaves no pixel, so the image must stay free of red, and does.
 The `--taa-blend 1` mode (jitter, no history) makes TAA frames comparable one by one.
 
-## Known residual: TAA history is not bit-exact between runs
+## Through the render graph (2026-09-24, issue #1)
 
-Two identical runs with TAA on and the camera moving differ at frame 600 in about 700 of
-1 440 000 pixels by up to 30 levels (invisible), sometimes in 0. Everything narrower is exact:
-TAA off, jitter without history (`--taa-blend 1`), a static camera with history, and the
-per-frame CPU inputs (`FORGE_TRACE_FRAMES` traces of two runs are identical). Synchronization
-validation and GPU-assisted validation report nothing; a full barrier before every pass
-(`FORGE_PARANOID_BARRIERS`), a device wait after every frame (`FORGE_WAIT_IDLE`) and vsync
-change nothing; a CPU sleep of 20 ms or more after every frame (`FORGE_STALL_MS=20`) makes
-every run bit-identical, and periodic captures do the same. The outcome is bimodal (runs land
-on one of two histories), so it is a GPU-side effect that only the temporal feedback loop
-amplifies; it is not a culling error. Use `FORGE_STALL_MS=20` for reference captures and treat
-it as open (revisit with the render graph's explicit resource states and when TAA is
-replaced by DLSS on NVIDIA).
+The ballad's frame is declared, not recorded: the TAA declares the HDR colour transient and
+returns the jittered projection, the sky declares a colour-attachment pass, the meshlet
+renderer declares the instance cull, the first mesh pass, eleven pyramid passes and the
+second mesh pass (returning the depth transient), the TAA declares motion vectors, resolve
+and the blit, and the shell adds the overlay, the capture and the present. The graph derives
+the barriers from what each pass declared and from the state the previous frame left:
+
+| per frame | passes | image barriers | memory barriers | transients |
+|---|---|---|---|---|
+| ballad (TAA on, occlusion on) | 19 | 37 | 3 | colour 12.8 MB, depth 6.4 MB, motion 6.4 MB |
+| bench (occlusion on) | 15 | 28 | 2 | depth 6.4 MB |
+
+`FORGE_GRAPH_LOG=1` prints the plan; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
+memory. Proof that nothing changed: the seven reference captures taken before the migration
+(frames 240 and 600 with and without TAA, with and without occlusion, the bench static and
+orbiting) differ from the graph's in **0 pixels**, as do aliased vs non-aliased transients;
+validation and synchronization validation are silent. The F1 overlay's counters show the
+graph's per-frame numbers and the transient heap. Not in this step: async compute and
+transfer queues, transient buffers, resolving straight into the swapchain (the blit stays so
+the images stay identical; it is the next TAA item).
+
+## Resolved: TAA history is bit-exact between runs since the render graph (issue #10)
+
+Before the graph, two identical runs with TAA on and the camera moving differed at frame
+600 in about 700 of 1 440 000 pixels by up to 30 levels (invisible), sometimes in 0.
+Everything narrower was exact: TAA off, jitter without history (`--taa-blend 1`), a static
+camera with history, and the per-frame CPU inputs (`FORGE_TRACE_FRAMES` traces of two runs
+identical). Synchronization validation and GPU-assisted validation reported nothing; a full
+barrier before every pass, a device wait after every frame and vsync changed nothing; a CPU
+sleep of 20 ms after every frame (`FORGE_STALL_MS=20`) made every run bit-identical. The
+outcome was bimodal (runs landed on one of two histories): a GPU-side ordering effect that
+only the temporal feedback loop amplified.
+
+With the render graph deriving every barrier from declared accesses (2026-09-24), **twelve
+of twelve runs** of `--fixed-step --frames 601 --capture --capture-frame 600` are
+bit-identical (0 pixels, max channel error 0), without any stall. Which hand-written
+dependency was incomplete was not isolated; the graph replaced them all, and the plan it
+derives (`FORGE_GRAPH_LOG=1`) is the record of what the frame now waits for.
+`FORGE_STALL_MS` stays as a debugging aid.
 
 ## What the numbers say
 

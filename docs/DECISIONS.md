@@ -247,3 +247,29 @@ Cloud coverage, precipitation, temperature, wind vector, humidity in one struct 
 the simulation and read by rendering (precipitation, wetness, snow), materials (D-007),
 audio and physics (wind forces). *(research: lighting-gi.md — weather rendering not yet
 researched, vegetation-materials.md §8 — pending)*
+
+## D-020 — Render graph: declared accesses, derived barriers, aliased transients ✅ (2026-09-24)
+
+Every pass declares the images (per mip level where it matters) and buffers it reads and
+writes, with an access kind (`ColorAttachment`, `DepthAttachment`, `Sampled(stages)`,
+`StorageWrite(stages)`, `IndirectArgs`, …); the graph derives every barrier and layout
+transition from the tracked state of each subresource and records the passes in
+declaration order, one profiler zone per pass label. Per-frame images are transients of the
+graph, laid out in one heap from their lifetimes (largest first, first fit among the images
+whose lifetimes intersect), so images that never coexist share memory; their first use in
+a frame waits for whatever last touched that memory, in this frame or the previous one.
+Persistent images and buffers (`GraphImage`, `GraphBuffer`) carry their state across
+frames; anything a frame in flight may still use is destroyed through the frame slots
+(`Frames::destroy_later`). Nothing is culled or reordered, there is one queue, and nobody
+outside `forge-gpu` records a barrier. Async compute and transfer queues are the next
+extension (a queue per pass, timeline waits and ownership transfers on crossing edges),
+as are transient buffers. The graph lives in `forge-gpu` (not `forge-render` as first
+planned) because the app shell and every renderer draw through it and the barrier
+vocabulary is Vulkan's; the module is written without `unsafe`.
+*Measured:* the ballad and the bench through the graph are pixel-identical to the
+hand-written barriers (0 pixels over seven captures, and 0 between the aliased heap and
+`FORGE_GRAPH_NO_ALIAS`), validation and synchronization validation clean; a ballad frame
+is 19 passes, 37 image barriers and 3 memory barriers, its three transients 25.6 MB. Nothing
+aliases in that frame yet (colour, depth and motion vectors are all alive at the resolve);
+the heap pays once post-processing chains arrive. *(research: task-system.md §F,
+memory-streaming.md §2; issue #1)*

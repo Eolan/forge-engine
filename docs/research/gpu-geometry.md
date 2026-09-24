@@ -353,3 +353,34 @@ that is also the `x` of the indirect mesh-task command) leaves a few thousand gr
 pass; both passes draw `vkCmdDrawMeshTasksIndirectEXT` over that list. Geometry passes:
 0.46 + 0.42 ms → 0.06 + 0.02 ms, cull pass 0.02 ms; ballad frame 0.34 ms at 1 px. This is
 the GPU-driven shape the fallback path (compute culling + indirect count draws) will share.
+
+### The render graph in Forge (2026-09-24, issue #1, D-020)
+
+Everything above now draws through `forge_gpu::graph`. What the migration taught:
+
+- **Declared accesses find the barriers hands miss.** Writing the plan down as data made
+  three of the old hand barriers visibly redundant (a full `ALL_COMMANDS` wait on the depth
+  buffer every frame, the "unmarked demo work" zone, the overlay's `ALL_COMMANDS` fence) and
+  one subtle: the swapchain image went undefined → colour attachment → transfer destination
+  every frame although its first use is the blit. The graph goes straight to the first use.
+- **Per-mip states are the right granularity for a pyramid.** Eleven passes reading level
+  `l−1` and writing level `l` produce two image barriers each, one profiler zone for all
+  (consecutive passes with one label share a zone), and the pass-2 read of the whole pyramid
+  then costs exactly one barrier (the last level written) because the other levels are
+  already in the read state.
+- **Cross-frame state is the point.** The visibility bits (task read/write every frame), the
+  depth pyramid (read by the next frame when culling is frozen), the TAA histories (written
+  one frame, read the next) and the HDR colour transient (read by the resolve, rewritten by
+  the next frame's sky) all get their barrier from the state the previous frame left, not
+  from a conservative wait. Transients start from `UNDEFINED` every frame but keep the
+  stage/access of whatever last touched their memory, in either frame in flight.
+- **Aliasing has no customer yet.** Colour, depth and motion vectors are all alive at the
+  resolve, so the heap equals the sum (25.6 MB). The first-fit layout and the aliasing
+  barrier are unit-tested; the memory win arrives with post-processing chains and the
+  visibility-buffer passes.
+- **The bindless set and layouts.** A sampled-image descriptor carries a layout, so the
+  graph asks the image which layout its `Sampled` reads use (`GENERAL` for storage-capable
+  images such as the pyramid, `SHADER_READ_ONLY_OPTIMAL` otherwise) instead of the pass.
+- **Cost.** Compiling and recording 19 passes moved the CPU record zone from 0.07 to
+  0.08 ms; the GPU frame is unchanged (0.33 ms against 0.34 before), which is expected since
+  the same work runs behind barriers of the same kinds.

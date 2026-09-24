@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Commands, Device, FullscreenPipelineDesc, Pipeline, Result, ShaderCompiler, ShaderStage, vk,
+    Device, FrameGraph, FullscreenPipelineDesc, ImageAccess, ImageHandle, Pipeline, Result,
+    ShaderCompiler, ShaderStage, vk,
 };
 use glam::Mat4;
 
@@ -64,43 +65,47 @@ impl Starfield {
         })
     }
 
-    /// Draws the background over the whole colour target (which must be in
-    /// `COLOR_ATTACHMENT_OPTIMAL`), clearing nothing: the pass covers every pixel.
-    pub fn draw(
-        &self,
-        commands: &Commands<'_>,
-        color_view: vk::ImageView,
+    /// Declares the pass that draws the background over the whole of `color`, clearing
+    /// nothing: the pass covers every pixel.
+    pub fn draw<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        color: ImageHandle,
         extent: vk::Extent2D,
         view_proj: Mat4,
         sun_dir: glam::Vec3,
     ) {
-        let color = [vk::RenderingAttachmentInfo::default()
-            .image_view(color_view)
-            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .store_op(vk::AttachmentStoreOp::STORE)];
-        let info = vk::RenderingInfo::default()
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D::default(),
-                extent,
-            })
-            .layer_count(1)
-            .color_attachments(&color);
-        commands.begin_rendering(&info);
-        commands.bind_pipeline(&self.pipeline);
-        commands.set_viewport_full(extent);
-        commands.push_constants(
-            &self.pipeline,
-            &Push {
-                inv_view_proj: view_proj.inverse().to_cols_array(),
-                sun_dir: sun_dir.to_array(),
-                exposure: self.exposure,
-                planet_dir: self.planet_dir.to_array(),
-                planet_angle: self.planet_angle,
-            },
-        );
-        commands.draw(3, 1);
-        commands.end_rendering();
-        commands.mark("sky/starfield + planet");
+        let push = Push {
+            inv_view_proj: view_proj.inverse().to_cols_array(),
+            sun_dir: sun_dir.to_array(),
+            exposure: self.exposure,
+            planet_dir: self.planet_dir.to_array(),
+            planet_angle: self.planet_angle,
+        };
+        let pipeline = &self.pipeline;
+        graph
+            .pass("sky/starfield + planet")
+            .image(color, ImageAccess::ColorAttachment)
+            .run(move |resources, commands| {
+                let attachments = [vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(color))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .store_op(vk::AttachmentStoreOp::STORE)];
+                let info = vk::RenderingInfo::default()
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent,
+                    })
+                    .layer_count(1)
+                    .color_attachments(&attachments);
+                commands.begin_rendering(&info);
+                commands.bind_pipeline(pipeline);
+                commands.set_viewport_full(extent);
+                commands.push_constants(pipeline, &push);
+                commands.draw(3, 1);
+                commands.end_rendering();
+                Ok(())
+            });
     }
 }

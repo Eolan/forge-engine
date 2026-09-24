@@ -130,7 +130,9 @@ crops and the diff side by side, enlarged, for looking at a difference.
 | `FORGE_WAIT_IDLE=1` | wait for the GPU after every frame (debugging). |
 | `FORGE_FRAME_BARRIER=1` | a full memory barrier at the start of every frame (debugging). |
 | `FORGE_PARANOID_BARRIERS=1` | a full memory barrier before every pass (debugging). |
-| `FORGE_STALL_MS=N` | sleep N ms after every frame (debugging; `20` makes TAA captures bit-exact between runs, see `docs/demos/asteroids.md`). |
+| `FORGE_GRAPH_LOG=1` | log the render graph's compiled plan (passes, derived barriers, transient placement) whenever it changes. |
+| `FORGE_GRAPH_NO_ALIAS=1` | give every transient image its own memory instead of the aliased heap (debugging). |
+| `FORGE_STALL_MS=N` | sleep N ms after every frame (debugging; it was the workaround for the TAA run-to-run difference the render graph resolved, see `docs/demos/asteroids.md`). |
 | `FORGE_NO_TITLE=1` | never update the window title (debugging). |
 | `FORGE_TRACE_FRAMES=file` | `asteroids`: append every frame's CPU-side inputs to `file` (to diff two runs). |
 | `RUST_LOG` | tracing filter (`info` by default). |

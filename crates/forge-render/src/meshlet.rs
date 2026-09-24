@@ -1,17 +1,18 @@
 //! GPU-driven meshlet rendering (`shaders/meshlet.slang`, `shaders/hzb.slang`).
 //!
 //! [`MeshletSceneBuilder`] concatenates any number of meshlet meshes and instances into the
-//! GPU tables; [`MeshletRenderer`] owns the depth buffer, the hierarchical-Z pyramid, the
-//! pipelines and the per-slot frame blocks, and records the two-pass occluded draw.
+//! GPU tables; [`MeshletRenderer`] owns the hierarchical-Z pyramid, the pipelines and the
+//! per-slot frame blocks, and declares the passes of the two-pass occluded draw into the
+//! render graph (the depth buffer is a transient of the frame).
 
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, GpuVertex, MeshletMesh};
 use forge_gpu::{
-    Buffer, BufferDesc, Commands, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameSlot, Image,
-    ImageDesc, MemoryLocation, MeshPipelineDesc, Pipeline, Result, SampledImageId, ShaderCompiler,
-    ShaderStage, StorageImageId, vk,
+    Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
+    FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryLocation,
+    MeshPipelineDesc, Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
@@ -302,11 +303,11 @@ impl MeshletSceneBuilder {
             )?,
             meshes: device.create_buffer_with_data(&self.meshes, usage, "meshes")?,
             instances: device.create_buffer_with_data(&self.instances, usage, "instances")?,
-            visibility: device.create_buffer_with_data(
+            visibility: GraphBuffer::new(device.create_buffer_with_data(
                 &vec![0_u32; visibility_words],
                 usage,
                 "visibility bits",
-            )?,
+            )?),
             group_table: device.create_buffer_with_data(
                 &self.group_table,
                 usage,
@@ -314,22 +315,26 @@ impl MeshletSceneBuilder {
             )?,
             work: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
-                    device.create_buffer(BufferDesc {
-                        size: u64::from(self.group_table.len() as u32) * 8,
-                        usage,
-                        location: MemoryLocation::GpuOnly,
-                        name: &format!("task work list {i}"),
-                    })
+                    device
+                        .create_buffer(BufferDesc {
+                            size: u64::from(self.group_table.len() as u32) * 8,
+                            usage,
+                            location: MemoryLocation::GpuOnly,
+                            name: &format!("task work list {i}"),
+                        })
+                        .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
             indirect: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
-                    device.create_buffer(BufferDesc {
-                        size: 16,
-                        usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
-                        location: MemoryLocation::CpuToGpu,
-                        name: &format!("task indirect {i}"),
-                    })
+                    device
+                        .create_buffer(BufferDesc {
+                            size: 16,
+                            usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                            location: MemoryLocation::CpuToGpu,
+                            name: &format!("task indirect {i}"),
+                        })
+                        .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
             instance_count: self.instances.len() as u32,
@@ -351,12 +356,14 @@ pub struct MeshletScene {
     meshlet_triangles: Buffer,
     meshes: Buffer,
     instances: Buffer,
-    visibility: Buffer,
+    /// One bit per (instance, cluster): visible last frame. Read and rewritten by the task
+    /// shader every frame, so the graph tracks it.
+    visibility: GraphBuffer,
     group_table: Buffer,
     /// Per frame slot: the task-group work list built by the cull pass.
-    work: Vec<Buffer>,
+    work: Vec<GraphBuffer>,
     /// Per frame slot: the indirect mesh-task command (x = work count).
-    indirect: Vec<Buffer>,
+    indirect: Vec<GraphBuffer>,
     /// Instances.
     pub instance_count: u32,
     /// Task groups per pass (every instance's clusters in groups of 32).
@@ -447,29 +454,15 @@ pub struct FrameStats {
     pub lod_level_sum: u32,
 }
 
-struct DepthResources {
-    depth: Image,
-    depth_sampled: SampledImageId,
-    hzb: Image,
-    hzb_sampled: SampledImageId,
-    hzb_storage: Vec<StorageImageId>,
-}
-
-impl DepthResources {
-    fn new(device: &Arc<Device>, extent: vk::Extent2D) -> Result<Self> {
-        let depth = device.create_image(ImageDesc {
-            width: extent.width,
-            height: extent.height,
-            format: vk::Format::D32_SFLOAT,
-            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            aspect: vk::ImageAspectFlags::DEPTH,
-            mip_levels: 1,
-            name: "depth",
-        })?;
-        let prev_pow2 = |v: u32| 1_u32 << (31 - v.max(1).leading_zeros());
-        let (w, h) = (prev_pow2(extent.width), prev_pow2(extent.height));
-        let mips = 32 - w.max(h).leading_zeros();
-        let hzb = device.create_image(ImageDesc {
+/// The hierarchical-Z pyramid: power-of-two, one storage view per level, sampled in
+/// `GENERAL`. Persistent (a frozen culling camera keeps using the last one built).
+fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphImage> {
+    let prev_pow2 = |v: u32| 1_u32 << (31 - v.max(1).leading_zeros());
+    let (w, h) = (prev_pow2(extent.width), prev_pow2(extent.height));
+    let mips = 32 - w.max(h).leading_zeros();
+    let hzb = GraphImage::new(
+        device,
+        ImageDesc {
             width: w,
             height: h,
             format: vk::Format::R32_SFLOAT,
@@ -477,52 +470,28 @@ impl DepthResources {
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: mips,
             name: "hzb",
-        })?;
-        device.initialize_image_layout(
-            &hzb,
-            vk::ImageAspectFlags::COLOR,
-            vk::ImageLayout::GENERAL,
-        )?;
-        let depth_sampled =
-            device.register_sampled_image(depth.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        let hzb_sampled = device.register_sampled_image(hzb.view(), vk::ImageLayout::GENERAL);
-        let hzb_storage = (0..mips)
-            .map(|level| device.register_storage_image(hzb.mip_view(level)))
-            .collect();
-        tracing::info!(hzb_width = w, hzb_height = h, mips, "depth pyramid created");
-        Ok(Self {
-            depth,
-            depth_sampled,
-            hzb,
-            hzb_sampled,
-            hzb_storage,
-        })
-    }
-
-    fn release(&self, device: &Device) {
-        device.release_sampled_image(self.depth_sampled);
-        device.release_sampled_image(self.hzb_sampled);
-        for &id in &self.hzb_storage {
-            device.release_storage_image(id);
-        }
-    }
+        },
+    )?;
+    tracing::info!(hzb_width = w, hzb_height = h, mips, "depth pyramid created");
+    Ok(hzb)
 }
 
-/// Records the meshlet passes for one scene.
+/// Declares the meshlet passes for one scene.
 pub struct MeshletRenderer {
     device: Arc<Device>,
     pipeline_solid: Pipeline,
     pipeline_wire: Pipeline,
     pipeline_hzb: Pipeline,
     pipeline_cull: Pipeline,
-    depth: DepthResources,
+    hzb: GraphImage,
     frame_buffers: Vec<Buffer>,
-    stats_buffers: Vec<Buffer>,
+    stats_buffers: Vec<GraphBuffer>,
     /// Direction *to* the sun (world space), used by the fragment shader.
     pub sun_dir: Vec3,
 }
 
 /// What to draw this frame.
+#[derive(Clone, Copy)]
 pub struct DrawParams<'a> {
     /// The scene tables.
     pub scene: &'a MeshletScene,
@@ -538,14 +507,26 @@ pub struct DrawParams<'a> {
     pub lod_threshold_px: f32,
     /// Culling flags.
     pub flags: CullFlags,
-    /// Colour target, already in `COLOR_ATTACHMENT_OPTIMAL`.
-    pub color_view: vk::ImageView,
+    /// Colour target (a graph handle; the passes declare it as a colour attachment).
+    pub color: ImageHandle,
     /// Target size.
     pub extent: vk::Extent2D,
     /// Clear the colour target first, or load what a previous pass drew.
     pub clear_color: Option<[f32; 4]>,
     /// Wireframe.
     pub wireframe: bool,
+}
+
+/// The graph handles one mesh pass touches.
+#[derive(Clone, Copy)]
+struct MeshPassIo {
+    color: ImageHandle,
+    depth: ImageHandle,
+    hzb: ImageHandle,
+    work: forge_gpu::BufferHandle,
+    indirect: forge_gpu::BufferHandle,
+    visibility: forge_gpu::BufferHandle,
+    stats: forge_gpu::BufferHandle,
 }
 
 impl MeshletRenderer {
@@ -609,7 +590,7 @@ impl MeshletRenderer {
         for module in [task, mesh, frag, hzb, cull] {
             device.destroy_shader_module(module);
         }
-        let depth = DepthResources::new(device, extent)?;
+        let hzb = create_pyramid(device, extent)?;
         let frame_buffers = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -629,7 +610,7 @@ impl MeshletRenderer {
                     name: &format!("meshlet stats {i}"),
                 })?;
                 b.write(0, &[0_u32; STAT_COUNT]);
-                Ok(b)
+                Ok(GraphBuffer::new(b))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
@@ -638,28 +619,22 @@ impl MeshletRenderer {
             pipeline_wire,
             pipeline_hzb,
             pipeline_cull,
-            depth,
+            hzb,
             frame_buffers,
             stats_buffers,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
         })
     }
 
-    /// Recreates the depth resources. The device must be idle.
+    /// Recreates the depth pyramid. The device must be idle.
     pub fn resize(&mut self, extent: vk::Extent2D) -> Result<()> {
-        self.depth.release(&self.device);
-        self.depth = DepthResources::new(&self.device, extent)?;
+        self.hzb = create_pyramid(&self.device, extent)?;
         Ok(())
     }
 
     /// Size of the depth pyramid's level 0.
     pub fn hzb_extent(&self) -> vk::Extent2D {
-        self.depth.hzb.extent()
-    }
-
-    /// The depth buffer and its sampled-image handle (`DEPTH_ATTACHMENT_OPTIMAL` after `draw`).
-    pub fn depth(&self) -> (vk::Image, SampledImageId) {
-        (self.depth.depth.raw(), self.depth.depth_sampled)
+        self.hzb.extent()
     }
 
     /// Reads and clears the statistics of the frame that last used `slot`. Returns `None`
@@ -680,7 +655,7 @@ impl MeshletRenderer {
 
     fn frame_block(&self, slot: FrameSlot, params: &DrawParams<'_>, pass: u32) -> GpuFrame {
         let scene = params.scene;
-        let hzb = self.depth.hzb.extent();
+        let hzb = self.hzb.extent();
         GpuFrame {
             view_proj: params.view_proj.to_cols_array(),
             cull_view_proj: params.cull.view_proj.to_cols_array(),
@@ -691,7 +666,7 @@ impl MeshletRenderer {
             max_meshlets: scene.max_meshlets,
             flags: params.flags.0,
             pass,
-            hzb_image: self.depth.hzb_sampled.0,
+            hzb_image: self.hzb.sampled().0,
             hzb_size: [hzb.width, hzb.height],
             p00: params.cull.p00,
             p11: params.cull.p11,
@@ -716,14 +691,16 @@ impl MeshletRenderer {
         }
     }
 
-    /// Records the passes into `commands`. The colour target must be in
-    /// `COLOR_ATTACHMENT_OPTIMAL` and stays there.
-    pub fn draw(
-        &mut self,
-        commands: &Commands<'_>,
+    /// Declares the passes of this frame's draw: instance cull, the first mesh pass, the
+    /// depth pyramid and the second mesh pass (with occlusion), all reading and writing
+    /// through declared graph accesses. Returns the frame's depth buffer (a transient) for
+    /// passes that need it afterwards (temporal anti-aliasing).
+    pub fn draw<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
         slot: FrameSlot,
-        params: &DrawParams<'_>,
-    ) -> Result<()> {
+        params: DrawParams<'f>,
+    ) -> Result<ImageHandle> {
         let occlusion = params.flags.has(CullFlags::OCCLUSION);
         let frozen = params.flags.has(CullFlags::FREEZE);
         let first_pass = if occlusion {
@@ -731,203 +708,230 @@ impl MeshletRenderer {
         } else {
             PASS_SINGLE
         };
-        let block1 = self.frame_block(slot, params, first_pass);
-        let block2 = self.frame_block(slot, params, PASS_REMAINDER);
+        let block1 = self.frame_block(slot, &params, first_pass);
+        let block2 = self.frame_block(slot, &params, PASS_REMAINDER);
         self.frame_buffers[slot.index].write(0, &[block1]);
         self.frame_buffers[slot.index].write(FRAME_BLOCK_STRIDE, &[block2]);
+        // The indirect command of both passes (x = group count, reset here every frame).
+        let scene = params.scene;
+        scene.indirect[slot.index].write(0, &[0_u32, 1, 1, 0]);
 
         let extent = params.extent;
-        let depth_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::DEPTH,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
+        let depth = graph.transient(TransientDesc {
+            name: "depth",
+            width: extent.width,
+            height: extent.height,
+            format: vk::Format::D32_SFLOAT,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::DEPTH,
+            mip_levels: 1,
+        });
+        let io = MeshPassIo {
+            color: params.color,
+            depth,
+            hzb: graph.import(&self.hzb),
+            work: graph.import_buffer(&scene.work[slot.index]),
+            indirect: graph.import_buffer(&scene.indirect[slot.index]),
+            visibility: graph.import_buffer(&scene.visibility),
+            stats: graph.import_buffer(&self.stats_buffers[slot.index]),
         };
-        let depth_image = self.depth.depth.raw();
-        let depth_barrier = || {
-            vk::ImageMemoryBarrier2::default()
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(depth_image)
-                .subresource_range(depth_range)
-        };
-        let attachment_stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
-            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
-        let attachment_access = vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE
-            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
+        let frame_address = self.frame_buffers[slot.index].address();
 
-        let color_attachment = |load: vk::AttachmentLoadOp| {
-            vk::RenderingAttachmentInfo::default()
-                .image_view(params.color_view)
+        // Instance culling and LOD level windows in compute: the task-group work list.
+        let cull_pipeline = &self.pipeline_cull;
+        let instance_count = scene.instance_count;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        graph
+            .pass("geometry/instance cull")
+            .buffer(io.work, BufferAccess::ShaderWrite(compute))
+            .buffer(io.indirect, BufferAccess::ShaderWrite(compute))
+            .buffer(io.stats, BufferAccess::ShaderWrite(compute))
+            .run(move |_, commands| {
+                commands.bind_pipeline(cull_pipeline);
+                commands.push_constants(
+                    cull_pipeline,
+                    &Push {
+                        frame: frame_address,
+                    },
+                );
+                commands.dispatch(instance_count.div_ceil(64).max(1), 1, 1);
+                Ok(())
+            });
+
+        let first = MeshPass {
+            label: if occlusion {
+                "geometry/meshlet pass 1 (visible last frame)"
+            } else {
+                "geometry/meshlets (single pass)"
+            },
+            io,
+            frame_address,
+            first: true,
+            reads_hzb: false,
+        };
+        self.mesh_pass(graph, first, &params, slot);
+
+        if occlusion {
+            if !frozen {
+                self.pyramid_passes(graph, io);
+            }
+            let second = MeshPass {
+                label: "geometry/meshlet pass 2 (newly visible)",
+                io,
+                frame_address: frame_address + FRAME_BLOCK_STRIDE,
+                first: false,
+                reads_hzb: true,
+            };
+            self.mesh_pass(graph, second, &params, slot);
+        }
+        Ok(depth)
+    }
+
+    /// One mesh-shader pass over the work list: clears the targets when `first`, tests the
+    /// depth pyramid when `reads_hzb`.
+    fn mesh_pass<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        pass: MeshPass,
+        params: &DrawParams<'f>,
+        slot: FrameSlot,
+    ) {
+        use vk::PipelineStageFlags2 as S;
+        let pipeline = if params.wireframe {
+            &self.pipeline_wire
+        } else {
+            &self.pipeline_solid
+        };
+        let indirect: &'f GraphBuffer = &params.scene.indirect[slot.index];
+        let extent = params.extent;
+        let clear_color = params.clear_color.filter(|_| pass.first);
+        let MeshPass {
+            label,
+            io,
+            frame_address,
+            first,
+            reads_hzb,
+        } = pass;
+        let mut builder = graph
+            .pass(label)
+            .buffer(io.work, BufferAccess::ShaderRead(S::TASK_SHADER_EXT))
+            .buffer(io.indirect, BufferAccess::IndirectArgs)
+            .buffer(
+                io.visibility,
+                BufferAccess::ShaderReadWrite(S::TASK_SHADER_EXT),
+            )
+            .buffer(
+                io.stats,
+                BufferAccess::ShaderWrite(
+                    S::TASK_SHADER_EXT | S::MESH_SHADER_EXT | S::FRAGMENT_SHADER,
+                ),
+            )
+            .image(io.color, ImageAccess::ColorAttachment)
+            .image(io.depth, ImageAccess::DepthAttachment);
+        if reads_hzb {
+            builder = builder.image(io.hzb, ImageAccess::Sampled(S::TASK_SHADER_EXT));
+        }
+        builder.run(move |resources, commands| {
+            let color = [vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(io.color))
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(load)
+                .load_op(if clear_color.is_some() {
+                    vk::AttachmentLoadOp::CLEAR
+                } else {
+                    vk::AttachmentLoadOp::LOAD
+                })
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue {
-                        float32: params.clear_color.unwrap_or([0.0; 4]),
+                        float32: clear_color.unwrap_or([0.0; 4]),
                     },
-                })
-        };
-        let depth_attachment = |load: vk::AttachmentLoadOp| {
-            vk::RenderingAttachmentInfo::default()
-                .image_view(self.depth.depth.view())
+                })];
+            let depth = vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(io.depth))
                 .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                .load_op(load)
+                .load_op(if first {
+                    vk::AttachmentLoadOp::CLEAR
+                } else {
+                    vk::AttachmentLoadOp::LOAD
+                })
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue {
                         depth: 0.0,
                         stencil: 0,
                     },
+                });
+            let info = vk::RenderingInfo::default()
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent,
                 })
-        };
-        let first_color = [color_attachment(if params.clear_color.is_some() {
-            vk::AttachmentLoadOp::CLEAR
-        } else {
-            vk::AttachmentLoadOp::LOAD
-        })];
-        let second_color = [color_attachment(vk::AttachmentLoadOp::LOAD)];
-        let first_depth = depth_attachment(vk::AttachmentLoadOp::CLEAR);
-        let second_depth = depth_attachment(vk::AttachmentLoadOp::LOAD);
-        let area = vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent,
-        };
-        let rendering_pass1 = vk::RenderingInfo::default()
-            .render_area(area)
-            .layer_count(1)
-            .color_attachments(&first_color)
-            .depth_attachment(&first_depth);
-        let rendering_pass2 = vk::RenderingInfo::default()
-            .render_area(area)
-            .layer_count(1)
-            .color_attachments(&second_color)
-            .depth_attachment(&second_depth);
-
-        let pipeline = if params.wireframe {
-            &self.pipeline_wire
-        } else {
-            &self.pipeline_solid
-        };
-        let frame_address = self.frame_buffers[slot.index].address();
-
-        // Visibility bits written by the previous frame must be visible to this frame's task shader.
-        commands.memory_barrier(
-            vk::PipelineStageFlags2::TASK_SHADER_EXT,
-            vk::AccessFlags2::SHADER_STORAGE_WRITE,
-            vk::PipelineStageFlags2::TASK_SHADER_EXT,
-            vk::AccessFlags2::SHADER_STORAGE_READ,
-        );
-        // Instance culling and LOD level windows in compute: the task-group work list and the
-        // indirect command of both passes (x = group count, reset here every frame).
-        params.scene.indirect[slot.index].write(0, &[0_u32, 1, 1, 0]);
-        commands.bind_pipeline(&self.pipeline_cull);
-        commands.push_constants(
-            &self.pipeline_cull,
-            &Push {
-                frame: frame_address,
-            },
-        );
-        commands.dispatch(params.scene.instance_count.div_ceil(64).max(1), 1, 1);
-        commands.memory_barrier(
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
-            vk::AccessFlags2::SHADER_STORAGE_WRITE,
-            vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::TASK_SHADER_EXT,
-            vk::AccessFlags2::INDIRECT_COMMAND_READ | vk::AccessFlags2::SHADER_STORAGE_READ,
-        );
-        commands.mark("geometry/instance cull");
-        // The previous frame may have sampled the depth (pyramid build, TAA): wait for everything.
-        commands.image_barriers(&[depth_barrier()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .src_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
-            .dst_stage_mask(attachment_stages)
-            .dst_access_mask(attachment_access)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)]);
-
-        commands.begin_rendering(&rendering_pass1);
-        commands.bind_pipeline(pipeline);
-        commands.set_viewport_full(extent);
-        commands.push_constants(
-            pipeline,
-            &Push {
-                frame: frame_address,
-            },
-        );
-        commands.draw_mesh_tasks_indirect(&params.scene.indirect[slot.index], 0)?;
-        commands.end_rendering();
-        commands.mark(if occlusion {
-            "geometry/meshlet pass 1 (visible last frame)"
-        } else {
-            "geometry/meshlets (single pass)"
+                .layer_count(1)
+                .color_attachments(&color)
+                .depth_attachment(&depth);
+            commands.begin_rendering(&info);
+            commands.bind_pipeline(pipeline);
+            commands.set_viewport_full(extent);
+            commands.push_constants(
+                pipeline,
+                &Push {
+                    frame: frame_address,
+                },
+            );
+            let result = commands.draw_mesh_tasks_indirect(indirect, 0);
+            commands.end_rendering();
+            result
         });
+    }
 
-        if occlusion {
-            if !frozen {
-                commands.image_barriers(&[depth_barrier()
-                    .src_stage_mask(attachment_stages)
-                    .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                    .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                    .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]);
-                commands.bind_pipeline(&self.pipeline_hzb);
-                for level in 0..self.depth.hzb.mip_levels() {
-                    let dst = self.depth.hzb.mip_extent(level);
+    /// Builds the depth pyramid level by level: level 0 from the depth buffer, each next
+    /// level from the previous one (one pass per level, one profiler zone for all).
+    fn pyramid_passes<'f>(&'f self, graph: &mut FrameGraph<'f>, io: MeshPassIo) {
+        use vk::PipelineStageFlags2 as S;
+        let pipeline = &self.pipeline_hzb;
+        let hzb = &self.hzb;
+        for level in 0..hzb.mip_levels() {
+            let dst = hzb.mip_extent(level);
+            let pass = graph.pass("geometry/depth pyramid");
+            let pass = if level == 0 {
+                pass.image(io.depth, ImageAccess::Sampled(S::COMPUTE_SHADER))
+            } else {
+                pass.image_mip(io.hzb, level - 1, ImageAccess::Sampled(S::COMPUTE_SHADER))
+            };
+            pass.image_mip(io.hzb, level, ImageAccess::StorageWrite(S::COMPUTE_SHADER))
+                .run(move |resources, commands| {
                     let (src_image, src_level) = if level == 0 {
-                        (self.depth.depth_sampled.0, 0)
+                        (resources.sampled(io.depth).0, 0)
                     } else {
-                        (self.depth.hzb_sampled.0, level - 1)
+                        (hzb.sampled().0, level - 1)
                     };
+                    commands.bind_pipeline(pipeline);
                     commands.push_constants(
-                        &self.pipeline_hzb,
+                        pipeline,
                         &HzbPush {
                             src_image,
                             src_level,
-                            dst_image: self.depth.hzb_storage[level as usize].0,
+                            dst_image: hzb.storage(level).0,
                             dst_width: dst.width,
                             dst_height: dst.height,
                             pad: [0; 3],
                         },
                     );
                     commands.dispatch(dst.width.div_ceil(8), dst.height.div_ceil(8), 1);
-                    commands.memory_barrier(
-                        vk::PipelineStageFlags2::COMPUTE_SHADER,
-                        vk::AccessFlags2::SHADER_STORAGE_WRITE,
-                        vk::PipelineStageFlags2::COMPUTE_SHADER
-                            | vk::PipelineStageFlags2::TASK_SHADER_EXT,
-                        vk::AccessFlags2::SHADER_SAMPLED_READ,
-                    );
-                }
-                commands.mark("geometry/depth pyramid");
-                commands.image_barriers(&[depth_barrier()
-                    .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                    .src_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                    .dst_stage_mask(attachment_stages)
-                    .dst_access_mask(attachment_access)
-                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)]);
-            }
-            commands.begin_rendering(&rendering_pass2);
-            commands.bind_pipeline(pipeline);
-            commands.set_viewport_full(extent);
-            commands.push_constants(
-                pipeline,
-                &Push {
-                    frame: frame_address + FRAME_BLOCK_STRIDE,
-                },
-            );
-            commands.draw_mesh_tasks_indirect(&params.scene.indirect[slot.index], 0)?;
-            commands.end_rendering();
-            commands.mark("geometry/meshlet pass 2 (newly visible)");
+                    Ok(())
+                });
         }
-        Ok(())
     }
 }
 
-impl Drop for MeshletRenderer {
-    fn drop(&mut self) {
-        self.depth.release(&self.device);
-    }
+/// One mesh-shader pass to declare.
+#[derive(Clone, Copy)]
+struct MeshPass {
+    label: &'static str,
+    io: MeshPassIo,
+    frame_address: u64,
+    /// Clears colour (when asked) and depth; the second pass loads both.
+    first: bool,
+    /// Tests clusters against the depth pyramid.
+    reads_hzb: bool,
 }

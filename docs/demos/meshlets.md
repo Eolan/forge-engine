@@ -93,8 +93,14 @@ detail 96, welded seams), 1194 meshlets per instance → **1.4 M meshlets, 127 M
   with `D32_SFLOAT` and an infinite far plane (`GREATER_OR_EQUAL`).
 - Frame statistics are written by the shaders into a per-slot host-visible buffer and read
   back two frames later, so the window title shows real visible counts without a stall.
-- Resources are RAII (`Buffer`, `Image`, `Pipeline`, `Surface` hold their device). Until the
-  render graph brings deferred deletion, anything destroyed mid-run waits for idle first.
+- Resources are RAII (`Buffer`, `Image`, `Pipeline`, `Surface` hold their device). Anything a
+  frame in flight may still use is retired through `Frames::destroy_later` (dropped when
+  that frame has completed); resizes still wait for idle.
+- Since 2026-09-24 the bench draws through the render graph (D-020): the cull pass, the two
+  mesh passes and the eleven pyramid levels declare their buffers and images (per mip for
+  the pyramid) and the graph derives the 28 image barriers and 2 memory barriers of a frame;
+  the depth buffer is a transient. `FORGE_GRAPH_LOG=1` prints the plan. Captures are
+  identical to the hand-written barriers (0 pixels, static and orbiting, occlusion on and off).
 
 ## Next steps (from the research recommendation)
 

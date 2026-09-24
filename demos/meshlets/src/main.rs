@@ -170,7 +170,7 @@ impl Demo for Bench {
         }
     }
 
-    fn render(&mut self, ctx: &mut Context, frame: &FrameInfo<'_>) -> Result<()> {
+    fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
         if let Some(stats) = self.renderer.take_stats(frame.slot) {
             self.stats.push(stats);
@@ -197,16 +197,16 @@ impl Demo for Bench {
             _ => live,
         };
         self.renderer.draw(
-            &frame.commands,
+            &mut frame.graph,
             frame.slot,
-            &DrawParams {
+            DrawParams {
                 scene: &self.scene,
                 view_proj: live.view_proj,
                 cull,
                 lod_threshold_px: self.args.lod_error,
                 draw_jitter: glam::Vec2::ZERO,
                 flags: self.flags,
-                color_view: ctx.swapchain.view(frame.image_index),
+                color: frame.target,
                 extent: ctx.extent(),
                 clear_color: Some([0.02, 0.02, 0.03, 1.0]),
                 wireframe: self.wireframe,

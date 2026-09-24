@@ -5,13 +5,16 @@
 //! resolve blends this frame's samples with the history fetched there, clipped to the
 //! neighbourhood, and writes the next history, which is then blitted to the swapchain.
 //! Ported from the previous project's `temporal.rs` (Karis 2014, Jimenez 2016, Playdead 2016).
+//!
+//! The colour and motion targets are transients of the render graph; the two histories are
+//! persistent [`GraphImage`]s whose state the graph carries from frame to frame.
 
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Commands, Device, FullscreenPipelineDesc, Image, ImageDesc, Pipeline, Result, SampledImageId,
-    ShaderCompiler, ShaderStage, vk,
+    Commands, Device, FrameGraph, FullscreenPipelineDesc, GraphImage, ImageAccess, ImageDesc,
+    ImageHandle, Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
 use glam::{DMat4, Mat4, Vec2};
 
@@ -74,95 +77,49 @@ struct ResolvePush {
     pad: [u32; 3],
 }
 
-struct Targets {
-    color: Image,
-    color_id: SampledImageId,
-    motion: Image,
-    motion_id: SampledImageId,
-    history: [Image; 2],
-    history_ids: [SampledImageId; 2],
-    extent: vk::Extent2D,
-}
-
-impl Targets {
-    fn new(device: &Arc<Device>, extent: vk::Extent2D) -> Result<Self> {
-        let make = |format: vk::Format, name: &str| {
-            device.create_image(ImageDesc {
+fn create_history(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
+    let make = |name: &str| {
+        GraphImage::new(
+            device,
+            ImageDesc {
                 width: extent.width,
                 height: extent.height,
-                format,
+                format: HDR_FORMAT,
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
                     | vk::ImageUsageFlags::SAMPLED
                     | vk::ImageUsageFlags::TRANSFER_SRC,
                 aspect: vk::ImageAspectFlags::COLOR,
                 mip_levels: 1,
                 name,
-            })
-        };
-        let color = make(HDR_FORMAT, "taa scene color")?;
-        let motion = make(MOTION_FORMAT, "taa motion")?;
-        let history = [
-            make(HDR_FORMAT, "taa history 0")?,
-            make(HDR_FORMAT, "taa history 1")?,
-        ];
-        for h in &history {
-            device.initialize_image_layout(
-                h,
-                vk::ImageAspectFlags::COLOR,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            )?;
-        }
-        let color_id =
-            device.register_sampled_image(color.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        let motion_id =
-            device.register_sampled_image(motion.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        let history_ids = [
-            device.register_sampled_image(
-                history[0].view(),
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            ),
-            device.register_sampled_image(
-                history[1].view(),
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            ),
-        ];
-        Ok(Self {
-            color,
-            color_id,
-            motion,
-            motion_id,
-            history,
-            history_ids,
-            extent,
-        })
-    }
-
-    fn release(&self, device: &Device) {
-        device.release_sampled_image(self.color_id);
-        device.release_sampled_image(self.motion_id);
-        for &id in &self.history_ids {
-            device.release_sampled_image(id);
-        }
-    }
+            },
+        )
+    };
+    Ok([make("taa history 0")?, make("taa history 1")?])
 }
 
-/// What the current frame draws with.
+/// What the current frame draws with, from [`Taa::begin`].
 #[derive(Clone, Copy, Debug)]
 pub struct TaaFrame {
     /// Projection shifted by this frame's jitter: draw with it.
     pub jittered_projection: Mat4,
     /// This frame's jitter in pixels.
     pub jitter: Vec2,
-    /// Colour target to draw into (HDR, `COLOR_ATTACHMENT_OPTIMAL` after `begin`).
-    pub color_view: vk::ImageView,
+    /// The HDR colour target to draw into (a transient of the frame).
+    pub color: ImageHandle,
+    /// Size of the targets.
+    pub extent: vk::Extent2D,
+    previous_from_current: Mat4,
+    blend: f32,
+    written: usize,
 }
 
-/// The temporal anti-aliasing passes and their targets.
+/// The temporal anti-aliasing passes and their histories.
 pub struct Taa {
     device: Arc<Device>,
     pipeline_motion: Pipeline,
     pipeline_resolve: Pipeline,
-    targets: Targets,
+    history: [GraphImage; 2],
+    extent: vk::Extent2D,
     frame_index: u64,
     previous_view_proj: Option<DMat4>,
     reset: bool,
@@ -174,7 +131,7 @@ pub struct Taa {
 }
 
 impl Taa {
-    /// Compiles the passes and creates targets for `extent`.
+    /// Compiles the passes and creates the histories for `extent`.
     pub fn new(
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
@@ -211,12 +168,13 @@ impl Taa {
         for module in [vertex, motion, resolve] {
             device.destroy_shader_module(module);
         }
-        let targets = Targets::new(device, extent)?;
+        let history = create_history(device, extent)?;
         Ok(Self {
             device: Arc::clone(device),
             pipeline_motion,
             pipeline_resolve,
-            targets,
+            history,
+            extent,
             frame_index: 0,
             previous_view_proj: None,
             reset: true,
@@ -225,10 +183,10 @@ impl Taa {
         })
     }
 
-    /// Recreates the targets (device idle) and restarts the history.
+    /// Recreates the histories (device idle) and restarts the history.
     pub fn resize(&mut self, extent: vk::Extent2D) -> Result<()> {
-        self.targets.release(&self.device);
-        self.targets = Targets::new(&self.device, extent)?;
+        self.history = create_history(&self.device, extent)?;
+        self.extent = extent;
         self.reset = true;
         Ok(())
     }
@@ -253,42 +211,21 @@ impl Taa {
         self.previous_view_proj
     }
 
-    /// Starts a frame: transitions the scene target for drawing and returns the jittered
-    /// projection to draw with.
-    pub fn begin(&mut self, commands: &Commands<'_>, projection: Mat4) -> TaaFrame {
+    /// Starts a frame: declares the HDR colour target and returns the jittered projection to
+    /// draw with. `view_proj` is the *unjittered* world-to-clip of this frame (the
+    /// reprojection into the previous frame is derived from it and the previous one).
+    pub fn begin<'f>(
+        &mut self,
+        graph: &mut FrameGraph<'f>,
+        projection: Mat4,
+        view_proj: Mat4,
+    ) -> TaaFrame {
         let jitter = if self.enabled {
             jitter(self.frame_index)
         } else {
             Vec2::ZERO
         };
-        let extent = self.targets.extent;
-        commands.image_barriers(&[color_barrier(self.targets.color.raw())
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)]);
-        TaaFrame {
-            jittered_projection: jittered_projection(projection, jitter, extent),
-            jitter,
-            color_view: self.targets.color.view(),
-        }
-    }
-
-    /// Resolves the frame drawn into the scene target and writes the result to `output`
-    /// (a swapchain image in `COLOR_ATTACHMENT_OPTIMAL`, left in that layout).
-    ///
-    /// `depth` is the depth buffer the scene was drawn with (in `DEPTH_ATTACHMENT_OPTIMAL`, left
-    /// in `SHADER_READ_ONLY_OPTIMAL`); `view_proj` the *unjittered* world-to-clip of this frame.
-    pub fn resolve(
-        &mut self,
-        commands: &Commands<'_>,
-        frame: &TaaFrame,
-        depth: (vk::Image, SampledImageId),
-        view_proj: Mat4,
-        output: vk::Image,
-    ) {
-        let extent = self.targets.extent;
+        let extent = self.extent;
         let current = view_proj.as_dmat4();
         let previous_from_current = match self.previous_view_proj {
             Some(previous) if !self.reset => previous * current.inverse(),
@@ -299,175 +236,119 @@ impl Taa {
         } else {
             self.blend
         };
+        let written = (self.frame_index % 2) as usize;
         self.previous_view_proj = Some(current);
         self.reset = false;
-        let written = (self.frame_index % 2) as usize;
-        let read = 1 - written;
-
-        // Scene colour and depth become readable; the motion target becomes writable.
-        let depth_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::DEPTH,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        commands.image_barriers(&[
-            color_barrier(self.targets.color.raw())
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            vk::ImageMemoryBarrier2::default()
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(depth.0)
-                .subresource_range(depth_range)
-                // Depth is written by the early *or* the late fragment tests: name both.
-                .src_stage_mask(
-                    vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
-                        | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
-                )
-                .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            color_barrier(self.targets.motion.raw())
-                .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-            color_barrier(self.targets.history[written].raw())
-                .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-        ]);
-
-        // Motion vectors.
-        fullscreen_pass(
-            commands,
-            self.targets.motion.view(),
-            extent,
-            &self.pipeline_motion,
-            &MotionPush {
-                previous_from_current: previous_from_current.as_mat4().to_cols_array(),
-                jitter: frame.jitter.to_array(),
-                depth: depth.1.0,
-                width: extent.width,
-                height: extent.height,
-            },
-        );
-        commands.image_barriers(&[color_barrier(self.targets.motion.raw())
-            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]);
-        commands.mark("temporal/motion vectors");
-
-        // Resolve into the written history.
-        fullscreen_pass(
-            commands,
-            self.targets.history[written].view(),
-            extent,
-            &self.pipeline_resolve,
-            &ResolvePush {
-                color: self.targets.color_id.0,
-                motion: self.targets.motion_id.0,
-                depth: depth.1.0,
-                history: self.targets.history_ids[read].0,
-                width: extent.width,
-                height: extent.height,
-                jitter: frame.jitter.to_array(),
-                blend,
-                pad: [0; 3],
-            },
-        );
-        commands.mark("temporal/TAA resolve");
-
-        // Blit the result to the output and leave the history readable for the next frame.
-        let color_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        commands.image_barriers(&[
-            color_barrier(self.targets.history[written].raw())
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
-            vk::ImageMemoryBarrier2::default()
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(output)
-                .subresource_range(color_range)
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
-        ]);
-        commands.blit_image(
-            self.targets.history[written].raw(),
-            output,
-            extent,
-            vk::Filter::NEAREST,
-        );
-        commands.image_barriers(&[
-            color_barrier(self.targets.history[written].raw())
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
-                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            vk::ImageMemoryBarrier2::default()
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(output)
-                .subresource_range(color_range)
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-        ]);
-        commands.mark("temporal/blit to swapchain");
         self.frame_index += 1;
+        let color = graph.transient(TransientDesc {
+            name: "taa scene color",
+            width: extent.width,
+            height: extent.height,
+            format: HDR_FORMAT,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        TaaFrame {
+            jittered_projection: jittered_projection(projection, jitter, extent),
+            jitter,
+            color,
+            extent,
+            previous_from_current: previous_from_current.as_mat4(),
+            blend,
+            written,
+        }
     }
-}
 
-impl Drop for Taa {
-    fn drop(&mut self) {
-        self.targets.release(&self.device);
+    /// Declares the passes that resolve the frame drawn into `frame.color` with `depth` (the
+    /// depth buffer the scene was drawn with) and blit the result to `output`.
+    pub fn resolve<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        frame: &TaaFrame,
+        depth: ImageHandle,
+        output: ImageHandle,
+    ) {
+        use vk::PipelineStageFlags2 as S;
+        let frame = *frame;
+        let extent = frame.extent;
+        let motion = graph.transient(TransientDesc {
+            name: "taa motion",
+            width: extent.width,
+            height: extent.height,
+            format: MOTION_FORMAT,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let history_written = graph.import(&self.history[frame.written]);
+        let history_read = graph.import(&self.history[1 - frame.written]);
+
+        let pipeline_motion = &self.pipeline_motion;
+        graph
+            .pass("temporal/motion vectors")
+            .image(depth, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(motion, ImageAccess::ColorAttachment)
+            .run(move |resources, commands| {
+                fullscreen_pass(
+                    commands,
+                    resources.view(motion),
+                    extent,
+                    pipeline_motion,
+                    &MotionPush {
+                        previous_from_current: frame.previous_from_current.to_cols_array(),
+                        jitter: frame.jitter.to_array(),
+                        depth: resources.sampled(depth).0,
+                        width: extent.width,
+                        height: extent.height,
+                    },
+                );
+                Ok(())
+            });
+
+        let pipeline_resolve = &self.pipeline_resolve;
+        graph
+            .pass("temporal/TAA resolve")
+            .image(frame.color, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(motion, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(depth, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(history_read, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(history_written, ImageAccess::ColorAttachment)
+            .run(move |resources, commands| {
+                fullscreen_pass(
+                    commands,
+                    resources.view(history_written),
+                    extent,
+                    pipeline_resolve,
+                    &ResolvePush {
+                        color: resources.sampled(frame.color).0,
+                        motion: resources.sampled(motion).0,
+                        depth: resources.sampled(depth).0,
+                        history: resources.sampled(history_read).0,
+                        width: extent.width,
+                        height: extent.height,
+                        jitter: frame.jitter.to_array(),
+                        blend: frame.blend,
+                        pad: [0; 3],
+                    },
+                );
+                Ok(())
+            });
+
+        graph
+            .pass("temporal/blit to swapchain")
+            .image(history_written, ImageAccess::TransferSrc)
+            .image(output, ImageAccess::TransferDst)
+            .run(move |resources, commands| {
+                commands.blit_image(
+                    resources.image(history_written).raw,
+                    resources.image(output).raw,
+                    extent,
+                    vk::Filter::NEAREST,
+                );
+                Ok(())
+            });
     }
-}
-
-fn color_barrier(image: vk::Image) -> vk::ImageMemoryBarrier2<'static> {
-    vk::ImageMemoryBarrier2::default()
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        })
 }
 
 fn fullscreen_pass<P: Pod>(

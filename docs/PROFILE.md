@@ -14,46 +14,56 @@ in Tracy's GPU timeline next to the CPU zones.
 
 Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24.
 
-## `asteroids` — the ballad, cluster LOD DAG + instance cull pass (frame 600, LOD 1 px, TAA on)
+## `asteroids` — the ballad through the render graph (frame 400, LOD 1 px, TAA on, overlay in full mode)
 
-Frame **0.35 ms** (2 829 fps), p50 0.34, p99 0.60. GPU zones sum to 0.34 ms; CPU main
-thread 0.16 ms of work (record 0.07, submit + present 0.10), now comparable to the GPU.
+Frame **0.35 ms** (2 880 fps), p50 0.33, p99 0.59; over a 6000-frame scripted run without
+the overlay the GPU averages **0.33 ms** (0.34 before the graph). GPU zones sum to 0.37 ms
+with the overlay and the capture copy in the frame; CPU main thread 0.18 ms of work
+(record 0.08, submit + present 0.10). Every zone below is now a graph pass; the graph's own
+counters are the first line of the COUNTERS block.
 
 | Subject | Zone | ms | share of GPU | Verdict |
 |---|---|---|---|---|
-| sky | starfield + planet | 0.13 | 39 % | **Now the largest item.** Full-screen procedural noise (three value-noise octaves, two star lattices of 27 cells, the planet) at every pixel every frame. Render the far sky into a cube map refreshed over several frames, or at half resolution with TAA; the atmosphere (issue #8) will replace this shader anyway. |
-| geometry | meshlet pass 1 (visible last frame) | 0.06 | 18 % | 6–8 k clusters, 0.5 M triangles: real work at last, and small. |
-| geometry | instance cull | 0.02 | 7 % | One thread per instance: frustum, per-level LOD window, work-list append. Replaces the launch-bound task-shader walk (0.45 ms per pass). |
-| geometry | depth pyramid | 0.02 | 6 % | Negligible; stays. |
+| sky | starfield + planet | 0.14 | 37 % | **The largest item.** Full-screen procedural noise (three value-noise octaves, two star lattices of 27 cells, the planet) at every pixel every frame. Render the far sky into a cube map refreshed over several frames, or at half resolution with TAA; the atmosphere (issue #8) will replace this shader anyway. |
+| geometry | meshlet pass 1 (visible last frame) | 0.07 | 18 % | 7–8 k clusters, 0.5 M triangles: real work at last, and small. |
+| geometry | instance cull | 0.05 | 12 % | One thread per instance: frustum, per-level LOD window, work-list append. 0.02–0.05 ms from frame to frame: at this size the timestamps' own granularity shows. |
+| geometry | depth pyramid | 0.02 | 6 % | Eleven graph passes, one zone. Negligible; stays. |
 | geometry | meshlet pass 2 (newly visible) | 0.02 | 6 % | Almost nothing becomes newly visible per frame at 1 px. |
-| temporal | TAA (motion + resolve + blit) | 0.07 | 20 % | Second largest now. Resolve straight into the swapchain once the render graph exists (saves the blit); DLSS replaces it on NVIDIA. |
-| app | overlay | 0.01 | 3 % | The profiler itself. |
-| cpu | record / submit + present | 0.07 / 0.10 | — | At 2 800 fps the driver's submit and present are a third of the frame; a render thread and fewer, larger submissions fix that when it matters. |
-| cpu | wait for GPU (frame slot) | 0.16 | — | Still GPU-bound, barely. |
+| temporal | motion / TAA resolve / blit | 0.01 / 0.05 / 0.01 | 18 % | Second largest. The blit goes once the resolve writes the swapchain as a second target (the graph makes that a two-line change; kept for now so the images stay identical); DLSS replaces the resolve on NVIDIA. |
+| app | overlay / present | 0.01 / 0.00 | 3 % | The profiler itself; the present transition is free. |
+| cpu | record / submit + present | 0.08 / 0.10 | — | Record now includes compiling the graph (19 passes, 40 barriers): +0.01 ms. At 2 900 fps the driver's submit and present are a third of the frame; a render thread and fewer, larger submissions fix that when it matters. |
+| cpu | wait for GPU (frame slot) | 0.17 | — | Still GPU-bound, barely. |
 
-Counters: 3000 asteroids, 195 M leaf triangles, 28 k clusters in the DAG tables, 4.6 M
-cluster slots; drawn 2 458 instances, 8 k meshlets, 0.63 M triangles, mean LOD level 6.3.
+Counters: graph 20 passes (with the overlay), 38 image + 3 memory barriers, transients 3
+images, 26.2 MB in a 26.2 MB heap (nothing can alias yet: colour, depth and motion vectors
+are all alive at the resolve), 1 heap build, 0 retired; 3000 asteroids, 195 M leaf
+triangles, 28 k clusters in the DAG tables, 4.6 M cluster slots; drawn 2 531 instances,
+8 k meshlets, 0.63 M triangles, mean LOD level 6.3.
 
 **The road here (same frame):** full detail 5.5 ms → DAG with the old dispatch 4.1 ms →
-exact task tables 1.09 ms → instance cull pass 0.34 ms. The geometry passes went from 5.8 ms
-to 0.13 ms, and the rendering is pixel-identical to brute force at every step of the A/B
-harness.
+exact task tables 1.09 ms → instance cull pass 0.34 ms → render graph 0.33 ms (the same
+work; the graph is about correctness and structure, not speed). The rendering is
+pixel-identical to brute force at every step of the A/B harness and to the pre-graph
+captures.
 
-**Priority list from these numbers:** (1) the sky at 39 % (cache it, or wait for the
+**Priority list from these numbers:** (1) the sky at 37 % (cache it, or wait for the
 atmosphere pass and design that one cheap from the start), (2) TAA → DLSS and no blit,
 (3) the CPU submit/present path only when a real scene makes it visible, (4) geometry is
 done until triangle counts rise again (streaming and the software rasteriser then).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
-Frame **0.16 ms**, GPU 0.15 ms: 15 k meshlets, 1.09 M triangles (full detail: 325 k
-meshlets, 30 M triangles, 2.18 ms; without occlusion at full detail: 106 M at 6.30 ms).
+Frame **0.16 ms**, GPU 0.15 ms (unchanged through the graph: 15 passes, 28 image + 2
+memory barriers, one 6.4 MB transient): 15 k meshlets, 1.09 M triangles (full detail:
+325 k meshlets, 30 M triangles, 2.18 ms; without occlusion at full detail: 106 M at
+6.30 ms).
 
 ## Not measured yet
 
 - **Memory**: VRAM residency and per-heap budgets (`VK_EXT_memory_budget`), upload bandwidth,
   streaming queue depth — arrive with the memory/streaming work (D-018) as an overlay group
-  (issue #9).
+  (issue #9). The render graph's transient heap (images, requested vs allocated bytes,
+  rebuilds, pending destructions) is already a counter line.
 - **Job system**: worker occupancy per frame — arrives with the simulation phase (Tracy shows
   it already under `--features profiling`).
 - **Presentation latency**: the time from submit to scan-out — once the render thread exists.

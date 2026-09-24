@@ -19,6 +19,10 @@ pub enum GpuError {
     /// File access failed.
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
+    /// A render-graph declaration is inconsistent (a transient read before any write, a
+    /// resource declared twice in one pass, a heap that cannot hold its images).
+    #[error("render graph: {0}")]
+    Graph(String),
 }
 
 /// Result alias for the GPU layer.
