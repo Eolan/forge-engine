@@ -121,6 +121,9 @@ static const uint CULLED_BIT = 0x80000000u;   // drawn although culling rejected
 static const uint SOFTWARE_BIT = 0x40000000u; // rasterised in compute
 // The previous frame's pyramid and culling camera (`Frame::prev_*`) are valid.
 public static const uint FLAG_PREV_PYRAMID = 2048;
+public static const uint FLAG_STREAMING = 4096;     // a streamed scene: the cut follows the resident pages (`lod_selected`)
+
+static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
 
 public static const uint PASS_PREVIOUSLY_VISIBLE = 1;
@@ -199,6 +202,7 @@ public struct Frame
     public float prev_p00;          // the previous culling camera's projection scales
     public float prev_p11;
     public uint2* roots;            // (instance, local cluster) per root entry of the instance cull, `work_capacity` of them
+    public uint* page_need;         // streaming: per page, the largest error in pixels it takes away (a float's bits)
 };
 
 struct Push
@@ -352,12 +356,20 @@ float lod_error_pixels(Frame* f, float3 center, float radius, float error)
 // Exactly one cut through the DAG: draw when the parent is too coarse and this is fine
 // enough. Siblings share the parent values and the children of a group share its values as
 // their `self`, so the decision is consistent and watertight.
-bool lod_selected(Frame* f, Meshlet m, float4x4 model, float scale)
+// `streamed` is a compile-time constant of each cluster-cull entry point (`cluster_cull`):
+// the streamed cut's code and registers stay out of a resident scene's cull.
+bool lod_selected(Frame* f, Meshlet m, float4x4 model, float scale, bool streamed)
 {
     if ((f[0].flags & FLAG_LOD) == 0)
-        return m.lod_level == 0;
+    {
+        // Full detail; a streamed scene shows what of it is resident (a debug view).
+        bool resident = !streamed || f[0].page_table[m.page] != PAGE_NONE;
+        return m.lod_level == 0 && resident;
+    }
     float3 self_center = mul(model, float4(m.self_center, 1)).xyz;
     float self_px = lod_error_pixels(f, self_center, m.self_radius * scale, m.self_error * scale);
+    if (streamed)
+        return lod_selected_streamed(f, m, model, scale, self_px);
     if (self_px > f[0].lod_threshold)
         return false;
     if (isinf(m.parent_error))
@@ -365,6 +377,38 @@ bool lod_selected(Frame* f, Meshlet m, float4x4 model, float scale)
     float3 parent_center = mul(model, float4(m.parent_center, 1)).xyz;
     float parent_px = lod_error_pixels(f, parent_center, m.parent_radius * scale, m.parent_error * scale);
     return parent_px > f[0].lod_threshold;
+}
+
+// Records that `page` is wanted: `px` pixels of error would appear without it.
+void want_page(Frame* f, uint page, float px)
+{
+    uint unused;
+    InterlockedMax(f[0].page_need[page], asuint(max(px, 0.0)), unused);
+}
+
+// The cut through the resident part of the DAG (issue #36, crates/forge-render/src/
+// streaming.rs): a cluster draws when its page is resident, its parent is too coarse, and it
+// is fine enough or its children's page is absent. Children are refined into only when
+// their page is resident, and that page holds every child of the group (a group never spans
+// two pages), so the cut stays one watertight surface through any resident set that holds
+// the roots. On the way it records which pages it wants: a drawn cluster its own page, a
+// too-coarse one its children's.
+bool lod_selected_streamed(Frame* f, Meshlet m, float4x4 model, float scale, float self_px)
+{
+    if (f[0].page_table[m.page] == PAGE_NONE)
+        return false;
+    if (!isinf(m.parent_error))
+    {
+        float3 parent_center = mul(model, float4(m.parent_center, 1)).xyz;
+        float parent_px = lod_error_pixels(f, parent_center, m.parent_radius * scale, m.parent_error * scale);
+        if (parent_px <= f[0].lod_threshold)
+            return false;
+        want_page(f, m.page, parent_px);
+    }
+    if (self_px <= f[0].lod_threshold)
+        return true;
+    want_page(f, m.child_page, self_px);
+    return f[0].page_table[m.child_page] == PAGE_NONE;
 }
 
 uint level_of(Mesh* mesh, uint cluster)
@@ -382,7 +426,7 @@ uint level_of(Mesh* mesh, uint cluster)
 // projects its own error above the threshold even at the farthest distance, or its parent's
 // error at or below the threshold even at the nearest. Conservative bounds from the per-level
 // tables, so a group is never skipped wrongly; most groups of a far instance exit here.
-bool group_possible(Frame* f, Mesh* mesh, Instance* inst, uint local_group, float scale)
+bool group_possible(Frame* f, Mesh* mesh, Instance* inst, uint local_group, float scale, bool streamed)
 {
     uint first = local_group * TASK_GROUP_SIZE;
     uint count = mesh[0].meshlet_count;
@@ -398,13 +442,15 @@ bool group_possible(Frame* f, Mesh* mesh, Instance* inst, uint local_group, floa
     float k = f[0].p11 * 0.5 * f[0].viewport_height;
     float dist = length(inst[0].center - f[0].camera_pos);
     float t = f[0].lod_threshold;
+    // Streaming draws a too-coarse cluster whose children are absent: only the parent bound
+    // holds.
     for (uint l = l0; l <= l1; l++)
     {
         float self_far = dist + mesh[0].self_reach_max[l] * scale;
         float parent_near = max(dist - mesh[0].parent_reach_max[l] * scale, f[0].znear);
         float self_min_px = mesh[0].self_error_min[l] * scale * k / self_far;
         float parent_max_px = mesh[0].parent_error_max[l] * scale * k / parent_near;
-        if (self_min_px <= t && parent_max_px > t)
+        if ((self_min_px <= t || streamed) && parent_max_px > t)
             return true;
     }
     return false;
@@ -503,7 +549,7 @@ bool dense_cluster(Frame* f, float3 world_center, float radius, uint triangles)
 // Culls cluster `thread` of work item `item`: LOD selection, frustum and normal cone; with
 // occlusion, pass 1 keeps what the previous frame showed and pass 2 what this frame's pyramid
 // does not hide among the rest.
-ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
+ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
 {
     ClusterVerdict v = {};
     uint pass = f[0].pass;
@@ -537,7 +583,7 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
     // Uniform scale is assumed for the bounding spheres: take the length of the first column.
     float scale = length(inst[0].model[0].xyz);
     // Whole-group rejection from the per-level tables before any cluster is read.
-    if (!instance_visible || (!root && !group_possible(f, mesh, inst, local_group, scale))
+    if (!instance_visible || (!root && !group_possible(f, mesh, inst, local_group, scale, streamed))
         || local_meshlet >= mesh[0].meshlet_count)
         return v;
     v.meshlet = mesh[0].meshlet_offset + local_meshlet;
@@ -548,7 +594,7 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
     v.lod_level = m.lod_level;
     float3 center = mul(inst[0].model, float4(m.center, 1)).xyz;
     float world_radius = m.radius * scale;
-    bool visible = lod_selected(f, m, inst[0].model, scale);
+    bool visible = lod_selected(f, m, inst[0].model, scale, streamed);
     visible = visible && (!frustum || sphere_in_frustum(f, center, world_radius));
     // Normal-cone culling (meshoptimizer): culled when dot(normalize(apex - camera), axis) >=
     // cutoff. A cutoff of 1 marks a cone wider than a hemisphere; meshoptimizer then leaves
@@ -728,9 +774,8 @@ groupshared uint s_kept_software;        // where the list ends: software cluste
 // lists, the fallback's draws carry the slots. The grids are written by the last workgroup,
 // or, when the list is full, by the one it ends in. A full list drops what does not fit and
 // counts it, so no draw reads past the end.
-[shader("compute")]
-[numthreads(TASK_GROUP_SIZE * CULL_ITEMS, 1, 1)]
-void cluster_cull_main(uint thread : SV_GroupThreadID)
+// `streamed`: the scene streams its pages (`lod_selected`), a constant per entry point.
+void cluster_cull(uint thread, bool streamed)
 {
     Frame* f = push.frame;
     bool second = f[0].pass == PASS_REMAINDER;
@@ -759,7 +804,7 @@ void cluster_cull_main(uint thread : SV_GroupThreadID)
     uint item = ticket * CULL_ITEMS + local;
     ClusterVerdict v = {};
     if (item < items)
-        v = cull_cluster(f, item, lane);
+        v = cull_cluster(f, item, lane, streamed);
     if (v.draw)
     {
         InterlockedOr(s_drawn[local], 1u << lane);
@@ -888,6 +933,22 @@ void cluster_cull_main(uint thread : SV_GroupThreadID)
     }
 }
 
+// The cluster cull of a scene whose pages are all resident.
+[shader("compute")]
+[numthreads(TASK_GROUP_SIZE * CULL_ITEMS, 1, 1)]
+void cluster_cull_main(uint thread : SV_GroupThreadID)
+{
+    cluster_cull(thread, false);
+}
+
+// The cluster cull of a streamed scene (FLAG_STREAMING).
+[shader("compute")]
+[numthreads(TASK_GROUP_SIZE * CULL_ITEMS, 1, 1)]
+void cluster_cull_streamed_main(uint thread : SV_GroupThreadID)
+{
+    cluster_cull(thread, true);
+}
+
 // ------------------------------------------------------------ instance cull ---
 
 // Whether any cluster of LOD level `l` of the mesh can be selected for this instance: the
@@ -900,7 +961,8 @@ bool level_possible(Frame* f, Mesh* mesh, uint l, float scale, float dist)
     float parent_near = max(dist - mesh[0].parent_reach_max[l] * scale, f[0].znear);
     float self_min_px = mesh[0].self_error_min[l] * scale * k / self_far;
     float parent_max_px = mesh[0].parent_error_max[l] * scale * k / parent_near;
-    return self_min_px <= t && parent_max_px > t;
+    bool streamed = (f[0].flags & FLAG_STREAMING) != 0; // see `group_possible`
+    return (self_min_px <= t || streamed) && parent_max_px > t;
 }
 
 // The root shortcut (issue #37): when every root of the mesh is fine enough at the nearest

@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use bytemuck::Pod;
 
-use crate::meshlet::{CookOptions, GpuMeshlet, MeshletMesh};
+use crate::meshlet::{CookOptions, GpuMeshlet, MeshletMesh, PageFile};
 use crate::page::PAGE_SIZE;
 use crate::procedural::TriMesh;
 
@@ -57,8 +57,22 @@ fn push_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
-/// The file's bytes for `mesh` under `key`.
+/// Bytes of the header, before the meshlet records.
+const HEADER_BYTES: usize = 68;
+
+/// Where the pages start in a file of `meshlets` records and `levels` levels.
+fn pages_offset(meshlets: u32, levels: u32) -> u64 {
+    (HEADER_BYTES + meshlets as usize * size_of::<GpuMeshlet>() + levels as usize * 4)
+        .next_multiple_of(PAGE_ALIGN) as u64
+}
+
+/// The file's bytes for `mesh` under `key` (its pages must be in memory).
 fn encode(mesh: &MeshletMesh, key: u64) -> Vec<u8> {
+    assert_eq!(
+        mesh.pages.len(),
+        mesh.page_count as usize * PAGE_SIZE,
+        "a mesh is stored with its pages"
+    );
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
     push_u32(&mut out, FORMAT_VERSION);
@@ -66,7 +80,7 @@ fn encode(mesh: &MeshletMesh, key: u64) -> Vec<u8> {
     push_u32(&mut out, COOK_VERSION);
     push_u32(&mut out, mesh.meshlets.len() as u32);
     push_u32(&mut out, mesh.clusters_per_level.len() as u32);
-    push_u32(&mut out, mesh.page_count());
+    push_u32(&mut out, mesh.page_count);
     push_u32(&mut out, mesh.root_pages);
     push_u64(&mut out, mesh.triangle_count as u64);
     push_u64(&mut out, mesh.dag_triangle_count as u64);
@@ -74,6 +88,7 @@ fn encode(mesh: &MeshletMesh, key: u64) -> Vec<u8> {
         out.extend_from_slice(&c.to_le_bytes());
     }
     out.extend_from_slice(&mesh.radius.to_le_bytes());
+    assert_eq!(out.len(), HEADER_BYTES);
     out.extend_from_slice(bytemuck::cast_slice(&mesh.meshlets));
     out.extend_from_slice(bytemuck::cast_slice(&mesh.clusters_per_level));
     out.resize(out.len().next_multiple_of(PAGE_ALIGN), 0);
@@ -116,8 +131,9 @@ impl Reader<'_> {
     }
 }
 
-/// The mesh in `bytes` if they hold one under `key`, else `None`.
-fn decode(bytes: &[u8], key: u64) -> Option<MeshletMesh> {
+/// The mesh whose header and records start `bytes` if they hold one under `key`, without
+/// its pages (`page_file` unset), and the file size it needs; else `None`.
+fn decode_hierarchy(bytes: &[u8], key: u64) -> Option<(MeshletMesh, u64)> {
     let mut r = Reader { bytes };
     if r.take(4)? != MAGIC || r.u32()? != FORMAT_VERSION || r.u64()? != key {
         return None;
@@ -130,21 +146,34 @@ fn decode(bytes: &[u8], key: u64) -> Option<MeshletMesh> {
     let dag_triangle_count = r.u64()? as usize;
     let center = [r.f32()?, r.f32()?, r.f32()?];
     let radius = r.f32()?;
-    let meshlets = r.array::<GpuMeshlet>(meshlets)?;
-    let clusters_per_level = r.array::<u32>(levels)?;
-    let read = bytes.len() - r.bytes.len();
-    r.take(read.next_multiple_of(PAGE_ALIGN) - read)?;
+    let offset = pages_offset(meshlets, levels);
     let mesh = MeshletMesh {
-        meshlets,
-        pages: r.array::<u8>(pages * PAGE_SIZE as u32)?,
+        meshlets: r.array::<GpuMeshlet>(meshlets)?,
+        clusters_per_level: r.array::<u32>(levels)?,
+        pages: Vec::new(),
+        page_count: pages,
         root_pages,
-        clusters_per_level,
+        page_file: None,
         triangle_count,
         dag_triangle_count,
         center,
         radius,
     };
-    r.bytes.is_empty().then_some(mesh)
+    Some((mesh, offset + u64::from(pages) * PAGE_SIZE as u64))
+}
+
+/// The mesh in `bytes` if they hold one under `key`, pages included, else `None`.
+fn decode(bytes: &[u8], key: u64) -> Option<MeshletMesh> {
+    let (mut mesh, size) = decode_hierarchy(bytes, key)?;
+    if bytes.len() as u64 != size {
+        return None;
+    }
+    let offset = pages_offset(
+        mesh.meshlets.len() as u32,
+        mesh.clusters_per_level.len() as u32,
+    );
+    mesh.pages = bytes[offset as usize..].to_vec();
+    Some(mesh)
 }
 
 /// Writes `mesh` to `path` under `key`: into a temporary file first, renamed into place, so
@@ -161,6 +190,34 @@ pub fn save(path: &Path, mesh: &MeshletMesh, key: u64) -> io::Result<()> {
 /// The mesh stored at `path` under `key`, or `None` when there is none (or another one).
 pub fn load(path: &Path, key: u64) -> Option<MeshletMesh> {
     decode(&fs::read(path).ok()?, key)
+}
+
+/// The mesh stored at `path` under `key` without its pages, which stay in the file for a
+/// streamer to read one at a time ([`MeshletMesh::page_file`]); `None` when there is no such
+/// mesh or the file is not the size its header says.
+pub fn load_hierarchy(path: &Path, key: u64) -> Option<MeshletMesh> {
+    use std::io::Read;
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let mut head = vec![0; HEADER_BYTES];
+    file.read_exact(&mut head).ok()?;
+    let meshlets = u32::from_le_bytes(head[20..24].try_into().ok()?);
+    let levels = u32::from_le_bytes(head[24..28].try_into().ok()?);
+    let records = pages_offset(meshlets, levels) as usize;
+    if (len as usize) < records {
+        return None;
+    }
+    head.resize(records, 0);
+    file.read_exact(&mut head[HEADER_BYTES..]).ok()?;
+    let (mut mesh, size) = decode_hierarchy(&head, key)?;
+    if len != size {
+        return None;
+    }
+    mesh.page_file = Some(PageFile {
+        path: path.to_path_buf(),
+        offset: records as u64,
+    });
+    Some(mesh)
 }
 
 /// Removes the files of mesh `name` cached under another key than `key` (earlier parameters
@@ -201,18 +258,26 @@ pub struct Cooked {
 /// The mesh `name` from `dir` when cached under its parameters `key_text`; otherwise
 /// `generate`s it, cooks it with `options` ([`MeshletMesh::build_with`]; they belong in
 /// `key_text`) and stores it (a failed write is
-/// logged by the caller's choice: it only costs the next run a cook).
+/// logged by the caller's choice: it only costs the next run a cook). With
+/// `pages_in_memory` false the pages stay in the cache file ([`load_hierarchy`]), unless
+/// the file could not be written.
 pub fn cook_cached(
     dir: &Path,
     name: &str,
     key_text: &str,
     options: CookOptions,
+    pages_in_memory: bool,
     generate: impl FnOnce() -> TriMesh,
 ) -> (Cooked, io::Result<()>) {
     let start = Instant::now();
     let key = key(key_text);
     let file = path(dir, name, key);
-    if let Some(mesh) = load(&file, key) {
+    let cached = if pages_in_memory {
+        load(&file, key)
+    } else {
+        load_hierarchy(&file, key)
+    };
+    if let Some(mesh) = cached {
         let ms = start.elapsed().as_secs_f64() * 1e3;
         return (
             Cooked {
@@ -223,9 +288,19 @@ pub fn cook_cached(
             Ok(()),
         );
     }
-    let mesh = MeshletMesh::build_with(&generate(), options);
+    let mut mesh = MeshletMesh::build_with(&generate(), options);
     let ms = start.elapsed().as_secs_f64() * 1e3;
     let stored = save(&file, &mesh, key).map(|()| remove_stale(dir, name, key));
+    if stored.is_ok() && !pages_in_memory {
+        mesh.pages = Vec::new();
+        mesh.page_file = Some(PageFile {
+            path: file,
+            offset: pages_offset(
+                mesh.meshlets.len() as u32,
+                mesh.clusters_per_level.len() as u32,
+            ),
+        });
+    }
     (
         Cooked {
             mesh,
@@ -266,6 +341,33 @@ mod tests {
         assert_eq!(back.dag_triangle_count, mesh.dag_triangle_count);
         assert_eq!(back.center, mesh.center);
         assert_eq!(back.radius, mesh.radius);
+    }
+
+    #[test]
+    fn a_streamed_mesh_leaves_its_pages_in_the_file() {
+        let dir = std::env::temp_dir().join(format!("forge-cache-pages-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mesh = small();
+        let file = path(&dir, "rock", 5);
+        save(&file, &mesh, 5).expect("saved");
+        let streamed = load_hierarchy(&file, 5).expect("the hierarchy loads");
+        assert!(streamed.pages.is_empty());
+        assert_eq!(streamed.page_count, mesh.page_count);
+        assert_eq!(streamed.root_pages, mesh.root_pages);
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&streamed.meshlets),
+            bytemuck::cast_slice::<_, u8>(&mesh.meshlets)
+        );
+        let pages = streamed.page_file.expect("a page file");
+        let bytes = fs::read(&pages.path).expect("read");
+        let last = mesh.page_count as usize - 1;
+        let at = pages.offset as usize + last * PAGE_SIZE;
+        assert_eq!(
+            &bytes[at..at + PAGE_SIZE],
+            &mesh.pages[last * PAGE_SIZE..(last + 1) * PAGE_SIZE]
+        );
+        assert!(load_hierarchy(&file, 6).is_none(), "another key");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

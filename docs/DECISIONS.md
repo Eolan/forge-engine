@@ -421,3 +421,61 @@ It pays off once the scene costs more than about half a millisecond more at nati
 than at the input size (the city-blocks target at 1440p). Validation and synchronization
 validation are silent in every mode and across the switch. *(research: lighting-gi.md §9;
 issue #8)*
+
+## D-025 — Cluster pages and their residency ✅ (2026-09-25)
+
+D-018 fixed the frame: 128 KB pages, the roots always resident, GPU requests read back,
+eviction by need. This is what the pages hold and how residency follows the cut
+(`forge_geom::page`, `forge_render::streaming`, issue #36).
+
+**The page format.** A page is 128 KiB of cluster payloads. A cluster's payload is its own
+vertices, then its triangles. Each vertex is 16 bytes: the exact f32 position and a 16-bit
+octahedral normal (at most 0.0035° off). Each triangle is three one-byte local indices.
+A page needs nothing outside itself.
+- **The roots** fill the first pages of each mesh, loaded at start and never evicted.
+- **A DAG group never spans two pages.** Every cluster records the page of its children
+  (the members of the group that produced it) as `child_page`.
+- **Groups go level by level,** finest first, in Morton order of their spheres.
+- **The hierarchy** (the 112-byte cluster records, the mesh records) stays resident.
+- **On disk,** the pages follow the hierarchy in the mesh-cache file, 4 KiB-aligned, so
+  one page is one positioned read.
+- **The GPU** holds a pool of page slots and a page table (page → slot). The fallback
+  path binds the pool as its index buffer.
+
+**The cut through what is resident.** A cluster draws when its page is resident, its
+parent is too coarse, and it is fine enough or its children's page is absent. One page
+holds all of a group's children, so this is one watertight cut through any resident set
+that contains the roots. A missing page costs detail, never a piece of surface. The cull
+records, per page, the largest projected error the page takes away: a drawn cluster keeps
+its own page, a too-coarse one asks for its children's. A second cull pipeline, compiled
+with streaming, carries that code, so resident scenes do not pay for its registers
+(+10 % when they shared one).
+
+**Residency stays closed upwards,** after Nanite's dependencies:
+- A page loads only when every page holding a parent of its clusters is resident.
+- Only pages with no resident children are evicted.
+- A page holds about a dozen groups whose parents lie in several pages, some of which the
+  cut may not want for themselves. A wanted page therefore lends its need to all its
+  ancestors, which load first and stay while it does. Without that loan the static view
+  kept 21 pages waiting forever.
+
+**Priorities.** Reads go to an I/O thread (blocking positioned reads for now; IOCP with
+D-018's container), the neediest first, a bounded number in flight. Uploads happen at
+most `upload_pages` per frame, the neediest first, into free slots, or into the slot of
+the evictable page with the lowest need (the least recently wanted among equals). A page
+is uploaded only when it is needed more than the page it replaces. The upload is one
+`streaming/upload` graph pass before the culls.
+
+*Measured* (city-blocks, 1 M instances, 7 868 pages = 983 MiB; RTX 5070 Ti, 1600×900):
+- **The static view** settles in 39 frames (44 ms) from the roots alone, with 395 pages
+  (49 MiB) resident, at 1.12 ms against 1.05 with every page resident.
+- **The flight at 300 m/s** keeps 540–640 pages resident. With a 48 MiB pool (384 slots)
+  it uploads 0–1.6 pages a frame in real time at 60 Hz, draws the same frames as with
+  every page resident (0 pixels apart at the captured frames), and holds geometry to
+  225 MiB against 1 160.
+- **Pools too small for the cut** (16 and 24 MiB) draw coarser surfaces, never holes: no
+  pixel inside a surface of the resident image shows the sky.
+
+Left for later: compressed vertices (quantised to a per-mesh grid) and D-018's container
+(BLAKE3 chunks, zstd), IOCP reads, and a transfer-queue upload. *(research:
+memory-streaming.md §4, gpu-geometry.md; demo: city-blocks)*

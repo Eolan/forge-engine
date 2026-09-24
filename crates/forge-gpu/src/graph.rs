@@ -130,6 +130,9 @@ pub enum BufferAccess {
     /// Read as indirect arguments and by these shader stages (a count the draw also reads to
     /// find where its grid ends).
     IndirectArgsAndShaderRead(vk::PipelineStageFlags2),
+    /// Read as the index buffer of draws and by these shader stages (a buffer of cluster
+    /// pages the vertex shader also reads).
+    IndexAndShaderRead(vk::PipelineStageFlags2),
     /// Source of a copy.
     TransferSrc,
     /// Destination of a copy.
@@ -242,6 +245,11 @@ impl BufferAccess {
             Self::IndirectArgsAndShaderRead(stages) => (
                 S::DRAW_INDIRECT | stages,
                 A::INDIRECT_COMMAND_READ | A::SHADER_STORAGE_READ,
+                false,
+            ),
+            Self::IndexAndShaderRead(stages) => (
+                S::INDEX_INPUT | stages,
+                A::INDEX_READ | A::SHADER_STORAGE_READ,
                 false,
             ),
             Self::TransferSrc => (S::TRANSFER, A::TRANSFER_READ, false),

@@ -312,6 +312,36 @@ impl<'a> Commands<'a> {
         }
     }
 
+    /// Copies `regions` (source offset, destination offset, size) from `src` to `dst` in one
+    /// command (`TRANSFER_SRC` / `TRANSFER_DST` usage). Nothing is recorded for no region.
+    pub fn copy_buffer_regions(
+        &self,
+        src: &crate::Buffer,
+        dst: &crate::Buffer,
+        regions: &[(u64, u64, u64)],
+    ) {
+        if regions.is_empty() {
+            return;
+        }
+        let regions: Vec<vk::BufferCopy> = regions
+            .iter()
+            .map(|&(src_offset, dst_offset, size)| {
+                vk::BufferCopy::default()
+                    .src_offset(src_offset)
+                    .dst_offset(dst_offset)
+                    .size(size)
+            })
+            .collect();
+        // SAFETY: recording state; every region lies inside both buffers, the destination
+        // regions do not overlap, and both buffers outlive the frame (the caller's
+        // responsibility).
+        unsafe {
+            self.device
+                .raw()
+                .cmd_copy_buffer(self.cb, src.raw(), dst.raw(), &regions);
+        }
+    }
+
     /// Copies a whole 2-D colour image (in `TRANSFER_SRC_OPTIMAL` layout) into `buffer`,
     /// tightly packed, for readback. The buffer must hold `width × height × 4` bytes.
     pub fn copy_image_to_buffer(

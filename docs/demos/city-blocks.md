@@ -10,7 +10,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Twenty props, cooked once and cached on disk | #34 | ✅ the prop gallery (`--gallery`) |
 | Terrain patch and GPU placement | #35 | ✅ the city, a million instances |
 | Culling at a million instances | #37 | ✅ far instances' roots 32 to an item: the city in 1.06 ms instead of 4.90 |
-| Streaming of cluster pages | #36 | |
+| Streaming of cluster pages | #36 | ✅ 128 KiB pages from the cache files; the flight at 300 m/s in a 48 MiB pool, no holes |
 | The flight, 1440p, numbers | #13 | |
 
 ```
@@ -26,7 +26,10 @@ Options:
 - `--focus NAME` frames one prop of the gallery (`fountain`, `tower-wide`, …).
 - `--instances N` sets how many instances are placed (1 000 000).
 - `--recook` cooks every prop and the terrain again.
-- `--orbit` gives a scripted camera.
+- `--orbit` gives a scripted camera; `--fly` flies a loop at 300 m/s, 140 m up, over the
+  city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead).
+- `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
+  page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
@@ -66,9 +69,9 @@ terrain mesh's own vertices, which cooking keeps in grid order.
 |---|---|
 | instances | 1 000 001 (644 G triangles, 15.4 G clusters if all drawn at full detail) |
 | drawn | 500 k instances in view; the culls test 28 k work items and 791 k roots; 48 k clusters, 3.32 M triangles drawn (13 k clusters in software: auto mode, far rocks) |
-| GPU per frame | **1.06 ms** (4.90 before #37): instance cull 0.30, cluster culls 0.22 + 0.23, meshlet pass 1 0.17, resolve 0.05, software raster and merge 0.04, depth pyramid 0.02 |
+| GPU per frame | **1.05 ms** with every page resident (4.90 before #37): instance cull 0.31, cluster culls 0.23 + 0.23, meshlet pass 1 0.16, resolve 0.05, software raster and merge 0.03, depth pyramid 0.02; **1.12 ms** streamed (below) |
 | CPU per frame | 0.25 ms of work (record 0.09, submit + present 0.16), the rest waiting for the GPU |
-| memory | 1.19 GiB allocated: geometry 1 071 MiB (props 749, terrain about 226, instance table 96), work buffers 84 |
+| memory | every page resident: 1.25 GiB allocated, geometry 1 160 MiB (983 of pages, 89 of cluster records, the instance table 96), work buffers 84; streamed through the default 512 MiB pool, geometry 689 MiB |
 | start-up | 13.3 s the first time (the terrain's cook), 0.85 s from the cache |
 
 The orbit (`--orbit`) views the whole city from 1.5 km out at 160 m: 1.52 ms.
@@ -83,7 +86,55 @@ alone are the cut lists those roots instead, and the cluster culls take them 32 
 - **What is left:** 791 k roots are tested for 48 k drawn clusters, the rest hidden by the
   hills and the buildings. Instance occlusion and a hierarchy over instances are #38.
 
-Streaming (#36) and the flight at 300 m/s (#13) come next.
+The flight at 300 m/s, 1440p and the closing numbers (#13) come next.
+
+## Streaming (issue #36, 2026-09-25)
+
+The city's geometry no longer has to fit in VRAM. Every mesh is cut into **128 KiB pages
+of clusters** (7 868 for the city, 983 MiB), which stay in the cache files. The GPU keeps a
+**pool of page slots** and a page table, and the cut through the LOD DAG follows whatever
+is resident. How it works is in [D-025](../DECISIONS.md) and `forge_render::streaming`:
+- **Pages:** a cluster's own 16-byte vertices and its triangles; a DAG group never spans
+  two pages; the roots' pages always resident.
+- **The cut:** a cluster draws when its page is resident, its parent is too coarse, and it
+  is fine enough or its children's page is absent. What is missing costs detail, never a
+  piece of surface.
+- **The loop:** the culls write each page's need (pixels of error it takes away); an I/O
+  thread reads the neediest absent pages; a `streaming/upload` pass copies up to 64 a
+  frame into free slots or over the least-needed leaves of the resident set.
+
+The overlay (F1) has the group `streaming` (the upload pass) and a counter line: pages
+resident, wanted, requested, reading, uploaded and evicted this frame.
+
+| streamed (1600×900, LOD 1 px) | pool | resident | GPU per frame | geometry |
+|---|---|---|---|---|
+| every page resident (`--stream-pool 0`) | — | 7 868 pages | 1.05 ms | 1 160 MiB |
+| the south edge, default | 512 MiB | 395 pages (49 MiB), settled after 39 frames (44 ms) from the roots alone | 1.12 ms | 689 MiB |
+| the orbit | 512 MiB | 620 pages | 1.56 ms | 689 MiB |
+| the flight at 300 m/s (`--fly`) | 512 MiB | 540–640 pages | 1.18 ms | 689 MiB |
+| the same flight | 48 MiB | 384 of 384 slots, 0–1.6 pages uploaded a frame at 60 Hz | 1.18 ms | 225 MiB |
+
+- **What streaming costs.** The streamed cull runs 0.26 ms a pass against 0.23. Coarser
+  levels stay in the LOD window, since they may have to stand in for absent children, and
+  every cluster checks its pages. It is a separate pipeline, so a resident scene does not
+  carry that code. The CPU spends about 0.03 ms a frame on residency: needs for 7 868
+  pages, placements, requests.
+- **No holes.** `imgdiff --background-at` counts the pixels that show the sky in one image
+  but not in the other, and those inside the other image's surfaces. Flight frames 300 and
+  900 (`--fixed-step`, so about 16 times faster than real time against the streamer's
+  clock) give these results:
+  - 512 and 48 MiB pools: 0 pixels apart from the resident frames.
+  - 24 and 16 MiB pools, too small for the cut: about 30 % of pixels differ. The distant
+    buildings are drawn as their coarse root boxes, and 17–41 sky pixels appear where the
+    resident image had rooftop units and window reveals on the skyline. None show through
+    a surface.
+- **Captures.** With every page resident, the city and every other demo draw the same
+  pixels as the paged format did before streaming. A streamed capture can differ by a few
+  hundred pixels (the orbit at frame 120: 466), all one LOD level coarser where a page
+  arrived a frame late. The golden captures of the city therefore use `--stream-pool 0`.
+- **Auto software raster.** A streamed start is coarse, so the dense-triangle count stays
+  under the auto mode's switch-on threshold and the static view stays in hardware
+  (0.20 ms against 0.16 + 0.03).
 
 ## The props (issue #34, 2026-09-24)
 
@@ -162,8 +213,9 @@ Reading the table:
   files under older keys.
 - **Mismatches:** a file whose key, version or size does not match is cooked again.
 
-This is the demo's cache, not the engine's asset format. That arrives with streaming (#36):
-fixed-size cluster pages, D-018's container, compressed vertices.
+Since #36 the cache holds cluster pages: the header and the cluster records, then the
+pages from a 4 KiB boundary, read one at a time by the streamer. It is still the demo's
+cache, not the engine's asset format: D-018's container and compressed vertices come later.
 
 **GPU:**
 - The gallery overview draws in **0.12 ms** at 1 px LOD, against 0.71 ms at full detail

@@ -397,6 +397,37 @@ ran 714 k work items for 713 k visible instances: 4.8 ms of a 6 ms frame.
 - **A hierarchy over instances.** The instance cull (0.30 ms in the city) is now the
   largest zone.
 
+## Cluster pages (issue #36, 2026-09-25)
+
+The geometry the GPU reads is now a pool of **128 KiB pages** and a page table (D-025).
+The pages are streamed in city-blocks (`docs/demos/city-blocks.md`); here every page is
+resident, each in the slot of its own index. The shared vertex buffer and its per-cluster
+index lists are gone:
+- **Each cluster carries its own vertices,** 16 bytes each: the exact position and a
+  16-bit octahedral normal.
+- **Its triangles follow** as one-byte local indices.
+- **Readers:** the mesh shader, the software rasteriser and the resolve read the payload at
+  `page_table[page] × 128 KiB + payload`. The fallback binds the pool as its index buffer,
+  and its draws carry the pool offsets.
+
+Packing keeps the LOD cut's decisions within one page: the roots first, a DAG group never
+across two pages, each cluster pointing at its children's page (`forge_geom::page`).
+
+| | before | after |
+|---|---|---|
+| bench (static view) | 0.192 ms | **0.177 ms** (meshlet pass 1 0.076 → 0.064, resolve 0.032 → 0.029) |
+| bench orbit / ballad | 0.123 / 0.328 ms | 0.117 / 0.316 ms |
+| `--side 700` | 1.36 ms | 1.28 ms (software raster 0.775 → 0.707) |
+| geometry, bench / ballad | 3.32 / 34.97 MiB | 3.76 / 39.31 MiB |
+
+- **Faster reads:** a vertex is 16 bytes read directly, where it used to be 32 bytes behind
+  an index.
+- **More memory:** a vertex on a cluster border is stored once per cluster, which costs
+  about 13 %.
+- **Captures:** the golden captures move by one level in at most 0.13 % of pixels (the
+  normals), and the TAA ballad at frame 600 by up to 44 levels in 73 isolated pixels (its
+  history diverging on edges). The A/B harness and mesh vs fallback stay at 0 pixels.
+
 ## Numbers — occlusion culling
 
 Same scene, default roughness, 1600×900, validation clean:
@@ -477,5 +508,6 @@ the default row at 1 049 k clusters; since #27 it draws all 1 140 k again, in 6.
 3. Visibility buffer: done (a 32-bit id next to the hardware depth, analytic barycentrics in
    compute, issue #6; the software rasteriser merges into it, #3); next the material
    classification and the material table (#20).
-4. Streaming of cluster pages and, on RTX hardware, cluster acceleration structures
-   (`VK_NV_cluster_acceleration_structure`) so the same clusters feed ray tracing.
+4. Streaming of cluster pages ✅ (issue #36, D-025: `docs/demos/city-blocks.md`) and, on
+   RTX hardware, cluster acceleration structures (`VK_NV_cluster_acceleration_structure`)
+   so the same clusters feed ray tracing.

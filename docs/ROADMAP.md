@@ -51,7 +51,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   1600×900), memory counters in the overlay ✅ (VRAM against the OS budget, the engine's
   allocations by category, uploads per frame; 359 MiB of a 14.9 GiB budget), the software
   rasteriser for dense clusters ✅ (issue #3: off at the ballad's 1 px LOD, where it would
-  not pay; full detail 4.37 → 2.02 ms); next streaming of cluster pages.
+  not pay; full detail 4.37 → 2.02 ms), cluster pages ✅ (issue #36: 16-byte vertices in
+  128 KiB pages, 0.316 ms; streamed in city-blocks).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -103,7 +104,9 @@ Goal: the renderer skeleton every later system draws through.
    them, 0 pixels apart (`--force-fallback`). Mesh path at the task path's cost, fallback
    draw about 2× (numbers in `docs/demos/meshlets.md`).
 4. Cluster LOD DAG (meshoptimizer `clusterlod` through FFI), GPU LOD selection by
-   screen-space error, streaming of cluster pages from disk through a GPU request buffer,
+   screen-space error, streaming of cluster pages from disk through a GPU request buffer
+   ✅ (issue #36, 2026-09-25, D-025: the culls write each page's need, the pages stream
+   through a pool with residency closed upwards; `docs/demos/city-blocks.md`),
    software rasteriser for sub-pixel clusters (64-bit atomics) ✅ (issue #3, 2026-09-24:
    dense clusters of the first pass in compute, merged into the hardware's targets; auto
    when a frame holds enough of them; full detail 2× faster, `docs/demos/meshlets.md`).
@@ -128,7 +131,8 @@ Goal: the renderer skeleton every later system draws through.
    In steps (`docs/demos/city-blocks.md`): the renderer at a million instances ✅ (#33), the
    twenty props cooked and cached ✅ (#34), terrain and GPU placement ✅ (#35: a million instances
    in 4.96 ms), culling at scale ✅ (#37: 1.06 ms, instance occlusion next in #38),
-   streaming (#36), the flight (#13).
+   streaming ✅ (#36, D-025: 128 KiB cluster pages, the flight at 300 m/s through a 48 MiB
+   pool with no holes), the flight at 1440p (#13).
 
 ## Phase 2 — World
 

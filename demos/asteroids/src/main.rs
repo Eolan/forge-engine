@@ -491,7 +491,7 @@ impl Demo for Ballad {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
-        if let Some(stats) = self.renderer.begin_frame(frame.slot, &self.scene)? {
+        if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);

@@ -95,28 +95,32 @@ where to measure that. The LOD error is scaled to output pixels, so every mode d
 same 0.56 M triangles and the geometry passes shrink only with the pixel count. Streamline
 adds about 0.07 ms of CPU to recording (0.17 against 0.10).
 
-## `city-blocks` — a million instances (issues #33–#37, the city from its south edge)
+## `city-blocks` — a million instances (issues #33–#37 and #36, the city from its south edge)
 
-GPU **1.06 ms** for 1 000 001 instances (a 4 km terrain; 2 304 buildings, 9 600 lamp
-posts, 180 plaza props and 988 k rocks placed by a compute pass): 48 k clusters and
-3.32 M triangles drawn. It was 4.96 ms before #37 packed far instances' roots 32 to a
-cluster-cull item. CPU 0.25 ms of work, the rest waiting for the GPU. Memory: 1.19 GiB
-allocated, of which 1 071 MiB is geometry.
+GPU **1.12 ms** for 1 000 001 instances (a 4 km terrain; 2 304 buildings, 9 600 lamp
+posts, 180 plaza props and 988 k rocks placed by a compute pass), streamed through a
+512 MiB pool of which the view keeps 49 MiB: 48 k clusters and 3.32 M triangles drawn.
+- **Before:** 4.96 ms before #37 packed far instances' roots 32 to a cluster-cull item.
+- **Every page resident** (`--stream-pool 0`): 1.05 ms, with 1 160 MiB of geometry
+  against 689.
+- **CPU:** 0.25 ms of work, the rest waiting for the GPU.
 
 | Subject | Zone | ms | share | Verdict |
 |---|---|---|---|---|
-| geometry | instance cull | 0.30 | 28 % | A thread per instance, a million of them, no hierarchy: cells would skip whole hills (#38). It was 0.54 before it stopped writing 526 k work items. |
-| geometry | cluster cull 1 / 2 | 0.22 / 0.23 | 43 % | 28 k work items and 791 k roots (25 k items) for 48 k drawn clusters: most rocks are hidden behind the hills or the buildings, which instance occlusion would drop before any work (#38). They were 2.0 and 2.1 ms. |
-| geometry | meshlet pass 1 / software raster + merge | 0.17 / 0.04 | 20 % | 3.3 M triangles: nothing to gain here. |
-| shading | visibility resolve | 0.05 | 5 % | |
+| geometry | instance cull | 0.31 | 27 % | A thread per instance, a million of them, no hierarchy: cells would skip whole hills (#38). It was 0.54 before it stopped writing 526 k work items. |
+| geometry | cluster cull 1 / 2 | 0.26 / 0.27 | 47 % | 30 k work items and 791 k roots (25 k items) for 48 k drawn clusters: most rocks are hidden behind the hills or the buildings, which instance occlusion would drop before any work (#38). They were 2.0 and 2.1 ms; the streamed cut adds 0.03 each (0.23 with every page resident). |
+| geometry | meshlet pass 1 | 0.20 | 18 % | 3.3 M triangles in hardware: a streamed start is coarse and leaves the auto software raster off (0.16 + 0.03 with it). |
+| shading | visibility resolve | 0.05 | 4 % | |
+| streaming | upload | 0.00 | 0 % | Nothing to upload once the view has settled (39 frames). The flight at 300 m/s uploads 0–1.6 pages a frame. |
 
-**Priority:** streaming (#36) bounds the memory, and the flight at 300 m/s (#13) measures
-it. The culls' next step (#38) waits until the flight shows it matters. Details in
+**Priority:** the flight at 300 m/s at 1440p (#13) measures the whole. The culls' next
+step (#38) waits until the flight shows it matters. Details in
 [city-blocks.md](demos/city-blocks.md).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
-GPU **0.18 ms** (0.15 with the rocks shaded in the mesh passes): the bench resolves the
+GPU **0.18 ms** (0.177 since the cluster pages of #36; 0.15 with the rocks shaded in the
+mesh passes): the bench resolves the
 visibility buffer into a pre-exposed HDR image at a fixed EV100 of 15 and the display pass
 (AgX) writes the swapchain: 20 passes, 32 image + 6 memory barriers (issue #5 added the
 clear of the instance cull's look-back words and a cluster cull before each mesh pass), three transients,
@@ -142,8 +146,8 @@ throughout; the overlay's graph counter line stays in MB.
 |---|---|---|---|---|---|---|
 | VRAM used by the process (budget 14.87 GiB) | **357 MiB** (2.3 %) | **357 MiB** | 419 | 616 | 616 | 572 |
 | system RAM used by the process | 77 MiB | 13 | | | | |
-| allocated by the engine | 108.5 MiB | 43.7 | 120.2 | 120.2 | 91.1 | 80.7 |
-| — geometry | 35.0 | 3.3 | 35.5 | 35.5 | 35.5 | 35.5 |
+| allocated by the engine | 112.9 MiB | 44.2 | 120.2 | 120.2 | 91.1 | 80.7 |
+| — geometry | 39.3 | 3.8 | 35.5 | 35.5 | 35.5 | 35.5 |
 | — render targets | 41.5 | 16.3 | 40.3 | 40.3 | 25.8 | 19.6 |
 | — transient heap | 25.0 | 18.8 | 25.0 | 25.0 | 10.5 | 6.3 |
 | — GPU work buffers | 6.6 | 4.8 | 18.8 | 18.8 | 18.8 | 18.8 |
@@ -171,7 +175,10 @@ Issue #33 then dropped the per-cluster visibility bits and sized the work list b
 work buffers 4.3 and 3.3 MiB, plus a second depth pyramid (2.7 MiB of render targets). At
 a million instances that is what keeps the bench at 197 MiB instead of 2 938
 (`docs/demos/meshlets.md`). Issue #37 added the root list, as long as the work list: work
-buffers 6.6 and 4.8 MiB (84 MiB at `--side 700` and in the city). **Verdicts:**
+buffers 6.6 and 4.8 MiB (84 MiB at `--side 700` and in the city). Issue #36 stores each
+cluster's own 16-byte vertices in 128 KiB pages instead of a shared 32-byte vertex buffer
+and its index lists: geometry 39.3 and 3.8 MiB (13 % more, the vertices on cluster borders
+stored once per cluster). **Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
    reserves 256 MiB device blocks and 64 MiB host-visible ones. Each demo holds one of each

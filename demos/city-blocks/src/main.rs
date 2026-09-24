@@ -25,7 +25,8 @@ use forge_render::meshlet::DrawParams;
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::{
     CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, SwRaster, Tonemap, exposure_from_ev100,
+    MeshletSceneBuilder, Residency, StreamingConfig, StreamingStats, SwRaster, Tonemap,
+    exposure_from_ev100,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -91,6 +92,21 @@ struct Args {
     /// Instances placed over the terrain (the city takes about 12 k, the hills the rest).
     #[arg(long, default_value_t = 1_000_000)]
     instances: u32,
+    /// Stream the city's cluster pages through a pool of this many MiB (0: every page
+    /// resident, read once at start).
+    #[arg(long, default_value_t = 512)]
+    stream_pool: u32,
+    /// Most MiB of cluster pages uploaded per frame while streaming.
+    #[arg(long, default_value_t = 8)]
+    stream_upload: u32,
+    /// Fly a loop at 300 m/s, 140 m up, over the city's edge and the hills (1.4 km from the
+    /// centre, 29 s a lap, in real time).
+    #[arg(long)]
+    fly: bool,
+    /// Advance the flight by 1/60 s a frame instead of the frame's time (reproducible
+    /// captures; with `--vsync` at 60 Hz, still 300 m/s).
+    #[arg(long)]
+    fixed_step: bool,
 }
 
 /// Where a prop stands in the gallery: its name, the centre and radius of its bounds.
@@ -113,6 +129,14 @@ struct Gallery {
     stats: Vec<FrameStats>,
     gpu_ms: Vec<f64>,
     title_updates: u32,
+    /// Seconds flown (`--fly`).
+    fly_time: f32,
+    /// The streamer's frames since the last title.
+    streaming: Vec<StreamingStats>,
+    /// When the first frame was rendered, until the streamer first settles (nothing wanted
+    /// or being read).
+    started: Option<Instant>,
+    settled: bool,
 }
 
 /// Metres between the centres of neighbouring props in the gallery.
@@ -180,6 +204,10 @@ impl Gallery {
             stats: Vec::new(),
             gpu_ms: Vec::new(),
             title_updates: 0,
+            fly_time: 0.0,
+            streaming: Vec::new(),
+            started: None,
+            settled: false,
         })
     }
 
@@ -216,7 +244,16 @@ impl Demo for Gallery {
     }
 
     fn update(&mut self, _ctx: &mut Context, input: &Input, dt: f32) {
-        if self.args.orbit {
+        if self.args.fly {
+            // Counter-clockwise seen from above, facing along the path, a little down.
+            const RADIUS: f32 = 1400.0;
+            const SPEED: f32 = 300.0;
+            self.fly_time += if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            let angle = self.fly_time * SPEED / RADIUS;
+            self.camera.position = Vec3::new(angle.sin() * RADIUS, 140.0, angle.cos() * RADIUS);
+            self.camera.yaw = angle - std::f32::consts::FRAC_PI_2;
+            self.camera.pitch = -0.15;
+        } else if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.
             let angle = self.frame as f32 * 0.004;
             let (radius, height, pitch) = if self.args.gallery {
@@ -234,11 +271,25 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
-        if let Some(stats) = self.renderer.begin_frame(frame.slot, &self.scene)? {
+        if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);
             }
+        }
+        if let Some(streaming) = self.scene.streaming() {
+            let started = *self.started.get_or_insert_with(Instant::now);
+            if self.frame > 8 && streaming.wanted == 0 && streaming.reading == 0 && !self.settled {
+                self.settled = true;
+                tracing::info!(
+                    frame = self.frame,
+                    ms = started.elapsed().as_millis(),
+                    resident = streaming.resident,
+                    "streaming settled"
+                );
+            }
+            ctx.profile.counter(streaming.line());
+            self.streaming.push(streaming);
         }
         if let Some(last) = self.stats.last() {
             ctx.profile.counter(format!(
@@ -320,6 +371,22 @@ impl Demo for Gallery {
             mean(|s| s.triangles) / 1e6,
             gpu,
         );
+        let title = match self.streaming.last() {
+            Some(last) => {
+                let frames = self.streaming.len() as f64;
+                let uploaded: u32 = self.streaming.iter().map(|s| s.uploaded).sum();
+                let wanted = self.streaming.iter().map(|s| s.wanted).max().unwrap_or(0);
+                format!(
+                    "{title} | pages {} of {} resident, {:.1} uploaded a frame, up to {} wanted",
+                    last.resident,
+                    last.pool_pages,
+                    f64::from(uploaded) / frames,
+                    wanted,
+                )
+            }
+            None => title,
+        };
+        self.streaming.clear();
         self.stats.clear();
         self.gpu_ms.clear();
         self.title_updates += 1;
@@ -332,7 +399,7 @@ impl Demo for Gallery {
 
 /// Cooks (or loads) `props` in parallel on the job system, logging each prop's DAG; returns
 /// the meshes in order and the milliseconds they took together.
-fn cook_props(props: &[PropSpec], recook: bool) -> (Vec<MeshletMesh>, f64) {
+fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<MeshletMesh>, f64) {
     let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
     let cache = root.join("mesh-cache");
     if recook {
@@ -354,6 +421,7 @@ fn cook_props(props: &[PropSpec], recook: bool) -> (Vec<MeshletMesh>, f64) {
                     &spec.name,
                     &spec.key_text(),
                     spec.cook_options(),
+                    pages_in_memory,
                     || spec.generate(),
                 );
                 if let Err(error) = stored {
@@ -398,7 +466,8 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         name: "terrain".to_owned(),
         kind: PropKind::Terrain(terrain.clone()),
     });
-    let (meshes, cook_ms) = cook_props(&props, args.recook);
+    let streamed = args.stream_pool > 0;
+    let (meshes, cook_ms) = cook_props(&props, args.recook, !streamed);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
     let id = |name: &str| ids[props.iter().position(|p| p.name == name).expect("prop")];
@@ -423,7 +492,21 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
     };
     let layout = CityLayout::city(args.instances);
     let first = builder.reserve_instances(&placement::mesh_counts(&layout, &city));
-    let scene = builder.build(&ctx.device)?;
+    let residency = if streamed {
+        Residency::Streamed(StreamingConfig::from_mib(
+            args.stream_pool,
+            args.stream_upload,
+        ))
+    } else {
+        Residency::All
+    };
+    let scene = builder.build_with(&ctx.device, residency)?;
+    tracing::info!(
+        pages = scene.page_count,
+        mib = (u64::from(scene.page_count) * forge_geom::PAGE_SIZE as u64) >> 20,
+        streamed,
+        "cluster pages"
+    );
     // The heightfield the terrain mesh was sampled from.
     let heights_start = std::time::Instant::now();
     let heights = parallel_heights(&terrain);
@@ -476,7 +559,7 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
 fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed>)> {
     let start = Instant::now();
     let props = city_props();
-    let (meshes, total_ms) = cook_props(&props, args.recook);
+    let (meshes, total_ms) = cook_props(&props, args.recook, true);
     let mut builder = MeshletSceneBuilder::new();
     let mut placed = Vec::with_capacity(props.len());
     for (i, (spec, mesh)) in props.iter().zip(&meshes).enumerate() {

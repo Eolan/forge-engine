@@ -393,6 +393,36 @@ impl Device {
         Ok(buffer)
     }
 
+    /// Copies `data` into `dst` from byte `offset` through a staging copy and waits for it
+    /// (`dst` needs `TRANSFER_DST` usage and must not be in use).
+    pub fn write_buffer_staged(
+        self: &Arc<Self>,
+        dst: &Buffer,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        let staging = self.create_buffer(BufferDesc {
+            size: data.len() as u64,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            location: MemoryLocation::CpuToGpu,
+            category: MemoryCategory::Transfer,
+            name: "staging",
+        })?;
+        staging.write(0, data);
+        self.execute_transient(|device, cb| {
+            let region = vk::BufferCopy::default()
+                .dst_offset(offset)
+                .size(data.len() as u64);
+            // SAFETY: both buffers are live, the copy is within bounds (the caller keeps
+            // `offset + data.len()` inside `dst`) and `dst` is not in use.
+            unsafe { device.cmd_copy_buffer(cb, staging.raw(), dst.raw(), &[region]) };
+        })?;
+        Ok(())
+    }
+
     /// Creates a single-level colour image filled with `data` (tightly packed rows of the
     /// image's format) and leaves it in `SHADER_READ_ONLY_OPTIMAL`. `TRANSFER_DST` is added
     /// to the usage.

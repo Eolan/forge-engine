@@ -15,9 +15,11 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
+
+use crate::streaming::{PageSource, PageStore, PageStreamer, Residency, StreamingStats};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
-    FrameSlot, FullscreenPipelineDesc, GraphBuffer, GraphImage, ImageAccess, ImageDesc,
+    FrameSlot, FullscreenPipelineDesc, GpuError, GraphBuffer, GraphImage, ImageAccess, ImageDesc,
     ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, Result,
     ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc, vk,
 };
@@ -68,6 +70,9 @@ impl CullFlags {
 const FLAG_SW_RASTER: u32 = 512;
 /// `FLAG_PREV_PYRAMID` in the shader: set by the renderer when pass 1 has a previous pyramid.
 const FLAG_PREV_PYRAMID: u32 = 2048;
+/// `FLAG_STREAMING` in the shader: set by the renderer for a streamed scene (the LOD cut
+/// follows the resident pages and records the pages it wants, see `crate::streaming`).
+const FLAG_STREAMING: u32 = 4096;
 
 /// When the software rasteriser draws the dense clusters ([`DrawParams::sw_raster`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -260,6 +265,8 @@ struct GpuFrame {
     prev_p11: f32,
     /// The root list: (instance, local cluster) per root the instance cull lists.
     roots: u64,
+    /// A streamed scene's page needs (a float's bits per page), 0 otherwise.
+    page_need: u64,
 }
 
 // Both passes' blocks share one buffer at this stride.
@@ -381,6 +388,10 @@ pub struct DrawTargets {
     /// The visible-cluster list the ids index (this frame slot's): `(instance, meshlet)` per
     /// slot, pass 1 then pass 2.
     pub visible_list: forge_gpu::BufferHandle,
+    /// The scene's page pool and page table, which hold the clusters' vertices.
+    pub pages: forge_gpu::BufferHandle,
+    /// See `pages`.
+    pub page_table: forge_gpu::BufferHandle,
 }
 
 /// Mirrors `Push` in `hzb.slang`.
@@ -410,8 +421,10 @@ impl MeshId {
 #[derive(Default)]
 pub struct MeshletSceneBuilder {
     meshlets: Vec<GpuMeshlet>,
-    /// Every mesh's cluster pages, one after the other.
-    pages: Vec<u8>,
+    /// Every mesh's cluster pages, one after the other: where to read each.
+    store: PageStore,
+    /// The pages that hold roots (always resident).
+    root_pages: Vec<u32>,
     meshes: Vec<GpuMesh>,
     instances: Vec<GpuInstance>,
     total_triangles: u64,
@@ -431,11 +444,32 @@ impl MeshletSceneBuilder {
         Self::default()
     }
 
-    /// Appends a mesh; its pages are rebased into the scene's page table.
+    /// Appends a mesh; its pages are rebased into the scene's page table. Pages in memory are
+    /// copied; pages left in a file ([`MeshletMesh::page_file`]) are read from it when needed.
     pub fn add_mesh(&mut self, mesh: &MeshletMesh) -> MeshId {
-        let page_base = (self.pages.len() / PAGE_SIZE) as u32;
+        let page_base = self.store.sources.len() as u32;
         let meshlet_offset = self.meshlets.len() as u32;
-        self.pages.extend_from_slice(&mesh.pages);
+        match &mesh.page_file {
+            Some(file) if mesh.pages.is_empty() => {
+                let index = self.store.files.len() as u32;
+                self.store.files.push(file.path.clone());
+                self.store
+                    .sources
+                    .extend((0..u64::from(mesh.page_count)).map(|p| PageSource::File {
+                        file: index,
+                        offset: file.offset + p * PAGE_SIZE as u64,
+                    }));
+            }
+            _ => {
+                let at = self.store.memory.len();
+                self.store.memory.extend_from_slice(&mesh.pages);
+                self.store.sources.extend(
+                    (0..mesh.page_count as usize).map(|p| PageSource::Memory(at + p * PAGE_SIZE)),
+                );
+            }
+        }
+        self.root_pages
+            .extend((0..mesh.root_pages).map(|p| page_base + p));
         self.meshlets
             .extend(mesh.meshlets.iter().map(|m| GpuMeshlet {
                 page: m.page + page_base,
@@ -562,43 +596,111 @@ impl MeshletSceneBuilder {
         first
     }
 
-    /// Uploads everything: every page resident, each in the slot of its own index.
+    /// Uploads everything, every page resident ([`Residency::All`]).
     pub fn build(self, device: &Arc<Device>) -> Result<MeshletScene> {
-        let page_count = (self.pages.len() / PAGE_SIZE) as u32;
-        // The shaders address the pool in 32-bit bytes (`payload_base`).
-        assert!(
-            (self.pages.len() as u64) < (1 << 32),
-            "{} MiB of pages exceed what the shaders address",
-            self.pages.len() >> 20
-        );
-        let page_table: Vec<u32> = (0..page_count.max(1)).collect();
+        self.build_with(device, Residency::All)
+    }
+
+    /// Uploads the tables and makes the pages resident as `residency` says: all of them,
+    /// each in the slot of its own index, or the roots' pages in a pool that streams the
+    /// rest.
+    pub fn build_with(
+        mut self,
+        device: &Arc<Device>,
+        residency: Residency,
+    ) -> Result<MeshletScene> {
+        let page_count = self.store.sources.len() as u32;
+        let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
+        let pool_usage = usage | vk::BufferUsageFlags::INDEX_BUFFER;
+        let (pool, page_table, streamer) = match residency {
+            Residency::All => {
+                let bytes = self.store.read_pages(0..page_count)?;
+                // The shaders address the pool in 32-bit bytes (`payload_base`).
+                if bytes.len() as u64 >= 1 << 32 {
+                    return Err(GpuError::Unsupported(format!(
+                        "{} MiB of cluster pages exceed what the shaders address: stream them",
+                        bytes.len() >> 20
+                    )));
+                }
+                let table: Vec<u32> = (0..page_count.max(1)).collect();
+                (
+                    device.create_buffer_with_data(
+                        &bytes,
+                        pool_usage,
+                        MemoryCategory::Geometry,
+                        "cluster pages",
+                    )?,
+                    device.create_buffer_with_data(
+                        &table,
+                        usage,
+                        MemoryCategory::Geometry,
+                        "page table",
+                    )?,
+                    None,
+                )
+            }
+            Residency::Streamed(config) => {
+                let pinned = std::mem::take(&mut self.root_pages);
+                if config.pool_pages as usize <= pinned.len()
+                    || u64::from(config.pool_pages) * PAGE_SIZE as u64 >= 1 << 32
+                {
+                    return Err(GpuError::Unsupported(format!(
+                        "a pool of {} pages for {} root pages (and under 4 GiB)",
+                        config.pool_pages,
+                        pinned.len()
+                    )));
+                }
+                let pool = device.create_buffer(BufferDesc {
+                    size: u64::from(config.pool_pages) * PAGE_SIZE as u64,
+                    usage: pool_usage | vk::BufferUsageFlags::TRANSFER_DST,
+                    location: MemoryLocation::GpuOnly,
+                    category: MemoryCategory::Geometry,
+                    name: "cluster page pool",
+                })?;
+                device.write_buffer_staged(
+                    &pool,
+                    0,
+                    &self.store.read_pages(pinned.iter().copied())?,
+                )?;
+                let mut table = vec![PAGE_NONE; page_count.max(1) as usize];
+                for (slot, &page) in pinned.iter().enumerate() {
+                    table[page as usize] = slot as u32;
+                }
+                let page_table = device.create_buffer_with_data(
+                    &table,
+                    usage,
+                    MemoryCategory::Geometry,
+                    "page table",
+                )?;
+                let store = Arc::new(std::mem::take(&mut self.store));
+                let streamer = PageStreamer::new(device, config, store, &self.meshlets, &pinned)?;
+                tracing::info!(
+                    pages = page_count,
+                    pool_pages = config.pool_pages,
+                    root_pages = pinned.len(),
+                    upload_pages = config.upload_pages,
+                    "cluster pages streamed"
+                );
+                (pool, page_table, Some(streamer))
+            }
+        };
         let max_meshlets = self
             .meshes
             .iter()
             .map(|m| m.meshlet_count)
             .max()
             .unwrap_or(0);
-        let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
         Ok(MeshletScene {
-            // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
-            pool: device.create_buffer_with_data(
-                &self.pages,
-                usage | vk::BufferUsageFlags::INDEX_BUFFER,
-                MemoryCategory::Geometry,
-                "cluster pages",
-            )?,
+            pool: GraphBuffer::new(pool),
             meshlets: device.create_buffer_with_data(
                 &self.meshlets,
                 usage,
                 MemoryCategory::Geometry,
                 "meshlets",
             )?,
-            page_table: device.create_buffer_with_data(
-                &page_table,
-                usage,
-                MemoryCategory::Geometry,
-                "page table",
-            )?,
+            page_table: GraphBuffer::new(page_table),
+            streamer,
             page_count,
             meshes: device.create_buffer_with_data(
                 &self.meshes,
@@ -667,11 +769,14 @@ impl MeshletSceneBuilder {
 
 /// The uploaded scene tables.
 pub struct MeshletScene {
-    /// The cluster pages (all of them: every page resident in the slot of its index).
-    pool: Buffer,
+    /// The resident cluster pages: all of them in the slot of their index, or a streamed
+    /// pool (`streamer`).
+    pool: GraphBuffer,
     meshlets: Buffer,
-    /// Per page, its slot in `pool`.
-    page_table: Buffer,
+    /// Per page, its slot in `pool` (`PAGE_NONE` when absent).
+    page_table: GraphBuffer,
+    /// A streamed scene's residency.
+    streamer: Option<PageStreamer>,
     /// Pages over all meshes.
     pub page_count: u32,
     meshes: Buffer,
@@ -719,6 +824,11 @@ impl MeshletScene {
     /// The mesh table (`Mesh` in `meshlet.slang`).
     pub(crate) fn mesh_buffer(&self) -> &Buffer {
         &self.meshes
+    }
+
+    /// What the streamer did last frame, for a streamed scene ([`Residency::Streamed`]).
+    pub fn streaming(&self) -> Option<StreamingStats> {
+        self.streamer.as_ref().map(PageStreamer::stats)
     }
 }
 
@@ -1029,6 +1139,8 @@ pub struct MeshletRenderer {
     pipeline_hzb: Pipeline,
     pipeline_cull: Pipeline,
     pipeline_cluster_cull: Pipeline,
+    /// The same for a streamed scene (the LOD cut follows the resident pages).
+    pipeline_cluster_cull_streamed: Pipeline,
     /// The software rasteriser and its merge, on devices with 64-bit buffer atomics.
     pipeline_sw_raster: Option<Pipeline>,
     pipeline_merge: Option<Pipeline>,
@@ -1111,6 +1223,12 @@ struct MeshPassIo {
     roots: forge_gpu::BufferHandle,
     /// The cluster culls' status words.
     cluster_lookback: forge_gpu::BufferHandle,
+    /// The resident cluster pages and the page table.
+    pool: forge_gpu::BufferHandle,
+    page_table: forge_gpu::BufferHandle,
+    /// A streamed scene's page needs and this slot's readback of them.
+    need: Option<forge_gpu::BufferHandle>,
+    need_readback: Option<forge_gpu::BufferHandle>,
     indirect: forge_gpu::BufferHandle,
     /// Each pass's draw grid and cluster count, and the cluster culls' tickets.
     clusters: forge_gpu::BufferHandle,
@@ -1178,6 +1296,14 @@ impl MeshletRenderer {
             &shaders.compile("meshlet.slang", "cluster_cull_main", ShaderStage::Compute)?,
             "cluster cull",
         )?;
+        let cluster_cull_streamed = device.create_shader_module(
+            &shaders.compile(
+                "meshlet.slang",
+                "cluster_cull_streamed_main",
+                ShaderStage::Compute,
+            )?,
+            "cluster cull (streamed)",
+        )?;
         let make_pipeline = |wireframe: bool| {
             let name = if wireframe {
                 "meshlets wire"
@@ -1229,6 +1355,12 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             name: "cluster cull",
         })?;
+        let pipeline_cluster_cull_streamed =
+            device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (cluster_cull_streamed, "cluster_cull_streamed_main"),
+                push_constant_bytes: std::mem::size_of::<Push>() as u32,
+                name: "cluster cull (streamed)",
+            })?;
         let (pipeline_sw_raster, pipeline_merge) = if device.features().int64_atomics {
             let (raster, merge) = Self::software_pipelines(device, shaders)?;
             (Some(raster), Some(merge))
@@ -1245,7 +1377,15 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
             name: "visibility resolve",
         })?;
-        for module in [geometry, frag, hzb, cull, cluster_cull, resolve] {
+        for module in [
+            geometry,
+            frag,
+            hzb,
+            cull,
+            cluster_cull,
+            cluster_cull_streamed,
+            resolve,
+        ] {
             device.destroy_shader_module(module);
         }
         let hzb = create_pyramids(device, extent)?;
@@ -1314,6 +1454,7 @@ impl MeshletRenderer {
             pipeline_hzb,
             pipeline_cull,
             pipeline_cluster_cull,
+            pipeline_cluster_cull_streamed,
             pipeline_sw_raster,
             pipeline_merge,
             pipeline_resolve,
@@ -1456,8 +1597,11 @@ impl MeshletRenderer {
     pub fn begin_frame(
         &mut self,
         slot: FrameSlot,
-        scene: &MeshletScene,
+        scene: &mut MeshletScene,
     ) -> Result<Option<FrameStats>> {
+        if let Some(streamer) = scene.streamer.as_mut() {
+            streamer.begin_frame(slot.index, slot.frame_number);
+        }
         // The work list: the scene's bound up front when small (no frame then ever drops a
         // work item), else grown from the demand the instance cull counts.
         let reserve = scene.work_bound.min(u64::from(WORK_RESERVE_MAX)) as u32;
@@ -1567,6 +1711,10 @@ impl MeshletRenderer {
         if prev.is_some() {
             flags.0 |= FLAG_PREV_PYRAMID;
         }
+        flags.0 &= !FLAG_STREAMING;
+        if scene.streamer.is_some() {
+            flags.0 |= FLAG_STREAMING;
+        }
         let prev = prev.unwrap_or(PrevCull {
             view: Mat4::IDENTITY,
             p00: 1.0,
@@ -1625,6 +1773,10 @@ impl MeshletRenderer {
             prev_p00: prev.p00,
             prev_p11: prev.p11,
             roots: work.roots.address(),
+            page_need: scene
+                .streamer
+                .as_ref()
+                .map_or(0, |s| s.need_buffer.address()),
         }
     }
 
@@ -1725,8 +1877,33 @@ impl MeshletRenderer {
                 .map(|b| graph.import_buffer(b)),
             stats: graph.import_buffer(&self.stats),
             stats_readback: graph.import_buffer(&self.stats_readback[slot.index]),
+            pool: graph.import_buffer(&scene.pool),
+            page_table: graph.import_buffer(&scene.page_table),
+            need: scene
+                .streamer
+                .as_ref()
+                .map(|s| graph.import_buffer(&s.need_buffer)),
+            need_readback: scene
+                .streamer
+                .as_ref()
+                .map(|s| graph.import_buffer(&s.readback[slot.index])),
         };
         let frame_address = self.frame_buffers[slot.index].address();
+
+        // Streaming: this frame's pages and page-table entries, before anything reads them.
+        if let Some(streamer) = scene.streamer.as_ref() {
+            let (staging, plan) = (streamer.staging(slot.index), &streamer.plans[slot.index]);
+            let (pool, table): (&'f Buffer, &'f Buffer) = (&scene.pool, &scene.page_table);
+            graph
+                .pass("streaming/upload")
+                .buffer(io.pool, BufferAccess::TransferDst)
+                .buffer(io.page_table, BufferAccess::TransferDst)
+                .run(move |_, commands| {
+                    commands.copy_buffer_regions(staging, pool, &plan.pages);
+                    commands.copy_buffer_regions(staging, table, &plan.table);
+                    Ok(())
+                });
+        }
 
         // Instance culling and LOD level windows: the work and root lists and the cluster
         // cull's grid. Every cull's status words start cleared.
@@ -1738,17 +1915,25 @@ impl MeshletRenderer {
         let cluster_lookback_bytes = 2 * u64::from(work_list.groups()) * 8;
         let stats: &'f GraphBuffer = &self.stats;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        graph
+        let need: Option<&'f GraphBuffer> = scene.streamer.as_ref().map(|s| &s.need_buffer);
+        let need_bytes = u64::from(scene.page_count.max(1)) * 4;
+        let mut clears = graph
             .pass("geometry/instance cull")
             .buffer(io.lookback, BufferAccess::TransferDst)
             .buffer(io.cluster_lookback, BufferAccess::TransferDst)
-            .buffer(io.stats, BufferAccess::TransferDst)
-            .run(move |_, commands| {
-                commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 8, 0);
-                commands.fill_buffer(cluster_lookback, 0, cluster_lookback_bytes, 0);
-                commands.fill_buffer(stats, 0, STATS_BYTES, 0);
-                Ok(())
-            });
+            .buffer(io.stats, BufferAccess::TransferDst);
+        if let Some(handle) = io.need {
+            clears = clears.buffer(handle, BufferAccess::TransferDst);
+        }
+        clears.run(move |_, commands| {
+            commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 8, 0);
+            commands.fill_buffer(cluster_lookback, 0, cluster_lookback_bytes, 0);
+            commands.fill_buffer(stats, 0, STATS_BYTES, 0);
+            if let Some(need) = need {
+                commands.fill_buffer(need, 0, need_bytes, 0);
+            }
+            Ok(())
+        });
         graph
             .pass("geometry/instance cull")
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
@@ -1785,6 +1970,7 @@ impl MeshletRenderer {
         self.cull_pass(graph, cull_label, first, &params, slot);
         if !occlusion {
             self.stats_readback_passes(graph, cull_label, io, slot);
+            self.need_readback_passes(graph, cull_label, io, scene, slot);
         }
         self.draw_pass(graph, draw_label, first, &params, slot);
         self.software_passes(graph, raster_label, first, &params, slot);
@@ -1807,6 +1993,13 @@ impl MeshletRenderer {
                 slot,
             );
             self.stats_readback_passes(graph, "geometry/cluster cull 2 (occlusion)", io, slot);
+            self.need_readback_passes(
+                graph,
+                "geometry/cluster cull 2 (occlusion)",
+                io,
+                scene,
+                slot,
+            );
             self.draw_pass(
                 graph,
                 "geometry/meshlet pass 2 (newly visible)",
@@ -1830,7 +2023,40 @@ impl MeshletRenderer {
             depth,
             visibility,
             visible_list: io.visible,
+            pages: io.pool,
+            page_table: io.page_table,
         })
+    }
+
+    /// Once the last cull has written the page needs: copies them into this slot's readback
+    /// for the streamer (`crate::streaming`), under the last cull's label.
+    fn need_readback_passes<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        label: &'static str,
+        io: MeshPassIo,
+        scene: &'f MeshletScene,
+        slot: FrameSlot,
+    ) {
+        let (Some(streamer), Some(need), Some(readback)) =
+            (scene.streamer.as_ref(), io.need, io.need_readback)
+        else {
+            return;
+        };
+        let (src, dst) = (&streamer.need_buffer, &streamer.readback[slot.index]);
+        let bytes = u64::from(scene.page_count.max(1)) * 4;
+        graph
+            .pass(label)
+            .buffer(need, BufferAccess::TransferSrc)
+            .buffer(readback, BufferAccess::TransferDst)
+            .run(move |_, commands| {
+                commands.copy_buffer(src, dst, bytes);
+                Ok(())
+            });
+        graph
+            .pass(label)
+            .buffer(readback, BufferAccess::HostRead)
+            .run(|_, _| Ok(()));
     }
 
     /// Declares the pass that shades the visibility buffer once per pixel into `color` (a
@@ -1854,6 +2080,8 @@ impl MeshletRenderer {
             .image(targets.visibility, ImageAccess::Sampled(compute))
             .image(color, ImageAccess::StorageWrite(compute))
             .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+            .buffer(targets.pages, BufferAccess::ShaderRead(compute))
+            .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
             .run(move |resources, commands| {
                 commands.bind_pipeline(pipeline);
                 commands.push_constants(
@@ -1886,7 +2114,11 @@ impl MeshletRenderer {
         slot: FrameSlot,
     ) {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        let pipeline = &self.pipeline_cluster_cull;
+        let pipeline = if params.scene.streamer.is_some() {
+            &self.pipeline_cluster_cull_streamed
+        } else {
+            &self.pipeline_cluster_cull
+        };
         let grid: &'f GraphBuffer = &params.scene.indirect[slot.index];
         let MeshPass {
             io,
@@ -1906,9 +2138,13 @@ impl MeshletRenderer {
             .buffer(io.cluster_lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.visible, BufferAccess::ShaderWrite(compute))
             .buffer(io.raster, BufferAccess::ShaderWrite(compute))
-            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.page_table, BufferAccess::ShaderRead(compute));
         if let Some(draws) = io.draws {
             builder = builder.buffer(draws, BufferAccess::ShaderWrite(compute));
+        }
+        if let Some(need) = io.need {
+            builder = builder.buffer(need, BufferAccess::ShaderReadWrite(compute));
         }
         // Pass 1 tests the previous pyramid; pass 2 that one too (to skip what pass 1 drew) and
         // this frame's.
@@ -1989,11 +2225,15 @@ impl MeshletRenderer {
                     BufferAccess::IndirectArgsAndShaderRead(S::MESH_SHADER_EXT),
                 )
                 .buffer(io.raster, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
-                .buffer(io.visible, BufferAccess::ShaderRead(S::MESH_SHADER_EXT)),
+                .buffer(io.visible, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
+                .buffer(io.pool, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
+                .buffer(io.page_table, BufferAccess::ShaderRead(S::MESH_SHADER_EXT)),
+            // The fallback's draws carry the pool offsets: no page-table read.
             Some(draws) => builder
                 .buffer(io.clusters, BufferAccess::IndirectArgs)
                 .buffer(draws, BufferAccess::IndirectArgs)
-                .buffer(io.visible, BufferAccess::ShaderRead(S::VERTEX_SHADER)),
+                .buffer(io.visible, BufferAccess::ShaderRead(S::VERTEX_SHADER))
+                .buffer(io.pool, BufferAccess::IndexAndShaderRead(S::VERTEX_SHADER)),
         };
         builder
             .image(io.visibility, ImageAccess::ColorAttachment)
@@ -2091,6 +2331,8 @@ impl MeshletRenderer {
             )
             .buffer(io.raster, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
             .buffer(io.visible, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
+            .buffer(io.pool, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
+            .buffer(io.page_table, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
             .image(io.depth, ImageAccess::Sampled(S::COMPUTE_SHADER))
             .image(io.visibility, ImageAccess::Sampled(S::COMPUTE_SHADER))
             .buffer(vis64, BufferAccess::ShaderReadWrite(S::COMPUTE_SHADER))

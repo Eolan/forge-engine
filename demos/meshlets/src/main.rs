@@ -202,7 +202,7 @@ impl Demo for Bench {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
-        if let Some(stats) = self.renderer.begin_frame(frame.slot, &self.scene)? {
+        if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);
@@ -358,7 +358,7 @@ fn build_scene(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         .sum::<f64>()
         / built.meshlets.len().max(1) as f64;
     tracing::info!(
-        pages = built.page_count(),
+        pages = built.page_count,
         triangles = built.triangle_count,
         meshlets = built.meshlets.len(),
         cone_cullable_pct = (cullable as f64 * 100.0 / built.meshlets.len().max(1) as f64).round(),

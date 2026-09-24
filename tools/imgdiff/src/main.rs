@@ -41,6 +41,54 @@ struct Args {
     /// Write the crops of a, b and the diff side by side to this path.
     #[arg(long)]
     crops: Option<PathBuf>,
+    /// The pixel "x,y" of `a` whose colour is the background: counts the pixels that show
+    /// the background in `b` but not in `a`, and those of them whose eight neighbours in `a`
+    /// show none either (inside a surface of `a`: a hole in `b`, not a moved outline). The
+    /// cluster-streaming check (issue #36).
+    #[arg(long, value_parser = parse_point)]
+    background_at: Option<[u32; 2]>,
+}
+
+fn parse_point(text: &str) -> std::result::Result<[u32; 2], String> {
+    let parts: Vec<u32> = text
+        .split(',')
+        .map(|p| p.trim().parse::<u32>().map_err(|e| e.to_string()))
+        .collect::<std::result::Result<_, _>>()?;
+    parts.try_into().map_err(|_| "expected x,y".to_owned())
+}
+
+/// Pixels showing `background` in `b` but not in `a`, and those of them whose eight
+/// neighbours in `a` show none either.
+fn background_only_in_b(
+    a: &image::RgbaImage,
+    b: &image::RgbaImage,
+    background: image::Rgba<u8>,
+    inside_at: &mut Vec<(u32, u32)>,
+) -> (u64, u64) {
+    let (width, height) = a.dimensions();
+    let is_background = |image: &image::RgbaImage, x: u32, y: u32| {
+        image.get_pixel(x, y).0[..3] == background.0[..3]
+    };
+    let (mut only_b, mut inside) = (0, 0);
+    for y in 0..height {
+        for x in 0..width {
+            if !is_background(b, x, y) || is_background(a, x, y) {
+                continue;
+            }
+            only_b += 1;
+            let mut near_background = false;
+            for ny in y.saturating_sub(1)..=(y + 1).min(height - 1) {
+                for nx in x.saturating_sub(1)..=(x + 1).min(width - 1) {
+                    near_background |= is_background(a, nx, ny);
+                }
+            }
+            inside += u64::from(!near_background);
+            if !near_background {
+                inside_at.push((x, y));
+            }
+        }
+    }
+    (only_b, inside)
 }
 
 fn parse_rect(text: &str) -> std::result::Result<[u32; 4], String> {
@@ -110,6 +158,19 @@ fn main() -> Result<ExitCode> {
         different as f64 * 100.0 / total as f64,
         sum_error as f64 / total as f64
     );
+    if let Some([x, y]) = args.background_at {
+        let background = *a.get_pixel(x.min(width - 1), y.min(height - 1));
+        let mut inside_at = Vec::new();
+        let (only_b, inside) = background_only_in_b(&a, &b, background, &mut inside_at);
+        let (only_a, inside_a) = background_only_in_b(&b, &a, background, &mut Vec::new());
+        println!(
+            "background {:?}: {only_b} pixels only in b ({inside} inside a's surfaces), {only_a} only in a ({inside_a} inside b's)",
+            &background.0[..3]
+        );
+        for (x, y) in inside_at.iter().take(args.report) {
+            println!("inside a's surfaces, background in b: ({x}, {y})");
+        }
+    }
     if let Some(out) = &args.out {
         diff.save(out)
             .with_context(|| format!("write {}", out.display()))?;

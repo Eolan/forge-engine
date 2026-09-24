@@ -278,3 +278,28 @@ category, every host write into GPU-visible memory counted as upload. What it ta
 - **The upload counter measures the host side only.** It counts bytes the CPU writes
   through mapped pointers. Staging copies on the GPU are not counted twice: the ballad
   writes 1.1 KiB per frame, and the overlay's cell grid adds 31 KiB.
+
+## Implementation notes from Forge: cluster streaming (2026-09-25, issue #36, D-025)
+
+The cluster-page half of §4, in city-blocks. It follows the Nanite shape above: fixed
+128 KiB pages, a resident hierarchy, GPU-written needs read back, eviction by need. Where it
+departs so far, and what it taught:
+- **Pages are not transcoded yet.** A page holds each cluster's own 16-byte vertices
+  (exact positions, octahedral normals) and one-byte triangles, as the GPU reads them.
+  There are no references to parent pages and no compression, so a cluster costs about
+  13 % more than with a shared vertex buffer. Quantised positions on a per-mesh grid and
+  D-018's zstd container are the next step for the disk and the pool.
+- **Dependencies decide more than priorities.** A page holds about a dozen groups, and
+  their parent clusters lie in several pages. The first version waited for all of a
+  page's parent pages but requested only what the cut asked for. Parent pages that held
+  nothing the cut wanted then never came, and their children waited forever (21 pages in
+  the static view). The fix is Nanite's: a wanted page lends its need to every ancestor,
+  which is requested first and kept while the page is.
+- **One page per group makes the fallback exact.** The cut refines a cluster only when its
+  children's page is resident, and all of a group's children share that page. So any
+  resident set that holds the roots gives one watertight surface. Evicting only pages with
+  no resident children keeps coarser and finer pages from overlapping.
+- **The I/O is simple for now.** One thread does blocking positioned reads, and the
+  uploads are a graphics-queue copy pass before the culls. At 300 m/s the flight needs at
+  most 1.6 pages a frame (200 KiB at 60 Hz), far from any of the budgets in §3. IOCP and
+  the transfer queue come when a scene asks for more.

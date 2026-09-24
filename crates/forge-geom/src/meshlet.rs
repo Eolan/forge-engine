@@ -108,10 +108,16 @@ pub struct DagStats {
 pub struct MeshletMesh {
     /// Meshlet records, all levels (the hierarchy, always resident).
     pub meshlets: Vec<GpuMeshlet>,
-    /// The clusters' payloads, [`PAGE_SIZE`] bytes per page, the roots' pages first.
+    /// The clusters' payloads, [`PAGE_SIZE`] bytes per page, the roots' pages first; empty
+    /// when the pages stay in a file ([`MeshletMesh::page_file`]).
     pub pages: Vec<u8>,
+    /// How many pages there are.
+    pub page_count: u32,
     /// How many of the first pages hold the roots.
     pub root_pages: u32,
+    /// Where the pages lie on disk when they are not in memory (a streamed mesh, see
+    /// `crate::cache::load_hierarchy`).
+    pub page_file: Option<PageFile>,
     /// Triangles at full detail (level 0).
     pub triangle_count: usize,
     /// Triangles over all levels.
@@ -150,8 +156,10 @@ impl MeshletMesh {
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
             meshlets: dag.meshlets,
+            page_count: pages.count(),
             pages: pages.bytes,
             root_pages: pages.root_pages,
+            page_file: None,
             triangle_count: indices.len() / 3,
             dag_triangle_count: dag.triangle_count,
             clusters_per_level: dag.clusters_per_level,
@@ -165,18 +173,13 @@ impl MeshletMesh {
         self.clusters_per_level.len()
     }
 
-    /// Number of pages.
-    pub fn page_count(&self) -> u32 {
-        (self.pages.len() / PAGE_SIZE) as u32
-    }
-
-    /// Vertex `i` of cluster `m`, read from its page.
+    /// Vertex `i` of cluster `m`, read from its page (the pages must be in memory).
     pub fn vertex(&self, m: &GpuMeshlet, i: usize) -> PagedVertex {
         let at = m.page as usize * PAGE_SIZE + m.payload as usize + i * size_of::<PagedVertex>();
         bytemuck::pod_read_unaligned(&self.pages[at..at + size_of::<PagedVertex>()])
     }
 
-    /// The three local vertex indices of triangle `t` of cluster `m`.
+    /// The three local vertex indices of triangle `t` of cluster `m` (pages in memory).
     pub fn triangle(&self, m: &GpuMeshlet, t: usize) -> [u8; 3] {
         let at = m.page as usize * PAGE_SIZE
             + m.payload as usize
@@ -185,7 +188,7 @@ impl MeshletMesh {
         [self.pages[at], self.pages[at + 1], self.pages[at + 2]]
     }
 
-    /// The position of corner `k` of triangle `t` of cluster `m`.
+    /// The position of corner `k` of triangle `t` of cluster `m` (pages in memory).
     pub fn corner(&self, m: &GpuMeshlet, t: usize, k: usize) -> [f32; 3] {
         self.vertex(m, self.triangle(m, t)[k] as usize).position
     }
@@ -204,6 +207,16 @@ impl MeshletMesh {
             fill: self.dag_triangle_count as f64 / (clusters * MESHLET_MAX_TRIANGLES) as f64,
         }
     }
+}
+
+/// Where a mesh's pages lie in a file: page `p` is the [`PAGE_SIZE`] bytes at
+/// `offset + p × PAGE_SIZE` of `path`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageFile {
+    /// The file (a mesh cache file, `crate::cache`).
+    pub path: std::path::PathBuf,
+    /// Where page 0 starts.
+    pub offset: u64,
 }
 
 fn bounding_sphere(positions: &[[f32; 3]]) -> ([f32; 3], f32) {
@@ -253,7 +266,7 @@ mod tests {
             assert!(m.vertex_count as usize <= MESHLET_MAX_VERTICES);
             assert!(m.triangle_count as usize <= MESHLET_MAX_TRIANGLES);
             assert!(m.radius > 0.0);
-            assert!(m.page < built.page_count());
+            assert!(m.page < built.page_count);
             assert_eq!(m.payload as usize % page::PAYLOAD_ALIGN, 0);
             let end = m.payload as usize + page::payload_bytes(m.vertex_count, m.triangle_count);
             assert!(end <= PAGE_SIZE);
@@ -273,7 +286,8 @@ mod tests {
     fn pages_keep_groups_whole_and_point_at_the_children() {
         let mesh = crate::procedural::asteroid(Seed::new(700), 64, 1.0, 0.45);
         let built = MeshletMesh::build(&mesh);
-        assert!(built.page_count() >= 2, "pages {}", built.page_count());
+        assert!(built.page_count >= 2, "pages {}", built.page_count);
+        assert_eq!(built.pages.len(), built.page_count as usize * PAGE_SIZE);
         assert!(built.root_pages >= 1);
         let mut spans: Vec<(usize, usize)> = built
             .meshlets
@@ -300,7 +314,7 @@ mod tests {
             if m.lod_level == 0 {
                 assert_eq!(m.child_page, page::PAGE_NONE);
             } else {
-                assert!(m.child_page >= built.root_pages && m.child_page < built.page_count());
+                assert!(m.child_page >= built.root_pages && m.child_page < built.page_count);
             }
         }
         // The children of a cluster are the clusters whose parent is its group: they share

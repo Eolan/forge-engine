@@ -15,6 +15,7 @@ pub mod exposure;
 pub mod meshlet;
 pub mod placement;
 pub mod starfield;
+pub mod streaming;
 pub mod taa;
 pub mod upscale;
 pub mod visibility;
@@ -29,5 +30,6 @@ pub use meshlet::{
     MeshletScene, MeshletSceneBuilder, SwRaster,
 };
 pub use starfield::Starfield;
+pub use streaming::{Residency, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
