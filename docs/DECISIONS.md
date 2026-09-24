@@ -58,14 +58,18 @@ when a frame holds enough of them to repay its fixed cost (D-021). Since issue #
 occlusion keeps no state per cluster. Pass 1 draws what the previous frame's pyramid
 shows, from the previous culling camera, and pass 2 re-derives that to test only the rest
 against this frame's pyramid. The work lists are sized by demand, so the scene can hold a
-million instances (197 MiB for 980 k rocks, against 2.9 GiB before). Next: cluster
-acceleration structures for ray tracing on RTX.
+million instances (197 MiB for 980 k rocks, against 2.9 GiB before). Since issue #37 an
+instance whose roots alone are the cut lists them in a root list instead of taking work
+items, 32 roots of any instances to a cluster-cull item. Next: cluster acceleration
+structures for ray tracing on RTX.
 *Measured:* 127 M-triangle scene, 1152 instances: 6.1 ms brute force → 1.1 ms with
 occlusion, 0 pixels different. Compute culling (#5): the two paths 0 pixels apart; the mesh
 path costs what the task path did (0.180 ms bench, 0.326 against 0.322 ms for the ballad),
 the fallback's draw about twice the mesh draw. Software rasteriser (#3): full detail
 2.27 → 1.15 ms on the bench (6.41 → 2.48 without occlusion, 3.92 → 1.20 through the
 fallback), the ballad at full detail 4.37 → 2.02; the LOD views unchanged (it stays off).
+Root lists (#37): 980 k rocks 5.95 → 1.36 ms, the million-instance city 4.90 → 1.06 ms,
+the same pixels.
 *(research: gpu-geometry.md; demo: meshlets)*
 
 ## D-004 — Coordinates: f64 nested frames, camera-relative f32, Y-up metres ✅ (2026-09-24)

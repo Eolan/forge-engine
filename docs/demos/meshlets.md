@@ -57,8 +57,10 @@ produces:
 
 - **Instance cull** (one thread per instance): the frustum test and the LOD levels that can
   hold selected clusters at the instance's distance; appends the instance's work items
-  (groups of 32 clusters) to the work list and writes the cluster cull's indirect grid.
-- **Cluster cull** (one per mesh pass; 8 work items per 256-thread workgroup): LOD
+  (groups of 32 clusters) to the work list, or, when its roots alone are the cut, its roots
+  to the root list (#37), and writes the cluster cull's indirect grid.
+- **Cluster cull** (one per mesh pass; 8 work items per 256-thread workgroup, the root list
+  after the work items at 32 roots to an item): LOD
   selection, frustum, normal cone and, in the second pass, the depth pyramid and the
   "visible last frame" bits; appends the survivors to the frame's visible-cluster list (pass
   1 from the front, pass 2 from the back, so neither draw needs the other's count; since
@@ -344,6 +346,56 @@ triangles at 1 px) and the rocks look alike, but the golden captures move: 30 % 
 ballad's pixels, largely the automatic exposure shifting by a level. The full-detail
 captures are unchanged, level 0 being the same. The A/B harness and mesh vs fallback stay
 at 0 pixels.
+
+## Far instances without work items (issue #37, 2026-09-24)
+
+A work item is one instance's group of 32 clusters, tested by 32 lanes. A far rock selects
+only its root, so 31 lanes idle, and both passes test the item. At `--side 700` the culls
+ran 714 k work items for 713 k visible instances: 4.8 ms of a 6 ms frame.
+
+**The root shortcut.**
+- **What the mesh record holds:** its roots, when there are at most four: their indices,
+  their largest error, and how far their spheres reach from the mesh centre.
+- **The instance cull's test:** it projects that error from the nearest point any root
+  sphere can have. If every root is fine enough there, the roots alone are the DAG's cut.
+  Errors and spheres only grow up the DAG, so no cluster below a fine root can have a
+  parent that is too coarse.
+- **The root list:** such an instance takes no work item. Its roots go to a root list, in
+  instance order: the second count of the look-back word the instance cull already
+  publishes.
+- **The cluster culls** read the list 32 roots to an item, after the work items. Each root
+  takes the same tests as before (LOD, frustum, cone, occlusion). The shortcut only packs
+  lanes; what is drawn does not change.
+- **Status words:** the root items get no cluster-cull status words from the instance
+  cull's appends. A fill before the instance cull clears them all (2 MiB at 1 M items).
+- **Memory:** the root list has the work list's capacity, 8 MiB per frame slot at 1 M. Both
+  lists grow from the larger demand, and the reserved bound counts roots too.
+- **Meshes with more than four roots** keep their work items, like the city's terrain with
+  its 173.
+
+| `meshlets --side 700` (980 k instances) | before | after |
+|---|---|---|
+| GPU per frame | 5.95 ms | **1.36 ms** |
+| cluster cull 1 / 2 | 2.42 / 2.39 ms | 0.12 / 0.13 ms |
+| instance cull | 0.19 ms | 0.16 ms |
+| what the culls test | 714 k work items | 3 k work items + 711 k roots (22 k items) |
+| work buffers | 68 MiB | 84 MiB |
+
+- **The city** (`city-blocks`, from its south edge):
+  - 4.90 → **1.06 ms**; its orbit 5.50 → 1.52.
+  - Culls 1.98 / 2.08 → 0.22 / 0.23 ms; the instance cull 0.54 → 0.30 ms.
+- **The usual views are unchanged:** bench 0.191 → 0.192 ms, its orbit 0.120 → 0.123, the
+  ballad 0.336 → 0.328.
+- **Captures:** all 26 golden captures (bench, ballad, city, gallery, both paths) are 0
+  pixels apart from the previous build, and so is the A/B harness.
+
+**What is left** (#38):
+- **Instance occlusion.** The city tests 791 k roots and draws 48 k clusters: most rocks
+  are behind the hills or the buildings. An instance cull could drop them before any work,
+  but with two passes it has to run twice: a list of the instances hidden last frame,
+  tested again after the pyramid.
+- **A hierarchy over instances.** The instance cull (0.30 ms in the city) is now the
+  largest zone.
 
 ## Numbers — occlusion culling
 

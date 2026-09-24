@@ -75,6 +75,13 @@ public struct Mesh
     public float parent_error_max[LOD_LEVELS];
     public float self_reach_max[LOD_LEVELS];   // max |self_center - center| + self_radius per level
     public float parent_reach_max[LOD_LEVELS];
+    // The DAG's roots (issue #37): their local indices when there are at most four, the
+    // largest `self_error` among them and how far their `self` spheres reach from `center`.
+    public uint roots[4];
+    public uint root_count;        // 0: more than four roots, no shortcut (`instance_roots`)
+    public float root_error_max;
+    public float root_reach_max;
+    public uint pad_roots;
 };
 
 public struct Instance
@@ -128,7 +135,8 @@ public static const uint STAT_SW_CLUSTERS = 7;      // clusters rasterised in co
 public static const uint STAT_SW_TRIANGLES = 8;     // their triangles (also counted in STAT_TRIANGLES)
 public static const uint STAT_DENSE_TRIANGLES = 9;  // triangles of the drawn dense clusters, software rasteriser on or off
 public static const uint STAT_WORK_ITEMS = 10;      // work items the instance cull emitted (the demand)
-public static const uint STAT_WORK_OVERFLOW = 11;   // of those, dropped because the work list was full
+public static const uint STAT_WORK_OVERFLOW = 11;   // of those, dropped because the work list was full (and root entries past the root list)
+public static const uint STAT_ROOT_ENTRIES = 12;    // root clusters listed by the instance cull (the demand)
 
 // The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
 // `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, filled by the
@@ -147,7 +155,7 @@ public struct Frame
     public float4 planes[6];        // frustum planes of `cull_view_proj`, inward normals
     public float3 camera_pos;       // camera used for culling
     public uint instance_count;
-    public uint work_capacity;      // slots in `work`
+    public uint work_capacity;      // slots in `work`, and in `roots`
     public uint flags;
     public uint pass;
     public uint hzb_image;          // sampled image index of the depth pyramid
@@ -167,10 +175,10 @@ public struct Frame
     public Instance* instances;
     public uint* stats;
     public uint64_t* cluster_lookback; // status words of the cluster culls' ordered appends: `cluster_groups` per pass
-    public uint cluster_groups;     // cluster-cull workgroups `work_capacity` items need
+    public uint cluster_groups;     // cluster-cull workgroups the fullest lists need: `work_capacity` items, then `work_capacity` roots at 32 an item
     public uint prev_hzb_image;     // sampled image index of the previous frame's pyramid
     public uint2* work;             // (instance, local group) per work item, built by `cull_main`
-    public uint* indirect;          // the cluster cull's grid (x, y, 1, work item count), then the instance cull's ticket
+    public uint* indirect;          // the cluster cull's grid (x, y, 1, work item count), the instance cull's ticket (4), the regular work items (5) and the root entries (6) the items cover
     public uint2* visible;          // (instance, meshlet | flag bits) per drawn cluster, in cull order: pass 1, then pass 2
     public uint visible_capacity;   // slots in `visible`
     public float exposure;          // pre-exposure of the frame (crates/forge-render/src/exposure.rs)
@@ -187,6 +195,7 @@ public struct Frame
     public float2 prev_draw_jitter; // the previous frame's `draw_jitter`
     public float prev_p00;          // the previous culling camera's projection scales
     public float prev_p11;
+    public uint2* roots;            // (instance, local cluster) per root entry of the instance cull, `work_capacity` of them
 };
 
 struct Push
@@ -466,19 +475,37 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
 {
     ClusterVerdict v = {};
     uint pass = f[0].pass;
-    uint2 work = f[0].work[item]; // written by cull_main: (instance, local group)
-    v.instance = work.x;
-    uint local_group = work.y;
+    // The first items are an instance's group of 32 clusters each; the rest cover the root
+    // list, 32 root clusters (of any instances) each.
+    uint regular = f[0].indirect[5];
+    uint local_meshlet;
+    uint local_group = 0;
+    bool root = item >= regular;
+    if (root)
+    {
+        uint entry = (item - regular) * TASK_GROUP_SIZE + thread;
+        if (entry >= f[0].indirect[6])
+            return v;
+        uint2 r = f[0].roots[entry]; // written by cull_main: (instance, local cluster)
+        v.instance = r.x;
+        local_meshlet = r.y;
+    }
+    else
+    {
+        uint2 work = f[0].work[item]; // written by cull_main: (instance, local group)
+        v.instance = work.x;
+        local_group = work.y;
+        local_meshlet = local_group * TASK_GROUP_SIZE + thread;
+    }
     Instance* inst = f[0].instances + v.instance;
     Mesh* mesh = f[0].meshes + inst[0].mesh;
-    uint local_meshlet = local_group * TASK_GROUP_SIZE + thread;
     bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
     bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
     bool instance_visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
     // Uniform scale is assumed for the bounding spheres: take the length of the first column.
     float scale = length(inst[0].model[0].xyz);
     // Whole-group rejection from the per-level tables before any cluster is read.
-    if (!instance_visible || !group_possible(f, mesh, inst, local_group, scale)
+    if (!instance_visible || (!root && !group_possible(f, mesh, inst, local_group, scale))
         || local_meshlet >= mesh[0].meshlet_count)
         return v;
     v.meshlet = mesh[0].meshlet_offset + local_meshlet;
@@ -844,10 +871,25 @@ bool level_possible(Frame* f, Mesh* mesh, uint l, float scale, float dist)
     return self_min_px <= t && parent_max_px > t;
 }
 
+// The root shortcut (issue #37): when every root of the mesh is fine enough at the nearest
+// distance its roots can be from the camera, the DAG's one cut is the roots themselves
+// (errors and spheres grow up the DAG, so no cluster below a selected root has a parent that
+// is too coarse) and the instance needs no work item of its own: its roots go to the root
+// list, which the cluster cull reads 32 entries to an item. Far instances of big meshes, 32
+// lanes testing the coarse levels for one or two clusters, were most of the culls' time at a
+// million instances. Returns how many roots the instance lists, 0 when it takes work items.
+uint instance_roots(Frame* f, Mesh* mesh, float scale, float dist)
+{
+    if ((f[0].flags & (FLAG_LOD | FLAG_GROUP_WINDOW_OFF)) != FLAG_LOD || mesh[0].root_count == 0)
+        return 0;
+    float nearest = max(dist - mesh[0].root_reach_max * scale, f[0].znear);
+    float px = mesh[0].root_error_max * scale * f[0].p11 * 0.5 * f[0].viewport_height / nearest;
+    return px <= f[0].lod_threshold ? mesh[0].root_count : 0;
+}
+
 // The work items of a visible instance: its groups of 32 clusters covering the LOD levels
 // that can hold selected clusters at its distance, in increasing order, each once. Returns
-// how many; with `write`, also writes them to the work list from `base` and clears their
-// status words for the cluster culls' look-back.
+// how many; with `write`, also writes them to the work list from `base`.
 uint instance_items(Frame* f, uint instance_index, uint base, bool write)
 {
     Instance* inst = f[0].instances + instance_index;
@@ -858,7 +900,6 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
     bool all = (f[0].flags & FLAG_GROUP_WINDOW_OFF) != 0;
     bool lod = (f[0].flags & FLAG_LOD) != 0;
     uint level_count = max(mesh[0].level_count, 1u);
-    uint64_t* status = f[0].cluster_lookback;
     uint count = 0;
     uint next_group = 0; // groups come out in increasing order, each at most once
     for (uint l = 0; l < level_count; l++)
@@ -876,15 +917,7 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
         {
             uint slot = base + count + (g - first);
             if (slot < f[0].work_capacity)
-            {
                 f[0].work[slot] = uint2(instance_index, g);
-                if (slot % CULL_ITEMS == 0)
-                {
-                    // The first item of a cluster-cull workgroup clears its status words.
-                    status[slot / CULL_ITEMS] = 0;
-                    status[f[0].cluster_groups + slot / CULL_ITEMS] = 0;
-                }
-            }
         }
         if (first <= last)
             count += last - first + 1;
@@ -894,12 +927,14 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
 }
 
 groupshared uint s_counts[64];
-groupshared uint s_total;
+groupshared uint s_root_counts[64];
+groupshared uint2 s_total;
 
-// One thread per instance: frustum-cull it and append its work items to the work list, in
-// instance order (see "ordered appends"). The last workgroup writes the cluster cull's grid
-// `indirect` = (x, y, 1, count) over the items that fit in `work_capacity` and counts the
-// demand; each group of an instance is appended at most once.
+// One thread per instance: frustum-cull it and append its work items to the work list, or
+// its roots to the root list (`instance_roots`), both in instance order (see "ordered
+// appends"). The last workgroup writes the cluster cull's grid `indirect` = (x, y, 1, count)
+// over the items that fit in `work_capacity` plus the root runs, and counts the demand;
+// each group of an instance is appended at most once.
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cull_main(uint thread : SV_GroupThreadID)
@@ -919,36 +954,63 @@ void cull_main(uint thread : SV_GroupThreadID)
     }
     if (visible)
         InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], 1);
-    uint count = visible ? instance_items(f, instance_index, 0, false) : 0;
+    uint count = 0;
+    uint roots = 0;
+    if (visible)
+    {
+        Instance* inst = f[0].instances + instance_index;
+        Mesh* mesh = f[0].meshes + inst[0].mesh;
+        float dist = length(inst[0].center - f[0].camera_pos);
+        roots = instance_roots(f, mesh, length(inst[0].model[0].xyz), dist);
+        count = roots > 0 ? 0u : instance_items(f, instance_index, 0, false);
+    }
     s_counts[thread] = count;
+    s_root_counts[thread] = roots;
     GroupMemoryBarrierWithGroupSync();
     if (thread == 0)
     {
-        uint total = 0;
+        uint2 total = 0;
         for (uint i = 0; i < 64; i++)
         {
-            uint c = s_counts[i];
-            s_counts[i] = total; // now this thread's offset in the workgroup's run
+            uint2 c = uint2(s_counts[i], s_root_counts[i]);
+            s_counts[i] = total.x; // now this thread's offsets in the workgroup's runs
+            s_root_counts[i] = total.y;
             total += c;
         }
         s_total = total;
     }
     GroupMemoryBarrierWithGroupSync();
-    uint total = s_total;
-    uint first = lookback_exclusive(f[0].lookback, ticket, uint2(total, 0), thread).x;
+    uint2 total = s_total;
+    uint2 first = lookback_exclusive(f[0].lookback, ticket, total, thread);
     if (thread == 0 && ticket == instance_cull_groups(f) - 1)
     {
         // The last workgroup knows the demand: what fits goes to the cluster cull, the rest is
-        // counted (the renderer grows the list from it).
-        uint demand = first + total;
-        uint items = min(demand, f[0].work_capacity);
+        // counted (the renderer grows the lists from it).
+        uint2 demand = first + total;
+        uint regular = min(demand.x, f[0].work_capacity);
+        uint listed = min(demand.y, f[0].work_capacity);
+        uint items = regular + (listed + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
         write_grid(f[0].indirect, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
-        InterlockedAdd(f[0].stats[STAT_WORK_ITEMS], demand);
-        if (demand > items)
-            InterlockedAdd(f[0].stats[STAT_WORK_OVERFLOW], demand - items);
+        f[0].indirect[5] = regular;
+        f[0].indirect[6] = listed;
+        InterlockedAdd(f[0].stats[STAT_WORK_ITEMS], demand.x);
+        InterlockedAdd(f[0].stats[STAT_ROOT_ENTRIES], demand.y);
+        uint dropped = (demand.x - regular) + (demand.y - listed);
+        if (dropped > 0)
+            InterlockedAdd(f[0].stats[STAT_WORK_OVERFLOW], dropped);
     }
     if (count > 0)
-        instance_items(f, instance_index, first + s_counts[thread], true);
+        instance_items(f, instance_index, first.x + s_counts[thread], true);
+    if (roots > 0)
+    {
+        Mesh* mesh = f[0].meshes + f[0].instances[instance_index].mesh;
+        for (uint k = 0; k < roots; k++)
+        {
+            uint entry = first.y + s_root_counts[thread] + k;
+            if (entry < f[0].work_capacity)
+                f[0].roots[entry] = uint2(instance_index, mesh[0].roots[k]);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- mesh stage ---

@@ -306,7 +306,7 @@ impl Demo for Gallery {
             |f: fn(&FrameStats) -> u32| self.stats.iter().map(|s| f64::from(f(s))).sum::<f64>() / n;
         let gpu = self.gpu_ms.iter().sum::<f64>() / self.gpu_ms.len().max(1) as f64;
         let title = format!(
-            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances, {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items), {:.2} M tris | GPU {:.2} ms",
+            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances, {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms",
             self.scene.instance_count,
             self.scene.total_triangles as f64 / 1e6,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -316,6 +316,7 @@ impl Demo for Gallery {
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,
             mean(|s| s.work_items) / 1e3,
+            mean(|s| s.root_entries) / 1e3,
             mean(|s| s.triangles) / 1e6,
             gpu,
         );

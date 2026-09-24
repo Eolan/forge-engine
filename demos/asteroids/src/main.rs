@@ -723,7 +723,7 @@ impl Demo for Ballad {
                 .unwrap_or(0.0)
         };
         let title = format!(
-            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles; {:.0} k work items), {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
+            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
             self.scene.instance_count,
             self.scene.mesh_count,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -734,6 +734,7 @@ impl Demo for Ballad {
             mean(|s| s.sw_clusters) / 1e3,
             mean(|s| s.dense_triangles) / 1e6,
             mean(|s| s.work_items) / 1e3,
+            mean(|s| s.root_entries) / 1e3,
             mean(|s| s.triangles) / 1e6,
             gpu,
             cpu,

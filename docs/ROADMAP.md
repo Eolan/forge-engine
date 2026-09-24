@@ -127,8 +127,8 @@ Goal: the renderer skeleton every later system draws through.
    120 fps at 1440p on the 5070 Ti, 60 fps on the 3080, flying at 300 m/s with streaming on.
    In steps (`docs/demos/city-blocks.md`): the renderer at a million instances ✅ (#33), the
    twenty props cooked and cached ✅ (#34), terrain and GPU placement ✅ (#35: a million instances
-   in 4.96 ms), culling at scale
-   (#37), streaming (#36), the flight (#13).
+   in 4.96 ms), culling at scale ✅ (#37: 1.06 ms, instance occlusion next in #38),
+   streaming (#36), the flight (#13).
 
 ## Phase 2 — World
 

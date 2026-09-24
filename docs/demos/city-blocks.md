@@ -9,7 +9,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | The meshlet renderer at a million instances | #33 | ✅ 197 MiB for 980 k instances (`docs/demos/meshlets.md`) |
 | Twenty props, cooked once and cached on disk | #34 | ✅ the prop gallery (`--gallery`) |
 | Terrain patch and GPU placement | #35 | ✅ the city, a million instances |
-| Culling at a million instances | #37 | the culls are 5 ms of a million-instance frame |
+| Culling at a million instances | #37 | ✅ far instances' roots 32 to an item: the city in 1.06 ms instead of 4.90 |
 | Streaming of cluster pages | #36 | |
 | The flight, 1440p, numbers | #13 | |
 
@@ -65,16 +65,25 @@ terrain mesh's own vertices, which cooking keeps in grid order.
 | The city, from the south edge (1600×900, LOD 1 px) | |
 |---|---|
 | instances | 1 000 001 (644 G triangles, 15.4 G clusters if all drawn at full detail) |
-| drawn | 500 k instances in view, 526 k work items; 48 k clusters, 3.32 M triangles (13 k clusters in software: auto mode, far rocks) |
-| GPU per frame | **4.96 ms**: cluster culls 2.00 + 2.12, instance cull 0.55, meshlet pass 1 0.17, resolve 0.05, software raster and merge 0.04, depth pyramid 0.02 |
+| drawn | 500 k instances in view; the culls test 28 k work items and 791 k roots; 48 k clusters, 3.32 M triangles drawn (13 k clusters in software: auto mode, far rocks) |
+| GPU per frame | **1.06 ms** (4.90 before #37): instance cull 0.30, cluster culls 0.22 + 0.23, meshlet pass 1 0.17, resolve 0.05, software raster and merge 0.04, depth pyramid 0.02 |
 | CPU per frame | 0.25 ms of work (record 0.09, submit + present 0.16), the rest waiting for the GPU |
-| memory | 1.18 GiB allocated: geometry 1 071 MiB (props 749, terrain about 226, instance table 96), work buffers 68 |
+| memory | 1.19 GiB allocated: geometry 1 071 MiB (props 749, terrain about 226, instance table 96), work buffers 84 |
 | start-up | 13.3 s the first time (the terrain's cook), 0.85 s from the cache |
 
-The orbit (`--orbit`) views the whole city from 1.5 km out at 160 m: 5.5 ms. The culls are
-the frame: 4.1 of its 5 ms go to testing 526 k work items of 32 clusters for the 500 k
-instances in view, most of them far rocks down to their last cluster. That is #37.
-Streaming (#36) and the flight at 300 m/s (#13) come after.
+The orbit (`--orbit`) views the whole city from 1.5 km out at 160 m: 1.52 ms.
+
+**Culling at a million instances (issue #37).** Before, the culls were the frame: 4.1 of
+its 4.9 ms went to 526 k work items of 32 clusters for the 500 k instances in view. Most
+were far rocks down to their last cluster, with 31 idle lanes. Now an instance whose roots
+alone are the cut lists those roots instead, and the cluster culls take them 32 to an item.
+- **What changed:** 4.90 → 1.06 ms here, 5.50 → 1.52 ms for the orbit, and the same
+  pixels.
+- **How:** `docs/demos/meshlets.md`, "Far instances without work items".
+- **What is left:** 791 k roots are tested for 48 k drawn clusters, the rest hidden by the
+  hills and the buildings. Instance occlusion and a hierarchy over instances are #38.
+
+Streaming (#36) and the flight at 300 m/s (#13) come next.
 
 ## The props (issue #34, 2026-09-24)
 

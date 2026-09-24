@@ -126,13 +126,13 @@ const PASS_PREVIOUSLY_VISIBLE: u32 = 1;
 const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
-const STAT_COUNT: usize = 12;
+const STAT_COUNT: usize = 13;
 const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
 const FRAME_BLOCK_STRIDE: u64 = 1024;
 
-/// Mirrors `Mesh` in `meshlet.slang` (32 bytes).
+/// Mirrors `Mesh` in `meshlet.slang` (400 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuMesh {
@@ -153,7 +153,32 @@ struct GpuMesh {
     self_reach_max: [f32; LOD_LEVELS],
     /// Per level: the same for the `parent` spheres.
     parent_reach_max: [f32; LOD_LEVELS],
+    /// The DAG's roots, local indices, when there are at most [`MAX_SHORTCUT_ROOTS`].
+    roots: [u32; MAX_SHORTCUT_ROOTS],
+    /// How many of `roots` there are; 0 when the mesh has more (no root shortcut).
+    root_count: u32,
+    /// The largest `self_error` of the roots.
+    root_error_max: f32,
+    /// How far the roots' `self` spheres reach from the mesh centre.
+    root_reach_max: f32,
+    pad_roots: u32,
 }
+
+impl GpuMesh {
+    /// What an instance can put in either work list: all its groups of 32 clusters, or its
+    /// roots.
+    fn work_bound(&self) -> u32 {
+        self.meshlet_count
+            .div_ceil(TASK_GROUP_SIZE)
+            .max(self.root_count)
+    }
+}
+
+/// Roots a mesh may have for the instance cull's root shortcut (`instance_roots` in
+/// `meshlet.slang`): an instance whose roots are all fine enough lists them in the root list
+/// instead of taking work items.
+const MAX_SHORTCUT_ROOTS: usize = 4;
+const _: () = assert!(std::mem::size_of::<GpuMesh>() == 400);
 
 /// Mirrors `Instance` in `meshlet.slang` (96 bytes).
 #[repr(C)]
@@ -232,6 +257,8 @@ struct GpuFrame {
     prev_draw_jitter: [f32; 2],
     prev_p00: f32,
     prev_p11: f32,
+    /// The root list: (instance, local cluster) per root the instance cull lists.
+    roots: u64,
 }
 
 // Both passes' blocks share one buffer at this stride.
@@ -392,7 +419,7 @@ pub struct MeshletSceneBuilder {
     mesh_finest: Vec<u32>,
     finest_clusters: u64,
     /// Work items if every instance were visible with every level possible (groups of 32
-    /// clusters): the bound of the work list.
+    /// clusters), or its roots when it has more of those: the bound of the work lists.
     work_bound: u64,
     /// Clusters over all instances.
     instance_meshlets: u64,
@@ -436,6 +463,23 @@ impl MeshletSceneBuilder {
             level_offset[level + 1] = level_offset[level] + mesh.clusters_per_level[level];
         }
         let reach = |c: [f32; 3], r: f32| (Vec3::from(c) - Vec3::from(mesh.center)).length() + r;
+        let mut roots = [0_u32; MAX_SHORTCUT_ROOTS];
+        let mut root_count = 0;
+        let mut root_error_max = 0.0_f32;
+        let mut root_reach_max = 0.0_f32;
+        for (index, m) in mesh.meshlets.iter().enumerate() {
+            if m.parent_error.is_infinite() {
+                if root_count < MAX_SHORTCUT_ROOTS {
+                    roots[root_count] = index as u32;
+                }
+                root_count += 1;
+                root_error_max = root_error_max.max(m.self_error);
+                root_reach_max = root_reach_max.max(reach(m.self_center, m.self_radius));
+            }
+        }
+        if root_count > MAX_SHORTCUT_ROOTS {
+            root_count = 0;
+        }
         for m in &mesh.meshlets {
             let level = (m.lod_level as usize).min(level_count.saturating_sub(1));
             self_error_min[level] = self_error_min[level].min(m.self_error);
@@ -460,6 +504,11 @@ impl MeshletSceneBuilder {
             parent_error_max,
             self_reach_max,
             parent_reach_max,
+            roots,
+            root_count: root_count as u32,
+            root_error_max,
+            root_reach_max,
+            pad_roots: 0,
         });
         self.mesh_finest
             .push(mesh.meshlets.iter().filter(|m| m.lod_level == 0).count() as u32);
@@ -473,7 +522,7 @@ impl MeshletSceneBuilder {
         let center = model.transform_point3(Vec3::from(info.center));
         self.total_triangles += u64::from(info.triangle_count);
         self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]);
-        self.work_bound += u64::from(info.meshlet_count.div_ceil(TASK_GROUP_SIZE));
+        self.work_bound += u64::from(info.work_bound());
         self.instance_meshlets += u64::from(info.meshlet_count);
         self.instances.push(GpuInstance {
             model: model.to_cols_array(),
@@ -500,7 +549,7 @@ impl MeshletSceneBuilder {
             let n = u64::from(count);
             self.total_triangles += u64::from(info.triangle_count) * n;
             self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]) * n;
-            self.work_bound += u64::from(info.meshlet_count.div_ceil(TASK_GROUP_SIZE)) * n;
+            self.work_bound += u64::from(info.work_bound()) * n;
             self.instance_meshlets += u64::from(info.meshlet_count) * n;
             // Placeholders: the GPU pass writes every one of them before the first frame.
             self.instances.extend(std::iter::repeat_n(
@@ -641,7 +690,8 @@ pub struct MeshletScene {
     /// Instances.
     pub instance_count: u32,
     /// Work items if every instance were visible with every LOD level possible (groups of 32
-    /// clusters): the most a frame can emit; a frame emits far fewer.
+    /// clusters), or its roots when it has more of those: the most a frame can put in either
+    /// work list; a frame puts far fewer.
     pub work_bound: u64,
     instance_meshlets: u64,
     /// Largest meshlet count of any mesh.
@@ -749,8 +799,12 @@ pub struct FrameStats {
     /// Work items the instance cull emitted (groups of 32 clusters of the visible instances'
     /// LOD windows).
     pub work_items: u32,
-    /// Work items dropped because the work list was full (the frames in flight when the demand
-    /// jumps past the list, until [`MeshletRenderer::begin_frame`] has grown it).
+    /// Roots the instance cull listed for the instances whose roots are the whole cut (32 to
+    /// a work item of the cluster culls).
+    pub root_entries: u32,
+    /// Work items and roots dropped because the work or root list was full (the frames in
+    /// flight when the demand jumps past the lists, until [`MeshletRenderer::begin_frame`]
+    /// has grown them).
     pub work_overflow: u32,
     /// Triangles of the drawn dense clusters, the software rasteriser's kind, whether it ran
     /// or not ([`SwRaster::Auto`] decides from them).
@@ -783,7 +837,7 @@ impl FrameStats {
         }
         if self.work_overflow != 0 {
             note += &format!(
-                ", {:.0} k work items dropped (work list full)",
+                ", {:.0} k work items or roots dropped (work list full)",
                 f64::from(self.work_overflow) / 1e3
             );
         }
@@ -844,38 +898,61 @@ const WORK_RESERVE_MAX: u32 = 1 << 20;
 /// Most slots the work list grows to (128 MiB of work items).
 const WORK_MAX_CAPACITY: u32 = 1 << 24;
 
-/// One frame slot's work list for the cluster culls: an instance's group of 32 clusters per
-/// item, appended by the instance cull, and the cluster culls' status words (one per
-/// workgroup of `CULL_ITEMS` items and pass, cleared by the instance cull as it appends).
+/// One frame slot's work lists for the cluster culls, appended by the instance cull: an
+/// instance's group of 32 clusters per work item, and the root list, (instance, local
+/// cluster) per root of the instances whose roots are the whole cut, read 32 roots to a work
+/// item after the others; `capacity` of each. Then the cluster culls' status words, one per
+/// workgroup of `CULL_ITEMS` items and pass, cleared before the instance cull.
 struct WorkList {
     work: GraphBuffer,
+    roots: GraphBuffer,
     lookback: GraphBuffer,
     capacity: u32,
 }
 
 impl WorkList {
     fn new(device: &Arc<Device>, capacity: u32, slot: usize) -> Result<Self> {
-        let groups = u64::from(capacity.div_ceil(CULL_ITEMS));
-        let buffer = |size: u64, name: String| {
+        let groups = u64::from(Self::groups_for(capacity));
+        let buffer = |size: u64, usage: vk::BufferUsageFlags, name: String| {
             device
                 .create_buffer(BufferDesc {
                     size,
-                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER | usage,
                     location: MemoryLocation::GpuOnly,
                     category: MemoryCategory::Work,
                     name: &name,
                 })
                 .map(GraphBuffer::new)
         };
+        let none = vk::BufferUsageFlags::empty();
         Ok(Self {
-            work: buffer(u64::from(capacity) * 8, format!("cull work list {slot}"))?,
-            lookback: buffer(2 * groups * 8, format!("cluster cull look-back {slot}"))?,
+            work: buffer(
+                u64::from(capacity) * 8,
+                none,
+                format!("cull work list {slot}"),
+            )?,
+            roots: buffer(
+                u64::from(capacity) * 8,
+                none,
+                format!("cull root list {slot}"),
+            )?,
+            lookback: buffer(
+                2 * groups * 8,
+                vk::BufferUsageFlags::TRANSFER_DST,
+                format!("cluster cull look-back {slot}"),
+            )?,
             capacity,
         })
     }
 
+    /// Cluster-cull workgroups the most work the lists can hold needs: `capacity` work items,
+    /// then the root list's `capacity` roots at 32 to an item.
+    fn groups_for(capacity: u32) -> u32 {
+        (capacity + capacity.div_ceil(TASK_GROUP_SIZE)).div_ceil(CULL_ITEMS)
+    }
+
     fn groups(&self) -> u32 {
-        self.capacity.div_ceil(CULL_ITEMS)
+        Self::groups_for(self.capacity)
     }
 }
 
@@ -1032,6 +1109,8 @@ struct MeshPassIo {
     /// occlusion off).
     hzb_prev: Option<ImageHandle>,
     work: forge_gpu::BufferHandle,
+    /// The root list, read by the cluster culls after the work items.
+    roots: forge_gpu::BufferHandle,
     /// The cluster culls' status words.
     cluster_lookback: forge_gpu::BufferHandle,
     indirect: forge_gpu::BufferHandle,
@@ -1410,13 +1489,15 @@ impl MeshletRenderer {
             dense_triangles: raw[9],
             work_items: raw[10],
             work_overflow: raw[11],
+            root_entries: raw[12],
         });
         if let Some(s) = stats {
-            let target =
-                grown_capacity(self.work_target, u64::from(s.work_items), WORK_MAX_CAPACITY);
+            // One capacity for both lists: the larger demand.
+            let wanted = s.work_items.max(s.root_entries);
+            let target = grown_capacity(self.work_target, u64::from(wanted), WORK_MAX_CAPACITY);
             if target != self.work_target {
                 tracing::info!(
-                    wanted = s.work_items,
+                    wanted,
                     from = self.work_target,
                     to = target,
                     "cull work list grown"
@@ -1546,6 +1627,7 @@ impl MeshletRenderer {
             prev_draw_jitter: prev.jitter.to_array(),
             prev_p00: prev.p00,
             prev_p11: prev.p11,
+            roots: work.roots.address(),
         }
     }
 
@@ -1628,6 +1710,7 @@ impl MeshletRenderer {
             hzb,
             hzb_prev,
             work: graph.import_buffer(&self.work_lists[slot.index].work),
+            roots: graph.import_buffer(&self.work_lists[slot.index].roots),
             cluster_lookback: graph.import_buffer(&self.work_lists[slot.index].lookback),
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
             clusters: graph.import_buffer(&scene.clusters[slot.index]),
@@ -1648,27 +1731,31 @@ impl MeshletRenderer {
         };
         let frame_address = self.frame_buffers[slot.index].address();
 
-        // Instance culling and LOD level windows: the work list and the cluster cull's grid.
-        // The instance cull's status words start cleared; it clears the cluster culls' for
-        // the workgroups it fills.
+        // Instance culling and LOD level windows: the work and root lists and the cluster
+        // cull's grid. Every cull's status words start cleared.
         let cull_pipeline = &self.pipeline_cull;
         let instance_groups = scene.instance_count.div_ceil(64).max(1);
         let lookback: &'f GraphBuffer = &scene.lookback[slot.index];
+        let work_list = &self.work_lists[slot.index];
+        let cluster_lookback: &'f GraphBuffer = &work_list.lookback;
+        let cluster_lookback_bytes = 2 * u64::from(work_list.groups()) * 8;
         let stats: &'f GraphBuffer = &self.stats;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         graph
             .pass("geometry/instance cull")
             .buffer(io.lookback, BufferAccess::TransferDst)
+            .buffer(io.cluster_lookback, BufferAccess::TransferDst)
             .buffer(io.stats, BufferAccess::TransferDst)
             .run(move |_, commands| {
                 commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 8, 0);
+                commands.fill_buffer(cluster_lookback, 0, cluster_lookback_bytes, 0);
                 commands.fill_buffer(stats, 0, STATS_BYTES, 0);
                 Ok(())
             });
         graph
             .pass("geometry/instance cull")
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
-            .buffer(io.cluster_lookback, BufferAccess::ShaderWrite(compute))
+            .buffer(io.roots, BufferAccess::ShaderWrite(compute))
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
@@ -1817,6 +1904,7 @@ impl MeshletRenderer {
                 BufferAccess::IndirectArgsAndShaderRead(compute),
             )
             .buffer(io.work, BufferAccess::ShaderRead(compute))
+            .buffer(io.roots, BufferAccess::ShaderRead(compute))
             .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.cluster_lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.visible, BufferAccess::ShaderWrite(compute))
@@ -2128,7 +2216,7 @@ mod tests {
         };
         assert_eq!(
             capped.overflow_note(),
-            ", 2 k dropped (visible list full), 20 k work items dropped (work list full)"
+            ", 2 k dropped (visible list full), 20 k work items or roots dropped (work list full)"
         );
     }
 
@@ -2201,5 +2289,35 @@ mod tests {
             height: 900,
         };
         assert_eq!(vis64_bytes(extent), 1600 * 900 * 8);
+    }
+
+    #[test]
+    fn the_mesh_record_lists_up_to_four_roots() {
+        let rock = forge_geom::procedural::asteroid(forge_core::Seed::new(7), 32, 1.0, 0.3);
+        let mut mesh = MeshletMesh::build(&rock);
+        let roots: Vec<u32> = (0..mesh.meshlets.len() as u32)
+            .filter(|&i| mesh.meshlets[i as usize].parent_error.is_infinite())
+            .collect();
+        assert!((1..=MAX_SHORTCUT_ROOTS).contains(&roots.len()));
+        let mut builder = MeshletSceneBuilder::new();
+        builder.add_mesh(&mesh);
+        let record = builder.meshes[0];
+        assert_eq!(record.root_count as usize, roots.len());
+        assert_eq!(record.roots[..roots.len()], roots[..]);
+        let error = roots
+            .iter()
+            .map(|&r| mesh.meshlets[r as usize].self_error)
+            .fold(0.0, f32::max);
+        assert_eq!(record.root_error_max, error);
+        assert!(record.root_reach_max > 0.0);
+        let groups = record.meshlet_count.div_ceil(TASK_GROUP_SIZE);
+        assert_eq!(record.work_bound(), groups.max(record.root_count));
+
+        // More roots than the shortcut takes: the instances take work items.
+        for m in mesh.meshlets.iter_mut().take(MAX_SHORTCUT_ROOTS + 1) {
+            m.parent_error = f32::INFINITY;
+        }
+        builder.add_mesh(&mesh);
+        assert_eq!(builder.meshes[1].root_count, 0);
     }
 }
