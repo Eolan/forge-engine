@@ -202,7 +202,7 @@ impl Demo for Bench {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
-        if let Some(stats) = self.renderer.begin_frame(frame.slot)? {
+        if let Some(stats) = self.renderer.begin_frame(frame.slot, &self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);
@@ -283,7 +283,7 @@ impl Demo for Bench {
         let gpu = self.gpu_ms.iter().sum::<f64>() / self.gpu_ms.len().max(1) as f64;
         let cpu = self.cpu_ms.iter().sum::<f64>() / self.cpu_ms.len().max(1) as f64;
         let title = format!(
-            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} inst, {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles), {:.2} M tris, {:.0} k occluded{} | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
+            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} inst, {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles; {:.0} k work items), {:.2} M tris, {:.0} k occluded{} | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
             self.scene.instance_count,
             self.scene.max_meshlets,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -294,6 +294,7 @@ impl Demo for Bench {
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,
             mean(|s| s.dense_triangles) / 1e6,
+            mean(|s| s.work_items) / 1e3,
             mean(|s| s.triangles) / 1e6,
             mean(|s| s.occluded) / 1e3,
             match mean(|s| s.visible_overflow) {

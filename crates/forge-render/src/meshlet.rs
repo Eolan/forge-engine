@@ -10,6 +10,7 @@
 //! keeps 64-bit samples (depth and visibility id, with an atomic maximum) where it beats the
 //! hardware's pixel; a merge pass writes them into the visibility buffer and the depth.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
@@ -65,6 +66,8 @@ impl CullFlags {
 /// `FLAG_SW_RASTER` in the shader: set by the renderer, from [`DrawParams::sw_raster`], in the
 /// first pass's frame block.
 const FLAG_SW_RASTER: u32 = 512;
+/// `FLAG_PREV_PYRAMID` in the shader: set by the renderer when pass 1 has a previous pyramid.
+const FLAG_PREV_PYRAMID: u32 = 2048;
 
 /// When the software rasteriser draws the dense clusters ([`DrawParams::sw_raster`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -123,7 +126,7 @@ const PASS_PREVIOUSLY_VISIBLE: u32 = 1;
 const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
-const STAT_COUNT: usize = 10;
+const STAT_COUNT: usize = 12;
 const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
@@ -161,10 +164,7 @@ struct GpuInstance {
     radius: f32,
     mesh: u32,
     id: u32,
-    /// First work item of this instance (`ceil(meshlet_count / 32)` groups of 32 clusters follow).
-    group_offset: u32,
-    /// First visibility bit of this instance (`meshlet_count` bits follow).
-    bit_offset: u32,
+    pad: [u32; 2],
 }
 
 /// Mirrors `Frame` in `meshlet.slang`.
@@ -174,10 +174,13 @@ struct GpuFrame {
     view_proj: [f32; 16],
     cull_view_proj: [f32; 16],
     cull_view: [f32; 16],
+    /// The previous frame's culling view (with `FLAG_PREV_PYRAMID`).
+    prev_cull_view: [f32; 16],
     planes: [[f32; 4]; 6],
     camera_pos: [f32; 3],
     instance_count: u32,
-    max_meshlets: u32,
+    /// Slots in `work`.
+    work_capacity: u32,
     flags: u32,
     pass: u32,
     hzb_image: u32,
@@ -196,9 +199,11 @@ struct GpuFrame {
     meshes: u64,
     instances: u64,
     stats: u64,
-    visibility: u64,
-    total_groups: u32,
-    pad_end: u32,
+    /// The cluster culls' status words, `cluster_groups` per pass.
+    cluster_lookback: u64,
+    cluster_groups: u32,
+    /// The previous frame's pyramid (sampled-image index).
+    prev_hzb_image: u32,
     work: u64,
     indirect: u64,
     /// The visible-cluster list: (instance, meshlet | flags) per listed cluster.
@@ -213,7 +218,7 @@ struct GpuFrame {
     clusters: u64,
     /// The fallback's indexed draws (0 on the mesh path).
     draws: u64,
-    /// 64-bit status words of the ordered appends (instance cull, then each cluster cull).
+    /// 64-bit status words of the instance cull's ordered appends.
     lookback: u64,
     /// Per pass, the list slots of the hardware-drawn clusters (from the front) and of the
     /// software-rasterised ones (from the back).
@@ -223,6 +228,10 @@ struct GpuFrame {
     /// Clusters with fewer pixels of bounding rectangle per triangle are rasterised in compute.
     sw_raster_area: f32,
     pad_raster: u32,
+    /// The previous frame's `draw_jitter`, `p00` and `p11`.
+    prev_draw_jitter: [f32; 2],
+    prev_p00: f32,
+    prev_p11: f32,
 }
 
 // Both passes' blocks share one buffer at this stride.
@@ -375,10 +384,11 @@ pub struct MeshletSceneBuilder {
     /// Per mesh: its finest-level clusters (LOD level 0).
     mesh_finest: Vec<u32>,
     finest_clusters: u64,
-    /// Work items so far (groups of 32 clusters; sizes the work list and the look-back words).
-    total_groups: u32,
-    /// Visibility bits over all instances (one per cluster).
-    total_bits: u32,
+    /// Work items if every instance were visible with every level possible (groups of 32
+    /// clusters): the bound of the work list.
+    work_bound: u64,
+    /// Clusters over all instances.
+    instance_meshlets: u64,
 }
 
 impl MeshletSceneBuilder {
@@ -456,19 +466,15 @@ impl MeshletSceneBuilder {
         let center = model.transform_point3(Vec3::from(info.center));
         self.total_triangles += u64::from(info.triangle_count);
         self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]);
-        let groups = info.meshlet_count.div_ceil(TASK_GROUP_SIZE);
-        let group_offset = self.total_groups;
-        self.total_groups += groups;
-        let bit_offset = self.total_bits;
-        self.total_bits += info.meshlet_count;
+        self.work_bound += u64::from(info.meshlet_count.div_ceil(TASK_GROUP_SIZE));
+        self.instance_meshlets += u64::from(info.meshlet_count);
         self.instances.push(GpuInstance {
             model: model.to_cols_array(),
             center: center.to_array(),
             radius: info.radius * scale,
             mesh: mesh.0,
             id: self.instances.len() as u32,
-            group_offset,
-            bit_offset,
+            pad: [0; 2],
         });
     }
 
@@ -489,8 +495,6 @@ impl MeshletSceneBuilder {
             .max()
             .unwrap_or(0);
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
-        let visibility_words = (self.total_bits as usize).div_ceil(32).max(1);
-        let total_groups = self.total_groups.max(1);
         Ok(MeshletScene {
             vertices: device.create_buffer_with_data(
                 &self.vertices,
@@ -529,25 +533,6 @@ impl MeshletSceneBuilder {
                 MemoryCategory::Geometry,
                 "instances",
             )?,
-            visibility: GraphBuffer::new(device.create_buffer_with_data(
-                &vec![0_u32; visibility_words],
-                usage,
-                MemoryCategory::Work,
-                "visibility bits",
-            )?),
-            work: (0..FRAMES_IN_FLIGHT)
-                .map(|i| {
-                    device
-                        .create_buffer(BufferDesc {
-                            size: u64::from(total_groups) * 8,
-                            usage,
-                            location: MemoryLocation::GpuOnly,
-                            category: MemoryCategory::Work,
-                            name: &format!("cull work list {i}"),
-                        })
-                        .map(GraphBuffer::new)
-                })
-                .collect::<Result<Vec<_>>>()?,
             indirect: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     device
@@ -577,21 +562,20 @@ impl MeshletSceneBuilder {
             lookback: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     let instance_groups = (self.instances.len() as u64).div_ceil(64).max(1);
-                    let words = instance_groups + 2 * u64::from(total_groups);
                     device
                         .create_buffer(BufferDesc {
-                            size: words * 8,
+                            size: instance_groups * 8,
                             usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
                             location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Work,
-                            name: &format!("cull look-back {i}"),
+                            name: &format!("instance cull look-back {i}"),
                         })
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
             instance_count: self.instances.len() as u32,
-            total_groups,
-            total_bits: self.total_bits,
+            work_bound: self.work_bound,
+            instance_meshlets: self.instance_meshlets,
             max_meshlets,
             mesh_count: self.meshes.len() as u32,
             meshlet_count: self.meshlets.len() as u32,
@@ -609,28 +593,22 @@ pub struct MeshletScene {
     meshlet_triangles: Buffer,
     meshes: Buffer,
     instances: Buffer,
-    /// One bit per (instance, cluster): visible last frame. Read and rewritten by the cluster
-    /// culls every frame, so the graph tracks it.
-    visibility: GraphBuffer,
-    /// Per frame slot: the work list (an instance's group of 32 clusters per item) built by
-    /// the instance cull.
-    work: Vec<GraphBuffer>,
     /// Per frame slot: the cluster cull's indirect grid (x, y, 1, work item count), then the
     /// instance cull's ticket counter.
     indirect: Vec<GraphBuffer>,
     /// Per frame slot: per pass (pass 1 or the single pass, then pass 2) the draw grid
     /// (x, y, 1) and the count of listed clusters, then the two cluster culls' tickets.
     clusters: Vec<GraphBuffer>,
-    /// Per frame slot: the status words that keep both culls' appends in a fixed order (one
-    /// per instance-cull workgroup, then one per work item for each cluster cull).
+    /// Per frame slot: the status words that keep the instance cull's appends in a fixed
+    /// order (one per instance-cull workgroup; the cluster culls' are the renderer's).
     lookback: Vec<GraphBuffer>,
     /// Instances.
     pub instance_count: u32,
-    /// Work items (every instance's clusters in groups of 32).
-    pub total_groups: u32,
-    /// Clusters over all instances (one visibility bit each).
-    pub total_bits: u32,
-    /// Largest meshlet count of any mesh (work items per instance derive from it).
+    /// Work items if every instance were visible with every LOD level possible (groups of 32
+    /// clusters): the most a frame can emit; a frame emits far fewer.
+    pub work_bound: u64,
+    instance_meshlets: u64,
+    /// Largest meshlet count of any mesh.
     pub max_meshlets: u32,
     /// Distinct meshes.
     pub mesh_count: u32,
@@ -646,7 +624,7 @@ pub struct MeshletScene {
 impl MeshletScene {
     /// Meshlets over all instances (the culling universe).
     pub fn instance_meshlets(&self) -> u64 {
-        u64::from(self.total_bits)
+        self.instance_meshlets
     }
 }
 
@@ -722,6 +700,12 @@ pub struct FrameStats {
     pub sw_clusters: u32,
     /// Their triangles (included in `triangles`).
     pub sw_triangles: u32,
+    /// Work items the instance cull emitted (groups of 32 clusters of the visible instances'
+    /// LOD windows).
+    pub work_items: u32,
+    /// Work items dropped because the work list was full (the frames in flight when the demand
+    /// jumps past the list, until [`MeshletRenderer::begin_frame`] has grown it).
+    pub work_overflow: u32,
     /// Triangles of the drawn dense clusters, the software rasteriser's kind, whether it ran
     /// or not ([`SwRaster::Auto`] decides from them).
     pub dense_triangles: u32,
@@ -740,22 +724,38 @@ impl FrameStats {
         )
     }
 
-    /// ", N k dropped (visible list full)" when clusters were dropped, else nothing: for the
-    /// counter lines, so a capped frame never reads as a complete one.
+    /// ", N k dropped (visible list full)" when clusters were dropped, and the same for work
+    /// items, else nothing: for the counter lines, so a capped frame never reads as a
+    /// complete one.
     pub fn overflow_note(&self) -> String {
-        if self.visible_overflow == 0 {
-            String::new()
-        } else {
-            format!(
+        let mut note = String::new();
+        if self.visible_overflow != 0 {
+            note += &format!(
                 ", {:.0} k dropped (visible list full)",
                 f64::from(self.visible_overflow) / 1e3
-            )
+            );
         }
+        if self.work_overflow != 0 {
+            note += &format!(
+                ", {:.0} k work items dropped (work list full)",
+                f64::from(self.work_overflow) / 1e3
+            );
+        }
+        note
     }
 }
 
-/// The hierarchical-Z pyramid: power-of-two, one storage view per level, sampled in
-/// `GENERAL`. Persistent (a frozen culling camera keeps using the last one built).
+/// The two hierarchical-Z pyramids: pass 1 reads the one the previous frame built while this
+/// frame builds the other (see [`PrevCull`]).
+fn create_pyramids(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
+    Ok([
+        create_pyramid(device, extent)?,
+        create_pyramid(device, extent)?,
+    ])
+}
+
+/// A hierarchical-Z pyramid: power-of-two, one storage view per level, sampled in `GENERAL`.
+/// Persistent (a frozen culling camera keeps using the last one built).
 fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphImage> {
     let prev_pow2 = |v: u32| 1_u32 << (31 - v.max(1).leading_zeros());
     let (w, h) = (prev_pow2(extent.width), prev_pow2(extent.height));
@@ -774,6 +774,63 @@ fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphIma
     )?;
     tracing::info!(hzb_width = w, hzb_height = h, mips, "depth pyramid created");
     Ok(hzb)
+}
+
+/// What pass 1 of the next frame tests against: the culling view that drew this frame's
+/// first pass and the pyramid built from it.
+#[derive(Clone, Copy, Debug)]
+struct PrevCull {
+    view: Mat4,
+    p00: f32,
+    p11: f32,
+    jitter: Vec2,
+    /// Which of the two pyramids.
+    pyramid: usize,
+}
+
+/// Work items per cluster-cull workgroup (`CULL_ITEMS` in the shader).
+const CULL_ITEMS: u32 = 8;
+/// Work-list slots each frame slot starts with; the scene's bound, when smaller, is reserved
+/// up front (see [`MeshletRenderer::begin_frame`]).
+const WORK_INITIAL_CAPACITY: u32 = 1 << 14;
+/// The most of a scene's bound reserved up front (8 MiB of work items).
+const WORK_RESERVE_MAX: u32 = 1 << 20;
+/// Most slots the work list grows to (128 MiB of work items).
+const WORK_MAX_CAPACITY: u32 = 1 << 24;
+
+/// One frame slot's work list for the cluster culls: an instance's group of 32 clusters per
+/// item, appended by the instance cull, and the cluster culls' status words (one per
+/// workgroup of `CULL_ITEMS` items and pass, cleared by the instance cull as it appends).
+struct WorkList {
+    work: GraphBuffer,
+    lookback: GraphBuffer,
+    capacity: u32,
+}
+
+impl WorkList {
+    fn new(device: &Arc<Device>, capacity: u32, slot: usize) -> Result<Self> {
+        let groups = u64::from(capacity.div_ceil(CULL_ITEMS));
+        let buffer = |size: u64, name: String| {
+            device
+                .create_buffer(BufferDesc {
+                    size,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::GpuOnly,
+                    category: MemoryCategory::Work,
+                    name: &name,
+                })
+                .map(GraphBuffer::new)
+        };
+        Ok(Self {
+            work: buffer(u64::from(capacity) * 8, format!("cull work list {slot}"))?,
+            lookback: buffer(2 * groups * 8, format!("cluster cull look-back {slot}"))?,
+            capacity,
+        })
+    }
+
+    fn groups(&self) -> u32 {
+        self.capacity.div_ceil(CULL_ITEMS)
+    }
 }
 
 /// One frame slot's visible-cluster list: `(instance, meshlet | flags)` per listed cluster,
@@ -855,7 +912,15 @@ pub struct MeshletRenderer {
     pipeline_sw_raster: Option<Pipeline>,
     pipeline_merge: Option<Pipeline>,
     pipeline_resolve: Pipeline,
-    hzb: GraphImage,
+    /// The two depth pyramids ([`create_pyramids`]).
+    hzb: [GraphImage; 2],
+    /// The previous frame's culling view and pyramid, when pass 1 can test against them (not
+    /// after a resize, nor with occlusion off). A `Cell`: set while declaring a frame.
+    prev: Cell<Option<PrevCull>>,
+    /// Per frame slot: the cluster culls' work list.
+    work_lists: Vec<WorkList>,
+    /// Slots every frame slot's work list grows to.
+    work_target: u32,
     /// The software rasteriser's samples (see [`create_vis64`]), with it.
     vis64: Option<GraphBuffer>,
     /// [`SwRaster::Auto`]'s state: the recent frames held enough dense triangles.
@@ -915,8 +980,14 @@ struct MeshPassIo {
     /// The visibility buffer (colour attachment of the draws).
     visibility: ImageHandle,
     depth: ImageHandle,
+    /// The pyramid pass 2 tests (built after pass 1, or the previous one when frozen).
     hzb: ImageHandle,
+    /// The previous frame's pyramid, which pass 1 tests (none after a resize or with
+    /// occlusion off).
+    hzb_prev: Option<ImageHandle>,
     work: forge_gpu::BufferHandle,
+    /// The cluster culls' status words.
+    cluster_lookback: forge_gpu::BufferHandle,
     indirect: forge_gpu::BufferHandle,
     /// Each pass's draw grid and cluster count, and the cluster culls' tickets.
     clusters: forge_gpu::BufferHandle,
@@ -924,8 +995,6 @@ struct MeshPassIo {
     lookback: forge_gpu::BufferHandle,
     /// The fallback's indexed draws.
     draws: Option<forge_gpu::BufferHandle>,
-    /// The per-cluster "visible last frame" bits.
-    visibility_bits: forge_gpu::BufferHandle,
     /// The visible-cluster list of this frame slot.
     visible: forge_gpu::BufferHandle,
     /// Its raster lists.
@@ -1056,7 +1125,10 @@ impl MeshletRenderer {
         for module in [geometry, frag, hzb, cull, cluster_cull, resolve] {
             device.destroy_shader_module(module);
         }
-        let hzb = create_pyramid(device, extent)?;
+        let hzb = create_pyramids(device, extent)?;
+        let work_lists = (0..FRAMES_IN_FLIGHT)
+            .map(|i| WorkList::new(device, WORK_INITIAL_CAPACITY, i))
+            .collect::<Result<Vec<_>>>()?;
         let vis64 = pipeline_sw_raster
             .is_some()
             .then(|| create_vis64(device, extent))
@@ -1123,6 +1195,9 @@ impl MeshletRenderer {
             pipeline_merge,
             pipeline_resolve,
             hzb,
+            prev: Cell::new(None),
+            work_lists,
+            work_target: WORK_INITIAL_CAPACITY,
             vis64,
             sw_auto_on: false,
             extent,
@@ -1213,10 +1288,12 @@ impl MeshletRenderer {
         self.path
     }
 
-    /// Recreates the depth pyramid and the software rasteriser's samples. The device must be
-    /// idle.
+    /// Recreates the depth pyramids and the software rasteriser's samples. The device must be
+    /// idle. The next frame's pass 1 has no previous pyramid and draws nothing; pass 2 draws
+    /// everything visible.
     pub fn resize(&mut self, extent: vk::Extent2D) -> Result<()> {
-        self.hzb = create_pyramid(&self.device, extent)?;
+        self.hzb = create_pyramids(&self.device, extent)?;
+        self.prev.set(None);
         if self.vis64.is_some() {
             self.vis64 = Some(create_vis64(&self.device, extent)?);
         }
@@ -1224,9 +1301,9 @@ impl MeshletRenderer {
         Ok(())
     }
 
-    /// Size of the depth pyramid's level 0.
+    /// Size of the depth pyramids' level 0.
     pub fn hzb_extent(&self) -> vk::Extent2D {
-        self.hzb.extent()
+        self.hzb[0].extent()
     }
 
     /// Sizes the visible-cluster list for `clusters` before the first frame that needs them
@@ -1253,7 +1330,22 @@ impl MeshletRenderer {
     /// dropped clusters raises the size every slot grows to; this slot grows now, the others
     /// when their turn comes, so a jump in demand leaves holes in the frames in flight
     /// until then (two or three).
-    pub fn begin_frame(&mut self, slot: FrameSlot) -> Result<Option<FrameStats>> {
+    pub fn begin_frame(
+        &mut self,
+        slot: FrameSlot,
+        scene: &MeshletScene,
+    ) -> Result<Option<FrameStats>> {
+        // The work list: the scene's bound up front when small (no frame then ever drops a
+        // work item), else grown from the demand the instance cull counts.
+        let reserve = scene.work_bound.min(u64::from(WORK_RESERVE_MAX)) as u32;
+        if reserve > self.work_target {
+            tracing::info!(
+                from = self.work_target,
+                to = reserve,
+                "cull work list reserved"
+            );
+            self.work_target = reserve;
+        }
         let mut raw = [0_u32; STAT_COUNT];
         // Declared `HostRead` by the frame that wrote it (its commands have completed); cleared
         // so that a frame which draws nothing reads as zero.
@@ -1270,7 +1362,26 @@ impl MeshletRenderer {
             sw_clusters: raw[7],
             sw_triangles: raw[8],
             dense_triangles: raw[9],
+            work_items: raw[10],
+            work_overflow: raw[11],
         });
+        if let Some(s) = stats {
+            let target =
+                grown_capacity(self.work_target, u64::from(s.work_items), WORK_MAX_CAPACITY);
+            if target != self.work_target {
+                tracing::info!(
+                    wanted = s.work_items,
+                    from = self.work_target,
+                    to = target,
+                    "cull work list grown"
+                );
+                self.work_target = target;
+            }
+        }
+        let work = &mut self.work_lists[slot.index];
+        if work.capacity < self.work_target {
+            *work = WorkList::new(&self.device, self.work_target, slot.index)?;
+        }
         if let Some(s) = stats {
             let on = software_worth_it(self.sw_auto_on, s.dense_triangles);
             if on != self.sw_auto_on {
@@ -1307,9 +1418,19 @@ impl MeshletRenderer {
         Ok(stats)
     }
 
-    fn frame_block(&self, slot: FrameSlot, params: &DrawParams<'_>, pass: u32) -> GpuFrame {
+    /// The frame block of `pass`: `pyramid` is the pyramid this frame's pass 2 tests (built
+    /// after pass 1, or the previous one when culling is frozen), `prev` what pass 1 tests.
+    fn frame_block(
+        &self,
+        slot: FrameSlot,
+        params: &DrawParams<'_>,
+        pass: u32,
+        pyramid: usize,
+        prev: Option<PrevCull>,
+    ) -> GpuFrame {
         let scene = params.scene;
-        let hzb = self.hzb.extent();
+        let hzb = self.hzb[pyramid].extent();
+        let work = &self.work_lists[slot.index];
         // Only the first pass rasterises in software: pass 2 draws the few clusters that
         // became visible, and a second raster and merge would cost more than they save.
         let mut flags = params.flags;
@@ -1317,17 +1438,29 @@ impl MeshletRenderer {
         if pass != PASS_REMAINDER && self.software_raster(params) {
             flags.0 |= FLAG_SW_RASTER;
         }
+        flags.0 &= !FLAG_PREV_PYRAMID;
+        if prev.is_some() {
+            flags.0 |= FLAG_PREV_PYRAMID;
+        }
+        let prev = prev.unwrap_or(PrevCull {
+            view: Mat4::IDENTITY,
+            p00: 1.0,
+            p11: 1.0,
+            jitter: Vec2::ZERO,
+            pyramid,
+        });
         GpuFrame {
             view_proj: params.view_proj.to_cols_array(),
             cull_view_proj: params.cull.view_proj.to_cols_array(),
             cull_view: params.cull.view.to_cols_array(),
+            prev_cull_view: prev.view.to_cols_array(),
             planes: frustum_planes(params.cull.view_proj),
             camera_pos: params.cull.position.to_array(),
             instance_count: scene.instance_count,
-            max_meshlets: scene.max_meshlets,
+            work_capacity: work.capacity,
             flags: flags.0,
             pass,
-            hzb_image: self.hzb.sampled().0,
+            hzb_image: self.hzb[pyramid].sampled().0,
             hzb_size: [hzb.width, hzb.height],
             p00: params.cull.p00,
             p11: params.cull.p11,
@@ -1343,10 +1476,10 @@ impl MeshletRenderer {
             meshes: scene.meshes.address(),
             instances: scene.instances.address(),
             stats: self.stats.address(),
-            visibility: scene.visibility.address(),
-            total_groups: scene.total_groups,
-            pad_end: 0,
-            work: scene.work[slot.index].address(),
+            cluster_lookback: work.lookback.address(),
+            cluster_groups: work.groups(),
+            prev_hzb_image: self.hzb[prev.pyramid].sampled().0,
+            work: work.work.address(),
             indirect: scene.indirect[slot.index].address(),
             visible: self.lists[slot.index].visible.address(),
             visible_capacity: self.lists[slot.index].capacity,
@@ -1364,6 +1497,9 @@ impl MeshletRenderer {
             target_height: self.extent.height,
             sw_raster_area: params.sw_raster_area.max(0.0),
             pad_raster: 0,
+            prev_draw_jitter: prev.jitter.to_array(),
+            prev_p00: prev.p00,
+            prev_p11: prev.p11,
         }
     }
 
@@ -1387,8 +1523,18 @@ impl MeshletRenderer {
         } else {
             PASS_SINGLE
         };
-        let block1 = self.frame_block(slot, &params, first_pass);
-        let block2 = self.frame_block(slot, &params, PASS_REMAINDER);
+        // The pyramids: pass 1 tests the previous frame's, this frame builds the other one
+        // after pass 1 for pass 2 (and the next frame's pass 1). A frozen culling camera keeps
+        // the last one built, unless there is none yet.
+        let prev = self.prev.get().filter(|_| occlusion);
+        let build = occlusion && (!frozen || prev.is_none());
+        let pyramid = match prev {
+            Some(p) if build => 1 - p.pyramid,
+            Some(p) => p.pyramid,
+            None => 0,
+        };
+        let block1 = self.frame_block(slot, &params, first_pass, pyramid, prev);
+        let block2 = self.frame_block(slot, &params, PASS_REMAINDER, pyramid, prev);
         self.frame_buffers[slot.index].write(0, &[block1]);
         self.frame_buffers[slot.index].write(FRAME_BLOCK_STRIDE, &[block2]);
         // The grids start empty every frame, (x, y, z, count) for the cluster cull and for the
@@ -1422,11 +1568,21 @@ impl MeshletRenderer {
             mip_levels: 1,
         });
         let software = self.software_raster(&params);
+        let hzb = graph.import(&self.hzb[pyramid]);
+        let hzb_prev = prev.map(|p| {
+            if p.pyramid == pyramid {
+                hzb
+            } else {
+                graph.import(&self.hzb[p.pyramid])
+            }
+        });
         let io = MeshPassIo {
             visibility,
             depth,
-            hzb: graph.import(&self.hzb),
-            work: graph.import_buffer(&scene.work[slot.index]),
+            hzb,
+            hzb_prev,
+            work: graph.import_buffer(&self.work_lists[slot.index].work),
+            cluster_lookback: graph.import_buffer(&self.work_lists[slot.index].lookback),
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
             clusters: graph.import_buffer(&scene.clusters[slot.index]),
             lookback: graph.import_buffer(&scene.lookback[slot.index]),
@@ -1434,7 +1590,6 @@ impl MeshletRenderer {
                 .draws
                 .as_ref()
                 .map(|b| graph.import_buffer(b)),
-            visibility_bits: graph.import_buffer(&scene.visibility),
             visible: graph.import_buffer(&self.lists[slot.index].visible),
             raster: graph.import_buffer(&self.lists[slot.index].raster),
             vis64: self
@@ -1449,7 +1604,7 @@ impl MeshletRenderer {
 
         // Instance culling and LOD level windows: the work list and the cluster cull's grid.
         // The instance cull's status words start cleared; it clears the cluster culls' for
-        // the items it appends.
+        // the workgroups it fills.
         let cull_pipeline = &self.pipeline_cull;
         let instance_groups = scene.instance_count.div_ceil(64).max(1);
         let lookback: &'f GraphBuffer = &scene.lookback[slot.index];
@@ -1467,6 +1622,7 @@ impl MeshletRenderer {
         graph
             .pass("geometry/instance cull")
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
+            .buffer(io.cluster_lookback, BufferAccess::ShaderWrite(compute))
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
@@ -1504,8 +1660,8 @@ impl MeshletRenderer {
         self.software_passes(graph, raster_label, first, &params, slot);
 
         if occlusion {
-            if !frozen {
-                self.pyramid_passes(graph, io);
+            if build {
+                self.pyramid_passes(graph, io, &self.hzb[pyramid]);
             }
             let second = MeshPass {
                 io,
@@ -1529,6 +1685,17 @@ impl MeshletRenderer {
                 slot,
             );
         }
+        self.prev.set(match (occlusion, build) {
+            (false, _) => None,
+            (true, true) => Some(PrevCull {
+                view: params.cull.view,
+                p00: params.cull.p00,
+                p11: params.cull.p11,
+                jitter: params.draw_jitter,
+                pyramid,
+            }),
+            (true, false) => prev,
+        });
         Ok(DrawTargets {
             depth,
             visibility,
@@ -1604,16 +1771,20 @@ impl MeshletRenderer {
                 BufferAccess::IndirectArgsAndShaderRead(compute),
             )
             .buffer(io.work, BufferAccess::ShaderRead(compute))
-            .buffer(io.visibility_bits, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
-            .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.cluster_lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.visible, BufferAccess::ShaderWrite(compute))
             .buffer(io.raster, BufferAccess::ShaderWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
         if let Some(draws) = io.draws {
             builder = builder.buffer(draws, BufferAccess::ShaderWrite(compute));
         }
-        if second {
+        // Pass 1 tests the previous pyramid; pass 2 that one too (to skip what pass 1 drew) and
+        // this frame's.
+        if let Some(prev) = io.hzb_prev {
+            builder = builder.image(prev, ImageAccess::Sampled(compute));
+        }
+        if second && io.hzb_prev != Some(io.hzb) {
             builder = builder.image(io.hzb, ImageAccess::Sampled(compute));
         }
         builder.run(move |_, commands| {
@@ -1840,12 +2011,17 @@ impl MeshletRenderer {
             });
     }
 
-    /// Builds the depth pyramid level by level: level 0 from the depth buffer, each next
-    /// level from the previous one (one pass per level, one profiler zone for all).
-    fn pyramid_passes<'f>(&'f self, graph: &mut FrameGraph<'f>, io: MeshPassIo) {
+    /// Builds the depth pyramid `hzb` (`io.hzb` in the graph) level by level: level 0 from
+    /// the depth buffer, each next level from the previous one (one pass per level, one
+    /// profiler zone for all).
+    fn pyramid_passes<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        io: MeshPassIo,
+        hzb: &'f GraphImage,
+    ) {
         use vk::PipelineStageFlags2 as S;
         let pipeline = &self.pipeline_hzb;
-        let hzb = &self.hzb;
         for level in 0..hzb.mip_levels() {
             let dst = hzb.mip_extent(level);
             let pass = graph.pass("geometry/depth pyramid");
@@ -1896,6 +2072,19 @@ struct MeshPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_work_list_says_so_too() {
+        let capped = FrameStats {
+            visible_overflow: 1_500,
+            work_overflow: 20_000,
+            ..FrameStats::default()
+        };
+        assert_eq!(
+            capped.overflow_note(),
+            ", 2 k dropped (visible list full), 20 k work items dropped (work list full)"
+        );
+    }
 
     #[test]
     fn a_capped_frame_says_how_much_it_dropped() {

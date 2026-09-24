@@ -39,7 +39,8 @@ Research behind it: [research/gpu-geometry.md](../research/gpu-geometry.md).
 - Meshlets come from meshoptimizer (`meshopt` 0.6): ≤ 64 vertices, ≤ 124 triangles, cone
   weight 0.5, after vertex-cache optimisation. Bounds and cones are meshoptimizer's.
 - **Two-pass occlusion culling** (Haar & Aaltonen 2015, Nanite 2021). Pass 1 draws the
-  meshlets whose visibility bit was set last frame. A compute pass builds a hierarchical-Z
+  meshlets whose visibility bit was set last frame (since issue #33: that the previous
+  frame's pyramid shows, with no bits; see "A million instances"). A compute pass builds a hierarchical-Z
   pyramid (1024×512, 11 levels, linear min-reduction sampler, conservative by construction)
   from that depth. Pass 2 projects every remaining meshlet's sphere to a screen rectangle
   (Mara & McGuire 2013), samples the pyramid at the rectangle's four corners at the level
@@ -47,7 +48,7 @@ Research behind it: [research/gpu-geometry.md](../research/gpu-geometry.md).
   draws the survivors and rewrites the bits; previously visible meshlets are re-tested
   without drawing so the set never creeps. Normal-cone culling skips clusters whose cone is
   wider than a hemisphere (meshoptimizer marks them with a unit cutoff and a zero axis). Everything runs through the same global bindless set (images) and device-address
-  buffers; the visibility bits are one bit per (instance, meshlet) on the GPU.
+  buffers; the visibility bits were one bit per (instance, meshlet) on the GPU until #33.
 
 ## Two paths, one culling (issue #5, 2026-09-24)
 
@@ -271,6 +272,49 @@ the pixels). Auto keeps the ballad in hardware.
 - A second software raster in pass 2 cost more than it saved.
 
 Validation and synchronization validation are silent on both paths, with DLSS too.
+
+## A million instances (issue #33, 2026-09-24)
+
+The first step of city-blocks (#13). Two structures grew with instances × clusters:
+- **Visibility bits:** one "visible last frame" bit per instance and cluster.
+- **Work list and look-back words:** both sized for every cluster group of every instance.
+
+At `--side 700` (980 000 instances of the 2 639-cluster rock), the work buffers alone took
+2.8 GiB, and the city's props would need ten to twenty times that.
+
+- **Occlusion from the previous frame's pyramid** (Nanite's main and post passes). Pass 1
+  draws the clusters that the previous frame's pyramid shows, seen from the previous culling
+  camera; a cluster entirely outside that image counts as unseen. The frame then builds its
+  own pyramid into the other of two images. Pass 2 asks pass 1's question again, on the same
+  inputs, to skip what it drew, and tests the rest against the new pyramid. Nothing is kept
+  per cluster. Pass 1's answer only decides which pass draws a cluster, never whether: what
+  it skips, pass 2 tests against a pyramid built from depth that is all in the final image.
+  - After a resize, or with occlusion just turned on, there is no previous pyramid: pass 1
+    draws nothing and pass 2 everything visible.
+  - A frozen culling camera keeps the last pyramid.
+  - A first version counted a sphere partly outside the previous image as unseen. That sent
+    the 1 k clusters on the bench's screen border to pass 2 every frame (+0.005 ms); they
+    now take the clamped test pass 2 uses.
+- **Lists sized by demand.**
+  - The renderer owns the work list and the cluster culls' status words, one per workgroup
+    of eight items per pass.
+  - It reserves the scene's bound up front when that is at most 1 M items (so no frame of
+    today's demos drops one), and otherwise grows from the demand the instance cull counts.
+  - Dropped items are counted like dropped clusters.
+
+| `meshlets --side 700` (980 k instances, 2.59 G clusters, 108 G triangles) | before | after |
+|---|---|---|
+| allocated by the engine | 2 938 MiB (work buffers 2 823) | **197 MiB** (work buffers 68, the instance table 93) |
+| GPU per frame | 7.23 ms | 6.20 ms |
+| cluster cull 1 / 2 | 2.24 / 2.36 ms | 2.54 / 2.51 ms |
+| meshlet pass 1 | 2.36 ms | 0.09 ms, + 0.78 ms software raster (auto: 40.8 M dense triangles) |
+
+The view draws 713 k instances, 402 k clusters and 42 M triangles, from 714 k work items.
+The culls now cost 0.3 ms more each: every cluster does a pyramid test in both passes
+instead of reading a bit. At this scale they are the frame (#13 continues there). The usual
+views are unchanged: bench 0.19 ms, ballad 0.35, their full-detail views 1.11 and 2.02.
+Every golden capture is 0 pixels apart from the previous build, both paths, and so is the
+A/B harness.
 
 ## Numbers — occlusion culling
 

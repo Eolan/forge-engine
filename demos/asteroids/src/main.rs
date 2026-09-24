@@ -491,7 +491,7 @@ impl Demo for Ballad {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
-        if let Some(stats) = self.renderer.begin_frame(frame.slot)? {
+        if let Some(stats) = self.renderer.begin_frame(frame.slot, &self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);
@@ -723,7 +723,7 @@ impl Demo for Ballad {
                 .unwrap_or(0.0)
         };
         let title = format!(
-            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles), {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
+            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles; {:.0} k work items), {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
             self.scene.instance_count,
             self.scene.mesh_count,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -733,6 +733,7 @@ impl Demo for Ballad {
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,
             mean(|s| s.dense_triangles) / 1e6,
+            mean(|s| s.work_items) / 1e3,
             mean(|s| s.triangles) / 1e6,
             gpu,
             cpu,

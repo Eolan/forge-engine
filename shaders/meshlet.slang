@@ -12,10 +12,12 @@
 // Layouts are std430 and mirrored by `#[repr(C)]` structs in `forge-geom` / `forge-render`.
 //
 // Occlusion is two-pass (Haar & Aaltonen 2015, Nanite 2021): pass 1 draws the meshlets that
-// were visible last frame; the renderer then builds a hierarchical-Z pyramid from that depth;
-// pass 2 tests every remaining meshlet against it, draws the survivors and rewrites the
-// visibility bits for next frame (pass-1 meshlets are re-tested too, without drawing). Each
-// mesh pass is a cluster-cull compute pass followed by the draw of what it kept.
+// the previous frame's hierarchical-Z pyramid shows, seen from the previous culling camera;
+// the renderer then builds this frame's pyramid from that depth (into the other of two
+// images); pass 2 re-derives pass 1's answer to skip what it drew and tests every other
+// meshlet against the new pyramid. No state is kept per cluster, so the scene can hold any
+// number of instances (issue #33). Each mesh pass is a cluster-cull compute pass followed by
+// the draw of what it kept.
 import bindless;
 import vis64;
 
@@ -82,8 +84,7 @@ public struct Instance
     public float radius;
     public uint mesh;
     public uint id;
-    public uint group_offset; // first work item (group of 32 clusters) of this instance
-    public uint bit_offset;   // first visibility bit of this instance
+    public uint2 pad;
 };
 
 public static const uint FLAG_FREEZE_CULLING = 1;
@@ -107,6 +108,8 @@ public static const uint FLAG_SHOW_RASTER = 1024;
 // Flags in the meshlet word of a visible-list record, above the meshlet index.
 static const uint CULLED_BIT = 0x80000000u;   // drawn although culling rejected it (FLAG_SHOW_CULLED)
 static const uint SOFTWARE_BIT = 0x40000000u; // rasterised in compute
+// The previous frame's pyramid and culling camera (`Frame::prev_*`) are valid.
+public static const uint FLAG_PREV_PYRAMID = 2048;
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
 
 public static const uint PASS_PREVIOUSLY_VISIBLE = 1;
@@ -124,6 +127,8 @@ public static const uint STAT_VISIBLE_OVERFLOW = 6; // clusters dropped because 
 public static const uint STAT_SW_CLUSTERS = 7;      // clusters rasterised in compute
 public static const uint STAT_SW_TRIANGLES = 8;     // their triangles (also counted in STAT_TRIANGLES)
 public static const uint STAT_DENSE_TRIANGLES = 9;  // triangles of the drawn dense clusters, software rasteriser on or off
+public static const uint STAT_WORK_ITEMS = 10;      // work items the instance cull emitted (the demand)
+public static const uint STAT_WORK_OVERFLOW = 11;   // of those, dropped because the work list was full
 
 // The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
 // `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, filled by the
@@ -138,10 +143,11 @@ public struct Frame
     public float4x4 view_proj;      // for drawing
     public float4x4 cull_view_proj; // for culling (frozen when FLAG_FREEZE_CULLING)
     public float4x4 cull_view;      // view matrix used for culling
+    public float4x4 prev_cull_view; // the previous frame's (with FLAG_PREV_PYRAMID)
     public float4 planes[6];        // frustum planes of `cull_view_proj`, inward normals
     public float3 camera_pos;       // camera used for culling
     public uint instance_count;
-    public uint max_meshlets;       // work items per instance = ceil(max_meshlets / 32)
+    public uint work_capacity;      // slots in `work`
     public uint flags;
     public uint pass;
     public uint hzb_image;          // sampled image index of the depth pyramid
@@ -160,9 +166,9 @@ public struct Frame
     public Mesh* meshes;
     public Instance* instances;
     public uint* stats;
-    public uint* visibility;        // one bit per (instance, local meshlet): visible last frame
-    public uint total_groups;
-    public uint pad_end;
+    public uint64_t* cluster_lookback; // status words of the cluster culls' ordered appends: `cluster_groups` per pass
+    public uint cluster_groups;     // cluster-cull workgroups `work_capacity` items need
+    public uint prev_hzb_image;     // sampled image index of the previous frame's pyramid
     public uint2* work;             // (instance, local group) per work item, built by `cull_main`
     public uint* indirect;          // the cluster cull's grid (x, y, 1, work item count), then the instance cull's ticket
     public uint2* visible;          // (instance, meshlet | flag bits) per drawn cluster, in cull order: pass 1, then pass 2
@@ -172,12 +178,15 @@ public struct Frame
     public uint pad_exposure;
     public uint* clusters;          // per pass (pass 1 or the single pass at 0, pass 2 at 12): the hardware draw grid (x, y, 1) and its cluster count, the software raster grid and its count, the merge's VkDrawIndirectCommand; then the culls' tickets (24, 25)
     public uint* draws;             // fallback: a VkDrawIndexedIndirectCommand per hardware-drawn cluster of the pass; null on the mesh path
-    public uint64_t* lookback;      // status words of the ordered appends: instance cull, then each cluster cull
+    public uint64_t* lookback;      // status words of the instance cull's ordered appends
     public uint* raster;            // per pass, the list slots of its clusters: hardware-drawn from the front, software-rasterised from the back
     public uint target_width;       // pixels
     public uint target_height;
     public float sw_raster_area;    // a cluster whose bounding rectangle holds fewer pixels than this per triangle is dense (rasterised in compute with FLAG_SW_RASTER)
     public uint pad_raster;
+    public float2 prev_draw_jitter; // the previous frame's `draw_jitter`
+    public float prev_p00;          // the previous culling camera's projection scales
+    public float prev_p11;
 };
 
 struct Push
@@ -234,15 +243,10 @@ bool project_sphere(float3 c, float r, float znear, float p00, float p11, out fl
     return true;
 }
 
-// True when the sphere may be visible against the depth pyramid.
-bool occlusion_visible(Frame* f, float3 world_center, float radius)
+// True when a rectangle (uv, the sphere's projection) whose nearest point is at depth
+// `nearest` may be visible against the depth pyramid `hzb_image`.
+bool pyramid_visible(Frame* f, uint hzb_image, float4 aabb, float nearest)
 {
-    float3 c = mul(f[0].cull_view, float4(world_center, 1)).xyz;
-    float4 aabb;
-    if (!project_sphere(c, radius, f[0].znear, f[0].p00, f[0].p11, aabb))
-        return true;
-    // The depth was drawn with a jittered projection: test where the sphere is in *that* image.
-    aabb += f[0].draw_jitter.xyxy;
     float width = (aabb.z - aabb.x) * f[0].hzb_size.x;
     float height = (aabb.w - aabb.y) * f[0].hzb_size.y;
     // Level where a texel is at most the rectangle's size (T <= w < 2T). One linear
@@ -253,13 +257,46 @@ bool occlusion_visible(Frame* f, float3 world_center, float radius)
     // (the gap would need w >= 2T). This is the tightest exact test with a 2x2 sampler.
     float level = floor(log2(max(max(width, height), 1.0)));
     float farthest = min(
-        min(sample_depth_level(f[0].hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.xy, level),
-            sample_depth_level(f[0].hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.zy, level)),
-        min(sample_depth_level(f[0].hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.xw, level),
-            sample_depth_level(f[0].hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.zw, level)));
-    // Reversed-Z, infinite far plane: depth = znear / distance. Nearest point of the sphere:
-    float nearest = f[0].znear / (-c.z - radius);
+        min(sample_depth_level(hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.xy, level),
+            sample_depth_level(hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.zy, level)),
+        min(sample_depth_level(hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.xw, level),
+            sample_depth_level(hzb_image, SAMPLER_MIN_REDUCTION_CLAMP, aabb.zw, level)));
     return nearest >= farthest;
+}
+
+// True when the sphere may be visible against this frame's depth pyramid (built after pass 1).
+bool occlusion_visible(Frame* f, float3 world_center, float radius)
+{
+    float3 c = mul(f[0].cull_view, float4(world_center, 1)).xyz;
+    float4 aabb;
+    if (!project_sphere(c, radius, f[0].znear, f[0].p00, f[0].p11, aabb))
+        return true;
+    // The depth was drawn with a jittered projection: test where the sphere is in *that* image.
+    aabb += f[0].draw_jitter.xyxy;
+    // Reversed-Z, infinite far plane: depth = znear / distance. Nearest point of the sphere:
+    return pyramid_visible(f, f[0].hzb_image, aabb, f[0].znear / (-c.z - radius));
+}
+
+// Whether the previous frame showed the sphere: its pyramid (built after that frame's first
+// pass), seen from that frame's culling camera, does not hide it. A sphere entirely outside
+// that image counts as not shown, one crossing the near plane as shown, one partly outside is
+// tested where it was (the clamped samples, as in `occlusion_visible`). Pass 1 draws what
+// this accepts, and pass 2 asks the same question on the same inputs to skip it. The answer
+// only decides which pass draws a cluster, never whether: what pass 1 skips, pass 2 tests
+// against a pyramid of depth that is all in the final image, so a visible cluster always
+// passes there.
+bool visible_last_frame(Frame* f, float3 world_center, float radius)
+{
+    if ((f[0].flags & FLAG_PREV_PYRAMID) == 0)
+        return false;
+    float3 c = mul(f[0].prev_cull_view, float4(world_center, 1)).xyz;
+    float4 aabb;
+    if (!project_sphere(c, radius, f[0].znear, f[0].prev_p00, f[0].prev_p11, aabb))
+        return true;
+    aabb += f[0].prev_draw_jitter.xyxy;
+    if (any(aabb.zw < 0.0) || any(aabb.xy > 1.0))
+        return false;
+    return pyramid_visible(f, f[0].prev_hzb_image, aabb, f[0].znear / (-c.z - radius));
 }
 
 // Projected size in pixels of an object-space error `error` carried by a world-space sphere,
@@ -422,9 +459,9 @@ bool dense_cluster(Frame* f, float3 world_center, float radius, uint triangles)
     return max(size.x, size.y) < SW_RASTER_MAX_PX && size.x * size.y < f[0].sw_raster_area * float(triangles);
 }
 
-// Culls cluster `thread` of work item `item`: LOD selection, frustum and normal cone; in the
-// second pass of the two-pass occlusion also the depth pyramid and the rewrite of the cluster's
-// "visible last frame" bit.
+// Culls cluster `thread` of work item `item`: LOD selection, frustum and normal cone; with
+// occlusion, pass 1 keeps what the previous frame showed and pass 2 what this frame's pyramid
+// does not hide among the rest.
 ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
 {
     ClusterVerdict v = {};
@@ -445,11 +482,6 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
         || local_meshlet >= mesh[0].meshlet_count)
         return v;
     v.meshlet = mesh[0].meshlet_offset + local_meshlet;
-    uint bit_index = inst[0].bit_offset + local_meshlet;
-    uint word = bit_index >> 5;
-    uint mask = 1u << (bit_index & 31);
-    bool was_visible = (f[0].visibility[word] & mask) != 0;
-
     Meshlet m = f[0].meshlets[v.meshlet];
     v.triangle_count = m.triangle_count;
     v.triangle_offset = m.triangle_offset;
@@ -476,28 +508,20 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
 
     if (pass == PASS_PREVIOUSLY_VISIBLE)
     {
-        v.draw = was_visible && visible;
+        v.draw = visible && visible_last_frame(f, center, world_radius);
     }
     else if (pass == PASS_REMAINDER)
     {
-        bool now_visible = visible;
-        if (visible && (f[0].flags & FLAG_OCCLUSION_CULLING) != 0)
+        // Pass 1 drew what the previous frame showed; the rest faces this frame's pyramid.
+        if (visible && !visible_last_frame(f, center, world_radius))
         {
-            now_visible = occlusion_visible(f, center, world_radius);
-            v.occluded = !now_visible;
+            v.draw = occlusion_visible(f, center, world_radius);
+            v.occluded = !v.draw;
             if (v.occluded && show_culled)
             {
                 v.culled_debug = true;
-                now_visible = true;
+                v.draw = true;
             }
-        }
-        v.draw = now_visible && !was_visible;
-        if (now_visible != was_visible)
-        {
-            if (now_visible)
-                InterlockedOr(f[0].visibility[word], mask);
-            else
-                InterlockedAnd(f[0].visibility[word], ~mask);
         }
     }
     else
@@ -602,16 +626,16 @@ uint2 lookback_exclusive(uint64_t* status, uint ticket, uint2 counts, uint threa
     return lookback_unpack(exclusive);
 }
 
-// Workgroups of the instance cull; their status words open `Frame::lookback`, the two cluster
-// culls' follow (`total_groups` words each).
+// Workgroups of the instance cull, one status word each in `Frame::lookback`.
 uint instance_cull_groups(Frame* f)
 {
     return max((f[0].instance_count + 63) / 64, 1u);
 }
 
+// This pass's cluster cull's status words (`cluster_groups` per pass).
 uint64_t* cluster_status(Frame* f)
 {
-    return f[0].lookback + instance_cull_groups(f) + (f[0].pass == PASS_REMAINDER ? f[0].total_groups : 0);
+    return f[0].cluster_lookback + (f[0].pass == PASS_REMAINDER ? f[0].cluster_groups : 0);
 }
 
 // Writes the grid (x, y, 1) that covers `groups` workgroups, and the `count` they work on.
@@ -834,7 +858,7 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
     bool all = (f[0].flags & FLAG_GROUP_WINDOW_OFF) != 0;
     bool lod = (f[0].flags & FLAG_LOD) != 0;
     uint level_count = max(mesh[0].level_count, 1u);
-    uint64_t* status = f[0].lookback + instance_cull_groups(f);
+    uint64_t* status = f[0].cluster_lookback;
     uint count = 0;
     uint next_group = 0; // groups come out in increasing order, each at most once
     for (uint l = 0; l < level_count; l++)
@@ -851,11 +875,15 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
         for (uint g = first; write && g <= last; g++)
         {
             uint slot = base + count + (g - first);
-            if (slot < f[0].total_groups)
+            if (slot < f[0].work_capacity)
             {
                 f[0].work[slot] = uint2(instance_index, g);
-                status[slot] = 0;
-                status[f[0].total_groups + slot] = 0;
+                if (slot % CULL_ITEMS == 0)
+                {
+                    // The first item of a cluster-cull workgroup clears its status words.
+                    status[slot / CULL_ITEMS] = 0;
+                    status[f[0].cluster_groups + slot / CULL_ITEMS] = 0;
+                }
             }
         }
         if (first <= last)
@@ -870,8 +898,8 @@ groupshared uint s_total;
 
 // One thread per instance: frustum-cull it and append its work items to the work list, in
 // instance order (see "ordered appends"). The last workgroup writes the cluster cull's grid
-// `indirect` = (x, y, 1, count); each group of an instance is appended at most once, so the
-// count never exceeds `total_groups`.
+// `indirect` = (x, y, 1, count) over the items that fit in `work_capacity` and counts the
+// demand; each group of an instance is appended at most once.
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cull_main(uint thread : SV_GroupThreadID)
@@ -910,8 +938,14 @@ void cull_main(uint thread : SV_GroupThreadID)
     uint first = lookback_exclusive(f[0].lookback, ticket, uint2(total, 0), thread).x;
     if (thread == 0 && ticket == instance_cull_groups(f) - 1)
     {
-        uint items = min(first + total, f[0].total_groups);
+        // The last workgroup knows the demand: what fits goes to the cluster cull, the rest is
+        // counted (the renderer grows the list from it).
+        uint demand = first + total;
+        uint items = min(demand, f[0].work_capacity);
         write_grid(f[0].indirect, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
+        InterlockedAdd(f[0].stats[STAT_WORK_ITEMS], demand);
+        if (demand > items)
+            InterlockedAdd(f[0].stats[STAT_WORK_OVERFLOW], demand - items);
     }
     if (count > 0)
         instance_items(f, instance_index, first + s_counts[thread], true);

@@ -54,7 +54,11 @@ GPUs without them, one indexed draw per listed cluster through
 `vkCmdDrawIndexedIndirectCount` (the cooked one-byte triangle lists as the index buffer) draw
 the same list. Since issue #3 the first pass's dense clusters (under 2 pixels of bounding
 rectangle per triangle) can go to a software rasteriser in compute instead, on both paths,
-when a frame holds enough of them to repay its fixed cost (D-021). Next: cluster
+when a frame holds enough of them to repay its fixed cost (D-021). Since issue #33 the
+occlusion keeps no state per cluster. Pass 1 draws what the previous frame's pyramid
+shows, from the previous culling camera, and pass 2 re-derives that to test only the rest
+against this frame's pyramid. The work lists are sized by demand, so the scene can hold a
+million instances (197 MiB for 980 k rocks, against 2.9 GiB before). Next: cluster
 acceleration structures for ray tracing on RTX.
 *Measured:* 127 M-triangle scene, 1152 instances: 6.1 ms brute force → 1.1 ms with
 occlusion, 0 pixels different. Compute culling (#5): the two paths 0 pixels apart; the mesh

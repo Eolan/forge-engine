@@ -513,3 +513,22 @@ What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.
   TAA's reprojection turns into sub-level differences over the frame.
 - **The fallback gains most.** Its per-cluster indexed draws are what compute replaces: the
   bench at full detail goes 3.92 → 1.20 ms, against 2.27 → 1.15 on the mesh path.
+
+### Occlusion without per-cluster state (issue #33)
+
+- **The previous frame's pyramid replaces the "visible last frame" bits.**
+  - Pass 1 tests each cluster against the pyramid the previous frame built after its own
+    pass 1, projected with the previous culling camera, and draws what it shows.
+  - This frame builds its pyramid into the other of two images.
+  - Pass 2 asks pass 1's question again on the same inputs, which is deterministic, to skip
+    what pass 1 drew, and tests the rest against the new pyramid.
+  - Nothing grows with instances × clusters. At 980 k instances the bench fell from 2.9 GiB
+    to 197 MiB.
+- **Pass 1's test decides which pass, never whether.** Whatever pass 1 skips, pass 2 tests
+  against a pyramid of depth that is all in the final image, so a visible cluster always
+  passes there. The previous-frame test may be any deterministic guess. Counting spheres
+  partly outside the previous image as unseen was correct but sent the screen border to
+  pass 2 every frame; the clamped test is the better guess.
+- **The price is a second pyramid test.** Pass 1 now samples a pyramid where it read a
+  bit, and pass 2 samples two. At a million instances the culls rose from 2.24 and 2.36 ms
+  to 2.54 and 2.51 ms. At the LOD views it is within noise.

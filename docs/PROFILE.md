@@ -33,7 +33,7 @@ exposure (EV100, target, compensation, curve) the last.
 | Subject | Zone | ms | share of GPU | Verdict |
 |---|---|---|---|---|
 | geometry | meshlet pass 1 (visible last frame) | 0.04 | 12 % | 7–8 k clusters, 0.5 M triangles, positions and a 32-bit id only (0.06 while the task shader culled inside it). Through the indirect-count fallback: 0.07. |
-| geometry | cluster cull 1 / cluster cull 2 (occlusion) | 0.02 / 0.02 | 5 % each | Compute since issue #5: LOD selection, frustum, normal cone and, in the second, the depth pyramid and the visibility bits, appending the survivors in a fixed order (a prefix sum over workgroups, so the image does not depend on timing). The same list feeds both paths. |
+| geometry | cluster cull 1 / cluster cull 2 (occlusion) | 0.02 / 0.02 | 5 % each | Compute since issue #5: LOD selection, frustum, normal cone and the depth pyramids (the previous frame's in both, this frame's in the second, since issue #33), appending the survivors in a fixed order (a prefix sum over workgroups, so the image does not depend on timing). The same list feeds both paths. |
 | geometry | instance cull | 0.02 | 5 % | One thread per instance: frustum, per-level LOD window, work-list append in instance order. At this size the timestamps' own granularity shows. |
 | geometry | depth pyramid | 0.02 | 7 % | Eleven graph passes, one zone. Negligible; stays. |
 | geometry | meshlet pass 2 (newly visible) | 0.01 | 2 % | Almost nothing becomes newly visible per frame at 1 px. |
@@ -123,13 +123,13 @@ throughout; the overlay's graph counter line stays in MB.
 |---|---|---|---|---|---|---|
 | VRAM used by the process (budget 14.87 GiB) | **357 MiB** (2.3 %) | **357 MiB** | 419 | 616 | 616 | 572 |
 | system RAM used by the process | 77 MiB | 13 | | | | |
-| allocated by the engine | 94.3 MiB | 29.6 | 120.2 | 120.2 | 91.1 | 80.7 |
+| allocated by the engine | 106.3 MiB | 42.3 | 120.2 | 120.2 | 91.1 | 80.7 |
 | — geometry | 35.0 | 3.3 | 35.5 | 35.5 | 35.5 | 35.5 |
-| — render targets | 27.8 | 2.7 | 40.3 | 40.3 | 25.8 | 19.6 |
+| — render targets | 41.5 | 16.3 | 40.3 | 40.3 | 25.8 | 19.6 |
 | — transient heap | 25.0 | 18.8 | 25.0 | 25.0 | 10.5 | 6.3 |
-| — GPU work buffers | 6.0 | 4.3 | 18.8 | 18.8 | 18.8 | 18.8 |
+| — GPU work buffers | 4.3 | 3.3 | 18.8 | 18.8 | 18.8 | 18.8 |
 | — per-frame data, textures, staging + readback | 0.5, 0.03, 0.00 | 0.5, 0.03, 0.00 | | | | |
-| allocator blocks | 384 MiB (25 % used) | 320 (9 %) | 384 | 384 | 384 | 384 |
+| allocator blocks | 384 MiB (28 % used) | 384 (11 %) | 384 | 384 | 384 | 384 |
 | outside the allocator | 50 MiB | 50 | 161 | 364 | 364 | 316 |
 | uploads per frame, overlay off (full overlay) | 1.20 KiB (32.3) | 1.09 KiB (32.2) | 1.11 | 1.11 | 1.11 | 1.11 |
 | read back per frame | 1.03 KiB | 0.03 KiB | 1.03 | 1.03 | 1.03 | 1.03 |
@@ -143,7 +143,15 @@ list to the demand: 65 536 slots per frame slot instead of 1 M, 15 MiB less in b
 grows when a frame drops clusters; `--no-lod` reserves the scene's finest clusters, 2.10 M
 and 1.38 M: work buffers 37.1 and 24.3 MiB). The Streamline columns are from issue #9 (with
 the 1 M list). The indirect-count fallback adds 2.5 MiB of draw commands at that size
-(work buffers 8.5 and 6.8 MiB; 117.2 and 76.7 under `--no-lod`). **Verdicts:**
+(work buffers 8.5 and 6.8 MiB; 117.2 and 76.7 under `--no-lod`).
+
+Issue #3 added the software rasteriser's samples: 11.0 MiB of render targets at
+1600×900, allocated when the GPU has 64-bit atomics even while auto mode keeps the
+rasteriser off. It also made the look-back words 64-bit (work buffers 8.8 and 6.2 MiB).
+Issue #33 then dropped the per-cluster visibility bits and sized the work list by demand:
+work buffers 4.3 and 3.3 MiB, plus a second depth pyramid (2.7 MiB of render targets). At
+a million instances that is what keeps the bench at 197 MiB instead of 2 938
+(`docs/demos/meshlets.md`). **Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
    reserves 256 MiB device blocks and 64 MiB host-visible ones. Each demo holds one of each
