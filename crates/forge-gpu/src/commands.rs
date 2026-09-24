@@ -257,4 +257,17 @@ impl<'a> Commands<'a> {
         unsafe { loader.cmd_draw_mesh_tasks(self.cb, x, y, z) };
         Ok(())
     }
+
+    /// `vkCmdDrawMeshTasksIndirectEXT` with one `VkDrawMeshTasksIndirectCommandEXT` (three
+    /// `u32`: x, y, z) at `offset` in `buffer`, which must have `INDIRECT_BUFFER` usage.
+    pub fn draw_mesh_tasks_indirect(&self, buffer: &crate::Buffer, offset: u64) -> Result<()> {
+        let loader = self
+            .device
+            .mesh_loader()
+            .ok_or_else(|| GpuError::Unsupported("mesh shaders".into()))?;
+        // SAFETY: a mesh pipeline is bound inside a rendering instance and the buffer holds a
+        // complete indirect command at `offset` (the caller's responsibility).
+        unsafe { loader.cmd_draw_mesh_tasks_indirect(self.cb, buffer.raw(), offset, 1, 12) };
+        Ok(())
+    }
 }

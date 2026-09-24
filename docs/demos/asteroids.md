@@ -72,15 +72,15 @@ subject, F1 cycles off → compact → full. The verdicts behind the numbers are
 | | value |
 |---|---|
 | scene | 3000 asteroids, 7 meshes, 195 M leaf triangles; DAG tables 28 k clusters, 4.6 M cluster slots over all instances |
-| drawn per frame, LOD 1 px (moving, default path) | 8 k meshlets, **0.62 M triangles**, mean LOD level 6.3 |
-| GPU per frame, LOD 1 px | **1.09 ms** (sky 0.14 + meshlet pass 1 0.46 + pyramid 0.02 + pass 2 0.42 + TAA 0.06) |
-| GPU per frame, LOD 0.5 px / 2 px | 1.13 ms (1.68 M triangles) / 1.11 ms (0.30 M) |
-| GPU per frame, full detail (`--no-lod`) | 5.50 ms (862 k + 33 k meshlets, 83 M triangles) |
-| CPU per frame (main thread) | 0.18 ms |
-| frame time, uncapped, LOD 1 px | p50 1.07 ms, p99 1.36 ms (~930 fps) |
+| drawn per frame, LOD 1 px (moving, default path) | 6–8 k meshlets, **0.5–0.6 M triangles**, mean LOD level 6.3 |
+| GPU per frame, LOD 1 px | **0.34 ms** (sky 0.13 + instance cull 0.02 + meshlet pass 1 0.06 + pyramid 0.02 + pass 2 0.02 + TAA 0.07) |
+| GPU per frame, LOD 0.5 px / 2 px | 0.39 ms (1.24 M triangles) / 0.28 ms (0.30 M) |
+| GPU per frame, full detail (`--no-lod`) | 5.15 ms (852 k + 33 k meshlets, 82 M triangles) |
+| CPU per frame (main thread) | 0.16 ms |
+| frame time, uncapped, LOD 1 px | p50 0.34 ms, p99 0.60 ms (~2 800 fps) |
 | field build (7 DAGs on 6 workers + scatter + upload) | ~2.5 s |
 
-The `meshlets` bench (1152 rocks, 127 M triangles) goes the same way: 2.18 ms → **0.58 ms**
+The `meshlets` bench (1152 rocks, 127 M triangles) goes the same way: 2.18 ms → **0.15 ms**
 at 1 px (15 k meshlets, 1.1 M triangles).
 
 Earlier configurations for reference: 6000 rocks in a 60–160 m tube drew 50 M triangles at
@@ -125,6 +125,16 @@ remembering: reading a 368-byte `Mesh` record by value in every task thread, and
 instruction) because a wrapped line hid the old formula from a replacement. The profiler
 showed both passes at exactly 1.94 ms whatever was drawn, which is the signature of launch
 overhead, not work.
+
+**The instance cull pass (issue #4).** With exact tables the two passes still launched
+145 k task groups each and cost 0.45 ms apiece, launch-bound. A compute pass with one thread
+per instance now frustum-culls the instance, evaluates the per-level window once per level
+and appends only the task groups of the levels that can hold selected clusters to a work
+list; both meshlet passes are indirect mesh-task draws over that list. The work list holds a
+few thousand groups instead of 145 k, and the passes went from 0.46 + 0.42 ms to
+0.06 + 0.02 ms (the cull pass itself: 0.02 ms). Same A/B results: 0 pixels against the
+previous LOD image, against brute force, and with the window off. The sky is now the largest
+item of the frame.
 
 ## The culling A/B check, and the two bugs it found (2026-09-24)
 
@@ -177,9 +187,8 @@ replaced by DLSS on NVIDIA).
 
 - Before the DAG almost every drawn triangle was smaller than a pixel (54 per pixel): a
   442 k-triangle rock 300 m away covers a few hundred pixels. The DAG draws that rock with a
-  few clusters of its coarse levels; the geometry passes went from 5.8 ms to 0.9 ms and what
-  is left in them is the task-shader walk over the cluster slots, not rasterisation (the
-  cluster hierarchy is the next step).
+  few clusters of its coarse levels, and the instance cull pass hands the task shader only
+  the groups that can matter: the geometry passes went from 5.8 ms to 0.13 ms.
 - With a static camera and TAA on, consecutive frames differed in ~1.4 % of the pixels by up
   to 41 levels at full detail: the temporal filter cannot settle on geometry that changes
   every jitter. With the DAG the far field is a few triangles per pixel, which the filter can
@@ -196,9 +205,9 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
 
 ## Next for the ballad
 
-1. Software rasteriser for the sub-pixel clusters and a cluster hierarchy in the task
-   shader (fewer, fatter task groups; the two passes are launch-bound at 145 k groups each);
-   streaming of cluster pages. Cluster LOD DAG: done (above).
+1. Cluster LOD DAG and the instance cull pass: done (above). Next in geometry: streaming of
+   cluster pages, the software rasteriser for the smallest clusters once triangle counts
+   rise again (a million-triangle city, not a rock field), the visibility buffer.
 2. HDR exposure and tonemapping, DLSS; a proper sun with ray-traced shadows on the RTX
    tiers; volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,

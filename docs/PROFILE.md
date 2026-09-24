@@ -14,37 +14,39 @@ in Tracy's GPU timeline next to the CPU zones.
 
 Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24.
 
-## `asteroids` — the ballad, after the cluster LOD DAG (frame 600, LOD 1 px, TAA on)
+## `asteroids` — the ballad, cluster LOD DAG + instance cull pass (frame 600, LOD 1 px, TAA on)
 
-Frame **1.12 ms** (893 fps), p50 1.09, p99 1.40. GPU zones sum to 1.10 ms; CPU main thread
-0.18 ms of work, the rest blocked on the GPU.
+Frame **0.35 ms** (2 829 fps), p50 0.34, p99 0.60. GPU zones sum to 0.34 ms; CPU main
+thread 0.16 ms of work (record 0.07, submit + present 0.10), now comparable to the GPU.
 
 | Subject | Zone | ms | share of GPU | Verdict |
 |---|---|---|---|---|
-| geometry | meshlet pass 1 (visible last frame) | 0.46 | 41 % | 8 k clusters, 0.62 M triangles drawn; the time is now the task-shader walk over 145 k groups of 32 cluster slots (4.6 M slots over 2 458 visible instances), most exiting on the per-level window. Next: a cluster hierarchy or fatter task groups so far instances cost a handful of groups, not hundreds (issue #4). |
-| geometry | meshlet pass 2 (newly visible) | 0.42 | 38 % | The same walk again to find what became visible; with the DAG it draws almost nothing (0 k) and is pure traversal. Same fix as pass 1; or test only clusters that pass 1 skipped. |
-| geometry | depth pyramid | 0.02 | 2 % | Negligible; stays. |
-| sky | starfield + planet | 0.14 | 12 % | Unchanged in absolute terms, now the second item. Full-screen procedural noise; when the atmosphere arrives, render the far sky at lower resolution or into a cached cube. |
-| temporal | TAA (motion + resolve + blit) | 0.06 | 6 % | Cheap. DLSS replaces it on NVIDIA. |
-| app | overlay | 0.01 | 1 % | The profiler itself. |
-| cpu | wait for GPU (frame slot) | 0.91 | — | Still GPU-bound, at 900 fps. The main thread does 0.18 ms of work per frame. |
-| cpu | record / submit + present | 0.07 / 0.11 | — | Driver cost; a render thread hides it later. |
+| sky | starfield + planet | 0.13 | 39 % | **Now the largest item.** Full-screen procedural noise (three value-noise octaves, two star lattices of 27 cells, the planet) at every pixel every frame. Render the far sky into a cube map refreshed over several frames, or at half resolution with TAA; the atmosphere (issue #8) will replace this shader anyway. |
+| geometry | meshlet pass 1 (visible last frame) | 0.06 | 18 % | 6–8 k clusters, 0.5 M triangles: real work at last, and small. |
+| geometry | instance cull | 0.02 | 7 % | One thread per instance: frustum, per-level LOD window, work-list append. Replaces the launch-bound task-shader walk (0.45 ms per pass). |
+| geometry | depth pyramid | 0.02 | 6 % | Negligible; stays. |
+| geometry | meshlet pass 2 (newly visible) | 0.02 | 6 % | Almost nothing becomes newly visible per frame at 1 px. |
+| temporal | TAA (motion + resolve + blit) | 0.07 | 20 % | Second largest now. Resolve straight into the swapchain once the render graph exists (saves the blit); DLSS replaces it on NVIDIA. |
+| app | overlay | 0.01 | 3 % | The profiler itself. |
+| cpu | record / submit + present | 0.07 / 0.10 | — | At 2 800 fps the driver's submit and present are a third of the frame; a render thread and fewer, larger submissions fix that when it matters. |
+| cpu | wait for GPU (frame slot) | 0.16 | — | Still GPU-bound, barely. |
 
 Counters: 3000 asteroids, 195 M leaf triangles, 28 k clusters in the DAG tables, 4.6 M
-cluster slots; drawn 2 458 instances, 8 k meshlets, 0.62 M triangles, mean LOD level 6.3.
+cluster slots; drawn 2 458 instances, 8 k meshlets, 0.63 M triangles, mean LOD level 6.3.
 
-**Before the DAG (same frame, full detail):** GPU 5.5 ms, of which pass 1 4.6 ms and pass 2
-1.2 ms for 78 M sub-pixel triangles. The LOD removed 99.2 % of the triangles and 80 % of the
-frame; the sub-pixel problem (54 triangles per pixel) is gone.
+**The road here (same frame):** full detail 5.5 ms → DAG with the old dispatch 4.1 ms →
+exact task tables 1.09 ms → instance cull pass 0.34 ms. The geometry passes went from 5.8 ms
+to 0.13 ms, and the rendering is pixel-identical to brute force at every step of the A/B
+harness.
 
-**Priority list from these numbers:** (1) the task-shader walk (issue #4: cluster hierarchy /
-fatter groups; both passes are launch-bound at ~145 k groups), (2) the sky at 12 %, (3) the
-software rasteriser for the smallest clusters (issue #3) matters again only once the walk is
-cheap, (4) then lighting and the CPU simulation become the numbers to watch.
+**Priority list from these numbers:** (1) the sky at 39 % (cache it, or wait for the
+atmosphere pass and design that one cheap from the start), (2) TAA → DLSS and no blit,
+(3) the CPU submit/present path only when a real scene makes it visible, (4) geometry is
+done until triangle counts rise again (streaming and the software rasteriser then).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
-Frame **0.6 ms**, GPU 0.58 ms: 15 k meshlets, 1.09 M triangles (full detail: 325 k
+Frame **0.16 ms**, GPU 0.15 ms: 15 k meshlets, 1.09 M triangles (full detail: 325 k
 meshlets, 30 M triangles, 2.18 ms; without occlusion at full detail: 106 M at 6.30 ms).
 
 ## Not measured yet

@@ -134,9 +134,11 @@ public struct Frame
     public Instance* instances;
     public uint* stats;
     public uint* visibility;        // one bit per (instance, local meshlet): visible last frame
-    public uint* group_table;       // instance index of every task group
+    public uint* group_table;       // instance index of every task group (capacity: total_groups)
     public uint total_groups;
     public uint pad_end;
+    public uint2* work;             // (instance, local group) per task group, built by `cull_main`
+    public uint* indirect;          // VkDrawMeshTasksIndirectCommandEXT: x = work count, y = z = 1
 };
 
 struct Push
@@ -328,19 +330,18 @@ void task_main(uint thread : SV_GroupThreadID, uint group : SV_GroupID)
 
     bool draw = false;
     bool instance_visible = false;
-    bool first_group = false;
     bool occluded = false;
     bool culled_debug = false; // FLAG_SHOW_CULLED: this meshlet would have been culled
     uint meshlet_index = 0;
     uint instance_index = 0;
     if (group < f[0].total_groups)
     {
-        instance_index = f[0].group_table[group];
+        uint2 item = f[0].work[group]; // written by cull_main: (instance, local group)
+        instance_index = item.x;
+        uint local_group = item.y;
         Instance* inst = f[0].instances + instance_index;
         Mesh* mesh = f[0].meshes + inst[0].mesh;
-        uint local_group = group - inst[0].group_offset;
         uint local_meshlet = local_group * TASK_GROUP_SIZE + thread;
-        first_group = local_group == 0;
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
         bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
         instance_visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
@@ -426,10 +427,70 @@ void task_main(uint thread : SV_GroupThreadID, uint group : SV_GroupID)
             InterlockedAdd(f[0].stats[pass == PASS_REMAINDER ? STAT_MESHLETS_PASS2 : STAT_MESHLETS_PASS1], draw_count);
         if (occluded_count > 0)
             InterlockedAdd(f[0].stats[STAT_OCCLUDED], occluded_count);
-        if (instance_visible && first_group && pass != PASS_REMAINDER)
-            InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], 1);
     }
     DispatchMesh(draw_count, 1, 1, s_payload);
+}
+
+// ------------------------------------------------------------- cull stage ---
+
+// Whether any cluster of LOD level `l` of the mesh can be selected for this instance: the
+// same bounds as `group_possible`, evaluated per level from the instance's distance.
+bool level_possible(Frame* f, Mesh* mesh, uint l, float scale, float dist)
+{
+    float k = f[0].p11 * 0.5 * f[0].viewport_height;
+    float t = f[0].lod_threshold;
+    float self_far = dist + mesh[0].self_reach_max[l] * scale;
+    float parent_near = max(dist - mesh[0].parent_reach_max[l] * scale, f[0].znear);
+    float self_min_px = mesh[0].self_error_min[l] * scale * k / self_far;
+    float parent_max_px = mesh[0].parent_error_max[l] * scale * k / parent_near;
+    return self_min_px <= t && parent_max_px > t;
+}
+
+// One thread per instance: frustum-cull the instance, find the LOD levels that can hold
+// selected clusters at its distance, and append the task groups covering those levels to
+// the work list. `indirect[0]` counts them and is the x of the indirect mesh-task draws;
+// each group is appended at most once, so the list never exceeds `total_groups`.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cull_main(uint3 id : SV_DispatchThreadID)
+{
+    Frame* f = push.frame;
+    uint instance_index = id.x;
+    if (instance_index >= f[0].instance_count)
+        return;
+    Instance* inst = f[0].instances + instance_index;
+    bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
+    if (frustum && !sphere_in_frustum(f, inst[0].center, inst[0].radius))
+        return;
+    InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], 1);
+    Mesh* mesh = f[0].meshes + inst[0].mesh;
+    float scale = length(inst[0].model[0].xyz);
+    float dist = length(inst[0].center - f[0].camera_pos);
+    uint groups = (mesh[0].meshlet_count + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
+    bool all = (f[0].flags & FLAG_GROUP_WINDOW_OFF) != 0;
+    bool lod = (f[0].flags & FLAG_LOD) != 0;
+    uint level_count = max(mesh[0].level_count, 1u);
+    uint next_group = 0; // groups come out in increasing order, each at most once
+    for (uint l = 0; l < level_count; l++)
+    {
+        uint begin = mesh[0].level_offset[l];
+        uint end = mesh[0].level_offset[l + 1];
+        if (end <= begin)
+            continue;
+        bool possible = all || (lod ? level_possible(f, mesh, l, scale, dist) : (l == 0));
+        if (!possible)
+            continue;
+        uint first = max(begin / TASK_GROUP_SIZE, next_group);
+        uint last = min((end - 1) / TASK_GROUP_SIZE, groups - 1);
+        for (uint g = first; g <= last; g++)
+        {
+            uint slot;
+            InterlockedAdd(f[0].indirect[0], 1, slot);
+            if (slot < f[0].total_groups)
+                f[0].work[slot] = uint2(instance_index, g);
+        }
+        next_group = last + 1;
+    }
 }
 
 // ---------------------------------------------------------------- mesh stage ---

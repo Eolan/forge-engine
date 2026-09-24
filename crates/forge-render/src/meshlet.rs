@@ -133,6 +133,8 @@ struct GpuFrame {
     group_table: u64,
     total_groups: u32,
     pad_end: u32,
+    work: u64,
+    indirect: u64,
 }
 
 #[repr(C)]
@@ -310,6 +312,26 @@ impl MeshletSceneBuilder {
                 usage,
                 "task group table",
             )?,
+            work: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device.create_buffer(BufferDesc {
+                        size: u64::from(self.group_table.len() as u32) * 8,
+                        usage,
+                        location: MemoryLocation::GpuOnly,
+                        name: &format!("task work list {i}"),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+            indirect: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device.create_buffer(BufferDesc {
+                        size: 16,
+                        usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                        location: MemoryLocation::CpuToGpu,
+                        name: &format!("task indirect {i}"),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
             instance_count: self.instances.len() as u32,
             total_groups: self.group_table.len() as u32,
             total_bits: self.total_bits,
@@ -331,6 +353,10 @@ pub struct MeshletScene {
     instances: Buffer,
     visibility: Buffer,
     group_table: Buffer,
+    /// Per frame slot: the task-group work list built by the cull pass.
+    work: Vec<Buffer>,
+    /// Per frame slot: the indirect mesh-task command (x = work count).
+    indirect: Vec<Buffer>,
     /// Instances.
     pub instance_count: u32,
     /// Task groups per pass (every instance's clusters in groups of 32).
@@ -488,6 +514,7 @@ pub struct MeshletRenderer {
     pipeline_solid: Pipeline,
     pipeline_wire: Pipeline,
     pipeline_hzb: Pipeline,
+    pipeline_cull: Pipeline,
     depth: DepthResources,
     frame_buffers: Vec<Buffer>,
     stats_buffers: Vec<Buffer>,
@@ -545,6 +572,10 @@ impl MeshletRenderer {
             &shaders.compile("hzb.slang", "hzb_main", ShaderStage::Compute)?,
             "hzb",
         )?;
+        let cull = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "cull_main", ShaderStage::Compute)?,
+            "instance cull",
+        )?;
         let make_pipeline = |wireframe: bool| {
             device.create_mesh_pipeline(&MeshPipelineDesc {
                 task: Some((task, "task_main")),
@@ -570,7 +601,12 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<HzbPush>() as u32,
             name: "hzb build",
         })?;
-        for module in [task, mesh, frag, hzb] {
+        let pipeline_cull = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (cull, "cull_main"),
+            push_constant_bytes: std::mem::size_of::<Push>() as u32,
+            name: "instance cull + LOD window",
+        })?;
+        for module in [task, mesh, frag, hzb, cull] {
             device.destroy_shader_module(module);
         }
         let depth = DepthResources::new(device, extent)?;
@@ -601,6 +637,7 @@ impl MeshletRenderer {
             pipeline_solid,
             pipeline_wire,
             pipeline_hzb,
+            pipeline_cull,
             depth,
             frame_buffers,
             stats_buffers,
@@ -674,6 +711,8 @@ impl MeshletRenderer {
             group_table: scene.group_table.address(),
             total_groups: scene.total_groups,
             pad_end: 0,
+            work: scene.work[slot.index].address(),
+            indirect: scene.indirect[slot.index].address(),
         }
     }
 
@@ -772,7 +811,6 @@ impl MeshletRenderer {
             &self.pipeline_solid
         };
         let frame_address = self.frame_buffers[slot.index].address();
-        let task_groups = params.scene.total_groups;
 
         // Visibility bits written by the previous frame must be visible to this frame's task shader.
         commands.memory_barrier(
@@ -781,6 +819,24 @@ impl MeshletRenderer {
             vk::PipelineStageFlags2::TASK_SHADER_EXT,
             vk::AccessFlags2::SHADER_STORAGE_READ,
         );
+        // Instance culling and LOD level windows in compute: the task-group work list and the
+        // indirect command of both passes (x = group count, reset here every frame).
+        params.scene.indirect[slot.index].write(0, &[0_u32, 1, 1, 0]);
+        commands.bind_pipeline(&self.pipeline_cull);
+        commands.push_constants(
+            &self.pipeline_cull,
+            &Push {
+                frame: frame_address,
+            },
+        );
+        commands.dispatch(params.scene.instance_count.div_ceil(64).max(1), 1, 1);
+        commands.memory_barrier(
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_STORAGE_WRITE,
+            vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::TASK_SHADER_EXT,
+            vk::AccessFlags2::INDIRECT_COMMAND_READ | vk::AccessFlags2::SHADER_STORAGE_READ,
+        );
+        commands.mark("geometry/instance cull");
         // The previous frame may have sampled the depth (pyramid build, TAA): wait for everything.
         commands.image_barriers(&[depth_barrier()
             .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
@@ -799,9 +855,7 @@ impl MeshletRenderer {
                 frame: frame_address,
             },
         );
-        if task_groups > 0 {
-            commands.draw_mesh_tasks(task_groups, 1, 1)?;
-        }
+        commands.draw_mesh_tasks_indirect(&params.scene.indirect[slot.index], 0)?;
         commands.end_rendering();
         commands.mark(if occlusion {
             "geometry/meshlet pass 1 (visible last frame)"
@@ -864,9 +918,7 @@ impl MeshletRenderer {
                     frame: frame_address + FRAME_BLOCK_STRIDE,
                 },
             );
-            if task_groups > 0 {
-                commands.draw_mesh_tasks(task_groups, 1, 1)?;
-            }
+            commands.draw_mesh_tasks_indirect(&params.scene.indirect[slot.index], 0)?;
             commands.end_rendering();
             commands.mark("geometry/meshlet pass 2 (newly visible)");
         }

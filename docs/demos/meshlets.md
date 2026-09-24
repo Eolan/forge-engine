@@ -10,9 +10,10 @@ culling (move the camera to see what was culled), **C** cone culling, **V** frus
 the swapchain without anti-aliasing on purpose: it measures culling, not looks; the
 `asteroids` demo is where TAA and the sky live.
 
-With the cluster LOD DAG (2026-09-24, see [asteroids.md](asteroids.md)) the static view
-draws 15 k meshlets and 1.09 M triangles in **0.58 ms** at a 1 px threshold; the numbers
-below are the full-detail (`--no-lod`) figures that measure culling alone.
+With the cluster LOD DAG and the instance cull pass (2026-09-24, see
+[asteroids.md](asteroids.md)) the static view draws 15 k meshlets and 1.09 M triangles in
+**0.15 ms** at a 1 px threshold; the numbers below are the full-detail (`--no-lod`) figures
+that measure culling alone.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 Research behind it: [research/gpu-geometry.md](../research/gpu-geometry.md).
 

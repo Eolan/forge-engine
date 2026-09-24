@@ -344,3 +344,12 @@ instance's distance and exit before reading a cluster. Ballad: 78 M → 0.62 M t
 5.5 → 1.09 ms; bench 2.18 → 0.58 ms; every A/B (occlusion vs brute force, window on vs off,
 LOD off vs the pre-DAG image) at 0 pixels. What remains in the geometry passes is the
 task-shader walk itself (145 k groups per pass), which is the cluster-hierarchy work.
+
+**Instance cull pass (issue #4, same day).** With exact tables the two meshlet passes were
+still launch-bound: 145 k task groups each, 0.45 ms apiece whatever was drawn. A compute pass
+with one thread per instance (frustum test, the per-level LOD window evaluated once per
+level, task groups of the possible levels appended to a work list through an atomic counter
+that is also the `x` of the indirect mesh-task command) leaves a few thousand groups per
+pass; both passes draw `vkCmdDrawMeshTasksIndirectEXT` over that list. Geometry passes:
+0.46 + 0.42 ms → 0.06 + 0.02 ms, cull pass 0.02 ms; ballad frame 0.34 ms at 1 px. This is
+the GPU-driven shape the fallback path (compute culling + indirect count draws) will share.
