@@ -1,9 +1,14 @@
 # Forge — How work flows
 
-GitHub is the system of record: every piece of work is an issue, every change is a pull
-request reviewed before it reaches `main`, every Claude Code session handles one issue in its
-own worktree. The owner steers through issues, labels and reviews; the sessions are
+GitHub is the system of record: every piece of work is an issue; every Claude Code session
+handles one issue. The owner steers through issues, labels and reviews; the sessions are
 autonomous inside an issue.
+
+**Current mode (2026-09-24): local `main`.** No branches or pull requests yet: sessions
+commit on `main` locally and push when a step is working (a demo shows it, verification
+passes). Reviews happen on the owner's machine and in the session's report. The
+branch-and-PR flow below is the target and switches on when the owner says so (branch
+protection needs GitHub Pro or a public repository, issue #16).
 
 ## Issues
 
@@ -18,7 +23,8 @@ autonomous inside an issue.
   which numbers, which docs) and the decision(s) it depends on. Sessions refuse issues that
   build on an untaken decision and ask for it instead.
 
-## A session's life
+## A session's life (target flow; in local mode steps 1 and 5–6 collapse to "commit on
+## `main`, push when working, report")
 
 1. Pick the issue (assigned or the top ready one of the milestone). Start a session in a
    worktree: `claude --worktree task-<n>` (or the desktop app's worktree option). The
