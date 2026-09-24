@@ -1319,7 +1319,9 @@ impl RenderGraph {
             let desc = placed.desc.image_desc();
             let image = match &heap {
                 Some(heap) => self.device.create_image_in(desc, heap, placed.offset)?,
-                None => self.device.create_image(desc)?,
+                None => self
+                    .device
+                    .allocate_image(&desc, crate::memory_report::MemoryCategory::Transient)?,
             };
             images.push(GraphImage::wrap(
                 &self.device,

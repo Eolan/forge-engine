@@ -21,6 +21,7 @@ mod frame;
 pub mod graph;
 mod instance;
 mod memory;
+mod memory_report;
 mod pipeline;
 mod shader;
 #[cfg(all(feature = "dlss", windows))]
@@ -46,6 +47,7 @@ pub use graph::{
 };
 pub use instance::{Instance, Surface};
 pub use memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};
+pub use memory_report::{BUDGET_WARNING, HeapReport, MemoryCategory, MemoryReport};
 pub use pipeline::{ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline};
 pub use shader::{ShaderCompiler, ShaderStage};
 pub use swapchain::Swapchain;

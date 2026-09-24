@@ -20,8 +20,8 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FrameSlot,
-    GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryLocation, Pipeline, Result,
-    ShaderCompiler, ShaderStage, vk,
+    GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory, MemoryLocation, Pipeline,
+    Result, ShaderCompiler, ShaderStage, vk,
 };
 use glam::Vec3;
 
@@ -258,6 +258,7 @@ impl Atmosphere {
                     size: std::mem::size_of::<GpuPlanet>() as u64,
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                     location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
                     name: &format!("planet {i}"),
                 })
             })

@@ -90,12 +90,60 @@ memory; 15 k meshlets, 1.09 M triangles (full detail, measured before the visibi
 buffer: 325 k meshlets, 30 M triangles, 2.18 ms; without occlusion at full detail: 106 M at
 6.30 ms).
 
+## Memory — both demos (the overlay's memory group, issue #9)
+
+The group reads `VK_EXT_memory_budget` four times per second and on every captured frame
+(the query costs 8–10 µs, 3 % of this CPU frame if it ran every frame): each heap's usage
+for the whole process against the budget the OS gives it. It also shows the engine's own
+allocations by category, what the process holds outside the allocator, the allocator's
+blocks, and the host's writes to and reads from GPU-visible memory per frame. The exit log
+prints the same numbers, with the traffic averaged over the run (`memory: …`). MiB
+throughout; the overlay's graph counter line stays in MB.
+
+| | asteroids | meshlets | asteroids, Streamline build: TAA | DLAA | DLSS Quality | DLSS Performance |
+|---|---|---|---|---|---|---|
+| VRAM used by the process (budget 14.87 GiB) | **357 MiB** (2.3 %) | **357 MiB** | 419 | 616 | 616 | 572 |
+| system RAM used by the process | 77 MiB | 13 | | | | |
+| allocated by the engine | 107.7 MiB | 43.5 | 120.2 | 120.2 | 91.1 | 80.7 |
+| — geometry | 35.5 | 3.7 | 35.5 | 35.5 | 35.5 | 35.5 |
+| — render targets | 27.8 | 2.7 | 40.3 | 40.3 | 25.8 | 19.6 |
+| — transient heap | 25.0 | 18.8 | 25.0 | 25.0 | 10.5 | 6.3 |
+| — GPU work buffers | 18.8 | 17.8 | 18.8 | 18.8 | 18.8 | 18.8 |
+| — per-frame data, textures, staging + readback | 0.5, 0.03, 0.00 | 0.5, 0.03, 0.00 | | | | |
+| allocator blocks | 384 MiB (28 % used) | 320 (14 %) | 384 | 384 | 384 | 384 |
+| outside the allocator | 50 MiB | 50 | 161 | 364 | 364 | 316 |
+| uploads per frame, overlay off (full overlay) | 1.11 KiB (32.2) | 1.00 KiB (32.1) | 1.11 | 1.11 | 1.11 | 1.11 |
+| read back per frame | 1.03 KiB | 0.03 KiB | 1.03 | 1.03 | 1.03 | 1.03 |
+
+1200-frame scripted runs, exit log; the meshlets bench and the TAA build with the overlay
+off. **Verdicts:**
+
+1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
+   reserves 256 MiB device blocks and 64 MiB host-visible ones. Each demo holds one of each
+   in VRAM (per-frame data sits in Resizable BAR memory, so its block is device-local too),
+   plus a 64 MiB system-memory block when something reads back. The meshlets bench's 43 MiB
+   and the ballad's 108 MiB both come to 357 MiB. That is harmless on a 16 GB card. The
+   in-house TLSF layer of D-018 sizes its pools to what is resident when streaming arrives
+   (Phase 9).
+2. **Outside the allocator: 50 MiB.** The three 1600×900 swapchain images are 16.5 MiB, the
+   rest is the driver. Loading Streamline adds 111 MiB even while the TAA runs. The DLSS
+   feature adds 203 MiB at a 1600×900 output (DLAA and Quality alike) and 155 MiB in
+   Performance mode. The upscaler's output image (12.5 MiB of render targets) is allocated
+   at start-up, even when the TAA is selected; creating it on the first switch would save
+   that in the default mode.
+3. **Traffic is negligible.** The renderer writes 1.1 KiB per frame: camera blocks, indirect
+   arguments and statistics reset, the planet. The full overlay adds 31 KiB, because it
+   rewrites its whole cell grid every frame (90 MiB/s at 2 900 fps). The ballad reads back
+   1 KiB per frame (the exposure histogram and the meshlet statistics). The counters are
+   there for streaming, whose budget is 64 MB per frame (D-018).
+4. **The warning.** With `FORGE_VRAM_BUDGET_MB=390`, the ballad's 359 MiB is 92 % of the
+   budget: the VRAM heap line and its bar turn red (capture in
+   [asteroids.md](demos/asteroids.md)).
+
 ## Not measured yet
 
-- **Memory**: VRAM residency and per-heap budgets (`VK_EXT_memory_budget`), upload bandwidth,
-  streaming queue depth — arrive with the memory/streaming work (D-018) as an overlay group
-  (issue #9). The render graph's transient heap (images, requested vs allocated bytes,
-  rebuilds, pending destructions) is already a counter line.
+- **Streaming**: residency pools, request queue depth, drive and decompression throughput.
+  These arrive with the streaming work (D-018, Phase 9) as lines of the memory group.
 - **Job system**: worker occupancy per frame — arrives with the simulation phase (Tracy shows
   it already under `--features profiling`).
 - **Presentation latency**: the time from submit to scan-out — once the render thread exists.

@@ -15,8 +15,8 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FullscreenPipelineDesc, GraphImage,
-    ImageAccess, ImageDesc, ImageHandle, MemoryLocation, Pipeline, Result, ShaderCompiler,
-    ShaderStage, vk,
+    ImageAccess, ImageDesc, ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result,
+    ShaderCompiler, ShaderStage, vk,
 };
 
 /// Cells per slot buffer: enough for 4K at 8×16 (480 × 135).
@@ -144,6 +144,35 @@ impl Canvas {
     }
 }
 
+#[cfg(test)]
+impl Canvas {
+    /// A blank canvas of `cols` × `rows` cells.
+    pub(crate) fn blank(cols: usize, rows: usize) -> Self {
+        let mut canvas = Self::new();
+        canvas.reset(cols, rows);
+        canvas
+    }
+
+    /// The text of `row` (bars and empty cells as spaces) and the colour of its first
+    /// character.
+    pub(crate) fn row_text(&self, row: usize) -> (String, Option<u32>) {
+        let cells = &self.cells[row * self.cols..(row + 1) * self.cols];
+        let glyph = |cell: u32| cell & 0xFF;
+        let text = cells
+            .iter()
+            .map(|&cell| match glyph(cell) {
+                g @ 33..127 => char::from(g as u8),
+                _ => ' ',
+            })
+            .collect::<String>();
+        let first = cells
+            .iter()
+            .find(|&&cell| (33..127).contains(&glyph(cell)))
+            .map(|cell| (cell >> 8) & 0xF);
+        (text.trim_end().to_owned(), first)
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Push {
@@ -225,6 +254,7 @@ impl Overlay {
                     size: (MAX_CELLS * 4) as u64,
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                     location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
                     name: &format!("overlay cells {i}"),
                 })
             })

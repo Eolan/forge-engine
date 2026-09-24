@@ -19,8 +19,8 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FrameSlot,
-    GraphBuffer, ImageAccess, ImageHandle, MemoryLocation, Pipeline, Result, ShaderCompiler,
-    ShaderStage, vk,
+    GraphBuffer, ImageAccess, ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result,
+    ShaderCompiler, ShaderStage, vk,
 };
 
 /// Bins of the histogram (must match `exposure.slang`).
@@ -241,6 +241,7 @@ impl LuminanceMeter {
                 | vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST,
             location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
             name: "luminance histogram",
         })?);
         let readback = (0..FRAMES_IN_FLIGHT)
@@ -249,6 +250,7 @@ impl LuminanceMeter {
                     size: HISTOGRAM_BYTES,
                     usage: vk::BufferUsageFlags::TRANSFER_DST,
                     location: MemoryLocation::GpuToCpu,
+                    category: MemoryCategory::Transfer,
                     name: &format!("luminance histogram readback {i}"),
                 })?))
             })

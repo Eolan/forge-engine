@@ -25,12 +25,12 @@ pub use forge_gpu::TransientDesc;
 pub use forge_gpu::vk;
 use forge_gpu::{
     Buffer, BufferDesc, Commands, Device, FrameGraph, FrameSlot, Frames, GraphStats, ImageAccess,
-    ImageHandle, Instance, MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler,
-    Surface, Swapchain,
+    ImageHandle, Instance, MemoryCategory, MemoryLocation, RawImage, RenderGraph, ResourceState,
+    ShaderCompiler, Surface, Swapchain,
 };
 pub use input::Input;
 pub use overlay::{Canvas, Color, Overlay};
-pub use profile::{OverlayMode, Profile};
+pub use profile::{MemorySample, OverlayMode, Profile};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -193,8 +193,12 @@ pub fn run<D: Demo>(
         error: None,
     };
     event_loop.run_app(&mut app)?;
-    if let Some(state) = app.state.take() {
+    if let Some(mut state) = app.state.take() {
         let frames = state.ctx.frames_rendered;
+        state.sample_memory();
+        if let Some(memory) = state.ctx.profile.memory() {
+            tracing::info!("memory: {}", memory.summary());
+        }
         drop(state);
         tracing::info!(frames, "exited cleanly");
     }
@@ -253,13 +257,73 @@ struct State<D: Demo> {
     overlay: Overlay,
     /// The render graph's counters of the previous frame (shown in the overlay).
     graph_stats: GraphStats,
+    /// When the memory counters were last sampled, and the traffic totals then.
+    memory_mark: Option<MemoryMark>,
+    /// The first sample (the first frame, after the demo's start-up uploads): the exit log
+    /// averages the traffic over the run from it.
+    memory_start: Option<MemoryMark>,
     #[cfg(feature = "profiling")]
     tracy_gpu: Option<tracy_client::GpuContext>,
 }
 
+/// Traffic totals at one moment, to turn the device's running totals into rates.
+#[derive(Clone, Copy)]
+struct MemoryMark {
+    at: Instant,
+    frame: u64,
+    uploaded: u64,
+    read_back: u64,
+}
+
+/// How often the overlay's memory counters are refreshed: the budget query goes through the
+/// driver to the OS.
+const MEMORY_SAMPLE_PERIOD: Duration = Duration::from_millis(250);
+
 type InitFn<D> = Box<dyn FnOnce(&mut Context) -> Result<D>>;
 
 impl<D: Demo> State<D> {
+    /// Refreshes the memory counters: the device's report, and the traffic per frame and per
+    /// second since `since` (the previous sample by default).
+    fn sample_memory_since(&mut self, since: Option<MemoryMark>) {
+        let report = self.ctx.device.memory_report();
+        let mark = MemoryMark {
+            at: Instant::now(),
+            frame: self.ctx.frames_rendered,
+            uploaded: report.uploaded,
+            read_back: report.read_back,
+        };
+        let (uploaded_per_frame, uploaded_per_second, read_back_per_frame) = match since {
+            Some(since) => {
+                let frames = mark.frame.saturating_sub(since.frame).max(1) as f64;
+                let seconds = (mark.at - since.at).as_secs_f64().max(1e-6);
+                let uploaded = mark.uploaded.saturating_sub(since.uploaded) as f64;
+                let read_back = mark.read_back.saturating_sub(since.read_back) as f64;
+                (uploaded / frames, uploaded / seconds, read_back / frames)
+            }
+            None => (0.0, 0.0, 0.0),
+        };
+        #[cfg(feature = "profiling")]
+        {
+            if let Some((usage, _)) = report.device_local() {
+                tracy_client::plot!("VRAM MiB", usage as f64 / f64::from(1 << 20));
+            }
+            tracy_client::plot!("upload KiB per frame", uploaded_per_frame / 1024.0);
+        }
+        self.ctx.profile.set_memory(MemorySample {
+            report,
+            uploaded_per_frame,
+            uploaded_per_second,
+            read_back_per_frame,
+        });
+        self.memory_start.get_or_insert(mark);
+        self.memory_mark = Some(mark);
+    }
+
+    /// Samples the memory with the traffic averaged over the whole run (the exit log).
+    fn sample_memory(&mut self) {
+        self.sample_memory_since(self.memory_start);
+    }
+
     fn new(window: Arc<Window>, config: AppConfig, init: InitFn<D>) -> Result<Self> {
         let display = window.display_handle()?.as_raw();
         let window_handle = window.window_handle()?.as_raw();
@@ -349,6 +413,8 @@ impl<D: Demo> State<D> {
                 .unwrap_or(0),
             overlay,
             graph_stats: GraphStats::default(),
+            memory_mark: None,
+            memory_start: None,
             #[cfg(feature = "profiling")]
             tracy_gpu: None,
         })
@@ -482,12 +548,22 @@ impl<D: Demo> State<D> {
             }
             _ => None,
         };
+        // Four times per second, and on a captured frame so that a scripted capture shows
+        // current counters however fast the frames went by.
+        if capture_path.is_some()
+            || self
+                .memory_mark
+                .is_none_or(|mark| mark.at.elapsed() >= MEMORY_SAMPLE_PERIOD)
+        {
+            self.sample_memory_since(self.memory_mark);
+        }
         let capture = capture_path
             .map(|path| {
                 let buffer = self.ctx.device.create_buffer(BufferDesc {
                     size: u64::from(extent.width) * u64::from(extent.height) * 4,
                     usage: vk::BufferUsageFlags::TRANSFER_DST,
                     location: MemoryLocation::GpuToCpu,
+                    category: MemoryCategory::Transfer,
                     name: "capture",
                 })?;
                 Ok::<_, forge_gpu::GpuError>((path, buffer))

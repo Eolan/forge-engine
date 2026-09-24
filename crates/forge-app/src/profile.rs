@@ -1,9 +1,10 @@
 //! The frame profile shown by the overlay: named CPU and GPU zones per frame, smoothed and
-//! grouped by subject (`group/name` labels), plus counters the demo reports.
+//! grouped by subject (`group/name` labels), the device's memory (issue #9) and counters the
+//! demo reports.
 
 use std::collections::VecDeque;
 
-use forge_gpu::{GpuZone, vk};
+use forge_gpu::{BUDGET_WARNING, GpuZone, MemoryCategory, MemoryReport, vk};
 
 use crate::overlay::{Canvas, Color};
 
@@ -12,6 +13,10 @@ const HISTORY: usize = 240;
 const SMOOTHING: f64 = 0.08;
 const NAME_COLUMNS: usize = 32;
 const BAR_CELLS: usize = 16;
+/// The fold group of the memory counters, after the timing groups.
+const MEMORY_GROUP: &str = "memory";
+const MIB: f64 = (1 << 20) as f64;
+const GIB: f64 = (1 << 30) as f64;
 
 /// How much of the profile the overlay shows (F1 cycles through these).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +27,57 @@ pub enum OverlayMode {
     Compact,
     /// Every zone and the counters; a digit key folds that group.
     Full,
+}
+
+/// The memory counters: the device's report and the traffic measured since the previous one.
+#[derive(Clone, Debug)]
+pub struct MemorySample {
+    /// The device's report.
+    pub report: MemoryReport,
+    /// Host bytes written into GPU-visible memory per frame, averaged since the previous
+    /// sample.
+    pub uploaded_per_frame: f64,
+    /// The same per second.
+    pub uploaded_per_second: f64,
+    /// Host bytes read back from GPU-visible memory per frame.
+    pub read_back_per_frame: f64,
+}
+
+impl MemorySample {
+    /// One line for logs: VRAM against the budget, the categories, the traffic.
+    pub fn summary(&self) -> String {
+        let report = &self.report;
+        let mut line = match report.device_local() {
+            Some((usage, budget)) => format!(
+                "VRAM {:.1} of {:.1} MiB ({:.1}%)",
+                usage as f64 / MIB,
+                budget as f64 / MIB,
+                100.0 * usage as f64 / budget.max(1) as f64
+            ),
+            None => "VRAM usage unknown (no VK_EXT_memory_budget)".to_owned(),
+        };
+        line += &format!(
+            "; allocated {:.2} MiB in {:.1} MiB of blocks:",
+            report.total_allocated() as f64 / MIB,
+            report.reserved as f64 / MIB
+        );
+        for category in MemoryCategory::ALL {
+            line += &format!(
+                " {} {:.2},",
+                category.name(),
+                report.allocated(category) as f64 / MIB
+            );
+        }
+        if let Some(outside) = report.outside_allocator() {
+            line += &format!(" outside the allocator {:.1} MiB", outside as f64 / MIB);
+        }
+        line + &format!(
+            "; uploads {:.2} KiB/frame ({:.2} MiB/s), read back {:.2} KiB/frame",
+            self.uploaded_per_frame / 1024.0,
+            self.uploaded_per_second / MIB,
+            self.read_back_per_frame / 1024.0
+        )
+    }
 }
 
 struct Zone {
@@ -38,6 +94,7 @@ pub struct Profile {
     gpu: Vec<Zone>,
     cpu: Vec<Zone>,
     counters: Vec<String>,
+    memory: Option<MemorySample>,
     /// Groups whose fold state the digit keys flipped from the mode's default.
     toggled: Vec<String>,
 }
@@ -50,8 +107,18 @@ impl Profile {
             gpu: Vec::new(),
             cpu: Vec::new(),
             counters: Vec::new(),
+            memory: None,
             toggled: Vec::new(),
         }
+    }
+
+    /// The latest memory counters (refreshed four times per second).
+    pub fn memory(&self) -> Option<&MemorySample> {
+        self.memory.as_ref()
+    }
+
+    pub(crate) fn set_memory(&mut self, sample: MemorySample) {
+        self.memory = Some(sample);
     }
 
     /// Whether anything is drawn.
@@ -125,7 +192,7 @@ impl Profile {
         }
     }
 
-    /// Group names in display order: GPU groups by first appearance, then the CPU loop.
+    /// Group names in display order: GPU groups by first appearance, the CPU loop, memory.
     fn groups(&self) -> Vec<String> {
         let mut groups: Vec<String> = Vec::new();
         for zone in self.gpu.iter().chain(self.cpu.iter()) {
@@ -133,6 +200,9 @@ impl Profile {
             if !groups.contains(&group) {
                 groups.push(group);
             }
+        }
+        if self.memory.is_some() {
+            groups.push(MEMORY_GROUP.to_owned());
         }
         groups
     }
@@ -159,7 +229,7 @@ impl Profile {
         let show_counters = self.mode == OverlayMode::Full && !self.counters.is_empty();
         // Count the rows first so the panel fits.
         let mut rows = 3;
-        for group in &groups {
+        for group in groups.iter().filter(|g| *g != MEMORY_GROUP) {
             rows += 1;
             if !self.folded(group) {
                 rows += self.zones_in(group).count();
@@ -169,6 +239,14 @@ impl Profile {
             rows += 1 + self.counters.len();
         }
         rows += 1;
+        // The memory group goes under the timings, or beside them when it would push the
+        // counters off the bottom and the screen is wide enough.
+        let memory_rows = self.memory_group_rows();
+        let beside =
+            memory_rows > 0 && rows + memory_rows > canvas.rows() && canvas.cols() > 2 * width;
+        if !beside {
+            rows += memory_rows;
+        }
         canvas.panel(0, 0, width, rows.min(canvas.rows()), Color::Panel);
         canvas.panel(0, 0, width, 2, Color::Header);
 
@@ -190,6 +268,16 @@ impl Profile {
 
         let mut row = 3;
         for (index, group) in groups.iter().enumerate() {
+            if group == MEMORY_GROUP {
+                if beside {
+                    let col = width + 1;
+                    canvas.panel(col, 2, width, memory_rows + 2, Color::Panel);
+                    self.layout_memory(canvas, col + 1, 3, index);
+                } else {
+                    row = self.layout_memory(canvas, 1, row, index);
+                }
+                continue;
+            }
             let is_cpu = group == "cpu";
             let total: f64 = self
                 .zones_in(group)
@@ -265,6 +353,125 @@ impl Profile {
         }
     }
 
+    /// Lines of the unfolded memory group: the heaps, the categories, the memory outside the
+    /// allocator, its blocks and the traffic.
+    fn memory_rows(&self) -> usize {
+        self.memory
+            .as_ref()
+            .map_or(0, |m| m.report.heaps.len() + MemoryCategory::COUNT + 4)
+    }
+
+    /// Rows of the memory group with its heading (0 without a sample).
+    fn memory_group_rows(&self) -> usize {
+        match self.memory {
+            Some(_) if self.folded(MEMORY_GROUP) => 1,
+            Some(_) => 1 + self.memory_rows(),
+            None => 0,
+        }
+    }
+
+    /// Draws the memory group, the `index`-th, from `col` and `row`; returns the row after it.
+    fn layout_memory(
+        &self,
+        canvas: &mut Canvas,
+        col: usize,
+        mut row: usize,
+        index: usize,
+    ) -> usize {
+        let Some(sample) = &self.memory else {
+            return row;
+        };
+        let bars = col - 1 + NAME_COLUMNS + 18;
+        let report = &sample.report;
+        let (value, share) = match report.device_local() {
+            Some((usage, budget)) => (usage, Some(usage as f64 / budget.max(1) as f64)),
+            None => (report.total_allocated(), None),
+        };
+        let folded = self.folded(MEMORY_GROUP);
+        let (value, unit) = size(value);
+        let heading = format!(
+            "{}{} {:<width$} {value:>6} {unit}{}",
+            if folded { "+" } else { "-" },
+            index + 1,
+            "MEMORY (VRAM, % OF BUDGET)",
+            percent(share),
+            width = NAME_COLUMNS - 4
+        );
+        let warning = share.is_some_and(|s| s >= BUDGET_WARNING);
+        let heading_color = if warning { Color::Red } else { Color::Yellow };
+        canvas.text(col, row, &heading, heading_color);
+        if let Some(share) = share {
+            let color = budget_heat(share);
+            canvas.bar(bars, row, BAR_CELLS, share as f32, color);
+        }
+        row += 1;
+        if folded {
+            return row;
+        }
+        for heap in &report.heaps {
+            let (budget, unit) = size(heap.budget);
+            let name = format!("{} of {budget} {unit}", heap.name());
+            let share = heap.usage.map(|u| u as f64 / heap.budget.max(1) as f64);
+            let warning = share.is_some_and(|s| s >= BUDGET_WARNING);
+            let line = memory_line(&name, heap.usage.map(size), &percent(share));
+            let color = if warning { Color::Red } else { Color::Grey };
+            canvas.text(col, row, &line, color);
+            if let Some(share) = share {
+                let color = budget_heat(share);
+                canvas.bar(bars, row, BAR_CELLS, share as f32, color);
+            }
+            row += 1;
+        }
+        let total = report.total_allocated().max(1) as f64;
+        for category in MemoryCategory::ALL {
+            let bytes = report.allocated(category);
+            let share = bytes as f64 / total;
+            let line = memory_line(category.name(), Some(size(bytes)), &percent(Some(share)));
+            canvas.text(col, row, &line, Color::Grey);
+            canvas.bar(bars, row, BAR_CELLS, share as f32, heat(share));
+            row += 1;
+        }
+        let outside = report.outside_allocator().map(size);
+        let filled = percent(Some(total / report.reserved.max(1) as f64));
+        let kib = |bytes: f64| (format!("{:.2}", bytes / 1024.0), "KiB");
+        let upload_rate = format!(" {:.2} MiB/s", sample.uploaded_per_second / MIB);
+        let lines = [
+            (
+                memory_line("driver, swapchain, others", outside, ""),
+                Color::Dim,
+            ),
+            (
+                memory_line(
+                    "allocator blocks, % used",
+                    Some(size(report.reserved)),
+                    &filled,
+                ),
+                Color::Dim,
+            ),
+            (
+                memory_line(
+                    "uploads per frame",
+                    Some(kib(sample.uploaded_per_frame)),
+                    &upload_rate,
+                ),
+                Color::Grey,
+            ),
+            (
+                memory_line(
+                    "read back per frame",
+                    Some(kib(sample.read_back_per_frame)),
+                    "",
+                ),
+                Color::Grey,
+            ),
+        ];
+        for (line, color) in lines {
+            canvas.text(col, row, &line, color);
+            row += 1;
+        }
+        row
+    }
+
     fn zones_in<'a>(&'a self, group: &'a str) -> impl Iterator<Item = &'a Zone> + 'a {
         self.gpu
             .iter()
@@ -303,6 +510,44 @@ fn clip(text: &str, width: usize) -> String {
 
 fn name_of(label: &str) -> &str {
     label.split_once('/').map_or(label, |(_, name)| name)
+}
+
+/// A size in six characters or fewer with its unit: MiB, or GiB from 10 000 MiB.
+fn size(bytes: u64) -> (String, &'static str) {
+    let mib = bytes as f64 / MIB;
+    if mib >= 10_000.0 {
+        (format!("{:.2}", bytes as f64 / GIB), "GiB")
+    } else {
+        (format!("{mib:.1}"), "MiB")
+    }
+}
+
+/// A memory line whose percentage falls in the zone lines' column: the name, the value and
+/// its unit (`?` when unknown), a note.
+fn memory_line(name: &str, value: Option<(String, &str)>, note: &str) -> String {
+    let (value, unit) = value.unwrap_or_else(|| ("?".to_owned(), "MiB"));
+    format!(
+        "     {:<width$} {value:>6} {unit}{note}",
+        clip(name, NAME_COLUMNS - 5),
+        width = NAME_COLUMNS - 5
+    )
+}
+
+/// `"  42%"` (with the space before it), or blanks when there is nothing to divide by.
+fn percent(share: Option<f64>) -> String {
+    share.map_or_else(|| "     ".to_owned(), |s| format!(" {:3.0}%", 100.0 * s))
+}
+
+/// Bar colour of a share of a memory budget: warm from three quarters, the warning colour
+/// from [`BUDGET_WARNING`] (the 10 % reserve of D-018).
+fn budget_heat(share: f64) -> Color {
+    if share >= BUDGET_WARNING {
+        Color::Red
+    } else if share >= 0.75 {
+        Color::Orange
+    } else {
+        Color::Cyan
+    }
 }
 
 /// Bar colour by share of the reference: cool below a quarter, warm below a half, hot above.
@@ -354,5 +599,107 @@ mod tests {
         assert!(profile.folded("geometry"));
         profile.toggle_group(0);
         assert!(!profile.folded("geometry"));
+    }
+
+    fn sample(vram_usage: u64) -> MemorySample {
+        let heap = |index, device_local, usage, budget| forge_gpu::HeapReport {
+            index,
+            size: budget,
+            device_local,
+            host_visible: true,
+            usage: Some(usage),
+            budget,
+        };
+        let mut allocated = [0; MemoryCategory::COUNT];
+        allocated[0] = 300 << 20;
+        allocated[1] = 100 << 20;
+        MemorySample {
+            report: MemoryReport {
+                heaps: vec![
+                    heap(0, true, vram_usage, 16 << 30),
+                    heap(1, false, 64 << 20, 32 << 30),
+                ],
+                allocated,
+                reserved: 512 << 20,
+                uploaded: 0,
+                read_back: 0,
+            },
+            uploaded_per_frame: 2048.0,
+            uploaded_per_second: 2048.0 * 400.0,
+            read_back_per_frame: 64.0,
+        }
+    }
+
+    #[test]
+    fn memory_is_the_last_group_and_keeps_the_zone_columns() {
+        let mut profile = Profile::new(OverlayMode::Compact);
+        profile.cpu_zone("cpu/update", 0.1);
+        assert_eq!(profile.groups(), vec!["cpu"]);
+        profile.set_memory(sample(1 << 30));
+        assert_eq!(profile.groups(), vec!["cpu", "memory"]);
+        assert!(profile.folded("memory"));
+        profile.toggle_group(1);
+        assert!(!profile.folded("memory"));
+        assert_eq!(profile.memory_rows(), 2 + MemoryCategory::COUNT + 4);
+        // The percentages line up with the timings'.
+        let zone = format!("     {:<27} {:7.2} ms {:3.0}%", "pass", 1.0, 5.0);
+        let memory = memory_line("geometry", Some(size(300 << 20)), &percent(Some(0.73)));
+        assert_eq!(
+            memory.find('%'),
+            zone.find('%'),
+            "{memory}
+{zone}"
+        );
+        assert_eq!(memory.len(), zone.len());
+        assert_eq!(size(20_000 << 20), ("19.53".to_owned(), "GiB"));
+        let summary = profile.memory().unwrap().summary();
+        assert!(
+            summary.starts_with("VRAM 1024.0 of 16384.0 MiB (6.2%)"),
+            "{summary}"
+        );
+        assert!(summary.contains("geometry 300.00"), "{summary}");
+    }
+
+    #[test]
+    fn memory_turns_to_the_warning_colour_within_ten_percent_of_the_budget() {
+        assert_eq!(budget_heat(0.5), Color::Cyan);
+        assert_eq!(budget_heat(0.8), Color::Orange);
+        assert_eq!(budget_heat(0.9), Color::Red);
+        for (usage, color) in [(8 << 30, Color::Yellow), (15 << 30, Color::Red)] {
+            let mut profile = Profile::new(OverlayMode::Full);
+            profile.set_memory(sample(usage));
+            let mut canvas = Canvas::blank(120, 40);
+            profile.layout(&mut canvas, "test", vk::Extent2D::default());
+            let (heading, heading_color) = canvas.row_text(3);
+            assert!(heading.contains("MEMORY"), "{heading}");
+            assert_eq!(heading_color, Some(color as u32), "{heading}");
+            let (heap, _) = canvas.row_text(4);
+            assert!(heap.contains("VRAM (ReBAR) of 16.00 GiB"), "{heap}");
+            let (uploads, _) = canvas.row_text(4 + 2 + MemoryCategory::COUNT + 2);
+            assert!(uploads.contains("uploads per frame"), "{uploads}");
+            assert!(uploads.contains("2.00 KiB 0.78 MiB/s"), "{uploads}");
+        }
+    }
+
+    #[test]
+    fn memory_moves_beside_the_timings_when_it_would_not_fit_under_them() {
+        let mut profile = Profile::new(OverlayMode::Full);
+        profile.cpu_zone("cpu/update", 0.1);
+        profile.set_memory(sample(1 << 30));
+        let mut tall = Canvas::blank(200, 40);
+        profile.layout(&mut tall, "test", vk::Extent2D::default());
+        let (under, _) = tall.row_text(5);
+        assert_eq!(under.find("MEMORY"), Some(4), "{under}");
+        let mut short = Canvas::blank(200, 12);
+        profile.layout(&mut short, "test", vk::Extent2D::default());
+        let (cpu, _) = short.row_text(3);
+        let width = NAME_COLUMNS + BAR_CELLS + 30;
+        assert_eq!(cpu.find("CPU"), Some(4), "{cpu}");
+        assert_eq!(cpu.find("MEMORY"), Some(width + 2 + 3), "{cpu}");
+        // Too narrow for two panels: under the timings, clipped at the bottom.
+        let mut narrow = Canvas::blank(120, 12);
+        profile.layout(&mut narrow, "test", vk::Extent2D::default());
+        let (under, _) = narrow.row_text(5);
+        assert_eq!(under.find("MEMORY"), Some(4), "{under}");
     }
 }

@@ -251,3 +251,30 @@ No browser pane was used and no YouTube page was opened or fetched; every talk i
 Fetched and read: every URL listed in an entry, including the GDC Vault pages for all eleven Vault talks; the GPUOpen, asawicki.info, NVIDIA developer and GeForce pages and the NVIDIA forum thread; Microsoft Learn, DirectX-Specs, the DirectX blog posts for DirectStorage 1.1–1.4, the DirectStorage repository and NuGet page; the Khronos refpages, news item and KTX2 specification (plus `VK_EXT_host_image_copy`); the GitHub READMEs and changelogs named; docs.rs and lib.rs for every crate in §6 and `tracy-client`; rust-lang PR #156882 and issue #32838; Epic's documentation pages; the Guerrilla, Sony and Xbox posts; cbloomrants, fgiesen, gingerbill, dgtlgrove, the Handmade Hero guide, MJP's blog, windows-internals, Puget Systems, the isetta interview, arXiv 2510.10219, the mimalloc benchmark page, OpenAlex for TLSF, the Phoronix NVK ReBAR note and the NVIDIA RTX 5070 Ti product page.
 
 Slide decks whose text was extracted locally with `pdftotext` after download from the publisher: Sawicki GDC 2018, Gyrling GDC 2015, Viau GDC 2024, Gierach/Hux GDC 2021, van Waveren 2012, Tovey Vulkanised 2018, Widmark GDC 2012, Bentley GDC 2021, Karis et al. SIGGRAPH 2021 and Guerrilla's HZD streaming deck; all numbers attributed to those decks come from that text. Crate versions and dates are as shown on docs.rs/lib.rs on 24 Sep 2026. Where a fetch summary disagreed with a primary page on a year (VMA release dates), the repository changelog was used.
+
+## Implementation notes from Forge: the memory counters (2026-09-24, issue #9, D-018)
+
+The telemetry half of the GPU-memory recommendation, ahead of the allocator it will
+measure: `VK_EXT_memory_budget` read into the F1 overlay, every allocation counted by
+category, every host write into GPU-visible memory counted as upload. What it taught:
+
+- **The budget query is not free.** `vkGetPhysicalDeviceMemoryProperties2` with the
+  budget structure costs 8–10 µs on this machine (the driver asks the OS). That is 3 % of
+  a 0.2 ms CPU frame if it ran every frame, so the overlay reads it four times per second
+  and on captured frames. "Polls `heapBudget` every frame" above becomes "every few
+  frames" until a streaming scheduler needs it more often.
+- **Block size dominates small scenes.** `gpu-allocator`'s default 256 MiB device and
+  64 MiB host blocks put both demos at 357 MiB of VRAM for 43 and 108 MiB of data (14 %
+  and 28 % of the blocks used). The TLSF layer with size-classed pools is where that
+  changes; until then, the process's usage says more about the allocator than the scene.
+- **Per-frame data is in VRAM.** On this Resizable BAR system every `CpuToGpu` allocation
+  lands in the device-local heap. The first host-visible block is therefore 64 MiB of VRAM
+  for 0.5 MiB of per-frame data.
+- **What the process holds outside the allocator can dwarf what it allocates.** 50 MiB
+  of driver memory and swapchain images, 111 MiB more once Streamline is loaded (even with
+  DLSS unused), and 155–203 MiB more with the DLSS feature running at a 1600×900 output.
+  Only `heapUsage` sees any of it, which is why the budget has to come from the OS, not
+  from the engine's own tally.
+- **The upload counter measures the host side only.** It counts bytes the CPU writes
+  through mapped pointers. Staging copies on the GPU are not counted twice: the ballad
+  writes 1.1 KiB per frame, and the overlay's cell grid adds 31 KiB.

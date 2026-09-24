@@ -48,7 +48,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   atmosphere ✅ (the limb, the terminator and the sun through the air from one integral;
   0.325 ms, 0.34 with the planet in view), DLSS through Streamline as an option next to
   TAA ✅ (U switches mode at run time; 0.60–0.77 ms, the DLSS pass itself 0.45 ms at
-  1600×900); next streaming of cluster pages, the software rasteriser when triangle counts
+  1600×900), memory counters in the overlay ✅ (VRAM against the OS budget, the engine's
+  allocations by category, uploads per frame; 359 MiB of a 14.9 GiB budget); next streaming of cluster pages, the software rasteriser when triangle counts
   rise again.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
@@ -82,6 +83,10 @@ from a TTF atlas — JetBrains Mono by default, any font via `FORGE_OVERLAY_FONT
 built-in pixel font as fallback; no UI dependency). The same zones feed Tracy's GPU timeline
 under `--features profiling`. `docs/PROFILE.md` mirrors the overlay at each checkpoint with
 a verdict per item on what is expensive and how to attack it.
+Its memory group (issue #9) ✅ shows each heap's usage against the budget
+`VK_EXT_memory_budget` reports (red past 90 %, the reserve D-018 keeps), the engine's
+allocations by category, the memory outside the allocator and the upload and readback
+traffic per frame.
 
 Goal: the renderer skeleton every later system draws through.
 

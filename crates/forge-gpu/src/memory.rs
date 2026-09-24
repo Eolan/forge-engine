@@ -8,6 +8,7 @@ use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 
 use crate::device::Device;
 use crate::error::Result;
+use crate::memory_report::MemoryCategory;
 
 /// Description of a buffer to create.
 #[derive(Clone, Copy, Debug)]
@@ -19,6 +20,8 @@ pub struct BufferDesc<'a> {
     /// Where the memory lives. `CpuToGpu` picks host-visible device-local memory when the
     /// driver exposes it (Resizable BAR), which is what per-frame data wants.
     pub location: MemoryLocation,
+    /// What it holds, for the memory counters.
+    pub category: MemoryCategory,
     /// Debug name.
     pub name: &'a str,
 }
@@ -29,6 +32,7 @@ pub struct Buffer {
     device: Arc<Device>,
     raw: vk::Buffer,
     allocation: Option<Allocation>,
+    category: MemoryCategory,
     size: u64,
     address: vk::DeviceAddress,
     mapped: Option<NonNull<u8>>,
@@ -73,6 +77,7 @@ impl Buffer {
             offset + bytes.len() as u64 <= self.size,
             "write exceeds buffer size"
         );
+        self.device.memory_counters().upload(bytes.len() as u64);
         // SAFETY: the mapping covers `size` bytes and the bounds were checked above; the caller
         // ensures the GPU is not reading this range (frame slots).
         unsafe {
@@ -95,6 +100,7 @@ impl Buffer {
             offset + bytes.len() as u64 <= self.size,
             "read exceeds buffer size"
         );
+        self.device.memory_counters().read_back(bytes.len() as u64);
         // SAFETY: as in `write`.
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -109,6 +115,9 @@ impl Buffer {
 impl Drop for Buffer {
     fn drop(&mut self) {
         if let Some(allocation) = self.allocation.take() {
+            self.device
+                .memory_counters()
+                .free(self.category, allocation.size());
             let _ = self.device.with_allocator(|a| a.free(allocation));
         }
         // SAFETY: the memory was released above and the owner guarantees the GPU is done.
@@ -146,6 +155,7 @@ pub struct Image {
     allocation: Option<Allocation>,
     /// The heap a placed image lives in (kept alive by the image).
     heap: Option<Arc<TransientHeap>>,
+    category: MemoryCategory,
     format: vk::Format,
     usage: vk::ImageUsageFlags,
     extent: vk::Extent2D,
@@ -176,6 +186,9 @@ impl TransientHeap {
 impl Drop for TransientHeap {
     fn drop(&mut self) {
         if let Some(allocation) = self.allocation.take() {
+            self.device
+                .memory_counters()
+                .free(MemoryCategory::Transient, allocation.size());
             let _ = self.device.with_allocator(|a| a.free(allocation));
         }
     }
@@ -234,6 +247,9 @@ impl Drop for Image {
             self.device.raw().destroy_image(self.raw, None);
         }
         if let Some(allocation) = self.allocation.take() {
+            self.device
+                .memory_counters()
+                .free(self.category, allocation.size());
             let _ = self.device.with_allocator(|a| a.free(allocation));
         }
     }
@@ -277,10 +293,13 @@ impl Device {
         let address = unsafe { self.raw().get_buffer_device_address(&address_info) };
         let mapped = allocation.mapped_ptr().map(|p| p.cast::<u8>());
         self.set_name(raw, desc.name);
+        self.memory_counters()
+            .allocate(desc.category, allocation.size());
         Ok(Buffer {
             device: Arc::clone(self),
             raw,
             allocation: Some(allocation),
+            category: desc.category,
             size,
             address,
             mapped,
@@ -292,6 +311,7 @@ impl Device {
         self: &Arc<Self>,
         data: &[T],
         usage: vk::BufferUsageFlags,
+        category: MemoryCategory,
         name: &str,
     ) -> Result<Buffer> {
         let bytes: &[u8] = bytemuck::cast_slice(data);
@@ -300,6 +320,7 @@ impl Device {
             size,
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             location: MemoryLocation::CpuToGpu,
+            category: MemoryCategory::Transfer,
             name: "staging",
         })?;
         staging.write(0, bytes);
@@ -307,6 +328,7 @@ impl Device {
             size,
             usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
             location: MemoryLocation::GpuOnly,
+            category,
             name,
         })?;
         self.execute_transient(|device, cb| {
@@ -330,12 +352,15 @@ impl Device {
             mip_levels: 1,
             ..desc
         };
-        let image = self.create_image(desc)?;
-        let staging = self.create_buffer_with_data(
-            data,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            "image upload staging",
-        )?;
+        let image = self.allocate_image(&desc, MemoryCategory::Textures)?;
+        let staging = self.create_buffer(BufferDesc {
+            size: data.len() as u64,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            location: MemoryLocation::CpuToGpu,
+            category: MemoryCategory::Transfer,
+            name: "image upload staging",
+        })?;
+        staging.write(0, data);
         let range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -440,9 +465,19 @@ impl Device {
         })
     }
 
-    /// Creates a 2-D image in device memory with a full view.
+    /// Creates a 2-D image in device memory with a full view, counted as a render target
+    /// (an image the GPU writes; uploaded images are [`Device::create_image_with_data`]'s).
     pub fn create_image(self: &Arc<Self>, desc: ImageDesc<'_>) -> Result<Image> {
-        let (raw, extent, mip_levels) = self.create_unbound_image(&desc)?;
+        self.allocate_image(&desc, MemoryCategory::Targets)
+    }
+
+    /// Creates an image with its own memory, counted under `category`.
+    pub(crate) fn allocate_image(
+        self: &Arc<Self>,
+        desc: &ImageDesc<'_>,
+        category: MemoryCategory,
+    ) -> Result<Image> {
+        let (raw, extent, mip_levels) = self.create_unbound_image(desc)?;
         // SAFETY: `raw` is live.
         let requirements = unsafe { self.raw().get_image_memory_requirements(raw) };
         let allocation = match self.with_allocator(|a| {
@@ -471,7 +506,14 @@ impl Device {
             let _ = self.with_allocator(|a| a.free(allocation));
             return Err(e.into());
         }
-        self.finish_image(raw, &desc, extent, mip_levels, Some(allocation), None)
+        self.finish_image(
+            raw,
+            desc,
+            extent,
+            mip_levels,
+            (Some(allocation), category),
+            None,
+        )
     }
 
     /// The memory an image of `desc` needs (size, alignment, compatible memory types),
@@ -511,6 +553,8 @@ impl Device {
                 allocation_scheme: AllocationScheme::GpuAllocatorManaged,
             })
         })?;
+        self.memory_counters()
+            .allocate(MemoryCategory::Transient, allocation.size());
         Ok(Arc::new(TransientHeap {
             device: Arc::clone(self),
             allocation: Some(allocation),
@@ -558,7 +602,14 @@ impl Device {
             unsafe { self.raw().destroy_image(raw, None) };
             return Err(e.into());
         }
-        self.finish_image(raw, &desc, extent, mip_levels, None, Some(Arc::clone(heap)))
+        self.finish_image(
+            raw,
+            &desc,
+            extent,
+            mip_levels,
+            (None, MemoryCategory::Transient),
+            Some(Arc::clone(heap)),
+        )
     }
 
     /// Creates the Vulkan image of `desc` without memory.
@@ -569,14 +620,14 @@ impl Device {
         Ok((raw, extent, mip_levels))
     }
 
-    /// Creates the views and names a bound image.
+    /// Creates the views and names a bound image; counts its own memory under the category.
     fn finish_image(
         self: &Arc<Self>,
         raw: vk::Image,
         desc: &ImageDesc<'_>,
         extent: vk::Extent2D,
         mip_levels: u32,
-        allocation: Option<Allocation>,
+        (allocation, category): (Option<Allocation>, MemoryCategory),
         heap: Option<Arc<TransientHeap>>,
     ) -> Result<Image> {
         let make_view = |base_mip_level: u32, level_count: u32| {
@@ -599,6 +650,9 @@ impl Device {
             .map(|level| make_view(level, 1))
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.set_name(raw, desc.name);
+        if let Some(allocation) = &allocation {
+            self.memory_counters().allocate(category, allocation.size());
+        }
         Ok(Image {
             device: Arc::clone(self),
             raw,
@@ -606,6 +660,7 @@ impl Device {
             mip_views,
             allocation,
             heap,
+            category,
             format: desc.format,
             usage: desc.usage,
             extent,

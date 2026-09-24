@@ -11,8 +11,9 @@ use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, GpuVertex, MeshletMesh};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
-    FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryLocation,
-    MeshPipelineDesc, Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc, vk,
+    FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
+    MemoryLocation, MeshPipelineDesc, Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc,
+    vk,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
@@ -327,28 +328,52 @@ impl MeshletSceneBuilder {
             self.group_table.push(0);
         }
         Ok(MeshletScene {
-            vertices: device.create_buffer_with_data(&self.vertices, usage, "meshlet vertices")?,
-            meshlets: device.create_buffer_with_data(&self.meshlets, usage, "meshlets")?,
+            vertices: device.create_buffer_with_data(
+                &self.vertices,
+                usage,
+                MemoryCategory::Geometry,
+                "meshlet vertices",
+            )?,
+            meshlets: device.create_buffer_with_data(
+                &self.meshlets,
+                usage,
+                MemoryCategory::Geometry,
+                "meshlets",
+            )?,
             meshlet_vertices: device.create_buffer_with_data(
                 &self.meshlet_vertices,
                 usage,
+                MemoryCategory::Geometry,
                 "meshlet vertex indices",
             )?,
             meshlet_triangles: device.create_buffer_with_data(
                 &self.meshlet_triangles,
                 usage,
+                MemoryCategory::Geometry,
                 "meshlet triangles",
             )?,
-            meshes: device.create_buffer_with_data(&self.meshes, usage, "meshes")?,
-            instances: device.create_buffer_with_data(&self.instances, usage, "instances")?,
+            meshes: device.create_buffer_with_data(
+                &self.meshes,
+                usage,
+                MemoryCategory::Geometry,
+                "meshes",
+            )?,
+            instances: device.create_buffer_with_data(
+                &self.instances,
+                usage,
+                MemoryCategory::Geometry,
+                "instances",
+            )?,
             visibility: GraphBuffer::new(device.create_buffer_with_data(
                 &vec![0_u32; visibility_words],
                 usage,
+                MemoryCategory::Work,
                 "visibility bits",
             )?),
             group_table: device.create_buffer_with_data(
                 &self.group_table,
                 usage,
+                MemoryCategory::Geometry,
                 "task group table",
             )?,
             work: (0..FRAMES_IN_FLIGHT)
@@ -358,6 +383,7 @@ impl MeshletSceneBuilder {
                             size: u64::from(self.group_table.len() as u32) * 8,
                             usage,
                             location: MemoryLocation::GpuOnly,
+                            category: MemoryCategory::Work,
                             name: &format!("task work list {i}"),
                         })
                         .map(GraphBuffer::new)
@@ -370,6 +396,7 @@ impl MeshletSceneBuilder {
                             size: 16,
                             usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
                             location: MemoryLocation::CpuToGpu,
+                            category: MemoryCategory::Frame,
                             name: &format!("task indirect {i}"),
                         })
                         .map(GraphBuffer::new)
@@ -382,6 +409,7 @@ impl MeshletSceneBuilder {
                             size: u64::from(VISIBLE_CAPACITY + 1) * 8,
                             usage,
                             location: MemoryLocation::GpuOnly,
+                            category: MemoryCategory::Work,
                             name: &format!("visible clusters {i}"),
                         })
                         .map(GraphBuffer::new)
@@ -664,6 +692,7 @@ impl MeshletRenderer {
                     size: FRAME_BLOCK_STRIDE * 2,
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                     location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
                     name: &format!("meshlet frame {i}"),
                 })
             })
@@ -674,6 +703,7 @@ impl MeshletRenderer {
                     size: (STAT_COUNT * 4) as u64,
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                     location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Transfer,
                     name: &format!("meshlet stats {i}"),
                 })?;
                 b.write(0, &[0_u32; STAT_COUNT]);

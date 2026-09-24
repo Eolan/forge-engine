@@ -35,12 +35,17 @@ Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-
 
 ![The planet under its atmosphere (`--look` at the planet, frame 60)](images/asteroids-planet.png)
 
-![The profiling overlay (F1, full view): GPU time per graph pass, CPU time per zone, the render graph's counters (passes, barriers, transient heap) and the demo's](images/asteroids-profile.png)
+![The profiling overlay (F1, full view): GPU time per graph pass, CPU time per zone, the memory group beside them (VRAM against the budget, the engine's allocations by category, traffic per frame), the render graph's counters (passes, barriers, transient heap) and the demo's](images/asteroids-profile.png)
 
 ![Clusters coloured by LOD level (K): grey 0, green 1, yellow 2, orange 3, red 4, magenta 5, blue 6, cyan 7+](images/asteroids-lod-levels.png)
 
 The compact view (the default) is the header and one line per subject; a digit opens a
-subject, F1 cycles off → compact → full. The verdicts behind the numbers are in
+subject, F1 cycles off → compact → full. The memory group (the last subject) moves beside the
+timings when it would push the counters off the screen, and turns red when a heap passes
+90 % of its budget:
+
+![The memory group with the budget capped at 390 MiB (`FORGE_VRAM_BUDGET_MB=390`): 92 %, in the warning colour](images/asteroids-memory-warning.png)
+ The verdicts behind the numbers are in
 [PROFILE.md](../PROFILE.md).
 
 ## What it shows (phase 0)

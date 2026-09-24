@@ -135,6 +135,7 @@ crops and the diff side by side, enlarged, for looking at a difference.
 | `FORGE_OVERLAY` | `off`, `compact` or `full`: the profiling overlay's start mode (default: compact when interactive, off in scripted runs; F1 cycles at run time). |
 | `FORGE_OVERLAY_FONT` | TTF/OTF for the overlay (default `assets/fonts/jetbrains-mono/JetBrainsMono-Variable.ttf`; a built-in pixel font if unreadable). |
 | `FORGE_OVERLAY_FONT_PX` | Overlay font size in pixels (default 14). |
+| `FORGE_VRAM_BUDGET_MB=N` | cap the device-local memory budget the overlay's memory group measures against (rehearsing a smaller card; the group turns red past 90 %). |
 | `FORGE_SYNC_VALIDATION=1` | with `--validate`: the validation layer's synchronization (hazard) checks. Slow. |
 | `FORGE_GPU_AV=1` | with `--validate`: GPU-assisted validation (out-of-bounds device-address and descriptor accesses). Slow. |
 | `FORGE_WAIT_IDLE=1` | wait for the GPU after every frame (debugging). |

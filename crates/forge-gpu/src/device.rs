@@ -18,6 +18,8 @@ pub struct DeviceFeatures {
     pub ray_query: bool,
     /// `VK_EXT_sampler_filter_minmax` (min-reduction sampling for depth pyramids).
     pub sampler_minmax: bool,
+    /// `VK_EXT_memory_budget` (per-heap usage and budget from the OS).
+    pub memory_budget: bool,
 }
 
 /// Mesh-shader limits worth knowing when sizing meshlets.
@@ -51,6 +53,11 @@ pub struct Device {
     bindless: Mutex<Option<Bindless>>,
     bindless_layout: vk::DescriptorSetLayout,
     bindless_set: vk::DescriptorSet,
+    /// Bytes allocated per category, uploaded and read back.
+    memory_counters: crate::memory_report::MemoryCounters,
+    /// `FORGE_VRAM_BUDGET_MB`: a smaller device-local budget than the OS gives (testing the
+    /// warning, rehearsing a smaller card).
+    budget_cap: Option<u64>,
     /// DLSS, when the instance came through Streamline and this GPU runs it.
     dlss: Option<crate::dlss::Dlss>,
 }
@@ -93,6 +100,9 @@ impl Device {
         }
         if best.features.sampler_minmax {
             extensions.push(ext::sampler_filter_minmax::NAME.as_ptr());
+        }
+        if best.features.memory_budget {
+            extensions.push(ext::memory_budget::NAME.as_ptr());
         }
 
         let base = vk::PhysicalDeviceFeatures::default()
@@ -230,6 +240,11 @@ impl Device {
             bindless_layout,
             bindless_set,
             dlss,
+            memory_counters: Default::default(),
+            budget_cap: std::env::var("FORGE_VRAM_BUDGET_MB")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|mb| mb << 20),
         }))
     }
 
@@ -317,6 +332,7 @@ impl Device {
             ray_query: has(khr::ray_query::NAME) && has(khr::acceleration_structure::NAME),
             sampler_minmax: has(ext::sampler_filter_minmax::NAME)
                 && v12.sampler_filter_minmax == vk::TRUE,
+            memory_budget: has(ext::memory_budget::NAME),
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
@@ -397,6 +413,14 @@ impl Device {
     /// Mesh-shader functions when available.
     pub fn mesh_loader(&self) -> Option<&ext::mesh_shader::Device> {
         self.mesh_loader.as_ref()
+    }
+
+    pub(crate) fn memory_counters(&self) -> &crate::memory_report::MemoryCounters {
+        &self.memory_counters
+    }
+
+    pub(crate) fn budget_cap(&self) -> Option<u64> {
+        self.budget_cap
     }
 
     pub(crate) fn with_allocator<R>(&self, f: impl FnOnce(&mut Allocator) -> R) -> R {
