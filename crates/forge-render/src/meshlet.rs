@@ -134,12 +134,11 @@ struct GpuFrame {
     instances: u64,
     stats: u64,
     visibility: u64,
-    group_table: u64,
     total_groups: u32,
     pad_end: u32,
     work: u64,
     indirect: u64,
-    /// The visible-cluster list: slot 0 holds the count, then (instance, meshlet | flags).
+    /// The visible-cluster list: (instance, meshlet | flags) per listed cluster.
     visible: u64,
     visible_capacity: u32,
     /// Pre-exposure of the frame (see `crate::exposure`).
@@ -246,8 +245,8 @@ pub struct MeshletSceneBuilder {
     meshes: Vec<GpuMesh>,
     instances: Vec<GpuInstance>,
     total_triangles: u64,
-    /// Instance index of every work item (its length sizes the work list).
-    group_table: Vec<u32>,
+    /// Work items so far (groups of 32 clusters; sizes the work list and the look-back words).
+    total_groups: u32,
     /// Visibility bits over all instances (one per cluster).
     total_bits: u32,
 }
@@ -325,11 +324,8 @@ impl MeshletSceneBuilder {
         let center = model.transform_point3(Vec3::from(info.center));
         self.total_triangles += u64::from(info.triangle_count);
         let groups = info.meshlet_count.div_ceil(TASK_GROUP_SIZE);
-        let group_offset = self.group_table.len() as u32;
-        self.group_table.extend(std::iter::repeat_n(
-            self.instances.len() as u32,
-            groups as usize,
-        ));
+        let group_offset = self.total_groups;
+        self.total_groups += groups;
         let bit_offset = self.total_bits;
         self.total_bits += info.meshlet_count;
         self.instances.push(GpuInstance {
@@ -361,9 +357,7 @@ impl MeshletSceneBuilder {
             .unwrap_or(0);
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
         let visibility_words = (self.total_bits as usize).div_ceil(32).max(1);
-        if self.group_table.is_empty() {
-            self.group_table.push(0);
-        }
+        let total_groups = self.total_groups.max(1);
         Ok(MeshletScene {
             vertices: device.create_buffer_with_data(
                 &self.vertices,
@@ -408,21 +402,15 @@ impl MeshletSceneBuilder {
                 MemoryCategory::Work,
                 "visibility bits",
             )?),
-            group_table: device.create_buffer_with_data(
-                &self.group_table,
-                usage,
-                MemoryCategory::Geometry,
-                "task group table",
-            )?,
             work: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     device
                         .create_buffer(BufferDesc {
-                            size: u64::from(self.group_table.len() as u32) * 8,
+                            size: u64::from(total_groups) * 8,
                             usage,
                             location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Work,
-                            name: &format!("task work list {i}"),
+                            name: &format!("cull work list {i}"),
                         })
                         .map(GraphBuffer::new)
                 })
@@ -456,7 +444,7 @@ impl MeshletSceneBuilder {
             lookback: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     let instance_groups = (self.instances.len() as u64).div_ceil(64).max(1);
-                    let words = instance_groups + 2 * self.group_table.len() as u64;
+                    let words = instance_groups + 2 * u64::from(total_groups);
                     device
                         .create_buffer(BufferDesc {
                             size: words * 4,
@@ -482,7 +470,7 @@ impl MeshletSceneBuilder {
                 })
                 .collect::<Result<Vec<_>>>()?,
             instance_count: self.instances.len() as u32,
-            total_groups: self.group_table.len() as u32,
+            total_groups,
             total_bits: self.total_bits,
             max_meshlets,
             mesh_count: self.meshes.len() as u32,
@@ -500,10 +488,9 @@ pub struct MeshletScene {
     meshlet_triangles: Buffer,
     meshes: Buffer,
     instances: Buffer,
-    /// One bit per (instance, cluster): visible last frame. Read and rewritten by the task
-    /// shader every frame, so the graph tracks it.
+    /// One bit per (instance, cluster): visible last frame. Read and rewritten by the cluster
+    /// culls every frame, so the graph tracks it.
     visibility: GraphBuffer,
-    group_table: Buffer,
     /// Per frame slot: the work list (an instance's group of 32 clusters per item) built by
     /// the instance cull.
     work: Vec<GraphBuffer>,
@@ -965,7 +952,6 @@ impl MeshletRenderer {
             instances: scene.instances.address(),
             stats: self.stats_buffers[slot.index].address(),
             visibility: scene.visibility.address(),
-            group_table: scene.group_table.address(),
             total_groups: scene.total_groups,
             pad_end: 0,
             work: scene.work[slot.index].address(),

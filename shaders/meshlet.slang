@@ -143,7 +143,6 @@ public struct Frame
     public Instance* instances;
     public uint* stats;
     public uint* visibility;        // one bit per (instance, local meshlet): visible last frame
-    public uint* group_table;       // instance index of every work item (not read by the shaders)
     public uint total_groups;
     public uint pad_end;
     public uint2* work;             // (instance, local group) per work item, built by `cull_main`

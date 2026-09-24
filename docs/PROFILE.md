@@ -111,21 +111,23 @@ throughout; the overlay's graph counter line stays in MB.
 |---|---|---|---|---|---|---|
 | VRAM used by the process (budget 14.87 GiB) | **357 MiB** (2.3 %) | **357 MiB** | 419 | 616 | 616 | 572 |
 | system RAM used by the process | 77 MiB | 13 | | | | |
-| allocated by the engine | 109.9 MiB | 44.9 | 120.2 | 120.2 | 91.1 | 80.7 |
-| — geometry | 35.5 | 3.7 | 35.5 | 35.5 | 35.5 | 35.5 |
+| allocated by the engine | 109.3 MiB | 44.6 | 120.2 | 120.2 | 91.1 | 80.7 |
+| — geometry | 35.0 | 3.3 | 35.5 | 35.5 | 35.5 | 35.5 |
 | — render targets | 27.8 | 2.7 | 40.3 | 40.3 | 25.8 | 19.6 |
 | — transient heap | 25.0 | 18.8 | 25.0 | 25.0 | 10.5 | 6.3 |
 | — GPU work buffers | 21.0 | 19.3 | 18.8 | 18.8 | 18.8 | 18.8 |
 | — per-frame data, textures, staging + readback | 0.5, 0.03, 0.00 | 0.5, 0.03, 0.00 | | | | |
 | allocator blocks | 384 MiB (28 % used) | 320 (14 %) | 384 | 384 | 384 | 384 |
 | outside the allocator | 50 MiB | 50 | 161 | 364 | 364 | 316 |
-| uploads per frame, overlay off (full overlay) | 1.22 KiB (32.3) | 1.11 KiB (32.2) | 1.11 | 1.11 | 1.11 | 1.11 |
+| uploads per frame, overlay off (full overlay) | 1.20 KiB (32.3) | 1.09 KiB (32.2) | 1.11 | 1.11 | 1.11 | 1.11 |
 | read back per frame | 1.03 KiB | 0.03 KiB | 1.03 | 1.03 | 1.03 | 1.03 |
 
 1200-frame scripted runs, exit log; the meshlets bench and the TAA build with the overlay
-off. The first two columns are re-measured after issue #5: the culls' look-back status
+off. The first two columns are re-measured after issues #5 and #29. #5: the culls' look-back status
 words add 2.2 and 1.5 MiB of work buffers and their argument resets 0.1 KiB of uploads per
-frame; the Streamline columns are from issue #9. The indirect-count fallback adds 40 MiB of
+frame. Issue #29 then dropped the task-group table no shader read any more (4 B per work
+item: geometry 0.56 and 0.35 MiB less, 8 B less per frame block). The Streamline columns
+are from issue #9. The indirect-count fallback adds 40 MiB of
 draw commands (work buffers 61.0 and 59.3 MiB). **Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
