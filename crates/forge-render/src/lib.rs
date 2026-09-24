@@ -13,6 +13,7 @@ pub mod blit;
 pub mod display;
 pub mod exposure;
 pub mod meshlet;
+pub mod placement;
 pub mod starfield;
 pub mod taa;
 pub mod upscale;

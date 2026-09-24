@@ -696,6 +696,7 @@ name = "forge-render"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "forge-core",
  "forge-geom",
  "forge-gpu",
  "glam",

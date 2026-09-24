@@ -1387,3 +1387,185 @@ void resolve_main(uint3 id : SV_DispatchThreadID)
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][id.xy] = float4(color, 1.0);
 }
+
+// ---------------------------------------------------------------- placement ---
+
+// GPU placement of the city-blocks instances (issue #35): a thread per instance slot writes
+// that slot's `Instance` from the seed and the slot's index alone, so the table is the same on
+// every run. The slots come in category ranges, in this order: buildings on the city's block
+// lots, lamp posts along both sides of every street, a fountain and four columns on some
+// street crossings, rocks and rubble in the hills around the city. The mesh choice is mirrored
+// on the CPU (`forge_render::placement`), which needs the per-mesh counts.
+public struct Placement
+{
+    public Instance* instances; // the scene's table
+    public Mesh* meshes;
+    public float* heights;      // the terrain's samples, `samples` per row, rows along +z
+    public uint first;          // first slot of the placed range in `instances`
+    public uint count;
+    public uint samples;
+    public uint seed;
+    public float spacing;       // metres between samples
+    public float half_size;     // half the terrain's side
+    public float city_half;     // half the city square's side
+    public float block;         // block pitch: a block and a street, metres
+    public float street;        // street width
+    public float lamp_step;     // metres between lamp posts
+    public uint blocks;         // blocks per side of the city
+    public uint plaza_every;    // crossings k with k % plaza_every == plaza_every / 2 on both axes hold a plaza
+    public uint buildings;      // slots per category
+    public uint lamps;
+    public uint plaza_slots;
+    public uint rocks;
+    public uint building_mesh_count;
+    public uint rock_mesh_count;
+    public uint lamp_mesh;
+    public uint fountain_mesh;
+    public uint column_mesh;
+    public uint pad;
+    public uint building_meshes[16];
+    public uint rock_meshes[8];
+};
+
+struct PlacementPush
+{
+    Placement* placement;
+};
+
+[[vk::push_constant]]
+PlacementPush placement_push;
+
+// forge_core::hash::pcg4d, bit for bit.
+uint4 pcg4d(uint4 v)
+{
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+    v ^= v >> 16u;
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+    return v;
+}
+
+// Four uniform numbers in [0, 1) for `slot` and a purpose `salt`.
+float4 random4(Placement* p, uint slot, uint salt)
+{
+    return float4(pcg4d(uint4(slot, p[0].seed, salt, 0u)) >> 8u) * (1.0 / 16777216.0);
+}
+
+// The ground's height at (x, z): the terrain's samples, bilinearly.
+float ground(Placement* p, float x, float z)
+{
+    float2 g = clamp((float2(x, z) + p[0].half_size) / p[0].spacing, 0.0, float(p[0].samples - 1) - 1e-3);
+    uint2 i = uint2(g);
+    float2 f = g - float2(i);
+    uint n = p[0].samples;
+    float h00 = p[0].heights[i.y * n + i.x];
+    float h10 = p[0].heights[i.y * n + i.x + 1];
+    float h01 = p[0].heights[(i.y + 1) * n + i.x];
+    float h11 = p[0].heights[(i.y + 1) * n + i.x + 1];
+    return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+}
+
+// Writes the instance of `slot`: `mesh` at `position`, turned by `yaw` about +Y and then by
+// `tilt` about the turned X axis, scaled by `scale`.
+void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float tilt, float scale)
+{
+    float cy = cos(yaw), sy = sin(yaw), ct = cos(tilt), st = sin(tilt);
+    // R = Ry(yaw) × Rx(tilt), rows.
+    float3 r0 = float3(cy, sy * st, sy * ct);
+    float3 r1 = float3(0.0, ct, -st);
+    float3 r2 = float3(-sy, cy * st, cy * ct);
+    float4x4 model = float4x4(
+        float4(r0 * scale, position.x),
+        float4(r1 * scale, position.y),
+        float4(r2 * scale, position.z),
+        float4(0.0, 0.0, 0.0, 1.0));
+    Mesh* m = p[0].meshes + mesh;
+    Instance inst;
+    inst.model = model;
+    inst.center = mul(model, float4(m[0].center, 1.0)).xyz;
+    inst.radius = m[0].radius * scale;
+    inst.mesh = mesh;
+    inst.id = p[0].first + slot;
+    inst.pad = uint2(0u, 0u);
+    p[0].instances[p[0].first + slot] = inst;
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void place_main(uint3 id : SV_DispatchThreadID)
+{
+    Placement* p = placement_push.placement;
+    uint slot = id.x;
+    if (slot >= p[0].count)
+        return;
+    float quarter_turn = 1.5707963;
+    uint s = slot;
+    if (s < p[0].buildings)
+    {
+        // Four lots per block, a building in each, turned to one of four sides.
+        uint b = s / 4u, lot = s % 4u;
+        float inner = p[0].block - p[0].street;
+        float2 corner = -p[0].city_half + p[0].street * 0.5 + float2(b % p[0].blocks, b / p[0].blocks) * p[0].block;
+        float2 at = corner + (float2(lot & 1u, lot >> 1u) + 0.5) * inner * 0.5;
+        uint4 h = pcg4d(uint4(slot, p[0].seed, 1u, 0u));
+        uint mesh = p[0].building_meshes[h.x % p[0].building_mesh_count];
+        place(p, slot, mesh, float3(at.x, ground(p, at.x, at.y), at.y), float(h.y % 4u) * quarter_turn, 0.0, 1.0);
+        return;
+    }
+    s -= p[0].buildings;
+    if (s < p[0].lamps)
+    {
+        // Along both sides of every street line, in both directions.
+        uint per_line = uint(2.0 * p[0].city_half / p[0].lamp_step);
+        uint post = s % per_line;
+        uint side = (s / per_line) % 2u;
+        uint line = (s / per_line / 2u) % (p[0].blocks + 1u);
+        uint axis = s / per_line / 2u / (p[0].blocks + 1u);
+        float along = -p[0].city_half + (float(post) + 0.5) * p[0].lamp_step;
+        float across = -p[0].city_half + float(line) * p[0].block + (side == 0u ? -1.0 : 1.0) * (p[0].street * 0.5 - 1.5);
+        float2 at = axis == 0u ? float2(along, across) : float2(across, along);
+        place(p, slot, p[0].lamp_mesh, float3(at.x, ground(p, at.x, at.y), at.y), 0.0, 0.0, 1.0);
+        return;
+    }
+    s -= p[0].lamps;
+    if (s < p[0].plaza_slots)
+    {
+        // A fountain on the crossing and four columns around it.
+        uint plaza = s / 5u, part = s % 5u;
+        uint per_side = (p[0].blocks + 1u + p[0].plaza_every - 1u - p[0].plaza_every / 2u) / p[0].plaza_every;
+        uint2 k = uint2(plaza % per_side, plaza / per_side) * p[0].plaza_every + p[0].plaza_every / 2u;
+        float2 at = -p[0].city_half + float2(k) * p[0].block;
+        uint mesh = p[0].fountain_mesh;
+        if (part > 0u)
+        {
+            float a = (float(part) - 0.5) * quarter_turn;
+            at += float2(cos(a), sin(a)) * 7.5;
+            mesh = p[0].column_mesh;
+        }
+        place(p, slot, mesh, float3(at.x, ground(p, at.x, at.y), at.y), 0.0, 0.0, 1.0);
+        return;
+    }
+    s -= p[0].plaza_slots;
+    // Rocks: uniform over the four bands of hills around the city (north and south span the
+    // whole side, east and west the city's depth), any turn, a slight tilt, sunk a little.
+    float4 r = random4(p, slot, 4u);
+    float4 q = random4(p, slot, 5u);
+    uint mesh = p[0].rock_meshes[pcg4d(uint4(slot, p[0].seed, 6u, 0u)).x % p[0].rock_mesh_count];
+    float h = p[0].half_size, c = p[0].city_half;
+    float ns = 2.0 * h * (h - c), ew = 2.0 * c * (h - c); // areas of one north/south and one east/west band
+    float pick = r.x * 2.0 * (ns + ew);
+    float2 at;
+    if (pick < 2.0 * ns)
+        at = float2(lerp(-h, h, r.y), lerp(c, h, r.z) * (pick < ns ? 1.0 : -1.0));
+    else
+        at = float2(lerp(c, h, r.y) * (pick < 2.0 * ns + ew ? 1.0 : -1.0), lerp(-c, c, r.z));
+    float scale = lerp(0.5, 1.6, q.x * q.x);
+    float radius = p[0].meshes[mesh].radius * scale;
+    place(p, slot, mesh, float3(at.x, ground(p, at.x, at.y) - 0.15 * radius, at.y), r.w * 6.2831853, (q.y - 0.5) * 0.4, scale);
+}

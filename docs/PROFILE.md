@@ -95,6 +95,23 @@ where to measure that. The LOD error is scaled to output pixels, so every mode d
 same 0.56 M triangles and the geometry passes shrink only with the pixel count. Streamline
 adds about 0.07 ms of CPU to recording (0.17 against 0.10).
 
+## `city-blocks` — a million instances (issues #33–#35, the city from its south edge)
+
+GPU **4.96 ms** for 1 000 001 instances (a 4 km terrain; 2 304 buildings, 9 600 lamp
+posts, 180 plaza props and 988 k rocks placed by a compute pass): 48 k clusters and
+3.32 M triangles drawn. CPU 0.25 ms of work, the rest waiting for the GPU. Memory: 1.18 GiB
+allocated, of which 1 071 MiB is geometry.
+
+| Subject | Zone | ms | share | Verdict |
+|---|---|---|---|---|
+| geometry | cluster cull 1 / 2 | 2.00 / 2.12 | **83 %** | **The frame.** 526 k work items of 32 clusters for the 500 k instances in view, most of them far rocks down to their last cluster: 32 lanes where one or two have work, tested twice (#37). |
+| geometry | instance cull | 0.55 | 11 % | A thread per instance, a million of them, no hierarchy: a grid of cells would skip whole hills (#37). |
+| geometry | meshlet pass 1 / software raster + merge | 0.17 / 0.04 | 4 % | 3.3 M triangles: nothing to gain here. |
+| shading | visibility resolve | 0.05 | 1 % | |
+
+**Priority:** the culls (#37). Streaming (#36) then bounds the memory, and the flight at
+300 m/s (#13) measures both. Details in [city-blocks.md](demos/city-blocks.md).
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.18 ms** (0.15 with the rocks shaded in the mesh passes): the bench resolves the

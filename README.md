@@ -122,12 +122,14 @@ Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.
 cargo run --release -p city-blocks
 ```
 
-For now the prop gallery: twenty procedural props (buildings with real window recesses,
-towers, boulders, rubble, a column, a fountain, a lamp post; 25.8 M triangles), cooked into
-cluster DAGs on the job system (9 s) and cached in `mesh-cache/` (0.5 s on later runs).
-Keys: **L** / **K** LOD and its colours, **M** cluster colours, **O** occlusion, **R**
-software rasteriser, **H** its pixels, **[** / **]** LOD threshold, **Tab** wireframe, **G**
-tone curve. Options: `--focus NAME` (frame one prop), `--recook`, `--orbit`, `--no-lod`,
+A city on a 4 km terrain: a compute pass places a million instances of twenty procedural
+props (buildings with real window recesses, towers, lamp posts, fountains, columns, and
+rocks and rubble over the hills around it; 25.8 M triangles of props, 8 M of terrain),
+cooked into cluster DAGs on the job system and cached in `mesh-cache/` (13 s the first
+time, under a second after). Keys: **L** / **K** LOD and its colours, **M** cluster colours,
+**O** occlusion, **R** software rasteriser, **H** its pixels, **[** / **]** LOD threshold,
+**Tab** wireframe, **G** tone curve. Options: `--gallery` (the twenty props side by side),
+`--focus NAME` (frame one of them), `--instances N`, `--recook`, `--orbit`, `--no-lod`,
 `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`, `--ev100 EV`,
 `--force-fallback`. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
 

@@ -60,7 +60,7 @@ fn value_noise(seed: u64, p: Vec3) -> f32 {
     lerp(y0, y1, s.z)
 }
 
-fn fbm(seed: u64, mut p: Vec3, octaves: u32) -> f32 {
+pub(crate) fn fbm(seed: u64, mut p: Vec3, octaves: u32) -> f32 {
     let mut amplitude = 0.5;
     let mut sum = 0.0;
     let mut norm = 0.0;

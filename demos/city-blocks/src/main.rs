@@ -1,7 +1,9 @@
-//! `city-blocks` — the Phase 1 closing demo (issue #13), built in steps. This first step
-//! (issue #34) is the prop gallery: the twenty procedural props of the city set, 0.5 to 3 M
-//! triangles each, cooked into cluster DAGs once and cached on disk (`mesh-cache/`), drawn
-//! side by side through the GPU-driven meshlet renderer.
+//! `city-blocks` — the Phase 1 closing demo (issue #13), built in steps. The twenty
+//! procedural props of the city set (0.5 to 3 M triangles each, issue #34) and a 4 km
+//! terrain (8 M triangles) are cooked into cluster DAGs once and cached on disk
+//! (`mesh-cache/`); a compute pass places a million instances of the props over the terrain
+//! (issue #35): a street grid of buildings, lamp posts and plazas, and rocks over the hills
+//! around it. `--gallery` shows the twenty props side by side instead.
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
@@ -18,8 +20,9 @@ use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
 use forge_app::{TransientDesc, vk};
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
-use forge_geom::city::{PropSpec, city_props};
+use forge_geom::city::{PropKind, PropSpec, Terrain, city_props};
 use forge_render::meshlet::DrawParams;
+use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::{
     CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, SwRaster, Tonemap, exposure_from_ev100,
@@ -79,9 +82,15 @@ struct Args {
     /// Cook every prop again, ignoring (and replacing) the cache.
     #[arg(long)]
     recook: bool,
-    /// Start framed on this prop (its name in the log, e.g. `fountain`).
+    /// Start framed on this prop (its name in the log, e.g. `fountain`; the gallery only).
     #[arg(long)]
     focus: Option<String>,
+    /// Show the twenty props side by side instead of the city.
+    #[arg(long)]
+    gallery: bool,
+    /// Instances placed over the terrain (the city takes about 12 k, the hills the rest).
+    #[arg(long, default_value_t = 1_000_000)]
+    instances: u32,
 }
 
 /// Where a prop stands in the gallery: its name, the centre and radius of its bounds.
@@ -115,7 +124,11 @@ impl Gallery {
     fn new(ctx: &mut Context, args: Args) -> Result<Self> {
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
-        let (scene, placed) = build_gallery(ctx, &args)?;
+        let (scene, placed) = if args.gallery {
+            build_gallery(ctx, &args)?
+        } else {
+            (build_city(ctx, &args)?, Vec::new())
+        };
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM);
         if !args.no_lod {
             flags.0 |= CullFlags::LOD;
@@ -125,11 +138,21 @@ impl Gallery {
         if !args.no_occlusion {
             flags.0 |= CullFlags::OCCLUSION;
         }
-        let mut camera = FlyCamera {
-            position: Vec3::new(0.0, 70.0, 230.0),
-            pitch: -0.3,
-            speed: 40.0,
-            ..FlyCamera::default()
+        let mut camera = if args.gallery {
+            FlyCamera {
+                position: Vec3::new(0.0, 70.0, 230.0),
+                pitch: -0.3,
+                speed: 40.0,
+                ..FlyCamera::default()
+            }
+        } else {
+            // Over the city's south edge, looking north along a street.
+            FlyCamera {
+                position: Vec3::new(10.0, 45.0, 1260.0),
+                pitch: -0.12,
+                speed: 80.0,
+                ..FlyCamera::default()
+            }
         };
         if let Some(name) = &args.focus {
             let prop = placed
@@ -196,10 +219,14 @@ impl Demo for Gallery {
         if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.
             let angle = self.frame as f32 * 0.004;
-            let radius = 230.0 - (self.frame as f32 * 0.1).min(120.0);
-            self.camera.position = Vec3::new(angle.sin() * radius, 45.0, angle.cos() * radius);
+            let (radius, height, pitch) = if self.args.gallery {
+                (230.0 - (self.frame as f32 * 0.1).min(120.0), 45.0, -0.22)
+            } else {
+                (1500.0, 160.0, -0.12)
+            };
+            self.camera.position = Vec3::new(angle.sin() * radius, height, angle.cos() * radius);
             self.camera.yaw = angle;
-            self.camera.pitch = -0.22;
+            self.camera.pitch = pitch;
         } else {
             self.camera.update(input, dt);
         }
@@ -215,7 +242,7 @@ impl Demo for Gallery {
         }
         if let Some(last) = self.stats.last() {
             ctx.profile.counter(format!(
-                "drawn through {}: {} props, {:.0} k + {:.0} k clusters, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px",
+                "drawn through {}: {} instances, {:.0} k + {:.0} k clusters, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px",
                 self.renderer.path().name(),
                 last.instances_visible,
                 f64::from(last.meshlets_pass1) / 1e3,
@@ -279,14 +306,16 @@ impl Demo for Gallery {
             |f: fn(&FrameStats) -> u32| self.stats.iter().map(|s| f64::from(f(s))).sum::<f64>() / n;
         let gpu = self.gpu_ms.iter().sum::<f64>() / self.gpu_ms.len().max(1) as f64;
         let title = format!(
-            "forge city-blocks | {} props, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k + {:.0} k clusters ({:.0} k in software), {:.2} M tris | GPU {:.2} ms",
+            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances, {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items), {:.2} M tris | GPU {:.2} ms",
             self.scene.instance_count,
             self.scene.total_triangles as f64 / 1e6,
             self.scene.instance_meshlets() as f64 / 1e6,
             self.renderer.path().name(),
+            mean(|s| s.instances_visible) / 1e3,
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,
+            mean(|s| s.work_items) / 1e3,
             mean(|s| s.triangles) / 1e6,
             gpu,
         );
@@ -300,20 +329,18 @@ impl Demo for Gallery {
     }
 }
 
-/// Cooks (or loads) every prop of the city set in parallel and lays one of each out on a
-/// grid, `SPACING` metres apart.
-fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed>)> {
-    let start = Instant::now();
+/// Cooks (or loads) `props` in parallel on the job system, logging each prop's DAG; returns
+/// the meshes in order and the milliseconds they took together.
+fn cook_props(props: &[PropSpec], recook: bool) -> (Vec<MeshletMesh>, f64) {
     let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
     let cache = root.join("mesh-cache");
-    if args.recook {
+    if recook {
         // Stale files would still match their keys: remove this set's before cooking.
-        for spec in city_props() {
+        for spec in props {
             let key = forge_geom::cache::key(&spec.key_text());
             let _ = std::fs::remove_file(forge_geom::cache::path(&cache, &spec.name, key));
         }
     }
-    let props = city_props();
     let pool = TaskPool::client();
     let mut cooked: Vec<Option<(MeshletMesh, bool, f64)>> = props.iter().map(|_| None).collect();
     pool.scope(|s| {
@@ -335,24 +362,121 @@ fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed
             });
         }
     });
+    let mut total_ms = 0.0;
+    let meshes = props
+        .iter()
+        .zip(cooked)
+        .map(|(spec, done)| {
+            let (mesh, from_cache, ms) = done.expect("prop cooked");
+            let dag = mesh.dag_stats();
+            tracing::info!(
+                prop = %spec.name,
+                triangles = mesh.triangle_count,
+                clusters = dag.clusters,
+                levels = dag.levels,
+                roots = dag.roots,
+                fill = %format_args!("{:.2}", dag.fill),
+                ms = %format_args!("{ms:.0}"),
+                from_cache,
+                "prop ready"
+            );
+            total_ms += ms;
+            mesh
+        })
+        .collect();
+    (meshes, total_ms)
+}
+
+/// The city: the terrain and the twenty props cooked (or loaded), the terrain placed once
+/// at the origin and `args.instances` props placed over it by the GPU.
+fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
+    let start = Instant::now();
+    let terrain = Terrain::city();
+    let mut props = city_props();
+    props.push(PropSpec {
+        name: "terrain".to_owned(),
+        kind: PropKind::Terrain(terrain.clone()),
+    });
+    let (meshes, cook_ms) = cook_props(&props, args.recook);
+    let mut builder = MeshletSceneBuilder::new();
+    let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
+    let id = |name: &str| ids[props.iter().position(|p| p.name == name).expect("prop")];
+    let terrain_id = id("terrain");
+    builder.add_instance(terrain_id, Mat4::IDENTITY);
+    let city = CityMeshes {
+        buildings: props
+            .iter()
+            .zip(&ids)
+            .filter(|(p, _)| matches!(p.kind, PropKind::Building(_)))
+            .map(|(_, &id)| id)
+            .collect(),
+        rocks: props
+            .iter()
+            .zip(&ids)
+            .filter(|(p, _)| matches!(p.kind, PropKind::Boulder { .. } | PropKind::Rubble { .. }))
+            .map(|(_, &id)| id)
+            .collect(),
+        lamp: id("lamp-post"),
+        fountain: id("fountain"),
+        column: id("column"),
+    };
+    let layout = CityLayout::city(args.instances);
+    let first = builder.reserve_instances(&placement::mesh_counts(&layout, &city));
+    let scene = builder.build(&ctx.device)?;
+    // The terrain's cooked vertices are its heightfield, in grid order.
+    let heights: Vec<f32> = meshes[props.len() - 1]
+        .vertices
+        .iter()
+        .map(|v| v.position[1])
+        .collect();
+    let report = placement::place(
+        &ctx.device,
+        &ctx.shaders,
+        &scene,
+        first,
+        &layout,
+        &city,
+        &Ground {
+            heights: &heights,
+            samples: terrain.samples(),
+            spacing: terrain.spacing,
+        },
+    )?;
+    let counts = layout.counts();
+    tracing::info!(
+        placed = report.placed,
+        buildings = counts.buildings,
+        lamps = counts.lamps,
+        plaza_props = counts.plaza_slots,
+        rocks = counts.rocks,
+        ms = %format_args!("{:.1}", report.ms),
+        checksum = %format_args!("{:016x}", report.checksum),
+        matches_cpu_mirror = report.matches_mirror,
+        "instances placed"
+    );
+    if !report.matches_mirror {
+        tracing::warn!("the placed meshes differ from the CPU mirror: the scene's counts are off");
+    }
+    tracing::info!(
+        instances = scene.instance_count,
+        triangles = scene.total_triangles,
+        clusters = scene.instance_meshlets(),
+        cook_ms = %format_args!("{cook_ms:.0}"),
+        wall_ms = start.elapsed().as_millis(),
+        "city ready"
+    );
+    Ok(scene)
+}
+
+/// Cooks (or loads) every prop of the city set in parallel and lays one of each out on a
+/// grid, `SPACING` metres apart.
+fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed>)> {
+    let start = Instant::now();
+    let props = city_props();
+    let (meshes, total_ms) = cook_props(&props, args.recook);
     let mut builder = MeshletSceneBuilder::new();
     let mut placed = Vec::with_capacity(props.len());
-    let mut total_ms = 0.0;
-    for (i, (spec, done)) in props.iter().zip(&cooked).enumerate() {
-        let (mesh, from_cache, ms) = done.as_ref().expect("prop cooked");
-        let dag = mesh.dag_stats();
-        tracing::info!(
-            prop = %spec.name,
-            triangles = mesh.triangle_count,
-            clusters = dag.clusters,
-            levels = dag.levels,
-            roots = dag.roots,
-            fill = %format_args!("{:.2}", dag.fill),
-            ms = %format_args!("{ms:.0}"),
-            from_cache,
-            "prop ready"
-        );
-        total_ms += ms;
+    for (i, (spec, mesh)) in props.iter().zip(&meshes).enumerate() {
         let id = builder.add_mesh(mesh);
         let (column, row) = (i as u32 % COLUMNS, i as u32 / COLUMNS);
         let position = Vec3::new(

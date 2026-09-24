@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 bytemuck = { workspace = true }
+forge-core = { workspace = true }
 forge-geom = { workspace = true }
 forge-gpu = { workspace = true }
 glam = { workspace = true }

@@ -7,8 +7,8 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Step | Issue | State |
 |---|---|---|
 | The meshlet renderer at a million instances | #33 | ✅ 197 MiB for 980 k instances (`docs/demos/meshlets.md`) |
-| Twenty props, cooked once and cached on disk | #34 | ✅ this page: the prop gallery |
-| Terrain patch and GPU placement | #35 | next |
+| Twenty props, cooked once and cached on disk | #34 | ✅ the prop gallery (`--gallery`) |
+| Terrain patch and GPU placement | #35 | ✅ the city, a million instances |
 | Culling at a million instances | #37 | the culls are 5 ms of a million-instance frame |
 | Streaming of cluster pages | #36 | |
 | The flight, 1440p, numbers | #13 | |
@@ -22,12 +22,59 @@ Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD c
 what it drew, **[** / **]** LOD threshold, **Tab** wireframe, **G** tone curve.
 
 Options:
-- `--focus NAME` frames one prop (`fountain`, `tower-wide`, …).
-- `--recook` cooks every prop again.
+- `--gallery` shows the twenty props side by side instead of the city.
+- `--focus NAME` frames one prop of the gallery (`fountain`, `tower-wide`, …).
+- `--instances N` sets how many instances are placed (1 000 000).
+- `--recook` cooks every prop and the terrain again.
 - `--orbit` gives a scripted camera.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## The city (issue #35, 2026-09-24)
+
+**The ground** is one mesh through the same DAG and cache as the props:
+- 4 km across, a sample every 2 m: **8 M triangles**, 186 k clusters, 14 levels;
+- flat in a 2.4 km city square, rising over 300 m into fractal hills of up to 90 m;
+- a single mesh has no tile borders, so it cannot crack;
+- the mesh's outer edge is locked like a group border, which leaves 173 roots along it;
+- cooking takes 12 s once, loading 0.85 s with the props.
+
+**A compute pass places the instances** (`forge_render::placement`, `place_main`), once
+before the first frame. A thread per slot writes its instance from the seed and the slot's
+index alone. The slots come in category ranges:
+- **buildings:** four per block of a 24 × 24 grid of 100 m blocks with 20 m streets,
+  chosen and turned by `pcg4d`: 2 304;
+- **lamp posts:** every 25 m along both sides of every street: 9 600;
+- **plazas:** a fountain and four columns on every fourth crossing: 36 plazas, 180 props;
+- **rocks and rubble:** everything else, 987 916 of them, uniform over the hills around the
+  city, any turn, a slight tilt, 0.5–1.6× scale, sunk a little.
+
+Every prop stands on the ground height interpolated between the terrain's samples: the
+terrain mesh's own vertices, which cooking keeps in grid order.
+
+**Determinism and cost.**
+- The CPU mirrors only the mesh choice (the same `pcg4d`), for the scene's per-mesh counts.
+- After the pass the table (96 MB) is read back once: its FNV-1a checksum goes to the log
+  (`ed6454c65dd1e823` on every run and on both paths so far), and its meshes are checked
+  against the mirror.
+- Two runs capture the same frame to the pixel.
+- The pass takes 3–6 ms once its shader is compiled (384 ms on the first run, compilation
+  included).
+
+| The city, from the south edge (1600×900, LOD 1 px) | |
+|---|---|
+| instances | 1 000 001 (644 G triangles, 15.4 G clusters if all drawn at full detail) |
+| drawn | 500 k instances in view, 526 k work items; 48 k clusters, 3.32 M triangles (13 k clusters in software: auto mode, far rocks) |
+| GPU per frame | **4.96 ms**: cluster culls 2.00 + 2.12, instance cull 0.55, meshlet pass 1 0.17, resolve 0.05, software raster and merge 0.04, depth pyramid 0.02 |
+| CPU per frame | 0.25 ms of work (record 0.09, submit + present 0.16), the rest waiting for the GPU |
+| memory | 1.18 GiB allocated: geometry 1 071 MiB (props 749, terrain about 226, instance table 96), work buffers 68 |
+| start-up | 13.3 s the first time (the terrain's cook), 0.85 s from the cache |
+
+The orbit (`--orbit`) views the whole city from 1.5 km out at 160 m: 5.5 ms. The culls are
+the frame: 4.1 of its 5 ms go to testing 526 k work items of 32 clusters for the 500 k
+instances in view, most of them far rocks down to their last cluster. That is #37.
+Streaming (#36) and the flight at 300 m/s (#13) come after.
 
 ## The props (issue #34, 2026-09-24)
 

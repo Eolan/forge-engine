@@ -14,7 +14,7 @@ use forge_core::hash::unit_f32;
 use glam::Vec3;
 
 use crate::meshlet::CookOptions;
-use crate::procedural::{TriMesh, asteroid};
+use crate::procedural::{TriMesh, asteroid, fbm};
 
 /// A prop of the city set: its name (unique within the set) and how to generate it.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +50,8 @@ pub enum PropKind {
     },
     /// A surface of revolution (see [`lathe`]).
     Lathe(Lathe),
+    /// The ground (see [`terrain_mesh`]).
+    Terrain(Terrain),
 }
 
 impl PropSpec {
@@ -68,6 +70,7 @@ impl PropSpec {
                 segments,
             } => rubble(*seed, *pieces, *segments),
             PropKind::Lathe(l) => lathe(l),
+            PropKind::Terrain(t) => terrain_mesh(t),
         }
     }
 
@@ -78,7 +81,7 @@ impl PropSpec {
             normal_weight: match self.kind {
                 PropKind::Building(_) => 1.0,
                 PropKind::Lathe(_) => 0.5,
-                PropKind::Boulder { .. } | PropKind::Rubble { .. } => 0.0,
+                PropKind::Boulder { .. } | PropKind::Rubble { .. } | PropKind::Terrain(_) => 0.0,
             },
         }
     }
@@ -135,6 +138,84 @@ pub struct Lathe {
     pub flute_depth: f32,
     /// Heights between which the flutes are cut.
     pub flute_span: (f32, f32),
+}
+
+/// The ground of the city (issue #35): a square heightfield centred on the origin, flat
+/// where the city stands and rising into hills around it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Terrain {
+    /// Side of the square, metres.
+    pub size: f32,
+    /// Distance between samples, metres.
+    pub spacing: f32,
+    /// Half the side of the flat city square, metres.
+    pub city_half: f32,
+    /// Distance over which the hills rise from the city's edge, metres.
+    pub rise: f32,
+    /// Height of the highest hills, metres.
+    pub hill_height: f32,
+    /// Noise seed.
+    pub seed: u64,
+}
+
+impl Terrain {
+    /// The city-blocks ground: 4 km across, a sample every 2 m (8 M triangles), a 2.4 km
+    /// city square rising over 300 m into hills of up to 90 m.
+    pub fn city() -> Self {
+        Self {
+            size: 4000.0,
+            spacing: 2.0,
+            city_half: 1200.0,
+            rise: 300.0,
+            hill_height: 90.0,
+            seed: 35,
+        }
+    }
+
+    /// Samples per side.
+    pub fn samples(&self) -> u32 {
+        (self.size / self.spacing).round() as u32 + 1
+    }
+
+    /// Height of the ground at (x, z), metres.
+    pub fn height(&self, x: f32, z: f32) -> f32 {
+        let hills = {
+            let n = fbm(self.seed, Vec3::new(x, 0.0, z) / 700.0, 5);
+            let t = (0.5 + 0.5 * n).clamp(0.0, 1.0);
+            self.hill_height * t * t
+        };
+        let flat = 0.4 * fbm(self.seed ^ 0x5eed, Vec3::new(x, 0.0, z) / 90.0, 3);
+        // 0 inside the city square, 1 from `rise` beyond it, smooth between.
+        let d = ((x.abs().max(z.abs()) - self.city_half) / self.rise).clamp(0.0, 1.0);
+        let w = d * d * (3.0 - 2.0 * d);
+        flat + (hills - flat) * w
+    }
+}
+
+/// The terrain as a grid mesh: vertex `j × samples + i` at x = −size/2 + i × spacing,
+/// z = −size/2 + j × spacing (the order cooking keeps, so the cooked vertices are the
+/// heightfield), two counter-clockwise triangles per cell seen from above.
+pub fn terrain_mesh(t: &Terrain) -> TriMesh {
+    let n = t.samples();
+    let half = t.size * 0.5;
+    let mut mesh = TriMesh::default();
+    mesh.positions.reserve((n * n) as usize);
+    for j in 0..n {
+        for i in 0..n {
+            let (x, z) = (-half + i as f32 * t.spacing, -half + j as f32 * t.spacing);
+            mesh.positions.push([x, t.height(x, z), z]);
+        }
+    }
+    mesh.indices.reserve(((n - 1) * (n - 1) * 6) as usize);
+    for j in 0..n - 1 {
+        for i in 0..n - 1 {
+            let a = j * n + i;
+            let (b, c, d) = (a + 1, a + n, a + n + 1);
+            mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+    mesh.recompute_normals();
+    mesh
 }
 
 /// Six faces of a box as (normal, up, right), with `up × right = normal` so that the grid's
@@ -610,6 +691,32 @@ mod tests {
                 assert!(n[0] * p[0] + n[2] * p[2] > 0.0);
             }
         }
+    }
+
+    #[test]
+    fn the_terrain_faces_up_and_is_flat_in_the_city() {
+        let t = Terrain {
+            size: 64.0,
+            spacing: 4.0,
+            city_half: 16.0,
+            rise: 8.0,
+            hill_height: 30.0,
+            seed: 1,
+        };
+        let mesh = terrain_mesh(&t);
+        assert_eq!(mesh.positions.len() as u32, t.samples() * t.samples());
+        assert!(
+            mesh.normals.iter().all(|n| n[1] > 0.0),
+            "every normal faces up"
+        );
+        // The vertices are the heightfield, in grid order.
+        let n = t.samples() as usize;
+        let p = mesh.positions[3 * n + 5];
+        assert_eq!(
+            p,
+            [-32.0 + 5.0 * 4.0, t.height(p[0], p[2]), -32.0 + 3.0 * 4.0]
+        );
+        assert!(t.height(0.0, 0.0).abs() < 0.5, "the city is flat");
     }
 
     #[test]

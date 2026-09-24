@@ -371,6 +371,13 @@ struct HzbPush {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeshId(u32);
 
+impl MeshId {
+    /// The mesh's index in the scene's mesh table.
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// Concatenates meshes and instances into the GPU tables.
 #[derive(Default)]
 pub struct MeshletSceneBuilder {
@@ -483,6 +490,34 @@ impl MeshletSceneBuilder {
         self.instances.len()
     }
 
+    /// Reserves instance slots for a GPU pass to fill after [`MeshletSceneBuilder::build`]
+    /// (`crate::placement`): `per_mesh` says how many of them show each mesh, which the
+    /// scene's counts (triangles, work bound, finest clusters) need. Returns the first slot.
+    pub fn reserve_instances(&mut self, per_mesh: &[(MeshId, u32)]) -> u32 {
+        let first = self.instances.len() as u32;
+        for &(mesh, count) in per_mesh {
+            let info = self.meshes[mesh.0 as usize];
+            let n = u64::from(count);
+            self.total_triangles += u64::from(info.triangle_count) * n;
+            self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]) * n;
+            self.work_bound += u64::from(info.meshlet_count.div_ceil(TASK_GROUP_SIZE)) * n;
+            self.instance_meshlets += u64::from(info.meshlet_count) * n;
+            // Placeholders: the GPU pass writes every one of them before the first frame.
+            self.instances.extend(std::iter::repeat_n(
+                GpuInstance {
+                    model: Mat4::IDENTITY.to_cols_array(),
+                    center: [0.0; 3],
+                    radius: 0.0,
+                    mesh: mesh.0,
+                    id: 0,
+                    pad: [0; 2],
+                },
+                count as usize,
+            ));
+        }
+        first
+    }
+
     /// Uploads everything.
     pub fn build(mut self, device: &Arc<Device>) -> Result<MeshletScene> {
         while !self.meshlet_triangles.len().is_multiple_of(4) {
@@ -527,9 +562,10 @@ impl MeshletSceneBuilder {
                 MemoryCategory::Geometry,
                 "meshes",
             )?,
+            // Written by GPU placement (`crate::placement`) and read back once for its checksum.
             instances: device.create_buffer_with_data(
                 &self.instances,
-                usage,
+                usage | vk::BufferUsageFlags::TRANSFER_SRC,
                 MemoryCategory::Geometry,
                 "instances",
             )?,
@@ -625,6 +661,16 @@ impl MeshletScene {
     /// Meshlets over all instances (the culling universe).
     pub fn instance_meshlets(&self) -> u64 {
         self.instance_meshlets
+    }
+
+    /// The instance table (`Instance` in `meshlet.slang`, 96 bytes each).
+    pub(crate) fn instance_buffer(&self) -> &Buffer {
+        &self.instances
+    }
+
+    /// The mesh table (`Mesh` in `meshlet.slang`).
+    pub(crate) fn mesh_buffer(&self) -> &Buffer {
+        &self.meshes
     }
 }
 

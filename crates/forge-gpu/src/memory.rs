@@ -306,6 +306,60 @@ impl Device {
         })
     }
 
+    /// Records `record` (dispatches, without barriers of their own) into a one-shot command
+    /// buffer, followed by a barrier that makes its shader writes visible to everything
+    /// submitted later, submits it and waits: a compute pass that prepares data before the
+    /// first frame (GPU placement). Initialisation only.
+    pub fn execute_compute_once(&self, record: impl FnOnce(&crate::Commands<'_>)) -> Result<()> {
+        use vk::PipelineStageFlags2 as S;
+        self.execute_transient(|_, cb| {
+            let commands = crate::Commands::new(self, cb);
+            record(&commands);
+            commands.memory_barrier(
+                S::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_WRITE,
+                S::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+            );
+        })
+    }
+
+    /// Copies `size` bytes of `src` from `offset` into host memory: everything submitted
+    /// before is waited for and made visible to the copy, the copy to the host. `src` needs
+    /// `TRANSFER_SRC` usage. Initialisation and tests only (it waits).
+    pub fn read_back(self: &Arc<Self>, src: &Buffer, offset: u64, size: u64) -> Result<Vec<u8>> {
+        use vk::PipelineStageFlags2 as S;
+        let readback = self.create_buffer(BufferDesc {
+            size: size.max(4),
+            usage: vk::BufferUsageFlags::TRANSFER_DST,
+            location: MemoryLocation::GpuToCpu,
+            category: MemoryCategory::Transfer,
+            name: "read back",
+        })?;
+        self.execute_transient(|device, cb| {
+            let commands = crate::Commands::new(self, cb);
+            commands.memory_barrier(
+                S::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_WRITE,
+                S::COPY,
+                vk::AccessFlags2::TRANSFER_READ,
+            );
+            let region = vk::BufferCopy::default().src_offset(offset).size(size);
+            // SAFETY: both buffers are live and the copy is within bounds (the caller's
+            // responsibility for `src`).
+            unsafe { device.cmd_copy_buffer(cb, src.raw(), readback.raw(), &[region]) };
+            commands.memory_barrier(
+                S::COPY,
+                vk::AccessFlags2::TRANSFER_WRITE,
+                S::HOST,
+                vk::AccessFlags2::HOST_READ,
+            );
+        })?;
+        let mut bytes = vec![0_u8; size as usize];
+        readback.read(0, &mut bytes);
+        Ok(bytes)
+    }
+
     /// Creates a device-local buffer initialised with `data` through a staging copy.
     pub fn create_buffer_with_data<T: Pod>(
         self: &Arc<Self>,
