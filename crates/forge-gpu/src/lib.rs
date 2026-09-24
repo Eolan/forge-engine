@@ -36,7 +36,7 @@ pub use bindless::{
     StorageImageId,
 };
 pub use commands::Commands;
-pub use device::{Device, DeviceFeatures, MeshShaderLimits};
+pub use device::{Device, DeviceFeatures, DeviceOptions, MeshShaderLimits};
 pub use dlss::{Dlss, DlssFrame, DlssImage, DlssImages, DlssMode, DlssToken};
 pub use error::{GpuError, Result};
 pub use frame::{FRAMES_IN_FLIGHT, FrameSlot, Frames};
@@ -48,7 +48,9 @@ pub use graph::{
 pub use instance::{Instance, Surface};
 pub use memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};
 pub use memory_report::{BUDGET_WARNING, HeapReport, MemoryCategory, MemoryReport};
-pub use pipeline::{ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline};
+pub use pipeline::{
+    ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline, VertexPipelineDesc,
+};
 pub use shader::{ShaderCompiler, ShaderStage};
 pub use swapchain::Swapchain;
 pub use timers::{GpuTimerSlot, GpuTimers, GpuZone, MAX_MARKS_PER_FRAME};

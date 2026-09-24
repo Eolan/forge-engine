@@ -16,34 +16,36 @@ Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24.
 
 ## `asteroids` — the ballad with the planet's atmosphere (frame 400, LOD 1 px, TAA on, ACES, overlay in full mode)
 
-Frame **0.35 ms** (2 836 fps), p50 0.34, p99 0.59; over two 6000-frame scripted runs without
-the overlay the GPU averages **0.325 ms** along the path and 0.34 ms facing the planet
-(`--look`) (0.315 measured the same day before the atmosphere, 0.30 before the exposure
-histogram, 0.27 with the rocks shaded in the mesh passes, 0.33 with the sky drawn first,
-0.34 before the graph). GPU zones sum to 0.34 ms with the overlay and the capture copy in
-the frame; CPU main thread 0.18 ms of work (record 0.09, submit + present 0.09). Every zone below is a
+Frame **0.36 ms** (2 746 fps), p50 0.35, p99 0.64; over a 20 000-frame scripted run without
+the overlay the GPU averages **0.326 ms** along the path (0.322 through the task shader the
+same day, 0.360 through the indirect-count fallback; 0.325 before issue #5, 0.315 before
+the atmosphere, 0.30 before the exposure histogram, 0.27 with the rocks shaded in the mesh
+passes, 0.33 with the sky drawn first, 0.34 before the graph) and 0.34 ms facing the planet
+(`--look`). GPU zones sum to 0.36 ms with the overlay and the capture copy in the frame;
+CPU main thread 0.20 ms of work (record 0.10, submit + present 0.10). Every zone below is a
 graph pass; the graph's own counters are the first line of the COUNTERS block, the
 exposure (EV100, target, compensation, curve) the last.
 
 | Subject | Zone | ms | share of GPU | Verdict |
 |---|---|---|---|---|
-| geometry | meshlet pass 1 (visible last frame) | 0.06 | 16 % | 7–8 k clusters, 0.5 M triangles, positions and a 32-bit id only. |
-| geometry | instance cull | 0.02 | 7 % | One thread per instance: frustum, per-level LOD window, work-list append. At this size the timestamps' own granularity shows. |
-| geometry | depth pyramid | 0.02 | 6 % | Eleven graph passes, one zone. Negligible; stays. |
-| geometry | meshlet pass 2 (newly visible) | 0.02 | 6 % | Almost nothing becomes newly visible per frame at 1 px. |
+| geometry | meshlet pass 1 (visible last frame) | 0.04 | 12 % | 7–8 k clusters, 0.5 M triangles, positions and a 32-bit id only (0.06 while the task shader culled inside it). Through the indirect-count fallback: 0.07. |
+| geometry | cluster cull 1 / cluster cull 2 (occlusion) | 0.02 / 0.02 | 5 % each | Compute since issue #5: LOD selection, frustum, normal cone and, in the second, the depth pyramid and the visibility bits, appending the survivors in a fixed order (a prefix sum over workgroups, so the image does not depend on timing). The same list feeds both paths. |
+| geometry | instance cull | 0.02 | 5 % | One thread per instance: frustum, per-level LOD window, work-list append in instance order. At this size the timestamps' own granularity shows. |
+| geometry | depth pyramid | 0.02 | 7 % | Eleven graph passes, one zone. Negligible; stays. |
+| geometry | meshlet pass 2 (newly visible) | 0.01 | 2 % | Almost nothing becomes newly visible per frame at 1 px. |
 | shading | visibility resolve | 0.03 | 8 % | One 8×8 compute group per tile, shading once per covered pixel, now in cd/m² times the exposure. Where shading cost will grow; material classification (#20) keeps it per material. |
-| sky | starfield + planet | 0.11 (0.14–0.16 with the planet in view) | 32 % | **Still the largest single item.** Drawn after the rocks with a depth test, so its noise runs only on the uncovered pixels. Since #8 the planet is a ground under Earth's air, marched per pixel in 16 segments through Hillaire's tables (D-023); pixels outside the atmosphere's cone skip it, so the planet costs only where it is: +0.01 ms out of view, +0.04–0.06 in view, 0.31 ms for a planet filling the screen. The planet-view table (#26) turns that into a lookup. The tables themselves are built once (`sky/atmosphere tables`, first frame only). |
-| exposure | luminance histogram | 0.02 | 5 % | Four passes in one zone: clear 1 KB, count every pixel into 256 log2 bins (shared-memory atomics, one global atomic per non-empty bin and group), copy to the slot's cached readback, host read. Could meter a quarter-resolution image if it ever matters; it does not now. |
-| temporal | motion / TAA resolve | 0.01 / 0.05 | 17 % | The resolve rescales the history by the exposure ratio and writes the display image through the tone curve in the same pass: the curve is free. DLSS replaces the resolve on NVIDIA. |
+| sky | starfield + planet | 0.11 (0.14–0.16 with the planet in view) | 30 % | **Still the largest single item.** Drawn after the rocks with a depth test, so its noise runs only on the uncovered pixels. Since #8 the planet is a ground under Earth's air, marched per pixel in 16 segments through Hillaire's tables (D-023); pixels outside the atmosphere's cone skip it, so the planet costs only where it is: +0.01 ms out of view, +0.04–0.06 in view, 0.31 ms for a planet filling the screen. The planet-view table (#26) turns that into a lookup. The tables themselves are built once (`sky/atmosphere tables`, first frame only). |
+| exposure | luminance histogram | 0.02 | 7 % | Four passes in one zone: clear 1 KB, count every pixel into 256 log2 bins (shared-memory atomics, one global atomic per non-empty bin and group), copy to the slot's cached readback, host read. Could meter a quarter-resolution image if it ever matters; it does not now. |
+| temporal | motion / TAA resolve | 0.01 / 0.05 | 16 % | The resolve rescales the history by the exposure ratio and writes the display image through the tone curve in the same pass: the curve is free. DLSS replaces the resolve on NVIDIA. |
 | app | overlay / present | 0.01 / 0.00 | 3 % | The profiler itself; the present transition is free. |
-| cpu | record / submit + present | 0.09 / 0.09 | — | Record includes compiling the graph (23 passes, 47 barriers) and the exposure update (a 256-bin walk). At 3 000 fps the driver's submit and present are a third of the frame; a render thread and fewer, larger submissions fix that when it matters. |
-| cpu | wait for GPU (frame slot) | 0.14 | — | The frame is GPU-bound: the main thread's 0.18 ms of work finishes first and waits for the slot. |
+| cpu | record / submit + present | 0.10 / 0.10 | — | Record includes compiling the graph (26 passes, 49 barriers) and the exposure update (a 256-bin walk). At 3 000 fps the driver's submit and present are a third of the frame; a render thread and fewer, larger submissions fix that when it matters. |
+| cpu | wait for GPU (frame slot) | 0.15 | — | The frame is GPU-bound: the main thread's 0.20 ms of work finishes first and waits for the slot. |
 
-Counters: graph 24 passes (with the overlay), 40 image + 8 memory barriers, transients 4
+Counters: graph 27 passes (with the overlay), 40 image + 10 memory barriers, transients 4
 images, 32.8 MB requested in a 26.2 MB heap (the visibility buffer and the motion vectors
 share 6.4 MB), 1 heap build, 0 retired; 3000 asteroids, 195 M leaf triangles, 28 k clusters
 in the DAG tables, 4.6 M cluster slots; drawn 2 531 instances, 8 k meshlets, 0.63 M
-triangles, mean LOD level 6.3; EV100 14.40 automatic, ACES, sun 128 klux.
+triangles, mean LOD level 6.25; EV100 14.40 automatic, ACES, sun 128 klux.
 
 **The road here (same frame):** full detail 5.5 ms → DAG with the old dispatch 4.1 ms →
 exact task tables 1.09 ms → instance cull pass 0.34 ms → render graph 0.33 ms (the same
@@ -51,7 +53,9 @@ work; the graph is about correctness and structure, not speed) → sky drawn las
 resolve straight into the swapchain 0.27 ms → visibility buffer 0.30 ms → physical light,
 histogram exposure and tone curves 0.30–0.31 ms (structure again: the image is now a
 function of light in lux, a camera value and a curve) → the planet under a physical
-atmosphere 0.325 ms (0.34 facing it). The rendering stays pixel-identical
+atmosphere 0.325 ms (0.34 facing it) → culling in compute, appending in a fixed order, drawn by
+mesh shaders 0.326 ms (issue #5; the task shader 0.322 the same day, the indirect-count
+fallback 0.360). The rendering stays pixel-identical
 to brute force at every step of the A/B harness, and the golden captures of the three
 curves are bit-identical from run to run.
 
@@ -84,11 +88,14 @@ adds about 0.07 ms of CPU to recording (0.17 against 0.10).
 
 GPU **0.18 ms** (0.15 with the rocks shaded in the mesh passes): the bench resolves the
 visibility buffer into a pre-exposed HDR image at a fixed EV100 of 15 and the display pass
-(AgX) writes the swapchain: 17 passes, 32 image + 3 memory barriers, three transients,
+(AgX) writes the swapchain: 20 passes, 32 image + 6 memory barriers (issue #5 added the
+clear of the instance cull's look-back words and a cluster cull before each mesh pass), three transients,
 25.6 MB requested in a 19.2 MB heap since the colour image reuses the depth buffer's
 memory; 15 k meshlets, 1.09 M triangles (full detail, measured before the visibility
 buffer: 325 k meshlets, 30 M triangles, 2.18 ms; without occlusion at full detail: 106 M at
-6.30 ms).
+6.30 ms). Through the indirect-count fallback (`--force-fallback`): 0.270 ms, the draw of pass 1
+taking 0.159 ms instead of 0.071; both paths and the old task path compared in
+[meshlets.md](demos/meshlets.md).
 
 ## Memory — both demos (the overlay's memory group, issue #9)
 
@@ -104,19 +111,22 @@ throughout; the overlay's graph counter line stays in MB.
 |---|---|---|---|---|---|---|
 | VRAM used by the process (budget 14.87 GiB) | **357 MiB** (2.3 %) | **357 MiB** | 419 | 616 | 616 | 572 |
 | system RAM used by the process | 77 MiB | 13 | | | | |
-| allocated by the engine | 107.7 MiB | 43.5 | 120.2 | 120.2 | 91.1 | 80.7 |
+| allocated by the engine | 109.9 MiB | 44.9 | 120.2 | 120.2 | 91.1 | 80.7 |
 | — geometry | 35.5 | 3.7 | 35.5 | 35.5 | 35.5 | 35.5 |
 | — render targets | 27.8 | 2.7 | 40.3 | 40.3 | 25.8 | 19.6 |
 | — transient heap | 25.0 | 18.8 | 25.0 | 25.0 | 10.5 | 6.3 |
-| — GPU work buffers | 18.8 | 17.8 | 18.8 | 18.8 | 18.8 | 18.8 |
+| — GPU work buffers | 21.0 | 19.3 | 18.8 | 18.8 | 18.8 | 18.8 |
 | — per-frame data, textures, staging + readback | 0.5, 0.03, 0.00 | 0.5, 0.03, 0.00 | | | | |
 | allocator blocks | 384 MiB (28 % used) | 320 (14 %) | 384 | 384 | 384 | 384 |
 | outside the allocator | 50 MiB | 50 | 161 | 364 | 364 | 316 |
-| uploads per frame, overlay off (full overlay) | 1.11 KiB (32.2) | 1.00 KiB (32.1) | 1.11 | 1.11 | 1.11 | 1.11 |
+| uploads per frame, overlay off (full overlay) | 1.22 KiB (32.3) | 1.11 KiB (32.2) | 1.11 | 1.11 | 1.11 | 1.11 |
 | read back per frame | 1.03 KiB | 0.03 KiB | 1.03 | 1.03 | 1.03 | 1.03 |
 
 1200-frame scripted runs, exit log; the meshlets bench and the TAA build with the overlay
-off. **Verdicts:**
+off. The first two columns are re-measured after issue #5: the culls' look-back status
+words add 2.2 and 1.5 MiB of work buffers and their argument resets 0.1 KiB of uploads per
+frame; the Streamline columns are from issue #9. The indirect-count fallback adds 40 MiB of
+draw commands (work buffers 61.0 and 59.3 MiB). **Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
    reserves 256 MiB device blocks and 64 MiB host-visible ones. Each demo holds one of each
@@ -131,7 +141,7 @@ off. **Verdicts:**
    Performance mode. The upscaler's output image (12.5 MiB of render targets) is allocated
    at start-up, even when the TAA is selected; creating it on the first switch would save
    that in the default mode.
-3. **Traffic is negligible.** The renderer writes 1.1 KiB per frame: camera blocks, indirect
+3. **Traffic is negligible.** The renderer writes 1.2 KiB per frame: camera blocks, indirect
    arguments and statistics reset, the planet. The full overlay adds 31 KiB, because it
    rewrites its whole cell grid every frame (90 MiB/s at 2 900 fps). The ballad reads back
    1 KiB per frame (the exposure histogram and the meshlet statistics). The counters are

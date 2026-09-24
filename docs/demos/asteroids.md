@@ -17,7 +17,9 @@ error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colo
 `--sun-lux LUX` (128 000, the Sun at 1 AU), `--exposure-log file.csv` (EV100 and its target
 per frame), `--look x,y,z` (hold the view direction while moving along the path: stills of
 the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance` (taa),
-`--cycle-upscaler N` (switch as U does every N frames: tests the switch in scripted runs).
+`--cycle-upscaler N` (switch as U does every N frames: tests the switch in scripted runs),
+`--force-fallback` (the device without mesh shaders: the geometry goes through
+`vkCmdDrawIndexedIndirectCount`, pixel-identical; see [meshlets.md](meshlets.md)).
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`. With DLSS: `cargo run --release -p asteroids --features dlss`
 (Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad says
@@ -455,6 +457,17 @@ bit-identical (0 pixels, max channel error 0), without any stall. Which hand-wri
 dependency was incomplete was not isolated; the graph replaced them all, and the plan it
 derives (`FORGE_GRAPH_LOG=1`) is the record of what the frame now waits for.
 `FORGE_STALL_MS` stays as a debugging aid.
+
+**The mechanism, found in issue #5.** The same bimodal signature came back when the culling
+moved into compute and filled the visible-cluster list with atomics, and this time it was
+isolated: two triangles can meet a sample at exactly the same depth, the depth test keeps the
+one drawn last, and the draw order followed the order in which workgroups won the atomics.
+Only TAA's history makes the rare ties visible, and a stall hides them because it changes
+the scheduling, not the synchronization. Both culls now append in a fixed order (a prefix
+sum over workgroups in ticket order; [meshlets.md](meshlets.md), "The draw order is part of
+the output"), which makes the draw order, and so the image, independent of timing. The fixed
+order moved the golden once (14 946 pixels at ±1 with TAA and automatic exposure; identical
+with a fixed exposure or without TAA); it is identical from run to run since.
 
 ## What the numbers say
 

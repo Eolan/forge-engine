@@ -134,6 +134,9 @@ struct Args {
     /// Append "frame,path_t,ev100,target_ev100" for every frame to this CSV file.
     #[arg(long)]
     exposure_log: Option<PathBuf>,
+    /// Draw through the indirect-count fallback: the device is created without mesh shaders.
+    #[arg(long)]
+    force_fallback: bool,
 }
 
 fn parse_vec3(text: &str) -> std::result::Result<Vec3, String> {
@@ -205,12 +208,6 @@ struct Ballad {
 
 impl Ballad {
     fn new(ctx: &mut Context, args: Args) -> Result<Self> {
-        if !ctx.device.features().mesh_shader {
-            anyhow::bail!(
-                "{} has no mesh shader support (VK_EXT_mesh_shader)",
-                ctx.device.name()
-            );
-        }
         // The scene is drawn into a visibility buffer and shaded into the TAA's HDR target;
         // the swapchain only receives the resolve.
         let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
@@ -489,12 +486,14 @@ impl Demo for Ballad {
                 self.scene.instance_meshlets() as f64 / 1e6
             ));
             ctx.profile.counter(format!(
-                "drawn: {} instances, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded",
+                "drawn through {}: {} instances, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}",
+                self.renderer.path().name(),
                 last.instances_visible,
                 f64::from(last.meshlets_pass1) / 1e3,
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
-                f64::from(last.occluded) / 1e3
+                f64::from(last.occluded) / 1e3,
+                last.overflow_note()
             ));
             ctx.profile.counter(format!(
                 "LOD {} at {:.2} px: mean level {:.2} of the drawn clusters; {} clusters in the DAG tables",
@@ -701,11 +700,12 @@ impl Demo for Ballad {
                 .unwrap_or(0.0)
         };
         let title = format!(
-            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | drawn {:.0} k + {:.0} k meshlets, {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
+            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} k + {:.0} k meshlets, {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
             self.scene.instance_count,
             self.scene.mesh_count,
             self.scene.instance_meshlets() as f64 / 1e6,
             self.scene.total_triangles as f64 / 1e6,
+            self.renderer.path().name(),
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.triangles) / 1e6,
@@ -927,6 +927,7 @@ fn main() -> Result<()> {
         // Built with `--features dlss`: the Vulkan API comes through Streamline so U can switch
         // to DLSS at run time.
         streamline: cfg!(feature = "dlss"),
+        force_fallback: args.force_fallback,
         ..AppConfig::default()
     };
     forge_app::run(config, move |ctx| Ballad::new(ctx, args))

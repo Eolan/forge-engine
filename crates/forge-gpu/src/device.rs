@@ -20,6 +20,17 @@ pub struct DeviceFeatures {
     pub sampler_minmax: bool,
     /// `VK_EXT_memory_budget` (per-heap usage and budget from the OS).
     pub memory_budget: bool,
+    /// 8-bit index buffers (`VK_KHR_index_type_uint8` or the EXT): the meshlet fallback draws
+    /// straight from the cooked one-byte triangle lists.
+    pub index_type_uint8: bool,
+}
+
+/// Choices made when creating a device.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DeviceOptions {
+    /// Leave `VK_EXT_mesh_shader` disabled even when the GPU has it, so the renderers take
+    /// their fallback paths on this GPU (`--force-fallback` in the demos).
+    pub no_mesh_shader: bool,
 }
 
 /// Mesh-shader limits worth knowing when sizing meshlets.
@@ -45,6 +56,7 @@ pub struct Device {
     features: DeviceFeatures,
     mesh_limits: Option<MeshShaderLimits>,
     timestamp_period_ns: f32,
+    limits: vk::PhysicalDeviceLimits,
     name: String,
     swapchain_loader: khr::swapchain::Device,
     mesh_loader: Option<ext::mesh_shader::Device>,
@@ -66,6 +78,8 @@ struct Candidate {
     physical: vk::PhysicalDevice,
     graphics_family: u32,
     features: DeviceFeatures,
+    /// The uint8 index extension to enable (the KHR name when offered, else the EXT one).
+    index_type_uint8: Option<&'static CStr>,
     score: u32,
     name: String,
 }
@@ -74,6 +88,15 @@ impl Device {
     /// Picks the best physical device that can present to `surface` (when given) and creates
     /// the logical device with the engine's baseline features plus the optional ones found.
     pub fn new(instance: Arc<Instance>, surface: Option<vk::SurfaceKHR>) -> Result<Arc<Self>> {
+        Self::with_options(instance, surface, DeviceOptions::default())
+    }
+
+    /// [`Device::new`] with explicit [`DeviceOptions`].
+    pub fn with_options(
+        instance: Arc<Instance>,
+        surface: Option<vk::SurfaceKHR>,
+        options: DeviceOptions,
+    ) -> Result<Arc<Self>> {
         let raw_instance = instance.raw();
         // SAFETY: plain enumeration on a live instance.
         let physicals = unsafe { raw_instance.enumerate_physical_devices()? };
@@ -83,12 +106,16 @@ impl Device {
                 candidates.push(c);
             }
         }
-        let best = candidates
+        let mut best = candidates
             .into_iter()
             .max_by_key(|c| c.score)
             .ok_or_else(|| {
                 GpuError::Unsupported("no Vulkan 1.3 device with a graphics queue".into())
             })?;
+        if options.no_mesh_shader && best.features.mesh_shader {
+            tracing::info!("mesh shaders left disabled (fallback paths forced)");
+            best.features.mesh_shader = false;
+        }
         tracing::info!(device = %best.name, features = ?best.features, "selected GPU");
 
         let mut extensions: Vec<*const i8> = Vec::new();
@@ -104,12 +131,17 @@ impl Device {
         if best.features.memory_budget {
             extensions.push(ext::memory_budget::NAME.as_ptr());
         }
+        if let Some(name) = best.index_type_uint8 {
+            extensions.push(name.as_ptr());
+        }
 
         let base = vk::PhysicalDeviceFeatures::default()
             .shader_int64(true)
             .shader_int16(true)
             .sampler_anisotropy(true)
             .multi_draw_indirect(true)
+            // The meshlet fallback's indirect draws carry the visible-list slot in firstInstance.
+            .draw_indirect_first_instance(true)
             .fill_mode_non_solid(true)
             // No geometry shaders are ever used (D-003), but a fragment shader that reads
             // `SV_PrimitiveID` (the visibility buffer's) declares the SPIR-V `Geometry`
@@ -157,6 +189,11 @@ impl Device {
         if best.features.mesh_shader {
             features2 = features2.push_next(&mut mesh);
         }
+        let mut uint8 =
+            vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default().index_type_uint8(true);
+        if best.features.index_type_uint8 {
+            features2 = features2.push_next(&mut uint8);
+        }
         let priorities = [1.0_f32];
         let queue_info = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(best.graphics_family)
@@ -178,6 +215,7 @@ impl Device {
         // SAFETY: property query on a valid physical device.
         unsafe { raw_instance.get_physical_device_properties2(best.physical, &mut props2) };
         let timestamp_period_ns = props2.properties.limits.timestamp_period;
+        let limits = props2.properties.limits;
         let max_anisotropy = props2.properties.limits.max_sampler_anisotropy;
         let mesh_limits = best.features.mesh_shader.then_some(MeshShaderLimits {
             preferred_task_invocations: mesh_props.max_preferred_task_work_group_invocations,
@@ -231,6 +269,7 @@ impl Device {
             features: best.features,
             mesh_limits,
             timestamp_period_ns,
+            limits,
             name: best.name,
             swapchain_loader,
             mesh_loader,
@@ -316,6 +355,13 @@ impl Device {
         if mesh_ext {
             features2 = features2.push_next(&mut mesh);
         }
+        let uint8_ext = [vk::KHR_INDEX_TYPE_UINT8_NAME, vk::EXT_INDEX_TYPE_UINT8_NAME]
+            .into_iter()
+            .find(|name| has(name));
+        let mut uint8 = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default();
+        if uint8_ext.is_some() {
+            features2 = features2.push_next(&mut uint8);
+        }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
         let baseline = v12.timeline_semaphore == vk::TRUE
@@ -333,6 +379,7 @@ impl Device {
             sampler_minmax: has(ext::sampler_filter_minmax::NAME)
                 && v12.sampler_filter_minmax == vk::TRUE,
             memory_budget: has(ext::memory_budget::NAME),
+            index_type_uint8: uint8_ext.is_some() && uint8.index_type_uint8 == vk::TRUE,
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
@@ -349,6 +396,7 @@ impl Device {
             physical,
             graphics_family,
             features,
+            index_type_uint8: uint8_ext.filter(|_| features.index_type_uint8),
             score,
             name,
         }))
@@ -393,6 +441,11 @@ impl Device {
     /// Mesh-shader limits when the feature is present.
     pub fn mesh_limits(&self) -> Option<MeshShaderLimits> {
         self.mesh_limits
+    }
+
+    /// The physical device's limits.
+    pub fn limits(&self) -> &vk::PhysicalDeviceLimits {
+        &self.limits
     }
 
     /// Nanoseconds per timestamp tick.

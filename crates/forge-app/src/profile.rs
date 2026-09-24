@@ -97,6 +97,10 @@ pub struct Profile {
     memory: Option<MemorySample>,
     /// Groups whose fold state the digit keys flipped from the mode's default.
     toggled: Vec<String>,
+    /// GPU milliseconds per zone summed over the run (unsmoothed), for the exit log.
+    run_gpu: Vec<(String, f64)>,
+    /// Frames whose GPU zones were summed.
+    run_frames: u64,
 }
 
 impl Profile {
@@ -109,7 +113,31 @@ impl Profile {
             counters: Vec::new(),
             memory: None,
             toggled: Vec::new(),
+            run_gpu: Vec::new(),
+            run_frames: 0,
         }
+    }
+
+    /// The GPU zones averaged over every frame of the run so far, largest first: the line
+    /// the shell logs at exit (the overlay shows smoothed values of the last frames only).
+    pub fn gpu_run_summary(&self) -> Option<String> {
+        if self.run_frames == 0 {
+            return None;
+        }
+        let frames = self.run_frames as f64;
+        let mut zones: Vec<(&str, f64)> = self
+            .run_gpu
+            .iter()
+            .map(|(label, sum)| (label.as_str(), sum / frames))
+            .collect();
+        zones.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let total: f64 = zones.iter().map(|z| z.1).sum();
+        let mut line = format!("{total:.3} ms per frame over {} frames:", self.run_frames);
+        for (label, ms) in zones {
+            line += &format!(" {label} {ms:.3},");
+        }
+        line.pop();
+        Some(line)
     }
 
     /// The latest memory counters (refreshed four times per second).
@@ -176,7 +204,16 @@ impl Profile {
         }
         for zone in zones {
             upsert(&mut self.gpu, zone.label, zone.ms);
+            match self
+                .run_gpu
+                .iter_mut()
+                .find(|(label, _)| label == zone.label)
+            {
+                Some((_, sum)) => *sum += zone.ms,
+                None => self.run_gpu.push((zone.label.to_owned(), zone.ms)),
+            }
         }
+        self.run_frames += 1;
         self.gpu.retain(|z| z.seen);
     }
 
@@ -564,6 +601,25 @@ fn heat(share: f64) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_run_summary_averages_every_zone_over_all_frames_largest_first() {
+        let mut profile = Profile::new(OverlayMode::Off);
+        assert_eq!(profile.gpu_run_summary(), None);
+        let zone = |label, ms| GpuZone {
+            label,
+            ms,
+            start_ticks: 0,
+            end_ticks: 0,
+        };
+        profile.gpu_zones(&[zone("shading/resolve", 0.1), zone("geometry/cull", 0.2)]);
+        // A zone missing from a frame counts as zero there; a repeated label adds up.
+        profile.gpu_zones(&[zone("geometry/cull", 0.3), zone("geometry/cull", 0.1)]);
+        assert_eq!(
+            profile.gpu_run_summary().as_deref(),
+            Some("0.350 ms per frame over 2 frames: geometry/cull 0.300, shading/resolve 0.050")
+        );
+    }
 
     #[test]
     fn zones_group_by_prefix_and_smooth() {

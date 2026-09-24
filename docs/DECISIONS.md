@@ -40,17 +40,24 @@ task, mesh, compute and ray-tracing stages, modules, generics, pointers to devic
 buffers, Khronos-hosted; rust-gpu still lacks buffer device address.
 *(research: gpu-geometry.md §8–9; demo: meshlets)*
 
-## D-003 — GPU-driven geometry: clusters, task/mesh shaders, compute fallback ✅ (2026-09-24)
+## D-003 — GPU-driven geometry: clusters, compute culling, mesh shaders, indirect-count fallback ✅ (2026-09-24)
 
 Meshes are cooked into meshlets (≤ 128 triangles; 64 v / 124 t today via meshoptimizer);
 culling (frustum, normal cone, two-pass hierarchical-Z occlusion) and emission run on the GPU
-from device-address buffers; the CPU issues one draw. Geometry shaders are never used. Every
+from device-address buffers; the CPU issues one draw per pass. Geometry shaders are never used. Every
 mesh-shader path gets a compute + `vkCmdDrawIndexedIndirectCount` fallback producing the same
-pixels (checked with `tools/imgdiff`). Next: cluster LOD DAG (meshoptimizer `clusterlod`),
-visibility buffer, software rasteriser for sub-pixel clusters, cluster acceleration
+pixels (checked with `tools/imgdiff`). Since issue #5 the culling itself is compute (an
+instance cull, then a cluster cull per mesh pass) and appends to a compacted list of visible
+clusters **in a fixed order** (a single-pass prefix sum over workgroups): depth ties resolve
+by draw order, so the order must not depend on timing. Mesh shaders (no task stage) or, on
+GPUs without them, one indexed draw per listed cluster through
+`vkCmdDrawIndexedIndirectCount` (the cooked one-byte triangle lists as the index buffer) draw
+the same list. Next: software rasteriser for sub-pixel clusters, cluster acceleration
 structures for ray tracing on RTX.
 *Measured:* 127 M-triangle scene, 1152 instances: 6.1 ms brute force → 1.1 ms with
-occlusion, 0 pixels different. *(research: gpu-geometry.md; demo: meshlets)*
+occlusion, 0 pixels different. Compute culling (#5): the two paths 0 pixels apart; the mesh
+path costs what the task path did (0.180 ms bench, 0.326 against 0.322 ms for the ballad),
+the fallback's draw about twice the mesh draw. *(research: gpu-geometry.md; demo: meshlets)*
 
 ## D-004 — Coordinates: f64 nested frames, camera-relative f32, Y-up metres ✅ (2026-09-24)
 
@@ -278,7 +285,7 @@ memory-streaming.md §2; issue #1)*
 
 The rasterisers write no attributes. The hardware path writes a 32-bit id
 (`visible slot << 7 | triangle`, the slot indexing a per-frame visible-cluster list of
-`(instance, cluster)` filled by the task shader) into an `R32_UINT` target next to the
+`(instance, cluster)` filled by the cluster cull) into an `R32_UINT` target next to the
 hardware depth, and a compute pass shades once per pixel from the id, reconstructing the
 perspective-correct barycentrics and their derivatives analytically (no `ddx`, no helper
 lanes; `docs/ARCHITECTURE.md` §4). The 64-bit `depth | id` atomic target of the plan is

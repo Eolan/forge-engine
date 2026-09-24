@@ -420,3 +420,50 @@ classification (#20). What was learned:
   too cheap for deferred shading to win; Hable measured the crossover at 8–10 px triangles
   with a real material graph. The step buys one shading path for three rasterisers and the
   entry point for materials, not milliseconds.
+
+### Compute culling and the indirect-count fallback (issue #5)
+
+What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.md`):
+
+- **The fallback needs no second cook.** With `VK_KHR_index_type_uint8` the cooked meshlet
+  triangle lists are the index buffer as they are: a draw's `firstIndex` is the cluster's byte
+  offset, its `vertexOffset` the cluster's window of the meshlet vertex table (so an index
+  plus the offset lands in that table, which the vertex shader reads), and its
+  `firstInstance` the cluster's slot in the visible list, which carries the id. The only new
+  memory is the commands (20 B per listed cluster). It needs `drawIndirectFirstInstance`,
+  `multiDrawIndirect`, `drawIndirectCount` and, for a fragment shader reading
+  `SV_PrimitiveID`, `geometryShader` enabled; the primitive id restarts at 0 in every draw
+  of an indirect-count call, so it is the triangle's index in its cluster.
+- **Slang's `SV_VertexID` and `SV_InstanceID` are the D3D ones.** Compiled for Vulkan they
+  subtract `BaseVertex` / `BaseInstance` (the SPIR-V shows the `OpISub` and the
+  `DrawParameters` capability), which silently drops a `firstInstance` payload.
+  `SV_VulkanVertexID` and `SV_VulkanInstanceID` are the raw `VertexIndex` and `InstanceIndex`.
+- **Slang's direct SPIR-V emitter drops `precise`.** No `NoContraction` decoration comes out
+  (the `-emit-spirv-via-glsl` route does emit it), so two inlined copies of the same float
+  formula may be fused differently by the driver. It was a false lead here (the cut through
+  the LOD DAG stayed exact), but anything that relies on two evaluations agreeing to the bit
+  must share one code path.
+- **The draw order is part of the output.** Two triangles can meet a sample at exactly the
+  same depth, and a `GREATER_OR_EQUAL` depth test keeps the one drawn last. A visible list
+  filled by racing atomics therefore draws in a different order every run and changes the
+  image; only TAA's history accumulates the rare ties into a visible difference (half the runs
+  of the ballad's golden came out about 3 000 pixels apart; the old task path's work-list
+  order happened to be stable). The culls now append with a single-pass prefix sum over
+  workgroups, the decoupled look-back of Merrill & Garland ("Single-pass Parallel Prefix Scan
+  with Decoupled Look-back", NVIDIA technical report NVR-2016-002, 2016,
+  https://research.nvidia.com/publication/2016-03_single-pass-parallel-prefix-scan-decoupled-look-back),
+  with the workgroup's place taken from a ticket counter so that every predecessor is already
+  running. Its cost is per workgroup (a ticket, a status word, a look-back read, on few
+  addresses), so batching work items matters: one work item per workgroup cost 0.036 ms over the
+  atomic version's 0.170 ms frame, eight per workgroup 0.011 ms, which is the task path's 0.18.
+- **The look-back assumes forward progress between workgroups**, which Vulkan does not
+  promise. It held on the RTX 5070 Ti, the only GPU tested so far; on GPUs without such guarantees
+  (Apple M-series is the documented case) a spinning workgroup can starve the one it waits
+  for. "Decoupled Fallback" (Smith, Levien & Owens, SPAA 2025; the companion repository
+  https://github.com/b0nes164/GPUPrefixSums describes it as letting such devices run the scan
+  "without crashing") bounds the spin and lets the waiting workgroup compute the missing
+  count itself (issue #28). The paper's PDF could not be read here (no text extractor), so
+  its details come from the ACM listing and the repository.
+- **Indirect grids are two-dimensional.** The spec guarantees only 65 535 workgroups per
+  dimension for compute and mesh dispatches; the culls write `x = min(n, 32 768)` and
+  `y = ⌈n / 32 768⌉` and the rest of the last row exits.

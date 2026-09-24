@@ -13,9 +13,11 @@ next and `RESEARCH.md` indexes the evidence.
 **P1 — The GPU owns the geometry.** The CPU decides *what exists* and hands the GPU pointers;
 the GPU decides what is drawn. Culling (frustum, normal cone, occlusion), level of detail,
 instancing, amplification (grass, clutter, tessellation) and eventually visibility resolution
-all run in task/mesh/compute shaders from device-address buffers. Geometry shaders are never
+all run in compute and mesh shaders from device-address buffers. Geometry shaders are never
 used: they serialise output and are the stage mesh shaders replaced. Every GPU-driven path
-has a compute + indirect-count fallback that produces the same pixels.
+has a compute + indirect-count fallback that produces the same pixels (for the geometry
+since issue #5: culling runs in compute for both, and the compacted cluster list is drawn by
+mesh shaders or by one `vkCmdDrawIndexedIndirectCount`, 0 pixels apart).
 *(research: gpu-geometry.md; demo: meshlets)*
 
 **P2 — One material, every consumer.** A material is one record that the renderer, the physics
@@ -91,9 +93,9 @@ and the date next to every number.
 |---|---|---|
 | `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle` |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
-| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers, memory budget detected), `gpu-allocator` with every allocation counted by category and every host write counted as upload (`memory_report`: per-heap usage and budget from `VK_EXT_memory_budget`, issue #9), RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks, `Custom` accesses for third-party work; D-020), and `dlss` (DLSS through NVIDIA Streamline's interposer behind the `dlss` feature: modes, render sizes, tagging graph images, evaluation inside a graph pass; D-024) |
+| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers, memory budget detected), `gpu-allocator` with every allocation counted by category and every host write counted as upload (`memory_report`: per-heap usage and budget from `VK_EXT_memory_budget`, issue #9), RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh, vertex and compute pipelines, indirect dispatches and indexed indirect-count draws, `DeviceOptions` (mesh shaders left off for `--force-fallback`), `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks, `Custom` accesses for third-party work; D-020), and `dlss` (DLSS through NVIDIA Streamline's interposer behind the `dlss` feature: modes, render sizes, tagging graph images, evaluation inside a graph pass; D-024) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
-| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `DlssUpscaler` (DLSS in place of the TAA resolve, the scene drawn at DLSS's input size), `Starfield` (stars, nebula, a physical sun disc, a planet under its atmosphere), `Atmosphere` (Hillaire 2020 transmittance and multiple-scattering tables as graph passes, the per-pixel march for views from space), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), lighting tiers, post (bloom) |
+| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance and cluster culls in compute appending in a fixed order, drawn by mesh shaders or the indirect-count fallback (`GeometryPath`, issue #5), two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `DlssUpscaler` (DLSS in place of the TAA resolve, the scene drawn at DLSS's input size), `Starfield` (stars, nebula, a physical sun disc, a planet under its atmosphere), `Atmosphere` (Hillaire 2020 transmittance and multiple-scattering tables as graph passes, the per-pixel march for views from space), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), lighting tiers, post (bloom) |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
 | `forge-anim` | planned | clips, blend graph, motion matching, IK, powered ragdoll tracking, contact events |
@@ -141,10 +143,11 @@ descriptor buffers is a back-end change. Layouts are `std430`, mirrored by `#[re
 structs in Rust and checked by tests.
 
 **Geometry reaches the screen through a visibility buffer** (issue #6, 2026-09-24). The
-mesh passes rasterise only positions: the task shader appends every drawn cluster to the
-frame's visible-cluster list (`(instance, cluster)`, one atomic per task group), the mesh
-shader emits the cluster's triangles with `visible_slot << 7 | triangle` as the per-primitive
-id, and the fragment shader writes that id into an `R32_UINT` target next to the hardware
+mesh passes rasterise only positions: the cluster cull (compute) appends every drawn cluster
+to the frame's visible-cluster list (`(instance, cluster)`, in a fixed order, issue #5), the
+mesh shader emits the cluster's triangles with `visible_slot << 7 | triangle` as the
+per-primitive id (the fallback's vertex shader carries the slot, the primitive id gives the
+triangle), and the fragment shader writes that id into an `R32_UINT` target next to the hardware
 depth (`u32::MAX` = nothing drawn). A compute pass then shades once per pixel: it reads the
 id, fetches the triangle's three vertices through the visible list, projects them with the
 frame's jittered camera and reconstructs the attributes at the pixel centre from

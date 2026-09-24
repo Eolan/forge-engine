@@ -1,4 +1,6 @@
-// Meshlet rendering: task shader culls instances and meshlets, mesh shader emits triangles.
+// Meshlet rendering: compute passes cull instances and clusters into a compacted list of
+// visible clusters, which the mesh shader draws or, on GPUs without mesh shaders, the vertex
+// fallback through one `vkCmdDrawIndexedIndirectCount` (same list, same ids, same pixels).
 //
 // Every buffer is reached through a device address held in the per-frame `Frame` block, so
 // the CPU hands the GPU one pointer (push constant) and the GPU walks the scene from there.
@@ -7,7 +9,8 @@
 // Occlusion is two-pass (Haar & Aaltonen 2015, Nanite 2021): pass 1 draws the meshlets that
 // were visible last frame; the renderer then builds a hierarchical-Z pyramid from that depth;
 // pass 2 tests every remaining meshlet against it, draws the survivors and rewrites the
-// visibility bits for next frame (pass-1 meshlets are re-tested too, without drawing).
+// visibility bits for next frame (pass-1 meshlets are re-tested too, without drawing). Each
+// mesh pass is a cluster-cull compute pass followed by the draw of what it kept.
 import bindless;
 
 // ---------------------------------------------------------------- shared data ---
@@ -48,7 +51,7 @@ public struct Meshlet
 
 static const uint LOD_LEVELS = 16; // forge_geom::MAX_LEVELS
 
-// One mesh: a range of meshlets stored level by level, with per-level bounds so a task group
+// One mesh: a range of meshlets stored level by level, with per-level bounds so a work item
 // can tell without touching a cluster whether any of its clusters can be selected.
 public struct Mesh
 {
@@ -73,7 +76,7 @@ public struct Instance
     public float radius;
     public uint mesh;
     public uint id;
-    public uint group_offset; // first task group of this instance
+    public uint group_offset; // first work item (group of 32 clusters) of this instance
     public uint bit_offset;   // first visibility bit of this instance
 };
 
@@ -91,7 +94,7 @@ public static const uint FLAG_LOD = 64;
 public static const uint FLAG_LOD_COLORS = 128;
 // Debug: disable the per-group LOD window (every group tests its clusters); for the A/B harness.
 public static const uint FLAG_GROUP_WINDOW_OFF = 256;
-static const uint CULLED_BIT = 0x80000000u; // top bit of a payload / visible-list meshlet index
+static const uint CULLED_BIT = 0x80000000u; // top bit of a visible-list meshlet index
 
 public static const uint PASS_PREVIOUSLY_VISIBLE = 1;
 public static const uint PASS_REMAINDER = 2;
@@ -107,8 +110,8 @@ public static const uint STAT_LOD_LEVEL_SUM = 5; // sum of the LOD level of ever
 public static const uint STAT_VISIBLE_OVERFLOW = 6; // clusters dropped because the visible list was full
 
 // The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
-// `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, appended by the
-// task shader) and `triangle` the cluster's triangle; `VISIBILITY_EMPTY` is the clear value.
+// `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, filled by the
+// cluster cull) and `triangle` the cluster's triangle; `VISIBILITY_EMPTY` is the clear value.
 public static const uint VISIBILITY_EMPTY = 0xFFFFFFFFu;
 public static const uint VISIBILITY_TRIANGLE_BITS = 7;
 
@@ -120,7 +123,7 @@ public struct Frame
     public float4 planes[6];        // frustum planes of `cull_view_proj`, inward normals
     public float3 camera_pos;       // camera used for culling
     public uint instance_count;
-    public uint max_meshlets;       // task groups per instance = ceil(max_meshlets / 32)
+    public uint max_meshlets;       // work items per instance = ceil(max_meshlets / 32)
     public uint flags;
     public uint pass;
     public uint hzb_image;          // sampled image index of the depth pyramid
@@ -140,16 +143,19 @@ public struct Frame
     public Instance* instances;
     public uint* stats;
     public uint* visibility;        // one bit per (instance, local meshlet): visible last frame
-    public uint* group_table;       // instance index of every task group (capacity: total_groups)
+    public uint* group_table;       // instance index of every work item (not read by the shaders)
     public uint total_groups;
     public uint pad_end;
-    public uint2* work;             // (instance, local group) per task group, built by `cull_main`
-    public uint* indirect;          // VkDrawMeshTasksIndirectCommandEXT: x = work count, y = z = 1
-    public uint2* visible;          // slot 0: (count, 0); then (instance, meshlet | CULLED_BIT) per drawn cluster
-    public uint visible_capacity;   // slots after the counter
+    public uint2* work;             // (instance, local group) per work item, built by `cull_main`
+    public uint* indirect;          // the cluster cull's grid (x, y, 1, work item count), then the instance cull's ticket
+    public uint2* visible;          // (instance, meshlet | CULLED_BIT) per drawn cluster: pass 1 from the front, pass 2 from the back
+    public uint visible_capacity;   // slots in `visible`
     public float exposure;          // pre-exposure of the frame (crates/forge-render/src/exposure.rs)
     public float sun_illuminance;   // lux; the rocks return albedo × E / π
     public uint pad_exposure;
+    public uint* clusters;          // per pass (pass 1 or the single pass at 0, pass 2 at 4): the draw grid (x, y, 1) and the cluster count; then the culls' tickets (8, 9)
+    public uint* draws;             // fallback: a VkDrawIndexedIndirectCommand per cluster of the pass; null on the mesh path
+    public uint* lookback;          // status words of the ordered appends: instance cull, then each cluster cull
 };
 
 struct Push
@@ -266,7 +272,7 @@ uint level_of(Mesh* mesh, uint cluster)
     return max(mesh[0].level_count, 1u) - 1;
 }
 
-// Whether any cluster of task group `local_group` of `inst` can be selected: the group's 32
+// Whether any cluster of work item `local_group` of `inst` can be selected: the group's 32
 // clusters span one or two levels; a level is impossible when every one of its clusters
 // projects its own error above the threshold even at the farthest distance, or its parent's
 // error at or below the threshold even at the nearest. Conservative bounds from the per-level
@@ -319,150 +325,352 @@ float3 hash_color(uint n)
     return float3(n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF) / 255.0;
 }
 
-// ---------------------------------------------------------------- task stage ---
+// ------------------------------------------------------------- cluster cull ---
 
-static const uint TASK_GROUP_SIZE = 32;
+static const uint TASK_GROUP_SIZE = 32; // clusters per work item (an instance's group of 32)
 
-struct Payload
+// Indirect grids are two-dimensional so that a count above the per-dimension limit (65 535
+// is all the spec guarantees for compute and mesh dispatches) still launches: x = min(count,
+// GRID_ROW), y = ceil(count / GRID_ROW). The rest of the last row exits.
+static const uint GRID_ROW = 32768;
+
+uint grid_index(uint3 group)
 {
-    uint meshlet_index[TASK_GROUP_SIZE];
-    uint instance;
-    uint visible_base; // first slot of this group's clusters in the visible-cluster list
-};
-
-groupshared Payload s_payload;
-
-// One task workgroup handles 32 consecutive meshlets of one instance.
-[shader("amplification")]
-[numthreads(TASK_GROUP_SIZE, 1, 1)]
-void task_main(uint thread : SV_GroupThreadID, uint group : SV_GroupID)
-{
-    Frame* f = push.frame;
-    uint pass = f[0].pass;
-
-    bool draw = false;
-    bool instance_visible = false;
-    bool occluded = false;
-    bool culled_debug = false; // FLAG_SHOW_CULLED: this meshlet would have been culled
-    uint meshlet_index = 0;
-    uint instance_index = 0;
-    if (group < f[0].total_groups)
-    {
-        uint2 item = f[0].work[group]; // written by cull_main: (instance, local group)
-        instance_index = item.x;
-        uint local_group = item.y;
-        Instance* inst = f[0].instances + instance_index;
-        Mesh* mesh = f[0].meshes + inst[0].mesh;
-        uint local_meshlet = local_group * TASK_GROUP_SIZE + thread;
-        bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
-        instance_visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
-        // Uniform scale is assumed for the bounding spheres: take the length of the first column.
-        float scale = length(inst[0].model[0].xyz);
-        // Whole-group rejection from the per-level tables before any cluster is read.
-        bool possible = instance_visible && group_possible(f, mesh, inst, local_group, scale);
-        if (possible && local_meshlet < mesh[0].meshlet_count)
-        {
-            meshlet_index = mesh[0].meshlet_offset + local_meshlet;
-            uint bit_index = inst[0].bit_offset + local_meshlet;
-            uint word = bit_index >> 5;
-            uint mask = 1u << (bit_index & 31);
-            bool was_visible = (f[0].visibility[word] & mask) != 0;
-
-            bool visible = false;
-            float3 center = 0;
-            float world_radius = 0;
-            {
-                Meshlet m = f[0].meshlets[meshlet_index];
-                center = mul(inst[0].model, float4(m.center, 1)).xyz;
-                world_radius = m.radius * scale;
-                visible = lod_selected(f, m, inst[0].model, scale);
-                visible = visible && (!frustum || sphere_in_frustum(f, center, world_radius));
-                // Normal-cone culling (meshoptimizer): culled when
-                // dot(normalize(apex - camera), axis) >= cutoff. A cutoff of 1 marks a cone
-                // wider than a hemisphere; meshoptimizer then leaves the axis at zero, whose
-                // normalisation is NaN and would (silently) cull the meshlet: skip the test.
-                if (visible && (f[0].flags & FLAG_CONE_CULLING) != 0 && m.cone_cutoff < 1.0)
-                {
-                    float3 apex = mul(inst[0].model, float4(m.cone_apex, 1)).xyz;
-                    float3 axis = normalize(mul(inst[0].model, float4(m.cone_axis, 0)).xyz);
-                    bool cone_visible = dot(normalize(apex - f[0].camera_pos), axis) < m.cone_cutoff;
-                    if (!cone_visible && show_culled)
-                        culled_debug = true;
-                    else
-                        visible = cone_visible;
-                }
-            }
-
-            if (pass == PASS_PREVIOUSLY_VISIBLE)
-            {
-                draw = was_visible && visible;
-            }
-            else if (pass == PASS_REMAINDER)
-            {
-                bool now_visible = visible;
-                if (visible && (f[0].flags & FLAG_OCCLUSION_CULLING) != 0)
-                {
-                    now_visible = occlusion_visible(f, center, world_radius);
-                    occluded = !now_visible;
-                    if (occluded && show_culled)
-                    {
-                        culled_debug = true;
-                        now_visible = true;
-                    }
-                }
-                draw = now_visible && !was_visible;
-                if (now_visible != was_visible)
-                {
-                    if (now_visible)
-                        InterlockedOr(f[0].visibility[word], mask);
-                    else
-                        InterlockedAnd(f[0].visibility[word], ~mask);
-                }
-            }
-            else
-            {
-                draw = visible;
-            }
-        }
-    }
-
-    uint draw_count = WaveActiveCountBits(draw);
-    uint slot = WavePrefixCountBits(draw);
-    // Reserve this group's slots in the visible-cluster list (one atomic per group; the list
-    // starts at slot 1, slot 0 holds the counter). A full list drops the clusters and counts
-    // them, so the resolve never reads past the end.
-    uint visible_base = 0;
-    if (thread == 0 && draw_count > 0)
-        InterlockedAdd(f[0].visible[0].x, draw_count, visible_base);
-    visible_base = WaveReadLaneAt(visible_base, 0);
-    if (visible_base + draw_count > f[0].visible_capacity)
-    {
-        if (thread == 0 && draw_count > 0)
-            InterlockedAdd(f[0].stats[STAT_VISIBLE_OVERFLOW], draw_count);
-        draw_count = 0;
-        draw = false;
-    }
-    uint packed = meshlet_index | (culled_debug ? CULLED_BIT : 0u);
-    if (draw)
-    {
-        s_payload.meshlet_index[slot] = packed;
-        f[0].visible[1 + visible_base + slot] = uint2(instance_index, packed);
-    }
-    uint occluded_count = WaveActiveCountBits(occluded);
-    if (thread == 0)
-    {
-        s_payload.instance = instance_index;
-        s_payload.visible_base = visible_base;
-        if (draw_count > 0)
-            InterlockedAdd(f[0].stats[pass == PASS_REMAINDER ? STAT_MESHLETS_PASS2 : STAT_MESHLETS_PASS1], draw_count);
-        if (occluded_count > 0)
-            InterlockedAdd(f[0].stats[STAT_OCCLUDED], occluded_count);
-    }
-    DispatchMesh(draw_count, 1, 1, s_payload);
+    return group.y * GRID_ROW + group.x;
 }
 
-// ------------------------------------------------------------- cull stage ---
+// The slot of the `index`-th cluster of this pass in the visible-cluster list: pass 1 (and
+// the single pass) fill it from the front, pass 2 from the back, so a draw finds its range
+// without the other pass's count.
+uint visible_slot(Frame* f, uint index)
+{
+    return f[0].pass == PASS_REMAINDER ? f[0].visible_capacity - 1 - index : index;
+}
+
+// This pass's (x, y, 1, count) in `Frame::clusters`.
+uint* pass_args(Frame* f)
+{
+    return f[0].clusters + (f[0].pass == PASS_REMAINDER ? 4 : 0);
+}
+
+// What one thread decided about its cluster.
+struct ClusterVerdict
+{
+    bool draw;
+    bool occluded;     // rejected by the depth pyramid (counted)
+    bool culled_debug; // FLAG_SHOW_CULLED: drawn although culling rejected it
+    uint instance;
+    uint meshlet;      // global meshlet index
+    uint triangle_count;
+    uint triangle_offset;
+    uint vertex_offset;
+    uint lod_level;
+};
+
+// Culls cluster `thread` of work item `item`: LOD selection, frustum and normal cone; in the
+// second pass of the two-pass occlusion also the depth pyramid and the rewrite of the cluster's
+// "visible last frame" bit.
+ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
+{
+    ClusterVerdict v = {};
+    uint pass = f[0].pass;
+    uint2 work = f[0].work[item]; // written by cull_main: (instance, local group)
+    v.instance = work.x;
+    uint local_group = work.y;
+    Instance* inst = f[0].instances + v.instance;
+    Mesh* mesh = f[0].meshes + inst[0].mesh;
+    uint local_meshlet = local_group * TASK_GROUP_SIZE + thread;
+    bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
+    bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
+    bool instance_visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
+    // Uniform scale is assumed for the bounding spheres: take the length of the first column.
+    float scale = length(inst[0].model[0].xyz);
+    // Whole-group rejection from the per-level tables before any cluster is read.
+    if (!instance_visible || !group_possible(f, mesh, inst, local_group, scale)
+        || local_meshlet >= mesh[0].meshlet_count)
+        return v;
+    v.meshlet = mesh[0].meshlet_offset + local_meshlet;
+    uint bit_index = inst[0].bit_offset + local_meshlet;
+    uint word = bit_index >> 5;
+    uint mask = 1u << (bit_index & 31);
+    bool was_visible = (f[0].visibility[word] & mask) != 0;
+
+    Meshlet m = f[0].meshlets[v.meshlet];
+    v.triangle_count = m.triangle_count;
+    v.triangle_offset = m.triangle_offset;
+    v.vertex_offset = m.vertex_offset;
+    v.lod_level = m.lod_level;
+    float3 center = mul(inst[0].model, float4(m.center, 1)).xyz;
+    float world_radius = m.radius * scale;
+    bool visible = lod_selected(f, m, inst[0].model, scale);
+    visible = visible && (!frustum || sphere_in_frustum(f, center, world_radius));
+    // Normal-cone culling (meshoptimizer): culled when dot(normalize(apex - camera), axis) >=
+    // cutoff. A cutoff of 1 marks a cone wider than a hemisphere; meshoptimizer then leaves
+    // the axis at zero, whose normalisation is NaN and would (silently) cull the meshlet:
+    // skip the test.
+    if (visible && (f[0].flags & FLAG_CONE_CULLING) != 0 && m.cone_cutoff < 1.0)
+    {
+        float3 apex = mul(inst[0].model, float4(m.cone_apex, 1)).xyz;
+        float3 axis = normalize(mul(inst[0].model, float4(m.cone_axis, 0)).xyz);
+        bool cone_visible = dot(normalize(apex - f[0].camera_pos), axis) < m.cone_cutoff;
+        if (!cone_visible && show_culled)
+            v.culled_debug = true;
+        else
+            visible = cone_visible;
+    }
+
+    if (pass == PASS_PREVIOUSLY_VISIBLE)
+    {
+        v.draw = was_visible && visible;
+    }
+    else if (pass == PASS_REMAINDER)
+    {
+        bool now_visible = visible;
+        if (visible && (f[0].flags & FLAG_OCCLUSION_CULLING) != 0)
+        {
+            now_visible = occlusion_visible(f, center, world_radius);
+            v.occluded = !now_visible;
+            if (v.occluded && show_culled)
+            {
+                v.culled_debug = true;
+                now_visible = true;
+            }
+        }
+        v.draw = now_visible && !was_visible;
+        if (now_visible != was_visible)
+        {
+            if (now_visible)
+                InterlockedOr(f[0].visibility[word], mask);
+            else
+                InterlockedAnd(f[0].visibility[word], ~mask);
+        }
+    }
+    else
+    {
+        v.draw = visible;
+    }
+    return v;
+}
+
+// ------------------------------------------------------------ ordered appends ---
+
+// Both culls append to a list whose order is the draw order, and the draw order must not
+// depend on timing: two triangles can meet a sample at exactly the same depth, and the depth
+// test (`GREATER_OR_EQUAL`) then keeps the one drawn last, so a list filled by racing atomics
+// changes the image from run to run (visibly through TAA's history). Each list is therefore
+// filled in workgroup order with a single-pass prefix sum (decoupled look-back, Merrill &
+// Garland 2016): a workgroup publishes how many entries it appends, adds up the counts of the
+// workgroups before it and writes at that offset. Workgroups take their index from a ticket
+// counter in the order they start, so every earlier index belongs to a workgroup already
+// running and the wait always ends.
+//
+// A status word is 0 (nothing published yet), LOOKBACK_AGGREGATE | count, or
+// LOOKBACK_PREFIX | count of this workgroup and all before it.
+static const uint LOOKBACK_AGGREGATE = 1u << 30;
+static const uint LOOKBACK_PREFIX = 2u << 30;
+static const uint LOOKBACK_VALUE = LOOKBACK_AGGREGATE - 1u;
+
+static const uint LOOKBACK_LANES = 32; // predecessors read per round
+
+groupshared uint s_window[LOOKBACK_LANES];
+groupshared uint s_exclusive; // counts of the tickets before this one, summed so far
+groupshared uint s_cursor;    // tickets [0, s_cursor) not yet added
+groupshared uint s_found;     // a published prefix was reached
+
+// Publishes `count` for workgroup `ticket` in `status` and returns the sum of the counts of
+// the tickets before it. Every thread of the workgroup calls it with the same arguments (the
+// wait is shared): each round, the first LOOKBACK_LANES threads read one predecessor's status
+// word each, nearest first, and thread 0 adds them up to the first prefix or to the first
+// predecessor that has published nothing yet, where the next round starts.
+uint lookback_exclusive(uint* status, uint ticket, uint count, uint thread)
+{
+    uint ignored;
+    if (thread == 0)
+    {
+        InterlockedExchange(status[ticket], (ticket == 0 ? LOOKBACK_PREFIX : LOOKBACK_AGGREGATE) | count, ignored);
+        s_exclusive = 0;
+        s_cursor = ticket;
+        s_found = ticket == 0 ? 1u : 0u;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    while (s_found == 0)
+    {
+        uint cursor = s_cursor;
+        if (thread < LOOKBACK_LANES)
+        {
+            uint word = 0;
+            if (thread < cursor)
+                InterlockedOr(status[cursor - 1 - thread], 0u, word); // an atomic read
+            s_window[thread] = word;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        if (thread == 0)
+        {
+            uint n = min(LOOKBACK_LANES, cursor);
+            uint added = 0;
+            for (; added < n; added++)
+            {
+                uint word = s_window[added];
+                uint flag = word & ~LOOKBACK_VALUE;
+                if (flag == 0)
+                    break; // not published yet: the next round starts here
+                s_exclusive += word & LOOKBACK_VALUE;
+                if (flag == LOOKBACK_PREFIX)
+                {
+                    s_found = 1;
+                    break;
+                }
+            }
+            s_cursor = cursor - added;
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    uint exclusive = s_exclusive;
+    if (thread == 0 && ticket != 0)
+        InterlockedExchange(status[ticket], LOOKBACK_PREFIX | (exclusive + count), ignored);
+    return exclusive;
+}
+
+// Workgroups of the instance cull; their status words open `Frame::lookback`, the two cluster
+// culls' follow (`total_groups` words each).
+uint instance_cull_groups(Frame* f)
+{
+    return max((f[0].instance_count + 63) / 64, 1u);
+}
+
+uint* cluster_status(Frame* f)
+{
+    return f[0].lookback + instance_cull_groups(f) + (f[0].pass == PASS_REMAINDER ? f[0].total_groups : 0);
+}
+
+// Writes the grid (x, y, 1) that covers `groups` workgroups, and the `count` they work on.
+void write_grid(uint* args, uint groups, uint count)
+{
+    args[0] = min(groups, GRID_ROW);
+    args[1] = (groups + GRID_ROW - 1) / GRID_ROW;
+    args[3] = count;
+}
+
+// Work items per cluster-cull workgroup: fewer workgroups take fewer tickets and publish
+// fewer status words (the ordered appends cost per workgroup, and at 1 px most work items of
+// a frame draw nothing).
+static const uint CULL_ITEMS = 8;
+
+groupshared uint s_ticket;            // this workgroup's place in the order
+groupshared uint s_drawn[CULL_ITEMS]; // per work item, a bit per lane: the cluster is drawn
+groupshared uint s_triangles;
+groupshared uint s_levels;
+groupshared uint s_occluded;
+
+// One workgroup per CULL_ITEMS work items: cull their clusters and append the survivors to
+// this pass's range of the visible-cluster list in item order, then lane order; on the
+// fallback path also one indexed draw per survivor. Both paths draw from this list: the mesh
+// shader reads it, the fallback's draws carry its slots. The last workgroup writes the pass's
+// draw grid. A full list drops what does not fit and counts it, so no draw reads past the end.
+[shader("compute")]
+[numthreads(TASK_GROUP_SIZE * CULL_ITEMS, 1, 1)]
+void cluster_cull_main(uint thread : SV_GroupThreadID)
+{
+    Frame* f = push.frame;
+    bool second = f[0].pass == PASS_REMAINDER;
+    if (thread == 0)
+    {
+        InterlockedAdd(f[0].clusters[8 + (second ? 1 : 0)], 1, s_ticket);
+        s_triangles = 0;
+        s_levels = 0;
+        s_occluded = 0;
+    }
+    if (thread < CULL_ITEMS)
+        s_drawn[thread] = 0;
+    GroupMemoryBarrierWithGroupSync();
+    uint ticket = s_ticket;
+    uint items = f[0].indirect[3];
+    if (ticket * CULL_ITEMS >= items)
+        return; // the rest of the grid's last row: the whole workgroup leaves
+    uint local = thread / TASK_GROUP_SIZE;
+    uint lane = thread % TASK_GROUP_SIZE;
+    uint item = ticket * CULL_ITEMS + local;
+    ClusterVerdict v = {};
+    if (item < items)
+        v = cull_cluster(f, item, lane);
+    if (v.draw)
+    {
+        InterlockedOr(s_drawn[local], 1u << lane);
+        InterlockedAdd(s_triangles, v.triangle_count);
+        InterlockedAdd(s_levels, v.lod_level);
+    }
+    if (v.occluded)
+        InterlockedAdd(s_occluded, 1);
+    GroupMemoryBarrierWithGroupSync();
+    uint* args = pass_args(f);
+    // Pass 2 fills what pass 1 left of the list (pass 1's count is final by now).
+    uint capacity = f[0].visible_capacity - (second ? f[0].clusters[3] : 0);
+    uint drawn = 0;
+    uint before = 0; // drawn by the work items before this thread's, in this workgroup
+    for (uint k = 0; k < CULL_ITEMS; k++)
+    {
+        uint n = countbits(s_drawn[k]);
+        before += k < local ? n : 0u;
+        drawn += n;
+    }
+    uint first = lookback_exclusive(cluster_status(f), ticket, drawn, thread);
+    uint index = first + before + countbits(s_drawn[local] & ((1u << lane) - 1u));
+    if (first + drawn > capacity)
+    {
+        // This workgroup reaches past the end of the list (uniform: `first` and `drawn` are
+        // the same for every thread): count only what it keeps, so the triangles stay exact.
+        if (thread == 0)
+        {
+            s_triangles = 0;
+            s_levels = 0;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        if (v.draw && index < capacity)
+        {
+            InterlockedAdd(s_triangles, v.triangle_count);
+            InterlockedAdd(s_levels, v.lod_level);
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (thread == 0)
+    {
+        if (drawn > 0)
+        {
+            InterlockedAdd(f[0].stats[STAT_TRIANGLES], s_triangles);
+            InterlockedAdd(f[0].stats[STAT_LOD_LEVEL_SUM], s_levels);
+        }
+        if (s_occluded > 0)
+            InterlockedAdd(f[0].stats[STAT_OCCLUDED], s_occluded);
+        if (ticket == (items - 1) / CULL_ITEMS)
+        {
+            // The last workgroup knows the total: the pass's draw grid and counts.
+            uint total = first + drawn;
+            uint listed = min(total, capacity);
+            write_grid(args, listed, listed);
+            InterlockedAdd(f[0].stats[second ? STAT_MESHLETS_PASS2 : STAT_MESHLETS_PASS1], listed);
+            if (total > listed)
+                InterlockedAdd(f[0].stats[STAT_VISIBLE_OVERFLOW], total - listed);
+        }
+    }
+    if (!v.draw || index >= capacity)
+        return;
+    uint slot = visible_slot(f, index);
+    f[0].visible[slot] = uint2(v.instance, v.meshlet | (v.culled_debug ? CULLED_BIT : 0u));
+    if (f[0].draws != nullptr)
+    {
+        // VkDrawIndexedIndirectCommand: the cluster's triangles straight from the cooked
+        // one-byte lists (the index buffer), its window of `meshlet_vertices` as the vertex
+        // offset, one instance, and its list slot as the first instance.
+        uint* draw = f[0].draws + index * 5;
+        draw[0] = v.triangle_count * 3;
+        draw[1] = 1;
+        draw[2] = v.triangle_offset;
+        draw[3] = v.vertex_offset;
+        draw[4] = slot;
+    }
+}
+
+// ------------------------------------------------------------ instance cull ---
 
 // Whether any cluster of LOD level `l` of the mesh can be selected for this instance: the
 // same bounds as `group_possible`, evaluated per level from the instance's distance.
@@ -477,25 +685,13 @@ bool level_possible(Frame* f, Mesh* mesh, uint l, float scale, float dist)
     return self_min_px <= t && parent_max_px > t;
 }
 
-// One thread per instance: frustum-cull the instance, find the LOD levels that can hold
-// selected clusters at its distance, and append the task groups covering those levels to
-// the work list. `indirect[0]` counts them and is the x of the indirect mesh-task draws;
-// each group is appended at most once, so the list never exceeds `total_groups`.
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void cull_main(uint3 id : SV_DispatchThreadID)
+// The work items of a visible instance: its groups of 32 clusters covering the LOD levels
+// that can hold selected clusters at its distance, in increasing order, each once. Returns
+// how many; with `write`, also writes them to the work list from `base` and clears their
+// status words for the cluster culls' look-back.
+uint instance_items(Frame* f, uint instance_index, uint base, bool write)
 {
-    Frame* f = push.frame;
-    uint instance_index = id.x;
-    if (instance_index == 0)
-        f[0].visible[0] = uint2(0, 0); // the visible-cluster counter, before the mesh passes
-    if (instance_index >= f[0].instance_count)
-        return;
     Instance* inst = f[0].instances + instance_index;
-    bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-    if (frustum && !sphere_in_frustum(f, inst[0].center, inst[0].radius))
-        return;
-    InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], 1);
     Mesh* mesh = f[0].meshes + inst[0].mesh;
     float scale = length(inst[0].model[0].xyz);
     float dist = length(inst[0].center - f[0].camera_pos);
@@ -503,6 +699,8 @@ void cull_main(uint3 id : SV_DispatchThreadID)
     bool all = (f[0].flags & FLAG_GROUP_WINDOW_OFF) != 0;
     bool lod = (f[0].flags & FLAG_LOD) != 0;
     uint level_count = max(mesh[0].level_count, 1u);
+    uint* status = f[0].lookback + instance_cull_groups(f);
+    uint count = 0;
     uint next_group = 0; // groups come out in increasing order, each at most once
     for (uint l = 0; l < level_count; l++)
     {
@@ -515,15 +713,73 @@ void cull_main(uint3 id : SV_DispatchThreadID)
             continue;
         uint first = max(begin / TASK_GROUP_SIZE, next_group);
         uint last = min((end - 1) / TASK_GROUP_SIZE, groups - 1);
-        for (uint g = first; g <= last; g++)
+        for (uint g = first; write && g <= last; g++)
         {
-            uint slot;
-            InterlockedAdd(f[0].indirect[0], 1, slot);
+            uint slot = base + count + (g - first);
             if (slot < f[0].total_groups)
+            {
                 f[0].work[slot] = uint2(instance_index, g);
+                status[slot] = 0;
+                status[f[0].total_groups + slot] = 0;
+            }
         }
+        if (first <= last)
+            count += last - first + 1;
         next_group = last + 1;
     }
+    return count;
+}
+
+groupshared uint s_counts[64];
+groupshared uint s_total;
+
+// One thread per instance: frustum-cull it and append its work items to the work list, in
+// instance order (see "ordered appends"). The last workgroup writes the cluster cull's grid
+// `indirect` = (x, y, 1, count); each group of an instance is appended at most once, so the
+// count never exceeds `total_groups`.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cull_main(uint thread : SV_GroupThreadID)
+{
+    Frame* f = push.frame;
+    if (thread == 0)
+        InterlockedAdd(f[0].indirect[4], 1, s_ticket);
+    GroupMemoryBarrierWithGroupSync();
+    uint ticket = s_ticket;
+    uint instance_index = ticket * 64 + thread;
+    bool visible = false;
+    if (instance_index < f[0].instance_count)
+    {
+        Instance* inst = f[0].instances + instance_index;
+        bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
+        visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
+    }
+    if (visible)
+        InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], 1);
+    uint count = visible ? instance_items(f, instance_index, 0, false) : 0;
+    s_counts[thread] = count;
+    GroupMemoryBarrierWithGroupSync();
+    if (thread == 0)
+    {
+        uint total = 0;
+        for (uint i = 0; i < 64; i++)
+        {
+            uint c = s_counts[i];
+            s_counts[i] = total; // now this thread's offset in the workgroup's run
+            total += c;
+        }
+        s_total = total;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    uint total = s_total;
+    uint first = lookback_exclusive(f[0].lookback, ticket, total, thread);
+    if (thread == 0 && ticket == instance_cull_groups(f) - 1)
+    {
+        uint items = min(first + total, f[0].total_groups);
+        write_grid(f[0].indirect, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
+    }
+    if (count > 0)
+        instance_items(f, instance_index, first + s_counts[thread], true);
 }
 
 // ---------------------------------------------------------------- mesh stage ---
@@ -543,22 +799,29 @@ struct PrimitiveOut
     uint id : SV_PrimitiveID;
 };
 
+// One workgroup per cluster of this pass's range of the visible-cluster list; no task stage:
+// the culling ran in compute (`cluster_cull_main`), shared with the fallback.
 [shader("mesh")]
 [outputtopology("triangle")]
 [numthreads(MESH_GROUP_SIZE, 1, 1)]
 void mesh_main(
     uint thread : SV_GroupThreadID,
-    uint group : SV_GroupID,
-    in payload Payload payload,
+    uint3 group : SV_GroupID,
     out vertices VertexOut verts[MAX_VERTICES],
     out indices uint3 tris[MAX_TRIANGLES],
     out primitives PrimitiveOut prims[MAX_TRIANGLES])
 {
     Frame* f = push.frame;
-    uint meshlet_index = payload.meshlet_index[group] & ~CULLED_BIT;
-    Meshlet m = f[0].meshlets[meshlet_index];
-    Instance inst = f[0].instances[payload.instance];
-    uint visible_slot = payload.visible_base + group;
+    uint index = grid_index(group);
+    if (index >= pass_args(f)[3])
+    {
+        SetMeshOutputCounts(0, 0); // the partial last row of the grid
+        return;
+    }
+    uint slot = visible_slot(f, index);
+    uint2 record = f[0].visible[slot];
+    Meshlet m = f[0].meshlets[record.y & ~CULLED_BIT];
+    Instance inst = f[0].instances[record.x];
 
     SetMeshOutputCounts(m.vertex_count, m.triangle_count);
 
@@ -569,11 +832,6 @@ void mesh_main(
         float4 world = mul(inst.model, float4(v.position, 1));
         verts[thread].position = mul(f[0].view_proj, world);
     }
-    if (thread == 0)
-    {
-        InterlockedAdd(f[0].stats[STAT_TRIANGLES], m.triangle_count);
-        InterlockedAdd(f[0].stats[STAT_LOD_LEVEL_SUM], m.lod_level);
-    }
 
     for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
     {
@@ -582,8 +840,36 @@ void mesh_main(
             load_byte(f[0].meshlet_triangles, base),
             load_byte(f[0].meshlet_triangles, base + 1),
             load_byte(f[0].meshlet_triangles, base + 2));
-        prims[t].id = (visible_slot << VISIBILITY_TRIANGLE_BITS) | t;
+        prims[t].id = (slot << VISIBILITY_TRIANGLE_BITS) | t;
     }
+}
+
+// ---------------------------------------------------------- vertex fallback ---
+
+// Without mesh shaders every cluster is one indexed draw of `vkCmdDrawIndexedIndirectCount`
+// (the command `cluster_cull_main` wrote): the index buffer is the cooked one-byte triangle
+// lists, so an index plus the draw's vertex offset (the cluster's `vertex_offset`) is a
+// position in `meshlet_vertices`, and the first instance is the cluster's slot in the
+// visible-cluster list. The raw Vulkan builtins are used: Slang's `SV_VertexID` and
+// `SV_InstanceID` subtract the base vertex and instance (the D3D meaning).
+struct FallbackVertex
+{
+    float4 position : SV_Position;
+    nointerpolation uint id_base : VISIBILITY_ID; // slot << VISIBILITY_TRIANGLE_BITS
+};
+
+[shader("vertex")]
+FallbackVertex vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV_VulkanInstanceID)
+{
+    Frame* f = push.frame;
+    uint2 record = f[0].visible[slot];
+    Instance inst = f[0].instances[record.x];
+    Vertex v = f[0].vertices[f[0].meshlet_vertices[vertex_index]];
+    float4 world = mul(inst.model, float4(v.position, 1));
+    FallbackVertex o;
+    o.position = mul(f[0].view_proj, world);
+    o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
+    return o;
 }
 
 // ------------------------------------------------------------ fragment stage ---
@@ -593,6 +879,14 @@ void mesh_main(
 uint frag_main(uint id : SV_PrimitiveID) : SV_Target
 {
     return id;
+}
+
+// The same id on the fallback path: the primitive id restarts at 0 in every draw of the
+// indirect-count call, so it is the triangle's index in its cluster.
+[shader("fragment")]
+uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint triangle : SV_PrimitiveID) : SV_Target
+{
+    return id_base | triangle;
 }
 
 // ------------------------------------------------------------------ shading ---
@@ -717,7 +1011,7 @@ void resolve_main(uint3 id : SV_DispatchThreadID)
     }
     uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
     uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
-    uint2 record = f[0].visible[1 + slot];
+    uint2 record = f[0].visible[slot];
     uint meshlet_index = record.y & ~CULLED_BIT;
     bool culled_debug = (record.y & CULLED_BIT) != 0;
     Meshlet m = f[0].meshlets[meshlet_index];

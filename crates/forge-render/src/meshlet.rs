@@ -3,7 +3,9 @@
 //! [`MeshletSceneBuilder`] concatenates any number of meshlet meshes and instances into the
 //! GPU tables; [`MeshletRenderer`] owns the hierarchical-Z pyramid, the pipelines and the
 //! per-slot frame blocks, and declares the passes of the two-pass occluded draw into the
-//! render graph (the depth buffer is a transient of the frame).
+//! render graph (the depth buffer is a transient of the frame). Culling runs in compute and
+//! compacts the visible clusters into one list, which the mesh shader draws or, on GPUs
+//! without `VK_EXT_mesh_shader`, one `vkCmdDrawIndexedIndirectCount` ([`GeometryPath`]).
 
 use std::sync::Arc;
 
@@ -13,7 +15,7 @@ use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
     MemoryLocation, MeshPipelineDesc, Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc,
-    vk,
+    VertexPipelineDesc, vk,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
@@ -96,7 +98,7 @@ struct GpuInstance {
     radius: f32,
     mesh: u32,
     id: u32,
-    /// First task group of this instance (`ceil(meshlet_count / 32)` groups follow).
+    /// First work item of this instance (`ceil(meshlet_count / 32)` groups of 32 clusters follow).
     group_offset: u32,
     /// First visibility bit of this instance (`meshlet_count` bits follow).
     bit_offset: u32,
@@ -145,7 +147,16 @@ struct GpuFrame {
     /// Illuminance of the sun in lux.
     sun_illuminance: f32,
     pad_exposure: u32,
+    /// Per pass: the draw grid (x, y, 1) and the cluster count.
+    clusters: u64,
+    /// The fallback's indexed draws (0 on the mesh path).
+    draws: u64,
+    /// Status words of the ordered appends (instance cull, then each cluster cull).
+    lookback: u64,
 }
+
+// Both passes' blocks share one buffer at this stride.
+const _: () = assert!(std::mem::size_of::<GpuFrame>() as u64 <= FRAME_BLOCK_STRIDE);
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -167,9 +178,34 @@ struct ResolvePush {
     background: [f32; 4],
 }
 
-/// Clusters the visible-cluster list can hold per frame (8 MB per frame slot); the task
-/// shader drops and counts what does not fit (`FrameStats::visible_overflow`).
+/// Clusters the visible-cluster list can hold per frame, both passes together (8 MiB per
+/// frame slot); the cluster cull drops and counts what does not fit
+/// (`FrameStats::visible_overflow`).
 pub const VISIBLE_CAPACITY: u32 = 1 << 20;
+
+/// Bytes of one `VkDrawIndexedIndirectCommand`.
+const DRAW_COMMAND_BYTES: u32 = 20;
+
+/// How the clusters that survive culling reach the rasteriser. Both paths share the compute
+/// culling and its compacted list of visible clusters, so they produce the same pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeometryPath {
+    /// One mesh workgroup per listed cluster (`VK_EXT_mesh_shader`).
+    MeshShader,
+    /// One indexed draw per listed cluster through `vkCmdDrawIndexedIndirectCount`, the
+    /// cooked one-byte triangle lists as the index buffer (GPUs without mesh shaders).
+    IndirectCount,
+}
+
+impl GeometryPath {
+    /// Name for displays.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::MeshShader => "mesh shaders",
+            Self::IndirectCount => "indirect-count fallback",
+        }
+    }
+}
 
 /// What a frame's draw leaves behind for the passes after it.
 #[derive(Clone, Copy, Debug)]
@@ -179,7 +215,8 @@ pub struct DrawTargets {
     /// The visibility buffer (a transient), `R32_UINT`: `visible_slot << 7 | triangle`, or
     /// `u32::MAX` where nothing was drawn (see `forge_render::visibility`).
     pub visibility: ImageHandle,
-    /// The visible-cluster list the ids index (this frame slot's).
+    /// The visible-cluster list the ids index (this frame slot's): `(instance, meshlet)` per
+    /// slot, pass 1 filling it from the front and pass 2 from the back.
     pub visible_list: forge_gpu::BufferHandle,
 }
 
@@ -209,7 +246,7 @@ pub struct MeshletSceneBuilder {
     meshes: Vec<GpuMesh>,
     instances: Vec<GpuInstance>,
     total_triangles: u64,
-    /// Instance index of every task group.
+    /// Instance index of every work item (its length sizes the work list).
     group_table: Vec<u32>,
     /// Visibility bits over all instances (one per cluster).
     total_bits: u32,
@@ -242,7 +279,7 @@ impl MeshletSceneBuilder {
                 ..*m
             }));
         let id = MeshId(self.meshes.len() as u32);
-        // Per-level tables for the task shader's group window: clusters are stored level by level.
+        // Per-level tables for the culls' LOD windows: clusters are stored level by level.
         let level_count = mesh.clusters_per_level.len().min(LOD_LEVELS);
         let mut level_offset = [0_u32; LOD_LEVELS + 1];
         let mut self_error_min = [f32::INFINITY; LOD_LEVELS];
@@ -346,9 +383,10 @@ impl MeshletSceneBuilder {
                 MemoryCategory::Geometry,
                 "meshlet vertex indices",
             )?,
+            // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
             meshlet_triangles: device.create_buffer_with_data(
                 &self.meshlet_triangles,
-                usage,
+                usage | vk::BufferUsageFlags::INDEX_BUFFER,
                 MemoryCategory::Geometry,
                 "meshlet triangles",
             )?,
@@ -393,11 +431,39 @@ impl MeshletSceneBuilder {
                 .map(|i| {
                     device
                         .create_buffer(BufferDesc {
-                            size: 16,
+                            size: 32,
                             usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
                             location: MemoryLocation::CpuToGpu,
                             category: MemoryCategory::Frame,
-                            name: &format!("task indirect {i}"),
+                            name: &format!("cluster cull grid {i}"),
+                        })
+                        .map(GraphBuffer::new)
+                })
+                .collect::<Result<Vec<_>>>()?,
+            clusters: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device
+                        .create_buffer(BufferDesc {
+                            size: 48,
+                            usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                            location: MemoryLocation::CpuToGpu,
+                            category: MemoryCategory::Frame,
+                            name: &format!("cluster draw grids {i}"),
+                        })
+                        .map(GraphBuffer::new)
+                })
+                .collect::<Result<Vec<_>>>()?,
+            lookback: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    let instance_groups = (self.instances.len() as u64).div_ceil(64).max(1);
+                    let words = instance_groups + 2 * self.group_table.len() as u64;
+                    device
+                        .create_buffer(BufferDesc {
+                            size: words * 4,
+                            usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
+                            location: MemoryLocation::GpuOnly,
+                            category: MemoryCategory::Work,
+                            name: &format!("cull look-back {i}"),
                         })
                         .map(GraphBuffer::new)
                 })
@@ -406,7 +472,7 @@ impl MeshletSceneBuilder {
                 .map(|i| {
                     device
                         .create_buffer(BufferDesc {
-                            size: u64::from(VISIBLE_CAPACITY + 1) * 8,
+                            size: u64::from(VISIBLE_CAPACITY) * 8,
                             usage,
                             location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Work,
@@ -438,19 +504,27 @@ pub struct MeshletScene {
     /// shader every frame, so the graph tracks it.
     visibility: GraphBuffer,
     group_table: Buffer,
-    /// Per frame slot: the task-group work list built by the cull pass.
+    /// Per frame slot: the work list (an instance's group of 32 clusters per item) built by
+    /// the instance cull.
     work: Vec<GraphBuffer>,
-    /// Per frame slot: the indirect mesh-task command (x = work count).
+    /// Per frame slot: the cluster cull's indirect grid (x, y, 1, work item count), then the
+    /// instance cull's ticket counter.
     indirect: Vec<GraphBuffer>,
-    /// Per frame slot: the visible-cluster list the task shader appends to (slot 0 counts).
+    /// Per frame slot: per pass (pass 1 or the single pass, then pass 2) the draw grid
+    /// (x, y, 1) and the count of listed clusters, then the two cluster culls' tickets.
+    clusters: Vec<GraphBuffer>,
+    /// Per frame slot: the status words that keep both culls' appends in a fixed order (one
+    /// per instance-cull workgroup, then one per work item for each cluster cull).
+    lookback: Vec<GraphBuffer>,
+    /// Per frame slot: the visible-cluster list the cluster cull fills.
     visible: Vec<GraphBuffer>,
     /// Instances.
     pub instance_count: u32,
-    /// Task groups per pass (every instance's clusters in groups of 32).
+    /// Work items (every instance's clusters in groups of 32).
     pub total_groups: u32,
     /// Clusters over all instances (one visibility bit each).
     pub total_bits: u32,
-    /// Largest meshlet count of any mesh (task groups per instance derive from it).
+    /// Largest meshlet count of any mesh (work items per instance derive from it).
     pub max_meshlets: u32,
     /// Distinct meshes.
     pub mesh_count: u32,
@@ -536,6 +610,21 @@ pub struct FrameStats {
     pub visible_overflow: u32,
 }
 
+impl FrameStats {
+    /// ", N k dropped (visible list full)" when clusters were dropped, else nothing: for the
+    /// counter lines, so a capped frame never reads as a complete one.
+    pub fn overflow_note(&self) -> String {
+        if self.visible_overflow == 0 {
+            String::new()
+        } else {
+            format!(
+                ", {:.0} k dropped (visible list full)",
+                f64::from(self.visible_overflow) / 1e3
+            )
+        }
+    }
+}
+
 /// The hierarchical-Z pyramid: power-of-two, one storage view per level, sampled in
 /// `GENERAL`. Persistent (a frozen culling camera keeps using the last one built).
 fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphImage> {
@@ -561,14 +650,23 @@ fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphIma
 /// Declares the meshlet passes for one scene.
 pub struct MeshletRenderer {
     device: Arc<Device>,
+    path: GeometryPath,
+    /// The draw pipelines: mesh shaders, or vertex + fragment on the fallback path.
     pipeline_solid: Pipeline,
     pipeline_wire: Pipeline,
     pipeline_hzb: Pipeline,
     pipeline_cull: Pipeline,
+    pipeline_cluster_cull: Pipeline,
     pipeline_resolve: Pipeline,
     hzb: GraphImage,
     frame_buffers: Vec<Buffer>,
     stats_buffers: Vec<GraphBuffer>,
+    /// Fallback path only (empty on the mesh path): per frame slot, one indexed draw per
+    /// listed cluster of the pass being drawn.
+    draws: Vec<GraphBuffer>,
+    /// Slots of the visible-cluster list in use: [`VISIBLE_CAPACITY`], or fewer when the
+    /// fallback's `maxDrawIndirectCount` is lower.
+    visible_capacity: u32,
     /// Direction *to* the sun (world space), used by the visibility resolve.
     pub sun_dir: Vec3,
     /// Illuminance of the sun at the scene, in lux (the rocks return albedo × E / π).
@@ -600,15 +698,21 @@ pub struct DrawParams<'a> {
     pub exposure: f32,
 }
 
-/// The graph handles one mesh pass touches.
+/// The graph handles the cull and draw passes touch.
 #[derive(Clone, Copy)]
 struct MeshPassIo {
-    /// The visibility buffer (colour attachment of the mesh passes).
+    /// The visibility buffer (colour attachment of the draws).
     visibility: ImageHandle,
     depth: ImageHandle,
     hzb: ImageHandle,
     work: forge_gpu::BufferHandle,
     indirect: forge_gpu::BufferHandle,
+    /// Each pass's draw grid and cluster count, and the cluster culls' tickets.
+    clusters: forge_gpu::BufferHandle,
+    /// The ordered appends' status words.
+    lookback: forge_gpu::BufferHandle,
+    /// The fallback's indexed draws.
+    draws: Option<forge_gpu::BufferHandle>,
     /// The per-cluster "visible last frame" bits.
     visibility_bits: forge_gpu::BufferHandle,
     /// The visible-cluster list of this frame slot.
@@ -617,23 +721,39 @@ struct MeshPassIo {
 }
 
 impl MeshletRenderer {
-    /// Compiles the pipelines and creates the depth resources for `extent`.
+    /// Compiles the pipelines and creates the depth resources for `extent`. The path follows
+    /// the device: mesh shaders when it has them, the indirect-count fallback otherwise
+    /// (which needs 8-bit index buffers).
     pub fn new(
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
         extent: vk::Extent2D,
     ) -> Result<Self> {
-        let task = device.create_shader_module(
-            &shaders.compile("meshlet.slang", "task_main", ShaderStage::Task)?,
-            "task",
-        )?;
-        let mesh = device.create_shader_module(
-            &shaders.compile("meshlet.slang", "mesh_main", ShaderStage::Mesh)?,
-            "mesh",
+        let path = if device.features().mesh_shader {
+            GeometryPath::MeshShader
+        } else {
+            GeometryPath::IndirectCount
+        };
+        if path == GeometryPath::IndirectCount && !device.features().index_type_uint8 {
+            return Err(forge_gpu::GpuError::Unsupported(format!(
+                "{} has neither mesh shaders nor 8-bit index buffers \
+                 (VK_KHR_index_type_uint8) for the meshlet fallback",
+                device.name()
+            )));
+        }
+        let (geometry_entry, geometry_stage, fragment_entry) = match path {
+            GeometryPath::MeshShader => ("mesh_main", ShaderStage::Mesh, "frag_main"),
+            GeometryPath::IndirectCount => {
+                ("vertex_main", ShaderStage::Vertex, "frag_fallback_main")
+            }
+        };
+        let geometry = device.create_shader_module(
+            &shaders.compile("meshlet.slang", geometry_entry, geometry_stage)?,
+            geometry_entry,
         )?;
         let frag = device.create_shader_module(
-            &shaders.compile("meshlet.slang", "frag_main", ShaderStage::Fragment)?,
-            "frag",
+            &shaders.compile("meshlet.slang", fragment_entry, ShaderStage::Fragment)?,
+            fragment_entry,
         )?;
         let hzb = device.create_shader_module(
             &shaders.compile("hzb.slang", "hzb_main", ShaderStage::Compute)?,
@@ -643,23 +763,43 @@ impl MeshletRenderer {
             &shaders.compile("meshlet.slang", "cull_main", ShaderStage::Compute)?,
             "instance cull",
         )?;
+        let cluster_cull = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "cluster_cull_main", ShaderStage::Compute)?,
+            "cluster cull",
+        )?;
         let make_pipeline = |wireframe: bool| {
-            device.create_mesh_pipeline(&MeshPipelineDesc {
-                task: Some((task, "task_main")),
-                mesh: (mesh, "mesh_main"),
-                fragment: (frag, "frag_main"),
-                color_formats: &[vk::Format::R32_UINT],
-                depth_format: Some(vk::Format::D32_SFLOAT),
-                push_constant_bytes: std::mem::size_of::<Push>() as u32,
-                cull_mode: vk::CullModeFlags::BACK,
-                wireframe,
-                depth_test: true,
-                name: if wireframe {
-                    "meshlets wire"
-                } else {
-                    "meshlets"
-                },
-            })
+            let name = if wireframe {
+                "meshlets wire"
+            } else {
+                "meshlets"
+            };
+            let color_formats = &[vk::Format::R32_UINT];
+            let push_constant_bytes = std::mem::size_of::<Push>() as u32;
+            match path {
+                GeometryPath::MeshShader => device.create_mesh_pipeline(&MeshPipelineDesc {
+                    task: None,
+                    mesh: (geometry, geometry_entry),
+                    fragment: (frag, fragment_entry),
+                    color_formats,
+                    depth_format: Some(vk::Format::D32_SFLOAT),
+                    push_constant_bytes,
+                    cull_mode: vk::CullModeFlags::BACK,
+                    wireframe,
+                    depth_test: true,
+                    name,
+                }),
+                GeometryPath::IndirectCount => device.create_vertex_pipeline(&VertexPipelineDesc {
+                    vertex: (geometry, geometry_entry),
+                    fragment: (frag, fragment_entry),
+                    color_formats,
+                    depth_format: Some(vk::Format::D32_SFLOAT),
+                    push_constant_bytes,
+                    cull_mode: vk::CullModeFlags::BACK,
+                    wireframe,
+                    depth_test: true,
+                    name,
+                }),
+            }
         };
         let pipeline_solid = make_pipeline(false)?;
         let pipeline_wire = make_pipeline(true)?;
@@ -673,6 +813,11 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             name: "instance cull + LOD window",
         })?;
+        let pipeline_cluster_cull = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (cluster_cull, "cluster_cull_main"),
+            push_constant_bytes: std::mem::size_of::<Push>() as u32,
+            name: "cluster cull",
+        })?;
         let resolve = device.create_shader_module(
             &shaders.compile("meshlet.slang", "resolve_main", ShaderStage::Compute)?,
             "visibility resolve",
@@ -682,7 +827,7 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
             name: "visibility resolve",
         })?;
-        for module in [task, mesh, frag, hzb, cull, resolve] {
+        for module in [geometry, frag, hzb, cull, cluster_cull, resolve] {
             device.destroy_shader_module(module);
         }
         let hzb = create_pyramid(device, extent)?;
@@ -710,19 +855,56 @@ impl MeshletRenderer {
                 Ok(GraphBuffer::new(b))
             })
             .collect::<Result<Vec<_>>>()?;
+        let visible_capacity = match path {
+            GeometryPath::MeshShader => VISIBLE_CAPACITY,
+            GeometryPath::IndirectCount => {
+                VISIBLE_CAPACITY.min(device.limits().max_draw_indirect_count)
+            }
+        };
+        let draws = match path {
+            GeometryPath::MeshShader => Vec::new(),
+            GeometryPath::IndirectCount => (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device
+                        .create_buffer(BufferDesc {
+                            size: u64::from(visible_capacity) * u64::from(DRAW_COMMAND_BYTES),
+                            usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                                | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                            location: MemoryLocation::GpuOnly,
+                            category: MemoryCategory::Work,
+                            name: &format!("cluster draws {i}"),
+                        })
+                        .map(GraphBuffer::new)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        };
+        tracing::info!(
+            path = path.name(),
+            visible_capacity,
+            "meshlet renderer ready"
+        );
         Ok(Self {
             device: Arc::clone(device),
+            path,
             pipeline_solid,
             pipeline_wire,
             pipeline_hzb,
             pipeline_cull,
+            pipeline_cluster_cull,
             pipeline_resolve,
             hzb,
             frame_buffers,
             stats_buffers,
+            draws,
+            visible_capacity,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
             sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
         })
+    }
+
+    /// How the visible clusters are drawn on this device.
+    pub fn path(&self) -> GeometryPath {
+        self.path
     }
 
     /// Recreates the depth pyramid. The device must be idle.
@@ -789,17 +971,21 @@ impl MeshletRenderer {
             work: scene.work[slot.index].address(),
             indirect: scene.indirect[slot.index].address(),
             visible: scene.visible[slot.index].address(),
-            visible_capacity: VISIBLE_CAPACITY,
+            visible_capacity: self.visible_capacity,
             exposure: params.exposure,
             sun_illuminance: self.sun_illuminance,
             pad_exposure: 0,
+            clusters: scene.clusters[slot.index].address(),
+            draws: self.draws.get(slot.index).map_or(0, |b| b.address()),
+            lookback: scene.lookback[slot.index].address(),
         }
     }
 
-    /// Declares the passes of this frame's draw: instance cull, the first mesh pass, the
-    /// depth pyramid and the second mesh pass (with occlusion), all reading and writing
-    /// through declared graph accesses. The mesh passes write the visibility buffer and the
-    /// depth (both transients); [`MeshletRenderer::resolve`] shades the result.
+    /// Declares the passes of this frame's draw: the instance cull, then per mesh pass a
+    /// cluster cull (compute, filling the visible-cluster list) and the draw of what it kept,
+    /// with the depth pyramid built between the two passes when occlusion is on. Everything
+    /// reads and writes through declared graph accesses. The draws write the visibility
+    /// buffer and the depth (both transients); [`MeshletRenderer::resolve`] shades the result.
     pub fn draw<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -817,9 +1003,12 @@ impl MeshletRenderer {
         let block2 = self.frame_block(slot, &params, PASS_REMAINDER);
         self.frame_buffers[slot.index].write(0, &[block1]);
         self.frame_buffers[slot.index].write(FRAME_BLOCK_STRIDE, &[block2]);
-        // The indirect command of both passes (x = group count, reset here every frame).
+        // The grids start empty every frame, (x, y, z, count) for the cluster cull and for the
+        // draw of each pass, and so do the culls' tickets; the last workgroup of each cull
+        // writes the grid it leads to.
         let scene = params.scene;
-        scene.indirect[slot.index].write(0, &[0_u32, 1, 1, 0]);
+        scene.indirect[slot.index].write(0, &[0_u32, 0, 1, 0, 0, 0, 0, 0]);
+        scene.clusters[slot.index].write(0, &[0_u32, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0]);
 
         let extent = params.extent;
         let depth = graph.transient(TransientDesc {
@@ -846,22 +1035,34 @@ impl MeshletRenderer {
             hzb: graph.import(&self.hzb),
             work: graph.import_buffer(&scene.work[slot.index]),
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
+            clusters: graph.import_buffer(&scene.clusters[slot.index]),
+            lookback: graph.import_buffer(&scene.lookback[slot.index]),
+            draws: self.draws.get(slot.index).map(|b| graph.import_buffer(b)),
             visibility_bits: graph.import_buffer(&scene.visibility),
             visible: graph.import_buffer(&scene.visible[slot.index]),
             stats: graph.import_buffer(&self.stats_buffers[slot.index]),
         };
         let frame_address = self.frame_buffers[slot.index].address();
 
-        // Instance culling and LOD level windows in compute: the task-group work list. It
-        // also resets the visible-cluster counter.
+        // Instance culling and LOD level windows: the work list and the cluster cull's grid.
+        // The instance cull's status words start cleared; it clears the cluster culls' for
+        // the items it appends.
         let cull_pipeline = &self.pipeline_cull;
-        let instance_count = scene.instance_count;
+        let instance_groups = scene.instance_count.div_ceil(64).max(1);
+        let lookback: &'f GraphBuffer = &scene.lookback[slot.index];
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         graph
             .pass("geometry/instance cull")
+            .buffer(io.lookback, BufferAccess::TransferDst)
+            .run(move |_, commands| {
+                commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 4, 0);
+                Ok(())
+            });
+        graph
+            .pass("geometry/instance cull")
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
-            .buffer(io.indirect, BufferAccess::ShaderWrite(compute))
-            .buffer(io.visible, BufferAccess::ShaderWrite(compute))
+            .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderWrite(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(cull_pipeline);
@@ -871,35 +1072,54 @@ impl MeshletRenderer {
                         frame: frame_address,
                     },
                 );
-                commands.dispatch(instance_count.div_ceil(64).max(1), 1, 1);
+                commands.dispatch(instance_groups, 1, 1);
                 Ok(())
             });
 
+        let (cull_label, draw_label) = if occlusion {
+            (
+                "geometry/cluster cull 1 (visible last frame)",
+                "geometry/meshlet pass 1 (visible last frame)",
+            )
+        } else {
+            (
+                "geometry/cluster cull (single pass)",
+                "geometry/meshlets (single pass)",
+            )
+        };
         let first = MeshPass {
-            label: if occlusion {
-                "geometry/meshlet pass 1 (visible last frame)"
-            } else {
-                "geometry/meshlets (single pass)"
-            },
             io,
             frame_address,
-            first: true,
-            reads_hzb: false,
+            args_offset: 0,
+            second: false,
         };
-        self.mesh_pass(graph, first, &params, slot);
+        self.cull_pass(graph, cull_label, first, &params, slot);
+        self.draw_pass(graph, draw_label, first, &params, slot);
 
         if occlusion {
             if !frozen {
                 self.pyramid_passes(graph, io);
             }
             let second = MeshPass {
-                label: "geometry/meshlet pass 2 (newly visible)",
                 io,
                 frame_address: frame_address + FRAME_BLOCK_STRIDE,
-                first: false,
-                reads_hzb: true,
+                args_offset: 16,
+                second: true,
             };
-            self.mesh_pass(graph, second, &params, slot);
+            self.cull_pass(
+                graph,
+                "geometry/cluster cull 2 (occlusion)",
+                second,
+                &params,
+                slot,
+            );
+            self.draw_pass(
+                graph,
+                "geometry/meshlet pass 2 (newly visible)",
+                second,
+                &params,
+                slot,
+            );
         }
         Ok(DrawTargets {
             depth,
@@ -949,11 +1169,64 @@ impl MeshletRenderer {
             });
     }
 
-    /// One mesh-shader pass over the work list: clears the visibility buffer and the depth
-    /// when `first`, tests the depth pyramid when `reads_hzb`.
-    fn mesh_pass<'f>(
+    /// One cluster cull over the work list: every work item's 32 clusters are culled and the
+    /// survivors compacted into this pass's range of the visible-cluster list (and, on the
+    /// fallback path, into indexed draws). The second pass also tests the depth pyramid.
+    fn cull_pass<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
+        label: &'static str,
+        pass: MeshPass,
+        params: &DrawParams<'f>,
+        slot: FrameSlot,
+    ) {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let pipeline = &self.pipeline_cluster_cull;
+        let grid: &'f GraphBuffer = &params.scene.indirect[slot.index];
+        let MeshPass {
+            io,
+            frame_address,
+            second,
+            ..
+        } = pass;
+        let mut builder = graph
+            .pass(label)
+            .buffer(
+                io.indirect,
+                BufferAccess::IndirectArgsAndShaderRead(compute),
+            )
+            .buffer(io.work, BufferAccess::ShaderRead(compute))
+            .buffer(io.visibility_bits, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.visible, BufferAccess::ShaderWrite(compute))
+            .buffer(io.stats, BufferAccess::ShaderWrite(compute));
+        if let Some(draws) = io.draws {
+            builder = builder.buffer(draws, BufferAccess::ShaderWrite(compute));
+        }
+        if second {
+            builder = builder.image(io.hzb, ImageAccess::Sampled(compute));
+        }
+        builder.run(move |_, commands| {
+            commands.bind_pipeline(pipeline);
+            commands.push_constants(
+                pipeline,
+                &Push {
+                    frame: frame_address,
+                },
+            );
+            commands.dispatch_indirect(grid, 0);
+            Ok(())
+        });
+    }
+
+    /// One draw of the clusters a cull pass listed: a mesh workgroup per cluster, or on the
+    /// fallback path an indexed draw per cluster through one `vkCmdDrawIndexedIndirectCount`.
+    /// The first pass clears the visibility buffer and the depth, the second loads them.
+    fn draw_pass<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        label: &'static str,
         pass: MeshPass,
         params: &DrawParams<'f>,
         slot: FrameSlot,
@@ -964,84 +1237,95 @@ impl MeshletRenderer {
         } else {
             &self.pipeline_solid
         };
-        let indirect: &'f GraphBuffer = &params.scene.indirect[slot.index];
+        let clusters: &'f GraphBuffer = &params.scene.clusters[slot.index];
+        let triangles: &'f Buffer = &params.scene.meshlet_triangles;
+        let draws: Option<&'f GraphBuffer> = self.draws.get(slot.index);
+        let capacity = self.visible_capacity;
         let extent = params.extent;
         let MeshPass {
-            label,
             io,
             frame_address,
-            first,
-            reads_hzb,
+            args_offset,
+            second,
         } = pass;
-        let mut builder = graph
-            .pass(label)
-            .buffer(io.work, BufferAccess::ShaderRead(S::TASK_SHADER_EXT))
-            .buffer(io.indirect, BufferAccess::IndirectArgs)
-            .buffer(
-                io.visibility_bits,
-                BufferAccess::ShaderReadWrite(S::TASK_SHADER_EXT),
-            )
-            .buffer(
-                io.visible,
-                BufferAccess::ShaderReadWrite(S::TASK_SHADER_EXT),
-            )
-            .buffer(
-                io.stats,
-                BufferAccess::ShaderWrite(S::TASK_SHADER_EXT | S::MESH_SHADER_EXT),
-            )
+        let mut builder = graph.pass(label);
+        builder = match io.draws {
+            None => builder
+                .buffer(
+                    io.clusters,
+                    BufferAccess::IndirectArgsAndShaderRead(S::MESH_SHADER_EXT),
+                )
+                .buffer(io.visible, BufferAccess::ShaderRead(S::MESH_SHADER_EXT)),
+            Some(draws) => builder
+                .buffer(io.clusters, BufferAccess::IndirectArgs)
+                .buffer(draws, BufferAccess::IndirectArgs)
+                .buffer(io.visible, BufferAccess::ShaderRead(S::VERTEX_SHADER)),
+        };
+        builder
             .image(io.visibility, ImageAccess::ColorAttachment)
-            .image(io.depth, ImageAccess::DepthAttachment);
-        if reads_hzb {
-            builder = builder.image(io.hzb, ImageAccess::Sampled(S::TASK_SHADER_EXT));
-        }
-        builder.run(move |resources, commands| {
-            let load = if first {
-                vk::AttachmentLoadOp::CLEAR
-            } else {
-                vk::AttachmentLoadOp::LOAD
-            };
-            let color = [vk::RenderingAttachmentInfo::default()
-                .image_view(resources.view(io.visibility))
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(load)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .clear_value(vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        uint32: [crate::visibility::EMPTY; 4],
+            .image(io.depth, ImageAccess::DepthAttachment)
+            .run(move |resources, commands| {
+                let load = if second {
+                    vk::AttachmentLoadOp::LOAD
+                } else {
+                    vk::AttachmentLoadOp::CLEAR
+                };
+                let color = [vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(io.visibility))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(load)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            uint32: [crate::visibility::EMPTY; 4],
+                        },
+                    })];
+                let depth = vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(io.depth))
+                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .load_op(load)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 0.0,
+                            stencil: 0,
+                        },
+                    });
+                let info = vk::RenderingInfo::default()
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent,
+                    })
+                    .layer_count(1)
+                    .color_attachments(&color)
+                    .depth_attachment(&depth);
+                commands.begin_rendering(&info);
+                commands.bind_pipeline(pipeline);
+                commands.set_viewport_full(extent);
+                commands.push_constants(
+                    pipeline,
+                    &Push {
+                        frame: frame_address,
                     },
-                })];
-            let depth = vk::RenderingAttachmentInfo::default()
-                .image_view(resources.view(io.depth))
-                .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                .load_op(load)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .clear_value(vk::ClearValue {
-                    depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 0.0,
-                        stencil: 0,
-                    },
-                });
-            let info = vk::RenderingInfo::default()
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D::default(),
-                    extent,
-                })
-                .layer_count(1)
-                .color_attachments(&color)
-                .depth_attachment(&depth);
-            commands.begin_rendering(&info);
-            commands.bind_pipeline(pipeline);
-            commands.set_viewport_full(extent);
-            commands.push_constants(
-                pipeline,
-                &Push {
-                    frame: frame_address,
-                },
-            );
-            let result = commands.draw_mesh_tasks_indirect(indirect, 0);
-            commands.end_rendering();
-            result
-        });
+                );
+                let result = match draws {
+                    None => commands.draw_mesh_tasks_indirect(clusters, args_offset),
+                    Some(draws) => {
+                        commands.bind_index_buffer(triangles, 0, vk::IndexType::UINT8_KHR);
+                        commands.draw_indexed_indirect_count(
+                            draws,
+                            0,
+                            clusters,
+                            args_offset + 12,
+                            capacity,
+                            DRAW_COMMAND_BYTES,
+                        );
+                        Ok(())
+                    }
+                };
+                commands.end_rendering();
+                result
+            });
     }
 
     /// Builds the depth pyramid level by level: level 0 from the depth buffer, each next
@@ -1084,14 +1368,35 @@ impl MeshletRenderer {
     }
 }
 
-/// One mesh-shader pass to declare.
+/// One mesh pass to declare: its cull and its draw share these.
 #[derive(Clone, Copy)]
 struct MeshPass {
-    label: &'static str,
     io: MeshPassIo,
+    /// This pass's frame block.
     frame_address: u64,
-    /// Clears the visibility buffer and the depth; the second pass loads both.
-    first: bool,
-    /// Tests clusters against the depth pyramid.
-    reads_hzb: bool,
+    /// Offset of this pass's (x, y, 1, count) in the cluster arguments.
+    args_offset: u64,
+    /// The second pass of the two-pass occlusion: tests the depth pyramid, loads the targets.
+    second: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_capped_frame_says_how_much_it_dropped() {
+        assert_eq!(FrameStats::default().overflow_note(), "");
+        let capped = FrameStats {
+            visible_overflow: 92_400,
+            ..FrameStats::default()
+        };
+        assert_eq!(capped.overflow_note(), ", 92 k dropped (visible list full)");
+    }
+
+    #[test]
+    fn every_list_slot_fits_the_visibility_id() {
+        // The id keeps 7 bits for the triangle (124 per cluster): the slot has the other 25.
+        assert!(u64::from(VISIBLE_CAPACITY) <= 1 << (32 - 7));
+    }
 }

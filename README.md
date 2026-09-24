@@ -24,7 +24,7 @@ crates/forge-core     deterministic math, seeds, hashes, handles
 crates/forge-task     job system (work stealing, counters, scopes, task graphs, blocking pool)
 crates/forge-gpu      Vulkan layer: device, memory, swapchain, Slang shaders, bindless set, pipelines, frames
 crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedural test meshes, shared GPU layouts
-crates/forge-render   meshlet renderer (task/mesh shaders, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
+crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indirect-count fallback, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
                       physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
 shaders/              Slang sources (bindless, meshlet, hzb, starfield, atmosphere, taa, exposure, tonemap, display, overlay)
@@ -75,7 +75,9 @@ interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
 `--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral`, `--ev100 EV` (fixed
 exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (128 000),
 `--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
-of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance`.
+of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance`,
+`--force-fallback` (the device without mesh shaders: the geometry is drawn through
+`vkCmdDrawIndexedIndirectCount`, pixel-identical).
 Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
 where the time goes: [docs/PROFILE.md](docs/PROFILE.md).
 
@@ -104,7 +106,8 @@ culling and move the camera to see what was culled, **V** frustum, **C** cone, *
 occlusion, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold, **M** meshlet
 colours, **Tab** wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
 `--no-occlusion`, `--lod-error PX`, `--no-lod`, `--orbit` (scripted motion), `--overlay`,
-`--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral` (AgX).
+`--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral` (AgX), `--force-fallback`
+(the indirect-count path of GPUs without mesh shaders).
 Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
 
 ### `task-bench` — job system

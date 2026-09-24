@@ -96,8 +96,11 @@ Goal: the renderer skeleton every later system draws through.
    a profiler zone per pass. Still to come on it: async compute and transfer queues,
    transient buffers, parallel recording of pass bodies. (Lesson from the previous project:
    undeclared buffer uses made NVIDIA replay stale indirect arguments.)
-3. Compute culling shared by both paths + `vkCmdDrawIndexedIndirectCount` fallback,
-   pixel-diffed against the mesh-shader path.
+3. Compute culling shared by both paths + `vkCmdDrawIndexedIndirectCount` fallback ✅
+   (2026-09-24, issue #5): an instance cull and a cluster cull per mesh pass append the
+   visible clusters in a fixed order; mesh shaders or one indexed draw per cluster draw
+   them, 0 pixels apart (`--force-fallback`). Mesh path at the task path's cost, fallback
+   draw about 2× (numbers in `docs/demos/meshlets.md`).
 4. Cluster LOD DAG (meshoptimizer `clusterlod` through FFI), GPU LOD selection by
    screen-space error, streaming of cluster pages from disk through a GPU request buffer,
    software rasteriser for sub-pixel clusters (64-bit atomics). Metrics: DAG roots reached,

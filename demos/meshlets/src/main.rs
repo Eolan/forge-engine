@@ -72,6 +72,9 @@ struct Args {
     /// Force the profiling overlay on (also in scripted runs). F1 toggles it.
     #[arg(long)]
     overlay: bool,
+    /// Draw through the indirect-count fallback: the device is created without mesh shaders.
+    #[arg(long)]
+    force_fallback: bool,
 }
 
 struct Bench {
@@ -92,12 +95,6 @@ struct Bench {
 
 impl Bench {
     fn new(ctx: &mut Context, args: Args) -> Result<Self> {
-        if !ctx.device.features().mesh_shader {
-            anyhow::bail!(
-                "{} has no mesh shader support (VK_EXT_mesh_shader)",
-                ctx.device.name()
-            );
-        }
         let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
         let tonemap = args.tonemap;
@@ -191,12 +188,14 @@ impl Demo for Bench {
         }
         if let Some(last) = self.stats.last() {
             ctx.profile.counter(format!(
-                "drawn: {} instances, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded; LOD {} at {:.2} px, mean level {:.2}",
+                "drawn through {}: {} instances, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px, mean level {:.2}",
+                self.renderer.path().name(),
                 last.instances_visible,
                 f64::from(last.meshlets_pass1) / 1e3,
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
                 f64::from(last.occluded) / 1e3,
+                last.overflow_note(),
                 if self.flags.has(CullFlags::LOD) { "on" } else { "off" },
                 self.args.lod_error,
                 f64::from(last.lod_level_sum) / f64::from((last.meshlets_pass1 + last.meshlets_pass2).max(1))
@@ -259,16 +258,21 @@ impl Demo for Bench {
         let gpu = self.gpu_ms.iter().sum::<f64>() / self.gpu_ms.len().max(1) as f64;
         let cpu = self.cpu_ms.iter().sum::<f64>() / self.cpu_ms.len().max(1) as f64;
         let title = format!(
-            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | drawn: {:.0} inst, {:.0} k + {:.0} k meshlets, {:.2} M tris, {:.0} k occluded | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
+            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} inst, {:.0} k + {:.0} k meshlets, {:.2} M tris, {:.0} k occluded{} | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
             self.scene.instance_count,
             self.scene.max_meshlets,
             self.scene.instance_meshlets() as f64 / 1e6,
             self.scene.total_triangles as f64 / 1e6,
+            self.renderer.path().name(),
             mean(|s| s.instances_visible),
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.triangles) / 1e6,
             mean(|s| s.occluded) / 1e3,
+            match mean(|s| s.visible_overflow) {
+                0.0 => String::new(),
+                dropped => format!(", {:.0} k dropped (visible list full)", dropped / 1e3),
+            },
             gpu,
             cpu,
             if self.flags.has(CullFlags::FREEZE) {
@@ -385,6 +389,7 @@ fn main() -> Result<()> {
         capture: args.capture.clone().map(|p| (p, args.capture_frame)),
         capture_every: None,
         overlay: if args.overlay { Some(true) } else { None },
+        force_fallback: args.force_fallback,
         ..AppConfig::default()
     };
     forge_app::run(config, move |ctx| Bench::new(ctx, args))

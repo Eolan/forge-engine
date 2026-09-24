@@ -132,6 +132,63 @@ impl<'a> Commands<'a> {
         unsafe { self.device.raw().cmd_dispatch(self.cb, x, y, z) };
     }
 
+    /// Dispatches the workgroup counts of the `VkDispatchIndirectCommand` (three `u32`) at
+    /// `offset` in `buffer`, which must have `INDIRECT_BUFFER` usage.
+    pub fn dispatch_indirect(&self, buffer: &crate::Buffer, offset: u64) {
+        self.paranoid_barrier();
+        // SAFETY: a compute pipeline is bound and the buffer holds a complete command at
+        // `offset` (the caller's responsibility).
+        unsafe {
+            self.device
+                .raw()
+                .cmd_dispatch_indirect(self.cb, buffer.raw(), offset)
+        };
+    }
+
+    /// Binds `buffer` (with `INDEX_BUFFER` usage) as the index buffer.
+    pub fn bind_index_buffer(
+        &self,
+        buffer: &crate::Buffer,
+        offset: u64,
+        index_type: vk::IndexType,
+    ) {
+        // SAFETY: the buffer is alive while the command buffer is recorded and executed (the
+        // caller holds it); the index type's feature is the caller's responsibility.
+        unsafe {
+            self.device
+                .raw()
+                .cmd_bind_index_buffer(self.cb, buffer.raw(), offset, index_type)
+        };
+    }
+
+    /// `vkCmdDrawIndexedIndirectCount`: up to `max_draws` `VkDrawIndexedIndirectCommand`s,
+    /// `stride` bytes apart from `offset` in `buffer`, as many as the `u32` at `count_offset`
+    /// in `count_buffer` says. Both buffers need `INDIRECT_BUFFER` usage.
+    pub fn draw_indexed_indirect_count(
+        &self,
+        buffer: &crate::Buffer,
+        offset: u64,
+        count_buffer: &crate::Buffer,
+        count_offset: u64,
+        max_draws: u32,
+        stride: u32,
+    ) {
+        // SAFETY: a graphics pipeline and an index buffer are bound inside a rendering
+        // instance, and the buffers hold the commands and the count (the caller's
+        // responsibility).
+        unsafe {
+            self.device.raw().cmd_draw_indexed_indirect_count(
+                self.cb,
+                buffer.raw(),
+                offset,
+                count_buffer.raw(),
+                count_offset,
+                max_draws,
+                stride,
+            )
+        };
+    }
+
     /// A global memory barrier between two stage/access sets (buffers and images alike).
     pub fn memory_barrier(
         &self,

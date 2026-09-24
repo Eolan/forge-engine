@@ -68,6 +68,30 @@ pub struct MeshPipelineDesc<'a> {
     pub name: &'a str,
 }
 
+/// Description of a vertex + fragment pipeline drawing triangle lists that pull their
+/// vertices from buffers (no vertex input), with the same fixed-function state as
+/// [`MeshPipelineDesc`]: the mesh pipeline's twin on GPUs without mesh shaders.
+pub struct VertexPipelineDesc<'a> {
+    /// Vertex stage.
+    pub vertex: (vk::ShaderModule, &'a str),
+    /// Fragment stage.
+    pub fragment: (vk::ShaderModule, &'a str),
+    /// Color attachment formats.
+    pub color_formats: &'a [vk::Format],
+    /// Depth attachment format, if any.
+    pub depth_format: Option<vk::Format>,
+    /// Push constant size in bytes (visible to both stages).
+    pub push_constant_bytes: u32,
+    /// Face culling.
+    pub cull_mode: vk::CullModeFlags,
+    /// Wireframe rasterisation.
+    pub wireframe: bool,
+    /// Depth test with reversed-Z (`GREATER_OR_EQUAL`) and write.
+    pub depth_test: bool,
+    /// Debug name.
+    pub name: &'a str,
+}
+
 /// Description of a full-screen vertex + fragment pipeline (no vertex input, no depth).
 pub struct FullscreenPipelineDesc<'a> {
     /// Vertex stage (typically a 3-vertex triangle from `SV_VertexID`).
@@ -250,11 +274,6 @@ impl Device {
 
     /// Creates a mesh-shading pipeline. Requires the mesh-shader feature.
     pub fn create_mesh_pipeline(self: &Arc<Self>, desc: &MeshPipelineDesc<'_>) -> Result<Pipeline> {
-        let all_stages = vk::ShaderStageFlags::TASK_EXT
-            | vk::ShaderStageFlags::MESH_EXT
-            | vk::ShaderStageFlags::FRAGMENT;
-        let layout = self.create_layout(all_stages, desc.push_constant_bytes)?;
-
         let names: Vec<CString> = [
             desc.task.map(|t| t.1),
             Some(desc.mesh.1),
@@ -286,26 +305,87 @@ impl Device {
                 .module(desc.fragment.0)
                 .name(name_iter.next().expect("fragment name")),
         );
+        self.create_raster_pipeline(
+            &stages,
+            vk::ShaderStageFlags::TASK_EXT
+                | vk::ShaderStageFlags::MESH_EXT
+                | vk::ShaderStageFlags::FRAGMENT,
+            false,
+            &RasterState {
+                color_formats: desc.color_formats,
+                depth_format: desc.depth_format,
+                push_constant_bytes: desc.push_constant_bytes,
+                cull_mode: desc.cull_mode,
+                wireframe: desc.wireframe,
+                depth_test: desc.depth_test,
+                name: desc.name,
+            },
+        )
+    }
 
+    /// Creates a vertex + fragment pipeline drawing triangle lists without vertex buffers.
+    pub fn create_vertex_pipeline(
+        self: &Arc<Self>,
+        desc: &VertexPipelineDesc<'_>,
+    ) -> Result<Pipeline> {
+        let vertex_name = CString::new(desc.vertex.1).expect("entry point name");
+        let fragment_name = CString::new(desc.fragment.1).expect("entry point name");
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(desc.vertex.0)
+                .name(&vertex_name),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(desc.fragment.0)
+                .name(&fragment_name),
+        ];
+        self.create_raster_pipeline(
+            &stages,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            true,
+            &RasterState {
+                color_formats: desc.color_formats,
+                depth_format: desc.depth_format,
+                push_constant_bytes: desc.push_constant_bytes,
+                cull_mode: desc.cull_mode,
+                wireframe: desc.wireframe,
+                depth_test: desc.depth_test,
+                name: desc.name,
+            },
+        )
+    }
+
+    /// The fixed-function state the geometry pipelines share, around their shader stages.
+    /// `vertex_input` adds the (empty) vertex input and triangle-list assembly a vertex
+    /// pipeline needs and a mesh pipeline must not have.
+    fn create_raster_pipeline(
+        self: &Arc<Self>,
+        stages: &[vk::PipelineShaderStageCreateInfo<'_>],
+        stage_mask: vk::ShaderStageFlags,
+        vertex_input: bool,
+        state: &RasterState<'_>,
+    ) -> Result<Pipeline> {
+        let layout = self.create_layout(stage_mask, state.push_constant_bytes)?;
         let viewport = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
         let raster = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(if desc.wireframe {
+            .polygon_mode(if state.wireframe {
                 vk::PolygonMode::LINE
             } else {
                 vk::PolygonMode::FILL
             })
-            .cull_mode(desc.cull_mode)
+            .cull_mode(state.cull_mode)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
         let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(desc.depth_test)
-            .depth_write_enable(desc.depth_test)
+            .depth_test_enable(state.depth_test)
+            .depth_write_enable(state.depth_test)
             .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL);
-        let blend_attachments: Vec<_> = desc
+        let blend_attachments: Vec<_> = state
             .color_formats
             .iter()
             .map(|_| {
@@ -317,13 +397,16 @@ impl Device {
             vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        let mut rendering =
-            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(desc.color_formats);
-        if let Some(depth_format) = desc.depth_format {
+        let mut rendering = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(state.color_formats);
+        if let Some(depth_format) = state.depth_format {
             rendering = rendering.depth_attachment_format(depth_format);
         }
-        let info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
+        let empty_input = vk::PipelineVertexInputStateCreateInfo::default();
+        let triangles = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let mut info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(stages)
             .viewport_state(&viewport)
             .rasterization_state(&raster)
             .multisample_state(&multisample)
@@ -332,8 +415,13 @@ impl Device {
             .dynamic_state(&dynamic)
             .layout(layout)
             .push_next(&mut rendering);
-        // SAFETY: all referenced state lives until the call returns; no vertex input state is
-        // required for mesh pipelines.
+        if vertex_input {
+            info = info
+                .vertex_input_state(&empty_input)
+                .input_assembly_state(&triangles);
+        }
+        // SAFETY: all referenced state lives until the call returns; mesh pipelines take no
+        // vertex input or input assembly state.
         let created = unsafe {
             self.raw()
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
@@ -346,13 +434,24 @@ impl Device {
                 return Err(e.into());
             }
         };
-        self.set_name(raw, desc.name);
+        self.set_name(raw, state.name);
         Ok(Pipeline {
             device: Arc::clone(self),
             raw,
             layout,
             bind_point: vk::PipelineBindPoint::GRAPHICS,
-            push_constant_stages: all_stages,
+            push_constant_stages: stage_mask,
         })
     }
+}
+
+/// What [`Device::create_raster_pipeline`] builds around the stages.
+struct RasterState<'a> {
+    color_formats: &'a [vk::Format],
+    depth_format: Option<vk::Format>,
+    push_constant_bytes: u32,
+    cull_mode: vk::CullModeFlags,
+    wireframe: bool,
+    depth_test: bool,
+    name: &'a str,
 }

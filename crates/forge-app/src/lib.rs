@@ -24,9 +24,9 @@ pub use forge_gpu::TransientDesc;
 /// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
 pub use forge_gpu::vk;
 use forge_gpu::{
-    Buffer, BufferDesc, Commands, Device, FrameGraph, FrameSlot, Frames, GraphStats, ImageAccess,
-    ImageHandle, Instance, MemoryCategory, MemoryLocation, RawImage, RenderGraph, ResourceState,
-    ShaderCompiler, Surface, Swapchain,
+    Buffer, BufferDesc, Commands, Device, DeviceOptions, FrameGraph, FrameSlot, Frames, GraphStats,
+    ImageAccess, ImageHandle, Instance, MemoryCategory, MemoryLocation, RawImage, RenderGraph,
+    ResourceState, ShaderCompiler, Surface, Swapchain,
 };
 pub use input::Input;
 pub use overlay::{Canvas, Color, Overlay};
@@ -69,6 +69,9 @@ pub struct AppConfig {
     /// `FORGE_STREAMLINE_DIR` points). Falls back to the plain loader when Streamline does not
     /// load.
     pub streamline: bool,
+    /// Create the device without `VK_EXT_mesh_shader` even when the GPU has it, so the
+    /// renderers take their fallback paths (`--force-fallback`).
+    pub force_fallback: bool,
 }
 
 impl Default for AppConfig {
@@ -85,6 +88,7 @@ impl Default for AppConfig {
             optimize_shaders: true,
             overlay: None,
             streamline: false,
+            force_fallback: false,
         }
     }
 }
@@ -198,6 +202,9 @@ pub fn run<D: Demo>(
         state.sample_memory();
         if let Some(memory) = state.ctx.profile.memory() {
             tracing::info!("memory: {}", memory.summary());
+        }
+        if let Some(gpu) = state.ctx.profile.gpu_run_summary() {
+            tracing::info!("gpu: {gpu}");
         }
         drop(state);
         tracing::info!(frames, "exited cleanly");
@@ -345,7 +352,13 @@ impl<D: Demo> State<D> {
         };
         let instance = Arc::new(instance);
         let surface = instance.create_surface(display, window_handle)?;
-        let device = Device::new(Arc::clone(&instance), Some(surface.raw()))?;
+        let device = Device::with_options(
+            Arc::clone(&instance),
+            Some(surface.raw()),
+            DeviceOptions {
+                no_mesh_shader: config.force_fallback,
+            },
+        )?;
         let size = window.inner_size();
         let swapchain = Swapchain::new(
             Arc::clone(&device),
