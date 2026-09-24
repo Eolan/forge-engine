@@ -929,3 +929,30 @@ the bench. What the implementation taught:
   lets the sunlit rocks dominate the key inside the belt (in open space the nebula takes
   over and the image opens by half a stop): along the 90-second path EV100 stays within
   14.4–15.0 and reverses by more than 0.1 EV once every nine seconds.
+
+## Implementation notes from Forge: the atmosphere (2026-09-24, issue #8, D-023)
+
+Hillaire 2020's transmittance and multiple-scattering tables, lifted from the `world`
+project onto the render graph, with the per-pixel march for a planet seen from space in
+the ballad. What the port taught:
+
+- **From space the air is a hairline.** An Earth-sized planet seen at 18° of angular
+  radius is 14 000 km away: its 100 km of atmosphere is 0.3° (three pixels at 1600×900),
+  and the part that scatters much less than one pixel. The blue limb, the haze towards it
+  and the red ring of sunset light round the night side are all there, sub-pixel, and
+  TAA's jitter integrates them. At 50° (1 900 km up) the same air reads as a band. How big
+  the planet looks is an art-direction choice, not a lighting one.
+- **Distances of 20 000 km need care in f32.** Ray–sphere spans computed as `b² − c` lose
+  kilometres at grazing rays; from the point of closest approach, as `(r − h)(r + h)`, they
+  keep metres. Marching from the atmosphere's entry point keeps the samples precise.
+- **Put the samples where the air is.** A grazing ray is 2 000 km long, but the air that
+  matters sits within a few hundred kilometres of its lowest point; segments packed
+  quadratically towards that point (and towards the ground for rays that hit it) make 16
+  segments enough: within 4/255 of 128. Uniform segments would need several times more.
+- **The sun stays white behind the limb.** Its disc is 10⁹ cd/m²; a transmittance of 10⁻²
+  still clips at an exposure set for sunlit rock, as it does in a camera. The reddening
+  shows in the air around it.
+- **Cost follows coverage.** A cone test against the planet's direction skips the march for
+  every other pixel (+0.01 ms with the planet out of view); in view the ballad's planet adds
+  0.04–0.06 ms, a planet filling the screen 0.2 ms. Because the camera barely moves
+  relative to the planet, a view-direction table around it (#26) would make that a lookup.

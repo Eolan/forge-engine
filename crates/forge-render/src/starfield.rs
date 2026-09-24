@@ -5,12 +5,13 @@
 //!
 //! Units: the sun is `sun_illuminance` lux arriving from a disc of `sun_angular_radius`, so
 //! the disc's luminance is the illuminance over its solid angle (1.9 · 10⁹ cd/m² for the Sun
-//! seen from 1 AU). The planet is lit by that sun like the rocks (albedo × E / π). Stars,
-//! nebula and the glow around the sun are *authored* emissives, in units of the luminance of a
-//! white Lambertian surface facing the sun: a real starfield is eight orders of magnitude
-//! below a sunlit rock and would not show at the same exposure (the "no stars in the Moon
-//! photos" effect), so this sky is art-directed to read next to the rocks, as every space
-//! game's is. Everything is written pre-exposed ([`crate::exposure`]).
+//! seen from 1 AU). A planet's ground is lit by that sun through its atmosphere
+//! ([`crate::atmosphere`]), which also dims and reddens what is seen through it. Stars,
+//! nebula, the glow around the sun and city lights are *authored* emissives, in units of the
+//! luminance of a white Lambertian surface facing the sun: a real starfield is eight orders
+//! of magnitude below a sunlit rock and would not show at the same exposure (the "no stars
+//! in the Moon photos" effect), so this sky is art-directed to read next to the rocks, as
+//! every space game's is. Everything is written pre-exposed ([`crate::exposure`]).
 
 use std::sync::Arc;
 
@@ -21,6 +22,8 @@ use forge_gpu::{
 };
 use glam::Mat4;
 
+use crate::atmosphere::AtmosphereFrame;
+
 /// Mirrors `Push` in `starfield.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -30,13 +33,21 @@ struct Push {
     /// Pre-exposed luminance of a white Lambertian surface facing the sun: the unit of the
     /// authored sky and of the planet's albedo.
     luminance_unit: f32,
+    /// From the camera to the planet's centre.
     planet_dir: [f32; 3],
-    planet_angle: f32,
+    /// Cosine of the angular radius of the top of the planet's atmosphere: pixels outside
+    /// that cone skip it.
+    planet_cos: f32,
     /// Pre-exposed luminance of the sun's disc.
     sun_disc: f32,
     /// Angular radius of the sun's disc (radians).
     sun_angle: f32,
-    pad: [f32; 2],
+    /// Device address of the planet and its atmosphere; 0 = no planet.
+    planet: u64,
+    /// The atmosphere's tables (sampled images).
+    transmittance: u32,
+    multiple_scattering: u32,
+    pad: [u32; 2],
 }
 
 /// Illuminance of the Sun at 1 AU outside an atmosphere, in lux.
@@ -59,10 +70,6 @@ pub struct Starfield {
     pub sun_illuminance: f32,
     /// Angular radius of the sun's disc, in radians.
     pub sun_angular_radius: f32,
-    /// Direction to a distant planet drawn in the sky.
-    pub planet_dir: glam::Vec3,
-    /// Angular radius of the planet in radians; 0 hides it.
-    pub planet_angle: f32,
 }
 
 impl Starfield {
@@ -95,13 +102,12 @@ impl Starfield {
             pipeline,
             sun_illuminance: SUN_ILLUMINANCE_1AU,
             sun_angular_radius: SUN_ANGULAR_RADIUS_1AU,
-            planet_dir: glam::Vec3::new(-0.35, 0.12, -1.0).normalize(),
-            planet_angle: 0.0,
         })
     }
 
     /// Declares the pass that draws the background into `color` wherever `depth` (the
-    /// buffer the geometry was drawn with) is still clear, pre-exposed by `exposure`.
+    /// buffer the geometry was drawn with) is still clear, pre-exposed by `exposure`, with
+    /// `planet` and its atmosphere in front of the stars when given.
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
@@ -112,55 +118,75 @@ impl Starfield {
         view_proj: Mat4,
         sun_dir: glam::Vec3,
         exposure: f32,
+        planet: Option<AtmosphereFrame>,
     ) {
         let push = Push {
             inv_view_proj: view_proj.inverse().to_cols_array(),
             sun_dir: sun_dir.to_array(),
             luminance_unit: crate::exposure::lambertian_luminance(self.sun_illuminance) * exposure,
-            planet_dir: self.planet_dir.to_array(),
-            planet_angle: self.planet_angle,
             sun_disc: disc_luminance(self.sun_illuminance, self.sun_angular_radius) * exposure,
             sun_angle: self.sun_angular_radius,
-            pad: [0.0; 2],
+            planet_dir: planet.map_or([0.0; 3], |p| p.direction.to_array()),
+            planet_cos: planet.map_or(2.0, |p| p.cos_top),
+            planet: planet.map_or(0, |p| p.planet),
+            transmittance: 0,
+            multiple_scattering: 0,
+            pad: [0; 2],
         };
         let pipeline = &self.pipeline;
-        graph
+        let mut pass = graph
             .pass("sky/starfield + planet")
             .image(color, ImageAccess::ColorAttachment)
-            .image(depth, ImageAccess::DepthRead)
-            .run(move |resources, commands| {
-                let attachments = [vk::RenderingAttachmentInfo::default()
-                    .image_view(resources.view(color))
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::LOAD)
-                    .store_op(vk::AttachmentStoreOp::STORE)];
-                let depth_attachment = vk::RenderingAttachmentInfo::default()
-                    .image_view(resources.view(depth))
-                    .image_layout(vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::LOAD)
-                    .store_op(vk::AttachmentStoreOp::NONE);
-                let info = vk::RenderingInfo::default()
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D::default(),
-                        extent,
-                    })
-                    .layer_count(1)
-                    .color_attachments(&attachments)
-                    .depth_attachment(&depth_attachment);
-                commands.begin_rendering(&info);
-                commands.bind_pipeline(pipeline);
-                commands.set_viewport_full(extent);
-                commands.push_constants(pipeline, &push);
-                commands.draw(3, 1);
-                commands.end_rendering();
-                Ok(())
-            });
+            .image(depth, ImageAccess::DepthRead);
+        if let Some(p) = planet {
+            let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+            pass = pass
+                .image(p.transmittance, ImageAccess::Sampled(fragment))
+                .image(p.multiple_scattering, ImageAccess::Sampled(fragment));
+        }
+        pass.run(move |resources, commands| {
+            let mut push = push;
+            if let Some(p) = planet {
+                push.transmittance = resources.sampled(p.transmittance).0;
+                push.multiple_scattering = resources.sampled(p.multiple_scattering).0;
+            }
+            let attachments = [vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(color))
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::STORE)];
+            let depth_attachment = vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(depth))
+                .image_layout(vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::NONE);
+            let info = vk::RenderingInfo::default()
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent,
+                })
+                .layer_count(1)
+                .color_attachments(&attachments)
+                .depth_attachment(&depth_attachment);
+            commands.begin_rendering(&info);
+            commands.bind_pipeline(pipeline);
+            commands.set_viewport_full(extent);
+            commands.push_constants(pipeline, &push);
+            commands.draw(3, 1);
+            commands.end_rendering();
+            Ok(())
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_push_constants_fit_the_guaranteed_128_bytes() {
+        assert_eq!(std::mem::size_of::<Push>(), 128);
+    }
 
     #[test]
     fn the_sun_disc_carries_its_illuminance() {

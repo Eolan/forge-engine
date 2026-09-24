@@ -4,7 +4,7 @@
 //! Phase 0: several procedural asteroid meshes, thousands of instances, task/mesh shaders,
 //! two-pass occlusion culling, a procedural starfield, a spline camera path.
 //! Phase 1: cluster LOD DAG, visibility buffer, render graph, physical light units with
-//! automatic exposure and a choice of tone curves.
+//! automatic exposure and a choice of tone curves, the planet under a Hillaire atmosphere.
 //!
 //! Controls: P pause/resume the path (right mouse look + WASD to fly freely while paused),
 //! T temporal anti-aliasing, M meshlet colours, O occlusion, Tab wireframe, G tone curve,
@@ -23,8 +23,8 @@ use forge_core::{Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    AutoExposure, CullCamera, CullFlags, FrameStats, HDR_FORMAT, LuminanceMeter, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap,
+    Atmosphere, AtmosphereParams, AutoExposure, CullCamera, CullFlags, FrameStats, HDR_FORMAT,
+    LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -60,6 +60,9 @@ struct Args {
     /// Angular radius of the planet in degrees (0 hides it).
     #[arg(long, default_value_t = 18.0)]
     planet_angle: f32,
+    /// Look in this direction, "x,y,z", instead of along the path (stills of the sky).
+    #[arg(long, value_parser = parse_vec3)]
+    look: Option<Vec3>,
     /// Exit after this many frames.
     #[arg(long)]
     frames: Option<u64>,
@@ -159,6 +162,8 @@ struct Ballad {
     args: Args,
     renderer: MeshletRenderer,
     starfield: Starfield,
+    /// The planet's atmosphere and the camera's position relative to its centre (km).
+    atmosphere: Option<(Atmosphere, Vec3)>,
     taa: Taa,
     taa_enabled: bool,
     meter: LuminanceMeter,
@@ -194,9 +199,15 @@ impl Ballad {
         // the swapchain only receives the resolve.
         let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let mut starfield = Starfield::new(&ctx.device, &ctx.shaders, HDR_FORMAT)?;
-        // A large planet low on the horizon, lit from the side by the sun.
-        starfield.planet_angle = args.planet_angle.to_radians();
-        starfield.planet_dir = args.planet_dir.normalize_or(Vec3::NEG_Z);
+        // A large Earth-like planet low on the horizon, lit from the side by the sun: the
+        // camera sits where its ground fills a disc of `--planet-angle`.
+        let atmosphere = if args.planet_angle > 0.0 {
+            let params = AtmosphereParams::earth();
+            let view = params.view_from_space(args.planet_dir, args.planet_angle.to_radians());
+            Some((Atmosphere::new(&ctx.device, &ctx.shaders, params)?, view))
+        } else {
+            None
+        };
         let mut renderer = renderer;
         renderer.sun_dir = args.sun_dir.normalize_or(Vec3::Y);
         // One sun for the rocks, the planet and the disc in the sky.
@@ -254,6 +265,7 @@ impl Ballad {
             args,
             renderer,
             starfield,
+            atmosphere,
             taa,
             taa_enabled,
             meter,
@@ -335,7 +347,10 @@ impl Demo for Ballad {
         self.path_t += step / self.args.duration;
         let position = self.path.sample(self.path_t);
         let ahead = self.path.sample(self.path_t + 0.004);
-        let forward = (ahead - position).normalize_or_zero();
+        let forward = match self.args.look {
+            Some(look) => look.normalize_or(Vec3::NEG_Z),
+            None => (ahead - position).normalize_or_zero(),
+        };
         // Look along the tangent with a gentle roll into the turns.
         let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
         self.camera.position = position;
@@ -477,6 +492,10 @@ impl Demo for Ballad {
             extent,
             None,
         );
+        let planet = self
+            .atmosphere
+            .as_mut()
+            .map(|(atmosphere, view)| atmosphere.frame(&mut frame.graph, frame.slot, *view));
         self.starfield.draw(
             &mut frame.graph,
             taa_frame.color,
@@ -485,6 +504,7 @@ impl Demo for Ballad {
             draw_view_proj,
             self.renderer.sun_dir,
             exposure,
+            planet,
         );
         // Meter the finished HDR scene (the next frames' exposure), then resolve it into the
         // history and, through the tone curve, the swapchain.

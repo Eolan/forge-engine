@@ -27,12 +27,12 @@ crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedur
 crates/forge-render   meshlet renderer (task/mesh shaders, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
                       physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
-shaders/              Slang sources (bindless, meshlet, hzb, starfield, taa, exposure, tonemap, display, overlay)
+shaders/              Slang sources (bindless, meshlet, hzb, starfield, atmosphere, taa, exposure, tonemap, display, overlay)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
 tools/imgdiff         pixel comparison of captures (golden images)
-tools/contact-sheet   lays a capture sequence out on one image of thumbnails
+tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
 docs/                 ARCHITECTURE, DECISIONS, ROADMAP, RESEARCH + research/ and demos/
 ```
 
@@ -56,10 +56,11 @@ cargo run --release -p asteroids
 ```
 
 A 90-second scripted flight through 3000 asteroids (rock and ice) of seven procedural meshes
-(195 M source triangles) over a procedural sky with a planet and the sun, with temporal
-anti-aliasing. Keys: **F1** profiling overlay (off → compact → full: GPU time per pass and
-CPU time per zone, grouped by subject; **1**–**9** open or fold a group; the same zones go
-to Tracy with `--features profiling`), **P** pause the path and fly freely, **T** TAA,
+(195 M source triangles) over a procedural sky with the sun and an Earth-like planet under a
+physical atmosphere, with temporal anti-aliasing. Keys: **F1** profiling overlay (off →
+compact → full: GPU time per pass and CPU time per zone, grouped by subject; **1**–**9**
+open or fold a group; the same zones go to Tracy with `--features profiling`), **P** pause
+the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
 is a bug), **M** meshlet colours, **Tab** wireframe, **G** tone curve (ACES → PBR Neutral →
@@ -72,7 +73,8 @@ sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by 
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
 `--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral`, `--ev100 EV` (fixed
 exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (128 000),
-`--exposure-log file.csv` (EV100 per frame). Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
+`--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
+of the sky). Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
 where the time goes: [docs/PROFILE.md](docs/PROFILE.md).
 
 The culling A/B check (expects 0 differing pixels; see `docs/demos/asteroids.md`):

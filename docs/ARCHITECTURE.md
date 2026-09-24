@@ -93,7 +93,7 @@ and the date next to every number.
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
 | `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks; D-020) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
-| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `Starfield` (stars, nebula, a physical sun disc, planet), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), lighting tiers, atmosphere, post (bloom), upscalers |
+| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `Starfield` (stars, nebula, a physical sun disc, a planet under its atmosphere), `Atmosphere` (Hillaire 2020 transmittance and multiple-scattering tables as graph passes, the per-pixel march for views from space), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), DLSS (#8), lighting tiers, post (bloom) |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
 | `forge-anim` | planned | clips, blend graph, motion matching, IK, powered ragdoll tracking, contact events |
@@ -170,6 +170,13 @@ their history by the exposure ratio. The display transform is chosen at run time
 `tonemap.slang` (AgX, ACES fit, Khronos PBR Neutral) and applied where the last HDR pass
 writes the display image (the TAA resolve in the ballad, the stand-alone display pass
 elsewhere); nothing upstream knows which curve is on screen.
+
+**Atmospheres belong to planets** (issue #8, D-023). A planet's air is two tables built by
+compute passes when it changes (transmittance, multiple scattering; Hillaire 2020) and a
+per-pixel march through the shell for views from space, in the same pre-exposed units:
+the ground is lit through the air, and the stars and the sun seen through it are dimmed
+and reddened by its transmittance. Empty space has no medium. Cameras inside an
+atmosphere will add the sky-view and aerial-perspective tables.
 
 ## 5. Conventions
 

@@ -44,9 +44,10 @@ It always shows the best the engine can do at that moment and carries its own pr
   (2026-09-24: every pass declared, every barrier derived, transients in one heap,
   pixel-identical), the sky drawn last behind the rocks ✅ (0.33 → 0.28 ms), the
   visibility buffer ✅ (shading once per pixel in compute, 0.30 ms), physical light units
-  with automatic exposure and run-time tone curves ✅ (0.31 ms); next the atmosphere and
-  DLSS (#8), streaming of cluster pages, the software rasteriser when triangle counts rise
-  again.
+  with automatic exposure and run-time tone curves ✅ (0.31 ms), the planet under a Hillaire
+  atmosphere ✅ (the limb, the terminator and the sun through the air from one integral;
+  0.325 ms, 0.34 with the planet in view); next DLSS (#8), streaming of cluster pages, the
+  software rasteriser when triangle counts rise again.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -103,8 +104,10 @@ Goal: the renderer skeleton every later system draws through.
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
    Still to come: bloom, ACES 2.0's output transform, a perceptual golden-image metric.
-   Lift Hillaire atmosphere, TAA and the DLSS/Streamline hook from the previous project
-   (#8).
+   Hillaire atmosphere ✅ (2026-09-24, D-023: transmittance and multiple-scattering tables
+   as graph passes, the per-pixel march for planets seen from space; the planet-view table
+   #26 for big planets, the sky-view and aerial-perspective tables with the first ground
+   demo). TAA ✅. Next the DLSS/Streamline hook from the previous project (#8).
    **Demo:** `city-blocks` — a million GPU-placed instances of twenty props with the DAG,
    120 fps at 1440p on the 5070 Ti, 60 fps on the 3080, flying at 300 m/s with streaming on.
 

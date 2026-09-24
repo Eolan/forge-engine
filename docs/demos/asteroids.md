@@ -15,7 +15,8 @@ error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colo
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
 `--ev100 EV` (a fixed exposure instead of the automatic one), `--exposure-compensation EV`,
 `--sun-lux LUX` (128 000, the Sun at 1 AU), `--exposure-log file.csv` (EV100 and its target
-per frame).
+per frame), `--look x,y,z` (hold the view direction while moving along the path: stills of
+the sky).
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`.
 Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the path and fly
@@ -28,7 +29,7 @@ Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-
 
 ![The ballad, phase 0](images/asteroids-ballad.png)
 
-![Passing the planet](images/asteroids-planet.png)
+![The planet under its atmosphere (`--look` at the planet, frame 60)](images/asteroids-planet.png)
 
 ![The profiling overlay (F1, full view): GPU time per graph pass, CPU time per zone, the render graph's counters (passes, barriers, transient heap) and the demo's](images/asteroids-profile.png)
 
@@ -65,8 +66,9 @@ subject, F1 cycles off → compact → full. The verdicts behind the numbers are
   pyramid where the jittered projection put the sphere, so culling stays exact under TAA.
 - A procedural sky as one full-screen triangle: two star lattices whose glow is never
   narrower than a pixel (so stars do not twinkle), a Milky-Way band and dusty nebula, the sun
-  with disc, halo and wide glow, and a **planet** (lit sphere with continents, ice caps,
-  clouds, night-side city lights, atmosphere rim and a scattered halo beyond the limb).
+  with disc, halo and wide glow, and a **planet** (continents, ice caps, clouds and
+  night-side city lights under a physical atmosphere since #8: the limb, the terminator
+  and the sun through the air come from Hillaire's integral, below).
 - A closed Catmull-Rom camera path through the belt, 90 s per lap, looking along the tangent.
 - Tracy: frame marks, `update` / `wait for frame slot` / `record` / `submit and present`
   zones and a `gpu ms` plot (`--features profiling`).
@@ -77,7 +79,7 @@ subject, F1 cycles off → compact → full. The verdicts behind the numbers are
 |---|---|
 | scene | 3000 asteroids, 7 meshes, 195 M leaf triangles; DAG tables 28 k clusters, 4.6 M cluster slots over all instances |
 | drawn per frame, LOD 1 px (moving, default path) | 6–8 k meshlets, **0.5–0.6 M triangles**, mean LOD level 6.3 |
-| GPU per frame, LOD 1 px | **0.34 ms** (sky 0.13 + instance cull 0.02 + meshlet pass 1 0.06 + pyramid 0.02 + pass 2 0.02 + TAA 0.07) |
+| GPU per frame, LOD 1 px | **0.325 ms** along the path, 0.34 facing the planet (full split in [PROFILE.md](../PROFILE.md): geometry 0.12, resolve 0.03, sky 0.11, or 0.14–0.16 with the planet, exposure 0.02, TAA 0.06) |
 | GPU per frame, LOD 0.5 px / 2 px | 0.39 ms (1.24 M triangles) / 0.28 ms (0.30 M) |
 | GPU per frame, full detail (`--no-lod`) | 5.15 ms (852 k + 33 k meshlets, 82 M triangles) |
 | CPU per frame (main thread) | 0.16 ms |
@@ -320,6 +322,63 @@ counting on the device and copying 1 KB costs neither. The frame is now 23 passe
 before), 39 image and 8 memory barriers (3 before): the histogram group is four small
 passes sharing one profiler zone.
 
+## The planet's atmosphere (2026-09-24, issue #8)
+
+The planet used to be painted: a lit sphere with an "atmosphere rim" term and a halo drawn
+beyond the limb. It is now an Earth-sized ground (6 360 km) under Earth's air (Hillaire
+2020's coefficients: Rayleigh, a continental aerosol, the ozone layer, 100 km thick), seen
+from where its ground fills a disc of `--planet-angle` (18°: 20 580 km from its centre).
+The air exists only in that shell; the rocks and the space between them have none. The
+still at the top of this page shows the default planet; below, its edge zoomed and a
+closer planet.
+![Zoomed ×4: the lit limb, a thin blue line with the haze brightening towards it; the terminator with city lights on the night side](images/asteroids-atmosphere-limb.png)
+
+![A closer planet (`--planet-angle 50`, 1 940 km up): the blue limb over the day side and the red ring of sunset light round the night side; the sun rising behind the limb](images/asteroids-atmosphere-near.png)
+
+How (`forge_render::atmosphere`, `shaders/atmosphere.slang`, D-023): two tables built by
+compute passes on the first frame and whenever the atmosphere changes (`sky/atmosphere
+tables`: transmittance 256 × 64, multiple scattering 32 × 32), then, in the sky pass, every
+pixel whose ray crosses the atmosphere marches it in 16 segments packed towards the ray's
+lowest point, with single scattering through the transmittance table, the planet's shadow
+and the multiple-scattering term. The ground is lit by the sun through the air plus the
+skylight; the stars and the sun behind the air are multiplied by its RGB transmittance.
+Pixels outside the cone of the atmosphere skip all of it (a dot product against the
+planet's direction; no pixel changes). The ground (oceans, continents, ice caps, a cloud
+deck, city lights) is the old procedural surface, now as albedo.
+
+What it shows, and why it is thin: from 14 000 km up the whole atmosphere is 0.3° thick, three
+pixels, and the part that scatters (below 20 km) less than one, so the limb is a hairline,
+as in photographs of the Earth from high orbit. The blue limb over the day side, the haze
+brightening towards it, the warm terminator and, at 50°, the red ring of light that grazed
+the ground at sunset all come from the same integral, with nothing painted. The sun behind
+the limb stays white: its disc is 10⁹ cd/m², and even a hundredth of it is far above white
+at this exposure (a camera clips it the same way); the reddening shows in the thin air
+around it. Whether the ballad's planet should sit closer, where the air reads as a band,
+is an art-direction question for the owner.
+
+Checks: the CPU mirror of the transmittance integral (tests: the noon sun 0.87 in green;
+a horizon sun red over blue by more than 20×; a ray from space grazing 10 km up reddened;
+metre-precise spans 20 000 km out); 16 segments within 4/255 of a 128-segment reference
+at 18° and 50° (24 within 2/255, 12 off by 9/255); culling A/B at 0 pixels along the path
+and facing the planet; validation and synchronization validation silent. With a fixed
+exposure, frame 600 of the path is bit-identical to before the change; with the
+automatic exposure it moves by 0.0002 EV (the old painted halo reached the edge of a few
+early frames), so the three tone-curve goldens were recaptured.
+
+Cost: the sky pass is 0.11 ms with the planet out of view (0.10 before), 0.14–0.16 ms with
+the default planet in view, 0.31 ms for a planet filling most of the screen; the tables cost
+nothing after the first frame. The frame along the path is 0.325 ms (0.315 before, two
+6000-frame runs each) and 0.34 ms facing the planet. A planet-view table would make the
+big-planet case a lookup (#26).
+
+Stills of the sky: `--look x,y,z` holds the camera's direction while it moves along the
+path, for example:
+
+```
+cargo run --release -p asteroids -- --fixed-step --look=-0.45,0.10,-1.0 --frames 61 --capture planet.png --capture-frame 60
+cargo run --release -p asteroids -- --fixed-step --planet-angle 50 --look=0.27891,0.29307,-0.91451 --sun-dir=0.40811,0.31726,-0.85603 --frames 601 --capture sunrise.png --capture-frame 600
+```
+
 ## Resolved: TAA history is bit-exact between runs since the render graph (issue #10)
 
 Before the graph, two identical runs with TAA on and the camera moving differed at frame
@@ -366,7 +425,8 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    geometry: material classification of the visibility buffer (#20), streaming of cluster
    pages, the software rasteriser for the smallest clusters once triangle counts rise again
    (a million-triangle city, not a rock field).
-2. The atmosphere and DLSS (#8), bloom; a proper sun with ray-traced shadows on the RTX
+2. DLSS (#8), bloom, a closer planet if the owner wants its air to read as a band, the
+   planet-view table (#26); a proper sun with ray-traced shadows on the RTX
    tiers; volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,
    crashes (Phases 5–7), a second player, spatial audio.

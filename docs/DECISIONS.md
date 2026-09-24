@@ -330,3 +330,29 @@ every nine seconds, the largest 0.52 EV): adaptation without pumping. The histog
 bit-identical. The ballad defaults to ACES (its toe keeps space black; AgX's 16.5-stop log
 encoding lifts the nebula to a flat grey), the bench to AgX. *(research: lighting-gi.md §5
 and §10; issue #7)*
+
+## D-023 — Atmospheres: Hillaire 2020 tables in the graph, a per-pixel march from space ✅ (2026-09-24)
+
+An atmosphere belongs to a planet (or any body massive enough to hold one): a Rayleigh
+layer, an aerosol (Mie, Cornette–Shanks phase) layer and an ozone tent over a spherical
+ground, in kilometres and per-kilometre coefficients (`AtmosphereParams`, Earth from
+Hillaire 2020 / Bruneton 2017 as the preset). Empty space has none. Two tables are built by
+compute graph passes (`sky/atmosphere tables`) only when the atmosphere changes:
+**transmittance** to the top of the atmosphere (256 × 64, Bruneton's mapping) and the
+**multiple-scattering** transfer (32 × 32: second order from 64 directions, then the
+geometric series). Luminance is per unit of sun illuminance, so the result is multiplied by
+the same pre-exposed illuminance as everything else (D-022). **Seen from outside the
+atmosphere** (the ballad, orbit), the sky pass marches each pixel's ray through the shell
+with both tables: 16 segments packed towards the ray's lowest point and the ground, exact
+per-segment integration, the planet's own shadow; the ground under it is lit by the sun
+through the air plus π × the multiple-scattering term as skylight, and whatever lies
+behind the air (stars, the sun's disc) is multiplied by the ray's RGB transmittance.
+Ray–sphere spans are computed from the point of closest approach, `(r − h)(r + h)`, which
+keeps metre precision 20 000 km out. **Seen from inside** (ground, flight), Hillaire's
+sky-view and aerial-perspective tables come with the first demo that stands on a planet
+(Phase 2). *Measured:* the CPU mirror of the transmittance integral (tests) gives Earth's
+noon sun 0.87 in green and a horizon sun red over blue by more than 20×; 16 segments are
+within 4/255 of a 128-segment reference; the sky pass costs 0.11 ms with the planet out of
+view, 0.14–0.16 ms with the ballad's planet (18° radius) in view and 0.31 ms for a planet
+filling the screen, which a planet-view table would make a lookup (#26). *(research:
+lighting-gi.md §6; issue #8)*
