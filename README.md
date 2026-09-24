@@ -24,13 +24,15 @@ crates/forge-core     deterministic math, seeds, hashes, handles
 crates/forge-task     job system (work stealing, counters, scopes, task graphs, blocking pool)
 crates/forge-gpu      Vulkan layer: device, memory, swapchain, Slang shaders, bindless set, pipelines, frames
 crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedural test meshes, shared GPU layouts
-crates/forge-render   meshlet renderer (task/mesh shaders, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield, blit
+crates/forge-render   meshlet renderer (task/mesh shaders, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
+                      physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
-shaders/              Slang sources (bindless, meshlet, hzb, starfield)
+shaders/              Slang sources (bindless, meshlet, hzb, starfield, taa, exposure, tonemap, display, overlay)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
 tools/imgdiff         pixel comparison of captures (golden images)
+tools/contact-sheet   lays a capture sequence out on one image of thumbnails
 docs/                 ARCHITECTURE, DECISIONS, ROADMAP, RESEARCH + research/ and demos/
 ```
 
@@ -60,14 +62,17 @@ CPU time per zone, grouped by subject; **1**–**9** open or fold a group; the s
 to Tracy with `--features profiling`), **P** pause the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
-is a bug), **M** meshlet colours, **Tab** wireframe.
+is a bug), **M** meshlet colours, **Tab** wireframe, **G** tone curve (ACES → PBR Neutral →
+AgX), **-** / **=** exposure compensation (half an EV per press).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
 `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
 sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
-`--lod-colors`, `--no-group-window`. Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
+`--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral`, `--ev100 EV` (fixed
+exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (128 000),
+`--exposure-log file.csv` (EV100 per frame). Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
 where the time goes: [docs/PROFILE.md](docs/PROFILE.md).
 
 The culling A/B check (expects 0 differing pixels; see `docs/demos/asteroids.md`):
@@ -93,8 +98,9 @@ cargo run --release -p meshlets
 A grid of 1152 asteroids (127 M triangles). Keys: **F1** profiling overlay, **F** freeze
 culling and move the camera to see what was culled, **V** frustum, **C** cone, **O**
 occlusion, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold, **M** meshlet
-colours, **Tab** wireframe. Options: `--side N`, `--detail N`, `--roughness R`,
-`--no-occlusion`, `--lod-error PX`, `--no-lod`, `--orbit` (scripted motion), `--overlay`.
+colours, **Tab** wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
+`--no-occlusion`, `--lod-error PX`, `--no-lod`, `--orbit` (scripted motion), `--overlay`,
+`--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral` (AgX).
 Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
 
 ### `task-bench` — job system

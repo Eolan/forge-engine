@@ -2,7 +2,8 @@
 //! with every culling stage switchable so its effect can be measured and frozen.
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, F freeze culling, C cone culling,
-//! V frustum culling, O occlusion culling, M meshlet colours, Tab wireframe, Esc quit.
+//! V frustum culling, O occlusion culling, M meshlet colours, Tab wireframe, G tone curve, Esc
+//! quit. The scene is lit in physical units (the sun at 128 klux) at a fixed exposure.
 
 #![forbid(unsafe_code)]
 
@@ -17,8 +18,8 @@ use forge_core::Seed;
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    CullCamera, CullFlags, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, blit,
+    CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder, Tonemap, exposure_from_ev100,
 };
 use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
@@ -62,6 +63,12 @@ struct Args {
     /// Which frame to capture.
     #[arg(long, default_value_t = 60)]
     capture_frame: u64,
+    /// Fixed exposure value at ISO 100 (15: sunny 16).
+    #[arg(long, default_value_t = 15.0)]
+    ev100: f32,
+    /// Tone curve: agx, aces or neutral (G cycles them).
+    #[arg(long, default_value = "agx")]
+    tonemap: Tonemap,
     /// Force the profiling overlay on (also in scripted runs). F1 toggles it.
     #[arg(long)]
     overlay: bool,
@@ -70,6 +77,8 @@ struct Args {
 struct Bench {
     args: Args,
     renderer: MeshletRenderer,
+    display: Display,
+    tonemap: Tonemap,
     scene: MeshletScene,
     camera: FlyCamera,
     flags: CullFlags,
@@ -90,6 +99,8 @@ impl Bench {
             );
         }
         let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
+        let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
+        let tonemap = args.tonemap;
         let scene = build_scene(ctx, &args)?;
         let side = args.side as f32;
         let camera = FlyCamera {
@@ -107,6 +118,8 @@ impl Bench {
         Ok(Self {
             args,
             renderer,
+            display,
+            tonemap,
             scene,
             camera,
             flags,
@@ -154,6 +167,7 @@ impl Demo for Bench {
             KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
             KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
+            KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             _ => {}
         }
     }
@@ -193,17 +207,16 @@ impl Demo for Bench {
             Some(frozen) if self.flags.has(CullFlags::FREEZE) => frozen,
             _ => live,
         };
-        // Visibility buffer → shaded HDR colour (with a clear colour behind the rocks) → blit
-        // to the swapchain: no anti-aliasing on purpose, this bench measures culling.
+        // Visibility buffer → shaded, pre-exposed HDR colour (with a clear colour behind the
+        // rocks) → display transform into the swapchain: no anti-aliasing on purpose, this
+        // bench measures culling.
         let extent = ctx.extent();
         let color = frame.graph.transient(TransientDesc {
             name: "bench color",
             width: extent.width,
             height: extent.height,
             format: HDR_FORMAT,
-            usage: vk::ImageUsageFlags::STORAGE
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_SRC,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });
@@ -219,6 +232,7 @@ impl Demo for Bench {
                 flags: self.flags,
                 extent,
                 wireframe: self.wireframe,
+                exposure: exposure_from_ev100(self.args.ev100),
             },
         )?;
         self.renderer.resolve(
@@ -229,13 +243,8 @@ impl Demo for Bench {
             extent,
             Some([0.02, 0.02, 0.03, 1.0]),
         );
-        blit(
-            &mut frame.graph,
-            "app/blit to swapchain",
-            color,
-            frame.target,
-            extent,
-        );
+        self.display
+            .draw(&mut frame.graph, color, frame.target, extent, self.tonemap);
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())
     }

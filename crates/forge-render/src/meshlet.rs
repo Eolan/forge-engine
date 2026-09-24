@@ -139,7 +139,11 @@ struct GpuFrame {
     /// The visible-cluster list: slot 0 holds the count, then (instance, meshlet | flags).
     visible: u64,
     visible_capacity: u32,
-    pad_visible: u32,
+    /// Pre-exposure of the frame (see `crate::exposure`).
+    exposure: f32,
+    /// Illuminance of the sun in lux.
+    sun_illuminance: f32,
+    pad_exposure: u32,
 }
 
 #[repr(C)]
@@ -537,8 +541,10 @@ pub struct MeshletRenderer {
     hzb: GraphImage,
     frame_buffers: Vec<Buffer>,
     stats_buffers: Vec<GraphBuffer>,
-    /// Direction *to* the sun (world space), used by the fragment shader.
+    /// Direction *to* the sun (world space), used by the visibility resolve.
     pub sun_dir: Vec3,
+    /// Illuminance of the sun at the scene, in lux (the rocks return albedo × E / π).
+    pub sun_illuminance: f32,
 }
 
 /// What to draw this frame.
@@ -562,6 +568,8 @@ pub struct DrawParams<'a> {
     pub extent: vk::Extent2D,
     /// Wireframe.
     pub wireframe: bool,
+    /// Pre-exposure the resolve multiplies the shaded luminance by (see `crate::exposure`).
+    pub exposure: f32,
 }
 
 /// The graph handles one mesh pass touches.
@@ -683,6 +691,7 @@ impl MeshletRenderer {
             frame_buffers,
             stats_buffers,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
+            sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
         })
     }
 
@@ -751,7 +760,9 @@ impl MeshletRenderer {
             indirect: scene.indirect[slot.index].address(),
             visible: scene.visible[slot.index].address(),
             visible_capacity: VISIBLE_CAPACITY,
-            pad_visible: 0,
+            exposure: params.exposure,
+            sun_illuminance: self.sun_illuminance,
+            pad_exposure: 0,
         }
     }
 

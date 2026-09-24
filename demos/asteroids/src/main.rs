@@ -3,12 +3,16 @@
 //!
 //! Phase 0: several procedural asteroid meshes, thousands of instances, task/mesh shaders,
 //! two-pass occlusion culling, a procedural starfield, a spline camera path.
+//! Phase 1: cluster LOD DAG, visibility buffer, render graph, physical light units with
+//! automatic exposure and a choice of tone curves.
 //!
 //! Controls: P pause/resume the path (right mouse look + WASD to fly freely while paused),
-//! T temporal anti-aliasing, M meshlet colours, O occlusion, Tab wireframe, Esc quit.
+//! T temporal anti-aliasing, M meshlet colours, O occlusion, Tab wireframe, G tone curve,
+//! - / = exposure compensation, Esc quit.
 
 #![forbid(unsafe_code)]
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -19,8 +23,8 @@ use forge_core::{Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    CullCamera, CullFlags, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, Starfield, Taa,
+    AutoExposure, CullCamera, CullFlags, FrameStats, HDR_FORMAT, LuminanceMeter, MeshletRenderer,
+    MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -102,6 +106,22 @@ struct Args {
     /// Force the profiling overlay off (F1 still toggles it).
     #[arg(long)]
     no_overlay: bool,
+    /// Tone curve: agx, aces or neutral (G cycles them). ACES by default here: its toe keeps
+    /// space black, where AgX's wide log encoding lifts the nebula to a flat grey.
+    #[arg(long, default_value = "aces")]
+    tonemap: Tonemap,
+    /// Fixed exposure value at ISO 100 instead of automatic exposure.
+    #[arg(long)]
+    ev100: Option<f32>,
+    /// Exposure compensation in EV for the automatic exposure (positive = brighter; - / =).
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    exposure_compensation: f32,
+    /// Illuminance of the sun at the field, in lux (128 000: the Sun at 1 AU in space).
+    #[arg(long, default_value_t = forge_render::starfield::SUN_ILLUMINANCE_1AU)]
+    sun_lux: f32,
+    /// Append "frame,path_t,ev100,target_ev100" for every frame to this CSV file.
+    #[arg(long)]
+    exposure_log: Option<PathBuf>,
 }
 
 fn parse_vec3(text: &str) -> std::result::Result<Vec3, String> {
@@ -141,6 +161,12 @@ struct Ballad {
     starfield: Starfield,
     taa: Taa,
     taa_enabled: bool,
+    meter: LuminanceMeter,
+    exposure: AutoExposure,
+    tonemap: Tonemap,
+    /// Seconds the scene advanced this frame (the fixed step with `--fixed-step`).
+    step: f32,
+    exposure_log: Option<std::io::BufWriter<std::fs::File>>,
     scene: MeshletScene,
     path: Path,
     path_t: f32,
@@ -173,6 +199,23 @@ impl Ballad {
         starfield.planet_dir = args.planet_dir.normalize_or(Vec3::NEG_Z);
         let mut renderer = renderer;
         renderer.sun_dir = args.sun_dir.normalize_or(Vec3::Y);
+        // One sun for the rocks, the planet and the disc in the sky.
+        renderer.sun_illuminance = args.sun_lux;
+        starfield.sun_illuminance = args.sun_lux;
+        let meter = LuminanceMeter::new(&ctx.device, &ctx.shaders)?;
+        let exposure = match args.ev100 {
+            Some(ev100) => AutoExposure::fixed(ev100),
+            None => {
+                let mut exposure = AutoExposure::new(15.0);
+                exposure.compensation = args.exposure_compensation;
+                exposure
+            }
+        };
+        let exposure_log = args
+            .exposure_log
+            .as_ref()
+            .map(|path| std::fs::File::create(path).map(std::io::BufWriter::new))
+            .transpose()?;
         let taa = Taa::new(
             &ctx.device,
             &ctx.shaders,
@@ -206,12 +249,18 @@ impl Ballad {
         }
         let mut taa = taa;
         taa.blend = args.taa_blend;
+        let tonemap = args.tonemap;
         Ok(Self {
             args,
             renderer,
             starfield,
             taa,
             taa_enabled,
+            meter,
+            exposure,
+            tonemap,
+            step: 0.0,
+            exposure_log,
             scene,
             path,
             path_t: 0.0,
@@ -261,6 +310,9 @@ impl Demo for Ballad {
             KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
             KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
+            KeyCode::KeyG => self.tonemap = self.tonemap.next(),
+            KeyCode::Minus => self.exposure.compensation -= 0.5,
+            KeyCode::Equal => self.exposure.compensation += 0.5,
             _ => {}
         }
     }
@@ -270,15 +322,16 @@ impl Demo for Ballad {
         self.frame_ms
             .push((now - self.last_frame).as_secs_f64() * 1e3);
         self.last_frame = now;
-        if self.paused {
-            self.camera.update(input, dt);
-            return;
-        }
         let step = if self.args.fixed_step {
             1.0 / 120.0
         } else {
             dt
         };
+        self.step = step;
+        if self.paused {
+            self.camera.update(input, dt);
+            return;
+        }
         self.path_t += step / self.args.duration;
         let position = self.path.sample(self.path_t);
         let ahead = self.path.sample(self.path_t + 0.004);
@@ -341,6 +394,26 @@ impl Demo for Ballad {
                 }
             ));
         }
+        // Exposure for this frame from the histogram of the frame that last used this slot.
+        let histogram = self.meter.take(frame.slot);
+        self.exposure.update(histogram.as_ref(), self.step);
+        let exposure = self.exposure.exposure();
+        if let Some(log) = &mut self.exposure_log {
+            writeln!(
+                log,
+                "{},{:.6},{:.4},{:.4}",
+                ctx.frames_rendered, self.path_t, self.exposure.ev100, self.exposure.target_ev100
+            )?;
+        }
+        ctx.profile.counter(format!(
+            "exposure: EV100 {:.2} {} (target {:.2}, compensation {:+.1} EV with - / =); {} (G); sun {:.0} klux",
+            self.exposure.ev100,
+            if self.exposure.automatic { "auto" } else { "fixed" },
+            self.exposure.target_ev100,
+            self.exposure.compensation,
+            self.tonemap.label(),
+            self.args.sun_lux / 1000.0
+        ));
         let cull = self.cull_camera(ctx.aspect());
         let extent = ctx.extent();
         if let Some(path) = std::env::var_os("FORGE_TRACE_FRAMES") {
@@ -377,6 +450,7 @@ impl Demo for Ballad {
             &mut frame.graph,
             self.camera.projection(ctx.aspect()),
             cull.view_proj,
+            exposure,
         );
         let draw_view_proj = taa_frame.jittered_projection * self.camera.view();
         let targets = self.renderer.draw(
@@ -392,6 +466,7 @@ impl Demo for Ballad {
                 flags: self.flags,
                 extent,
                 wireframe: self.wireframe,
+                exposure,
             },
         )?;
         self.renderer.resolve(
@@ -409,9 +484,24 @@ impl Demo for Ballad {
             extent,
             draw_view_proj,
             self.renderer.sun_dir,
+            exposure,
         );
-        self.taa
-            .resolve(&mut frame.graph, &taa_frame, targets.depth, frame.target);
+        // Meter the finished HDR scene (the next frames' exposure), then resolve it into the
+        // history and, through the tone curve, the swapchain.
+        self.meter.measure(
+            &mut frame.graph,
+            frame.slot,
+            taa_frame.color,
+            extent,
+            exposure,
+        );
+        self.taa.resolve(
+            &mut frame.graph,
+            &taa_frame,
+            targets.depth,
+            frame.target,
+            self.tonemap,
+        );
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())
     }
@@ -434,7 +524,7 @@ impl Demo for Ballad {
                 .unwrap_or(0.0)
         };
         let title = format!(
-            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | drawn {:.0} k + {:.0} k meshlets, {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | {}{}{}{}{}",
+            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | drawn {:.0} k + {:.0} k meshlets, {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
             self.scene.instance_count,
             self.scene.mesh_count,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -446,6 +536,8 @@ impl Demo for Ballad {
             cpu,
             p(0.5),
             p(0.99),
+            self.exposure.ev100,
+            self.tonemap.name(),
             if self.paused { "[P paused] " } else { "" },
             if self.taa_enabled { "[T taa] " } else { "" },
             if self.flags.has(CullFlags::OCCLUSION) {

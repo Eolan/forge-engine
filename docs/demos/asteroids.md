@@ -12,14 +12,18 @@ deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
-`--no-group-window` (A/B: must not change the image).
+`--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
+`--ev100 EV` (a fixed exposure instead of the automatic one), `--exposure-compensation EV`,
+`--sun-lux LUX` (128 000, the Sun at 1 AU), `--exposure-log file.csv` (EV100 and its target
+per frame).
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`.
 Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the path and fly
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
-red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **Esc** quit.
+red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **G** tone curve,
+**-** / **=** exposure compensation (half an EV), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 
 ![The ballad, phase 0](images/asteroids-ballad.png)
@@ -182,8 +186,10 @@ the barriers from what each pass declared and from the state the previous frame 
 | ballad (TAA on, occlusion on), at the migration | 19 | 37 | 3 | colour 12.8 MB, depth 6.4 MB, motion 6.4 MB |
 | ballad after #19 and #18 (sky last, no blit) | 18 | 37 | 2 | the same |
 | ballad with the visibility buffer (#6) | 19 | 39 | 3 | + visibility 6.4 MB; 32 MB requested in a 25.6 MB heap (visibility and motion share memory) |
+| ballad with the exposure histogram (#7) | 23 | 39 | 8 | the same |
 | bench (occlusion on), at the migration | 15 | 28 | 2 | depth 6.4 MB |
 | bench with the visibility buffer (#6) | 17 | 32 | 4 | depth 6.4 MB, visibility 6.4 MB, colour 12.8 MB; 25.6 MB in a 19.2 MB heap |
+| bench with the display pass (#7) | 17 | 32 | 3 | the same |
 
 **The sky is drawn last (issue #19, same day).** With the graph in place the starfield moved
 after the mesh passes: it reads the depth transient as a read-only attachment and its
@@ -243,6 +249,77 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Not in this step: material classification and the material table (#20), the 64-bit
 depth|id target of the software rasteriser (#3).
 
+## Physical light, automatic exposure, tone curves (2026-09-24, issue #7)
+
+**Units.** The sun delivers 128 000 lux (the Sun at 1 AU, outside any atmosphere;
+`--sun-lux`). The rocks return albedo × E / π in cd/m² from the visibility resolve, the
+planet is lit by the same sun the same way, and the sun's disc is drawn at its physical
+size (0.267° in radius, about 3.4 pixels at this field of view) with the luminance that
+illuminance implies over that solid angle: 1.9 · 10⁹ cd/m². The stars, the nebula and the
+glow around the sun are **authored**, in units of a sunlit white Lambertian surface: a real
+starfield is some eight orders of magnitude below a sunlit rock and would vanish at the
+rocks' exposure, as it does in photographs from the Moon. Every pass writes luminance times
+the frame's exposure (pre-exposure), so the fp16 targets hold values near 1; the sky is
+clamped at 16 384 so the disc cannot overflow them.
+
+**Exposure.** EV100 is either fixed (`--ev100`) or automatic: the pass group
+`exposure/luminance histogram` bins the luminance of every pixel of the finished HDR image
+into 256 log2 bins (shared-memory atomics, then device-local memory), copies the 1 KB
+result into a cached readback buffer of the frame slot and declares a `HostRead`; the CPU
+reads it two frames later, ignores the black bin, takes the log-average of the samples
+between the 50th and 98th percentiles and moves EV100 towards the value that meters that
+key as middle grey (1.5 per second towards darker, 0.8 towards brighter; **-** / **=**
+shift it by half an EV). The TAA rescales its history by the ratio of exposures, so
+adaptation never ghosts. Along the whole 90-second path (`--fixed-step --exposure-log`):
+
+| EV100 over the path | largest change | reversals larger than 0.1 EV | largest swing |
+|---|---|---|---|
+| 14.4 – 15.0 | 0.55 EV per second | 10 in 90 s | 0.52 EV |
+
+The meter settles around the sunny-16 value because the sunlit rocks dominate the upper
+half of the histogram; it opens up by half a stop where the path leaves the belt and the
+view is mostly nebula, and closes again in the dense clumps. Nothing pumps: one reversal
+every nine seconds, never faster than half a stop per second.
+
+![EV100 along the path and the metered target](images/asteroids-exposure.svg)
+
+![The capture sequence behind the curve: one frame every 7.5 s of the path, ACES](images/asteroids-exposure-sequence.png)
+
+**Tone curves.** **G** cycles ACES → Khronos PBR Neutral → AgX (`--tonemap`). The curve is
+applied in the TAA resolve, which writes the HDR history and the display image in one pass;
+the bench uses the stand-alone display pass. The same frame 600 (`--fixed-step`, TAA on,
+automatic exposure), the golden captures of the three curves:
+
+| ACES (Hill's fit of the 1.x RRT + ODT), the ballad's default | Khronos PBR Neutral | AgX |
+|---|---|---|
+| ![ACES](images/asteroids-hdr-aces.png) | ![PBR Neutral](images/asteroids-hdr-neutral.png) | ![AgX](images/asteroids-hdr-agx.png) |
+
+ACES is the default here because its toe keeps space black and the lit rocks contrasted;
+PBR Neutral keeps base colours (the nebula's browns and purples show), which is what it is
+for; AgX, the engine's default elsewhere and the most hue-safe, spends the display range on
+16.5 stops and lifts this mostly dark scene to a flat grey. Middle grey lands at 0.106
+(ACES), 0.14 (Neutral) and 0.21 (AgX) of display white; `forge_render::display` pins these
+in tests against CPU mirrors of the shader.
+
+**Checks.** Occlusion, cone and `--show-culled` A/B at 0 pixels without TAA; occlusion on
+vs off with TAA and automatic exposure at frame 600: 0 pixels (the histograms, hence the
+exposures, are identical); two runs of the golden capture: bit-identical. Validation and
+synchronization validation silent with each curve and with a fixed exposure. The goldens
+are checked with:
+
+```
+cargo run --release -p asteroids -- --fixed-step --frames 601 --capture aces.png --capture-frame 600
+cargo run --release -p imgdiff -- --tolerance 0 docs/demos/images/asteroids-hdr-aces.png aces.png
+```
+
+**Cost.** The histogram group (clear, count, copy, host read) is 0.02 ms of GPU; the frame
+went from 0.30 to 0.30–0.31 ms over two 6000-frame runs. A first version counted straight
+into host-visible memory: in video memory (Resizable BAR) the CPU paid 0.02 ms per frame
+to read 1 KB, in cached system memory the GPU paid 0.4 ms for atomics across PCIe;
+counting on the device and copying 1 KB costs neither. The frame is now 23 passes (19
+before), 39 image and 8 memory barriers (3 before): the histogram group is four small
+passes sharing one profiler zone.
+
 ## Resolved: TAA history is bit-exact between runs since the render graph (issue #10)
 
 Before the graph, two identical runs with TAA on and the camera moving differed at frame
@@ -272,7 +349,8 @@ derives (`FORGE_GRAPH_LOG=1`) is the record of what the frame now waits for.
   to 41 levels at full detail: the temporal filter cannot settle on geometry that changes
   every jitter. With the DAG the far field is a few triangles per pixel, which the filter can
   settle; the trembling the owner saw was the culling holes above.
-- TAA costs 0.06 ms here (motion + resolve + blit at 1600×900); the sky 0.14 ms.
+- TAA costs 0.06 ms here (motion vectors and the resolve, which also writes the display
+  image through the tone curve, at 1600×900); the sky 0.10 ms.
 - The CPU is idle (0.18 ms per frame). Everything below the frame loop is the GPU walking
   pointer tables.
 
@@ -288,7 +366,7 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    geometry: material classification of the visibility buffer (#20), streaming of cluster
    pages, the software rasteriser for the smallest clusters once triangle counts rise again
    (a million-triangle city, not a rock field).
-2. HDR exposure and tonemapping, DLSS; a proper sun with ray-traced shadows on the RTX
+2. The atmosphere and DLSS (#8), bloom; a proper sun with ray-traced shadows on the RTX
    tiers; volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,
    crashes (Phases 5–7), a second player, spatial audio.

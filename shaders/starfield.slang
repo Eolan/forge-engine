@@ -1,14 +1,24 @@
 // Procedural starfield: one full-screen triangle; stars and a faint nebula hashed from the
 // per-pixel view direction, so the sky is stable under camera motion and needs no textures.
+// Units (crates/forge-render/src/starfield.rs): the sun's disc is physical (its illuminance
+// over its solid angle), the planet is lit albedo × E / π like the rocks, and the stars,
+// nebula and sun glow are authored in units of a white Lambertian surface facing the sun.
+// Everything is written pre-exposed and clamped far below the fp16 limit.
 
 struct Push
 {
     float4x4 inv_view_proj;
     float3 sun_dir;
-    float exposure;
+    float luminance_unit;   // pre-exposed luminance of a white Lambertian surface facing the sun
     float3 planet_dir;      // direction to the planet's centre
     float planet_angle;     // angular radius of the planet (radians); 0 = no planet
+    float sun_disc;         // pre-exposed luminance of the sun's disc
+    float sun_angle;        // angular radius of the sun's disc (radians)
+    float2 pad;
 };
+
+// Pre-exposed values above this are white on any curve; fp16 overflows at 65504.
+static const float MAX_PRE_EXPOSED = 16384.0;
 
 [[vk::push_constant]]
 Push push;
@@ -165,15 +175,20 @@ float4 frag_main(VertexOut input) : SV_Target
     float pixel_size = max(length(ddx(dir)), length(ddy(dir)));
     float3 color = stars(dir, 160.0, 0.010, 1.0, pixel_size) * 0.9 + stars(dir, 60.0, 0.006, 2.0, pixel_size) * 1.6 + nebula * 1.8 + warm * 1.5;
 
-    // The sun: a small bright disc with a soft halo and a wide glow.
+    // The sun: a glow (authored, like the stars) around a physical disc whose edge is
+    // antialiased over one pixel. The angle comes from the cross product, which keeps its
+    // precision where acos(dot) would not.
     float3 sun = normalize(push.sun_dir);
     float s = saturate(dot(dir, sun));
-    color += float3(1.0, 0.95, 0.85) * (smoothstep(0.9995, 0.9999, s) * 20.0 + pow(s, 200.0) * 0.8 + pow(s, 12.0) * 0.06 + pow(s, 3.0) * 0.01);
+    color += float3(1.0, 0.95, 0.85) * (pow(s, 200.0) * 0.8 + pow(s, 12.0) * 0.06 + pow(s, 3.0) * 0.01);
+    float sun_offset = asin(min(length(cross(dir, sun)), 1.0));
+    float disc = dot(dir, sun) > 0.0 ? saturate((push.sun_angle - sun_offset) / max(pixel_size, 1e-6) + 0.5) : 0.0;
+    color = color * push.luminance_unit + float3(1.0, 0.95, 0.85) * disc * push.sun_disc;
 
-    // The planet covers the stars behind it.
+    // The planet covers the stars and the sun behind it.
     float coverage;
-    float3 planet_color = planet(dir, sun, coverage);
+    float3 planet_color = planet(dir, sun, coverage) * push.luminance_unit;
     color = lerp(color, planet_color, coverage) + planet_color * (1.0 - coverage);
 
-    return float4(color * push.exposure, 1.0);
+    return float4(min(color, MAX_PRE_EXPOSED), 1.0);
 }

@@ -297,3 +297,36 @@ differ by more than two levels (slivers at silhouettes). The visibility transien
 graph's first aliasing customer (it shares memory with the motion vectors).
 *(research: gpu-geometry.md, Burns & Hunt 2013, Schied & Dachsbacher 2015, Hable 2021;
 issue #6)*
+
+## D-022 — Physical light units, pre-exposure, histogram exposure, tone curves as data ✅ (2026-09-24)
+
+Lights are given in photometric units and every pass writes **pre-exposed luminance**
+(Lagarde & de Rousiers 2014): the sun is an illuminance in lux (128 000 for the Sun at
+1 AU), its disc a luminance equal to that illuminance over its solid angle (1.9 · 10⁹
+cd/m² at 0.267°), surfaces return albedo × E / π in cd/m², and each shader multiplies by
+the frame's exposure so fp16 targets hold values near 1 from starlight to noon (sky values
+are clamped at 16 384 before the fp16 limit). Exposure is a camera value, EV100, with
+exposure = 1 / (1.2 · 2^EV100). **Automatic exposure** meters a 256-bin log2 luminance
+histogram of the finished HDR image (a compute pass counting in shared memory, then
+device-local memory, copied to a cached readback buffer per frame slot and read two
+frames later, no stall): the black bin is ignored, the key is the log-average of the
+samples between the 50th and 98th percentiles of the rest, EV100 follows it at 1.5 per
+second towards darker and 0.8 per second towards brighter (Narkowicz 2016), with
+compensation and a clamp, and snaps on the first metered frame. The adaptation runs on
+the CPU (unit-tested, deterministic under `--fixed-step`); a GPU-resident loop is the
+option if the two-frame latency ever matters. Temporal filters rescale their history by
+the ratio of exposures. **The display transform is data** chosen at run time: AgX (engine
+default, hue-safe), ACES as Hill's fit of the 1.x RRT + sRGB ODT (ACES 2.0's output
+transform is not implemented), Khronos PBR Neutral; one Slang module serves the TAA resolve
+(history and display image in one pass) and a stand-alone display pass, with CPU mirrors
+under test. Emissives that cannot be physical at the same exposure (the ballad's stars and
+nebula, eight orders of magnitude below a sunlit rock in reality) are authored in units of
+a sunlit white Lambertian surface and documented as art-directed. Readbacks declare a
+`HostRead` access in the render graph so device writes are visible to the host.
+*Measured:* along the ballad's 90-second path the exposure stays within EV100 14.4–15.0,
+changes at most 0.55 EV per second and reverses by more than 0.1 EV ten times (one swing
+every nine seconds, the largest 0.52 EV): adaptation without pumping. The histogram costs
+0.02 ms of GPU, the frame 0.30 → 0.30–0.31 ms. Culling A/B at 0 pixels, two runs
+bit-identical. The ballad defaults to ACES (its toe keeps space black; AgX's 16.5-stop log
+encoding lifts the nebula to a flat grey), the bench to AgX. *(research: lighting-gi.md §5
+and §10; issue #7)*

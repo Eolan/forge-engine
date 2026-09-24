@@ -43,9 +43,10 @@ It always shows the best the engine can do at that moment and carries its own pr
   triangles, GPU 5.5 → 0.34 ms, pixel-exact A/B), profiler overlay ✅, render graph ✅
   (2026-09-24: every pass declared, every barrier derived, transients in one heap,
   pixel-identical), the sky drawn last behind the rocks ✅ (0.33 → 0.28 ms), the
-  visibility buffer ✅ (shading once per pixel in compute, 0.30 ms); next HDR exposure and
-  tonemapping, streaming of cluster pages, the software rasteriser when triangle counts
-  rise again, DLSS.
+  visibility buffer ✅ (shading once per pixel in compute, 0.30 ms), physical light units
+  with automatic exposure and run-time tone curves ✅ (0.31 ms); next the atmosphere and
+  DLSS (#8), streaming of cluster pages, the software rasteriser when triangle counts rise
+  again.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -98,9 +99,12 @@ Goal: the renderer skeleton every later system draws through.
    barycentrics and shades once per pixel; `docs/ARCHITECTURE.md` §4). Still to come:
    material classification and per-material shading (#20), the material table (D-007) as the
    shading input, the 64-bit combined depth|id for the software rasteriser (#3).
-6. HDR pipeline: physical light units, histogram exposure, tonemapping as data (AgX, ACES,
-   Khronos PBR Neutral), golden images. Lift Hillaire atmosphere, TAA and the DLSS/Streamline
-   hook from the previous project.
+6. HDR pipeline ✅ (2026-09-24, D-022): physical light units (the sun in lux, its disc from
+   its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
+   AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
+   Still to come: bloom, ACES 2.0's output transform, a perceptual golden-image metric.
+   Lift Hillaire atmosphere, TAA and the DLSS/Streamline hook from the previous project
+   (#8).
    **Demo:** `city-blocks` — a million GPU-placed instances of twenty props with the DAG,
    120 fps at 1440p on the 5070 Ti, 60 fps on the 3080, flying at 300 m/s with streaming on.
 

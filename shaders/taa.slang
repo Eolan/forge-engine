@@ -4,8 +4,11 @@
 // Every frame is drawn with its projection shifted by a sub-pixel jitter. The motion pass says
 // where each pixel was the frame before (static scene: depth and the two cameras suffice); the
 // resolve fetches the history there, clips it to what this frame's neighbourhood allows and
-// blends it with this frame's samples.
+// blends it with this frame's samples. The scene is pre-exposed: the history, stored at the
+// previous frame's exposure, is rescaled by `history_scale` before it is compared. The second
+// output is the display image, through the tone curve of `tonemap.slang`.
 import bindless;
+import tonemap;
 
 struct Varyings
 {
@@ -65,9 +68,9 @@ struct ResolvePush
     float jitter_x;
     float jitter_y;
     float blend; // how much of the result may come from this frame; 1 discards the history
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    float history_scale; // this frame's exposure over the history's
+    uint curve;          // TONEMAP_* of tonemap.slang
+    uint encode_srgb;    // 1 when the display target is UNORM
 };
 
 [[vk::push_constant]]
@@ -143,8 +146,8 @@ float3 clip_to_box(float3 value, float3 low, float3 high)
     return largest > 1.0 ? centre + offset / largest : value;
 }
 
-// The resolved colour goes to two targets at once: the next history (HDR) and the swapchain
-// image (the display format converts on write), so no blit is needed afterwards.
+// The resolved colour goes to two targets at once: the next history (pre-exposed HDR) and the
+// display image through the tone curve, so no separate display pass is needed afterwards.
 struct ResolveOut
 {
     float4 history : SV_Target0;
@@ -154,10 +157,10 @@ struct ResolveOut
 [shader("fragment")]
 ResolveOut resolve_main(Varyings input)
 {
-    float4 color = float4(resolve_color(input), 1.0);
+    float3 color = resolve_color(input);
     ResolveOut o;
-    o.history = color;
-    o.output = color;
+    o.history = float4(color, 1.0);
+    o.output = float4(display_output(color, resolve_push.curve, resolve_push.encode_srgb != 0), 1.0);
     return o;
 }
 
@@ -215,7 +218,7 @@ float3 resolve_color(Varyings input)
     // Clip the history to the mean ± 1.25 standard deviations of the nine samples around.
     float3 mean = moment1 / 9.0;
     float3 deviation = sqrt(abs(moment2 / 9.0 - mean * mean));
-    float3 history = compress(sample_history(history_uv, size));
+    float3 history = compress(sample_history(history_uv, size) * resolve_push.history_scale);
     history = from_ycocg(clip_to_box(to_ycocg(history), mean - 1.25 * deviation, mean + 1.25 * deviation));
 
     float alpha = saturate(resolve_push.blend * lerp(0.4, 1.0, nearest_weight));

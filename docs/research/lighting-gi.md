@@ -897,3 +897,35 @@ Cited under 2020, rev. 2022.
   found a better mirror.
 - Rockstar statements: the only primary Rockstar page cited is rockstargames.com/VI (release date
   19 November 2026). Everything about GTA VI rendering is press.
+
+## Implementation notes from Forge (2026-09-24, issue #7, D-022)
+
+Build-order step (1) of the recommendation, minus the perceptual metric, in the ballad and
+the bench. What the implementation taught:
+
+- **Space breaks a physical sky.** With the sun at 128 000 lux the rocks meter at EV100 ≈
+  15, where a real starfield (about 10⁻⁴ cd/m²) is eight orders of magnitude below black.
+  The sun's disc can be physical (its illuminance over its solid angle, 1.9 · 10⁹ cd/m²) and
+  the planet can be lit like the rocks, but stars and nebula have to be authored in units
+  of the sunlit surface and documented as art direction, or they disappear exactly as they
+  do in Apollo photographs.
+- **AgX flattens a mostly dark scene.** Its log encoding spends the display range on 16.5
+  stops, so a sky of dim nebula lifts to a flat grey; ACES's toe keeps space black. The
+  choice is per scene, which is the point of shipping the curves as data: the ballad
+  defaults to ACES, the engine and the bench to AgX. ACES here is Hill's fit of the 1.x
+  RRT + ODT; the 2.0 output transform is still to do.
+- **Pre-exposure needs the history rescaled.** A temporal filter stores pre-exposed
+  colour; multiplying the fetched history by the ratio of this frame's exposure to the
+  previous one keeps adaptation free of ghosts at no cost.
+- **Where the histogram lives matters more than how it is built.** Atomics from 5 600
+  workgroups into host-visible memory: in video memory through Resizable BAR the GPU is fast
+  but the CPU pays 0.02 ms to read 1 KB back; in cached system memory the CPU is fast and
+  the GPU pays 0.4 ms of PCIe atomics. Counting in device-local memory and copying 1 KB to
+  a cached buffer costs 0.02 ms in total.
+- **A fence wait does not make device writes visible to the host.** The readback needs a
+  barrier to `HOST_READ`; the render graph gained a `HostRead` buffer access for it
+  (issue #21 extends it to the older statistics and capture readbacks).
+- **Metering in space.** Dropping the black bin and keeping the 50th–98th percentiles
+  lets the sunlit rocks dominate the key inside the belt (in open space the nebula takes
+  over and the image opens by half a stop): along the 90-second path EV100 stays within
+  14.4–15.0 and reverses by more than 0.1 EV once every nine seconds.

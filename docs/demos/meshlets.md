@@ -2,14 +2,16 @@
 
 Run: `cargo run --release -p meshlets` (options `--side N`, `--detail N`, `--roughness R`,
 `--vsync`, `--validate`, `--no-occlusion`, `--lod-error PX` (1.0), `--no-lod`, `--orbit`,
-`--frames N`, `--capture file.png --capture-frame N`, `--overlay`).
+`--frames N`, `--capture file.png --capture-frame N`, `--overlay`, `--ev100 EV` (15),
+`--tonemap agx|aces|neutral`).
 Controls: WASD/QE move, Shift fast, right mouse drag to look, **F1** profiler, **F** freeze
 culling (move the camera to see what was culled), **C** cone culling, **V** frustum culling,
 **O** occlusion culling, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold,
-**M** meshlet colours (on by default here), **Tab** wireframe. The bench draws without
-anti-aliasing or a sky on purpose: it measures culling, not looks; since 2026-09-24 it
-shades through the visibility buffer like the ballad (a compute resolve into an HDR image,
-blitted to the swapchain); the `asteroids` demo is where TAA and the sky live.
+**M** meshlet colours (on by default here), **Tab** wireframe, **G** tone curve. The bench
+draws without anti-aliasing or a sky on purpose: it measures culling, not looks; since
+2026-09-24 it shades through the visibility buffer like the ballad (a compute resolve into
+a pre-exposed HDR image at a fixed EV100 of 15, then the display transform into the
+swapchain); the `asteroids` demo is where TAA, the sky and automatic exposure live.
 
 With the cluster LOD DAG and the instance cull pass (2026-09-24, see
 [asteroids.md](asteroids.md)) the static view draws 15 k meshlets and 1.09 M triangles in
@@ -108,6 +110,10 @@ detail 96, welded seams), 1194 meshlets per instance → **1.4 M meshlets, 127 M
   colour where nothing was drawn) and a blit pass copies it to the swapchain: 17 passes, 32
   image + 4 memory barriers, three transients in a 19.2 MB heap (the colour image aliases
   the depth buffer). Occlusion on vs off while orbiting: still 0 pixels.
+- Since issue #7 (same day) the rocks are lit in physical units (the sun at 128 klux) and
+  drawn at a fixed EV100 of 15 (`--ev100`), and the display pass (AgX by default, **G**
+  cycles the curves) replaces the blit: 17 passes, 32 image + 3 memory barriers, GPU
+  0.18 ms unchanged. Occlusion on vs off while orbiting: 0 pixels.
 
 ## Next steps (from the research recommendation)
 

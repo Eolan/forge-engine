@@ -147,7 +147,9 @@ public struct Frame
     public uint* indirect;          // VkDrawMeshTasksIndirectCommandEXT: x = work count, y = z = 1
     public uint2* visible;          // slot 0: (count, 0); then (instance, meshlet | CULLED_BIT) per drawn cluster
     public uint visible_capacity;   // slots after the counter
-    public uint pad_visible;
+    public float exposure;          // pre-exposure of the frame (crates/forge-render/src/exposure.rs)
+    public float sun_illuminance;   // lux; the rocks return albedo × E / π
+    public uint pad_exposure;
 };
 
 struct Push
@@ -738,6 +740,9 @@ void resolve_main(uint3 id : SV_DispatchThreadID)
     float3 n2 = normalize(mul(inst.model, float4(v2.normal, 0)).xyz);
     float3 n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
-    float3 color = shade(f, n, object_position, inst.id, meshlet_index, m.lod_level, culled_debug);
+    // `shade` works in units of a white Lambertian surface facing the sun; the frame stores
+    // luminance (cd/m²) times the exposure.
+    float3 color = shade(f, n, object_position, inst.id, meshlet_index, m.lod_level, culled_debug)
+        * (f[0].sun_illuminance * f[0].exposure / 3.14159265);
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][id.xy] = float4(color, 1.0);
 }

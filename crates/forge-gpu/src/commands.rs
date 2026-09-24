@@ -229,6 +229,32 @@ impl<'a> Commands<'a> {
         }
     }
 
+    /// Fills `size` bytes of `buffer` from `offset` with the 32-bit `value`
+    /// (`vkCmdFillBuffer`; the buffer needs `TRANSFER_DST` usage, offset and size are
+    /// multiples of 4).
+    pub fn fill_buffer(&self, buffer: &crate::Buffer, offset: u64, size: u64, value: u32) {
+        // SAFETY: recording state; the caller keeps the range inside the buffer and the
+        // buffer alive until the frame completes.
+        unsafe {
+            self.device
+                .raw()
+                .cmd_fill_buffer(self.cb, buffer.raw(), offset, size, value);
+        }
+    }
+
+    /// Copies `size` bytes from the start of `src` to the start of `dst`
+    /// (`TRANSFER_SRC` / `TRANSFER_DST` usage).
+    pub fn copy_buffer(&self, src: &crate::Buffer, dst: &crate::Buffer, size: u64) {
+        let region = vk::BufferCopy::default().size(size);
+        // SAFETY: recording state; both buffers hold at least `size` bytes and outlive the
+        // frame (the caller's responsibility).
+        unsafe {
+            self.device
+                .raw()
+                .cmd_copy_buffer(self.cb, src.raw(), dst.raw(), &[region]);
+        }
+    }
+
     /// Copies a whole 2-D colour image (in `TRANSFER_SRC_OPTIMAL` layout) into `buffer`,
     /// tightly packed, for readback. The buffer must hold `width × height × 4` bytes.
     pub fn copy_image_to_buffer(

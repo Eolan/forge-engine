@@ -120,6 +120,9 @@ pub enum BufferAccess {
     TransferSrc,
     /// Destination of a copy.
     TransferDst,
+    /// Read by the CPU once the frame has completed (readbacks): makes the device's writes
+    /// visible to the host, which a fence or semaphore wait alone does not.
+    HostRead,
 }
 
 impl ImageAccess {
@@ -205,6 +208,7 @@ impl BufferAccess {
             Self::IndirectArgs => (S::DRAW_INDIRECT, A::INDIRECT_COMMAND_READ, false),
             Self::TransferSrc => (S::TRANSFER, A::TRANSFER_READ, false),
             Self::TransferDst => (S::TRANSFER, A::TRANSFER_WRITE, true),
+            Self::HostRead => (S::HOST, A::HOST_READ, false),
         };
         ResourceState {
             layout: vk::ImageLayout::UNDEFINED,
@@ -1373,6 +1377,17 @@ fn describe(
 mod tests {
     use super::*;
     use vk::{AccessFlags2 as A, ImageLayout as L, PipelineStageFlags2 as S};
+
+    #[test]
+    fn a_host_read_waits_for_the_copy_and_the_next_copy_for_the_host() {
+        let mut state = BufferAccess::TransferDst.state();
+        let (src, dst) = transition(&mut state, BufferAccess::HostRead.state()).expect("barrier");
+        assert_eq!((src.stage, src.access), (S::TRANSFER, A::TRANSFER_WRITE));
+        assert_eq!((dst.stage, dst.access), (S::HOST, A::HOST_READ));
+        // Two frames later the slot's next copy overwrites it: a write after the host read.
+        let (src, _) = transition(&mut state, BufferAccess::TransferDst.state()).expect("barrier");
+        assert_eq!((src.stage, src.access), (S::HOST, A::HOST_READ));
+    }
 
     fn meta(name: &str, mips: u32, transient: Option<Option<(u64, u64)>>) -> ImageMeta {
         ImageMeta {

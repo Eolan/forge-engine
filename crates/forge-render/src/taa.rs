@@ -3,8 +3,12 @@
 //! The scene is drawn into an HDR colour target with a Halton-jittered projection. A motion
 //! pass reprojects every pixel into the previous frame from depth and the two cameras; the
 //! resolve blends this frame's samples with the history fetched there, clipped to the
-//! neighbourhood, and writes the next history and the swapchain image in one pass.
+//! neighbourhood, and writes the next history (HDR) and the display image (through the tone
+//! curve, [`crate::display`]) in one pass.
 //! Ported from the previous project's `temporal.rs` (Karis 2014, Jimenez 2016, Playdead 2016).
+//!
+//! The scene is pre-exposed ([`crate::exposure`]): when the exposure changes between frames
+//! the history, stored at the previous exposure, is rescaled by the ratio before blending.
 //!
 //! The colour and motion targets are transients of the render graph; the two histories are
 //! persistent [`GraphImage`]s whose state the graph carries from frame to frame.
@@ -17,6 +21,8 @@ use forge_gpu::{
     ImageHandle, Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
 use glam::{DMat4, Mat4, Vec2};
+
+use crate::display::{Tonemap, format_encodes_srgb};
 
 /// Colour format of the offscreen scene target and the history.
 pub const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -74,7 +80,9 @@ struct ResolvePush {
     height: u32,
     jitter: [f32; 2],
     blend: f32,
-    pad: [u32; 3],
+    history_scale: f32,
+    curve: u32,
+    encode_srgb: u32,
 }
 
 fn create_history(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
@@ -110,6 +118,8 @@ pub struct TaaFrame {
     pub extent: vk::Extent2D,
     previous_from_current: Mat4,
     blend: f32,
+    /// This frame's exposure over the one the history was stored with.
+    history_scale: f32,
     written: usize,
 }
 
@@ -122,7 +132,9 @@ pub struct Taa {
     extent: vk::Extent2D,
     frame_index: u64,
     previous_view_proj: Option<DMat4>,
+    previous_exposure: f32,
     reset: bool,
+    encode_srgb: bool,
     /// Steady-state share of the current frame (0.1 is a typical TAA; 1 disables the history).
     pub blend: f32,
     /// When false, frames are drawn without jitter and resolved without history: the passes
@@ -181,7 +193,9 @@ impl Taa {
             extent,
             frame_index: 0,
             previous_view_proj: None,
+            previous_exposure: 0.0,
             reset: true,
+            encode_srgb: !format_encodes_srgb(output_format),
             blend: 0.1,
             enabled: true,
         })
@@ -217,13 +231,21 @@ impl Taa {
 
     /// Starts a frame: declares the HDR colour target and returns the jittered projection to
     /// draw with. `view_proj` is the *unjittered* world-to-clip of this frame (the
-    /// reprojection into the previous frame is derived from it and the previous one).
+    /// reprojection into the previous frame is derived from it and the previous one);
+    /// `exposure` is the frame's pre-exposure (the history is rescaled when it changes).
     pub fn begin<'f>(
         &mut self,
         graph: &mut FrameGraph<'f>,
         projection: Mat4,
         view_proj: Mat4,
+        exposure: f32,
     ) -> TaaFrame {
+        let history_scale = if self.reset || self.previous_exposure <= 0.0 {
+            1.0
+        } else {
+            exposure / self.previous_exposure
+        };
+        self.previous_exposure = exposure;
         let jitter = if self.enabled {
             jitter(self.frame_index)
         } else {
@@ -264,19 +286,23 @@ impl Taa {
             extent,
             previous_from_current: previous_from_current.as_mat4(),
             blend,
+            history_scale,
             written,
         }
     }
 
     /// Declares the passes that resolve the frame drawn into `frame.color` with `depth` (the
-    /// depth buffer the scene was drawn with) into the next history and `output` at once.
+    /// depth buffer the scene was drawn with) into the next history and, through `curve`,
+    /// into `output` at once.
     pub fn resolve<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
         frame: &TaaFrame,
         depth: ImageHandle,
         output: ImageHandle,
+        curve: Tonemap,
     ) {
+        let encode_srgb = u32::from(self.encode_srgb);
         use vk::PipelineStageFlags2 as S;
         let frame = *frame;
         let extent = frame.extent;
@@ -338,7 +364,9 @@ impl Taa {
                         height: extent.height,
                         jitter: frame.jitter.to_array(),
                         blend: frame.blend,
-                        pad: [0; 3],
+                        history_scale: frame.history_scale,
+                        curve: curve.index(),
+                        encode_srgb,
                     },
                 );
                 Ok(())

@@ -91,9 +91,9 @@ and the date next to every number.
 |---|---|---|
 | `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle` |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
-| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones; D-020) |
+| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks; D-020) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
-| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history), `Starfield` (stars, nebula, sun, planet); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), lighting tiers, atmosphere, post, upscalers |
+| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `Starfield` (stars, nebula, a physical sun disc, planet), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), lighting tiers, atmosphere, post (bloom), upscalers |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
 | `forge-anim` | planned | clips, blend graph, motion matching, IK, powered ragdoll tracking, contact events |
@@ -159,9 +159,22 @@ background colour). What this buys: shading cost independent of overdraw and tri
 one shading code path for the mesh-shader, software and fallback rasterisers, and the entry
 point for material classification (D-007) and the 64-bit depth|id software rasteriser.
 
+**Colour is physical and pre-exposed** (issue #7, D-022). Lights carry photometric units
+(the sun in lux, its disc in cd/m² from its solid angle) and every pass writes luminance
+multiplied by the frame's exposure, so the HDR targets stay near 1 in fp16 whatever the
+scene. The exposure is an EV100: fixed, or automatic from a 256-bin log-luminance histogram
+of the finished HDR image (`exposure/luminance histogram`: clear, count in shared then
+device-local memory, copy 1 KB to a cached per-slot readback, `HostRead`), read two frames
+later and followed on the CPU with separate speeds up and down. Temporal passes rescale
+their history by the exposure ratio. The display transform is chosen at run time from
+`tonemap.slang` (AgX, ACES fit, Khronos PBR Neutral) and applied where the last HDR pass
+writes the display image (the TAA resolve in the ballad, the stand-alone display pass
+elsewhere); nothing upstream knows which curve is on screen.
+
 ## 5. Conventions
 
-- Units: SI. Axes: right-handed, +Y up, −Z forward. Vulkan's Y-down framebuffer is handled
+- Units: SI; light in photometric units (lux, cd/m²), colour targets pre-exposed (D-022).
+  Axes: right-handed, +Y up, −Z forward. Vulkan's Y-down framebuffer is handled
   by a negative viewport height; clip depth is reversed.
 - `unsafe` is forbidden at the crate root except in `forge-task` (scoped lifetimes) and
   `forge-gpu` (Vulkan); every block carries a `SAFETY:` comment, enforced by lints.
