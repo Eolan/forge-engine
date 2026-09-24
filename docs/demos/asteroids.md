@@ -179,7 +179,8 @@ the barriers from what each pass declared and from the state the previous frame 
 
 | per frame | passes | image barriers | memory barriers | transients |
 |---|---|---|---|---|
-| ballad (TAA on, occlusion on) | 19 | 37 | 3 | colour 12.8 MB, depth 6.4 MB, motion 6.4 MB |
+| ballad (TAA on, occlusion on), at the migration | 19 | 37 | 3 | colour 12.8 MB, depth 6.4 MB, motion 6.4 MB |
+| ballad after #19 and #18 (sky last, no blit) | 18 | 37 | 2 | the same |
 | bench (occlusion on) | 15 | 28 | 2 | depth 6.4 MB |
 
 **The sky is drawn last (issue #19, same day).** With the graph in place the starfield moved
@@ -194,8 +195,15 @@ memory. Proof that nothing changed: the seven reference captures taken before th
 orbiting) differ from the graph's in **0 pixels**, as do aliased vs non-aliased transients;
 validation and synchronization validation are silent. The F1 overlay's counters show the
 graph's per-frame numbers and the transient heap. Not in this step: async compute and
-transfer queues, transient buffers, resolving straight into the swapchain (the blit stays so
-the images stay identical; it is the next TAA item).
+transfer queues, transient buffers.
+
+**The resolve writes the swapchain directly (issue #18, same day).** The TAA resolve now has
+two colour attachments, the next history (HDR) and the swapchain image, so the blit pass and
+its two layout transitions are gone: the swapchain goes undefined → colour attachment →
+present. The display value is the same number converted to sRGB by the attachment write
+instead of by the transfer engine: 747 of 1 440 000 pixels differ by exactly one level
+(0.05 %, none by more), which is the rounding difference between the two paths. GPU frame
+0.28 → 0.27 ms.
 
 ## Resolved: TAA history is bit-exact between runs since the render graph (issue #10)
 

@@ -143,8 +143,25 @@ float3 clip_to_box(float3 value, float3 low, float3 high)
     return largest > 1.0 ? centre + offset / largest : value;
 }
 
+// The resolved colour goes to two targets at once: the next history (HDR) and the swapchain
+// image (the display format converts on write), so no blit is needed afterwards.
+struct ResolveOut
+{
+    float4 history : SV_Target0;
+    float4 output : SV_Target1;
+};
+
 [shader("fragment")]
-float4 resolve_main(Varyings input) : SV_Target
+ResolveOut resolve_main(Varyings input)
+{
+    float4 color = float4(resolve_color(input), 1.0);
+    ResolveOut o;
+    o.history = color;
+    o.output = color;
+    return o;
+}
+
+float3 resolve_color(Varyings input)
 {
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
     float2 uv = input.position.xy / size;
@@ -188,12 +205,12 @@ float4 resolve_main(Varyings input) : SV_Target
     }
     float3 current = sum / max(weights, 1e-5);
     if (resolve_push.blend >= 1.0)
-        return float4(expand(current), 1.0);
+        return expand(current);
 
     float2 motion = g_sampled_images[NonUniformResourceIndex(resolve_push.motion)].Load(int3(closest, 0)).rg;
     float2 history_uv = uv + motion;
     if (any(history_uv < 0.0) || any(history_uv > 1.0))
-        return float4(expand(current), 1.0);
+        return expand(current);
 
     // Clip the history to the mean ± 1.25 standard deviations of the nine samples around.
     float3 mean = moment1 / 9.0;
@@ -206,5 +223,5 @@ float4 resolve_main(Varyings input) : SV_Target
     float3 result = expand(lerp(history, current, alpha));
     if (any(isnan(result)))
         result = expand(current);
-    return float4(result, 1.0);
+    return result;
 }

@@ -3,7 +3,7 @@
 //! The scene is drawn into an HDR colour target with a Halton-jittered projection. A motion
 //! pass reprojects every pixel into the previous frame from depth and the two cameras; the
 //! resolve blends this frame's samples with the history fetched there, clipped to the
-//! neighbourhood, and writes the next history, which is then blitted to the swapchain.
+//! neighbourhood, and writes the next history and the swapchain image in one pass.
 //! Ported from the previous project's `temporal.rs` (Karis 2014, Jimenez 2016, Playdead 2016).
 //!
 //! The colour and motion targets are transients of the render graph; the two histories are
@@ -131,11 +131,13 @@ pub struct Taa {
 }
 
 impl Taa {
-    /// Compiles the passes and creates the histories for `extent`.
+    /// Compiles the passes and creates the histories for `extent`. The resolve writes the
+    /// history and an output image of `output_format` (the swapchain's) in one pass.
     pub fn new(
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
         extent: vk::Extent2D,
+        output_format: vk::Format,
     ) -> Result<Self> {
         let vertex = device.create_shader_module(
             &shaders.compile("taa.slang", "vert_main", ShaderStage::Vertex)?,
@@ -161,7 +163,7 @@ impl Taa {
         let pipeline_resolve = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
             vertex: (vertex, "vert_main"),
             fragment: (resolve, "resolve_main"),
-            color_formats: &[HDR_FORMAT],
+            color_formats: &[HDR_FORMAT, output_format],
             push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
             alpha_blend: false,
             depth_test: None,
@@ -263,7 +265,7 @@ impl Taa {
     }
 
     /// Declares the passes that resolve the frame drawn into `frame.color` with `depth` (the
-    /// depth buffer the scene was drawn with) and blit the result to `output`.
+    /// depth buffer the scene was drawn with) into the next history and `output` at once.
     pub fn resolve<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -294,7 +296,7 @@ impl Taa {
             .run(move |resources, commands| {
                 fullscreen_pass(
                     commands,
-                    resources.view(motion),
+                    &[resources.view(motion)],
                     extent,
                     pipeline_motion,
                     &MotionPush {
@@ -316,10 +318,11 @@ impl Taa {
             .image(depth, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(history_read, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(history_written, ImageAccess::ColorAttachment)
+            .image(output, ImageAccess::ColorAttachment)
             .run(move |resources, commands| {
                 fullscreen_pass(
                     commands,
-                    resources.view(history_written),
+                    &[resources.view(history_written), resources.view(output)],
                     extent,
                     pipeline_resolve,
                     &ResolvePush {
@@ -336,35 +339,26 @@ impl Taa {
                 );
                 Ok(())
             });
-
-        graph
-            .pass("temporal/blit to swapchain")
-            .image(history_written, ImageAccess::TransferSrc)
-            .image(output, ImageAccess::TransferDst)
-            .run(move |resources, commands| {
-                commands.blit_image(
-                    resources.image(history_written).raw,
-                    resources.image(output).raw,
-                    extent,
-                    vk::Filter::NEAREST,
-                );
-                Ok(())
-            });
     }
 }
 
 fn fullscreen_pass<P: Pod>(
     commands: &Commands<'_>,
-    target: vk::ImageView,
+    targets: &[vk::ImageView],
     extent: vk::Extent2D,
     pipeline: &Pipeline,
     push: &P,
 ) {
-    let color = [vk::RenderingAttachmentInfo::default()
-        .image_view(target)
-        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        .load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .store_op(vk::AttachmentStoreOp::STORE)];
+    let color: Vec<_> = targets
+        .iter()
+        .map(|&target| {
+            vk::RenderingAttachmentInfo::default()
+                .image_view(target)
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .store_op(vk::AttachmentStoreOp::STORE)
+        })
+        .collect();
     let info = vk::RenderingInfo::default()
         .render_area(vk::Rect2D {
             offset: vk::Offset2D::default(),

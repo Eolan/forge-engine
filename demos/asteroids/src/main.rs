@@ -172,7 +172,12 @@ impl Ballad {
         starfield.planet_dir = args.planet_dir.normalize_or(Vec3::NEG_Z);
         let mut renderer = renderer;
         renderer.sun_dir = args.sun_dir.normalize_or(Vec3::Y);
-        let taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent())?;
+        let taa = Taa::new(
+            &ctx.device,
+            &ctx.shaders,
+            ctx.extent(),
+            ctx.swapchain.format(),
+        )?;
         let (scene, path) = build_field(ctx, &args)?;
         let camera = FlyCamera {
             speed: 40.0,
