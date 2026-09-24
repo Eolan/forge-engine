@@ -144,8 +144,8 @@ structs in Rust and checked by tests.
 
 **Geometry reaches the screen through a visibility buffer** (issue #6, 2026-09-24). The
 mesh passes rasterise only positions: the cluster cull (compute) appends every drawn cluster
-to the frame's visible-cluster list (`(instance, cluster)`, in a fixed order, issue #5), the
-mesh shader emits the cluster's triangles with `visible_slot << 7 | triangle` as the
+to the frame's visible-cluster list (`(instance, cluster)`, in a fixed order, issue #5; sized to
+the demand, issue #27), the mesh shader emits the cluster's triangles with `visible_slot << 7 | triangle` as the
 per-primitive id (the fallback's vertex shader carries the slot, the primitive id gives the
 triangle), and the fragment shader writes that id into an `R32_UINT` target next to the hardware
 depth (`u32::MAX` = nothing drawn). A compute pass then shades once per pixel: it reads the

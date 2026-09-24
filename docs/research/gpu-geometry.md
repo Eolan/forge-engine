@@ -467,3 +467,17 @@ What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.
 - **Indirect grids are two-dimensional.** The spec guarantees only 65 535 workgroups per
   dimension for compute and mesh dispatches; the culls write `x = min(n, 32 768)` and
   `y = ⌈n / 32 768⌉` and the rest of the last row exits.
+
+### Sizing the visible list (issue #27)
+
+- **Grow from the overflow count, reserve when the demand is known.** The cull already counts
+  the clusters that do not fit; read back two frames later, that count sizes the list (the
+  power of two above 1.5 × the demand, each frame slot replaced when its slot comes up). The
+  LOD views need 4–15 k slots, so the list now starts at 65 536 instead of a fixed 1 M.
+  The only exact bound comes from the scene: with LOD off a frame lists at most every
+  instance's finest clusters, and the demos reserve that up front.
+- **Holes are not transient when the exposure is automatic.** Two frames with holes at
+  start-up change the luminance histogram, and the exposure's adaptation carries that for
+  seconds: at full detail, a list grown after two frames and one reserved from the start gave
+  frame 240 images 1.13 M pixels apart (up to 3 levels, TAA off). Any culling A/B at full
+  detail is only exact when neither side ever dropped a cluster.

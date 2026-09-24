@@ -95,7 +95,7 @@ struct Bench {
 
 impl Bench {
     fn new(ctx: &mut Context, args: Args) -> Result<Self> {
-        let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
+        let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
         let tonemap = args.tonemap;
         let scene = build_scene(ctx, &args)?;
@@ -108,6 +108,9 @@ impl Bench {
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM | CullFlags::MESHLET_COLORS);
         if !args.no_lod {
             flags.0 |= CullFlags::LOD;
+        } else {
+            // Every frame lists at most the finest clusters: no frame has to drop any.
+            renderer.reserve_visible(scene.finest_clusters);
         }
         if !args.no_occlusion {
             flags.0 |= CullFlags::OCCLUSION;
@@ -180,7 +183,7 @@ impl Demo for Bench {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
-        if let Some(stats) = self.renderer.take_stats(frame.slot) {
+        if let Some(stats) = self.renderer.begin_frame(frame.slot)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);

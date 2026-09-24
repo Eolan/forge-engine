@@ -91,9 +91,9 @@ visibility buffer into a pre-exposed HDR image at a fixed EV100 of 15 and the di
 (AgX) writes the swapchain: 20 passes, 32 image + 6 memory barriers (issue #5 added the
 clear of the instance cull's look-back words and a cluster cull before each mesh pass), three transients,
 25.6 MB requested in a 19.2 MB heap since the colour image reuses the depth buffer's
-memory; 15 k meshlets, 1.09 M triangles (full detail, measured before the visibility
-buffer: 325 k meshlets, 30 M triangles, 2.18 ms; without occlusion at full detail: 106 M at
-6.30 ms). Through the indirect-count fallback (`--force-fallback`): 0.270 ms, the draw of pass 1
+memory; 15 k meshlets, 1.09 M triangles (full detail, the list reserved for it since #27:
+325 k meshlets, 30 M triangles, 2.18 ms; without occlusion 1 140 k meshlets, 106 M triangles,
+6.34 ms, the same as before the visibility buffer's list capped it). Through the indirect-count fallback (`--force-fallback`): 0.270 ms, the draw of pass 1
 taking 0.159 ms instead of 0.071; both paths and the old task path compared in
 [meshlets.md](demos/meshlets.md).
 
@@ -111,30 +111,33 @@ throughout; the overlay's graph counter line stays in MB.
 |---|---|---|---|---|---|---|
 | VRAM used by the process (budget 14.87 GiB) | **357 MiB** (2.3 %) | **357 MiB** | 419 | 616 | 616 | 572 |
 | system RAM used by the process | 77 MiB | 13 | | | | |
-| allocated by the engine | 109.3 MiB | 44.6 | 120.2 | 120.2 | 91.1 | 80.7 |
+| allocated by the engine | 94.3 MiB | 29.6 | 120.2 | 120.2 | 91.1 | 80.7 |
 | — geometry | 35.0 | 3.3 | 35.5 | 35.5 | 35.5 | 35.5 |
 | — render targets | 27.8 | 2.7 | 40.3 | 40.3 | 25.8 | 19.6 |
 | — transient heap | 25.0 | 18.8 | 25.0 | 25.0 | 10.5 | 6.3 |
-| — GPU work buffers | 21.0 | 19.3 | 18.8 | 18.8 | 18.8 | 18.8 |
+| — GPU work buffers | 6.0 | 4.3 | 18.8 | 18.8 | 18.8 | 18.8 |
 | — per-frame data, textures, staging + readback | 0.5, 0.03, 0.00 | 0.5, 0.03, 0.00 | | | | |
-| allocator blocks | 384 MiB (28 % used) | 320 (14 %) | 384 | 384 | 384 | 384 |
+| allocator blocks | 384 MiB (25 % used) | 320 (9 %) | 384 | 384 | 384 | 384 |
 | outside the allocator | 50 MiB | 50 | 161 | 364 | 364 | 316 |
 | uploads per frame, overlay off (full overlay) | 1.20 KiB (32.3) | 1.09 KiB (32.2) | 1.11 | 1.11 | 1.11 | 1.11 |
 | read back per frame | 1.03 KiB | 0.03 KiB | 1.03 | 1.03 | 1.03 | 1.03 |
 
 1200-frame scripted runs, exit log; the meshlets bench and the TAA build with the overlay
-off. The first two columns are re-measured after issues #5 and #29. #5: the culls' look-back status
+off. The first two columns are re-measured after issues #5, #29 and #27. #5: the culls' look-back status
 words add 2.2 and 1.5 MiB of work buffers and their argument resets 0.1 KiB of uploads per
 frame. Issue #29 then dropped the task-group table no shader read any more (4 B per work
-item: geometry 0.56 and 0.35 MiB less, 8 B less per frame block). The Streamline columns
-are from issue #9. The indirect-count fallback adds 40 MiB of
-draw commands (work buffers 61.0 and 59.3 MiB). **Verdicts:**
+item: geometry 0.56 and 0.35 MiB less, 8 B less per frame block). #27 sized the visible-cluster
+list to the demand: 65 536 slots per frame slot instead of 1 M, 15 MiB less in both (it
+grows when a frame drops clusters; `--no-lod` reserves the scene's finest clusters, 2.10 M
+and 1.38 M: work buffers 37.1 and 24.3 MiB). The Streamline columns are from issue #9 (with
+the 1 M list). The indirect-count fallback adds 2.5 MiB of draw commands at that size
+(work buffers 8.5 and 6.8 MiB; 117.2 and 76.7 under `--no-lod`). **Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
    reserves 256 MiB device blocks and 64 MiB host-visible ones. Each demo holds one of each
    in VRAM (per-frame data sits in Resizable BAR memory, so its block is device-local too),
-   plus a 64 MiB system-memory block when something reads back. The meshlets bench's 43 MiB
-   and the ballad's 108 MiB both come to 357 MiB. That is harmless on a 16 GB card. The
+   plus a 64 MiB system-memory block when something reads back. The meshlets bench's 30 MiB
+   and the ballad's 94 MiB both come to 357 MiB. That is harmless on a 16 GB card. The
    in-house TLSF layer of D-018 sizes its pools to what is resident when streaming arrives
    (Phase 9).
 2. **Outside the allocator: 50 MiB.** The three 1600×900 swapchain images are 16.5 MiB, the

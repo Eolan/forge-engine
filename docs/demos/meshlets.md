@@ -113,9 +113,9 @@ path measured on commit 231d674 the same day):
   cluster through the vertex pipeline, against a mesh workgroup per cluster. The culling is
   the same work on both. On the GPUs the fallback exists for (integrated, older) the absolute
   numbers will differ; what this measures is that nothing but the draw differs.
-- **The list caps at 1 048 576 clusters.** The full-detail view without occlusion needs
-  1.14 M and drops 92 k per frame on both paths (and did in the old one): the counters and the
-  title now say so. Sizing and growing the list is issue #27.
+- **The list capped at 1 048 576 clusters.** The full-detail view without occlusion needs
+  1.14 M and dropped 92 k per frame on both paths (and did in the old one): the counters and
+  the title say so. Issue #27 sized the list to the demand (next section).
 
 **The draw order is part of the output.** The first version appended with atomics: frame by
 frame pixel-identical, yet two runs of the ballad's golden capture (TAA on) came out 3 140
@@ -149,6 +149,56 @@ fixed exposure, or without TAA, frame 600 is identical. The ties resolve differe
 earlier frames, the histogram of those frames moves by a hair, and the exposure carries it.
 The new capture is the reference; it is identical from run to run.
 
+## The visible list grows (issue #27, 2026-09-24)
+
+The list had a fixed 1 048 576 slots per frame slot, which dropped clusters in full-detail
+views and held 8 MiB per frame slot (plus 20 MiB of draw commands on the fallback) for LOD
+views that list 4–15 k. Now it is sized to the demand:
+
+- **It starts at 65 536 slots** (512 KiB per frame slot) and **grows** when a frame drops
+  clusters: the cluster cull already counts what did not fit, the statistics come back two
+  frames later, and `MeshletRenderer::begin_frame` raises the size to the power of two above
+  1.5 × what that frame wanted. Each frame slot's list is replaced when its slot comes up
+  (the frame that last used it has completed), so the frames already in flight keep their
+  holes: two or three frames. It never shrinks. The ceiling is the id's 25 slot bits
+  (33.5 M slots, 256 MiB per frame slot), or the fallback's `maxDrawIndirectCount`.
+- **A caller that knows its demand reserves it** (`reserve_visible`). With LOD off every
+  frame lists at most the scene's finest clusters (`MeshletScene::finest_clusters`: each is
+  drawn at most once per frame), so `--no-lod` reserves them before the first frame:
+  1.38 M slots in the bench (10.5 MiB per frame slot), 2.10 M in the ballad (16.0 MiB).
+  Toggling LOD off at run time (L) goes through growth.
+
+Growth alone would have been enough for the counters, but not for the images: the holes of
+the first two frames are gone by frame 3, yet the automatic exposure remembers them. The
+ballad at full detail (TAA off), grown from 65 536 against reserved from the start, differs
+at frame 240 on 1.13 M pixels (up to 3 levels), and its occlusion A/B on 78 pixels, because
+the two runs had different holes at start-up. Reserved, both are 0.
+
+**Pixel proof** (tolerance 0, of 1 440 000 pixels):
+
+| Capture | before (#29, 1 M slots) | now |
+|---|---|---|
+| the regular set on both paths (meshlets static, orbit, `--no-lod`, `--no-occlusion`; asteroids TAA on and off; the A/B harness) against #29 | — | 0 each |
+| `meshlets --orbit --no-lod`, frame 120: occlusion on against off, each path | 0 (below the cap) | 0 |
+| `asteroids --fixed-step --no-lod --no-taa`, frame 240: occlusion on against off, each path | **721 921** | 0 |
+| the same without occlusion: fallback against mesh path | 0 | 0 |
+
+With a fixed exposure (`--ev100 14.5`) the ballad's four full-detail images split 3 pixels
+(±1) apart: the mesh path's single pass against the other three, which agree. Exact depth
+ties again, or the two stages transforming a vertex 1 ulp apart; issue #30.
+
+**Numbers** (GPU per frame over whole runs; listed clusters as means of the logged title
+windows; the ballad measured 0.330–0.335 ms with this build and 0.331–0.334 with the
+previous commit in the same session, 0.326 earlier in the day):
+
+| View | mesh path | fallback | listed | work buffers, mesh / fallback |
+|---|---|---|---|---|
+| `meshlets` static, LOD at 1 px | 0.180 ms | 0.270 ms | 15 k | 4.3 / 6.8 MiB (was 19.3 / 59.3) |
+| `meshlets --no-lod` | 2.18 ms | 3.76 ms | 325 k | 24.3 / 76.7 MiB (reserved) |
+| `meshlets --no-lod --no-occlusion` | 6.34 ms (5.77 with 92 k dropped) | 12.62 ms (11.07) | 1 140 k, 105.6 M triangles | 24.3 / 76.7 MiB |
+| `asteroids` path (20 000 frames, TAA) | 0.330 ms | 0.358 ms | 4–8 k | 6.0 / 8.5 MiB (was 21.0 / 61.0) |
+| `asteroids --no-lod` (3 000 frames) | 5.15 ms | 9.67 ms | 640–900 k | 37.1 / 117.2 MiB (reserved) |
+
 ## Numbers — occlusion culling
 
 Same scene, default roughness, 1600×900, validation clean:
@@ -176,8 +226,8 @@ pass — costs 0.13 ms of CPU.
 
 Scene: 1152 instances (24 × 24 × 2 layers) of a 110 592-triangle asteroid (cube-sphere,
 detail 96, welded seams), 1194 meshlets per instance → **1.4 M meshlets, 127 M triangles**.
-Measured before the visibility buffer's cluster list existed: today the list caps the
-default row at 1 049 k clusters and drops the rest (see "Two paths, one culling"; #27).
+Measured before the visibility buffer's cluster list existed. From #6 to #26 the list capped
+the default row at 1 049 k clusters; since #27 it draws all 1 140 k again, in 6.34 ms.
 
 | Roughness | visible instances | meshlets drawn (frustum + cone) | triangles drawn | GPU | CPU (record) |
 |---|---|---|---|---|---|

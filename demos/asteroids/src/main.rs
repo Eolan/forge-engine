@@ -283,6 +283,8 @@ impl Ballad {
         }
         if args.no_lod {
             flags.toggle(CullFlags::LOD);
+            // Every frame lists at most the finest clusters: no frame has to drop any.
+            renderer.reserve_visible(scene.finest_clusters);
         }
         if args.lod_colors {
             flags.toggle(CullFlags::LOD_COLORS);
@@ -471,7 +473,7 @@ impl Demo for Ballad {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
-        if let Some(stats) = self.renderer.take_stats(frame.slot) {
+        if let Some(stats) = self.renderer.begin_frame(frame.slot)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);

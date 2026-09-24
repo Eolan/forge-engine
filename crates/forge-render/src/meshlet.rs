@@ -177,10 +177,29 @@ struct ResolvePush {
     background: [f32; 4],
 }
 
-/// Clusters the visible-cluster list can hold per frame, both passes together (8 MiB per
-/// frame slot); the cluster cull drops and counts what does not fit
-/// (`FrameStats::visible_overflow`).
-pub const VISIBLE_CAPACITY: u32 = 1 << 20;
+/// Slots the visible-cluster list starts with per frame slot, both passes together (512 KiB;
+/// the LOD views of both demos list 8–15 k clusters). The cluster cull drops and counts what
+/// does not fit (`FrameStats::visible_overflow`) and [`MeshletRenderer::begin_frame`] grows
+/// the list from that count.
+pub const VISIBLE_INITIAL_CAPACITY: u32 = 1 << 16;
+
+/// Most slots the list can grow to: the visibility id keeps 7 bits for the triangle
+/// (`slot << 7 | triangle`), the slot has the other 25 (256 MiB of list per frame slot).
+pub const VISIBLE_MAX_CAPACITY: u32 = 1 << (32 - 7);
+const _: () = assert!(VISIBLE_INITIAL_CAPACITY <= VISIBLE_MAX_CAPACITY);
+
+/// The list size after a frame that wanted `wanted` slots: unchanged while they fit, else the
+/// next power of two above one and a half times the demand (so a slowly rising demand does
+/// not regrow every few frames), at most `max`. It never shrinks.
+fn grown_capacity(current: u32, wanted: u64, max: u32) -> u32 {
+    if wanted <= u64::from(current) {
+        return current;
+    }
+    let target = (wanted + wanted / 2)
+        .next_power_of_two()
+        .min(u64::from(max));
+    target.max(u64::from(current)) as u32
+}
 
 /// Bytes of one `VkDrawIndexedIndirectCommand`.
 const DRAW_COMMAND_BYTES: u32 = 20;
@@ -245,6 +264,9 @@ pub struct MeshletSceneBuilder {
     meshes: Vec<GpuMesh>,
     instances: Vec<GpuInstance>,
     total_triangles: u64,
+    /// Per mesh: its finest-level clusters (LOD level 0).
+    mesh_finest: Vec<u32>,
+    finest_clusters: u64,
     /// Work items so far (groups of 32 clusters; sizes the work list and the look-back words).
     total_groups: u32,
     /// Visibility bits over all instances (one per cluster).
@@ -314,6 +336,8 @@ impl MeshletSceneBuilder {
             self_reach_max,
             parent_reach_max,
         });
+        self.mesh_finest
+            .push(mesh.meshlets.iter().filter(|m| m.lod_level == 0).count() as u32);
         id
     }
 
@@ -323,6 +347,7 @@ impl MeshletSceneBuilder {
         let scale = model.x_axis.truncate().length();
         let center = model.transform_point3(Vec3::from(info.center));
         self.total_triangles += u64::from(info.triangle_count);
+        self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]);
         let groups = info.meshlet_count.div_ceil(TASK_GROUP_SIZE);
         let group_offset = self.total_groups;
         self.total_groups += groups;
@@ -456,19 +481,6 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
-            visible: (0..FRAMES_IN_FLIGHT)
-                .map(|i| {
-                    device
-                        .create_buffer(BufferDesc {
-                            size: u64::from(VISIBLE_CAPACITY) * 8,
-                            usage,
-                            location: MemoryLocation::GpuOnly,
-                            category: MemoryCategory::Work,
-                            name: &format!("visible clusters {i}"),
-                        })
-                        .map(GraphBuffer::new)
-                })
-                .collect::<Result<Vec<_>>>()?,
             instance_count: self.instances.len() as u32,
             total_groups,
             total_bits: self.total_bits,
@@ -476,6 +488,7 @@ impl MeshletSceneBuilder {
             mesh_count: self.meshes.len() as u32,
             meshlet_count: self.meshlets.len() as u32,
             total_triangles: self.total_triangles,
+            finest_clusters: self.finest_clusters,
         })
     }
 }
@@ -503,8 +516,6 @@ pub struct MeshletScene {
     /// Per frame slot: the status words that keep both culls' appends in a fixed order (one
     /// per instance-cull workgroup, then one per work item for each cluster cull).
     lookback: Vec<GraphBuffer>,
-    /// Per frame slot: the visible-cluster list the cluster cull fills.
-    visible: Vec<GraphBuffer>,
     /// Instances.
     pub instance_count: u32,
     /// Work items (every instance's clusters in groups of 32).
@@ -519,6 +530,9 @@ pub struct MeshletScene {
     pub meshlet_count: u32,
     /// Triangles over all instances.
     pub total_triangles: u64,
+    /// Finest-level clusters over all instances: the most a frame can list with LOD off (each
+    /// is drawn at most once per frame; see [`MeshletRenderer::reserve_visible`]).
+    pub finest_clusters: u64,
 }
 
 impl MeshletScene {
@@ -593,7 +607,8 @@ pub struct FrameStats {
     pub instances_visible: u32,
     /// Sum of the LOD level of every drawn meshlet (mean = sum / drawn).
     pub lod_level_sum: u32,
-    /// Clusters dropped because the visible-cluster list was full (must stay 0).
+    /// Clusters dropped because the visible-cluster list was full: the frames in flight when
+    /// the demand jumps, until [`MeshletRenderer::begin_frame`] has grown every slot's list.
     pub visible_overflow: u32,
 }
 
@@ -634,6 +649,42 @@ fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphIma
     Ok(hzb)
 }
 
+/// One frame slot's visible-cluster list: `(instance, meshlet | flags)` per listed cluster,
+/// pass 1 from the front and pass 2 from the back, and on the fallback path one
+/// `VkDrawIndexedIndirectCommand` per listed cluster of the pass being drawn.
+struct VisibleList {
+    visible: GraphBuffer,
+    draws: Option<GraphBuffer>,
+    capacity: u32,
+}
+
+impl VisibleList {
+    fn new(device: &Arc<Device>, path: GeometryPath, capacity: u32, slot: usize) -> Result<Self> {
+        let visible = device.create_buffer(BufferDesc {
+            size: u64::from(capacity) * 8,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: &format!("visible clusters {slot}"),
+        })?;
+        let draws = match path {
+            GeometryPath::MeshShader => None,
+            GeometryPath::IndirectCount => Some(device.create_buffer(BufferDesc {
+                size: u64::from(capacity) * u64::from(DRAW_COMMAND_BYTES),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Work,
+                name: &format!("cluster draws {slot}"),
+            })?),
+        };
+        Ok(Self {
+            visible: GraphBuffer::new(visible),
+            draws: draws.map(GraphBuffer::new),
+            capacity,
+        })
+    }
+}
+
 /// Declares the meshlet passes for one scene.
 pub struct MeshletRenderer {
     device: Arc<Device>,
@@ -648,12 +699,12 @@ pub struct MeshletRenderer {
     hzb: GraphImage,
     frame_buffers: Vec<Buffer>,
     stats_buffers: Vec<GraphBuffer>,
-    /// Fallback path only (empty on the mesh path): per frame slot, one indexed draw per
-    /// listed cluster of the pass being drawn.
-    draws: Vec<GraphBuffer>,
-    /// Slots of the visible-cluster list in use: [`VISIBLE_CAPACITY`], or fewer when the
-    /// fallback's `maxDrawIndirectCount` is lower.
-    visible_capacity: u32,
+    /// Per frame slot: the visible-cluster list and, on the fallback path, its draw commands.
+    lists: Vec<VisibleList>,
+    /// Slots every frame slot's list grows to (see [`MeshletRenderer::begin_frame`]).
+    visible_target: u32,
+    /// [`VISIBLE_MAX_CAPACITY`], or less when the fallback's `maxDrawIndirectCount` is lower.
+    visible_max: u32,
     /// Direction *to* the sun (world space), used by the visibility resolve.
     pub sun_dir: Vec3,
     /// Illuminance of the sun at the scene, in lux (the rocks return albedo × E / π).
@@ -842,32 +893,19 @@ impl MeshletRenderer {
                 Ok(GraphBuffer::new(b))
             })
             .collect::<Result<Vec<_>>>()?;
-        let visible_capacity = match path {
-            GeometryPath::MeshShader => VISIBLE_CAPACITY,
+        let visible_max = match path {
+            GeometryPath::MeshShader => VISIBLE_MAX_CAPACITY,
             GeometryPath::IndirectCount => {
-                VISIBLE_CAPACITY.min(device.limits().max_draw_indirect_count)
+                VISIBLE_MAX_CAPACITY.min(device.limits().max_draw_indirect_count)
             }
         };
-        let draws = match path {
-            GeometryPath::MeshShader => Vec::new(),
-            GeometryPath::IndirectCount => (0..FRAMES_IN_FLIGHT)
-                .map(|i| {
-                    device
-                        .create_buffer(BufferDesc {
-                            size: u64::from(visible_capacity) * u64::from(DRAW_COMMAND_BYTES),
-                            usage: vk::BufferUsageFlags::STORAGE_BUFFER
-                                | vk::BufferUsageFlags::INDIRECT_BUFFER,
-                            location: MemoryLocation::GpuOnly,
-                            category: MemoryCategory::Work,
-                            name: &format!("cluster draws {i}"),
-                        })
-                        .map(GraphBuffer::new)
-                })
-                .collect::<Result<Vec<_>>>()?,
-        };
+        let visible_target = VISIBLE_INITIAL_CAPACITY.min(visible_max);
+        let lists = (0..FRAMES_IN_FLIGHT)
+            .map(|i| VisibleList::new(device, path, visible_target, i))
+            .collect::<Result<Vec<_>>>()?;
         tracing::info!(
             path = path.name(),
-            visible_capacity,
+            visible_capacity = visible_target,
             "meshlet renderer ready"
         );
         Ok(Self {
@@ -882,8 +920,9 @@ impl MeshletRenderer {
             hzb,
             frame_buffers,
             stats_buffers,
-            draws,
-            visible_capacity,
+            lists,
+            visible_target,
+            visible_max,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
             sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
         })
@@ -905,13 +944,35 @@ impl MeshletRenderer {
         self.hzb.extent()
     }
 
-    /// Reads and clears the statistics of the frame that last used `slot`. Returns `None`
-    /// for the first frames in flight.
-    pub fn take_stats(&self, slot: FrameSlot) -> Option<FrameStats> {
+    /// Sizes the visible-cluster list for `clusters` before the first frame that needs them
+    /// (at most [`VISIBLE_MAX_CAPACITY`]), for a caller that knows its demand: with LOD off a
+    /// frame lists at most [`MeshletScene::finest_clusters`]. Without it the list only grows
+    /// after a frame has dropped clusters, which leaves holes in the frames in flight until
+    /// then and, through the automatic exposure, a trace in the images that follow.
+    pub fn reserve_visible(&mut self, clusters: u64) {
+        let target = clusters.min(u64::from(self.visible_max)) as u32;
+        if target > self.visible_target {
+            tracing::info!(
+                from = self.visible_target,
+                to = target,
+                list_mib = %format_args!("{:.1}", f64::from(target) * 8.0 / f64::from(1 << 20)),
+                "visible-cluster list reserved"
+            );
+            self.visible_target = target;
+        }
+    }
+
+    /// Call once per frame, after waiting for `slot` and before [`MeshletRenderer::draw`]:
+    /// reads and clears the statistics of the frame that last used `slot` (`None` for the
+    /// first frames in flight) and sizes the slot's visible-cluster list. A frame that
+    /// dropped clusters raises the size every slot grows to; this slot grows now, the others
+    /// when their turn comes, so a jump in demand leaves holes in the frames in flight
+    /// until then (two or three).
+    pub fn begin_frame(&mut self, slot: FrameSlot) -> Result<Option<FrameStats>> {
         let mut raw = [0_u32; STAT_COUNT];
         self.stats_buffers[slot.index].read(0, &mut raw);
         self.stats_buffers[slot.index].write(0, &[0_u32; STAT_COUNT]);
-        (slot.frame_number >= FRAMES_IN_FLIGHT as u64).then_some(FrameStats {
+        let stats = (slot.frame_number >= FRAMES_IN_FLIGHT as u64).then_some(FrameStats {
             meshlets_pass1: raw[0],
             meshlets_pass2: raw[1],
             triangles: raw[2],
@@ -919,7 +980,30 @@ impl MeshletRenderer {
             instances_visible: raw[4],
             lod_level_sum: raw[5],
             visible_overflow: raw[6],
-        })
+        });
+        if let Some(s) = stats {
+            let wanted = u64::from(s.meshlets_pass1)
+                + u64::from(s.meshlets_pass2)
+                + u64::from(s.visible_overflow);
+            let target = grown_capacity(self.visible_target, wanted, self.visible_max);
+            if target != self.visible_target {
+                tracing::info!(
+                    wanted,
+                    from = self.visible_target,
+                    to = target,
+                    list_mib = %format_args!("{:.1}", f64::from(target) * 8.0 / f64::from(1 << 20)),
+                    "visible-cluster list grown"
+                );
+                self.visible_target = target;
+            }
+        }
+        let list = &mut self.lists[slot.index];
+        if list.capacity < self.visible_target {
+            // The frame that last used this slot has completed (the caller waited for the
+            // slot), so its list can go now.
+            *list = VisibleList::new(&self.device, self.path, self.visible_target, slot.index)?;
+        }
+        Ok(stats)
     }
 
     fn frame_block(&self, slot: FrameSlot, params: &DrawParams<'_>, pass: u32) -> GpuFrame {
@@ -956,13 +1040,16 @@ impl MeshletRenderer {
             pad_end: 0,
             work: scene.work[slot.index].address(),
             indirect: scene.indirect[slot.index].address(),
-            visible: scene.visible[slot.index].address(),
-            visible_capacity: self.visible_capacity,
+            visible: self.lists[slot.index].visible.address(),
+            visible_capacity: self.lists[slot.index].capacity,
             exposure: params.exposure,
             sun_illuminance: self.sun_illuminance,
             pad_exposure: 0,
             clusters: scene.clusters[slot.index].address(),
-            draws: self.draws.get(slot.index).map_or(0, |b| b.address()),
+            draws: self.lists[slot.index]
+                .draws
+                .as_ref()
+                .map_or(0, |b| b.address()),
             lookback: scene.lookback[slot.index].address(),
         }
     }
@@ -1023,9 +1110,12 @@ impl MeshletRenderer {
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
             clusters: graph.import_buffer(&scene.clusters[slot.index]),
             lookback: graph.import_buffer(&scene.lookback[slot.index]),
-            draws: self.draws.get(slot.index).map(|b| graph.import_buffer(b)),
+            draws: self.lists[slot.index]
+                .draws
+                .as_ref()
+                .map(|b| graph.import_buffer(b)),
             visibility_bits: graph.import_buffer(&scene.visibility),
-            visible: graph.import_buffer(&scene.visible[slot.index]),
+            visible: graph.import_buffer(&self.lists[slot.index].visible),
             stats: graph.import_buffer(&self.stats_buffers[slot.index]),
         };
         let frame_address = self.frame_buffers[slot.index].address();
@@ -1225,8 +1315,8 @@ impl MeshletRenderer {
         };
         let clusters: &'f GraphBuffer = &params.scene.clusters[slot.index];
         let triangles: &'f Buffer = &params.scene.meshlet_triangles;
-        let draws: Option<&'f GraphBuffer> = self.draws.get(slot.index);
-        let capacity = self.visible_capacity;
+        let draws: Option<&'f GraphBuffer> = self.lists[slot.index].draws.as_ref();
+        let capacity = self.lists[slot.index].capacity;
         let extent = params.extent;
         let MeshPass {
             io,
@@ -1381,8 +1471,23 @@ mod tests {
     }
 
     #[test]
+    fn the_list_grows_past_the_demand_and_never_shrinks() {
+        let max = VISIBLE_MAX_CAPACITY;
+        // Fits: unchanged, including a later frame that wants less.
+        assert_eq!(grown_capacity(1 << 16, 15_000, max), 1 << 16);
+        assert_eq!(grown_capacity(1 << 21, 10, max), 1 << 21);
+        assert_eq!(grown_capacity(1 << 16, 1 << 16, max), 1 << 16);
+        // Dropped: the power of two above 1.5 × the demand (1.14 M wanted → 2 M slots).
+        assert_eq!(grown_capacity(1 << 16, 1_140_000, max), 1 << 21);
+        assert_eq!(grown_capacity(1 << 16, (1 << 16) + 1, max), 1 << 17);
+        // Capped by the id's slot bits, or by a lower fallback limit.
+        assert_eq!(grown_capacity(1 << 16, 40_000_000, max), max);
+        assert_eq!(grown_capacity(1 << 16, 1_000_000, 500_000), 500_000);
+    }
+
+    #[test]
     fn every_list_slot_fits_the_visibility_id() {
         // The id keeps 7 bits for the triangle (124 per cluster): the slot has the other 25.
-        assert!(u64::from(VISIBLE_CAPACITY) <= 1 << (32 - 7));
+        assert!(u64::from(VISIBLE_MAX_CAPACITY) <= 1 << (32 - 7));
     }
 }
