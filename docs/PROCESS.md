@@ -7,8 +7,26 @@ autonomous inside an issue.
 **Current mode (2026-09-24): local `main`.** No branches or pull requests yet: sessions
 commit on `main` locally and push when a step is working (a demo shows it, verification
 passes). Reviews happen on the owner's machine and in the session's report. The
-branch-and-PR flow below is the target and switches on when the owner says so (branch
-protection needs GitHub Pro or a public repository, issue #16).
+branch-and-PR flow below is the target and switches on when the owner says so.
+
+## Repository settings (issue #16)
+
+The repository is public; only collaborators can write. Settings that live outside git are
+kept as files and applied by the owner with `tools/github-settings.sh` (an admin `gh`
+login, safe to re-run):
+
+- **Rulesets on `main`** (`.github/rulesets/`). *Keep history*, no bypass: no deletion, no
+  force-push, linear history. *Pull request and green CI*: changes arrive by pull request
+  with both CI jobs green and review threads resolved; the admin role bypasses it, which
+  is how local-mode pushes to `main` keep working.
+- **Secret scanning with push protection**: a pushed credential is refused.
+- **Dependabot**: alerts and security-fix pull requests for crates; monthly grouped
+  updates of the pinned CI actions (`.github/dependabot.yml`). Its pull requests are ours:
+  a session merges them after CI when the owner says so.
+- **CodeQL** default setup (Rust and the workflows) on pushes, pull requests and weekly.
+- **Private vulnerability reporting** (`SECURITY.md`).
+- **Workflows from forks** wait for approval unless the author is a collaborator; CI runs
+  with a read-only token and actions pinned to commit hashes.
 
 ## Issues
 
@@ -42,10 +60,10 @@ protection needs GitHub Pro or a public repository, issue #16).
 ## Review and merge
 
 - Every PR gets an automated review from a separate session (`/code-review --comment` on
-  the PR, or the Claude GitHub App once installed) and the owner's read. Findings are fixed
-  in the PR branch; the reviewer re-runs.
-- The owner merges (squash) or says "merge" and the process session merges. `main` is
-  protected: no direct pushes, PR required, checks green.
+  the PR) and the owner's read. Findings are fixed in the PR branch; the reviewer re-runs.
+  The Claude GitHub App is not installed (it needs an API-billed key, issue #14).
+- The owner merges (squash) or says "merge" and the process session merges. Once the flow
+  is on, sessions stop pushing to `main` even though the admin bypass would let them.
 - CI (`.github/workflows/ci.yml`) builds, tests, lints and checks formatting on Windows and
   Linux; GPU demos and captures run on the owner's machine, not in CI.
 

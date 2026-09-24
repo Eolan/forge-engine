@@ -1,0 +1,13 @@
+# Keeps the pinned CI actions current (issue #16). Crates are pinned on purpose in
+# Cargo.lock; they get security-fix pull requests from Dependabot alerts only.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

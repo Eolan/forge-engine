@@ -21,6 +21,8 @@ the research index `docs/RESEARCH.md`, where the time goes `docs/PROFILE.md`. Th
   `docs/DECISIONS.md` entry marked 🟡 and stop there; do not build on an untaken decision.
 - The branch-and-PR flow with reviews (`docs/PROCESS.md`) is the target once the owner
   turns it on; until then reviews happen on the owner's machine and in the report.
+- Never rewrite pushed history: `main` refuses force-pushes and deletion (rulesets in
+  `.github/rulesets/`, repository settings in `docs/PROCESS.md`).
 
 ## Verification before a PR (all of it, every time)
 
