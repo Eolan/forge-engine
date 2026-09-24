@@ -56,6 +56,9 @@ capture) before and after, and update `docs/PROFILE.md`.
   page with numbers; a changed number gets updated where it is quoted.
 - Never copy credentials into the repo or the docs (`server-auth.md`, `.env`,
   `config/server-identity/` are ignored on purpose).
+- Credit other people's work in the commit that brings it in: a library, tool, asset or
+  published technique gets its line in `CREDITS.md`. A new crate also needs
+  `cargo run -p credits`: CI fails while `docs/credits-crates.md` is out of date.
 
 ## Environment (this machine)
 

@@ -1,0 +1,110 @@
+# Credits
+
+Forge is built on other people's work. This file names them:
+- the libraries and tools in the build;
+- the assets;
+- the published techniques the code implements.
+
+The Rust crates are listed with their authors and licences in
+[`docs/credits-crates.md`](docs/credits-crates.md), which `cargo run -p credits` generates.
+A game built on Forge carries these names in its credits.
+
+A new dependency, asset or technique gets its line here in the same commit that brings it
+in. CI checks the crate list.
+
+## When a build ships
+
+- **NVIDIA DLSS** (the `dlss` feature): the DLSS SDK's licence asks every application that
+  uses it to attribute the SDK and to show the NVIDIA marks:
+  - on the splash screen;
+  - in the about box;
+  - in a game's credits.
+
+  The clause is 7.1(b) of the supplement to the DLSS licence that comes with the Streamline
+  SDK (`bin/x64/nvngx_dlss.license.txt`).
+- **Permissive licences** (MIT, Apache-2.0, BSD, Zlib, ISC, BSL-1.0): the notices and licence
+  texts go with the binaries. A tool such as `cargo-about` builds that file from the same
+  metadata as the crate list.
+- **JetBrains Mono** ships with its `OFL.txt` and is never sold on its own.
+
+## Libraries and tools
+
+| Project | People | What Forge uses it for | Licence |
+|---|---|---|---|
+| [Vulkan](https://www.vulkan.org/) and the [Vulkan SDK](https://vulkan.lunarg.com/) | The Khronos Group; LunarG | the GPU API; the validation layers behind every `--validate` run | Apache-2.0 and MIT components |
+| [ash](https://github.com/ash-rs/ash) | Maik Klein, Benjamin Saunders, Marijn Suijten and contributors | Vulkan from Rust (`forge-gpu`) | MIT OR Apache-2.0 |
+| [Slang](https://github.com/shader-slang/slang) | the Slang contributors (a Khronos project, started by Yong He, Kayvon Fatahalian and Tim Foley) | every shader in `shaders/`, compiled by `slangc` | Apache-2.0 WITH LLVM-exception |
+| [meshoptimizer](https://github.com/zeux/meshoptimizer) | Arseny Kapoulkine | meshlets, simplification and cluster partitioning for the LOD DAG, following its `clusterlod.h` (`forge-geom`) | MIT |
+| [meshopt](https://github.com/gwihlidal/meshopt-rs) | Graham Wihlidal | meshoptimizer from Rust | MIT OR Apache-2.0 |
+| [gpu-allocator](https://github.com/Traverse-Research/gpu-allocator) | Traverse Research | GPU memory (`forge-gpu`) | MIT OR Apache-2.0 |
+| [winit](https://github.com/rust-windowing/winit) | Pierre Krieger and the winit contributors | windows and input (`forge-app`) | Apache-2.0 |
+| [glam](https://github.com/bitshifter/glam-rs) | Cameron Hart and contributors | vector and matrix maths | MIT OR Apache-2.0 |
+| [crossbeam](https://github.com/crossbeam-rs/crossbeam) | the crossbeam contributors | the work-stealing deques and channels under `forge-task` | MIT OR Apache-2.0 |
+| [Tracy](https://github.com/wolfpld/tracy) | Bartosz Taudul | the profiler behind `--features profiling` | BSD-3-Clause |
+| [tracy-client](https://github.com/nagisa/rust_tracy_client) | Simonas Kazlauskas | Tracy from Rust | MIT OR Apache-2.0 |
+| [Streamline](https://github.com/NVIDIA-RTX/Streamline) and DLSS | NVIDIA | DLSS as an option next to TAA (`dlss` feature, D-024) | Streamline: MIT, parts under NVIDIA's Nsight SDK licences; DLSS: NVIDIA RTX SDKs licence |
+| [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |
+| [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff` | MIT OR Apache-2.0 |
+| [xxhash-rust](https://github.com/DoumanAsh/xxhash-rust), after [xxHash](https://github.com/Cyan4973/xxHash) | Douman; the XXH3 algorithm by Yann Collet | cache keys for shaders and cooked meshes | BSL-1.0 |
+
+## Assets
+
+| Asset | People | Where | Licence |
+|---|---|---|---|
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | the JetBrains Mono Project Authors | the profiler overlay's text | SIL OFL 1.1 (`assets/fonts/jetbrains-mono/OFL.txt`) |
+
+## Techniques
+
+The published work the code follows. The full references, with links, are in the research
+files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
+
+**Geometry** (`forge-geom`, `shaders/meshlet.slang`):
+- **Nanite.** Brian Karis, Rune Stubbe, Graham Wihlidal, "A Deep Dive into Nanite
+  Virtualized Geometry", SIGGRAPH 2021. Forge follows it for:
+  - the cluster LOD DAG and its cut;
+  - the software rasteriser on 64-bit atomics;
+  - 128 KiB cluster pages and their streaming.
+- **The DAG's build.** Arseny Kapoulkine, meshoptimizer's `clusterlod.h`.
+- **GPU-driven culling.**
+  - Ulrich Haar, Sebastian Aaltonen, "GPU-Driven Rendering Pipelines", SIGGRAPH 2015: the
+    two-pass occlusion against a depth pyramid.
+  - Graham Wihlidal, "Optimizing the Graphics Pipeline with Compute", GDC 2016: cluster
+    culling in compute.
+- **Ordered appends.** Duane Merrill, Michael Garland, "Single-pass Parallel Prefix Scan with
+  Decoupled Look-back", 2016: the culls' ordered appends.
+- **The visibility buffer.**
+  - Christopher A. Burns, Warren A. Hunt, "The Visibility Buffer: A Cache-Friendly Approach
+    to Deferred Shading", JCGT 2013.
+  - Christoph Schied, Carsten Dachsbacher, "Deferred Attribute Interpolation for
+    Memory-Efficient Deferred Shading", HPG 2015.
+  - John Hable, "Visibility Buffer Rendering with Material Graphs", 2021.
+- **Normals in cluster pages.** Quirin Meyer et al., "On Floating-Point Normal Vectors",
+  EGSR 2010: the octahedral encoding.
+
+**Light and image** (`forge-render`, `shaders/`):
+- **The atmosphere.** Sébastien Hillaire, "A Scalable and Production Ready Sky and Atmosphere
+  Rendering Technique", EGSR 2020. Its Earth preset comes from Eric Bruneton, "Precomputed
+  Atmospheric Scattering: a New Implementation", 2017.
+- **Physical light units and pre-exposure.** Sébastien Lagarde, Charles de Rousiers, "Moving
+  Frostbite to Physically Based Rendering", SIGGRAPH 2014.
+- **Automatic exposure.** Krzysztof Narkowicz, "Automatic Exposure", 2016.
+- **Tone curves.**
+  - AgX: Troy Sobotka. Forge uses the minimal real-time form by Benjamin Wrensch (2023).
+  - ACES 1.x: the Academy of Motion Picture Arts and Sciences, through Stephen Hill's fit
+    (from BakingLab, MIT).
+  - PBR Neutral: the Khronos Group.
+- **TAA.**
+  - Brian Karis, "High-Quality Temporal Supersampling", SIGGRAPH 2014.
+  - Jorge Jimenez, "Filmic SMAA", SIGGRAPH 2016.
+  - Lasse Jon Fuglsang Pedersen (Playdead), "Temporal Reprojection Anti-Aliasing in INSIDE",
+    GDC 2016.
+
+**Core** (`forge-core`, `forge-task`):
+- **Hashes.** Mark Jarzynski, Marc Olano, "Hash Functions for GPU Rendering", JCGT 2020: the
+  PCG3D and PCG4D hashes.
+- **SplitMix64.** Guy L. Steele Jr., Doug Lea, Christine H. Flood, "Fast Splittable
+  Pseudorandom Number Generators", OOPSLA 2014, with David Stafford's mix13 finaliser.
+- **Work stealing.** David Chase, Yossi Lev, "Dynamic Circular Work-Stealing Deque", SPAA 2005.
+- **The job model.** The continuation model follows Natalya Tatarchuk, "Destiny's Multithreaded
+  Rendering Architecture", GDC 2015, and the engines surveyed in
+  `docs/research/task-system.md`.

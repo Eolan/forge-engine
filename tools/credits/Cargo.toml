@@ -1,0 +1,16 @@
+[package]
+name = "credits"
+description = "Lists the Rust crates in Forge's build (docs/credits-crates.md) from `cargo metadata`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde_json = "1"

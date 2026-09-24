@@ -31,9 +31,12 @@ shaders/              Slang sources (bindless, meshlet, hzb, starfield, atmosphe
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
+demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster pages streamed, the 300 m/s flight
 tools/imgdiff         pixel comparison of captures (golden images)
 tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
+tools/credits         the Rust crates in the build, their licences and authors (docs/credits-crates.md; CI checks it)
 docs/                 ARCHITECTURE, DECISIONS, ROADMAP, RESEARCH + research/ and demos/
+CREDITS.md            the people, libraries, assets and published techniques Forge builds on
 ```
 
 ## Build and test
