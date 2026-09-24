@@ -27,8 +27,16 @@ use crate::display::{Tonemap, format_encodes_srgb};
 /// Colour format of the offscreen scene target and the history.
 pub const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 const MOTION_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
-/// Jitter phases before the sequence repeats.
+/// Jitter phases before the sequence repeats, at native resolution. An upscaler wants
+/// `JITTER_PHASES × (output / render)²` so every output pixel is covered ([`jitter_phases`]).
 pub const JITTER_PHASES: u32 = 8;
+
+/// Jitter phases for drawing at `render` and presenting at `output` (NVIDIA's rule for DLSS:
+/// eight per output pixel covered by one render pixel).
+pub fn jitter_phases(render: vk::Extent2D, output: vk::Extent2D) -> u32 {
+    let scale = output.height.max(1) as f32 / render.height.max(1) as f32;
+    ((JITTER_PHASES as f32 * scale * scale).round() as u32).max(JITTER_PHASES)
+}
 
 /// The `index`-th element of the Halton sequence in `base`, in [0, 1).
 pub fn halton(mut index: u32, base: u32) -> f32 {
@@ -42,9 +50,10 @@ pub fn halton(mut index: u32, base: u32) -> f32 {
     result
 }
 
-/// Sub-pixel jitter of frame `index`, in pixels (x right, y down), in (−0.5, 0.5).
-pub fn jitter(index: u64) -> Vec2 {
-    let i = (index % u64::from(JITTER_PHASES)) as u32 + 1;
+/// Sub-pixel jitter of frame `index` in a sequence of `phases`, in pixels (x right, y down),
+/// in (−0.5, 0.5).
+pub fn jitter(index: u64, phases: u32) -> Vec2 {
+    let i = (index % u64::from(phases.max(1))) as u32 + 1;
     Vec2::new(halton(i, 2) - 0.5, halton(i, 3) - 0.5)
 }
 
@@ -116,7 +125,10 @@ pub struct TaaFrame {
     pub color: ImageHandle,
     /// Size of the targets.
     pub extent: vk::Extent2D,
-    previous_from_current: Mat4,
+    /// The previous frame's unjittered clip coordinates from this frame's.
+    pub previous_from_current: Mat4,
+    /// Nothing on screen matches the frames before (first frame, a cut, a new size).
+    pub reset: bool,
     blend: f32,
     /// This frame's exposure over the one the history was stored with.
     history_scale: f32,
@@ -140,6 +152,9 @@ pub struct Taa {
     /// When false, frames are drawn without jitter and resolved without history: the passes
     /// still run (so the output path is identical) but the image is the plain scene.
     pub enabled: bool,
+    /// Length of the jitter sequence ([`JITTER_PHASES`] at native resolution, more when an
+    /// upscaler draws below it: [`jitter_phases`]).
+    pub jitter_phases: u32,
 }
 
 impl Taa {
@@ -198,6 +213,7 @@ impl Taa {
             encode_srgb: !format_encodes_srgb(output_format),
             blend: 0.1,
             enabled: true,
+            jitter_phases: JITTER_PHASES,
         })
     }
 
@@ -247,7 +263,7 @@ impl Taa {
         };
         self.previous_exposure = exposure;
         let jitter = if self.enabled {
-            jitter(self.frame_index)
+            jitter(self.frame_index, self.jitter_phases)
         } else {
             Vec2::ZERO
         };
@@ -257,6 +273,7 @@ impl Taa {
             Some(previous) if !self.reset => previous * current.inverse(),
             _ => DMat4::IDENTITY,
         };
+        let reset = self.reset;
         let blend = if self.reset || !self.enabled {
             1.0
         } else {
@@ -285,24 +302,23 @@ impl Taa {
             color,
             extent,
             previous_from_current: previous_from_current.as_mat4(),
+            reset,
             blend,
             history_scale,
             written,
         }
     }
 
-    /// Declares the passes that resolve the frame drawn into `frame.color` with `depth` (the
-    /// depth buffer the scene was drawn with) into the next history and, through `curve`,
-    /// into `output` at once.
-    pub fn resolve<'f>(
+    /// Declares the pass "temporal/motion vectors": for every pixel of the frame drawn with
+    /// `depth` (the depth buffer the scene was drawn with), the offset in UV to where it was in
+    /// the previous frame, without jitter (camera motion; nothing in the scene moves yet). The
+    /// TAA resolve and DLSS read it.
+    pub fn motion_vectors<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
         frame: &TaaFrame,
         depth: ImageHandle,
-        output: ImageHandle,
-        curve: Tonemap,
-    ) {
-        let encode_srgb = u32::from(self.encode_srgb);
+    ) -> ImageHandle {
         use vk::PipelineStageFlags2 as S;
         let frame = *frame;
         let extent = frame.extent;
@@ -315,9 +331,6 @@ impl Taa {
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });
-        let history_written = graph.import(&self.history[frame.written]);
-        let history_read = graph.import(&self.history[1 - frame.written]);
-
         let pipeline_motion = &self.pipeline_motion;
         graph
             .pass("temporal/motion vectors")
@@ -339,7 +352,27 @@ impl Taa {
                 );
                 Ok(())
             });
+        motion
+    }
 
+    /// Declares the pass that resolves the frame drawn into `frame.color` with `depth` and
+    /// `motion` (from [`Taa::motion_vectors`]) into the next history and, through `curve`,
+    /// into `output` at once.
+    pub fn resolve<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        frame: &TaaFrame,
+        depth: ImageHandle,
+        motion: ImageHandle,
+        output: ImageHandle,
+        curve: Tonemap,
+    ) {
+        let encode_srgb = u32::from(self.encode_srgb);
+        use vk::PipelineStageFlags2 as S;
+        let frame = *frame;
+        let extent = frame.extent;
+        let history_written = graph.import(&self.history[frame.written]);
+        let history_read = graph.import(&self.history[1 - frame.written]);
         let pipeline_resolve = &self.pipeline_resolve;
         graph
             .pass("temporal/TAA resolve")
@@ -414,11 +447,26 @@ mod tests {
     fn the_jitter_covers_the_pixel_evenly() {
         assert_eq!(halton(1, 2), 0.5);
         assert_eq!(halton(2, 2), 0.25);
-        let points: Vec<Vec2> = (0..u64::from(JITTER_PHASES)).map(jitter).collect();
+        let points: Vec<Vec2> = (0..u64::from(JITTER_PHASES))
+            .map(|i| jitter(i, JITTER_PHASES))
+            .collect();
         let mean = points.iter().copied().sum::<Vec2>() / JITTER_PHASES as f32;
         assert!(mean.length() < 0.08, "{mean}");
         assert!(points.iter().all(|p| p.x.abs() < 0.5 && p.y.abs() < 0.5));
-        assert_eq!(jitter(u64::from(JITTER_PHASES)), jitter(0));
+        assert_eq!(
+            jitter(u64::from(JITTER_PHASES), JITTER_PHASES),
+            jitter(0, JITTER_PHASES)
+        );
+        let native = vk::Extent2D {
+            width: 1600,
+            height: 900,
+        };
+        let half = vk::Extent2D {
+            width: 800,
+            height: 450,
+        };
+        assert_eq!(jitter_phases(native, native), JITTER_PHASES);
+        assert_eq!(jitter_phases(half, native), 32);
     }
 
     #[test]

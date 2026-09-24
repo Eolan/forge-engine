@@ -18,13 +18,14 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
+use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
 use forge_core::{Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    Atmosphere, AtmosphereParams, AutoExposure, CullCamera, CullFlags, FrameStats, HDR_FORMAT,
-    LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap,
+    Atmosphere, AtmosphereParams, AutoExposure, CullCamera, CullFlags, Display, DlssMode,
+    DlssUpscaler, FrameStats, HDR_FORMAT, LuminanceMeter, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder, Starfield, Taa, Tonemap, UpscaleCamera,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -78,6 +79,14 @@ struct Args {
     /// Start with temporal anti-aliasing off (T toggles it).
     #[arg(long)]
     no_taa: bool,
+    /// Anti-aliasing and upscaling: taa, or a DLSS mode (dlaa, quality, balanced, performance,
+    /// ultra-performance; needs `--features dlss`, the Streamline SDK and an RTX GPU). U cycles
+    /// them at run time.
+    #[arg(long, default_value = "taa")]
+    upscaler: String,
+    /// Switch the anti-aliasing as U does every N frames (tests the switch in scripted runs).
+    #[arg(long)]
+    cycle_upscaler: Option<u64>,
     /// Start with occlusion culling off (O toggles it).
     #[arg(long)]
     no_occlusion: bool,
@@ -166,6 +175,13 @@ struct Ballad {
     atmosphere: Option<(Atmosphere, Vec3)>,
     taa: Taa,
     taa_enabled: bool,
+    /// DLSS, when the device has it; used instead of the TAA resolve while `dlss_on`.
+    dlss: Option<DlssUpscaler>,
+    dlss_on: bool,
+    /// Takes DLSS's HDR output through the tone curve to the swapchain.
+    display: Display,
+    /// The size the scene is drawn at (the window's, or DLSS's input size).
+    render_extent: vk::Extent2D,
     meter: LuminanceMeter,
     exposure: AutoExposure,
     tonemap: Tonemap,
@@ -233,6 +249,28 @@ impl Ballad {
             ctx.extent(),
             ctx.swapchain.format(),
         )?;
+        // DLSS takes over from the TAA resolve when asked for and available; its HDR output goes
+        // to the swapchain through the stand-alone display pass.
+        let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
+        let requested = match args.upscaler.as_str() {
+            "taa" => None,
+            name => Some(DlssMode::from_name(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown upscaler '{name}': taa, dlaa, quality, balanced, performance or ultra-performance"
+                )
+            })?),
+        };
+        let dlss = DlssUpscaler::new(
+            &ctx.device,
+            requested.unwrap_or(DlssMode::Dlaa),
+            ctx.extent(),
+        )?;
+        if requested.is_some() && dlss.is_none() {
+            tracing::warn!(
+                "DLSS is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): TAA instead"
+            );
+        }
+        let dlss_on = requested.is_some() && dlss.is_some();
         let (scene, path) = build_field(ctx, &args)?;
         let camera = FlyCamera {
             speed: 40.0,
@@ -261,13 +299,17 @@ impl Ballad {
         let mut taa = taa;
         taa.blend = args.taa_blend;
         let tonemap = args.tonemap;
-        Ok(Self {
+        let mut ballad = Self {
             args,
             renderer,
             starfield,
             atmosphere,
             taa,
             taa_enabled,
+            dlss,
+            dlss_on,
+            display,
+            render_extent: ctx.extent(),
             meter,
             exposure,
             tonemap,
@@ -286,7 +328,73 @@ impl Ballad {
             frame_ms: Vec::new(),
             last_frame: Instant::now(),
             title_updates: 0,
-        })
+        };
+        ballad.apply_upscaler(ctx.extent())?;
+        Ok(ballad)
+    }
+
+    /// Draws at the size the anti-aliasing wants for an `output` of that many pixels: the
+    /// window's with TAA, DLSS's input size with DLSS, with the jitter sequence to match. The
+    /// device must be idle.
+    fn apply_upscaler(&mut self, output: vk::Extent2D) -> Result<()> {
+        let render = match &mut self.dlss {
+            Some(dlss) if self.dlss_on => {
+                dlss.configure(dlss.mode(), output)?;
+                dlss.render_extent()?
+            }
+            _ => output,
+        };
+        if render != self.render_extent {
+            self.renderer.resize(render)?;
+            self.taa.resize(render)?;
+            self.render_extent = render;
+        }
+        self.taa.jitter_phases = forge_render::taa::jitter_phases(render, output);
+        self.taa.reset_history();
+        Ok(())
+    }
+
+    /// TAA → DLAA → Quality → Balanced → Performance → Ultra Performance → TAA (the U key).
+    fn cycle_upscaler(&mut self, ctx: &Context) {
+        let Some(dlss) = &mut self.dlss else {
+            tracing::warn!(
+                "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU)"
+            );
+            return;
+        };
+        let next = if self.dlss_on {
+            let index = DlssMode::ALL.iter().position(|&m| m == dlss.mode());
+            index.and_then(|i| DlssMode::ALL.get(i + 1).copied())
+        } else {
+            Some(DlssMode::ALL[0])
+        };
+        ctx.device.wait_idle();
+        let applied: Result<()> = match next {
+            Some(mode) => {
+                self.dlss_on = true;
+                dlss.configure(mode, ctx.extent()).map_err(Into::into)
+            }
+            None => {
+                self.dlss_on = false;
+                Ok(())
+            }
+        };
+        match applied.and_then(|()| self.apply_upscaler(ctx.extent())) {
+            Ok(()) => tracing::info!(
+                upscaler = self.upscaler_label(),
+                render = ?self.render_extent,
+                "anti-aliasing switched"
+            ),
+            Err(error) => tracing::error!(%error, "cannot switch the anti-aliasing"),
+        }
+    }
+
+    /// The anti-aliasing on screen, for the overlay and the title.
+    fn upscaler_label(&self) -> &'static str {
+        match &self.dlss {
+            Some(dlss) if self.dlss_on => dlss.mode().label(),
+            _ => "TAA",
+        }
     }
 
     fn cull_camera(&self, aspect: f32) -> CullCamera {
@@ -301,13 +409,13 @@ impl Ballad {
 
 impl Demo for Ballad {
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
-        self.renderer.resize(ctx.extent())?;
-        self.taa.resize(ctx.extent())?;
+        self.apply_upscaler(ctx.extent())?;
         Ok(())
     }
 
-    fn key_pressed(&mut self, _ctx: &mut Context, code: KeyCode) {
+    fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
         match code {
+            KeyCode::KeyU => self.cycle_upscaler(ctx),
             KeyCode::KeyP => self.paused = !self.paused,
             KeyCode::KeyT => {
                 self.taa_enabled = !self.taa_enabled;
@@ -329,7 +437,13 @@ impl Demo for Ballad {
         }
     }
 
-    fn update(&mut self, _ctx: &mut Context, input: &Input, dt: f32) {
+    fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
+        if let Some(every) = self.args.cycle_upscaler
+            && ctx.frames_rendered > 0
+            && ctx.frames_rendered.is_multiple_of(every)
+        {
+            self.cycle_upscaler(ctx);
+        }
         let now = Instant::now();
         self.frame_ms
             .push((now - self.last_frame).as_secs_f64() * 1e3);
@@ -390,8 +504,16 @@ impl Demo for Ballad {
                 self.scene.meshlet_count
             ));
             ctx.profile.counter(format!(
-                "TAA {}   occlusion {}   cone {}   {}",
-                if self.taa_enabled { "on" } else { "off" },
+                "{} (U) at {}x{}   occlusion {}   cone {}   {}",
+                if self.dlss_on {
+                    self.upscaler_label().to_owned()
+                } else if self.taa_enabled {
+                    "TAA on (T)".to_owned()
+                } else {
+                    "TAA off (T)".to_owned()
+                },
+                self.render_extent.width,
+                self.render_extent.height,
                 if self.flags.has(CullFlags::OCCLUSION) {
                     "on"
                 } else {
@@ -430,7 +552,8 @@ impl Demo for Ballad {
             self.args.sun_lux / 1000.0
         ));
         let cull = self.cull_camera(ctx.aspect());
-        let extent = ctx.extent();
+        // The scene's size: the window's, or DLSS's input size.
+        let extent = self.render_extent;
         if let Some(path) = std::env::var_os("FORGE_TRACE_FRAMES") {
             // Debugging aid: every CPU-side input of the frame, one line per frame, to diff two runs.
             use std::io::Write;
@@ -460,7 +583,8 @@ impl Demo for Ballad {
         }
         // Draw jittered into the HDR target; cull with the unjittered camera. The rocks go
         // first, then the sky fills the pixels they left (depth-tested), then the resolve.
-        self.taa.enabled = self.taa_enabled;
+        // DLSS needs the jitter whatever T says.
+        self.taa.enabled = self.taa_enabled || self.dlss_on;
         let taa_frame = self.taa.begin(
             &mut frame.graph,
             self.camera.projection(ctx.aspect()),
@@ -475,7 +599,11 @@ impl Demo for Ballad {
                 scene: &self.scene,
                 view_proj: draw_view_proj,
                 cull,
-                lod_threshold_px: self.args.lod_error,
+                // The LOD error is meant in output pixels: drawn below the output (DLSS), the same
+                // error is a smaller share of a render pixel, so the geometry stays as detailed
+                // as on screen instead of coarsening with the render size.
+                lod_threshold_px: self.args.lod_error * extent.height as f32
+                    / ctx.extent().height.max(1) as f32,
                 draw_jitter: taa_frame.jitter
                     / glam::Vec2::new(extent.width as f32, extent.height as f32),
                 flags: self.flags,
@@ -506,8 +634,9 @@ impl Demo for Ballad {
             exposure,
             planet,
         );
-        // Meter the finished HDR scene (the next frames' exposure), then resolve it into the
-        // history and, through the tone curve, the swapchain.
+        // Meter the finished HDR scene (the next frames' exposure), then resolve it: TAA into
+        // its history and, through the tone curve, the swapchain; or DLSS into an HDR image at
+        // the window's size that the display pass takes through the curve.
         self.meter.measure(
             &mut frame.graph,
             frame.slot,
@@ -515,13 +644,41 @@ impl Demo for Ballad {
             extent,
             exposure,
         );
-        self.taa.resolve(
-            &mut frame.graph,
-            &taa_frame,
-            targets.depth,
-            frame.target,
-            self.tonemap,
-        );
+        let motion = self
+            .taa
+            .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        match self.dlss.as_mut() {
+            Some(dlss) if self.dlss_on => {
+                let upscaled = dlss.upscale(
+                    &mut frame.graph,
+                    ctx.frames_rendered,
+                    &taa_frame,
+                    UpscaleCamera {
+                        projection: self.camera.projection(ctx.aspect()),
+                        near: self.camera.near,
+                        vertical_fov: self.camera.fov_y,
+                    },
+                    targets.depth,
+                    motion,
+                    exposure,
+                )?;
+                self.display.draw(
+                    &mut frame.graph,
+                    upscaled,
+                    frame.target,
+                    ctx.extent(),
+                    self.tonemap,
+                );
+            }
+            _ => self.taa.resolve(
+                &mut frame.graph,
+                &taa_frame,
+                targets.depth,
+                motion,
+                frame.target,
+                self.tonemap,
+            ),
+        }
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())
     }
@@ -559,7 +716,13 @@ impl Demo for Ballad {
             self.exposure.ev100,
             self.tonemap.name(),
             if self.paused { "[P paused] " } else { "" },
-            if self.taa_enabled { "[T taa] " } else { "" },
+            if self.dlss_on {
+                format!("[U {}] ", self.upscaler_label())
+            } else if self.taa_enabled {
+                "[T taa] ".to_owned()
+            } else {
+                String::new()
+            },
             if self.flags.has(CullFlags::OCCLUSION) {
                 "[O occlusion] "
             } else {
@@ -761,6 +924,9 @@ fn main() -> Result<()> {
         } else {
             None
         },
+        // Built with `--features dlss`: the Vulkan API comes through Streamline so U can switch
+        // to DLSS at run time.
+        streamline: cfg!(feature = "dlss"),
         ..AppConfig::default()
     };
     forge_app::run(config, move |ctx| Ballad::new(ctx, args))

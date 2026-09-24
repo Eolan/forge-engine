@@ -64,7 +64,8 @@ the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
 is a bug), **M** meshlet colours, **Tab** wireframe, **G** tone curve (ACES → PBR Neutral →
-AgX), **-** / **=** exposure compensation (half an EV per press).
+AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
+(built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
 `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-occlusion`, `--no-cone`,
@@ -74,7 +75,8 @@ interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
 `--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral`, `--ev100 EV` (fixed
 exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (128 000),
 `--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
-of the sky). Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
+of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance`.
+Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
 where the time goes: [docs/PROFILE.md](docs/PROFILE.md).
 
 The culling A/B check (expects 0 differing pixels; see `docs/demos/asteroids.md`):

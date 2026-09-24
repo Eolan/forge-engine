@@ -2,7 +2,7 @@
 //!
 //! The meshlet path (task/mesh shaders, frustum + cone + two-pass hierarchical-Z
 //! occlusion, the visibility buffer and its compute resolve), a starfield background with a
-//! planet under a physical atmosphere, TAA, physical exposure with histogram metering and the
+//! planet under a physical atmosphere, TAA or DLSS, physical exposure with histogram metering and the
 //! display transform. Everything is driven from device-address buffers and the global
 //! bindless set of `forge-gpu`.
 
@@ -15,15 +15,18 @@ pub mod exposure;
 pub mod meshlet;
 pub mod starfield;
 pub mod taa;
+pub mod upscale;
 pub mod visibility;
 
 pub use atmosphere::{Atmosphere, AtmosphereFrame, AtmosphereParams};
 pub use blit::blit;
 pub use display::{Display, Tonemap};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
+pub use forge_gpu::DlssMode;
 pub use meshlet::{
     CullCamera, CullFlags, DrawTargets, FrameStats, MeshId, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder,
 };
 pub use starfield::Starfield;
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
+pub use upscale::{DlssUpscaler, UpscaleCamera};

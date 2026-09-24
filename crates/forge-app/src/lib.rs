@@ -64,6 +64,11 @@ pub struct AppConfig {
     /// Whether the profiling overlay starts visible: `None` = yes when interactive, no when
     /// a frame limit is set (scripted captures); `Some` forces it. F1 toggles it at run time.
     pub overlay: Option<bool>,
+    /// Load the Vulkan API through NVIDIA Streamline so the device can offer DLSS (needs the
+    /// `dlss` feature on Windows and the SDK in `streamline-sdk/bin/x64`, or wherever
+    /// `FORGE_STREAMLINE_DIR` points). Falls back to the plain loader when Streamline does not
+    /// load.
+    pub streamline: bool,
 }
 
 impl Default for AppConfig {
@@ -79,6 +84,7 @@ impl Default for AppConfig {
             capture_every: None,
             optimize_shaders: true,
             overlay: None,
+            streamline: false,
         }
     }
 }
@@ -258,7 +264,22 @@ impl<D: Demo> State<D> {
         let display = window.display_handle()?.as_raw();
         let window_handle = window.window_handle()?.as_raw();
         let validation = config.validate || cfg!(debug_assertions);
-        let instance = Arc::new(Instance::new(c"forge", validation, Some(display))?);
+        let root = workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+        let instance = if config.streamline {
+            let sdk = std::env::var_os("FORGE_STREAMLINE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.join("streamline-sdk/bin/x64"));
+            match Instance::with_streamline(c"forge", validation, Some(display), &sdk) {
+                Ok(instance) => instance,
+                Err(error) => {
+                    tracing::warn!(%error, sdk = %sdk.display(), "no Streamline: DLSS unavailable");
+                    Instance::new(c"forge", validation, Some(display))?
+                }
+            }
+        } else {
+            Instance::new(c"forge", validation, Some(display))?
+        };
+        let instance = Arc::new(instance);
         let surface = instance.create_surface(display, window_handle)?;
         let device = Device::new(Arc::clone(&instance), Some(surface.raw()))?;
         let size = window.inner_size();
@@ -270,7 +291,6 @@ impl<D: Demo> State<D> {
             config.vsync,
         )?;
         let frames = Frames::new(Arc::clone(&device), swapchain.image_count())?;
-        let root = workspace_root_from(env!("CARGO_MANIFEST_DIR"));
         let shaders = ShaderCompiler::new(
             root.join("shaders"),
             root.join("shader-cache"),

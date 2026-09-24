@@ -147,6 +147,7 @@ pub struct Image {
     /// The heap a placed image lives in (kept alive by the image).
     heap: Option<Arc<TransientHeap>>,
     format: vk::Format,
+    usage: vk::ImageUsageFlags,
     extent: vk::Extent2D,
 }
 
@@ -200,6 +201,10 @@ impl Image {
     /// Format.
     pub fn format(&self) -> vk::Format {
         self.format
+    }
+    /// Usage flags it was created with.
+    pub fn usage(&self) -> vk::ImageUsageFlags {
+        self.usage
     }
     /// Size of level 0.
     pub fn extent(&self) -> vk::Extent2D {
@@ -602,6 +607,7 @@ impl Device {
             allocation,
             heap,
             format: desc.format,
+            usage: desc.usage,
             extent,
         })
     }

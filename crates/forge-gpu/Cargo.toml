@@ -10,11 +10,17 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# DLSS Super Resolution through NVIDIA Streamline (Windows; the SDK stays outside the
+# repository, in `streamline-sdk/`). Without it `Device::dlss` is always `None`.
+dlss = ["dep:libloading"]
+
 [dependencies]
 ash = { workspace = true }
 ash-window = { workspace = true }
 bytemuck = { workspace = true }
 gpu-allocator = { workspace = true }
+libloading = { version = "0.8", optional = true }
 parking_lot = { workspace = true }
 raw-window-handle = { workspace = true }
 thiserror = { workspace = true }

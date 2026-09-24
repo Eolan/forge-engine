@@ -16,15 +16,19 @@ error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colo
 `--ev100 EV` (a fixed exposure instead of the automatic one), `--exposure-compensation EV`,
 `--sun-lux LUX` (128 000, the Sun at 1 AU), `--exposure-log file.csv` (EV100 and its target
 per frame), `--look x,y,z` (hold the view direction while moving along the path: stills of
-the sky).
+the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance` (taa),
+`--cycle-upscaler N` (switch as U does every N frames: tests the switch in scripted runs).
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
-`tracy/tracy-profiler.exe`.
+`tracy/tracy-profiler.exe`. With DLSS: `cargo run --release -p asteroids --features dlss`
+(Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad says
+so and keeps TAA).
 Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the path and fly
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
 red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **G** tone curve,
-**-** / **=** exposure compensation (half an EV), **Esc** quit.
+**-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
+Quality → Balanced → Performance → Ultra Performance, with `--features dlss`), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 
 ![The ballad, phase 0](images/asteroids-ballad.png)
@@ -79,7 +83,7 @@ subject, F1 cycles off → compact → full. The verdicts behind the numbers are
 |---|---|
 | scene | 3000 asteroids, 7 meshes, 195 M leaf triangles; DAG tables 28 k clusters, 4.6 M cluster slots over all instances |
 | drawn per frame, LOD 1 px (moving, default path) | 6–8 k meshlets, **0.5–0.6 M triangles**, mean LOD level 6.3 |
-| GPU per frame, LOD 1 px | **0.325 ms** along the path, 0.34 facing the planet (full split in [PROFILE.md](../PROFILE.md): geometry 0.12, resolve 0.03, sky 0.11, or 0.14–0.16 with the planet, exposure 0.02, TAA 0.06) |
+| GPU per frame, LOD 1 px | **0.325 ms** along the path with TAA (0.60–0.77 ms with DLSS, below), 0.34 facing the planet (full split in [PROFILE.md](../PROFILE.md): geometry 0.12, resolve 0.03, sky 0.11, or 0.14–0.16 with the planet, exposure 0.02, TAA 0.06) |
 | GPU per frame, LOD 0.5 px / 2 px | 0.39 ms (1.24 M triangles) / 0.28 ms (0.30 M) |
 | GPU per frame, full detail (`--no-lod`) | 5.15 ms (852 k + 33 k meshlets, 82 M triangles) |
 | CPU per frame (main thread) | 0.16 ms |
@@ -379,6 +383,55 @@ cargo run --release -p asteroids -- --fixed-step --look=-0.45,0.10,-1.0 --frames
 cargo run --release -p asteroids -- --fixed-step --planet-angle 50 --look=0.27891,0.29307,-0.91451 --sun-dir=0.40811,0.31726,-0.85603 --frames 601 --capture sunrise.png --capture-frame 600
 ```
 
+## DLSS (2026-09-24, issue #8)
+
+With `--features dlss` the Vulkan API comes through NVIDIA Streamline's interposer, and
+**U** (or `--upscaler`) replaces the TAA resolve with DLSS: the scene is drawn jittered at
+DLSS's input size, DLSS upscales the pre-exposed HDR colour with the depth and the TAA's
+motion vectors into an HDR image at the window's size, and the display pass takes it
+through the tone curve (D-024). TAA stays the default and the fallback. Without the
+feature, the SDK or an RTX GPU, U says so and nothing changes.
+
+![Frame 600, zoomed ×2: TAA, DLAA, DLSS Quality (1067×600), DLSS Performance (800×450)](images/asteroids-dlss.png)
+
+| anti-aliasing | drawn at | GPU per frame (path average) | the resolve pass | triangles |
+|---|---|---|---|---|
+| TAA | 1600×900 | 0.333 ms | TAA resolve 0.05 ms | 0.56 M |
+| DLAA | 1600×900 | 0.768 ms | DLSS 0.46 ms | 0.56 M |
+| DLSS Quality | 1067×600 | 0.690 ms | DLSS 0.45 ms | 0.57 M |
+| DLSS Balanced | 928×522 | 0.662 ms | — | 0.56 M |
+| DLSS Performance | 800×450 | 0.646 ms | DLSS 0.45 ms | 0.55 M |
+| DLSS Ultra Performance | 533×300 | 0.600 ms | DLSS 0.43 ms | 0.55 M |
+
+One 6000-frame run per mode with `--fixed-step`, TAA measured in the same Streamline build
+(0.325 ms without it); the pass times come from the F1 overlay at frame 1200. What the
+numbers say: the DLSS pass costs what the **output** costs, 0.43–0.46 ms at 1600×900 in
+every mode. Drawing smaller saves this scene only 0.1–0.2 ms, so here DLSS costs more
+than it saves. It pays once the scene saves more than about 0.5 ms at the input size (the
+city-blocks target at 1440p). Streamline also adds about 0.07 ms of CPU to recording.
+
+What it took (details in D-024 and the research notes):
+
+- **The LOD error is measured in output pixels.** In render pixels the cluster DAG picked
+  coarser cuts at the smaller sizes, and Quality and Performance drew faceted rocks that
+  DLSS cannot restore. Scaled by the render/output ratio, every mode draws the same
+  0.56 M triangles, and DLSS only reconstructs shading.
+- **A longer jitter sequence**: 8 × (output / render)² Halton phases (32 at Performance).
+- **The graph declares everything.** The images tagged for Streamline are declared by the
+  `temporal/DLSS` pass. The output uses a new `Custom` access because NGX clears it at the
+  transfer stage before writing it. Synchronization validation caught the missing stage.
+- **Tags valid until present**: tagged `eOnlyValidNow`, Streamline copied every input first
+  (and validation flagged the copies).
+- **IMMEDIATE present under Streamline**: through the interposer, MAILBOX presents were held
+  to the display's refresh in most runs (acquire waiting 8 ms); IMMEDIATE never was. The
+  plain build keeps MAILBOX.
+
+Checks: validation and synchronization validation silent in every mode and while
+switching (`--cycle-upscaler 60` through all six); DLAA lines up with the TAA frame
+(camera, jitter and motion vectors agree); the TAA path is bit-identical to the golden
+after the refactor (motion vectors now a pass of their own, the LOD scale 1 at native).
+DLSS output is not used as a golden image: it changes with the DLSS model the driver ships.
+
 ## Resolved: TAA history is bit-exact between runs since the render graph (issue #10)
 
 Before the graph, two identical runs with TAA on and the camera moving differed at frame
@@ -425,8 +478,8 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    geometry: material classification of the visibility buffer (#20), streaming of cluster
    pages, the software rasteriser for the smallest clusters once triangle counts rise again
    (a million-triangle city, not a rock field).
-2. DLSS (#8), bloom, a closer planet if the owner wants its air to read as a band, the
-   planet-view table (#26); a proper sun with ray-traced shadows on the RTX
+2. Bloom, a closer planet if the owner wants its air to read as a band, the planet-view
+   table (#26); a proper sun with ray-traced shadows on the RTX
    tiers; volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,
    crashes (Phases 5–7), a second player, spatial audio.

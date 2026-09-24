@@ -91,9 +91,9 @@ and the date next to every number.
 |---|---|---|
 | `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle` |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
-| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks; D-020) |
+| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks, `Custom` accesses for third-party work; D-020), and `dlss` (DLSS through NVIDIA Streamline's interposer behind the `dlss` feature: modes, render sizes, tagging graph images, evaluation inside a graph pass; D-024) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
-| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `Starfield` (stars, nebula, a physical sun disc, a planet under its atmosphere), `Atmosphere` (Hillaire 2020 transmittance and multiple-scattering tables as graph passes, the per-pixel march for views from space), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), DLSS (#8), lighting tiers, post (bloom) |
+| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (cluster LOD DAG, instance cull pass, two-pass HZB occlusion, the visibility buffer and its compute resolve, statistics), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `DlssUpscaler` (DLSS in place of the TAA resolve, the scene drawn at DLSS's input size), `Starfield` (stars, nebula, a physical sun disc, a planet under its atmosphere), `Atmosphere` (Hillaire 2020 transmittance and multiple-scattering tables as graph passes, the per-pixel march for views from space), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: material classification (#20), lighting tiers, post (bloom) |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
 | `forge-anim` | planned | clips, blend graph, motion matching, IK, powered ragdoll tracking, contact events |
@@ -101,7 +101,7 @@ and the date next to every number.
 | `forge-net` | planned | transport, replication, prediction, interest management, replay |
 | `forge-sim` | planned | `bevy_ecs` storage with the Forge executor, gameplay systems, simulation LOD |
 | `forge-procgen` | planned | terrain genesis (uplift, erosion, hydrology), ecosystems, settlements, grammars, noise/SDF library |
-| `forge-app` | built | window, input, frame loop that owns each frame's `FrameGraph` (swapchain import, demo passes, overlay, capture, present), PNG capture, fly camera, the profiler overlay (F1) and Tracy frame marks/zones (`profiling`) |
+| `forge-app` | built | window, input, frame loop that owns each frame's `FrameGraph` (swapchain import, demo passes, overlay, capture, present), PNG capture, fly camera, the profiler overlay (F1) and Tracy frame marks/zones (`profiling`), the Vulkan API through Streamline when asked (`AppConfig::streamline`, feature `dlss`) |
 | `tools/imgdiff` | built | pixel comparison of captures (the golden-image check; exit code for CI) |
 
 ## 3. Frame model
@@ -177,6 +177,15 @@ per-pixel march through the shell for views from space, in the same pre-exposed 
 the ground is lit through the air, and the stars and the sun seen through it are dimmed
 and reddened by its transmittance. Empty space has no medium. Cameras inside an
 atmosphere will add the sky-view and aerial-perspective tables.
+
+**The resolve is TAA or DLSS** (issue #8, D-024). The scene is drawn jittered into a
+pre-exposed HDR target either way, and the motion vectors (UV offsets from depth and the two
+cameras) are their own pass. TAA resolves at the output size and writes the display image
+through the tone curve in the same pass. DLSS (builds with `--features dlss` on an RTX GPU,
+the Vulkan API through Streamline's interposer) draws the scene at its input size, upscales
+into an HDR image at the output size, and the display pass applies the curve. The DLSS pass
+is a graph pass like any other: it declares every image it hands to Streamline, and its
+output with a `Custom` access, because NGX clears it at the transfer stage before writing it.
 
 ## 5. Conventions
 

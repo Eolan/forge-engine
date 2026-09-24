@@ -668,6 +668,7 @@ dependencies = [
  "ash-window",
  "bytemuck",
  "gpu-allocator",
+ "libloading",
  "parking_lot",
  "raw-window-handle",
  "thiserror 2.0.21",

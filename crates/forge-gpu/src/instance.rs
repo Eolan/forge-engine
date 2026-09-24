@@ -1,4 +1,5 @@
 use std::ffi::{CStr, c_void};
+use std::path::Path;
 use std::sync::Arc;
 
 use ash::{ext, khr, vk};
@@ -15,6 +16,9 @@ pub struct Instance {
     surface_loader: khr::surface::Instance,
     debug: Option<(ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
     validation: bool,
+    /// Last, so it is dropped after the entry: the Vulkan API came from its interposer.
+    #[cfg(all(feature = "dlss", windows))]
+    streamline: Option<Arc<crate::streamline::Streamline>>,
 }
 
 unsafe extern "system" fn debug_callback(
@@ -56,6 +60,58 @@ impl Instance {
     ) -> Result<Self> {
         // SAFETY: loading the Vulkan library has no preconditions beyond it being installed.
         let entry = unsafe { ash::Entry::load()? };
+        Self::create(entry, app_name, validation, display)
+    }
+
+    /// Like [`Instance::new`], with the Vulkan API loaded from NVIDIA Streamline's interposer in
+    /// `sdk_bin` (the SDK's `bin/x64`, where its plugins and DLSS live too) so the device can
+    /// offer DLSS ([`crate::Device::dlss`]). Fails without the `dlss` feature on Windows, or when
+    /// Streamline does not load; callers fall back to [`Instance::new`].
+    pub fn with_streamline(
+        app_name: &CStr,
+        validation: bool,
+        display: Option<RawDisplayHandle>,
+        sdk_bin: &Path,
+    ) -> Result<Self> {
+        #[cfg(all(feature = "dlss", windows))]
+        {
+            let streamline = Arc::new(crate::streamline::Streamline::load(sdk_bin)?);
+            // SAFETY: Streamline's interposer exports the Vulkan loader's entry points and
+            // forwards them to it; `Streamline::load` just loaded and initialized it.
+            let entry = unsafe { ash::Entry::load_from(streamline.interposer())? };
+            let mut instance = Self::create(entry, app_name, validation, display)?;
+            instance.streamline = Some(streamline);
+            Ok(instance)
+        }
+        #[cfg(not(all(feature = "dlss", windows)))]
+        {
+            let _ = (app_name, validation, display, sdk_bin);
+            Err(crate::error::GpuError::Unsupported(
+                "Streamline needs the `dlss` feature on Windows".into(),
+            ))
+        }
+    }
+
+    /// Whether the Vulkan API comes through NVIDIA Streamline's interposer.
+    pub fn through_streamline(&self) -> bool {
+        #[cfg(all(feature = "dlss", windows))]
+        return self.streamline.is_some();
+        #[cfg(not(all(feature = "dlss", windows)))]
+        false
+    }
+
+    /// Streamline, when the instance was created through it.
+    #[cfg(all(feature = "dlss", windows))]
+    pub(crate) fn streamline(&self) -> Option<&Arc<crate::streamline::Streamline>> {
+        self.streamline.as_ref()
+    }
+
+    fn create(
+        entry: ash::Entry,
+        app_name: &CStr,
+        validation: bool,
+        display: Option<RawDisplayHandle>,
+    ) -> Result<Self> {
         // SAFETY: plain property enumeration.
         let layers = unsafe { entry.enumerate_instance_layer_properties()? };
         let has_validation = layers
@@ -143,6 +199,8 @@ impl Instance {
             surface_loader,
             debug,
             validation,
+            #[cfg(all(feature = "dlss", windows))]
+            streamline: None,
         })
     }
 

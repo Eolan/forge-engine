@@ -59,9 +59,26 @@ curves are bit-identical from run to run.
 its own: the sky's 0.11 ms is the starfield's per-pixel price, the planet adds 0.04–0.06
 when in view and #26 would take most of that back; (2) the resolve is where shading cost will grow, and material classification (#20)
 keeps that growth per material; (3) the CPU submit/present path only when a real scene
-makes it visible; (4) geometry is done until triangle counts rise again. Next is DLSS
-(#8), optional and off by default: the previous project measured it at 0.9–1.1 ms at 1440p
-against 0.12 ms for its own resolve.
+makes it visible; (4) geometry is done until triangle counts rise again; (5) DLSS stays
+optional (below): its 0.45 ms only pays in a heavier scene.
+
+### The same frame with DLSS (`--features dlss`, U; issue #8)
+
+| anti-aliasing | drawn at | GPU per frame | geometry | sky | temporal | post | Verdict |
+|---|---|---|---|---|---|---|---|
+| TAA (Streamline build) | 1600×900 | 0.333 ms | 0.14 | 0.10 | 0.06 (motion 0.01, resolve 0.05) | — | The default. |
+| DLAA | 1600×900 | 0.768 ms | 0.14 | 0.10 | 0.47 (DLSS 0.46) | 0.01 | DLSS at native size: the best image here, 0.44 ms more. |
+| DLSS Quality | 1067×600 | 0.690 ms | 0.11 | 0.06 | 0.46 (DLSS 0.45) | 0.01 | The scene saves about 0.1 ms; DLSS costs 0.40 ms more than the TAA resolve. |
+| DLSS Performance | 800×450 | 0.646 ms | 0.10 | 0.05 | 0.46 (DLSS 0.45) | 0.01 | |
+| DLSS Ultra Performance | 533×300 | 0.600 ms | 0.09 | 0.03 | 0.44 (DLSS 0.43) | 0.01 | |
+
+GPU per frame: path averages of 6000-frame runs; zones: F1 at frame 1200. **Verdict:**
+the DLSS pass costs what the output costs (0.43–0.46 ms at 1600×900 whatever the input
+size), so it cannot pay in a 0.33 ms scene. It pays once the native frame costs about
+0.5 ms more than the frame at the input size: the million-instance city at 1440p (#13) is
+where to measure that. The LOD error is scaled to output pixels, so every mode draws the
+same 0.56 M triangles and the geometry passes shrink only with the pixel count. Streamline
+adds about 0.07 ms of CPU to recording (0.17 against 0.10).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

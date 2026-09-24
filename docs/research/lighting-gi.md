@@ -956,3 +956,31 @@ the ballad. What the port taught:
   every other pixel (+0.01 ms with the planet out of view); in view the ballad's planet adds
   0.04–0.06 ms, a planet filling the screen 0.2 ms. Because the camera barely moves
   relative to the planet, a view-direction table around it (#26) would make that a lookup.
+
+## Implementation notes from Forge: DLSS (2026-09-24, issue #8, D-024)
+
+DLSS Super Resolution through Streamline 2.14, optional behind the `dlss` feature, with TAA
+as the default. What the port taught:
+
+- **Tag lifetimes decide copies.** Tagged `eOnlyValidNow`, as the previous project did,
+  Streamline copies every input before evaluating: extra transfers, and transfer usage the
+  render graph had not declared (validation errors). `eValidUntilPresent` is true here,
+  since nothing writes the inputs between the DLSS pass and the present, and DLSS then reads
+  them in place.
+- **Third-party passes need an honest declaration.** NGX clears its output at the transfer
+  stage before its compute shaders write it. A storage-write declaration left that clear
+  unsynchronised (a write-after-write hazard across frames). The graph gained a `Custom`
+  access that names the layout, stages and access bits, and the barrier is derived as usual.
+- **The interposer changes presentation.** With Streamline's `vkQueuePresentKHR` in the
+  path, MAILBOX was held to the display's refresh in most runs (the acquire waited 8 ms);
+  IMMEDIATE was not. Streamline also needs Vulkan 1.3's `privateData` feature enabled.
+- **LOD in output pixels.** With a cluster DAG the geometric detail follows the render size
+  unless the LOD error is scaled: in render pixels, Quality and Performance drew faceted
+  rocks that no upscaler can restore. Measured in output pixels, every mode draws the same
+  0.56 M triangles, and DLSS only reconstructs shading.
+- **DLSS costs what the output costs.** 0.43–0.46 ms at 1600×900 in every mode, against
+  0.05 ms for the TAA resolve. Upscaling pays only when the scene saves more than that at
+  the input size: not the 0.33 ms ballad, but the million-instance city at 1440p.
+- **Pre-exposure.** Passing the frame's pre-exposure (relative to a fixed EV100) kept the
+  output at the input's level. DLSS undoes it on the way out, so its history can follow the
+  automatic exposure the way the TAA's rescaled history does.

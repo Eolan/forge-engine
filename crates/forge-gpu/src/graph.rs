@@ -103,6 +103,17 @@ pub enum ImageAccess {
     TransferDst,
     /// Handed to the presentation engine after the pass (the swapchain image's last use).
     Present,
+    /// Any other use, spelled out: third-party work recorded into the pass (DLSS clears its
+    /// output at the transfer stage before writing it from compute shaders). A write when
+    /// `access` holds any write bit.
+    Custom {
+        /// Layout during the pass.
+        layout: vk::ImageLayout,
+        /// Every stage that touches the image.
+        stages: vk::PipelineStageFlags2,
+        /// Every way those stages touch it.
+        access: vk::AccessFlags2,
+    },
 }
 
 /// How a pass uses a buffer.
@@ -124,6 +135,17 @@ pub enum BufferAccess {
     /// visible to the host, which a fence or semaphore wait alone does not.
     HostRead,
 }
+
+/// Access bits that write.
+const WRITES: vk::AccessFlags2 = vk::AccessFlags2::from_raw(
+    vk::AccessFlags2::SHADER_WRITE.as_raw()
+        | vk::AccessFlags2::SHADER_STORAGE_WRITE.as_raw()
+        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE.as_raw()
+        | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw()
+        | vk::AccessFlags2::TRANSFER_WRITE.as_raw()
+        | vk::AccessFlags2::HOST_WRITE.as_raw()
+        | vk::AccessFlags2::MEMORY_WRITE.as_raw(),
+);
 
 impl ImageAccess {
     /// The state a subresource is in while a pass uses it this way. `sampled_layout` is the
@@ -171,6 +193,11 @@ impl ImageAccess {
                 true,
             ),
             Self::Present => (L::PRESENT_SRC_KHR, S::BOTTOM_OF_PIPE, A::NONE, false),
+            Self::Custom {
+                layout,
+                stages,
+                access,
+            } => (layout, stages, access, access.intersects(WRITES)),
         };
         ResourceState {
             layout,
@@ -183,6 +210,9 @@ impl ImageAccess {
     /// Whether the access may be a transient's first use (it writes the whole image, or
     /// does not care what was there).
     fn initialises(self) -> bool {
+        if let Self::Custom { access, .. } = self {
+            return access.intersects(WRITES);
+        }
         !matches!(
             self,
             Self::DepthRead
@@ -350,6 +380,8 @@ impl GraphImage {
                 .collect(),
             extent: self.image.extent(),
             format: self.image.format(),
+            usage: self.image.usage(),
+            sampled_layout: self.sampled_layout,
             sampled: self.sampled,
             storage: self.storage.clone(),
         }
@@ -639,6 +671,10 @@ pub struct ResolvedImage {
     pub extent: vk::Extent2D,
     /// Format.
     pub format: vk::Format,
+    /// Usage flags (empty for raw images).
+    pub usage: vk::ImageUsageFlags,
+    /// The layout a `Sampled` access puts it in (`GENERAL` when it also has `STORAGE` usage).
+    pub sampled_layout: vk::ImageLayout,
     /// Sampled-image handle, when the image has `SAMPLED` usage.
     pub sampled: Option<SampledImageId>,
     /// Storage-image handle per mip level, when the image has `STORAGE` usage.
@@ -1129,6 +1165,8 @@ impl RenderGraph {
                         mip_views: vec![raw.view],
                         extent: raw.extent,
                         format: raw.format,
+                        usage: vk::ImageUsageFlags::empty(),
+                        sampled_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                         sampled: None,
                         storage: Vec::new(),
                     });
@@ -1175,6 +1213,8 @@ impl RenderGraph {
                             mip_views: Vec::new(),
                             extent: vk::Extent2D::default(),
                             format: vk::Format::UNDEFINED,
+                            usage: vk::ImageUsageFlags::empty(),
+                            sampled_layout: vk::ImageLayout::UNDEFINED,
                             sampled: None,
                             storage: Vec::new(),
                         });
@@ -1387,6 +1427,36 @@ mod tests {
         // Two frames later the slot's next copy overwrites it: a write after the host read.
         let (src, _) = transition(&mut state, BufferAccess::TransferDst.state()).expect("barrier");
         assert_eq!((src.stage, src.access), (S::HOST, A::HOST_READ));
+    }
+
+    #[test]
+    fn a_custom_access_covers_every_stage_it_names() {
+        // DLSS: a clear at the transfer stage, then compute writes, in `GENERAL`.
+        let dlss = ImageAccess::Custom {
+            layout: L::GENERAL,
+            stages: S::CLEAR | S::COMPUTE_SHADER,
+            access: A::TRANSFER_WRITE | A::SHADER_STORAGE_WRITE,
+        };
+        assert!(dlss.initialises());
+        let mut state = ImageAccess::Sampled(S::FRAGMENT_SHADER).state(L::GENERAL);
+        let (src, dst) = transition(&mut state, dlss.state(L::GENERAL)).expect("barrier");
+        assert_eq!(src.stage, S::FRAGMENT_SHADER);
+        assert_eq!(dst.stage, S::CLEAR | S::COMPUTE_SHADER);
+        assert_eq!(dst.access, A::TRANSFER_WRITE | A::SHADER_STORAGE_WRITE);
+        // The display pass then waits for both the clear and the compute writes.
+        let (src, _) = transition(
+            &mut state,
+            ImageAccess::Sampled(S::FRAGMENT_SHADER).state(L::GENERAL),
+        )
+        .expect("barrier");
+        assert_eq!(src.access, A::TRANSFER_WRITE | A::SHADER_STORAGE_WRITE);
+        // A read-only custom access is not a write.
+        let read = ImageAccess::Custom {
+            layout: L::GENERAL,
+            stages: S::COMPUTE_SHADER,
+            access: A::SHADER_SAMPLED_READ,
+        };
+        assert!(!read.initialises() && !read.state(L::GENERAL).write);
     }
 
     fn meta(name: &str, mips: u32, transient: Option<Option<(u64, u64)>>) -> ImageMeta {

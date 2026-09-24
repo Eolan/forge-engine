@@ -14,6 +14,7 @@
 mod bindless;
 mod commands;
 mod device;
+pub mod dlss;
 mod error;
 mod frame;
 #[forbid(unsafe_code)]
@@ -22,6 +23,8 @@ mod instance;
 mod memory;
 mod pipeline;
 mod shader;
+#[cfg(all(feature = "dlss", windows))]
+mod streamline;
 mod swapchain;
 mod timers;
 
@@ -33,6 +36,7 @@ pub use bindless::{
 };
 pub use commands::Commands;
 pub use device::{Device, DeviceFeatures, MeshShaderLimits};
+pub use dlss::{Dlss, DlssFrame, DlssImage, DlssImages, DlssMode, DlssToken};
 pub use error::{GpuError, Result};
 pub use frame::{FRAMES_IN_FLIGHT, FrameSlot, Frames};
 pub use gpu_allocator::MemoryLocation;

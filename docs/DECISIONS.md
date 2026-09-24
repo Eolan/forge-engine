@@ -356,3 +356,42 @@ within 4/255 of a 128-segment reference; the sky pass costs 0.11 ms with the pla
 view, 0.14–0.16 ms with the ballad's planet (18° radius) in view and 0.31 ms for a planet
 filling the screen, which a planet-view table would make a lookup (#26). *(research:
 lighting-gi.md §6; issue #8)*
+
+## D-024 — DLSS through Streamline's interposer, optional, TAA as the default ✅ (2026-09-24)
+
+DLSS Super Resolution runs through NVIDIA Streamline 2.14 (the SDK in `streamline-sdk/`,
+git-ignored), with the binding lifted from the `world` project into `forge-gpu`
+(`streamline.rs`, every FFI structure's size and padding checked at compile time). It
+is **optional**: the `dlss` feature (Windows) loads `sl.interposer.dll` in place of the
+Vulkan loader (`Instance::with_streamline`, `AppConfig::streamline`). The device offers
+`Device::dlss()` when its GPU runs it. Without the feature `Dlss` is an uninhabited type,
+so renderers and demos compile without feature gates. **TAA stays the default and the
+fallback**; U switches TAA → DLAA → Quality → Balanced → Performance → Ultra Performance
+at run time (`--upscaler` at start), and the profiler zones are `temporal/TAA resolve` or
+`temporal/DLSS` + `post/display transform`.
+
+DLSS reads the same inputs as the TAA resolve: the jittered pre-exposed HDR colour, the
+reversed-Z depth, the motion vectors (UV offsets, unjittered) and a 1 × 1 exposure of 1.
+Pre-exposure is passed relative to EV100 15; DLSS's output kept the input's level. The
+scene is drawn at DLSS's input size, with a jitter sequence of 8 × (output / render)² phases
+and **the LOD error measured in output pixels**, so the geometry stays as detailed as the
+screen (in render pixels the Quality and Performance modes drew visibly faceted rocks).
+
+The render graph was extended rather than bypassed: resolved images carry their usage and
+sampled layout for Streamline's tags, and a `Custom` access (explicit layout, stages and
+access) declares the output, which NGX clears at the transfer stage before writing it
+from compute (synchronization validation found the missing transfer stage). Tags are
+`eValidUntilPresent`: `eOnlyValidNow` made Streamline copy every input first. The device
+enables Vulkan 1.3's `privateData`, which Streamline uses. Through the interposer, MAILBOX
+presents were held to the display's refresh in most runs, so the swapchain prefers
+IMMEDIATE when Streamline is loaded.
+
+*Measured* (1600×900 output, RTX 5070 Ti, ballad path average): TAA 0.333 ms GPU; DLAA
+0.768, Quality (1067×600) 0.690, Balanced 0.662, Performance (800×450) 0.646, Ultra
+Performance (533×300) 0.600. The DLSS pass itself costs 0.43–0.46 ms in every mode (it
+scales with the output), the scene saves 0.1–0.2 ms at the smaller sizes, and Streamline
+adds about 0.07 ms of CPU to recording. In a 0.33 ms scene DLSS costs more than it saves.
+It pays off once the scene costs more than about half a millisecond more at native size
+than at the input size (the city-blocks target at 1440p). Validation and synchronization
+validation are silent in every mode and across the switch. *(research: lighting-gi.md §9;
+issue #8)*

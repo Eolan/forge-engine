@@ -65,8 +65,22 @@ impl Swapchain {
             .or_else(|| formats.first())
             .copied()
             .ok_or_else(|| crate::GpuError::Unsupported("surface has no formats".into()))?;
-        let present_mode = if self.vsync {
+        // `FORGE_PRESENT_MODE=immediate|mailbox|fifo` overrides the choice (debugging aid).
+        let forced = match std::env::var("FORGE_PRESENT_MODE").ok().as_deref() {
+            Some("immediate") => Some(vk::PresentModeKHR::IMMEDIATE),
+            Some("mailbox") => Some(vk::PresentModeKHR::MAILBOX),
+            Some("fifo") => Some(vk::PresentModeKHR::FIFO),
+            _ => None,
+        }
+        .filter(|mode| modes.contains(mode));
+        let present_mode = if let Some(mode) = forced {
+            mode
+        } else if self.vsync {
             vk::PresentModeKHR::FIFO
+        } else if instance.through_streamline() && modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+            // Through Streamline's interposer, MAILBOX presents were held to the display's
+            // refresh in most runs (the acquire waited 8 ms at 120 Hz); IMMEDIATE never was.
+            vk::PresentModeKHR::IMMEDIATE
         } else if modes.contains(&vk::PresentModeKHR::MAILBOX) {
             vk::PresentModeKHR::MAILBOX
         } else if modes.contains(&vk::PresentModeKHR::IMMEDIATE) {

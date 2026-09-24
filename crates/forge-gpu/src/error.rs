@@ -23,6 +23,9 @@ pub enum GpuError {
     /// resource declared twice in one pass, a heap that cannot hold its images).
     #[error("render graph: {0}")]
     Graph(String),
+    /// NVIDIA Streamline (DLSS) failed to load or refused a call.
+    #[error("Streamline: {0}")]
+    Streamline(String),
 }
 
 /// Result alias for the GPU layer.

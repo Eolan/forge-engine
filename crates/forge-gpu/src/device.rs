@@ -51,6 +51,8 @@ pub struct Device {
     bindless: Mutex<Option<Bindless>>,
     bindless_layout: vk::DescriptorSetLayout,
     bindless_set: vk::DescriptorSet,
+    /// DLSS, when the instance came through Streamline and this GPU runs it.
+    dlss: Option<crate::dlss::Dlss>,
 }
 
 struct Candidate {
@@ -131,7 +133,9 @@ impl Device {
             .synchronization2(true)
             .maintenance4(true)
             .shader_demote_to_helper_invocation(true)
-            .subgroup_size_control(true);
+            .subgroup_size_control(true)
+            // Required of every Vulkan 1.3 device; Streamline (DLSS) creates private data slots.
+            .private_data(true);
         let mut mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT::default()
             .task_shader(true)
             .mesh_shader(true);
@@ -192,6 +196,21 @@ impl Device {
         let bindless = Bindless::new(&raw, max_anisotropy, best.features.sampler_minmax)?;
         let bindless_layout = bindless.layout();
         let bindless_set = bindless.set();
+        #[cfg(all(feature = "dlss", windows))]
+        let dlss = instance.streamline().and_then(|streamline| {
+            match streamline.dlss_supported(vk::Handle::as_raw(best.physical)) {
+                Ok(()) => {
+                    tracing::info!("DLSS is available");
+                    Some(crate::dlss::Dlss::new(Arc::clone(streamline)))
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "DLSS is not available on this GPU");
+                    None
+                }
+            }
+        });
+        #[cfg(not(all(feature = "dlss", windows)))]
+        let dlss = None;
 
         Ok(Arc::new(Self {
             instance,
@@ -210,6 +229,7 @@ impl Device {
             bindless: Mutex::new(Some(bindless)),
             bindless_layout,
             bindless_set,
+            dlss,
         }))
     }
 
@@ -316,6 +336,12 @@ impl Device {
             score,
             name,
         }))
+    }
+
+    /// DLSS, when the instance was created through Streamline
+    /// ([`Instance::with_streamline`]) and this GPU runs it.
+    pub fn dlss(&self) -> Option<&crate::dlss::Dlss> {
+        self.dlss.as_ref()
     }
 
     /// The raw device.
@@ -476,6 +502,11 @@ impl Device {
 impl Drop for Device {
     fn drop(&mut self) {
         self.wait_idle();
+        // Streamline frees what it allocated on the device first.
+        #[cfg(all(feature = "dlss", windows))]
+        if let Some(streamline) = self.instance.streamline() {
+            streamline.shut_down();
+        }
         if let Some(mut bindless) = self.bindless.lock().take() {
             bindless.destroy(&self.raw);
         }
