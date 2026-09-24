@@ -11,7 +11,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Terrain patch and GPU placement | #35 | ✅ the city, a million instances |
 | Culling at a million instances | #37 | ✅ far instances' roots 32 to an item: the city in 1.06 ms instead of 4.90 |
 | Streaming of cluster pages | #36 | ✅ 128 KiB pages from the cache files; the flight at 300 m/s in a 48 MiB pool, no holes |
-| The flight, 1440p, numbers | #13 | |
+| The flight, 1440p, numbers | #13 | ✅ the flight at 300 m/s at 1440p: worst frame 2.6 ms (385 fps) on the 5070 Ti |
 
 ```
 cargo run --release -p city-blocks
@@ -19,7 +19,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -30,9 +30,66 @@ Options:
   city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead).
 - `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
   page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
+- `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
+  target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## The flight (issue #13, 2026-09-25)
+
+The closing measurement of Phase 1: the city flown at 300 m/s with streaming on, at 1440p,
+through TAA.
+
+```
+cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
+```
+
+| 2560 × 1440, RTX 5070 Ti, LOD 1 px, TAA, streamed through 512 MiB | GPU per frame | frame p50 / p99 / worst |
+|---|---|---|
+| **the flight at 300 m/s** (a 29 s lap, 20 000 frames) | **1.64 ms** | 1.65 / 2.04 / **2.58 ms** |
+| the south edge | 1.58 ms | 1.56 / 1.96 / 2.37 ms |
+| the orbit (the whole city from 1.5 km) | 2.19 ms | 2.18 / 2.65 / 6.66 ms |
+| the flight through the indirect-count fallback (`--force-fallback`) | 2.33 ms | 2.37 / 2.88 / 6.04 ms |
+
+- **The target was 120 fps (8.33 ms).** The flight's worst frame is 2.58 ms and its median
+  frame is five times inside the budget. The frames are unthrottled (MAILBOX) and the
+  GPU sets them: the CPU works 0.25 ms of each.
+- **The flight streams little.** 540–720 pages are resident, 0–1.6 are uploaded a frame in
+  real time, and nothing waits (the counters under "Streaming" above).
+- **TAA** costs 0.15 ms at 1440p (motion vectors 0.02, resolve 0.13). It is on by default:
+  at 300 m/s the window grids and rock fields shimmer without it (**T**, `--no-taa`).
+- **Where the time goes** in the flight (F1 overlay below):
+  - the culls 0.72 ms (instance 0.32, clusters 0.19 + 0.20);
+  - hardware and software raster 0.57;
+  - resolve 0.09 and TAA 0.15.
+- **The RTX 3080** half of the target (60 fps at 1440p) waits for a run on the server PC
+  (#39).
+
+![The flight at 300 m/s at 1440p with the F1 overlay: the streaming group and its counter line, geometry 1.32 of 1.58 ms, 621 fps](images/city-blocks-profile.png)
+
+**Golden captures** (1600 × 900, every page resident, so that a capture does not depend on
+the I/O's timing). Two runs of each are identical to the pixel.
+
+| The south edge, frame 60 | The orbit, frame 240 |
+|---|---|
+| ![The city from its south edge](images/city-blocks-south.png) | ![The whole city from 1.5 km](images/city-blocks-orbit.png) |
+| **The flight, frame 600** (`--fly --fixed-step`) | **The gallery, frame 60** (`--gallery`) |
+| ![The flight 10 s in](images/city-blocks-flight.png) | ![The twenty props](images/city-blocks-gallery.png) |
+
+```
+city-blocks --stream-pool 0 --frames 61 --capture south.png --capture-frame 60
+city-blocks --stream-pool 0 --orbit --frames 241 --capture orbit.png --capture-frame 240
+city-blocks --stream-pool 0 --fly --fixed-step --frames 601 --capture flight.png --capture-frame 600
+city-blocks --gallery --frames 61 --capture gallery.png --capture-frame 60
+```
+
+**What a starved pool looks like.** The same flight frame with every page resident, then
+through a 16 MiB pool: too small for the cut, so the distant buildings stand as their
+coarse root boxes. The surfaces lose their detail but stay whole (the third panel shows
+the pixels that differ):
+
+![Every page resident, a 16 MiB pool, and the pixels that differ](images/city-blocks-streaming-fallback.png)
 
 ## The city (issue #35, 2026-09-24)
 

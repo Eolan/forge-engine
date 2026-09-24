@@ -3,11 +3,13 @@
 //! terrain (8 M triangles) are cooked into cluster DAGs once and cached on disk
 //! (`mesh-cache/`); a compute pass places a million instances of the props over the terrain
 //! (issue #35): a street grid of buildings, lamp posts and plazas, and rocks over the hills
-//! around it. `--gallery` shows the twenty props side by side instead.
+//! around it. Their cluster pages stream from the cache files through a GPU pool as the LOD
+//! cut asks for them (issue #36); `--fly` flies a loop at 300 m/s through TAA (issue #13).
+//! `--gallery` shows the twenty props side by side instead.
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
-//! threshold, Tab wireframe, G tone curve, Esc quit.
+//! threshold, T TAA, Tab wireframe, G tone curve, Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -17,16 +19,14 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
-use forge_app::{TransientDesc, vk};
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{PropKind, PropSpec, Terrain, city_props};
 use forge_render::meshlet::DrawParams;
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::{
-    CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, Residency, StreamingConfig, StreamingStats, SwRaster, Tonemap,
-    exposure_from_ev100,
+    CullCamera, CullFlags, FrameStats, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
+    Residency, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -107,6 +107,15 @@ struct Args {
     /// captures; with `--vsync` at 60 Hz, still 300 m/s).
     #[arg(long)]
     fixed_step: bool,
+    /// Draw without TAA (no jitter, no history): the raw frame, aliased.
+    #[arg(long)]
+    no_taa: bool,
+    /// Window width in pixels (the render size).
+    #[arg(long, default_value_t = 1600)]
+    width: u32,
+    /// Window height in pixels.
+    #[arg(long, default_value_t = 900)]
+    height: u32,
 }
 
 /// Where a prop stands in the gallery: its name, the centre and radius of its bounds.
@@ -119,7 +128,8 @@ struct Placed {
 struct Gallery {
     args: Args,
     renderer: MeshletRenderer,
-    display: Display,
+    /// Anti-aliasing: jittered frames into a history, resolved through the tone curve.
+    taa: Taa,
     tonemap: Tonemap,
     scene: MeshletScene,
     camera: FlyCamera,
@@ -133,6 +143,10 @@ struct Gallery {
     fly_time: f32,
     /// The streamer's frames since the last title.
     streaming: Vec<StreamingStats>,
+    /// Frame times (ms) since the last title, and over the whole run (the exit log).
+    frame_ms: Vec<f64>,
+    run_frame_ms: Vec<f64>,
+    last_frame: Instant,
     /// When the first frame was rendered, until the streamer first settles (nothing wanted
     /// or being read).
     started: Option<Instant>,
@@ -147,7 +161,13 @@ const COLUMNS: u32 = 5;
 impl Gallery {
     fn new(ctx: &mut Context, args: Args) -> Result<Self> {
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
-        let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
+        let mut taa = Taa::new(
+            &ctx.device,
+            &ctx.shaders,
+            ctx.extent(),
+            ctx.swapchain.format(),
+        )?;
+        taa.enabled = !args.no_taa;
         let (scene, placed) = if args.gallery {
             build_gallery(ctx, &args)?
         } else {
@@ -195,7 +215,7 @@ impl Gallery {
             tonemap: args.tonemap,
             args,
             renderer,
-            display,
+            taa,
             scene,
             camera,
             flags,
@@ -206,6 +226,9 @@ impl Gallery {
             title_updates: 0,
             fly_time: 0.0,
             streaming: Vec::new(),
+            frame_ms: Vec::new(),
+            run_frame_ms: Vec::new(),
+            last_frame: Instant::now(),
             started: None,
             settled: false,
         })
@@ -224,6 +247,8 @@ impl Gallery {
 impl Demo for Gallery {
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
         self.renderer.resize(ctx.extent())?;
+        self.taa.resize(ctx.extent())?;
+        self.taa.reset_history();
         Ok(())
     }
 
@@ -239,11 +264,22 @@ impl Demo for Gallery {
             KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
+            KeyCode::KeyT => {
+                self.taa.enabled = !self.taa.enabled;
+                self.taa.reset_history();
+            }
             _ => {}
         }
     }
 
     fn update(&mut self, _ctx: &mut Context, input: &Input, dt: f32) {
+        let now = Instant::now();
+        let ms = (now - self.last_frame).as_secs_f64() * 1e3;
+        self.last_frame = now;
+        if self.frame > 0 {
+            self.frame_ms.push(ms);
+            self.run_frame_ms.push(ms);
+        }
         if self.args.fly {
             // Counter-clockwise seen from above, facing along the path, a little down.
             const RADIUS: f32 = 1400.0;
@@ -308,43 +344,53 @@ impl Demo for Gallery {
         }
         let camera = self.cull_camera(ctx.aspect());
         let extent = ctx.extent();
-        let color = frame.graph.transient(TransientDesc {
-            name: "gallery color",
-            width: extent.width,
-            height: extent.height,
-            format: HDR_FORMAT,
-            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
-            aspect: vk::ImageAspectFlags::COLOR,
-            mip_levels: 1,
-        });
+        let exposure = exposure_from_ev100(self.args.ev100);
+        // Draw jittered into TAA's HDR target, cull with the unjittered camera, resolve
+        // through the history and the tone curve into the swapchain.
+        let taa_frame = self.taa.begin(
+            &mut frame.graph,
+            self.camera.projection(ctx.aspect()),
+            camera.view_proj,
+            exposure,
+        );
         let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
             DrawParams {
                 scene: &self.scene,
-                view_proj: camera.view_proj,
+                view_proj: taa_frame.jittered_projection * self.camera.view(),
                 cull: camera,
                 lod_threshold_px: self.args.lod_error,
-                draw_jitter: glam::Vec2::ZERO,
+                draw_jitter: taa_frame.jitter
+                    / glam::Vec2::new(extent.width as f32, extent.height as f32),
                 flags: self.flags,
                 extent,
                 wireframe: self.wireframe,
-                exposure: exposure_from_ev100(self.args.ev100),
+                exposure,
                 sw_raster: self.args.sw_raster,
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
-        // A pale sky behind the props (the terrain and the sky come with issue #35).
+        // A pale sky behind the props.
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
             targets,
-            color,
+            taa_frame.color,
             extent,
             Some([0.55, 0.62, 0.72, 1.0]),
         );
-        self.display
-            .draw(&mut frame.graph, color, frame.target, extent, self.tonemap);
+        let motion = self
+            .taa
+            .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        self.taa.resolve(
+            &mut frame.graph,
+            &taa_frame,
+            targets.depth,
+            motion,
+            frame.target,
+            self.tonemap,
+        );
         Ok(())
     }
 
@@ -356,8 +402,10 @@ impl Demo for Gallery {
         let mean =
             |f: fn(&FrameStats) -> u32| self.stats.iter().map(|s| f64::from(f(s))).sum::<f64>() / n;
         let gpu = self.gpu_ms.iter().sum::<f64>() / self.gpu_ms.len().max(1) as f64;
+        let mut frames = std::mem::take(&mut self.frame_ms);
+        let (p50, p99) = (percentile(&mut frames, 0.5), percentile(&mut frames, 0.99));
         let title = format!(
-            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances, {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms",
+            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances, {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms, frame p50 {p50:.2} p99 {p99:.2} ms",
             self.scene.instance_count,
             self.scene.total_triangles as f64 / 1e6,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -395,6 +443,31 @@ impl Demo for Gallery {
         }
         Some(title)
     }
+}
+
+impl Drop for Gallery {
+    fn drop(&mut self) {
+        let mut frames = std::mem::take(&mut self.run_frame_ms);
+        if frames.is_empty() {
+            return;
+        }
+        tracing::info!(
+            frames = frames.len(),
+            p50 = format!("{:.2}", percentile(&mut frames, 0.5)),
+            p99 = format!("{:.2}", percentile(&mut frames, 0.99)),
+            max = format!("{:.2}", percentile(&mut frames, 1.0)),
+            "frame times (ms) over the run"
+        );
+    }
+}
+
+/// The `q` quantile of `values` (sorted in place; 0 when empty).
+fn percentile(values: &mut [f64], q: f64) -> f64 {
+    values.sort_by(f64::total_cmp);
+    values
+        .get(((values.len().max(1) - 1) as f64 * q).round() as usize)
+        .copied()
+        .unwrap_or(0.0)
 }
 
 /// Cooks (or loads) `props` in parallel on the job system, logging each prop's DAG; returns
@@ -600,6 +673,8 @@ fn main() -> Result<()> {
         capture_every: None,
         overlay: if args.overlay { Some(true) } else { None },
         force_fallback: args.force_fallback,
+        width: args.width,
+        height: args.height,
         ..AppConfig::default()
     };
     forge_app::run(config, move |ctx| Gallery::new(ctx, args))

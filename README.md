@@ -129,11 +129,12 @@ cooked into cluster DAGs on the job system and cached in `mesh-cache/` (13 s the
 time, under a second after), then streamed: 128 KiB cluster pages read from the cache files
 as the LOD cut asks for them, through a 512 MiB pool. Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
-**[** / **]** LOD threshold, **Tab** wireframe, **G** tone curve. Options: `--gallery` (the twenty props side by side),
-`--focus NAME` (frame one of them), `--instances N`, `--recook`, `--orbit`, `--fly` (a loop
-at 300 m/s), `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--no-lod`,
-`--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`, `--ev100 EV`,
-`--force-fallback`. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
+**[** / **]** LOD threshold, **T** TAA, **Tab** wireframe, **G** tone curve. Options:
+`--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),
+`--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
+`--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
+`--no-taa`, `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
+`--ev100 EV`, `--force-fallback`. At 1440p the flight at 300 m/s runs at 1.64 ms of GPU. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
 
 ### `task-bench` — job system
 

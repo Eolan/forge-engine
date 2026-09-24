@@ -113,9 +113,10 @@ posts, 180 plaza props and 988 k rocks placed by a compute pass), streamed throu
 | shading | visibility resolve | 0.05 | 4 % | |
 | streaming | upload | 0.00 | 0 % | Nothing to upload once the view has settled (39 frames). The flight at 300 m/s uploads 0–1.6 pages a frame. |
 
-**Priority:** the flight at 300 m/s at 1440p (#13) measures the whole. The culls' next
-step (#38) waits until the flight shows it matters. Details in
-[city-blocks.md](demos/city-blocks.md).
+**At 1440p with TAA** (#13) the flight at 300 m/s takes 1.64 ms of GPU, its worst frame
+2.58 ms against the 8.33 of the 120 fps target; the south edge 1.58 ms, the orbit 2.19.
+**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
+next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

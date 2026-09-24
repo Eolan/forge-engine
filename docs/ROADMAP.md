@@ -132,7 +132,8 @@ Goal: the renderer skeleton every later system draws through.
    twenty props cooked and cached ✅ (#34), terrain and GPU placement ✅ (#35: a million instances
    in 4.96 ms), culling at scale ✅ (#37: 1.06 ms, instance occlusion next in #38),
    streaming ✅ (#36, D-025: 128 KiB cluster pages, the flight at 300 m/s through a 48 MiB
-   pool with no holes), the flight at 1440p (#13).
+   pool with no holes), the flight at 1440p ✅ (#13, 2026-09-25: 1.64 ms GPU with TAA, worst
+   frame 2.58 ms on the 5070 Ti; the 3080 run is #39).
 
 ## Phase 2 — World
 
