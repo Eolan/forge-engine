@@ -3,12 +3,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cache;
+pub mod city;
 pub mod lod;
 pub mod meshlet;
 pub mod procedural;
 
 pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag};
 pub use meshlet::{
-    GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES, MeshletMesh,
+    CookOptions, DagStats, GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES,
+    MeshletMesh,
 };
 pub use procedural::TriMesh;

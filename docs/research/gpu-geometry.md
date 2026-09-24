@@ -543,3 +543,11 @@ What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.
   simplification normalises positions to the group's extent: the same choice as
   `clusterlod.h`'s sparse mode, and a slightly different DAG than before (the golden
   captures moved; the volume a frame selects did not).
+- **Hard surfaces need their normals in the error.** A building facade's window recess is
+  25 cm deep. Geometric error alone lets the coarse levels drop it while the window is
+  still several pixels wide, and the vertices left keep full-detail normals that no longer
+  match the surface: the facades smear at a distance. With the normals in the error
+  (`meshopt_simplifyWithAttributes`, a 90° turn weighted like a metre), the windows stay
+  until about a pixel. The gallery's LOD and full-detail views then differ by 1 % of their
+  pixels, all at window edges. Rocks keep geometry alone: their smooth normals would only
+  make them finer for nothing.

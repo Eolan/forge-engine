@@ -116,6 +116,21 @@ wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
 `--sw-raster-area PX`, `--show-raster`.
 Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
 
+### `city-blocks` — the Phase 1 closing demo, in steps
+
+```
+cargo run --release -p city-blocks
+```
+
+For now the prop gallery: twenty procedural props (buildings with real window recesses,
+towers, boulders, rubble, a column, a fountain, a lamp post; 25.8 M triangles), cooked into
+cluster DAGs on the job system (9 s) and cached in `mesh-cache/` (0.5 s on later runs).
+Keys: **L** / **K** LOD and its colours, **M** cluster colours, **O** occlusion, **R**
+software rasteriser, **H** its pixels, **[** / **]** LOD threshold, **Tab** wireframe, **G**
+tone curve. Options: `--focus NAME` (frame one prop), `--recook`, `--orbit`, `--no-lod`,
+`--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`, `--ev100 EV`,
+`--force-fallback`. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
+
 ### `task-bench` — job system
 
 ```

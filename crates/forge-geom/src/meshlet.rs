@@ -72,6 +72,32 @@ pub struct GpuMeshlet {
     pub pad2: u32,
 }
 
+/// How a mesh is cooked.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CookOptions {
+    /// Weight of the vertex normals in the simplification error, in metres of error per unit
+    /// of normal change: 0 counts geometry only. A facade's window recess is shallow (a
+    /// quarter metre) but turns the normal by 90°: with geometric error alone the coarse
+    /// levels lose the windows while they are still several pixels wide, and the vertices
+    /// left keep normals that no longer match the surface. With a weight of 1 a 90° turn
+    /// counts like about a metre, so windows stay until they are about a pixel.
+    pub normal_weight: f32,
+}
+
+/// The shape of a cooked DAG (the metrics the research asks to track: roots reached, fill).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DagStats {
+    /// LOD levels.
+    pub levels: usize,
+    /// Clusters over all levels.
+    pub clusters: usize,
+    /// Clusters no coarser level replaces: 1 when the DAG simplified the mesh down to one
+    /// cluster; more when groups stalled (see `lod::STALL_RATIO`).
+    pub roots: usize,
+    /// Mean triangles per cluster over the maximum (1 = every cluster full).
+    pub fill: f64,
+}
+
 /// A mesh cut into clusters at every LOD level, ready for upload.
 pub struct MeshletMesh {
     /// Vertex buffer (shared by every level).
@@ -95,8 +121,14 @@ pub struct MeshletMesh {
 }
 
 impl MeshletMesh {
-    /// Optimises the index buffer for the vertex cache, clusters it and builds the LOD DAG.
+    /// Optimises the index buffer for the vertex cache, clusters it and builds the LOD DAG,
+    /// with the default [`CookOptions`] (geometric error only).
     pub fn build(mesh: &TriMesh) -> Self {
+        Self::build_with(mesh, CookOptions::default())
+    }
+
+    /// [`MeshletMesh::build`] with explicit options.
+    pub fn build_with(mesh: &TriMesh, options: CookOptions) -> Self {
         let vertices: Vec<GpuVertex> = mesh
             .positions
             .iter()
@@ -109,7 +141,7 @@ impl MeshletMesh {
             })
             .collect();
         let indices = meshopt::optimize_vertex_cache(&mesh.indices, vertices.len());
-        let dag = lod::build_dag(&indices, &vertices);
+        let dag = lod::build_dag(&indices, &vertices, options.normal_weight);
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
             vertices,
@@ -127,6 +159,21 @@ impl MeshletMesh {
     /// Number of LOD levels.
     pub fn levels(&self) -> usize {
         self.clusters_per_level.len()
+    }
+
+    /// The DAG's shape: levels, roots and how full the clusters are.
+    pub fn dag_stats(&self) -> DagStats {
+        let clusters = self.meshlets.len().max(1);
+        DagStats {
+            levels: self.levels(),
+            clusters: self.meshlets.len(),
+            roots: self
+                .meshlets
+                .iter()
+                .filter(|m| m.parent_error.is_infinite())
+                .count(),
+            fill: self.dag_triangle_count as f64 / (clusters * MESHLET_MAX_TRIANGLES) as f64,
+        }
     }
 }
 

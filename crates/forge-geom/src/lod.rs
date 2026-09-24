@@ -51,7 +51,9 @@ struct Record {
 }
 
 /// Builds the DAG of `indices` over `vertices`. `indices` must be a valid triangle list.
-pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
+/// `normal_weight` adds the vertex normals to the simplification error (metres per unit of
+/// normal change; 0: geometry only, see `crate::meshlet::CookOptions`).
+pub fn build_dag(indices: &[u32], vertices: &[GpuVertex], normal_weight: f32) -> ClusterDag {
     let mut dag = ClusterDag {
         meshlets: Vec::new(),
         meshlet_vertices: Vec::new(),
@@ -125,15 +127,33 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
             let subset = compactor.subset(&merged, vertices, &locked);
             let target = (merged.len() / 3).div_ceil(2).max(1) * 3;
             let mut simplify_error = 0.0_f32;
-            let simplified = meshopt::simplify_with_locks(
-                &subset.indices,
-                &subset.adapter(),
-                &subset.locked,
-                target,
-                f32::MAX,
-                SimplifyOptions::LockBorder | SimplifyOptions::ErrorAbsolute,
-                Some(&mut simplify_error),
-            );
+            let options = SimplifyOptions::LockBorder | SimplifyOptions::ErrorAbsolute;
+            let simplified = if normal_weight > 0.0 {
+                // The normals are the vertex's floats 4..7: read them in place.
+                let floats: &[f32] = bytemuck::cast_slice(&subset.vertices);
+                meshopt::simplify_with_attributes_and_locks(
+                    &subset.indices,
+                    &subset.adapter(),
+                    &floats[4..],
+                    &[normal_weight; 3],
+                    std::mem::size_of::<GpuVertex>(),
+                    &subset.locked,
+                    target,
+                    f32::MAX,
+                    options,
+                    Some(&mut simplify_error),
+                )
+            } else {
+                meshopt::simplify_with_locks(
+                    &subset.indices,
+                    &subset.adapter(),
+                    &subset.locked,
+                    target,
+                    f32::MAX,
+                    options,
+                    Some(&mut simplify_error),
+                )
+            };
             if simplified.is_empty() || simplified.len() as f32 > merged.len() as f32 * STALL_RATIO
             {
                 // Could not simplify: these clusters are roots of their branch.

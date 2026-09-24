@@ -2,6 +2,7 @@
 /target/
 **/target/
 /shader-cache/
+/mesh-cache/
 /captures/
 
 # Vendored third-party binaries and SDKs (Tracy profiler, NVIDIA Streamline): kept locally,
