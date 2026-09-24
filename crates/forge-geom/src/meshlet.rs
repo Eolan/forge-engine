@@ -8,6 +8,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use crate::lod;
+use crate::page::{self, PAGE_SIZE, PagedVertex};
 use crate::procedural::TriMesh;
 
 /// Maximum vertices per meshlet.
@@ -15,7 +16,8 @@ pub const MESHLET_MAX_VERTICES: usize = 64;
 /// Maximum triangles per meshlet.
 pub const MESHLET_MAX_TRIANGLES: usize = 124;
 
-/// Vertex layout shared with the shaders (32 bytes, std430).
+/// A cooking vertex (32 bytes): what the DAG builder simplifies. The GPU reads the 16-byte
+/// [`PagedVertex`] of the cluster pages instead.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct GpuVertex {
@@ -43,16 +45,20 @@ pub struct GpuMeshlet {
     pub cone_cutoff: f32,
     /// Normal cone axis.
     pub cone_axis: [f32; 3],
-    /// First entry in the meshlet vertex index list.
-    pub vertex_offset: u32,
-    /// First byte in the meshlet triangle list.
-    pub triangle_offset: u32,
+    /// The page holding the payload (the mesh's page index; a scene rebases it into its
+    /// page table).
+    pub page: u32,
+    /// Byte offset of the payload in the page: `vertex_count` [`PagedVertex`], then
+    /// `triangle_count` triangles of three one-byte local indices (see [`crate::page`]).
+    pub payload: u32,
     /// Vertices in this meshlet.
     pub vertex_count: u32,
     /// Triangles in this meshlet.
     pub triangle_count: u32,
-    /// Padding.
-    pub pad: u32,
+    /// The page of this cluster's children, the members of the group that produced it
+    /// ([`page::PAGE_NONE`] at level 0): the cut refines the cluster only when that page is
+    /// resident.
+    pub child_page: u32,
     /// LOD: centre of the sphere of the group this cluster was produced from.
     pub self_center: [f32; 3],
     /// LOD: its radius.
@@ -98,16 +104,14 @@ pub struct DagStats {
     pub fill: f64,
 }
 
-/// A mesh cut into clusters at every LOD level, ready for upload.
+/// A mesh cut into clusters at every LOD level and packed into pages, ready for upload.
 pub struct MeshletMesh {
-    /// Vertex buffer (shared by every level).
-    pub vertices: Vec<GpuVertex>,
-    /// Meshlet records, all levels.
+    /// Meshlet records, all levels (the hierarchy, always resident).
     pub meshlets: Vec<GpuMeshlet>,
-    /// Indices into `vertices`, per meshlet.
-    pub meshlet_vertices: Vec<u32>,
-    /// Local triangle indices (3 bytes each), padded to a multiple of 4.
-    pub meshlet_triangles: Vec<u8>,
+    /// The clusters' payloads, [`PAGE_SIZE`] bytes per page, the roots' pages first.
+    pub pages: Vec<u8>,
+    /// How many of the first pages hold the roots.
+    pub root_pages: u32,
     /// Triangles at full detail (level 0).
     pub triangle_count: usize,
     /// Triangles over all levels.
@@ -141,13 +145,13 @@ impl MeshletMesh {
             })
             .collect();
         let indices = meshopt::optimize_vertex_cache(&mesh.indices, vertices.len());
-        let dag = lod::build_dag(&indices, &vertices, options.normal_weight);
+        let mut dag = lod::build_dag(&indices, &vertices, options.normal_weight);
+        let pages = page::pack(&mut dag, &vertices);
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
-            vertices,
             meshlets: dag.meshlets,
-            meshlet_vertices: dag.meshlet_vertices,
-            meshlet_triangles: dag.meshlet_triangles,
+            pages: pages.bytes,
+            root_pages: pages.root_pages,
             triangle_count: indices.len() / 3,
             dag_triangle_count: dag.triangle_count,
             clusters_per_level: dag.clusters_per_level,
@@ -159,6 +163,31 @@ impl MeshletMesh {
     /// Number of LOD levels.
     pub fn levels(&self) -> usize {
         self.clusters_per_level.len()
+    }
+
+    /// Number of pages.
+    pub fn page_count(&self) -> u32 {
+        (self.pages.len() / PAGE_SIZE) as u32
+    }
+
+    /// Vertex `i` of cluster `m`, read from its page.
+    pub fn vertex(&self, m: &GpuMeshlet, i: usize) -> PagedVertex {
+        let at = m.page as usize * PAGE_SIZE + m.payload as usize + i * size_of::<PagedVertex>();
+        bytemuck::pod_read_unaligned(&self.pages[at..at + size_of::<PagedVertex>()])
+    }
+
+    /// The three local vertex indices of triangle `t` of cluster `m`.
+    pub fn triangle(&self, m: &GpuMeshlet, t: usize) -> [u8; 3] {
+        let at = m.page as usize * PAGE_SIZE
+            + m.payload as usize
+            + m.vertex_count as usize * size_of::<PagedVertex>()
+            + t * 3;
+        [self.pages[at], self.pages[at + 1], self.pages[at + 2]]
+    }
+
+    /// The position of corner `k` of triangle `t` of cluster `m`.
+    pub fn corner(&self, m: &GpuMeshlet, t: usize, k: usize) -> [f32; 3] {
+        self.vertex(m, self.triangle(m, t)[k] as usize).position
     }
 
     /// The DAG's shape: levels, roots and how full the clusters are.
@@ -224,21 +253,99 @@ mod tests {
             assert!(m.vertex_count as usize <= MESHLET_MAX_VERTICES);
             assert!(m.triangle_count as usize <= MESHLET_MAX_TRIANGLES);
             assert!(m.radius > 0.0);
-            assert!(
-                (m.triangle_offset as usize + m.triangle_count as usize * 3)
-                    <= built.meshlet_triangles.len()
-            );
+            assert!(m.page < built.page_count());
+            assert_eq!(m.payload as usize % page::PAYLOAD_ALIGN, 0);
+            let end = m.payload as usize + page::payload_bytes(m.vertex_count, m.triangle_count);
+            assert!(end <= PAGE_SIZE);
             for t in 0..m.triangle_count as usize {
-                for k in 0..3 {
-                    let local =
-                        built.meshlet_triangles[m.triangle_offset as usize + t * 3 + k] as u32;
-                    assert!(local < m.vertex_count);
-                    let vertex = built.meshlet_vertices[(m.vertex_offset + local) as usize];
-                    assert!((vertex as usize) < built.vertices.len());
+                for local in built.triangle(m, t) {
+                    assert!(u32::from(local) < m.vertex_count);
                 }
             }
         }
-        assert_eq!(built.meshlet_triangles.len() % 4, 0);
+        assert_eq!(built.pages.len() % PAGE_SIZE, 0);
+    }
+
+    /// Every cluster's payload lies in its page without overlapping another's; the roots
+    /// fill the first pages; a group's members share one page, and the clusters it produced
+    /// point at it; level 0 points nowhere.
+    #[test]
+    fn pages_keep_groups_whole_and_point_at_the_children() {
+        let mesh = crate::procedural::asteroid(Seed::new(700), 64, 1.0, 0.45);
+        let built = MeshletMesh::build(&mesh);
+        assert!(built.page_count() >= 2, "pages {}", built.page_count());
+        assert!(built.root_pages >= 1);
+        let mut spans: Vec<(usize, usize)> = built
+            .meshlets
+            .iter()
+            .map(|m| {
+                let start = m.page as usize * PAGE_SIZE + m.payload as usize;
+                (
+                    start,
+                    start + page::payload_bytes(m.vertex_count, m.triangle_count),
+                )
+            })
+            .collect();
+        spans.sort_unstable();
+        for pair in spans.windows(2) {
+            assert!(pair[0].1 <= pair[1].0, "payloads overlap: {pair:?}");
+        }
+        for m in &built.meshlets {
+            let root = m.parent_error.is_infinite();
+            assert_eq!(
+                root,
+                m.page < built.root_pages,
+                "roots and only roots in root pages"
+            );
+            if m.lod_level == 0 {
+                assert_eq!(m.child_page, page::PAGE_NONE);
+            } else {
+                assert!(m.child_page >= built.root_pages && m.child_page < built.page_count());
+            }
+        }
+        // The children of a cluster are the clusters whose parent is its group: they share
+        // its `self` values as their `parent` ones and all lie in its `child_page`.
+        let key = |c: [f32; 3], r: f32, e: f32| (c.map(f32::to_bits), r.to_bits(), e.to_bits());
+        let mut child_page = std::collections::HashMap::new();
+        for m in built.meshlets.iter().filter(|m| m.lod_level > 0) {
+            let k = key(m.self_center, m.self_radius, m.self_error);
+            assert_eq!(*child_page.entry(k).or_insert(m.child_page), m.child_page);
+        }
+        let mut children = 0;
+        for m in built.meshlets.iter().filter(|m| m.parent_error.is_finite()) {
+            let k = key(m.parent_center, m.parent_radius, m.parent_error);
+            assert_eq!(
+                child_page.get(&k),
+                Some(&m.page),
+                "a child outside its page"
+            );
+            children += 1;
+        }
+        assert!(children > 0);
+    }
+
+    /// The paged vertices are the cooked ones: exact positions, normals within 0.01°.
+    #[test]
+    fn paged_vertices_keep_the_positions_exactly() {
+        let mesh = crate::procedural::asteroid(Seed::new(7), 24, 1.0, 0.2);
+        let built = MeshletMesh::build(&mesh);
+        let mut matched = 0;
+        for m in level0(&built) {
+            for i in 0..m.vertex_count as usize {
+                let v = built.vertex(m, i);
+                let source = mesh
+                    .positions
+                    .iter()
+                    .position(|p| *p == v.position)
+                    .expect("a paged position that is not a mesh vertex");
+                let n = mesh.normals[source];
+                let d = page::decode_normal(v.normal);
+                let dot: f32 = (0..3).map(|k| n[k] * d[k]).sum();
+                assert!(dot > 0.999_99, "normal off by {dot}");
+                matched += 1;
+            }
+        }
+        assert!(matched > 0);
     }
 
     /// The DAG reaches a root, halves per level, and its errors and spheres are monotonic
@@ -373,15 +480,7 @@ mod tests {
                 culled_sphere += usize::from(cull_sphere);
                 let mut front = 0;
                 for t in 0..m.triangle_count as usize {
-                    let corner = |k: usize| {
-                        let local = built.meshlet_triangles[m.triangle_offset as usize + t * 3 + k]
-                            as usize;
-                        Vec3::from(
-                            built.vertices
-                                [built.meshlet_vertices[m.vertex_offset as usize + local] as usize]
-                                .position,
-                        )
-                    };
+                    let corner = |k: usize| Vec3::from(built.corner(m, t, k));
                     let (a, b, c) = (corner(0), corner(1), corner(2));
                     if (b - a).cross(c - a).dot(camera - a) > 0.0 {
                         front += 1;
@@ -446,15 +545,8 @@ mod tests {
                 culled += 1;
                 let mut front = 0;
                 for t in 0..m.triangle_count as usize {
-                    let corner = |k: usize| {
-                        let local = built.meshlet_triangles[m.triangle_offset as usize + t * 3 + k]
-                            as usize;
-                        model.transform_point3(Vec3::from(
-                            built.vertices
-                                [built.meshlet_vertices[m.vertex_offset as usize + local] as usize]
-                                .position,
-                        ))
-                    };
+                    let corner =
+                        |k: usize| model.transform_point3(Vec3::from(built.corner(m, t, k)));
                     let (a, b, c) = (corner(0), corner(1), corner(2));
                     if (b - a).cross(c - a).dot(camera - a) > 0.0 {
                         front += 1;

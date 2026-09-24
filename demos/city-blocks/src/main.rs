@@ -424,12 +424,14 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
     let layout = CityLayout::city(args.instances);
     let first = builder.reserve_instances(&placement::mesh_counts(&layout, &city));
     let scene = builder.build(&ctx.device)?;
-    // The terrain's cooked vertices are its heightfield, in grid order.
-    let heights: Vec<f32> = meshes[props.len() - 1]
-        .vertices
-        .iter()
-        .map(|v| v.position[1])
-        .collect();
+    // The heightfield the terrain mesh was sampled from.
+    let heights_start = std::time::Instant::now();
+    let heights = parallel_heights(&terrain);
+    tracing::info!(
+        samples = heights.len(),
+        ms = heights_start.elapsed().as_millis(),
+        "terrain heights"
+    );
     let report = placement::place(
         &ctx.device,
         &ctx.shaders,
@@ -518,4 +520,16 @@ fn main() -> Result<()> {
         ..AppConfig::default()
     };
     forge_app::run(config, move |ctx| Gallery::new(ctx, args))
+}
+
+/// [`Terrain::heights`] on the job system, 64 rows to a job.
+fn parallel_heights(terrain: &Terrain) -> Vec<f32> {
+    let n = terrain.samples() as usize;
+    let mut heights = vec![0.0; n * n];
+    TaskPool::client().scope(|s| {
+        for (chunk, rows) in heights.chunks_mut(64 * n).enumerate() {
+            s.spawn(move |_| terrain.heights_into((chunk * 64) as u32, rows));
+        }
+    });
+    heights
 }

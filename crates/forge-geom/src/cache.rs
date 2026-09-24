@@ -4,11 +4,13 @@
 //! [`COOK_VERSION`], so a demo cooks each prop once per change of either.
 //!
 //! File format (`<name>-<key>.fmesh`, little-endian hosts): a header of
-//! `"FGMS"`, the format version, the key, the cook version, the element counts, the triangle
-//! counts and the bounding sphere; then the vertices, the meshlet records, the meshlet vertex
-//! indices, the meshlet triangle bytes and the clusters per level, each as raw `Pod` bytes.
-//! A file that does not match (another key, version or size) is ignored and cooked again;
-//! a new file is written beside the old name and renamed into place.
+//! `"FGMS"`, the format version, the key, the cook version, the element counts, the root
+//! pages, the triangle counts and the bounding sphere; then the meshlet records and the
+//! clusters per level as raw `Pod` bytes; then, from the next multiple of [`PAGE_ALIGN`],
+//! the pages (issue #36), so a page can be read on its own at
+//! `pages_offset + page * PAGE_SIZE`. A file that does not match (another key, version or
+//! size) is ignored and cooked again; a new file is written beside the old name and renamed
+//! into place.
 
 use std::fs;
 use std::io;
@@ -17,14 +19,18 @@ use std::time::Instant;
 
 use bytemuck::Pod;
 
-use crate::meshlet::{CookOptions, GpuMeshlet, GpuVertex, MeshletMesh};
+use crate::meshlet::{CookOptions, GpuMeshlet, MeshletMesh};
+use crate::page::PAGE_SIZE;
 use crate::procedural::TriMesh;
 
 /// Version of what cooking produces: bump it when the DAG builder, the meshlet format or
 /// meshoptimizer changes the output, so every cached mesh is cooked again.
-pub const COOK_VERSION: u32 = 1;
+pub const COOK_VERSION: u32 = 2;
 const MAGIC: [u8; 4] = *b"FGMS";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
+/// The pages start at a multiple of this in the file: a page read is then aligned for
+/// unbuffered I/O (sector and page sizes divide it).
+pub const PAGE_ALIGN: usize = 4096;
 
 /// FNV-1a over `bytes` (stable across platforms and runs).
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -58,22 +64,20 @@ fn encode(mesh: &MeshletMesh, key: u64) -> Vec<u8> {
     push_u32(&mut out, FORMAT_VERSION);
     push_u64(&mut out, key);
     push_u32(&mut out, COOK_VERSION);
-    push_u32(&mut out, mesh.vertices.len() as u32);
     push_u32(&mut out, mesh.meshlets.len() as u32);
-    push_u32(&mut out, mesh.meshlet_vertices.len() as u32);
-    push_u32(&mut out, mesh.meshlet_triangles.len() as u32);
     push_u32(&mut out, mesh.clusters_per_level.len() as u32);
+    push_u32(&mut out, mesh.page_count());
+    push_u32(&mut out, mesh.root_pages);
     push_u64(&mut out, mesh.triangle_count as u64);
     push_u64(&mut out, mesh.dag_triangle_count as u64);
     for c in mesh.center {
         out.extend_from_slice(&c.to_le_bytes());
     }
     out.extend_from_slice(&mesh.radius.to_le_bytes());
-    out.extend_from_slice(bytemuck::cast_slice(&mesh.vertices));
     out.extend_from_slice(bytemuck::cast_slice(&mesh.meshlets));
-    out.extend_from_slice(bytemuck::cast_slice(&mesh.meshlet_vertices));
-    out.extend_from_slice(&mesh.meshlet_triangles);
     out.extend_from_slice(bytemuck::cast_slice(&mesh.clusters_per_level));
+    out.resize(out.len().next_multiple_of(PAGE_ALIGN), 0);
+    out.extend_from_slice(&mesh.pages);
     out
 }
 
@@ -121,18 +125,20 @@ fn decode(bytes: &[u8], key: u64) -> Option<MeshletMesh> {
     if r.u32()? != COOK_VERSION {
         return None;
     }
-    let (vertices, meshlets, meshlet_vertices, triangles, levels) =
-        (r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?);
+    let (meshlets, levels, pages, root_pages) = (r.u32()?, r.u32()?, r.u32()?, r.u32()?);
     let triangle_count = r.u64()? as usize;
     let dag_triangle_count = r.u64()? as usize;
     let center = [r.f32()?, r.f32()?, r.f32()?];
     let radius = r.f32()?;
+    let meshlets = r.array::<GpuMeshlet>(meshlets)?;
+    let clusters_per_level = r.array::<u32>(levels)?;
+    let read = bytes.len() - r.bytes.len();
+    r.take(read.next_multiple_of(PAGE_ALIGN) - read)?;
     let mesh = MeshletMesh {
-        vertices: r.array::<GpuVertex>(vertices)?,
-        meshlets: r.array::<GpuMeshlet>(meshlets)?,
-        meshlet_vertices: r.array::<u32>(meshlet_vertices)?,
-        meshlet_triangles: r.array::<u8>(triangles)?,
-        clusters_per_level: r.array::<u32>(levels)?,
+        meshlets,
+        pages: r.array::<u8>(pages * PAGE_SIZE as u32)?,
+        root_pages,
+        clusters_per_level,
         triangle_count,
         dag_triangle_count,
         center,
@@ -243,17 +249,18 @@ mod tests {
     #[test]
     fn a_mesh_comes_back_as_it_went_in() {
         let mesh = small();
-        let back = decode(&encode(&mesh, 7), 7).expect("decodes");
-        assert_eq!(
-            bytemuck::cast_slice::<_, u8>(&back.vertices),
-            bytemuck::cast_slice::<_, u8>(&mesh.vertices)
-        );
+        let bytes = encode(&mesh, 7);
+        let back = decode(&bytes, 7).expect("decodes");
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&back.meshlets),
             bytemuck::cast_slice::<_, u8>(&mesh.meshlets)
         );
-        assert_eq!(back.meshlet_vertices, mesh.meshlet_vertices);
-        assert_eq!(back.meshlet_triangles, mesh.meshlet_triangles);
+        assert_eq!(back.pages, mesh.pages);
+        assert_eq!(back.root_pages, mesh.root_pages);
+        // The pages sit at an aligned offset, one after the other, at the end of the file.
+        let offset = bytes.len() - mesh.pages.len();
+        assert_eq!(offset % PAGE_ALIGN, 0);
+        assert_eq!(&bytes[offset..offset + PAGE_SIZE], &mesh.pages[..PAGE_SIZE]);
         assert_eq!(back.clusters_per_level, mesh.clusters_per_level);
         assert_eq!(back.triangle_count, mesh.triangle_count);
         assert_eq!(back.dag_triangle_count, mesh.dag_triangle_count);

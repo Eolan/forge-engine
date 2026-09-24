@@ -190,20 +190,43 @@ impl Terrain {
         let w = d * d * (3.0 - 2.0 * d);
         flat + (hills - flat) * w
     }
+
+    /// The heightfield: [`Terrain::height`] at sample `j × samples + i`, x = −size/2 +
+    /// i × spacing, z = −size/2 + j × spacing. The terrain mesh's vertices are these samples,
+    /// so what stands on the grid's heights stands on the drawn ground.
+    pub fn heights(&self) -> Vec<f32> {
+        let n = self.samples() as usize;
+        let mut heights = vec![0.0; n * n];
+        self.heights_into(0, &mut heights);
+        heights
+    }
+
+    /// Rows `first_row..` of [`Terrain::heights`] into `out` (whole rows), so that callers
+    /// can split the grid between threads.
+    pub fn heights_into(&self, first_row: u32, out: &mut [f32]) {
+        let n = self.samples() as usize;
+        let half = self.size * 0.5;
+        for (r, row) in out.chunks_exact_mut(n).enumerate() {
+            let z = -half + (first_row as usize + r) as f32 * self.spacing;
+            for (i, h) in row.iter_mut().enumerate() {
+                *h = self.height(-half + i as f32 * self.spacing, z);
+            }
+        }
+    }
 }
 
-/// The terrain as a grid mesh: vertex `j × samples + i` at x = −size/2 + i × spacing,
-/// z = −size/2 + j × spacing (the order cooking keeps, so the cooked vertices are the
-/// heightfield), two counter-clockwise triangles per cell seen from above.
+/// The terrain as a grid mesh: vertex `j × samples + i` at the sample of
+/// [`Terrain::heights`], two counter-clockwise triangles per cell seen from above.
 pub fn terrain_mesh(t: &Terrain) -> TriMesh {
     let n = t.samples();
     let half = t.size * 0.5;
     let mut mesh = TriMesh::default();
     mesh.positions.reserve((n * n) as usize);
+    let heights = t.heights();
     for j in 0..n {
         for i in 0..n {
             let (x, z) = (-half + i as f32 * t.spacing, -half + j as f32 * t.spacing);
-            mesh.positions.push([x, t.height(x, z), z]);
+            mesh.positions.push([x, heights[(j * n + i) as usize], z]);
         }
     }
     mesh.indices.reserve(((n - 1) * (n - 1) * 6) as usize);

@@ -23,13 +23,17 @@ import vis64;
 
 // ---------------------------------------------------------------- shared data ---
 
-public struct Vertex
+// A vertex in a cluster page (crates/forge-geom/src/page.rs): the exact object-space
+// position and a 16-bit octahedral normal (`decode_normal`).
+public struct PagedVertex
 {
     public float3 position;
-    public float pad0;
-    public float3 normal;
-    public float pad1;
+    public uint normal;
 };
+
+// Bytes per cluster page (forge_geom::PAGE_SIZE) and per paged vertex.
+static const uint PAGE_SIZE = 131072;
+static const uint PAGED_VERTEX_BYTES = 16;
 
 // One cluster of at most 64 vertices / 124 triangles (meshoptimizer output).
 public struct Meshlet
@@ -39,11 +43,11 @@ public struct Meshlet
     public float3 cone_apex;   // normal cone, object space (meshoptimizer)
     public float cone_cutoff;
     public float3 cone_axis;
-    public uint vertex_offset;   // into `meshlet_vertices`
-    public uint triangle_offset; // into `meshlet_triangles`, in bytes (3 per triangle)
+    public uint page;            // the page holding the payload (an index into `page_table`)
+    public uint payload;         // bytes into the page: the vertices, then 3-byte triangles
     public uint vertex_count;
     public uint triangle_count;
-    public uint pad;
+    public uint child_page;      // the page of the clusters this one is refined into (none at level 0)
     // Cluster LOD DAG (crates/forge-geom/src/lod.rs): the sphere and error of the group this
     // cluster came from (`self`) and of the group that simplified it away (`parent`; an
     // infinite error marks a root). Draw when project(parent) > threshold >= project(self).
@@ -167,10 +171,9 @@ public struct Frame
     public float2 draw_jitter;      // where the drawn image sits relative to the culling camera (uv, y down)
     public float lod_threshold;     // pixels of projected error a drawn cluster may have
     public float viewport_height;   // pixels
-    public Vertex* vertices;
+    public uint* pool;              // the resident cluster pages, `PAGE_SIZE` bytes each (see `payload_base`)
     public Meshlet* meshlets;
-    public uint* meshlet_vertices;
-    public uint* meshlet_triangles; // bytes packed four per uint
+    public uint* page_table;        // per page of the scene, its slot in `pool`
     public Mesh* meshes;
     public Instance* instances;
     public uint* stats;
@@ -216,6 +219,35 @@ Push push;
 uint load_byte(uint* words, uint byte_index)
 {
     return (words[byte_index >> 2] >> ((byte_index & 3) * 8)) & 0xFF;
+}
+
+// Where cluster `m`'s payload lies in the pool, in bytes: its page's slot, then its offset.
+uint payload_base(Frame* f, Meshlet m)
+{
+    return f[0].page_table[m.page] * PAGE_SIZE + m.payload;
+}
+
+// Vertex `i` of the payload at `base`.
+PagedVertex paged_vertex(Frame* f, uint base, uint i)
+{
+    return ((PagedVertex*)f[0].pool)[base / PAGED_VERTEX_BYTES + i];
+}
+
+// Local vertex index `k` (0..2) of triangle `t` of cluster `m`, whose payload is at `base`.
+uint paged_index(Frame* f, uint base, Meshlet m, uint t, uint k)
+{
+    return load_byte(f[0].pool, base + m.vertex_count * PAGED_VERTEX_BYTES + t * 3 + k);
+}
+
+// The 16-bit octahedral normal of a paged vertex (forge_geom::page::decode_normal).
+float3 decode_normal(uint e)
+{
+    float2 o = clamp(float2(float(int(e << 16) >> 16), float(int(e) >> 16)) / 32767.0, -1.0, 1.0);
+    float3 n = float3(o, 1.0 - abs(o.x) - abs(o.y));
+    float t = max(-n.z, 0.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
 }
 
 bool sphere_in_frustum(Frame* f, float3 center, float radius)
@@ -443,8 +475,8 @@ struct ClusterVerdict
     uint instance;
     uint meshlet;      // global meshlet index
     uint triangle_count;
-    uint triangle_offset;
-    uint vertex_offset;
+    uint vertex_count;
+    uint payload;      // where its payload lies in the pool, in bytes (`payload_base`)
     uint lod_level;
 };
 
@@ -511,8 +543,8 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
     v.meshlet = mesh[0].meshlet_offset + local_meshlet;
     Meshlet m = f[0].meshlets[v.meshlet];
     v.triangle_count = m.triangle_count;
-    v.triangle_offset = m.triangle_offset;
-    v.vertex_offset = m.vertex_offset;
+    v.vertex_count = m.vertex_count;
+    v.payload = payload_base(f, m);
     v.lod_level = m.lod_level;
     float3 center = mul(inst[0].model, float4(m.center, 1)).xyz;
     float world_radius = m.radius * scale;
@@ -844,14 +876,14 @@ void cluster_cull_main(uint thread : SV_GroupThreadID)
     f[0].raster[hw_index] = slot;
     if (f[0].draws != nullptr)
     {
-        // VkDrawIndexedIndirectCommand: the cluster's triangles straight from the cooked
-        // one-byte lists (the index buffer), its window of `meshlet_vertices` as the vertex
-        // offset, one instance, and its list slot as the first instance.
+        // VkDrawIndexedIndirectCommand: the cluster's triangles straight from its page (the
+        // pool is the index buffer, one-byte indices), its first vertex in the pool as the
+        // vertex offset, one instance, and its list slot as the first instance.
         uint* draw = f[0].draws + hw_index * 5;
         draw[0] = v.triangle_count * 3;
         draw[1] = 1;
-        draw[2] = v.triangle_offset;
-        draw[3] = v.vertex_offset;
+        draw[2] = v.payload + v.vertex_count * PAGED_VERTEX_BYTES;
+        draw[3] = v.payload / PAGED_VERTEX_BYTES;
         draw[4] = slot;
     }
 }
@@ -1055,22 +1087,18 @@ void mesh_main(
     Instance inst = f[0].instances[record.x];
 
     SetMeshOutputCounts(m.vertex_count, m.triangle_count);
+    uint base = payload_base(f, m);
 
     if (thread < m.vertex_count)
     {
-        uint vertex_index = f[0].meshlet_vertices[m.vertex_offset + thread];
-        Vertex v = f[0].vertices[vertex_index];
+        PagedVertex v = paged_vertex(f, base, thread);
         float4 world = mul(inst.model, float4(v.position, 1));
         verts[thread].position = mul(f[0].view_proj, world);
     }
 
     for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
     {
-        uint base = m.triangle_offset + t * 3;
-        tris[t] = uint3(
-            load_byte(f[0].meshlet_triangles, base),
-            load_byte(f[0].meshlet_triangles, base + 1),
-            load_byte(f[0].meshlet_triangles, base + 2));
+        tris[t] = uint3(paged_index(f, base, m, t, 0), paged_index(f, base, m, t, 1), paged_index(f, base, m, t, 2));
         prims[t].id = (slot << VISIBILITY_TRIANGLE_BITS) | t;
     }
 }
@@ -1078,9 +1106,9 @@ void mesh_main(
 // ---------------------------------------------------------- vertex fallback ---
 
 // Without mesh shaders every cluster is one indexed draw of `vkCmdDrawIndexedIndirectCount`
-// (the command `cluster_cull_main` wrote): the index buffer is the cooked one-byte triangle
-// lists, so an index plus the draw's vertex offset (the cluster's `vertex_offset`) is a
-// position in `meshlet_vertices`, and the first instance is the cluster's slot in the
+// (the command `cluster_cull_main` wrote): the index buffer is the pool of cluster pages,
+// whose one-byte local indices plus the draw's vertex offset (the cluster's first vertex in
+// the pool) index the pool's vertices, and the first instance is the cluster's slot in the
 // visible-cluster list. The raw Vulkan builtins are used: Slang's `SV_VertexID` and
 // `SV_InstanceID` subtract the base vertex and instance (the D3D meaning).
 struct FallbackVertex
@@ -1095,7 +1123,7 @@ FallbackVertex vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV
     Frame* f = push.frame;
     uint2 record = f[0].visible[slot];
     Instance inst = f[0].instances[record.x];
-    Vertex v = f[0].vertices[f[0].meshlet_vertices[vertex_index]];
+    PagedVertex v = paged_vertex(f, 0, vertex_index);
     float4 world = mul(inst.model, float4(v.position, 1));
     FallbackVertex o;
     o.position = mul(f[0].view_proj, world);
@@ -1268,12 +1296,12 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
     uint2 record = f[0].visible[slot];
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
     Instance inst = f[0].instances[record.x];
+    uint base = payload_base(f, m);
     if (thread < m.vertex_count)
     {
         // The mesh shader's transform, then the fixed-function steps: perspective division,
         // the viewport of `set_viewport_full` (y flipped) and the snap to sub-pixels.
-        uint vertex_index = f[0].meshlet_vertices[m.vertex_offset + thread];
-        Vertex v = f[0].vertices[vertex_index];
+        PagedVertex v = paged_vertex(f, base, thread);
         float4 world = mul(inst.model, float4(v.position, 1));
         float4 clip = mul(f[0].view_proj, world);
         float3 ndc = clip.xyz / clip.w;
@@ -1286,11 +1314,10 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
     uint id_base = slot << VISIBILITY_TRIANGLE_BITS;
     for (uint t = thread; t < m.triangle_count; t += SW_RASTER_GROUP)
     {
-        uint base = m.triangle_offset + t * 3;
         rasterise_triangle(f,
-            load_byte(f[0].meshlet_triangles, base),
-            load_byte(f[0].meshlet_triangles, base + 1),
-            load_byte(f[0].meshlet_triangles, base + 2),
+            paged_index(f, base, m, t, 0),
+            paged_index(f, base, m, t, 1),
+            paged_index(f, base, m, t, 2),
             id_base | t);
     }
 }
@@ -1423,22 +1450,19 @@ void resolve_main(uint3 id : SV_DispatchThreadID)
     bool software = (record.y & SOFTWARE_BIT) != 0;
     Meshlet m = f[0].meshlets[meshlet_index];
     Instance inst = f[0].instances[record.x];
-    uint base = m.triangle_offset + tri * 3;
-    uint i0 = f[0].meshlet_vertices[m.vertex_offset + load_byte(f[0].meshlet_triangles, base)];
-    uint i1 = f[0].meshlet_vertices[m.vertex_offset + load_byte(f[0].meshlet_triangles, base + 1)];
-    uint i2 = f[0].meshlet_vertices[m.vertex_offset + load_byte(f[0].meshlet_triangles, base + 2)];
-    Vertex v0 = f[0].vertices[i0];
-    Vertex v1 = f[0].vertices[i1];
-    Vertex v2 = f[0].vertices[i2];
+    uint base = payload_base(f, m);
+    PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
+    PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
+    PagedVertex v2 = paged_vertex(f, base, paged_index(f, base, m, tri, 2));
     float4 c0 = mul(f[0].view_proj, mul(inst.model, float4(v0.position, 1)));
     float4 c1 = mul(f[0].view_proj, mul(inst.model, float4(v1.position, 1)));
     float4 c2 = mul(f[0].view_proj, mul(inst.model, float4(v2.position, 1)));
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
     float2 ndc = float2((float(id.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(id.y) + 0.5) / size.y * 2.0);
     Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
-    float3 n0 = normalize(mul(inst.model, float4(v0.normal, 0)).xyz);
-    float3 n1 = normalize(mul(inst.model, float4(v1.normal, 0)).xyz);
-    float3 n2 = normalize(mul(inst.model, float4(v2.normal, 0)).xyz);
+    float3 n0 = normalize(mul(inst.model, float4(decode_normal(v0.normal), 0)).xyz);
+    float3 n1 = normalize(mul(inst.model, float4(decode_normal(v1.normal), 0)).xyz);
+    float3 n2 = normalize(mul(inst.model, float4(decode_normal(v2.normal), 0)).xyz);
     float3 n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     // `shade` works in units of a white Lambertian surface facing the sun; the frame stores

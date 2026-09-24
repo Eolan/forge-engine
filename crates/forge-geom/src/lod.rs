@@ -16,6 +16,9 @@
 //!
 //! Vertices are shared across levels (simplification only drops indices), so the vertex
 //! buffer is the original one; only the index tables grow (about twice the leaf count).
+//! Every cluster also records the group it is a member of and the group that produced it:
+//! the page packer (`crate::page`) keeps each group in one page and points a cluster at the
+//! page of its children.
 
 use meshopt::{PositionDataAdapter, RadiusDataAdapter, SimplifyOptions, VertexDataAdapter};
 
@@ -30,22 +33,46 @@ pub const MAX_LEVELS: u32 = 16;
 /// stalled; its clusters become roots.
 const STALL_RATIO: f32 = 0.85;
 
-/// The DAG's cluster tables, in the flat layout the GPU reads.
+/// The DAG's clusters: their GPU records (without their page placement, see
+/// [`crate::page`]), where their vertices and triangles lie in the two index tables, and
+/// the groups they belong to.
 pub struct ClusterDag {
     /// Every cluster of every level.
     pub meshlets: Vec<GpuMeshlet>,
+    /// Per cluster: its window of `meshlet_vertices` and `meshlet_triangles`.
+    pub ranges: Vec<ClusterRange>,
     /// Global vertex indices, per cluster.
     pub meshlet_vertices: Vec<u32>,
     /// Local triangle indices (3 bytes each).
     pub meshlet_triangles: Vec<u8>,
+    /// Per cluster: the group it is a member of ([`NO_GROUP`] when it was never grouped:
+    /// the last cluster, or the level cap).
+    pub cluster_group: Vec<u32>,
+    /// Per cluster: the group whose simplification produced it ([`NO_GROUP`] at level 0).
+    pub cluster_source: Vec<u32>,
     /// Clusters per level.
     pub clusters_per_level: Vec<u32>,
     /// Triangles over all levels.
     pub triangle_count: usize,
 }
 
+/// No group (see [`ClusterDag::cluster_group`]).
+pub const NO_GROUP: u32 = u32::MAX;
+
+/// Where one cluster's data lies in the DAG's index tables.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ClusterRange {
+    /// First entry in `meshlet_vertices`.
+    pub vertex_offset: u32,
+    /// First byte in `meshlet_triangles`.
+    pub triangle_offset: u32,
+}
+
 struct Record {
     gpu: GpuMeshlet,
+    range: ClusterRange,
+    group: u32,
+    source: u32,
     /// Global vertex indices of the cluster's triangles (needed to merge and partition).
     indices: Vec<u32>,
 }
@@ -56,8 +83,11 @@ struct Record {
 pub fn build_dag(indices: &[u32], vertices: &[GpuVertex], normal_weight: f32) -> ClusterDag {
     let mut dag = ClusterDag {
         meshlets: Vec::new(),
+        ranges: Vec::new(),
         meshlet_vertices: Vec::new(),
         meshlet_triangles: Vec::new(),
+        cluster_group: Vec::new(),
+        cluster_source: Vec::new(),
         clusters_per_level: Vec::new(),
         triangle_count: 0,
     };
@@ -79,6 +109,7 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex], normal_weight: f32) ->
     dag.clusters_per_level.push(current.len() as u32);
 
     let mut level = 1;
+    let mut group_id = 0_u32;
     while current.len() > 1 && level < MAX_LEVELS {
         // Partition the level's clusters into spatial groups.
         let cluster_indices: Vec<u32> = current
@@ -120,6 +151,11 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex], normal_weight: f32) ->
         let mut next = Vec::new();
         let mut progressed = false;
         for members in groups.iter().filter(|m| !m.is_empty()) {
+            let group = group_id;
+            group_id += 1;
+            for &c in members {
+                records[c].group = group;
+            }
             let merged: Vec<u32> = members
                 .iter()
                 .flat_map(|&c| records[c].indices.iter().copied())
@@ -182,7 +218,7 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex], normal_weight: f32) ->
                 records[c].gpu.parent_radius = sphere.1;
                 records[c].gpu.parent_error = error;
             }
-            next.extend(emit_clusters(
+            let produced = emit_clusters(
                 &mut dag,
                 &mut records,
                 &subset,
@@ -190,7 +226,11 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex], normal_weight: f32) ->
                 level,
                 sphere,
                 error,
-            ));
+            );
+            for &c in &produced {
+                records[c].source = group;
+            }
+            next.extend(produced);
         }
         if !progressed {
             break;
@@ -207,7 +247,12 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex], normal_weight: f32) ->
             record.gpu.parent_radius = record.gpu.self_radius;
         }
     }
-    dag.meshlets = records.into_iter().map(|r| r.gpu).collect();
+    for record in records {
+        dag.meshlets.push(record.gpu);
+        dag.ranges.push(record.range);
+        dag.cluster_group.push(record.group);
+        dag.cluster_source.push(record.source);
+    }
     while !dag.meshlet_triangles.len().is_multiple_of(4) {
         dag.meshlet_triangles.push(0);
     }
@@ -327,11 +372,11 @@ fn emit_clusters(
             cone_apex: bounds.cone_apex,
             cone_cutoff: bounds.cone_cutoff,
             cone_axis: bounds.cone_axis,
-            vertex_offset,
-            triangle_offset,
+            page: 0,
+            payload: 0,
             vertex_count: raw.vertex_count,
             triangle_count: raw.triangle_count,
-            pad: 0,
+            child_page: crate::page::PAGE_NONE,
             self_center,
             self_radius,
             parent_center: [0.0; 3],
@@ -344,6 +389,12 @@ fn emit_clusters(
         ids.push(records.len());
         records.push(Record {
             gpu,
+            range: ClusterRange {
+                vertex_offset,
+                triangle_offset,
+            },
+            group: NO_GROUP,
+            source: NO_GROUP,
             indices: global,
         });
     }

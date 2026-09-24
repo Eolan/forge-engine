@@ -358,7 +358,7 @@ fn build_scene(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         .sum::<f64>()
         / built.meshlets.len().max(1) as f64;
     tracing::info!(
-        vertices = built.vertices.len(),
+        pages = built.page_count(),
         triangles = built.triangle_count,
         meshlets = built.meshlets.len(),
         cone_cullable_pct = (cullable as f64 * 100.0 / built.meshlets.len().max(1) as f64).round(),

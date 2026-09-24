@@ -14,7 +14,7 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use forge_geom::{GpuMeshlet, GpuVertex, MeshletMesh};
+use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, FullscreenPipelineDesc, GraphBuffer, GraphImage, ImageAccess, ImageDesc,
@@ -217,10 +217,11 @@ struct GpuFrame {
     draw_jitter: [f32; 2],
     lod_threshold: f32,
     viewport_height: f32,
-    vertices: u64,
+    /// The resident cluster pages.
+    pool: u64,
     meshlets: u64,
-    meshlet_vertices: u64,
-    meshlet_triangles: u64,
+    /// Per page of the scene, its slot in `pool`.
+    page_table: u64,
     meshes: u64,
     instances: u64,
     stats: u64,
@@ -408,10 +409,9 @@ impl MeshId {
 /// Concatenates meshes and instances into the GPU tables.
 #[derive(Default)]
 pub struct MeshletSceneBuilder {
-    vertices: Vec<GpuVertex>,
     meshlets: Vec<GpuMeshlet>,
-    meshlet_vertices: Vec<u32>,
-    meshlet_triangles: Vec<u8>,
+    /// Every mesh's cluster pages, one after the other.
+    pages: Vec<u8>,
     meshes: Vec<GpuMesh>,
     instances: Vec<GpuInstance>,
     total_triangles: u64,
@@ -431,24 +431,19 @@ impl MeshletSceneBuilder {
         Self::default()
     }
 
-    /// Appends a mesh; offsets are rebased into the shared tables.
+    /// Appends a mesh; its pages are rebased into the scene's page table.
     pub fn add_mesh(&mut self, mesh: &MeshletMesh) -> MeshId {
-        let vertex_base = self.vertices.len() as u32;
-        let meshlet_vertex_base = self.meshlet_vertices.len() as u32;
-        while !self.meshlet_triangles.len().is_multiple_of(4) {
-            self.meshlet_triangles.push(0);
-        }
-        let triangle_base = self.meshlet_triangles.len() as u32;
+        let page_base = (self.pages.len() / PAGE_SIZE) as u32;
         let meshlet_offset = self.meshlets.len() as u32;
-        self.vertices.extend_from_slice(&mesh.vertices);
-        self.meshlet_vertices
-            .extend(mesh.meshlet_vertices.iter().map(|v| v + vertex_base));
-        self.meshlet_triangles
-            .extend_from_slice(&mesh.meshlet_triangles);
+        self.pages.extend_from_slice(&mesh.pages);
         self.meshlets
             .extend(mesh.meshlets.iter().map(|m| GpuMeshlet {
-                vertex_offset: m.vertex_offset + meshlet_vertex_base,
-                triangle_offset: m.triangle_offset + triangle_base,
+                page: m.page + page_base,
+                child_page: if m.child_page == PAGE_NONE {
+                    PAGE_NONE
+                } else {
+                    m.child_page + page_base
+                },
                 ..*m
             }));
         let id = MeshId(self.meshes.len() as u32);
@@ -567,11 +562,16 @@ impl MeshletSceneBuilder {
         first
     }
 
-    /// Uploads everything.
-    pub fn build(mut self, device: &Arc<Device>) -> Result<MeshletScene> {
-        while !self.meshlet_triangles.len().is_multiple_of(4) {
-            self.meshlet_triangles.push(0);
-        }
+    /// Uploads everything: every page resident, each in the slot of its own index.
+    pub fn build(self, device: &Arc<Device>) -> Result<MeshletScene> {
+        let page_count = (self.pages.len() / PAGE_SIZE) as u32;
+        // The shaders address the pool in 32-bit bytes (`payload_base`).
+        assert!(
+            (self.pages.len() as u64) < (1 << 32),
+            "{} MiB of pages exceed what the shaders address",
+            self.pages.len() >> 20
+        );
+        let page_table: Vec<u32> = (0..page_count.max(1)).collect();
         let max_meshlets = self
             .meshes
             .iter()
@@ -580,11 +580,12 @@ impl MeshletSceneBuilder {
             .unwrap_or(0);
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
         Ok(MeshletScene {
-            vertices: device.create_buffer_with_data(
-                &self.vertices,
-                usage,
+            // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
+            pool: device.create_buffer_with_data(
+                &self.pages,
+                usage | vk::BufferUsageFlags::INDEX_BUFFER,
                 MemoryCategory::Geometry,
-                "meshlet vertices",
+                "cluster pages",
             )?,
             meshlets: device.create_buffer_with_data(
                 &self.meshlets,
@@ -592,19 +593,13 @@ impl MeshletSceneBuilder {
                 MemoryCategory::Geometry,
                 "meshlets",
             )?,
-            meshlet_vertices: device.create_buffer_with_data(
-                &self.meshlet_vertices,
+            page_table: device.create_buffer_with_data(
+                &page_table,
                 usage,
                 MemoryCategory::Geometry,
-                "meshlet vertex indices",
+                "page table",
             )?,
-            // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
-            meshlet_triangles: device.create_buffer_with_data(
-                &self.meshlet_triangles,
-                usage | vk::BufferUsageFlags::INDEX_BUFFER,
-                MemoryCategory::Geometry,
-                "meshlet triangles",
-            )?,
+            page_count,
             meshes: device.create_buffer_with_data(
                 &self.meshes,
                 usage,
@@ -672,10 +667,13 @@ impl MeshletSceneBuilder {
 
 /// The uploaded scene tables.
 pub struct MeshletScene {
-    vertices: Buffer,
+    /// The cluster pages (all of them: every page resident in the slot of its index).
+    pool: Buffer,
     meshlets: Buffer,
-    meshlet_vertices: Buffer,
-    meshlet_triangles: Buffer,
+    /// Per page, its slot in `pool`.
+    page_table: Buffer,
+    /// Pages over all meshes.
+    pub page_count: u32,
     meshes: Buffer,
     instances: Buffer,
     /// Per frame slot: the cluster cull's indirect grid (x, y, 1, work item count), then the
@@ -1596,10 +1594,9 @@ impl MeshletRenderer {
             draw_jitter: params.draw_jitter.to_array(),
             lod_threshold: params.lod_threshold_px,
             viewport_height: params.extent.height as f32,
-            vertices: scene.vertices.address(),
+            pool: scene.pool.address(),
             meshlets: scene.meshlets.address(),
-            meshlet_vertices: scene.meshlet_vertices.address(),
-            meshlet_triangles: scene.meshlet_triangles.address(),
+            page_table: scene.page_table.address(),
             meshes: scene.meshes.address(),
             instances: scene.instances.address(),
             stats: self.stats.address(),
@@ -1973,7 +1970,7 @@ impl MeshletRenderer {
             &self.pipeline_solid
         };
         let clusters: &'f GraphBuffer = &params.scene.clusters[slot.index];
-        let triangles: &'f Buffer = &params.scene.meshlet_triangles;
+        let triangles: &'f Buffer = &params.scene.pool;
         let draws: Option<&'f GraphBuffer> = self.lists[slot.index].draws.as_ref();
         let capacity = self.lists[slot.index].capacity;
         let extent = params.extent;
