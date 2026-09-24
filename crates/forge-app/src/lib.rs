@@ -24,9 +24,9 @@ pub use forge_gpu::TransientDesc;
 /// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
 pub use forge_gpu::vk;
 use forge_gpu::{
-    Buffer, BufferDesc, Commands, Device, DeviceOptions, FrameGraph, FrameSlot, Frames, GraphStats,
-    ImageAccess, ImageHandle, Instance, MemoryCategory, MemoryLocation, RawImage, RenderGraph,
-    ResourceState, ShaderCompiler, Surface, Swapchain,
+    Buffer, BufferAccess, BufferDesc, Commands, Device, DeviceOptions, FrameGraph, FrameSlot,
+    Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance, MemoryCategory,
+    MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface, Swapchain,
 };
 pub use input::Input;
 pub use overlay::{Canvas, Color, Overlay};
@@ -205,6 +205,9 @@ pub fn run<D: Demo>(
         }
         if let Some(gpu) = state.ctx.profile.gpu_run_summary() {
             tracing::info!("gpu: {gpu}");
+        }
+        if let Some(cpu) = state.ctx.profile.cpu_run_summary() {
+            tracing::info!("cpu: {cpu}");
         }
         drop(state);
         tracing::info!(frames, "exited cleanly");
@@ -579,7 +582,7 @@ impl<D: Demo> State<D> {
                     category: MemoryCategory::Transfer,
                     name: "capture",
                 })?;
-                Ok::<_, forge_gpu::GpuError>((path, buffer))
+                Ok::<_, forge_gpu::GpuError>((path, GraphBuffer::new(buffer)))
             })
             .transpose()?;
 
@@ -623,14 +626,23 @@ impl<D: Demo> State<D> {
                     .draw(&mut frame.graph, slot.index, target, extent);
             }
             if let Some((_, buffer)) = &capture {
+                // The copy, then the host read after the wait below: declared, so the
+                // device's writes are made visible to the host.
+                let handle = frame.graph.import_buffer(buffer);
                 frame
                     .graph
                     .pass("app/capture")
                     .image(target, ImageAccess::TransferSrc)
+                    .buffer(handle, BufferAccess::TransferDst)
                     .run(move |resources, commands| {
                         commands.copy_image_to_buffer(resources.image(target).raw, extent, buffer);
                         Ok(())
                     });
+                frame
+                    .graph
+                    .pass("app/capture")
+                    .buffer(handle, BufferAccess::HostRead)
+                    .run(|_, _| Ok(()));
             }
             frame
                 .graph

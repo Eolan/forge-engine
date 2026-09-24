@@ -10,7 +10,8 @@ first timestamp waits for all earlier commands so the first zone does not absorb
 frame's tail. CPU zones are wall-clock spans of the main-thread frame loop. Frames overlap on
 the GPU (two in flight), so the per-pass sum can exceed the wall-clock frame: the frame time
 is the truth, the zones are the split. With `--features profiling` the same GPU zones appear
-in Tracy's GPU timeline next to the CPU zones.
+in Tracy's GPU timeline next to the CPU zones. At exit every demo logs the GPU zones (`gpu:`)
+and the CPU zones (`cpu:`) averaged over the whole run, unsmoothed, and the memory counters.
 
 Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24.
 
@@ -22,7 +23,10 @@ same day, 0.360 through the indirect-count fallback; 0.325 before issue #5, 0.31
 the atmosphere, 0.30 before the exposure histogram, 0.27 with the rocks shaded in the mesh
 passes, 0.33 with the sky drawn first, 0.34 before the graph) and 0.34 ms facing the planet
 (`--look`). GPU zones sum to 0.36 ms with the overlay and the capture copy in the frame;
-CPU main thread 0.20 ms of work (record 0.10, submit + present 0.10). Every zone below is a
+CPU main thread 0.18 ms of work (record 0.08, submit + present 0.10; the exit log's `cpu:`
+line over 20 000 frames). Issue #21 moved the meshlet statistics into device memory, copied
+into a host-cached readback, and declared that read and the capture's as host reads in the
+graph: record 0.076–0.079 ms before, 0.078–0.079 after (meshlets 0.047–0.049 both). Every zone below is a
 graph pass; the graph's own counters are the first line of the COUNTERS block, the
 exposure (EV100, target, compensation, curve) the last.
 

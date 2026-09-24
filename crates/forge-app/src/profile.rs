@@ -101,6 +101,9 @@ pub struct Profile {
     run_gpu: Vec<(String, f64)>,
     /// Frames whose GPU zones were summed.
     run_frames: u64,
+    /// CPU milliseconds per zone summed over the run, with the number of samples, in the
+    /// order the frame loop first reported them.
+    run_cpu: Vec<(String, f64, u64)>,
 }
 
 impl Profile {
@@ -115,6 +118,7 @@ impl Profile {
             toggled: Vec::new(),
             run_gpu: Vec::new(),
             run_frames: 0,
+            run_cpu: Vec::new(),
         }
     }
 
@@ -133,6 +137,27 @@ impl Profile {
         zones.sort_by(|a, b| b.1.total_cmp(&a.1));
         let total: f64 = zones.iter().map(|z| z.1).sum();
         let mut line = format!("{total:.3} ms per frame over {} frames:", self.run_frames);
+        for (label, ms) in zones {
+            line += &format!(" {label} {ms:.3},");
+        }
+        line.pop();
+        Some(line)
+    }
+
+    /// The CPU zones of the frame loop averaged over the run, in frame order: the exit log's
+    /// companion to [`Profile::gpu_run_summary`].
+    pub fn cpu_run_summary(&self) -> Option<String> {
+        if self.run_cpu.is_empty() {
+            return None;
+        }
+        let zones: Vec<(&str, f64)> = self
+            .run_cpu
+            .iter()
+            .map(|(label, sum, n)| (label.as_str(), sum / *n as f64))
+            .collect();
+        let total: f64 = zones.iter().map(|z| z.1).sum();
+        let frames = self.run_cpu.iter().map(|z| z.2).max().unwrap_or(0);
+        let mut line = format!("{total:.3} ms per frame over {frames} frames:");
         for (label, ms) in zones {
             line += &format!(" {label} {ms:.3},");
         }
@@ -193,6 +218,13 @@ impl Profile {
 
     pub(crate) fn cpu_zone(&mut self, label: &'static str, ms: f64) {
         upsert(&mut self.cpu, label, ms);
+        match self.run_cpu.iter_mut().find(|(l, _, _)| l == label) {
+            Some((_, sum, n)) => {
+                *sum += ms;
+                *n += 1;
+            }
+            None => self.run_cpu.push((label.to_owned(), ms, 1)),
+        }
     }
 
     pub(crate) fn gpu_zones(&mut self, zones: &[GpuZone]) {
@@ -618,6 +650,20 @@ mod tests {
         assert_eq!(
             profile.gpu_run_summary().as_deref(),
             Some("0.350 ms per frame over 2 frames: geometry/cull 0.300, shading/resolve 0.050")
+        );
+    }
+
+    #[test]
+    fn the_cpu_run_summary_averages_each_zone_in_frame_order() {
+        let mut profile = Profile::new(OverlayMode::Off);
+        assert_eq!(profile.cpu_run_summary(), None);
+        profile.cpu_zone("cpu/update", 0.2);
+        profile.cpu_zone("cpu/record commands", 0.1);
+        profile.cpu_zone("cpu/update", 0.4);
+        profile.cpu_zone("cpu/record commands", 0.3);
+        assert_eq!(
+            profile.cpu_run_summary().as_deref(),
+            Some("0.500 ms per frame over 2 frames: cpu/update 0.300, cpu/record commands 0.200")
         );
     }
 

@@ -62,6 +62,7 @@ const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
 const STAT_COUNT: usize = 8;
+const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
 const FRAME_BLOCK_STRIDE: u64 = 512;
@@ -698,7 +699,10 @@ pub struct MeshletRenderer {
     pipeline_resolve: Pipeline,
     hzb: GraphImage,
     frame_buffers: Vec<Buffer>,
-    stats_buffers: Vec<GraphBuffer>,
+    /// The per-frame counters (`FrameStats`): cleared and counted on the GPU in device-local
+    /// memory, then copied into this frame slot's host-cached readback.
+    stats: GraphBuffer,
+    stats_readback: Vec<GraphBuffer>,
     /// Per frame slot: the visible-cluster list and, on the fallback path, its draw commands.
     lists: Vec<VisibleList>,
     /// Slots every frame slot's list grows to (see [`MeshletRenderer::begin_frame`]).
@@ -756,6 +760,8 @@ struct MeshPassIo {
     /// The visible-cluster list of this frame slot.
     visible: forge_gpu::BufferHandle,
     stats: forge_gpu::BufferHandle,
+    /// This frame slot's copy of the counters for the host.
+    stats_readback: forge_gpu::BufferHandle,
 }
 
 impl MeshletRenderer {
@@ -880,14 +886,25 @@ impl MeshletRenderer {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let stats_buffers = (0..FRAMES_IN_FLIGHT)
+        // The culls count with atomics in device-local memory; the host reads a copy in cached
+        // memory (reading host-visible video memory through Resizable BAR is slow for the CPU).
+        let stats = GraphBuffer::new(device.create_buffer(BufferDesc {
+            size: STATS_BYTES,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: "meshlet stats",
+        })?);
+        let stats_readback = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 let b = device.create_buffer(BufferDesc {
-                    size: (STAT_COUNT * 4) as u64,
-                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-                    location: MemoryLocation::CpuToGpu,
+                    size: STATS_BYTES,
+                    usage: vk::BufferUsageFlags::TRANSFER_DST,
+                    location: MemoryLocation::GpuToCpu,
                     category: MemoryCategory::Transfer,
-                    name: &format!("meshlet stats {i}"),
+                    name: &format!("meshlet stats readback {i}"),
                 })?;
                 b.write(0, &[0_u32; STAT_COUNT]);
                 Ok(GraphBuffer::new(b))
@@ -919,7 +936,8 @@ impl MeshletRenderer {
             pipeline_resolve,
             hzb,
             frame_buffers,
-            stats_buffers,
+            stats,
+            stats_readback,
             lists,
             visible_target,
             visible_max,
@@ -970,8 +988,10 @@ impl MeshletRenderer {
     /// until then (two or three).
     pub fn begin_frame(&mut self, slot: FrameSlot) -> Result<Option<FrameStats>> {
         let mut raw = [0_u32; STAT_COUNT];
-        self.stats_buffers[slot.index].read(0, &mut raw);
-        self.stats_buffers[slot.index].write(0, &[0_u32; STAT_COUNT]);
+        // Declared `HostRead` by the frame that wrote it (its commands have completed); cleared
+        // so that a frame which draws nothing reads as zero.
+        self.stats_readback[slot.index].read(0, &mut raw);
+        self.stats_readback[slot.index].write(0, &[0_u32; STAT_COUNT]);
         let stats = (slot.frame_number >= FRAMES_IN_FLIGHT as u64).then_some(FrameStats {
             meshlets_pass1: raw[0],
             meshlets_pass2: raw[1],
@@ -1034,7 +1054,7 @@ impl MeshletRenderer {
             meshlet_triangles: scene.meshlet_triangles.address(),
             meshes: scene.meshes.address(),
             instances: scene.instances.address(),
-            stats: self.stats_buffers[slot.index].address(),
+            stats: self.stats.address(),
             visibility: scene.visibility.address(),
             total_groups: scene.total_groups,
             pad_end: 0,
@@ -1116,7 +1136,8 @@ impl MeshletRenderer {
                 .map(|b| graph.import_buffer(b)),
             visibility_bits: graph.import_buffer(&scene.visibility),
             visible: graph.import_buffer(&self.lists[slot.index].visible),
-            stats: graph.import_buffer(&self.stats_buffers[slot.index]),
+            stats: graph.import_buffer(&self.stats),
+            stats_readback: graph.import_buffer(&self.stats_readback[slot.index]),
         };
         let frame_address = self.frame_buffers[slot.index].address();
 
@@ -1126,12 +1147,15 @@ impl MeshletRenderer {
         let cull_pipeline = &self.pipeline_cull;
         let instance_groups = scene.instance_count.div_ceil(64).max(1);
         let lookback: &'f GraphBuffer = &scene.lookback[slot.index];
+        let stats: &'f GraphBuffer = &self.stats;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         graph
             .pass("geometry/instance cull")
             .buffer(io.lookback, BufferAccess::TransferDst)
+            .buffer(io.stats, BufferAccess::TransferDst)
             .run(move |_, commands| {
                 commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 4, 0);
+                commands.fill_buffer(stats, 0, STATS_BYTES, 0);
                 Ok(())
             });
         graph
@@ -1139,7 +1163,7 @@ impl MeshletRenderer {
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
-            .buffer(io.stats, BufferAccess::ShaderWrite(compute))
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(cull_pipeline);
                 commands.push_constants(
@@ -1170,6 +1194,9 @@ impl MeshletRenderer {
             second: false,
         };
         self.cull_pass(graph, cull_label, first, &params, slot);
+        if !occlusion {
+            self.stats_readback_passes(graph, cull_label, io, slot);
+        }
         self.draw_pass(graph, draw_label, first, &params, slot);
 
         if occlusion {
@@ -1189,6 +1216,7 @@ impl MeshletRenderer {
                 &params,
                 slot,
             );
+            self.stats_readback_passes(graph, "geometry/cluster cull 2 (occlusion)", io, slot);
             self.draw_pass(
                 graph,
                 "geometry/meshlet pass 2 (newly visible)",
@@ -1276,7 +1304,7 @@ impl MeshletRenderer {
             .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.visible, BufferAccess::ShaderWrite(compute))
-            .buffer(io.stats, BufferAccess::ShaderWrite(compute));
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
         if let Some(draws) = io.draws {
             builder = builder.buffer(draws, BufferAccess::ShaderWrite(compute));
         }
@@ -1294,6 +1322,31 @@ impl MeshletRenderer {
             commands.dispatch_indirect(grid, 0);
             Ok(())
         });
+    }
+
+    /// Once the last cull has counted: copies the frame's counters into this slot's readback
+    /// and hands them to the host, where [`MeshletRenderer::begin_frame`] reads them when the
+    /// slot comes back. Under the last cull's label (the copy is part of its cost).
+    fn stats_readback_passes<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        label: &'static str,
+        io: MeshPassIo,
+        slot: FrameSlot,
+    ) {
+        let (stats, readback) = (&self.stats, &self.stats_readback[slot.index]);
+        graph
+            .pass(label)
+            .buffer(io.stats, BufferAccess::TransferSrc)
+            .buffer(io.stats_readback, BufferAccess::TransferDst)
+            .run(move |_, commands| {
+                commands.copy_buffer(stats, readback, STATS_BYTES);
+                Ok(())
+            });
+        graph
+            .pass(label)
+            .buffer(io.stats_readback, BufferAccess::HostRead)
+            .run(|_, _| Ok(()));
     }
 
     /// One draw of the clusters a cull pass listed: a mesh workgroup per cluster, or on the
