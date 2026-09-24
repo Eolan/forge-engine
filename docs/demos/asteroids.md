@@ -175,17 +175,18 @@ replaced by DLSS on NVIDIA).
 
 ## What the numbers say
 
-- Almost every drawn triangle is smaller than a pixel: a 442 k-triangle rock 300 m away
-  covers a few hundred pixels. The GPU time is spent rasterising and shading geometry that
-  cannot be seen — exactly the case the cluster LOD DAG and the software rasteriser (Phase 1)
-  remove. This demo is the benchmark for that work: the target is the same image at well
-  under 1 ms of geometry.
-- With a static camera and TAA on, consecutive frames still differ in ~1.4 % of the pixels
-  by up to 41 levels: the temporal filter cannot fully settle on geometry that changes
-  every jitter. That residual sizzle on distant rocks is what LOD will remove; the trembling
-  the owner saw was the holes above.
-- TAA costs about 0.5 ms here (motion + resolve + blit at 1600×900).
-- The CPU is idle. Everything below the frame loop is the GPU walking pointer tables.
+- Before the DAG almost every drawn triangle was smaller than a pixel (54 per pixel): a
+  442 k-triangle rock 300 m away covers a few hundred pixels. The DAG draws that rock with a
+  few clusters of its coarse levels; the geometry passes went from 5.8 ms to 0.9 ms and what
+  is left in them is the task-shader walk over the cluster slots, not rasterisation (the
+  cluster hierarchy is the next step).
+- With a static camera and TAA on, consecutive frames differed in ~1.4 % of the pixels by up
+  to 41 levels at full detail: the temporal filter cannot settle on geometry that changes
+  every jitter. With the DAG the far field is a few triangles per pixel, which the filter can
+  settle; the trembling the owner saw was the culling holes above.
+- TAA costs 0.06 ms here (motion + resolve + blit at 1600×900); the sky 0.14 ms.
+- The CPU is idle (0.18 ms per frame). Everything below the frame loop is the GPU walking
+  pointer tables.
 
 ## Reference look (owner's references)
 

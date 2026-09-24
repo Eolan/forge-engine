@@ -92,7 +92,7 @@ and the date next to every number.
 | `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle` |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
 | `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers detected), `gpu-allocator`, RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh and compute pipelines, `Frames` (timeline semaphore, 2 in flight, GPU timestamps), safe `Commands` |
-| `forge-geom` | built | meshlet building (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
+| `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`), procedural cube-sphere asteroid, shared GPU layouts |
 | `forge-render` | phase 0 built | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances, visibility bits), `MeshletRenderer` (two-pass HZB occlusion, statistics), `Taa` (jittered HDR target, motion vectors, clipped history), `Starfield` (stars, nebula, sun, planet). Next: render graph (declared barriers, deferred deletion), cluster LOD DAG, visibility buffer, material resolve, lighting tiers, atmosphere, post, upscalers |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
