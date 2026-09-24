@@ -7,8 +7,8 @@
 //! automatic exposure and a choice of tone curves, the planet under a Hillaire atmosphere.
 //!
 //! Controls: P pause/resume the path (right mouse look + WASD to fly freely while paused),
-//! T temporal anti-aliasing, M meshlet colours, O occlusion, Tab wireframe, G tone curve,
-//! - / = exposure compensation, Esc quit.
+//! T temporal anti-aliasing, M meshlet colours, O occlusion, R software rasteriser, H show
+//! what it drew, Tab wireframe, G tone curve, - / = exposure compensation, Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +21,7 @@ use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
 use forge_core::{Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
+use forge_render::SwRaster;
 use forge_render::meshlet::DrawParams;
 use forge_render::{
     Atmosphere, AtmosphereParams, AutoExposure, CullCamera, CullFlags, Display, DlssMode,
@@ -137,6 +138,18 @@ struct Args {
     /// Draw through the indirect-count fallback: the device is created without mesh shaders.
     #[arg(long)]
     force_fallback: bool,
+    /// When the software rasteriser draws the dense clusters: auto (when a frame holds enough
+    /// of them to repay its fixed cost), on or off. R cycles them; on and off must give the
+    /// same image (A/B harness).
+    #[arg(long, default_value = "auto")]
+    sw_raster: SwRaster,
+    /// Clusters (under 64 pixels across) whose bounding rectangle holds fewer pixels than
+    /// this per triangle are rasterised in compute.
+    #[arg(long, default_value_t = forge_render::meshlet::SW_RASTER_DEFAULT_AREA)]
+    sw_raster_area: f32,
+    /// Start with the software rasteriser's pixels tinted green (H toggles it).
+    #[arg(long)]
+    show_raster: bool,
 }
 
 fn parse_vec3(text: &str) -> std::result::Result<Vec3, String> {
@@ -295,6 +308,9 @@ impl Ballad {
         if args.show_culled {
             flags.toggle(CullFlags::SHOW_CULLED);
         }
+        if args.show_raster {
+            flags.toggle(CullFlags::SHOW_RASTER);
+        }
         let mut taa = taa;
         taa.blend = args.taa_blend;
         let tonemap = args.tonemap;
@@ -426,6 +442,8 @@ impl Demo for Ballad {
             KeyCode::KeyX => self.flags.toggle(CullFlags::SHOW_CULLED),
             KeyCode::KeyL => self.flags.toggle(CullFlags::LOD),
             KeyCode::KeyK => self.flags.toggle(CullFlags::LOD_COLORS),
+            KeyCode::KeyR => self.args.sw_raster = self.args.sw_raster.next(),
+            KeyCode::KeyH => self.flags.toggle(CullFlags::SHOW_RASTER),
             KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
             KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
@@ -497,6 +515,7 @@ impl Demo for Ballad {
                 f64::from(last.occluded) / 1e3,
                 last.overflow_note()
             ));
+            ctx.profile.counter(last.software_line(self.args.sw_raster));
             ctx.profile.counter(format!(
                 "LOD {} at {:.2} px: mean level {:.2} of the drawn clusters; {} clusters in the DAG tables",
                 if self.flags.has(CullFlags::LOD) { "on" } else { "off" },
@@ -611,6 +630,8 @@ impl Demo for Ballad {
                 extent,
                 wireframe: self.wireframe,
                 exposure,
+                sw_raster: self.args.sw_raster,
+                sw_raster_area: self.args.sw_raster_area,
             },
         )?;
         self.renderer.resolve(
@@ -702,7 +723,7 @@ impl Demo for Ballad {
                 .unwrap_or(0.0)
         };
         let title = format!(
-            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} k + {:.0} k meshlets, {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
+            "forge asteroids | {} asteroids, {} meshes, {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles), {:.2} M tris | GPU {:.2} ms  CPU {:.2} ms  frame p50 {:.2} p99 {:.2} ms | EV100 {:.1} {} | {}{}{}{}{}",
             self.scene.instance_count,
             self.scene.mesh_count,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -710,6 +731,8 @@ impl Demo for Ballad {
             self.renderer.path().name(),
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
+            mean(|s| s.sw_clusters) / 1e3,
+            mean(|s| s.dense_triangles) / 1e6,
             mean(|s| s.triangles) / 1e6,
             gpu,
             cpu,

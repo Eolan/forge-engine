@@ -45,6 +45,11 @@ exposure (EV100, target, compensation, curve) the last.
 | cpu | record / submit + present | 0.10 / 0.10 | — | Record includes compiling the graph (26 passes, 49 barriers) and the exposure update (a 256-bin walk). At 3 000 fps the driver's submit and present are a third of the frame; a render thread and fewer, larger submissions fix that when it matters. |
 | cpu | wait for GPU (frame slot) | 0.15 | — | The frame is GPU-bound: the main thread's 0.20 ms of work finishes first and waits for the slot. |
 
+The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
+triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs
+0.374 ms against 0.364 forced off. At full detail (`--no-lod`) it halves the geometry:
+4.37 → 2.02 ms.
+
 Counters: graph 27 passes (with the overlay), 40 image + 10 memory barriers, transients 4
 images, 32.8 MB requested in a 26.2 MB heap (the visibility buffer and the motion vectors
 share 6.4 MB), 1 heap build, 0 retired; 3000 asteroids, 195 M leaf triangles, 28 k clusters
@@ -59,7 +64,8 @@ histogram exposure and tone curves 0.30–0.31 ms (structure again: the image is
 function of light in lux, a camera value and a curve) → the planet under a physical
 atmosphere 0.325 ms (0.34 facing it) → culling in compute, appending in a fixed order, drawn by
 mesh shaders 0.326 ms (issue #5; the task shader 0.322 the same day, the indirect-count
-fallback 0.360). The rendering stays pixel-identical
+fallback 0.360) → the software rasteriser for dense clusters, off here by its own measure
+(0.346 → 0.350 ms, noise; issue #3). The rendering stays pixel-identical
 to brute force at every step of the A/B harness, and the golden captures of the three
 curves are bit-identical from run to run.
 
@@ -67,7 +73,8 @@ curves are bit-identical from run to run.
 its own: the sky's 0.11 ms is the starfield's per-pixel price, the planet adds 0.04–0.06
 when in view and #26 would take most of that back; (2) the resolve is where shading cost will grow, and material classification (#20)
 keeps that growth per material; (3) the CPU submit/present path only when a real scene
-makes it visible; (4) geometry is done until triangle counts rise again; (5) DLSS stays
+makes it visible; (4) geometry is done until triangle counts rise again, and when they do the
+software rasteriser takes the dense clusters by itself (full detail 2× faster); (5) DLSS stays
 optional (below): its 0.45 ms only pays in a heavier scene.
 
 ### The same frame with DLSS (`--features dlss`, U; issue #8)
@@ -96,8 +103,9 @@ visibility buffer into a pre-exposed HDR image at a fixed EV100 of 15 and the di
 clear of the instance cull's look-back words and a cluster cull before each mesh pass), three transients,
 25.6 MB requested in a 19.2 MB heap since the colour image reuses the depth buffer's
 memory; 15 k meshlets, 1.09 M triangles (full detail, the list reserved for it since #27:
-325 k meshlets, 30 M triangles, 2.18 ms; without occlusion 1 140 k meshlets, 106 M triangles,
-6.34 ms, the same as before the visibility buffer's list capped it). Through the indirect-count fallback (`--force-fallback`): 0.270 ms, the draw of pass 1
+325 k meshlets, 30 M triangles, 2.27 ms in hardware and 1.15 with the software rasteriser,
+which auto mode turns on there (issue #3); without occlusion 1 140 k meshlets, 106 M
+triangles, 6.41 → 2.48 ms). Through the indirect-count fallback (`--force-fallback`): 0.270 ms, the draw of pass 1
 taking 0.159 ms instead of 0.071; both paths and the old task path compared in
 [meshlets.md](demos/meshlets.md).
 

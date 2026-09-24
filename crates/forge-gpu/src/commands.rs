@@ -356,6 +356,20 @@ impl<'a> Commands<'a> {
         Ok(())
     }
 
+    /// `vkCmdDrawIndirect` with one `VkDrawIndirectCommand` (four `u32`: vertex count,
+    /// instance count, first vertex, first instance) at `offset` in `buffer`, which must have
+    /// `INDIRECT_BUFFER` usage: a draw whose size the GPU decides, down to nothing.
+    pub fn draw_indirect(&self, buffer: &crate::Buffer, offset: u64) {
+        // SAFETY: a graphics pipeline without vertex input is bound inside a rendering
+        // instance and the buffer holds a complete indirect command at `offset` (the caller's
+        // responsibility).
+        unsafe {
+            self.device
+                .raw()
+                .cmd_draw_indirect(self.cb, buffer.raw(), offset, 1, 16)
+        };
+    }
+
     /// `vkCmdDrawMeshTasksIndirectEXT` with one `VkDrawMeshTasksIndirectCommandEXT` (three
     /// `u32`: x, y, z) at `offset` in `buffer`, which must have `INDIRECT_BUFFER` usage.
     pub fn draw_mesh_tasks_indirect(&self, buffer: &crate::Buffer, offset: u64) -> Result<()> {

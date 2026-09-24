@@ -160,7 +160,27 @@ LOD later, follow from the same gradients (`∂lambda_i/∂x = w · (∂(b_i/w_i
 test, in `forge_render::visibility`. Empty pixels are left to the sky pass (or filled with a
 background colour). What this buys: shading cost independent of overdraw and triangle size,
 one shading code path for the mesh-shader, software and fallback rasterisers, and the entry
-point for material classification (D-007) and the 64-bit depth|id software rasteriser.
+point for material classification (D-007).
+
+**Dense clusters go to a software rasteriser** (issue #3). The cluster cull marks a cluster
+dense when it is in front of the near plane, under 64 pixels across and has fewer than two
+pixels of its bounding sphere's screen rectangle per triangle: there the hardware's fixed
+cost per primitive dominates. In the first pass, when the renderer runs it, those clusters
+go to a second raster list instead of the hardware's: a compute workgroup per cluster
+transforms and snaps its vertices exactly as the fixed-function stages do (perspective
+division, the viewport, round-to-nearest-even to 1/256 pixel), then a thread per triangle
+culls back faces, walks the pixel centres of its bounding box with 32-bit edge functions and
+the top-left rule, interpolates the depth linearly in screen space and keeps
+`depth << 32 | id` with a 64-bit atomic maximum, only where it beats the hardware's pixel of
+that pass (nearer, or at equal depth the larger id: the hardware's depth test keeps the last
+drawn and it draws in id order, so every path resolves ties alike). A full-screen merge (an
+indirect draw, empty when no cluster went to software) writes those samples into the
+visibility buffer and the depth and clears them; everything after the draw, from the depth
+pyramid to TAA, sees one image. The renderer runs it (`SwRaster::Auto`) when the recent
+frames held 1.5 M dense triangles or more, until they fall below 0.75 M: the raster pass and
+the merge cost about 0.02 ms, which a million dense triangles repay. The pass-2 clusters
+(the few newly visible) stay in hardware. It needs 64-bit buffer atomics; without them
+every cluster is drawn in hardware.
 
 **Colour is physical and pre-exposed** (issue #7, D-022). Lights carry photometric units
 (the sun in lux, its disc in cd/m² from its solid angle) and every pass writes luminance

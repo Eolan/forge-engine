@@ -60,7 +60,8 @@ produces:
 - **Cluster cull** (one per mesh pass; 8 work items per 256-thread workgroup): LOD
   selection, frustum, normal cone and, in the second pass, the depth pyramid and the
   "visible last frame" bits; appends the survivors to the frame's visible-cluster list (pass
-  1 from the front, pass 2 from the back, so neither draw needs the other's count). The last
+  1 from the front, pass 2 from the back, so neither draw needs the other's count; since
+  #3 pass 2 follows pass 1, so the ids grow with the draw order). The last
   workgroup writes the pass's draw arguments.
 - **Mesh-shader path:** `vkCmdDrawMeshTasksIndirectEXT`, one mesh workgroup per listed
   cluster, no task stage.
@@ -199,6 +200,78 @@ previous commit in the same session, 0.326 earlier in the day):
 | `asteroids` path (20 000 frames, TAA) | 0.330 ms | 0.358 ms | 4–8 k | 6.0 / 8.5 MiB (was 21.0 / 61.0) |
 | `asteroids --no-lod` (3 000 frames) | 5.15 ms | 9.67 ms | 640–900 k | 37.1 / 117.2 MiB (reserved) |
 
+## The software rasteriser (issue #3, 2026-09-24)
+
+Dense clusters, the ones with fewer than 2 pixels of their bounding sphere's screen rectangle
+per triangle (`--sw-raster-area`), under 64 pixels across and in front of the near plane,
+can be rasterised in compute instead of by the hardware (Nanite's split). In the first pass
+the cluster cull appends them to a second raster list, in the same fixed order as
+everything else. A workgroup per cluster transforms its vertices with the mesh shader's
+arithmetic, then does the fixed-function steps itself: perspective division, the viewport
+of `set_viewport_full`, round-to-nearest-even to 1/256 pixel (8 sub-pixel bits). A thread
+per triangle then culls back faces, walks the pixel centres of its bounding box with 32-bit
+edge functions and the top-left rule, and interpolates the depth linearly in screen space.
+It keeps `depth << 32 | id` per pixel with a 64-bit atomic maximum, only where it beats the
+hardware's pixel of the pass: nearer or, at equal depth, the larger id. That is the rule the
+hardware already follows, since its depth test (`GREATER_OR_EQUAL`) keeps the last drawn and
+it draws in id order. To make that true across both passes, pass 2 now fills the list after
+pass 1 instead of from the back; every golden capture is unchanged. A full-screen merge,
+drawn indirectly with zero vertices when nothing went to software, writes the samples into
+the visibility buffer and the depth and clears them. The depth pyramid, the resolve, the sky
+and TAA see one image. Pass 2, the few newly visible clusters, stays in hardware.
+
+**When it runs.** The cull counts the triangles of the dense clusters every frame, running
+or not, and `--sw-raster auto` (the default; **R** cycles auto → on → off, **H** tints its
+pixels) turns it on from 1.5 M dense triangles and off below 0.75 M. At the 1 px LOD both
+demos hold 0.01–0.08 M, at full detail 29–70 M. Break-even measured near 1 M (`--lod-error`
+0.5: 0.43–0.54 M dense, forced on 0.01 ms slower; 0.25: 1.8–4.7 M, 0.05–0.10 ms faster).
+
+| GPU ms per frame | before #3 | auto (default) | forced off | forced on |
+|---|---|---|---|---|
+| bench, LOD 1 px | 0.191 | 0.193 | 0.191 | 0.206 |
+| bench, LOD 0.25 px | 0.61 | 0.51 | 0.62 | 0.51 |
+| bench `--no-lod` | 2.27 | **1.15** | 2.28 | 1.14 |
+| bench `--no-lod --no-occlusion` (106 M triangles) | 6.41 | **2.48** | 6.72 | 2.42 |
+| bench `--no-lod`, fallback path | 3.92 | **1.20** | 3.95 | 1.17 |
+| ballad | 0.346 | 0.350 | 0.364 | 0.374 |
+| ballad `--no-lod` | 4.37 | **2.02** | 4.42 | 2.01 |
+
+The fallback gains the most: its per-cluster indexed draws are what compute replaces.
+
+**Pixels.** Against the build before #3, the whole capture set is 0 pixels apart on both
+paths, the A/B harness 0. The one exception is the bench at full detail, where auto turns
+the software rasteriser on: 19 pixels.
+
+| forced on vs forced off, no TAA | pixels | beyond one level |
+|---|---|---|
+| bench static, orbit, no occlusion | 0 | 0 |
+| bench orbit `--lod-error 0.25` | 6 | 4 |
+| bench orbit `--no-lod` | 19 | 9 |
+| ballad frame 240 | 4 | 1 |
+| ballad frame 240 `--no-lod` | 188 | 6 |
+
+The differences are coverage at triangle edges. The fixed-function unit rounds a few vertex
+positions to the other 1/256 step. Neither round-half-to-even written out (identical to
+`Round`) nor a depth nudge of 1e-6 moved a pixel, and half-up or truncation made it far
+worse. Beyond one level, they are silhouette pixels. With TAA and the software rasteriser
+forced on, its depth values differ from the hardware's in the last bits and move TAA's
+reprojection: frame 600 of the ballad differs by 0.07 levels on average (max 33, 6.6 % of
+the pixels). Auto keeps the ballad in hardware.
+
+**Measured and not kept.**
+- The plan's single 64-bit target for all three rasterisers (a fragment atomic instead of
+  the colour write, then an export of the depth) cost 0.05 ms at the LOD views, bench
+  0.19 → 0.24 ms (fragment atomics 0.025, export 0.016, clear 0.007).
+- Routing by size instead of density (clusters under 16 or 32 pixels) sent clusters the
+  hardware draws cheaply: the LOD views paid the fixed cost for no gain.
+- A read before each atomic was slower.
+- A tiled 64-bit layout (a 2×2 quad per 32-byte sector) measured the same.
+- Merging only the 16-pixel tiles the software rasteriser touched cost more in marking than
+  it saved where it runs (full detail 1.07 → 1.16 ms).
+- A second software raster in pass 2 cost more than it saved.
+
+Validation and synchronization validation are silent on both paths, with DLSS too.
+
 ## Numbers — occlusion culling
 
 Same scene, default roughness, 1600×900, validation clean:
@@ -274,9 +347,10 @@ the default row at 1 049 k clusters; since #27 it draws all 1 140 k again, in 6.
 1. ✅ (issue #5, 2026-09-24) Culling in compute, shared by the mesh-shader path and the
    indirect-count fallback, 0 pixels apart ("Two paths, one culling" above).
 2. Cluster LOD DAG with meshoptimizer's `clusterlod` (QEM with locked group borders) and
-   per-cluster screen-space error selection, plus a software rasteriser for sub-pixel clusters.
-3. Visibility buffer: done for the hardware path (a 32-bit id next to the hardware depth,
-   analytic barycentrics in compute, issue #6); next the material classification and the
-   material table (#20), and the 64-bit depth | id target with the software rasteriser.
+   per-cluster screen-space error selection ✅, and a software rasteriser for dense
+   clusters ✅ (issue #3, above).
+3. Visibility buffer: done (a 32-bit id next to the hardware depth, analytic barycentrics in
+   compute, issue #6; the software rasteriser merges into it, #3); next the material
+   classification and the material table (#20).
 4. Streaming of cluster pages and, on RTX hardware, cluster acceleration structures
    (`VK_NV_cluster_acceleration_structure`) so the same clusters feed ray tracing.

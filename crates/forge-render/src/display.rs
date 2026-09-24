@@ -211,6 +211,7 @@ impl Display {
             push_constant_bytes: std::mem::size_of::<DisplayPush>() as u32,
             alpha_blend: false,
             depth_test: None,
+            depth_write: false,
             name: "display transform",
         })?;
         device.destroy_shader_module(vertex);

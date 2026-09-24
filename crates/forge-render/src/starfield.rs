@@ -94,6 +94,7 @@ impl Starfield {
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             alpha_blend: false,
             depth_test: Some(vk::Format::D32_SFLOAT),
+            depth_write: false,
             name: "starfield",
         })?;
         device.destroy_shader_module(vertex);

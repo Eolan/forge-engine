@@ -259,8 +259,9 @@ isolated single pixels on sliver triangles at silhouettes, where the hardware in
 Validation and synchronization validation are silent. One capability detail: a fragment
 shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which needs the
 `geometryShader` device feature although no geometry shader runs; the device enables it.
-Not in this step: material classification and the material table (#20), the 64-bit
-depth|id target of the software rasteriser (#3).
+Not in this step: material classification and the material table (#20). The software
+rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
+**H**; `docs/demos/meshlets.md`).
 
 ## Physical light, automatic exposure, tone curves (2026-09-24, issue #7)
 

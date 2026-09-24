@@ -1,6 +1,11 @@
 // Meshlet rendering: compute passes cull instances and clusters into a compacted list of
 // visible clusters, which the mesh shader draws or, on GPUs without mesh shaders, the vertex
 // fallback through one `vkCmdDrawIndexedIndirectCount` (same list, same ids, same pixels).
+// Clusters that project to a few pixels are rasterised in compute instead (issue #3), into
+// 64-bit samples (depth << 32 | visibility id, kept with an atomic max) that a merge pass
+// then writes into the hardware's targets. Every path keeps the same pixel: the nearest
+// and, at equal depth, the larger id (the hardware's depth test keeps the one drawn last,
+// and it draws in id order).
 //
 // Every buffer is reached through a device address held in the per-frame `Frame` block, so
 // the CPU hands the GPU one pointer (push constant) and the GPU walks the scene from there.
@@ -12,6 +17,7 @@
 // visibility bits for next frame (pass-1 meshlets are re-tested too, without drawing). Each
 // mesh pass is a cluster-cull compute pass followed by the draw of what it kept.
 import bindless;
+import vis64;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -94,7 +100,14 @@ public static const uint FLAG_LOD = 64;
 public static const uint FLAG_LOD_COLORS = 128;
 // Debug: disable the per-group LOD window (every group tests its clusters); for the A/B harness.
 public static const uint FLAG_GROUP_WINDOW_OFF = 256;
-static const uint CULLED_BIT = 0x80000000u; // top bit of a visible-list meshlet index
+// Rasterise the dense clusters (`dense_cluster`) of the first pass in compute.
+public static const uint FLAG_SW_RASTER = 512;
+// Debug: tint what the software rasteriser drew.
+public static const uint FLAG_SHOW_RASTER = 1024;
+// Flags in the meshlet word of a visible-list record, above the meshlet index.
+static const uint CULLED_BIT = 0x80000000u;   // drawn although culling rejected it (FLAG_SHOW_CULLED)
+static const uint SOFTWARE_BIT = 0x40000000u; // rasterised in compute
+static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
 
 public static const uint PASS_PREVIOUSLY_VISIBLE = 1;
 public static const uint PASS_REMAINDER = 2;
@@ -108,10 +121,15 @@ public static const uint STAT_OCCLUDED = 3;
 public static const uint STAT_INSTANCES_VISIBLE = 4;
 public static const uint STAT_LOD_LEVEL_SUM = 5; // sum of the LOD level of every drawn meshlet
 public static const uint STAT_VISIBLE_OVERFLOW = 6; // clusters dropped because the visible list was full
+public static const uint STAT_SW_CLUSTERS = 7;      // clusters rasterised in compute
+public static const uint STAT_SW_TRIANGLES = 8;     // their triangles (also counted in STAT_TRIANGLES)
+public static const uint STAT_DENSE_TRIANGLES = 9;  // triangles of the drawn dense clusters, software rasteriser on or off
 
 // The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
 // `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, filled by the
 // cluster cull) and `triangle` the cluster's triangle; `VISIBILITY_EMPTY` is the clear value.
+// The software rasteriser keeps `depth << 32 | id` per pixel in `Push::vis64` (the depth's
+// float bits: reversed-Z, nearer is larger; 0 is empty) until the merge.
 public static const uint VISIBILITY_EMPTY = 0xFFFFFFFFu;
 public static const uint VISIBILITY_TRIANGLE_BITS = 7;
 
@@ -147,19 +165,29 @@ public struct Frame
     public uint pad_end;
     public uint2* work;             // (instance, local group) per work item, built by `cull_main`
     public uint* indirect;          // the cluster cull's grid (x, y, 1, work item count), then the instance cull's ticket
-    public uint2* visible;          // (instance, meshlet | CULLED_BIT) per drawn cluster: pass 1 from the front, pass 2 from the back
+    public uint2* visible;          // (instance, meshlet | flag bits) per drawn cluster, in cull order: pass 1, then pass 2
     public uint visible_capacity;   // slots in `visible`
     public float exposure;          // pre-exposure of the frame (crates/forge-render/src/exposure.rs)
     public float sun_illuminance;   // lux; the rocks return albedo × E / π
     public uint pad_exposure;
-    public uint* clusters;          // per pass (pass 1 or the single pass at 0, pass 2 at 4): the draw grid (x, y, 1) and the cluster count; then the culls' tickets (8, 9)
-    public uint* draws;             // fallback: a VkDrawIndexedIndirectCommand per cluster of the pass; null on the mesh path
-    public uint* lookback;          // status words of the ordered appends: instance cull, then each cluster cull
+    public uint* clusters;          // per pass (pass 1 or the single pass at 0, pass 2 at 12): the hardware draw grid (x, y, 1) and its cluster count, the software raster grid and its count, the merge's VkDrawIndirectCommand; then the culls' tickets (24, 25)
+    public uint* draws;             // fallback: a VkDrawIndexedIndirectCommand per hardware-drawn cluster of the pass; null on the mesh path
+    public uint64_t* lookback;      // status words of the ordered appends: instance cull, then each cluster cull
+    public uint* raster;            // per pass, the list slots of its clusters: hardware-drawn from the front, software-rasterised from the back
+    public uint target_width;       // pixels
+    public uint target_height;
+    public float sw_raster_area;    // a cluster whose bounding rectangle holds fewer pixels than this per triangle is dense (rasterised in compute with FLAG_SW_RASTER)
+    public uint pad_raster;
 };
 
 struct Push
 {
     Frame* frame;
+    uint64_t* vis64;   // the software rasteriser's samples, depth << 32 | id per pixel (vis64.slang)
+    uint target_width; // = frame.target_width, without a load per pixel
+    uint depth_image;  // software raster: sampled-image indices of the hardware's depth and
+    uint vis_image;    // visibility buffer of this pass
+    uint pad;
 };
 
 [[vk::push_constant]]
@@ -338,18 +366,24 @@ uint grid_index(uint3 group)
     return group.y * GRID_ROW + group.x;
 }
 
-// The slot of the `index`-th cluster of this pass in the visible-cluster list: pass 1 (and
-// the single pass) fill it from the front, pass 2 from the back, so a draw finds its range
-// without the other pass's count.
-uint visible_slot(Frame* f, uint index)
+// Clusters pass 1 listed (hardware and software), final once pass 2 culls.
+uint pass1_listed(Frame* f)
 {
-    return f[0].pass == PASS_REMAINDER ? f[0].visible_capacity - 1 - index : index;
+    return f[0].clusters[3] + f[0].clusters[7];
 }
 
-// This pass's (x, y, 1, count) in `Frame::clusters`.
+// The slot of the `index`-th cluster of this pass in the visible-cluster list: pass 2 follows
+// pass 1, so the ids grow with the draw order across the passes.
+uint visible_slot(Frame* f, uint index)
+{
+    return f[0].pass == PASS_REMAINDER ? pass1_listed(f) + index : index;
+}
+
+// This pass's hardware draw arguments (x, y, 1, count) in `Frame::clusters`; its software
+// raster arguments follow (`pass_args(f) + 4`), then the merge's draw (`+ 8`).
 uint* pass_args(Frame* f)
 {
-    return f[0].clusters + (f[0].pass == PASS_REMAINDER ? 4 : 0);
+    return f[0].clusters + (f[0].pass == PASS_REMAINDER ? 12 : 0);
 }
 
 // What one thread decided about its cluster.
@@ -358,6 +392,8 @@ struct ClusterVerdict
     bool draw;
     bool occluded;     // rejected by the depth pyramid (counted)
     bool culled_debug; // FLAG_SHOW_CULLED: drawn although culling rejected it
+    bool dense;        // drawn, and dense enough for the software rasteriser (`dense_cluster`)
+    bool software;     // dense, and rasterised in compute
     uint instance;
     uint meshlet;      // global meshlet index
     uint triangle_count;
@@ -365,6 +401,26 @@ struct ClusterVerdict
     uint vertex_offset;
     uint lod_level;
 };
+
+// Largest cluster the software rasteriser takes, in pixels across its bounding rectangle
+// (forge_render::meshlet::SW_RASTER_MAX_PX): the rectangle bounds every triangle, which
+// keeps the rasteriser's integer edge functions in range (`SW_RASTER_MAX_EXTENT`).
+static const float SW_RASTER_MAX_PX = 64.0;
+
+// Whether a cluster is dense, the software rasteriser's kind: entirely in front of the near
+// plane, under SW_RASTER_MAX_PX across, and fewer than `sw_raster_area` pixels of its
+// bounding sphere's rectangle per triangle. There the hardware's fixed cost per primitive
+// dominates and a thread per triangle wins (Nanite's split); a small cluster of few, larger
+// triangles costs the hardware little and stays there.
+bool dense_cluster(Frame* f, float3 world_center, float radius, uint triangles)
+{
+    float3 c = mul(f[0].cull_view, float4(world_center, 1)).xyz;
+    float4 aabb;
+    if (!project_sphere(c, radius, f[0].znear, f[0].p00, f[0].p11, aabb))
+        return false;
+    float2 size = abs(aabb.zw - aabb.xy) * float2(f[0].target_width, f[0].target_height);
+    return max(size.x, size.y) < SW_RASTER_MAX_PX && size.x * size.y < f[0].sw_raster_area * float(triangles);
+}
 
 // Culls cluster `thread` of work item `item`: LOD selection, frustum and normal cone; in the
 // second pass of the two-pass occlusion also the depth pyramid and the rewrite of the cluster's
@@ -448,42 +504,58 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread)
     {
         v.draw = visible;
     }
+    v.dense = v.draw && dense_cluster(f, center, world_radius, m.triangle_count);
+    v.software = v.dense && (f[0].flags & FLAG_SW_RASTER) != 0;
     return v;
 }
 
 // ------------------------------------------------------------ ordered appends ---
 
-// Both culls append to a list whose order is the draw order, and the draw order must not
-// depend on timing: two triangles can meet a sample at exactly the same depth, and the depth
-// test (`GREATER_OR_EQUAL`) then keeps the one drawn last, so a list filled by racing atomics
-// changes the image from run to run (visibly through TAA's history). Each list is therefore
-// filled in workgroup order with a single-pass prefix sum (decoupled look-back, Merrill &
+// Both culls append to lists in a fixed order, and the ids follow it: two triangles can meet
+// a sample at exactly the same depth, and the larger id wins (the depth test,
+// `GREATER_OR_EQUAL`, keeps the one drawn last, and the hardware draws in list order; the
+// software rasteriser compares the ids), so a list filled by racing atomics would change the
+// image from run to run (visibly through TAA's history). Each list is therefore filled in
+// workgroup order with a single-pass prefix sum (decoupled look-back, Merrill &
 // Garland 2016): a workgroup publishes how many entries it appends, adds up the counts of the
 // workgroups before it and writes at that offset. Workgroups take their index from a ticket
 // counter in the order they start, so every earlier index belongs to a workgroup already
 // running and the wait always ends.
 //
-// A status word is 0 (nothing published yet), LOOKBACK_AGGREGATE | count, or
-// LOOKBACK_PREFIX | count of this workgroup and all before it.
-static const uint LOOKBACK_AGGREGATE = 1u << 30;
-static const uint LOOKBACK_PREFIX = 2u << 30;
-static const uint LOOKBACK_VALUE = LOOKBACK_AGGREGATE - 1u;
+// A status word is 0 (nothing published yet), LOOKBACK_AGGREGATE | counts, or
+// LOOKBACK_PREFIX | counts of this workgroup and all before it. It carries two counts of 31
+// bits (a cluster cull counts its clusters and, among them, the software-rasterised ones),
+// packed so that adding two words adds the counts.
+static const uint64_t LOOKBACK_AGGREGATE = 1ull << 62;
+static const uint64_t LOOKBACK_PREFIX = 2ull << 62;
+static const uint64_t LOOKBACK_FLAGS = 3ull << 62;
+
+uint64_t lookback_pack(uint2 counts)
+{
+    return uint64_t(counts.x) | (uint64_t(counts.y) << 31);
+}
+
+uint2 lookback_unpack(uint64_t word)
+{
+    return uint2(uint(word & 0x7FFFFFFFull), uint((word >> 31) & 0x7FFFFFFFull));
+}
 
 static const uint LOOKBACK_LANES = 32; // predecessors read per round
 
-groupshared uint s_window[LOOKBACK_LANES];
-groupshared uint s_exclusive; // counts of the tickets before this one, summed so far
+groupshared uint64_t s_window[LOOKBACK_LANES];
+groupshared uint64_t s_exclusive; // counts of the tickets before this one, summed so far
 groupshared uint s_cursor;    // tickets [0, s_cursor) not yet added
 groupshared uint s_found;     // a published prefix was reached
 
-// Publishes `count` for workgroup `ticket` in `status` and returns the sum of the counts of
+// Publishes `counts` for workgroup `ticket` in `status` and returns the sums of the counts of
 // the tickets before it. Every thread of the workgroup calls it with the same arguments (the
 // wait is shared): each round, the first LOOKBACK_LANES threads read one predecessor's status
 // word each, nearest first, and thread 0 adds them up to the first prefix or to the first
 // predecessor that has published nothing yet, where the next round starts.
-uint lookback_exclusive(uint* status, uint ticket, uint count, uint thread)
+uint2 lookback_exclusive(uint64_t* status, uint ticket, uint2 counts, uint thread)
 {
-    uint ignored;
+    uint64_t count = lookback_pack(counts);
+    uint64_t ignored;
     if (thread == 0)
     {
         InterlockedExchange(status[ticket], (ticket == 0 ? LOOKBACK_PREFIX : LOOKBACK_AGGREGATE) | count, ignored);
@@ -497,9 +569,9 @@ uint lookback_exclusive(uint* status, uint ticket, uint count, uint thread)
         uint cursor = s_cursor;
         if (thread < LOOKBACK_LANES)
         {
-            uint word = 0;
+            uint64_t word = 0;
             if (thread < cursor)
-                InterlockedOr(status[cursor - 1 - thread], 0u, word); // an atomic read
+                InterlockedOr(status[cursor - 1 - thread], 0ull, word); // an atomic read
             s_window[thread] = word;
         }
         GroupMemoryBarrierWithGroupSync();
@@ -509,11 +581,11 @@ uint lookback_exclusive(uint* status, uint ticket, uint count, uint thread)
             uint added = 0;
             for (; added < n; added++)
             {
-                uint word = s_window[added];
-                uint flag = word & ~LOOKBACK_VALUE;
+                uint64_t word = s_window[added];
+                uint64_t flag = word & LOOKBACK_FLAGS;
                 if (flag == 0)
                     break; // not published yet: the next round starts here
-                s_exclusive += word & LOOKBACK_VALUE;
+                s_exclusive += word & ~LOOKBACK_FLAGS;
                 if (flag == LOOKBACK_PREFIX)
                 {
                     s_found = 1;
@@ -524,10 +596,10 @@ uint lookback_exclusive(uint* status, uint ticket, uint count, uint thread)
         }
         GroupMemoryBarrierWithGroupSync();
     }
-    uint exclusive = s_exclusive;
+    uint64_t exclusive = s_exclusive;
     if (thread == 0 && ticket != 0)
         InterlockedExchange(status[ticket], LOOKBACK_PREFIX | (exclusive + count), ignored);
-    return exclusive;
+    return lookback_unpack(exclusive);
 }
 
 // Workgroups of the instance cull; their status words open `Frame::lookback`, the two cluster
@@ -537,7 +609,7 @@ uint instance_cull_groups(Frame* f)
     return max((f[0].instance_count + 63) / 64, 1u);
 }
 
-uint* cluster_status(Frame* f)
+uint64_t* cluster_status(Frame* f)
 {
     return f[0].lookback + instance_cull_groups(f) + (f[0].pass == PASS_REMAINDER ? f[0].total_groups : 0);
 }
@@ -555,17 +627,24 @@ void write_grid(uint* args, uint groups, uint count)
 // a frame draw nothing).
 static const uint CULL_ITEMS = 8;
 
-groupshared uint s_ticket;            // this workgroup's place in the order
-groupshared uint s_drawn[CULL_ITEMS]; // per work item, a bit per lane: the cluster is drawn
+groupshared uint s_ticket;               // this workgroup's place in the order
+groupshared uint s_drawn[CULL_ITEMS];    // per work item, a bit per lane: the cluster is drawn
+groupshared uint s_software[CULL_ITEMS]; // among those, the ones rasterised in compute
 groupshared uint s_triangles;
+groupshared uint s_sw_triangles;
+groupshared uint s_dense_triangles;
 groupshared uint s_levels;
 groupshared uint s_occluded;
+groupshared uint s_kept_software;        // where the list ends: software clusters still kept
 
 // One workgroup per CULL_ITEMS work items: cull their clusters and append the survivors to
-// this pass's range of the visible-cluster list in item order, then lane order; on the
-// fallback path also one indexed draw per survivor. Both paths draw from this list: the mesh
-// shader reads it, the fallback's draws carry its slots. The last workgroup writes the pass's
-// draw grid. A full list drops what does not fit and counts it, so no draw reads past the end.
+// this pass's range of the visible-cluster list in item order, then lane order, and their
+// slots to the pass's raster lists (hardware-drawn from the front, software-rasterised from
+// the back, each in the same order); on the fallback path also one indexed draw per
+// hardware-drawn survivor. The mesh shader and the software rasteriser read the raster
+// lists, the fallback's draws carry the slots. The grids are written by the last workgroup,
+// or, when the list is full, by the one it ends in. A full list drops what does not fit and
+// counts it, so no draw reads past the end.
 [shader("compute")]
 [numthreads(TASK_GROUP_SIZE * CULL_ITEMS, 1, 1)]
 void cluster_cull_main(uint thread : SV_GroupThreadID)
@@ -574,13 +653,19 @@ void cluster_cull_main(uint thread : SV_GroupThreadID)
     bool second = f[0].pass == PASS_REMAINDER;
     if (thread == 0)
     {
-        InterlockedAdd(f[0].clusters[8 + (second ? 1 : 0)], 1, s_ticket);
+        InterlockedAdd(f[0].clusters[24 + (second ? 1 : 0)], 1, s_ticket);
         s_triangles = 0;
+        s_sw_triangles = 0;
+        s_dense_triangles = 0;
         s_levels = 0;
         s_occluded = 0;
+        s_kept_software = 0;
     }
     if (thread < CULL_ITEMS)
+    {
         s_drawn[thread] = 0;
+        s_software[thread] = 0;
+    }
     GroupMemoryBarrierWithGroupSync();
     uint ticket = s_ticket;
     uint items = f[0].indirect[3];
@@ -597,30 +682,45 @@ void cluster_cull_main(uint thread : SV_GroupThreadID)
         InterlockedOr(s_drawn[local], 1u << lane);
         InterlockedAdd(s_triangles, v.triangle_count);
         InterlockedAdd(s_levels, v.lod_level);
+        if (v.dense)
+            InterlockedAdd(s_dense_triangles, v.triangle_count);
+        if (v.software)
+        {
+            InterlockedOr(s_software[local], 1u << lane);
+            InterlockedAdd(s_sw_triangles, v.triangle_count);
+        }
     }
     if (v.occluded)
         InterlockedAdd(s_occluded, 1);
     GroupMemoryBarrierWithGroupSync();
     uint* args = pass_args(f);
-    // Pass 2 fills what pass 1 left of the list (pass 1's count is final by now).
-    uint capacity = f[0].visible_capacity - (second ? f[0].clusters[3] : 0);
-    uint drawn = 0;
-    uint before = 0; // drawn by the work items before this thread's, in this workgroup
+    // Pass 2 fills what pass 1 left of the list (pass 1's counts are final by now).
+    uint capacity = f[0].visible_capacity - (second ? pass1_listed(f) : 0);
+    uint2 drawn = 0;  // clusters of this workgroup drawn, and software-rasterised among them
+    uint2 before = 0; // the same for the work items before this thread's
     for (uint k = 0; k < CULL_ITEMS; k++)
     {
-        uint n = countbits(s_drawn[k]);
-        before += k < local ? n : 0u;
+        uint2 n = uint2(countbits(s_drawn[k]), countbits(s_software[k]));
+        before += k < local ? n : uint2(0, 0);
         drawn += n;
     }
-    uint first = lookback_exclusive(cluster_status(f), ticket, drawn, thread);
-    uint index = first + before + countbits(s_drawn[local] & ((1u << lane) - 1u));
-    if (first + drawn > capacity)
+    uint2 first = lookback_exclusive(cluster_status(f), ticket, drawn, thread);
+    uint below = (1u << lane) - 1u;
+    uint index = first.x + before.x + countbits(s_drawn[local] & below);
+    uint sw_index = first.y + before.y + countbits(s_software[local] & below); // software clusters before this one
+    uint hw_index = index - sw_index; // for a hardware-drawn cluster, the hardware-drawn ones before it
+    // The list ends in this workgroup (at most one does); every thread agrees on both.
+    bool past_end = first.x + drawn.x > capacity;
+    bool ends_here = past_end && first.x <= capacity;
+    if (past_end)
     {
-        // This workgroup reaches past the end of the list (uniform: `first` and `drawn` are
-        // the same for every thread): count only what it keeps, so the triangles stay exact.
+        // This workgroup reaches past the end of the list: count only what it keeps, so the
+        // triangles stay exact and the grids cover the kept clusters.
         if (thread == 0)
         {
             s_triangles = 0;
+            s_sw_triangles = 0;
+            s_dense_triangles = 0;
             s_levels = 0;
         }
         GroupMemoryBarrierWithGroupSync();
@@ -628,39 +728,75 @@ void cluster_cull_main(uint thread : SV_GroupThreadID)
         {
             InterlockedAdd(s_triangles, v.triangle_count);
             InterlockedAdd(s_levels, v.lod_level);
+            if (v.dense)
+                InterlockedAdd(s_dense_triangles, v.triangle_count);
+            if (v.software)
+            {
+                InterlockedAdd(s_sw_triangles, v.triangle_count);
+                InterlockedAdd(s_kept_software, 1);
+            }
         }
         GroupMemoryBarrierWithGroupSync();
     }
     if (thread == 0)
     {
-        if (drawn > 0)
+        if (drawn.x > 0)
         {
             InterlockedAdd(f[0].stats[STAT_TRIANGLES], s_triangles);
             InterlockedAdd(f[0].stats[STAT_LOD_LEVEL_SUM], s_levels);
+            InterlockedAdd(f[0].stats[STAT_SW_TRIANGLES], s_sw_triangles);
+            InterlockedAdd(f[0].stats[STAT_DENSE_TRIANGLES], s_dense_triangles);
         }
         if (s_occluded > 0)
             InterlockedAdd(f[0].stats[STAT_OCCLUDED], s_occluded);
+        uint2 listed = 0; // the pass's kept clusters and software ones, when known here
+        bool knows = false;
+        if (ends_here)
+        {
+            listed = uint2(capacity, first.y + s_kept_software);
+            knows = true;
+        }
         if (ticket == (items - 1) / CULL_ITEMS)
         {
-            // The last workgroup knows the total: the pass's draw grid and counts.
-            uint total = first + drawn;
-            uint listed = min(total, capacity);
-            write_grid(args, listed, listed);
-            InterlockedAdd(f[0].stats[second ? STAT_MESHLETS_PASS2 : STAT_MESHLETS_PASS1], listed);
-            if (total > listed)
-                InterlockedAdd(f[0].stats[STAT_VISIBLE_OVERFLOW], total - listed);
+            // The last workgroup knows the totals.
+            uint total = first.x + drawn.x;
+            if (total > capacity)
+            {
+                InterlockedAdd(f[0].stats[STAT_VISIBLE_OVERFLOW], total - capacity);
+            }
+            else
+            {
+                listed = first + drawn;
+                knows = true;
+            }
+        }
+        if (knows)
+        {
+            uint hardware = listed.x - listed.y;
+            write_grid(args, hardware, hardware);
+            write_grid(args + 4, listed.y, listed.y);
+            args[8] = listed.y > 0 ? 3u : 0u; // the merge: a full-screen triangle, or nothing
+            InterlockedAdd(f[0].stats[second ? STAT_MESHLETS_PASS2 : STAT_MESHLETS_PASS1], listed.x);
+            InterlockedAdd(f[0].stats[STAT_SW_CLUSTERS], listed.y);
         }
     }
     if (!v.draw || index >= capacity)
         return;
     uint slot = visible_slot(f, index);
-    f[0].visible[slot] = uint2(v.instance, v.meshlet | (v.culled_debug ? CULLED_BIT : 0u));
+    uint flags = (v.culled_debug ? CULLED_BIT : 0u) | (v.software ? SOFTWARE_BIT : 0u);
+    f[0].visible[slot] = uint2(v.instance, v.meshlet | flags);
+    if (v.software)
+    {
+        f[0].raster[f[0].visible_capacity - 1 - sw_index] = slot;
+        return;
+    }
+    f[0].raster[hw_index] = slot;
     if (f[0].draws != nullptr)
     {
         // VkDrawIndexedIndirectCommand: the cluster's triangles straight from the cooked
         // one-byte lists (the index buffer), its window of `meshlet_vertices` as the vertex
         // offset, one instance, and its list slot as the first instance.
-        uint* draw = f[0].draws + index * 5;
+        uint* draw = f[0].draws + hw_index * 5;
         draw[0] = v.triangle_count * 3;
         draw[1] = 1;
         draw[2] = v.triangle_offset;
@@ -698,7 +834,7 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
     bool all = (f[0].flags & FLAG_GROUP_WINDOW_OFF) != 0;
     bool lod = (f[0].flags & FLAG_LOD) != 0;
     uint level_count = max(mesh[0].level_count, 1u);
-    uint* status = f[0].lookback + instance_cull_groups(f);
+    uint64_t* status = f[0].lookback + instance_cull_groups(f);
     uint count = 0;
     uint next_group = 0; // groups come out in increasing order, each at most once
     for (uint l = 0; l < level_count; l++)
@@ -771,7 +907,7 @@ void cull_main(uint thread : SV_GroupThreadID)
     }
     GroupMemoryBarrierWithGroupSync();
     uint total = s_total;
-    uint first = lookback_exclusive(f[0].lookback, ticket, total, thread);
+    uint first = lookback_exclusive(f[0].lookback, ticket, uint2(total, 0), thread).x;
     if (thread == 0 && ticket == instance_cull_groups(f) - 1)
     {
         uint items = min(first + total, f[0].total_groups);
@@ -798,8 +934,8 @@ struct PrimitiveOut
     uint id : SV_PrimitiveID;
 };
 
-// One workgroup per cluster of this pass's range of the visible-cluster list; no task stage:
-// the culling ran in compute (`cluster_cull_main`), shared with the fallback.
+// One workgroup per hardware-drawn cluster of this pass (the front of `Frame::raster`); no
+// task stage: the culling ran in compute (`cluster_cull_main`), shared with the fallback.
 [shader("mesh")]
 [outputtopology("triangle")]
 [numthreads(MESH_GROUP_SIZE, 1, 1)]
@@ -817,9 +953,9 @@ void mesh_main(
         SetMeshOutputCounts(0, 0); // the partial last row of the grid
         return;
     }
-    uint slot = visible_slot(f, index);
+    uint slot = f[0].raster[index];
     uint2 record = f[0].visible[slot];
-    Meshlet m = f[0].meshlets[record.y & ~CULLED_BIT];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
     Instance inst = f[0].instances[record.x];
 
     SetMeshOutputCounts(m.vertex_count, m.triangle_count);
@@ -886,6 +1022,181 @@ uint frag_main(uint id : SV_PrimitiveID) : SV_Target
 uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint triangle : SV_PrimitiveID) : SV_Target
 {
     return id_base | triangle;
+}
+
+// ------------------------------------------------------------------- merge ---
+
+// Writes what the software rasteriser kept in this pass into the hardware's targets. Every
+// sample it kept beats the hardware's pixel (`write_software_sample`), so the depth test
+// (`GREATER_OR_EQUAL`) passes; the sample is cleared for the next pass, which leaves the
+// buffer empty at the end of the frame. Drawn only when the pass has software clusters (an
+// indirect draw of three vertices or none). Merging only the tiles the software rasteriser
+// touched measured slower where it pays (full detail: the marking cost more than the merge).
+[shader("vertex")]
+float4 merge_vert_main(uint id : SV_VertexID) : SV_Position
+{
+    return float4((id == 1) ? 3.0 : -1.0, (id == 2) ? 3.0 : -1.0, 0.0, 1.0);
+}
+
+struct MergeOut
+{
+    uint id : SV_Target0;
+    float depth : SV_Depth;
+};
+
+[shader("fragment")]
+MergeOut merge_main(float4 position : SV_Position)
+{
+    uint index = vis64_index(push.target_width, uint2(position.xy));
+    if (vis64_depth_bits(push.vis64, index) == 0)
+        discard; // no software sample: the hardware's pixel stays (half the bytes read)
+    uint64_t* cell = push.vis64 + index;
+    uint64_t value = cell[0];
+    cell[0] = 0;
+    MergeOut o;
+    o.id = uint(value);
+    o.depth = asfloat(uint(value >> 32));
+    return o;
+}
+
+// ------------------------------------------------------- software rasteriser ---
+
+// The hardware's snap of framebuffer positions: 8 bits of sub-pixel precision
+// (`subPixelPrecisionBits` on NVIDIA and AMD), so that a triangle covers the same pixels
+// whichever rasteriser draws it.
+static const int SUBPIXEL_BITS = 8;
+static const int SUBPIXEL_ONE = 1 << SUBPIXEL_BITS;
+// Largest triangle extent the rasteriser takes, in sub-pixels. Its edge functions are 32-bit:
+// a product of two coordinate differences stays below 2^30 and their difference below 2^31.
+static const int SW_RASTER_MAX_EXTENT = 96 * SUBPIXEL_ONE;
+static const uint SW_RASTER_GROUP = 64; // = MAX_VERTICES: a thread per vertex, then per triangle
+
+groupshared int2 s_sw_position[MAX_VERTICES]; // framebuffer position, snapped to 1/256 px
+groupshared float s_sw_depth[MAX_VERTICES];   // depth (z / w); negative behind the camera
+
+// Keeps `depth << 32 | id` at `pixel` when it beats the hardware's pixel of this pass (drawn
+// before the software raster runs) and the software samples already there: nearer or, at
+// equal depth, a larger id (the hardware's rule: its depth test keeps the last drawn, and it
+// draws in id order).
+void write_software_sample(uint2 pixel, float depth, uint id)
+{
+    float hardware_depth = g_sampled_images_r[NonUniformResourceIndex(push.depth_image)].Load(int3(pixel, 0));
+    if (depth < hardware_depth)
+        return;
+    if (depth == hardware_depth
+        && id < g_sampled_images_u32[NonUniformResourceIndex(push.vis_image)].Load(int3(pixel, 0)))
+        return;
+    InterlockedMax(push.vis64[vis64_index(push.target_width, pixel)], (uint64_t(asuint(depth)) << 32) | id);
+}
+
+// Top-left fill rule for edge a -> b of a triangle wound clockwise on screen (y down), the
+// hardware's rule for samples exactly on an edge: a top edge is horizontal with the triangle
+// below it, a left edge goes up.
+bool top_left(int2 a, int2 b)
+{
+    int2 d = b - a;
+    return (d.y == 0 && d.x > 0) || d.y < 0;
+}
+
+// Edge function of a -> b at p (twice the signed area of a, b, p): positive inside a triangle
+// wound clockwise on screen.
+int edge(int2 a, int2 b, int2 p)
+{
+    return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+}
+
+// Rasterises one triangle as the hardware pipelines do: back faces culled (the front face is
+// counter-clockwise in Vulkan's framebuffer orientation, clockwise on screen once v1 and v2
+// are swapped), a sample at every pixel centre inside or on a top-left edge, depth
+// interpolated linearly in screen space.
+void rasterise_triangle(Frame* f, uint i0, uint i1, uint i2, uint id)
+{
+    int2 p0 = s_sw_position[i0];
+    int2 p1 = s_sw_position[i2]; // swapped: a front face becomes clockwise on screen
+    int2 p2 = s_sw_position[i1];
+    float z0 = s_sw_depth[i0];
+    float z1 = s_sw_depth[i2];
+    float z2 = s_sw_depth[i1];
+    if (min(z0, min(z1, z2)) < 0.0)
+        return; // behind the camera: never routed here (the near plane test), and not drawable
+    int2 lo = min(p0, min(p1, p2));
+    int2 hi = max(p0, max(p1, p2));
+    if (any(hi - lo > SW_RASTER_MAX_EXTENT))
+        return; // never routed here (`dense_cluster`); keeps the arithmetic exact
+    int area = edge(p0, p1, p2);
+    if (area <= 0)
+        return; // back-facing or degenerate
+    // Pixels whose centre (x + 0.5) lies in [lo, hi], clipped to the target.
+    int2 half_pixel = SUBPIXEL_ONE / 2;
+    int2 first = max((lo - half_pixel + SUBPIXEL_ONE - 1) >> SUBPIXEL_BITS, int2(0, 0));
+    int2 last = min((hi - half_pixel) >> SUBPIXEL_BITS, int2(f[0].target_width, f[0].target_height) - 1);
+    if (any(last < first))
+        return;
+    // Edge functions at the first sample, biased so that "covered" is ">= 0" for all three;
+    // a step of one pixel adds a constant.
+    int2 sample = first * SUBPIXEL_ONE + half_pixel;
+    int3 bias = int3(top_left(p1, p2) ? 0 : -1, top_left(p2, p0) ? 0 : -1, top_left(p0, p1) ? 0 : -1);
+    int3 row = int3(edge(p1, p2, sample), edge(p2, p0, sample), edge(p0, p1, sample));
+    int3 step_x = -int3(p2.y - p1.y, p0.y - p2.y, p1.y - p0.y) * SUBPIXEL_ONE;
+    int3 step_y = int3(p2.x - p1.x, p0.x - p2.x, p1.x - p0.x) * SUBPIXEL_ONE;
+    float inv_area = 1.0 / float(area);
+    for (int y = first.y; y <= last.y; y++)
+    {
+        int3 e = row;
+        for (int x = first.x; x <= last.x; x++)
+        {
+            if (all(e + bias >= 0))
+            {
+                // Barycentric weights of p1 and p2 from their opposite edges.
+                float depth = saturate(z0 + (z1 - z0) * (float(e.y) * inv_area) + (z2 - z0) * (float(e.z) * inv_area));
+                if (depth > 0.0) // 0 is the empty sample (and the far plane, where nothing is)
+                    write_software_sample(uint2(x, y), depth, id);
+            }
+            e += step_x;
+        }
+        row += step_y;
+    }
+}
+
+// One workgroup per software-rasterised cluster of this pass (the back of `Frame::raster`):
+// its vertices are transformed and snapped once, then each thread rasterises triangles.
+[shader("compute")]
+[numthreads(SW_RASTER_GROUP, 1, 1)]
+void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+    Frame* f = push.frame;
+    uint index = grid_index(group);
+    if (index >= (pass_args(f) + 4)[3])
+        return; // the partial last row of the grid (uniform)
+    uint slot = f[0].raster[f[0].visible_capacity - 1 - index];
+    uint2 record = f[0].visible[slot];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    Instance inst = f[0].instances[record.x];
+    if (thread < m.vertex_count)
+    {
+        // The mesh shader's transform, then the fixed-function steps: perspective division,
+        // the viewport of `set_viewport_full` (y flipped) and the snap to sub-pixels.
+        uint vertex_index = f[0].meshlet_vertices[m.vertex_offset + thread];
+        Vertex v = f[0].vertices[vertex_index];
+        float4 world = mul(inst.model, float4(v.position, 1));
+        float4 clip = mul(f[0].view_proj, world);
+        float3 ndc = clip.xyz / clip.w;
+        float2 half_size = float2(f[0].target_width, f[0].target_height) * 0.5;
+        float2 framebuffer = float2(ndc.x * half_size.x + half_size.x, half_size.y - ndc.y * half_size.y);
+        s_sw_position[thread] = int2(round(framebuffer * float(SUBPIXEL_ONE)));
+        s_sw_depth[thread] = clip.w > 0.0 ? ndc.z : -1.0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    uint id_base = slot << VISIBILITY_TRIANGLE_BITS;
+    for (uint t = thread; t < m.triangle_count; t += SW_RASTER_GROUP)
+    {
+        uint base = m.triangle_offset + t * 3;
+        rasterise_triangle(f,
+            load_byte(f[0].meshlet_triangles, base),
+            load_byte(f[0].meshlet_triangles, base + 1),
+            load_byte(f[0].meshlet_triangles, base + 2),
+            id_base | t);
+    }
 }
 
 // ------------------------------------------------------------------ shading ---
@@ -1011,8 +1322,9 @@ void resolve_main(uint3 id : SV_DispatchThreadID)
     uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
     uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
     uint2 record = f[0].visible[slot];
-    uint meshlet_index = record.y & ~CULLED_BIT;
+    uint meshlet_index = record.y & MESHLET_INDEX_MASK;
     bool culled_debug = (record.y & CULLED_BIT) != 0;
+    bool software = (record.y & SOFTWARE_BIT) != 0;
     Meshlet m = f[0].meshlets[meshlet_index];
     Instance inst = f[0].instances[record.x];
     uint base = m.triangle_offset + tri * 3;
@@ -1035,7 +1347,9 @@ void resolve_main(uint3 id : SV_DispatchThreadID)
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     // `shade` works in units of a white Lambertian surface facing the sun; the frame stores
     // luminance (cd/m²) times the exposure.
-    float3 color = shade(f, n, object_position, inst.id, meshlet_index, m.lod_level, culled_debug)
-        * (f[0].sun_illuminance * f[0].exposure / 3.14159265);
+    float3 color = shade(f, n, object_position, inst.id, meshlet_index, m.lod_level, culled_debug);
+    if (software && (f[0].flags & FLAG_SHOW_RASTER) != 0)
+        color = lerp(color, float3(0.1, 0.9, 0.3), 0.6); // the software rasteriser's pixels
+    color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][id.xy] = float4(color, 1.0);
 }

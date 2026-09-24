@@ -185,6 +185,7 @@ impl Taa {
             push_constant_bytes: std::mem::size_of::<MotionPush>() as u32,
             alpha_blend: false,
             depth_test: None,
+            depth_write: false,
             name: "taa motion",
         })?;
         let pipeline_resolve = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
@@ -194,6 +195,7 @@ impl Taa {
             push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
             alpha_blend: false,
             depth_test: None,
+            depth_write: false,
             name: "taa resolve",
         })?;
         for module in [vertex, motion, resolve] {

@@ -6,6 +6,9 @@
 //! render graph (the depth buffer is a transient of the frame). Culling runs in compute and
 //! compacts the visible clusters into one list, which the mesh shader draws or, on GPUs
 //! without `VK_EXT_mesh_shader`, one `vkCmdDrawIndexedIndirectCount` ([`GeometryPath`]).
+//! Clusters smaller than a few pixels go to a software rasteriser in compute instead, which
+//! keeps 64-bit samples (depth and visibility id, with an atomic maximum) where it beats the
+//! hardware's pixel; a merge pass writes them into the visibility buffer and the depth.
 
 use std::sync::Arc;
 
@@ -13,9 +16,9 @@ use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, GpuVertex, MeshletMesh};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
-    FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
-    MemoryLocation, MeshPipelineDesc, Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc,
-    VertexPipelineDesc, vk,
+    FrameSlot, FullscreenPipelineDesc, GraphBuffer, GraphImage, ImageAccess, ImageDesc,
+    ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, Result,
+    ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc, vk,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
@@ -44,7 +47,9 @@ impl CullFlags {
     pub const LOD_COLORS: u32 = 128;
     /// Disable the per-group LOD window (debug: every group tests its clusters).
     pub const GROUP_WINDOW_OFF: u32 = 256;
-    /// Everything on except the debug view.
+    /// Tint the pixels the software rasteriser drew (debug view).
+    pub const SHOW_RASTER: u32 = 1024;
+    /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
     /// Whether a bit is set.
@@ -57,15 +62,72 @@ impl CullFlags {
     }
 }
 
+/// `FLAG_SW_RASTER` in the shader: set by the renderer, from [`DrawParams::sw_raster`], in the
+/// first pass's frame block.
+const FLAG_SW_RASTER: u32 = 512;
+
+/// When the software rasteriser draws the dense clusters ([`DrawParams::sw_raster`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SwRaster {
+    /// Never: every cluster is drawn in hardware.
+    Off,
+    /// When the frames hold enough dense triangles to repay its fixed cost (a raster pass and
+    /// a full-screen merge): from [`SW_RASTER_AUTO_ON`] dense triangles a frame until they
+    /// fall below [`SW_RASTER_AUTO_OFF`]. Both ways give the same pixels.
+    #[default]
+    Auto,
+    /// Every frame (the A/B harness, measurements).
+    On,
+}
+
+impl SwRaster {
+    /// Every mode, in the order R cycles them.
+    pub const ALL: [Self; 3] = [Self::Off, Self::Auto, Self::On];
+
+    /// Name for displays and the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::On => "on",
+        }
+    }
+
+    /// The mode after this one.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Auto,
+            Self::Auto => Self::On,
+            Self::On => Self::Off,
+        }
+    }
+}
+
+impl std::str::FromStr for SwRaster {
+    type Err = String;
+
+    fn from_str(text: &str) -> std::result::Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.name().eq_ignore_ascii_case(text))
+            .ok_or_else(|| format!("unknown software raster mode {text:?}: off, auto or on"))
+    }
+}
+
+/// [`SwRaster::Auto`] turns the software rasteriser on from this many dense triangles a frame.
+pub const SW_RASTER_AUTO_ON: u32 = 1_500_000;
+/// ...and off again below this many.
+pub const SW_RASTER_AUTO_OFF: u32 = 750_000;
+
 const PASS_PREVIOUSLY_VISIBLE: u32 = 1;
 const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
-const STAT_COUNT: usize = 8;
+const STAT_COUNT: usize = 10;
 const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
-const FRAME_BLOCK_STRIDE: u64 = 512;
+const FRAME_BLOCK_STRIDE: u64 = 1024;
 
 /// Mirrors `Mesh` in `meshlet.slang` (32 bytes).
 #[repr(C)]
@@ -151,8 +213,16 @@ struct GpuFrame {
     clusters: u64,
     /// The fallback's indexed draws (0 on the mesh path).
     draws: u64,
-    /// Status words of the ordered appends (instance cull, then each cluster cull).
+    /// 64-bit status words of the ordered appends (instance cull, then each cluster cull).
     lookback: u64,
+    /// Per pass, the list slots of the hardware-drawn clusters (from the front) and of the
+    /// software-rasterised ones (from the back).
+    raster: u64,
+    target_width: u32,
+    target_height: u32,
+    /// Clusters with fewer pixels of bounding rectangle per triangle are rasterised in compute.
+    sw_raster_area: f32,
+    pad_raster: u32,
 }
 
 // Both passes' blocks share one buffer at this stride.
@@ -162,6 +232,14 @@ const _: () = assert!(std::mem::size_of::<GpuFrame>() as u64 <= FRAME_BLOCK_STRI
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Push {
     frame: u64,
+    /// The software rasteriser's samples, and the target width again (a pixel reaches
+    /// them without a load through `frame`).
+    vis64: u64,
+    target_width: u32,
+    /// Software raster: sampled-image indices of the hardware's depth and visibility buffer.
+    depth_image: u32,
+    vis_image: u32,
+    pad: u32,
 }
 
 /// Mirrors `ResolvePush` in `meshlet.slang`.
@@ -202,8 +280,37 @@ fn grown_capacity(current: u32, wanted: u64, max: u32) -> u32 {
     target.max(u64::from(current)) as u32
 }
 
+/// [`SwRaster::Auto`]'s decision after a frame with `dense_triangles`, from its state `on`:
+/// on from [`SW_RASTER_AUTO_ON`], off below [`SW_RASTER_AUTO_OFF`], unchanged between the
+/// two, so that a demand near one threshold does not flip it every frame.
+fn software_worth_it(on: bool, dense_triangles: u32) -> bool {
+    if on {
+        dense_triangles >= SW_RASTER_AUTO_OFF
+    } else {
+        dense_triangles >= SW_RASTER_AUTO_ON
+    }
+}
+
 /// Bytes of one `VkDrawIndexedIndirectCommand`.
 const DRAW_COMMAND_BYTES: u32 = 20;
+
+/// The cluster arguments at the start of a frame (`Frame::clusters`): per pass, the hardware
+/// draw grid and its count, the software raster grid and its count and the merge's draw
+/// (vertex count written by the cull), all empty; then the culls' tickets.
+const CLUSTER_ARGS_START: [u32; 26] = [
+    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, // pass 1 (or the single pass)
+    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, // pass 2 (no software clusters: see `frame_block`)
+    0, 0, // tickets
+];
+/// Bytes of one pass's cluster arguments.
+const CLUSTER_ARGS_PASS_BYTES: u64 = 48;
+
+/// Default of [`DrawParams::sw_raster_area`].
+pub const SW_RASTER_DEFAULT_AREA: f32 = 2.0;
+/// Largest cluster the software rasteriser takes, in pixels across its bounding rectangle
+/// (`SW_RASTER_MAX_PX` in the shader): its integer edge functions take triangles up to 96
+/// pixels across (`SW_RASTER_MAX_EXTENT`), and the rectangle bounds the triangles.
+pub const SW_RASTER_MAX_PX: f32 = 64.0;
 
 /// How the clusters that survive culling reach the rasteriser. Both paths share the compute
 /// culling and its compacted list of visible clusters, so they produce the same pixels.
@@ -235,7 +342,7 @@ pub struct DrawTargets {
     /// `u32::MAX` where nothing was drawn (see `forge_render::visibility`).
     pub visibility: ImageHandle,
     /// The visible-cluster list the ids index (this frame slot's): `(instance, meshlet)` per
-    /// slot, pass 1 filling it from the front and pass 2 from the back.
+    /// slot, pass 1 then pass 2.
     pub visible_list: forge_gpu::BufferHandle,
 }
 
@@ -458,7 +565,7 @@ impl MeshletSceneBuilder {
                 .map(|i| {
                     device
                         .create_buffer(BufferDesc {
-                            size: 48,
+                            size: std::mem::size_of_val(&CLUSTER_ARGS_START) as u64,
                             usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
                             location: MemoryLocation::CpuToGpu,
                             category: MemoryCategory::Frame,
@@ -473,7 +580,7 @@ impl MeshletSceneBuilder {
                     let words = instance_groups + 2 * u64::from(total_groups);
                     device
                         .create_buffer(BufferDesc {
-                            size: words * 4,
+                            size: words * 8,
                             usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
                             location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Work,
@@ -611,9 +718,28 @@ pub struct FrameStats {
     /// Clusters dropped because the visible-cluster list was full: the frames in flight when
     /// the demand jumps, until [`MeshletRenderer::begin_frame`] has grown every slot's list.
     pub visible_overflow: u32,
+    /// Clusters rasterised in compute (included in the pass counts).
+    pub sw_clusters: u32,
+    /// Their triangles (included in `triangles`).
+    pub sw_triangles: u32,
+    /// Triangles of the drawn dense clusters, the software rasteriser's kind, whether it ran
+    /// or not ([`SwRaster::Auto`] decides from them).
+    pub dense_triangles: u32,
 }
 
 impl FrameStats {
+    /// The software rasteriser's counter line for `mode`: what it drew, and how many
+    /// triangles sat in dense clusters (what [`SwRaster::Auto`] decides from).
+    pub fn software_line(&self, mode: SwRaster) -> String {
+        format!(
+            "software raster {} (R): {:.0} k clusters, {:.2} M triangles in compute; {:.2} M triangles in dense clusters",
+            mode.name(),
+            f64::from(self.sw_clusters) / 1e3,
+            f64::from(self.sw_triangles) / 1e6,
+            f64::from(self.dense_triangles) / 1e6
+        )
+    }
+
     /// ", N k dropped (visible list full)" when clusters were dropped, else nothing: for the
     /// counter lines, so a capped frame never reads as a complete one.
     pub fn overflow_note(&self) -> String {
@@ -651,10 +777,12 @@ fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphIma
 }
 
 /// One frame slot's visible-cluster list: `(instance, meshlet | flags)` per listed cluster,
-/// pass 1 from the front and pass 2 from the back, and on the fallback path one
-/// `VkDrawIndexedIndirectCommand` per listed cluster of the pass being drawn.
+/// pass 1 then pass 2; the pass being drawn's raster lists (list slots, hardware-drawn from
+/// the front, software-rasterised from the back); and on the
+/// fallback path one `VkDrawIndexedIndirectCommand` per hardware-drawn cluster of that pass.
 struct VisibleList {
     visible: GraphBuffer,
+    raster: GraphBuffer,
     draws: Option<GraphBuffer>,
     capacity: u32,
 }
@@ -668,6 +796,13 @@ impl VisibleList {
             category: MemoryCategory::Work,
             name: &format!("visible clusters {slot}"),
         })?;
+        let raster = device.create_buffer(BufferDesc {
+            size: u64::from(capacity) * 4,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: &format!("raster lists {slot}"),
+        })?;
         let draws = match path {
             GeometryPath::MeshShader => None,
             GeometryPath::IndirectCount => Some(device.create_buffer(BufferDesc {
@@ -680,10 +815,30 @@ impl VisibleList {
         };
         Ok(Self {
             visible: GraphBuffer::new(visible),
+            raster: GraphBuffer::new(raster),
             draws: draws.map(GraphBuffer::new),
             capacity,
         })
     }
+}
+
+/// Bytes of the software rasteriser's samples for `extent`: 8 per pixel
+/// (`shaders/vis64.slang`).
+pub fn vis64_bytes(extent: vk::Extent2D) -> u64 {
+    u64::from(extent.width.max(1)) * u64::from(extent.height.max(1)) * 8
+}
+
+/// The software rasteriser's samples, `depth << 32 | id` per pixel of `extent`, row-major
+/// (`shaders/vis64.slang`), created empty (zero). The merge clears what it takes, so the
+/// buffer is empty again at the end of every frame.
+fn create_vis64(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphBuffer> {
+    let samples = vec![0_u64; (vis64_bytes(extent) / 8) as usize];
+    Ok(GraphBuffer::new(device.create_buffer_with_data(
+        &samples,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        MemoryCategory::Targets,
+        "software raster samples",
+    )?))
 }
 
 /// Declares the meshlet passes for one scene.
@@ -696,8 +851,17 @@ pub struct MeshletRenderer {
     pipeline_hzb: Pipeline,
     pipeline_cull: Pipeline,
     pipeline_cluster_cull: Pipeline,
+    /// The software rasteriser and its merge, on devices with 64-bit buffer atomics.
+    pipeline_sw_raster: Option<Pipeline>,
+    pipeline_merge: Option<Pipeline>,
     pipeline_resolve: Pipeline,
     hzb: GraphImage,
+    /// The software rasteriser's samples (see [`create_vis64`]), with it.
+    vis64: Option<GraphBuffer>,
+    /// [`SwRaster::Auto`]'s state: the recent frames held enough dense triangles.
+    sw_auto_on: bool,
+    /// The target size.
+    extent: vk::Extent2D,
     frame_buffers: Vec<Buffer>,
     /// The per-frame counters (`FrameStats`): cleared and counted on the GPU in device-local
     /// memory, then copied into this frame slot's host-cached readback.
@@ -738,6 +902,11 @@ pub struct DrawParams<'a> {
     pub wireframe: bool,
     /// Pre-exposure the resolve multiplies the shaded luminance by (see `crate::exposure`).
     pub exposure: f32,
+    /// When the software rasteriser draws the first pass's dense clusters.
+    pub sw_raster: SwRaster,
+    /// Dense clusters: under [`SW_RASTER_MAX_PX`] across, with fewer pixels of bounding
+    /// rectangle than this per triangle.
+    pub sw_raster_area: f32,
 }
 
 /// The graph handles the cull and draw passes touch.
@@ -759,6 +928,10 @@ struct MeshPassIo {
     visibility_bits: forge_gpu::BufferHandle,
     /// The visible-cluster list of this frame slot.
     visible: forge_gpu::BufferHandle,
+    /// Its raster lists.
+    raster: forge_gpu::BufferHandle,
+    /// The software rasteriser's samples, when it runs this frame.
+    vis64: Option<forge_gpu::BufferHandle>,
     stats: forge_gpu::BufferHandle,
     /// This frame slot's copy of the counters for the host.
     stats_readback: forge_gpu::BufferHandle,
@@ -767,7 +940,9 @@ struct MeshPassIo {
 impl MeshletRenderer {
     /// Compiles the pipelines and creates the depth resources for `extent`. The path follows
     /// the device: mesh shaders when it has them, the indirect-count fallback otherwise
-    /// (which needs 8-bit index buffers).
+    /// (which needs 8-bit index buffers). The software rasteriser needs 64-bit atomics on
+    /// storage buffers (and stores from fragment shaders, for its merge); without them every
+    /// cluster is drawn in hardware.
     pub fn new(
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
@@ -862,6 +1037,13 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             name: "cluster cull",
         })?;
+        let (pipeline_sw_raster, pipeline_merge) = if device.features().int64_atomics {
+            let (raster, merge) = Self::software_pipelines(device, shaders)?;
+            (Some(raster), Some(merge))
+        } else {
+            tracing::info!("no 64-bit buffer atomics: software rasteriser off");
+            (None, None)
+        };
         let resolve = device.create_shader_module(
             &shaders.compile("meshlet.slang", "resolve_main", ShaderStage::Compute)?,
             "visibility resolve",
@@ -875,6 +1057,10 @@ impl MeshletRenderer {
             device.destroy_shader_module(module);
         }
         let hzb = create_pyramid(device, extent)?;
+        let vis64 = pipeline_sw_raster
+            .is_some()
+            .then(|| create_vis64(device, extent))
+            .transpose()?;
         let frame_buffers = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -933,8 +1119,13 @@ impl MeshletRenderer {
             pipeline_hzb,
             pipeline_cull,
             pipeline_cluster_cull,
+            pipeline_sw_raster,
+            pipeline_merge,
             pipeline_resolve,
             hzb,
+            vis64,
+            sw_auto_on: false,
+            extent,
             frame_buffers,
             stats,
             stats_readback,
@@ -946,14 +1137,90 @@ impl MeshletRenderer {
         })
     }
 
+    /// The software rasteriser (compute) and its merge (a full-screen triangle writing the
+    /// visibility buffer and the depth).
+    fn software_pipelines(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+    ) -> Result<(Pipeline, Pipeline)> {
+        let raster = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "sw_raster_main", ShaderStage::Compute)?,
+            "software raster",
+        )?;
+        let merge_vertex = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "merge_vert_main", ShaderStage::Vertex)?,
+            "software raster merge",
+        )?;
+        let merge_fragment = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "merge_main", ShaderStage::Fragment)?,
+            "software raster merge",
+        )?;
+        let pipelines = device
+            .create_compute_pipeline(&ComputePipelineDesc {
+                shader: (raster, "sw_raster_main"),
+                push_constant_bytes: std::mem::size_of::<Push>() as u32,
+                name: "software raster",
+            })
+            .and_then(|raster| {
+                let merge = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
+                    vertex: (merge_vertex, "merge_vert_main"),
+                    fragment: (merge_fragment, "merge_main"),
+                    color_formats: &[vk::Format::R32_UINT],
+                    push_constant_bytes: std::mem::size_of::<Push>() as u32,
+                    alpha_blend: false,
+                    depth_test: Some(vk::Format::D32_SFLOAT),
+                    depth_write: true,
+                    name: "software raster merge",
+                })?;
+                Ok((raster, merge))
+            });
+        for module in [raster, merge_vertex, merge_fragment] {
+            device.destroy_shader_module(module);
+        }
+        pipelines
+    }
+
+    /// The push constants of the meshlet pipelines for the frame block at `frame_address`.
+    fn push(&self, frame_address: u64) -> Push {
+        Push {
+            frame: frame_address,
+            vis64: self.vis64.as_ref().map_or(0, |b| b.address()),
+            target_width: self.extent.width,
+            depth_image: 0,
+            vis_image: 0,
+            pad: 0,
+        }
+    }
+
+    /// Whether this frame rasterises its dense clusters in compute: asked for (or, in
+    /// [`SwRaster::Auto`], worth it lately), available on the device, and neither a frozen
+    /// culling camera (the routing sizes clusters with it, and it may be far from the drawing
+    /// camera) nor wireframe.
+    pub fn software_raster(&self, params: &DrawParams<'_>) -> bool {
+        let wanted = match params.sw_raster {
+            SwRaster::Off => false,
+            SwRaster::Auto => self.sw_auto_on,
+            SwRaster::On => true,
+        };
+        wanted
+            && self.pipeline_sw_raster.is_some()
+            && !params.flags.has(CullFlags::FREEZE)
+            && !params.wireframe
+    }
+
     /// How the visible clusters are drawn on this device.
     pub fn path(&self) -> GeometryPath {
         self.path
     }
 
-    /// Recreates the depth pyramid. The device must be idle.
+    /// Recreates the depth pyramid and the software rasteriser's samples. The device must be
+    /// idle.
     pub fn resize(&mut self, extent: vk::Extent2D) -> Result<()> {
         self.hzb = create_pyramid(&self.device, extent)?;
+        if self.vis64.is_some() {
+            self.vis64 = Some(create_vis64(&self.device, extent)?);
+        }
+        self.extent = extent;
         Ok(())
     }
 
@@ -1000,7 +1267,21 @@ impl MeshletRenderer {
             instances_visible: raw[4],
             lod_level_sum: raw[5],
             visible_overflow: raw[6],
+            sw_clusters: raw[7],
+            sw_triangles: raw[8],
+            dense_triangles: raw[9],
         });
+        if let Some(s) = stats {
+            let on = software_worth_it(self.sw_auto_on, s.dense_triangles);
+            if on != self.sw_auto_on {
+                tracing::debug!(
+                    dense_triangles = s.dense_triangles,
+                    on,
+                    "software raster (auto)"
+                );
+                self.sw_auto_on = on;
+            }
+        }
         if let Some(s) = stats {
             let wanted = u64::from(s.meshlets_pass1)
                 + u64::from(s.meshlets_pass2)
@@ -1029,6 +1310,13 @@ impl MeshletRenderer {
     fn frame_block(&self, slot: FrameSlot, params: &DrawParams<'_>, pass: u32) -> GpuFrame {
         let scene = params.scene;
         let hzb = self.hzb.extent();
+        // Only the first pass rasterises in software: pass 2 draws the few clusters that
+        // became visible, and a second raster and merge would cost more than they save.
+        let mut flags = params.flags;
+        flags.0 &= !FLAG_SW_RASTER;
+        if pass != PASS_REMAINDER && self.software_raster(params) {
+            flags.0 |= FLAG_SW_RASTER;
+        }
         GpuFrame {
             view_proj: params.view_proj.to_cols_array(),
             cull_view_proj: params.cull.view_proj.to_cols_array(),
@@ -1037,7 +1325,7 @@ impl MeshletRenderer {
             camera_pos: params.cull.position.to_array(),
             instance_count: scene.instance_count,
             max_meshlets: scene.max_meshlets,
-            flags: params.flags.0,
+            flags: flags.0,
             pass,
             hzb_image: self.hzb.sampled().0,
             hzb_size: [hzb.width, hzb.height],
@@ -1071,14 +1359,21 @@ impl MeshletRenderer {
                 .as_ref()
                 .map_or(0, |b| b.address()),
             lookback: scene.lookback[slot.index].address(),
+            raster: self.lists[slot.index].raster.address(),
+            target_width: self.extent.width,
+            target_height: self.extent.height,
+            sw_raster_area: params.sw_raster_area.max(0.0),
+            pad_raster: 0,
         }
     }
 
     /// Declares the passes of this frame's draw: the instance cull, then per mesh pass a
-    /// cluster cull (compute, filling the visible-cluster list) and the draw of what it kept,
-    /// with the depth pyramid built between the two passes when occlusion is on. Everything
-    /// reads and writes through declared graph accesses. The draws write the visibility
-    /// buffer and the depth (both transients); [`MeshletRenderer::resolve`] shades the result.
+    /// cluster cull (compute, filling the visible-cluster list), the hardware draw of what it
+    /// kept and, with the software rasteriser, its raster and merge, with the depth pyramid
+    /// built between the two passes when occlusion is on. Everything reads and writes through
+    /// declared graph accesses. The draws write the visibility buffer and the depth (both
+    /// transients); [`MeshletRenderer::resolve`] shades the result. `extent` must be the
+    /// renderer's (see [`MeshletRenderer::resize`]).
     pub fn draw<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -1101,9 +1396,13 @@ impl MeshletRenderer {
         // writes the grid it leads to.
         let scene = params.scene;
         scene.indirect[slot.index].write(0, &[0_u32, 0, 1, 0, 0, 0, 0, 0]);
-        scene.clusters[slot.index].write(0, &[0_u32, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0]);
+        scene.clusters[slot.index].write(0, &CLUSTER_ARGS_START);
 
         let extent = params.extent;
+        debug_assert_eq!(
+            extent, self.extent,
+            "resize the meshlet renderer with the target"
+        );
         let depth = graph.transient(TransientDesc {
             name: "depth",
             width: extent.width,
@@ -1122,6 +1421,7 @@ impl MeshletRenderer {
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });
+        let software = self.software_raster(&params);
         let io = MeshPassIo {
             visibility,
             depth,
@@ -1136,6 +1436,12 @@ impl MeshletRenderer {
                 .map(|b| graph.import_buffer(b)),
             visibility_bits: graph.import_buffer(&scene.visibility),
             visible: graph.import_buffer(&self.lists[slot.index].visible),
+            raster: graph.import_buffer(&self.lists[slot.index].raster),
+            vis64: self
+                .vis64
+                .as_ref()
+                .filter(|_| software)
+                .map(|b| graph.import_buffer(b)),
             stats: graph.import_buffer(&self.stats),
             stats_readback: graph.import_buffer(&self.stats_readback[slot.index]),
         };
@@ -1154,7 +1460,7 @@ impl MeshletRenderer {
             .buffer(io.lookback, BufferAccess::TransferDst)
             .buffer(io.stats, BufferAccess::TransferDst)
             .run(move |_, commands| {
-                commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 4, 0);
+                commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 8, 0);
                 commands.fill_buffer(stats, 0, STATS_BYTES, 0);
                 Ok(())
             });
@@ -1166,25 +1472,22 @@ impl MeshletRenderer {
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(cull_pipeline);
-                commands.push_constants(
-                    cull_pipeline,
-                    &Push {
-                        frame: frame_address,
-                    },
-                );
+                commands.push_constants(cull_pipeline, &self.push(frame_address));
                 commands.dispatch(instance_groups, 1, 1);
                 Ok(())
             });
 
-        let (cull_label, draw_label) = if occlusion {
+        let (cull_label, draw_label, raster_label) = if occlusion {
             (
                 "geometry/cluster cull 1 (visible last frame)",
                 "geometry/meshlet pass 1 (visible last frame)",
+                "geometry/software raster 1 (visible last frame)",
             )
         } else {
             (
                 "geometry/cluster cull (single pass)",
                 "geometry/meshlets (single pass)",
+                "geometry/software raster (single pass)",
             )
         };
         let first = MeshPass {
@@ -1198,6 +1501,7 @@ impl MeshletRenderer {
             self.stats_readback_passes(graph, cull_label, io, slot);
         }
         self.draw_pass(graph, draw_label, first, &params, slot);
+        self.software_passes(graph, raster_label, first, &params, slot);
 
         if occlusion {
             if !frozen {
@@ -1206,7 +1510,7 @@ impl MeshletRenderer {
             let second = MeshPass {
                 io,
                 frame_address: frame_address + FRAME_BLOCK_STRIDE,
-                args_offset: 16,
+                args_offset: CLUSTER_ARGS_PASS_BYTES,
                 second: true,
             };
             self.cull_pass(
@@ -1304,6 +1608,7 @@ impl MeshletRenderer {
             .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.visible, BufferAccess::ShaderWrite(compute))
+            .buffer(io.raster, BufferAccess::ShaderWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
         if let Some(draws) = io.draws {
             builder = builder.buffer(draws, BufferAccess::ShaderWrite(compute));
@@ -1313,12 +1618,7 @@ impl MeshletRenderer {
         }
         builder.run(move |_, commands| {
             commands.bind_pipeline(pipeline);
-            commands.push_constants(
-                pipeline,
-                &Push {
-                    frame: frame_address,
-                },
-            );
+            commands.push_constants(pipeline, &self.push(frame_address));
             commands.dispatch_indirect(grid, 0);
             Ok(())
         });
@@ -1349,8 +1649,9 @@ impl MeshletRenderer {
             .run(|_, _| Ok(()));
     }
 
-    /// One draw of the clusters a cull pass listed: a mesh workgroup per cluster, or on the
-    /// fallback path an indexed draw per cluster through one `vkCmdDrawIndexedIndirectCount`.
+    /// The hardware draw of the clusters a cull pass listed for it: a mesh workgroup per
+    /// cluster, or on the fallback path an indexed draw per cluster through one
+    /// `vkCmdDrawIndexedIndirectCount`, in list order (the ids grow with the draw order).
     /// The first pass clears the visibility buffer and the depth, the second loads them.
     fn draw_pass<'f>(
         &'f self,
@@ -1371,11 +1672,12 @@ impl MeshletRenderer {
         let draws: Option<&'f GraphBuffer> = self.lists[slot.index].draws.as_ref();
         let capacity = self.lists[slot.index].capacity;
         let extent = params.extent;
+        let push = self.push(pass.frame_address);
         let MeshPass {
             io,
-            frame_address,
             args_offset,
             second,
+            ..
         } = pass;
         let mut builder = graph.pass(label);
         builder = match io.draws {
@@ -1384,6 +1686,7 @@ impl MeshletRenderer {
                     io.clusters,
                     BufferAccess::IndirectArgsAndShaderRead(S::MESH_SHADER_EXT),
                 )
+                .buffer(io.raster, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
                 .buffer(io.visible, BufferAccess::ShaderRead(S::MESH_SHADER_EXT)),
             Some(draws) => builder
                 .buffer(io.clusters, BufferAccess::IndirectArgs)
@@ -1431,12 +1734,7 @@ impl MeshletRenderer {
                 commands.begin_rendering(&info);
                 commands.bind_pipeline(pipeline);
                 commands.set_viewport_full(extent);
-                commands.push_constants(
-                    pipeline,
-                    &Push {
-                        frame: frame_address,
-                    },
-                );
+                commands.push_constants(pipeline, &push);
                 let result = match draws {
                     None => commands.draw_mesh_tasks_indirect(clusters, args_offset),
                     Some(draws) => {
@@ -1454,6 +1752,91 @@ impl MeshletRenderer {
                 };
                 commands.end_rendering();
                 result
+            });
+    }
+
+    /// The software raster of the clusters a cull pass listed for it, after the hardware
+    /// draw of the same pass: a compute workgroup per cluster, a thread per vertex then per
+    /// triangle, keeping in the 64-bit samples only what beats the hardware's pixel; then the
+    /// merge of those samples into the visibility buffer and the depth.
+    fn software_passes<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        label: &'static str,
+        pass: MeshPass,
+        params: &DrawParams<'f>,
+        slot: FrameSlot,
+    ) {
+        use vk::PipelineStageFlags2 as S;
+        let (Some(raster), Some(merge), Some(vis64)) = (
+            &self.pipeline_sw_raster,
+            &self.pipeline_merge,
+            pass.io.vis64,
+        ) else {
+            return;
+        };
+        let clusters: &'f GraphBuffer = &params.scene.clusters[slot.index];
+        let extent = params.extent;
+        let push = self.push(pass.frame_address);
+        let MeshPass {
+            io, args_offset, ..
+        } = pass;
+        graph
+            .pass(label)
+            .buffer(
+                io.clusters,
+                BufferAccess::IndirectArgsAndShaderRead(S::COMPUTE_SHADER),
+            )
+            .buffer(io.raster, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
+            .buffer(io.visible, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
+            .image(io.depth, ImageAccess::Sampled(S::COMPUTE_SHADER))
+            .image(io.visibility, ImageAccess::Sampled(S::COMPUTE_SHADER))
+            .buffer(vis64, BufferAccess::ShaderReadWrite(S::COMPUTE_SHADER))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(raster);
+                commands.push_constants(
+                    raster,
+                    &Push {
+                        depth_image: resources.sampled(io.depth).0,
+                        vis_image: resources.sampled(io.visibility).0,
+                        ..push
+                    },
+                );
+                commands.dispatch_indirect(clusters, args_offset + 16);
+                Ok(())
+            });
+        graph
+            .pass("geometry/software raster merge")
+            .buffer(io.clusters, BufferAccess::IndirectArgs)
+            .buffer(vis64, BufferAccess::ShaderReadWrite(S::FRAGMENT_SHADER))
+            .image(io.visibility, ImageAccess::ColorAttachment)
+            .image(io.depth, ImageAccess::DepthAttachment)
+            .run(move |resources, commands| {
+                let color = [vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(io.visibility))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE)];
+                let depth = vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(io.depth))
+                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE);
+                let info = vk::RenderingInfo::default()
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent,
+                    })
+                    .layer_count(1)
+                    .color_attachments(&color)
+                    .depth_attachment(&depth);
+                commands.begin_rendering(&info);
+                commands.bind_pipeline(merge);
+                commands.set_viewport_full(extent);
+                commands.push_constants(merge, &push);
+                commands.draw_indirect(clusters, args_offset + 32);
+                commands.end_rendering();
+                Ok(())
             });
     }
 
@@ -1503,7 +1886,8 @@ struct MeshPass {
     io: MeshPassIo,
     /// This pass's frame block.
     frame_address: u64,
-    /// Offset of this pass's (x, y, 1, count) in the cluster arguments.
+    /// Offset of this pass's hardware (x, y, 1, count) in the cluster arguments; its
+    /// software raster's follow 16 bytes later, then its merge's `VkDrawIndirectCommand`.
     args_offset: u64,
     /// The second pass of the two-pass occlusion: tests the depth pyramid, loads the targets.
     second: bool,
@@ -1542,5 +1926,45 @@ mod tests {
     fn every_list_slot_fits_the_visibility_id() {
         // The id keeps 7 bits for the triangle (124 per cluster): the slot has the other 25.
         assert!(u64::from(VISIBLE_MAX_CAPACITY) <= 1 << (32 - 7));
+    }
+
+    #[test]
+    fn the_software_raster_modes_parse_and_cycle() {
+        for mode in SwRaster::ALL {
+            assert_eq!(mode.name().parse::<SwRaster>(), Ok(mode));
+            assert_eq!(mode.name().to_uppercase().parse::<SwRaster>(), Ok(mode));
+        }
+        assert!("sometimes".parse::<SwRaster>().is_err());
+        assert_eq!(SwRaster::default(), SwRaster::Auto);
+        let mut mode = SwRaster::Off;
+        for _ in 0..SwRaster::ALL.len() {
+            mode = mode.next();
+        }
+        assert_eq!(mode, SwRaster::Off, "R comes back to where it started");
+    }
+
+    #[test]
+    fn auto_mode_switches_with_a_gap_between_its_thresholds() {
+        const _: () = assert!(SW_RASTER_AUTO_OFF < SW_RASTER_AUTO_ON);
+        let between = (SW_RASTER_AUTO_OFF + SW_RASTER_AUTO_ON) / 2;
+        assert!(!software_worth_it(false, between), "stays off between");
+        assert!(
+            software_worth_it(false, SW_RASTER_AUTO_ON),
+            "turns on at the upper one"
+        );
+        assert!(software_worth_it(true, between), "stays on between");
+        assert!(
+            !software_worth_it(true, SW_RASTER_AUTO_OFF - 1),
+            "turns off below the lower one"
+        );
+    }
+
+    #[test]
+    fn the_software_samples_take_eight_bytes_a_pixel() {
+        let extent = vk::Extent2D {
+            width: 1600,
+            height: 900,
+        };
+        assert_eq!(vis64_bytes(extent), 1600 * 900 * 8);
     }
 }

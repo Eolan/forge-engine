@@ -52,12 +52,17 @@ clusters **in a fixed order** (a single-pass prefix sum over workgroups): depth 
 by draw order, so the order must not depend on timing. Mesh shaders (no task stage) or, on
 GPUs without them, one indexed draw per listed cluster through
 `vkCmdDrawIndexedIndirectCount` (the cooked one-byte triangle lists as the index buffer) draw
-the same list. Next: software rasteriser for sub-pixel clusters, cluster acceleration
-structures for ray tracing on RTX.
+the same list. Since issue #3 the first pass's dense clusters (under 2 pixels of bounding
+rectangle per triangle) can go to a software rasteriser in compute instead, on both paths,
+when a frame holds enough of them to repay its fixed cost (D-021). Next: cluster
+acceleration structures for ray tracing on RTX.
 *Measured:* 127 M-triangle scene, 1152 instances: 6.1 ms brute force → 1.1 ms with
 occlusion, 0 pixels different. Compute culling (#5): the two paths 0 pixels apart; the mesh
 path costs what the task path did (0.180 ms bench, 0.326 against 0.322 ms for the ballad),
-the fallback's draw about twice the mesh draw. *(research: gpu-geometry.md; demo: meshlets)*
+the fallback's draw about twice the mesh draw. Software rasteriser (#3): full detail
+2.27 → 1.15 ms on the bench (6.41 → 2.48 without occlusion, 3.92 → 1.20 through the
+fallback), the ballad at full detail 4.37 → 2.02; the LOD views unchanged (it stays off).
+*(research: gpu-geometry.md; demo: meshlets)*
 
 ## D-004 — Coordinates: f64 nested frames, camera-relative f32, Y-up metres ✅ (2026-09-24)
 
@@ -288,9 +293,15 @@ The rasterisers write no attributes. The hardware path writes a 32-bit id
 `(instance, cluster)` filled by the cluster cull) into an `R32_UINT` target next to the
 hardware depth, and a compute pass shades once per pixel from the id, reconstructing the
 perspective-correct barycentrics and their derivatives analytically (no `ddx`, no helper
-lanes; `docs/ARCHITECTURE.md` §4). The 64-bit `depth | id` atomic target of the plan is
-deferred to the software rasteriser (#3), which needs it; the hardware path will write the
-same word then so the two merge in one image. Material classification and per-material
+lanes; `docs/ARCHITECTURE.md` §4). The plan's 64-bit `depth | id` atomic target for every
+rasteriser was built and measured with the software rasteriser (#3) and not kept: the
+fragment atomic, the export of its depth and the clear cost 0.05 ms at the LOD views (bench
+0.19 → 0.24 ms, ballad 0.34 → 0.40) where the software rasteriser brings nothing. The
+hardware keeps this 32-bit id and its depth test; the software rasteriser keeps 64-bit
+samples only where they beat the hardware's pixel, with the same rule (nearer, or at equal
+depth the larger id: the depth test keeps the last drawn and the hardware draws in id
+order), and a merge pass writes them into the id and the depth (amended 2026-09-24).
+Material classification and per-material
 dispatches (#20) sit on top of this resolve and read the D-007 table. Chosen over shading
 in the mesh passes because it makes shading cost independent of overdraw and triangle
 size, gives the mesh-shader, software and fallback rasterisers one shading path and is the

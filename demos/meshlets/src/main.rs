@@ -2,8 +2,9 @@
 //! with every culling stage switchable so its effect can be measured and frozen.
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, F freeze culling, C cone culling,
-//! V frustum culling, O occlusion culling, M meshlet colours, Tab wireframe, G tone curve, Esc
-//! quit. The scene is lit in physical units (the sun at 128 klux) at a fixed exposure.
+//! V frustum culling, O occlusion culling, M meshlet colours, R software rasteriser, H show
+//! what it drew, Tab wireframe, G tone curve, Esc quit. The scene is lit in physical units
+//! (the sun at 128 klux) at a fixed exposure.
 
 #![forbid(unsafe_code)]
 
@@ -16,6 +17,7 @@ use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
 use forge_app::{TransientDesc, vk};
 use forge_core::Seed;
 use forge_geom::{MeshletMesh, procedural};
+use forge_render::SwRaster;
 use forge_render::meshlet::DrawParams;
 use forge_render::{
     CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
@@ -75,6 +77,18 @@ struct Args {
     /// Draw through the indirect-count fallback: the device is created without mesh shaders.
     #[arg(long)]
     force_fallback: bool,
+    /// When the software rasteriser draws the dense clusters: auto (when a frame holds enough
+    /// of them to repay its fixed cost), on or off. R cycles them; on and off must give the
+    /// same image (A/B harness).
+    #[arg(long, default_value = "auto")]
+    sw_raster: SwRaster,
+    /// Clusters (under 64 pixels across) whose bounding rectangle holds fewer pixels than
+    /// this per triangle are rasterised in compute.
+    #[arg(long, default_value_t = forge_render::meshlet::SW_RASTER_DEFAULT_AREA)]
+    sw_raster_area: f32,
+    /// Start with the software rasteriser's pixels tinted green (H toggles it).
+    #[arg(long)]
+    show_raster: bool,
 }
 
 struct Bench {
@@ -114,6 +128,9 @@ impl Bench {
         }
         if !args.no_occlusion {
             flags.0 |= CullFlags::OCCLUSION;
+        }
+        if args.show_raster {
+            flags.0 |= CullFlags::SHOW_RASTER;
         }
         Ok(Self {
             args,
@@ -164,6 +181,8 @@ impl Demo for Bench {
             KeyCode::KeyM => self.flags.toggle(CullFlags::MESHLET_COLORS),
             KeyCode::KeyL => self.flags.toggle(CullFlags::LOD),
             KeyCode::KeyK => self.flags.toggle(CullFlags::LOD_COLORS),
+            KeyCode::KeyR => self.args.sw_raster = self.args.sw_raster.next(),
+            KeyCode::KeyH => self.flags.toggle(CullFlags::SHOW_RASTER),
             KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
             KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
@@ -203,6 +222,7 @@ impl Demo for Bench {
                 self.args.lod_error,
                 f64::from(last.lod_level_sum) / f64::from((last.meshlets_pass1 + last.meshlets_pass2).max(1))
             ));
+            ctx.profile.counter(last.software_line(self.args.sw_raster));
         }
         let live = self.cull_camera(ctx.aspect());
         let cull = match self.frozen {
@@ -235,6 +255,8 @@ impl Demo for Bench {
                 extent,
                 wireframe: self.wireframe,
                 exposure: exposure_from_ev100(self.args.ev100),
+                sw_raster: self.args.sw_raster,
+                sw_raster_area: self.args.sw_raster_area,
             },
         )?;
         self.renderer.resolve(
@@ -261,7 +283,7 @@ impl Demo for Bench {
         let gpu = self.gpu_ms.iter().sum::<f64>() / self.gpu_ms.len().max(1) as f64;
         let cpu = self.cpu_ms.iter().sum::<f64>() / self.cpu_ms.len().max(1) as f64;
         let title = format!(
-            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} inst, {:.0} k + {:.0} k meshlets, {:.2} M tris, {:.0} k occluded{} | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
+            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} inst, {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles), {:.2} M tris, {:.0} k occluded{} | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
             self.scene.instance_count,
             self.scene.max_meshlets,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -270,6 +292,8 @@ impl Demo for Bench {
             mean(|s| s.instances_visible),
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
+            mean(|s| s.sw_clusters) / 1e3,
+            mean(|s| s.dense_triangles) / 1e6,
             mean(|s| s.triangles) / 1e6,
             mean(|s| s.occluded) / 1e3,
             match mean(|s| s.visible_overflow) {

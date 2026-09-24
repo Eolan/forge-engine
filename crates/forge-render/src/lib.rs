@@ -25,7 +25,7 @@ pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_fr
 pub use forge_gpu::DlssMode;
 pub use meshlet::{
     CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, MeshId, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder,
+    MeshletScene, MeshletSceneBuilder, SwRaster,
 };
 pub use starfield::Starfield;
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};

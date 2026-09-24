@@ -104,10 +104,12 @@ pub struct FullscreenPipelineDesc<'a> {
     pub push_constant_bytes: u32,
     /// Blend the output over the attachment with its alpha (overlays); opaque otherwise.
     pub alpha_blend: bool,
-    /// Test against a depth attachment of this format without writing it (reversed-Z
-    /// `GREATER_OR_EQUAL`: a full-screen triangle at depth 0 then covers only the pixels
-    /// nothing was drawn to, which is how the sky is drawn last).
+    /// Test against a depth attachment of this format (reversed-Z `GREATER_OR_EQUAL`: a
+    /// full-screen triangle at depth 0 then covers only the pixels nothing was drawn to,
+    /// which is how the sky is drawn last).
     pub depth_test: Option<vk::Format>,
+    /// Also write the depth that passes (a fragment shader exporting `SV_Depth`).
+    pub depth_write: bool,
     /// Debug name.
     pub name: &'a str,
 }
@@ -232,7 +234,7 @@ impl Device {
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(desc.depth_test.is_some())
-            .depth_write_enable(false)
+            .depth_write_enable(desc.depth_test.is_some() && desc.depth_write)
             .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL);
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(desc.color_formats)

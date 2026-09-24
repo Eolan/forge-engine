@@ -23,6 +23,9 @@ pub struct DeviceFeatures {
     /// 8-bit index buffers (`VK_KHR_index_type_uint8` or the EXT): the meshlet fallback draws
     /// straight from the cooked one-byte triangle lists.
     pub index_type_uint8: bool,
+    /// 64-bit atomics on storage buffers (`shaderBufferInt64Atomics`), usable from fragment
+    /// shaders (`fragmentStoresAndAtomics`): the meshlet renderer's visibility buffer.
+    pub int64_atomics: bool,
 }
 
 /// Choices made when creating a device.
@@ -143,6 +146,7 @@ impl Device {
             // The meshlet fallback's indirect draws carry the visible-list slot in firstInstance.
             .draw_indirect_first_instance(true)
             .fill_mode_non_solid(true)
+            .fragment_stores_and_atomics(best.features.int64_atomics)
             // No geometry shaders are ever used (D-003), but a fragment shader that reads
             // `SV_PrimitiveID` (the visibility buffer's) declares the SPIR-V `Geometry`
             // capability, which the validation layer ties to this feature.
@@ -166,6 +170,7 @@ impl Device {
             .scalar_block_layout(true)
             .host_query_reset(true)
             .draw_indirect_count(true)
+            .shader_buffer_int64_atomics(best.features.int64_atomics)
             .shader_float16(true)
             .shader_int8(true)
             .storage_buffer8_bit_access(true)
@@ -364,6 +369,7 @@ impl Device {
         }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
+        let fragment_stores_and_atomics = features2.features.fragment_stores_and_atomics;
         let baseline = v12.timeline_semaphore == vk::TRUE
             && v12.buffer_device_address == vk::TRUE
             && v12.descriptor_indexing == vk::TRUE
@@ -380,6 +386,8 @@ impl Device {
                 && v12.sampler_filter_minmax == vk::TRUE,
             memory_budget: has(ext::memory_budget::NAME),
             index_type_uint8: uint8_ext.is_some() && uint8.index_type_uint8 == vk::TRUE,
+            int64_atomics: v12.shader_buffer_int64_atomics == vk::TRUE
+                && fragment_stores_and_atomics == vk::TRUE,
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,

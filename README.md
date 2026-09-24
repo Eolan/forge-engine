@@ -63,7 +63,8 @@ open or fold a group; the same zones go to Tracy with `--features profiling`), *
 the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
-is a bug), **M** meshlet colours, **Tab** wireframe, **G** tone curve (ACES → PBR Neutral →
+is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
+what it drew, **Tab** wireframe, **G** tone curve (ACES → PBR Neutral →
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
 (built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
@@ -77,7 +78,10 @@ exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (1
 `--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
 of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance`,
 `--force-fallback` (the device without mesh shaders: the geometry is drawn through
-`vkCmdDrawIndexedIndirectCount`, pixel-identical).
+`vkCmdDrawIndexedIndirectCount`, pixel-identical), `--sw-raster auto|on|off` (the software
+rasteriser for dense clusters; auto runs it when a frame holds enough of them),
+`--sw-raster-area PX` (2: pixels of a cluster's bounding rectangle per triangle below which
+it is dense), `--show-raster`.
 Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
 where the time goes: [docs/PROFILE.md](docs/PROFILE.md).
 
@@ -104,10 +108,12 @@ cargo run --release -p meshlets
 A grid of 1152 asteroids (127 M triangles). Keys: **F1** profiling overlay, **F** freeze
 culling and move the camera to see what was culled, **V** frustum, **C** cone, **O**
 occlusion, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold, **M** meshlet
-colours, **Tab** wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
+colours, **R** software rasteriser (auto → on → off), **H** tint what it drew, **Tab**
+wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
 `--no-occlusion`, `--lod-error PX`, `--no-lod`, `--orbit` (scripted motion), `--overlay`,
 `--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral` (AgX), `--force-fallback`
-(the indirect-count path of GPUs without mesh shaders).
+(the indirect-count path of GPUs without mesh shaders), `--sw-raster auto|on|off`,
+`--sw-raster-area PX`, `--show-raster`.
 Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
 
 ### `task-bench` — job system

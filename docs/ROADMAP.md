@@ -49,8 +49,9 @@ It always shows the best the engine can do at that moment and carries its own pr
   0.325 ms, 0.34 with the planet in view), DLSS through Streamline as an option next to
   TAA ✅ (U switches mode at run time; 0.60–0.77 ms, the DLSS pass itself 0.45 ms at
   1600×900), memory counters in the overlay ✅ (VRAM against the OS budget, the engine's
-  allocations by category, uploads per frame; 359 MiB of a 14.9 GiB budget); next streaming of cluster pages, the software rasteriser when triangle counts
-  rise again.
+  allocations by category, uploads per frame; 359 MiB of a 14.9 GiB budget), the software
+  rasteriser for dense clusters ✅ (issue #3: off at the ballad's 1 px LOD, where it would
+  not pay; full detail 4.37 → 2.02 ms); next streaming of cluster pages.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -103,13 +104,15 @@ Goal: the renderer skeleton every later system draws through.
    draw about 2× (numbers in `docs/demos/meshlets.md`).
 4. Cluster LOD DAG (meshoptimizer `clusterlod` through FFI), GPU LOD selection by
    screen-space error, streaming of cluster pages from disk through a GPU request buffer,
-   software rasteriser for sub-pixel clusters (64-bit atomics). Metrics: DAG roots reached,
-   cluster fill.
+   software rasteriser for sub-pixel clusters (64-bit atomics) ✅ (issue #3, 2026-09-24:
+   dense clusters of the first pass in compute, merged into the hardware's targets; auto
+   when a frame holds enough of them; full detail 2× faster, `docs/demos/meshlets.md`).
+   Metrics: DAG roots reached, cluster fill.
 5. Visibility buffer ✅ (2026-09-24: the mesh passes write `visible cluster << 7 | triangle`
    next to the hardware depth, a compute resolve reconstructs the attributes with analytic
    barycentrics and shades once per pixel; `docs/ARCHITECTURE.md` §4). Still to come:
    material classification and per-material shading (#20), the material table (D-007) as the
-   shading input, the 64-bit combined depth|id for the software rasteriser (#3).
+   shading input. The software rasteriser's 64-bit depth|id samples are merged into it (#3).
 6. HDR pipeline ✅ (2026-09-24, D-022): physical light units (the sun in lux, its disc from
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.

@@ -481,3 +481,35 @@ What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.
   seconds: at full detail, a list grown after two frames and one reserved from the start gave
   frame 240 images 1.13 M pixels apart (up to 3 levels, TAA off). Any culling A/B at full
   detail is only exact when neither side ever dropped a cluster.
+
+### The software rasteriser in Forge (issue #3)
+
+- **Route by density, not size.** Nanite and Bevy send clusters under a pixel size to
+  compute. On the RTX 5070 Ti, at a 1 px LOD error, clusters under 16–32 pixels still hold
+  triangles of several pixels. The hardware draws them for almost nothing: pass 1 stayed at
+  0.040 ms with a third of its clusters removed. What the hardware pays for is primitives per
+  pixel, so a cluster is dense when its bounding rectangle holds fewer than 2 pixels per
+  triangle.
+- **A fixed cost that only volume repays.** A raster pass plus a merge cost about 0.02 ms.
+  At full detail the software path halves the geometry (29–106 M dense triangles), but at
+  the LOD views (0.01–0.08 M) it only adds time. The cull therefore counts dense triangles
+  every frame, and the renderer runs the path from 1.5 M until the count falls below 0.75 M.
+  Measured break-even is near 1 M. Both paths give the same pixels, so the switch cannot show.
+- **The unified 64-bit target did not pay here.** Nanite's design has every rasteriser write
+  `depth << 32 | id` with atomics, then export the depth. Built as planned, the fragment
+  atomic cost 0.025 ms over the colour write through the ROPs, the export 0.016 and the
+  clear 0.007. That made the LOD views 0.05 ms slower (bench 0.19 → 0.24 ms).
+  - The hardware now keeps its 32-bit id and depth test.
+  - The software rasteriser checks the hardware's pixel before its atomic.
+  - A merge pass writes the winners in.
+  - One tie rule serves every path, because the hardware draws in id order: nearer, or at
+    equal depth the larger id.
+  - Neither a tiled 64-bit layout nor a read before the atomic helped.
+- **Matching the hardware's coverage.** Round-to-nearest-even to 1/256 pixel and the top-left
+  rule match NVIDIA's rasteriser except for a handful of edge pixels per frame at full detail
+  (19 of 1.44 M, 9 beyond one level). GLSL `Round` compiles to round-half-to-even there.
+  Those pixels come from positions the fixed-function unit rounds to the other step, not
+  from depth: a 1e-6 depth nudge moved none. The depth values differ in the last bits, which
+  TAA's reprojection turns into sub-level differences over the frame.
+- **The fallback gains most.** Its per-cluster indexed draws are what compute replaces: the
+  bench at full detail goes 3.92 → 1.20 ms, against 2.27 → 1.15 on the mesh path.
