@@ -54,7 +54,8 @@ timings when it would push the counters off the screen, and turns red when a hea
 
 - Seven procedural asteroid meshes (cube-spheres of 48 to 192 segments per face displaced by
   fractal noise, 28 k to 442 k triangles each), built in parallel on the job system, cooked
-  into meshlets by meshoptimizer and concatenated into one set of GPU tables.
+  into meshlets by meshoptimizer and concatenated into one set of GPU tables (0.64 s at
+  start-up since issue #34 gave each simplification only its group's vertices; 10.1 s before).
 - 3000 instances scattered along an S-shaped belt (a flattened disc 140–360 m across with
   density clumps), big rocks rare, no two rocks overlapping (a placement grid rejects
   intersections), a clear corridor kept around the flight path: **195 M source triangles,

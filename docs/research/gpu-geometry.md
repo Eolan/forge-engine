@@ -532,3 +532,14 @@ What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.
 - **The price is a second pyramid test.** Pass 1 now samples a pyramid where it read a
   bit, and pass 2 samples two. At a million instances the culls rose from 2.24 and 2.36 ms
   to 2.54 and 2.51 ms. At the LOD views it is within noise.
+
+### Cooking time (issue #34)
+
+- **Hand meshoptimizer only the group.** `meshopt_simplify` and `meshopt_buildMeshlets` size
+  their tables by the vertex buffer they receive. Given the whole mesh for every group, a
+  DAG level cost groups × vertices: 49 s for a 1 M-triangle rock, 511 s for 3 M. A compact
+  copy of each group's vertices, in the mesh's order, brings that to 1.4 s and 4.5 s. The
+  error then comes back absolute (`meshopt_SimplifyErrorAbsolute`), and the
+  simplification normalises positions to the group's extent: the same choice as
+  `clusterlod.h`'s sparse mode, and a slightly different DAG than before (the golden
+  captures moved; the volume a frame selects did not).

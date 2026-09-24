@@ -316,6 +316,35 @@ views are unchanged: bench 0.19 ms, ballad 0.35, their full-detail views 1.11 an
 Every golden capture is 0 pixels apart from the previous build, both paths, and so is the
 A/B harness.
 
+## Cooking a DAG in seconds (issue #34, 2026-09-24)
+
+City-blocks needs twenty props of 0.5–3 M triangles. Cooking the bench's rock at that size
+took minutes, more than linearly:
+
+| Rock (`--detail`) | triangles | clusters | cook before | cook after |
+|---|---|---|---|---|
+| 96 | 110 k | 2 639 → 2 634 | 0.63 s | 0.15 s |
+| 290 | 1.0 M | 24 111 → 24 101 | 49 s | 1.4 s |
+| 500 | 3.0 M | 71 058 → 71 143 | 511 s | 4.5 s |
+
+Every group's simplification and clustering was handed the whole vertex buffer, and
+meshoptimizer builds its per-vertex tables over the buffer it gets, so each level cost
+groups × vertices. Now each group runs on a compact copy of the vertices it uses:
+- the copy keeps the mesh's vertex order, so ties break as before;
+- the error comes back absolute, where it used to be relative and scaled;
+- the members of each group are found in one pass instead of one scan of the level per group.
+
+The ballad's seven rocks build in 0.64 s at start-up instead of 10.1 s.
+
+The DAG is not bit-identical. meshoptimizer normalises positions to the extents of the
+vertices it is given, now the group's rather than the mesh's, so some collapses go the other
+way. This is also the recipe meshoptimizer's own `clusterlod.h` follows (sparse, absolute
+error). A frame selects the same volume (the bench 14–15 k clusters, 1.07 against 1.09 M
+triangles at 1 px) and the rocks look alike, but the golden captures move: 30 % of the
+ballad's pixels, largely the automatic exposure shifting by a level. The full-detail
+captures are unchanged, level 0 being the same. The A/B harness and mesh vs fallback stay
+at 0 pixels.
+
 ## Numbers — occlusion culling
 
 Same scene, default roughness, 1600×900, validation clean:

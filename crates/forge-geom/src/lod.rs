@@ -52,10 +52,6 @@ struct Record {
 
 /// Builds the DAG of `indices` over `vertices`. `indices` must be a valid triangle list.
 pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
-    let vertex_bytes: &[u8] = bytemuck::cast_slice(vertices);
-    let adapter = VertexDataAdapter::new(vertex_bytes, std::mem::size_of::<GpuVertex>(), 0)
-        .expect("vertex adapter");
-    let scale = meshopt::simplify_scale(&adapter);
     let mut dag = ClusterDag {
         meshlets: Vec::new(),
         meshlet_vertices: Vec::new(),
@@ -64,13 +60,16 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
         triangle_count: 0,
     };
     let mut records: Vec<Record> = Vec::new();
+    let mut compactor = Compactor::new(vertices.len());
+    let mut locked = vec![false; vertices.len()];
 
     // Level 0.
+    let whole = compactor.subset(indices, vertices, &locked);
     let mut current = emit_clusters(
         &mut dag,
         &mut records,
-        indices,
-        &adapter,
+        &whole,
+        &whole.indices,
         0,
         ([0.0; 3], 0.0),
         0.0,
@@ -96,10 +95,14 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
             vertices.len(),
             GROUP_SIZE,
         );
+        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); group_count];
+        for (slot, &c) in current.iter().enumerate() {
+            groups[partition[slot] as usize].push(c);
+        }
 
         // Lock the vertices shared between groups so neighbouring groups stay watertight.
         let mut vertex_group = vec![u32::MAX; vertices.len()];
-        let mut locked = vec![false; vertices.len()];
+        locked.fill(false);
         for (slot, &c) in current.iter().enumerate() {
             let group = partition[slot];
             for &v in &records[c].indices {
@@ -114,30 +117,22 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
 
         let mut next = Vec::new();
         let mut progressed = false;
-        for group in 0..group_count as u32 {
-            let members: Vec<usize> = current
-                .iter()
-                .enumerate()
-                .filter(|(slot, _)| partition[*slot] == group)
-                .map(|(_, &c)| c)
-                .collect();
-            if members.is_empty() {
-                continue;
-            }
+        for members in groups.iter().filter(|m| !m.is_empty()) {
             let merged: Vec<u32> = members
                 .iter()
                 .flat_map(|&c| records[c].indices.iter().copied())
                 .collect();
+            let subset = compactor.subset(&merged, vertices, &locked);
             let target = (merged.len() / 3).div_ceil(2).max(1) * 3;
-            let mut relative_error = 0.0_f32;
+            let mut simplify_error = 0.0_f32;
             let simplified = meshopt::simplify_with_locks(
-                &merged,
-                &adapter,
-                &locked,
+                &subset.indices,
+                &subset.adapter(),
+                &subset.locked,
                 target,
-                1.0,
-                SimplifyOptions::LockBorder,
-                Some(&mut relative_error),
+                f32::MAX,
+                SimplifyOptions::LockBorder | SimplifyOptions::ErrorAbsolute,
+                Some(&mut simplify_error),
             );
             if simplified.is_empty() || simplified.len() as f32 > merged.len() as f32 * STALL_RATIO
             {
@@ -161,8 +156,8 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
             let error = members
                 .iter()
                 .map(|&c| records[c].gpu.self_error)
-                .fold(relative_error * scale, f32::max);
-            for &c in &members {
+                .fold(simplify_error, f32::max);
+            for &c in members {
                 records[c].gpu.parent_center = sphere.0;
                 records[c].gpu.parent_radius = sphere.1;
                 records[c].gpu.parent_error = error;
@@ -170,8 +165,8 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
             next.extend(emit_clusters(
                 &mut dag,
                 &mut records,
+                &subset,
                 &simplified,
-                &adapter,
                 level,
                 sphere,
                 error,
@@ -199,35 +194,105 @@ pub fn build_dag(indices: &[u32], vertices: &[GpuVertex]) -> ClusterDag {
     dag
 }
 
-/// Cuts `indices` into clusters, appends them to the tables and the records, and returns
-/// the new records' ids. `self_sphere` / `self_error` are the producing group's values.
+/// Part of the mesh (the whole mesh, or a group's triangles) over a compact copy of the
+/// vertices it uses. meshoptimizer's simplifier and clusteriser size their per-vertex tables
+/// by the vertex buffer they are given: handed the whole mesh for every group, the cost of a
+/// level was groups × vertices, and a 3 M-triangle mesh took 8.5 minutes to cook.
+struct Subset {
+    /// The used vertices, in the mesh's order.
+    vertices: Vec<GpuVertex>,
+    /// Their lock flags (shared with another group).
+    locked: Vec<bool>,
+    /// The mesh's index of each local vertex.
+    global: Vec<u32>,
+    /// The triangles, in local indices.
+    indices: Vec<u32>,
+}
+
+impl Subset {
+    fn adapter(&self) -> VertexDataAdapter<'_> {
+        VertexDataAdapter::new(
+            bytemuck::cast_slice(&self.vertices),
+            std::mem::size_of::<GpuVertex>(),
+            0,
+        )
+        .expect("vertex adapter")
+    }
+}
+
+/// Builds [`Subset`]s with one mesh-sized table, reset after each subset.
+struct Compactor {
+    /// Local index of each mesh vertex in the subset being built, `u32::MAX` elsewhere.
+    local: Vec<u32>,
+}
+
+impl Compactor {
+    fn new(vertex_count: usize) -> Self {
+        Self {
+            local: vec![u32::MAX; vertex_count],
+        }
+    }
+
+    /// The subset of `indices`, its vertices numbered in the mesh's order (so meshoptimizer
+    /// breaks ties between vertices as it would on the whole mesh).
+    fn subset(&mut self, indices: &[u32], vertices: &[GpuVertex], locked: &[bool]) -> Subset {
+        let mut global = Vec::new();
+        for &g in indices {
+            let local = &mut self.local[g as usize];
+            if *local == u32::MAX {
+                *local = 0;
+                global.push(g);
+            }
+        }
+        global.sort_unstable();
+        for (i, &g) in global.iter().enumerate() {
+            self.local[g as usize] = i as u32;
+        }
+        let subset = Subset {
+            vertices: global.iter().map(|&g| vertices[g as usize]).collect(),
+            locked: global.iter().map(|&g| locked[g as usize]).collect(),
+            indices: indices.iter().map(|&g| self.local[g as usize]).collect(),
+            global,
+        };
+        for &g in &subset.global {
+            self.local[g as usize] = u32::MAX;
+        }
+        subset
+    }
+}
+
+/// Cuts `indices` (local to `subset`) into clusters, appends them to the tables and the
+/// records in mesh indices, and returns the new records' ids. `self_sphere` / `self_error`
+/// are the producing group's values.
 fn emit_clusters(
     dag: &mut ClusterDag,
     records: &mut Vec<Record>,
+    subset: &Subset,
     indices: &[u32],
-    adapter: &VertexDataAdapter<'_>,
     level: u32,
     self_sphere: ([f32; 3], f32),
     self_error: f32,
 ) -> Vec<usize> {
+    let adapter = subset.adapter();
     let built = meshopt::build_meshlets(
         indices,
-        adapter,
+        &adapter,
         MESHLET_MAX_VERTICES,
         MESHLET_MAX_TRIANGLES,
         0.5,
     );
     let mut ids = Vec::with_capacity(built.meshlets.len());
     for (raw, meshlet) in built.meshlets.iter().zip(built.iter()) {
-        let bounds = meshopt::compute_meshlet_bounds(meshlet, adapter);
+        let bounds = meshopt::compute_meshlet_bounds(meshlet, &adapter);
         let vertex_offset = dag.meshlet_vertices.len() as u32;
         let triangle_offset = dag.meshlet_triangles.len() as u32;
-        dag.meshlet_vertices.extend_from_slice(meshlet.vertices);
+        dag.meshlet_vertices
+            .extend(meshlet.vertices.iter().map(|&v| subset.global[v as usize]));
         dag.meshlet_triangles.extend_from_slice(meshlet.triangles);
         let global: Vec<u32> = meshlet
             .triangles
             .iter()
-            .map(|&local| meshlet.vertices[local as usize])
+            .map(|&local| subset.global[meshlet.vertices[local as usize] as usize])
             .collect();
         dag.triangle_count += raw.triangle_count as usize;
         // Level 0 clusters use their own sphere as `self` (error 0, always fine enough).
