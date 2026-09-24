@@ -511,10 +511,21 @@ pub struct DrawParams<'a> {
     pub color: ImageHandle,
     /// Target size.
     pub extent: vk::Extent2D,
-    /// Clear the colour target first, or load what a previous pass drew.
-    pub clear_color: Option<[f32; 4]>,
+    /// What the first pass does with the colour target's previous contents.
+    pub color_load: ColorLoad,
     /// Wireframe.
     pub wireframe: bool,
+}
+
+/// Load operation of the colour target in the first mesh pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ColorLoad {
+    /// Clear to this colour.
+    Clear([f32; 4]),
+    /// Keep what an earlier pass drew.
+    Load,
+    /// Nothing drawn before and a later pass covers every pixel the rocks leave (the sky).
+    DontCare,
 }
 
 /// The graph handles one mesh pass touches.
@@ -804,7 +815,11 @@ impl MeshletRenderer {
         };
         let indirect: &'f GraphBuffer = &params.scene.indirect[slot.index];
         let extent = params.extent;
-        let clear_color = params.clear_color.filter(|_| pass.first);
+        let color_load = if pass.first {
+            params.color_load
+        } else {
+            ColorLoad::Load
+        };
         let MeshPass {
             label,
             io,
@@ -832,19 +847,18 @@ impl MeshletRenderer {
             builder = builder.image(io.hzb, ImageAccess::Sampled(S::TASK_SHADER_EXT));
         }
         builder.run(move |resources, commands| {
+            let (load_op, clear) = match color_load {
+                ColorLoad::Clear(color) => (vk::AttachmentLoadOp::CLEAR, color),
+                ColorLoad::Load => (vk::AttachmentLoadOp::LOAD, [0.0; 4]),
+                ColorLoad::DontCare => (vk::AttachmentLoadOp::DONT_CARE, [0.0; 4]),
+            };
             let color = [vk::RenderingAttachmentInfo::default()
                 .image_view(resources.view(io.color))
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(if clear_color.is_some() {
-                    vk::AttachmentLoadOp::CLEAR
-                } else {
-                    vk::AttachmentLoadOp::LOAD
-                })
+                .load_op(load_op)
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: clear_color.unwrap_or([0.0; 4]),
-                    },
+                    color: vk::ClearColorValue { float32: clear },
                 })];
             let depth = vk::RenderingAttachmentInfo::default()
                 .image_view(resources.view(io.depth))

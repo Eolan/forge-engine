@@ -42,8 +42,9 @@ It always shows the best the engine can do at that moment and carries its own pr
 - Phase 1: cluster LOD DAG ✅ and instance cull pass ✅ (2026-09-24: 78 M → 0.6 M
   triangles, GPU 5.5 → 0.34 ms, pixel-exact A/B), profiler overlay ✅, render graph ✅
   (2026-09-24: every pass declared, every barrier derived, transients in one heap,
-  pixel-identical); next a cheaper sky, streaming of cluster pages, the software rasteriser
-  when triangle counts rise again, visibility buffer, HDR exposure and tonemapping, DLSS.
+  pixel-identical), the sky drawn last behind the rocks ✅ (0.33 → 0.28 ms); next the
+  visibility buffer, HDR exposure and tonemapping, streaming of cluster pages, the software
+  rasteriser when triangle counts rise again, DLSS.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.

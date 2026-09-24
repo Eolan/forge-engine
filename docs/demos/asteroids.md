@@ -182,6 +182,12 @@ the barriers from what each pass declared and from the state the previous frame 
 | ballad (TAA on, occlusion on) | 19 | 37 | 3 | colour 12.8 MB, depth 6.4 MB, motion 6.4 MB |
 | bench (occlusion on) | 15 | 28 | 2 | depth 6.4 MB |
 
+**The sky is drawn last (issue #19, same day).** With the graph in place the starfield moved
+after the mesh passes: it reads the depth transient as a read-only attachment and its
+full-screen triangle sits at depth 0, so in reversed-Z the fragment shader runs only where
+no rock was drawn. Same pixels (0 differences on the four ballad captures), GPU frame
+0.33 → 0.28 ms; the atmosphere pass (#8) will take the same slot.
+
 `FORGE_GRAPH_LOG=1` prints the plan; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
 memory. Proof that nothing changed: the seven reference captures taken before the migration
 (frames 240 and 600 with and without TAA, with and without occlusion, the bench static and

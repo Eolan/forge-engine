@@ -11,7 +11,8 @@ pub mod starfield;
 pub mod taa;
 
 pub use meshlet::{
-    CullCamera, CullFlags, FrameStats, MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
+    ColorLoad, CullCamera, CullFlags, FrameStats, MeshId, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder,
 };
 pub use starfield::Starfield;
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};

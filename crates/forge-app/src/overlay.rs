@@ -191,6 +191,7 @@ impl Overlay {
             color_formats: &[format],
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             alpha_blend: true,
+            depth_test: None,
             name: "overlay",
         })?;
         device.destroy_shader_module(vertex);

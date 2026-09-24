@@ -87,6 +87,8 @@ pub enum ImageAccess {
     ColorAttachment,
     /// Tested and written as the depth attachment.
     DepthAttachment,
+    /// Tested as a read-only depth attachment (`DEPTH_READ_ONLY_OPTIMAL`, store op `NONE`).
+    DepthRead,
     /// Sampled or loaded through the bindless set by these shader stages.
     Sampled(vk::PipelineStageFlags2),
     /// Read as a storage image by these stages.
@@ -138,6 +140,12 @@ impl ImageAccess {
                 A::DEPTH_STENCIL_ATTACHMENT_READ | A::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 true,
             ),
+            Self::DepthRead => (
+                L::DEPTH_READ_ONLY_OPTIMAL,
+                S::EARLY_FRAGMENT_TESTS | S::LATE_FRAGMENT_TESTS,
+                A::DEPTH_STENCIL_ATTACHMENT_READ,
+                false,
+            ),
             Self::Sampled(stages) => (sampled_layout, stages, A::SHADER_SAMPLED_READ, false),
             Self::StorageRead(stages) => (L::GENERAL, stages, A::SHADER_STORAGE_READ, false),
             Self::StorageWrite(stages) => (L::GENERAL, stages, A::SHADER_STORAGE_WRITE, true),
@@ -174,7 +182,11 @@ impl ImageAccess {
     fn initialises(self) -> bool {
         !matches!(
             self,
-            Self::Sampled(_) | Self::StorageRead(_) | Self::TransferSrc | Self::Present
+            Self::DepthRead
+                | Self::Sampled(_)
+                | Self::StorageRead(_)
+                | Self::TransferSrc
+                | Self::Present
         )
     }
 }

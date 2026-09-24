@@ -16,7 +16,8 @@ use forge_core::Seed;
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    CullCamera, CullFlags, FrameStats, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
+    ColorLoad, CullCamera, CullFlags, FrameStats, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder,
 };
 use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
@@ -208,7 +209,7 @@ impl Demo for Bench {
                 flags: self.flags,
                 color: frame.target,
                 extent: ctx.extent(),
-                clear_color: Some([0.02, 0.02, 0.03, 1.0]),
+                color_load: ColorLoad::Clear([0.02, 0.02, 0.03, 1.0]),
                 wireframe: self.wireframe,
             },
         )?;

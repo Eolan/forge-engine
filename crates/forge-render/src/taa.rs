@@ -155,6 +155,7 @@ impl Taa {
             color_formats: &[MOTION_FORMAT],
             push_constant_bytes: std::mem::size_of::<MotionPush>() as u32,
             alpha_blend: false,
+            depth_test: None,
             name: "taa motion",
         })?;
         let pipeline_resolve = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
@@ -163,6 +164,7 @@ impl Taa {
             color_formats: &[HDR_FORMAT],
             push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
             alpha_blend: false,
+            depth_test: None,
             name: "taa resolve",
         })?;
         for module in [vertex, motion, resolve] {

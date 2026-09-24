@@ -19,7 +19,7 @@ use forge_core::{Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    CullCamera, CullFlags, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
+    ColorLoad, CullCamera, CullFlags, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, Starfield, Taa,
 };
 use forge_task::TaskPool;
@@ -364,8 +364,8 @@ impl Demo for Ballad {
                 );
             }
         }
-        // Draw jittered into the HDR target; cull with the unjittered camera. The sky, the
-        // rocks and the resolve are graph passes: the graph orders their colour writes.
+        // Draw jittered into the HDR target; cull with the unjittered camera. The rocks go
+        // first, then the sky fills the pixels they left (depth-tested), then the resolve.
         self.taa.enabled = self.taa_enabled;
         let taa_frame = self.taa.begin(
             &mut frame.graph,
@@ -373,13 +373,6 @@ impl Demo for Ballad {
             cull.view_proj,
         );
         let draw_view_proj = taa_frame.jittered_projection * self.camera.view();
-        self.starfield.draw(
-            &mut frame.graph,
-            taa_frame.color,
-            extent,
-            draw_view_proj,
-            self.renderer.sun_dir,
-        );
         let depth = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
@@ -393,10 +386,18 @@ impl Demo for Ballad {
                 flags: self.flags,
                 color: taa_frame.color,
                 extent,
-                clear_color: None,
+                color_load: ColorLoad::DontCare,
                 wireframe: self.wireframe,
             },
         )?;
+        self.starfield.draw(
+            &mut frame.graph,
+            taa_frame.color,
+            depth,
+            extent,
+            draw_view_proj,
+            self.renderer.sun_dir,
+        );
         self.taa
             .resolve(&mut frame.graph, &taa_frame, depth, frame.target);
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
