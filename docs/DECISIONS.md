@@ -1,0 +1,249 @@
+# Forge — Decisions
+
+Numbered, dated, never deleted. A decision cites the research that backs it and the demo that
+proved it. Status: ✅ **accepted** (in code, measured), 🟡 **proposed** (needs the owner's
+yes), ⏳ **pending** (research not finished), 🅿️ **parked**.
+
+Read `ARCHITECTURE.md` for the principles these decisions implement and `ROADMAP.md` for
+when each one gets built.
+
+---
+
+## D-001 — Rust for the whole engine ✅ (2026-09-24)
+
+Client, server, tools and pipelines are Rust. The argument, honestly:
+
+- **For.** Memory safety without a garbage collector in a multithreaded engine (the job
+  system's scoped borrows are checked by the compiler, see `forge-task`); one toolchain for
+  Windows and Linux servers; first-class Vulkan (`ash`), meshoptimizer, QUIC (`quinn`) and
+  ECS (`bevy_ecs`) crates; `cargo` for builds, tests and dependency auditing; deterministic
+  builds; the previous three projects were Rust, so the bricks port directly.
+- **Against, and what we do about it.** The best physics engines (Jolt, PhysX, box3d) and
+  audio middleware are C/C++: bind them behind a Forge trait (D-009, D-011) rather than
+  rewrite them. Compile times: dependencies are built optimised once (`profile.dev.package`),
+  engine crates stay small. `unsafe` is confined to two crates with documented invariants.
+- **Not chosen.** C++ (no safety net for the concurrency we need), C# (GC pauses against a
+  real-time audio thread), Zig/Jai (ecosystem too small for Vulkan + QUIC + physics bindings).
+
+## D-002 — Vulkan 1.3+ through `ash`, shaders in Slang ✅ (2026-09-24)
+
+Baseline: dynamic rendering, synchronization2, timeline semaphores, buffer device address,
+descriptor indexing, scalar block layout, host query reset, draw indirect count. Optional,
+detected at start: `VK_EXT_mesh_shader`, ray query + acceleration structures,
+`VK_EXT_sampler_filter_minmax`. Shaders are Slang compiled by `slangc` to SPIR-V 1.6 into a
+content-hashed cache; one file per pipeline family; `-matrix-layout-column-major` so glam
+matrices are used as-is.
+*Why not wgpu:* trails raw Vulkan on mesh shaders, ray tracing and descriptor features and
+adds a layer; the previous project reached the same conclusion. *Why not DX12:* Windows only;
+the server and a Linux build matter. *Why Slang over HLSL/GLSL/rust-gpu:* one language for
+task, mesh, compute and ray-tracing stages, modules, generics, pointers to device-address
+buffers, Khronos-hosted; rust-gpu still lacks buffer device address.
+*(research: gpu-geometry.md §8–9; demo: meshlets)*
+
+## D-003 — GPU-driven geometry: clusters, task/mesh shaders, compute fallback ✅ (2026-09-24)
+
+Meshes are cooked into meshlets (≤ 128 triangles; 64 v / 124 t today via meshoptimizer);
+culling (frustum, normal cone, two-pass hierarchical-Z occlusion) and emission run on the GPU
+from device-address buffers; the CPU issues one draw. Geometry shaders are never used. Every
+mesh-shader path gets a compute + `vkCmdDrawIndexedIndirectCount` fallback producing the same
+pixels (checked with `tools/imgdiff`). Next: cluster LOD DAG (meshoptimizer `clusterlod`),
+visibility buffer, software rasteriser for sub-pixel clusters, cluster acceleration
+structures for ray tracing on RTX.
+*Measured:* 127 M-triangle scene, 1152 instances: 6.1 ms brute force → 1.1 ms with
+occlusion, 0 pixels different. *(research: gpu-geometry.md; demo: meshlets)*
+
+## D-004 — Coordinates: f64 nested frames, camera-relative f32, Y-up metres ✅ (2026-09-24)
+
+`(frame_id, f64 position)` inside a hierarchy integer sector → star system → body →
+construct; the GPU receives `f32` relative to the camera or an anchor; reversed-Z with an
+infinite far plane in `D32_SFLOAT`. **No origin rebasing** (unsupported in multiplayer by
+Epic's own account; each client renders relative to its own camera instead). Right-handed,
++Y up, −Z forward, 1 unit = 1 metre; Vulkan's Y-down framebuffer handled once by a negative
+viewport height; Z-up sources (Blender, GIS) swapped at import.
+*(research: large-worlds.md §1–2, §9)*
+
+## D-005 — Our own job system, with the "leave cores free" rule ✅ (2026-09-24)
+
+`forge-task`: work-stealing deques per worker, three priorities, dependency counters that
+fire continuations (no waiting inside jobs), helping waits, borrowed fork-join scopes, task
+graphs, a separate blocking pool for I/O. Client pools use `physical cores − 2` workers;
+servers use every hardware thread. Background jobs stay ≤ 200 µs.
+*Measured:* ×5.98 on 6 workers for a 16 M-element map, 5 µs job round trip, 5.2 M jobs/s;
+with a worker on every hardware thread the audio stand-in misses 103/471 deadlines and the
+frame tail hits 34 ms, versus 0 misses and 2.2 ms p99 with the rule.
+*Not chosen:* rayon (16 spinning workers by default, no priorities, no continuations),
+`bevy_tasks` (three more pools), fibers (unsafe in Rust). *(research: task-system.md; demo:
+task-bench)*
+
+## D-006 — ECS: `bevy_ecs` storage and queries, Forge executor ✅ (2026-09-24)
+
+Use `bevy_ecs` 0.19 standalone for archetypal storage, queries, change detection,
+relationships, hooks and observers, and replace its multithreaded executor with a ~500-line
+Forge one built on `forge-task` (its `System::run_unsafe`, access sets and `UnsafeWorldCell`
+are public). Determinism: commands applied in (system, entity) order, per-item seeds.
+*Not chosen:* full Bevy (f32 transforms and its renderer fight planet scale), `hecs` (no
+change detection), `flecs_ecs` (alpha bindings), custom SoA tables (only if profiles indict
+bevy_ecs). *(research: task-system.md §E)* Accepted by the owner 2026-09-24.
+
+## D-007 — One material record for every system ✅ (2026-09-24)
+
+A `Material` is one row: render layers; physics (static/dynamic friction, restitution,
+combine rules, density, solidity/penetrability); audio (footstep and impact sound sets,
+absorption); gameplay tags (slippery, sinkable, deformable, flammable, climbable, buoyant);
+weather state overrides (wet, frozen, snow depth) mutated at run time; a `deform` block for
+soft materials. Terrain layers, mesh sections, decals and the visibility buffer all reference
+materials by ID; a hit anywhere resolves to one (per-triangle material ids are native in
+Jolt). Deformable materials own a clip-mapped displacement layer that physics contacts
+(feet, paws, wheels, impacts) write into, that rendering and audio read, and that weather
+refills (Batman: Arkham Origins 2014, Rise of the Tomb Raider snow).
+*(research: vegetation-materials.md §8, physics-fluids.md, audio.md §4)* Accepted by the owner 2026-09-24.
+
+## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
+
+Four tiers on one renderer: **T0 raster** (SDF-updated probe clipmaps, screen-space
+indirect, SSR, cascaded shadow maps), **T1 hybrid** (ray-query DDGI probes, ReSTIR direct
+lighting, hybrid reflections, NRD — the RTX 3080 target), **T2 RT GI** (ReSTIR GI + radiance
+cache + Ray Reconstruction), **T3 path traced** (ReSTIR PT + neural radiance cache, opacity
+micromaps, cluster acceleration structures) used as the golden-image reference. Sky:
+Hillaire 2020 (lifted from the previous project). Upscaling: DLSS 4.5 via Streamline on
+NVIDIA, FSR 3.1 / XeSS on Vulkan elsewhere.
+**Decision needed:** ship with hardware ray tracing *required* (Doom: The Dark Ages and
+Indiana Jones do; it removes T0 from the product) or keep T0 for integrated GPUs and tools?
+Recommendation: RT required for players, T0 kept only for tools and servers.
+*(research: lighting-gi.md)*
+
+## D-009 — Physics: Jolt first, box3d tracked ✅ (2026-09-24)
+
+Bind **Jolt Physics** through a Forge-owned fork of JoltC (`joltc-sys` on crates.io is stuck
+at 5.0; Jolt is at 5.6): `CROSS_PLATFORM_DETERMINISTIC` on (≈ 8 % slower, needs precise FP
+and no FMA contraction), `JPH_DOUBLE_PRECISION` on (5–10 %), one physics system per
+construct/space, `CharacterVirtual` with arbitrary up for characters, its vehicle constraint,
+motorised ragdolls (D-012), soft bodies for ropes and cloth. First three tests: Jolt's
+documented non-deterministic corners (broad-phase query order, narrow-phase result order,
+listener callback order). **box3d** (Erin Catto, alpha since May 2026, worker-count-
+independent determinism by default, trivial to bind) is tracked behind the same trait and
+re-evaluated at its 1.0 or in twelve months. PhysX 5 rejected for authority (same-platform
+determinism only, bindings archived), Avian rejected (Bevy-coupled), Rapier kept as the
+pure-Rust reserve. Water: far = analytic spectrum evaluated identically on CPU and GPU;
+mid = server-authoritative column model shadowed by a GPU shallow-water heightfield; near =
+GPU particles, visual only; boats by submerged-triangle hydrostatics.
+*(research: physics-fluids.md)* Accepted by the owner 2026-09-24.
+
+## D-010 — Netcode: QUIC transport, our own replication ✅ (2026-09-24)
+
+Transport: QUIC via `quinn`/`rustls` behind a `Transport` trait — unreliable datagrams for
+inputs and snapshots, reliable streams for events, TOFU-pinned certificates now, signed login
+tokens later; WebTransport for browser clients when needed. Replication is ours: 60 Hz
+simulation, 30 Hz snapshots near the player, ~800-byte packets under the 1200-byte datagram
+floor, per-client byte budget with a priority accumulator, 32-baseline ack ring per entity,
+cell-relative positions and smallest-three quaternions in a hand-written bit writer, cell
+interest management, authority handoff between workers. Inputs: 60 Hz, four redundant per
+datagram, a server-reported jitter buffer the client paces itself to (a starved buffer waits,
+never repeats); reconcile above a threshold and fade corrections over ~100 ms; predict
+physics contact groups; 1 s hit-volume history for lag compensation. Clients talk only to the
+replication layer; workers are stateless `bevy_ecs` processes; MongoDB write-behind;
+RabbitMQ for events only. Proof stages: 2-player handoff → 100 bots at ≤ 24 KB/s over
+100 ms / 2 % loss for 10 min → 8-player hit registration → 200 bots crossing a worker
+boundary with replay diff → browser client.
+*(research: netcode.md)* Accepted by the owner 2026-09-24.
+
+## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
+
+`cpal` device I/O → our own lock-free mixer graph (bus tree, sends, RTPCs, states and
+switches, HDR loudness culling, virtual voices, banks) → Steam Audio through `audionimbus`
+for HRTF, occlusion and reflections → a third-order ambisonic bus rendered binaurally or to
+speakers → HDR master. Events authored as data in Wwise vocabulary. SADIE II HRTFs
+(Apache-2.0) by default. Acoustic LOD in three tiers: near ray-traced, mid ISO 9613 + SDF,
+far virtual. Impacts and footsteps from modal banks fitted per material (D-007); rain, wind
+and water textures driven by the weather fields; Opus for voice. Wwise/FMOD are the yardstick
+(both free under indie thresholds) but not dependencies.
+*(research: audio.md)* Accepted by the owner 2026-09-24.
+
+## D-012 — Animation: layered, kinematic first, powered ragdolls ✅ (2026-09-24)
+
+Server simulation object → **clip layer** (blend spaces of a few clips with inertialization;
+`ozz-animation-rs` as the deterministic clip runtime; motion matching only once capture data
+exists) → **procedural layer** (two-bone and FABRIK IK, foot locking through
+inertialization, look-at, motion warping for ledges and vaults; emits foot-down events with
+position, normal, pressure, foot shape, material and tick for the deformation system, D-007)
+→ **physics layer** (Jolt powered ragdolls driving motors to the kinematic pose with a
+strength schedule, so hits, shoves and falls are simulated rather than played; later a
+learned tracker in the DReCon → SuperTrack line). Generated creatures are authored against
+chain roles with gaits derived from the body plan (Spore's architecture) and IK onto the
+ground. Tiers: full stack near, clips only mid, texture-animated instances far. Networking
+replicates parameters and hit events, never poses.
+*(research: animation.md)* Accepted by the owner 2026-09-24.
+
+## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
+
+Trees are grown, not modelled: Weber–Penn parameter files per species, space colonisation
+with competition for the skeleton, scanned bark and leaf atlases (CC0 Poly Haven / ambientCG,
+the free Megascans slice). Rendering ladder: 0–40 m alpha-tested geometry with wind and leaf
+translucency; 40–150 m billboard-cloud leaf cards; 150–600 m hemi-octahedral impostors with a
+light-facing shadow pass and an ellipsoid ray-tracing proxy; beyond, a lit canopy volume —
+behind an interface a voxel aggregate (Nanite Foliage's direction) can replace. Grass as in
+Ghost of Tsushima: GPU-generated blades from a hash, shared wind field, per-tile interaction.
+Buildings use **trim sheets** (still standard: Sunset Overdrive, Uncharted 4, Helldivers 2):
+two to four regional trim sheets, six to ten tileables, a decal atlas and vertex paint, the
+shape grammar snapping tagged faces onto trim rows; trims can be generated procedurally from
+SDF profiles. One normal-compositing rule (Mikkelsen's surface-gradient framework); KTX2 +
+Zstd with BC7/BC5/BC4.
+*(research: vegetation-materials.md, large-worlds.md §7)* Accepted by the owner 2026-09-24.
+
+## D-014 — Terrain representation ✅ (2026-09-24)
+
+Equi-angular cube-sphere quadtree for planets and a flat grid for islands, CDLOD heightfield
+far field, dual contouring / Transvoxel volumetric near field for overhangs and caves, SDF
+bricks for edits, genesis (uplift, stream-power erosion, hydrology) baked per region and a
+deterministic runtime detail layer. Lifted from the previous project's design and code.
+*(research: large-worlds.md §8, RESEARCH.md §1)* Accepted by the owner 2026-09-24.
+
+## D-015 — Services: MongoDB persistence, RabbitMQ events only ✅ (carried over)
+
+Unchanged from the previous project: persistence is write-behind to MongoDB (transactions
+need a replica set), RabbitMQ carries asynchronous events (persistence jobs, chat, economy,
+telemetry) and never real-time replication. Both stay on the Pi 5 until load requires more.
+
+## D-016 — Determinism rules ✅ (2026-09-24)
+
+No platform float functions in generation and simulation (`forge_core::dmath`, lint coming
+with `forge-sim`); seeds derived per item (`Seed::derive`), never shared generators; parallel
+results merged by index; CI digests at 1 and 6 workers, debug and release. Lifted from the
+previous project's harness.
+
+## D-017 — Demos are milestones; golden images ✅ (2026-09-24)
+
+A system is done when its demo runs on both machines with numbers in `docs/demos/`. Every
+demo supports `--frames` and `--capture`; `tools/imgdiff` compares captures with a tolerance
+and an exit code. p50/p99/max, never means.
+
+## D-018 — Memory and streaming ✅ (2026-09-24)
+
+**CPU:** a tagged heap over one reserved virtual range (2 MiB blocks, per-worker blocks,
+bulk free by frame/stage or by cell id), `slotmap` pools for tables, `bumpalo` frame arenas
+until Rust's `Allocator` trait is stable, mimalloc as the global allocator for the long tail;
+every allocator reports to Tracy. **GPU:** keep `gpu-allocator` now; replace with an in-house
+TLSF layer (256 MiB blocks) or `vk-mem` when budgets, aliasing and defragmentation are
+needed — budget from `VK_EXT_memory_budget` minus 10 %, render-graph aliasing of transients,
+incremental defragmentation on the transfer queue (~16 MiB per frame). **Resizable BAR** is
+used only for sequential, 64-byte-aligned, never-read per-frame data (what `CpuToGpu`
+already does); bulk uploads go through staging on the transfer queue. No sparse residency:
+paging is software page tables over ordinary pools. **Streaming:** dedicated I/O threads
+(IOCP now, io_uring on Linux), a request scheduler that fetches by need (screen error,
+distance, camera prefetch) and evicts by lowest need with recency only as a tie-breaker (the
+cure for the previous engine's LOD popping), per-frame upload budgets, never a wait in the
+frame; CPU zstd/LZ4 decompression by default (they out-decode the NVMe on this CPU), GPU
+GDeflate through `VK_EXT_memory_decompression` when probed and when CPU headroom is short.
+Cluster pages after Nanite: fixed 128 KB pages, root and hierarchy always resident,
+GPU-emitted page requests read back asynchronously. **Container:** a table of BLAKE3
+content-addressed, 256 KiB block-compressed, dependency-ordered, 4 KiB-aligned chunks; KTX2
+per-level supercompression for textures. Proof: a 64 km² world flown at 300 m/s with
+residency and bandwidth graphs and no frame over 20 ms, degrading to blur when the drive is
+throttled. *(research: memory-streaming.md)* Accepted by the owner 2026-09-24.
+
+## D-019 — Weather as one shared state ✅ (2026-09-24)
+
+Cloud coverage, precipitation, temperature, wind vector, humidity in one struct written by
+the simulation and read by rendering (precipitation, wetness, snow), materials (D-007),
+audio and physics (wind forces). *(research: lighting-gi.md — weather rendering not yet
+researched, vegetation-materials.md §8 — pending)*

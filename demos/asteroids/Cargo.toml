@@ -1,0 +1,27 @@
+[package]
+name = "asteroids"
+description = "The ballad: a scripted flight through an asteroid field, the engine's living showcase."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Tracy zones, frame marks and GPU-time plots (connect tracy/tracy-profiler.exe).
+profiling = ["forge-app/profiling"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+forge-app = { workspace = true }
+forge-core = { workspace = true }
+forge-geom = { workspace = true }
+forge-render = { workspace = true }
+forge-task = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+winit = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "imgdiff"
+description = "Compares two PNG captures: differing pixel count, max channel error, optional diff image."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }

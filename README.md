@@ -1,0 +1,133 @@
+# Forge
+
+A professional-grade game engine for very large procedural worlds, built one system at a time,
+each with its own research, demo and tests.
+
+- Language: Rust everywhere (client, server, tools). Vulkan through `ash`, shaders in Slang.
+- Docs: [docs/RESEARCH.md](docs/RESEARCH.md) (research index and per-system bibliographies),
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (system map and principles),
+  [docs/DECISIONS.md](docs/DECISIONS.md) (numbered decisions), [docs/ROADMAP.md](docs/ROADMAP.md),
+  and one page per demo under [docs/demos/](docs/demos/).
+
+## Requirements
+
+- Stable Rust (see `rust-toolchain.toml`; 1.98 or newer).
+- Vulkan SDK 1.4.357 or newer: the demos compile Slang shaders with its `slangc` (found via
+  `VULKAN_SDK`, `PATH`, or `FORGE_SLANGC=<path to slangc>`).
+- A GPU with `VK_EXT_mesh_shader` for the rendering demos (any RTX, RDNA 2+, Arc). The
+  Khronos validation layer is used automatically in debug builds and with `--validate`.
+
+## Layout
+
+```
+crates/forge-core     deterministic math, seeds, hashes, handles
+crates/forge-task     job system (work stealing, counters, scopes, task graphs, blocking pool)
+crates/forge-gpu      Vulkan layer: device, memory, swapchain, Slang shaders, bindless set, pipelines, frames
+crates/forge-geom     meshlets (meshoptimizer), procedural test meshes, shared GPU layouts
+crates/forge-render   meshlet renderer (task/mesh shaders, two-pass HZB occlusion), starfield
+crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
+shaders/              Slang sources (bindless, meshlet, hzb, starfield)
+demos/task-bench      job-system benchmarks and the frame-pacing demonstration
+demos/meshlets        culling test bench: every culling stage switchable and measurable
+demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
+tools/imgdiff         pixel comparison of captures (golden images)
+docs/                 ARCHITECTURE, DECISIONS, ROADMAP, RESEARCH + research/ and demos/
+```
+
+## Build and test
+
+```
+cargo test --workspace
+cargo clippy --workspace --all-targets
+```
+
+## Running the demos
+
+All rendering demos share these options: `--vsync`, `--validate` (Vulkan validation layer),
+`--frames N` (exit after N frames, for headless runs), `--capture out.png --capture-frame N`
+(save frame N as a PNG). Right mouse drag looks around, WASD/QE move, Shift is fast, Esc quits.
+
+### `asteroids` — the ballad
+
+```
+cargo run --release -p asteroids
+```
+
+A 90-second scripted flight through 3000 asteroids (rock and ice) of seven procedural meshes
+(195 M source triangles) over a procedural sky with a planet and the sun, with temporal
+anti-aliasing. Keys: **F1** profiling overlay (off → compact → full: GPU time per pass and
+CPU time per zone, grouped by subject; **1**–**9** open or fold a group; the same zones go
+to Tracy with `--features profiling`), **P** pause the path and fly freely, **T** TAA,
+**O** occlusion culling, **C** cone culling, **X** culling-error view (culled meshlets drawn
+in red: any red pixel is a bug), **M** meshlet colours, **Tab** wireframe.
+Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
+`--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--fixed-step` (path advances
+per frame, for deterministic captures), `--no-taa`, `--no-occlusion`, `--no-cone`,
+`--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
+sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
+interactive runs and off in scripted ones). Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
+where the time goes: [docs/PROFILE.md](docs/PROFILE.md).
+
+The culling A/B check (expects 0 differing pixels; see `docs/demos/asteroids.md`):
+
+```
+cargo run --release -p asteroids -- --fixed-step --no-taa --frames 601 --capture a.png --capture-frame 600
+cargo run --release -p asteroids -- --fixed-step --no-taa --no-occlusion --no-cone --frames 601 --capture b.png --capture-frame 600
+cargo run --release -p imgdiff -- a.png b.png
+```
+
+With Tracy (start `tracy/tracy-profiler.exe`, then):
+
+```
+cargo run --release -p asteroids --features profiling
+```
+
+### `meshlets` — culling test bench
+
+```
+cargo run --release -p meshlets
+```
+
+A grid of 1152 asteroids (127 M triangles). Keys: **F1** profiling overlay, **F** freeze
+culling and move the camera to see what was culled, **V** frustum, **C** cone, **O**
+occlusion, **M** meshlet colours, **Tab** wireframe. Options: `--side N`, `--detail N`,
+`--roughness R`, `--no-occlusion`, `--orbit` (scripted motion), `--overlay`. Numbers and the
+correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
+
+### `task-bench` — job system
+
+```
+cargo run --release -p task-bench
+```
+
+Prints throughput, latency and the frame-pacing comparison (6 workers vs every hardware
+thread with a real-time thread alongside). Options: `--workers N`, `--frames N`, `--pin`,
+`--quick`. Numbers: [docs/demos/task-bench.md](docs/demos/task-bench.md).
+
+### `imgdiff` — golden images
+
+```
+cargo run --release -p imgdiff -- a.png b.png --out diff.png --tolerance 2
+```
+
+Exit code 1 when more than `--max-different` pixels differ. `--report N` prints the first N
+differing pixels with both colours; `--crop x,y,w,h --zoom K --crops out.png` writes the two
+crops and the diff side by side, enlarged, for looking at a difference.
+
+### Environment variables (all demos)
+
+| Variable | Effect |
+|---|---|
+| `FORGE_MONITOR` | `secondary` (default: the first non-primary monitor), `primary`, or a monitor index. Scripted runs (`--frames`) never take keyboard focus. |
+| `FORGE_OVERLAY` | `off`, `compact` or `full`: the profiling overlay's start mode (default: compact when interactive, off in scripted runs; F1 cycles at run time). |
+| `FORGE_OVERLAY_FONT` | TTF/OTF for the overlay (default `assets/fonts/jetbrains-mono/JetBrainsMono-Variable.ttf`; a built-in pixel font if unreadable). |
+| `FORGE_OVERLAY_FONT_PX` | Overlay font size in pixels (default 14). |
+| `FORGE_SYNC_VALIDATION=1` | with `--validate`: the validation layer's synchronization (hazard) checks. Slow. |
+| `FORGE_GPU_AV=1` | with `--validate`: GPU-assisted validation (out-of-bounds device-address and descriptor accesses). Slow. |
+| `FORGE_WAIT_IDLE=1` | wait for the GPU after every frame (debugging). |
+| `FORGE_FRAME_BARRIER=1` | a full memory barrier at the start of every frame (debugging). |
+| `FORGE_PARANOID_BARRIERS=1` | a full memory barrier before every pass (debugging). |
+| `FORGE_STALL_MS=N` | sleep N ms after every frame (debugging; `20` makes TAA captures bit-exact between runs, see `docs/demos/asteroids.md`). |
+| `FORGE_NO_TITLE=1` | never update the window title (debugging). |
+| `FORGE_TRACE_FRAMES=file` | `asteroids`: append every frame's CPU-side inputs to `file` (to diff two runs). |
+| `RUST_LOG` | tracing filter (`info` by default). |

@@ -1,0 +1,25 @@
+[package]
+name = "forge-task"
+description = "Forge job system: work-stealing workers, dependency counters, fork-join scopes, task graphs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Job zones and worker thread names in Tracy.
+profiling = ["dep:tracy-client"]
+
+[dependencies]
+core_affinity = { workspace = true }
+crossbeam-channel = { workspace = true }
+crossbeam-deque = { workspace = true }
+crossbeam-utils = { workspace = true }
+num_cpus = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+tracy-client = { workspace = true, optional = true }

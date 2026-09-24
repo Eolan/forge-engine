@@ -1,0 +1,22 @@
+[package]
+name = "meshlets"
+description = "GPU-driven meshlet culling test bench: task-shader culling, mesh-shader geometry, two-pass occlusion."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+forge-app = { workspace = true }
+forge-core = { workspace = true }
+forge-geom = { workspace = true }
+forge-render = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+winit = { workspace = true }

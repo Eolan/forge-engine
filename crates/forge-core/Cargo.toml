@@ -1,0 +1,17 @@
+[package]
+name = "forge-core"
+description = "Forge engine foundations: deterministic math, seeds, hashes, handles."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { workspace = true }
+libm = { workspace = true }
+serde = { workspace = true }
+xxhash-rust = { workspace = true }

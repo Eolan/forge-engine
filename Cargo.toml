@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "demos/*", "tools/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+ab_glyph = "0.2"
+# Internal crates
+forge-core = { path = "crates/forge-core" }
+forge-task = { path = "crates/forge-task" }
+forge-gpu = { path = "crates/forge-gpu" }
+forge-geom = { path = "crates/forge-geom" }
+forge-app = { path = "crates/forge-app" }
+forge-render = { path = "crates/forge-render" }
+
+# Graphics & windowing
+ash = "0.38"
+ash-window = "0.13"
+gpu-allocator = { version = "0.28", default-features = false, features = ["std", "vulkan"] }
+winit = "0.30"
+raw-window-handle = "0.6"
+meshopt = "0.6"
+
+# Concurrency
+crossbeam-deque = "0.8"
+crossbeam-channel = "0.5"
+crossbeam-utils = "0.8"
+parking_lot = "0.12"
+core_affinity = "0.8"
+num_cpus = "1.16"
+
+# Math & determinism
+glam = "0.33"
+libm = "0.2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Data
+serde = { version = "1", features = ["derive"] }
+bytemuck = { version = "1", features = ["derive"] }
+
+# Diagnostics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# tracy-client 0.19 pairs with the Tracy 0.14 profiler GUI.
+tracy-client = { version = "0.19", default-features = false, features = ["enable", "only-localhost"] }
+
+# Tooling
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+
+# Only used by benchmarks as a comparison baseline; never by engine crates.
+rayon = "1.12"
+
+[workspace.lints.rust]
+# `unsafe` is allowed only where a crate opts in explicitly (`forge-task` for scoped lifetimes,
+# the GPU crates for Vulkan). Every other crate forbids it at the crate root.
+unsafe_code = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+print_stdout = "allow"
+
+# Dependencies are compiled optimised even in debug builds: the engine's own crates stay fast to
+# rebuild, while `ash`, `glam` and the allocators run at release speed during development.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+# Line tables for Tracy, RenderDoc and crash dumps; costs nothing at run time.
+debug = "line-tables-only"
+lto = "thin"
+codegen-units = 4
+
+[profile.bench]
+inherits = "release"

@@ -1,0 +1,28 @@
+[package]
+name = "forge-app"
+description = "Forge application shell: window, input, frame loop, capture, shared by demos and tools."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Tracy: frame marks, CPU zones for the frame loop and a GPU-time plot.
+profiling = ["dep:tracy-client"]
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+ab_glyph = { workspace = true }
+forge-gpu = { workspace = true }
+tracy-client = { workspace = true, optional = true }
+glam = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+raw-window-handle = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+winit = { workspace = true }

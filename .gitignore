@@ -1,0 +1,26 @@
+# Build output and caches
+/target/
+**/target/
+/shader-cache/
+/captures/
+
+# Vendored third-party binaries and SDKs (Tracy profiler, NVIDIA Streamline): kept locally,
+# never committed (126 MB and 486 MB).
+/tracy/
+/streamline-sdk/
+
+# Compiled shaders are rebuilt from shaders/*.slang
+*.spv
+
+# Secrets and per-machine configuration
+.env
+.env.*
+server-auth.md
+config/server-identity/
+
+# Editors and OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
