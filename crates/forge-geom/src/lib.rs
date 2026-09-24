@@ -1,10 +1,13 @@
-//! Geometry processing for the GPU-driven pipeline: meshlets and procedural test meshes.
+//! Geometry processing for the GPU-driven pipeline: meshlets, the cluster LOD DAG and
+//! procedural test meshes.
 
 #![forbid(unsafe_code)]
 
+pub mod lod;
 pub mod meshlet;
 pub mod procedural;
 
+pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag};
 pub use meshlet::{
     GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES, MeshletMesh,
 };

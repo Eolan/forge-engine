@@ -77,6 +77,18 @@ struct Args {
     /// Start with cone culling off (C toggles it).
     #[arg(long)]
     no_cone: bool,
+    /// Projected LOD error a drawn cluster may have, in pixels (0.5 = finer, 2 = coarser).
+    #[arg(long, default_value_t = 1.0)]
+    lod_error: f32,
+    /// Draw the full-detail clusters only (no LOD selection; L toggles it).
+    #[arg(long)]
+    no_lod: bool,
+    /// Start with clusters coloured by LOD level (K toggles it).
+    #[arg(long)]
+    lod_colors: bool,
+    /// Disable the per-group LOD window (A/B harness: must not change the image).
+    #[arg(long)]
+    no_group_window: bool,
     /// Share of the current frame in the temporal blend (0.1 default; 1 keeps the jitter but
     /// no history).
     #[arg(long, default_value_t = 0.1)]
@@ -174,6 +186,15 @@ impl Ballad {
         if args.no_cone {
             flags.toggle(CullFlags::CONE);
         }
+        if args.no_lod {
+            flags.toggle(CullFlags::LOD);
+        }
+        if args.lod_colors {
+            flags.toggle(CullFlags::LOD_COLORS);
+        }
+        if args.no_group_window {
+            flags.toggle(CullFlags::GROUP_WINDOW_OFF);
+        }
         if args.show_culled {
             flags.toggle(CullFlags::SHOW_CULLED);
         }
@@ -229,6 +250,10 @@ impl Demo for Ballad {
             KeyCode::KeyO => self.flags.toggle(CullFlags::OCCLUSION),
             KeyCode::KeyC => self.flags.toggle(CullFlags::CONE),
             KeyCode::KeyX => self.flags.toggle(CullFlags::SHOW_CULLED),
+            KeyCode::KeyL => self.flags.toggle(CullFlags::LOD),
+            KeyCode::KeyK => self.flags.toggle(CullFlags::LOD_COLORS),
+            KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
+            KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
             _ => {}
         }
@@ -282,6 +307,13 @@ impl Demo for Ballad {
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
                 f64::from(last.occluded) / 1e3
+            ));
+            ctx.profile.counter(format!(
+                "LOD {} at {:.2} px: mean level {:.2} of the drawn clusters; {} clusters in the DAG tables",
+                if self.flags.has(CullFlags::LOD) { "on" } else { "off" },
+                self.args.lod_error,
+                f64::from(last.lod_level_sum) / f64::from((last.meshlets_pass1 + last.meshlets_pass2).max(1)),
+                self.scene.meshlet_count
             ));
             ctx.profile.counter(format!(
                 "TAA {}   occlusion {}   cone {}   {}",
@@ -360,6 +392,7 @@ impl Demo for Ballad {
                 scene: &self.scene,
                 view_proj: draw_view_proj,
                 cull,
+                lod_threshold_px: self.args.lod_error,
                 draw_jitter: taa_frame.jitter
                     / glam::Vec2::new(extent.width as f32, extent.height as f32),
                 flags: self.flags,
@@ -466,6 +499,11 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         .iter()
         .map(|m| builder.add_mesh(m.as_ref().expect("mesh built")))
         .collect();
+    for (i, mesh) in meshes.iter().enumerate() {
+        if let Some(mesh) = mesh {
+            tracing::info!(mesh = i, levels = ?mesh.clusters_per_level, dag_triangles = mesh.dag_triangle_count, "cluster DAG");
+        }
+    }
     let mesh_ms = start.elapsed().as_millis();
 
     // The belt: an S-shaped centre line; asteroids scattered around it with density peaks.

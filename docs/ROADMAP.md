@@ -39,8 +39,9 @@ It always shows the best the engine can do at that moment and carries its own pr
   instances of seven procedural meshes, a spline camera path, Tracy hooks. Culling is
   verified pixel-exact against brute force by the A/B harness (`--no-occlusion`,
   `--no-cone`, `--show-culled`, `imgdiff`), which found and closed two silent culling bugs.
-- Phase 1: cluster LOD DAG and streaming (asteroids of a million triangles each), visibility
-  buffer, HDR exposure and tonemapping, DLSS, Tracy GPU zones, 120 fps target.
+- Phase 1: cluster LOD DAG ✅ (2026-09-24: 78 M → 0.62 M triangles, GPU 5.5 → 1.09 ms,
+  pixel-exact A/B), profiler overlay ✅; next the cluster hierarchy, the software rasteriser,
+  streaming of cluster pages, visibility buffer, HDR exposure and tonemapping, DLSS.
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.

@@ -1,13 +1,18 @@
 # Demo: `meshlets` — GPU-driven geometry with task and mesh shaders
 
 Run: `cargo run --release -p meshlets` (options `--side N`, `--detail N`, `--roughness R`,
-`--vsync`, `--validate`, `--no-occlusion`, `--orbit`, `--frames N`,
-`--capture file.png --capture-frame N`).
-Controls: WASD/QE move, Shift fast, right mouse drag to look, **F** freeze culling (move the
-camera to see what was culled), **C** cone culling, **V** frustum culling, **O** occlusion
-culling, **M** meshlet colours (on by default here), **Tab** wireframe. The bench draws
-straight to the swapchain without anti-aliasing on purpose: it measures culling, not looks;
-the `asteroids` demo is where TAA and the sky live.
+`--vsync`, `--validate`, `--no-occlusion`, `--lod-error PX` (1.0), `--no-lod`, `--orbit`,
+`--frames N`, `--capture file.png --capture-frame N`, `--overlay`).
+Controls: WASD/QE move, Shift fast, right mouse drag to look, **F1** profiler, **F** freeze
+culling (move the camera to see what was culled), **C** cone culling, **V** frustum culling,
+**O** occlusion culling, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold,
+**M** meshlet colours (on by default here), **Tab** wireframe. The bench draws straight to
+the swapchain without anti-aliasing on purpose: it measures culling, not looks; the
+`asteroids` demo is where TAA and the sky live.
+
+With the cluster LOD DAG (2026-09-24, see [asteroids.md](asteroids.md)) the static view
+draws 15 k meshlets and 1.09 M triangles in **0.58 ms** at a 1 px threshold; the numbers
+below are the full-detail (`--no-lod`) figures that measure culling alone.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 Research behind it: [research/gpu-geometry.md](../research/gpu-geometry.md).
 

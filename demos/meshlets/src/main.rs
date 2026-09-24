@@ -42,6 +42,12 @@ struct Args {
     /// Start with occlusion culling disabled.
     #[arg(long)]
     no_occlusion: bool,
+    /// Projected LOD error a drawn cluster may have, in pixels.
+    #[arg(long, default_value_t = 1.0)]
+    lod_error: f32,
+    /// Draw the full-detail clusters only (no LOD selection; L toggles it).
+    #[arg(long)]
+    no_lod: bool,
     /// Scripted camera: turn and drift so every frame differs (for headless comparisons).
     #[arg(long)]
     orbit: bool,
@@ -95,6 +101,9 @@ impl Bench {
             ..FlyCamera::default()
         };
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM | CullFlags::MESHLET_COLORS);
+        if !args.no_lod {
+            flags.0 |= CullFlags::LOD;
+        }
         if !args.no_occlusion {
             flags.0 |= CullFlags::OCCLUSION;
         }
@@ -143,6 +152,10 @@ impl Demo for Bench {
             KeyCode::KeyV => self.flags.toggle(CullFlags::FRUSTUM),
             KeyCode::KeyO => self.flags.toggle(CullFlags::OCCLUSION),
             KeyCode::KeyM => self.flags.toggle(CullFlags::MESHLET_COLORS),
+            KeyCode::KeyL => self.flags.toggle(CullFlags::LOD),
+            KeyCode::KeyK => self.flags.toggle(CullFlags::LOD_COLORS),
+            KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
+            KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
             _ => {}
         }
@@ -165,6 +178,19 @@ impl Demo for Bench {
                 self.gpu_ms.push(ms);
             }
         }
+        if let Some(last) = self.stats.last() {
+            ctx.profile.counter(format!(
+                "drawn: {} instances, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded; LOD {} at {:.2} px, mean level {:.2}",
+                last.instances_visible,
+                f64::from(last.meshlets_pass1) / 1e3,
+                f64::from(last.meshlets_pass2) / 1e3,
+                f64::from(last.triangles) / 1e6,
+                f64::from(last.occluded) / 1e3,
+                if self.flags.has(CullFlags::LOD) { "on" } else { "off" },
+                self.args.lod_error,
+                f64::from(last.lod_level_sum) / f64::from((last.meshlets_pass1 + last.meshlets_pass2).max(1))
+            ));
+        }
         let live = self.cull_camera(ctx.aspect());
         let cull = match self.frozen {
             Some(frozen) if self.flags.has(CullFlags::FREEZE) => frozen,
@@ -177,6 +203,7 @@ impl Demo for Bench {
                 scene: &self.scene,
                 view_proj: live.view_proj,
                 cull,
+                lod_threshold_px: self.args.lod_error,
                 draw_jitter: glam::Vec2::ZERO,
                 flags: self.flags,
                 color_view: ctx.swapchain.view(frame.image_index),

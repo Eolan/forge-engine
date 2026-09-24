@@ -10,13 +10,16 @@ seconds per lap (90), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle D
 hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-occlusion`, `--no-cone`,
-`--show-culled`, `--taa-blend F` (1 = jitter without history).
+`--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
+error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
+`--no-group-window` (A/B: must not change the image).
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`.
 Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the path and fly
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
-culling, **C** cone culling, **X** culling-error view (what culling rejected is drawn in red;
-any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **Esc** quit.
+culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
+double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
+red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 
 ![The ballad, phase 0](images/asteroids-ballad.png)
@@ -24,6 +27,8 @@ Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-
 ![Passing the planet](images/asteroids-planet.png)
 
 ![The profiling overlay (F1, full view): GPU time per pass, CPU time per zone, counters](images/asteroids-profile.png)
+
+![Clusters coloured by LOD level (K): grey 0, green 1, yellow 2, orange 3, red 4, magenta 5, blue 6, cyan 7+](images/asteroids-lod-levels.png)
 
 The compact view (the default) is the header and one line per subject; a digit opens a
 subject, F1 cycles off → compact → full. The verdicts behind the numbers are in
@@ -42,6 +47,13 @@ subject, F1 cycles off → compact → full. The verdicts behind the numbers are
 - The GPU-driven pipeline of the `meshlets` bench: one draw per pass, task-shader culling
   (frustum, normal cone, two-pass hierarchical-Z occlusion), mesh-shader emission, no
   descriptor sets, statistics read back without stalls.
+- **A cluster LOD DAG per mesh** (Nanite-style, built with meshoptimizer: groups of eight
+  clusters, locked group borders, each group simplified to half and re-clustered, 9 to 13
+  levels down to one root cluster, about twice the leaf triangles in the tables). The task
+  shader selects, per cluster, the one cut of the DAG whose projected error is under a
+  threshold (1 px by default) with monotonic errors and spheres so the cut has no cracks; a
+  per-mesh per-level table lets a task group of 32 clusters exit before reading a cluster
+  when none of its levels can be selected at the instance's distance.
 - **Temporal anti-aliasing**: Halton-jittered projection, motion vectors from depth and the
   two cameras, Catmull-Rom history clipped to the neighbourhood (ported from the previous
   project). Without it, sub-pixel triangles of distant rocks shimmer badly. The scene is
@@ -59,18 +71,60 @@ subject, F1 cycles off → compact → full. The verdicts behind the numbers are
 
 | | value |
 |---|---|
-| scene | 3000 asteroids, 7 meshes, 195 M triangles, 14.2 M meshlets |
-| drawn per frame (moving, default path) | 810 k previously visible + 29 k newly visible meshlets, **78 M triangles** |
-| GPU per frame | **7.0 ms** (sky + two meshlet passes + 11-level pyramid + motion + resolve + blit) |
-| CPU per frame (record) | 0.06 ms |
-| frame time, uncapped | p50 7.0 ms, p99 7.4 ms |
-| field build (7 meshes on 6 workers + scatter + upload) | ~1.2 s |
+| scene | 3000 asteroids, 7 meshes, 195 M leaf triangles; DAG tables 28 k clusters, 4.6 M cluster slots over all instances |
+| drawn per frame, LOD 1 px (moving, default path) | 8 k meshlets, **0.62 M triangles**, mean LOD level 6.3 |
+| GPU per frame, LOD 1 px | **1.09 ms** (sky 0.14 + meshlet pass 1 0.46 + pyramid 0.02 + pass 2 0.42 + TAA 0.06) |
+| GPU per frame, LOD 0.5 px / 2 px | 1.13 ms (1.68 M triangles) / 1.11 ms (0.30 M) |
+| GPU per frame, full detail (`--no-lod`) | 5.50 ms (862 k + 33 k meshlets, 83 M triangles) |
+| CPU per frame (main thread) | 0.18 ms |
+| frame time, uncapped, LOD 1 px | p50 1.07 ms, p99 1.36 ms (~930 fps) |
+| field build (7 DAGs on 6 workers + scatter + upload) | ~2.5 s |
+
+The `meshlets` bench (1152 rocks, 127 M triangles) goes the same way: 2.18 ms → **0.58 ms**
+at 1 px (15 k meshlets, 1.1 M triangles).
 
 Earlier configurations for reference: 6000 rocks in a 60–160 m tube drew 50 M triangles at
 7 ms and looked like a cave; the first belt layout without overlap rejection drew 20 M
 triangles at 3.4 ms because rocks stacked inside each other. The 58–64 M triangles at
 5.6–6.0 ms reported before the culling fixes below were measured with a quarter of the
-geometry silently missing.
+geometry silently missing; 78 M at 7.0 ms was the honest full-detail number before the DAG.
+
+## The cluster LOD DAG (2026-09-24)
+
+Build (`crates/forge-geom/src/lod.rs`): level 0 is the mesh cut into clusters; each level
+partitions the previous level's clusters into spatial groups of about eight
+(`meshopt::partition_clusters`), locks every vertex shared between groups, simplifies each
+group's triangles to half (`simplify_with_locks`), re-clusters the result and records two
+spheres and two errors per cluster: `self` (the group that produced it; error 0 at level 0)
+and `parent` (the group that consumed it; infinite for a root). A group's error is at least
+its children's and its sphere contains theirs, and every cluster of a group carries the
+group's values, so "draw when `project(parent) > t >= project(self)`" selects exactly one cut
+with no cracks: siblings decide together, and the children of a group decide with the same
+numbers their parents used. Vertices are shared across levels; the tables hold about twice
+the leaf triangles (the 442 k-triangle rock: 13 levels, 884 k triangles, 9 434 clusters).
+
+Selection (`shaders/meshlet.slang`): the projected error is the object-space error scaled by
+the instance, times the projection scale and half the viewport height, over the distance to
+the sphere's nearest point. Every level-0 cluster passes the `self` test; every root passes
+the `parent` test. The culling universe is now every instance's real cluster count (a
+group-to-instance table, exact task-group counts, per-instance visibility bits) instead of
+"largest mesh × instances", and each task group first checks, from a per-mesh per-level table
+of error and sphere bounds, whether any of its 32 clusters can be selected at the instance's
+distance; most groups of a far instance exit there without reading a cluster. Both are
+provably conservative, and `--no-group-window` proves it empirically.
+
+Exactness checks at frame 600 (`imgdiff`): `--no-lod` against the pre-DAG full-detail image,
+occlusion against brute force with LOD on, and the group window on against off all differ in
+**0 of 1 440 000 pixels**. LOD on against full detail changes 28 % of the pixels by a mean
+of 7.7 levels: the far field is simplified, which is the point, and the picture reads the
+same (captures above).
+
+Two things cost more than the geometry itself while this was built and are worth
+remembering: reading a 368-byte `Mesh` record by value in every task thread, and dispatching
+`instances × largest mesh` task groups (885 k per pass, all but 145 k exiting on the first
+instruction) because a wrapped line hid the old formula from a replacement. The profiler
+showed both passes at exactly 1.94 ms whatever was drawn, which is the signature of launch
+overhead, not work.
 
 ## The culling A/B check, and the two bugs it found (2026-09-24)
 
@@ -141,8 +195,9 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
 
 ## Next for the ballad
 
-1. Cluster LOD DAG + software rasteriser (Phase 1): rocks of a million triangles at
-   negligible cost, screen-space error selection, streaming of cluster pages.
+1. Software rasteriser for the sub-pixel clusters and a cluster hierarchy in the task
+   shader (fewer, fatter task groups; the two passes are launch-bound at 145 k groups each);
+   streaming of cluster pages. Cluster LOD DAG: done (above).
 2. HDR exposure and tonemapping, DLSS; a proper sun with ray-traced shadows on the RTX
    tiers; volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,

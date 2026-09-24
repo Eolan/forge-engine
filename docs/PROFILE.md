@@ -14,52 +14,44 @@ in Tracy's GPU timeline next to the CPU zones.
 
 Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24.
 
-## `asteroids` — the ballad (frame 380 of the default path, TAA on)
+## `asteroids` — the ballad, after the cluster LOD DAG (frame 600, LOD 1 px, TAA on)
 
-Frame **5.06 ms** (198 fps), p50 4.89, p99 6.39. GPU zones sum to 6.01 ms; CPU main thread
-0.25 ms of work, the rest of the frame blocked on the GPU.
+Frame **1.12 ms** (893 fps), p50 1.09, p99 1.40. GPU zones sum to 1.10 ms; CPU main thread
+0.18 ms of work, the rest blocked on the GPU.
 
 | Subject | Zone | ms | share of GPU | Verdict |
 |---|---|---|---|---|
-| geometry | meshlet pass 1 (visible last frame) | 4.59 | 76 % | **The frame.** 783 k meshlets, 77 M triangles for 1.44 M pixels: ~54 triangles per pixel, almost all smaller than a pixel. Rasterisation and shading of invisible detail. Fix: the cluster LOD DAG selects clusters by screen-space error (≈ 1 triangle per pixel → ~3 M triangles), the software rasteriser takes sub-pixel clusters, the visibility buffer shades once per pixel. Target: geometry under 1 ms. |
-| geometry | meshlet pass 2 (newly visible) | 1.18 | 20 % | 44 k meshlets that became visible this frame plus the re-test of every remaining slot (14.2 M meshlet slots walked by 447 k task groups per pass). Shrinks with LOD (fewer clusters) and with a cluster hierarchy so the task shader tests groups of clusters instead of every cluster. |
-| geometry | depth pyramid | 0.02 | 0 % | 11 levels from 1024×512. Negligible; stays. |
-| sky | starfield + planet | 0.14 | 2 % | Full-screen procedural noise (three value-noise octaves, two star lattices of 27 cells each, the planet). Fine now; when the atmosphere and clouds arrive, render the far sky at lower resolution or into a cached cube. |
-| temporal | motion vectors | 0.01 | 0 % | Cheap. |
-| temporal | TAA resolve | 0.04 | 1 % | Cheap: the 3×3 gather and Catmull-Rom history at 1600×900. The earlier estimate of 0.5 ms for TAA was wrong. DLSS will replace this on NVIDIA; nothing to do. |
-| temporal | blit to swapchain | 0.01 | 0 % | Goes away with the render graph (resolve straight into the swapchain). |
-| app | overlay | 0.01 | 0 % | The profiler itself. |
-| cpu | wait for GPU (frame slot) | 5.73 | — | The main thread is idle 96 % of the frame: the engine is entirely GPU-bound. The job system has the whole frame for simulation, physics and streaming. |
-| cpu | record commands | 0.09 | — | One frame block write and ~40 commands. |
-| cpu | submit + present | 0.16 | — | Driver cost of submit and present; will hide behind the render thread. |
-| cpu | update, acquire | 0.00 | — | The path evaluation and the swapchain acquire. |
+| geometry | meshlet pass 1 (visible last frame) | 0.46 | 41 % | 8 k clusters, 0.62 M triangles drawn; the time is now the task-shader walk over 145 k groups of 32 cluster slots (4.6 M slots over 2 458 visible instances), most exiting on the per-level window. Next: a cluster hierarchy or fatter task groups so far instances cost a handful of groups, not hundreds (issue #4). |
+| geometry | meshlet pass 2 (newly visible) | 0.42 | 38 % | The same walk again to find what became visible; with the DAG it draws almost nothing (0 k) and is pure traversal. Same fix as pass 1; or test only clusters that pass 1 skipped. |
+| geometry | depth pyramid | 0.02 | 2 % | Negligible; stays. |
+| sky | starfield + planet | 0.14 | 12 % | Unchanged in absolute terms, now the second item. Full-screen procedural noise; when the atmosphere arrives, render the far sky at lower resolution or into a cached cube. |
+| temporal | TAA (motion + resolve + blit) | 0.06 | 6 % | Cheap. DLSS replaces it on NVIDIA. |
+| app | overlay | 0.01 | 1 % | The profiler itself. |
+| cpu | wait for GPU (frame slot) | 0.91 | — | Still GPU-bound, at 900 fps. The main thread does 0.18 ms of work per frame. |
+| cpu | record / submit + present | 0.07 / 0.11 | — | Driver cost; a render thread hides it later. |
 
-Counters at that frame: 3000 asteroids, 7 meshes, 195 M triangles, 14.2 M meshlet slots;
-drawn 2435 instances, 783 k + 44 k meshlets, 76.8 M triangles; 779 k meshlets occluded.
+Counters: 3000 asteroids, 195 M leaf triangles, 28 k clusters in the DAG tables, 4.6 M
+cluster slots; drawn 2 458 instances, 8 k meshlets, 0.62 M triangles, mean LOD level 6.3.
 
-**Priority list from these numbers:** (1) cluster LOD DAG, (2) software rasteriser for
-sub-pixel clusters, (3) cluster hierarchy in the task shader, (4) visibility buffer. Together
-they turn the 5.8 ms of geometry into well under 1 ms, at which point the sky, lighting and
-the CPU simulation become the numbers to watch.
+**Before the DAG (same frame, full detail):** GPU 5.5 ms, of which pass 1 4.6 ms and pass 2
+1.2 ms for 78 M sub-pixel triangles. The LOD removed 99.2 % of the triangles and 80 % of the
+frame; the sub-pixel problem (54 triangles per pixel) is gone.
 
-## `meshlets` — the culling bench (static view, occlusion on)
+**Priority list from these numbers:** (1) the task-shader walk (issue #4: cluster hierarchy /
+fatter groups; both passes are launch-bound at ~145 k groups), (2) the sky at 12 %, (3) the
+software rasteriser for the smallest clusters (issue #3) matters again only once the walk is
+cheap, (4) then lighting and the CPU simulation become the numbers to watch.
 
-Frame **2.07 ms** (483 fps), p50 2.10, p99 2.36. GPU 1.96 ms; CPU 0.17 ms.
+## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
-| Subject | Zone | ms | share | Verdict |
-|---|---|---|---|---|
-| geometry | meshlet pass 1 | 1.80 | 92 % | 325 k meshlets, 30 M triangles: the same sub-pixel story with denser, closer rocks. |
-| geometry | meshlet pass 2 | 0.13 | 6 % | Steady state: almost nothing becomes newly visible. |
-| geometry | depth pyramid | 0.02 | 1 % | Negligible. |
-| cpu | record / submit + present | 0.06 / 0.11 | — | Idle main thread. |
-
-Without occlusion culling the same view draws 106 M triangles at 6.30 ms: the two-pass
-pyramid pays for itself thirty times over.
+Frame **0.6 ms**, GPU 0.58 ms: 15 k meshlets, 1.09 M triangles (full detail: 325 k
+meshlets, 30 M triangles, 2.18 ms; without occlusion at full detail: 106 M at 6.30 ms).
 
 ## Not measured yet
 
 - **Memory**: VRAM residency and per-heap budgets (`VK_EXT_memory_budget`), upload bandwidth,
-  streaming queue depth — arrive with the memory/streaming work (D-018) as an overlay group.
+  streaming queue depth — arrive with the memory/streaming work (D-018) as an overlay group
+  (issue #9).
 - **Job system**: worker occupancy per frame — arrives with the simulation phase (Tracy shows
   it already under `--features profiling`).
 - **Presentation latency**: the time from submit to scan-out — once the render thread exists.

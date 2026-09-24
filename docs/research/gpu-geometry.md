@@ -326,3 +326,21 @@ and in a plausible-looking picture, both found by pixel-diffing culling on again
 Honest numbers after the fixes, same bench (1152 rocks, 127 M triangles, roughness 0.35):
 30 M triangles drawn at 2.16 ms with occlusion versus 106 M at 6.30 ms without; the 13 M at
 1.14 ms reported earlier was measured with a quarter of the visible geometry missing.
+
+### The cluster LOD DAG in Forge (2026-09-24)
+
+Built as the papers describe and as meshoptimizer's cluster LOD recipe does it: groups of
+eight clusters (`meshopt_partitionClusters`), vertices shared between groups locked,
+`meshopt_simplifyWithAttributes` with the lock array to half the triangles, re-clustering,
+until one cluster remains (9–13 levels for the asteroids, about 2× the leaf triangles in the
+tables, vertices shared across levels). Per cluster: the producing group's sphere and error
+(`self`) and the consuming group's (`parent`, infinite for roots); errors and spheres are
+made monotonic on the CPU, so `project(parent) > t >= project(self)` is a crack-free cut on
+the GPU. Two additions that mattered on 3000 instances: an exact task-group table (every
+instance's real cluster count, per-instance visibility bits) instead of "largest mesh ×
+instances", and a per-mesh per-level table (min self error, max parent error, sphere reach)
+so a task group of 32 clusters can prove that none of its levels can be selected at the
+instance's distance and exit before reading a cluster. Ballad: 78 M → 0.62 M triangles, GPU
+5.5 → 1.09 ms; bench 2.18 → 0.58 ms; every A/B (occlusion vs brute force, window on vs off,
+LOD off vs the pre-DAG image) at 0 pixels. What remains in the geometry passes is the
+task-shader walk itself (145 k groups per pass), which is the cluster-hierarchy work.

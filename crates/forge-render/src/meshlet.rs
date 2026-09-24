@@ -34,8 +34,14 @@ impl CullFlags {
     /// skipping them: a correctly culled meshlet is back-facing or hidden and leaves no
     /// pixel, so every red pixel is a culling error (debug view).
     pub const SHOW_CULLED: u32 = 32;
+    /// Select clusters by projected LOD error; off draws level 0 only (full detail).
+    pub const LOD: u32 = 64;
+    /// Colour every cluster by its LOD level (debug view).
+    pub const LOD_COLORS: u32 = 128;
+    /// Disable the per-group LOD window (debug: every group tests its clusters).
+    pub const GROUP_WINDOW_OFF: u32 = 256;
     /// Everything on except the debug view.
-    pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION);
+    pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
     /// Whether a bit is set.
     pub fn has(self, bit: u32) -> bool {
@@ -52,6 +58,8 @@ const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
 const STAT_COUNT: usize = 8;
+/// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
+const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
 const FRAME_BLOCK_STRIDE: u64 = 512;
 
 /// Mirrors `Mesh` in `meshlet.slang` (32 bytes).
@@ -61,9 +69,20 @@ struct GpuMesh {
     meshlet_offset: u32,
     meshlet_count: u32,
     triangle_count: u32,
-    pad0: u32,
+    level_count: u32,
     center: [f32; 3],
     radius: f32,
+    /// Cluster offsets per LOD level relative to `meshlet_offset`, plus the end.
+    level_offset: [u32; LOD_LEVELS + 1],
+    pad: [u32; 3],
+    /// Per level: the smallest `self_error` of its clusters.
+    self_error_min: [f32; LOD_LEVELS],
+    /// Per level: the largest `parent_error` (infinite when the level holds a root).
+    parent_error_max: [f32; LOD_LEVELS],
+    /// Per level: how far a cluster's `self` sphere reaches from the mesh centre.
+    self_reach_max: [f32; LOD_LEVELS],
+    /// Per level: the same for the `parent` spheres.
+    parent_reach_max: [f32; LOD_LEVELS],
 }
 
 /// Mirrors `Instance` in `meshlet.slang` (96 bytes).
@@ -75,7 +94,10 @@ struct GpuInstance {
     radius: f32,
     mesh: u32,
     id: u32,
-    pad: [u32; 2],
+    /// First task group of this instance (`ceil(meshlet_count / 32)` groups follow).
+    group_offset: u32,
+    /// First visibility bit of this instance (`meshlet_count` bits follow).
+    bit_offset: u32,
 }
 
 /// Mirrors `Frame` in `meshlet.slang`.
@@ -98,6 +120,8 @@ struct GpuFrame {
     znear: f32,
     sun_dir: [f32; 3],
     draw_jitter: [f32; 2],
+    lod_threshold: f32,
+    viewport_height: f32,
     vertices: u64,
     meshlets: u64,
     meshlet_vertices: u64,
@@ -106,6 +130,9 @@ struct GpuFrame {
     instances: u64,
     stats: u64,
     visibility: u64,
+    group_table: u64,
+    total_groups: u32,
+    pad_end: u32,
 }
 
 #[repr(C)]
@@ -140,6 +167,10 @@ pub struct MeshletSceneBuilder {
     meshes: Vec<GpuMesh>,
     instances: Vec<GpuInstance>,
     total_triangles: u64,
+    /// Instance index of every task group.
+    group_table: Vec<u32>,
+    /// Visibility bits over all instances (one per cluster).
+    total_bits: u32,
 }
 
 impl MeshletSceneBuilder {
@@ -169,13 +200,41 @@ impl MeshletSceneBuilder {
                 ..*m
             }));
         let id = MeshId(self.meshes.len() as u32);
+        // Per-level tables for the task shader's group window: clusters are stored level by level.
+        let level_count = mesh.clusters_per_level.len().min(LOD_LEVELS);
+        let mut level_offset = [0_u32; LOD_LEVELS + 1];
+        let mut self_error_min = [f32::INFINITY; LOD_LEVELS];
+        let mut parent_error_max = [0.0_f32; LOD_LEVELS];
+        let mut self_reach_max = [0.0_f32; LOD_LEVELS];
+        let mut parent_reach_max = [0.0_f32; LOD_LEVELS];
+        for level in 0..level_count {
+            level_offset[level + 1] = level_offset[level] + mesh.clusters_per_level[level];
+        }
+        let reach = |c: [f32; 3], r: f32| (Vec3::from(c) - Vec3::from(mesh.center)).length() + r;
+        for m in &mesh.meshlets {
+            let level = (m.lod_level as usize).min(level_count.saturating_sub(1));
+            self_error_min[level] = self_error_min[level].min(m.self_error);
+            parent_error_max[level] = parent_error_max[level].max(m.parent_error);
+            self_reach_max[level] = self_reach_max[level].max(reach(m.self_center, m.self_radius));
+            parent_reach_max[level] =
+                parent_reach_max[level].max(reach(m.parent_center, m.parent_radius));
+        }
+        for value in self_error_min.iter_mut().skip(level_count) {
+            *value = 0.0;
+        }
         self.meshes.push(GpuMesh {
             meshlet_offset,
             meshlet_count: mesh.meshlets.len() as u32,
             triangle_count: mesh.triangle_count as u32,
-            pad0: 0,
+            level_count: level_count as u32,
             center: mesh.center,
             radius: mesh.radius,
+            level_offset,
+            pad: [0; 3],
+            self_error_min,
+            parent_error_max,
+            self_reach_max,
+            parent_reach_max,
         });
         id
     }
@@ -186,13 +245,22 @@ impl MeshletSceneBuilder {
         let scale = model.x_axis.truncate().length();
         let center = model.transform_point3(Vec3::from(info.center));
         self.total_triangles += u64::from(info.triangle_count);
+        let groups = info.meshlet_count.div_ceil(TASK_GROUP_SIZE);
+        let group_offset = self.group_table.len() as u32;
+        self.group_table.extend(std::iter::repeat_n(
+            self.instances.len() as u32,
+            groups as usize,
+        ));
+        let bit_offset = self.total_bits;
+        self.total_bits += info.meshlet_count;
         self.instances.push(GpuInstance {
             model: model.to_cols_array(),
             center: center.to_array(),
             radius: info.radius * scale,
             mesh: mesh.0,
             id: self.instances.len() as u32,
-            pad: [0; 2],
+            group_offset,
+            bit_offset,
         });
     }
 
@@ -213,9 +281,10 @@ impl MeshletSceneBuilder {
             .max()
             .unwrap_or(0);
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
-        let visibility_words = (self.instances.len() * max_meshlets as usize)
-            .div_ceil(32)
-            .max(1);
+        let visibility_words = (self.total_bits as usize).div_ceil(32).max(1);
+        if self.group_table.is_empty() {
+            self.group_table.push(0);
+        }
         Ok(MeshletScene {
             vertices: device.create_buffer_with_data(&self.vertices, usage, "meshlet vertices")?,
             meshlets: device.create_buffer_with_data(&self.meshlets, usage, "meshlets")?,
@@ -236,7 +305,14 @@ impl MeshletSceneBuilder {
                 usage,
                 "visibility bits",
             )?,
+            group_table: device.create_buffer_with_data(
+                &self.group_table,
+                usage,
+                "task group table",
+            )?,
             instance_count: self.instances.len() as u32,
+            total_groups: self.group_table.len() as u32,
+            total_bits: self.total_bits,
             max_meshlets,
             mesh_count: self.meshes.len() as u32,
             meshlet_count: self.meshlets.len() as u32,
@@ -254,8 +330,13 @@ pub struct MeshletScene {
     meshes: Buffer,
     instances: Buffer,
     visibility: Buffer,
+    group_table: Buffer,
     /// Instances.
     pub instance_count: u32,
+    /// Task groups per pass (every instance's clusters in groups of 32).
+    pub total_groups: u32,
+    /// Clusters over all instances (one visibility bit each).
+    pub total_bits: u32,
     /// Largest meshlet count of any mesh (task groups per instance derive from it).
     pub max_meshlets: u32,
     /// Distinct meshes.
@@ -269,7 +350,7 @@ pub struct MeshletScene {
 impl MeshletScene {
     /// Meshlets over all instances (the culling universe).
     pub fn instance_meshlets(&self) -> u64 {
-        u64::from(self.instance_count) * u64::from(self.max_meshlets)
+        u64::from(self.total_bits)
     }
 }
 
@@ -336,6 +417,8 @@ pub struct FrameStats {
     pub occluded: u32,
     /// Instances that passed the frustum test.
     pub instances_visible: u32,
+    /// Sum of the LOD level of every drawn meshlet (mean = sum / drawn).
+    pub lod_level_sum: u32,
 }
 
 struct DepthResources {
@@ -424,6 +507,8 @@ pub struct DrawParams<'a> {
     /// y down): the temporal anti-aliasing jitter divided by the extent, or zero. The
     /// occlusion test reads the depth pyramid there.
     pub draw_jitter: Vec2,
+    /// Projected LOD error a drawn cluster may have, in pixels (when `CullFlags::LOD` is set).
+    pub lod_threshold_px: f32,
     /// Culling flags.
     pub flags: CullFlags,
     /// Colour target, already in `COLOR_ATTACHMENT_OPTIMAL`.
@@ -552,6 +637,7 @@ impl MeshletRenderer {
             triangles: raw[2],
             occluded: raw[3],
             instances_visible: raw[4],
+            lod_level_sum: raw[5],
         })
     }
 
@@ -575,6 +661,8 @@ impl MeshletRenderer {
             znear: params.cull.near,
             sun_dir: self.sun_dir.to_array(),
             draw_jitter: params.draw_jitter.to_array(),
+            lod_threshold: params.lod_threshold_px,
+            viewport_height: params.extent.height as f32,
             vertices: scene.vertices.address(),
             meshlets: scene.meshlets.address(),
             meshlet_vertices: scene.meshlet_vertices.address(),
@@ -583,6 +671,9 @@ impl MeshletRenderer {
             instances: scene.instances.address(),
             stats: self.stats_buffers[slot.index].address(),
             visibility: scene.visibility.address(),
+            group_table: scene.group_table.address(),
+            total_groups: scene.total_groups,
+            pad_end: 0,
         }
     }
 
@@ -681,8 +772,7 @@ impl MeshletRenderer {
             &self.pipeline_solid
         };
         let frame_address = self.frame_buffers[slot.index].address();
-        let task_groups =
-            params.scene.instance_count * params.scene.max_meshlets.div_ceil(TASK_GROUP_SIZE);
+        let task_groups = params.scene.total_groups;
 
         // Visibility bits written by the previous frame must be visible to this frame's task shader.
         commands.memory_barrier(

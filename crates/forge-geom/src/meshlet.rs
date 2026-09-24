@@ -1,11 +1,13 @@
 //! Meshlet building with meshoptimizer.
 //!
-//! A meshlet is a cluster of at most 64 vertices and 124 triangles with a bounding sphere and
-//! a normal cone, the unit of work of the task/mesh pipeline (`shaders/meshlet.slang`). The
-//! sizes follow NVIDIA's mesh-shader guidance and the limits reported by the device.
+//! A meshlet is a cluster of at most 64 vertices and 124 triangles with a bounding sphere, a
+//! normal cone and its place in the cluster LOD DAG (`lod.rs`), the unit of work of the
+//! task/mesh pipeline (`shaders/meshlet.slang`). The sizes follow NVIDIA's mesh-shader
+//! guidance and the limits reported by the device.
 
 use bytemuck::{Pod, Zeroable};
 
+use crate::lod;
 use crate::procedural::TriMesh;
 
 /// Maximum vertices per meshlet.
@@ -27,17 +29,17 @@ pub struct GpuVertex {
     pub pad1: f32,
 }
 
-/// Meshlet record shared with the shaders (64 bytes, std430).
+/// Meshlet record shared with the shaders (112 bytes, natural layout).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct GpuMeshlet {
-    /// Bounding sphere centre.
+    /// Bounding sphere centre (culling).
     pub center: [f32; 3],
-    /// Bounding sphere radius.
+    /// Bounding sphere radius (culling).
     pub radius: f32,
     /// Normal cone apex.
     pub cone_apex: [f32; 3],
-    /// Normal cone cutoff (`cos(angle)`).
+    /// Normal cone cutoff (`cos(angle)`; 1 = wider than a hemisphere, axis zero, no test).
     pub cone_cutoff: f32,
     /// Normal cone axis.
     pub cone_axis: [f32; 3],
@@ -51,20 +53,41 @@ pub struct GpuMeshlet {
     pub triangle_count: u32,
     /// Padding.
     pub pad: u32,
+    /// LOD: centre of the sphere of the group this cluster was produced from.
+    pub self_center: [f32; 3],
+    /// LOD: its radius.
+    pub self_radius: f32,
+    /// LOD: centre of the sphere of the group that simplified this cluster away.
+    pub parent_center: [f32; 3],
+    /// LOD: its radius.
+    pub parent_radius: f32,
+    /// LOD: error (object-space length) of the simplification that produced this cluster;
+    /// 0 for level 0.
+    pub self_error: f32,
+    /// LOD: error of the simplification that consumed it; infinite for a root.
+    pub parent_error: f32,
+    /// LOD level (0 = full detail).
+    pub lod_level: u32,
+    /// Padding.
+    pub pad2: u32,
 }
 
-/// A mesh split into meshlets, ready for upload.
+/// A mesh cut into clusters at every LOD level, ready for upload.
 pub struct MeshletMesh {
-    /// Vertex buffer.
+    /// Vertex buffer (shared by every level).
     pub vertices: Vec<GpuVertex>,
-    /// Meshlet records.
+    /// Meshlet records, all levels.
     pub meshlets: Vec<GpuMeshlet>,
     /// Indices into `vertices`, per meshlet.
     pub meshlet_vertices: Vec<u32>,
     /// Local triangle indices (3 bytes each), padded to a multiple of 4.
     pub meshlet_triangles: Vec<u8>,
-    /// Total triangles.
+    /// Triangles at full detail (level 0).
     pub triangle_count: usize,
+    /// Triangles over all levels.
+    pub dag_triangle_count: usize,
+    /// Clusters per LOD level.
+    pub clusters_per_level: Vec<u32>,
     /// Bounding sphere centre of the whole mesh.
     pub center: [f32; 3],
     /// Bounding sphere radius of the whole mesh.
@@ -72,7 +95,7 @@ pub struct MeshletMesh {
 }
 
 impl MeshletMesh {
-    /// Optimises the index buffer for the vertex cache and clusters it into meshlets.
+    /// Optimises the index buffer for the vertex cache, clusters it and builds the LOD DAG.
     pub fn build(mesh: &TriMesh) -> Self {
         let vertices: Vec<GpuVertex> = mesh
             .positions
@@ -86,48 +109,24 @@ impl MeshletMesh {
             })
             .collect();
         let indices = meshopt::optimize_vertex_cache(&mesh.indices, vertices.len());
-        let vertex_bytes: &[u8] = bytemuck::cast_slice(&vertices);
-        let adapter =
-            meshopt::VertexDataAdapter::new(vertex_bytes, std::mem::size_of::<GpuVertex>(), 0)
-                .expect("vertex adapter");
-        let built = meshopt::build_meshlets(
-            &indices,
-            &adapter,
-            MESHLET_MAX_VERTICES,
-            MESHLET_MAX_TRIANGLES,
-            0.5,
-        );
-
-        let mut meshlets = Vec::with_capacity(built.meshlets.len());
-        for (raw, meshlet) in built.meshlets.iter().zip(built.iter()) {
-            let bounds = meshopt::compute_meshlet_bounds(meshlet, &adapter);
-            meshlets.push(GpuMeshlet {
-                center: bounds.center,
-                radius: bounds.radius,
-                cone_apex: bounds.cone_apex,
-                cone_cutoff: bounds.cone_cutoff,
-                cone_axis: bounds.cone_axis,
-                vertex_offset: raw.vertex_offset,
-                triangle_offset: raw.triangle_offset,
-                vertex_count: raw.vertex_count,
-                triangle_count: raw.triangle_count,
-                pad: 0,
-            });
-        }
-        let mut meshlet_triangles = built.triangles.clone();
-        while !meshlet_triangles.len().is_multiple_of(4) {
-            meshlet_triangles.push(0);
-        }
+        let dag = lod::build_dag(&indices, &vertices);
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
             vertices,
-            meshlets,
-            meshlet_vertices: built.vertices.clone(),
-            meshlet_triangles,
+            meshlets: dag.meshlets,
+            meshlet_vertices: dag.meshlet_vertices,
+            meshlet_triangles: dag.meshlet_triangles,
             triangle_count: indices.len() / 3,
+            dag_triangle_count: dag.triangle_count,
+            clusters_per_level: dag.clusters_per_level,
             center,
             radius,
         }
+    }
+
+    /// Number of LOD levels.
+    pub fn levels(&self) -> usize {
+        self.clusters_per_level.len()
     }
 }
 
@@ -163,16 +162,16 @@ mod tests {
     use super::*;
     use forge_core::Seed;
 
+    fn level0<'a>(built: &'a MeshletMesh) -> impl Iterator<Item = &'a GpuMeshlet> + 'a {
+        built.meshlets.iter().filter(|m| m.lod_level == 0)
+    }
+
     #[test]
     fn meshlets_cover_every_triangle_within_limits() {
         let mesh = crate::procedural::asteroid(Seed::new(7), 24, 1.0, 0.2);
         let built = MeshletMesh::build(&mesh);
         assert_eq!(built.triangle_count, mesh.indices.len() / 3);
-        let total: usize = built
-            .meshlets
-            .iter()
-            .map(|m| m.triangle_count as usize)
-            .sum();
+        let total: usize = level0(&built).map(|m| m.triangle_count as usize).sum();
         assert_eq!(total, built.triangle_count);
         for m in &built.meshlets {
             assert!(m.vertex_count as usize <= MESHLET_MAX_VERTICES);
@@ -195,6 +194,70 @@ mod tests {
         assert_eq!(built.meshlet_triangles.len() % 4, 0);
     }
 
+    /// The DAG reaches a root, halves per level, and its errors and spheres are monotonic
+    /// with every group's clusters sharing the group's values.
+    #[test]
+    fn the_lod_dag_is_monotonic_and_reaches_a_root() {
+        let mesh = crate::procedural::asteroid(Seed::new(700), 48, 1.0, 0.45);
+        let built = MeshletMesh::build(&mesh);
+        eprintln!(
+            "levels: {:?}, dag triangles {} for {} leaf",
+            built.clusters_per_level, built.dag_triangle_count, built.triangle_count
+        );
+        assert!(built.levels() >= 4, "levels {:?}", built.clusters_per_level);
+        assert_eq!(
+            *built.clusters_per_level.last().unwrap(),
+            1,
+            "one root cluster"
+        );
+        // Triangles halve per level; cluster counts shrink a little less (level-0 clusters
+        // are not full, simplified ones are).
+        for pair in built.clusters_per_level.windows(2) {
+            assert!(
+                pair[1] < pair[0] && pair[1] as f32 <= pair[0] as f32 * 0.75 + 2.0,
+                "levels must shrink: {pair:?}"
+            );
+        }
+        let roots = built
+            .meshlets
+            .iter()
+            .filter(|m| m.parent_error.is_infinite())
+            .count();
+        assert!(roots >= 1);
+        for m in &built.meshlets {
+            assert!(
+                m.parent_error >= m.self_error,
+                "parent error {} < self error {}",
+                m.parent_error,
+                m.self_error
+            );
+            if m.parent_error.is_finite() {
+                // The parent sphere contains the self sphere.
+                let d = (0..3)
+                    .map(|i| (m.parent_center[i] - m.self_center[i]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                assert!(
+                    d + m.self_radius <= m.parent_radius + 1e-3,
+                    "parent sphere does not contain the child's"
+                );
+            }
+            if m.lod_level == 0 {
+                assert_eq!(m.self_error, 0.0);
+            } else {
+                assert!(m.self_error > 0.0);
+            }
+        }
+        // Siblings (same parent values) exist: at least one parent sphere is shared by > 1 cluster.
+        let mut shared = std::collections::HashMap::new();
+        for m in built.meshlets.iter().filter(|m| m.parent_error.is_finite()) {
+            *shared.entry(m.parent_center.map(f32::to_bits)).or_insert(0) += 1;
+        }
+        assert!(shared.values().any(|&n| n > 1));
+        // Total DAG size is about twice the leaves.
+        assert!(built.dag_triangle_count < built.triangle_count * 3);
+    }
+
     /// meshoptimizer marks a cone wider than a hemisphere with `cone_cutoff == 1` and leaves
     /// the axis at zero; a shader that normalises that axis gets NaN and culls the meshlet
     /// (the bug that punched holes in every rough asteroid). The convention must hold so the
@@ -203,11 +266,7 @@ mod tests {
     fn wide_cones_are_marked_by_a_unit_cutoff() {
         let mesh = crate::procedural::asteroid(Seed::new(700), 48, 1.0, 0.45);
         let built = MeshletMesh::build(&mesh);
-        let wide = built
-            .meshlets
-            .iter()
-            .filter(|m| m.cone_cutoff >= 1.0)
-            .count();
+        let wide = level0(&built).filter(|m| m.cone_cutoff >= 1.0).count();
         assert!(wide > 0, "a rough asteroid should have some wide cones");
         for m in &built.meshlets {
             let axis_len = glam::Vec3::from(m.cone_axis).length();
@@ -227,10 +286,6 @@ mod tests {
                 );
             }
         }
-        eprintln!(
-            "{wide} / {} meshlets have a cone wider than a hemisphere",
-            built.meshlets.len()
-        );
     }
 
     /// A culled meshlet must not contain a single front-facing triangle, for either cone test
