@@ -278,6 +278,8 @@ struct Ballad {
     /// The size the scene is drawn at (the window's, or DLSS's input size).
     render_extent: vk::Extent2D,
     meter: LuminanceMeter,
+    /// `FORGE_HASH_IMAGES=1`: per-frame image hashes in the frame trace (issue #71).
+    hasher: Option<forge_render::debug_hash::ImageHasher>,
     exposure: AutoExposure,
     tonemap: Tonemap,
     /// Seconds the scene advanced this frame (the fixed step with `--fixed-step`).
@@ -319,6 +321,10 @@ impl Ballad {
         renderer.sun_illuminance = args.sun_lux;
         starfield.sun_illuminance = args.sun_lux;
         let meter = LuminanceMeter::new(&ctx.device, &ctx.shaders)?;
+        let hasher = std::env::var_os("FORGE_HASH_IMAGES")
+            .is_some_and(|v| v != "0")
+            .then(|| forge_render::debug_hash::ImageHasher::new(&ctx.device, &ctx.shaders))
+            .transpose()?;
         let exposure = match args.ev100 {
             Some(ev100) => AutoExposure::fixed(ev100),
             None => {
@@ -439,6 +445,7 @@ impl Ballad {
             display,
             render_extent: ctx.extent(),
             meter,
+            hasher,
             exposure,
             tonemap,
             step: 0.0,
@@ -616,7 +623,13 @@ impl Demo for Ballad {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
-        if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
+        let frame_stats = self.renderer.begin_frame(frame.slot, &mut self.scene)?;
+        let frame_hashes = self
+            .hasher
+            .as_ref()
+            .map(|h| h.take(frame.slot))
+            .unwrap_or_default();
+        if let Some(stats) = frame_stats {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);
@@ -714,7 +727,7 @@ impl Demo for Ballad {
                     .unwrap_or([0.0; 16]);
                 let _ = writeln!(
                     file,
-                    "{} t={:.9} pos={:?} yaw={} pitch={} taa={} flags={} prev={:?}",
+                    "{} t={:.9} pos={:?} yaw={} pitch={} taa={} flags={} prev={:?} gpu={:?} hashes={:x?}",
                     ctx.frames_rendered,
                     self.path_t,
                     self.camera.position.to_array(),
@@ -722,7 +735,9 @@ impl Demo for Ballad {
                     self.camera.pitch,
                     self.taa.frame_index(),
                     self.flags.0,
-                    &prev[..8]
+                    prev,
+                    frame_stats,
+                    frame_hashes
                 );
             }
         }
@@ -740,6 +755,14 @@ impl Demo for Ballad {
             exposure,
         );
         let draw_view_proj = taa_frame.jittered_projection * self.camera.view();
+        // `FORGE_HASH_IMAGES=1` (issue #71): the scene colour after each pass that writes it
+        // (after the shading, the sky's pixels are still undefined), then the frame's other
+        // images, in the frame trace.
+        use forge_render::debug_hash::HashKind;
+        let hasher = self.hasher.as_ref();
+        if let Some(h) = hasher {
+            h.begin(&mut frame.graph, frame.slot);
+        }
         let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
@@ -788,6 +811,9 @@ impl Demo for Ballad {
                 probes: None,
             },
         );
+        if let Some(h) = hasher {
+            h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
+        }
         let planet = self
             .atmosphere
             .as_mut()
@@ -802,6 +828,9 @@ impl Demo for Ballad {
             exposure,
             planet,
         );
+        if let Some(h) = hasher {
+            h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
+        }
         // The belt's dust, lit by the sun between the rocks (issue #58).
         if let Some(dust) = self.dust.as_ref().filter(|_| self.dust_on) {
             let sun_luminance = self.renderer.sun_illuminance * exposure;
@@ -826,6 +855,9 @@ impl Demo for Ballad {
                 extent,
             );
         }
+        if let Some(h) = hasher {
+            h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
+        }
         // Meter the finished HDR scene (the next frames' exposure), then resolve it: TAA into
         // its history and, through the tone curve, the swapchain; or DLSS into an HDR image at
         // the window's size that the display pass takes through the curve.
@@ -839,7 +871,7 @@ impl Demo for Ballad {
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
-        match self.dlss.as_mut() {
+        let (history, bloom_image) = match self.dlss.as_mut() {
             Some(dlss) if self.dlss_on => {
                 let upscaled = dlss.upscale(
                     &mut frame.graph,
@@ -861,13 +893,14 @@ impl Demo for Ballad {
                     ctx.extent(),
                     self.tonemap,
                 );
+                (None, None)
             }
             _ => {
                 let bloom = self.bloom_on.then(|| {
                     self.bloom
                         .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
                 });
-                self.taa.resolve(
+                let history = self.taa.resolve(
                     &mut frame.graph,
                     &taa_frame,
                     targets.depth,
@@ -875,8 +908,27 @@ impl Demo for Ballad {
                     frame.target,
                     self.tonemap,
                     bloom,
-                )
+                );
+                (Some(history), bloom)
             }
+        };
+        if let Some(h) = hasher {
+            let half = vk::Extent2D {
+                width: (extent.width >> 1).max(1),
+                height: (extent.height >> 1).max(1),
+            };
+            let images = [
+                Some((targets.visibility, HashKind::Uint, extent)),
+                Some((targets.depth, HashKind::Depth, extent)),
+                Some((motion, HashKind::Float4, extent)),
+                occlusion.map(|ao| (ao, HashKind::Float4, extent)),
+                bloom_image.map(|b| (b, HashKind::Float4, half)),
+                history.map(|h| (h, HashKind::Float4, extent)),
+            ];
+            for (image, kind, size) in images.into_iter().flatten() {
+                h.add(&mut frame.graph, image, kind, size);
+            }
+            h.finish(&mut frame.graph);
         }
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())

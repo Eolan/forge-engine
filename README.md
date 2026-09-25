@@ -184,10 +184,12 @@ the two sequences: LOD pops against a full-detail reference
 | `FORGE_GPU_AV=1` | with `--validate`: GPU-assisted validation (out-of-bounds device-address and descriptor accesses). Slow. |
 | `FORGE_WAIT_IDLE=1` | wait for the GPU after every frame (debugging). |
 | `FORGE_FRAME_BARRIER=1` | a full memory barrier at the start of every frame (debugging). |
-| `FORGE_PARANOID_BARRIERS=1` | a full memory barrier before every pass (debugging). |
+| `FORGE_PARANOID_BARRIERS=1` | a full memory barrier before every dispatch, draw and blit (debugging); a comma-separated list of pass-label prefixes (`ao/,dust/`) limits it to those passes. |
+| `FORGE_FP_PRECISE=1` | compile the shaders with `-fp-mode precise`: no contraction into FMAs (debugging, issue #71). |
 | `FORGE_GRAPH_LOG=1` | log the render graph's compiled plan (passes, derived barriers, transient placement) whenever it changes. |
 | `FORGE_GRAPH_NO_ALIAS=1` | give every transient image its own memory instead of the aliased heap (debugging). |
 | `FORGE_STALL_MS=N` | sleep N ms after every frame (debugging; it was the workaround for the TAA run-to-run difference the render graph resolved, see `docs/demos/asteroids.md`). |
 | `FORGE_NO_TITLE=1` | never update the window title (debugging). |
-| `FORGE_TRACE_FRAMES=file` | `asteroids`: append every frame's CPU-side inputs to `file` (to diff two runs). |
+| `FORGE_TRACE_FRAMES=file` | `asteroids`: append every frame's CPU-side inputs and culling counters to `file` (to diff two runs). |
+| `FORGE_HASH_IMAGES=1` | `asteroids`, with `FORGE_TRACE_FRAMES`: hash on the GPU the scene colour after each pass that writes it and the frame's other images, into the trace, without waiting (where two runs part, issue #71). |
 | `RUST_LOG` | tracing filter (`info` by default). |

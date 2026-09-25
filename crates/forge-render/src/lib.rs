@@ -11,6 +11,7 @@
 pub mod atmosphere;
 pub mod blit;
 pub mod bloom;
+pub mod debug_hash;
 pub mod display;
 pub mod dust;
 pub mod exposure;

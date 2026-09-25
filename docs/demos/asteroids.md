@@ -985,20 +985,44 @@ the output"), which makes the draw order, and so the image, independent of timin
 order moved the golden once (14 946 pixels at ±1 with TAA and automatic exposure; identical
 with a fixed exposure or without TAA); it is identical from run to run since.
 
-**Still open: issue #71 (2026-09-25).** The frame-600 TAA capture still differs now and then:
-- about 4 runs in 10 on the fallback path, fewer on the mesh path;
-- each time a few hundred scattered edge pixels, and never the same ones twice.
-
-Waiting for the GPU after every frame (`FORGE_WAIT_IDLE=1`) or a full barrier before every
-compute dispatch (`FORGE_PARANOID_BARRIERS=1`) hides it; aliasing and the exposure feedback
-play no part. The hunt fixed two real hazards without removing it:
+**Issue #71 (2026-09-25): the GPU runs one pipeline two ways.** The frame-600 TAA capture
+still differs now and then: about half the runs on the fallback path, fewer on the mesh
+path, each time a few hundred edge pixels by up to 20 levels. The hunt fixed two real
+hazards without removing it:
 - **The render graph** gave a barrier only to the first reader after a write. A later read in
   another stage (the TAA motion vectors' fragment reads of the depth, after the dust's compute
   read) waited for nothing. It now gets a barrier chained from the earlier readers.
 - **The culls' grids and tickets** were reset by the host, with nothing making the device's
   writes of two frames before available to it. They are reset on the GPU now.
 
-Until #71 is found, rerun a single differing ballad TAA capture before believing it.
+Hashes of the frame's images on the GPU, read back without waiting (`FORGE_HASH_IMAGES=1`
+with `FORGE_TRACE_FRAMES`), then showed where two runs part:
+- The culling counters, the visibility buffer, the depth and the AO are identical in every
+  frame of every run.
+- At a frame that changes from run to run (between about 450 and 600), the scene colour after
+  the starfield and the motion vectors differ first; the shading's output differs from the
+  next frame. TAA's history and the exposure carry the difference to frame 600.
+- The motion pass got the same push constants (hashed inside the shader) and read the same
+  depth, bit for bit.
+- Drawn twice in one frame, the same motion pipeline on the same inputs gave two results that
+  differ in almost every pixel by a rounding step (fewer than 20 pixels by more than 0.1 %).
+  They are the same two results in every run: each draw runs one of two variants, and timing
+  picks which.
+- Compiled without contraction into FMAs (`FORGE_FP_PRECISE=1`), the motion pass has one
+  result. The starfield, a ray march through the atmosphere (exponentials, square roots),
+  still has two.
+
+So the cause lies below Forge. The Vulkan specification requires identical pipelines to give
+identical results on identical inputs (invariance, rule 4), and no hazard explains it: frames
+serialised on the GPU keep it, and OBS's and NVIDIA's implicit layers play no part. Waiting
+for the GPU after every frame, a sleep after the first frame or slower frames make it rarer,
+because they move the moment the variants change. It is invisible on its own (a rounding
+step); TAA's neighbourhood clamp turns it into a few levels on high-contrast edges.
+
+For the checks: the culling harness compares captures without TAA, where a rounding step
+rarely crosses a level (one capture in about 60 differed). A ballad TAA capture that differs
+from the golden in a few hundred edge pixels by at most about 20 levels is this effect; rerun
+it before believing it.
 
 ## What the numbers say
 

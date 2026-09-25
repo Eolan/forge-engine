@@ -367,7 +367,7 @@ impl Taa {
 
     /// Declares the pass that resolves the frame drawn into `frame.color` with `depth` and
     /// `motion` (from [`Taa::motion_vectors`]) into the next history and, through `curve`,
-    /// into `output` at once.
+    /// into `output` at once. Returns the history it wrote.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve<'f>(
         &'f self,
@@ -378,7 +378,7 @@ impl Taa {
         output: ImageHandle,
         curve: Tonemap,
         bloom: Option<ImageHandle>,
-    ) {
+    ) -> ImageHandle {
         let encode_srgb = u32::from(self.encode_srgb);
         let bloom_strength = self.bloom_strength;
         use vk::PipelineStageFlags2 as S;
@@ -422,6 +422,7 @@ impl Taa {
             );
             Ok(())
         });
+        history_written
     }
 }
 

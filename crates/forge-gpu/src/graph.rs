@@ -1279,6 +1279,7 @@ impl RenderGraph {
             commands.barriers(memory, &plan.image_barriers);
             stats.image_barriers += plan.image_barriers.len() as u32;
             stats.memory_barriers += memory.len() as u32;
+            commands.set_pass(pass.decl.label);
             (pass.run)(&resources, commands)?;
             if let Some(label) = plan.mark {
                 commands.mark(label);

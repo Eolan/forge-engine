@@ -161,7 +161,8 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 
 **Core** (`forge-core`, `forge-task`):
 - **Hashes.** Mark Jarzynski, Marc Olano, "Hash Functions for GPU Rendering", JCGT 2020: the
-  PCG3D and PCG4D hashes.
+  PCG3D and PCG4D hashes, and the one-word PCG hash of the debugging image hash
+  (`shaders/debug_hash.slang`, issue #71).
 - **SplitMix64.** Guy L. Steele Jr., Doug Lea, Christine H. Flood, "Fast Splittable
   Pseudorandom Number Generators", OOPSLA 2014, with David Stafford's mix13 finaliser.
 - **Work stealing.** David Chase, Yossi Lev, "Dynamic Circular Work-Stealing Deque", SPAA 2005.

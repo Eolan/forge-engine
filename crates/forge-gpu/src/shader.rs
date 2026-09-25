@@ -254,6 +254,7 @@ impl ShaderCompiler {
         }
         hasher.update(self.version.as_bytes());
         hasher.update(&[u8::from(self.optimize)]);
+        hasher.update(&[u8::from(std::env::var_os("FORGE_FP_PRECISE").is_some())]);
         Ok(hasher.digest())
     }
 
@@ -292,6 +293,11 @@ impl ShaderCompiler {
             .arg(&cached);
         if !self.optimize {
             cmd.arg("-g2");
+        }
+        if std::env::var_os("FORGE_FP_PRECISE").is_some() {
+            // Debugging aid (issue #71): no contraction into FMAs, which the driver may otherwise
+            // do differently from one draw to the next.
+            cmd.args(["-fp-mode", "precise"]);
         }
         let output = cmd
             .output()

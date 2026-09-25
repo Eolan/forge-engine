@@ -14,6 +14,8 @@ pub struct Commands<'a> {
     device: &'a Device,
     cb: vk::CommandBuffer,
     timers: Option<&'a GpuTimerSlot>,
+    /// The label of the render-graph pass being recorded (the debugging barrier's filter).
+    pass: std::cell::Cell<&'static str>,
 }
 
 impl<'a> Commands<'a> {
@@ -31,12 +33,27 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// `FORGE_PARANOID_BARRIERS=1`: a full memory barrier before every pass (debugging aid to
-    /// tell an intra-frame ordering bug from anything else).
+    /// Records which render-graph pass the next commands belong to.
+    pub(crate) fn set_pass(&self, label: &'static str) {
+        self.pass.set(label);
+    }
+
+    /// `FORGE_PARANOID_BARRIERS=1`: a full memory barrier before every dispatch, draw and blit
+    /// (debugging aid to tell an intra-frame ordering bug from anything else). A comma-separated
+    /// list of pass-label prefixes (`ao/,dust/`) limits it to those passes.
     fn paranoid_barrier(&self) {
-        static PARANOID: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *PARANOID
-            .get_or_init(|| std::env::var_os("FORGE_PARANOID_BARRIERS").is_some_and(|v| v != "0"))
+        static PARANOID: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+        let filter = PARANOID.get_or_init(|| {
+            let value = std::env::var("FORGE_PARANOID_BARRIERS").ok()?;
+            match value.as_str() {
+                "" | "0" => None,
+                "1" => Some(Vec::new()),
+                list => Some(list.split(',').map(str::to_owned).collect()),
+            }
+        });
+        let pass = self.pass.get();
+        if let Some(filter) = filter
+            && (filter.is_empty() || filter.iter().any(|p| pass.starts_with(p.as_str())))
         {
             self.memory_barrier(
                 vk::PipelineStageFlags2::ALL_COMMANDS,
@@ -53,6 +70,7 @@ impl<'a> Commands<'a> {
             device,
             cb,
             timers: None,
+            pass: std::cell::Cell::new(""),
         }
     }
 
