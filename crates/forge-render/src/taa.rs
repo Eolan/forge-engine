@@ -368,6 +368,7 @@ impl Taa {
     /// Declares the pass that resolves the frame drawn into `frame.color` with `depth` and
     /// `motion` (from [`Taa::motion_vectors`]) into the next history and, through `curve`,
     /// into `output` at once.
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
