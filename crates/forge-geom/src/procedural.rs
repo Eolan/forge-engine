@@ -1,4 +1,5 @@
-//! Procedural test meshes: a noise-displaced cube-sphere "asteroid" with welded seams.
+//! Procedural test meshes: a noise-displaced cube-sphere "asteroid" with welded seams, and the
+//! angular chunks cut from it.
 
 use std::collections::HashMap;
 
@@ -79,6 +80,50 @@ pub(crate) fn fbm(seed: u64, mut p: Vec3, octaves: u32) -> f32 {
         p = p * 2.03 + Vec3::splat(17.1);
     }
     sum / norm
+}
+
+/// An angular chunk of rock (issue #60): [`asteroid`]'s displaced cube-sphere, cut by `cuts`
+/// random planes. Every vertex beyond a plane moves back onto it, so the rock gets flat
+/// fractured facets meeting at sharp edges, one convex cell as a Voronoi fracture makes them.
+/// The planes stand 0.58 to 0.88 of `radius` from the centre, and a faint noise keeps the
+/// facets from reading as machined.
+pub fn chunk(seed: Seed, segments: u32, radius: f32, roughness: f32, cuts: u32) -> TriMesh {
+    let mut mesh = asteroid(seed, segments, radius, roughness);
+    let mut rng = seed.derive_str("chunk planes").rng();
+    let planes: Vec<(Vec3, f32)> = (0..cuts)
+        .map(|_| {
+            // A uniform direction (rejection in the unit ball) and a distance.
+            let n = loop {
+                let v = Vec3::new(
+                    rng.next_f32() * 2.0 - 1.0,
+                    rng.next_f32() * 2.0 - 1.0,
+                    rng.next_f32() * 2.0 - 1.0,
+                );
+                let l = v.length_squared();
+                if l > 1e-4 && l <= 1.0 {
+                    break v / l.sqrt();
+                }
+            };
+            (n, radius * (0.58 + 0.3 * rng.next_f32()))
+        })
+        .collect();
+    let noise_seed = seed.derive_str("chunk facets").value();
+    for p in &mut mesh.positions {
+        let mut v = Vec3::from_array(*p);
+        // A vertex can pass several planes: a few rounds settle it inside all of them.
+        for _ in 0..3 {
+            for &(n, d) in &planes {
+                let beyond = v.dot(n) - d;
+                if beyond > 0.0 {
+                    v -= n * beyond;
+                }
+            }
+        }
+        let grain = fbm(noise_seed, v / radius * 9.0, 3) * radius * 0.012;
+        *p = (v + v.normalize_or_zero() * grain).to_array();
+    }
+    mesh.recompute_normals();
+    mesh
 }
 
 /// A cube-sphere of `segments × segments` quads per face, displaced by fractal noise.
@@ -165,6 +210,34 @@ mod tests {
         for n in &a.normals {
             let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
             assert!((len - 1.0).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn a_chunk_is_the_asteroid_cut_flat_and_deterministic() {
+        let round = asteroid(Seed::new(7), 24, 1.0, 0.3);
+        let a = chunk(Seed::new(7), 24, 1.0, 0.3, 10);
+        let b = chunk(Seed::new(7), 24, 1.0, 0.3, 10);
+        assert_eq!(a.positions, b.positions);
+        // The same topology, every vertex pulled in (to within the facets' grain), and on
+        // average well inside the round rock: the cuts took its bulges (ten random planes
+        // need not reach every one, so not its farthest point).
+        assert_eq!(a.indices, round.indices);
+        let mean = |m: &TriMesh| {
+            m.positions
+                .iter()
+                .map(|p| Vec3::from(*p).length())
+                .sum::<f32>()
+                / m.positions.len() as f32
+        };
+        assert!(
+            mean(&a) < 0.92 * mean(&round),
+            "{} vs {}",
+            mean(&a),
+            mean(&round)
+        );
+        for (p, q) in a.positions.iter().zip(&round.positions) {
+            assert!(Vec3::from(*p).length() <= Vec3::from(*q).length() + 0.013);
         }
     }
 }

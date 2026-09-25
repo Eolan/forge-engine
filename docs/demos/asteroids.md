@@ -11,7 +11,7 @@ hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
-`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--no-occlusion`, `--no-cone`,
+`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--round-rocks` (Phase 0's round rocks), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -265,6 +265,35 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Rock chunks (2026-09-25, issue #60)
+
+The owner's look asked for "rock asteroids as angular *chunks* of rock (fractured faces,
+edges, flat facets)" and "ice asteroids as ice *blocks/chunks*". The seven meshes are now
+chunks (`forge_geom::procedural::chunk`):
+- **The cuts:** Phase 0's displaced cube-sphere, cut by 8 to 14 random planes 0.58 to 0.88
+  of its radius from the centre. Every vertex beyond a plane moves back onto it, so flat
+  facets meet at sharp edges.
+- **The grain:** a faint noise keeps the facets from reading as machined.
+- **The Voronoi link:** a Voronoi fracture cuts a body into such convex cells, the
+  intersections of half-spaces. The destruction system (Phase 3, #12) can build its cells from
+  the same cuts.
+
+The ice blocks glow through their thin edges with #59's translucency. `--round-rocks` keeps
+the round rocks. The bench keeps them too.
+
+![Frame 600: Phase 0's round rocks, then the chunks: fractured rock and ice blocks](images/asteroids-chunks.png)
+
+**Numbers:** the field builds in 871 ms (832 for the round rocks). The GPU time *drops*,
+0.709 → 0.665 ms over 600 frames, because the flat facets simplify well in the cluster DAG.
+The same 195 M leaf triangles become 4.60 M cluster slots instead of 4.65 M.
+
+**Checks:**
+- With `--round-rocks`, the captures are identical to the previous build.
+- The culling harness and mesh against fallback stay at 0; the city and the bench are
+  unchanged.
+- Synchronization validation is silent. A test covers the generator: deterministic, the
+  sphere's topology, every vertex pulled in.
 
 ## Translucent ice (2026-09-25, issue #59)
 
@@ -677,4 +706,6 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    translucent according to their density and to the thickness of ice between the light and
    the camera (transmission through the body, so the sun glows through thin edges; a
    material-layer job for the lighting phase, with the fracture generator shared with the
-   destruction system).
+   destruction system). **First pass done (2026-09-25):** the chunks (#60, plane cuts, one Voronoi
+   cell each) and the translucent ice (#59, D-033: the sun through its thickness, by rays). Left:
+   density per material, fracture on impact with the destruction system (#12).

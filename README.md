@@ -58,7 +58,7 @@ All rendering demos share these options: `--vsync`, `--validate` (Vulkan validat
 cargo run --release -p asteroids
 ```
 
-A 90-second scripted flight through 3000 asteroids (rock and ice) of seven procedural meshes
+A 90-second scripted flight through 3000 asteroids (rock and ice chunks) of seven procedural meshes
 (195 M source triangles) over a procedural sky with the sun and an Earth-like planet under a
 physical atmosphere, with temporal anti-aliasing. Keys: **F1** profiling overlay (off →
 compact → full: GPU time per pass and CPU time per zone, grouped by subject; **1**–**9**
@@ -73,7 +73,7 @@ AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
 `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-shadows`, `--no-textures` (the
-untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-dust`, `--dust E`, `--no-translucency`, `--no-occlusion`, `--no-cone`,
+untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-dust`, `--dust E`, `--no-translucency`, `--round-rocks`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
 sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,

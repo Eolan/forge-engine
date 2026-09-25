@@ -51,6 +51,9 @@ struct Args {
     /// the motion into streaks (issue #55).
     #[arg(long)]
     soft_shadows: bool,
+    /// The Phase 0 rocks: round displaced spheres instead of fractured chunks.
+    #[arg(long)]
+    round_rocks: bool,
     /// Opaque ice: no sunlight through its thickness (Y toggles it).
     #[arg(long)]
     no_translucency: bool,
@@ -920,12 +923,18 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         (192, 30.0, 0.22),
     ];
     let mut meshes: Vec<Option<MeshletMesh>> = (0..recipes.len()).map(|_| None).collect();
+    let round = args.round_rocks;
     pool.scope(|s| {
         for (i, slot) in meshes.iter_mut().enumerate() {
             let (segments, radius, roughness) = recipes[i];
             s.spawn(move |_| {
-                let mesh =
-                    procedural::asteroid(Seed::new(700 + i as u64), segments, radius, roughness);
+                // Angular chunks with fractured facets (issue #60), or the Phase 0 round rocks.
+                let seed = Seed::new(700 + i as u64);
+                let mesh = if round {
+                    procedural::asteroid(seed, segments, radius, roughness)
+                } else {
+                    procedural::chunk(seed, segments, radius, roughness, 8 + i as u32)
+                };
                 *slot = Some(MeshletMesh::build(&mesh));
             });
         }
