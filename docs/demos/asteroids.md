@@ -12,9 +12,11 @@ hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
-`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--clear-ice` (#59's one clear ice), `--ice-belt D` (the ice in its own belt D metres
-away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round rocks), `--no-crust` (no weathered crust on the chunks), `--rock-shaped-ice` (the ice in the rock's
-shapes), `--no-occlusion`, `--no-cone`,
+`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4),
+`--no-translucency`, `--clear-ice` (#59's one clear ice), `--ice-belt D` (the ice in its own
+belt D metres away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round
+rocks), `--no-crust` (no weathered crust on the chunks), `--rock-shaped-ice` (the ice in the
+rock's shapes), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
