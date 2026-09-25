@@ -47,10 +47,10 @@ struct Push {
     /// The atmosphere's tables (sampled images).
     transmittance: u32,
     multiple_scattering: u32,
-    /// The planet-view table and its transmittance row (issue #26); `u32::MAX`: every pixel
-    /// marches its ray instead.
+    /// The planet-view table (issue #26); `u32::MAX`: every pixel marches its ray instead.
     planet_view: u32,
-    planet_view_transmittance: u32,
+    /// The table's transmittance row; when marching, the segments per ray (issue #73).
+    planet_view_row: u32,
 }
 
 /// Illuminance of the Sun at 1 AU outside an atmosphere, in lux.
@@ -136,7 +136,7 @@ impl Starfield {
             transmittance: 0,
             multiple_scattering: 0,
             planet_view: u32::MAX,
-            planet_view_transmittance: u32::MAX,
+            planet_view_row: planet.map_or(0, |p| p.march_steps),
         };
         let pipeline = &self.pipeline;
         let mut pass = graph
@@ -161,7 +161,7 @@ impl Starfield {
                 push.multiple_scattering = resources.sampled(p.multiple_scattering).0;
                 if let Some((table, table_transmittance)) = p.planet_view {
                     push.planet_view = resources.sampled(table).0;
-                    push.planet_view_transmittance = resources.sampled(table_transmittance).0;
+                    push.planet_view_row = resources.sampled(table_transmittance).0;
                 }
             }
             let attachments = [vk::RenderingAttachmentInfo::default()

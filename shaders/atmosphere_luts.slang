@@ -153,14 +153,15 @@ struct PlanetViewPush
     uint multiple_scattering; // sampled image of the multiple-scattering table
     uint luminance_out;       // storage image of the planet-view table
     uint transmittance_out;   // storage image of its one-row transmittance
+    uint steps;               // segments of each texel's march (issue #73)
 };
 
 [[vk::push_constant]]
 PlanetViewPush view_push;
 
-// One texel of the planet-view table: `cross_atmosphere` along its ray, with the steps the
-// sky's march takes, so that the table and the march it replaces agree at the texels. Row 0
-// of the second table takes the ray's transmittance.
+// One texel of the planet-view table: `cross_atmosphere` along its ray in `steps` segments.
+// Built once, it affords many more than a per-pixel march (64 by default: within 1/255 of a
+// 512-segment march, issue #73). Row 0 of the second table takes the ray's transmittance.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void planet_view_main(uint3 id : SV_DispatchThreadID)
@@ -173,7 +174,7 @@ void planet_view_main(uint3 id : SV_DispatchThreadID)
     float b = planet_view_b(p, (float(id.x) + 0.5) / float(PLANET_VIEW_WIDTH));
     float phi = PI * (float(id.y) + 0.5) / float(PLANET_VIEW_HEIGHT);
     float3 direction = planet_view_direction(frame, b, phi);
-    Crossing c = cross_atmosphere(p, view_push.transmittance, view_push.multiple_scattering, direction, sun, SPACE_MARCH_STEPS);
+    Crossing c = cross_atmosphere(p, view_push.transmittance, view_push.multiple_scattering, direction, sun, view_push.steps);
     g_storage_images_rgba16f[NonUniformResourceIndex(view_push.luminance_out)][id.xy] = float4(c.luminance, 1.0);
     if (id.y == 0)
         g_storage_images_rgba16f[NonUniformResourceIndex(view_push.transmittance_out)][uint2(id.x, 0)] = float4(c.transmittance, 1.0);

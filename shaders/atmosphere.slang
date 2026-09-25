@@ -235,8 +235,6 @@ public Crossing cross_atmosphere(Planet p, uint transmittance, uint multiple_sca
 
 public static const uint PLANET_VIEW_WIDTH = 512;  // along b, half for each kind of ray
 public static const uint PLANET_VIEW_HEIGHT = 256; // along phi
-// Segments of the march through the shell for a camera outside it (the table's and the sky's).
-public static const uint SPACE_MARCH_STEPS = 16;
 
 // The camera's frame around the planet: `toward` the planet's centre, `across` the sun's side
 // of the plane through it (any side when the sun is on that line), `third` completing it.

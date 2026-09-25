@@ -39,6 +39,12 @@ const LABEL: &str = "sky/atmosphere tables";
 pub const PLANET_VIEW_SIZE: [u32; 2] = [512, 256];
 /// Profiler zone of its pass, which runs when the camera, the sun or the atmosphere moves.
 const PLANET_VIEW_LABEL: &str = "sky/planet-view table";
+/// Default segments of the march behind each texel of the planet-view table: within 1/255 of a
+/// 512-segment march everywhere the ballad was checked, where 16 were 4/255 off at the limb
+/// (issue #73). 0.08 ms to build, once.
+pub const PLANET_VIEW_STEPS: u32 = 64;
+/// Default segments of the per-pixel march from space (#8: within 4/255 of 128).
+pub const MARCH_STEPS: u32 = 16;
 
 /// An atmosphere: a Rayleigh layer, an aerosol (Mie) layer and an absorbing ozone layer over a
 /// spherical ground. Distances in kilometres, coefficients per kilometre.
@@ -205,12 +211,13 @@ struct PlanetViewPush {
     multiple_scattering: u32,
     luminance_out: u32,
     transmittance_out: u32,
-    pad: [u32; 2],
+    steps: u32,
+    pad: u32,
 }
 
-/// What the planet-view table was built for: the atmosphere, the camera in the planet's frame
-/// and the direction to the sun.
-type PlanetViewKey = (AtmosphereParams, [f32; 3], [f32; 3]);
+/// What the planet-view table was built for: the atmosphere, the camera in the planet's frame,
+/// the direction to the sun and the segments of its march.
+type PlanetViewKey = (AtmosphereParams, [f32; 3], [f32; 3], u32);
 
 /// What the passes of a frame that draw the atmosphere need: the planet's data by device
 /// address and the two tables, to declare as sampled.
@@ -230,6 +237,8 @@ pub struct AtmosphereFrame {
     /// From a camera outside the atmosphere, the planet-view table and its transmittance row
     /// (issue #26); `None` from inside it or with [`Atmosphere::planet_view`] off.
     pub planet_view: Option<(ImageHandle, ImageHandle)>,
+    /// Segments of the per-pixel march where there is no planet-view table.
+    pub march_steps: u32,
 }
 
 /// The atmosphere's tables, their passes and the per-frame planet data.
@@ -247,6 +256,10 @@ pub struct Atmosphere {
     /// Draw a planet seen from space through the planet-view table (the default), else by
     /// marching every pixel's ray (the reference the table is checked against).
     pub planet_view: bool,
+    /// Segments of the march behind each texel of the planet-view table (issue #73).
+    pub planet_view_steps: u32,
+    /// Segments of the per-pixel march, where the planet-view table is not used.
+    pub march_steps: u32,
     planets: Vec<Buffer>,
     /// The atmosphere drawn; changing it rebuilds the tables.
     pub params: AtmosphereParams,
@@ -322,6 +335,8 @@ impl Atmosphere {
             )?,
             view_built: None,
             planet_view: true,
+            planet_view_steps: PLANET_VIEW_STEPS,
+            march_steps: MARCH_STEPS,
             transmittance: table(TRANSMITTANCE_SIZE, "atmosphere transmittance")?,
             multiple_scattering: table(MULTIPLE_SCATTERING_SIZE, "atmosphere multiple scattering")?,
             planets,
@@ -347,7 +362,12 @@ impl Atmosphere {
         let rebuild = self.built != Some(self.params);
         self.built = Some(self.params);
         let outside = view_position.length() > self.params.top_radius;
-        let view_key = (self.params, view_position.to_array(), sun.to_array());
+        let view_key = (
+            self.params,
+            view_position.to_array(),
+            sun.to_array(),
+            self.planet_view_steps,
+        );
         let view_rebuild = self.view_built != Some(view_key);
         let use_view = outside && self.planet_view;
         if use_view {
@@ -422,7 +442,8 @@ impl Atmosphere {
                                 multiple_scattering: resources.sampled(multiple_scattering).0,
                                 luminance_out: resources.storage(table, 0).0,
                                 transmittance_out: resources.storage(table_transmittance, 0).0,
-                                pad: [0; 2],
+                                steps: this.planet_view_steps,
+                                pad: 0,
                             },
                         );
                         let [w, h] = PLANET_VIEW_SIZE;
@@ -447,6 +468,7 @@ impl Atmosphere {
             direction: -view_position.normalize_or(Vec3::NEG_Z),
             cos_top,
             planet_view,
+            march_steps: this.march_steps,
         }
     }
 }

@@ -954,6 +954,26 @@ The thin limb and the sun's glow on it are the same in both.
 
 The table's pass costs 0.02 ms, once.
 
+**More segments for the limb (issue #73).** The 16-segment march is coarse where the air
+matters most: a grazing ray at the limb crosses about 2 260 km of it, against an 8 km scale
+height. A table built once can afford far more.
+
+Against a 512-segment march (`--planet-march 512`, fixed exposure, no TAA, facing the planet),
+the pixels more than 2 levels off, and the largest difference:
+
+| Segments | 18°, lit from the side | 50°, lit from the side | 18°, sun behind | 18°, sunrise over the limb | table pass (once) |
+|---|---|---|---|---|---|
+| the 16-segment march | 35 px, 4 | 424 px, 4 | 0, 1 | 0, 2 | — |
+| table, 16 | 36 px, 4 | 434 px, 4 | 0, 1 | 0, 2 | 0.023 ms |
+| table, 32 | 0, 2 | 0, 2 | 0, 1 | 0, 1 | — |
+| **table, 64 (the default)** | 0, 1 | 0, 1 | 0, 1 | 0, 1 | 0.081 ms |
+| table, 128 | 0, 1 | 0, 1 | 0, 1 | 0, 1 | 0.160 ms |
+
+With 64 segments the table is within one level of the fine march everywhere these views were
+checked, so storing Rayleigh and Mie apart without their phases (Bruneton's way of keeping
+Mie's forward peak out of a table) is not needed. `--planet-view-steps N` sets the table's
+segments and `--planet-march [STEPS]` the reference's.
+
 ## DLSS (2026-09-24, issue #8)
 
 With `--features dlss` the Vulkan API comes through NVIDIA Streamline's interposer, and

@@ -125,10 +125,14 @@ struct Args {
     /// Angular radius of the planet in degrees (0 hides it).
     #[arg(long, default_value_t = 18.0)]
     planet_angle: f32,
-    /// Draw the planet's atmosphere by marching every pixel's ray instead of through the
-    /// planet-view table (issue #26): the reference the table is checked against.
-    #[arg(long)]
-    planet_march: bool,
+    /// Draw the planet's atmosphere by marching every pixel's ray, in STEPS segments (16),
+    /// instead of through the planet-view table (issue #26): the reference the table is
+    /// checked against (256 or more for the fine one, issue #73).
+    #[arg(long, num_args = 0..=1, default_missing_value = "16", value_name = "STEPS")]
+    planet_march: Option<u32>,
+    /// Segments of the march behind each texel of the planet-view table (issue #73).
+    #[arg(long, default_value_t = forge_render::atmosphere::PLANET_VIEW_STEPS)]
+    planet_view_steps: u32,
     /// Look in this direction, "x,y,z", instead of along the path (stills of the sky).
     #[arg(long, value_parser = parse_vec3)]
     look: Option<Vec3>,
@@ -320,7 +324,11 @@ impl Ballad {
             let params = AtmosphereParams::earth();
             let view = params.view_from_space(args.planet_dir, args.planet_angle.to_radians());
             let mut atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, params)?;
-            atmosphere.planet_view = !args.planet_march;
+            atmosphere.planet_view = args.planet_march.is_none();
+            atmosphere.march_steps = args
+                .planet_march
+                .unwrap_or(forge_render::atmosphere::MARCH_STEPS);
+            atmosphere.planet_view_steps = args.planet_view_steps;
             Some((atmosphere, view))
         } else {
             None

@@ -982,13 +982,14 @@ the ballad. What the port taught:
     horizon.
   - **The mirrored azimuth** of Hillaire's sky-view table.
 
-  Two points of the review remain open:
-  - The 16-segment march the table reproduces is itself coarse along a grazing chord (about
-    2 260 km in 16 segments, against an 8 km scale height). A table built once can afford far
-    more segments, checked against a march of 256 or more.
+  Two more points of the review, settled by #73:
+  - The 16-segment march the table first reproduced is itself coarse along a grazing chord
+    (about 2 260 km in 16 segments, against an 8 km scale height): up to 4/255 off a
+    512-segment march at the limb. The table now marches 64 segments per texel, within 1/255
+    of it everywhere checked, for 0.081 ms once.
   - Storing Rayleigh and Mie apart, without their phase functions, would keep Mie's forward
-    peak out of the table. At 512 × 256 the sun rising over the limb already stays within
-    1/255.
+    peak out of the table. It is not needed: at 512 × 256 and 64 segments the sun rising over
+    the limb stays within 1/255 of the fine march.
 
 ## Implementation notes from Forge: DLSS (2026-09-24, issue #8, D-024)
 

@@ -71,8 +71,8 @@ what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
 (built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
-`--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--planet-march` (the planet by a march per pixel instead of
-its planet-view table, the reference), `--fixed-step` (path advances
+`--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--planet-march [STEPS]` (the planet by a march per pixel, 16 segments, instead
+of its planet-view table: the reference), `--planet-view-steps N` (the table's segments, 64), `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-shadows`, `--no-textures` (the
 untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-dust`, `--dust E`, `--no-translucency`, `--round-rocks`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a

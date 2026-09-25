@@ -411,7 +411,8 @@ lighting-gi.md §6; issue #8)*
   at the disc's centre, where the ground under the ray moves across the terminator linearly,
   and packed towards its edge. Rays above the ground go by the square root of their lowest
   point's height.
-- **Its texels** are the same 16-segment march, so the table and the march agree there.
+- **Its texels** march 64 segments since #73. Built once, the table affords four times the
+  per-pixel march's 16, which are 4/255 off at the limb.
 - **When it is built:** when the atmosphere, the camera's position relative to the planet or
   the sun changes (once in the ballad).
 - **The reference:** `--planet-march` keeps the per-pixel march.
@@ -423,7 +424,9 @@ atmosphere (lighting-gi.md §6).
 *Measured:* within 1/255 of the march everywhere at 18° and 50°, lit from the side, from
 behind, and with the sun rising over the limb. The sky pass at 50° goes 0.333 → 0.105 ms:
 0.215 with the table, and 0.105 once the stars are no longer worked out behind the ground.
-That reorder alone takes the march to 0.225.
+That reorder alone takes the march to 0.225. With 64 segments (#73) the table is within
+1/255 of a 512-segment march in all those views, where the 16-segment march is up to 4/255
+off at the limb (424 pixels beyond 2/255 at 50°). It takes 0.081 ms to build, once.
 
 **The ground view** (issue #43, 2026-09-25) is `forge_render::sky`, three passes a frame over
 the same tables:

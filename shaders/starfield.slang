@@ -19,8 +19,8 @@ struct Push
     Planet* planet;             // the planet and its atmosphere; null = none
     uint transmittance;         // the atmosphere's tables (sampled images)
     uint multiple_scattering;
-    uint planet_view;           // the planet-view table and its transmittance row (issue #26);
-    uint planet_view_transmittance; // 0xFFFFFFFF: march every pixel instead
+    uint planet_view;           // the planet-view table (issue #26); 0xFFFFFFFF: march every pixel instead
+    uint planet_view_row;       // its transmittance row; when marching, the segments per ray (issue #73)
 };
 
 // Pre-exposed values above this are white on any curve; fp16 overflows at 65504.
@@ -160,14 +160,14 @@ float4 frag_main(VertexOut input) : SV_Target
             // the ray lands is worked out here, for the ground's own lighting.
             float2 uv = planet_view_uv(p, planet_view_frame(p, sun), dir);
             c.luminance = sample_table(push.planet_view, uv);
-            c.transmittance = sample_table(push.planet_view_transmittance, float2(uv.x, 0.5));
+            c.transmittance = sample_table(push.planet_view_row, float2(uv.x, 0.5));
             float near_t, far_t;
             c.crosses = sphere_span(p.view_position.xyz, dir, p.radii.y, near_t, far_t);
             c.hits_ground = sphere_span(p.view_position.xyz, dir, p.radii.x, near_t, far_t) && near_t > 0.0;
             c.ground = p.view_position.xyz + dir * near_t;
         }
         else
-            c = cross_atmosphere(p, push.transmittance, push.multiple_scattering, dir, sun, SPACE_MARCH_STEPS);
+            c = cross_atmosphere(p, push.transmittance, push.multiple_scattering, dir, sun, push.planet_view_row);
     }
 
     float3 color = 0.0;
