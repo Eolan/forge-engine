@@ -551,3 +551,82 @@ What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.
   until about a pixel. The gallery's LOD and full-detail views then differ by 1 % of their
   pixels, all at window edges. Rocks keep geometry alone: their smooth normals would only
   make them finer for nothing.
+
+## Research for issue #77: async compute and transfer queues (2026-09-25)
+
+Gathered by a research agent for #77, before any code. The links were given by the agent;
+NVIDIA's statement on sharing modes was checked here. Queue counts come from `vulkaninfo` on
+the owner's machine.
+
+**How render graphs do it.** In every engine checked, the author picks a pass's queue and the
+graph derives the cross-queue waits. None picks queues automatically (Halcyon calls that
+"ongoing research").
+- **Unreal RDG:** `ERDGPassFlags::AsyncCompute`, with the fork and join derived and split
+  barriers.
+  <https://dev.epicgames.com/documentation/en-us/unreal-engine/render-dependency-graph-in-unreal-engine>
+- **Frostbite:** `asyncComputeEnable(true)`, with lifetimes extended to the sync point.
+- **Granite:** a queue flag per pass. Only resources used on both queues are CONCURRENT.
+  <https://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/>
+- **AMD's Render Pipeline Shaders:** batches with fences mapped to the application's
+  semaphores.
+- **Epic is cautious on PC:** Nanite overlaps its rasterisers only where async compute is
+  "efficient".
+
+**Vulkan.**
+- **Sharing modes:**
+  - NVIDIA: "VkSharingMode is ignored by the driver, so VK_SHARING_MODE_CONCURRENT incurs no
+    overhead" (<https://developer.nvidia.com/blog/vulkan-dos-donts/>). The 5070 Ti's driver
+    617.14 also exposes `VK_KHR_maintenance9`.
+  - AMD: CONCURRENT disables DCC on images. One shipped title gained 5–10 % by going back to
+    EXCLUSIVE with ownership transfers (Kramer, Vulkanised 2019). For buffers the cost is
+    negligible.
+  - RDNA 4 is unknown: measure it with Radeon GPU Profiler.
+- **Ownership transfers:** a release on one queue, an acquire on the other and a semaphore
+  between them. A resource whose first use on the new queue is a write needs none.
+- **Synchronisation and submits:**
+  - One timeline semaphore per queue.
+  - Queues synchronise only at submits, and submits should be few.
+  - On AMD's async queue an `ALL_COMMANDS` barrier waits for the end of the pipe. Signal at
+    `COMPUTE_SHADER`.
+- **Timestamps** from different queues share the device time domain. All queues here have 64
+  valid bits.
+- **Queues on this machine:**
+  - RTX 5070 Ti: 16 graphics, 8 compute, 2 transfer.
+  - AMD iGPU: 8 graphics, 4 compute, 1 transfer.
+  - NVIDIA warns that more than two queues can serialise when hardware scheduling is off; AMD
+    saw no gain from a second compute queue.
+- **Synchronisation validation** checks cross-queue hazards at submit, including timeline
+  semaphores since 2024. It misses aliasing hazards.
+
+**What pays.**
+- **Published gains:** Doom 2016 on consoles gained 3–5 ms (particles and most post). Kramer's
+  title gained about 10 % from async and 1–2 % from the copy queue. AMD's double-buffered
+  uploads on the copy queue saved nearly 10 %.
+- **Good pairs:** math-limited compute beside shadow rasterisation or ray tracing, and
+  acceleration-structure builds.
+- **Bad pairs:** two ray-tracing workloads, heavy cache traffic, and async work that finishes
+  after the graphics queue needs it. In Forge, the HZB chain and the culling chain are bad
+  candidates.
+- **Transfer queue:** NVIDIA's copy engine is built for PCIe, not for data needed right away
+  and not for VRAM-to-VRAM copies. DirectStorage uses one compute and two copy queues.
+  Resizable BAR writes are the alternative.
+
+**Measuring.** Overlapped passes slow each other, so their times stop adding up. Report the
+whole frame's span, keep a switch that runs everything on one queue, and look at queue
+overlap in Nsight Graphics' GPU Trace or Radeon GPU Profiler.
+
+*Bearing for #77:*
+1. **Per pass:** a `queue` option. The graph inserts a timeline wait on every edge that
+   crosses queues and batches at the fork and join points.
+2. **Semaphores:** one timeline semaphore per queue. Signal and wait at `COMPUTE_SHADER`.
+3. **The first pass to move:** the DDGI probe update (about 0.4 ms) and the atmosphere tables,
+   on the dedicated compute family. They overlap the culls and the rasterisers, but must not
+   overlap the ray-query passes.
+4. **Sharing:** EXCLUSIVE by default, with a CONCURRENT flag on graph resources shared across
+   queues. No ownership transfers in the first step. Async transients stay out of the aliased
+   heap or live until the join.
+5. **Transfer queue:** second. Time the upload copy first.
+6. **Profiler:** a lane per queue, the frame's span as the headline, and a `FORGE_ASYNC=0`
+   switch.
+7. **Tests:** synchronisation validation in both modes; serial and async captures 0 px apart;
+   the AMD iGPU (see #67), since NVIDIA ignores sharing modes and would hide ownership bugs.

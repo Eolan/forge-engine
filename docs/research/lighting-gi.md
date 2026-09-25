@@ -1074,3 +1074,64 @@ as the default. What the port taught:
   normalisation (SIGGRAPH 2013) divides by the probe's own irradiance at the vertex normal;
   Unity HDRP's probe volumes take the numerator along the mirror direction, by luminance and
   clamped so it only darkens (after Drobot, Infinite Warfare, 2017, not checked here).
+
+## Research for issue #76: ACES 2.0's output transform (2026-09-25)
+
+Gathered by a research agent for #76, before any code. The links were given by the agent; the
+repository licences and OCIO's table sizes were checked here.
+
+**The transform** (CTL v2.0 of 2025-04-04, `aces-aswf/aces-core`, formerly `ampas/aces-dev`,
+now Apache-2.0: <https://github.com/aces-aswf/aces-core>; presets in
+<https://github.com/aces-aswf/aces-output>; overview
+<https://docs.acescentral.com/system-components/output-transforms/technical-details/rendering-overview/>):
+1. **Clamp** in AP1 to [0, 8 · r_hit] (1024 at 100 nits). Forge's linear Rec.709 goes straight to
+   AP1 (Bradford D65 → ACES white).
+2. **RGB → JMh** through a simplified Hellwig 2022 appearance model: fixed viewing conditions,
+   custom cone primaries, `copysign`ed compression.
+3. **Tonescale** (Daniele Siragusano's Michaelis–Menten curve with a flare toe) on the achromatic
+   luminance. At 100 nits, 0.18 → 10.0 nits and 1.0 → 45.8 nits.
+4. **Chroma compression** of M: expansion in the shadows, compression in the highlights, bounded
+   by a reach table (the path to white).
+5. **Gamut compression** of J and M per hue slice, towards a focus point, against a cusp table
+   and a per-hue upper-hull gamma.
+6. **White limiting and display encoding.** The SDR preset uses 100 nits, Rec.709 limiting and
+   encoding primaries, and the sRGB piecewise EOTF. The HDR presets use 1000 nits, P3-D65 and
+   PQ.
+
+**Implementations:**
+- **OpenColorIO 2.4.2+** (BSD-3-Clause), `src/OpenColorIO/ops/fixedfunction/ACES2/`. It runs
+  per pixel on the GPU (`FixedFunctionOpGPU.cpp`) from tables built on the CPU
+  (`Transform.cpp`): 360 hues plus wrap-around entries (`Common.h`). A ~9-step binary search
+  over the hue table runs per pixel. OCIO PR #2127 made it about 25 % faster.
+- **The CTL** is the specification and test oracle.
+- **Others:** Nick Shaw's DCTLs carry no licence and must not be copied. Resolve's is
+  proprietary.
+- **Engines:** none of those checked ships ACES 2 (Unreal, Unity HDRP, Filament, Godot: ACES 1
+  or AgX).
+
+**Cost and approach.** About 20 pow-equivalents, an atan2, a sin/cos pair and the search per
+pixel: roughly 0.1–0.2 ms at 1440p (the agent's estimate, to be measured). Engines bake their
+display transforms into 3D LUTs: Unreal 32³ (64³ advised), Filament 16³–64³, and ACESCentral
+advises a 64³/65³ compute bake. No published ΔE figures for a LUT against the CTL were found.
+
+**Look and pitfalls.**
+- Fewer hue skews than ACES 1, less contrast, strict hue within AP1, and everything bright
+  enough desaturates to white.
+- Users report tearing near very bright saturated highlights and a sharp falloff in saturated
+  blues.
+- Do not stack the Reference Gamut Compression on top.
+- Compare curves at matched mid-grey: Hill's ACES 1 fit assumes a pre-exposure of 1/0.6.
+
+**Verification.** The official test images (SonyF35.StillLife, syntheticChart.01, with reference
+TIFFs: `aces-output/tests/images/README.md`). OCIO's own tolerances are 1e-5 on the CPU against
+`ctlrender` and 2e-5 to 1e-4 on the GPU against the CPU.
+
+*Bearing for #76:*
+- Port OCIO's ACES2 code: the tables in Rust, the per-pixel maths in Slang, the CTL as the
+  oracle.
+- Bake a 65³ LUT (log2 shaper up to the forward limit, sRGB-encoded out), rebuilt by one
+  compute dispatch when the peak or the gamut changes.
+- Keep the analytic path as a reference mode (tables in a buffer, not a constant array).
+- Compare 33³ against 65³ with ꟻLIP (#75).
+- Credit the ACES Project (Apache-2.0), OpenColorIO (BSD-3-Clause), Hellwig and Fairchild 2022,
+  and Siragusano's tonescale.
