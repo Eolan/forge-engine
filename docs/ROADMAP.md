@@ -61,7 +61,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   its thickness by rays, 0.694 ms), rock and ice chunks ✅ (issue #60: fractured facets from
   plane cuts, the owner's look; 0.665 ms), ice of three densities ✅ (issue #61: bubbles
   scatter the light inside it, clear to white, at no measurable cost), a denser belt ✅
-  (issue #23: 10 000 chunks in 28 shapes, 0.808 ms).
+  (issue #23: 10 000 chunks in 28 shapes, 0.808 ms), weathered crust around the fracture
+  faces ✅ (issue #62: no measurable cost).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.

@@ -20,6 +20,7 @@ use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
 use forge_core::hash::hash_cell3;
+use forge_core::material::Material;
 use forge_core::{MaterialTable, Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::SwRaster;
@@ -55,6 +56,9 @@ struct Args {
     /// The Phase 0 rocks: round displaced spheres instead of fractured chunks.
     #[arg(long)]
     round_rocks: bool,
+    /// No weathered crust: the chunks' old surface drawn like their fracture faces (issue #62).
+    #[arg(long)]
+    no_crust: bool,
     /// Opaque ice: no sunlight through its thickness (Y toggles it).
     #[arg(long)]
     no_translucency: bool,
@@ -951,6 +955,7 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
     let mut meshes: Vec<Option<MeshletMesh>> =
         (0..recipes.len() * variants).map(|_| None).collect();
     let round = args.round_rocks;
+    let no_crust = args.no_crust;
     pool.scope(|s| {
         for (k, slot) in meshes.iter_mut().enumerate() {
             let (i, v) = (k / variants, k % variants);
@@ -973,6 +978,9 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
                     }
                     mesh.recompute_normals();
                 }
+                if no_crust {
+                    mesh.sections.clear();
+                }
                 *slot = Some(MeshletMesh::build(&mesh));
             });
         }
@@ -982,8 +990,16 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
     // procedural rock texture and its relief (issue #46); the ice stays smooth.
     let mut materials = MaterialTable::new();
     let mut textures = TextureSet::new(&ctx.device);
-    let rock = if args.no_textures {
-        materials.add(stock::rock())
+    // Every row is followed by the one its chunks' fracture faces take (section 1, issue #62).
+    // A chunk's old surface is crust that space weathering has darkened and reddened; its
+    // fracture faces show the rock beneath. The ice is the same ice on both.
+    let mut add_with_faces = |row: Material, faces: Material| {
+        let id = materials.add(row);
+        materials.add(faces);
+        id
+    };
+    let rock_row = if args.no_textures {
+        stock::rock()
     } else {
         let [albedo, normal] = forge_render::textures::rock(11, 512);
         let (albedo, normal) = (textures.add(&albedo)?, textures.add(&normal)?);
@@ -994,18 +1010,27 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         rock.render.albedo_texture = Some(albedo);
         rock.render.normal_texture = Some(normal);
         rock.render.texture_scale = 4.0;
-        materials.add(rock)
+        rock
     };
+    let weathered = |[r, g, b]: [f32; 3]| [r * 0.72, g * 0.62, b * 0.55];
+    let mut crust = rock_row.clone();
+    if !args.no_crust {
+        crust.name = "weathered rock".to_owned();
+        crust.render.color_a = weathered(rock_row.render.color_a);
+        crust.render.color_b = weathered(rock_row.render.color_b);
+    }
+    let rock = add_with_faces(crust, rock_row);
     // Ice of three densities (issue #61): clear blocks glow deep blue through metres of ice,
     // bubbly ones turn white and glow only at their thin edges.
     let ice_rows = if args.clear_ice {
-        [materials.add(stock::ice()); 3]
+        [add_with_faces(stock::ice(), stock::ice()); 3]
     } else {
-        [
-            materials.add(stock::bubbly_ice("clear ice", 3e-5)),
-            materials.add(stock::bubbly_ice("ice", 6e-4)),
-            materials.add(stock::bubbly_ice("white ice", 3e-3)),
-        ]
+        [("clear ice", 3e-5), ("ice", 6e-4), ("white ice", 3e-3)].map(|(name, bubbles)| {
+            add_with_faces(
+                stock::bubbly_ice(name, bubbles),
+                stock::bubbly_ice(name, bubbles),
+            )
+        })
     };
     builder.set_materials(&materials, Some(textures));
     // The field stays still until Phase 3: its structures are built once (issue #45).

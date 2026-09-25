@@ -13,7 +13,7 @@ deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
 `--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--clear-ice` (#59's one clear ice), `--ice-belt D` (the ice in its own belt D metres
-away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round rocks), `--no-occlusion`, `--no-cone`,
+away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round rocks), `--no-crust` (no weathered crust on the chunks), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -270,6 +270,32 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Weathered crust (2026-09-25, issue #62)
+
+The chunks of #60 have flat fracture faces, but faces and old surface shared one material,
+so the fracture did not show in the colour. On real asteroids, space weathering (the solar
+wind and micrometeorites) darkens and reddens exposed surfaces over time, while fresh
+fractures show the brighter rock beneath. A chunk broken off a bigger body wears its old
+crust around fresh faces:
+- **The faces:** `procedural::chunk` marks the triangles lying on its cut planes as
+  section 1. The material sections of issue #41 draw them with the row after the instance's,
+  and #51's majority vote carries them through the LOD.
+- **The rows:** the crust is today's rock darkened and reddened (× 0.72, 0.62, 0.55 per
+  channel); the faces keep the rock as it was. The ice is the same ice on both.
+- **`--no-crust`** draws the old surface like the faces.
+
+![Frame 600, zoomed: one material on the whole chunk, then the weathered crust around the fracture faces](images/asteroids-crust.png)
+
+**Cost:** the sections add seams to the simplification, so 12.6 → 13.2 M cluster slots, and
+the mesh build takes 0.1 s more. The GPU time does not move: 0.831–0.837 ms with and without
+in alternating runs.
+
+**Checks:**
+- `--no-crust` gives the previous build's captures exactly.
+- The culling harness and mesh against fallback stay at 0; the bench and the city are
+  unchanged.
+- Synchronization validation is silent. The chunk test covers the sections.
 
 ## Two belts, as an option (2026-09-25, issue #22)
 

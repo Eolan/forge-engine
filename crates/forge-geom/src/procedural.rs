@@ -87,6 +87,9 @@ pub(crate) fn fbm(seed: u64, mut p: Vec3, octaves: u32) -> f32 {
 /// fractured facets meeting at sharp edges, one convex cell as a Voronoi fracture makes them.
 /// The planes stand 0.58 to 0.88 of `radius` from the centre, and a faint noise keeps the
 /// facets from reading as machined.
+///
+/// The triangles lying on a cut are section 1 (issue #62): fresh fracture faces, which a
+/// renderer can draw brighter than the weathered surface around them (section 0).
 pub fn chunk(seed: Seed, segments: u32, radius: f32, roughness: f32, cuts: u32) -> TriMesh {
     let mut mesh = asteroid(seed, segments, radius, roughness);
     let mut rng = seed.derive_str("chunk planes").rng();
@@ -108,7 +111,8 @@ pub fn chunk(seed: Seed, segments: u32, radius: f32, roughness: f32, cuts: u32) 
         })
         .collect();
     let noise_seed = seed.derive_str("chunk facets").value();
-    for p in &mut mesh.positions {
+    let mut cut = vec![false; mesh.positions.len()];
+    for (p, cut) in mesh.positions.iter_mut().zip(&mut cut) {
         let mut v = Vec3::from_array(*p);
         // A vertex can pass several planes: a few rounds settle it inside all of them.
         for _ in 0..3 {
@@ -116,12 +120,20 @@ pub fn chunk(seed: Seed, segments: u32, radius: f32, roughness: f32, cuts: u32) 
                 let beyond = v.dot(n) - d;
                 if beyond > 0.0 {
                     v -= n * beyond;
+                    *cut = true;
                 }
             }
         }
         let grain = fbm(noise_seed, v / radius * 9.0, 3) * radius * 0.012;
         *p = (v + v.normalize_or_zero() * grain).to_array();
     }
+    mesh.sections = mesh
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|tri| u8::from(tri.iter().all(|&i| cut[i as usize])))
+        .collect();
     mesh.recompute_normals();
     mesh
 }
@@ -239,6 +251,11 @@ mod tests {
         for (p, q) in a.positions.iter().zip(&round.positions) {
             assert!(Vec3::from(*p).length() <= Vec3::from(*q).length() + 0.013);
         }
+        // The facets are section 1, the weathered surface around them section 0 (issue #62).
+        assert_eq!(a.sections.len(), a.triangle_count());
+        let fresh =
+            a.sections.iter().filter(|&&s| s == 1).count() as f32 / a.triangle_count() as f32;
+        assert!((0.2..0.8).contains(&fresh), "{fresh}");
     }
 }
 
