@@ -104,6 +104,12 @@ struct Args {
     /// Extent of the field along its long axis (metres).
     #[arg(long, default_value_t = 1200.0)]
     length: f32,
+    /// Move the field this far from the world's origin along every axis, metres (issue #93): the
+    /// rocks, the path and the dust go together, so a renderer without a precision limit would
+    /// draw the same image. The renderer keeps positions in f32, whose spacing grows with the
+    /// distance (the log prints it): the image drifts, the farther the more.
+    #[arg(long, default_value_t = 0.0)]
+    origin: f32,
     /// Seconds for one pass along the path.
     #[arg(long, default_value_t = 90.0)]
     duration: f32,
@@ -636,9 +642,10 @@ impl Demo for Ballad {
             Some(look) => look.normalize_or(Vec3::NEG_Z),
             None => (ahead - position).normalize_or_zero(),
         };
-        // Look along the tangent with a gentle roll into the turns.
+        // Look along the tangent with a gentle roll into the turns. The path is laid out around
+        // the field's own centre; the field stands `--origin` from the world's origin (issue #93).
         let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-        self.camera.position = position;
+        self.camera.position = position + Vec3::splat(self.args.origin);
         self.camera.yaw = -flat.x.atan2(-flat.z);
         self.camera.pitch = forward.y.asin().clamp(-1.2, 1.2);
     }
@@ -866,6 +873,7 @@ impl Demo for Ballad {
                 DustParams {
                     view_proj: draw_view_proj,
                     camera: self.camera.position,
+                    origin: Vec3::splat(self.args.origin),
                     sun_dir: self.renderer.sun_dir,
                     sun_color: self.renderer.sun_color,
                     sun_luminance,
@@ -1205,9 +1213,12 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
     }
     let mesh_ms = field.build_ms;
 
-    // The belt: an S-shaped centre line; asteroids scattered around it with density peaks.
+    // The belt: an S-shaped centre line; asteroids scattered around it with density peaks. It is
+    // laid out around its own centre and stands `--origin` from the world's origin (issue #93):
+    // the offset goes on each instance's transform, and on the camera as it follows the path.
     let mut rng: SplitMix64 = Seed::new(4242).rng();
     let length = args.length;
+    let origin = Vec3::splat(args.origin);
     let centre = |t: f32| {
         Vec3::new(
             (t - 0.5) * length,
@@ -1326,7 +1337,7 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
         };
         builder.add_instance_with_material(
             mesh_ids[shape],
-            Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
+            Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position + origin),
             if ice { ice_rows[ice_kind(id)] } else { rock },
         );
         placed += 1;
@@ -1342,6 +1353,12 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
             "acceleration structures"
         );
     }
+    // How finely an f32 resolves a position at the belt's far end (issue #93).
+    tracing::info!(
+        origin_m = args.origin,
+        f32_spacing_m = forge_render::precision::ulp(args.origin.abs() + 0.5 * length + 360.0),
+        "the scene's offset from the world's origin"
+    );
     tracing::info!(
         meshes = mesh_ids.len(),
         mesh_build_ms = mesh_ms,

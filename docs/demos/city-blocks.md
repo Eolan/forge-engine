@@ -66,6 +66,8 @@ Options:
 - `--day S` runs a day in S seconds, sunrise to sunset and again, with automatic exposure.
 - `--view x,y,z,yaw,pitch` starts the camera there (metres, then degrees; yaw 0 looks north,
   along −z), e.g. `--view=-8,1.7,1135,-50,10` in a street.
+- `--origin M` moves the city M metres from the world's origin along every axis, the camera
+  with it: the far-origin check (issue #93, below).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
@@ -74,6 +76,60 @@ Options:
   one, not by cells of 64, #38), `--show-culled` (what culling rejected drawn in red),
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral|aces2|aces2-analytic`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## Far from the origin (issue #93, 2026-09-25)
+
+The first step of Phase 2's large-world coordinates: measure what today's renderer does when
+the scene is far from the world's origin, before deciding D-004's amendment (the GPU instance
+table in integer cells, `docs/DECISIONS.md`). `--origin M` moves the city M metres along every
+axis, and with it everything that defines the scene: the terrain's transform, the placed
+instances (`place_main` adds the offset to each position; the ground is still sampled in the
+city's own frame), the camera (its start, `--view`, `--orbit`, `--fly`), the mapping of the
+camera onto the planet for the sky, and the frame of the Morton order. It does not touch what
+the renderer does with positions: the instance table stays world-space `f32`, and the view
+matrix, `view_proj`, `Frame::camera_pos` in the culls and the LOD, the cells' spheres (#38),
+the TLAS's `f32` instance transforms (the shadows and the mirror rays), the probes' positions
+and the sky's ray reconstruction from `inv_view_proj` all see the large coordinates. A renderer
+without a precision limit would draw the same image at every offset; each of those places is
+one the amendment has to reach, and the captures show their sum. The log prints the offset and
+the spacing of an `f32` position at the terrain's far edge (0.12 mm at the origin, 1 m at
+10⁷ m).
+
+**Predicted** (`forge_render::precision`; `cargo test -p forge-render precision -- --nocapture`
+prints the table): the south view at 1440p, objects 2 m to 1 km in front of the camera, the
+demos' own arithmetic in `f32` (the placement's rounded translation, `FlyCamera::view`'s
+inverse, the shader's `view_proj × (model × vertex)`) against the same geometry in `f64`. The
+last column is the proposal: an integer cell of 1 km and an `f32` offset inside it, the cell
+difference taken in integers.
+
+| Offset | `f32` spacing | Today, 2 m away | 10 m | 100 m | 1 km | Depth, 2 m away | Cells of 1 km |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.12 mm | 0.03 px | 0.004 px | 0.000 px | 0.000 px | 0.008 % | 0.002 px |
+| 10⁴ m | 0.98 mm | 0.54 px | 0.08 px | 0.007 px | 0.001 px | 0.05 % | 0.013 px |
+| 10⁵ m | 7.8 mm | 9.1 px | 2.1 px | 0.13 px | 0.02 px | 0.4 % | 0.013 px |
+| 10⁶ m | 6.25 cm | 45 px | 10.4 px | 0.88 px | 0.13 px | 4.2 % | 0.013 px |
+| 10⁷ m | 1 m | 800 px | 160 px | 21 px | 1.8 px | 18 % | 0.013 px |
+
+In metres, the worst error of a vertex's position relative to the camera: 0.16 mm, 1.5 mm,
+15 mm, 0.17 m and 2.5 m; the cells 0.04–0.08 mm at every offset. Today's error is two to three
+spacings of the offset, not half of one: the rounding of the instance's and the camera's
+positions accounts for half a spacing each, the rest is `FlyCamera::view`'s 4 × 4 inverse and
+`view_proj × world`, which take a small difference of two numbers the offset's size. So at
+10 km what is 2 m from the camera is half a pixel off and what is 10 m away a tenth; at 100 km
+the nearest lamp posts shimmer by two pixels; at 1 000 km the near walls are off by tens of
+pixels and their depth by 4 %, so nearby surfaces sort wrong; and at 10 000 km, where a
+position can only take whole metres, the city falls apart, and the camera itself moves in 1 m
+steps. The cells stay at the origin's precision because a local part never exceeds 1 km.
+
+**To measure** (the owner's machine: `tools/origins.sh captures/origins`): the south view and
+the ballad's frame 240 at each offset against the origin's, in pixels and ꟻLIP, with the
+difference and the error map beside each capture. Two things in those captures are not
+precision: the Morton keys are taken from the rounded centres, so a few instances near a key
+boundary (6 cm) change order, which changes the draw order at equal depth (#38's reordering was
+399 px); and the placement's checksum changes with the offset, as it should. Mesh against
+fallback and the A/B harness should still be 0 px at each offset. This session ran in the
+cloud, without a GPU: the captures are still to take, and the numbers above are the model's,
+not the card's.
 
 ## Loading screen (issue #25, 2026-09-25)
 

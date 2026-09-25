@@ -227,6 +227,23 @@ written from the fragment shader, and that the reversed float buffer nearly matc
 *Bearing:* settles depth for Forge: `D32_SFLOAT`, reversed-Z, infinite far plane,
 greater-or-equal compare; no logarithmic-depth path.
 
+**Forge's measurement (issue #93, 2026-09-25).** Before D-004's amendment is decided, the
+renderer as it stands was given the means to show the problem: `--origin M` in city-blocks and
+the ballad moves the scene M metres from the world's origin along every axis, the camera and
+everything anchored to the scene going with it, and `tools/origins.sh` captures both at 10⁴ to
+10⁷ m against the origin's image (`docs/PROCESS.md`). `forge_render::precision` predicts what
+the captures should show by running the demos' own arithmetic in `f32` against `f64`: for the
+city's south view at 1440p, an object 2 m from the camera is drawn 0.5 px off at 10 km, 9 px at
+100 km, 45 px at 1 000 km and 800 px at 10 000 km, with its depth 18 % off there; an object 1 km
+away 0.001, 0.02, 0.13 and 1.8 px. The error is two to three `f32` spacings of the offset (1 m
+at 10⁷ m), not half of one: the rounding of the stored positions accounts for one spacing, the
+rest is the view's 4 × 4 inverse and `view_proj × world` taking a small difference of two
+numbers the offset's size. The same geometry stored as Freese's segments, an integer cell of
+1 km and an `f32` inside it, the cell difference taken in integers, stays at 0.013 px and
+0.08 mm at every offset: the origin's own precision, since a local part never exceeds the cell.
+The numbers per distance are in `docs/demos/city-blocks.md`; the captures on the RTX 5070 Ti are
+the next step, then the decision.
+
 ---
 
 ## 2. Coordinate conventions

@@ -36,6 +36,7 @@ struct GpuDust {
     sun_color: [f32; 4],
     params: [f32; 4],
     fill: [f32; 4],
+    origin: [f32; 4],
     tlas: u64,
     light: u32,
     light_sampled: u32,
@@ -49,7 +50,7 @@ struct GpuDust {
     pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuDust>() == 192);
+const _: () = assert!(std::mem::size_of::<GpuDust>() == 208);
 
 /// What a frame's dust needs.
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +59,9 @@ pub struct DustParams {
     pub view_proj: Mat4,
     /// The camera, world metres.
     pub camera: Vec3,
+    /// The scene's offset from the world's origin, metres (issue #93): the dust's shape is a
+    /// noise of the position in the scene, so it moves with the scene.
+    pub origin: Vec3,
     /// Towards the sun.
     pub sun_dir: Vec3,
     /// The sunlight's colour.
@@ -167,6 +171,7 @@ impl DustVolume {
                         sun_color: params.sun_color.extend(0.0).to_array(),
                         params: [params.extinction, params.far, params.anisotropy, 1.0 / 45.0],
                         fill: params.fill.extend(0.0).to_array(),
+                        origin: params.origin.extend(0.0).to_array(),
                         tlas: params.tlas,
                         light: resources.storage(light, 0).0,
                         light_sampled: resources.sampled(light).0,

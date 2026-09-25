@@ -72,7 +72,8 @@ what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
 (built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
-`--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--planet-march [STEPS]` (the planet by a march per pixel, 16 segments, instead
+`--origin M` (the field moved M metres from the world's origin along every axis, the camera
+with it: the far-origin check, issue #93), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--planet-march [STEPS]` (the planet by a march per pixel, 16 segments, instead
 of its planet-view table: the reference), `--planet-view-steps N` (the table's segments, 64), `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-shadows`, `--no-textures` (the
 untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-dust`, `--dust E`, `--no-translucency`, `--round-rocks`, `--no-occlusion`, `--no-cone`,
@@ -149,7 +150,9 @@ colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H*
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
 `--no-taa`, `--no-shadows`, `--no-sky-light`, `--no-ao`, `--ao-radius M`, `--show-ao`, `--no-probes`, `--show-gi`, `--probe-rays N`, `--probe-cascades N`, `--no-reflections`, `--no-ray-reflections`, `--hard-shadows`, `--no-lod`, `--no-occlusion`, `--lod-error PX`,
 `--sw-raster auto|on|off`, `--instance-occlusion auto|on|off`, `--no-instance-cells`, `--show-culled`, `--ev100 EV`, `--day S` (a day in S seconds, automatic exposure),
-`--view x,y,z,yaw,pitch` (start the camera there, e.g. in a street), `--force-fallback`. At
+`--view x,y,z,yaw,pitch` (start the camera there, e.g. in a street), `--origin M` (the city
+moved M metres from the world's origin along every axis, the camera with it: the far-origin
+check, issue #93), `--force-fallback`. At
 1440p the flight at 300 m/s runs at 3.38 ms of GPU with everything on, its p99 frame 3.8 ms
 (2.6 ms without the probes; 2026-09-25, after #77 and #92). Numbers:
 [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
@@ -191,6 +194,7 @@ tools/captures.sh captures/new           # after it
 tools/compare.sh captures/base captures/new
 tools/validate.sh
 tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]
+tools/origins.sh captures/origins        # the far-origin check (issue #93)
 ```
 
 What each script does and how to build a baseline from an older commit:

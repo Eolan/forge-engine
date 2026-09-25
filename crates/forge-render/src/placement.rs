@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{ComputePipelineDesc, Device, Result, ShaderCompiler, ShaderStage, vk};
+use glam::Vec3;
 
 use crate::meshlet::{MeshId, MeshletScene};
 
@@ -36,6 +37,9 @@ pub struct CityLayout {
     pub plaza_every: u32,
     /// Instances to place in all; what the city does not take goes to the hills as rocks.
     pub total: u32,
+    /// Where the city's centre sits in the world, metres (issue #93): the layout is made around
+    /// its own centre and the instances are written this far from the world's origin.
+    pub origin: Vec3,
 }
 
 /// Slots per category, in the order the shader lays them out.
@@ -63,6 +67,7 @@ impl CityLayout {
             lamp_step: 25.0,
             plaza_every: 4,
             total,
+            origin: Vec3::ZERO,
         }
     }
 
@@ -175,6 +180,9 @@ struct GpuPlacement {
     pad: u32,
     building_meshes: [u32; 16],
     rock_meshes: [u32; 8],
+    /// The scene's offset from the world's origin (issue #93).
+    origin: [f32; 3],
+    pad2: f32,
 }
 
 /// The ground the instances stand on: `samples × samples` heights, `spacing` metres apart,
@@ -333,9 +341,9 @@ fn spread_bits(v: u32) -> u32 {
 }
 
 /// The instance records of `table` (`record` bytes each, the centre at bytes 64..76) reordered
-/// along a Morton curve of their centres' x and z over the square of half-side `half`, ties
-/// kept in table order, so that runs of consecutive records are compact patches.
-fn morton_sorted(table: &[u8], record: usize, half: f32) -> Vec<u8> {
+/// along a Morton curve of their centres' x and z over the square of half-side `half` around
+/// `origin`, ties kept in table order, so that runs of consecutive records are compact patches.
+fn morton_sorted(table: &[u8], record: usize, half: f32, origin: Vec3) -> Vec<u8> {
     let records: Vec<&[u8]> = table.chunks_exact(record).collect();
     let coordinate = |bytes: &[u8]| f32::from_le_bytes(bytes.try_into().expect("4 bytes"));
     let cell = |v: f32| (((v + half) / (2.0 * half)).clamp(0.0, 1.0) * 65535.0) as u32;
@@ -343,7 +351,8 @@ fn morton_sorted(table: &[u8], record: usize, half: f32) -> Vec<u8> {
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let (x, z) = (coordinate(&r[64..68]), coordinate(&r[72..76]));
+            let x = coordinate(&r[64..68]) - origin.x;
+            let z = coordinate(&r[72..76]) - origin.z;
             (spread_bits(cell(x)) | (spread_bits(cell(z)) << 1), i as u32)
         })
         .collect();
@@ -355,8 +364,9 @@ fn morton_sorted(table: &[u8], record: usize, half: f32) -> Vec<u8> {
 
 /// Fills `scene`'s slots `first..first + layout.total` (reserved with the counts of
 /// [`mesh_counts`]) on the GPU and reads them back for the report (its checksum is the table
-/// as placed), then writes them again in Morton order of their centres (issue #38).
-/// Initialisation only.
+/// as placed), then writes them again in Morton order of their centres (issue #38). The city
+/// stands `layout.origin` from the world's origin (issue #93): the positions carry the offset,
+/// the Morton order is taken without it. Initialisation only.
 pub fn place(
     device: &Arc<Device>,
     shaders: &ShaderCompiler,
@@ -422,6 +432,8 @@ pub fn place(
         pad: 0,
         building_meshes,
         rock_meshes,
+        origin: layout.origin.to_array(),
+        pad2: 0.0,
     };
     let params = device.create_buffer_with_data(
         &[params],
@@ -460,7 +472,7 @@ pub fn place(
     // The table in Morton order of the centres (issue #38): the instance culls read it in cells
     // of 64 consecutive slots, which the rocks' random slots would spread over every hill.
     let half = (ground.samples - 1) as f32 * ground.spacing * 0.5;
-    let sorted = morton_sorted(&bytes, INSTANCE_BYTES as usize, half);
+    let sorted = morton_sorted(&bytes, INSTANCE_BYTES as usize, half, layout.origin);
     device.write_buffer_staged(
         scene.instance_buffer(),
         u64::from(first) * INSTANCE_BYTES,
@@ -540,7 +552,7 @@ mod tests {
             record[84..88].copy_from_slice(&i.to_le_bytes());
             table.extend_from_slice(&record);
         }
-        let sorted = morton_sorted(&table, RECORD, 80.0);
+        let sorted = morton_sorted(&table, RECORD, 80.0, Vec3::ZERO);
         let field = |r: &[u8], at: usize| f32::from_le_bytes(r[at..at + 4].try_into().unwrap());
         let records = sorted.as_chunks::<RECORD>().0;
         let mut ids: Vec<u32> = records

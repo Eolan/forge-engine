@@ -21,6 +21,7 @@ pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
 pub mod placement;
+pub mod precision;
 pub mod probes;
 pub mod raytrace;
 pub mod sky;

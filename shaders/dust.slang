@@ -15,6 +15,7 @@ struct Dust
     float4 sun_color;       // rgb: the sunlight's colour
     float4 params;          // x: extinction (1/m), y: the volume's far end (m), z: anisotropy g, w: noise scale (1/m)
     float4 fill;            // rgb: light scattered from the surroundings, pre-exposed units per unit extinction
+    float4 origin;          // xyz: the scene's offset from the world's origin (issue #93); the noise is taken in the scene
     uint64_t tlas;          // 0: no shafts
     uint light;             // storage index of the lit froxels: rgb scattered light, a extinction
     uint light_sampled;
@@ -97,7 +98,10 @@ void light_main(uint3 id : SV_DispatchThreadID)
     float3 direction = view_direction(d, uv);
     float t = lerp(slice_distance(d, float(id.z)), slice_distance(d, float(id.z) + 1.0), jitter.x);
     float3 world = d[0].camera.xyz + direction * t;
-    float shape = 0.6 * value_noise(world * d[0].params.w) + 0.4 * value_noise(world * d[0].params.w * 3.1 + 17.0);
+    // The noise in the scene's frame: it moves with the scene, not with the world's origin
+    // (issue #93). Far from the origin `world` itself is only as fine as an f32 there.
+    float3 scene = world - d[0].origin.xyz;
+    float shape = 0.6 * value_noise(scene * d[0].params.w) + 0.4 * value_noise(scene * d[0].params.w * 3.1 + 17.0);
     float extinction = d[0].params.x * saturate(shape * 1.6 - 0.25);
     float3 sun = d[0].sun.xyz;
     float visible = 1.0;

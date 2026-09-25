@@ -276,6 +276,23 @@ Material classification and the material table came with #20 (below). The softwa
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
 
+## Far from the origin (2026-09-25, issue #93)
+
+`--origin M` moves the field M metres from the world's origin along every axis: the rocks'
+transforms, the camera as it follows the path (the path itself stays around the field's own
+centre, so the camera's position is the only thing rounded), and the dust's noise, taken in the
+field's frame so the dust keeps its shape. The renderer sees the large coordinates everywhere
+else: the instance table, the view matrix, the culls' distances, the TLAS's `f32` transforms
+behind the shadows, the ice's rays and the dust's shafts, and the dust's own ray positions. The
+log prints the spacing of an `f32` position at the belt's far end: 0.06 mm at the origin (the
+belt is 1.2 km long), 1 m at 10⁷ m. The predicted numbers are on the city's page
+(`docs/demos/city-blocks.md`, "Far from the origin"); the corridor keeps the rocks 14 m clear
+of the camera, where the model says a pixel or two at 10⁵ m, ten at 10⁶ m with the shadows off
+their rocks by centimetres, and at 10⁷ m a camera that advances in 1 m steps. `tools/origins.sh`
+takes frame 240 without TAA at each offset against the origin's; the captures wait for the
+owner's machine (this session ran in the cloud). At 0, the default, nothing changes: the offset
+is added as `+ 0`.
+
 ## The rock's texture without repeats (2026-09-25, issue #66)
 
 The owner saw the rock's texture repeating, "visible on large flat surfaces". The rock's

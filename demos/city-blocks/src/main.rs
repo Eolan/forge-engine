@@ -113,6 +113,13 @@ struct Args {
     /// −z; 90 west; pitch up is positive), e.g. `--view=-8,1.7,1135,-50,10` in a street.
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     view: Option<Vec<f32>>,
+    /// Move the scene this far from the world's origin along every axis, metres (issue #93): the
+    /// terrain, the instances, the camera and its paths go together (`--view` stays in the
+    /// scene's metres), so a renderer without a precision limit would draw the same image. The
+    /// renderer keeps positions in f32, whose spacing grows with the distance (the log prints
+    /// it): the image drifts, the farther the more.
+    #[arg(long, default_value_t = 0.0)]
+    origin: f32,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -350,6 +357,8 @@ impl Gallery {
             camera.yaw = v[3].to_radians();
             camera.pitch = v[4].to_radians();
         }
+        // The scene stands `--origin` from the world's origin (issue #93), the camera with it.
+        camera.position += Vec3::splat(args.origin);
         // The probes trace the scene's TLAS (issue #53).
         let probes_on = !args.no_probes;
         anyhow::ensure!(
@@ -451,6 +460,11 @@ impl Gallery {
         ));
     }
 
+    /// The scene's offset from the world's origin (`--origin`, issue #93).
+    fn origin(&self) -> Vec3 {
+        Vec3::splat(self.args.origin)
+    }
+
     fn cull_camera(&self, aspect: f32) -> CullCamera {
         CullCamera::new(
             self.camera.view(),
@@ -524,7 +538,8 @@ impl Demo for Gallery {
             const SPEED: f32 = 300.0;
             self.fly_time += if self.args.fixed_step { 1.0 / 60.0 } else { dt };
             let angle = self.fly_time * SPEED / RADIUS;
-            self.camera.position = Vec3::new(angle.sin() * RADIUS, 140.0, angle.cos() * RADIUS);
+            self.camera.position =
+                Vec3::new(angle.sin() * RADIUS, 140.0, angle.cos() * RADIUS) + self.origin();
             self.camera.yaw = angle - std::f32::consts::FRAC_PI_2;
             self.camera.pitch = -0.15;
         } else if self.args.orbit {
@@ -535,7 +550,8 @@ impl Demo for Gallery {
             } else {
                 (1500.0, 160.0, -0.12)
             };
-            self.camera.position = Vec3::new(angle.sin() * radius, height, angle.cos() * radius);
+            self.camera.position =
+                Vec3::new(angle.sin() * radius, height, angle.cos() * radius) + self.origin();
             self.camera.yaw = angle;
             self.camera.pitch = pitch;
         } else {
@@ -669,11 +685,13 @@ impl Demo for Gallery {
             },
         )?;
         // The ground of the city is the surface of an Earth-sized planet: the camera in its
-        // frame, in km. The sky fills what the resolve leaves and hazes the rest (issue #43).
+        // frame, in km (`--origin` moves the scene, not the planet). The sky fills what the
+        // resolve leaves and hazes the rest (issue #43).
+        let in_scene = self.camera.position - self.origin();
         let view_km = Vec3::new(
-            self.camera.position.x * 1e-3,
-            self.atmosphere.params.bottom_radius + self.camera.position.y.max(1.0) * 1e-3,
-            self.camera.position.z * 1e-3,
+            in_scene.x * 1e-3,
+            self.atmosphere.params.bottom_radius + in_scene.y.max(1.0) * 1e-3,
+            in_scene.z * 1e-3,
         );
         let air =
             self.atmosphere
@@ -1285,7 +1303,10 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     let (meshes, cook_ms) = (cooked.meshes, cooked.ms);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
-    let layout = CityLayout::city(args.instances);
+    let mut layout = CityLayout::city(args.instances);
+    // The city stands `--origin` from the world's origin (issue #93); it is laid out around its
+    // own centre and moved as a whole.
+    layout.origin = Vec3::splat(args.origin);
     // The heightfield the terrain mesh was sampled from.
     let heights_start = std::time::Instant::now();
     let heights = parallel_heights(&terrain);
@@ -1315,7 +1336,7 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     materials.apply(&mut builder, &props, &ids);
     let id = |name: &str| ids[props.iter().position(|p| p.name == name).expect("prop")];
     let terrain_id = id("terrain");
-    builder.add_instance(terrain_id, Mat4::IDENTITY);
+    builder.add_instance(terrain_id, Mat4::from_translation(layout.origin));
     let city = CityMeshes {
         buildings: props
             .iter()
@@ -1373,6 +1394,12 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     if !report.matches_mirror {
         tracing::warn!("the placed meshes differ from the CPU mirror: the scene's counts are off");
     }
+    // How finely an f32 resolves a position at the terrain's far edge (issue #93).
+    tracing::info!(
+        origin_m = args.origin,
+        f32_spacing_m = forge_render::precision::ulp(args.origin.abs() + ground.half_size()),
+        "the scene's offset from the world's origin"
+    );
     // The instance culls read the sorted table by cells of 64 (issue #38).
     scene.build_cells(&ctx.device, &ctx.shaders)?;
     // The sun's shadows trace against every placed instance (issue #45).
@@ -1421,7 +1448,7 @@ fn build_gallery(
             (column as f32 - (COLUMNS - 1) as f32 * 0.5) * SPACING,
             0.0,
             (row as f32 - 1.5) * SPACING,
-        );
+        ) + Vec3::splat(args.origin);
         builder.add_instance(id, Mat4::from_translation(position));
         placed.push(Placed {
             name: spec.name.clone(),

@@ -3207,6 +3207,8 @@ public struct Placement
     public uint pad;
     public uint building_meshes[16];
     public uint rock_meshes[8];
+    public float3 origin;       // the scene's offset from the world's origin (issue #93)
+    public float pad2;
 };
 
 struct PlacementPush
@@ -3257,15 +3259,19 @@ float ground(Placement* p, float x, float z)
 // `tilt` about the turned X axis, scaled by `scale`, in the mesh's material.
 void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float tilt, float scale)
 {
+    // The scene's offset from the world's origin (issue #93): the ground was sampled in the
+    // scene's frame; the world position is rounded to an f32 here, whose spacing grows with the
+    // offset (1 m at 10 000 km).
+    float3 world = position + p[0].origin;
     float cy = cos(yaw), sy = sin(yaw), ct = cos(tilt), st = sin(tilt);
     // R = Ry(yaw) × Rx(tilt), rows.
     float3 r0 = float3(cy, sy * st, sy * ct);
     float3 r1 = float3(0.0, ct, -st);
     float3 r2 = float3(-sy, cy * st, cy * ct);
     float4x4 model = float4x4(
-        float4(r0 * scale, position.x),
-        float4(r1 * scale, position.y),
-        float4(r2 * scale, position.z),
+        float4(r0 * scale, world.x),
+        float4(r1 * scale, world.y),
+        float4(r2 * scale, world.z),
         float4(0.0, 0.0, 0.0, 1.0));
     Mesh* m = p[0].meshes + mesh;
     Instance inst;

@@ -104,7 +104,16 @@ holds; the frame block gives the camera the same way. The culls, LOD and draws c
 `float3(cell − camera_cell) · cell_size + (local − camera_local)`, which is exact near the
 camera, with a power-of-two cell size in metres. The CPU frames stay `f64`. First, measure: the
 city and the belt moved 10⁴ to 10⁷ m from the origin, compared with the origin's image, and GPU
-timings before and after. Only that measurement is built, behind a flag, until the owner decides.
+timings before and after. Only that measurement is built until the owner decides.
+*The measurement's tooling is built (2026-09-25, a cloud session, not yet run on a GPU):*
+`--origin M` in both demos moves the scene and everything anchored to it, `tools/origins.sh`
+captures and compares the offsets, and `forge_render::precision` predicts the captures from the
+demos' own arithmetic: at 1440p an object 2 m from the camera is drawn 0.5 px off at 10 km, 9 px
+at 100 km, 45 px at 1 000 km and 800 px at 10 000 km (its depth 18 % off), the same geometry in
+cells of 1 km 0.013 px throughout (`docs/demos/city-blocks.md`, "Far from the origin"). Left:
+the captures on the 5070 Ti (step 1), the prototype behind a flag and its timings (steps 2–3),
+then the decision. The cell size is part of it: 1 km keeps the local part's spacing at 0.12 mm;
+64 km would give 7.8 mm, today's precision at 100 km.
 *(research: large-worlds.md §1, Freese 2004)*
 
 ## D-005 — Our own job system, with the "leave cores free" rule ✅ (2026-09-24)

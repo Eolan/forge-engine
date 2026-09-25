@@ -146,6 +146,15 @@ alternating between the two builds. ZONES is a regex that also prints the matchi
 zones, for example `cull`. Put the numbers before and after, or the F1 overlay's, in the
 report and in `docs/PROFILE.md`.
 
+**Far from the origin (issue #93):** `tools/origins.sh OUT [BIN] [ORIGINS]` captures the
+city's south view and the ballad's frame 240 with the scene moved 10⁴, 10⁵, 10⁶ and 10⁷ m from
+the world's origin along every axis (`--origin`, the camera and everything anchored to the
+scene going with it), and compares each with the same view at the origin: pixels, ꟻLIP, the
+difference and the error map beside each capture. A renderer without a precision limit would
+give 0 px at every offset; today's world-space `f32` instance table does not (the numbers in
+`docs/research/large-worlds.md` §1). Run it for a change that touches how positions reach the
+GPU, and put its lines in the report. It becomes a 0 px check once D-004's amendment is built.
+
 **Debugging aids:**
 - `FORGE_TRACE_FRAMES=<file>` with `FORGE_HASH_IMAGES=1` writes per-frame hashes of the
   targets. The variable takes a path: `=1` writes a file named `1`.
