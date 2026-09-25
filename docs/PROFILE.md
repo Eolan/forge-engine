@@ -133,6 +133,8 @@ With the sun's ray-traced shadows (#45, D-029: about 0.14 ms of rays at 1440p) i
 With the sky's light (#47: `sky/irradiance` 0.016 ms, shading unchanged) it takes 2.20 ms.
 With its ambient occlusion (#48, D-030: `ao/*` 0.25 ms at 1440p) it takes 2.46 ms.
 With the sky's reflection (#49, D-031: 0.03 ms of shading) it takes 2.50 ms.
+With the mirror rays in the glass (#50: 0.09 ms of rays, 0.03–0.07 ms of registers across the
+resolve) it takes 2.66 ms.
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
 next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 

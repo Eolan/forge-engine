@@ -136,15 +136,15 @@ as the LOD cut asks for them, through a 512 MiB pool. Every prop is made of text
 materials (brick, plaster, concrete, glass windows, marble, rock), and the ground of layers:
 asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42), under a
 physical sky with haze by distance (`--sun-elevation DEG`, issue #43), lit by the sun with
-ray-traced shadows (issue #45) and by the sky's light (issue #47), occluded by GTAO (issue #48), reflected in the glass (issue #49). Keys: **L** / **K** LOD and its
+ray-traced shadows (issue #45) and by the sky's light (issue #47), occluded by GTAO (issue #48), reflected in the glass (issues #49, #50). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
-**[** / **]** LOD threshold, **T** TAA, **B** bloom, **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Tab** wireframe, **G** tone curve. Options:
+**[** / **]** LOD threshold, **T** TAA, **B** bloom, **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
-`--no-taa`, `--no-shadows`, `--no-sky-light`, `--no-ao`, `--ao-radius M`, `--show-ao`, `--no-reflections`, `--no-lod`, `--no-occlusion`, `--lod-error PX`,
+`--no-taa`, `--no-shadows`, `--no-sky-light`, `--no-ao`, `--ao-radius M`, `--show-ao`, `--no-reflections`, `--no-ray-reflections`, `--no-lod`, `--no-occlusion`, `--lod-error PX`,
 `--sw-raster auto|on|off`, `--ev100 EV`, `--force-fallback`. At 1440p the flight at 300 m/s runs
-at 2.50 ms of GPU with everything on. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
+at 2.66 ms of GPU with everything on. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
 
 ### `task-bench` — job system
 

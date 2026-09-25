@@ -10,7 +10,7 @@
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
 //! threshold, T TAA, B bloom, J shadows, I sky light, N ambient occlusion, V its view, F sky
-//! reflections, Tab wireframe, G tone curve, Esc quit.
+//! reflections, Y mirror rays in the glass, Tab wireframe, G tone curve, Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -140,6 +140,10 @@ struct Args {
     /// Draw without the sky's reflection in glass and at grazing angles (F toggles it).
     #[arg(long)]
     no_reflections: bool,
+    /// Reflect only the sky in the glass, without the mirror rays against the city (Y toggles
+    /// them; devices without ray queries have none).
+    #[arg(long)]
+    no_ray_reflections: bool,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -259,6 +263,9 @@ impl Gallery {
         if !args.no_reflections {
             flags.0 |= CullFlags::SKY_REFLECTIONS;
         }
+        if !args.no_ray_reflections {
+            flags.0 |= CullFlags::RAY_REFLECTIONS;
+        }
         let mut camera = if args.gallery {
             FlyCamera {
                 position: Vec3::new(0.0, 70.0, 230.0),
@@ -353,6 +360,7 @@ impl Demo for Gallery {
             KeyCode::KeyN => self.ao_on = !self.ao_on,
             KeyCode::KeyV => self.flags.toggle(CullFlags::SHOW_AO),
             KeyCode::KeyF => self.flags.toggle(CullFlags::SKY_REFLECTIONS),
+            KeyCode::KeyY => self.flags.toggle(CullFlags::RAY_REFLECTIONS),
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;
@@ -1120,6 +1128,7 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
             blas_triangles = rays.triangles,
             max_cut_error = %format_args!("{:.3}", rays.max_cut_error),
             mib = rays.bytes() >> 20,
+            hit_data_mib = rays.hit_bytes >> 20,
             blas_ms = %format_args!("{:.0}", rays.blas_ms),
             tlas_ms = %format_args!("{:.0}", rays.tlas_ms),
             "acceleration structures"

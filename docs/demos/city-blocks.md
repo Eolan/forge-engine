@@ -21,6 +21,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Sky light: the sky's irradiance on the shaded sides | #47 | ✅ nine SH coefficients a frame, 0.016 ms |
 | Ambient occlusion of the sky's light (GTAO) | #48 | ✅ 0.13 ms at 900p, 0.25 ms at 1440p |
 | The sky's reflection: glass and grazing surfaces (Fresnel) | #49 | ✅ 0.03 ms at 1440p |
+| The city in the glass: mirror rays against the TLAS | #50 | ✅ 0.17 ms at 1440p |
 
 ```
 cargo run --release -p city-blocks
@@ -28,7 +29,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -45,12 +46,55 @@ Options:
 - `--no-ao` leaves the sky's light unoccluded (**N** toggles the occlusion), `--ao-radius M`
   sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (**V**).
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
+- `--no-ray-reflections` reflects only the sky in the glass (**Y** toggles the mirror rays).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## The city in the glass (issue #50, 2026-09-25)
+
+The smooth rows now trace their mirror ray against the shadows' TLAS (D-031's step): the
+windows and the dark glass, Blinn-Phong exponent 60 and above. Glass is flat, so one ray per
+pixel is the whole reflection: no noise and no denoiser. A miss keeps the sky of #49.
+- **The hit data:** the BLAS cuts stay on the GPU after the build (34 MiB), with each
+  triangle's section. A hit reads its instance (the TLAS record's custom index), the cut
+  triangle and its row.
+- **The hit's light:** the row's colours mixed by the instance, times its texture's average
+  (the last mip). The sun comes through its own shadow ray, the sky's light through its SH
+  coefficients.
+- **The start:** a hit counts from 1.5 m on. The traced cut may stand up to a metre in front
+  of the drawn surface, and a window would otherwise reflect its own facade.
+
+`--no-ray-reflections` / **Y** keeps the sky alone. Devices without ray queries have only the
+sky.
+
+![The dark towers without the mirror rays and with them: the lower half reflects the neighbouring tower and the buildings below instead of the sky](images/city-blocks-ray-reflections.png)
+
+The effect is modest. Uncoated glass reflects 4 % head-on, and the rays mostly replace the
+sky with darker buildings, lower on the towers and at grazing angles. Coated curtain walls
+(20–40 %) need a reflectance per row, a material decision left for later.
+
+**Cost:**
+
+| RTX 5070 Ti | #49 | the rays compiled in, off (`--no-ray-reflections`) | on |
+|---|---|---|---|
+| `shading/standard`, 1600×900 | 0.155 ms | 0.187 ms | 0.274 ms |
+| the south view | 1.824 ms | 1.864 ms | 1.953 ms |
+| `shading/standard`, the 1440p flight | 0.366 ms | 0.436 ms | 0.525 ms |
+| the flight | 2.497 ms | 2.571 ms | 2.664 ms |
+
+The ray code costs registers in the whole resolve (0.03–0.07 ms, even switched off), and the
+rays 0.09 ms. Tracing in a pass of its own over the tiles that hold smooth rows would leave
+the resolve as it was.
+
+**Checks:**
+- With `--no-ray-reflections`, the city's three captures are identical to the previous build,
+  and without ray queries (`FORGE_NO_RAY_QUERY=1`) the switch changes nothing.
+- The ballad and the bench are identical, and mesh against fallback is at 0.
+- Synchronization validation is silent.
 
 ## The sky's reflection (issue #49, 2026-09-25)
 

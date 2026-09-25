@@ -62,6 +62,9 @@ impl CullFlags {
     pub const SHOW_AO: u32 = 16384;
     /// Under a sky, reflect it: Fresnel-weighted, sharp on smooth surfaces (issue #49).
     pub const SKY_REFLECTIONS: u32 = 32768;
+    /// On the smooth rows, trace the mirror ray against the TLAS instead of reading the sky
+    /// alone (issue #50; with `SKY_REFLECTIONS`, a TLAS and ray queries).
+    pub const RAY_REFLECTIONS: u32 = 65536;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -286,6 +289,9 @@ struct GpuFrame {
     sun_color: [f32; 4],
     /// The scene's top-level acceleration structure (0: none, no shadow rays).
     tlas: u64,
+    /// What a ray's hit reads to shade its triangle (`RtScene` in `meshlet.slang`, issue #50; 0:
+    /// none).
+    rt_scene: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -2001,6 +2007,7 @@ impl MeshletRenderer {
             materials: scene.materials.address(),
             sun_color: self.sun_color.extend(0.0).to_array(),
             tlas: scene.rays.as_ref().map_or(0, SceneRays::tlas_address),
+            rt_scene: scene.rays.as_ref().map_or(0, SceneRays::hit_address),
         }
     }
 

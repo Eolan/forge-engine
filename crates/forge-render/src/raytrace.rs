@@ -31,6 +31,8 @@ pub const TERRAIN_BUDGET: u32 = 600_000;
 pub(crate) struct Cut {
     pub positions: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    /// Per triangle, its section (issue #41): the row after the instance's first it takes.
+    pub sections: Vec<u32>,
     /// The cut's object-space error.
     pub error: f32,
 }
@@ -75,6 +77,7 @@ pub(crate) fn mesh_cut(meshlets: &[GpuMeshlet], store: &PageStore, budget: u32) 
     let mut cut = Cut {
         positions: Vec::new(),
         indices: Vec::new(),
+        sections: Vec::new(),
         error,
     };
     for m in clusters {
@@ -92,6 +95,14 @@ pub(crate) fn mesh_cut(meshlets: &[GpuMeshlet], store: &PageStore, budget: u32) 
                 .iter()
                 .map(|&l| first + u32::from(l)),
         );
+        // `triangle_section` in `meshlet.slang`: the first `split` triangles take section a.
+        let (a, b, split) = (
+            m.section & 0xFF,
+            (m.section >> 8) & 0xFF,
+            (m.section >> 16) & 0xFF,
+        );
+        cut.sections
+            .extend((0..m.triangle_count).map(|t| if t < split { a } else { b }));
     }
     Ok(cut)
 }
@@ -107,9 +118,37 @@ struct TlasPush {
     pad: u32,
 }
 
+/// Mirrors `RtMesh` in `meshlet.slang`: where a mesh's cut starts in the hit data.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuRtMesh {
+    first_vertex: u32,
+    first_triangle: u32,
+    cut_error: f32,
+    pad: u32,
+}
+
+/// Mirrors `RtScene` in `meshlet.slang`: what a ray's hit reads to shade its triangle (issue
+/// #50): every cut's positions (three floats a vertex), indices (local to the mesh), sections
+/// (one per triangle) and the per-mesh offsets.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuRtScene {
+    positions: u64,
+    indices: u64,
+    sections: u64,
+    meshes: u64,
+}
+
 /// The scene's structures.
 pub struct SceneRays {
     blases: Vec<AccelerationStructure>,
+    /// The cuts' geometry for shading hits (held for `hit_record`, which points into it), and
+    /// the record (`GpuRtScene`).
+    _hit_data: [Buffer; 4],
+    hit_record: Buffer,
+    /// Bytes of the hit data.
+    pub hit_bytes: u64,
     /// Per mesh, its bottom-level structure's address (read by the instance pass).
     blas_addresses: Buffer,
     tlas: Option<AccelerationStructure>,
@@ -143,7 +182,64 @@ impl SceneRays {
             MemoryCategory::Geometry,
             "BLAS addresses",
         )?;
+        // The cuts again, for the shaders: one buffer each, the meshes one after another.
+        let mut positions: Vec<f32> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        let mut sections: Vec<u32> = Vec::new();
+        let mut meshes = Vec::with_capacity(cuts.len());
+        for c in cuts {
+            meshes.push(GpuRtMesh {
+                first_vertex: (positions.len() / 3) as u32,
+                first_triangle: sections.len() as u32,
+                cut_error: c.error,
+                pad: 0,
+            });
+            positions.extend(c.positions.iter().flatten());
+            indices.extend_from_slice(&c.indices);
+            sections.extend_from_slice(&c.sections);
+        }
+        let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        let hit_data = [
+            device.create_buffer_with_data(
+                &positions,
+                storage,
+                MemoryCategory::Geometry,
+                "ray hit positions",
+            )?,
+            device.create_buffer_with_data(
+                &indices,
+                storage,
+                MemoryCategory::Geometry,
+                "ray hit indices",
+            )?,
+            device.create_buffer_with_data(
+                &sections,
+                storage,
+                MemoryCategory::Geometry,
+                "ray hit sections",
+            )?,
+            device.create_buffer_with_data(
+                &meshes,
+                storage,
+                MemoryCategory::Geometry,
+                "ray hit meshes",
+            )?,
+        ];
+        let hit_record = device.create_buffer_with_data(
+            &[GpuRtScene {
+                positions: hit_data[0].address(),
+                indices: hit_data[1].address(),
+                sections: hit_data[2].address(),
+                meshes: hit_data[3].address(),
+            }],
+            storage,
+            MemoryCategory::Geometry,
+            "ray hit record",
+        )?;
         Ok(Self {
+            hit_bytes: hit_data.iter().map(Buffer::size).sum(),
+            _hit_data: hit_data,
+            hit_record,
             triangles: cuts.iter().map(|c| c.indices.len() as u64 / 3).sum(),
             max_cut_error: cuts.iter().map(|c| c.error).fold(0.0, f32::max),
             blases,
@@ -198,6 +294,11 @@ impl SceneRays {
         self.tlas = Some(device.build_tlas(records.address(), count, "scene TLAS")?);
         self.tlas_ms = start.elapsed().as_secs_f64() * 1e3;
         Ok(())
+    }
+
+    /// The address of the hit data's record (`RtScene` in `meshlet.slang`).
+    pub fn hit_address(&self) -> u64 {
+        self.hit_record.address()
     }
 
     /// The top-level structure's address, 0 before it is built.

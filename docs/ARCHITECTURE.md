@@ -186,7 +186,8 @@ The resolve is three kinds of pass:
   surface also takes the sky's irradiance for its normal (nine SH coefficients a frame,
   from the sky-view table), scaled by GTAO computed from the depth before the resolve.
   It also reflects the sky: Schlick's Fresnel over the sky-view table in the mirror
-  direction (issue #49, D-031).
+  direction (issue #49, D-031), and on the smooth rows the city itself: a mirror ray against
+  the TLAS, the hit shaded from the BLAS cut kept on the GPU (issue #50).
 - **Ground in layers** (issue #42, D-028): a `layered` row names a layer map, a byte a texel,
   and each layer is the standard row after it; the layered pass blends the two heaviest
   layers around each pixel.

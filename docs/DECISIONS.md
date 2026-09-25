@@ -790,5 +790,21 @@ the instance's row, and the sky is kept for misses. Metals (F0 from albedo) come
 material work.
 
 *Measured* (city-blocks, RTX 5070 Ti): about 0.01 ms of shading at 1600×900 (the frame
-1.820 → 1.824 ms), 0.03 ms at 1440p (the flight 2.468 → 2.497 ms). With `--no-reflections` the captures are those of the previous build.
-*(research: lighting-gi.md §7; issue #49; demo: city-blocks)*
+1.820 → 1.824 ms), 0.03 ms at 1440p (the flight 2.468 → 2.497 ms). With `--no-reflections`
+the captures are those of the previous build.
+
+**Mirror rays** (issue #50, 2026-09-25):
+- **Which rows:** a Blinn-Phong exponent of 60 and above, the glass. They trace their mirror
+  ray in the `_rt` resolve; a miss keeps the sky.
+- **The hit data:** the cuts stay on the GPU after the BLAS builds, 34 MiB with each
+  triangle's section. A hit reads its instance from the record's custom index and its
+  triangle from the cut.
+- **The hit's light:** the row's colour times its texture's average, the sun through a
+  shadow ray, the sky's SH.
+- **The start:** hits count from 1.5 m, past the cut's error.
+
+The rays cost 0.09 ms, and their code 0.03–0.07 ms of registers across the resolve: 0.17 ms
+at 1440p in all. A pass of their own over the smooth rows' tiles would recover the
+registers. Glass reflects 4 % head-on, so the change is modest; coated curtain walls need a
+reflectance per row.
+*(research: lighting-gi.md §7; issues #49, #50; demo: city-blocks)*

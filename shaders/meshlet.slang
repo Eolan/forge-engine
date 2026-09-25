@@ -157,6 +157,8 @@ public static const uint FLAG_SHADOWS = 8192;
 public static const uint FLAG_SHOW_AO = 16384;
 // Under a sky, reflect it (issue #49).
 public static const uint FLAG_SKY_REFLECTIONS = 32768;
+// On the smooth rows, trace the mirror ray against `Frame::tlas` (issue #50).
+public static const uint FLAG_RAY_REFLECTIONS = 65536;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -187,6 +189,24 @@ public static const uint STAT_ROOT_ENTRIES = 12;    // root clusters listed by t
 // float bits: reversed-Z, nearer is larger; 0 is empty) until the merge.
 public static const uint VISIBILITY_EMPTY = 0xFFFFFFFFu;
 public static const uint VISIBILITY_TRIANGLE_BITS = 7;
+
+// What a ray's hit reads to shade its triangle (issue #50, crates/forge-render/src/raytrace.rs):
+// every mesh's cut, as the bottom-level structures hold it, and where each mesh starts in it.
+public struct RtMesh
+{
+    public uint first_vertex;
+    public uint first_triangle;
+    public float cut_error;  // how far the cut may stand from the drawn surface, object space
+    public uint pad;
+};
+
+public struct RtScene
+{
+    public float* positions;  // three floats a vertex
+    public uint* indices;     // three a triangle, local to the mesh
+    public uint* sections;    // one a triangle: the row after the instance's first it takes
+    public RtMesh* meshes;
+};
 
 public struct Frame
 {
@@ -241,6 +261,7 @@ public struct Frame
     public Material* materials;     // the material table (D-007), indexed by `Instance::material`
     public float4 sun_color;        // rgb: the sunlight's colour at the scene (white-ish in space, filtered by the air on a planet)
     public uint64_t tlas;           // the scene's top-level acceleration structure (0: none; issue #45)
+    public RtScene* rt_scene;       // what a ray's hit reads to shade its triangle (null: none; issue #50)
 };
 
 struct Push
@@ -1458,7 +1479,7 @@ float3 occlusion_bounce(float visibility, float3 albedo)
 // bounding its rise at grazing angles. GTAO's visibility `ao` (or -1) occludes it as
 // Lagarde and de Rousiers do (Moving Frostbite to PBR, 2014). `fresnel` is the share the
 // surface reflects, which its diffuse part loses.
-float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float specular_power, float ao, out float fresnel)
+float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float specular_power, float ao, float4 traced, out float fresnel)
 {
     float roughness = sqrt(sqrt(2.0 / (specular_power + 2.0))); // RenderLayer::roughness_for_power, inverted
     float nv = saturate(dot(n, view));
@@ -1468,13 +1489,14 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     float3 forward = sky[SH_COEFFICIENTS + 1].xyz;
     float3 r = reflect(-view, n);
     // Luminance per unit of sun illuminance, times π: the resolve's units.
-    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265;
+    // What the mirror ray met (issue #50), else the sky.
+    float3 mirror = traced.w > 0.0 ? traced.xyz : sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265;
     float3 environment = lerp(mirror, irradiance, saturate(2.0 * roughness * roughness));
     float occlusion = ao >= 0.0 ? saturate(pow(nv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao) : 1.0;
     return fresnel * occlusion * environment;
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float4 traced, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     // The sun is far, so a half vector from the light and the camera-to-surface direction
@@ -1494,7 +1516,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
         if ((f[0].flags & FLAG_SKY_REFLECTIONS) == 0)
             return albedo * (diffuse * sun + ambient) + specular * sun;
         float fresnel;
-        float3 reflection = sky_reflection(sky, irradiance, n, view, specular_power, ao, fresnel);
+        float3 reflection = sky_reflection(sky, irradiance, n, view, specular_power, ao, traced, fresnel);
         return albedo * (diffuse * sun + ambient) * (1.0 - fresnel) + specular * sun + reflection;
     }
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
@@ -1574,6 +1596,7 @@ struct Surface
 {
     float3 n;               // world-space normal, interpolated
     float3 view;            // unit, world space, from the surface towards the camera (issue #49)
+    float4 traced;          // the mirror ray's radiance (xyz) and 1 on a hit, else 0 (issue #50)
     float3 object_normal;   // object-space normal, interpolated
     float3 object_position; // object-space position
     float3 dpdx;            // its change per pixel to the right and down
@@ -1650,7 +1673,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, s.traced, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -1727,7 +1750,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, ndl) + emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, s.traced, ndl) + emissive;
 }
 
 float3 shade_ice(Frame* f, Material mat, Surface s)
@@ -1740,7 +1763,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(mat.color_a, mat.color_b, cavity);
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, s.traced, ndl);
     return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
 
@@ -1795,6 +1818,73 @@ float sun_shadow(Frame* f, float3 world, float3 n)
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
 }
 
+// Rows at least this smooth (Blinn-Phong exponent; roughness 0.42 and below) trace their
+// mirror ray (issue #50): the city's glass. Rougher rows keep the sky, blurred towards its
+// irradiance (`sky_reflection`).
+static const float RAY_REFLECTION_POWER = 60.0;
+// How far a mirror ray travels before a hit counts, metres: the traced surfaces are cuts of
+// the meshes' DAGs and may stand up to about a metre in front of the drawn ones (the towers';
+// most props much less), which would otherwise hide a window behind its own facade.
+static const float REFLECTION_START = 1.5;
+
+// What the mirror ray from `origin` along `direction` meets (issue #50): the light leaving the
+// cut's triangle towards the ray, in the resolve's units, with w = 1; w = 0 on a miss. The hit
+// is shaded plainly: the row's two colours mixed by the instance (its texture's last mip, the
+// texture's average, for the texture), the sun through a shadow ray, and the sky's irradiance.
+float4 trace_reflection(Frame* f, float4* sky, float3 origin, float3 direction)
+{
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = direction;
+    ray.TMin = REFLECTION_START;
+    ray.TMax = 50000.0;
+    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed())
+    {
+    }
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+        return float4(0.0);
+    RtScene* rs = f[0].rt_scene;
+    Instance inst = f[0].instances[q.CommittedInstanceID()];
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    uint tri = mesh.first_triangle + q.CommittedPrimitiveIndex();
+    float3 p[3];
+    [unroll]
+    for (uint k = 0; k < 3; k++)
+    {
+        uint v = mesh.first_vertex + rs[0].indices[tri * 3 + k];
+        p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
+    }
+    float2 b = q.CommittedTriangleBarycentrics();
+    float3 object_position = p[0] + b.x * (p[1] - p[0]) + b.y * (p[2] - p[0]);
+    float3 face = mul(inst.model, float4(cross(p[1] - p[0], p[2] - p[0]), 0.0)).xyz;
+    float3 n = dot(face, face) > 1e-20 ? normalize(face) : -direction;
+    if (dot(n, direction) > 0.0)
+        n = -n; // the side the ray came from
+    float3 hit = origin + direction * q.CommittedRayT();
+    uint row = inst.material + rs[0].sections[tri];
+    Material mat = f[0].materials[row];
+    if (mat.class_index == MATERIAL_CLASS_LAYERED)
+    {
+        // The layer under the hit, nearest texel (`shade_layered` blends two).
+        Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.albedo_texture)];
+        uint2 size;
+        map.GetDimensions(size.x, size.y);
+        float2 texel = (object_position.xz * mat.inv_texture_scale + 0.5) * float2(size);
+        int2 at = clamp(int2(texel), int2(0, 0), int2(size) - 1);
+        mat = f[0].materials[row + 1 + map.Load(int3(at, 0))];
+    }
+    float3 albedo = lerp(mat.color_a, mat.color_b, hash_color(inst.id).x);
+    if (mat.albedo_texture != TEXTURE_NONE)
+        albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
+    float3 sun = normalize(f[0].sun_dir);
+    float ndl = max(dot(n, sun), 0.0);
+    float shadow = ndl > 0.0 ? sun_shadow(f, hit, n) : 0.0;
+    float3 light = ndl * shadow * f[0].sun_color.rgb + sh_irradiance(sky, n);
+    return float4(albedo * light + mat.emissive, 1.0);
+}
+
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
 // of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
 // shadow ray in (devices with ray queries). Returns the class it has.
@@ -1846,6 +1936,14 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
         : -1.0;
     s.view = s.sky != nullptr ? normalize(f[0].camera_pos - mul(inst.model, float4(s.object_position, 1.0)).xyz) : float3(0.0, 1.0, 0.0);
+    s.traced = float4(0.0);
+    const uint reflect_flags = FLAG_SKY_REFLECTIONS | FLAG_RAY_REFLECTIONS;
+    if (SHADOWS != 0 && f[0].tlas != 0 && f[0].rt_scene != nullptr && s.sky != nullptr
+        && (f[0].flags & reflect_flags) == reflect_flags && mat.specular_power >= RAY_REFLECTION_POWER)
+    {
+        float3 world = mul(inst.model, float4(s.object_position, 1.0)).xyz;
+        s.traced = trace_reflection(f, s.sky, world + s.n * 0.05, reflect(-s.view, s.n));
+    }
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
