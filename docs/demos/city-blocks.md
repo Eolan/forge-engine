@@ -64,6 +64,7 @@ Options:
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
+  `--instance-occlusion auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
 
@@ -708,6 +709,10 @@ alone are the cut lists those roots instead, and the cluster culls take them 32 
 - **How:** `docs/demos/meshlets.md`, "Far instances without work items".
 - **What is left:** 791 k roots are tested for 48 k drawn clusters, the rest hidden by the
   hills and the buildings. Instance occlusion and a hierarchy over instances are #38.
+- **Instance occlusion (#38):** 493 k of the 500 k instances in view are hidden by the
+  previous frame's pyramid. They now skip pass 1, and a second instance cull tests them
+  against this frame's, so 10 k roots are tested instead of 791 k. The frame goes 2.90 →
+  2.65 ms at 1600 × 900 with the probes (`docs/demos/meshlets.md`, "Instance occlusion").
 
 The flight at 300 m/s, 1440p and the closing numbers (#13) come next.
 

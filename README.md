@@ -85,7 +85,8 @@ of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance
 `vkCmdDrawIndexedIndirectCount`, pixel-identical), `--sw-raster auto|on|off` (the software
 rasteriser for dense clusters; auto runs it when a frame holds enough of them),
 `--sw-raster-area PX` (2: pixels of a cluster's bounding rectangle per triangle below which
-it is dense), `--show-raster`.
+it is dense), `--show-raster`, `--instance-occlusion auto|on|off` (instances the previous
+frame's depth pyramid hides wait for this frame's; auto while most of a large crowd is hidden).
 Numbers: [docs/demos/asteroids.md](docs/demos/asteroids.md);
 where the time goes: [docs/PROFILE.md](docs/PROFILE.md).
 
@@ -117,7 +118,7 @@ wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
 `--no-occlusion`, `--lod-error PX`, `--no-lod`, `--orbit` (scripted motion), `--overlay`,
 `--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral` (AgX), `--force-fallback`
 (the indirect-count path of GPUs without mesh shaders), `--sw-raster auto|on|off`,
-`--sw-raster-area PX`, `--show-raster`, `--mip-check` (the resolve's texture level of detail
+`--sw-raster-area PX`, `--show-raster`, `--instance-occlusion auto|on|off`, `--mip-check` (the resolve's texture level of detail
 against a fragment shader's, logged at exit).
 Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
 
@@ -143,7 +144,7 @@ colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H*
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
 `--no-taa`, `--no-shadows`, `--no-sky-light`, `--no-ao`, `--ao-radius M`, `--show-ao`, `--no-probes`, `--show-gi`, `--probe-rays N`, `--probe-cascades N`, `--no-reflections`, `--no-ray-reflections`, `--hard-shadows`, `--no-lod`, `--no-occlusion`, `--lod-error PX`,
-`--sw-raster auto|on|off`, `--ev100 EV`, `--day S` (a day in S seconds, automatic exposure),
+`--sw-raster auto|on|off`, `--instance-occlusion auto|on|off`, `--ev100 EV`, `--day S` (a day in S seconds, automatic exposure),
 `--view x,y,z,yaw,pitch` (start the camera there, e.g. in a street), `--force-fallback`. At
 1440p the flight at 300 m/s runs at 3.81 ms of GPU with everything on (2.91 without the
 probes). Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).

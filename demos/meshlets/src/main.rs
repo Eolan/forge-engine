@@ -88,6 +88,10 @@ struct Args {
     /// same image (A/B harness).
     #[arg(long, default_value = "auto")]
     sw_raster: SwRaster,
+    /// Instance occlusion (issue #38): auto (while most instances in the frustum are hidden),
+    /// on or off. Every mode must give the same image (A/B harness).
+    #[arg(long, default_value = "auto")]
+    instance_occlusion: forge_render::InstanceOcclusion,
     /// Clusters (under 64 pixels across) whose bounding rectangle holds fewer pixels than
     /// this per triangle are rasterised in compute.
     #[arg(long, default_value_t = forge_render::meshlet::SW_RASTER_DEFAULT_AREA)]
@@ -248,9 +252,10 @@ impl Demo for Bench {
         }
         if let Some(last) = self.stats.last() {
             ctx.profile.counter(format!(
-                "drawn through {}: {} instances, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px, mean level {:.2}",
+                "drawn through {}: {} instances{}, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px, mean level {:.2}",
                 self.renderer.path().name(),
                 last.instances_visible,
+                last.hidden_note(),
                 f64::from(last.meshlets_pass1) / 1e3,
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
@@ -294,6 +299,7 @@ impl Demo for Bench {
                 wireframe: self.wireframe,
                 exposure: exposure_from_ev100(self.args.ev100),
                 sw_raster: self.args.sw_raster,
+                instance_occlusion: self.args.instance_occlusion,
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
@@ -325,13 +331,14 @@ impl Demo for Bench {
         let gpu = self.gpu_ms.iter().sum::<f64>() / self.gpu_ms.len().max(1) as f64;
         let cpu = self.cpu_ms.iter().sum::<f64>() / self.cpu_ms.len().max(1) as f64;
         let title = format!(
-            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} inst, {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles; {:.0} k work items, {:.0} k roots), {:.2} M tris, {:.0} k occluded{} | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
+            "forge meshlets | {} inst × {} meshlets = {:.1} M meshlets, {:.0} M tris | {}: drawn {:.0} inst ({:.0} hidden), {:.0} k + {:.0} k meshlets ({:.0} k in software, {:.2} M dense triangles; {:.0} k work items, {:.0} k roots), {:.2} M tris, {:.0} k occluded{} | GPU {:.2} ms  CPU {:.2} ms | {}{}{}{}{}{}",
             self.scene.instance_count,
             self.scene.max_meshlets,
             self.scene.instance_meshlets() as f64 / 1e6,
             self.scene.total_triangles as f64 / 1e6,
             self.renderer.path().name(),
             mean(|s| s.instances_visible),
+            mean(|s| s.instances_occluded),
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,

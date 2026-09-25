@@ -169,6 +169,10 @@ public static const uint FLAG_RAY_REFLECTIONS = 65536;
 public static const uint FLAG_TRANSLUCENCY = 131072;
 // Show the diffuse light alone, on white (issue #53).
 public static const uint FLAG_SHOW_GI = 262144;
+// Instance cull 1 defers the instances the previous pyramid hides to instance cull 2 (issue #38).
+public static const uint FLAG_INSTANCE_OCCLUSION = 524288;
+// Instance cull 1 counts the instances the previous pyramid hides (the renderer's auto mode).
+public static const uint FLAG_HIDDEN_INSTANCES = 1048576;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -191,6 +195,7 @@ public static const uint STAT_DENSE_TRIANGLES = 9;  // triangles of the drawn de
 public static const uint STAT_WORK_ITEMS = 10;      // work items the instance cull emitted (the demand)
 public static const uint STAT_WORK_OVERFLOW = 11;   // of those, dropped because the work list was full (and root entries past the root list)
 public static const uint STAT_ROOT_ENTRIES = 12;    // root clusters listed by the instance cull (the demand)
+public static const uint STAT_INSTANCES_OCCLUDED = 13; // instances in the frustum the previous pyramid hid (issue #38)
 
 // The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
 // `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, filled by the
@@ -272,7 +277,17 @@ public struct Frame
     public float4 sun_color;        // rgb: the sunlight's colour at the scene (white-ish in space, filtered by the air on a planet)
     public uint64_t tlas;           // the scene's top-level acceleration structure (0: none; issue #45)
     public RtScene* rt_scene;       // what a ray's hit reads to shade its triangle (null: none; issue #50)
+    public uint* deferred;          // with occlusion: instance cull 2's grid (x, y, 1, count), then the instances pass 1 deferred (issue #38)
 };
+
+// The second half of `Frame::indirect` (issue #38): the pass 2 cluster cull's grid over both
+// segments of the work lists (x, y, 1, items), segment 2's work items and roots (the work of
+// the instances instance cull 2 let through, after pass 1's), then instance cull 2's ticket.
+static const uint INDIRECT_PASS2 = 8;
+// Where `Frame::deferred`'s list starts, after instance cull 2's grid.
+static const uint DEFERRED_LIST = 4;
+// Tags the work of an instance both pyramids hid, listed only for FLAG_SHOW_CULLED.
+static const uint INSTANCE_HIDDEN_BIT = 0x80000000u;
 
 struct Push
 {
@@ -634,27 +649,46 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     ClusterVerdict v = {};
     uint pass = f[0].pass;
     // The first items are an instance's group of 32 clusters each; the rest cover the root
-    // list, 32 root clusters (of any instances) each.
+    // list, 32 root clusters (of any instances) each. Pass 2 then reads a second segment of
+    // both lists: the instances pass 1 deferred and instance cull 2 let through, none of whose
+    // clusters pass 1 saw (issue #38).
     uint regular = f[0].indirect[5];
+    uint listed = f[0].indirect[6];
+    uint2 base = 0;
+    bool fresh = false;
+    if (pass == PASS_REMAINDER)
+    {
+        uint items1 = regular + (listed + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
+        if (item >= items1)
+        {
+            fresh = true;
+            item -= items1;
+            base = uint2(regular, listed);
+            regular = f[0].indirect[INDIRECT_PASS2 + 4];
+            listed = f[0].indirect[INDIRECT_PASS2 + 5];
+        }
+    }
     uint local_meshlet;
     uint local_group = 0;
     bool root = item >= regular;
     if (root)
     {
         uint entry = (item - regular) * TASK_GROUP_SIZE + thread;
-        if (entry >= f[0].indirect[6])
+        if (entry >= listed)
             return v;
-        uint2 r = f[0].roots[entry]; // written by cull_main: (instance, local cluster)
+        uint2 r = f[0].roots[base.y + entry]; // written by the instance culls: (instance, local cluster)
         v.instance = r.x;
         local_meshlet = r.y;
     }
     else
     {
-        uint2 work = f[0].work[item]; // written by cull_main: (instance, local group)
+        uint2 work = f[0].work[base.x + item]; // written by the instance culls: (instance, local group)
         v.instance = work.x;
         local_group = work.y;
         local_meshlet = local_group * TASK_GROUP_SIZE + thread;
     }
+    bool hidden_instance = (v.instance & INSTANCE_HIDDEN_BIT) != 0;
+    v.instance &= ~INSTANCE_HIDDEN_BIT;
     Instance* inst = f[0].instances + v.instance;
     Mesh* mesh = f[0].meshes + inst[0].mesh;
     bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
@@ -698,9 +732,10 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     else if (pass == PASS_REMAINDER)
     {
         // Pass 1 drew what the previous frame showed; the rest faces this frame's pyramid.
-        if (visible && !visible_last_frame(f, center, world_radius))
+        // Segment 2's clusters were never pass 1's to draw.
+        if (visible && (fresh || !visible_last_frame(f, center, world_radius)))
         {
-            v.draw = occlusion_visible(f, center, world_radius);
+            v.draw = !hidden_instance && occlusion_visible(f, center, world_radius);
             v.occluded = !v.draw;
             if (v.occluded && show_culled)
             {
@@ -876,7 +911,7 @@ void cluster_cull(uint thread, bool streamed)
     }
     GroupMemoryBarrierWithGroupSync();
     uint ticket = s_ticket;
-    uint items = f[0].indirect[3];
+    uint items = f[0].indirect[second ? INDIRECT_PASS2 + 3 : 3];
     if (ticket * CULL_ITEMS >= items)
         return; // the rest of the grid's last row: the whole workgroup leaves
     uint local = thread / TASK_GROUP_SIZE;
@@ -1066,8 +1101,9 @@ uint instance_roots(Frame* f, Mesh* mesh, float scale, float dist)
 
 // The work items of a visible instance: its groups of 32 clusters covering the LOD levels
 // that can hold selected clusters at its distance, in increasing order, each once. Returns
-// how many; with `write`, also writes them to the work list from `base`.
-uint instance_items(Frame* f, uint instance_index, uint base, bool write)
+// how many; with `write`, also writes them to the work list from `base`, the instance tagged
+// with `tag`.
+uint instance_items(Frame* f, uint instance_index, uint base, bool write, uint tag)
 {
     Instance* inst = f[0].instances + instance_index;
     Mesh* mesh = f[0].meshes + inst[0].mesh;
@@ -1094,7 +1130,7 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
         {
             uint slot = base + count + (g - first);
             if (slot < f[0].work_capacity)
-                f[0].work[slot] = uint2(instance_index, g);
+                f[0].work[slot] = uint2(instance_index | tag, g);
         }
         if (first <= last)
             count += last - first + 1;
@@ -1106,31 +1142,19 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write)
 groupshared uint s_counts[64];
 groupshared uint s_root_counts[64];
 groupshared uint2 s_total;
+groupshared uint s_deferred[64];
+groupshared uint s_deferred_total;
 
-// One thread per instance: frustum-cull it and append its work items to the work list, or
-// its roots to the root list (`instance_roots`), both in instance order (see "ordered
-// appends"). The last workgroup writes the cluster cull's grid `indirect` = (x, y, 1, count)
-// over the items that fit in `work_capacity` plus the root runs, and counts the demand;
+// Appends the work of workgroup `ticket` (of `groups`) of an instance cull, one instance a
+// thread: a `visible` instance's work items to the work list, or its roots to the root list
+// (`instance_roots`), both in the cull's order (see "ordered appends", `status` its words).
+// Instance cull 1 writes the lists from their start (segment 1); instance cull 2 (`second`)
+// after segment 1 (segment 2, issue #38). The last workgroup writes the grid its cluster cull
+// reads, over the items that fit in `work_capacity` plus the root runs, and counts the demand;
 // each group of an instance is appended at most once.
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void cull_main(uint thread : SV_GroupThreadID)
+void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, uint thread,
+                          uint instance_index, bool visible, uint tag, bool second)
 {
-    Frame* f = push.frame;
-    if (thread == 0)
-        InterlockedAdd(f[0].indirect[4], 1, s_ticket);
-    GroupMemoryBarrierWithGroupSync();
-    uint ticket = s_ticket;
-    uint instance_index = ticket * 64 + thread;
-    bool visible = false;
-    if (instance_index < f[0].instance_count)
-    {
-        Instance* inst = f[0].instances + instance_index;
-        bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
-    }
-    if (visible)
-        InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], 1);
     uint count = 0;
     uint roots = 0;
     if (visible)
@@ -1139,7 +1163,7 @@ void cull_main(uint thread : SV_GroupThreadID)
         Mesh* mesh = f[0].meshes + inst[0].mesh;
         float dist = length(inst[0].center - f[0].camera_pos);
         roots = instance_roots(f, mesh, length(inst[0].model[0].xyz), dist);
-        count = roots > 0 ? 0u : instance_items(f, instance_index, 0, false);
+        count = roots > 0 ? 0u : instance_items(f, instance_index, 0, false, 0u);
     }
     s_counts[thread] = count;
     s_root_counts[thread] = roots;
@@ -1158,18 +1182,34 @@ void cull_main(uint thread : SV_GroupThreadID)
     }
     GroupMemoryBarrierWithGroupSync();
     uint2 total = s_total;
-    uint2 first = lookback_exclusive(f[0].lookback, ticket, total, thread);
-    if (thread == 0 && ticket == instance_cull_groups(f) - 1)
+    uint2 first = lookback_exclusive(status, ticket, total, thread);
+    uint2 base = second ? uint2(f[0].indirect[5], f[0].indirect[6]) : uint2(0, 0);
+    if (thread == 0 && ticket == groups - 1)
     {
         // The last workgroup knows the demand: what fits goes to the cluster cull, the rest is
         // counted (the renderer grows the lists from it).
         uint2 demand = first + total;
-        uint regular = min(demand.x, f[0].work_capacity);
-        uint listed = min(demand.y, f[0].work_capacity);
+        uint regular = min(demand.x, f[0].work_capacity - base.x);
+        uint listed = min(demand.y, f[0].work_capacity - base.y);
         uint items = regular + (listed + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
-        write_grid(f[0].indirect, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
-        f[0].indirect[5] = regular;
-        f[0].indirect[6] = listed;
+        if (second)
+        {
+            // Pass 2's cluster cull covers both segments.
+            uint all = f[0].indirect[3] + items;
+            write_grid(f[0].indirect + INDIRECT_PASS2, (all + CULL_ITEMS - 1) / CULL_ITEMS, all);
+            f[0].indirect[INDIRECT_PASS2 + 4] = regular;
+            f[0].indirect[INDIRECT_PASS2 + 5] = listed;
+        }
+        else
+        {
+            write_grid(f[0].indirect, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
+            f[0].indirect[5] = regular;
+            f[0].indirect[6] = listed;
+            // Pass 2 covers segment 1 alone until instance cull 2 appends a segment 2.
+            write_grid(f[0].indirect + INDIRECT_PASS2, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
+            f[0].indirect[INDIRECT_PASS2 + 4] = 0;
+            f[0].indirect[INDIRECT_PASS2 + 5] = 0;
+        }
         InterlockedAdd(f[0].stats[STAT_WORK_ITEMS], demand.x);
         InterlockedAdd(f[0].stats[STAT_ROOT_ENTRIES], demand.y);
         uint dropped = (demand.x - regular) + (demand.y - listed);
@@ -1177,17 +1217,121 @@ void cull_main(uint thread : SV_GroupThreadID)
             InterlockedAdd(f[0].stats[STAT_WORK_OVERFLOW], dropped);
     }
     if (count > 0)
-        instance_items(f, instance_index, first.x + s_counts[thread], true);
+        instance_items(f, instance_index, base.x + first.x + s_counts[thread], true, tag);
     if (roots > 0)
     {
         Mesh* mesh = f[0].meshes + f[0].instances[instance_index].mesh;
         for (uint k = 0; k < roots; k++)
         {
-            uint entry = first.y + s_root_counts[thread] + k;
+            uint entry = base.y + first.y + s_root_counts[thread] + k;
             if (entry < f[0].work_capacity)
-                f[0].roots[entry] = uint2(instance_index, mesh[0].roots[k]);
+                f[0].roots[entry] = uint2(instance_index | tag, mesh[0].roots[k]);
         }
     }
+}
+
+// Instance cull 1, one thread per instance: frustum-cull it and append its work
+// (`append_instance_work`). With FLAG_INSTANCE_OCCLUSION, an instance the previous frame's
+// pyramid hides (`visible_last_frame`, the clusters' pass 1 question) waits for this frame's
+// instead: it goes to `Frame::deferred`, in instance order, and pass 1 sees none of its
+// clusters (issue #38). Its last workgroup writes instance cull 2's grid at the head of that
+// list.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cull_main(uint thread : SV_GroupThreadID)
+{
+    Frame* f = push.frame;
+    if (thread == 0)
+        InterlockedAdd(f[0].indirect[4], 1, s_ticket);
+    GroupMemoryBarrierWithGroupSync();
+    uint ticket = s_ticket;
+    uint groups = instance_cull_groups(f);
+    uint instance_index = ticket * 64 + thread;
+    bool visible = false;
+    if (instance_index < f[0].instance_count)
+    {
+        Instance* inst = f[0].instances + instance_index;
+        bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
+        visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
+    }
+    uint in_frustum = WaveActiveCountBits(visible);
+    if (WaveIsFirstLane() && in_frustum > 0)
+        InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], in_frustum);
+    // With FLAG_HIDDEN_INSTANCES, the instances the previous pyramid hides are counted (the
+    // renderer's auto mode decides from them); with FLAG_INSTANCE_OCCLUSION they are also
+    // deferred.
+    bool hidden = false;
+    if (visible && f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_HIDDEN_INSTANCES) != 0)
+    {
+        Instance* inst = f[0].instances + instance_index;
+        hidden = !visible_last_frame(f, inst[0].center, inst[0].radius);
+    }
+    uint hidden_count = WaveActiveCountBits(hidden);
+    if (WaveIsFirstLane() && hidden_count > 0)
+        InterlockedAdd(f[0].stats[STAT_INSTANCES_OCCLUDED], hidden_count);
+    bool deferred = false;
+    if (f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_INSTANCE_OCCLUSION) != 0)
+    {
+        deferred = hidden;
+        s_deferred[thread] = deferred ? 1u : 0u;
+        GroupMemoryBarrierWithGroupSync();
+        if (thread == 0)
+        {
+            uint total = 0;
+            for (uint i = 0; i < 64; i++)
+            {
+                uint d = s_deferred[i];
+                s_deferred[i] = total; // now this thread's offset in the workgroup's run
+                total += d;
+            }
+            s_deferred_total = total;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        uint first = lookback_exclusive(f[0].lookback + groups, ticket, uint2(s_deferred_total, 0), thread).x;
+        if (deferred)
+            f[0].deferred[DEFERRED_LIST + first + s_deferred[thread]] = instance_index;
+        if (thread == 0 && ticket == groups - 1)
+        {
+            uint n = first + s_deferred_total;
+            write_grid(f[0].deferred, (n + 63) / 64, n);
+        }
+    }
+    append_instance_work(f, f[0].lookback, ticket, groups, thread, instance_index, visible && !deferred, 0u, false);
+}
+
+// Instance cull 2 (issue #38), after pass 1 and the pyramid it builds: the instances instance
+// cull 1 deferred, against this frame's pyramid (`occlusion_visible`). Those it does not hide
+// append their work as segment 2, which only pass 2's cluster cull reads, without asking pass
+// 1's question. With FLAG_SHOW_CULLED the hidden ones append theirs too, tagged, and their
+// clusters are drawn as culled.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cull_deferred_main(uint thread : SV_GroupThreadID)
+{
+    Frame* f = push.frame;
+    if (thread == 0)
+        InterlockedAdd(f[0].indirect[INDIRECT_PASS2 + 6], 1, s_ticket);
+    GroupMemoryBarrierWithGroupSync();
+    uint ticket = s_ticket;
+    uint deferred_count = f[0].deferred[3];
+    uint groups = (deferred_count + 63) / 64;
+    if (ticket >= groups)
+        return; // the rest of the grid's last row: the whole workgroup leaves
+    uint index = ticket * 64 + thread;
+    uint instance_index = 0;
+    bool visible = false;
+    bool hidden = false;
+    if (index < deferred_count)
+    {
+        instance_index = f[0].deferred[DEFERRED_LIST + index];
+        Instance* inst = f[0].instances + instance_index;
+        visible = occlusion_visible(f, inst[0].center, inst[0].radius);
+        hidden = !visible;
+    }
+    bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
+    append_instance_work(f, f[0].lookback + 2 * instance_cull_groups(f), ticket, groups, thread,
+                         instance_index, visible || (hidden && show_culled),
+                         hidden ? INSTANCE_HIDDEN_BIT : 0u, true);
 }
 
 // ---------------------------------------------------------------- mesh stage ---

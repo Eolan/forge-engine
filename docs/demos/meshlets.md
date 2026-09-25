@@ -650,6 +650,67 @@ and 1.5 M dense triangles.
 90 / 11 (since #65 its dense clusters are rasterised in software), ballad `--no-lod` 280 / 48.
 These are the silhouette pixels of #3, more of them in the denser belt.
 
+## Instance occlusion (issue #38, 2026-09-25)
+
+From its south edge the city has 500 k instances in the frustum. The previous frame's pyramid
+hides 493 k of them behind the hills and the buildings, yet their clusters used to reach both
+cluster culls: 791 k roots tested for 56 k drawn clusters.
+
+**How:**
+- **Instance cull 1** asks pass 1's question of each instance's bounding sphere
+  (`visible_last_frame`, from the previous culling camera). An instance it hides goes to a
+  deferred list instead of the work lists, in instance order: a second run of status words
+  of the same ordered appends. Pass 1 sees none of its clusters.
+- **Instance cull 2**, after pass 1 and the pyramid it builds, tests the deferred instances
+  against this frame's pyramid. The work of those it lets through goes after pass 1's in the
+  work and root lists (segment 2). Its grid heads the deferred list, written by instance
+  cull 1.
+- **Pass 2's cluster cull** covers both segments. Segment 1 is as before: pass 1's question
+  again, then this frame's pyramid for the rest. Segment 2's clusters were never pass 1's,
+  so they face this frame's pyramid directly.
+- **`--show-culled`** still checks the instance test: hidden instances list their work
+  anyway, tagged, and their clusters are drawn as culled (red), which must never show.
+- **Memory:** a deferred list of 4 bytes an instance per frame slot, 7.6 MiB for the city's
+  million, and three runs of status words instead of one (0.37 MiB).
+
+**When:** the test and the second cull cost more than they save where few instances hide
+(`meshlets --side 700`: 46 % hidden, +0.05 ms), and the second cull costs a fixed 0.006 ms.
+`--instance-occlusion auto` (the default) turns it on once 60 % of the instances in the
+frustum, and at least 65 536, were hidden, and off below 50 % or 32 768. The counting test
+runs only in scenes of at least 65 536 instances. `on` and `off` force it.
+
+| GPU ms per frame, 1600 × 900 (alternating runs, three each) | before | after |
+|---|---|---|
+| city, south edge (on: 493 k of 500 k hidden) | 2.898 | **2.639** |
+| the same, every page resident | 2.777 | **2.574** |
+| city orbit (on: 396 k of 529 k) | 3.126 | **3.030** |
+| city flight (off: 97 k of 279 k) | 2.481 | 2.485 |
+| `meshlets --side 700` (off: 326 k of 713 k; it still counts) | 1.431 | 1.439 |
+| bench, bench orbit | 0.234, 0.145 | 0.236, 0.146 |
+| ballad, 1600 × 900 and 1440p | 1.408, 2.825 | 1.403, 2.838 |
+
+At the south edge the culls go 1.13 → 0.87 ms: instance cull 0.322 → 0.339, the cluster
+culls 0.397 / 0.411 → 0.219 / 0.232, and instance cull 2 adds 0.084. 10 k roots are tested
+instead of 791 k. What is left is the instance cull, a thread per instance of the million,
+and the near instances' work items (41 k): a hierarchy over instances is #38's other idea.
+
+**Streaming:** hidden instances no longer ask for their pages. Frustum culling already
+worked that way, so a rock coming out from behind a hill streams in like one coming into
+view. Measured against every page resident, the streamed images differ as before:
+- the orbit at frames 120 and 300: 476 and 420 pixels, before and after;
+- the flight in a 48 MiB pool at frames 300 and 900: 250 and 259 before, 250 and 239 after.
+
+The south view keeps the same 463 resident pages.
+
+**Pixels:** with `--instance-occlusion on`, `off` and `auto`, on both paths:
+- the A/B views are identical to the previous build at tolerance 0: the ballad's frame 240
+  with and without occlusion and with `--show-culled`, its frame 600, and the bench static,
+  orbit, `--no-lod` and `--no-occlusion`;
+- the city's streamed and resident views are identical too.
+
+A single `off` run of the ballad's frame 600 moved 125 pixels by one level, and its reruns
+were identical. That is #71.
+
 ## Next steps (from the research recommendation)
 
 1. ✅ (issue #5, 2026-09-24) Culling in compute, shared by the mesh-shader path and the

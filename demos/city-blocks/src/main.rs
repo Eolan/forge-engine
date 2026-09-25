@@ -76,6 +76,10 @@ struct Args {
     /// The software rasteriser: auto, on or off (R cycles them).
     #[arg(long, default_value = "auto")]
     sw_raster: SwRaster,
+    /// Instance occlusion (issue #38): auto (while most instances in the frustum are hidden),
+    /// on or off. Every mode must give the same image (A/B harness).
+    #[arg(long, default_value = "auto")]
+    instance_occlusion: forge_render::InstanceOcclusion,
     /// Dense clusters: fewer pixels of bounding rectangle than this per triangle.
     #[arg(long, default_value_t = forge_render::meshlet::SW_RASTER_DEFAULT_AREA)]
     sw_raster_area: f32,
@@ -552,9 +556,10 @@ impl Demo for Gallery {
         }
         if let Some(last) = self.stats.last() {
             ctx.profile.counter(format!(
-                "drawn through {}: {} instances, {:.0} k + {:.0} k clusters, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px",
+                "drawn through {}: {} instances{}, {:.0} k + {:.0} k clusters, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px",
                 self.renderer.path().name(),
                 last.instances_visible,
+                last.hidden_note(),
                 f64::from(last.meshlets_pass1) / 1e3,
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
@@ -646,6 +651,7 @@ impl Demo for Gallery {
                 wireframe: self.wireframe,
                 exposure,
                 sw_raster: self.args.sw_raster,
+                instance_occlusion: self.args.instance_occlusion,
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
@@ -769,12 +775,13 @@ impl Demo for Gallery {
         let mut frames = std::mem::take(&mut self.frame_ms);
         let (p50, p99) = (percentile(&mut frames, 0.5), percentile(&mut frames, 0.99));
         let title = format!(
-            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances, {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms, frame p50 {p50:.2} p99 {p99:.2} ms",
+            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances ({:.0} k hidden), {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms, frame p50 {p50:.2} p99 {p99:.2} ms",
             self.scene.instance_count,
             self.scene.total_triangles as f64 / 1e6,
             self.scene.instance_meshlets() as f64 / 1e6,
             self.renderer.path().name(),
             mean(|s| s.instances_visible) / 1e3,
+            mean(|s| s.instances_occluded) / 1e3,
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,

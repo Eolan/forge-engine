@@ -52,16 +52,20 @@ clusters **in a fixed order** (a single-pass prefix sum over workgroups): depth 
 by draw order, so the order must not depend on timing. Mesh shaders (no task stage) or, on
 GPUs without them, one indexed draw per listed cluster through
 `vkCmdDrawIndexedIndirectCount` (the cooked one-byte triangle lists as the index buffer) draw
-the same list. Since issue #3 the first pass's dense clusters (under 2 pixels of bounding
-rectangle per triangle) can go to a software rasteriser in compute instead, on both paths,
-when a frame holds enough of them to repay its fixed cost (D-021). Since issue #33 the
-occlusion keeps no state per cluster. Pass 1 draws what the previous frame's pyramid
-shows, from the previous culling camera, and pass 2 re-derives that to test only the rest
-against this frame's pyramid. The work lists are sized by demand, so the scene can hold a
-million instances (197 MiB for 980 k rocks, against 2.9 GiB before). Since issue #37 an
-instance whose roots alone are the cut lists them in a root list instead of taking work
-items, 32 roots of any instances to a cluster-cull item. Next: cluster acceleration
-structures for ray tracing on RTX.
+the same list. Since issue #3 the dense clusters (under 2 pixels of bounding rectangle per
+triangle) can go to a software rasteriser in compute instead, on both paths, when a frame
+holds enough of them to repay its fixed cost (D-021); since #30 in both passes, so that a
+cluster is drawn the same way whichever pass draws it. Since issue #33 the occlusion keeps
+no state per cluster. Pass 1 draws what the previous frame's pyramid shows, from the
+previous culling camera, and pass 2 re-derives that to test only the rest against this
+frame's pyramid. The work lists are sized by demand, so the scene can hold a million
+instances (197 MiB for 980 k rocks, against 2.9 GiB before). Since issue #37 an instance
+whose roots alone are the cut lists them in a root list instead of taking work items, 32
+roots of any instances to a cluster-cull item. Since issue #38 the instance cull can ask
+pass 1's question of whole instances: one the previous pyramid hides goes to a second
+instance cull against this frame's pyramid, and only pass 2 culls the clusters of those it
+lets through. It runs while most of a large crowd is hidden (auto; the city's culls
+1.13 → 0.87 ms). Next: cluster acceleration structures for ray tracing on RTX.
 *Measured:* 127 M-triangle scene, 1152 instances: 6.1 ms brute force → 1.1 ms with
 occlusion, 0 pixels different. Compute culling (#5): the two paths 0 pixels apart; the mesh
 path costs what the task path did (0.180 ms bench, 0.326 against 0.322 ms for the ballad),

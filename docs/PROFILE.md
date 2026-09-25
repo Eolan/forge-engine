@@ -178,8 +178,12 @@ the lookup's cost is its own work, not the resolve's registers.
 With the sky's reflection dimmed by the probes (#68: a second direction in their lookup,
 `shading/standard` 0.67 → 0.80 ms) it takes 3.81 ms, against 3.66 ms in the same runs before;
 the south view at 1440p 4.13 → 4.24 ms.
-**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
-next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
+With instance occlusion (#38: the instances the previous pyramid hides skip pass 1, and a
+second instance cull tests them against this frame's), the south view at 1600 × 900 goes
+2.90 → 2.64 ms. Its culls go 1.13 → 0.87 ms (10 k roots tested instead of 791 k). The orbit
+goes 3.13 → 3.03 ms; the flight, where auto leaves it off, is unchanged.
+**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; a hierarchy over
+instances (#38's other idea) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

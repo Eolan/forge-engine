@@ -85,14 +85,22 @@ impl CullFlags {
     }
 }
 
-/// `FLAG_SW_RASTER` in the shader: set by the renderer, from [`DrawParams::sw_raster`], in the
-/// first pass's frame block.
+/// `FLAG_SW_RASTER` in the shader: set by the renderer, from [`DrawParams::sw_raster`], in both
+/// passes' frame blocks.
 const FLAG_SW_RASTER: u32 = 512;
 /// `FLAG_PREV_PYRAMID` in the shader: set by the renderer when pass 1 has a previous pyramid.
 const FLAG_PREV_PYRAMID: u32 = 2048;
 /// `FLAG_STREAMING` in the shader: set by the renderer for a streamed scene (the LOD cut
 /// follows the resident pages and records the pages it wants, see `crate::streaming`).
 const FLAG_STREAMING: u32 = 4096;
+/// `FLAG_INSTANCE_OCCLUSION` in the shader: set by the renderer, from
+/// [`DrawParams::instance_occlusion`], when instance cull 1 defers the instances the previous
+/// pyramid hides to instance cull 2 (issue #38).
+const FLAG_INSTANCE_OCCLUSION: u32 = 524_288;
+/// `FLAG_HIDDEN_INSTANCES` in the shader: instance cull 1 counts the instances the previous
+/// pyramid hides (what [`InstanceOcclusion::Auto`] decides from), set with
+/// `FLAG_INSTANCE_OCCLUSION` and while auto mode watches a scene large enough to turn it on.
+const FLAG_HIDDEN_INSTANCES: u32 = 1_048_576;
 
 /// When the software rasteriser draws the dense clusters ([`DrawParams::sw_raster`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -142,6 +150,67 @@ impl std::str::FromStr for SwRaster {
     }
 }
 
+/// When instance cull 1 defers the instances the previous frame's pyramid hides to instance
+/// cull 2, which tests them against this frame's (issue #38; [`DrawParams::instance_occlusion`]).
+/// Only with occlusion on. Every mode gives the same pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InstanceOcclusion {
+    /// Never: the cluster culls test every cluster of every instance in the frustum.
+    Off,
+    /// While most instances in the frustum are hidden, and enough of them to repay the second
+    /// instance cull: from [`INSTANCE_OCCLUSION_AUTO_ON`] of them until below
+    /// [`INSTANCE_OCCLUSION_AUTO_OFF`].
+    #[default]
+    Auto,
+    /// Every frame (the A/B harness, measurements).
+    On,
+}
+
+impl InstanceOcclusion {
+    /// Every mode.
+    pub const ALL: [Self; 3] = [Self::Off, Self::Auto, Self::On];
+
+    /// Name for displays and the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::On => "on",
+        }
+    }
+}
+
+impl std::str::FromStr for InstanceOcclusion {
+    type Err = String;
+
+    fn from_str(text: &str) -> std::result::Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.name().eq_ignore_ascii_case(text))
+            .ok_or_else(|| format!("unknown instance occlusion mode {text:?}: off, auto or on"))
+    }
+}
+
+/// [`InstanceOcclusion::Auto`] turns on once this share of the instances in the frustum, and
+/// at least [`INSTANCE_OCCLUSION_AUTO_MIN`] of them, were hidden by the previous pyramid.
+pub const INSTANCE_OCCLUSION_AUTO_ON: f32 = 0.6;
+/// [`InstanceOcclusion::Auto`] turns off below this share, or below half the minimum.
+pub const INSTANCE_OCCLUSION_AUTO_OFF: f32 = 0.5;
+/// The fewest hidden instances for which [`InstanceOcclusion::Auto`] turns on.
+pub const INSTANCE_OCCLUSION_AUTO_MIN: u32 = 65_536;
+
+/// [`InstanceOcclusion::Auto`]'s decision after a frame with `in_frustum` instances in the
+/// frustum, `hidden` of them hidden by the previous pyramid, from its state `on`. Between the
+/// two thresholds it stays as it was, so a share near one does not flip it every frame.
+fn instance_occlusion_worth_it(on: bool, hidden: u32, in_frustum: u32) -> bool {
+    let share = hidden as f32 / in_frustum.max(1) as f32;
+    if on {
+        share >= INSTANCE_OCCLUSION_AUTO_OFF && hidden >= INSTANCE_OCCLUSION_AUTO_MIN / 2
+    } else {
+        share >= INSTANCE_OCCLUSION_AUTO_ON && hidden >= INSTANCE_OCCLUSION_AUTO_MIN
+    }
+}
+
 /// [`SwRaster::Auto`] turns the software rasteriser on from this many dense triangles a frame.
 pub const SW_RASTER_AUTO_ON: u32 = 1_500_000;
 /// ...and off again below this many.
@@ -151,7 +220,7 @@ const PASS_PREVIOUSLY_VISIBLE: u32 = 1;
 const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
-const STAT_COUNT: usize = 13;
+const STAT_COUNT: usize = 14;
 const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
@@ -301,6 +370,8 @@ struct GpuFrame {
     /// What a ray's hit reads to shade its triangle (`RtScene` in `meshlet.slang`, issue #50; 0:
     /// none).
     rt_scene: u64,
+    /// With occlusion: instance cull 2's grid, then the instances pass 1 deferred (issue #38).
+    deferred: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -446,6 +517,19 @@ const CLUSTER_ARGS_START: [u32; 26] = [
 ];
 /// Bytes of one pass's cluster arguments.
 const CLUSTER_ARGS_PASS_BYTES: u64 = 48;
+
+/// `Frame::indirect` at the start of a frame: the cluster cull's grid (x, y, 1, items), the
+/// instance cull's ticket, its work items and roots, a spare word; then pass 2's grid over
+/// both segments, segment 2's work items and roots and instance cull 2's ticket
+/// (`INDIRECT_PASS2` in the shader, issue #38).
+const INDIRECT_START: [u32; 16] = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0];
+/// Byte offset of pass 2's cluster cull grid in `Frame::indirect`.
+const INDIRECT_PASS2_BYTES: u64 = 32;
+/// Instance cull 2's grid (x, y, 1, count) at the start of `Frame::deferred`, empty.
+const DEFERRED_GRID_START: [u32; 4] = [0, 0, 1, 0];
+/// The instance culls' runs of status words: instance cull 1's work, the instances it
+/// deferred, instance cull 2's work.
+const LOOKBACK_RUNS: u64 = 3;
 
 /// Default of [`DrawParams::sw_raster_area`].
 pub const SW_RASTER_DEFAULT_AREA: f32 = 2.0;
@@ -898,7 +982,7 @@ impl MeshletSceneBuilder {
                 .map(|i| {
                     device
                         .create_buffer(BufferDesc {
-                            size: 32,
+                            size: std::mem::size_of_val(&INDIRECT_START) as u64,
                             usage: usage
                                 | vk::BufferUsageFlags::INDIRECT_BUFFER
                                 | vk::BufferUsageFlags::TRANSFER_DST,
@@ -929,11 +1013,26 @@ impl MeshletSceneBuilder {
                     let instance_groups = (self.instances.len() as u64).div_ceil(64).max(1);
                     device
                         .create_buffer(BufferDesc {
-                            size: instance_groups * 8,
+                            size: LOOKBACK_RUNS * instance_groups * 8,
                             usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
                             location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Work,
                             name: &format!("instance cull look-back {i}"),
+                        })
+                        .map(GraphBuffer::new)
+                })
+                .collect::<Result<Vec<_>>>()?,
+            deferred: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device
+                        .create_buffer(BufferDesc {
+                            size: 16 + 4 * self.instances.len().max(1) as u64,
+                            usage: usage
+                                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                                | vk::BufferUsageFlags::TRANSFER_DST,
+                            location: MemoryLocation::GpuOnly,
+                            category: MemoryCategory::Work,
+                            name: &format!("deferred instances {i}"),
                         })
                         .map(GraphBuffer::new)
                 })
@@ -973,15 +1072,22 @@ pub struct MeshletScene {
     pub page_count: u32,
     meshes: Buffer,
     instances: Buffer,
-    /// Per frame slot: the cluster cull's indirect grid (x, y, 1, work item count), then the
-    /// instance cull's ticket counter.
+    /// Per frame slot: the cluster cull's indirect grid (x, y, 1, work item count), the
+    /// instance cull's ticket counter, the work items and roots it listed; then with occlusion
+    /// pass 2's cluster cull grid over both segments of the lists, segment 2's work items and
+    /// roots, and instance cull 2's ticket (issue #38; `INDIRECT_START`).
     indirect: Vec<GraphBuffer>,
     /// Per frame slot: per pass (pass 1 or the single pass, then pass 2) the draw grid
     /// (x, y, 1) and the count of listed clusters, then the two cluster culls' tickets.
     clusters: Vec<GraphBuffer>,
-    /// Per frame slot: the status words that keep the instance cull's appends in a fixed
-    /// order (one per instance-cull workgroup; the cluster culls' are the renderer's).
+    /// Per frame slot: the status words that keep the instance culls' appends in a fixed
+    /// order, one per instance-cull workgroup in each of three runs: instance cull 1's work,
+    /// the instances it deferred, instance cull 2's work (the cluster culls' are the
+    /// renderer's).
     lookback: Vec<GraphBuffer>,
+    /// Per frame slot, with occlusion: instance cull 2's grid (x, y, 1, count), then the
+    /// instances instance cull 1 deferred to it (issue #38).
+    deferred: Vec<GraphBuffer>,
     /// Acceleration structures for shadow rays, when asked for and supported.
     rays: Option<SceneRays>,
     /// The material table ([`GpuMaterial`] rows) and the textures they sample.
@@ -1114,6 +1220,9 @@ pub struct FrameStats {
     pub occluded: u32,
     /// Instances that passed the frustum test.
     pub instances_visible: u32,
+    /// Of those, the ones the previous frame's depth pyramid hid (issue #38): with instance
+    /// occlusion, pass 1 skips them and instance cull 2 tests them against this frame's.
+    pub instances_occluded: u32,
     /// Sum of the LOD level of every drawn meshlet (mean = sum / drawn).
     pub lod_level_sum: u32,
     /// Clusters dropped because the visible-cluster list was full: the frames in flight when
@@ -1149,6 +1258,16 @@ impl FrameStats {
             f64::from(self.sw_triangles) / 1e6,
             f64::from(self.dense_triangles) / 1e6
         )
+    }
+
+    /// " (N hidden)", the instances in the frustum the previous pyramid hid, when they were
+    /// counted (instance occlusion on, or its auto mode watching a large scene), else nothing.
+    pub fn hidden_note(&self) -> String {
+        if self.instances_occluded == 0 {
+            String::new()
+        } else {
+            format!(" ({} hidden)", self.instances_occluded)
+        }
     }
 
     /// ", N k dropped (visible list full)" when clusters were dropped, and the same for work
@@ -1357,6 +1476,8 @@ pub struct MeshletRenderer {
     pipeline_wire: Pipeline,
     pipeline_hzb: Pipeline,
     pipeline_cull: Pipeline,
+    /// Instance cull 2: the instances pass 1 deferred, against this frame's pyramid (issue #38).
+    pipeline_cull_deferred: Pipeline,
     pipeline_cluster_cull: Pipeline,
     /// The same for a streamed scene (the LOD cut follows the resident pages).
     pipeline_cluster_cull_streamed: Pipeline,
@@ -1383,6 +1504,8 @@ pub struct MeshletRenderer {
     vis64: Option<GraphBuffer>,
     /// [`SwRaster::Auto`]'s state: the recent frames held enough dense triangles.
     sw_auto_on: bool,
+    /// [`InstanceOcclusion::Auto`]'s state: most instances in the frustum were hidden lately.
+    instance_auto_on: bool,
     /// The target size.
     extent: vk::Extent2D,
     frame_buffers: Vec<Buffer>,
@@ -1435,8 +1558,10 @@ pub struct DrawParams<'a> {
     pub wireframe: bool,
     /// Pre-exposure the resolve multiplies the shaded luminance by (see `crate::exposure`).
     pub exposure: f32,
-    /// When the software rasteriser draws the first pass's dense clusters.
+    /// When the software rasteriser draws the dense clusters.
     pub sw_raster: SwRaster,
+    /// When the instances the previous pyramid hides wait for this frame's (issue #38).
+    pub instance_occlusion: InstanceOcclusion,
     /// Dense clusters: under [`SW_RASTER_MAX_PX`] across, with fewer pixels of bounding
     /// rectangle than this per triangle.
     pub sw_raster_area: f32,
@@ -1469,6 +1594,8 @@ struct MeshPassIo {
     clusters: forge_gpu::BufferHandle,
     /// The ordered appends' status words.
     lookback: forge_gpu::BufferHandle,
+    /// The instances instance cull 1 deferred, behind instance cull 2's grid.
+    deferred: forge_gpu::BufferHandle,
     /// The fallback's indexed draws.
     draws: Option<forge_gpu::BufferHandle>,
     /// The visible-cluster list of this frame slot.
@@ -1527,6 +1654,10 @@ impl MeshletRenderer {
             &shaders.compile("meshlet.slang", "cull_main", ShaderStage::Compute)?,
             "instance cull",
         )?;
+        let cull_deferred = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "cull_deferred_main", ShaderStage::Compute)?,
+            "instance cull 2",
+        )?;
         let cluster_cull = device.create_shader_module(
             &shaders.compile("meshlet.slang", "cluster_cull_main", ShaderStage::Compute)?,
             "cluster cull",
@@ -1584,6 +1715,11 @@ impl MeshletRenderer {
             shader: (cull, "cull_main"),
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             name: "instance cull + LOD window",
+        })?;
+        let pipeline_cull_deferred = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (cull_deferred, "cull_deferred_main"),
+            push_constant_bytes: std::mem::size_of::<Push>() as u32,
+            name: "instance cull 2 (occlusion)",
         })?;
         let pipeline_cluster_cull = device.create_compute_pipeline(&ComputePipelineDesc {
             shader: (cluster_cull, "cluster_cull_main"),
@@ -1644,6 +1780,7 @@ impl MeshletRenderer {
             frag,
             hzb,
             cull,
+            cull_deferred,
             cluster_cull,
             cluster_cull_streamed,
         ] {
@@ -1718,6 +1855,7 @@ impl MeshletRenderer {
             pipeline_wire,
             pipeline_hzb,
             pipeline_cull,
+            pipeline_cull_deferred,
             pipeline_cluster_cull,
             pipeline_cluster_cull_streamed,
             pipeline_sw_raster,
@@ -1731,6 +1869,7 @@ impl MeshletRenderer {
             work_target: WORK_INITIAL_CAPACITY,
             vis64,
             sw_auto_on: false,
+            instance_auto_on: false,
             extent,
             frame_buffers,
             stats,
@@ -1815,6 +1954,18 @@ impl MeshletRenderer {
             && self.pipeline_sw_raster.is_some()
             && !params.flags.has(CullFlags::FREEZE)
             && !params.wireframe
+    }
+
+    /// Whether this frame's instance cull 1 defers the instances the previous pyramid hides to
+    /// instance cull 2 (issue #38): asked for (or, in [`InstanceOcclusion::Auto`], worth it
+    /// lately), with occlusion on.
+    pub fn instance_occlusion(&self, params: &DrawParams<'_>) -> bool {
+        let wanted = match params.instance_occlusion {
+            InstanceOcclusion::Off => false,
+            InstanceOcclusion::Auto => self.instance_auto_on,
+            InstanceOcclusion::On => true,
+        };
+        wanted && params.flags.has(CullFlags::OCCLUSION)
     }
 
     /// How the visible clusters are drawn on this device.
@@ -1910,6 +2061,7 @@ impl MeshletRenderer {
             work_items: raw[10],
             work_overflow: raw[11],
             root_entries: raw[12],
+            instances_occluded: raw[13],
         });
         if let Some(s) = stats {
             // One capacity for both lists: the larger demand.
@@ -1938,6 +2090,22 @@ impl MeshletRenderer {
                     "software raster (auto)"
                 );
                 self.sw_auto_on = on;
+            }
+        }
+        if let Some(s) = stats {
+            let on = instance_occlusion_worth_it(
+                self.instance_auto_on,
+                s.instances_occluded,
+                s.instances_visible,
+            );
+            if on != self.instance_auto_on {
+                tracing::debug!(
+                    hidden = s.instances_occluded,
+                    in_frustum = s.instances_visible,
+                    on,
+                    "instance occlusion (auto)"
+                );
+                self.instance_auto_on = on;
             }
         }
         if let Some(s) = stats {
@@ -1988,6 +2156,15 @@ impl MeshletRenderer {
         flags.0 &= !FLAG_PREV_PYRAMID;
         if prev.is_some() {
             flags.0 |= FLAG_PREV_PYRAMID;
+        }
+        flags.0 &= !(FLAG_INSTANCE_OCCLUSION | FLAG_HIDDEN_INSTANCES);
+        if self.instance_occlusion(params) {
+            flags.0 |= FLAG_INSTANCE_OCCLUSION | FLAG_HIDDEN_INSTANCES;
+        } else if params.instance_occlusion == InstanceOcclusion::Auto
+            && params.flags.has(CullFlags::OCCLUSION)
+            && scene.instance_count >= INSTANCE_OCCLUSION_AUTO_MIN
+        {
+            flags.0 |= FLAG_HIDDEN_INSTANCES;
         }
         flags.0 &= !FLAG_STREAMING;
         if scene.streamer.is_some() {
@@ -2059,6 +2236,7 @@ impl MeshletRenderer {
             sun_color: self.sun_color.extend(0.0).to_array(),
             tlas: scene.rays.as_ref().map_or(0, SceneRays::tlas_address),
             rt_scene: scene.rays.as_ref().map_or(0, SceneRays::hit_address),
+            deferred: scene.deferred[slot.index].address(),
         }
     }
 
@@ -2141,6 +2319,7 @@ impl MeshletRenderer {
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
             clusters: graph.import_buffer(&scene.clusters[slot.index]),
             lookback: graph.import_buffer(&scene.lookback[slot.index]),
+            deferred: graph.import_buffer(&scene.deferred[slot.index]),
             draws: self.lists[slot.index]
                 .draws
                 .as_ref()
@@ -2200,20 +2379,28 @@ impl MeshletRenderer {
         // raced the device's writes of two frames before, which nothing made available to it.
         let (indirect, clusters): (&'f GraphBuffer, &'f GraphBuffer) =
             (&scene.indirect[slot.index], &scene.clusters[slot.index]);
+        let deferred: &'f GraphBuffer = &scene.deferred[slot.index];
         let mut clears = graph
             .pass("geometry/instance cull")
             .buffer(io.indirect, BufferAccess::TransferDst)
             .buffer(io.clusters, BufferAccess::TransferDst)
             .buffer(io.lookback, BufferAccess::TransferDst)
+            .buffer(io.deferred, BufferAccess::TransferDst)
             .buffer(io.cluster_lookback, BufferAccess::TransferDst)
             .buffer(io.stats, BufferAccess::TransferDst);
         if let Some(handle) = io.need {
             clears = clears.buffer(handle, BufferAccess::TransferDst);
         }
         clears.run(move |_, commands| {
-            commands.update_buffer(indirect, 0, &[0, 0, 1, 0, 0, 0, 0, 0]);
+            commands.update_buffer(indirect, 0, &INDIRECT_START);
             commands.update_buffer(clusters, 0, &CLUSTER_ARGS_START);
-            commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 8, 0);
+            commands.update_buffer(deferred, 0, &DEFERRED_GRID_START);
+            commands.fill_buffer(
+                lookback,
+                0,
+                LOOKBACK_RUNS * u64::from(instance_groups) * 8,
+                0,
+            );
             commands.fill_buffer(cluster_lookback, 0, cluster_lookback_bytes, 0);
             commands.fill_buffer(stats, 0, STATS_BYTES, 0);
             if let Some(need) = need {
@@ -2227,6 +2414,7 @@ impl MeshletRenderer {
             .buffer(io.roots, BufferAccess::ShaderWrite(compute))
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.deferred, BufferAccess::ShaderWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(cull_pipeline);
@@ -2265,6 +2453,9 @@ impl MeshletRenderer {
         if occlusion {
             if build {
                 self.pyramid_passes(graph, io, &self.hzb[pyramid]);
+            }
+            if self.instance_occlusion(&params) {
+                self.deferred_cull_pass(graph, io, frame_address + FRAME_BLOCK_STRIDE, slot, scene);
             }
             let second = MeshPass {
                 io,
@@ -2586,12 +2777,49 @@ impl MeshletRenderer {
         if second && io.hzb_prev != Some(io.hzb) {
             builder = builder.image(io.hzb, ImageAccess::Sampled(compute));
         }
+        // Pass 2 reads its own grid: segment 1 plus what instance cull 2 appended.
+        let grid_offset = if second { INDIRECT_PASS2_BYTES } else { 0 };
         builder.run(move |_, commands| {
             commands.bind_pipeline(pipeline);
             commands.push_constants(pipeline, &self.push(frame_address));
-            commands.dispatch_indirect(grid, 0);
+            commands.dispatch_indirect(grid, grid_offset);
             Ok(())
         });
+    }
+
+    /// Instance cull 2 (issue #38): after pass 1 and the pyramid it builds, the instances
+    /// instance cull 1 deferred (those the previous frame's pyramid hid) face this frame's.
+    /// The work of those it lets through goes after pass 1's in the work lists (segment 2),
+    /// and pass 2's grid covers both. `frame_address` is pass 2's frame block.
+    fn deferred_cull_pass<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        io: MeshPassIo,
+        frame_address: u64,
+        slot: FrameSlot,
+        scene: &'f MeshletScene,
+    ) {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let pipeline = &self.pipeline_cull_deferred;
+        let deferred: &'f GraphBuffer = &scene.deferred[slot.index];
+        graph
+            .pass("geometry/instance cull 2 (occlusion)")
+            .buffer(
+                io.deferred,
+                BufferAccess::IndirectArgsAndShaderRead(compute),
+            )
+            .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.work, BufferAccess::ShaderWrite(compute))
+            .buffer(io.roots, BufferAccess::ShaderWrite(compute))
+            .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+            .image(io.hzb, ImageAccess::Sampled(compute))
+            .run(move |_, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &self.push(frame_address));
+                commands.dispatch_indirect(deferred, 0);
+                Ok(())
+            });
     }
 
     /// Once the last cull has counted: copies the frame's counters into this slot's readback
@@ -2940,6 +3168,21 @@ mod tests {
             mode = mode.next();
         }
         assert_eq!(mode, SwRaster::Off, "R comes back to where it started");
+    }
+
+    #[test]
+    fn instance_occlusion_turns_on_for_crowds_mostly_hidden() {
+        // The city from its south edge: 493 k of the 500 k instances in the frustum hidden.
+        assert!(instance_occlusion_worth_it(false, 493_000, 500_000));
+        // `meshlets --side 700`: 46 % hidden, where the second cull cost more than it saved.
+        assert!(!instance_occlusion_worth_it(false, 326_000, 713_000));
+        // A small scene never repays the second cull.
+        assert!(!instance_occlusion_worth_it(false, 1_100, 1_152));
+        // Between the thresholds it keeps its state.
+        assert!(instance_occlusion_worth_it(true, 55_000, 100_000));
+        assert!(!instance_occlusion_worth_it(false, 55_000, 100_000));
+        assert!(!instance_occlusion_worth_it(true, 40_000, 100_000));
+        assert_eq!("ON".parse::<InstanceOcclusion>(), Ok(InstanceOcclusion::On));
     }
 
     #[test]

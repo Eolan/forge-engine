@@ -39,8 +39,8 @@ pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_fr
 pub use forge_gpu::DlssMode;
 pub use gtao::{Gtao, GtaoParams};
 pub use meshlet::{
-    AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, MeshId,
-    MeshletRenderer, MeshletScene, MeshletSceneBuilder, SwRaster,
+    AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,
+    MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder, SwRaster,
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
