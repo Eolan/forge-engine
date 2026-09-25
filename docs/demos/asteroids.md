@@ -11,7 +11,8 @@ seconds per lap (90), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle D
 hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
-shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
+shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-hex-tiling` (the rock's texture
+repeating as before #66), `--no-ao`, `--ao-radius M` (2),
 `--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4),
 `--no-translucency`, `--clear-ice` (#59's one clear ice), `--ice-belt D` (the ice in its own
 belt D metres away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round
@@ -274,6 +275,49 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## The rock's texture without repeats (2026-09-25, issue #66)
+
+The owner saw the rock's texture repeating, "visible on large flat surfaces". The rock's
+albedo and normal maps are one 512² tile, projected along the object's three axes and
+repeating every 4 m. A big chunk's fracture face is tens of metres of flat plane, so the same
+blotches lay in a grid across it. And every rock of a shape showed the same pattern in the
+same place. The slow brightness drift already in the shader did not hide the structure.
+
+**Hex-tiling** (Mikkelsen, "Practical Real-Time Hex-Tiling", JCGT 2022, after Heitz and
+Neyret 2018):
+- **Tiles:** the texture is sampled in three overlapping hexagonal tiles, each at a random
+  offset and rotation.
+- **Blend:** the tiles are blended by weights that favour the brighter sample near a tile's
+  edge, so the blend keeps the contrast instead of averaging it away.
+- **Code:** adapted from the paper's reference code (MIT; credited in `CREDITS.md`, its
+  notice in `shaders/third-party/`).
+- **Forge's choices:**
+  - The tiles are three times the paper's size, about one repeat across. At the paper's
+    size the seams, where the blend softens the texture, covered most of a face and blurred
+    the blotches.
+  - The tiles' weights come from the albedo and blend the normal map too, so colour and
+    relief stay together.
+  - Each instance takes its own place in the texture, so the rocks of one shape stop
+    sharing a pattern.
+
+It is a switch on the material row, `RenderLayer::hex_tiling`. It suits stochastic textures
+(rock, sand, concrete) but would break structured ones (brick courses, tiles, windows), so the
+city's rows keep it off. `--no-hex-tiling` gives the old look.
+
+![Frame 1350, the big chunk on the right: the texture repeating, then hex-tiled](images/asteroids-hex-tiling.png)
+
+**Cost:** the rock samples each texture nine times instead of three, one per tile and
+projection. `shading/standard` goes from 0.133 to 0.171 ms, and the frame from 1.29 to 1.33 ms
+at 1600 × 900 (alternating runs, 1500 frames each).
+
+**Checks:**
+- `--no-hex-tiling` gives the previous build's captures exactly, on both paths.
+- The culling harness and mesh against fallback stay at 0; the bench and the city are
+  unchanged.
+- With a static camera and TAA on, 0.68 % of the pixels change from frame to frame, against
+  0.65 % without the tiling: no new shimmer.
+- Synchronization validation is silent.
 
 ## LOD pops (2026-09-25, issue #65)
 

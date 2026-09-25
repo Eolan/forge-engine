@@ -111,7 +111,7 @@ public struct Material
     public float normal_strength;
     public float reflectance;       // Fresnel's F0: the share reflected at normal incidence (issue #56)
     public float scattering;        // ice: light scattered per metre by its bubbles (issue #61)
-    public uint pad1;
+    public uint flags;              // MATERIAL_FLAG_*
     public uint pad2;
 };
 
@@ -1608,6 +1608,135 @@ float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p
     return normalize(x * w.x + y * w.y + z * w.z);
 }
 
+// ------------------------------------------------------------- hex-tiling ---
+// Issue #66: a texture's repeats hidden on large surfaces. Mikkelsen, "Practical Real-Time
+// Hex-Tiling", JCGT 11(2), 2022, after Heitz & Neyret, "High-Performance By-Example Noise
+// using a Histogram-Preserving Blending Operator", 2018. Adapted from the paper's reference
+// code (github.com/mmikk/hextile-demo, `hextiling.h`, MIT License, Copyright (c) 2022 mmikk;
+// notice in shaders/third-party/hextile-demo-LICENSE.txt). The texture is sampled in three
+// overlapping hexagonal tiles, each at a random offset and rotation, and the tiles are blended
+// by weights that favour the brighter sample near a tile's edge, so the blend keeps the
+// texture's contrast instead of averaging it away. Forge's changes: an integer hash for the
+// offsets and angles, larger tiles (`HEX_TILE`), the tiles' weights taken from the albedo and
+// shared by the normal map (colour and relief stay together), and the normals blended as
+// tangent-space vectors in the triplanar projection's convention.
+
+static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render::material
+
+// Size of the hex tiles, in the paper's (about a third of a repeat across). Three times that,
+// about a repeat across, crosses fewer seams, where the blend softens the texture: on the
+// ballad's big faces the paper's size blurred the rock's blotches, this one keeps their
+// contrast, and a tile one repeat across still cannot show a repeat.
+static const float HEX_TILE = 3.0;
+
+// The three tiles over the texture coordinate `st` (in repeats): where each samples the
+// texture, its rotation, and its barycentric weight.
+struct HexTiles
+{
+    float2 uv[3];
+    float2x2 rot[3];
+    float3 w;
+};
+
+HexTiles hex_tiles(float2 st)
+{
+    HexTiles h;
+    // Skew into a triangle grid: its vertices are the hexagons' centres.
+    float2 skewed = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), st * (3.46410162 / HEX_TILE));
+    int2 base = int2(floor(skewed));
+    float3 t = float3(frac(skewed), 0.0);
+    t.z = 1.0 - t.x - t.y;
+    float s = step(0.0, -t.z);
+    float s2 = 2.0 * s - 1.0;
+    h.w = float3(-t.z * s2, s - t.y * s2, s - t.x * s2);
+    int i = int(s);
+    int2 vertex[3] = { base + int2(i, i), base + int2(i, 1 - i), base + int2(1 - i, i) };
+    [unroll]
+    for (uint k = 0; k < 3; k++)
+    {
+        int2 v = vertex[k];
+        uint n = asuint(v.x) * 0x8da6b343u ^ asuint(v.y) * 0xd8163841u;
+        n ^= n >> 16;
+        n *= 0x7feb352du;
+        n ^= n >> 15;
+        n *= 0x846ca68bu;
+        n ^= n >> 16;
+        float angle = float(n & 0x3FFu) * (6.2831853 / 1024.0);
+        float2 offset = float2((n >> 10) & 0x7FFu, n >> 21) * (1.0 / 2048.0);
+        float c = cos(angle);
+        float sn = sin(angle);
+        h.rot[k] = float2x2(c, -sn, sn, c);
+        float2 centre = mul(float2x2(1.0, 0.5, 0.0, 0.8660254), float2(v)) * (HEX_TILE / 3.46410162);
+        h.uv[k] = mul(st - centre, h.rot[k]) + centre + offset;
+    }
+    return h;
+}
+
+// One projection of a hex-tiled row: its albedo texel (white without an albedo texture) and
+// its tangent-space normal (`unpack_normal`'s form; flat without a normal map), from the
+// texture coordinate `st` and its derivatives across the pixel.
+void hex_sample(Material mat, float2 st, float2 dx, float2 dy, out float3 albedo, out float3 tangent)
+{
+    HexTiles h = hex_tiles(st);
+    float3 c[3];
+    float3 t[3];
+    float3 luminance = float3(1.0);
+    [unroll]
+    for (uint k = 0; k < 3; k++)
+    {
+        float2 gx = mul(dx, h.rot[k]);
+        float2 gy = mul(dy, h.rot[k]);
+        c[k] = float3(1.0);
+        t[k] = float3(0.0, 0.0, 1.0);
+        if (mat.albedo_texture != TEXTURE_NONE)
+        {
+            c[k] = sample_image_grad(mat.albedo_texture, SAMPLER_ANISOTROPIC_REPEAT, h.uv[k], gx, gy).rgb;
+            luminance[k] = dot(c[k], float3(0.299, 0.587, 0.114));
+        }
+        if (mat.normal_texture != TEXTURE_NONE)
+        {
+            t[k] = unpack_normal(sample_image_grad(mat.normal_texture, SAMPLER_ANISOTROPIC_REPEAT, h.uv[k], gx, gy), mat.normal_strength);
+            // Back from the tile's rotated frame to the projection's.
+            t[k].xy = mul(h.rot[k], t[k].xy);
+        }
+    }
+    // The paper's weights: the barycentrics sharpened (power 7) and scaled by each sample's
+    // luminance, 60 % of the way from 1.
+    float3 weight = lerp(float3(1.0), luminance, 0.6) * pow(h.w, float3(7.0));
+    weight /= max(weight.x + weight.y + weight.z, 1e-6);
+    albedo = weight.x * c[0] + weight.y * c[1] + weight.z * c[2];
+    tangent = weight.x * t[0] + weight.y * t[1] + weight.z * t[2];
+}
+
+// `sample_triplanar` and `triplanar_normal` for a hex-tiled row, in one walk over the
+// projections: the albedo texel and the bent object-space normal.
+void hex_triplanar(Material mat, float3 n, float3 w, float3 p, float3 dpdx, float3 dpdy, out float3 albedo, out float3 bent)
+{
+    float3 c = float3(0.0);
+    float3 x = float3(0.0), y = float3(0.0), z = float3(0.0);
+    float3 texel, t;
+    if (w.x > 0.01)
+    {
+        hex_sample(mat, p.zy, dpdx.zy, dpdy.zy, texel, t);
+        c += w.x * texel;
+        x = float3(t.xy + n.zy, abs(t.z) * n.x).zyx;
+    }
+    if (w.y > 0.01)
+    {
+        hex_sample(mat, p.xz, dpdx.xz, dpdy.xz, texel, t);
+        c += w.y * texel;
+        y = float3(t.xy + n.xz, abs(t.z) * n.y).xzy;
+    }
+    if (w.z > 0.01)
+    {
+        hex_sample(mat, p.xy, dpdx.xy, dpdy.xy, texel, t);
+        c += w.z * texel;
+        z = float3(t.xy + n.xy, abs(t.z) * n.z);
+    }
+    albedo = c / max(w.x * float(w.x > 0.01) + w.y * float(w.y > 0.01) + w.z * float(w.z > 0.01), 1e-4);
+    bent = normalize(x * w.x + y * w.y + z * w.z);
+}
+
 // What the resolve knows of the surface behind a pixel.
 struct Surface
 {
@@ -1669,6 +1798,20 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
         float3 p = s.object_position * mat.inv_texture_scale;
         float3 dpdx = s.dpdx * mat.inv_texture_scale;
         float3 dpdy = s.dpdy * mat.inv_texture_scale;
+        if ((mat.flags & MATERIAL_FLAG_HEX_TILING) != 0)
+        {
+            // Each instance its own place in the texture (a few dozen repeats away), so the
+            // objects of one mesh stop sharing a pattern; then the hex tiles (issue #66).
+            p += hash_color(s.instance_id ^ 0x9E3779B9u) * 61.0;
+            float broad = 0.65 * value_noise3(p * 0.137) + 0.35 * value_noise3(p * 0.41 + 17.0);
+            float3 texel, bent;
+            hex_triplanar(mat, s.object_normal, w, p, dpdx, dpdy, texel, bent);
+            if (mat.albedo_texture != TEXTURE_NONE)
+                albedo *= texel * (0.7 + 0.6 * broad);
+            if (mat.normal_texture != TEXTURE_NONE)
+                n = normalize(mul(s.model, float4(bent, 0)).xyz);
+            return;
+        }
         if (mat.albedo_texture != TEXTURE_NONE)
         {
             // Against visible repeats: a brightness that drifts over several repeats.

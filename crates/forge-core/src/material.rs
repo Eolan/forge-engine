@@ -91,6 +91,12 @@ pub struct RenderLayer {
     pub texture_scale: f32,
     /// How strongly the normal map bends the normal (1 as authored).
     pub normal_strength: f32,
+    /// Standard: hide the textures' repeats (issue #66). Hex-tiling (Mikkelsen 2022) samples
+    /// them in overlapping hexagonal tiles, each at a random offset and rotation, blended so
+    /// that the contrast holds; the projection is also offset per instance, so objects of one
+    /// mesh stop sharing a pattern. For stochastic textures (rock, sand, concrete), never for
+    /// structured ones (brick courses, tiles, windows), whose rows it would break.
+    pub hex_tiling: bool,
     /// The share of light reflected at normal incidence (Fresnel's F0), rising towards 1 at
     /// grazing angles: 0.04 for most dielectrics (stone, plaster, plastic, uncoated glass),
     /// 0.2–0.4 for coated glass (issue #56).
@@ -118,6 +124,7 @@ impl Default for RenderLayer {
             normal_texture: None,
             texture_scale: 1.0,
             normal_strength: 1.0,
+            hex_tiling: false,
             reflectance: 0.04,
             bubbles: 0.0,
         }

@@ -75,6 +75,8 @@ exposure (EV100, target, compensation, curve) the last.
   - The cluster culls go 0.02 → 0.14 ms each.
   - In all: 0.795 → 1.30 ms at 1600 × 900, and 1.75 → 2.63 ms at 1440p (alternating runs,
     1500 frames each).
+- Hex-tiling the rock's texture (#66): nine samples per texture instead of three.
+  `shading/standard` 0.133 → 0.171 ms, and 1.29 → 1.33 ms in all at 1600 × 900.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

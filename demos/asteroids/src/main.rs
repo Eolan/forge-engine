@@ -45,6 +45,10 @@ struct Args {
     /// The Phase 0 rock: plain colours, no texture.
     #[arg(long)]
     no_textures: bool,
+    /// The rock's texture repeating as before issue #66: no hex-tiling, one place in the texture
+    /// for every rock of a shape.
+    #[arg(long)]
+    no_hex_tiling: bool,
     /// Leave the fill light unoccluded: no ambient occlusion (N toggles it).
     #[arg(long)]
     no_ao: bool,
@@ -1088,6 +1092,8 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
         rock.render.albedo_texture = Some(albedo);
         rock.render.normal_texture = Some(normal);
         rock.render.texture_scale = 4.0;
+        // Its repeats hidden on the big fracture faces (issue #66).
+        rock.render.hex_tiling = !args.no_hex_tiling;
         rock
     };
     let weathered = |[r, g, b]: [f32; 3]| [r * 0.72, g * 0.62, b * 0.55];

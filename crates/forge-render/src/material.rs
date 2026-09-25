@@ -36,10 +36,16 @@ pub struct GpuMaterial {
     reflectance: f32,
     /// Ice: light scattered per metre by its bubbles ([`bubble_scattering`]).
     scattering: f32,
-    pad: [u32; 2],
+    /// `MATERIAL_*` flags.
+    flags: u32,
+    pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 96);
+
+/// [`GpuMaterial`] flag: the textures are hex-tiled and offset per instance
+/// ([`forge_core::material::RenderLayer::hex_tiling`]).
+pub const MATERIAL_HEX_TILING: u32 = 1;
 
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
@@ -186,7 +192,8 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 normal_strength: r.normal_strength,
                 reflectance: r.reflectance,
                 scattering: bubble_scattering(r.bubbles),
-                pad: [0; 2],
+                flags: if r.hex_tiling { MATERIAL_HEX_TILING } else { 0 },
+                pad: 0,
             }
         })
         .collect()

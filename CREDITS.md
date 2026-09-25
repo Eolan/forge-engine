@@ -120,6 +120,13 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   of Quasirandom Sequences", 2018).
 - **Triplanar normal maps.** Ben Golus, "Normal Mapping for a Triplanar Shader", 2017: the
   whiteout blend the materials' normal maps use.
+- **Hex-tiling.** Morten S. Mikkelsen, "Practical Real-Time Hex-Tiling", *Journal of Computer
+  Graphics Techniques* 11(2), 2022, after Eric Heitz and Fabrice Neyret, "High-Performance
+  By-Example Noise using a Histogram-Preserving Blending Operator", *Proc. ACM Comput. Graph.
+  Interact. Tech.* 1(2), 2018. The rock's texture is sampled in random hexagonal tiles so its
+  repeats do not show (issue #66). `shaders/meshlet.slang` adapts the paper's reference code,
+  [hextile-demo](https://github.com/mmikk/hextile-demo) (`hextiling.h`, MIT License,
+  Copyright (c) 2022 mmikk; notice in `shaders/third-party/hextile-demo-LICENSE.txt`).
 - **Tone curves.**
   - AgX: Troy Sobotka. Forge uses the minimal real-time form by Benjamin Wrensch (2023).
   - ACES 1.x: the Academy of Motion Picture Arts and Sciences, through Stephen Hill's fit

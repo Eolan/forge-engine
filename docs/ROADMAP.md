@@ -63,7 +63,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   scatter the light inside it, clear to white, at no measurable cost), a denser belt ✅
   (issue #23: 10 000 chunks in 28 shapes, 0.808 ms), weathered crust around the fracture
   faces ✅ (issue #62: no measurable cost), ice blocks in shapes of their own ✅ (issue #63). LOD pops fixed ✅ (issue #65: the chunks weigh their
-  normals when cooked, 4.8 times fewer pops above the floor, 1.30 ms).
+  normals when cooked, 4.8 times fewer pops above the floor, 1.30 ms). The rock's texture without
+  repeats ✅ (issue #66: hex-tiling, 0.04 ms).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece; issue #12 keeps the chunks' edge wear and

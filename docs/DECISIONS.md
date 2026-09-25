@@ -533,7 +533,8 @@ memory-streaming.md §4, gpu-geometry.md; demo: city-blocks)*
 
 D-007's record is `forge_core::material::Material`:
 - a render layer: the shading class, two base colours, a cavity term, roughness, the
-  highlight's weight, emission, the ice's scattering, and two textures with their scale;
+  highlight's weight, emission, the ice's scattering, and two textures with their scale
+  and whether they are hex-tiled;
 - a physics layer: density, static and dynamic friction, restitution;
 - gameplay tags.
 
@@ -559,6 +560,10 @@ textures are projected along the object's three axes:
 - `SampleGrad` takes the derivatives of the object-space position, which the analytic
   barycentric derivatives give (D-021);
 - a value noise over a few repeats varies the brightness, so the repeat does not show.
+- stochastic textures (rock, sand, concrete) can also be hex-tiled (Mikkelsen 2022, issue
+  #66): random hexagonal tiles, each at its own offset and rotation, and an offset per
+  instance. This hides the repeat on large faces for 0.04 ms in the ballad. Structured
+  textures (brick, tiles) keep plain repeats.
 
 The demos' textures are procedural: rock, concrete, brick and grass, 512 × 512, tileable,
 their mips averaged in linear light. The city generates them in 140 ms at start-up.
