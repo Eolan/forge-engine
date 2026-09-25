@@ -369,6 +369,12 @@ more pieces:
 The four shapes alone cost nothing measurable (0.691 ms at 3000 asteroids); the extra
 asteroids add shading, dust shadow rays and geometry in about equal parts.
 
+**Stability:** the belt has more small, sharp pieces, so it was checked for shimmer. With the
+camera nearly still (a 90 000 s lap), frames 300 and 308 (the same jitter phase) differ in
+0.30 % of pixels by more than four levels, against 0.18 % for the 3000-asteroid field of #62
+(`--count 3000 --variants 1 --rock-shaped-ice --no-crust`). That is in proportion to the
+doubled edges, and the changes are sparse dots in the dense far field, as before.
+
 **Checks:**
 - `--variants 1 --count 3000` gives the previous build's captures exactly.
 - The culling harness and mesh against fallback stay at 0 on the new field; the bench and the
