@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
+use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, Input, vk};
 use forge_core::hash::hash_cell3;
 use forge_core::material::Material;
 use forge_core::{MaterialTable, Seed, SplitMix64};
@@ -283,7 +283,7 @@ struct Ballad {
 }
 
 impl Ballad {
-    fn new(ctx: &mut Context, args: Args) -> Result<Self> {
+    fn new(ctx: &mut Context, args: Args, field: FieldMeshes) -> Result<Self> {
         // The scene is drawn into a visibility buffer and shaded into the TAA's HDR target;
         // the swapchain only receives the resolve.
         let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
@@ -344,7 +344,7 @@ impl Ballad {
             );
         }
         let dlss_on = requested.is_some() && dlss.is_some();
-        let (scene, path) = build_field(ctx, &args)?;
+        let (scene, path) = build_field(ctx, &args, field)?;
         let camera = FlyCamera {
             speed: 40.0,
             ..FlyCamera::default()
@@ -939,33 +939,51 @@ fn ice_kind(id: u32) -> usize {
     }
 }
 
-/// The field: seven size classes of asteroid meshes in several shapes, thousands of instances
-/// clustered along a curved belt, and a camera path weaving through it.
-fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
+/// Mesh recipes, one per size class: (segments per face, radius, roughness).
+const RECIPES: [(u32, f32, f32); 7] = [
+    (48, 1.0, 0.45),
+    (64, 1.8, 0.40),
+    (72, 2.6, 0.35),
+    (96, 4.0, 0.30),
+    (128, 7.0, 0.28),
+    (160, 14.0, 0.25),
+    (192, 30.0, 0.22),
+];
+
+/// Rock shapes per size class (`--variants`, issue #23).
+fn rock_variants(args: &Args) -> usize {
+    args.variants.max(1) as usize
+}
+
+/// Ice shapes per size class: none when the ice takes the rock's (issue #63).
+fn ice_shapes(args: &Args) -> usize {
+    if args.rock_shaped_ice || args.round_rocks {
+        0
+    } else {
+        ICE_SHAPES
+    }
+}
+
+/// The field's meshes and how long they took: the start-up's heavy CPU work, which runs
+/// behind the loading screen (issue #25).
+struct FieldMeshes {
+    meshes: Vec<MeshletMesh>,
+    build_ms: u128,
+}
+
+/// Builds the field's meshes on the job system (CPU only: no GPU context).
+fn build_meshes(args: &Args) -> FieldMeshes {
     let start = Instant::now();
     let pool = TaskPool::client();
-    // Mesh recipes: (segments per face, radius, roughness). Built in parallel.
-    let recipes: [(u32, f32, f32); 7] = [
-        (48, 1.0, 0.45),
-        (64, 1.8, 0.40),
-        (72, 2.6, 0.35),
-        (96, 4.0, 0.30),
-        (128, 7.0, 0.28),
-        (160, 14.0, 0.25),
-        (192, 30.0, 0.22),
-    ];
+    let recipes = RECIPES;
     // Every size class in `args.variants` rock shapes (issue #23): each cut by its own planes,
     // and all but the first stretched along two axes, as real asteroids are rarely round. Then
     // the ice's own shapes, ICE_SHAPES per class (issue #63): a smoother body cut by more
     // planes, so the ice reads as blocks. Built in parallel; class `c`'s rock variant `v` is
     // `meshes[c * variants + v]`, its ice shape `v` follows all the rock.
-    let variants = args.variants.max(1) as usize;
+    let variants = rock_variants(args);
     let round = args.round_rocks;
-    let ice_shapes = if args.rock_shaped_ice || round {
-        0
-    } else {
-        ICE_SHAPES
-    };
+    let ice_shapes = ice_shapes(args);
     let jobs: Vec<(usize, usize, bool)> = (0..recipes.len())
         .flat_map(|i| (0..variants).map(move |v| (i, v, false)))
         .chain((0..recipes.len()).flat_map(|i| (0..ice_shapes).map(move |v| (i, v, true))))
@@ -1002,6 +1020,24 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
             });
         }
     });
+    FieldMeshes {
+        meshes: meshes
+            .into_iter()
+            .map(|mesh| mesh.expect("mesh built"))
+            .collect(),
+        build_ms: start.elapsed().as_millis(),
+    }
+}
+
+/// The field: seven size classes of asteroid meshes in several shapes, thousands of instances
+/// clustered along a curved belt, and a camera path weaving through it, from the meshes
+/// [`build_meshes`] made.
+fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(MeshletScene, Path)> {
+    let start = Instant::now();
+    let recipes = RECIPES;
+    let variants = rock_variants(args);
+    let ice_shapes = ice_shapes(args);
+    let meshes = field.meshes;
     let mut builder = MeshletSceneBuilder::new();
     // Rock and ice: a fifth of the asteroids are ice (the rule since Phase 0). The rock takes the
     // procedural rock texture and its relief (issue #46); the ice stays smooth.
@@ -1052,16 +1088,11 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
     builder.set_materials(&materials, Some(textures));
     // The field stays still until Phase 3: its structures are built once (issue #45).
     builder.set_ray_traced(!args.no_shadows);
-    let mesh_ids: Vec<_> = meshes
-        .iter()
-        .map(|m| builder.add_mesh(m.as_ref().expect("mesh built")))
-        .collect();
+    let mesh_ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
     for (i, mesh) in meshes.iter().enumerate() {
-        if let Some(mesh) = mesh {
-            tracing::info!(mesh = i, levels = ?mesh.clusters_per_level, dag_triangles = mesh.dag_triangle_count, "cluster DAG");
-        }
+        tracing::info!(mesh = i, levels = ?mesh.clusters_per_level, dag_triangles = mesh.dag_triangle_count, "cluster DAG");
     }
-    let mesh_ms = start.elapsed().as_millis();
+    let mesh_ms = field.build_ms;
 
     // The belt: an S-shaped centre line; asteroids scattered around it with density peaks.
     let mut rng: SplitMix64 = Seed::new(4242).rng();
@@ -1207,7 +1238,7 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         instances = scene.instance_count,
         meshlets = scene.instance_meshlets(),
         total_triangles = scene.total_triangles,
-        total_ms = start.elapsed().as_millis(),
+        total_ms = mesh_ms + start.elapsed().as_millis(),
         "asteroid field ready"
     );
     Ok((scene, path))
@@ -1235,5 +1266,11 @@ fn main() -> Result<()> {
         force_fallback: args.force_fallback,
         ..AppConfig::default()
     };
-    forge_app::run(config, move |ctx| Ballad::new(ctx, args))
+    // The meshes and their cluster DAGs (about 2.4 s) build behind the loading screen (issue #25);
+    // the uploads follow on the main thread.
+    forge_app::run_loading(config, move || {
+        let field = build_meshes(&args);
+        let finish: Finish<Ballad> = Box::new(move |ctx| Ballad::new(ctx, args, field));
+        Ok(finish)
+    })
 }

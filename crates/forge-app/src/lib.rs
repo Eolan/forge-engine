@@ -1,7 +1,8 @@
 //! Application shell for demos and tools: a window, input state, the frame loop on
 //! `forge_gpu::Frames`, swapchain recreation, PNG capture and a fly camera.
 //!
-//! A demo implements [`Demo`] and calls [`run`]. The shell owns the GPU context and the
+//! A demo implements [`Demo`] and calls [`run`], or [`run_loading`] when its start-up has heavy
+//! CPU work to do behind a loading screen. The shell owns the GPU context and the
 //! render graph of every frame: it imports the swapchain image, lets the demo declare its
 //! passes, adds the overlay, the capture and the present transition, and executes the
 //! graph, which derives every barrier.
@@ -10,6 +11,7 @@
 
 mod camera;
 mod input;
+mod loading;
 mod overlay;
 mod profile;
 
@@ -24,11 +26,13 @@ pub use forge_gpu::TransientDesc;
 /// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
 pub use forge_gpu::vk;
 use forge_gpu::{
-    Buffer, BufferAccess, BufferDesc, Commands, Device, DeviceOptions, FrameGraph, FrameSlot,
-    Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance, MemoryCategory,
-    MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface, Swapchain,
+    Buffer, BufferAccess, BufferDesc, Commands, Device, DeviceOptions, FRAMES_IN_FLIGHT,
+    FrameGraph, FrameSlot, Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance,
+    MemoryCategory, MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface,
+    Swapchain,
 };
 pub use input::Input;
+pub use loading::Finish;
 pub use overlay::{Canvas, Color, Overlay};
 pub use profile::{MemorySample, OverlayMode, Profile};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -111,6 +115,13 @@ pub struct Context {
     pub profile: Profile,
     /// The render graph's persistent side (transient heap, statistics).
     pub graph: RenderGraph,
+    /// While a demo started with [`run_loading`] prepares on its thread (issue #25): the loading
+    /// screen shows, and its frames do not count (`frames_rendered`, captures, the frame limit,
+    /// the profile, the memory counters).
+    pub loading: bool,
+    /// The first frame (in the frame slots' numbering) the demo recorded after the loading
+    /// screen: the GPU zones of earlier frames are the loading screen's, not the demo's.
+    counted_from: u64,
     _surface: Arc<Surface>,
     _instance: Arc<Instance>,
 }
@@ -165,6 +176,17 @@ pub trait Demo: Sized + 'static {
     fn title(&mut self, _ctx: &Context) -> Option<String> {
         None
     }
+}
+
+/// Runs a demo whose start-up has heavy CPU work (issue #25): `prepare` runs on a thread of its
+/// own while the window shows a loading animation, and returns the step that finishes the demo
+/// on the main thread (uploads, pipelines). The loading frames do not count: the demo's frames
+/// number from 0, as with [`run`], so frame limits and captures are unchanged.
+pub fn run_loading<D: Demo>(
+    config: AppConfig,
+    prepare: impl FnOnce() -> Result<Finish<D>> + Send + 'static,
+) -> Result<()> {
+    run(config, move |ctx| loading::Stage::start(ctx, prepare))
 }
 
 /// Runs the demo built by `init` until the window closes, Escape is pressed or the frame
@@ -408,6 +430,8 @@ impl<D: Demo> State<D> {
             frames_rendered: 0,
             profile: Profile::new(overlay_mode),
             graph,
+            loading: false,
+            counted_from: 0,
             _surface: surface,
             _instance: instance,
         };
@@ -527,7 +551,12 @@ impl<D: Demo> State<D> {
         self.ctx
             .profile
             .cpu_zone("cpu/wait for GPU (frame slot)", ms_since(wait_start));
-        self.ctx.profile.gpu_zones(self.ctx.frames.gpu_zones());
+        // The zones are those of the frame that used the slot before, FRAMES_IN_FLIGHT ago.
+        if self.ctx.loading {
+            self.ctx.counted_from = slot.frame_number + 1;
+        } else if slot.frame_number >= self.ctx.counted_from + FRAMES_IN_FLIGHT as u64 {
+            self.ctx.profile.gpu_zones(self.ctx.frames.gpu_zones());
+        }
         #[cfg(feature = "profiling")]
         self.tracy_gpu_zones();
         #[cfg(feature = "profiling")]
@@ -549,6 +578,7 @@ impl<D: Demo> State<D> {
         let extent = self.ctx.swapchain.extent();
         let frame_number = self.ctx.frames_rendered;
         let capture_path = match &self.config.capture {
+            _ if self.ctx.loading => None,
             Some((path, frame)) if *frame == frame_number => Some(path.clone()),
             Some((path, _))
                 if self
@@ -566,10 +596,11 @@ impl<D: Demo> State<D> {
         };
         // Four times per second, and on a captured frame so that a scripted capture shows
         // current counters however fast the frames went by.
-        if capture_path.is_some()
-            || self
-                .memory_mark
-                .is_none_or(|mark| mark.at.elapsed() >= MEMORY_SAMPLE_PERIOD)
+        if !self.ctx.loading
+            && (capture_path.is_some()
+                || self
+                    .memory_mark
+                    .is_none_or(|mark| mark.at.elapsed() >= MEMORY_SAMPLE_PERIOD))
         {
             self.sample_memory_since(self.memory_mark);
         }
@@ -618,7 +649,7 @@ impl<D: Demo> State<D> {
                 dt,
             };
             self.demo.render(&mut self.ctx, &mut frame)?;
-            if self.ctx.profile.is_visible() {
+            if self.ctx.profile.is_visible() && !self.ctx.loading {
                 let title = self.config.title.clone();
                 let canvas = self.overlay.begin(extent);
                 self.ctx.profile.layout(canvas, &title, extent);
@@ -694,7 +725,9 @@ impl<D: Demo> State<D> {
             save_capture(&path, &buffer, extent, self.ctx.swapchain.format())?;
             tracing::info!(path = %path.display(), "captured frame {}", self.ctx.frames_rendered);
         }
-        self.ctx.frames_rendered += 1;
+        if !self.ctx.loading {
+            self.ctx.frames_rendered += 1;
+        }
         if self.debug_stall_ms > 0 {
             std::thread::sleep(Duration::from_millis(self.debug_stall_ms));
         }

@@ -274,6 +274,34 @@ Material classification and the material table came with #20 (below). The softwa
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
 
+## Loading screen (2026-09-25, issue #25)
+
+The owner's idea: "loading screen with a simple animation while loading in the background".
+Since #23 and #63 the ballad takes 2.7 s to build its field, and the window sat frozen until
+it was done. `forge_app::run_loading` runs a demo's CPU-heavy start on a thread of its own
+while the window shows a ring of dots turning. The step the thread returns then finishes the
+demo on the main thread: the uploads, the ray-tracing structures and the pipelines. For the
+ballad:
+- **On the thread:** the 42 meshes and their cluster DAGs, 2.2 s.
+- **On the main thread, after:** 0.45 s.
+
+![The loading screen](images/asteroids-loading.png)
+
+- **Loading frames don't count.** Frame numbers, `--frames`, captures, the profile and the
+  memory counters all start with the demo, so every capture is unchanged.
+- **They last at least 8 ms,** since the build needs the cores more than the dots need frames.
+- **Not covered yet:** on a cold shader cache (after a shader change), compilation happens in
+  the finishing step, about 10 s with the window frozen as before. The city still starts
+  through `run`.
+
+**Checks:**
+- Every capture is identical to the previous build: both demos, both paths, the culling
+  harness.
+- The GPU summary still averages 598 of 600 frames. It counts a frame's zones only if the
+  frame was recorded after the loading screen: a fixed skip count went wrong once a frame
+  bailed out after its slot wait.
+- Synchronization validation is silent, loading frames included.
+
 ## Ice blocks (2026-09-25, issue #63)
 
 The owner asked for "the ice ones more like ice blocks/chunks". Until now the ice asteroids
