@@ -250,7 +250,11 @@ branch 2026-09-26, to verify), then D-004's amendment decided.
    terrain.
 2. Terrain: lift genesis (uplift, stream-power erosion, hydrology, priority flood) and the
    cube-sphere CDLOD from the previous projects; volumetric near field (dual contouring /
-   Transvoxel) for overhangs and caves; SDF bricks for edits.
+   Transvoxel) for overhangs and caves; SDF bricks for edits. Started 2026-09-26 on the cloud
+   branch (`forge-procgen`, `tools/genesis`, `docs/demos/island.md`): the island's mask and
+   uplift, priority flood, D8 drainage and the implicit stream-power erosion, on the CPU with
+   PNG previews; a 16 km island at 16 m in 20 s. Next: the hand-off to the cluster-DAG cook so
+   today's renderer draws it, then the amplification to 2 m and the materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day.

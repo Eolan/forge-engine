@@ -1,0 +1,17 @@
+[package]
+name = "genesis"
+description = "Runs the terrain genesis pipeline (forge-procgen) for an island and writes PNG previews of every stage, with timings."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+forge-core = { workspace = true }
+forge-procgen = { workspace = true }

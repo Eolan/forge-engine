@@ -703,6 +703,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-procgen"
+version = "0.1.0"
+dependencies = [
+ "forge-core",
+ "glam",
+ "image",
+]
+
+[[package]]
 name = "forge-render"
 version = "0.1.0"
 dependencies = [
@@ -774,6 +783,16 @@ dependencies = [
  "rustversion",
  "windows-link",
  "windows-result",
+]
+
+[[package]]
+name = "genesis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "forge-core",
+ "forge-procgen",
 ]
 
 [[package]]

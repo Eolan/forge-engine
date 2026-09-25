@@ -29,6 +29,8 @@ crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indi
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
 crates/forge-world    world frames (phase 2): f64 reference frames in an integer sector grid, positions in cells for the GPU (#93),
                       the flat grid and the cube sphere cut into u64-named cells, cell streaming plans with hysteresis
+crates/forge-procgen  procedural generation on the CPU (phase 2): fields, lattice noise, the island's terrain genesis
+                      (mask, uplift, priority flood, drainage, stream-power erosion), PNG previews
 shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, aces2, tonemap, display, overlay, mipcheck, tonecheck)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
@@ -37,6 +39,7 @@ demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster 
 tools/imgdiff         pixel and perceptual (LDR-FLIP) comparison of captures (golden images)
 tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
 tools/credits         the Rust crates in the build, their licences and authors (docs/credits-crates.md; CI checks it)
+tools/genesis         the terrain genesis pipeline over a 16 km island, with timings and PNG previews (docs/demos/island.md)
 tools/*.sh            the verification batch (docs/PROCESS.md): captures, their comparison, validation, timings
 docs/                 ARCHITECTURE, DECISIONS, ROADMAP, RESEARCH + research/ and demos/
 CREDITS.md            the people, libraries, assets and published techniques Forge builds on
