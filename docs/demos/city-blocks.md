@@ -178,6 +178,19 @@ The ray code costs registers in the whole resolve (0.03–0.07 ms, even switched
 rays 0.09 ms. Tracing in a pass of its own over the tiles that hold smooth rows would leave
 the resolve as it was.
 
+*Since #52 (2026-09-25)* the rays run in `shading/reflections`, over the tiles the standard
+pass lists as holding smooth rows. The resolve shades them with the sky and stores the mirror
+direction and the weight W of what a ray meets there instead. The pass traces and adds
+W × (hit − sky), the same sum. The resolve is back to its cost without rays:
+
+| RTX 5070 Ti | rays in the resolve (#56) | rays in their own pass |
+|---|---|---|
+| the south view | 1.975 ms (`shading/standard` 0.278) | 1.919 ms (0.163 + reflections 0.079) |
+| the 1440p flight | 2.668 ms (0.523) | 2.611 ms (0.376 + reflections 0.098) |
+
+The images agree to within the split's arithmetic. 0.55 % of the south view's pixels move by
+more than two levels (at most 21, on glass), and bloom spreads ±1 over 5 %.
+
 **Checks:**
 - With `--no-ray-reflections`, the city's three captures are identical to the previous build,
   and without ray queries (`FORGE_NO_RAY_QUERY=1`) the switch changes nothing.

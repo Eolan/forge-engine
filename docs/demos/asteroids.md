@@ -284,8 +284,8 @@ Vogel disc turned per pixel, and it cleans up still frames. Motion still smears 
 with narrow penumbrae, keeps them on.
 
 **Cost** (1600×900, 1500 frames): 0.463 → 0.554 ms. The passes take 0.085 ms: the chain 0.024,
-gtao 0.043, the denoise 0.017. `shading/standard` has grown from 0.078 ms (#46) to 0.095 ms
-without AO. That is the registers of #50's mirror-ray code in the resolve; #52 moves it out.
+gtao 0.043, the denoise 0.017. #50's mirror-ray code had raised `shading/standard` from 0.078 ms (#46) to 0.095 ms without
+AO. #52 moved it to a pass of its own: 0.082 ms, and the ballad 0.540 ms with AO.
 
 **Checks:**
 - With `--no-ao`, the captures with and without TAA are identical to the previous build, on

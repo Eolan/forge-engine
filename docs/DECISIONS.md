@@ -831,7 +831,9 @@ the captures are those of the previous build.
 
 The rays cost 0.09 ms, and their code 0.03–0.07 ms of registers across the resolve: 0.17 ms
 at 1440p in all. A pass of their own over the smooth rows' tiles would recover the
-registers. Glass reflects 4 % head-on, so the change is modest; coated curtain walls need a
+registers. Done in #52: `shading/reflections` traces over the tiles the standard pass lists,
+from the direction and weight the resolve stores; the resolve is back to its cost without
+rays, and the city's frame drops 0.06 ms at 1440p. Glass reflects 4 % head-on, so the change is modest; coated curtain walls need a
 reflectance per row.
 **A reflectance per row** (issue #56, 2026-09-25). D-007's render layer gains `reflectance`, F0 at
 normal incidence, 0.04 by default. The city's dark glass is a coated curtain wall (0.3,

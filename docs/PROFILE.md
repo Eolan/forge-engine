@@ -52,9 +52,9 @@ exposure (EV100, target, compensation, curve) the last.
   the textures and half for the rays, and `shading/ice` 0.010 → 0.016 ms.
 - The structures are built once at start: 267 k BLAS triangles in 8 ms, the TLAS in 1 ms,
   16 MiB in all.
-- GTAO on the fill (#55, D-030) brings it to 0.554 ms: 0.085 ms of passes. `shading/standard`
-  is 0.095 ms without it, up from 0.078: the registers of the city's mirror-ray code (#50),
-  which #52 moves to a pass of its own.
+- GTAO on the fill (#55, D-030) brings it to 0.554 ms: 0.085 ms of passes. The mirror-ray
+  code of the city (#50) had raised `shading/standard` to 0.095 ms without AO; since #52 moved
+  it to a pass of its own, 0.082 ms, and the ballad takes 0.540 ms (0.448 without AO).
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs
@@ -139,6 +139,8 @@ With the sky's reflection (#49, D-031: 0.03 ms of shading) it takes 2.50 ms.
 With the mirror rays in the glass (#50: 0.09 ms of rays, 0.03–0.07 ms of registers across the
 resolve) it takes 2.66 ms.
 With soft shadows (#54: 0.02 ms) it takes 2.67 ms.
+With the mirror rays moved to a pass of their own (#52: the resolve 0.523 → 0.376 ms, the
+rays 0.098 ms) it takes 2.61 ms.
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
 next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 

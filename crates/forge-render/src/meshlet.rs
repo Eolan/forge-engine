@@ -334,7 +334,8 @@ struct ResolvePush {
     sky: u64,
     /// Sampled index of the ambient occlusion scaling the sky's light (issue #48), or `u32::MAX`.
     ao_image: u32,
-    pad: u32,
+    /// Storage index of the mirror rays' requests (direction, weight; issue #52), or `u32::MAX`.
+    request_image: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<ResolvePush>() == 80);
@@ -354,23 +355,27 @@ const TILE_GROUPS_X: u32 = 64;
 
 /// Shading classes: one resolve pipeline each (`MATERIAL_CLASSES` in `meshlet.slang`).
 const MATERIAL_CLASSES: usize = ShadingClass::ALL.len();
+/// Tile lists: one per class, then the smooth rows' for the mirror rays (`REFLECTION_LIST` in
+/// `meshlet.slang`, issue #52).
+const TILE_LISTS: usize = MATERIAL_CLASSES + 1;
+const REFLECTION_LIST: u64 = MATERIAL_CLASSES as u64;
 
 /// The shading tiles of a target: 8 × 8 pixels each.
 fn tile_count(extent: vk::Extent2D) -> u32 {
     extent.width.div_ceil(8) * extent.height.div_ceil(8)
 }
 
-/// The tile lists (every class can list every tile) and the classes' dispatches.
+/// The tile lists (every list can hold every tile) and their dispatches.
 fn create_shading_tiles(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphBuffer; 2]> {
     let tiles = device.create_buffer(BufferDesc {
-        size: MATERIAL_CLASSES as u64 * u64::from(tile_count(extent)) * 4,
+        size: TILE_LISTS as u64 * u64::from(tile_count(extent)) * 4,
         usage: vk::BufferUsageFlags::STORAGE_BUFFER,
         location: MemoryLocation::GpuOnly,
         category: MemoryCategory::Work,
         name: "shading tiles",
     })?;
     let args = device.create_buffer(BufferDesc {
-        size: MATERIAL_CLASSES as u64 * 16,
+        size: TILE_LISTS as u64 * 16,
         usage: vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::INDIRECT_BUFFER
             | vk::BufferUsageFlags::TRANSFER_DST,
@@ -1345,6 +1350,8 @@ pub struct MeshletRenderer {
     /// The shading passes, one per material class: the standard one over the whole target
     /// (it also lists the tiles of the others), each other over its tiles.
     pipeline_resolve: [Pipeline; MATERIAL_CLASSES],
+    /// The mirror rays of the smooth rows (issue #52): devices with ray queries only.
+    pipeline_reflections: Option<Pipeline>,
     /// Per class, the tiles that show it, and every class's dispatch ([`create_shading_tiles`]).
     shading_tiles: [GraphBuffer; 2],
     /// The two depth pyramids ([`create_pyramids`]).
@@ -1610,6 +1617,11 @@ impl MeshletRenderer {
                 "shading layered",
             )?,
         ];
+        let pipeline_reflections = if rt {
+            Some(shading_pipeline("reflections_main", "shading reflections")?)
+        } else {
+            None
+        };
         for module in [
             geometry,
             frag,
@@ -1690,6 +1702,7 @@ impl MeshletRenderer {
             pipeline_sw_raster,
             pipeline_merge,
             pipeline_resolve,
+            pipeline_reflections,
             shading_tiles: create_shading_tiles(device, extent)?,
             hzb,
             prev: Cell::new(None),
@@ -2326,6 +2339,23 @@ impl MeshletRenderer {
         let [tiles_buffer, args_buffer]: &'f [GraphBuffer; 2] = &self.shading_tiles;
         let tiles = graph.import_buffer(tiles_buffer);
         let args = graph.import_buffer(args_buffer);
+        // The mirror rays' requests (issue #52): the resolve writes them for the smooth rows, the
+        // reflection pass reads them. Only under a sky, on devices with ray queries.
+        let reflections = self
+            .pipeline_reflections
+            .as_ref()
+            .filter(|_| ambient.sky.is_some());
+        let request = reflections.map(|_| {
+            graph.transient(TransientDesc {
+                name: "mirror ray requests",
+                width: extent.width,
+                height: extent.height,
+                format: vk::Format::R16G16B16A16_SFLOAT,
+                usage: vk::ImageUsageFlags::STORAGE,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            })
+        });
         let frame_address = self.frame_buffers[slot.index].address();
         let push = move |resources: &forge_gpu::Resources<'_>| ResolvePush {
             frame: frame_address,
@@ -2342,7 +2372,7 @@ impl MeshletRenderer {
             ao_image: ambient
                 .occlusion
                 .map_or(u32::MAX, |ao| resources.sampled(ao).0),
-            pad: 0,
+            request_image: request.map_or(u32::MAX, |r| resources.storage(r, 0).0),
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -2350,7 +2380,7 @@ impl MeshletRenderer {
             .pass("shading/standard")
             .buffer(args, BufferAccess::TransferDst)
             .run(move |_, commands| {
-                for class in 0..MATERIAL_CLASSES as u64 {
+                for class in 0..TILE_LISTS as u64 {
                     commands.fill_buffer(args_buffer, class * 16, 4, TILE_GROUPS_X);
                     commands.fill_buffer(args_buffer, class * 16 + 4, 4, 0);
                     commands.fill_buffer(args_buffer, class * 16 + 8, 4, 1);
@@ -2372,6 +2402,9 @@ impl MeshletRenderer {
             builder = builder
                 .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
                 .image(sky.table, ImageAccess::Sampled(compute));
+        }
+        if let Some(r) = request {
+            builder = builder.image(r, ImageAccess::StorageWrite(compute));
         }
         if let Some(ao) = ambient.occlusion {
             builder = builder.image(ao, ImageAccess::Sampled(compute));
@@ -2403,6 +2436,9 @@ impl MeshletRenderer {
                     .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
                     .image(sky.table, ImageAccess::Sampled(compute));
             }
+            if let Some(r) = request {
+                builder = builder.image(r, ImageAccess::StorageWrite(compute));
+            }
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
             }
@@ -2410,6 +2446,30 @@ impl MeshletRenderer {
                 commands.bind_pipeline(pipeline);
                 commands.push_constants(pipeline, &push(resources));
                 commands.dispatch_indirect(args_buffer, offset);
+                Ok(())
+            });
+        }
+        // The mirror rays over the tiles holding smooth rows (issue #52).
+        if let (Some(pipeline), Some(request), Some(sky)) = (reflections, request, ambient.sky) {
+            let mut builder = graph
+                .pass("shading/reflections")
+                .image(targets.visibility, ImageAccess::Sampled(compute))
+                .image(color, ImageAccess::StorageReadWrite(compute))
+                .image(request, ImageAccess::StorageRead(compute))
+                .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+                .buffer(targets.pages, BufferAccess::ShaderRead(compute))
+                .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+                .buffer(tiles, BufferAccess::ShaderRead(compute))
+                .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute))
+                .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+                .image(sky.table, ImageAccess::Sampled(compute));
+            if let Some(ao) = ambient.occlusion {
+                builder = builder.image(ao, ImageAccess::Sampled(compute));
+            }
+            builder.run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &push(resources));
+                commands.dispatch_indirect(args_buffer, REFLECTION_LIST * 16);
                 Ok(())
             });
         }
