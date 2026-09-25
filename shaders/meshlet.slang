@@ -1493,17 +1493,17 @@ static float4 g_reflection_request;
 // levels), weighted by Schlick's Fresnel with 4 % at normal incidence and the roughness
 // bounding its rise at grazing angles. GTAO's visibility `ao` (or -1) occludes it as
 // Lagarde and de Rousiers do (Moving Frostbite to PBR, 2014). `fresnel` is the share the
-// surface reflects, which its diffuse part loses.
-float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float specular_power, float ao, float f0, out float fresnel)
+// surface reflects, which its diffuse part loses. `sky_share` scales the table's light in the
+// mirror direction `r`: the share of it the probes find there (issue #68), else 1.
+float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float3 r, float3 sky_share, float specular_power, float ao, float f0, out float fresnel)
 {
     float roughness = sqrt(sqrt(2.0 / (specular_power + 2.0))); // RenderLayer::roughness_for_power, inverted
     float nv = saturate(dot(n, view));
     fresnel = f0 + (max(1.0 - roughness, f0) - f0) * pow(1.0 - nv, 5.0);
     float4 up_table = sky[SH_COEFFICIENTS];
     float3 forward = sky[SH_COEFFICIENTS + 1].xyz;
-    float3 r = reflect(-view, n);
     // Luminance per unit of sun illuminance, times π: the resolve's units.
-    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265;
+    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265 * sky_share;
     float blend = saturate(2.0 * roughness * roughness);
     float3 environment = lerp(mirror, irradiance, blend);
     float occlusion = ao >= 0.0 ? saturate(pow(nv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao) : 1.0;
@@ -1513,7 +1513,7 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     return fresnel * occlusion * environment;
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     // The sun is far, so a half vector from the light and the camera-to-surface direction
@@ -1529,14 +1529,29 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     // instead: the sky the street's buildings leave and the light bouncing off them (issue #53).
     if (sky != nullptr)
     {
+        bool reflects = (f[0].flags & FLAG_SKY_REFLECTIONS) != 0;
+        float3 r = reflect(-view, n);
+        float3 sky_share = float3(1.0);
         float3 irradiance = sh_irradiance(sky, n);
-        if (probes != nullptr)
+        if (probes != nullptr && reflects && !traced)
+        {
+            // The sky's reflection dims as the probes' light does (issue #68): their light for
+            // a normal along the mirror direction over the open sky's there, per channel, up
+            // to 1. Lazarov rescaled reflection probes so at the normal (Black Ops II,
+            // SIGGRAPH 2013); along the mirror, a street's ground sees the buildings, not the
+            // sky above it. A mirror ray sees for itself.
+            float3 open_r = sh_irradiance(sky, r);
+            float3 toward_r;
+            irradiance = probe_irradiance_mirror(probes, world, n, view, irradiance, r, open_r, toward_r);
+            sky_share = saturate(toward_r / max(open_r, 1e-4));
+        }
+        else if (probes != nullptr)
             irradiance = probe_irradiance(probes, world, n, view, irradiance);
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
-        if ((f[0].flags & FLAG_SKY_REFLECTIONS) == 0)
+        if (!reflects)
             return albedo * (diffuse * sun + ambient) + specular * sun;
         float fresnel;
-        float3 reflection = sky_reflection(sky, irradiance, n, view, specular_power, ao, reflectance, fresnel);
+        float3 reflection = sky_reflection(sky, irradiance, n, view, r, sky_share, specular_power, ao, reflectance, fresnel);
         return albedo * (diffuse * sun + ambient) * (1.0 - fresnel) + specular * sun + reflection;
     }
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
@@ -1762,6 +1777,7 @@ struct Surface
     float ao;               // how much of the sky the surface sees (issue #48); -1: no occlusion computed
     float3 world;           // world-space position
     ProbeField* probes;     // the diffuse light's probes (probes.slang, issue #53), or null: the sky's irradiance unoccluded
+    bool traced;            // a mirror ray replaces the sky's reflection where it meets something (issues #50, #52)
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -1841,7 +1857,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -1921,7 +1937,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, ndl) + emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
 // How much of the light crossing the ice leaves towards the camera rather than elsewhere
@@ -1943,7 +1959,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(albedo, ICE_WHITE, 1.0 - exp(-mat.scattering * ICE_WHITENING_DEPTH));
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
     if (any(s.transmitted > 0.0))
     {
         // The sunlight that crossed the ice (issues #59, #61), tinted by it: the sun glows
@@ -2280,6 +2296,8 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.view = s.sky != nullptr ? normalize(f[0].camera_pos - mul(inst.model, float4(s.object_position, 1.0)).xyz) : float3(0.0, 1.0, 0.0);
     s.world = mul(inst.model, float4(s.object_position, 1.0)).xyz;
     s.probes = resolve_push.probes; // read under a sky only
+    bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
+    s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, sun_disc_point(pixel, f[0].noise_frame));
     s.transmitted = float3(0.0);
@@ -2306,8 +2324,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     }
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
-    bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
-    if (mirror_ray && resolve_push.request_image != 0xFFFFFFFFu)
+    if (s.traced)
         g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel] = g_reflection_request;
     return class_index | (mirror_ray ? REFLECT_BIT : 0u);
 }

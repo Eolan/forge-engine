@@ -193,8 +193,9 @@ Goal: the renderer skeleton every later system draws through.
    The probes ✅ (issue #53, D-036, the owner's pick of 2026-09-25): five cascades of DDGI
    probes around the camera, updated by ray queries every frame, in place of the open sky's
    light: sky occlusion at street scale and bounce light that follow the sun through `--day`,
-   1.05 ms at 1440p. Next for them: the sky's reflection occluded too (#68), probes woken for
-   moving geometry (#69), the lookup out of the resolve (#70).
+   1.05 ms at 1440p. The sky's reflection dims with them ✅ (#68: the probes' light towards
+   the mirror direction over the open sky's, 0.11 ms at 1440p). Next for them: probes woken
+   for moving geometry (#69), the lookup out of the resolve (#70).
 2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's

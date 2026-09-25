@@ -168,6 +168,9 @@ and the mirror rays) it takes 3.68 ms, against 2.91 ms in the same runs without 
 runs are 3000 frames of the loop). Its worst frames take 3.94 ms. On the static south view the
 probes cost 0.77 ms at 1600 × 900 (1.83 → 2.60) and 1.05 ms at 1440p (3.06 → 4.10), of which
 0.46 ms is the sampling: the next place to look (a pass of its own, as for the mirror rays).
+With the sky's reflection dimmed by the probes (#68: a second direction in their lookup,
+`shading/standard` 0.67 → 0.80 ms) it takes 3.81 ms, against 3.66 ms in the same runs before;
+the south view at 1440p 4.13 → 4.24 ms.
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
 next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 

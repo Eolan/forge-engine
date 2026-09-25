@@ -130,6 +130,13 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Representations for Independent Unit Vectors", *JCGT* 3(2), 2014, and their rays turn by
   Ken Shoemake's uniform random rotations ("Uniform Random Rotations", *Graphics Gems III*,
   1992).
+- **The sky's reflection dimmed by the probes.** Dimitar Lazarov, "Getting More Physical in
+  Call of Duty: Black Ops II", SIGGRAPH 2013 Physically Based Shading course: reflection
+  probes rescaled by the local irradiance over the probe's own, at the vertex normal. Unity
+  HDRP's Adaptive Probe Volumes (after Michał Drobot, "Rendering of Call of Duty: Infinite
+  Warfare", Digital Dragons 2017) read the local light along the mirror direction and let
+  the ratio only darken. Forge takes both terms along the mirror direction, the probes'
+  irradiance over the open sky's, per channel and at most 1 (issue #68); no code is used.
 - **Triplanar normal maps.** Ben Golus, "Normal Mapping for a Triplanar Shader", 2017: the
   whiteout blend the materials' normal maps use.
 - **Hex-tiling.** Morten S. Mikkelsen, "Practical Real-Time Hex-Tiling", *Journal of Computer

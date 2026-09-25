@@ -1027,3 +1027,12 @@ as the default. What the port taught:
   the probes' own passes. Removing its integer divisions barely moved it. The resolve's
   registers are the likelier cause, as they were for the mirror rays (#52), so a pass of its
   own is next.
+- **The sky's reflection needs them too** (#68). Probes that darken only the diffuse light
+  leave shaded asphalt mirroring the open sky at grazing angles. Scaling the sky's mirror
+  term by the probes' irradiance over the open sky's fixes it, if the ratio is taken towards
+  the mirror direction: at the normal, a street's ground sees the strip of sky above and
+  keeps most of the reflection. Reusing the diffuse lookup's probes and weights, the second
+  direction is one more fetch per probe, 0.11 ms at 1440p. Prior art: Lazarov's Black Ops II
+  normalisation (SIGGRAPH 2013) divides by the probe's own irradiance at the vertex normal;
+  Unity HDRP's probe volumes take the numerator along the mirror direction, by luminance and
+  clamped so it only darkens (after Drobot, Infinite Warfare, 2017, not checked here).

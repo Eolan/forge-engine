@@ -245,8 +245,11 @@ public float cascade_weight(ProbeField* field, uint c, float3 p)
 // Irradiance at `p` (unit normal `n`, `v` towards the viewer) from cascade `c`'s eight probes
 // around it, in the resolve's units (the cosine-weighted mean of the radiance the rays met, as
 // the shading multiplies it by the albedo); w is 1 when at least one of them is active, else 0.
-public float4 cascade_irradiance(ProbeField* field, uint c, float3 p, float3 n, float3 v)
+// With MIRROR, also the irradiance for a normal along `d` (`toward_d`), from the same probes
+// with the same weights: one more fetch each (issue #68).
+public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, float3 p, float3 n, float3 v, float3 d, out float3 toward_d)
 {
+    toward_d = float3(0.0);
     ProbeCascade cascade = field[0].cascades[c];
     float s = cascade.spacing;
     int3 counts = int3(field[0].counts);
@@ -263,7 +266,10 @@ public float4 cascade_irradiance(ProbeField* field, uint c, float3 p, float3 n, 
     // `probe_tile` divide, and 8 probes' divisions cost the resolve more than their fetches.
     int3 base_slot = wrap_cells(base, counts);
     uint row = uint(counts.x * counts.y);
+    float2 texel_n = (oct_encode(n) * 0.5 + 0.5) * float(IRRADIANCE_TEXELS);
+    float2 texel_d = (oct_encode(d) * 0.5 + 0.5) * float(IRRADIANCE_TEXELS);
     float3 sum = float3(0.0);
+    float3 sum_d = float3(0.0);
     float total = 0.0;
     bool found = false;
     [unroll]
@@ -295,8 +301,8 @@ public float4 cascade_irradiance(ProbeField* field, uint c, float3 p, float3 n, 
         if (r > moments.x)
         {
             float variance = abs(moments.y - moments.x * moments.x);
-            float d = r - moments.x;
-            float chebyshev = variance / (variance + d * d);
+            float gap = r - moments.x;
+            float chebyshev = variance / (variance + gap * gap);
             w *= max(0.05, chebyshev * chebyshev * chebyshev);
         }
         w = max(w, 1e-6);
@@ -304,35 +310,67 @@ public float4 cascade_irradiance(ProbeField* field, uint c, float3 p, float3 n, 
         if (w < 0.2)
             w *= w * w / (0.2 * 0.2);
         w *= tri.x * tri.y * tri.z;
+        float2 corner_texel = float2(tile * IRRADIANCE_TILE);
         float3 e = sample_image_level(field[0].irradiance_image, SAMPLER_LINEAR_CLAMP,
-            (float2(tile * IRRADIANCE_TILE) + 1.0 + (oct_encode(n) * 0.5 + 0.5) * float(IRRADIANCE_TEXELS)) * field[0].irradiance_texel, 0.0).rgb;
+            (corner_texel + 1.0 + texel_n) * field[0].irradiance_texel, 0.0).rgb;
         // Blend the square roots: a leak from a bright probe weighs less.
         sum += w * sqrt(max(e, 0.0));
+        if (MIRROR != 0)
+        {
+            float3 e_d = sample_image_level(field[0].irradiance_image, SAMPLER_LINEAR_CLAMP,
+                (corner_texel + 1.0 + texel_d) * field[0].irradiance_texel, 0.0).rgb;
+            sum_d += w * sqrt(max(e_d, 0.0));
+        }
         total += w;
     }
     if (!found || total <= 0.0)
         return float4(0.0);
     float3 root = sum / total;
+    if (MIRROR != 0)
+    {
+        float3 root_d = sum_d / total;
+        toward_d = root_d * root_d;
+    }
     return float4(root * root, 1.0);
 }
 
-// Irradiance at `p` from the finest cascades that cover it, finer first, each over what the
-// finer ones left; `open_sky` (the sky's irradiance at `n`, unoccluded) beyond them all.
-public float3 probe_irradiance(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky)
+// `probe_irradiance`, and with MIRROR the same for a normal along `d` (`toward_d`, over
+// `open_sky_d`).
+float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky, float3 d, float3 open_sky_d, out float3 toward_d)
 {
     float3 e = float3(0.0);
+    float3 e_d = float3(0.0);
     float covered = 0.0;
     for (uint c = 0; c < field[0].cascade_count && covered < 0.999; c++)
     {
         float w = cascade_weight(field, c, p);
         if (w <= 0.0)
             continue;
-        float4 ce = cascade_irradiance(field, c, p, n, v);
+        float3 ce_d;
+        float4 ce = cascade_irradiance<MIRROR>(field, c, p, n, v, d, ce_d);
         if (ce.w <= 0.0)
             continue;
         float share = (1.0 - covered) * w;
         e += share * ce.rgb;
+        e_d += share * ce_d;
         covered += share;
     }
+    toward_d = e_d + (1.0 - covered) * open_sky_d;
     return e + (1.0 - covered) * open_sky;
+}
+
+// Irradiance at `p` from the finest cascades that cover it, finer first, each over what the
+// finer ones left; `open_sky` (the sky's irradiance at `n`, unoccluded) beyond them all.
+public float3 probe_irradiance(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky)
+{
+    float3 unused;
+    return probe_lookup<0>(field, p, n, v, open_sky, n, open_sky, unused);
+}
+
+// `probe_irradiance`, and the irradiance the probes find for a normal along the mirror
+// direction `r` (`toward_r`, over the sky's unoccluded `open_sky_r` there), from the same
+// probes: what dims the sky's reflection in a street (issue #68).
+public float3 probe_irradiance_mirror(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky, float3 r, float3 open_sky_r, out float3 toward_r)
+{
+    return probe_lookup<1>(field, p, n, v, open_sky, r, open_sky_r, toward_r);
 }

@@ -145,7 +145,7 @@ colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H*
 `--no-taa`, `--no-shadows`, `--no-sky-light`, `--no-ao`, `--ao-radius M`, `--show-ao`, `--no-probes`, `--show-gi`, `--probe-rays N`, `--probe-cascades N`, `--no-reflections`, `--no-ray-reflections`, `--hard-shadows`, `--no-lod`, `--no-occlusion`, `--lod-error PX`,
 `--sw-raster auto|on|off`, `--ev100 EV`, `--day S` (a day in S seconds, automatic exposure),
 `--view x,y,z,yaw,pitch` (start the camera there, e.g. in a street), `--force-fallback`. At
-1440p the flight at 300 m/s runs at 3.68 ms of GPU with everything on (2.91 without the
+1440p the flight at 300 m/s runs at 3.81 ms of GPU with everything on (2.91 without the
 probes). Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
 
 ### `task-bench` — job system

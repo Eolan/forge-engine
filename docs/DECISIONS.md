@@ -1121,6 +1121,9 @@ NVIDIA's notice and terms, unlike the workspace's MIT/Apache.
   irradiance (#47) takes over beyond the coarsest.
 - **What it replaces:** the open sky's irradiance on the diffuse side, and the rough
   reflections' blur of it. GTAO stays on top for the contacts.
+- **What it dims** (#68): the sky in the reflection of the rows without mirror rays, by the
+  probes' irradiance towards the mirror direction over the open sky's there (per channel, at
+  most 1), from the same probes and weights as the diffuse lookup.
 
 **One driver note:** a signed remainder of a negative number came out as the unsigned one on
 the RTX 5070 Ti's driver, misplacing probes by 16 cells. The code takes remainders of
@@ -1134,7 +1137,7 @@ positive numbers only (`wrap_cells`).
 - **Identity:** `--no-probes` gives the previous build's pixels.
 
 **Left for later** (issues filed):
-- the sky's reflection occluded by the probes (#68);
+- the sky's reflection occluded by the probes (#68, done: 0.11 ms at 1440p);
 - probes woken again when geometry moves (doors, vehicles, rebuilt blocks; #69);
 - the lookup in a pass of its own instead of the resolve's registers (#70);
 - the T0 updater (SDF marches instead of rays) for GPUs without ray queries;

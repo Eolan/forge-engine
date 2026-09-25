@@ -26,6 +26,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Coated glass: a reflectance per row, the towers as curtain walls | #56 | ✅ no cost |
 | A day over the city: the sun crosses the sky, the exposure follows | #57 | ✅ `--day S`, 0.016 ms of metering |
 | Light from the street: probes updated by ray queries (DDGI) | #53 | ✅ five cascades around the camera, 0.77 ms at 900p, 1.05 ms at 1440p |
+| The sky's reflection dimmed in the streets by the probes | #68 | ✅ 0.11 ms at 1440p |
 
 ```
 cargo run --release -p city-blocks
@@ -76,6 +77,60 @@ The city starts through `forge_app::run_loading`, like the ballad
 - **Shaders compile ahead:** after a shader change, the city's entries in
   `shader-cache/city-blocks.entries` compile behind the loading screen too.
 - **Unchanged:** every capture, the frame numbering and the profile.
+
+## The sky's reflection in the streets (issue #68, 2026-09-25)
+
+The probes (#53, below) darkened the sky's light in the streets, but not its reflection. So
+asphalt in shadow still mirrored the open sky at grazing angles: a blue sheen, with sparkles
+where its normal map tilts the reflection towards the bright horizon.
+
+Now the reflection dims as the probes' light does:
+- **The mirror direction.** Each pixel's probe lookup also reads the probes' irradiance for a
+  normal along the mirror direction, from the same eight probes with the same weights: one
+  more fetch per probe.
+- **The share.** That light over the open sky's in the same direction, per channel and at
+  most 1, scales the sky in the reflection. It is 1 in the open and small along a street,
+  where the buildings hide the horizon. Lazarov rescaled Black Ops II's reflection probes by
+  the local irradiance at the normal, and Unity HDRP's probe volumes read it along the mirror
+  direction and only darken (CREDITS.md).
+- **The glass** keeps its mirror rays (#50): they see the buildings for themselves.
+
+![The two street views, before and after: the asphalt in shadow loses the open sky's blue sheen and most of its sparkles, while the asphalt in the sun keeps its look](images/city-blocks-probe-reflection.png)
+
+**The normal instead of the mirror direction.** The same share taken at the surface's normal
+would cost nothing, since the lookup computes both of its terms already. But at grazing
+angles the normal looks up at the strip of sky between the roofs, not along the street, and
+most of the sparkles stayed.
+
+**Cost** (RTX 5070 Ti), GPU ms a frame, the mean of two alternating runs each:
+
+| | before | after | `shading/standard` |
+|---|---|---|---|
+| south view, 1600 × 900 | 2.59 | 2.62 | 0.28 → 0.34 |
+| south view, 2560 × 1440 | 4.13 | 4.24 | 0.72 → 0.87 |
+| street view, 2560 × 1440 | 3.43 | 3.49 | 0.36 → 0.44 |
+| flight at 300 m/s, 2560 × 1440 | 3.66 | 3.81 | 0.67 → 0.80 |
+
+The buildings' pass takes the cost, and the ground's (`shading/layered`) hardly changes.
+Moving the lookup out of the resolve (#70) would take both directions with it.
+
+**Stability:** pixels changing by more than two levels, with a static camera and TAA on:
+
+| | frame 300 → 301 | frame 300 → 332 (same jitter) |
+|---|---|---|
+| south view, before | 2.04 % | 0.18 % |
+| south view, after | 2.05 % | 0.18 % |
+| street view, before | 1.48 % | 0.026 % |
+| street view, after | 1.31 % | 0.024 % |
+
+The street view now changes less from frame to frame: the sparkles were most of what moved
+on its asphalt.
+
+**Checks:**
+- With `--no-probes` every capture of the city, mesh and fallback, streamed and in the
+  gallery, is identical to the previous build, as are the ballad and the bench.
+- Mesh against fallback stays at 0 with the probes on: the city, its orbit and the gallery.
+- Synchronization validation is silent on every demo and path.
 
 ## Light from the street: probes (issue #53, 2026-09-25)
 
@@ -166,7 +221,7 @@ city-blocks --view=-8,1.7,1135,-50,10
 
 **Left for later** (issues filed):
 - **Reflections.** The probes darken the sky's light but not its reflection, so shaded
-  asphalt still mirrors the open sky (#68).
+  asphalt still mirrors the open sky (#68, done: see above).
 - **Moving geometry.** A settled probe does not move again, so doors and vehicles will need
   their probes woken (#69).
 - **Sampling cost.** The lookup could move out of the resolve into a pass of its own (#70).
