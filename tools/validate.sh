@@ -14,13 +14,13 @@ cd "$root"
 validate() {
   echo "== $*"
   FORGE_SYNC_VALIDATION=1 "$@" --validate 2>&1 | sed 's/\x1b\[[0-9;]*m//g' |
-    grep -E "VUID|SYNC-|Validation (Error|Warning)|ERROR|panicked|mip check" | grep -v "GOG" |
+    grep -E "VUID|SYNC-|Validation (Error|Warning)|ERROR|panicked|mip check|tone check" | grep -v "GOG" |
     cut -c1-300 | sort | uniq -c | head -n 8
 }
 
 for path in "" --force-fallback; do
   validate "$bin/asteroids$exe" --frames 90 $path
-  validate "$bin/meshlets$exe" --mip-check --frames 60 $path
+  validate "$bin/meshlets$exe" --mip-check --tone-check --frames 60 $path
   validate "$bin/city-blocks$exe" --frames 90 $path
   validate "$bin/city-blocks$exe" --stream-pool 0 --frames 60 $path
   validate "$bin/city-blocks$exe" --gallery --frames 60 $path

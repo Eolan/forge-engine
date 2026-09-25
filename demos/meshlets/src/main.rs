@@ -21,6 +21,7 @@ use forge_render::SwRaster;
 use forge_render::material::stock;
 use forge_render::meshlet::DrawParams;
 use forge_render::mipcheck::MipCheck;
+use forge_render::tonecheck::ToneCheck;
 use forge_render::{
     AmbientLight, CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer,
     MeshletScene, MeshletSceneBuilder, Tonemap, exposure_from_ev100,
@@ -35,6 +36,10 @@ struct Args {
     /// derivatives against a fragment shader's (issue #20); the result is logged at exit.
     #[arg(long)]
     mip_check: bool,
+    /// Also run the ACES 2.0 check each frame: the GPU's table and per-pixel transform over
+    /// fixed colours against the CPU's port (issue #76); the result is logged at exit.
+    #[arg(long)]
+    tone_check: bool,
     /// Instances per side of the grid (total = side × side × 2 layers).
     #[arg(long, default_value_t = 24)]
     side: u32,
@@ -120,11 +125,13 @@ struct Bench {
     cpu_ms: Vec<f64>,
     title_updates: u32,
     mip_check: Option<MipCheck>,
+    tone_check: Option<ToneCheck>,
 }
 
 impl Bench {
     fn new(ctx: &mut Context, args: Args) -> Result<Self> {
         let args_mip_check = args.mip_check;
+        let args_tone_check = args.tone_check;
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
         let tonemap = args.tonemap;
@@ -167,6 +174,11 @@ impl Bench {
             } else {
                 None
             },
+            tone_check: if args_tone_check {
+                Some(ToneCheck::new(&ctx.device, &ctx.shaders)?)
+            } else {
+                None
+            },
         })
     }
 
@@ -199,6 +211,28 @@ impl Drop for Bench {
                     mean_levels = result.mean_levels,
                     pixels = result.pixels,
                     "mip check FAILED: a pixel is a level or more from the fragment shader's"
+                );
+            }
+        }
+        if let Some(check) = &self.tone_check {
+            let result = check.result();
+            let [p50, p99, p999, max] = result.table_error;
+            let table_error = format!("p50 {p50:.3}, p99 {p99:.3}, p99.9 {p999:.3}, max {max:.2}");
+            if result.passes() {
+                tracing::info!(
+                    analytic_codes = %format_args!("{:.3}", result.analytic),
+                    table_codes = %format_args!("{:.3}", result.table),
+                    %table_error,
+                    colours = result.colours,
+                    "tone check passed: both ACES 2.0 paths agree with the CPU transform"
+                );
+            } else {
+                tracing::error!(
+                    analytic_codes = result.analytic,
+                    table_codes = result.table,
+                    %table_error,
+                    colours = result.colours,
+                    "tone check FAILED: an ACES 2.0 path is a code or more from the CPU's"
                 );
             }
         }
@@ -320,6 +354,9 @@ impl Demo for Bench {
         );
         if let Some(check) = &self.mip_check {
             check.record(&mut frame.graph, frame.slot, extent);
+        }
+        if let Some(check) = &self.tone_check {
+            check.record(&mut frame.graph);
         }
         self.display
             .draw(&mut frame.graph, color, frame.target, extent, self.tonemap);

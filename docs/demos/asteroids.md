@@ -820,32 +820,62 @@ every nine seconds, never faster than half a stop per second.
 
 ![The capture sequence behind the curve: one frame every 7.5 s of the path, ACES](images/asteroids-exposure-sequence.png)
 
-**Tone curves.** **G** cycles ACES → Khronos PBR Neutral → AgX (`--tonemap`). The curve is
-applied in the TAA resolve, which writes the HDR history and the display image in one pass;
-the bench uses the stand-alone display pass. The same frame 600 (`--fixed-step`, TAA on,
-automatic exposure), the golden captures of the three curves:
+**Tone curves.** **G** cycles ACES → Khronos PBR Neutral → ACES 2.0 → AgX (`--tonemap`).
+The curve is applied in the TAA resolve, which writes the HDR history and the display image
+in one pass; the bench uses the stand-alone display pass. The same frame 600
+(`--fixed-step`, TAA on, automatic exposure), the golden captures of the four curves
+(recaptured 2026-09-25 with ACES 2.0, issue #76):
 
-| ACES (Hill's fit of the 1.x RRT + ODT), the ballad's default | Khronos PBR Neutral | AgX |
-|---|---|---|
-| ![ACES](images/asteroids-hdr-aces.png) | ![PBR Neutral](images/asteroids-hdr-neutral.png) | ![AgX](images/asteroids-hdr-agx.png) |
+| ACES (Hill's fit of the 1.x RRT + ODT), the ballad's default | ACES 2.0 (SDR, 100 nits) |
+|---|---|
+| ![ACES](images/asteroids-hdr-aces.png) | ![ACES 2.0](images/asteroids-hdr-aces2.png) |
+| **Khronos PBR Neutral** | **AgX** |
+| ![PBR Neutral](images/asteroids-hdr-neutral.png) | ![AgX](images/asteroids-hdr-agx.png) |
 
 ACES is the default here because its toe keeps space black and the lit rocks contrasted;
 PBR Neutral keeps base colours (the nebula's browns and purples show), which is what it is
 for; AgX, the engine's default elsewhere and the most hue-safe, spends the display range on
-16.5 stops and lifts this mostly dark scene to a flat grey. Middle grey lands at 0.106
-(ACES), 0.14 (Neutral) and 0.21 (AgX) of display white; `forge_render::display` pins these
-in tests against CPU mirrors of the shader.
+16.5 stops and lifts this mostly dark scene to a flat grey. ACES 2.0 sits between the fit
+and Neutral: less contrast and saturation than the fit, a softer roll-off around the sun,
+the same black space. Middle grey lands at 0.106 (ACES), 0.100 (ACES 2.0), 0.14 (Neutral)
+and 0.21 (AgX) of display white; `forge_render::display` pins these in tests against CPU
+mirrors of the shader.
 
 **Checks.** Occlusion, cone and `--show-culled` A/B at 0 pixels without TAA; occlusion on
 vs off with TAA and automatic exposure at frame 600: 0 pixels (the histograms, hence the
-exposures, are identical); two runs of the golden capture: bit-identical. Validation and
-synchronization validation silent with each curve and with a fixed exposure. The goldens
-are checked with:
+exposures, are identical). Validation and synchronization validation silent with each curve
+and with a fixed exposure. Two runs of the golden capture were bit-identical in 2026-09-24;
+since #71 was found, the TAA frame can differ by a few hundred pixels between runs, so the
+goldens are checked with ꟻLIP (#75):
 
 ```
 cargo run --release -p asteroids -- --fixed-step --frames 601 --capture aces.png --capture-frame 600
-cargo run --release -p imgdiff -- --tolerance 0 docs/demos/images/asteroids-hdr-aces.png aces.png
+cargo run --release -p imgdiff -- docs/demos/images/asteroids-hdr-aces.png aces.png --max-flip 0.15
 ```
+
+**ACES 2.0 (issue #76).** The Academy's current output transform, the SDR preset (100 nits,
+Rec.709), ported from OpenColorIO ([`crates/forge-render/src/aces2.rs`](../../crates/forge-render/src/aces2.rs)):
+- **Against the reference.** OCIO's own test values pass: 35 colours at 1000 nits in P3
+  within 1e-5, and the SDR chain within 1e-4.
+- **The table.** The GPU samples a 65³ table baked on the CPU at start-up (10 ms), in
+  2 fetches. The per-pixel transform in Slang is kept as the reference
+  (`--tonemap aces2-analytic`).
+- **The tone check.** `meshlets --tone-check` runs both GPU paths over 4096 colours:
+
+  | Check | Largest difference, 8-bit codes |
+  |---|---|
+  | GPU per-pixel against the CPU port | 0.002 |
+  | GPU table against the CPU reading the same table | 0.14 |
+  | Table against the transform | p50 0.11, p99 1.5, p99.9 5.6, max 13.8 |
+
+  The largest errors are in saturated blues near the gamut's edge, where ACES 2.0's gamut
+  compression bends sharply. Tetrahedral interpolation, or a 129³ table, only trims them
+  (to 5.9 and 1.8 at p99.9).
+- **On real frames** the table stays within 1 level of the per-pixel transform (2 in one
+  meshlets frame). ꟻLIP means are 0.003–0.012 and the largest value 0.046, over the
+  ballad with and without TAA, the city, its orbit, the gallery and the bench.
+- **Cost at 2560 × 1440.** The ballad's TAA resolve takes 0.155–0.158 ms with the ACES fit
+  and 0.163–0.169 with the ACES 2.0 table. The per-pixel transform takes 0.253–0.260.
 
 **Cost.** The histogram group (clear, count, copy, host read) is 0.02 ms of GPU; the frame
 went from 0.30 to 0.30–0.31 ms over two 6000-frame runs. A first version counted straight

@@ -267,17 +267,22 @@ Which check applies:
 1. **The image must not change** (the culling A/B harness, mesh against fallback, a
    refactor, a speed-up): 0 px, as now.
 2. **Pixels may move where nobody would see it** (an instance order, TAA history rounding,
-   #71's flake): proposed pass at the default 67 pixels per degree, every pixel below 0.15
-   and the mean below 0.003 (`imgdiff --max-flip 0.15 --max-flip-mean 0.003`). Measured:
-   the city's new instance order (#38) peaks at 0.053, #71's flake at 0.061–0.103 (means up
-   to 0.0015). A faint one-pixel line reaches 0.17 and a 3×3 speck of 20 levels 0.26.
+   #71's flake, a baked table): proposed pass at the default 67 pixels per degree, every
+   pixel below 0.15 and the mean below 0.02 (`imgdiff --max-flip 0.15 --max-flip-mean
+   0.02`). Measured: the city's new instance order (#38) peaks at 0.053, #71's flake at
+   0.06–0.12 (means up to 0.0015). ACES 2.0's table against its per-pixel transform (#76)
+   is 1–2 levels everywhere: means 0.003–0.012, peaks up to 0.046. A faint one-pixel line
+   reaches 0.17 and a 3×3 speck of 20 levels 0.26. (Revised in #76: the first proposal's
+   mean of 0.003 failed the ACES 2.0 table, which nobody can tell apart.)
 3. **The look is meant to change** (a tone curve, a sampler, AO): no threshold. The report
    gives the mean, p99, largest value and error map, and the owner judges. Measured: GTAO on
    against off, means 0.011–0.026 and peaks 0.50–0.82; AgX against ACES, mean 0.37.
 4. **Another GPU** (#39, #67): thresholds after the first captures there.
 
-ꟻLIP's mean is its usual pooled number and is kept for that. The proposed check leans on the
-largest value. The measurements are in `docs/PROCESS.md`, "The perceptual check".
+ꟻLIP's mean is its usual pooled number and is kept for that. It does not separate the
+classes: GTAO's means overlap the ACES 2.0 table's. The proposed check leans on the largest
+value, with the mean as a guard against a shift over the whole frame. The measurements are
+in `docs/PROCESS.md`, "The perceptual check".
 
 ## D-018 — Memory and streaming ✅ (2026-09-24)
 
@@ -387,8 +392,14 @@ compensation and a clamp, and snaps on the first metered frame. The adaptation r
 the CPU (unit-tested, deterministic under `--fixed-step`); a GPU-resident loop is the
 option if the two-frame latency ever matters. Temporal filters rescale their history by
 the ratio of exposures. **The display transform is data** chosen at run time: AgX (engine
-default, hue-safe), ACES as Hill's fit of the 1.x RRT + sRGB ODT (ACES 2.0's output
-transform is not implemented), Khronos PBR Neutral; one Slang module serves the TAA resolve
+default, hue-safe), ACES as Hill's fit of the 1.x RRT + sRGB ODT, Khronos PBR Neutral, and
+**ACES 2.0's output transform** (issue #76, 2026-09-25: the SDR 100-nit Rec.709 preset,
+ported from OpenColorIO 2.5.2 and matching its test values to 1e-5). ACES 2.0 runs through a
+65³ table baked on the CPU at start-up (10 ms), sampled trilinearly on a log2 shaper. On
+real frames the table stays within 1–2 levels of the per-pixel transform, ꟻLIP largest
+0.046; it adds 0.007 ms to the ballad's resolve at 1440p. The per-pixel transform stays as
+the reference (`--tonemap aces2-analytic`, +0.10 ms), and `meshlets --tone-check` compares
+both GPU paths with the CPU port. One Slang module serves the TAA resolve
 (history and display image in one pass) and a stand-alone display pass, with CPU mirrors
 under test. Emissives that cannot be physical at the same exposure (the ballad's stars and
 nebula, eight orders of magnitude below a sunlit rock in reality) are authored in units of

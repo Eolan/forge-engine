@@ -27,7 +27,7 @@ crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedur
 crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indirect-count fallback, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
                       physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
-shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, tonemap, display, overlay, mipcheck)
+shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, aces2, tonemap, display, overlay, mipcheck, tonecheck)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
@@ -68,7 +68,7 @@ the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
 is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
-what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **V** the belt's dust, **Y** translucent ice, **G** tone curve (ACES → PBR Neutral →
+what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **V** the belt's dust, **Y** translucent ice, **G** tone curve (ACES → PBR Neutral → ACES 2.0 →
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
 (built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
@@ -79,7 +79,7 @@ untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-du
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
 sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
-`--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral`, `--ev100 EV` (fixed
+`--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral|aces2|aces2-analytic`, `--ev100 EV` (fixed
 exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (128 000),
 `--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
 of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance`,
@@ -119,10 +119,11 @@ occlusion, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold, **
 colours, **R** software rasteriser (auto → on → off), **H** tint what it drew, **Tab**
 wireframe, **G** tone curve. Options: `--side N`, `--detail N`, `--roughness R`,
 `--no-occlusion`, `--lod-error PX`, `--no-lod`, `--orbit` (scripted motion), `--overlay`,
-`--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral` (AgX), `--force-fallback`
+`--ev100 EV` (fixed exposure, 15), `--tonemap agx|aces|neutral|aces2|aces2-analytic` (AgX), `--force-fallback`
 (the indirect-count path of GPUs without mesh shaders), `--sw-raster auto|on|off`,
 `--sw-raster-area PX`, `--show-raster`, `--instance-occlusion auto|on|off`, `--no-instance-cells`, `--mip-check` (the resolve's texture level of detail
-against a fragment shader's, logged at exit).
+against a fragment shader's, logged at exit), `--tone-check` (ACES 2.0's GPU table and
+per-pixel transform against the CPU's port, logged at exit).
 Numbers and the correctness proof: [docs/demos/meshlets.md](docs/demos/meshlets.md).
 
 ### `city-blocks` — the Phase 1 closing demo, in steps

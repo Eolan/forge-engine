@@ -4,20 +4,22 @@
 //! The tone curve is data chosen at run time ([`Tonemap`]), never baked into lighting: AgX
 //! is the engine default (hue-safe), the ACES fit the contrasty film look (the ballad uses
 //! it: its toe keeps space black), Khronos PBR Neutral the view that keeps base colours for
-//! material checks. The ballad applies it inside its TAA resolve (one pass writes the HDR
-//! history and the display image); [`Display`] is the stand-alone pass for paths without
-//! temporal filtering. The CPU functions below mirror the shader and pin its behaviour in
-//! tests.
+//! material checks, ACES 2.0 the Academy's current output transform ([`crate::aces2`]). The
+//! ballad applies it inside its TAA resolve (one pass writes the HDR history and the display
+//! image); [`Display`] is the stand-alone pass for paths without temporal filtering. The CPU
+//! functions below mirror the shader and pin its behaviour in tests.
 
 use std::str::FromStr;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Device, FrameGraph, FullscreenPipelineDesc, ImageAccess, ImageHandle, Pipeline, Result,
-    ShaderCompiler, ShaderStage, vk,
+    Buffer, Device, FrameGraph, FullscreenPipelineDesc, Image, ImageAccess, ImageDesc, ImageHandle,
+    MemoryCategory, Pipeline, Result, SampledImageId, ShaderCompiler, ShaderStage, vk,
 };
 use glam::Vec3;
+
+use crate::aces2;
 
 /// A tone curve (index as in `tonemap.slang`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -29,11 +31,22 @@ pub enum Tonemap {
     Aces,
     /// Khronos PBR Neutral: base colours unchanged up to ~0.76, highlights compressed.
     PbrNeutral,
+    /// ACES 2.0's output transform for a 100-nit SDR Rec.709 display, through its baked
+    /// 65³ table: fewer hue skews than ACES 1, bright saturated colours go to white.
+    Aces2,
+    /// The same transform evaluated per pixel: the reference the table is measured against
+    /// (not in the cycle; `--tonemap aces2-analytic`).
+    Aces2Analytic,
 }
 
 impl Tonemap {
     /// Every curve, in cycling order.
-    pub const ALL: [Tonemap; 3] = [Tonemap::AgX, Tonemap::Aces, Tonemap::PbrNeutral];
+    pub const ALL: [Tonemap; 4] = [
+        Tonemap::AgX,
+        Tonemap::Aces,
+        Tonemap::PbrNeutral,
+        Tonemap::Aces2,
+    ];
 
     /// The shader's index.
     pub fn index(self) -> u32 {
@@ -41,6 +54,8 @@ impl Tonemap {
             Tonemap::AgX => 0,
             Tonemap::Aces => 1,
             Tonemap::PbrNeutral => 2,
+            Tonemap::Aces2 => 3,
+            Tonemap::Aces2Analytic => 4,
         }
     }
 
@@ -50,6 +65,8 @@ impl Tonemap {
             Tonemap::AgX => "agx",
             Tonemap::Aces => "aces",
             Tonemap::PbrNeutral => "neutral",
+            Tonemap::Aces2 => "aces2",
+            Tonemap::Aces2Analytic => "aces2-analytic",
         }
     }
 
@@ -59,6 +76,8 @@ impl Tonemap {
             Tonemap::AgX => "AgX",
             Tonemap::Aces => "ACES (Hill fit)",
             Tonemap::PbrNeutral => "Khronos PBR Neutral",
+            Tonemap::Aces2 => "ACES 2.0 (SDR, table)",
+            Tonemap::Aces2Analytic => "ACES 2.0 (SDR, per pixel)",
         }
     }
 
@@ -69,12 +88,16 @@ impl Tonemap {
     }
 
     /// CPU mirror of `tonemap()` in the shader: linear display colour in [0, 1] (before the
-    /// sRGB encoding).
+    /// sRGB encoding). Both ACES 2.0 curves give the transform itself; the table's error
+    /// against it is measured in [`crate::aces2`].
     pub fn apply(self, color: Vec3) -> Vec3 {
         let display = match self {
             Tonemap::AgX => agx(color),
             Tonemap::Aces => aces(color),
             Tonemap::PbrNeutral => pbr_neutral(color),
+            Tonemap::Aces2 | Tonemap::Aces2Analytic => {
+                Vec3::from(aces2::sdr().apply(color.max(Vec3::ZERO).to_array()))
+            }
         };
         display.clamp(Vec3::ZERO, Vec3::ONE)
     }
@@ -86,8 +109,78 @@ impl FromStr for Tonemap {
     fn from_str(text: &str) -> std::result::Result<Self, Self::Err> {
         Self::ALL
             .into_iter()
+            .chain([Tonemap::Aces2Analytic])
             .find(|t| t.name().eq_ignore_ascii_case(text))
-            .ok_or_else(|| format!("unknown tone curve {text:?}: agx, aces or neutral"))
+            .ok_or_else(|| {
+                format!("unknown tone curve {text:?}: agx, aces, neutral, aces2 or aces2-analytic")
+            })
+    }
+}
+
+/// What the ACES 2.0 curves read on the GPU (issue #76): the baked table, a bindless
+/// texture, and the per-pixel transform's parameters and tables in a buffer. Both are
+/// written once, here.
+pub struct ToneTables {
+    device: Arc<Device>,
+    _lut: Image,
+    lut: SampledImageId,
+    params: Buffer,
+}
+
+/// Mirrors `ToneTables` in `tonemap.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct ToneTablesPush {
+    lut: u32,
+    pad: u32,
+    aces2: u64,
+}
+
+impl ToneTables {
+    /// Uploads the table (baked on first use, about 10 ms) and the parameters.
+    pub fn new(device: &Arc<Device>) -> Result<Self> {
+        let size = aces2::LUT_SIZE;
+        let lut = device.create_image_with_data(
+            ImageDesc {
+                width: size * size,
+                height: size,
+                format: vk::Format::R16G16B16A16_SFLOAT,
+                usage: vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+                name: "ACES 2.0 table",
+            },
+            aces2::shared_lut_texels(),
+        )?;
+        let sampled =
+            device.register_sampled_image(lut.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let params = device.create_buffer_with_data(
+            &aces2::sdr().gpu_params(),
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryCategory::Textures,
+            "ACES 2.0 parameters",
+        )?;
+        Ok(Self {
+            device: Arc::clone(device),
+            _lut: lut,
+            lut: sampled,
+            params,
+        })
+    }
+
+    /// The fields of a push constant block.
+    pub fn push(&self) -> ToneTablesPush {
+        ToneTablesPush {
+            lut: self.lut.0,
+            pad: 0,
+            aces2: self.params.address(),
+        }
+    }
+}
+
+impl Drop for ToneTables {
+    fn drop(&mut self) {
+        self.device.release_sampled_image(self.lut);
     }
 }
 
@@ -181,12 +274,14 @@ struct DisplayPush {
     curve: u32,
     encode_srgb: u32,
     pad: u32,
+    tables: ToneTablesPush,
 }
 
 /// The stand-alone display pass.
 pub struct Display {
     pipeline: Pipeline,
     encode_srgb: bool,
+    tables: ToneTables,
 }
 
 impl Display {
@@ -219,6 +314,7 @@ impl Display {
         Ok(Self {
             pipeline,
             encode_srgb: !format_encodes_srgb(output_format),
+            tables: ToneTables::new(device)?,
         })
     }
 
@@ -234,6 +330,7 @@ impl Display {
     ) {
         let pipeline = &self.pipeline;
         let encode_srgb = u32::from(self.encode_srgb);
+        let tables = self.tables.push();
         graph
             .pass("post/display transform")
             .image(
@@ -264,6 +361,7 @@ impl Display {
                         curve: curve.index(),
                         encode_srgb,
                         pad: 0,
+                        tables,
                     },
                 );
                 commands.draw(3, 1);

@@ -47,6 +47,7 @@ in. CI checks the crate list.
 | [Streamline](https://github.com/NVIDIA-RTX/Streamline) and DLSS | NVIDIA | DLSS as an option next to TAA (`dlss` feature, D-024) | Streamline: MIT, parts under NVIDIA's Nsight SDK licences; DLSS: NVIDIA RTX SDKs licence |
 | [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |
 | [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff` | MIT OR Apache-2.0 |
+| [OpenColorIO](https://github.com/AcademySoftwareFoundation/OpenColorIO) | Contributors to the OpenColorIO Project (Academy Software Foundation) | ACES 2.0's output transform, ported from its ACES2 code, v2.5.2, with its notice kept (`crates/forge-render/src/aces2.rs`, `shaders/aces2.slang`, issue #76) | BSD-3-Clause |
 | [ꟻLIP](https://github.com/NVlabs/flip) | Pontus Ebelin (formerly Andersson), Jim Nilsson, Tomas Akenine-Möller, Magnus Oskarsson, Kalle Åström and Mark D. Fairchild (NVIDIA, Lund University, RIT) | LDR-ꟻLIP in `imgdiff`, ported from `FLIP.h` v1.7 with its notice kept (issue #75); its magma colour map is matplotlib's, by Nathaniel J. Smith and Stéfan van der Walt (CC0) | BSD-3-Clause |
 | [xxhash-rust](https://github.com/DoumanAsh/xxhash-rust), after [xxHash](https://github.com/Cyan4973/xxHash) | Douman; the XXH3 algorithm by Yann Collet | cache keys for shaders and cooked meshes | BSL-1.0 |
 
@@ -156,6 +157,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - ACES 1.x: the Academy of Motion Picture Arts and Sciences, through Stephen Hill's fit
     (from BakingLab, MIT).
   - PBR Neutral: the Khronos Group.
+  - ACES 2.0's output transform: the Academy's ACES project (the CTL, `aces-aswf/aces-core`,
+    Apache-2.0). Its tonescale is Daniele Siragusano's, and its appearance model a
+    simplified form of Luke Hellwig and Mark D. Fairchild's 2022 revision of CAM16. Forge
+    ports OpenColorIO's implementation (see the table above) and checks it against OCIO's
+    test values (issue #76).
 - **Bloom.** Jorge Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare",
   SIGGRAPH 2014: the downsample and upsample chain, and its firefly weighting.
 - **TAA.**

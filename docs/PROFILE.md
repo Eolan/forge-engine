@@ -87,6 +87,18 @@ exposure (EV100, target, compensation, curve) the last.
   of a 16-segment march per pixel, and the stars are no longer worked out behind its ground.
   The sky pass facing a 50° planet goes 0.333 → 0.105 ms, and facing the ballad's 18° planet
   0.159 → 0.132. Along the path it stays 0.117 ms.
+- ACES 2.0 (#76), per curve at 1440p (1500 frames, three alternating runs each), in
+  `temporal/TAA resolve`:
+
+  | Curve | TAA resolve (ms) |
+  |---|---|
+  | ACES fit | 0.155–0.158 |
+  | AgX | 0.161–0.165 |
+  | ACES 2.0, baked table (2 fetches) | 0.163–0.169 |
+  | ACES 2.0, per pixel (reference) | 0.253–0.260 |
+
+  The bench's `post/display transform` at 1600 × 900 takes 0.011 ms with the ACES fit,
+  0.013 with the table and 0.055 per pixel.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

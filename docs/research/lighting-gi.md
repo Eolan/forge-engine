@@ -1135,3 +1135,15 @@ TIFFs: `aces-output/tests/images/README.md`). OCIO's own tolerances are 1e-5 on 
 - Compare 33³ against 65³ with ꟻLIP (#75).
 - Credit the ACES Project (Apache-2.0), OpenColorIO (BSD-3-Clause), Hellwig and Fairchild 2022,
   and Siragusano's tonescale.
+
+*Outcome (2026-09-25, #76):* built as planned, with three differences.
+- The table is baked on the CPU (10 ms for 65³), not by a compute dispatch.
+- The sizes were compared on the CPU over 400 000 colours, in 8-bit codes against the
+  transform, trilinear then tetrahedral. At 33³: p99 4.2 and 3.1. At 65³: p99 1.5 and 1.1.
+  At 129³: p99 0.47 and 0.34. The tail stays in saturated blues at every size: at 65³,
+  p99.9 5.9 and max 15.
+- On real frames ꟻLIP settled it. The 65³ table is within 1–2 levels of the per-pixel
+  transform, largest ꟻLIP 0.046.
+
+The agent's cost estimate held: the per-pixel transform adds 0.10 ms at 1440p, the table
+0.007 ms. Details are in `docs/demos/asteroids.md`, "ACES 2.0".

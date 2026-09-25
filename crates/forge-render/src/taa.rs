@@ -22,7 +22,7 @@ use forge_gpu::{
 };
 use glam::{DMat4, Mat4, Vec2};
 
-use crate::display::{Tonemap, format_encodes_srgb};
+use crate::display::{ToneTables, ToneTablesPush, Tonemap, format_encodes_srgb};
 
 /// Colour format of the offscreen scene target and the history.
 pub const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -96,6 +96,7 @@ struct ResolvePush {
     bloom: u32,
     /// How much of the shown image is bloom (`crate::bloom`).
     bloom_strength: f32,
+    tables: ToneTablesPush,
 }
 
 fn create_history(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
@@ -151,6 +152,7 @@ pub struct Taa {
     previous_exposure: f32,
     reset: bool,
     encode_srgb: bool,
+    tables: ToneTables,
     /// Steady-state share of the current frame (0.1 is a typical TAA; 1 disables the history).
     pub blend: f32,
     /// When false, frames are drawn without jitter and resolved without history: the passes
@@ -220,6 +222,7 @@ impl Taa {
             previous_exposure: 0.0,
             reset: true,
             encode_srgb: !format_encodes_srgb(output_format),
+            tables: ToneTables::new(device)?,
             blend: 0.1,
             enabled: true,
             bloom_strength: 0.04,
@@ -381,6 +384,7 @@ impl Taa {
     ) -> ImageHandle {
         let encode_srgb = u32::from(self.encode_srgb);
         let bloom_strength = self.bloom_strength;
+        let tables = self.tables.push();
         use vk::PipelineStageFlags2 as S;
         let frame = *frame;
         let extent = frame.extent;
@@ -418,6 +422,7 @@ impl Taa {
                     encode_srgb,
                     bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
                     bloom_strength,
+                    tables,
                 },
             );
             Ok(())

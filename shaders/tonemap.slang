@@ -4,9 +4,23 @@
 // tests: crates/forge-render/src/display.rs (keep the two in step).
 module tonemap;
 
+import aces2;
+
 public static const uint TONEMAP_AGX = 0;
 public static const uint TONEMAP_ACES = 1;
 public static const uint TONEMAP_PBR_NEUTRAL = 2;
+// ACES 2.0's output transform through its baked table, and per pixel (the reference).
+public static const uint TONEMAP_ACES2 = 3;
+public static const uint TONEMAP_ACES2_ANALYTIC = 4;
+
+// What the ACES 2.0 curves read (crates/forge-render/src/display.rs, `ToneTables`): the
+// baked table's bindless index and the transform's parameters.
+public struct ToneTables
+{
+    public uint lut;
+    public uint pad;
+    public Aces2Params* aces2;
+};
 
 // AgX (Sobotka; Blender 4.0's default view), in the minimal real-time form of Wrensch 2023:
 // inset matrix, log2 encoding over [-12.47, +4.03] stops (0.18 · 2^-10 to 0.18 · 2^6.5), the
@@ -77,12 +91,16 @@ float3 pbr_neutral(float3 color)
     return lerp(c, float3(new_peak, new_peak, new_peak), g);
 }
 
-public float3 tonemap(float3 color, uint curve)
+public float3 tonemap(float3 color, uint curve, ToneTables tables)
 {
     if (curve == TONEMAP_ACES)
         return aces(color);
     if (curve == TONEMAP_PBR_NEUTRAL)
         return pbr_neutral(color);
+    if (curve == TONEMAP_ACES2)
+        return aces2_lut(max(color, 0.0), tables.lut);
+    if (curve == TONEMAP_ACES2_ANALYTIC)
+        return aces2_analytic(max(color, 0.0), tables.aces2);
     return agx(color);
 }
 
@@ -95,8 +113,8 @@ public float3 encode_srgb(float3 linear)
 
 // The display value of a pre-exposed HDR colour: the curve, then the sRGB encoding when the
 // target does not do it on write.
-public float3 display_output(float3 color, uint curve, bool encode)
+public float3 display_output(float3 color, uint curve, bool encode, ToneTables tables)
 {
-    float3 display = saturate(tonemap(color, curve));
+    float3 display = saturate(tonemap(color, curve, tables));
     return encode ? encode_srgb(display) : display;
 }

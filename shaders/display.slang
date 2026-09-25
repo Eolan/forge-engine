@@ -10,6 +10,7 @@ struct DisplayPush
     uint curve;
     uint encode_srgb;
     uint pad;
+    ToneTables tables;
 };
 
 [[vk::push_constant]]
@@ -32,5 +33,5 @@ Varyings vert_main(uint id : SV_VertexID)
 float4 frag_main(Varyings input) : SV_Target
 {
     float3 hdr = g_sampled_images[NonUniformResourceIndex(display_push.image)].Load(int3(int2(input.position.xy), 0)).rgb;
-    return float4(display_output(hdr, display_push.curve, display_push.encode_srgb != 0), 1.0);
+    return float4(display_output(hdr, display_push.curve, display_push.encode_srgb != 0, display_push.tables), 1.0);
 }

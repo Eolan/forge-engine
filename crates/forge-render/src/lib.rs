@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aces2;
 pub mod atmosphere;
 pub mod blit;
 pub mod bloom;
@@ -27,13 +28,14 @@ pub mod starfield;
 pub mod streaming;
 pub mod taa;
 pub mod textures;
+pub mod tonecheck;
 pub mod upscale;
 pub mod visibility;
 
 pub use atmosphere::{Atmosphere, AtmosphereFrame, AtmosphereParams};
 pub use blit::blit;
 pub use bloom::Bloom;
-pub use display::{Display, Tonemap};
+pub use display::{Display, ToneTables, Tonemap};
 pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;
