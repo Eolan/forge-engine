@@ -5,7 +5,8 @@ every system that lands (see the showcase section of [ROADMAP.md](../ROADMAP.md)
 records what it shows today and the numbers it produced.
 
 Run: `cargo run --release -p asteroids`.
-Options: `--count N` asteroids (3000), `--length M` belt length (1200), `--duration S`
+Options: `--count N` asteroids (10 000; 3000 until #23), `--variants N` chunk shapes per
+size class (4; 1 until #23), `--length M` belt length (1200), `--duration S`
 seconds per lap (90), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG` (18; 0
 hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
@@ -99,6 +100,9 @@ timings when it would push the counters off the screen, and turns red when a hea
 | CPU per frame (main thread) | 0.16 ms |
 | frame time, uncapped, LOD 1 px | p50 0.34 ms, p99 0.60 ms (~2 800 fps) |
 | field build (7 DAGs on 6 workers + scatter + upload) | ~2.5 s |
+
+The table is the 3000-asteroid field of Phases 0 and 1 (`--count 3000 --variants 1`). Since
+issue #23 the default is 10 000 asteroids in 28 shapes (section below).
 
 The `meshlets` bench (1152 rocks, 127 M triangles) goes the same way: 2.18 ms → **0.15 ms**
 at 1 px (15 k meshlets, 1.1 M triangles).
@@ -265,6 +269,41 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## More chunks (2026-09-25, issue #23)
+
+The owner's idea: "More chunk of rocks like asteroid belts". The belt gets more shapes and
+more pieces:
+- **Shapes:** each of the seven size classes comes as four chunks (`--variants`, 4), each cut
+  by its own planes. All but the first are stretched along two axes, since real asteroids are
+  rarely round: axis ratios of 1 : 0.6–0.95 : 0.45 and up. An asteroid takes its shape by a
+  hash of its id, so the placement does not change: `--variants 1 --count 3000` gives #61's
+  field, pixel for pixel.
+- **Pieces:** 10 000 asteroids instead of 3000 (`--count`), with the same size distribution.
+  The big rocks stay rare, and the belt fills with small chunks.
+
+![Frame 600: the field of #60 and #61 (3000 asteroids, seven shapes), then 10 000 asteroids in 28 shapes](images/asteroids-more-chunks.png)
+
+**Numbers:**
+
+| | before | after |
+|---|---|---|
+| meshes | 7 | 28 |
+| mesh build (in parallel) | 0.83 s | 1.6 s (the field ready in 1.8 s) |
+| leaf triangles over all instances | 195 M | 531 M |
+| cluster slots over all instances | 4.6 M | 12.6 M |
+| ray-tracing structures | 267 k triangles, 16 MiB, 8 ms | 1.06 M triangles, 65 MiB, 43 ms |
+| drawn per frame | 3 k meshlets, 0.3 M triangles | 6 k meshlets, 0.6–0.7 M triangles |
+| GPU over 600 frames | 0.665 ms | 0.808 ms |
+
+The four shapes alone cost nothing measurable (0.691 ms at 3000 asteroids); the extra
+asteroids add shading, dust shadow rays and geometry in about equal parts.
+
+**Checks:**
+- `--variants 1 --count 3000` gives the previous build's captures exactly.
+- The culling harness and mesh against fallback stay at 0 on the new field; the bench and the
+  city are unchanged.
+- Synchronization validation is silent.
 
 ## Ice of three densities (2026-09-25, issue #61)
 

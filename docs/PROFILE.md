@@ -60,6 +60,8 @@ exposure (EV100, target, compensation, curve) the last.
 - Translucent ice (#59, D-033): `shading/ice` 0.018 → 0.065 ms, 0.694 ms in all.
 - The rock chunks (#60) simplify better than the round rocks: 0.709 → 0.665 ms over 600 frames.
 - Ice of three densities (#61): no measurable cost, `shading/ice` 0.056–0.058 ms either way.
+- The denser belt (#23): 10 000 asteroids in 28 shapes, 0.665 → 0.808 ms. The shapes cost nothing measurable;
+  the extra asteroids add shading, dust shadow rays and geometry.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

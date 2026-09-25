@@ -19,6 +19,7 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
+use forge_core::hash::hash_cell3;
 use forge_core::{MaterialTable, Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::SwRaster;
@@ -72,9 +73,13 @@ struct Args {
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
-    /// Number of asteroids in the field.
-    #[arg(long, default_value_t = 3000)]
+    /// Number of asteroids in the field (3000 until issue #23).
+    #[arg(long, default_value_t = 10000)]
     count: u32,
+    /// Chunk shapes per size class (issue #23): each cut by its own planes, all but the first
+    /// stretched; 1 is #60's seven shapes.
+    #[arg(long, default_value_t = 4)]
+    variants: u32,
     /// Extent of the field along its long axis (metres).
     #[arg(long, default_value_t = 1200.0)]
     length: f32,
@@ -920,8 +925,8 @@ fn ice_kind(id: u32) -> usize {
     }
 }
 
-/// The field: a few distinct asteroid meshes, thousands of instances clustered along a
-/// curved belt, and a camera path weaving through it.
+/// The field: seven size classes of asteroid meshes in several shapes, thousands of instances
+/// clustered along a curved belt, and a camera path weaving through it.
 fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
     let start = Instant::now();
     let pool = TaskPool::client();
@@ -935,19 +940,35 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         (160, 14.0, 0.25),
         (192, 30.0, 0.22),
     ];
-    let mut meshes: Vec<Option<MeshletMesh>> = (0..recipes.len()).map(|_| None).collect();
+    // Every size class in `args.variants` shapes (issue #23): each cut by its own planes, and
+    // all but the first stretched along two axes, as real asteroids are rarely round. Built in
+    // parallel; class `c`'s variant `v` is `meshes[c * variants + v]`.
+    let variants = args.variants.max(1) as usize;
+    let mut meshes: Vec<Option<MeshletMesh>> =
+        (0..recipes.len() * variants).map(|_| None).collect();
     let round = args.round_rocks;
     pool.scope(|s| {
-        for (i, slot) in meshes.iter_mut().enumerate() {
+        for (k, slot) in meshes.iter_mut().enumerate() {
+            let (i, v) = (k / variants, k % variants);
             let (segments, radius, roughness) = recipes[i];
             s.spawn(move |_| {
                 // Angular chunks with fractured facets (issue #60), or the Phase 0 round rocks.
-                let seed = Seed::new(700 + i as u64);
-                let mesh = if round {
+                let seed = Seed::new(700 + i as u64 + 100 * v as u64);
+                let mut mesh = if round {
                     procedural::asteroid(seed, segments, radius, roughness)
                 } else {
-                    procedural::chunk(seed, segments, radius, roughness, 8 + i as u32)
+                    procedural::chunk(seed, segments, radius, roughness, 8 + (i + v) as u32)
                 };
+                if v > 0 {
+                    // Axis ratios of 1 : 0.6–0.95 : 0.45–that, the longest axis kept.
+                    let mut rng = seed.derive_str("stretch").rng();
+                    let b = 0.6 + 0.35 * rng.next_f32();
+                    let c = 0.45 + (b - 0.45) * rng.next_f32();
+                    for p in &mut mesh.positions {
+                        *p = [p[0], p[1] * b, p[2] * c];
+                    }
+                    mesh.recompute_normals();
+                }
                 *slot = Some(MeshletMesh::build(&mesh));
             });
         }
@@ -1101,8 +1122,11 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
             rng.range_f32(0.0, std::f32::consts::TAU),
         );
         let id = builder.instance_count() as u32;
+        // The shape within its class, by a hash of the instance: the placement draws the same
+        // numbers as with one shape.
+        let variant = (hash_cell3(0x5EED_0023, id as i32, 0, 0) % variants as u64) as usize;
         builder.add_instance_with_material(
-            mesh_ids[mesh],
+            mesh_ids[mesh * variants + variant],
             Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
             if stock::is_ice(id) {
                 ice[ice_kind(id)]
@@ -1124,7 +1148,7 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         );
     }
     tracing::info!(
-        meshes = recipes.len(),
+        meshes = mesh_ids.len(),
         mesh_build_ms = mesh_ms,
         placement_attempts = attempts,
         instances = scene.instance_count,

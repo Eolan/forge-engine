@@ -58,8 +58,8 @@ All rendering demos share these options: `--vsync`, `--validate` (Vulkan validat
 cargo run --release -p asteroids
 ```
 
-A 90-second scripted flight through 3000 asteroids (rock and ice chunks) of seven procedural meshes
-(195 M source triangles) over a procedural sky with the sun and an Earth-like planet under a
+A 90-second scripted flight through 10 000 asteroids (rock and ice chunks) in 28 procedural
+shapes (531 M source triangles) over a procedural sky with the sun and an Earth-like planet under a
 physical atmosphere, with temporal anti-aliasing. Keys: **F1** profiling overlay (off →
 compact → full: GPU time per pass and CPU time per zone, grouped by subject; **1**–**9**
 open or fold a group; the same zones go to Tracy with `--features profiling`), **P** pause
