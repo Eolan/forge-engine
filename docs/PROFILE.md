@@ -68,6 +68,13 @@ exposure (EV100, target, compensation, curve) the last.
   simplify better.
 - At 1440p (`--width 2560 --height 1440`, since tonight's last commit) the whole ballad takes
   1.63 ms over 600 frames, against 0.80 ms at 1600 × 900: every system on, 10 000 asteroids.
+- The LOD pops (#65): the chunks weigh their normals when cooked, and keep their shading detail
+  until it is under a pixel.
+  - Per frame at 1600 × 900: 10 k → 122 k clusters and 0.57 → 8.9 M triangles.
+  - The software rasteriser now runs in auto mode: 107 k clusters in 0.20 ms.
+  - The cluster culls go 0.02 → 0.14 ms each.
+  - In all: 0.795 → 1.30 ms at 1600 × 900, and 1.75 → 2.63 ms at 1440p (alternating runs,
+    1500 frames each).
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

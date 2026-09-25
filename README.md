@@ -166,6 +166,9 @@ cargo run --release -p imgdiff -- a.png b.png --out diff.png --tolerance 2
 Exit code 1 when more than `--max-different` pixels differ. `--report N` prints the first N
 differing pixels with both colours; `--crop x,y,w,h --zoom K --crops out.png` writes the two
 crops and the diff side by side, enlarged, for looking at a difference.
+`--then next_a.png next_b.png` counts the pixels whose change to the next frame differs between
+the two sequences: LOD pops against a full-detail reference
+([docs/demos/asteroids.md](docs/demos/asteroids.md), issue #65).
 
 ### Environment variables (all demos)
 

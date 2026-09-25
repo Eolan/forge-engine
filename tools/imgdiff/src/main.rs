@@ -4,6 +4,9 @@
 //! For looking at a difference: `--report N` prints the first N differing pixels with both
 //! colours; `--crop x,y,w,h --zoom K --crops out.png` writes the crop of both images and of
 //! the diff side by side, enlarged K times without filtering.
+//!
+//! For motion: `--then next_a.png next_b.png` counts the pixels whose change to the next frame
+//! differs between the two sequences (LOD pops against a full-detail reference, issue #65).
 
 #![forbid(unsafe_code)]
 
@@ -47,6 +50,13 @@ struct Args {
     /// cluster-streaming check (issue #36).
     #[arg(long, value_parser = parse_point)]
     background_at: Option<[u32; 2]>,
+    /// The next frames of `a` and `b`: counts the pixels whose change from `a` to its next
+    /// frame differs from the change from `b` to its next frame by more than `tolerance`. With
+    /// `a` drawn with LOD and `b` at full detail along the same path, these are the LOD pops:
+    /// the image changed where the reference did not (issue #65).
+    /// `--out` then writes these pixels, and `--crops` shows them beside the crops.
+    #[arg(long, num_args = 2, value_names = ["NEXT_A", "NEXT_B"])]
+    then: Option<Vec<PathBuf>>,
 }
 
 fn parse_point(text: &str) -> std::result::Result<[u32; 2], String> {
@@ -89,6 +99,38 @@ fn background_only_in_b(
         }
     }
     (only_b, inside)
+}
+
+/// Pixels where `a → next_a` and `b → next_b` differ by more than `tolerance` in a channel,
+/// marked white in `mask`.
+fn changed_differently(
+    [a, next_a, b, next_b]: [&image::RgbaImage; 4],
+    tolerance: u8,
+    mask: &mut image::RgbaImage,
+) -> u64 {
+    let mut count = 0;
+    for (x, y, pa) in a.enumerate_pixels() {
+        let (na, pb, nb) = (
+            next_a.get_pixel(x, y),
+            b.get_pixel(x, y),
+            next_b.get_pixel(x, y),
+        );
+        let err = (0..3)
+            .map(|c| {
+                let change = |from: u8, to: u8| i16::from(to) - i16::from(from);
+                change(pa[c], na[c]).abs_diff(change(pb[c], nb[c]))
+            })
+            .max()
+            .unwrap_or(0);
+        let bad = err > u16::from(tolerance);
+        count += u64::from(bad);
+        mask.put_pixel(
+            x,
+            y,
+            image::Rgba(if bad { [255; 4] } else { [0, 0, 0, 255] }),
+        );
+    }
+    count
 }
 
 fn parse_rect(text: &str) -> std::result::Result<[u32; 4], String> {
@@ -170,6 +212,27 @@ fn main() -> Result<ExitCode> {
         for (x, y) in inside_at.iter().take(args.report) {
             println!("inside a's surfaces, background in b: ({x}, {y})");
         }
+    }
+    if let Some(next) = &args.then {
+        let open = |path: &PathBuf| -> Result<image::RgbaImage> {
+            let image = image::open(path)
+                .with_context(|| format!("open {}", path.display()))?
+                .to_rgba8();
+            anyhow::ensure!(
+                image.dimensions() == a.dimensions(),
+                "size mismatch: {}",
+                path.display()
+            );
+            Ok(image)
+        };
+        let (next_a, next_b) = (open(&next[0])?, open(&next[1])?);
+        // `--out` shows these pixels instead of the plain difference.
+        let count = changed_differently([&a, &next_a, &b, &next_b], args.tolerance, &mut diff);
+        println!(
+            "changed differently (> {}): {count} / {total} pixels, {:.4} %",
+            args.tolerance,
+            count as f64 * 100.0 / total as f64
+        );
     }
     if let Some(out) = &args.out {
         diff.save(out)

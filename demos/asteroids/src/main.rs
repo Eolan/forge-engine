@@ -22,7 +22,7 @@ use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, Input, v
 use forge_core::hash::hash_cell3;
 use forge_core::material::Material;
 use forge_core::{MaterialTable, Seed, SplitMix64};
-use forge_geom::{MeshletMesh, procedural};
+use forge_geom::{CookOptions, MeshletMesh, procedural};
 use forge_render::SwRaster;
 use forge_render::material::{TextureSet, stock};
 use forge_render::meshlet::DrawParams;
@@ -162,6 +162,12 @@ struct Args {
     /// Start with clusters coloured by LOD level (K toggles it).
     #[arg(long)]
     lod_colors: bool,
+    /// Weight of the normals in the chunks' simplification error, in metres per unit of normal
+    /// change per metre of the rock's radius (issue #65). The chunks' relief is shallow but
+    /// steep: with geometry alone (0, the cooking before #65) a level flattens its shading while
+    /// moving it less than a pixel, and every switch of level pops.
+    #[arg(long, default_value_t = 0.5)]
+    lod_normals: f32,
     /// Disable the per-group LOD window (A/B harness: must not change the image).
     #[arg(long)]
     no_group_window: bool,
@@ -363,6 +369,13 @@ impl Ballad {
         if !args.no_translucency {
             flags.0 |= CullFlags::TRANSLUCENCY;
         }
+        // The chunks' cooking (issue #65) lists 120–140 k clusters a frame at 900 lines, 184 k
+        // with occlusion and cone culling off (O, C), 242 k at 1440: past the list's first size.
+        // Reserved up front, no frame drops any. Grown on demand instead, the first frames in
+        // flight would leave clusters out, and the automatic exposure would carry their trace
+        // into the frames after.
+        let lines = u64::from(args.height.max(900));
+        renderer.reserve_visible(u64::from(args.count) * 24 * lines / 900);
         if args.no_occlusion {
             flags.toggle(CullFlags::OCCLUSION);
         }
@@ -996,6 +1009,7 @@ fn build_meshes(args: &Args) -> FieldMeshes {
         .collect();
     let mut meshes: Vec<Option<MeshletMesh>> = jobs.iter().map(|_| None).collect();
     let no_crust = args.no_crust;
+    let lod_normals = args.lod_normals;
     pool.scope(|s| {
         for (slot, &(i, v, ice)) in meshes.iter_mut().zip(&jobs) {
             let (segments, radius, roughness) = recipes[i];
@@ -1022,7 +1036,12 @@ fn build_meshes(args: &Args) -> FieldMeshes {
                 if no_crust {
                     mesh.sections.clear();
                 }
-                *slot = Some(MeshletMesh::build(&mesh));
+                // In proportion to the radius, the normal change a level may make depends only on
+                // the rock's size on screen: its creases and relief stay until they are a pixel.
+                let options = CookOptions {
+                    normal_weight: lod_normals * radius,
+                };
+                *slot = Some(MeshletMesh::build_with(&mesh, options));
             });
         }
     });

@@ -18,7 +18,8 @@ belt D metres away from the sun, negative for sunward; 0), `--round-rocks` (Phas
 rocks), `--no-crust` (no weathered crust on the chunks), `--rock-shaped-ice` (the ice in the
 rock's shapes), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
-error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
+error a drawn cluster may have, 1.0), `--lod-normals W` (the weight of the normals when
+the chunks are cooked, 0.5; 0 before #65), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
 `--ev100 EV` (a fixed exposure instead of the automatic one), `--exposure-compensation EV`,
 `--sun-lux LUX` (128 000, the Sun at 1 AU), `--exposure-log file.csv` (EV100 and its target
@@ -273,6 +274,79 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## LOD pops (2026-09-25, issue #65)
+
+The owner saw "a lot of lod pops". A still frame shows where they came from: at frame 240
+without TAA, 6.7 % of the pixels drawn with LOD differ from full detail (`--no-lod`) by more
+than 16 levels, over whole surfaces:
+- **Near rocks:** the crust's relief is smoothed flat.
+- **Mid distance:** the ice's facets are rounded into blobs.
+- **Crust and faces:** their borders wander.
+
+**The cause:** the chunks were cooked with geometric error only. Their relief is shallow but
+steep, so a level could flatten its shading while moving its surface less than a pixel, and
+at every switch of level the shading flipped: a pop. A finer threshold does not reach it:
+`--lod-error 0.5` still leaves 5.1 %. The city's facades met the same problem with their
+windows (#41) and weigh their normals when they are cooked (`CookOptions::normal_weight`); the
+chunks did not.
+
+**The fix:** the chunks weigh their normals too, `--lod-normals 0.5`: metres of error per unit
+of normal change, per metre of the rock's radius. In proportion to the radius, the normal
+change a level may make depends only on the rock's size on screen: a rock 100 pixels across
+keeps its shading within 0.04, one 10 pixels across within 0.4. `--lod-normals 0` restores the
+old cooking.
+
+![Frame 240 without TAA, zoomed: the old cooking, the new one and full detail; near rocks above, the far field below](images/asteroids-lod-pops.png)
+
+**Pops in motion:** `imgdiff a.png b.png --then next_a.png next_b.png` counts the pixels whose
+change to the next frame differs between two sequences. The measure runs along 300 frames of
+the path (960 × 540, TAA off), each cooking against a full-detail sequence of its own. It
+counts, per frame pair, the pixels that change by more than 16 levels where full detail does
+not:
+
+| Cooking | Pops per frame pair | GPU at 1600 × 900 |
+|---|---|---|
+| Geometry only (before) | 7.65 % | 0.795 ms |
+| Weight 0.2 | 3.5 % | 1.04 ms |
+| Weight 0.3 | 3.0 % | 1.14 ms |
+| **Weight 0.5 (the default)** | **2.38 %** | **1.30 ms** |
+| Weight 1 | 1.6 % | 1.72 ms |
+| Weight 0.5 at `--lod-error 0.25` (the floor) | 1.00 % | 2.25 ms |
+
+The floor is what a quarter-pixel threshold still leaves: the silhouettes' sub-pixel aliasing,
+which TAA resolves. Above it, weight 0.5 leaves 1.4 % against 6.65 % before, 4.8 times fewer
+pops. The masks show the difference in kind: before, whole rock surfaces flip; after, what is
+left is pixel speckle in the dense far field.
+
+![Frame pair 156 → 157: the frame, then the pixels that change differently from full detail with the old cooking and with the new one](images/asteroids-lod-pop-masks.png)
+
+**Cost:**
+- **More detail kept:** each rock keeps its shading detail until it is under a pixel. A frame
+  at 1600 × 900 draws 122 k clusters and 8.9 M triangles (before: 10 k and 0.57 M).
+- **The software rasteriser (#3) now pays:** auto mode takes 107 k of those clusters, in
+  0.20 ms.
+- **GPU:** 0.795 → 1.30 ms at 1600 × 900, and 1.75 → 2.63 ms at 1440p. Both are well inside the
+  8.33 ms of 120 fps.
+- **Mesh build:** about 0.15 s longer, behind the loading screen.
+- **Visible-cluster list:** now reserved up front for this demand, 24 clusters per asteroid at
+  900 lines, scaled with the height. It used to start at 65 536 and grow only after a frame
+  had dropped clusters. With the new cooking, the first two frames dropped some, and the
+  automatic exposure carried a one-level trace of them into frame 240. The culling harness
+  caught it.
+
+**Tried and dropped:**
+- **Section borders kept as seams**, so that no level simplifies across the crust's border
+  with the fracture faces: no measurable change once the normals are weighed (2.383 against
+  2.386 %).
+- **A finer threshold with the old cooking:** `--lod-error 0.5` leaves 5.1 % of the pixels off
+  in the still frame, and the relief still flattened.
+
+**Checks:**
+- `--lod-normals 0` gives the previous build's captures exactly.
+- The culling harness (occlusion, cone, the culling-error view) and mesh against fallback stay
+  at 0 on every capture, TAA's frame 600 included. The bench and the city are unchanged.
+- Synchronization validation is silent.
 
 ## Loading screen (2026-09-25, issue #25)
 
