@@ -91,7 +91,7 @@ and the date next to every number.
 
 | Crate | Status | Contents |
 |---|---|---|
-| `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle`, the material record (`material`: `Material` with render, physics and tag layers, `MaterialTable`, D-007) |
+| `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle`, the material record (`material`: `Material` with render, physics and tag layers, `MaterialTable`, D-007; the render layer's reflectance since #56) |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
 | `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers, memory budget detected), acceleration structures and ray queries (`accel`: BLAS and TLAS builds, reached by device address; D-029), `gpu-allocator` with every allocation counted by category and every host write counted as upload (`memory_report`: per-heap usage and budget from `VK_EXT_memory_budget`, issue #9), RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh, vertex and compute pipelines, indirect dispatches and indexed indirect-count draws, `DeviceOptions` (mesh shaders left off for `--force-fallback`), `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks, `Custom` accesses for third-party work; D-020), and `dlss` (DLSS through NVIDIA Streamline's interposer behind the `dlss` feature: modes, render sizes, tagging graph images, evaluation inside a graph pass; D-024) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`; material sections through it, #41, D-027), 128 KiB cluster pages (`page`, D-025), the mesh cache (`cache`), procedural meshes (asteroid, the city's props and terrain), shared GPU layouts |
@@ -190,6 +190,7 @@ The resolve is three kinds of pass:
   It also reflects the sky: Schlick's Fresnel over the sky-view table in the mirror
   direction (issue #49, D-031), and on the smooth rows the city itself: a mirror ray against
   the TLAS, the hit shaded from the BLAS cut kept on the GPU (issue #50).
+  A row's reflectance (F0, issue #56) sets how much it mirrors: coated glass 0.3.
 - **Ground in layers** (issue #42, D-028): a `layered` row names a layer map, a byte a texel,
   and each layer is the standard row after it; the layered pass blends the two heaviest
   layers around each pixel.

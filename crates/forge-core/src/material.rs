@@ -91,6 +91,10 @@ pub struct RenderLayer {
     pub texture_scale: f32,
     /// How strongly the normal map bends the normal (1 as authored).
     pub normal_strength: f32,
+    /// The share of light reflected at normal incidence (Fresnel's F0), rising towards 1 at
+    /// grazing angles: 0.04 for most dielectrics (stone, plaster, plastic, uncoated glass),
+    /// 0.2–0.4 for coated glass (issue #56).
+    pub reflectance: f32,
 }
 
 impl Default for RenderLayer {
@@ -108,6 +112,7 @@ impl Default for RenderLayer {
             normal_texture: None,
             texture_scale: 1.0,
             normal_strength: 1.0,
+            reflectance: 0.04,
         }
     }
 }

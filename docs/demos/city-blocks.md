@@ -23,6 +23,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | The sky's reflection: glass and grazing surfaces (Fresnel) | #49 | ✅ 0.03 ms at 1440p |
 | The city in the glass: mirror rays against the TLAS | #50 | ✅ 0.17 ms at 1440p |
 | Soft shadows: the sun's disc over TAA's jitter | #54 | ✅ 0.02 ms at 1440p |
+| Coated glass: a reflectance per row, the towers as curtain walls | #56 | ✅ no cost |
 
 ```
 cargo run --release -p city-blocks
@@ -55,6 +56,33 @@ Options:
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## Coated glass (issue #56, 2026-09-25)
+
+A row now carries its reflectance, Fresnel's F0 at normal incidence (D-007's render layer).
+The default is 0.04, which every row used until now: stone, plaster, plastic, uncoated glass.
+The city's glass gets its own values:
+- **The dark glass towers** are coated curtain walls: F0 0.3, smooth (exponent 300), and flat,
+  with no normal map, since a bumpy mirror would alias.
+- **The windows** are mildly coated: 0.08.
+
+With #50's mirror rays, the towers now mirror the sky above and the buildings in front of them.
+
+![The glass tower before and after: its upper floors mirror the sky, its lower ones the brick and plaster buildings facing it](images/city-blocks-curtain-wall.png)
+
+**Stability**, on the static south view: 1.54 % of pixels change by more than two levels from
+frame to frame, and 0.087 % over 32 frames. That is the same as the view without the coating
+(0.09 %): the reflections alias no more than the geometry they mirror.
+
+**Cost:** none. The glass traced its mirror rays already; the south view is 1.975 ms, the 1440p
+flight 2.668 ms.
+
+**Checks:**
+- With every row at 0.04, the south view moves in 141 pixels by up to 4 levels. That is the
+  compiler's arithmetic now that F0 is a row value and no longer a folded constant; two runs
+  are identical.
+- The ballad and the bench are identical, and mesh against fallback is at 0.
+- Synchronization validation is silent.
 
 ## Soft shadows (issue #54, 2026-09-25)
 

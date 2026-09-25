@@ -829,4 +829,9 @@ The rays cost 0.09 ms, and their code 0.03–0.07 ms of registers across the res
 at 1440p in all. A pass of their own over the smooth rows' tiles would recover the
 registers. Glass reflects 4 % head-on, so the change is modest; coated curtain walls need a
 reflectance per row.
-*(research: lighting-gi.md §7; issues #49, #50; demo: city-blocks)*
+**A reflectance per row** (issue #56, 2026-09-25). D-007's render layer gains `reflectance`, F0 at
+normal incidence, 0.04 by default. The city's dark glass is a coated curtain wall (0.3,
+smooth, no normal map) and its windows are mildly coated (0.08), so the mirror rays now show:
+the towers mirror the sky and their neighbours. Stability and cost are unchanged. Metals (F0
+from the albedo) come with the material work.
+*(research: lighting-gi.md §7; issues #49, #50, #56; demo: city-blocks)*

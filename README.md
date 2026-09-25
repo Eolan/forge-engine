@@ -136,7 +136,7 @@ as the LOD cut asks for them, through a 512 MiB pool. Every prop is made of text
 materials (brick, plaster, concrete, glass windows, marble, rock), and the ground of layers:
 asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42), under a
 physical sky with haze by distance (`--sun-elevation DEG`, issue #43), lit by the sun with
-ray-traced soft shadows (issues #45, #54) and by the sky's light (issue #47), occluded by GTAO (issue #48), reflected in the glass (issues #49, #50). Keys: **L** / **K** LOD and its
+ray-traced soft shadows (issues #45, #54) and by the sky's light (issue #47), occluded by GTAO (issue #48), reflected in the glass, coated on the towers (issues #49, #50, #56). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
 **[** / **]** LOD threshold, **T** TAA, **B** bloom, **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays, **Z** soft or hard shadows, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),

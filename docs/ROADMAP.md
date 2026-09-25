@@ -178,7 +178,7 @@ Goal: the renderer skeleton every later system draws through.
 
 1. T1 hybrid: ray-query DDGI probes, ReSTIR direct lighting, hybrid reflections (the sky's
    term ✅, issue #49, D-031: Fresnel-weighted from the sky-view table; mirror rays in the
-   glass ✅, issue #50), NRD. Ahead of the probes: the sky's irradiance ✅ (#47) and GTAO ✅ (#48, D-030).
+   glass ✅, issue #50; coated glass ✅, issue #56), NRD. Ahead of the probes: the sky's irradiance ✅ (#47) and GTAO ✅ (#48, D-030).
 2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's

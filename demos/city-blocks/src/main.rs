@@ -791,6 +791,8 @@ impl CityMaterials {
             color_b: [0.07, 0.09, 0.12],
             roughness: RenderLayer::roughness_for_power(300.0),
             specular: 0.8,
+            // Mildly coated panes (issue #56).
+            reflectance: 0.08,
             ..RenderLayer::default()
         };
         let grass = add(
@@ -855,16 +857,23 @@ impl CityMaterials {
             ),
         );
         add("sandstone: windows", windows);
+        // A coated curtain wall (issue #56): a mirror of the sky and the city, flat, so no normal
+        // map (a bumpy mirror would alias).
         let glass = add(
             "dark glass",
-            textured(
-                concrete,
-                [0.18, 0.21, 0.26],
-                [0.15, 0.17, 0.2],
-                6.0,
-                90.0,
-                0.35,
-            ),
+            RenderLayer {
+                reflectance: 0.3,
+                normal_texture: None,
+                roughness: RenderLayer::roughness_for_power(300.0),
+                ..textured(
+                    concrete,
+                    [0.18, 0.21, 0.26],
+                    [0.15, 0.17, 0.2],
+                    6.0,
+                    90.0,
+                    0.35,
+                )
+            },
         );
         add("dark glass: windows", windows);
         let stone = add(

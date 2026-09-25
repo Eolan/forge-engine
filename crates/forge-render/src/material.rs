@@ -33,9 +33,11 @@ pub struct GpuMaterial {
     normal_texture: u32,
     inv_texture_scale: f32,
     normal_strength: f32,
+    reflectance: f32,
+    pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 80);
+const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 96);
 
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
@@ -168,6 +170,8 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 normal_texture: texture(r.normal_texture),
                 inv_texture_scale: 1.0 / r.texture_scale.max(1e-3),
                 normal_strength: r.normal_strength,
+                reflectance: r.reflectance,
+                pad: [0; 3],
             }
         })
         .collect()
