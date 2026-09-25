@@ -438,10 +438,10 @@ const DRAW_COMMAND_BYTES: u32 = 20;
 
 /// The cluster arguments at the start of a frame (`Frame::clusters`): per pass, the hardware
 /// draw grid and its count, the software raster grid and its count and the merge's draw
-/// (vertex count written by the cull), all empty; then the culls' tickets.
+/// (vertex and instance counts written by the cull), all empty; then the culls' tickets.
 const CLUSTER_ARGS_START: [u32; 26] = [
     0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, // pass 1 (or the single pass)
-    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, // pass 2 (no software clusters: see `frame_block`)
+    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, // pass 2
     0, 0, // tickets
 ];
 /// Bytes of one pass's cluster arguments.
@@ -1746,8 +1746,8 @@ impl MeshletRenderer {
         })
     }
 
-    /// The software rasteriser (compute) and its merge (a full-screen triangle writing the
-    /// visibility buffer and the depth).
+    /// The software rasteriser (compute) and its merge (a full-screen triangle, or a rectangle
+    /// per software cluster, writing the visibility buffer and the depth).
     fn software_pipelines(
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
@@ -2783,7 +2783,12 @@ impl MeshletRenderer {
             });
         graph
             .pass("geometry/software raster merge")
-            .buffer(io.clusters, BufferAccess::IndirectArgs)
+            .buffer(
+                io.clusters,
+                BufferAccess::IndirectArgsAndShaderRead(S::VERTEX_SHADER),
+            )
+            .buffer(io.raster, BufferAccess::ShaderRead(S::VERTEX_SHADER))
+            .buffer(io.visible, BufferAccess::ShaderRead(S::VERTEX_SHADER))
             .buffer(vis64, BufferAccess::ShaderReadWrite(S::FRAGMENT_SHADER))
             .image(io.visibility, ImageAccess::ColorAttachment)
             .image(io.depth, ImageAccess::DepthAttachment)

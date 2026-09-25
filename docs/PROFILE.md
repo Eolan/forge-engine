@@ -81,6 +81,8 @@ exposure (EV100, target, compensation, curve) the last.
   `meshlet pass 2` 0.014 → 0.007 ms, `software raster 2` 0.008 and the second merge 0.009.
   In all: 1.356 ms before and after at 1600 × 900, 2.750 → 2.783 ms at 1440p (the second
   merge), and 5.98 → 5.64 ms at full detail.
+- Pass 2 merges by rectangles, one per software cluster (#32): the merge zone 0.058 → 0.039 ms
+  at 1440p (2.735 → 2.721 ms in all) and 0.024 → 0.020 ms at 1600 × 900.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

@@ -218,9 +218,10 @@ It keeps `depth << 32 | id` per pixel with a 64-bit atomic maximum, only where i
 hardware's pixel of the pass: nearer or, at equal depth, the larger id. That is the rule the
 hardware already follows, since its depth test (`GREATER_OR_EQUAL`) keeps the last drawn and
 it draws in id order. To make that true across both passes, pass 2 now fills the list after
-pass 1 instead of from the back; every golden capture is unchanged. A full-screen merge,
-drawn indirectly with zero vertices when nothing went to software, writes the samples into
-the visibility buffer and the depth and clears them. The depth pyramid, the resolve, the sky
+pass 1 instead of from the back; every golden capture is unchanged. A full-screen merge
+(since #32, a rectangle per cluster when the pass has few), drawn indirectly with zero
+vertices when nothing went to software, writes the samples into the visibility buffer and
+the depth and clears them. The depth pyramid, the resolve, the sky
 and TAA see one image. Pass 2 stayed in hardware until issue #30; it now rasterises its dense
 clusters the same way, so a cluster is drawn alike whichever pass draws it.
 
@@ -591,6 +592,34 @@ would remove it (issue #32).
 
 **For the harness:** at full detail with bloom on, a few pixels one level apart are #71's
 effect. Rerun the capture, or compare with `--bloom 0`.
+
+## The merge by rectangles (issue #32, 2026-09-25)
+
+A pass with few software clusters now merges a rectangle per cluster instead of the whole
+target: pass 2 almost always, since #30 gave it a software raster.
+- **The rectangle** is the cluster's bounding sphere, projected as the cull projects it and
+  grown by a pixel for the vertices' snapping.
+- **The choice:** the cull's last workgroup knows the pass's count. It writes the merge's draw
+  as 6 vertices per software cluster while there is at most one per 256 pixels of the target
+  (`MERGE_RECT_PIXELS`), else as one full-screen triangle. The vertex shader reads that choice
+  back.
+- **Overlapping rectangles** only repeat work. The second fragment finds the sample taken and
+  cleared, or writes the same sample again.
+
+**Pixels:** every capture is identical to the previous build at tolerance 0, TAA's frame 600
+included. Rectangles shrunk by three pixels on purpose moved 1 920 pixels, so the rectangles
+are what merges.
+
+**Cost** (GPU ms per frame, the merge zone for both passes, alternating runs, three each):
+
+| View | merge before | merge after | frame before | frame after |
+|---|---|---|---|---|
+| ballad, 1600 × 900 | 0.024 | 0.020 | 1.365 | 1.352 |
+| ballad, 1600 × 900, fallback | 0.023 | 0.020 | 1.446 | 1.438 |
+| ballad, 1440p | 0.058 | 0.039 | 2.735 | 2.721 |
+
+The views at full detail, `--side 700` and the city keep the full-screen triangle in both
+passes, and their numbers are unchanged within noise.
 
 ## Next steps (from the research recommendation)
 

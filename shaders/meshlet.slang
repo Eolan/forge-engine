@@ -607,6 +607,10 @@ struct ClusterVerdict
 // keeps the rasteriser's integer edge functions in range (`SW_RASTER_MAX_EXTENT`).
 static const float SW_RASTER_MAX_PX = 64.0;
 
+// A pass merges its software samples by rectangles (one per cluster) while it has at most one
+// software cluster per this many pixels of the target, else with one full-screen triangle.
+static const uint MERGE_RECT_PIXELS = 256;
+
 // Whether a cluster is dense, the software rasteriser's kind: entirely in front of the near
 // plane, under SW_RASTER_MAX_PX across, and fewer than `sw_raster_area` pixels of its
 // bounding sphere's rectangle per triangle. There the hardware's fixed cost per primitive
@@ -979,7 +983,10 @@ void cluster_cull(uint thread, bool streamed)
             uint hardware = listed.x - listed.y;
             write_grid(args, hardware, hardware);
             write_grid(args + 4, listed.y, listed.y);
-            args[8] = listed.y > 0 ? 3u : 0u; // the merge: a full-screen triangle, or nothing
+            // The merge: nothing, a rectangle per software cluster, or a full-screen triangle.
+            bool rects = listed.y * MERGE_RECT_PIXELS <= f[0].target_width * f[0].target_height;
+            args[8] = listed.y == 0 ? 0u : (rects ? 6u : 3u);
+            args[9] = rects ? listed.y : 1u;
             InterlockedAdd(f[0].stats[second ? STAT_MESHLETS_PASS2 : STAT_MESHLETS_PASS1], listed.x);
             InterlockedAdd(f[0].stats[STAT_SW_CLUSTERS], listed.y);
         }
@@ -1291,13 +1298,39 @@ uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint trian
 // Writes what the software rasteriser kept in this pass into the hardware's targets. Every
 // sample it kept beats the hardware's pixel (`write_software_sample`), so the depth test
 // (`GREATER_OR_EQUAL`) passes; the sample is cleared for the next pass, which leaves the
-// buffer empty at the end of the frame. Drawn only when the pass has software clusters (an
-// indirect draw of three vertices or none). Merging only the tiles the software rasteriser
-// touched measured slower where it pays (full detail: the marking cost more than the merge).
+// buffer empty at the end of the frame. Drawn only when the pass has software clusters. A pass
+// with few of them (pass 2, issue #32) merges a rectangle per cluster: its bounding sphere's,
+// as the cull projected it, grown by a pixel for the vertices' snapping. Where rectangles
+// overlap, the second fragment finds the sample taken, or writes the same one again. A pass
+// with many merges the whole target with one triangle: marking the tiles the software
+// rasteriser touched measured slower where it pays (full detail: the marking cost more than
+// the merge).
+static const uint MERGE_RECT_CORNERS[6] = { 0, 1, 2, 2, 1, 3 }; // two triangles; x from bit 0, y from bit 1
+
 [shader("vertex")]
-float4 merge_vert_main(uint id : SV_VertexID) : SV_Position
+float4 merge_vert_main(uint id : SV_VertexID, uint cluster : SV_InstanceID) : SV_Position
 {
-    return float4((id == 1) ? 3.0 : -1.0, (id == 2) ? 3.0 : -1.0, 0.0, 1.0);
+    Frame* f = push.frame;
+    if (pass_args(f)[8] == 3u)
+        return float4((id == 1) ? 3.0 : -1.0, (id == 2) ? 3.0 : -1.0, 0.0, 1.0);
+    uint slot = f[0].raster[f[0].visible_capacity - 1 - cluster];
+    uint2 record = f[0].visible[slot];
+    Instance inst = f[0].instances[record.x];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    float3 center = mul(inst.model, float4(m.center, 1)).xyz;
+    float3 c = mul(f[0].cull_view, float4(center, 1)).xyz;
+    float2 size = float2(float(f[0].target_width), float(f[0].target_height));
+    float4 rect = float4(0.0, 0.0, size); // pixels; the whole target should the projection fail
+    float4 aabb;
+    if (project_sphere(c, m.radius * length(inst.model[0].xyz), f[0].znear, f[0].p00, f[0].p11, aabb))
+    {
+        aabb += f[0].draw_jitter.xyxy;
+        rect = clamp(float4(floor(aabb.xy * size) - 1.0, ceil(aabb.zw * size) + 1.0), 0.0, size.xyxy);
+    }
+    uint corner = MERGE_RECT_CORNERS[id];
+    float2 pixel = float2((corner & 1u) != 0 ? rect.z : rect.x, (corner & 2u) != 0 ? rect.w : rect.y);
+    // The viewport is flipped (`set_viewport_full`): clip y is up.
+    return float4(pixel.x / size.x * 2.0 - 1.0, 1.0 - pixel.y / size.y * 2.0, 0.0, 1.0);
 }
 
 struct MergeOut
