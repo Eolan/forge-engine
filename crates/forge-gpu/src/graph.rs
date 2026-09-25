@@ -153,6 +153,9 @@ pub enum BufferAccess {
     /// Read as indirect arguments and by these shader stages (a count the draw also reads to
     /// find where its grid ends).
     IndirectArgsAndShaderRead(vk::PipelineStageFlags2),
+    /// Read as indirect arguments, and read and written by these shader stages elsewhere in
+    /// the buffer (a cull that dispatches from its grid and writes the next pass's).
+    IndirectArgsAndShaderReadWrite(vk::PipelineStageFlags2),
     /// Read as the index buffer of draws and by these shader stages (a buffer of cluster
     /// pages the vertex shader also reads).
     IndexAndShaderRead(vk::PipelineStageFlags2),
@@ -269,6 +272,11 @@ impl BufferAccess {
                 S::DRAW_INDIRECT | stages,
                 A::INDIRECT_COMMAND_READ | A::SHADER_STORAGE_READ,
                 false,
+            ),
+            Self::IndirectArgsAndShaderReadWrite(stages) => (
+                S::DRAW_INDIRECT | stages,
+                A::INDIRECT_COMMAND_READ | A::SHADER_STORAGE_READ | A::SHADER_STORAGE_WRITE,
+                true,
             ),
             Self::IndexAndShaderRead(stages) => (
                 S::INDEX_INPUT | stages,
@@ -2163,6 +2171,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(src.stage, S::TASK_SHADER_EXT);
+    }
+
+    #[test]
+    fn a_pass_that_dispatches_from_a_buffer_and_writes_it_is_a_writer() {
+        // Issue #92: cluster cull 1 reads its grid and writes pass 2's in the same buffer.
+        let mut buffers = vec![ResourceState::UNDEFINED; 1];
+        let pass = |label, access| PassDecl {
+            label,
+            images: Vec::new(),
+            buffers: vec![BufferUse {
+                handle: BufferHandle(0),
+                access,
+            }],
+            queue: QueueKind::Graphics,
+        };
+        let compute = S::COMPUTE_SHADER;
+        let passes = [
+            pass("g/instance cull", BufferAccess::ShaderWrite(compute)),
+            pass(
+                "g/cluster cull 1",
+                BufferAccess::IndirectArgsAndShaderReadWrite(compute),
+            ),
+            pass(
+                "g/cluster cull 2",
+                BufferAccess::IndirectArgsAndShaderRead(compute),
+            ),
+        ];
+        let plan = compile(&passes, &[], &mut [], &mut buffers).unwrap();
+        let b = plan[1].memory_barrier.unwrap();
+        assert_eq!(b.src_stage_mask, compute);
+        assert_eq!(b.dst_stage_mask, S::DRAW_INDIRECT | compute);
+        assert!(b.dst_access_mask.contains(A::SHADER_STORAGE_WRITE));
+        // Its writes reach the next pass's indirect read.
+        let b = plan[2]
+            .memory_barrier
+            .expect("pass 2 waits for pass 1's writes");
+        assert!(b.src_stage_mask.contains(compute));
+        assert!(b.src_access_mask.contains(A::SHADER_STORAGE_WRITE));
+        assert!(b.dst_stage_mask.contains(S::DRAW_INDIRECT));
+        assert!(b.dst_access_mask.contains(A::INDIRECT_COMMAND_READ));
     }
 
     fn request(name: &'static str, size: u64, first: usize, last: usize) -> Request {

@@ -103,6 +103,10 @@ exposure (EV100, target, compensation, curve) the last.
 
   The bench's `post/display transform` at 1600 × 900 takes 0.011 ms with the ACES fit,
   0.013 with the table and 0.055 per pixel.
+- Pass 2's cluster cull over pass 1's rejects only (#92): pass 1 lists the 36 k clusters the
+  previous pyramid hid, and pass 2 tests those alone. Cluster cull 2 goes 0.134 → 0.017 ms,
+  cluster cull 1 0.139 → 0.167; in all 1.403 → 1.308 ms at 1600 × 900 and 2.82 → 2.67 ms at
+  1440p (three alternating runs each).
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs
@@ -224,9 +228,22 @@ ballad have no async pass and do not move (within 0.01 ms). The probes' zones re
 1.35 ms and the geometry passes a third to a half longer, since they now share the GPU: the
 frame's span is what shrank. The overlap is limited: the probes still wait for the previous
 frame's resolve, which reads their atlases (#95).
-**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target. The two cluster
-culls (0.21 and 0.22 ms) are the largest geometry zones left; pass 2 over pass 1's rejects only
-is the idea for them (#92). Details in [city-blocks.md](demos/city-blocks.md).
+With pass 2's cluster cull over pass 1's rejects only (#92: pass 1 lists the 80–160 k clusters
+the previous pyramid hid, pass 2 tests those alone instead of walking pass 1's work again),
+against the build before in alternating runs (three each; these runs measure the same build
+0.1 ms faster than those of #77):
+
+| View | before | after | cluster cull 2 | cluster cull 1 |
+|---|---|---|---|---|
+| south view | 2.16 ms | 1.96 ms | 0.278 → 0.033 | 0.308 → 0.351 |
+| orbit | 2.71 ms | 2.44 ms | 0.341 → 0.034 | 0.530 → 0.557 |
+| flight | 2.17 ms | 2.03 ms | 0.212 → 0.056 | 0.230 → 0.269 |
+| every page resident | 2.21 ms | 2.05 ms | 0.272 → 0.032 | 0.258 → 0.302 |
+
+Pass 1 pays 0.03–0.05 ms for its second ordered append.
+**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target. Cluster cull 1
+(0.35 ms at the south view, 0.56 in the orbit) is now the largest geometry zone. Details in
+[city-blocks.md](demos/city-blocks.md) and [meshlets.md](demos/meshlets.md).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
@@ -289,7 +306,11 @@ a million instances that is what keeps the bench at 197 MiB instead of 2 938
 buffers 6.6 and 4.8 MiB (84 MiB at `--side 700` and in the city). Issue #36 stores each
 cluster's own 16-byte vertices in 128 KiB pages instead of a shared 32-byte vertex buffer
 and its index lists: geometry 39.3 and 3.8 MiB (13 % more, the vertices on cluster borders
-stored once per cluster). **Verdicts:**
+stored once per cluster). Issue #92 adds the list of the clusters pass 1 leaves to pass 2
+(512 KiB per frame slot to start) and a third run of the cluster culls' status words: work
+buffers 19.96 → 21.76 MiB for the ballad, 5.15 → 6.34 for the bench, 127.8 → 145.9 for the
+city. The city's first frames, before instance occlusion's auto mode turns on, leave 820 k
+clusters to pass 2 and grow its list to the 8 MiB cap per slot. **Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
    reserves 256 MiB device blocks and 64 MiB host-visible ones. Each demo holds one of each

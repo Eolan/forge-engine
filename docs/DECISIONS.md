@@ -58,7 +58,9 @@ holds enough of them to repay its fixed cost (D-021); since #30 in both passes, 
 cluster is drawn the same way whichever pass draws it. Since issue #33 the occlusion keeps
 no state per cluster. Pass 1 draws what the previous frame's pyramid shows, from the
 previous culling camera, and pass 2 re-derives that to test only the rest against this
-frame's pyramid. The work lists are sized by demand, so the scene can hold a million
+frame's pyramid. Since #92 pass 1 lists that rest for pass 2, in its own order, in a list
+sized by demand; when it overflows, pass 2 re-derives as before (the city's cluster cull 2
+0.28 → 0.03 ms, its frame 2.16 → 1.96 ms). The work lists are sized by demand, so the scene can hold a million
 instances (197 MiB for 980 k rocks, against 2.9 GiB before). Since issue #37 an instance
 whose roots alone are the cut lists them in a root list instead of taking work items, 32
 roots of any instances to a cluster-cull item. Since issue #38 the instance cull can ask

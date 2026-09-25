@@ -48,7 +48,9 @@ batch in `docs/PROCESS.md`.
    probe update on the compute queue, its streaming copies on the transfer queue: 2.36 →
    2.25 ms). #78 (transient buffers, parallel recording) follows once CPU recording shows in
    the overlay. More overlap: #95.
-6. #92, the second cluster cull over the first one's rejects only.
+6. #92, the second cluster cull over the first one's rejects only ✅ (pass 1 lists what the
+   previous pyramid hid: the city's cluster cull 2 0.28 → 0.03 ms, its frame 2.16 → 1.96 ms,
+   the ballad 1.40 → 1.31 ms, every view faster).
 
 The owner confirmed this order on 2026-09-25, and the direction: grow the demos toward the
 games rather than rebuild a game now.

@@ -201,6 +201,7 @@ public static const uint STAT_INSTANCES_OCCLUDED = 13; // instances in the frust
 public static const uint STAT_CELLS_LISTED = 14;   // cells of 64 instances cell cull 1 listed for instance cull 1 (issue #38)
 public static const uint STAT_CELLS_DEFERRED = 15; // cells the previous pyramid hid whole, deferred to cell cull 2
 public static const uint STAT_CELLS_OPENED = 16;   // of those, the cells this frame's pyramid did not hide
+public static const uint STAT_REJECTED = 17;       // clusters pass 1 selected in view but the previous pyramid hid: pass 2's to test (issue #92)
 
 // The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
 // `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, filled by the
@@ -255,7 +256,7 @@ public struct Frame
     public Mesh* meshes;
     public Instance* instances;
     public uint* stats;
-    public uint64_t* cluster_lookback; // status words of the cluster culls' ordered appends: `cluster_groups` per pass
+    public uint64_t* cluster_lookback; // status words of the cluster culls' ordered appends: `cluster_groups` per pass, then as many for pass 1's rejects (issue #92)
     public uint cluster_groups;     // cluster-cull workgroups the fullest lists need: `work_capacity` items, then `work_capacity` roots at 32 an item
     public uint prev_hzb_image;     // sampled image index of the previous frame's pyramid
     public uint2* work;             // (instance, local group) per work item, built by `cull_main`
@@ -285,12 +286,20 @@ public struct Frame
     public uint* deferred;          // with occlusion: instance cull 2's grid (x, y, 1, count), then the instances instance cull 1 deferred and the cells cell cull 2 opened (issue #38; DEFERRED_LIST)
     public float4* cells;           // with FLAG_INSTANCE_CELLS: per cell of 64 instances in table order, their bounding sphere (xyz centre, w radius; issue #38)
     public uint* cell_list;         // with FLAG_INSTANCE_CELLS: instance cull 1's grid (x, y, 1, listed cells), cell cull 2's grid over the deferred cells (4), the cell culls' tickets (8, 9), then from CELL_LIST the listed cells and after them the deferred ones
+    public uint2* rejects;          // with occlusion: (instance, meshlet | CULLED_BIT) per cluster pass 1 selected in view but the previous pyramid hid, in cull order: pass 2's to test (issue #92)
+    public uint rejects_capacity;   // slots in `rejects`
+    public uint rejects_pad;
 };
 
 // The second half of `Frame::indirect` (issue #38): the pass 2 cluster cull's grid over both
 // segments of the work lists (x, y, 1, items), segment 2's work items and roots (the work of
 // the instances instance cull 2 let through, after pass 1's), then instance cull 2's ticket.
 static const uint INDIRECT_PASS2 = 8;
+// `Frame::indirect` word 7 (issue #92): how many clusters pass 1 left to pass 2 in
+// `Frame::rejects`, or REJECTS_OVERFLOW when they did not all fit: pass 2 then walks segment 1's
+// work items again, as pass 1 did.
+static const uint INDIRECT_REJECTS = 7;
+static const uint REJECTS_OVERFLOW = 0xFFFFFFFFu;
 // `Frame::deferred`: instance cull 2's grid, then how many instances instance cull 1 deferred
 // one by one and how many cells cell cull 2 opened; from DEFERRED_LIST the instances, then the
 // cells (at most one entry per instance in all: a deferred instance is in no deferred cell).
@@ -433,7 +442,8 @@ bool occlusion_visible(Frame* f, float3 world_center, float radius)
 // pass), seen from that frame's culling camera, does not hide it. A sphere entirely outside
 // that image counts as not shown, one crossing the near plane as shown, one partly outside is
 // tested where it was (the clamped samples, as in `occlusion_visible`). Pass 1 draws what
-// this accepts, and pass 2 asks the same question on the same inputs to skip it. The answer
+// this accepts and lists the rest for pass 2; when that list overflows, pass 2 asks the same
+// question on the same inputs to skip what pass 1 drew (issue #92). The answer
 // only decides which pass draws a cluster, never whether: what pass 1 skips, pass 2 tests
 // against a pyramid of depth that is all in the final image, so a visible cluster always
 // passes there.
@@ -597,6 +607,14 @@ uint grid_index(uint3 group)
     return group.y * GRID_ROW + group.x;
 }
 
+// Pass 2's work items over segment 1 (issue #92): the clusters pass 1 left to it, 32 to an
+// item, or, when they did not fit in `Frame::rejects`, pass 1's own work items.
+uint pass2_segment1_items(Frame* f)
+{
+    uint rejects = f[0].indirect[INDIRECT_REJECTS];
+    return rejects == REJECTS_OVERFLOW ? f[0].indirect[3] : (rejects + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
+}
+
 // Clusters pass 1 listed (hardware and software), final once pass 2 culls.
 uint pass1_listed(Frame* f)
 {
@@ -622,6 +640,7 @@ struct ClusterVerdict
 {
     bool draw;
     bool occluded;     // rejected by the depth pyramid (counted)
+    bool rejected;     // pass 1: selected and in view, but the previous pyramid hid it (counted)
     bool culled_debug; // FLAG_SHOW_CULLED: drawn although culling rejected it
     bool dense;        // drawn, and dense enough for the software rasteriser (`dense_cluster`)
     bool software;     // dense, and rasterised in compute
@@ -657,24 +676,78 @@ bool dense_cluster(Frame* f, float3 world_center, float radius, uint triangles)
     return max(size.x, size.y) < SW_RASTER_MAX_PX && size.x * size.y < f[0].sw_raster_area * float(triangles);
 }
 
+// The cluster's counts and where its payload lies, for the appends.
+void describe_cluster(Frame* f, inout ClusterVerdict v, Meshlet m)
+{
+    v.triangle_count = m.triangle_count;
+    v.vertex_count = m.vertex_count;
+    v.payload = payload_base(f, m);
+    v.lod_level = m.lod_level;
+}
+
+// Pass 2's test of a cluster pass 1 did not draw: this frame's pyramid. With
+// FLAG_SHOW_CULLED what it hides is drawn as culled.
+void test_this_frame(Frame* f, inout ClusterVerdict v, float3 center, float radius, bool hidden_instance)
+{
+    v.draw = !hidden_instance && occlusion_visible(f, center, radius);
+    v.occluded = !v.draw;
+    if (v.occluded && (f[0].flags & FLAG_SHOW_CULLED) != 0)
+    {
+        v.culled_debug = true;
+        v.draw = true;
+    }
+}
+
+// Whether a drawn cluster is dense, and rasterised in compute.
+void test_density(Frame* f, inout ClusterVerdict v, float3 center, float radius)
+{
+    v.dense = v.draw && dense_cluster(f, center, radius, v.triangle_count);
+    v.software = v.dense && (f[0].flags & FLAG_SW_RASTER) != 0;
+}
+
+// Pass 2's cull of the `entry`-th cluster pass 1 left to it (issue #92): pass 1 selected it
+// and found it in view, but the previous pyramid hid it, so only this frame's pyramid is left
+// to ask. The entries keep pass 1's order, so pass 2 appends what it draws in the order its
+// walk over pass 1's work items did.
+ClusterVerdict cull_rejected(Frame* f, uint entry)
+{
+    ClusterVerdict v = {};
+    if (entry >= f[0].indirect[INDIRECT_REJECTS])
+        return v;
+    uint2 r = f[0].rejects[entry];
+    v.instance = r.x;
+    v.meshlet = r.y & MESHLET_INDEX_MASK;
+    v.culled_debug = (r.y & CULLED_BIT) != 0; // the normal cone rejected it (FLAG_SHOW_CULLED)
+    Instance* inst = f[0].instances + v.instance;
+    Meshlet m = f[0].meshlets[v.meshlet];
+    describe_cluster(f, v, m);
+    float scale = length(inst[0].model[0].xyz);
+    float3 center = mul(inst[0].model, float4(m.center, 1)).xyz;
+    float world_radius = m.radius * scale;
+    test_this_frame(f, v, center, world_radius, false);
+    test_density(f, v, center, world_radius);
+    return v;
+}
+
 // Culls cluster `thread` of work item `item`: LOD selection, frustum and normal cone; with
-// occlusion, pass 1 keeps what the previous frame showed and pass 2 what this frame's pyramid
-// does not hide among the rest.
+// occlusion, pass 1 keeps what the previous frame showed and lists the rest in view for pass 2
+// (`Frame::rejects`), which keeps what this frame's pyramid does not hide.
 ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
 {
     ClusterVerdict v = {};
     uint pass = f[0].pass;
     // The first items are an instance's group of 32 clusters each; the rest cover the root
-    // list, 32 root clusters (of any instances) each. Pass 2 then reads a second segment of
-    // both lists: the instances pass 1 deferred and instance cull 2 let through, none of whose
-    // clusters pass 1 saw (issue #38).
+    // list, 32 root clusters (of any instances) each. Pass 2 reads the clusters pass 1 left to
+    // it instead (issue #92), or walks the same items again when they did not fit. It then
+    // reads a second segment of both lists: the instances pass 1 deferred and instance cull 2
+    // let through, none of whose clusters pass 1 saw (issue #38).
     uint regular = f[0].indirect[5];
     uint listed = f[0].indirect[6];
     uint2 base = 0;
     bool fresh = false;
     if (pass == PASS_REMAINDER)
     {
-        uint items1 = regular + (listed + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
+        uint items1 = pass2_segment1_items(f);
         if (item >= items1)
         {
             fresh = true;
@@ -682,6 +755,10 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
             base = uint2(regular, listed);
             regular = f[0].indirect[INDIRECT_PASS2 + 4];
             listed = f[0].indirect[INDIRECT_PASS2 + 5];
+        }
+        else if (f[0].indirect[INDIRECT_REJECTS] != REJECTS_OVERFLOW)
+        {
+            return cull_rejected(f, item * TASK_GROUP_SIZE + thread);
         }
     }
     uint local_meshlet;
@@ -718,10 +795,7 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
         return v;
     v.meshlet = mesh[0].meshlet_offset + local_meshlet;
     Meshlet m = f[0].meshlets[v.meshlet];
-    v.triangle_count = m.triangle_count;
-    v.vertex_count = m.vertex_count;
-    v.payload = payload_base(f, m);
-    v.lod_level = m.lod_level;
+    describe_cluster(f, v, m);
     float3 center = mul(inst[0].model, float4(m.center, 1)).xyz;
     float world_radius = m.radius * scale;
     bool visible = lod_selected(f, m, inst[0].model, scale, streamed);
@@ -744,28 +818,20 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     if (pass == PASS_PREVIOUSLY_VISIBLE)
     {
         v.draw = visible && visible_last_frame(f, center, world_radius);
+        v.rejected = visible && !v.draw;
     }
     else if (pass == PASS_REMAINDER)
     {
         // Pass 1 drew what the previous frame showed; the rest faces this frame's pyramid.
         // Segment 2's clusters were never pass 1's to draw.
         if (visible && (fresh || !visible_last_frame(f, center, world_radius)))
-        {
-            v.draw = !hidden_instance && occlusion_visible(f, center, world_radius);
-            v.occluded = !v.draw;
-            if (v.occluded && show_culled)
-            {
-                v.culled_debug = true;
-                v.draw = true;
-            }
-        }
+            test_this_frame(f, v, center, world_radius, hidden_instance);
     }
     else
     {
         v.draw = visible;
     }
-    v.dense = v.draw && dense_cluster(f, center, world_radius, m.triangle_count);
-    v.software = v.dense && (f[0].flags & FLAG_SW_RASTER) != 0;
+    test_density(f, v, center, world_radius);
     return v;
 }
 
@@ -895,7 +961,8 @@ groupshared uint s_sw_triangles;
 groupshared uint s_dense_triangles;
 groupshared uint s_levels;
 groupshared uint s_occluded;
-groupshared uint s_kept_software;        // where the list ends: software clusters still kept
+groupshared uint s_rejected[CULL_ITEMS]; // pass 1: per work item, a bit per lane: the cluster is left to pass 2
+groupshared uint s_kept_software;      // where the list ends: software clusters still kept
 
 // One workgroup per CULL_ITEMS work items: cull their clusters and append the survivors to
 // this pass's range of the visible-cluster list in item order, then lane order, and their
@@ -924,6 +991,7 @@ void cluster_cull(uint thread, bool streamed)
     {
         s_drawn[thread] = 0;
         s_software[thread] = 0;
+        s_rejected[thread] = 0;
     }
     GroupMemoryBarrierWithGroupSync();
     uint ticket = s_ticket;
@@ -951,6 +1019,8 @@ void cluster_cull(uint thread, bool streamed)
     }
     if (v.occluded)
         InterlockedAdd(s_occluded, 1);
+    if (v.rejected)
+        InterlockedOr(s_rejected[local], 1u << lane);
     GroupMemoryBarrierWithGroupSync();
     uint* args = pass_args(f);
     // Pass 2 fills what pass 1 left of the list (pass 1's counts are final by now).
@@ -968,6 +1038,26 @@ void cluster_cull(uint thread, bool streamed)
     uint index = first.x + before.x + countbits(s_drawn[local] & below);
     uint sw_index = first.y + before.y + countbits(s_software[local] & below); // software clusters before this one
     uint hw_index = index - sw_index; // for a hardware-drawn cluster, the hardware-drawn ones before it
+    // Pass 1 lists the clusters it leaves to pass 2 in the same order, through a run of status
+    // words of its own after the two passes' (issue #92). Without a previous pyramid it draws
+    // nothing and leaves everything: pass 2 then walks the work items again, as it would.
+    bool lists = f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_PREV_PYRAMID) != 0;
+    uint rejected = 0;     // this workgroup's
+    uint rejects_first = 0; // the workgroups' before it
+    uint reject_index = 0; // this thread's slot in `Frame::rejects`
+    if (lists)
+    {
+        uint rejected_before = 0;
+        for (uint k = 0; k < CULL_ITEMS; k++)
+        {
+            uint n = countbits(s_rejected[k]);
+            rejected_before += k < local ? n : 0u;
+            rejected += n;
+        }
+        GroupMemoryBarrierWithGroupSync(); // every thread is done with the first look-back's shared words
+        rejects_first = lookback_exclusive(f[0].cluster_lookback + 2 * f[0].cluster_groups, ticket, uint2(rejected, 0), thread).x;
+        reject_index = rejects_first + rejected_before + countbits(s_rejected[local] & below);
+    }
     // The list ends in this workgroup (at most one does); every thread agrees on both.
     bool past_end = first.x + drawn.x > capacity;
     bool ends_here = past_end && first.x <= capacity;
@@ -1008,6 +1098,8 @@ void cluster_cull(uint thread, bool streamed)
         }
         if (s_occluded > 0)
             InterlockedAdd(f[0].stats[STAT_OCCLUDED], s_occluded);
+        if (rejected > 0)
+            InterlockedAdd(f[0].stats[STAT_REJECTED], rejected);
         uint2 listed = 0; // the pass's kept clusters and software ones, when known here
         bool knows = false;
         if (ends_here)
@@ -1028,6 +1120,17 @@ void cluster_cull(uint thread, bool streamed)
                 listed = first + drawn;
                 knows = true;
             }
+            if (f[0].pass == PASS_PREVIOUSLY_VISIBLE)
+            {
+                // Pass 2's grid over segment 1: the clusters left to it, or pass 1's work
+                // items again when they were not listed or did not all fit (instance cull 2
+                // adds segment 2).
+                uint left = rejects_first + rejected;
+                bool fits = lists && left <= f[0].rejects_capacity;
+                f[0].indirect[INDIRECT_REJECTS] = fits ? left : REJECTS_OVERFLOW;
+                uint items2 = fits ? (left + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE : items;
+                write_grid(f[0].indirect + INDIRECT_PASS2, (items2 + CULL_ITEMS - 1) / CULL_ITEMS, items2);
+            }
         }
         if (knows)
         {
@@ -1042,6 +1145,8 @@ void cluster_cull(uint thread, bool streamed)
             InterlockedAdd(f[0].stats[STAT_SW_CLUSTERS], listed.y);
         }
     }
+    if (lists && v.rejected && reject_index < f[0].rejects_capacity)
+        f[0].rejects[reject_index] = uint2(v.instance, v.meshlet | (v.culled_debug ? CULLED_BIT : 0u));
     if (!v.draw || index >= capacity)
         return;
     uint slot = visible_slot(f, index);
@@ -1218,8 +1323,9 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         uint items = regular + (listed + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
         if (second)
         {
-            // Pass 2's cluster cull covers both segments.
-            uint all = f[0].indirect[3] + items;
+            // Pass 2's cluster cull covers both segments: segment 1 as cluster cull 1 left it
+            // (issue #92), then segment 2.
+            uint all = pass2_segment1_items(f) + items;
             write_grid(f[0].indirect + INDIRECT_PASS2, (all + CULL_ITEMS - 1) / CULL_ITEMS, all);
             f[0].indirect[INDIRECT_PASS2 + 4] = regular;
             f[0].indirect[INDIRECT_PASS2 + 5] = listed;
@@ -1229,7 +1335,8 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
             write_grid(f[0].indirect, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
             f[0].indirect[5] = regular;
             f[0].indirect[6] = listed;
-            // Pass 2 covers segment 1 alone until instance cull 2 appends a segment 2.
+            // Pass 2 covers segment 1 alone until cluster cull 1 lists what it leaves to it
+            // (issue #92) and instance cull 2 appends a segment 2.
             write_grid(f[0].indirect + INDIRECT_PASS2, (items + CULL_ITEMS - 1) / CULL_ITEMS, items);
             f[0].indirect[INDIRECT_PASS2 + 4] = 0;
             f[0].indirect[INDIRECT_PASS2 + 5] = 0;

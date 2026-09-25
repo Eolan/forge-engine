@@ -227,7 +227,7 @@ const PASS_PREVIOUSLY_VISIBLE: u32 = 1;
 const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
-const STAT_COUNT: usize = 17;
+const STAT_COUNT: usize = 18;
 const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
@@ -329,7 +329,8 @@ struct GpuFrame {
     meshes: u64,
     instances: u64,
     stats: u64,
-    /// The cluster culls' status words, `cluster_groups` per pass.
+    /// The cluster culls' status words, `cluster_groups` per pass, then as many for pass 1's
+    /// list of what it leaves to pass 2 (issue #92).
     cluster_lookback: u64,
     cluster_groups: u32,
     /// The previous frame's pyramid (sampled-image index).
@@ -383,6 +384,12 @@ struct GpuFrame {
     cells: u64,
     /// With cells: the cell culls' grids, tickets and lists (`CELL_LIST_START`).
     cell_list: u64,
+    /// With occlusion: the clusters pass 1 leaves to pass 2, (instance, meshlet | flags) in
+    /// cull order (issue #92).
+    rejects: u64,
+    /// Slots in `rejects`.
+    rejects_capacity: u32,
+    rejects_pad: u32,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -489,6 +496,13 @@ fn create_shading_tiles(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[G
     })?;
     Ok([GraphBuffer::new(tiles), GraphBuffer::new(args)])
 }
+
+/// Slots the list of what pass 1 leaves to pass 2 starts with per frame slot (512 KiB; the
+/// city's views leave 80–160 k, the bench's side view 330 k). What does not fit, pass 2 walks
+/// again from pass 1's work items (issue #92), and [`MeshletRenderer::begin_frame`] grows it.
+const REJECTS_INITIAL_CAPACITY: u32 = 1 << 16;
+/// Most slots it grows to (8 MiB per frame slot).
+const REJECTS_MAX_CAPACITY: u32 = 1 << 20;
 
 /// Slots the visible-cluster list starts with per frame slot, both passes together (512 KiB;
 /// the LOD views of both demos list 8–15 k clusters). The cluster cull drops and counts what
@@ -1353,6 +1367,9 @@ pub struct FrameStats {
     /// Of those, the ones this frame's pyramid did not hide (their instances go to instance
     /// cull 2).
     pub cells_opened: u32,
+    /// Clusters pass 1 selected and found in view, but the previous frame's pyramid hid them:
+    /// what pass 2 tests against this frame's (issue #92).
+    pub rejected: u32,
 }
 
 impl FrameStats {
@@ -1469,7 +1486,8 @@ const WORK_MAX_CAPACITY: u32 = 1 << 24;
 /// instance's group of 32 clusters per work item, and the root list, (instance, local
 /// cluster) per root of the instances whose roots are the whole cut, read 32 roots to a work
 /// item after the others; `capacity` of each. Then the cluster culls' status words, one per
-/// workgroup of `CULL_ITEMS` items and pass, cleared before the instance cull.
+/// workgroup of `CULL_ITEMS` items and pass, and one more run for pass 1's list of what it
+/// leaves to pass 2 (issue #92), cleared before the instance cull.
 struct WorkList {
     work: GraphBuffer,
     roots: GraphBuffer,
@@ -1504,7 +1522,7 @@ impl WorkList {
                 format!("cull root list {slot}"),
             )?,
             lookback: buffer(
-                2 * groups * 8,
+                3 * groups * 8,
                 vk::BufferUsageFlags::TRANSFER_DST,
                 format!("cluster cull look-back {slot}"),
             )?,
@@ -1564,6 +1582,32 @@ impl VisibleList {
             visible: GraphBuffer::new(visible),
             raster: GraphBuffer::new(raster),
             draws: draws.map(GraphBuffer::new),
+            capacity,
+        })
+    }
+}
+
+/// One frame slot's list of the clusters pass 1 leaves to pass 2 (issue #92): (instance,
+/// meshlet | flags) per cluster pass 1 selected and found in view but the previous frame's
+/// pyramid hid, in cull order. Pass 2 tests them alone against this frame's pyramid. When they
+/// do not all fit, pass 2 walks pass 1's work items again, so nothing is lost, and
+/// [`MeshletRenderer::begin_frame`] grows the list from [`FrameStats::rejected`].
+struct RejectList {
+    list: GraphBuffer,
+    capacity: u32,
+}
+
+impl RejectList {
+    fn new(device: &Arc<Device>, capacity: u32, slot: usize) -> Result<Self> {
+        let list = device.create_buffer(BufferDesc {
+            size: u64::from(capacity) * 8,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: &format!("pass 2 rejects {slot}"),
+        })?;
+        Ok(Self {
+            list: GraphBuffer::new(list),
             capacity,
         })
     }
@@ -1642,6 +1686,10 @@ pub struct MeshletRenderer {
     lists: Vec<VisibleList>,
     /// Slots every frame slot's list grows to (see [`MeshletRenderer::begin_frame`]).
     visible_target: u32,
+    /// Per frame slot: the clusters pass 1 leaves to pass 2 (issue #92).
+    rejects: Vec<RejectList>,
+    /// Slots every frame slot's reject list grows to.
+    rejects_target: u32,
     /// [`VISIBLE_MAX_CAPACITY`], or less when the fallback's `maxDrawIndirectCount` or the mesh
     /// path's `maxMeshWorkGroupTotalCount` is lower.
     visible_max: u32,
@@ -1733,6 +1781,8 @@ struct MeshPassIo {
     visible: forge_gpu::BufferHandle,
     /// Its raster lists.
     raster: forge_gpu::BufferHandle,
+    /// The clusters pass 1 leaves to pass 2 (issue #92).
+    rejects: forge_gpu::BufferHandle,
     /// The software rasteriser's samples, when it runs this frame.
     vis64: Option<forge_gpu::BufferHandle>,
     stats: forge_gpu::BufferHandle,
@@ -1998,6 +2048,9 @@ impl MeshletRenderer {
         let lists = (0..FRAMES_IN_FLIGHT)
             .map(|i| VisibleList::new(device, path, visible_target, i))
             .collect::<Result<Vec<_>>>()?;
+        let rejects = (0..FRAMES_IN_FLIGHT)
+            .map(|i| RejectList::new(device, REJECTS_INITIAL_CAPACITY, i))
+            .collect::<Result<Vec<_>>>()?;
         tracing::info!(
             path = path.name(),
             visible_capacity = visible_target,
@@ -2033,6 +2086,8 @@ impl MeshletRenderer {
             stats_readback,
             lists,
             visible_target,
+            rejects,
+            rejects_target: REJECTS_INITIAL_CAPACITY,
             visible_max,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
             sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
@@ -2230,6 +2285,7 @@ impl MeshletRenderer {
             cells_listed: raw[14],
             cells_deferred: raw[15],
             cells_opened: raw[16],
+            rejected: raw[17],
         });
         if let Some(s) = stats {
             // One capacity for both lists: the larger demand.
@@ -2297,6 +2353,23 @@ impl MeshletRenderer {
             // The frame that last used this slot has completed (the caller waited for the
             // slot), so its list can go now.
             *list = VisibleList::new(&self.device, self.path, self.visible_target, slot.index)?;
+        }
+        if let Some(s) = stats {
+            let wanted = u64::from(s.rejected);
+            let target = grown_capacity(self.rejects_target, wanted, REJECTS_MAX_CAPACITY);
+            if target != self.rejects_target {
+                tracing::info!(
+                    wanted,
+                    from = self.rejects_target,
+                    to = target,
+                    "pass 2 reject list grown"
+                );
+                self.rejects_target = target;
+            }
+        }
+        let rejects = &mut self.rejects[slot.index];
+        if rejects.capacity < self.rejects_target {
+            *rejects = RejectList::new(&self.device, self.rejects_target, slot.index)?;
         }
         Ok(stats)
     }
@@ -2411,6 +2484,9 @@ impl MeshletRenderer {
             deferred: scene.deferred[slot.index].address(),
             cells: scene.cells.address(),
             cell_list: scene.cell_lists[slot.index].address(),
+            rejects: self.rejects[slot.index].list.address(),
+            rejects_capacity: self.rejects[slot.index].capacity,
+            rejects_pad: 0,
         }
     }
 
@@ -2501,6 +2577,7 @@ impl MeshletRenderer {
                 .map(|b| graph.import_buffer(b)),
             visible: graph.import_buffer(&self.lists[slot.index].visible),
             raster: graph.import_buffer(&self.lists[slot.index].raster),
+            rejects: graph.import_buffer(&self.rejects[slot.index].list),
             vis64: self
                 .vis64
                 .as_ref()
@@ -2548,7 +2625,7 @@ impl MeshletRenderer {
         let lookback: &'f GraphBuffer = &scene.lookback[slot.index];
         let work_list = &self.work_lists[slot.index];
         let cluster_lookback: &'f GraphBuffer = &work_list.lookback;
-        let cluster_lookback_bytes = 2 * u64::from(work_list.groups()) * 8;
+        let cluster_lookback_bytes = 3 * u64::from(work_list.groups()) * 8;
         let stats: &'f GraphBuffer = &self.stats;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let need: Option<&'f GraphBuffer> = scene.streamer.as_ref().map(|s| &s.need_buffer);
@@ -2662,6 +2739,7 @@ impl MeshletRenderer {
             frame_address,
             args_offset: 0,
             second: false,
+            lists_rejects: occlusion,
         };
         self.cull_pass(graph, cull_label, first, &params, slot);
         if !occlusion {
@@ -2690,6 +2768,7 @@ impl MeshletRenderer {
                 frame_address: frame_address + FRAME_BLOCK_STRIDE,
                 args_offset: CLUSTER_ARGS_PASS_BYTES,
                 second: true,
+                lists_rejects: false,
             };
             self.cull_pass(
                 graph,
@@ -2975,14 +3054,19 @@ impl MeshletRenderer {
             io,
             frame_address,
             second,
+            lists_rejects,
             ..
         } = pass;
+        // Pass 1 of two also writes how many clusters it leaves to pass 2, and pass 2's grid
+        // (issue #92).
+        let indirect = if lists_rejects {
+            BufferAccess::IndirectArgsAndShaderReadWrite(compute)
+        } else {
+            BufferAccess::IndirectArgsAndShaderRead(compute)
+        };
         let mut builder = graph
             .pass(label)
-            .buffer(
-                io.indirect,
-                BufferAccess::IndirectArgsAndShaderRead(compute),
-            )
+            .buffer(io.indirect, indirect)
             .buffer(io.work, BufferAccess::ShaderRead(compute))
             .buffer(io.roots, BufferAccess::ShaderRead(compute))
             .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
@@ -2997,8 +3081,13 @@ impl MeshletRenderer {
         if let Some(need) = io.need {
             builder = builder.buffer(need, BufferAccess::ShaderReadWrite(compute));
         }
-        // Pass 1 tests the previous pyramid; pass 2 that one too (to skip what pass 1 drew) and
-        // this frame's.
+        if lists_rejects {
+            builder = builder.buffer(io.rejects, BufferAccess::ShaderWrite(compute));
+        } else if second {
+            builder = builder.buffer(io.rejects, BufferAccess::ShaderRead(compute));
+        }
+        // Pass 1 tests the previous pyramid; pass 2 that one too (to skip what pass 1 drew,
+        // when pass 1's rejects did not fit, issue #92) and this frame's.
         if let Some(prev) = io.hzb_prev {
             builder = builder.image(prev, ImageAccess::Sampled(compute));
         }
@@ -3355,6 +3444,8 @@ struct MeshPass {
     args_offset: u64,
     /// The second pass of the two-pass occlusion: tests the depth pyramid, loads the targets.
     second: bool,
+    /// The first pass of the two: lists what it leaves to the second (issue #92).
+    lists_rejects: bool,
 }
 
 #[cfg(test)]

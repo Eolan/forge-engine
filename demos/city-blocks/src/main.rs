@@ -790,7 +790,7 @@ impl Demo for Gallery {
         let mut frames = std::mem::take(&mut self.frame_ms);
         let (p50, p99) = (percentile(&mut frames, 0.5), percentile(&mut frames, 0.99));
         let title = format!(
-            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances ({:.0} k hidden; cells {:.1} k listed, {:.1} k hidden whole, {:.2} k opened again), {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms, frame p50 {p50:.2} p99 {p99:.2} ms",
+            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances ({:.0} k hidden; cells {:.1} k listed, {:.1} k hidden whole, {:.2} k opened again), {:.0} k + {:.0} k clusters ({:.0} k in software, {:.1} k left to pass 2; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms, frame p50 {p50:.2} p99 {p99:.2} ms",
             self.scene.instance_count,
             self.scene.total_triangles as f64 / 1e6,
             self.scene.instance_meshlets() as f64 / 1e6,
@@ -803,6 +803,7 @@ impl Demo for Gallery {
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,
+            mean(|s| s.rejected) / 1e3,
             mean(|s| s.work_items) / 1e3,
             mean(|s| s.root_entries) / 1e3,
             mean(|s| s.triangles) / 1e6,

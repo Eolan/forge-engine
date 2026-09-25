@@ -292,10 +292,11 @@ At `--side 700` (980 000 instances of the 2 639-cluster rock), the work buffers 
 - **Occlusion from the previous frame's pyramid** (Nanite's main and post passes). Pass 1
   draws the clusters that the previous frame's pyramid shows, seen from the previous culling
   camera; a cluster entirely outside that image counts as unseen. The frame then builds its
-  own pyramid into the other of two images. Pass 2 asks pass 1's question again, on the same
-  inputs, to skip what it drew, and tests the rest against the new pyramid. Nothing is kept
-  per cluster. Pass 1's answer only decides which pass draws a cluster, never whether: what
-  it skips, pass 2 tests against a pyramid built from depth that is all in the final image.
+  own pyramid into the other of two images. Pass 2 asked pass 1's question again, on the same
+  inputs, to skip what it drew, and tested the rest against the new pyramid. Since #92, pass 1
+  lists that rest for it instead (below). Pass 1's answer only decides which pass draws a
+  cluster, never whether: what it skips, pass 2 tests against a pyramid built from depth that
+  is all in the final image.
   - After a resize, or with occlusion just turned on, there is no previous pyramid: pass 1
     draws nothing and pass 2 everything visible.
   - A frozen culling camera keeps the last pyramid.
@@ -667,8 +668,8 @@ cluster culls: 791 k roots tested for 56 k drawn clusters.
   work and root lists (segment 2). Its grid heads the deferred list, written by instance
   cull 1.
 - **Pass 2's cluster cull** covers both segments. Segment 1 is as before: pass 1's question
-  again, then this frame's pyramid for the rest. Segment 2's clusters were never pass 1's,
-  so they face this frame's pyramid directly.
+  again, then this frame's pyramid for the rest (since #92, the rest as pass 1 listed it).
+  Segment 2's clusters were never pass 1's, so they face this frame's pyramid directly.
 - **`--show-culled`** still checks the instance test: hidden instances list their work
   anyway, tagged, and their clusters are drawn as culled (red), which must never show.
 - **Memory:** a deferred list of 4 bytes an instance per frame slot, 7.6 MiB for the city's
@@ -775,6 +776,68 @@ a pass 2 over pass 1's rejects only, #38's third idea, is the next step for them
 - **`--show-culled` in the city** (new) shows no red. It differs from the plain frame by
   235 grey pixels of at most 17 levels, the same with cells on and off (104 without the
   probes).
+
+## Pass 2 over pass 1's rejects (issue #92, 2026-09-25)
+
+After the cells, the two cluster culls were the city's largest geometry zones, 0.28 and
+0.31 ms at the south edge. Pass 2's cull walked all of pass 1's work again: 41 k work items
+of 32 clusters and 10 k roots. It asked pass 1's question once more to skip what pass 1 had
+drawn, and tested the rest against this frame's pyramid. Most of its time repeated pass 1's
+work.
+
+**What pass 1 leaves** (new counter: "left to pass 2" in the demos' title lines):
+
+| View | left to pass 2 | what pass 2 walked |
+|---|---|---|
+| city, south edge | 85 k clusters | 41 k work items + 10 k roots (1.3 M lanes) |
+| city orbit | 80 k | 57 k work items + 185 k roots |
+| city flight | 162 k | 19 k work items + 428 k roots |
+| `meshlets --side 700` | 330 k | 3 k work items + 711 k roots |
+| ballad | 36 k | |
+
+**How:**
+- **The list.** Pass 1's cluster cull appends each cluster it selects and finds in view, but
+  the previous pyramid hides, to a list: (instance, cluster), with the cone's culled bit for
+  `--show-culled`. It appends in its own order through a third run of status words (the same
+  ordered append as its visible clusters). Its last workgroup writes the count and pass 2's
+  grid over it.
+- **Pass 2** reads that list, 32 entries to a work item, and tests each cluster against this
+  frame's pyramid only. Segment 2 (the instances instance cull 2 let through, #38) follows as
+  before.
+- **The same pixels.** The list keeps pass 1's order, so pass 2 appends what it draws in the
+  order its old walk did: the ids, and so the depth ties, do not change. LOD selection now
+  runs once, in pass 1. That is also where the streamed pages a cluster wants are recorded:
+  an atomic max, which pass 2's repeat of it never changed.
+- **When the list is short.** It starts at 65 536 entries (512 KiB) per frame slot and grows
+  from the counter, up to 1 M (8 MiB). A frame whose clusters do not fit, and a frame without
+  a previous pyramid, sends pass 2 over pass 1's work items again, the old way. Nothing is
+  lost in either case.
+- **The graph** gained an access for a pass that dispatches from a buffer and writes
+  elsewhere in it (`IndirectArgsAndShaderReadWrite`): cluster cull 1 reads its own grid and
+  writes pass 2's.
+
+| GPU ms per frame, 1600 × 900 (`tools/timings.sh`, alternating runs, three each) | before | after |
+|---|---|---|
+| city, south edge | 2.159 | **1.960** |
+| the same, every page resident | 2.213 | **2.048** |
+| city orbit | 2.712 | **2.442** |
+| city flight | 2.174 | **2.033** |
+| `meshlets --side 700` | 1.433 | **1.378** |
+| bench, bench orbit | 0.232, 0.145 | 0.228, 0.142 |
+| ballad, 1600 × 900 and 1440p | 1.403, 2.820 | **1.308, 2.667** |
+
+Cluster cull 2 goes 0.278 → 0.033 ms at the south edge, 0.212 → 0.056 in the flight and
+0.130 → 0.057 at `--side 700`, whose 330 k entries are more than a third of what it walked.
+Cluster cull 1 pays for its second ordered append and the writes: +0.03 to +0.05 ms.
+
+**Memory:** work buffers 19.96 → 21.76 MiB for the ballad and 5.15 → 6.34 for the bench. The
+city's first frames leave 820 k clusters to pass 2, before instance occlusion's auto mode
+turns on, which grows its list to the 8 MiB cap per slot (127.8 → 145.9 MiB).
+
+**Pixels:** the capture batch and the A/B harness are at 0 px against the build before, and
+again with the list forced to overflow on every frame (16 entries), which runs the old walk
+throughout. The one exception is the ballad's TAA frame 600, #71's flake. Synchronization
+validation is silent on every demo and path.
 
 ## Next steps (from the research recommendation)
 
