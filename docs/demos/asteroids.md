@@ -12,7 +12,8 @@ hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
-`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--clear-ice` (#59's one clear ice), `--round-rocks` (Phase 0's round rocks), `--no-occlusion`, `--no-cone`,
+`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--clear-ice` (#59's one clear ice), `--ice-belt D` (the ice in its own belt D metres
+away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round rocks), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -269,6 +270,24 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Two belts, as an option (2026-09-25, issue #22)
+
+The owner's idea: "make asteroid belt separate from ice asteroid belt but still 'orbit' the
+same way, ice belt can be 'behind' the first belt". `--ice-belt D` moves the ice asteroids
+to a belt of their own. It follows the same centre line, D metres along the orbit's radial
+axis:
+- **Positive D, away from the sun:** where ice would sit in a real system, beyond the frost
+  line. From the path, the ice belt shows behind the rock belt, lit from the front.
+- **Negative D, sunward:** the ice would be backlit and glow (#59, #61).
+
+At 0, the default, it is the single mixed belt, identical to #23's build. Which side and
+distance the showcase should use is the owner's call.
+
+![Frame 300: the mixed belt, then `--ice-belt 400`: an ice belt behind the rocks](images/asteroids-ice-belt.png)
+
+**Checks:** the default is identical to the previous build; with `--ice-belt 400` the
+culling harness and mesh against fallback are at 0, and synchronization validation is silent.
 
 ## More chunks (2026-09-25, issue #23)
 

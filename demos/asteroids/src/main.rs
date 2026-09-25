@@ -61,6 +61,10 @@ struct Args {
     /// One ice for every block: #59's clear ice, instead of three densities of bubbles.
     #[arg(long)]
     clear_ice: bool,
+    /// Put the ice asteroids in a belt of their own along the same orbit, this many metres
+    /// beyond the rock belt, away from the sun (issue #22; negative: sunward; 0: one mixed belt).
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    ice_belt: f32,
     /// Draw without the sunlit dust between the rocks (V toggles it).
     #[arg(long)]
     no_dust: bool,
@@ -994,7 +998,7 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
     };
     // Ice of three densities (issue #61): clear blocks glow deep blue through metres of ice,
     // bubbly ones turn white and glow only at their thin edges.
-    let ice = if args.clear_ice {
+    let ice_rows = if args.clear_ice {
         [materials.add(stock::ice()); 3]
     } else {
         [
@@ -1068,7 +1072,14 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
     while placed < args.count && attempts < args.count * 40 {
         attempts += 1;
         let t = rng.next_f32();
-        let c = centre(t);
+        let id = builder.instance_count() as u32;
+        let ice = stock::is_ice(id);
+        // With `--ice-belt`, the ice keeps to a belt of its own along the same orbit (issue #22).
+        let c = if ice {
+            centre(t) + Vec3::Z * args.ice_belt
+        } else {
+            centre(t)
+        };
         // Clumps every ~80 m along the belt, thinner in between.
         let clump = (t * length / 80.0 * std::f32::consts::TAU).cos() * 0.5 + 0.5;
         if rng.next_f32() > 0.25 + 0.75 * clump {
@@ -1121,18 +1132,13 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
             rng.range_f32(0.0, std::f32::consts::TAU),
             rng.range_f32(0.0, std::f32::consts::TAU),
         );
-        let id = builder.instance_count() as u32;
         // The shape within its class, by a hash of the instance: the placement draws the same
         // numbers as with one shape.
         let variant = (hash_cell3(0x5EED_0023, id as i32, 0, 0) % variants as u64) as usize;
         builder.add_instance_with_material(
             mesh_ids[mesh * variants + variant],
             Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
-            if stock::is_ice(id) {
-                ice[ice_kind(id)]
-            } else {
-                rock
-            },
+            if ice { ice_rows[ice_kind(id)] } else { rock },
         );
         placed += 1;
     }
