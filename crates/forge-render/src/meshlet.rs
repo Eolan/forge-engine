@@ -65,6 +65,9 @@ impl CullFlags {
     /// On the smooth rows, trace the mirror ray against the TLAS instead of reading the sky
     /// alone (issue #50; with `SKY_REFLECTIONS`, a TLAS and ray queries).
     pub const RAY_REFLECTIONS: u32 = 65536;
+    /// Translucent ice: the sun through its thickness, by rays (issue #59; with a TLAS and ray
+    /// queries).
+    pub const TRANSLUCENCY: u32 = 131072;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 

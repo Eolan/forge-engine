@@ -57,7 +57,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   sun's ray-traced shadows between the rocks and the textured rock ✅ (issue #46, D-029:
   0.444 ms), GTAO on the fill ✅ (issue #55, D-030: 0.554 ms; soft shadows opt-in, since
   TAA smears their wide penumbrae in motion), the belt's sunlit dust with shafts from the TLAS ✅
-  (issue #58, D-032: 0.644 ms).
+  (issue #58, D-032: 0.644 ms), translucent ice ✅ (issue #59, D-033: the sun through
+  its thickness by rays, 0.694 ms).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.

@@ -57,6 +57,7 @@ exposure (EV100, target, compensation, curve) the last.
   it to a pass of its own, 0.082 ms, and the ballad takes 0.540 ms (0.448 without AO).
 - The belt's dust (#58, D-032) adds 0.105 ms: 0.538 → 0.644 ms. `dust/light` takes 0.073 of it,
   one shadow ray per froxel.
+- Translucent ice (#59, D-033): `shading/ice` 0.018 → 0.065 ms, 0.694 ms in all.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

@@ -872,3 +872,29 @@ it. In motion, consecutive frames change no more than without dust (7.7 % agains
 pixels by more than four levels). With `--no-dust` the captures are those of the previous
 build.
 *(research: lighting-gi.md §6; issue #58; demo: asteroids)*
+
+## D-033 — Translucent ice by ray-traced thickness ✅ (2026-09-25)
+
+The owner's look for the ballad (ROADMAP, "Next for the ballad", item 4) asks for ice
+"translucent according to its density and to the thickness of ice between the light and the
+camera". Games usually approximate the thickness with a baked local-thickness map (Barré-Brisebois
+and Bouchard, "Approximating Translucency for a Fast, Cheap and Convincing Subsurface
+Scattering Look", GDC 2011). With the TLAS and the cuts on the GPU (D-029, D-031), the
+thickness can be measured instead (issue #59, `ice_transmission` in `meshlet.slang`):
+- **The ray:** from the pixel's point towards the sun, as a non-opaque query that commits
+  nothing, so it sees every crossing of the pixel's own instance within its bounding sphere.
+  The last crossing is where the sunlight entered. The rule needs no winding and holds on
+  either side of the cut's surface.
+- **The sun:** a shadow ray from the entry point decides whether the sun reaches it.
+- **The light:** transmittance exp(−σ·t) per channel, σ = (0.16, 0.10, 0.065) m⁻¹, since
+  ice absorbs red. It is tinted by the ice's albedo and scattered forwards with a
+  Henyey–Greenstein phase (g = 0.5) towards the camera, with 30 % of the crossing light
+  leaving that way.
+
+It runs in the ice class pass only and is deterministic per pixel, with no noise. **Left for
+later:** density as a material parameter (the row's), the fractured chunks (#12), light
+scattered inside the body from the sky and the planet, and refraction of what lies behind.
+
+*Measured* (asteroids, RTX 5070 Ti, 1600×900): `shading/ice` 0.018 → 0.065 ms, the ballad
+0.646 → 0.694 ms. With `--no-translucency` the captures are those of the previous build.
+*(research: lighting-gi.md; D-029, D-031; issue #59; demo: asteroids)*

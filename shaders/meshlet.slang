@@ -164,6 +164,8 @@ public static const uint FLAG_SHOW_AO = 16384;
 public static const uint FLAG_SKY_REFLECTIONS = 32768;
 // On the smooth rows, trace the mirror ray against `Frame::tlas` (issue #50).
 public static const uint FLAG_RAY_REFLECTIONS = 65536;
+// Translucent ice: the sun through its thickness (issue #59).
+public static const uint FLAG_TRANSLUCENCY = 131072;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -1611,6 +1613,7 @@ struct Surface
 {
     float3 n;               // world-space normal, interpolated
     float3 view;            // unit, world space, from the surface towards the camera (issue #49)
+    float3 transmitted;     // the share of sunlight crossing the ice to this point, per channel (issue #59), else 0
     float3 object_normal;   // object-space normal, interpolated
     float3 object_position; // object-space position
     float3 dpdx;            // its change per pixel to the right and down
@@ -1770,6 +1773,10 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
     return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, ndl) + emissive;
 }
 
+// How much of the light crossing the ice leaves towards the camera rather than elsewhere
+// (issue #59): the rest scatters out of the view or is absorbed on the way.
+static const float ICE_GLOW = 0.3;
+
 float3 shade_ice(Frame* f, Material mat, Surface s)
 {
     float3 albedo;
@@ -1781,6 +1788,17 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
     }
     float ndl;
     float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, ndl);
+    if (any(s.transmitted > 0.0))
+    {
+        // The sunlight that crossed the ice (issue #59), tinted by it and scattered forwards
+        // towards the camera: the sun glows through the thin edges of a backlit rock.
+        float3 sun = normalize(f[0].sun_dir);
+        float3 to_camera = normalize(f[0].camera_pos - mul(s.model, float4(s.object_position, 1.0)).xyz);
+        float g = 0.5;
+        float cos_theta = dot(-sun, to_camera);
+        float phase = (1.0 - g * g) / (4.0 * 3.14159265 * pow(max(1.0 + g * g - 2.0 * g * cos_theta, 1e-4), 1.5));
+        color += ICE_GLOW * albedo * f[0].sun_color.rgb * (s.transmitted * phase * 3.14159265);
+    }
     return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
 
@@ -1928,6 +1946,47 @@ float4 trace_reflection(Frame* f, float4* sky, float3 origin, float3 direction)
     return float4(albedo * light + mat.emissive, 1.0);
 }
 
+// Translucent ice (issue #59): the share of sunlight that crosses the ice to reach `world`,
+// the point of instance `instance` a pixel shows. A ray from the point towards the sun meets
+// the instance's surface one or more times, within its bounding sphere; the last crossing is
+// where the light went in. The rule ignores winding, and it holds whether the ray starts just
+// inside or just outside the traced cut (which may stand off the drawn surface by its error).
+// Then a shadow ray from there: the sun must reach it. Beer–Lambert over the thickness, per
+// channel: ice absorbs red more than blue, so thick ice glows blue.
+static const float3 ICE_EXTINCTION = float3(0.16, 0.10, 0.065); // per metre
+float3 ice_transmission(Frame* f, uint instance, float3 world)
+{
+    float3 sun = normalize(f[0].sun_dir);
+    Instance inst = f[0].instances[instance];
+    RayDesc ray;
+    ray.Origin = world;
+    ray.Direction = sun;
+    ray.TMin = 0.0;
+    ray.TMax = 2.0 * inst.radius + 1.0;
+    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    float last = -1.0;
+    while (q.Proceed())
+    {
+        // Every crossing of this instance, none committed, so the traversal sees them all.
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE && q.CandidateInstanceID() == instance)
+            last = max(last, q.CandidateTriangleRayT());
+    }
+    if (last < 0.0)
+        return float3(0.0); // the ray left without crossing: the point faces the sun
+    RayDesc shadow;
+    shadow.Origin = world + sun * (last + SHADOW_BIAS);
+    shadow.Direction = sun;
+    shadow.TMin = 0.0;
+    shadow.TMax = 50000.0;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> s;
+    s.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, shadow);
+    s.Proceed();
+    if (s.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        return float3(0.0);
+    return exp(-ICE_EXTINCTION * last);
+}
+
 // The tile list after the classes': tiles holding a smooth row whose mirror ray `reflections_main`
 // traces (issue #52), and the bit `shade_pixel` returns for such a pixel.
 static const uint REFLECTION_LIST = MATERIAL_CLASSES;
@@ -1995,6 +2054,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.view = s.sky != nullptr ? normalize(f[0].camera_pos - mul(inst.model, float4(s.object_position, 1.0)).xyz) : float3(0.0, 1.0, 0.0);
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, sun_disc_point(pixel, f[0].noise_frame));
+    s.transmitted = float3(0.0);
+    if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
+        s.transmitted = ice_transmission(f, record.x, mul(inst.model, float4(s.object_position, 1.0)).xyz);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)

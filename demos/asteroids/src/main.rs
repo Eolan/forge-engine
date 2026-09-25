@@ -51,6 +51,9 @@ struct Args {
     /// the motion into streaks (issue #55).
     #[arg(long)]
     soft_shadows: bool,
+    /// Opaque ice: no sunlight through its thickness (Y toggles it).
+    #[arg(long)]
+    no_translucency: bool,
     /// Draw without the sunlit dust between the rocks (V toggles it).
     #[arg(long)]
     no_dust: bool,
@@ -329,6 +332,9 @@ impl Ballad {
         if !args.no_shadows {
             flags.0 |= CullFlags::SHADOWS;
         }
+        if !args.no_translucency {
+            flags.0 |= CullFlags::TRANSLUCENCY;
+        }
         if args.no_occlusion {
             flags.toggle(CullFlags::OCCLUSION);
         }
@@ -513,6 +519,7 @@ impl Demo for Ballad {
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::KeyN => self.ao_on = !self.ao_on,
             KeyCode::KeyV => self.dust_on = !self.dust_on,
+            KeyCode::KeyY => self.flags.toggle(CullFlags::TRANSLUCENCY),
             KeyCode::KeyZ => {
                 self.renderer.sun_angular_radius = if self.renderer.sun_angular_radius > 0.0 {
                     0.0

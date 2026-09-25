@@ -94,6 +94,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Reflections.** Christophe Schlick, "An Inexpensive BRDF Model for Physically-based
   Rendering", Eurographics 1994: the Fresnel approximation. The specular occlusion follows
   Lagarde and de Rousiers (2014, above).
+- **Translucent ice.** Colin Barré-Brisebois, Marc Bouchard, "Approximating Translucency for a
+  Fast, Cheap and Convincing Subsurface Scattering Look", GDC 2011: thickness-driven
+  translucency, here measured by rays.
 - **Volumetric dust.** Bartlomiej Wronski, "Volumetric Fog: Unified Compute Shader-Based Solution
   to Atmospheric Scattering", SIGGRAPH 2014, and Sébastien Hillaire, "Towards Unified and
   Physically-Based Volumetric Lighting in Frostbite", SIGGRAPH 2015: the froxel volume and its

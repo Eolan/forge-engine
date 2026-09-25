@@ -11,7 +11,7 @@ hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
-`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-occlusion`, `--no-cone`,
+`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -30,7 +30,7 @@ Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
-red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **V** the belt's dust (`--no-dust`), **G** tone curve,
+red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **V** the belt's dust (`--no-dust`), **Y** translucent ice (`--no-translucency`), **G** tone curve,
 **-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
 Quality → Balanced → Performance → Ultra Performance, with `--features dlss`), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
@@ -265,6 +265,36 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Translucent ice (2026-09-25, issue #59)
+
+The owner's look for the ice asteroids asked for transmission through the body: the sun
+glowing through thin edges. The ice rocks now let sunlight through (D-033). The fractured
+chunk shapes remain for the destruction work (#12).
+- **Thickness:** an ice pixel sends a ray towards the sun through its rock. The last crossing
+  of the rock's own surface, within its bounding sphere, is where the light went in; the rule
+  ignores winding and the traced cut's error.
+- **The sun:** a shadow ray from there says whether the sun reaches it.
+- **The light:** it crosses per Beer–Lambert, per channel (0.16, 0.10 and 0.065 per metre), so
+  thick ice glows blue. It is tinted by the ice and scattered forwards (Henyey–Greenstein,
+  g = 0.5) towards the camera.
+
+Looking towards the sun, the backlit ice rocks light up blue, the thinnest brightest; ice
+with the sun behind the camera is unchanged. The rays are deterministic per pixel, with no noise
+to shimmer. `--no-translucency` / **Y** turns it off, and devices without ray queries have
+none.
+
+![Towards the sun at frame 300 (dust off): opaque ice, then translucent ice glowing where the sun is behind it](images/asteroids-translucent-ice.png)
+
+**Cost:** `shading/ice` 0.018 → 0.065 ms (0.021 → 0.078 looking towards the sun): the ray
+visits every crossing of its rock. The ballad goes 0.646 → 0.694 ms.
+
+**Checks:**
+- With `--no-translucency`, the captures are identical to the previous build. With it, the
+  brighter ice moves the automatic exposure, so every pixel shifts a little.
+- The culling harness and mesh against fallback stay at 0; the city and the bench are
+  unchanged.
+- Synchronization validation is silent.
 
 ## The belt's dust (2026-09-25, issue #58)
 
