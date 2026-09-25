@@ -869,5 +869,7 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    material-layer job for the lighting phase, with the fracture generator shared with the
    destruction system). **First pass done (2026-09-25):** the chunks (#60, plane cuts, one Voronoi
    cell each) and the translucent ice (#59, D-033: the sun through its thickness, by rays). Then the
-   ice's density (#61: bubbles scatter the light inside it; clear, bubbly and white blocks).
-   Left: fracture on impact with the destruction system (#12).
+   ice's density (#61: bubbles scatter the light inside it; clear, bubbly and white blocks),
+   the weathered crust around the fracture faces (#62), the ice's own blockier shapes (#63)
+   and a denser belt in more shapes (#23). Left: edge wear, and fracture on impact with the
+   destruction system (#12).
