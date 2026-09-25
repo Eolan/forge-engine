@@ -14,6 +14,8 @@
 //! - [`erosion`]: the implicit stream-power law with hillslope diffusion, uplift against
 //!   erosion until mountains and valleys appear, rows and drainage trees in parallel on the
 //!   job system.
+//! - [`hydrology`]: stage 4, the river network as polylines with Strahler orders and widths
+//!   from the catchment.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
 //!   sea, rivers and lakes), which is how the pipeline is looked at before a GPU draws it.
@@ -26,6 +28,7 @@
 pub mod erosion;
 pub mod field;
 pub mod flow;
+pub mod hydrology;
 pub mod island;
 pub mod layers;
 pub mod noise;
@@ -34,5 +37,6 @@ pub mod preview;
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
 pub use flow::{Drainage, Flow, drain, priority_flood, route};
+pub use hydrology::{Mouth, River, Rivers, trace_rivers};
 pub use island::{IslandFields, IslandParams, cached_island, generate_island, island_fields};
 pub use layers::{LayerRule, slope_layers};

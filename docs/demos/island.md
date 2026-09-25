@@ -11,7 +11,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | D8 drainage, the downstream-first stack, integer areas; depressions by the basin graph each step, by priority flood for the reference and the lakes | ✅ `forge_procgen::flow` |
 | The implicit stream-power erosion with diffusion, rows and drainage trees in parallel on the job system; lakes as filling depressions (stage 3) | ✅ `forge_procgen::erosion` |
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes | ✅ `forge_procgen::preview`, `tools/genesis` |
-| Hydrology: rivers as polylines with widths, lakes by Fill–Spill–Merge (stage 4) | rivers and lakes are marked, not yet traced |
+| Hydrology: rivers as polylines with Strahler orders and widths (stage 4) | ✅ `forge_procgen::hydrology`; lakes are marked, not yet traced (Fill–Spill–Merge) |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
 | Materials from the fields, the layer map (stage 6) | planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | built, to see on a GPU: `city-blocks --island SEED` (#96 for the props and the demo of its own) |
@@ -65,9 +65,14 @@ is `f32` and `f64` with `sqrt` only.
    diffusion sweep smooths the hillslopes. The height keeps its depressions: a cell below its
    receiver rises towards it by the same rule, which is sediment settling in a lake, so lakes
    appear in the uplifted basins and slowly fill, from the carved outlet path outwards.
-4. **Hydrology, the first part**: rivers where more than 0.5 km² drains through a sample,
-   lakes where a final priority flood (Barnes 2014, once) stands more than 0.5 m over the
-   eroded field.
+4. **Hydrology**: rivers where more than 0.5 km² drains through a sample, traced as
+   polylines (`hydrology::trace_rivers`): from every mouth the trunk follows the largest
+   tributary upstream to its head, every other river donor met on the way starts a tributary,
+   so each river runs from a head to the sea or to its junction with a larger one; Strahler
+   orders bottom-up, widths `w = 0.005 √A` (Leopold & Maddock's exponent: 5 m at a square
+   kilometre of catchment, 14 m at the island's largest). Lakes where a final priority flood
+   (Barnes 2014, once) stands more than 0.5 m over the eroded field; their tracing
+   (Fill–Spill–Merge) is not done.
 
 | Run (seed 7, 150 steps) | Samples | Erosion | Per step | Was (flood, one thread) | Peaks | River samples | Lake samples |
 |---|---|---|---|---|---|---|---|
@@ -111,6 +116,13 @@ pictures below are from the new field. At 4 m the lakes cover 3.5 % of the land 
 (181 k of 5.2 M) against 1.4 % at 16 m: the finer grid holds more small depressions, which the
 sediment rule fills more slowly; a lake area limit, or the basin graph's fill mode with a
 spill rule, is the part of #97 that remains.
+
+**The network** (seed 7, 150 steps): at 16 m, 43 rivers, 27 of them to the sea, 68 km in all,
+the longest 6.3 km, orders up to 3; at 4 m, 42 rivers, 24 to the sea, 82 km, the longest
+7.5 km, orders up to 2 (the same square kilometres of catchment are more cells, and the finer
+network branches differently), the widest 14 m at both; the tracing takes 0.7 s at 4 m. These
+polylines are what the water research (`docs/research/water.md`, item 4 of its
+recommendation) turns into river ribbons with flow maps.
 
 **Digests** (D-016). `genesis` ends with a 64-bit FNV-1a of the field's bits
 (`Field2::digest`), the same on every machine and with any thread count; seed 7 after 150

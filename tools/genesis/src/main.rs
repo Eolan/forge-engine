@@ -159,9 +159,30 @@ fn main() -> Result<()> {
     let river_cells = (500_000.0 / (params.spacing * params.spacing)) as u32; // 0.5 km² of catchment
     let rivers = flow.area.iter().filter(|&&a| a > river_cells).count();
     let lakes = lake_depth.data.iter().filter(|&&d| d > 0.5).count();
+    let network = forge_procgen::trace_rivers(&height, &flow, river_cells + 1);
+    let trunks = network
+        .rivers
+        .iter()
+        .filter(|r| matches!(r.mouth, forge_procgen::Mouth::Outlet(_)))
+        .count();
+    let longest = network
+        .rivers
+        .iter()
+        .map(|r| r.length())
+        .fold(0.0_f32, f32::max);
+    let widest = network
+        .rivers
+        .iter()
+        .flat_map(|r| r.area.iter())
+        .map(|&a| forge_procgen::hydrology::width(f64::from(a) * params.spacing * params.spacing))
+        .fold(0.0, f64::max);
     println!(
-        "stage 4, hydrology: {:.2} s; {rivers} river samples above 0.5 km² of catchment, {lakes} lake samples",
-        start.elapsed().as_secs_f64()
+        "stage 4, hydrology: {:.2} s; {rivers} river samples above 0.5 km² of catchment, {lakes} lake samples; {} rivers ({trunks} to the sea, {} km in all, the longest {:.1} km, order up to {}, up to {widest:.0} m wide)",
+        start.elapsed().as_secs_f64(),
+        network.rivers.len(),
+        (network.total_length() / 1000.0).round(),
+        longest / 1000.0,
+        network.max_order()
     );
 
     let start = Instant::now();

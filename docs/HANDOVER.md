@@ -23,7 +23,10 @@ without losing the others.
 | 8 | `42c4097` Draw the island in the engine: `city-blocks --island SEED` | `PropKind::Heightfield`, the island cooked like the city's ground, stage 6's first layer rule | **yes** |
 | 9 | `8d0d54a` Add the dynamic-scenes research for moving geometry | `docs/research/dynamic-scenes.md` (#79, #69, #95) | no |
 | 10 | `ebebcfd` Route the erosion through the basin graph, in parallel: the 4 m island in two minutes | #97: `forge_procgen::flow::drain`, the step on `forge-task`; 3.5–4× a step | no (the same field, faster) |
-| 11 | (below) Build the stack in parallel and keep the erosion's buffers: the 4 m island in 50 s | #97's second part: `Drainage`, `Erosion`; 9.5× the first per-step time in all | no (the same field, faster) |
+| 11 | `a5b7e2a` Build the stack in parallel and keep the erosion's buffers: the 4 m island in 50 s | #97's second part: `Drainage`, `Erosion`; 9.5× the first per-step time in all | no (the same field, faster) |
+| 12 | `c2dbcb4` Print the eroded field's digest in genesis, for D-016 checks across machines | `Field2::digest`; seed 7's values recorded | no (compare the digest) |
+| 13 | (below) Trace the rivers as polylines with Strahler orders and widths (stage 4) | `forge_procgen::hydrology`, the network's numbers in `genesis` | no |
+| 14 | (below) Add the water research for the island's sea, shores, rivers and lakes | `docs/research/water.md` (Phase 2 item 3) | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -214,6 +217,32 @@ drainage across two fields and compares with fresh buffers. The run's last line 
 field's digest: seed 7, 150 steps, should give `0189d031eff0fb84` at 16 m and
 `9eacfe0f827fa7dd` at 4 m on the 9800X3D as here (D-016); if not, that is a finding of its
 own (`docs/demos/island.md`, "Digests").
+
+### 13. The rivers as polylines (commit 13)
+
+`forge_procgen::hydrology::trace_rivers`: from the flow, the river cells (0.5 km² of catchment)
+become polylines head to mouth, the trunk following the largest tributary, the others joining
+it (`Mouth::Junction`), with Strahler orders and a width from the catchment
+(`hydrology::width`). `genesis` prints the network's numbers on its `stage 4` line
+(`docs/demos/island.md`, "The network"). Nothing draws them yet; the water research (commit
+14) says how they become ribbons with flow maps. Test: `cargo test -p forge-procgen` (a
+V-shaped valley gives one river, a Y gives a trunk, a tributary and an order 2) and the
+`stage 4` line of a `genesis` run.
+
+### 14. The water research (commit 14)
+
+`docs/research/water.md`, 1010 lines, for Phase 2's third item: the open ocean (TMA/JONSWAP
+spectra, FFT cascades, foam, the clipmap mesh), shores (depth colour, shore waves from the
+coast distance, wet sand), rivers and lakes from the network, shading, what genesis bakes for
+the water, and the engines' water systems; its "Recommendation for Forge" is the build order
+for the island's sea. Same network caveat as the other research files: the proxy reached
+github.com only, everything else was checked through the search engine's record and graded per
+entry in its "Verification notes" (#99). Two corrections it makes to the owner's prompt: there
+is no GDC 2020 "Breaking Down Barriers" water talk (that title is Pettineo's 2019 barriers
+tutorial; Ubisoft's water talks are St-Amour 2013, Wroński 2014, Grujic 2018 and a 2024
+SIGGRAPH talk), and no public Frostbite ocean talk exists. It also flags that D-009's
+"spectrum evaluated identically on CPU and GPU" is not free with an FFT and proposes a 🟡
+decision when Phase 3 starts.
 
 ## How to give the cloud session its results
 
