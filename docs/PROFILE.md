@@ -186,8 +186,15 @@ With instance occlusion (#38: the instances the previous pyramid hides skip pass
 second instance cull tests them against this frame's), the south view at 1600 × 900 goes
 2.90 → 2.64 ms. Its culls go 1.13 → 0.87 ms (10 k roots tested instead of 791 k). The orbit
 goes 3.13 → 3.03 ms; the flight, where auto leaves it off, is unchanged.
-**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; a hierarchy over
-instances (#38's other idea) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
+With cells of instances (#38: the table sorted along a Morton curve, a cell cull testing 64
+instances at a time, and the terrain's work items written by a whole workgroup) the south
+view goes 2.52 → 2.26 ms, the orbit 2.89 → 2.71, the flight 2.36 → 2.13. The instance culls
+go 0.40 → 0.14 ms. The instance cull's old 0.31 ms was mostly one thread writing the
+terrain's thousands of work items, not the million tests. The clears ahead of the culls now
+have their own zone (`geometry/cull clears`, 0.008 ms).
+**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target. The two cluster
+culls (0.21 and 0.22 ms) are the largest geometry zones left; pass 2 over pass 1's rejects only
+is the idea for them (#92). Details in [city-blocks.md](demos/city-blocks.md).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

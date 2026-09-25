@@ -37,7 +37,9 @@ batch in `docs/PROCESS.md`.
 **The owner's picks (2026-09-25), in order:**
 1. #74, the verification batch in the repository ✅ (`tools/captures.sh`, `compare.sh`,
    `validate.sh`, `timings.sh`).
-2. #38, a hierarchy over instances. Instance occlusion is already done (dcb2ae9).
+2. #38, a hierarchy over instances ✅ (cells of 64 instances and a sorted table: the city's
+   instance culls 0.40 → 0.14 ms). Its third idea, pass 2 over pass 1's rejects only, is
+   #92.
 3. #75, a perceptual metric: ꟻLIP in `imgdiff`.
 4. #76, ACES 2.0's output transform as a fourth tone curve.
 5. #77, async compute and transfer queues in the render graph. #78 (transient buffers,
@@ -198,7 +200,8 @@ Goal: the renderer skeleton every later system draws through.
    120 fps at 1440p on the 5070 Ti, 60 fps on the 3080, flying at 300 m/s with streaming on.
    In steps (`docs/demos/city-blocks.md`): the renderer at a million instances ✅ (#33), the
    twenty props cooked and cached ✅ (#34), terrain and GPU placement ✅ (#35: a million instances
-   in 4.96 ms), culling at scale ✅ (#37: 1.06 ms, instance occlusion next in #38),
+   in 4.96 ms), culling at scale ✅ (#37: 1.06 ms; #38: instance occlusion and cells of instances, the
+   south view 2.90 → 2.26 ms with the probes),
    streaming ✅ (#36, D-025: 128 KiB cluster pages, the flight at 300 m/s through a 48 MiB
    pool with no holes), the flight at 1440p ✅ (#13, 2026-09-25: 1.64 ms GPU with TAA, worst
    frame 2.58 ms on the 5070 Ti; the 3080 run is #39), materials ✅ (#20: brick, plaster,

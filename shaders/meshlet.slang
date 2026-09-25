@@ -173,6 +173,8 @@ public static const uint FLAG_SHOW_GI = 262144;
 public static const uint FLAG_INSTANCE_OCCLUSION = 524288;
 // Instance cull 1 counts the instances the previous pyramid hides (the renderer's auto mode).
 public static const uint FLAG_HIDDEN_INSTANCES = 1048576;
+// A cell cull tests the instances 64 at a time before instance cull 1 (issue #38).
+public static const uint FLAG_INSTANCE_CELLS = 2097152;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -196,6 +198,9 @@ public static const uint STAT_WORK_ITEMS = 10;      // work items the instance c
 public static const uint STAT_WORK_OVERFLOW = 11;   // of those, dropped because the work list was full (and root entries past the root list)
 public static const uint STAT_ROOT_ENTRIES = 12;    // root clusters listed by the instance cull (the demand)
 public static const uint STAT_INSTANCES_OCCLUDED = 13; // instances in the frustum the previous pyramid hid (issue #38)
+public static const uint STAT_CELLS_LISTED = 14;   // cells of 64 instances cell cull 1 listed for instance cull 1 (issue #38)
+public static const uint STAT_CELLS_DEFERRED = 15; // cells the previous pyramid hid whole, deferred to cell cull 2
+public static const uint STAT_CELLS_OPENED = 16;   // of those, the cells this frame's pyramid did not hide
 
 // The visibility buffer: every drawn pixel holds `visible_slot << 7 | triangle`, where
 // `visible_slot` indexes the frame's visible-cluster list (`Frame::visible`, filled by the
@@ -277,15 +282,26 @@ public struct Frame
     public float4 sun_color;        // rgb: the sunlight's colour at the scene (white-ish in space, filtered by the air on a planet)
     public uint64_t tlas;           // the scene's top-level acceleration structure (0: none; issue #45)
     public RtScene* rt_scene;       // what a ray's hit reads to shade its triangle (null: none; issue #50)
-    public uint* deferred;          // with occlusion: instance cull 2's grid (x, y, 1, count), then the instances pass 1 deferred (issue #38)
+    public uint* deferred;          // with occlusion: instance cull 2's grid (x, y, 1, count), then the instances instance cull 1 deferred and the cells cell cull 2 opened (issue #38; DEFERRED_LIST)
+    public float4* cells;           // with FLAG_INSTANCE_CELLS: per cell of 64 instances in table order, their bounding sphere (xyz centre, w radius; issue #38)
+    public uint* cell_list;         // with FLAG_INSTANCE_CELLS: instance cull 1's grid (x, y, 1, listed cells), cell cull 2's grid over the deferred cells (4), the cell culls' tickets (8, 9), then from CELL_LIST the listed cells and after them the deferred ones
 };
 
 // The second half of `Frame::indirect` (issue #38): the pass 2 cluster cull's grid over both
 // segments of the work lists (x, y, 1, items), segment 2's work items and roots (the work of
 // the instances instance cull 2 let through, after pass 1's), then instance cull 2's ticket.
 static const uint INDIRECT_PASS2 = 8;
-// Where `Frame::deferred`'s list starts, after instance cull 2's grid.
-static const uint DEFERRED_LIST = 4;
+// `Frame::deferred`: instance cull 2's grid, then how many instances instance cull 1 deferred
+// one by one and how many cells cell cull 2 opened; from DEFERRED_LIST the instances, then the
+// cells (at most one entry per instance in all: a deferred instance is in no deferred cell).
+static const uint DEFERRED_SINGLES = 4;
+static const uint DEFERRED_OPENED = 5;
+static const uint DEFERRED_LIST = 8;
+// `Frame::cell_list` (issue #38): cell cull 2's grid, the cell culls' tickets, then the lists.
+static const uint CELL_GRID2 = 4;
+static const uint CELL_TICKET = 8;
+static const uint CELL_TICKET2 = 9;
+static const uint CELL_LIST = 12;
 // Tags the work of an instance both pyramids hid, listed only for FLAG_SHOW_CULLED.
 static const uint INSTANCE_HIDDEN_BIT = 0x80000000u;
 
@@ -1102,8 +1118,9 @@ uint instance_roots(Frame* f, Mesh* mesh, float scale, float dist)
 // The work items of a visible instance: its groups of 32 clusters covering the LOD levels
 // that can hold selected clusters at its distance, in increasing order, each once. Returns
 // how many; with `write`, also writes them to the work list from `base`, the instance tagged
-// with `tag`.
-uint instance_items(Frame* f, uint instance_index, uint base, bool write, uint tag)
+// with `tag`: the items `lane`, `lane + stride`, ... (a thread writes them all with lane 0 and
+// stride 1; a workgroup shares a large instance's, `append_instance_work`).
+uint instance_items(Frame* f, uint instance_index, uint base, bool write, uint tag, uint lane = 0, uint stride = 1)
 {
     Instance* inst = f[0].instances + instance_index;
     Mesh* mesh = f[0].meshes + inst[0].mesh;
@@ -1126,7 +1143,7 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write, uint t
             continue;
         uint first = max(begin / TASK_GROUP_SIZE, next_group);
         uint last = min((end - 1) / TASK_GROUP_SIZE, groups - 1);
-        for (uint g = first; write && g <= last; g++)
+        for (uint g = first + lane; write && g <= last; g += stride)
         {
             uint slot = base + count + (g - first);
             if (slot < f[0].work_capacity)
@@ -1144,6 +1161,13 @@ groupshared uint s_root_counts[64];
 groupshared uint2 s_total;
 groupshared uint s_deferred[64];
 groupshared uint s_deferred_total;
+groupshared uint2 s_heavy[64]; // (tagged instance, first slot) of the workgroup's instances with many work items
+groupshared uint s_heavy_count;
+
+// An instance with more work items than this has them written by its whole workgroup: the
+// terrain's thousands, written by one thread, held every city frame's instance cull
+// (issue #38).
+static const uint HEAVY_ITEMS = 64;
 
 // Appends the work of workgroup `ticket` (of `groups`) of an instance cull, one instance a
 // thread: a `visible` instance's work items to the work list, or its roots to the root list
@@ -1216,8 +1240,26 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         if (dropped > 0)
             InterlockedAdd(f[0].stats[STAT_WORK_OVERFLOW], dropped);
     }
-    if (count > 0)
-        instance_items(f, instance_index, base.x + first.x + s_counts[thread], true, tag);
+    // A thread writes its instance's items, unless they are many: those the workgroup writes
+    // together, one instance after the other.
+    if (thread == 0)
+        s_heavy_count = 0;
+    GroupMemoryBarrierWithGroupSync();
+    uint slot = base.x + first.x + s_counts[thread];
+    if (count > HEAVY_ITEMS)
+    {
+        uint k;
+        InterlockedAdd(s_heavy_count, 1, k);
+        s_heavy[k] = uint2(instance_index | tag, slot); // the tag is 0 or INSTANCE_HIDDEN_BIT
+    }
+    else if (count > 0)
+        instance_items(f, instance_index, slot, true, tag);
+    GroupMemoryBarrierWithGroupSync();
+    for (uint h = 0; h < s_heavy_count; h++)
+    {
+        uint tagged = s_heavy[h].x;
+        instance_items(f, tagged & ~INSTANCE_HIDDEN_BIT, s_heavy[h].y, true, tagged & INSTANCE_HIDDEN_BIT, thread, 64);
+    }
     if (roots > 0)
     {
         Mesh* mesh = f[0].meshes + f[0].instances[instance_index].mesh;
@@ -1235,7 +1277,8 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
 // pyramid hides (`visible_last_frame`, the clusters' pass 1 question) waits for this frame's
 // instead: it goes to `Frame::deferred`, in instance order, and pass 1 sees none of its
 // clusters (issue #38). Its last workgroup writes instance cull 2's grid at the head of that
-// list.
+// list. With FLAG_INSTANCE_CELLS, a workgroup takes a cell of 64 instances cell cull 1 listed
+// (`cell_cull_main`) instead of the next 64 of the table.
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cull_main(uint thread : SV_GroupThreadID)
@@ -1245,10 +1288,23 @@ void cull_main(uint thread : SV_GroupThreadID)
         InterlockedAdd(f[0].indirect[4], 1, s_ticket);
     GroupMemoryBarrierWithGroupSync();
     uint ticket = s_ticket;
-    uint groups = instance_cull_groups(f);
-    uint instance_index = ticket * 64 + thread;
+    uint groups = instance_cull_groups(f); // the length of each run of status words
+    uint run = groups;                     // this cull's workgroups
+    uint cell = ticket;
+    bool in_cell = true;
+    if ((f[0].flags & FLAG_INSTANCE_CELLS) != 0)
+    {
+        // A workgroup per listed cell, and one when none is (its last writes the grids).
+        uint listed = f[0].cell_list[3];
+        run = max(listed, 1u);
+        if (ticket >= run)
+            return; // the rest of the grid's last row: the whole workgroup leaves
+        in_cell = ticket < listed;
+        cell = in_cell ? f[0].cell_list[CELL_LIST + ticket] : 0u;
+    }
+    uint instance_index = cell * 64 + thread;
     bool visible = false;
-    if (instance_index < f[0].instance_count)
+    if (in_cell && instance_index < f[0].instance_count)
     {
         Instance* inst = f[0].instances + instance_index;
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
@@ -1290,20 +1346,222 @@ void cull_main(uint thread : SV_GroupThreadID)
         uint first = lookback_exclusive(f[0].lookback + groups, ticket, uint2(s_deferred_total, 0), thread).x;
         if (deferred)
             f[0].deferred[DEFERRED_LIST + first + s_deferred[thread]] = instance_index;
-        if (thread == 0 && ticket == groups - 1)
+        if (thread == 0 && ticket == run - 1)
         {
             uint n = first + s_deferred_total;
             write_grid(f[0].deferred, (n + 63) / 64, n);
+            f[0].deferred[DEFERRED_SINGLES] = n; // where cell cull 2 appends
         }
     }
-    append_instance_work(f, f[0].lookback, ticket, groups, thread, instance_index, visible && !deferred, 0u, false);
+    append_instance_work(f, f[0].lookback, ticket, run, thread, instance_index, visible && !deferred, 0u, false);
+}
+
+// ---------------------------------------------------------------- cell culls ---
+//
+// Issue #38: the instance culls test every instance of the table every frame, a million in the
+// city. With FLAG_INSTANCE_CELLS the table is read in cells of 64 (a cell is the instances one
+// instance-cull workgroup takes, `Frame::cells` their bounding spheres, `cell_bounds_main`).
+// Cell cull 1 lists the cells in the frustum for instance cull 1 and, with instance occlusion,
+// defers those the previous pyramid hides whole; cell cull 2 tests those against this frame's
+// pyramid and hands the instances of the cells it lets through to instance cull 2. An
+// instance's sphere lies inside its cell's, so a cell out of view has no instance in view:
+// both ways draw the same clusters. The cells pay when neighbours in the table are neighbours
+// in the world (the city sorts its table, `crate::placement`).
+
+uint cell_count(Frame* f)
+{
+    return (f[0].instance_count + 63) / 64;
+}
+
+groupshared uint2 s_cell_offsets[64];
+
+// Cell cull 1, one thread per cell: the frustum and, with FLAG_INSTANCE_OCCLUSION, the
+// previous pyramid. Lists the cells in view for instance cull 1 and those the pyramid hides
+// for cell cull 2, both in cell order (look-back, run 3); the last workgroup writes both
+// grids. The instances of a deferred cell count as in the frustum and hidden (the auto mode's
+// statistics), all of them: they are not tested one by one.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cell_cull_main(uint thread : SV_GroupThreadID)
+{
+    Frame* f = push.frame;
+    if (thread == 0)
+        InterlockedAdd(f[0].cell_list[CELL_TICKET], 1, s_ticket);
+    GroupMemoryBarrierWithGroupSync();
+    uint ticket = s_ticket;
+    uint cells = cell_count(f);
+    uint groups = max((cells + 63) / 64, 1u);
+    uint cell = ticket * 64 + thread;
+    bool listed = false;
+    bool deferred = false;
+    uint hidden_instances = 0;
+    if (cell < cells)
+    {
+        float4 sphere = f[0].cells[cell];
+        bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
+        bool in_view = !frustum || sphere_in_frustum(f, sphere.xyz, sphere.w);
+        if (in_view && f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_INSTANCE_OCCLUSION) != 0)
+            deferred = !visible_last_frame(f, sphere.xyz, sphere.w);
+        listed = in_view && !deferred;
+        if (deferred)
+            hidden_instances = min(64u, f[0].instance_count - cell * 64);
+    }
+    uint hidden_sum = WaveActiveSum(hidden_instances);
+    if (WaveIsFirstLane() && hidden_sum > 0)
+    {
+        InterlockedAdd(f[0].stats[STAT_INSTANCES_VISIBLE], hidden_sum);
+        InterlockedAdd(f[0].stats[STAT_INSTANCES_OCCLUDED], hidden_sum);
+    }
+    s_cell_offsets[thread] = uint2(listed ? 1u : 0u, deferred ? 1u : 0u);
+    GroupMemoryBarrierWithGroupSync();
+    if (thread == 0)
+    {
+        uint2 total = 0;
+        for (uint i = 0; i < 64; i++)
+        {
+            uint2 c = s_cell_offsets[i];
+            s_cell_offsets[i] = total; // now this thread's offsets in the workgroup's runs
+            total += c;
+        }
+        s_total = total;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    uint2 total = s_total;
+    uint2 first = lookback_exclusive(f[0].lookback + 3 * instance_cull_groups(f), ticket, total, thread);
+    uint2 offset = first + s_cell_offsets[thread];
+    if (listed)
+        f[0].cell_list[CELL_LIST + offset.x] = cell;
+    if (deferred)
+        f[0].cell_list[CELL_LIST + cells + offset.y] = cell;
+    if (thread == 0 && ticket == groups - 1)
+    {
+        uint2 n = first + total;
+        write_grid(f[0].cell_list, max(n.x, 1u), n.x);
+        write_grid(f[0].cell_list + CELL_GRID2, (n.y + 63) / 64, n.y);
+        InterlockedAdd(f[0].stats[STAT_CELLS_LISTED], n.x);
+        InterlockedAdd(f[0].stats[STAT_CELLS_DEFERRED], n.y);
+    }
+}
+
+// Cell cull 2, after pass 1 and the pyramid it builds, one thread per cell cell cull 1
+// deferred: the cells this frame's pyramid does not hide (with FLAG_SHOW_CULLED, all of them)
+// are opened, listed after the instances instance cull 1 deferred one by one, in cell order
+// (look-back, run 4). Its last workgroup writes instance cull 2's grid over both, and
+// instance cull 2 takes an opened cell's instances a workgroup per cell.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cell_cull_deferred_main(uint thread : SV_GroupThreadID)
+{
+    Frame* f = push.frame;
+    if (thread == 0)
+        InterlockedAdd(f[0].cell_list[CELL_TICKET2], 1, s_ticket);
+    GroupMemoryBarrierWithGroupSync();
+    uint ticket = s_ticket;
+    uint deferred_cells = f[0].cell_list[CELL_GRID2 + 3];
+    uint groups = (deferred_cells + 63) / 64;
+    if (ticket >= groups)
+        return; // the rest of the grid's last row: the whole workgroup leaves
+    uint k = ticket * 64 + thread;
+    uint cell = 0;
+    bool open = false;
+    if (k < deferred_cells)
+    {
+        cell = f[0].cell_list[CELL_LIST + cell_count(f) + k];
+        float4 sphere = f[0].cells[cell];
+        open = (f[0].flags & FLAG_SHOW_CULLED) != 0 || occlusion_visible(f, sphere.xyz, sphere.w);
+    }
+    s_deferred[thread] = open ? 1u : 0u;
+    GroupMemoryBarrierWithGroupSync();
+    if (thread == 0)
+    {
+        uint total = 0;
+        for (uint i = 0; i < 64; i++)
+        {
+            uint d = s_deferred[i];
+            s_deferred[i] = total; // now this thread's offset in the workgroup's run
+            total += d;
+        }
+        s_deferred_total = total;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    uint first = lookback_exclusive(f[0].lookback + 4 * instance_cull_groups(f), ticket, uint2(s_deferred_total, 0), thread).x;
+    uint singles = f[0].deferred[DEFERRED_SINGLES];
+    if (open)
+        f[0].deferred[DEFERRED_LIST + singles + first + s_deferred[thread]] = cell;
+    if (thread == 0 && ticket == groups - 1)
+    {
+        uint opened = first + s_deferred_total;
+        f[0].deferred[DEFERRED_OPENED] = opened;
+        uint instance_groups = (singles + 63) / 64 + opened;
+        write_grid(f[0].deferred, instance_groups, instance_groups);
+        InterlockedAdd(f[0].stats[STAT_CELLS_OPENED], opened);
+    }
+}
+
+struct CellBoundsPush
+{
+    Instance* instances;
+    float4* cells;
+    uint count;
+    uint pad;
+};
+
+[[vk::push_constant]]
+CellBoundsPush cell_bounds_push;
+
+groupshared float3 s_bounds_min[64];
+groupshared float3 s_bounds_max[64];
+groupshared float s_bounds_reach[64];
+
+// Once, after the instances are written: a workgroup per cell of 64 instances, the sphere
+// around their spheres (centred on the box around them; a tree reduction, so the same table
+// gives the same bits).
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cell_bounds_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
+{
+    CellBoundsPush p = cell_bounds_push;
+    uint index = group.x * 64 + thread;
+    bool valid = index < p.count;
+    float3 c = 0.0;
+    float r = 0.0;
+    if (valid)
+    {
+        c = p.instances[index].center;
+        r = p.instances[index].radius;
+    }
+    s_bounds_min[thread] = valid ? c - r : float3(3.0e38);
+    s_bounds_max[thread] = valid ? c + r : float3(-3.0e38);
+    GroupMemoryBarrierWithGroupSync();
+    for (uint stride = 32; stride > 0; stride >>= 1)
+    {
+        if (thread < stride)
+        {
+            s_bounds_min[thread] = min(s_bounds_min[thread], s_bounds_min[thread + stride]);
+            s_bounds_max[thread] = max(s_bounds_max[thread], s_bounds_max[thread + stride]);
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    float3 centre = 0.5 * (s_bounds_min[0] + s_bounds_max[0]);
+    GroupMemoryBarrierWithGroupSync();
+    s_bounds_reach[thread] = valid ? length(c - centre) + r : 0.0;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint stride = 32; stride > 0; stride >>= 1)
+    {
+        if (thread < stride)
+            s_bounds_reach[thread] = max(s_bounds_reach[thread], s_bounds_reach[thread + stride]);
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (thread == 0)
+        p.cells[group.x] = float4(centre, s_bounds_reach[0]);
 }
 
 // Instance cull 2 (issue #38), after pass 1 and the pyramid it builds: the instances instance
-// cull 1 deferred, against this frame's pyramid (`occlusion_visible`). Those it does not hide
-// append their work as segment 2, which only pass 2's cluster cull reads, without asking pass
-// 1's question. With FLAG_SHOW_CULLED the hidden ones append theirs too, tagged, and their
-// clusters are drawn as culled.
+// cull 1 deferred, against this frame's pyramid (`occlusion_visible`), a workgroup per 64 of
+// them; then a workgroup per cell cell cull 2 opened, a thread per instance of the cell in the
+// frustum. Those it does not hide append their work as segment 2, which only pass 2's cluster
+// cull reads, without asking pass 1's question. With FLAG_SHOW_CULLED the hidden ones append
+// theirs too, tagged, and their clusters are drawn as culled.
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cull_deferred_main(uint thread : SV_GroupThreadID)
@@ -1313,17 +1571,36 @@ void cull_deferred_main(uint thread : SV_GroupThreadID)
         InterlockedAdd(f[0].indirect[INDIRECT_PASS2 + 6], 1, s_ticket);
     GroupMemoryBarrierWithGroupSync();
     uint ticket = s_ticket;
-    uint deferred_count = f[0].deferred[3];
-    uint groups = (deferred_count + 63) / 64;
+    uint singles = f[0].deferred[DEFERRED_SINGLES];
+    uint single_groups = (singles + 63) / 64;
+    uint groups = single_groups + f[0].deferred[DEFERRED_OPENED];
     if (ticket >= groups)
         return; // the rest of the grid's last row: the whole workgroup leaves
-    uint index = ticket * 64 + thread;
     uint instance_index = 0;
+    bool candidate = false;
+    if (ticket < single_groups)
+    {
+        uint index = ticket * 64 + thread;
+        candidate = index < singles;
+        if (candidate)
+            instance_index = f[0].deferred[DEFERRED_LIST + index];
+    }
+    else
+    {
+        // An opened cell's instances, those in the frustum (its cell was, not all of them).
+        uint cell = f[0].deferred[DEFERRED_LIST + singles + ticket - single_groups];
+        instance_index = cell * 64 + thread;
+        if (instance_index < f[0].instance_count)
+        {
+            Instance* inst = f[0].instances + instance_index;
+            bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
+            candidate = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
+        }
+    }
     bool visible = false;
     bool hidden = false;
-    if (index < deferred_count)
+    if (candidate)
     {
-        instance_index = f[0].deferred[DEFERRED_LIST + index];
         Instance* inst = f[0].instances + instance_index;
         visible = occlusion_visible(f, inst[0].center, inst[0].radius);
         hidden = !visible;

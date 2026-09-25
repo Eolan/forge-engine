@@ -711,6 +711,70 @@ The south view keeps the same 463 resident pages.
 A single `off` run of the ballad's frame 600 moved 125 pixels by one level, and its reruns
 were identical. That is #71.
 
+## Cells of instances (issue #38, 2026-09-25)
+
+After instance occlusion, the instance culls were the city's largest culling zone: every
+frame, all million instances were read and tested, 64 to a workgroup.
+
+**How:**
+- **Cells.** A cell is 64 consecutive instances of the table, the instances one instance-cull
+  workgroup takes. `MeshletScene::build_cells` computes the sphere around each cell's
+  spheres once, on the GPU, after the scene is written (`cell_bounds_main`). An instance's
+  sphere lies inside its cell's, so a cell out of view holds no instance in view.
+- **A sorted table.** A cell pays only when neighbours in the table are neighbours in the
+  world. The city placed its rocks in random slots, so after placement its table is sorted
+  along a Morton curve of the centres (`placement::place`). Positions, meshes and ids stay
+  as they were; only the order moves.
+- **Cell cull 1**, before instance cull 1, one thread per cell:
+  - It tests the frustum and, with instance occlusion, the previous pyramid.
+  - It lists the cells in view for instance cull 1, which now takes one listed cell per
+    workgroup through an indirect dispatch.
+  - It defers the cells the pyramid hides whole.
+- **Cell cull 2**, after the pyramid build, one thread per deferred cell: the cells this
+  frame's pyramid does not hide are opened. Instance cull 2 takes each opened cell's
+  instances in the frustum after the instances deferred one by one.
+- **Order:** every list is appended in order (look-back), so the frame stays deterministic.
+- **When:** scenes of at least 65 536 instances whose cells are built.
+  `--no-instance-cells` culls instance by instance, for the A/B harness.
+- **Counters:** the overlay's instance line gains "cells L listed, D hidden whole (O opened
+  again)". The instances of a cell hidden whole count as in the frustum and hidden; they are
+  not tested one by one.
+
+**The instance cull's real cost.** Its zone hardly followed the instances it tested: with
+cells it tested 134 k instead of 1 M and still took 0.256 ms. The terrain was the reason.
+It is one instance with thousands of work items, and one thread wrote them all while the
+rest of the dispatch waited. An instance with more than 64 work items now has them written
+by its whole workgroup. That alone takes the instance cull from 0.308 to 0.225 ms without
+cells. The clears that start the culls also have a zone of their own now
+(`geometry/cull clears`, 0.008 ms); they used to count as instance cull.
+
+| GPU ms per frame, 1600 × 900 (`tools/timings.sh`, alternating runs, three each) | before | after |
+|---|---|---|
+| city, south edge (2.1 k cells listed, 5.8 k hidden whole, 60 opened again) | 2.515 | **2.256** |
+| the same, every page resident | 2.443 | **2.168** |
+| city orbit | 2.887 | **2.706** |
+| city flight (instance occlusion off: the cells cull the frustum) | 2.355 | **2.134** |
+| `meshlets --side 700` (row-major cells: strips of 64) | 1.394 | 1.399 |
+| bench, bench orbit (fewer than 65 536 instances: no cells) | 0.229, 0.144 | 0.231, 0.144 |
+| ballad, 1600 × 900 and 1440p (five runs at 1440p) | 1.341, 2.785 | 1.341, 2.778 |
+
+At the south edge the instance culls go from 0.317 + 0.080 ms to 0.014 (cell cull) + 0.076
+(instance cull 1) + 0.008 (cell cull 2) + 0.033 (instance cull 2) + 0.008 (clears): 0.40 →
+0.14 ms. The cluster culls stay at 0.21 and 0.22 ms and are now the largest geometry zones;
+a pass 2 over pass 1's rejects only, #38's third idea, is the next step for them (#92).
+
+**Pixels:**
+- **Cells on against `--no-instance-cells`: 0 px.** This holds on both paths, with
+  `--instance-occlusion auto`, `on` and `off`, for the resident city, its orbit, the
+  streamed flight at frame 600, `--show-culled`, and `meshlets --side 700`.
+- **The rest of the capture batch** (`tools/captures.sh`) is at 0 px against the previous
+  build, except the city's two views: 399 and 238 px, at most 12 levels, the same on both
+  paths. They come from the new order of the table (cells on and off agree), which changes
+  the order of the drawn clusters and of the TLAS. Those two images are the new references.
+- **`--show-culled` in the city** (new) shows no red. It differs from the plain frame by
+  235 grey pixels of at most 17 levels, the same with cells on and off (104 without the
+  probes).
+
 ## Next steps (from the research recommendation)
 
 1. ✅ (issue #5, 2026-09-24) Culling in compute, shared by the mesh-shader path and the

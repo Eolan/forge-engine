@@ -74,6 +74,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     culling in compute.
 - **Ordered appends.** Duane Merrill, Michael Garland, "Single-pass Parallel Prefix Scan with
   Decoupled Look-back", 2016: the culls' ordered appends.
+- **Morton order.** G. M. Morton, "A Computer Oriented Geodetic Data Base and a New Technique
+  in File Sequencing", IBM, 1966: the city's instance table sorted along the Z-order curve so
+  that its cells of 64 instances are compact (issue #38).
 - **The visibility buffer.**
   - Christopher A. Burns, Warren A. Hunt, "The Visibility Buffer: A Cache-Friendly Approach
     to Deferred Shading", JCGT 2013.

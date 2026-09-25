@@ -101,6 +101,13 @@ const FLAG_INSTANCE_OCCLUSION: u32 = 524_288;
 /// pyramid hides (what [`InstanceOcclusion::Auto`] decides from), set with
 /// `FLAG_INSTANCE_OCCLUSION` and while auto mode watches a scene large enough to turn it on.
 const FLAG_HIDDEN_INSTANCES: u32 = 1_048_576;
+/// `FLAG_INSTANCE_CELLS` in the shader: a cell cull tests the instances 64 at a time before
+/// instance cull 1 (issue #38; [`DrawParams::instance_cells`]).
+const FLAG_INSTANCE_CELLS: u32 = 2_097_152;
+
+/// Scenes with at least this many instances cull them by cells first (with
+/// [`DrawParams::instance_cells`]); below, the cell cull's pass costs more than it skips.
+pub const INSTANCE_CELLS_MIN: u32 = 65_536;
 
 /// When the software rasteriser draws the dense clusters ([`DrawParams::sw_raster`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -220,7 +227,7 @@ const PASS_PREVIOUSLY_VISIBLE: u32 = 1;
 const PASS_REMAINDER: u32 = 2;
 const PASS_SINGLE: u32 = 3;
 const TASK_GROUP_SIZE: u32 = 32;
-const STAT_COUNT: usize = 14;
+const STAT_COUNT: usize = 17;
 const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
@@ -372,6 +379,10 @@ struct GpuFrame {
     rt_scene: u64,
     /// With occlusion: instance cull 2's grid, then the instances pass 1 deferred (issue #38).
     deferred: u64,
+    /// With cells: per cell of 64 instances, their bounding sphere (issue #38).
+    cells: u64,
+    /// With cells: the cell culls' grids, tickets and lists (`CELL_LIST_START`).
+    cell_list: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -389,6 +400,16 @@ struct Push {
     /// Software raster: sampled-image indices of the hardware's depth and visibility buffer.
     depth_image: u32,
     vis_image: u32,
+    pad: u32,
+}
+
+/// Mirrors `CellBoundsPush` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CellBoundsPush {
+    instances: u64,
+    cells: u64,
+    count: u32,
     pad: u32,
 }
 
@@ -525,11 +546,22 @@ const CLUSTER_ARGS_PASS_BYTES: u64 = 48;
 const INDIRECT_START: [u32; 16] = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0];
 /// Byte offset of pass 2's cluster cull grid in `Frame::indirect`.
 const INDIRECT_PASS2_BYTES: u64 = 32;
-/// Instance cull 2's grid (x, y, 1, count) at the start of `Frame::deferred`, empty.
-const DEFERRED_GRID_START: [u32; 4] = [0, 0, 1, 0];
+/// The head of `Frame::deferred`, empty: instance cull 2's grid (x, y, 1, count), how many
+/// instances instance cull 1 deferred and how many cells cell cull 2 opened (listed after
+/// them, issue #38), two spare words (`DEFERRED_LIST` in the shader).
+const DEFERRED_GRID_START: [u32; 8] = [0, 0, 1, 0, 0, 0, 0, 0];
 /// The instance culls' runs of status words: instance cull 1's work, the instances it
-/// deferred, instance cull 2's work.
-const LOOKBACK_RUNS: u64 = 3;
+/// deferred, instance cull 2's work, then the cell culls': cell cull 1's listed and deferred
+/// cells, the cells cell cull 2 opens (issue #38).
+const LOOKBACK_RUNS: u64 = 5;
+/// `Frame::cell_list` at the start of a frame (issue #38): instance cull 1's grid (x, y, 1,
+/// listed cells), cell cull 2's grid over the deferred cells, the two cell culls' tickets, two
+/// spare words; the lists follow (`CELL_LIST` in the shader).
+const CELL_LIST_START: [u32; 12] = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0];
+/// Byte offset of cell cull 2's grid in `Frame::cell_list`.
+const CELL_GRID2_BYTES: u64 = 16;
+/// Words of `Frame::cell_list` before the lists.
+const CELL_LIST_WORDS: u64 = 12;
 
 /// Default of [`DrawParams::sw_raster_area`].
 pub const SW_RASTER_DEFAULT_AREA: f32 = 2.0;
@@ -954,6 +986,7 @@ impl MeshletSceneBuilder {
             .map(|m| m.meshlet_count)
             .max()
             .unwrap_or(0);
+        let cell_count = (self.instances.len() as u64).div_ceil(64);
         Ok(MeshletScene {
             pool: GraphBuffer::new(pool),
             meshlets: device.create_buffer_with_data(
@@ -1026,13 +1059,37 @@ impl MeshletSceneBuilder {
                 .map(|i| {
                     device
                         .create_buffer(BufferDesc {
-                            size: 16 + 4 * self.instances.len().max(1) as u64,
+                            size: std::mem::size_of_val(&DEFERRED_GRID_START) as u64
+                                + 4 * self.instances.len().max(1) as u64,
                             usage: usage
                                 | vk::BufferUsageFlags::INDIRECT_BUFFER
                                 | vk::BufferUsageFlags::TRANSFER_DST,
                             location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Work,
                             name: &format!("deferred instances {i}"),
+                        })
+                        .map(GraphBuffer::new)
+                })
+                .collect::<Result<Vec<_>>>()?,
+            cells: device.create_buffer(BufferDesc {
+                size: 16 * cell_count.max(1),
+                usage,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Geometry,
+                name: "instance cells",
+            })?,
+            cells_built: false,
+            cell_lists: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device
+                        .create_buffer(BufferDesc {
+                            size: 4 * (CELL_LIST_WORDS + 2 * cell_count.max(1)),
+                            usage: usage
+                                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                                | vk::BufferUsageFlags::TRANSFER_DST,
+                            location: MemoryLocation::GpuOnly,
+                            category: MemoryCategory::Work,
+                            name: &format!("instance cell lists {i}"),
                         })
                         .map(GraphBuffer::new)
                 })
@@ -1088,6 +1145,14 @@ pub struct MeshletScene {
     /// Per frame slot, with occlusion: instance cull 2's grid (x, y, 1, count), then the
     /// instances instance cull 1 deferred to it (issue #38).
     deferred: Vec<GraphBuffer>,
+    /// Per cell of 64 instances (in table order), the bounding sphere of theirs: xyz centre,
+    /// w radius (issue #38). Written by [`MeshletScene::build_cells`].
+    cells: Buffer,
+    /// `cells` holds the instances as they are now.
+    cells_built: bool,
+    /// Per frame slot: the cell culls' grids and tickets, then the cells cell cull 1 listed
+    /// and those it deferred (`CELL_LIST_START`).
+    cell_lists: Vec<GraphBuffer>,
     /// Acceleration structures for shadow rays, when asked for and supported.
     rays: Option<SceneRays>,
     /// The material table ([`GpuMaterial`] rows) and the textures they sample.
@@ -1123,6 +1188,41 @@ impl MeshletScene {
         if let Some(rays) = &mut self.rays {
             rays.build_tlas(device, shaders, &self.instances, self.instance_count)?;
         }
+        Ok(())
+    }
+
+    /// Computes the bounding sphere of each cell of 64 instances (issue #38; `cell_bounds_main`
+    /// in `meshlet.slang`), once the instances are written (after GPU placement). The cell cull
+    /// skips a whole cell when its sphere is out of view, so the cells pay when neighbours in
+    /// the table are neighbours in the world (see [`crate::placement::place`]). Initialisation
+    /// only.
+    pub fn build_cells(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
+        if self.instance_count == 0 {
+            return Ok(());
+        }
+        let module = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "cell_bounds_main", ShaderStage::Compute)?,
+            "instance cell bounds",
+        )?;
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (module, "cell_bounds_main"),
+            push_constant_bytes: std::mem::size_of::<CellBoundsPush>() as u32,
+            name: "instance cell bounds",
+        });
+        device.destroy_shader_module(module);
+        let pipeline = pipeline?;
+        let push = CellBoundsPush {
+            instances: self.instances.address(),
+            cells: self.cells.address(),
+            count: self.instance_count,
+            pad: 0,
+        };
+        device.execute_compute_once(|commands| {
+            commands.bind_pipeline(&pipeline);
+            commands.push_constants(&pipeline, &push);
+            commands.dispatch(self.instance_count.div_ceil(64), 1, 1);
+        })?;
+        self.cells_built = true;
         Ok(())
     }
 
@@ -1245,6 +1345,14 @@ pub struct FrameStats {
     /// Triangles of the drawn dense clusters, the software rasteriser's kind, whether it ran
     /// or not ([`SwRaster::Auto`] decides from them).
     pub dense_triangles: u32,
+    /// With cells (issue #38): the cells of 64 instances cell cull 1 listed for instance cull 1.
+    pub cells_listed: u32,
+    /// The cells the previous pyramid hid whole (deferred to cell cull 2; their instances
+    /// count as in the frustum and hidden).
+    pub cells_deferred: u32,
+    /// Of those, the ones this frame's pyramid did not hide (their instances go to instance
+    /// cull 2).
+    pub cells_opened: u32,
 }
 
 impl FrameStats {
@@ -1267,6 +1375,19 @@ impl FrameStats {
             String::new()
         } else {
             format!(" ({} hidden)", self.instances_occluded)
+        }
+    }
+
+    /// ", cells L listed, D hidden whole (O opened again)" when the instances were culled by
+    /// cells (issue #38), else nothing.
+    pub fn cells_note(&self) -> String {
+        if self.cells_listed + self.cells_deferred == 0 {
+            String::new()
+        } else {
+            format!(
+                ", cells {} listed, {} hidden whole ({} opened again)",
+                self.cells_listed, self.cells_deferred, self.cells_opened
+            )
         }
     }
 
@@ -1478,6 +1599,10 @@ pub struct MeshletRenderer {
     pipeline_cull: Pipeline,
     /// Instance cull 2: the instances pass 1 deferred, against this frame's pyramid (issue #38).
     pipeline_cull_deferred: Pipeline,
+    /// The cell culls ahead of the instance culls (issue #38): cells of 64 instances against
+    /// the frustum and the previous pyramid, then the deferred cells against this frame's.
+    pipeline_cell_cull: Pipeline,
+    pipeline_cell_cull_deferred: Pipeline,
     pipeline_cluster_cull: Pipeline,
     /// The same for a streamed scene (the LOD cut follows the resident pages).
     pipeline_cluster_cull_streamed: Pipeline,
@@ -1562,6 +1687,10 @@ pub struct DrawParams<'a> {
     pub sw_raster: SwRaster,
     /// When the instances the previous pyramid hides wait for this frame's (issue #38).
     pub instance_occlusion: InstanceOcclusion,
+    /// Cull the instances by cells of 64 first, in scenes of at least [`INSTANCE_CELLS_MIN`]
+    /// instances whose cells are built ([`MeshletScene::build_cells`]; issue #38). Both ways
+    /// give the same pixels.
+    pub instance_cells: bool,
     /// Dense clusters: under [`SW_RASTER_MAX_PX`] across, with fewer pixels of bounding
     /// rectangle than this per triangle.
     pub sw_raster_area: f32,
@@ -1596,6 +1725,8 @@ struct MeshPassIo {
     lookback: forge_gpu::BufferHandle,
     /// The instances instance cull 1 deferred, behind instance cull 2's grid.
     deferred: forge_gpu::BufferHandle,
+    /// The cell culls' grids and lists (issue #38).
+    cell_list: forge_gpu::BufferHandle,
     /// The fallback's indexed draws.
     draws: Option<forge_gpu::BufferHandle>,
     /// The visible-cluster list of this frame slot.
@@ -1657,6 +1788,18 @@ impl MeshletRenderer {
         let cull_deferred = device.create_shader_module(
             &shaders.compile("meshlet.slang", "cull_deferred_main", ShaderStage::Compute)?,
             "instance cull 2",
+        )?;
+        let cell_cull = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "cell_cull_main", ShaderStage::Compute)?,
+            "cell cull",
+        )?;
+        let cell_cull_deferred = device.create_shader_module(
+            &shaders.compile(
+                "meshlet.slang",
+                "cell_cull_deferred_main",
+                ShaderStage::Compute,
+            )?,
+            "cell cull 2",
         )?;
         let cluster_cull = device.create_shader_module(
             &shaders.compile("meshlet.slang", "cluster_cull_main", ShaderStage::Compute)?,
@@ -1721,6 +1864,16 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             name: "instance cull 2 (occlusion)",
         })?;
+        let pipeline_cell_cull = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (cell_cull, "cell_cull_main"),
+            push_constant_bytes: std::mem::size_of::<Push>() as u32,
+            name: "cell cull",
+        })?;
+        let pipeline_cell_cull_deferred = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (cell_cull_deferred, "cell_cull_deferred_main"),
+            push_constant_bytes: std::mem::size_of::<Push>() as u32,
+            name: "cell cull 2 (occlusion)",
+        })?;
         let pipeline_cluster_cull = device.create_compute_pipeline(&ComputePipelineDesc {
             shader: (cluster_cull, "cluster_cull_main"),
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
@@ -1781,6 +1934,8 @@ impl MeshletRenderer {
             hzb,
             cull,
             cull_deferred,
+            cell_cull,
+            cell_cull_deferred,
             cluster_cull,
             cluster_cull_streamed,
         ] {
@@ -1856,6 +2011,8 @@ impl MeshletRenderer {
             pipeline_hzb,
             pipeline_cull,
             pipeline_cull_deferred,
+            pipeline_cell_cull,
+            pipeline_cell_cull_deferred,
             pipeline_cluster_cull,
             pipeline_cluster_cull_streamed,
             pipeline_sw_raster,
@@ -1968,6 +2125,14 @@ impl MeshletRenderer {
         wanted && params.flags.has(CullFlags::OCCLUSION)
     }
 
+    /// Whether this frame culls the instances by cells of 64 first (issue #38): asked for, the
+    /// cells built, and the scene large enough ([`INSTANCE_CELLS_MIN`]).
+    pub fn instance_cells(&self, params: &DrawParams<'_>) -> bool {
+        params.instance_cells
+            && params.scene.cells_built
+            && params.scene.instance_count >= INSTANCE_CELLS_MIN
+    }
+
     /// How the visible clusters are drawn on this device.
     pub fn path(&self) -> GeometryPath {
         self.path
@@ -2062,6 +2227,9 @@ impl MeshletRenderer {
             work_overflow: raw[11],
             root_entries: raw[12],
             instances_occluded: raw[13],
+            cells_listed: raw[14],
+            cells_deferred: raw[15],
+            cells_opened: raw[16],
         });
         if let Some(s) = stats {
             // One capacity for both lists: the larger demand.
@@ -2166,6 +2334,10 @@ impl MeshletRenderer {
         {
             flags.0 |= FLAG_HIDDEN_INSTANCES;
         }
+        flags.0 &= !FLAG_INSTANCE_CELLS;
+        if self.instance_cells(params) {
+            flags.0 |= FLAG_INSTANCE_CELLS;
+        }
         flags.0 &= !FLAG_STREAMING;
         if scene.streamer.is_some() {
             flags.0 |= FLAG_STREAMING;
@@ -2237,6 +2409,8 @@ impl MeshletRenderer {
             tlas: scene.rays.as_ref().map_or(0, SceneRays::tlas_address),
             rt_scene: scene.rays.as_ref().map_or(0, SceneRays::hit_address),
             deferred: scene.deferred[slot.index].address(),
+            cells: scene.cells.address(),
+            cell_list: scene.cell_lists[slot.index].address(),
         }
     }
 
@@ -2317,6 +2491,7 @@ impl MeshletRenderer {
             roots: graph.import_buffer(&self.work_lists[slot.index].roots),
             cluster_lookback: graph.import_buffer(&self.work_lists[slot.index].lookback),
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
+            cell_list: graph.import_buffer(&scene.cell_lists[slot.index]),
             clusters: graph.import_buffer(&scene.clusters[slot.index]),
             lookback: graph.import_buffer(&scene.lookback[slot.index]),
             deferred: graph.import_buffer(&scene.deferred[slot.index]),
@@ -2380,14 +2555,19 @@ impl MeshletRenderer {
         let (indirect, clusters): (&'f GraphBuffer, &'f GraphBuffer) =
             (&scene.indirect[slot.index], &scene.clusters[slot.index]);
         let deferred: &'f GraphBuffer = &scene.deferred[slot.index];
+        let cells = self.instance_cells(&params);
+        let cell_list: &'f GraphBuffer = &scene.cell_lists[slot.index];
         let mut clears = graph
-            .pass("geometry/instance cull")
+            .pass("geometry/cull clears")
             .buffer(io.indirect, BufferAccess::TransferDst)
             .buffer(io.clusters, BufferAccess::TransferDst)
             .buffer(io.lookback, BufferAccess::TransferDst)
             .buffer(io.deferred, BufferAccess::TransferDst)
             .buffer(io.cluster_lookback, BufferAccess::TransferDst)
             .buffer(io.stats, BufferAccess::TransferDst);
+        if cells {
+            clears = clears.buffer(io.cell_list, BufferAccess::TransferDst);
+        }
         if let Some(handle) = io.need {
             clears = clears.buffer(handle, BufferAccess::TransferDst);
         }
@@ -2395,6 +2575,9 @@ impl MeshletRenderer {
             commands.update_buffer(indirect, 0, &INDIRECT_START);
             commands.update_buffer(clusters, 0, &CLUSTER_ARGS_START);
             commands.update_buffer(deferred, 0, &DEFERRED_GRID_START);
+            if cells {
+                commands.update_buffer(cell_list, 0, &CELL_LIST_START);
+            }
             commands.fill_buffer(
                 lookback,
                 0,
@@ -2408,20 +2591,53 @@ impl MeshletRenderer {
             }
             Ok(())
         });
-        graph
+        // With cells (issue #38): the cell cull lists the cells in view for instance cull 1,
+        // and with instance occlusion defers those the previous pyramid hides whole.
+        if cells {
+            let pipeline = &self.pipeline_cell_cull;
+            let mut builder = graph
+                .pass("geometry/cell cull")
+                .buffer(io.cell_list, BufferAccess::ShaderReadWrite(compute))
+                .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+                .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
+            if let Some(prev) = io.hzb_prev {
+                builder = builder.image(prev, ImageAccess::Sampled(compute));
+            }
+            builder.run(move |_, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &self.push(frame_address));
+                commands.dispatch(scene.instance_count.div_ceil(64).div_ceil(64).max(1), 1, 1);
+                Ok(())
+            });
+        }
+        let mut builder = graph
             .pass("geometry/instance cull")
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
             .buffer(io.roots, BufferAccess::ShaderWrite(compute))
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.deferred, BufferAccess::ShaderWrite(compute))
-            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
-            .run(move |_, commands| {
-                commands.bind_pipeline(cull_pipeline);
-                commands.push_constants(cull_pipeline, &self.push(frame_address));
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
+        if cells {
+            builder = builder.buffer(
+                io.cell_list,
+                BufferAccess::IndirectArgsAndShaderRead(compute),
+            );
+        }
+        // Instance occlusion reads the previous pyramid (issue #38).
+        if let Some(prev) = io.hzb_prev {
+            builder = builder.image(prev, ImageAccess::Sampled(compute));
+        }
+        builder.run(move |_, commands| {
+            commands.bind_pipeline(cull_pipeline);
+            commands.push_constants(cull_pipeline, &self.push(frame_address));
+            if cells {
+                commands.dispatch_indirect(cell_list, 0);
+            } else {
                 commands.dispatch(instance_groups, 1, 1);
-                Ok(())
-            });
+            }
+            Ok(())
+        });
 
         let (cull_label, draw_label, raster_label) = if occlusion {
             (
@@ -2455,7 +2671,14 @@ impl MeshletRenderer {
                 self.pyramid_passes(graph, io, &self.hzb[pyramid]);
             }
             if self.instance_occlusion(&params) {
-                self.deferred_cull_pass(graph, io, frame_address + FRAME_BLOCK_STRIDE, slot, scene);
+                self.deferred_cull_pass(
+                    graph,
+                    io,
+                    frame_address + FRAME_BLOCK_STRIDE,
+                    slot,
+                    scene,
+                    cells,
+                );
             }
             let second = MeshPass {
                 io,
@@ -2791,6 +3014,8 @@ impl MeshletRenderer {
     /// instance cull 1 deferred (those the previous frame's pyramid hid) face this frame's.
     /// The work of those it lets through goes after pass 1's in the work lists (segment 2),
     /// and pass 2's grid covers both. `frame_address` is pass 2's frame block.
+    /// With `cells`, cell cull 2 goes first: the cells cell cull 1 deferred face this frame's
+    /// pyramid, and the instances of those it lets through join instance cull 2's list.
     fn deferred_cull_pass<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -2798,10 +3023,30 @@ impl MeshletRenderer {
         frame_address: u64,
         slot: FrameSlot,
         scene: &'f MeshletScene,
+        cells: bool,
     ) {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let pipeline = &self.pipeline_cull_deferred;
         let deferred: &'f GraphBuffer = &scene.deferred[slot.index];
+        if cells {
+            let pipeline = &self.pipeline_cell_cull_deferred;
+            let cell_list: &'f GraphBuffer = &scene.cell_lists[slot.index];
+            graph
+                .pass("geometry/cell cull 2 (occlusion)")
+                .buffer(
+                    io.cell_list,
+                    BufferAccess::IndirectArgsAndShaderRead(compute),
+                )
+                .buffer(io.deferred, BufferAccess::ShaderReadWrite(compute))
+                .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+                .image(io.hzb, ImageAccess::Sampled(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &self.push(frame_address));
+                    commands.dispatch_indirect(cell_list, CELL_GRID2_BYTES);
+                    Ok(())
+                });
+        }
         graph
             .pass("geometry/instance cull 2 (occlusion)")
             .buffer(

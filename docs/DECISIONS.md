@@ -65,7 +65,13 @@ roots of any instances to a cluster-cull item. Since issue #38 the instance cull
 pass 1's question of whole instances: one the previous pyramid hides goes to a second
 instance cull against this frame's pyramid, and only pass 2 culls the clusters of those it
 lets through. It runs while most of a large crowd is hidden (auto; the city's culls
-1.13 → 0.87 ms). Next: cluster acceleration structures for ray tracing on RTX.
+1.13 → 0.87 ms). Also since #38, scenes of 65 536 instances or more are culled by cells of
+64 consecutive instances first. A cell cull tests each cell's bounding sphere against the
+frustum and the previous pyramid, and instance cull 1 takes only the cells in view. Cells
+hidden whole wait for this frame's pyramid in a second cell cull. The city's table is sorted
+along a Morton curve so that its cells are compact. The instance culls go 0.40 → 0.14 ms,
+with the same pixels, cells on or off. Next: cluster acceleration structures for ray
+tracing on RTX.
 *Measured:* 127 M-triangle scene, 1152 instances: 6.1 ms brute force → 1.1 ms with
 occlusion, 0 pixels different. Compute culling (#5): the two paths 0 pixels apart; the mesh
 path costs what the task path did (0.180 ms bench, 0.326 against 0.322 ms for the ballad),

@@ -64,7 +64,8 @@ Options:
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
-  `--instance-occlusion auto|on|off`,
+  `--instance-occlusion auto|on|off`, `--no-instance-cells` (cull the instances one by
+  one, not by cells of 64, #38), `--show-culled` (what culling rejected drawn in red),
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
 
@@ -713,6 +714,13 @@ alone are the cut lists those roots instead, and the cluster culls take them 32 
   previous frame's pyramid. They now skip pass 1, and a second instance cull tests them
   against this frame's, so 10 k roots are tested instead of 791 k. The frame goes 2.90 →
   2.65 ms at 1600 × 900 with the probes (`docs/demos/meshlets.md`, "Instance occlusion").
+- **Cells of instances (#38):** the table is sorted along a Morton curve after placement,
+  and a cell cull tests 64 instances at a time before the instance culls. From the south
+  edge, 2.1 k of the 15.6 k cells are listed and 5.8 k are hidden whole. The terrain's work
+  items are now written by a whole workgroup instead of one thread. Together, the instance
+  culls go 0.40 → 0.14 ms and the frame 2.52 → 2.26 ms. The orbit goes 2.89 → 2.71 ms, the
+  flight 2.36 → 2.13 ms, with the same pixels, cells on or off (`docs/demos/meshlets.md`,
+  "Cells of instances"). The overlay's instance line counts the cells.
 
 The flight at 300 m/s, 1440p and the closing numbers (#13) come next.
 

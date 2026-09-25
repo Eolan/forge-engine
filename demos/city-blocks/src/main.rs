@@ -80,6 +80,14 @@ struct Args {
     /// on or off. Every mode must give the same image (A/B harness).
     #[arg(long, default_value = "auto")]
     instance_occlusion: forge_render::InstanceOcclusion,
+    /// Cull the instances one by one instead of by cells of 64 first (issue #38; cells only
+    /// in scenes of 65 536 instances or more). Both ways must give the same image.
+    #[arg(long)]
+    no_instance_cells: bool,
+    /// The culling-error view: what culling rejected drawn in red (the A/B harness; with
+    /// instance occlusion and cells, issue #38).
+    #[arg(long)]
+    show_culled: bool,
     /// Dense clusters: fewer pixels of bounding rectangle than this per triangle.
     #[arg(long, default_value_t = forge_render::meshlet::SW_RASTER_DEFAULT_AREA)]
     sw_raster_area: f32,
@@ -316,6 +324,9 @@ impl Gallery {
         }
         if !args.no_ray_reflections {
             flags.0 |= CullFlags::RAY_REFLECTIONS;
+        }
+        if args.show_culled {
+            flags.0 |= CullFlags::SHOW_CULLED;
         }
         let mut camera = if args.gallery {
             FlyCamera {
@@ -556,10 +567,11 @@ impl Demo for Gallery {
         }
         if let Some(last) = self.stats.last() {
             ctx.profile.counter(format!(
-                "drawn through {}: {} instances{}, {:.0} k + {:.0} k clusters, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px",
+                "drawn through {}: {} instances{}{}, {:.0} k + {:.0} k clusters, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px",
                 self.renderer.path().name(),
                 last.instances_visible,
                 last.hidden_note(),
+                last.cells_note(),
                 f64::from(last.meshlets_pass1) / 1e3,
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
@@ -652,6 +664,7 @@ impl Demo for Gallery {
                 exposure,
                 sw_raster: self.args.sw_raster,
                 instance_occlusion: self.args.instance_occlusion,
+                instance_cells: !self.args.no_instance_cells,
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
@@ -777,13 +790,16 @@ impl Demo for Gallery {
         let mut frames = std::mem::take(&mut self.frame_ms);
         let (p50, p99) = (percentile(&mut frames, 0.5), percentile(&mut frames, 0.99));
         let title = format!(
-            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances ({:.0} k hidden), {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms, frame p50 {p50:.2} p99 {p99:.2} ms",
+            "forge city-blocks | {} instances, {:.1} M triangles, {:.1} M clusters | {}: drawn {:.0} k instances ({:.0} k hidden; cells {:.1} k listed, {:.1} k hidden whole, {:.2} k opened again), {:.0} k + {:.0} k clusters ({:.0} k in software; {:.0} k work items, {:.0} k roots), {:.2} M tris | GPU {:.2} ms, frame p50 {p50:.2} p99 {p99:.2} ms",
             self.scene.instance_count,
             self.scene.total_triangles as f64 / 1e6,
             self.scene.instance_meshlets() as f64 / 1e6,
             self.renderer.path().name(),
             mean(|s| s.instances_visible) / 1e3,
             mean(|s| s.instances_occluded) / 1e3,
+            mean(|s| s.cells_listed) / 1e3,
+            mean(|s| s.cells_deferred) / 1e3,
+            mean(|s| s.cells_opened) / 1e3,
             mean(|s| s.meshlets_pass1) / 1e3,
             mean(|s| s.meshlets_pass2) / 1e3,
             mean(|s| s.sw_clusters) / 1e3,
@@ -1356,6 +1372,8 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     if !report.matches_mirror {
         tracing::warn!("the placed meshes differ from the CPU mirror: the scene's counts are off");
     }
+    // The instance culls read the sorted table by cells of 64 (issue #38).
+    scene.build_cells(&ctx.device, &ctx.shaders)?;
     // The sun's shadows trace against every placed instance (issue #45).
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
     if let Some(rays) = scene.rays() {

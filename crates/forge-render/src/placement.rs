@@ -323,8 +323,40 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     })
 }
 
+/// Spreads the low 16 bits of `v` to the even bits of the result.
+fn spread_bits(v: u32) -> u32 {
+    let mut x = v & 0xFFFF;
+    x = (x | (x << 8)) & 0x00FF_00FF;
+    x = (x | (x << 4)) & 0x0F0F_0F0F;
+    x = (x | (x << 2)) & 0x3333_3333;
+    (x | (x << 1)) & 0x5555_5555
+}
+
+/// The instance records of `table` (`record` bytes each, the centre at bytes 64..76) reordered
+/// along a Morton curve of their centres' x and z over the square of half-side `half`, ties
+/// kept in table order, so that runs of consecutive records are compact patches.
+fn morton_sorted(table: &[u8], record: usize, half: f32) -> Vec<u8> {
+    let records: Vec<&[u8]> = table.chunks_exact(record).collect();
+    let coordinate = |bytes: &[u8]| f32::from_le_bytes(bytes.try_into().expect("4 bytes"));
+    let cell = |v: f32| (((v + half) / (2.0 * half)).clamp(0.0, 1.0) * 65535.0) as u32;
+    let mut keys: Vec<(u32, u32)> = records
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let (x, z) = (coordinate(&r[64..68]), coordinate(&r[72..76]));
+            (spread_bits(cell(x)) | (spread_bits(cell(z)) << 1), i as u32)
+        })
+        .collect();
+    keys.sort_unstable();
+    keys.iter()
+        .flat_map(|&(_, i)| records[i as usize].iter().copied())
+        .collect()
+}
+
 /// Fills `scene`'s slots `first..first + layout.total` (reserved with the counts of
-/// [`mesh_counts`]) on the GPU, then reads them back for the report. Initialisation only.
+/// [`mesh_counts`]) on the GPU and reads them back for the report (its checksum is the table
+/// as placed), then writes them again in Morton order of their centres (issue #38).
+/// Initialisation only.
 pub fn place(
     device: &Arc<Device>,
     shaders: &ShaderCompiler,
@@ -424,6 +456,16 @@ pub fn place(
         *expected.entry(mesh.index()).or_default() += count;
     }
     expected.retain(|_, count| *count > 0);
+
+    // The table in Morton order of the centres (issue #38): the instance culls read it in cells
+    // of 64 consecutive slots, which the rocks' random slots would spread over every hill.
+    let half = (ground.samples - 1) as f32 * ground.spacing * 0.5;
+    let sorted = morton_sorted(&bytes, INSTANCE_BYTES as usize, half);
+    device.write_buffer_staged(
+        scene.instance_buffer(),
+        u64::from(first) * INSTANCE_BYTES,
+        &sorted,
+    )?;
     Ok(PlacementReport {
         placed: layout.total,
         ms,
@@ -482,5 +524,38 @@ mod tests {
         // Crossings 2, 6, 10, 14, 18 and 22 on each axis.
         assert_eq!(c.plaza_slots, 5 * 6 * 6);
         assert_eq!(c.buildings + c.lamps + c.plaza_slots + c.rocks, 1_000_000);
+    }
+
+    #[test]
+    fn the_morton_order_keeps_every_record_and_packs_neighbours_together() {
+        // 256 records on a 16 × 16 grid of 10 m, in a scrambled order, their index as the id.
+        const RECORD: usize = 96;
+        let mut table = Vec::new();
+        for k in 0..256_u32 {
+            let i = (k * 97) % 256;
+            let (x, z) = ((i % 16) as f32 * 10.0 - 75.0, (i / 16) as f32 * 10.0 - 75.0);
+            let mut record = [0_u8; RECORD];
+            record[64..68].copy_from_slice(&x.to_le_bytes());
+            record[72..76].copy_from_slice(&z.to_le_bytes());
+            record[84..88].copy_from_slice(&i.to_le_bytes());
+            table.extend_from_slice(&record);
+        }
+        let sorted = morton_sorted(&table, RECORD, 80.0);
+        let field = |r: &[u8], at: usize| f32::from_le_bytes(r[at..at + 4].try_into().unwrap());
+        let records = sorted.as_chunks::<RECORD>().0;
+        let mut ids: Vec<u32> = records
+            .iter()
+            .map(|r| u32::from_le_bytes(r[84..88].try_into().unwrap()))
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..256).collect::<Vec<_>>());
+        // Along the curve, every run of 16 records is a 4 × 4 block of the grid.
+        for run in records.chunks(16) {
+            for at in [64, 72] {
+                let values = run.iter().map(|r| field(r, at));
+                let (lo, hi) = values.fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(v), h.max(v)));
+                assert_eq!(hi - lo, 30.0);
+            }
+        }
     }
 }

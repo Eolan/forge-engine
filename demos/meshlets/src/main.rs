@@ -92,6 +92,10 @@ struct Args {
     /// on or off. Every mode must give the same image (A/B harness).
     #[arg(long, default_value = "auto")]
     instance_occlusion: forge_render::InstanceOcclusion,
+    /// Cull the instances one by one instead of by cells of 64 first (issue #38; cells only
+    /// in scenes of 65 536 instances or more). Both ways must give the same image.
+    #[arg(long)]
+    no_instance_cells: bool,
     /// Clusters (under 64 pixels across) whose bounding rectangle holds fewer pixels than
     /// this per triangle are rasterised in compute.
     #[arg(long, default_value_t = forge_render::meshlet::SW_RASTER_DEFAULT_AREA)]
@@ -252,10 +256,11 @@ impl Demo for Bench {
         }
         if let Some(last) = self.stats.last() {
             ctx.profile.counter(format!(
-                "drawn through {}: {} instances{}, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px, mean level {:.2}",
+                "drawn through {}: {} instances{}{}, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}; LOD {} at {:.2} px, mean level {:.2}",
                 self.renderer.path().name(),
                 last.instances_visible,
                 last.hidden_note(),
+                last.cells_note(),
                 f64::from(last.meshlets_pass1) / 1e3,
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
@@ -300,6 +305,7 @@ impl Demo for Bench {
                 exposure: exposure_from_ev100(self.args.ev100),
                 sw_raster: self.args.sw_raster,
                 instance_occlusion: self.args.instance_occlusion,
+                instance_cells: !self.args.no_instance_cells,
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
@@ -454,7 +460,9 @@ fn build_scene(ctx: &Context, args: &Args) -> Result<MeshletScene> {
             }
         }
     }
-    let scene = builder.build(&ctx.device)?;
+    let mut scene = builder.build(&ctx.device)?;
+    // Cells of 64 instances for the instance culls, in scenes large enough (issue #38).
+    scene.build_cells(&ctx.device, &ctx.shaders)?;
     tracing::info!(
         instances = scene.instance_count,
         meshlets_per_instance = scene.max_meshlets,

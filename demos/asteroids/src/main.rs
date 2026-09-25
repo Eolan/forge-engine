@@ -224,6 +224,10 @@ struct Args {
     /// on or off. Every mode must give the same image (A/B harness).
     #[arg(long, default_value = "auto")]
     instance_occlusion: forge_render::InstanceOcclusion,
+    /// Cull the instances one by one instead of by cells of 64 first (issue #38; cells only
+    /// in scenes of 65 536 instances or more). Both ways must give the same image.
+    #[arg(long)]
+    no_instance_cells: bool,
     /// Clusters (under 64 pixels across) whose bounding rectangle holds fewer pixels than
     /// this per triangle are rasterised in compute.
     #[arg(long, default_value_t = forge_render::meshlet::SW_RASTER_DEFAULT_AREA)]
@@ -662,10 +666,11 @@ impl Demo for Ballad {
                 self.scene.instance_meshlets() as f64 / 1e6
             ));
             ctx.profile.counter(format!(
-                "drawn through {}: {} instances{}, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}",
+                "drawn through {}: {} instances{}{}, {:.0} k + {:.0} k meshlets, {:.2} M triangles, {:.0} k occluded{}",
                 self.renderer.path().name(),
                 last.instances_visible,
                 last.hidden_note(),
+                last.cells_note(),
                 f64::from(last.meshlets_pass1) / 1e3,
                 f64::from(last.meshlets_pass2) / 1e3,
                 f64::from(last.triangles) / 1e6,
@@ -802,6 +807,7 @@ impl Demo for Ballad {
                 exposure,
                 sw_raster: self.args.sw_raster,
                 instance_occlusion: self.args.instance_occlusion,
+                instance_cells: !self.args.no_instance_cells,
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
