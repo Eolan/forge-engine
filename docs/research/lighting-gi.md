@@ -1023,10 +1023,14 @@ as the default. What the port taught:
 - **Negative remainders.** On the RTX 5070 Ti's driver, a signed remainder of a negative
   number (SPIR-V `OpSRem`) came out as the unsigned one. A ring buffer indexed by world
   cells hits this at the first negative cell; take remainders of positive numbers.
-- **The lookup's cost is in the resolve.** It is 0.46 ms of the 1.05 ms at 1440p, more than
-  the probes' own passes. Removing its integer divisions barely moved it. The resolve's
-  registers are the likelier cause, as they were for the mirror rays (#52), so a pass of its
-  own is next.
+- **The lookup's cost is its own work.** It is 0.46 ms of the 1.05 ms at 1440p, more than
+  the probes' own passes. Removing its integer divisions barely moved it. A pass of its own
+  (#70, tried after #68) took it out of the resolve, which fell back to its cost without
+  probes, but the pass cost 0.41 ms: eight probes per cascade, each with a distance fetch,
+  a visibility test and the irradiance fetches, are the work, not the resolve's registers.
+  The net gain was 0.09 ms. And at the interpolated normal the pass lost what the normal map
+  does to the light: half of #68's sparkles came back. Half resolution or a cheaper lookup
+  are the next tries, when the budget asks.
 - **The sky's reflection needs them too** (#68). Probes that darken only the diffuse light
   leave shaded asphalt mirroring the open sky at grazing angles. Scaling the sky's mirror
   term by the probes' irradiance over the open sky's fixes it, if the ratio is taken towards

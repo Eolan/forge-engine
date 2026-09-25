@@ -1139,7 +1139,8 @@ positive numbers only (`wrap_cells`).
 **Left for later** (issues filed):
 - the sky's reflection occluded by the probes (#68, done: 0.11 ms at 1440p);
 - probes woken again when geometry moves (doors, vehicles, rebuilt blocks; #69);
-- the lookup in a pass of its own instead of the resolve's registers (#70);
+- a cheaper lookup (#70: a pass of its own saved only 0.09 ms at 1440p, and lost the normal
+  map's effect on the light; parked);
 - the T0 updater (SDF marches instead of rays) for GPUs without ray queries;
 - the froxel fog lit by the probes.
 

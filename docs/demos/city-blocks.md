@@ -112,7 +112,8 @@ most of the sparkles stayed.
 | flight at 300 m/s, 2560 × 1440 | 3.66 | 3.81 | 0.67 → 0.80 |
 
 The buildings' pass takes the cost, and the ground's (`shading/layered`) hardly changes.
-Moving the lookup out of the resolve (#70) would take both directions with it.
+A pass of its own for the lookup would save only 0.09 ms at 1440p, and at the interpolated
+normal half of the sparkles came back (#70, parked).
 
 **Stability:** pixels changing by more than two levels, with a static camera and TAA on:
 
@@ -224,7 +225,8 @@ city-blocks --view=-8,1.7,1135,-50,10
   asphalt still mirrors the open sky (#68, done: see above).
 - **Moving geometry.** A settled probe does not move again, so doors and vehicles will need
   their probes woken (#69).
-- **Sampling cost.** The lookup could move out of the resolve into a pass of its own (#70).
+- **Sampling cost.** The lookup could move out of the resolve into a pass of its own (#70:
+  tried after #68, the pass costs almost what it saves).
 
 ## A day over the city (issue #57, 2026-09-25)
 
