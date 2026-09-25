@@ -92,6 +92,10 @@ struct ResolvePush {
     history_scale: f32,
     curve: u32,
     encode_srgb: u32,
+    /// The bloom chain's top level (sampled index), or `u32::MAX` for none.
+    bloom: u32,
+    /// How much of the shown image is bloom (`crate::bloom`).
+    bloom_strength: f32,
 }
 
 fn create_history(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
@@ -152,6 +156,9 @@ pub struct Taa {
     /// When false, frames are drawn without jitter and resolved without history: the passes
     /// still run (so the output path is identical) but the image is the plain scene.
     pub enabled: bool,
+    /// How much of the shown image is bloom when a bloom chain is passed to
+    /// [`Taa::resolve`] (0.04 by default).
+    pub bloom_strength: f32,
     /// Length of the jitter sequence ([`JITTER_PHASES`] at native resolution, more when an
     /// upscaler draws below it: [`jitter_phases`]).
     pub jitter_phases: u32,
@@ -215,6 +222,7 @@ impl Taa {
             encode_srgb: !format_encodes_srgb(output_format),
             blend: 0.1,
             enabled: true,
+            bloom_strength: 0.04,
             jitter_phases: JITTER_PHASES,
         })
     }
@@ -368,44 +376,51 @@ impl Taa {
         motion: ImageHandle,
         output: ImageHandle,
         curve: Tonemap,
+        bloom: Option<ImageHandle>,
     ) {
         let encode_srgb = u32::from(self.encode_srgb);
+        let bloom_strength = self.bloom_strength;
         use vk::PipelineStageFlags2 as S;
         let frame = *frame;
         let extent = frame.extent;
         let history_written = graph.import(&self.history[frame.written]);
         let history_read = graph.import(&self.history[1 - frame.written]);
         let pipeline_resolve = &self.pipeline_resolve;
-        graph
+        let mut pass = graph
             .pass("temporal/TAA resolve")
             .image(frame.color, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(motion, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(depth, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(history_read, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(history_written, ImageAccess::ColorAttachment)
-            .image(output, ImageAccess::ColorAttachment)
-            .run(move |resources, commands| {
-                fullscreen_pass(
-                    commands,
-                    &[resources.view(history_written), resources.view(output)],
-                    extent,
-                    pipeline_resolve,
-                    &ResolvePush {
-                        color: resources.sampled(frame.color).0,
-                        motion: resources.sampled(motion).0,
-                        depth: resources.sampled(depth).0,
-                        history: resources.sampled(history_read).0,
-                        width: extent.width,
-                        height: extent.height,
-                        jitter: frame.jitter.to_array(),
-                        blend: frame.blend,
-                        history_scale: frame.history_scale,
-                        curve: curve.index(),
-                        encode_srgb,
-                    },
-                );
-                Ok(())
-            });
+            .image(output, ImageAccess::ColorAttachment);
+        if let Some(bloom) = bloom {
+            pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
+        }
+        pass.run(move |resources, commands| {
+            fullscreen_pass(
+                commands,
+                &[resources.view(history_written), resources.view(output)],
+                extent,
+                pipeline_resolve,
+                &ResolvePush {
+                    color: resources.sampled(frame.color).0,
+                    motion: resources.sampled(motion).0,
+                    depth: resources.sampled(depth).0,
+                    history: resources.sampled(history_read).0,
+                    width: extent.width,
+                    height: extent.height,
+                    jitter: frame.jitter.to_array(),
+                    blend: frame.blend,
+                    history_scale: frame.history_scale,
+                    curve: curve.index(),
+                    encode_srgb,
+                    bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
+                    bloom_strength,
+                },
+            );
+            Ok(())
+        });
     }
 }
 

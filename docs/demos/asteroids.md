@@ -28,7 +28,7 @@ Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
-red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **G** tone curve,
+red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **G** tone curve,
 **-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
 Quality → Balanced → Performance → Ultra Performance, with `--features dlss`), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
@@ -263,6 +263,26 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Bloom (2026-09-25, issue #44)
+
+The sun now spreads into the rocks in front of it, as it would through a lens. Bloom
+(Jimenez 2014, D-022) is built from the pre-exposed HDR frame:
+- six half-size levels, down with a 13-tap filter (the first step weighted against
+  fireflies);
+- back up with a 3×3 tent, each level adding the one below;
+- blended into the shown image before the tone curve by the TAA resolve: 4 % of the image
+  by default (`--bloom S`, **B**). The history stays unbloomed.
+
+![Frame 600 without bloom and with it: the sun's glow spills over the silhouettes in front of it](images/asteroids-bloom.png)
+
+**Cost:** `post/bloom` takes 0.04 ms at 1600×900 (the ballad 0.337 → 0.387 ms with the resolve's
+extra sample), and 0.08 ms in city-blocks' 1440p flight.
+
+**Checks:** with bloom off (`--bloom 0`), the ballad's captures without TAA and the city's
+(with TAA) are identical to the previous build. The ballad's TAA frame 600 moves 0.12 % of
+its pixels by more than two levels, from the resolve's recompiled arithmetic. Two runs are
+identical.
 
 ## Rock and ice as material rows (2026-09-25, issue #20)
 

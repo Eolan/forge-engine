@@ -23,7 +23,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -63,7 +63,8 @@ city-blocks --stream-pool 0 --orbit --frames 241 --capture sky.png --capture-fra
 - at 1600×900 the three passes cost 0.014 + 0.011 + 0.024 ms (the south view 1.491 → 1.541 ms);
 - at 1440p the compose takes 0.055 ms (the flight 1.868 → 1.938 ms).
 
-The sun's disc is clamped below fp16's range once pre-exposed.
+The sun's disc is clamped below fp16's range once pre-exposed. Bloom (issue #44, 4 %, **B**) spreads it
+into its surroundings: 0.043 ms at 1600×900, 0.078 ms at 1440p (the flight 1.938 → 2.023 ms).
 
 ## Materials (issue #20, 2026-09-25)
 

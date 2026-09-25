@@ -213,7 +213,9 @@ later and followed on the CPU with separate speeds up and down. Temporal passes 
 their history by the exposure ratio. The display transform is chosen at run time from
 `tonemap.slang` (AgX, ACES fit, Khronos PBR Neutral) and applied where the last HDR pass
 writes the display image (the TAA resolve in the ballad, the stand-alone display pass
-elsewhere); nothing upstream knows which curve is on screen.
+elsewhere); nothing upstream knows which curve is on screen. Bloom (issue #44) is a half-size
+downsample/upsample chain of the same pre-exposed image, blended into the displayed image
+before the curve; the TAA history never sees it.
 
 **Atmospheres belong to planets** (issue #8, D-023). A planet's air is two tables built by
 compute passes when it changes (transmittance, multiple scattering; Hillaire 2020) and a

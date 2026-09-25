@@ -125,7 +125,9 @@ Goal: the renderer skeleton every later system draws through.
 6. HDR pipeline ✅ (2026-09-24, D-022): physical light units (the sun in lux, its disc from
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
-   Still to come: bloom, ACES 2.0's output transform, a perceptual golden-image metric.
+   Bloom ✅ (issue #44: the downsample/upsample chain of Jimenez 2014 before the tone
+   curve, 0.04 ms at 900p). Still to come: ACES 2.0's output transform, a perceptual golden-image
+   metric.
    Hillaire atmosphere ✅ (2026-09-24, D-023: transmittance and multiple-scattering tables
    as graph passes, the per-pixel march for planets seen from space; the planet-view table
    #26 for big planets; the sky-view table, the aerial perspective and the sun seen from the

@@ -95,6 +95,8 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - ACES 1.x: the Academy of Motion Picture Arts and Sciences, through Stephen Hill's fit
     (from BakingLab, MIT).
   - PBR Neutral: the Khronos Group.
+- **Bloom.** Jorge Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare",
+  SIGGRAPH 2014: the downsample and upsample chain, and its firefly weighting.
 - **TAA.**
   - Brian Karis, "High-Quality Temporal Supersampling", SIGGRAPH 2014.
   - Jorge Jimenez, "Filmic SMAA", SIGGRAPH 2016.

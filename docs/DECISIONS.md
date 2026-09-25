@@ -357,6 +357,17 @@ bit-identical. The ballad defaults to ACES (its toe keeps space black; AgX's 16.
 encoding lifts the nebula to a flat grey), the bench to AgX. *(research: lighting-gi.md §5
 and §10; issue #7)*
 
+**Bloom** (issue #44, 2026-09-25) follows lighting-gi.md §10 (Jimenez 2014). It is computed
+from the pre-exposed HDR frame, before the tone curve:
+- a chain of six half-size levels, down with the 13-tap filter, the first step weighting each
+  box by 1 / (1 + luma) against fireflies;
+- back up with a 3×3 tent, each level adding the one below;
+- the TAA resolve blends the top level, averaged over the levels, into the image it shows
+  (4 % by default, `--bloom`, **B**).
+
+The history stays unbloomed, so bloom never feeds back. It costs 0.04 ms at 1600×900 and
+0.08 ms at 1440p.
+
 ## D-023 — Atmospheres: Hillaire 2020 tables in the graph, a per-pixel march from space ✅ (2026-09-24)
 
 An atmosphere belongs to a planet (or any body massive enough to hold one): a Rayleigh

@@ -25,7 +25,7 @@ use forge_render::SwRaster;
 use forge_render::material::stock;
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    Atmosphere, AtmosphereParams, AutoExposure, CullCamera, CullFlags, Display, DlssMode,
+    Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags, Display, DlssMode,
     DlssUpscaler, FrameStats, HDR_FORMAT, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, Starfield, Taa, Tonemap, UpscaleCamera,
 };
@@ -36,6 +36,9 @@ use winit::keyboard::KeyCode;
 #[derive(Parser, Debug, Clone)]
 #[command(about = "The asteroid ballad")]
 struct Args {
+    /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
+    #[arg(long, default_value_t = 0.04)]
+    bloom: f32,
     /// Number of asteroids in the field.
     #[arg(long, default_value_t = 3000)]
     count: u32,
@@ -191,6 +194,9 @@ struct Ballad {
     /// The planet's atmosphere and the camera's position relative to its centre (km).
     atmosphere: Option<(Atmosphere, Vec3)>,
     taa: Taa,
+    /// Bloom before the tone curve (issue #44), on while `bloom_on`.
+    bloom: Bloom,
+    bloom_on: bool,
     taa_enabled: bool,
     /// DLSS, when the device has it; used instead of the TAA resolve while `dlss_on`.
     dlss: Option<DlssUpscaler>,
@@ -314,6 +320,9 @@ impl Ballad {
         }
         let mut taa = taa;
         taa.blend = args.taa_blend;
+        taa.bloom_strength = args.bloom;
+        let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
+        let bloom_on = args.bloom > 0.0;
         let tonemap = args.tonemap;
         let mut ballad = Self {
             args,
@@ -321,6 +330,8 @@ impl Ballad {
             starfield,
             atmosphere,
             taa,
+            bloom,
+            bloom_on,
             taa_enabled,
             dlss,
             dlss_on,
@@ -449,6 +460,7 @@ impl Demo for Ballad {
             KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
+            KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::Minus => self.exposure.compensation -= 0.5,
             KeyCode::Equal => self.exposure.compensation += 0.5,
             _ => {}
@@ -693,14 +705,21 @@ impl Demo for Ballad {
                     self.tonemap,
                 );
             }
-            _ => self.taa.resolve(
-                &mut frame.graph,
-                &taa_frame,
-                targets.depth,
-                motion,
-                frame.target,
-                self.tonemap,
-            ),
+            _ => {
+                let bloom = self.bloom_on.then(|| {
+                    self.bloom
+                        .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
+                });
+                self.taa.resolve(
+                    &mut frame.graph,
+                    &taa_frame,
+                    targets.depth,
+                    motion,
+                    frame.target,
+                    self.tonemap,
+                    bloom,
+                )
+            }
         }
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())

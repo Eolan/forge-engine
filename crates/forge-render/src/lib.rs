@@ -10,6 +10,7 @@
 
 pub mod atmosphere;
 pub mod blit;
+pub mod bloom;
 pub mod display;
 pub mod exposure;
 pub mod material;
@@ -26,6 +27,7 @@ pub mod visibility;
 
 pub use atmosphere::{Atmosphere, AtmosphereFrame, AtmosphereParams};
 pub use blit::blit;
+pub use bloom::Bloom;
 pub use display::{Display, Tonemap};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;

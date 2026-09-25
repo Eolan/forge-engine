@@ -32,9 +32,9 @@ use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
-    Atmosphere, AtmosphereParams, CullCamera, CullFlags, FrameStats, GroundSky, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, Residency, SkyParams, StreamingConfig, StreamingStats,
-    SwRaster, Taa, Tonemap, exposure_from_ev100,
+    Atmosphere, AtmosphereParams, Bloom, CullCamera, CullFlags, FrameStats, GroundSky,
+    MeshletRenderer, MeshletScene, MeshletSceneBuilder, Residency, SkyParams, StreamingConfig,
+    StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -118,6 +118,9 @@ struct Args {
     /// The sun's elevation over the horizon, degrees (63.4: the renderer's default sun).
     #[arg(long, default_value_t = 63.4)]
     sun_elevation: f32,
+    /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
+    #[arg(long, default_value_t = 0.04)]
+    bloom: f32,
     /// Draw without TAA (no jitter, no history): the raw frame, aliased.
     #[arg(long)]
     no_taa: bool,
@@ -141,6 +144,9 @@ struct Gallery {
     renderer: MeshletRenderer,
     /// Anti-aliasing: jittered frames into a history, resolved through the tone curve.
     taa: Taa,
+    /// Bloom before the tone curve (issue #44), on while `bloom_on`.
+    bloom: Bloom,
+    bloom_on: bool,
     /// The Earth's atmosphere the city stands in, and the sky seen from the ground (issue #43).
     atmosphere: Atmosphere,
     sky: GroundSky,
@@ -182,6 +188,9 @@ impl Gallery {
             ctx.swapchain.format(),
         )?;
         taa.enabled = !args.no_taa;
+        taa.bloom_strength = args.bloom;
+        let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
+        let bloom_on = args.bloom > 0.0;
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
         let atmosphere_params = AtmosphereParams::earth();
         let elevation = args.sun_elevation.to_radians();
@@ -245,6 +254,8 @@ impl Gallery {
             args,
             renderer,
             taa,
+            bloom,
+            bloom_on,
             atmosphere,
             sky,
             scene,
@@ -295,6 +306,7 @@ impl Demo for Gallery {
             KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
+            KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;
                 self.taa.reset_history();
@@ -437,6 +449,9 @@ impl Demo for Gallery {
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        let bloom = self
+            .bloom_on
+            .then(|| self.bloom.draw(&mut frame.graph, taa_frame.color, extent));
         self.taa.resolve(
             &mut frame.graph,
             &taa_frame,
@@ -444,6 +459,7 @@ impl Demo for Gallery {
             motion,
             frame.target,
             self.tonemap,
+            bloom,
         );
         Ok(())
     }

@@ -71,7 +71,12 @@ struct ResolvePush
     float history_scale; // this frame's exposure over the history's
     uint curve;          // TONEMAP_* of tonemap.slang
     uint encode_srgb;    // 1 when the display target is UNORM
+    uint bloom;          // the bloom chain's top level (sampled index), 0xFFFFFFFF for none (bloom.slang)
+    float bloom_strength; // how much of the shown image is bloom
 };
+
+// Levels the bloom chain's top level sums (crates/forge-render/src/bloom.rs, LEVELS).
+static const float BLOOM_LEVELS = 6.0;
 
 [[vk::push_constant]]
 ResolvePush resolve_push;
@@ -160,7 +165,15 @@ ResolveOut resolve_main(Varyings input)
     float3 color = resolve_color(input);
     ResolveOut o;
     o.history = float4(color, 1.0);
-    o.output = float4(display_output(color, resolve_push.curve, resolve_push.encode_srgb != 0), 1.0);
+    // Bloom goes into the image shown, not into the history.
+    float3 shown = color;
+    if (resolve_push.bloom != 0xFFFFFFFFu)
+    {
+        float2 uv = input.position.xy / float2(float(resolve_push.width), float(resolve_push.height));
+        float3 bloom = sample_image_level(resolve_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
+        shown = lerp(color, bloom, resolve_push.bloom_strength);
+    }
+    o.output = float4(display_output(shown, resolve_push.curve, resolve_push.encode_srgb != 0), 1.0);
     return o;
 }
 

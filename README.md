@@ -67,7 +67,7 @@ the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
 is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
-what it drew, **Tab** wireframe, **G** tone curve (ACES → PBR Neutral →
+what it drew, **Tab** wireframe, **B** bloom, **G** tone curve (ACES → PBR Neutral →
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
 (built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
@@ -136,7 +136,7 @@ materials (brick, plaster, concrete, glass windows, marble, rock), and the groun
 asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42), under a
 physical sky with haze by distance (`--sun-elevation DEG`, issue #43). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
-**[** / **]** LOD threshold, **T** TAA, **Tab** wireframe, **G** tone curve. Options:
+**[** / **]** LOD threshold, **T** TAA, **B** bloom, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
