@@ -21,7 +21,9 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
-use forge_core::material::{Material, MaterialId, MaterialTable, RenderLayer, TextureId};
+use forge_core::material::{
+    Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
+};
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{PropKind, PropSpec, Terrain, city_props};
@@ -541,6 +543,30 @@ struct CityMaterials {
     textures: TextureSet,
     /// Row per prop name.
     by_prop: HashMap<&'static str, MaterialId>,
+    /// The albedo and normal maps: rock, concrete, brick, grass.
+    sets: [(TextureId, TextureId); 4],
+}
+
+/// A standard row over a texture set: the textures times a tint each instance mixes from `a`
+/// and `b` by its hash, `scale` metres per repeat, a highlight of Blinn-Phong `power`.
+fn textured(
+    (albedo, normal): (TextureId, TextureId),
+    a: [f32; 3],
+    b: [f32; 3],
+    scale: f32,
+    power: f32,
+    specular: f32,
+) -> RenderLayer {
+    RenderLayer {
+        color_a: a,
+        color_b: b,
+        albedo_texture: Some(albedo),
+        normal_texture: Some(normal),
+        texture_scale: scale,
+        roughness: RenderLayer::roughness_for_power(power),
+        specular,
+        ..RenderLayer::default()
+    }
 }
 
 impl CityMaterials {
@@ -567,6 +593,7 @@ impl CityMaterials {
             ids.push((textures.add(&set[0])?, textures.add(&set[1])?));
         }
         let [rock, concrete, brick, grass] = [ids[0], ids[1], ids[2], ids[3]];
+        let sets = [rock, concrete, brick, grass];
         tracing::info!(
             textures = textures.len(),
             mib = textures.bytes() >> 20,
@@ -574,22 +601,6 @@ impl CityMaterials {
             "city textures"
         );
 
-        // `tint` multiplies the texture; each instance mixes `a` and `b` by its hash.
-        let textured = |(albedo, normal): (TextureId, TextureId),
-                        a: [f32; 3],
-                        b: [f32; 3],
-                        scale: f32,
-                        power: f32,
-                        specular: f32| RenderLayer {
-            color_a: a,
-            color_b: b,
-            albedo_texture: Some(albedo),
-            normal_texture: Some(normal),
-            texture_scale: scale,
-            roughness: RenderLayer::roughness_for_power(power),
-            specular,
-            ..RenderLayer::default()
-        };
         let mut table = MaterialTable::new();
         let mut add = |name: &str, layer: RenderLayer| table.add(Material::new(name, layer));
         // A building's window panes are its section 1 (`forge_geom::city::GLASS`): each facade row
@@ -749,7 +760,83 @@ impl CityMaterials {
             table,
             textures,
             by_prop,
+            sets,
         })
+    }
+
+    /// The ground in layers (issue #42): uploads `layers` (`texels` a side over `size` metres,
+    /// `placement::ground_layers`) and adds the layered row and one row per layer after it,
+    /// in `placement::layer` order. The terrain takes the layered row.
+    fn ground(&mut self, layers: &[u8], texels: u32, size: f32) -> Result<MaterialId> {
+        let map = self
+            .textures
+            .add_layer_map("ground layers", texels, texels, layers)?;
+        let [rock, concrete, brick, grass] = self.sets;
+        let ground = self.table.add(Material::new(
+            "ground",
+            RenderLayer {
+                class: ShadingClass::Layered,
+                albedo_texture: Some(map),
+                texture_scale: size,
+                ..RenderLayer::default()
+            },
+        ));
+        let rows = [
+            (
+                "ground: grass",
+                textured(grass, [1.0; 3], [1.1, 1.05, 0.9], 12.0, 6.0, 0.02),
+            ),
+            (
+                "ground: asphalt",
+                textured(
+                    concrete,
+                    [0.2, 0.2, 0.21],
+                    [0.2, 0.2, 0.21],
+                    5.0,
+                    20.0,
+                    0.05,
+                ),
+            ),
+            (
+                "ground: sidewalk",
+                textured(
+                    concrete,
+                    [0.9, 0.88, 0.85],
+                    [0.9, 0.88, 0.85],
+                    1.5,
+                    12.0,
+                    0.04,
+                ),
+            ),
+            (
+                "ground: paving",
+                textured(
+                    brick,
+                    [0.78, 0.75, 0.72],
+                    [0.78, 0.75, 0.72],
+                    1.2,
+                    12.0,
+                    0.05,
+                ),
+            ),
+            (
+                "ground: rock",
+                textured(
+                    rock,
+                    [1.13, 1.08, 1.03],
+                    [1.13, 1.08, 1.03],
+                    6.0,
+                    14.0,
+                    0.06,
+                ),
+            ),
+        ];
+        assert_eq!(rows.len(), usize::from(placement::layer::COUNT));
+        for (name, layer) in rows {
+            self.table.add(Material::new(name, layer));
+        }
+        self.by_prop.insert("terrain", ground);
+        Ok(ground)
     }
 
     /// The row `prop` is made of (the default grey for a prop the table does not know).
@@ -783,7 +870,33 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
     let (meshes, cook_ms) = cook_props(&props, args.recook, !streamed);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
-    CityMaterials::new(&ctx.device)?.apply(&mut builder, &props, &ids);
+    let layout = CityLayout::city(args.instances);
+    // The heightfield the terrain mesh was sampled from.
+    let heights_start = std::time::Instant::now();
+    let heights = parallel_heights(&terrain);
+    tracing::info!(
+        samples = heights.len(),
+        ms = heights_start.elapsed().as_millis(),
+        "terrain heights"
+    );
+    let ground = Ground {
+        heights: &heights,
+        samples: terrain.samples(),
+        spacing: terrain.spacing,
+    };
+    // The ground's layers, a metre a texel: streets, sidewalks, plazas, lots, rock on the
+    // steep hills (issue #42).
+    let layers_start = std::time::Instant::now();
+    let texels = terrain.size as u32;
+    let layers = placement::ground_layers(&layout, &ground, texels);
+    tracing::info!(
+        texels,
+        ms = layers_start.elapsed().as_millis(),
+        "ground layers"
+    );
+    let mut materials = CityMaterials::new(&ctx.device)?;
+    materials.ground(&layers, texels, terrain.size)?;
+    materials.apply(&mut builder, &props, &ids);
     let id = |name: &str| ids[props.iter().position(|p| p.name == name).expect("prop")];
     let terrain_id = id("terrain");
     builder.add_instance(terrain_id, Mat4::IDENTITY);
@@ -804,7 +917,6 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         fountain: id("fountain"),
         column: id("column"),
     };
-    let layout = CityLayout::city(args.instances);
     let first = builder.reserve_instances(&placement::mesh_counts(&layout, &city));
     let residency = if streamed {
         Residency::Streamed(StreamingConfig::from_mib(
@@ -821,14 +933,6 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         streamed,
         "cluster pages"
     );
-    // The heightfield the terrain mesh was sampled from.
-    let heights_start = std::time::Instant::now();
-    let heights = parallel_heights(&terrain);
-    tracing::info!(
-        samples = heights.len(),
-        ms = heights_start.elapsed().as_millis(),
-        "terrain heights"
-    );
     let report = placement::place(
         &ctx.device,
         &ctx.shaders,
@@ -836,11 +940,7 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         first,
         &layout,
         &city,
-        &Ground {
-            heights: &heights,
-            samples: terrain.samples(),
-            spacing: terrain.spacing,
-        },
+        &ground,
     )?;
     let counts = layout.counts();
     tracing::info!(

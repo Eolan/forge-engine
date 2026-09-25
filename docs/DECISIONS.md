@@ -587,3 +587,34 @@ pixels as before):
   at 1440p 1.79 → 1.83 ms.
 *(research: gpu-geometry.md (Nanite's materials per triangle); D-007, D-026; demo:
 city-blocks)*
+
+## D-028 — Terrain in layers: a layer map and the rows after it ✅ (2026-09-25)
+
+Ground is one mesh, but it is made of many materials: asphalt, sidewalk and paving in the
+city, grass, soil and rock in the hills. A terrain row of class `layered` (issue #42) names
+a **layer map**:
+- one byte per texel (`R8_UINT`) over a square of the object's x and z;
+- layer `k` is shaded as the standard row `k + 1` after the layered row, textures, highlight
+  and all.
+
+The layered pass reads the four texels around the pixel and weighs each layer by the
+bilinear weights of its texels. It shades the two heaviest layers and blends them, so a
+street's edge is a metre-wide transition rather than a step between texels.
+
+**Why a map, not rules in the shader.** Rules would have to know the city's grid, or the
+island's rivers. A map is data that any generator writes: the city's layout today, the
+island's genesis in Phase 2 (altitude, slope, moisture, D-014). It costs a byte a square
+metre: 16 MB for the city's 4 km. The rules that fill it live on the CPU:
+- `placement::ground_layer` gives asphalt down the streets, sidewalks 3.5 m wide along
+  them, paving on the plazas and grass on the lots;
+- beyond the city, rock where the ground rises more than 0.45, grass elsewhere.
+
+*Measured:* the city's layer map (4000²) is generated in 45 ms on the CPU. `shading/layered`
+costs 0.031 ms on the south view at 1600×900 (GPU 1.465 → 1.491 ms) and 0.05 ms in the flight
+at 1440p (1.830 → 1.868 ms). The other demos have no layered rows, and their captures are
+unchanged.
+
+Left for later: layer maps streamed in tiles with the terrain's cells (Phase 2), a height per
+layer for sharper transitions (height blending), and decals for road markings.
+*(research: vegetation-materials.md §8, large-worlds.md; D-007, D-014, D-026; demo:
+city-blocks)*

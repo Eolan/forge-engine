@@ -110,7 +110,8 @@ public struct Material
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
 public static const uint MATERIAL_CLASS_ICE = 1;
-public static const uint MATERIAL_CLASSES = 2;
+public static const uint MATERIAL_CLASS_LAYERED = 2;
+public static const uint MATERIAL_CLASSES = 3;
 static const uint TEXTURE_NONE = 0xFFFFFFFFu;
 
 public struct Instance
@@ -1551,39 +1552,122 @@ float value_noise3(float3 p)
     return lerp(lerp(x00, x10, t.y), lerp(x01, x11, t.y), t.z);
 }
 
+// The albedo and the normal a standard row gives the surface: the row's two colours mixed by
+// the instance, its cavity, and its textures projected along the object's axes.
+void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
+{
+    n = s.n;
+    // Each instance its own mix of the two colours, darker where the surface faces the
+    // object's centre (rocks' hollows).
+    float3 instance_hash = hash_color(s.instance_id);
+    float3 tint = lerp(mat.color_a, mat.color_b, instance_hash.x);
+    float cavity = saturate(0.5 + 0.5 * dot(normalize(s.object_position), n));
+    albedo = tint * ((1.0 - mat.cavity) + mat.cavity * cavity);
+    if (mat.albedo_texture != TEXTURE_NONE || mat.normal_texture != TEXTURE_NONE)
+    {
+        float3 w = triplanar_weights(s.object_normal);
+        float3 p = s.object_position * mat.inv_texture_scale;
+        float3 dpdx = s.dpdx * mat.inv_texture_scale;
+        float3 dpdy = s.dpdy * mat.inv_texture_scale;
+        if (mat.albedo_texture != TEXTURE_NONE)
+        {
+            // Against visible repeats: a brightness that drifts over several repeats.
+            float broad = 0.65 * value_noise3(p * 0.137) + 0.35 * value_noise3(p * 0.41 + 17.0);
+            albedo *= sample_triplanar(mat.albedo_texture, w, p, dpdx, dpdy).rgb * (0.7 + 0.6 * broad);
+        }
+        if (mat.normal_texture != TEXTURE_NONE)
+        {
+            float3 bent = triplanar_normal(mat.normal_texture, mat.normal_strength, s.object_normal, w, p, dpdx, dpdy);
+            n = normalize(mul(s.model, float4(bent, 0)).xyz);
+        }
+    }
+}
+
 float3 shade_standard(Frame* f, Material mat, Surface s)
 {
     float3 albedo;
     float3 n = s.n;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
+        standard_surface(mat, s, albedo, n);
+    float ndl;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, ndl) + mat.emissive;
+}
+
+// Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
+// over `1 / inv_texture_scale` metres of the object's x and z, centred on its origin); layer k
+// is the standard row `row + 1 + k`. The two layers weighing most among the four texels
+// around the pixel are shaded and blended by their bilinear weights.
+float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
+{
+    float3 albedo;
+    float3 n = s.n;
+    float specular_power = mat.specular_power;
+    float specular = mat.specular;
+    float3 emissive = mat.emissive;
+    if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
     {
-        // Each instance its own mix of the two colours, darker where the surface faces the
-        // object's centre (rocks' hollows).
-        float3 instance_hash = hash_color(s.instance_id);
-        float3 tint = lerp(mat.color_a, mat.color_b, instance_hash.x);
-        float cavity = saturate(0.5 + 0.5 * dot(normalize(s.object_position), n));
-        albedo = tint * ((1.0 - mat.cavity) + mat.cavity * cavity);
-        if (mat.albedo_texture != TEXTURE_NONE || mat.normal_texture != TEXTURE_NONE)
+        Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.albedo_texture)];
+        uint2 size;
+        map.GetDimensions(size.x, size.y);
+        float2 texel = (s.object_position.xz * mat.inv_texture_scale + 0.5) * float2(size) - 0.5;
+        int2 i0 = int2(floor(texel));
+        float2 t = texel - float2(i0);
+        uint ids[4];
+        float weights[4] = { (1.0 - t.x) * (1.0 - t.y), t.x * (1.0 - t.y), (1.0 - t.x) * t.y, t.x * t.y };
+        [unroll]
+        for (uint k = 0; k < 4; k++)
         {
-            float3 w = triplanar_weights(s.object_normal);
-            float3 p = s.object_position * mat.inv_texture_scale;
-            float3 dpdx = s.dpdx * mat.inv_texture_scale;
-            float3 dpdy = s.dpdy * mat.inv_texture_scale;
-            if (mat.albedo_texture != TEXTURE_NONE)
+            int2 at = clamp(i0 + int2(k & 1u, k >> 1), int2(0, 0), int2(size) - 1);
+            ids[k] = map.Load(int3(at, 0));
+        }
+        // Each texel's layer weighs the four weights of the texels that share it; the two
+        // heaviest layers are shaded.
+        float total[4];
+        [unroll]
+        for (uint k = 0; k < 4; k++)
+        {
+            total[k] = 0.0;
+            [unroll]
+            for (uint j = 0; j < 4; j++)
+                total[k] += ids[j] == ids[k] ? weights[j] : 0.0;
+        }
+        uint heaviest = 0;
+        [unroll]
+        for (uint k = 1; k < 4; k++)
+            heaviest = total[k] > total[heaviest] ? k : heaviest;
+        uint first = ids[heaviest], second = first;
+        float w_first = total[heaviest], w_second = 0.0;
+        [unroll]
+        for (uint k = 0; k < 4; k++)
+        {
+            if (ids[k] != first && total[k] > w_second)
             {
-                // Against visible repeats: a brightness that drifts over several repeats.
-                float broad = 0.65 * value_noise3(p * 0.137) + 0.35 * value_noise3(p * 0.41 + 17.0);
-                albedo *= sample_triplanar(mat.albedo_texture, w, p, dpdx, dpdy).rgb * (0.7 + 0.6 * broad);
+                second = ids[k];
+                w_second = total[k];
             }
-            if (mat.normal_texture != TEXTURE_NONE)
-            {
-                float3 bent = triplanar_normal(mat.normal_texture, mat.normal_strength, s.object_normal, w, p, dpdx, dpdy);
-                n = normalize(mul(s.model, float4(bent, 0)).xyz);
-            }
+        }
+        Material a = f[0].materials[row + 1 + first];
+        float3 albedo_a, n_a;
+        standard_surface(a, s, albedo_a, n_a);
+        albedo = albedo_a;
+        n = n_a;
+        specular_power = a.specular_power;
+        specular = a.specular;
+        emissive = a.emissive;
+        if (second != first && w_second > 0.0)
+        {
+            Material b = f[0].materials[row + 1 + second];
+            float3 albedo_b, n_b;
+            standard_surface(b, s, albedo_b, n_b);
+            float blend = w_second / (w_first + w_second);
+            albedo = lerp(albedo_a, albedo_b, blend);
+            n = normalize(lerp(n_a, n_b, blend));
+            specular = lerp(a.specular, b.specular, blend);
+            emissive = lerp(a.emissive, b.emissive, blend);
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, ndl) + emissive;
 }
 
 float3 shade_ice(Frame* f, Material mat, Surface s)
@@ -1638,7 +1722,8 @@ uint shade_pixel(uint class_index, uint2 pixel, uint vis)
     uint meshlet_index = record.y & MESHLET_INDEX_MASK;
     Meshlet m = f[0].meshlets[meshlet_index];
     // The instance names its first section's row; the others follow it (issue #41).
-    Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
+    uint row = inst.material + triangle_section(m, tri);
+    Material mat = f[0].materials[row];
     if (mat.class_index != class_index)
         return mat.class_index;
     bool culled_debug = (record.y & CULLED_BIT) != 0;
@@ -1671,7 +1756,9 @@ uint shade_pixel(uint class_index, uint2 pixel, uint vis)
     s.lod_level = m.lod_level;
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
-    float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s) : shade_standard(f, mat, s);
+    float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)
+        : class_index == MATERIAL_CLASS_LAYERED ? shade_layered(f, row, mat, s)
+        : shade_standard(f, mat, s);
     if (culled_debug)
         color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
     if (software && (f[0].flags & FLAG_SHOW_RASTER) != 0)
@@ -1741,6 +1828,13 @@ void resolve_tiles(uint class_index, uint3 group, uint3 thread)
 void resolve_ice_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 {
     resolve_tiles(MATERIAL_CLASS_ICE, group, thread);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_layered_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    resolve_tiles(MATERIAL_CLASS_LAYERED, group, thread);
 }
 
 // ---------------------------------------------------------------- placement ---

@@ -1503,6 +1503,7 @@ impl MeshletRenderer {
         let pipeline_resolve = [
             shading_pipeline("resolve_standard_main", "shading standard")?,
             shading_pipeline("resolve_ice_main", "shading ice")?,
+            shading_pipeline("resolve_layered_main", "shading layered")?,
         ];
         for module in [
             geometry,
@@ -2260,6 +2261,7 @@ impl MeshletRenderer {
                 .pass(match class {
                     ShadingClass::Standard => "shading/standard",
                     ShadingClass::Ice => "shading/ice",
+                    ShadingClass::Layered => "shading/layered",
                 })
                 .image(targets.visibility, ImageAccess::Sampled(compute))
                 .image(color, ImageAccess::StorageWrite(compute))

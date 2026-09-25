@@ -2,8 +2,9 @@
 //! [`forge_core::MaterialTable`] row as a [`GpuMaterial`], which the visibility resolve reads
 //! by each instance's material id, and the textures the rows sample ([`TextureSet`]).
 //!
-//! The resolve shades by class: a classify pass lists the 8×8 tiles that show each
-//! [`ShadingClass`], then one dispatch per class shades its pixels (`MeshletRenderer::resolve`).
+//! The resolve shades by class (`MeshletRenderer::resolve`, D-026): the standard pass covers the
+//! target and lists the 8×8 tiles that show each other shading class, whose own dispatches
+//! then shade them.
 
 use std::sync::Arc;
 
@@ -77,6 +78,39 @@ impl TextureSet {
             .device
             .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         self.bytes += levels.iter().map(|l| l.len() as u64).sum::<u64>();
+        self.textures.push((image, sampled));
+        Ok(TextureId(self.textures.len() as u32 - 1))
+    }
+
+    /// Uploads a layer map for a [`ShadingClass::Layered`] row: `width × height` layer ids,
+    /// one byte each, rows top to bottom (`R8_UINT`, one level: the resolve reads texels, it
+    /// does not filter them).
+    ///
+    /// [`ShadingClass::Layered`]: forge_core::material::ShadingClass::Layered
+    pub fn add_layer_map(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        layers: &[u8],
+    ) -> Result<TextureId> {
+        assert_eq!(layers.len(), (width * height) as usize);
+        let image = self.device.create_image_with_data(
+            ImageDesc {
+                width,
+                height,
+                format: vk::Format::R8_UINT,
+                usage: vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+                name,
+            },
+            layers,
+        )?;
+        let sampled = self
+            .device
+            .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        self.bytes += layers.len() as u64;
         self.textures.push((image, sampled));
         Ok(TextureId(self.textures.len() as u32 - 1))
     }

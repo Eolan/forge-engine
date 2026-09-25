@@ -188,6 +188,121 @@ pub struct Ground<'a> {
     pub spacing: f32,
 }
 
+/// The ground's layers (issue #42): the ids of [`ground_layers`], in the order of the rows that
+/// follow the ground's layered material row.
+pub mod layer {
+    /// Grass, on the lots and the gentle hills.
+    pub const GRASS: u8 = 0;
+    /// Asphalt, down the middle of the streets.
+    pub const ASPHALT: u8 = 1;
+    /// Sidewalks, the edges of the streets.
+    pub const SIDEWALK: u8 = 2;
+    /// Paving, on the plazas.
+    pub const PAVING: u8 = 3;
+    /// Rock, where the hills are steep.
+    pub const ROCK: u8 = 4;
+    /// How many layers there are.
+    pub const COUNT: u8 = 5;
+}
+
+/// Metres of sidewalk along each side of a street.
+const SIDEWALK_WIDTH: f32 = 3.5;
+/// Radius of a plaza's paving around its crossing, metres.
+const PLAZA_RADIUS: f32 = 14.0;
+/// Rise over run above which the hills are rock.
+const ROCK_SLOPE: f32 = 0.45;
+
+impl Ground<'_> {
+    /// Half the side of the square the ground covers, metres.
+    pub fn half_size(&self) -> f32 {
+        (self.samples - 1) as f32 * self.spacing * 0.5
+    }
+
+    /// The height at (x, z), bilinearly (the placement shader's `ground`).
+    fn height(&self, x: f32, z: f32) -> f32 {
+        let n = self.samples as usize;
+        let max = (self.samples - 1) as f32 - 1e-3;
+        let gx = ((x + self.half_size()) / self.spacing).clamp(0.0, max);
+        let gz = ((z + self.half_size()) / self.spacing).clamp(0.0, max);
+        let (i, j) = (gx as usize, gz as usize);
+        let (fx, fz) = (gx - i as f32, gz - j as f32);
+        let h = |i: usize, j: usize| self.heights[j * n + i];
+        let top = h(i, j) + (h(i + 1, j) - h(i, j)) * fx;
+        let bottom = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * fx;
+        top + (bottom - top) * fz
+    }
+
+    /// Rise over run at (x, z).
+    fn slope(&self, x: f32, z: f32) -> f32 {
+        let d = self.spacing;
+        let gx = (self.height(x + d, z) - self.height(x - d, z)) / (2.0 * d);
+        let gz = (self.height(x, z + d) - self.height(x, z - d)) / (2.0 * d);
+        (gx * gx + gz * gz).sqrt()
+    }
+}
+
+/// The ground's layer of each of `texels × texels` cells over the whole terrain, rows along
+/// +z (the layer map of the terrain's layered material). The city's streets are asphalt
+/// with sidewalks along both sides, its plazas paving, its lots grass. Beyond the city the
+/// hills are grass, or rock where they rise more than [`ROCK_SLOPE`].
+pub fn ground_layers(layout: &CityLayout, ground: &Ground<'_>, texels: u32) -> Vec<u8> {
+    let half = ground.half_size();
+    let cell = 2.0 * half / texels as f32;
+    let layer_at = |x: f32, z: f32| ground_layer(layout, ground, x, z);
+    let mut layers = vec![0_u8; (texels * texels) as usize];
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let rows_per = (texels as usize).div_ceil(threads);
+    std::thread::scope(|s| {
+        for (chunk, rows) in layers.chunks_mut(rows_per * texels as usize).enumerate() {
+            s.spawn(move || {
+                for (r, row) in rows.chunks_mut(texels as usize).enumerate() {
+                    let z = -half + ((chunk * rows_per + r) as f32 + 0.5) * cell;
+                    for (i, texel) in row.iter_mut().enumerate() {
+                        *texel = layer_at(-half + (i as f32 + 0.5) * cell, z);
+                    }
+                }
+            });
+        }
+    });
+    layers
+}
+
+/// The ground's layer at (x, z) (see [`ground_layers`]).
+pub fn ground_layer(layout: &CityLayout, ground: &Ground<'_>, x: f32, z: f32) -> u8 {
+    let blocks = layout.blocks() as f32;
+    let street_half = layout.street * 0.5;
+    let city_edge = layout.city_half + street_half;
+    let e = layout.plaza_every.max(1);
+    let plaza = |k: f32| (k as u32) % e == e / 2;
+    if x.abs() <= city_edge && z.abs() <= city_edge {
+        // The nearest street line along each axis, and how far from it.
+        let line = |p: f32| {
+            ((p + layout.city_half) / layout.block)
+                .round()
+                .clamp(0.0, blocks)
+        };
+        let (kx, kz) = (line(x), line(z));
+        let dx = (x - (-layout.city_half + kx * layout.block)).abs();
+        let dz = (z - (-layout.city_half + kz * layout.block)).abs();
+        if plaza(kx) && plaza(kz) && dx.hypot(dz) < PLAZA_RADIUS {
+            return layer::PAVING;
+        }
+        let d = dx.min(dz);
+        if d <= street_half - SIDEWALK_WIDTH {
+            return layer::ASPHALT;
+        }
+        if d <= street_half {
+            return layer::SIDEWALK;
+        }
+        return layer::GRASS;
+    }
+    if ground.slope(x, z) > ROCK_SLOPE {
+        layer::ROCK
+    } else {
+        layer::GRASS
+    }
+}
+
 /// What a placement did.
 #[derive(Clone, Copy, Debug)]
 pub struct PlacementReport {
@@ -320,6 +435,42 @@ pub fn place(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ground_layers_follow_the_street_grid_and_the_slopes() {
+        let layout = CityLayout::city(1_000);
+        // A flat 4 km ground with a steep ramp along its east edge.
+        let samples = 401_u32;
+        let spacing = 10.0;
+        let heights: Vec<f32> = (0..samples * samples)
+            .map(|i| {
+                let x = (i % samples) as f32 * spacing - 2000.0;
+                if x > 1700.0 { (x - 1700.0) * 0.8 } else { 0.0 }
+            })
+            .collect();
+        let ground = Ground {
+            heights: &heights,
+            samples,
+            spacing,
+        };
+        let at = |x: f32, z: f32| ground_layer(&layout, &ground, x, z);
+        // The street line at x = -1200 + 100 k: asphalt in the middle, sidewalk at its edges.
+        assert_eq!(at(-1100.0, 30.0), layer::ASPHALT);
+        assert_eq!(at(-1100.0 + 8.0, 30.0), layer::SIDEWALK);
+        // Inside a block: a lot.
+        assert_eq!(at(-1050.0, 50.0), layer::GRASS);
+        // Crossing k = (2, 2) holds a plaza (every fourth crossing, the second of four).
+        assert_eq!(at(-1000.0 + 5.0, -1000.0 + 5.0), layer::PAVING);
+        assert_eq!(at(-1100.0 + 5.0, -1100.0 + 5.0), layer::ASPHALT);
+        // Beyond the city: grass on the flat, rock on the ramp.
+        assert_eq!(at(1500.0, 0.0), layer::GRASS);
+        assert_eq!(at(1850.0, 0.0), layer::ROCK);
+        // The map is the same rule, a texel at a time.
+        let map = ground_layers(&layout, &ground, 400);
+        assert_eq!(map.len(), 400 * 400);
+        assert!(map.iter().all(|&l| l < layer::COUNT));
+        assert!(map.contains(&layer::ROCK) && map.contains(&layer::ASPHALT));
+    }
 
     #[test]
     fn the_city_takes_what_it_holds_and_the_hills_the_rest() {

@@ -14,6 +14,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | The flight, 1440p, numbers | #13 | ✅ the flight at 300 m/s at 1440p: worst frame 2.6 ms (385 fps) on the 5070 Ti |
 | Materials: brick, plaster, concrete, glass, grass, rock | #20 | ✅ a row per prop, textured, 1.79 ms for the 1440p flight |
 | Windows of glass: material sections within a mesh | #41 | ✅ two sections per building through the DAG |
+| Streets, sidewalks, plazas: terrain layers | #42 | ✅ a layer map from the city's grid, 0.031 ms |
 
 ```
 cargo run --release -p city-blocks
@@ -77,6 +78,8 @@ in `docs/demos/meshlets.md` ("Textures and the mip check").
 | the flight at 1440p, TAA | 0.090 ms | 0.215 ms | 1.652 → 1.788 ms |
 | the same with glass windows (#41) | | 0.215 ms | 1.830 ms |
 | the south edge with glass windows (#41) | | 0.100 ms | 1.465 ms (the culls 0.36 + 0.38) |
+| the south edge with streets (#42) | | 0.091 + layered 0.030 ms | 1.491 ms |
+| the flight at 1440p with streets (#42) | | 0.206 + layered 0.05 ms | 1.868 ms |
 
 The flight's frame stays under 1.8 ms against the 8.33 ms of the 120 fps target.
 
@@ -91,8 +94,15 @@ the row its windows take: dark, bluish, a sharp highlight. The sections go throu
 The buildings cook to 3–4 % more clusters. The south view draws 58 k clusters and 3.72 M
 triangles instead of 50 k and 3.43 M.
 
-**Left for later:** the terrain is one material, so the streets are grass like the hills;
-terrain layers are #42.
+**Streets (issue #42, D-028).** The terrain's row is a layered one: a layer map, a byte per
+square metre, generated from the city's grid (45 ms), picks per texel among the rows after
+it:
+- asphalt down the streets, sidewalks 3.5 m wide along them;
+- paving around the plaza crossings, grass on the lots;
+- rock where the hills rise steeply.
+
+The layered pass blends the two heaviest layers around each pixel. It costs 0.031 ms on the
+south view.
 
 ## The flight (issue #13, 2026-09-25)
 
@@ -124,10 +134,10 @@ cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
 - **The RTX 3080** half of the target (60 fps at 1440p) waits for a run on the server PC
   (#39).
 
-![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials of #20 and the glass of #41: geometry 1.34 and shading 0.22 of 1.74 ms, 561 fps](images/city-blocks-profile.png)
+![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials of #20, the glass of #41 and the streets of #42: geometry 1.33 and shading 0.25 of 1.78 ms, 552 fps](images/city-blocks-profile.png)
 
 **Golden captures** (1600 × 900, every page resident, so that a capture does not depend on
-the I/O's timing; re-taken with the materials of #20 and the glass of #41). Two runs of each are identical to
+the I/O's timing; re-taken with the materials, glass and streets of #20, #41 and #42). Two runs of each are identical to
 the pixel.
 
 | The south edge, frame 60 | The orbit, frame 240 |

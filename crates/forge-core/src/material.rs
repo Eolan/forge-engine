@@ -26,17 +26,27 @@ pub enum ShadingClass {
     /// Ice: colour from how the surface faces its object's centre, a sharp highlight and
     /// light scattered back where the surface turns away from the sun.
     Ice,
+    /// Ground in layers (issue #42): the row's albedo texture is a layer map, one layer id per
+    /// texel (`R8_UINT`, `TextureSet::add_layer_map`), laid over `texture_scale` metres of
+    /// the object's x and z around its origin. Layer `k` is shaded as the standard row `k + 1`
+    /// after this one, and neighbouring layers blend across a texel.
+    Layered,
 }
 
 impl ShadingClass {
     /// Every class, in the order of their indices.
-    pub const ALL: [ShadingClass; 2] = [ShadingClass::Standard, ShadingClass::Ice];
+    pub const ALL: [ShadingClass; 3] = [
+        ShadingClass::Standard,
+        ShadingClass::Ice,
+        ShadingClass::Layered,
+    ];
 
     /// The index the GPU tables use (`MATERIAL_CLASS_*` in `meshlet.slang`).
     pub fn index(self) -> u32 {
         match self {
             ShadingClass::Standard => 0,
             ShadingClass::Ice => 1,
+            ShadingClass::Layered => 2,
         }
     }
 
@@ -45,6 +55,7 @@ impl ShadingClass {
         match self {
             ShadingClass::Standard => "standard",
             ShadingClass::Ice => "ice",
+            ShadingClass::Layered => "layered",
         }
     }
 }

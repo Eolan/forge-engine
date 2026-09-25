@@ -115,11 +115,12 @@ Goal: the renderer skeleton every later system draws through.
 5. Visibility buffer ✅ (2026-09-24: the mesh passes write `visible cluster << 7 | triangle`
    next to the hardware depth, a compute resolve reconstructs the attributes with analytic
    barycentrics and shades once per pixel; `docs/ARCHITECTURE.md` §4). Material
-   classification ✅ (issue #20, 2026-09-25, D-026: the D-007 table on the GPU, a classify
-   pass over 8×8 tiles and one dispatch per shading class, procedural textures projected
+   classification ✅ (issue #20, 2026-09-25, D-026: the D-007 table on the GPU, the standard
+   pass listing 8×8 tiles for one dispatch per other shading class, procedural textures projected
    triplanar and sampled with the reconstructed derivatives, within 0.06 of a level of a
    fragment shader's). Material sections within a mesh ✅ (#41, D-027: a building's
-   windows are glass). Still to come: terrain layers (#42). The software rasteriser's
+   windows are glass). Terrain layers ✅ (#42, D-028: streets, sidewalks,
+   plazas and rocky slopes from a layer map). The software rasteriser's
    64-bit depth|id samples are merged into it (#3).
 6. HDR pipeline ✅ (2026-09-24, D-022): physical light units (the sun in lux, its disc from
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,

@@ -118,6 +118,7 @@ posts, 180 plaza props and 988 k rocks placed by a compute pass), streamed throu
 With the textured materials of #20 the flight takes 1.79 ms (shading 0.09 → 0.22), and
 1.83 ms with the glass windows of #41 (D-027); the south edge 1.47 ms, its culls 0.36 and 0.38
 (the windows keep the far buildings' cut a little finer: 58 k clusters instead of 50 k).
+With the streets of #42 (D-028: `shading/layered` 0.03–0.05 ms) the flight takes 1.87 ms.
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
 next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 

@@ -131,14 +131,16 @@ props (buildings with real window recesses, towers, lamp posts, fountains, colum
 rocks and rubble over the hills around it; 25.8 M triangles of props, 8 M of terrain),
 cooked into cluster DAGs on the job system and cached in `mesh-cache/` (13 s the first
 time, under a second after), then streamed: 128 KiB cluster pages read from the cache files
-as the LOD cut asks for them, through a 512 MiB pool. Keys: **L** / **K** LOD and its
+as the LOD cut asks for them, through a 512 MiB pool. Every prop is made of textured
+materials (brick, plaster, concrete, glass windows, marble, rock), and the ground of layers:
+asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
 **[** / **]** LOD threshold, **T** TAA, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
 `--no-taa`, `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
-`--ev100 EV`, `--force-fallback`. At 1440p the flight at 300 m/s runs at 1.64 ms of GPU. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
+`--ev100 EV`, `--force-fallback`. At 1440p the flight at 300 m/s runs at 1.64 ms of GPU (1.83 with the materials). Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
 
 ### `task-bench` — job system
 
