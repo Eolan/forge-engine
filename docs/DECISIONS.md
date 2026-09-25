@@ -979,3 +979,81 @@ precipitation particles shaded from a streak array, rain as extinction in the fr
 - ecosystems and seasons: Phase 8 (`four-km-forest`, across an altitude ecotone).
 
 *(research: planet-environment.md; extends D-019; D-007, D-014, D-016, D-028, D-032; issue #11)*
+
+## D-035 — Content as packages: namespaced ids, layered records, a deterministic merge 🟡 (proposed 2026-09-25)
+
+Extends D-007 from one material table to every data table, and says where game code and mod code
+attach. Three layers:
+- **engine crates:** mechanisms and the record types they read; never content names except reserved
+  defaults (`forge:default`);
+- **game crates:** a demo today, the Phase 10 games later; they link the engine statically and
+  register systems, record types and extension points through a plugin trait;
+- **content packages:** a manifest, RON records and assets. The base game is a package; a mod is a
+  package loaded after it.
+
+**Ids:**
+- Authoring: `package:path` strings in files, saves, logs and network manifests.
+- Runtime: a dense `u32` per table (`MaterialId` today), assigned after the merge (reserved engine
+  rows first, then sorted by id), so it depends only on the content set. Never saved; never sent
+  without its manifest.
+- Cooked: BLAKE3 content hashes (D-018).
+
+**Records** (`forge-data`):
+- A Rust struct with `serde` derives, unknown fields rejected, a default for every field added after
+  release, doc comments on fields.
+- A schema version per table and migrations from older files; renames by alias, removed names never
+  reused.
+- RON on disk is the only persistent schema; runtime tables may change at every release; GPU rows
+  never appear in files.
+
+**Packages and the merge:**
+- Manifest: name, semver, the record-schema generation, dependencies with version ranges, optional
+  `after` hints.
+- Order: dependencies first by depth, then name (Factorio); a cycle is an error.
+- Operations per record: `Add`, `Replace` (last wins), `Patch` (named fields; lists by add/remove).
+- A conflict report of every field written by more than one package; every reference validated at
+  load; registries frozen; indices assigned; tables built.
+- In development, a file change re-runs the merge; tables update in place when the id set is
+  unchanged.
+
+**Determinism:** the merge is a pure function of the package set. Its manifest hash (BLAKE3 over the
+resolved order, names, versions and content hashes) joins D-016's digests and D-010's handshake. A
+mismatched client is refused; later it is sent the missing packages by hash. Data evaluated on both
+sides goes through engine evaluators on `dmath`.
+
+**Code:**
+- Engine and games are linked statically. No binary Rust plugins.
+- `subsecond` hot-patching of system bodies is an optional development feature.
+- Mod code, if wanted: Wasm components in wasmtime.
+  - A WIT API versioned per interface.
+  - NaN canonicalisation, deterministic relaxed SIMD, fuel as the per-tick budget.
+  - Server-side by default, client-side only for presentation.
+- Never native-code mods.
+
+*Not chosen:*
+- paths, or UUIDs, as the authoring id (Godot's and Unity's migration and sidecar problems); UUIDs for
+  placed instances are left to the editor;
+- whole-file or whole-record override only (Bethesda, RimWorld before Alpha 17);
+- a code generator, or reflection-driven loading now (`bevy_reflect` or `facet` come with the editor);
+- binary plugins (no stable Rust ABI; `abi_stable` cannot unload);
+- Lua in the deterministic simulation (Factorio had to replace its maths and iteration order);
+- native-code mods (fractureiser, 2023).
+
+**Decisions needed:**
+1. Namespaced string ids with dense per-table indices from the sorted set (recommended), or UUIDs.
+2. RON + serde with per-table schema versions (recommended), or a custom schema language.
+3. Field-level patches with a conflict report (recommended), or record-level replacement only.
+4. Whether mods are a goal for the Phase 10 games: data-only packages first (recommended), Wasm code
+   mods later, or no third-party content at all.
+
+**Phases:**
+- `forge-data`, and the stock materials moved from demo code into packages: Phase 2 (before
+  `island`); D-034's biome envelopes are the second table;
+- simulation and physics tables from packages, the manifest hash in the digests: Phase 3
+  (`materials-yard`);
+- manifests in the handshake, content fetched by hash: Phase 5 (`hundred-bots`);
+- audio events and buses as records: Phase 6;
+- games as plugin crates, the first data-only mod, the scripting and mod-code decision: Phase 10;
+- the editor: its own research file.
+
+*(research: data-driven.md; extends D-007; D-006, D-010, D-016, D-018, D-026, D-034; issue #64)*

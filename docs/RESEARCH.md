@@ -25,6 +25,7 @@ the system you are about to touch.
 | [research/memory-streaming.md](research/memory-streaming.md) | allocators, Resizable BAR, SSD streaming, residency | 40 | done |
 | [research/procedural.md](research/procedural.md) | terrain, grammars, noise, ecosystems, settlements, DOD (from the previous projects) | ~90 | done, carried over |
 | [research/planet-environment.md](research/planet-environment.md) | climate bake, biomes and ecotones, ecosystems, weather rendering, the environment state model | 51 | done |
+| [research/data-driven.md](research/data-driven.md) | data model, reflection, asset ids, packages and load order, scripting, Wasm, hot reload, modding | 49 | done |
 
 ## Verdicts
 
@@ -148,7 +149,25 @@ sample of three layers (proposed as D-034):
   replicated;
 - wetness, puddles and snow integrated in a clipmap around cameras.
 
+**Data-driven engine and mods.** Every engine that serves many games puts a reflected type system
+between code and content and references content by stable id, not by path (Unreal's Primary Asset
+Ids, Unity's asset IDs, Godot's `uid://`, completed only in 4.4). Every moddable game layers data
+with a load order and a conflict rule: Bethesda's rule of one, Paradox's LIOS, Minecraft data packs,
+RimWorld's XPath patches, Factorio's three data rounds sorted by dependency depth. D-007's table is
+already that pattern. What Forge needs (proposed as D-035):
+- `package:path` ids, with dense per-table indices from the sorted set;
+- RON records with schema versions;
+- packages merged by add/replace/patch, with a conflict report;
+- a manifest hash in D-016's digests and D-010's handshake.
+
+Code stays statically linked Rust, since there is no stable ABI; `subsecond` hot-patches systems in
+development. Mod code, if wanted, runs as Wasm components under wasmtime, with its deterministic
+settings and fuel, server-side by default. Wasm 3.0 specifies a deterministic profile, whereas
+Factorio had to replace Lua's maths and iteration order to keep lockstep. The editor is the long pole
+(Bevy still has none) and can wait; the data model is what to decide now.
+
 ## Still to research
 
-- Tools and editor: hot reload, the data model ("The Truth"), creation graphs — the
-  previous bibliography's §6 covers the sources; a Forge-specific file comes with the editor.
+- Tools and editor: creation graphs and the editor itself. The data model and hot reload are
+  covered in data-driven.md (D-035); the previous bibliography's §6 covers the rest, and a
+  Forge-specific file comes with the editor.
