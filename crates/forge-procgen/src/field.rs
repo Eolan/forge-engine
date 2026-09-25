@@ -97,6 +97,16 @@ impl<T: Copy + Default> Field2<T> {
 }
 
 impl Field2<f32> {
+    /// A 64-bit FNV-1a digest of the samples' bits (little-endian), the same on every machine
+    /// for the same field: what two runs compare to check D-016.
+    pub fn digest(&self) -> u64 {
+        self.data.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, v| {
+            v.to_le_bytes().iter().fold(h, |h, &b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+        })
+    }
+
     /// The smallest and largest sample.
     pub fn min_max(&self) -> (f32, f32) {
         self.data
@@ -153,5 +163,9 @@ mod tests {
         let plane = Field2::from_fn(5, 2.0, |x, _| 2.0 * x as f32);
         assert_eq!(plane.gradient(2, 2), (1.0, 0.0));
         assert_eq!(plane.min_max(), (0.0, 8.0));
+        // The digest tells fields apart and is a constant of the bytes.
+        assert_eq!(plane.digest(), plane.clone().digest());
+        assert_ne!(plane.digest(), f.digest());
+        assert_eq!(Field2::<f32>::new(0, 1.0).digest(), 0xcbf2_9ce4_8422_2325);
     }
 }

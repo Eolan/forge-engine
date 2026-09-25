@@ -1,7 +1,7 @@
 //! `genesis --seed 7 --spacing 16 --steps 150 --out captures/island`: the terrain genesis
 //! pipeline of `forge-procgen` over a 16 km island, stage by stage with timings, and the PNG
 //! previews of each stage in `--out` (`docs/research/terrain-genesis.md`, "What to build
-//! first"). Default: 16 m samples (1025²), seconds; `--spacing 4` is the island's target
+//! first"), and the field's digest, the same on every machine (D-016). Default: 16 m samples (1025²), seconds; `--spacing 4` is the island's target
 //! (4097², sixteen times the work), under a minute on the job system.
 
 #![forbid(unsafe_code)]
@@ -178,11 +178,12 @@ fn main() -> Result<()> {
     )?;
     let (lo, hi) = height.min_max();
     println!(
-        "previews in {} ({:.2} s): height {:.0}–{:.0} m",
+        "previews in {} ({:.2} s): height {:.0}–{:.0} m, digest {:016x}",
         args.out.display(),
         start.elapsed().as_secs_f64(),
         lo,
-        hi
+        hi,
+        height.digest()
     );
     Ok(())
 }

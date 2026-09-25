@@ -210,7 +210,10 @@ same to the bit (the counts of every run above are unchanged).
 
 Test: as for commit 10; the 4 m run should take about 50 s of erosion here and well under a
 minute on the 9800X3D (#97's first "done" box). `cargo test -p forge-procgen` also reuses a
-drainage across two fields and compares with fresh buffers.
+drainage across two fields and compares with fresh buffers. The run's last line prints the
+field's digest: seed 7, 150 steps, should give `0189d031eff0fb84` at 16 m and
+`9eacfe0f827fa7dd` at 4 m on the 9800X3D as here (D-016); if not, that is a finding of its
+own (`docs/demos/island.md`, "Digests").
 
 ## How to give the cloud session its results
 

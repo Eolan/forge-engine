@@ -112,6 +112,12 @@ pictures below are from the new field. At 4 m the lakes cover 3.5 % of the land 
 sediment rule fills more slowly; a lake area limit, or the basin graph's fill mode with a
 spill rule, is the part of #97 that remains.
 
+**Digests** (D-016). `genesis` ends with a 64-bit FNV-1a of the field's bits
+(`Field2::digest`), the same on every machine and with any thread count; seed 7 after 150
+steps: `0189d031eff0fb84` at 16 m (the same with `--threads 0`), `9eacfe0f827fa7dd` at 4 m,
+both from the cloud container. A different value on the owner's machine is a D-016 bug to
+find before the planet's tiles depend on it.
+
 ![The 16 km island at 16 m after 150 steps: the sea, hypsometric tints under a hillshade, rivers above 0.5 km² of catchment, lakes](images/island-overview-16m.png)
 
 ![Its hillshade: ridges, valleys, the drainage cut to the coast](images/island-hillshade-16m.png)
