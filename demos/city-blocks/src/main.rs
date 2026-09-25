@@ -118,7 +118,7 @@ struct Args {
     /// The sun's elevation over the horizon, degrees (63.4: the renderer's default sun).
     #[arg(long, default_value_t = 63.4)]
     sun_elevation: f32,
-    /// Draw without the sun's ray-traced shadows (X toggles them; devices without ray queries
+    /// Draw without the sun's ray-traced shadows (J toggles them; devices without ray queries
     /// have none).
     #[arg(long)]
     no_shadows: bool,
@@ -314,7 +314,7 @@ impl Demo for Gallery {
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
-            KeyCode::KeyX => self.flags.toggle(CullFlags::SHADOWS),
+            KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;
                 self.taa.reset_history();

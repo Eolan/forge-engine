@@ -53,7 +53,9 @@ It always shows the best the engine can do at that moment and carries its own pr
   rasteriser for dense clusters ✅ (issue #3: off at the ballad's 1 px LOD, where it would
   not pay; full detail 4.37 → 2.02 ms), cluster pages ✅ (issue #36: 16-byte vertices in
   128 KiB pages, 0.316 ms; streamed in city-blocks), rock and ice as rows of the material
-  table, shaded by class ✅ (issue #20, D-026: 0.34 ms).
+  table, shaded by class ✅ (issue #20, D-026: 0.34 ms), bloom ✅ (issue #44: 0.387 ms), the
+  sun's ray-traced shadows between the rocks and the textured rock ✅ (issue #46, D-029:
+  0.444 ms).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -173,7 +175,8 @@ Goal: the renderer skeleton every later system draws through.
 
 1. T1 hybrid: ray-query DDGI probes, ReSTIR direct lighting, hybrid reflections, NRD.
 2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
-   of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p); soft
+   of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
+   ballad's rocks in #46, 0.03 ms); soft
    shadows, and structures that follow streaming and motion, next.
 3. Clouds (Nubis-style), froxel fog, night sky; weather rendering (rain, snow, lightning,
    wet surfaces) driven by the shared weather state.

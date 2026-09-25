@@ -22,7 +22,7 @@ use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input, vk};
 use forge_core::{MaterialTable, Seed, SplitMix64};
 use forge_geom::{MeshletMesh, procedural};
 use forge_render::SwRaster;
-use forge_render::material::stock;
+use forge_render::material::{TextureSet, stock};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
     Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags, Display, DlssMode,
@@ -36,6 +36,12 @@ use winit::keyboard::KeyCode;
 #[derive(Parser, Debug, Clone)]
 #[command(about = "The asteroid ballad")]
 struct Args {
+    /// Draw without the sun's ray-traced shadows between the rocks (J toggles them).
+    #[arg(long)]
+    no_shadows: bool,
+    /// The Phase 0 rock: plain colours, no texture.
+    #[arg(long)]
+    no_textures: bool,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -295,6 +301,9 @@ impl Ballad {
         };
         let taa_enabled = !args.no_taa;
         let mut flags = CullFlags::DEFAULT;
+        if !args.no_shadows {
+            flags.0 |= CullFlags::SHADOWS;
+        }
         if args.no_occlusion {
             flags.toggle(CullFlags::OCCLUSION);
         }
@@ -461,6 +470,7 @@ impl Demo for Ballad {
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
+            KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::Minus => self.exposure.compensation -= 0.5,
             KeyCode::Equal => self.exposure.compensation += 0.5,
             _ => {}
@@ -820,11 +830,28 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         }
     });
     let mut builder = MeshletSceneBuilder::new();
-    // Rock and ice: a fifth of the asteroids are ice (the rule since Phase 0).
+    // Rock and ice: a fifth of the asteroids are ice (the rule since Phase 0). The rock takes the
+    // procedural rock texture and its relief (issue #46); the ice stays smooth.
     let mut materials = MaterialTable::new();
-    let rock = materials.add(stock::rock());
+    let mut textures = TextureSet::new(&ctx.device);
+    let rock = if args.no_textures {
+        materials.add(stock::rock())
+    } else {
+        let [albedo, normal] = forge_render::textures::rock(11, 512);
+        let (albedo, normal) = (textures.add(&albedo)?, textures.add(&normal)?);
+        let mut rock = stock::rock();
+        // The texture averages about 0.37: the Phase 0 colours over that.
+        rock.render.color_a = [1.13, 1.08, 1.03];
+        rock.render.color_b = [1.22, 0.89, 0.68];
+        rock.render.albedo_texture = Some(albedo);
+        rock.render.normal_texture = Some(normal);
+        rock.render.texture_scale = 4.0;
+        materials.add(rock)
+    };
     let ice = materials.add(stock::ice());
-    builder.set_materials(&materials, None);
+    builder.set_materials(&materials, Some(textures));
+    // The field stays still until Phase 3: its structures are built once (issue #45).
+    builder.set_ray_traced(!args.no_shadows);
     let mesh_ids: Vec<_> = meshes
         .iter()
         .map(|m| builder.add_mesh(m.as_ref().expect("mesh built")))
@@ -948,7 +975,17 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         );
         placed += 1;
     }
-    let scene = builder.build(&ctx.device)?;
+    let mut scene = builder.build(&ctx.device)?;
+    scene.build_tlas(&ctx.device, &ctx.shaders)?;
+    if let Some(rays) = scene.rays() {
+        tracing::info!(
+            blas_triangles = rays.triangles,
+            mib = rays.bytes() >> 20,
+            blas_ms = %format_args!("{:.0}", rays.blas_ms),
+            tlas_ms = %format_args!("{:.0}", rays.tlas_ms),
+            "acceleration structures"
+        );
+    }
     tracing::info!(
         meshes = recipes.len(),
         mesh_build_ms = mesh_ms,

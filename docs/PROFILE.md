@@ -45,6 +45,14 @@ exposure (EV100, target, compensation, curve) the last.
 | cpu | record / submit + present | 0.10 / 0.10 | — | Record includes compiling the graph (26 passes, 49 barriers) and the exposure update (a 256-bin walk). At 3 000 fps the driver's submit and present are a third of the frame; a render thread and fewer, larger submissions fix that when it matters. |
 | cpu | wait for GPU (frame slot) | 0.15 | — | The frame is GPU-bound: the main thread's 0.20 ms of work finishes first and waits for the slot. |
 
+**Since this table (2026-09-25):**
+- Bloom (#44, `post/bloom` 0.04 ms) brought the 1500-frame average from 0.337 to 0.387 ms.
+- The textured rock and the sun's ray-traced shadows (#46, D-029) bring it to 0.444 ms
+  (0.393 with both off, the same build). `shading/standard` goes 0.041 → 0.078 ms, half for
+  the textures and half for the rays, and `shading/ice` 0.010 → 0.016 ms.
+- The structures are built once at start: 267 k BLAS triangles in 8 ms, the TLAS in 1 ms,
+  16 MiB in all.
+
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs
 0.374 ms against 0.364 forced off. At full detail (`--no-lod`) it halves the geometry:

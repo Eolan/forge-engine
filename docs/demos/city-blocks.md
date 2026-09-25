@@ -25,7 +25,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **X** shadows, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -36,7 +36,7 @@ Options:
   city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead).
 - `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
   page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
-- `--no-shadows` draws without the sun's ray-traced shadows (**X** toggles them).
+- `--no-shadows` draws without the sun's ray-traced shadows (**J** toggles them).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
@@ -54,7 +54,7 @@ the lamp posts on the sidewalks, the rocks on each other.
   on the GPU. The BLASes take 58 ms, the TLAS 12 ms, 278 MiB in all.
 - **The rays:** the resolve traces one shadow ray per sun-facing pixel (a ray query, the first
   hit ends it).
-- **Options:** `--no-shadows` or **X** draws without. Devices without ray queries have none.
+- **Options:** `--no-shadows` or **J** draws without. Devices without ray queries have none.
 
 ![The south edge at a sun of 20°, without shadows and with them](images/city-blocks-shadows.png)
 

@@ -9,7 +9,8 @@ Options: `--count N` asteroids (3000), `--length M` belt length (1200), `--durat
 seconds per lap (90), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG` (18; 0
 hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
-`--capture-every N` (a PNG sequence), `--no-taa`, `--no-occlusion`, `--no-cone`,
+`--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
+shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -28,7 +29,7 @@ Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
-red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **G** tone curve,
+red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **G** tone curve,
 **-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
 Quality → Balanced → Performance → Ultra Performance, with `--features dlss`), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
@@ -263,6 +264,34 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Shadows between the rocks, textured rock (2026-09-25, issue #46)
+
+The rocks now shade each other. The ballad builds the ray-traced sun shadows the city got in
+#45 (D-029):
+- a bottom-level structure per mesh, over the finest cut of its cluster DAG that fits 40 000
+  triangles: 267 k triangles for the seven meshes, built in 8 ms;
+- a top-level structure over the 3000 asteroids, built in 1 ms; 16 MiB in all.
+
+The field stays still until Phase 3, so both are built once at start. The resolve traces one
+ray per sun-facing pixel, and a rock in another's shadow is lit by the sky alone. **J**
+toggles the shadows; `--no-shadows` starts without them.
+
+The rock row takes the procedural rock texture and its relief (albedo and normal, triplanar,
+4 m tiles; `forge_render::textures::rock`, #41), tinted with the Phase 0 colours.
+`--no-textures` keeps the plain Phase 0 rock. The ice stays smooth.
+
+![Frame 600, TAA on: the Phase 0 rock without shadows, then the textured rock with the sun's shadows between the rocks](images/asteroids-shadows.png)
+
+**Cost** (1600×900, 1500 frames): the ballad 0.393 → 0.444 ms.
+- The textures take 0.025 ms (`shading/standard` 0.041 → 0.058 ms with `--no-shadows`).
+- The rays take 0.027 ms (`shading/standard` 0.058 → 0.078 ms, `shading/ice` 0.011 → 0.016 ms).
+
+**Checks:**
+- With `--no-shadows --no-textures`, the captures with and without TAA (frames 600 and 240)
+  are identical to the previous build, on both paths.
+- With both on, the culling harness and mesh against fallback stay at 0 pixels.
+- Synchronization validation is silent.
 
 ## Bloom (2026-09-25, issue #44)
 
@@ -546,9 +575,9 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    geometry: material classification of the visibility buffer (#20), streaming of cluster
    pages, the software rasteriser for the smallest clusters once triangle counts rise again
    (a million-triangle city, not a rock field).
-2. Bloom, a closer planet if the owner wants its air to read as a band, the planet-view
-   table (#26); a proper sun with ray-traced shadows on the RTX
-   tiers; volumetric dust and the nebula lit by the sun.
+2. Bloom and the sun's hard ray-traced shadows: done (above). Next: soft shadows from the
+   sun's disc, a closer planet if the owner wants its air to read as a band, the planet-view
+   table (#26), volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,
    crashes (Phases 5–7), a second player, spatial audio.
 4. Look (owner's request, 2026-09-24, after the systems): rock asteroids as angular

@@ -652,7 +652,10 @@ shadows with rays. This is that tier's first piece (issue #45). It is built on r
 from the compute resolve, with no ray-tracing pipeline and no shader binding table.
 
 **`forge-gpu`** enables `VK_KHR_acceleration_structure` and `VK_KHR_ray_query` on devices
-that have them (`FORGE_NO_RAY_QUERY=1` turns them off for testing).
+that have them (`FORGE_NO_RAY_QUERY=1` turns them off for testing). It also enables
+`VK_KHR_ray_tracing_pipeline`, though no pipeline uses it: Slang's address-to-structure
+conversion declares `SPV_KHR_ray_tracing`, which the validation layers accept only with that
+extension on. Every RTX card has all three.
 - `Device::build_blases` and `Device::build_tlas` build static structures in one-shot
   submissions: prefer fast trace, scratch aligned to 256 bytes.
 - Shaders reach a structure by its device address (`RaytracingAccelerationStructure(address)`,
@@ -686,8 +689,7 @@ light by the result (`CullFlags::SHADOWS`).
 **Left for later:**
 - soft shadows (the sun's disc, a few rays with blue noise and a denoiser);
 - structures that follow streamed and moving geometry (refits, rebuilds, cluster
-  structures);
-- the ballad (its rocks tumble in Phase 3).
+  structures; the ballad's rocks tumble in Phase 3).
 
 *Measured* (city-blocks, RTX 5070 Ti):
 - **The build, once:** 1.39 M BLAS triangles in 58 ms (the cuts read from the pages included);
@@ -698,4 +700,9 @@ light by the result (`CullFlags::SHADOWS`).
 - **Checks:** with `--no-shadows`, or without ray queries (`FORGE_NO_RAY_QUERY=1`), the captures
   are those of the previous build. The other demos have no top-level structure and are
   unchanged, though they run the `_rt` pipelines. Synchronization validation is silent.
-*(research: lighting-gi.md; D-008; issue #45; demo: city-blocks)*
+**The ballad** (issue #46, 2026-09-25) builds its structures once at start: 267 k BLAS
+triangles for its seven meshes in 8 ms, and the TLAS over 3000 asteroids in 1 ms, 16 MiB in
+all. Its rays take 0.027 ms at 1600×900. `--no-shadows` or **J** turns them off, in both
+demos.
+
+*(research: lighting-gi.md; D-008; issues #45, #46; demos: city-blocks, asteroids)*
