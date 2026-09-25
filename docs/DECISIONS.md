@@ -714,7 +714,7 @@ force-opaque. The standard, ice and layered classes scale the sun's diffuse and 
 light by the result (`CullFlags::SHADOWS`).
 
 **Left for later:**
-- soft shadows (the sun's disc, a few rays with blue noise and a denoiser);
+- soft shadows: done in #54 (below), with one ray and TAA instead of several and a denoiser;
 - structures that follow streamed and moving geometry (refits, rebuilds, cluster
   structures; the ballad's rocks tumble in Phase 3).
 
@@ -732,7 +732,16 @@ triangles for its seven meshes in 8 ms, and the TLAS over 3000 asteroids in 1 ms
 all. Its rays take 0.027 ms at 1600×900. `--no-shadows` or **J** turns them off, in both
 demos.
 
-*(research: lighting-gi.md; D-008; issues #45, #46; demos: city-blocks, asteroids)*
+
+**Soft shadows** (issue #54, 2026-09-25). The shadow ray aims at a point of the sun's disc,
+uniform over it, from the per-pixel noise of D-030 (`noise.slang`). The noise repeats with
+TAA's 8-frame jitter, so TAA averages 8 points into the penumbra: one ray per pixel, no
+denoiser. `Frame::sun_angular_radius` is 0 in the ballad (hard) and the Sun's at 1 AU in
+the city. On a static view the slow change stays at hard shadows' 0.035 %, and the cost is
+0.02 ms at 1440p. The penumbra of a thin occluder (a lamp post) fades with distance, as it
+should. Wider penumbrae (a larger sun, an area light) would need more samples than TAA's
+eight.
+*(research: lighting-gi.md; D-008; issues #45, #46, #54; demos: city-blocks, asteroids)*
 
 ## D-030 — Ambient occlusion: GTAO from the depth, after XeGTAO, occluding the sky's light ✅ (2026-09-25)
 

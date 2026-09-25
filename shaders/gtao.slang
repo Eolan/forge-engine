@@ -19,6 +19,7 @@
 // View space here is XeGTAO's: x right, y up, z the distance forward (the engine's world is
 // right-handed with -Z forward; nothing here needs it).
 import bindless;
+import noise;
 
 struct Push
 {
@@ -104,39 +105,6 @@ void prefilter_main(uint3 id : SV_DispatchThreadID)
     g_storage_images_r32f[NonUniformResourceIndex(push.dst)][id.xy] = sum / max(weights, 1e-6);
 }
 
-// The index of (x, y) along a Hilbert curve over 64 × 64 pixels: neighbouring pixels get
-// well-spread noise values.
-uint hilbert_index(uint x, uint y)
-{
-    uint index = 0;
-    for (uint cur = 32; cur > 0; cur /= 2)
-    {
-        uint rx = (x & cur) > 0 ? 1u : 0u;
-        uint ry = (y & cur) > 0 ? 1u : 0u;
-        index += cur * cur * ((3u * rx) ^ ry);
-        if (ry == 0)
-        {
-            if (rx == 1)
-            {
-                x = 63u - x;
-                y = 63u - y;
-            }
-            uint t = x;
-            x = y;
-            y = t;
-        }
-    }
-    return index;
-}
-
-// Two noise values in [0, 1) for a pixel and frame: the R2 sequence (Roberts 2018) along the
-// Hilbert curve, shifted every frame.
-float2 spatio_temporal_noise(uint2 pixel, uint frame)
-{
-    uint index = hilbert_index(pixel.x % 64u, pixel.y % 64u) + 288u * (frame % 64u);
-    return frac(0.5 + float(index) * float2(0.75487766624669276, 0.56984029099805327));
-}
-
 // How much the pixel's depth agrees with each neighbour (left, right, top, bottom): 1 on the
 // same surface, 0 across an edge. A slope through the pixel is not an edge.
 float4 depth_edges(float center, float left, float right, float top, float bottom)
@@ -204,12 +172,12 @@ void gtao_main(uint3 id : SV_DispatchThreadID)
     float pixel_view_size = position.z * abs(push.ndc_to_view_mul.x) * push.pixel_size.x;
     float screen_radius = effect / pixel_view_size;
     float min_s = PIXEL_TOO_CLOSE / screen_radius;
-    float2 noise = spatio_temporal_noise(id.xy, push.frame);
+    float2 jitter = spatio_temporal_noise(id.xy, push.frame);
 
     float visibility = 0.0;
     for (uint slice = 0; slice < SLICES; slice++)
     {
-        float phi = (float(slice) + noise.x) / float(SLICES) * PI;
+        float phi = (float(slice) + jitter.x) / float(SLICES) * PI;
         float cos_phi = cos(phi);
         float sin_phi = sin(phi);
         // The slice's direction on screen (y down), in pixels, and in view space (y up).
@@ -228,7 +196,7 @@ void gtao_main(uint3 id : SV_DispatchThreadID)
         float horizon1 = low_horizon1;
         for (uint j = 0; j < STEPS; j++)
         {
-            float step_noise = frac(noise.y + float(slice + j * STEPS) * 0.6180339887);
+            float step_noise = frac(jitter.y + float(slice + j * STEPS) * 0.6180339887);
             float s = (float(j) + step_noise) / float(STEPS);
             s = pow(s, SAMPLE_DISTRIBUTION_POWER) + min_s;
             float2 offset = s * omega;

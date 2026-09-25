@@ -23,6 +23,7 @@ import vis64;
 import barycentrics;
 import sh;
 import skyview;
+import noise;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -244,7 +245,7 @@ public struct Frame
     public uint visible_capacity;   // slots in `visible`
     public float exposure;          // pre-exposure of the frame (crates/forge-render/src/exposure.rs)
     public float sun_illuminance;   // lux; the rocks return albedo × E / π
-    public uint pad_exposure;
+    public float sun_angular_radius; // the sun disc's angular radius, radians; 0: hard shadows (issue #54)
     public uint* clusters;          // per pass (pass 1 or the single pass at 0, pass 2 at 12): the hardware draw grid (x, y, 1) and its cluster count, the software raster grid and its count, the merge's VkDrawIndirectCommand; then the culls' tickets (24, 25)
     public uint* draws;             // fallback: a VkDrawIndexedIndirectCommand per hardware-drawn cluster of the pass; null on the mesh path
     public uint64_t* lookback;      // status words of the instance cull's ordered appends
@@ -252,7 +253,7 @@ public struct Frame
     public uint target_width;       // pixels
     public uint target_height;
     public float sw_raster_area;    // a cluster whose bounding rectangle holds fewer pixels than this per triangle is dense (rasterised in compute with FLAG_SW_RASTER)
-    public uint pad_raster;
+    public uint noise_frame;        // the frame index of the spatio-temporal noise (noise.slang)
     public float2 prev_draw_jitter; // the previous frame's `draw_jitter`
     public float prev_p00;          // the previous culling camera's projection scales
     public float prev_p11;
@@ -1802,14 +1803,26 @@ static const uint TILE_GROUPS_X = 64;
 static const float SHADOW_BIAS = 0.15;
 
 // 0 when something lies between `world` and the sun, else 1: one ray, the first hit ends it.
-float sun_shadow(Frame* f, float3 world, float3 n)
+// With a sun disc (`Frame::sun_angular_radius`, issue #54) the ray aims at a point of it,
+// uniform over the disc from `jitter` (two values in [0, 1): `noise.slang`'s, which repeat with
+// TAA's jitter so TAA averages the points into a penumbra); (0, 0) is the disc's centre.
+float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter)
 {
     float3 sun = normalize(f[0].sun_dir);
     if (dot(n, sun) <= 0.0)
         return 1.0; // facing away: the sun does not light it anyway
+    float3 direction = sun;
+    if (f[0].sun_angular_radius > 0.0)
+    {
+        float3 t = normalize(cross(sun, abs(sun.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
+        float3 b = cross(sun, t);
+        float r = tan(f[0].sun_angular_radius) * sqrt(jitter.x);
+        float phi = 6.2831853 * jitter.y;
+        direction = normalize(sun + (t * cos(phi) + b * sin(phi)) * r);
+    }
     RayDesc ray;
     ray.Origin = world + (n + sun) * SHADOW_BIAS;
-    ray.Direction = sun;
+    ray.Direction = direction;
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
@@ -1880,7 +1893,7 @@ float4 trace_reflection(Frame* f, float4* sky, float3 origin, float3 direction)
         albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
     float3 sun = normalize(f[0].sun_dir);
     float ndl = max(dot(n, sun), 0.0);
-    float shadow = ndl > 0.0 ? sun_shadow(f, hit, n) : 0.0;
+    float shadow = ndl > 0.0 ? sun_shadow(f, hit, n, float2(0.0)) : 0.0;
     float3 light = ndl * shadow * f[0].sun_color.rgb + sh_irradiance(sky, n);
     return float4(albedo * light + mat.emissive, 1.0);
 }
@@ -1945,7 +1958,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         s.traced = trace_reflection(f, s.sky, world + s.n * 0.05, reflect(-s.view, s.n));
     }
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
-        s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n);
+        s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, spatio_temporal_noise(pixel, f[0].noise_frame));
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)

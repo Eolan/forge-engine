@@ -10,7 +10,8 @@
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
 //! threshold, T TAA, B bloom, J shadows, I sky light, N ambient occlusion, V its view, F sky
-//! reflections, Y mirror rays in the glass, Tab wireframe, G tone curve, Esc quit.
+//! reflections, Y mirror rays in the glass, Z soft or hard shadows, Tab wireframe, G tone curve,
+//! Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -144,6 +145,9 @@ struct Args {
     /// them; devices without ray queries have none).
     #[arg(long)]
     no_ray_reflections: bool,
+    /// Hard sun shadows: one ray to the sun's centre instead of its disc (Z toggles them).
+    #[arg(long)]
+    hard_shadows: bool,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -238,6 +242,10 @@ impl Gallery {
             renderer.sun_dir,
             64,
         ));
+        // The sun's disc softens the shadows (issue #54).
+        if !args.hard_shadows {
+            renderer.sun_angular_radius = forge_render::starfield::SUN_ANGULAR_RADIUS_1AU;
+        }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
         let (scene, placed) = if args.gallery {
@@ -361,6 +369,13 @@ impl Demo for Gallery {
             KeyCode::KeyV => self.flags.toggle(CullFlags::SHOW_AO),
             KeyCode::KeyF => self.flags.toggle(CullFlags::SKY_REFLECTIONS),
             KeyCode::KeyY => self.flags.toggle(CullFlags::RAY_REFLECTIONS),
+            KeyCode::KeyZ => {
+                self.renderer.sun_angular_radius = if self.renderer.sun_angular_radius > 0.0 {
+                    0.0
+                } else {
+                    forge_render::starfield::SUN_ANGULAR_RADIUS_1AU
+                };
+            }
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;
@@ -459,6 +474,9 @@ impl Demo for Gallery {
                 "sky light, per unit of sun illuminance"
             );
         }
+        // The soft shadows' noise repeats with TAA's jitter (issue #54).
+        self.renderer.noise_frame =
+            (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
         let camera = self.cull_camera(ctx.aspect());
         let extent = ctx.extent();
         let exposure = exposure_from_ev100(self.args.ev100);

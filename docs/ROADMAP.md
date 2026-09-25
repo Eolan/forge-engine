@@ -180,8 +180,8 @@ Goal: the renderer skeleton every later system draws through.
    glass ✅, issue #50), NRD. Ahead of the probes: the sky's irradiance ✅ (#47) and GTAO ✅ (#48, D-030).
 2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
-   ballad's rocks in #46, 0.03 ms); soft
-   shadows, and structures that follow streaming and motion, next.
+   ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's
+   jitter, 0.02 ms at 1440p); structures that follow streaming and motion next.
 3. Clouds (Nubis-style), froxel fog, night sky; weather rendering (rain, snow, lightning,
    wet surfaces) driven by the shared weather state.
 4. T2/T3: ReSTIR GI, radiance cache, Ray Reconstruction, path-traced reference with cluster

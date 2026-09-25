@@ -182,6 +182,8 @@ The resolve is three kinds of pass:
 - **Shadows by ray query** (issue #45, D-029): the resolve's `_rt` variants trace one ray per
   sun-facing pixel against a TLAS over the scene's instances, whose BLASes are cuts of the
   meshes' DAGs. The city and the ballad (#46) build theirs once at start.
+  In the city the rays aim within the sun's disc, and TAA averages them into soft shadows
+  (#54).
 - **Sky light and its occlusion** (issues #47, #48; D-023's note, D-030): under a sky, a
   surface also takes the sky's irradiance for its normal (nine SH coefficients a frame,
   from the sky-view table), scaled by GTAO computed from the depth before the resolve.

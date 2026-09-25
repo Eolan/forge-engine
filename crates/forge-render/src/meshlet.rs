@@ -260,7 +260,8 @@ struct GpuFrame {
     exposure: f32,
     /// Illuminance of the sun in lux.
     sun_illuminance: f32,
-    pad_exposure: u32,
+    /// The sun disc's angular radius, radians: soft shadows (issue #54); 0 for hard ones.
+    sun_angular_radius: f32,
     /// Per pass: the draw grid (x, y, 1) and the cluster count.
     clusters: u64,
     /// The fallback's indexed draws (0 on the mesh path).
@@ -274,7 +275,8 @@ struct GpuFrame {
     target_height: u32,
     /// Clusters with fewer pixels of bounding rectangle per triangle are rasterised in compute.
     sw_raster_area: f32,
-    pad_raster: u32,
+    /// The frame index of the spatio-temporal noise (`noise.slang`): TAA's, modulo its jitter's period.
+    noise_frame: u32,
     /// The previous frame's `draw_jitter`, `p00` and `p11`.
     prev_draw_jitter: [f32; 2],
     prev_p00: f32,
@@ -1378,6 +1380,12 @@ pub struct MeshletRenderer {
     /// The sunlight's colour at the scene: (1, 0.96, 0.9) by default (the ballad's, in space);
     /// on a planet, the sun through the air.
     pub sun_color: Vec3,
+    /// The sun disc's angular radius, radians: the shadow rays aim within it and TAA averages
+    /// them into penumbrae (issue #54). 0 (the default) keeps the shadows hard.
+    pub sun_angular_radius: f32,
+    /// The frame index the noise of soft shadows uses: TAA's frame modulo its jitter's period,
+    /// so the pattern repeats with the jitter (set by the demo every frame).
+    pub noise_frame: u32,
 }
 
 /// What to draw this frame.
@@ -1699,6 +1707,8 @@ impl MeshletRenderer {
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
             sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
             sun_color: Vec3::new(1.0, 0.96, 0.9),
+            sun_angular_radius: 0.0,
+            noise_frame: 0,
         })
     }
 
@@ -1984,7 +1994,7 @@ impl MeshletRenderer {
             visible_capacity: self.lists[slot.index].capacity,
             exposure: params.exposure,
             sun_illuminance: self.sun_illuminance,
-            pad_exposure: 0,
+            sun_angular_radius: self.sun_angular_radius,
             clusters: scene.clusters[slot.index].address(),
             draws: self.lists[slot.index]
                 .draws
@@ -1995,7 +2005,7 @@ impl MeshletRenderer {
             target_width: self.extent.width,
             target_height: self.extent.height,
             sw_raster_area: params.sw_raster_area.max(0.0),
-            pad_raster: 0,
+            noise_frame: self.noise_frame,
             prev_draw_jitter: prev.jitter.to_array(),
             prev_p00: prev.p00,
             prev_p11: prev.p11,

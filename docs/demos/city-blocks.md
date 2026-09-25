@@ -22,6 +22,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Ambient occlusion of the sky's light (GTAO) | #48 | ✅ 0.13 ms at 900p, 0.25 ms at 1440p |
 | The sky's reflection: glass and grazing surfaces (Fresnel) | #49 | ✅ 0.03 ms at 1440p |
 | The city in the glass: mirror rays against the TLAS | #50 | ✅ 0.17 ms at 1440p |
+| Soft shadows: the sun's disc over TAA's jitter | #54 | ✅ 0.02 ms at 1440p |
 
 ```
 cargo run --release -p city-blocks
@@ -29,7 +30,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass, **Z** soft or hard shadows, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -47,12 +48,43 @@ Options:
   sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (**V**).
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--no-ray-reflections` reflects only the sky in the glass (**Y** toggles the mirror rays).
+- `--hard-shadows` aims every shadow ray at the sun's centre (**Z** toggles soft and hard).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## Soft shadows (issue #54, 2026-09-25)
+
+The sun is a disc 0.53° across, so a shadow's edge softens with the distance to its occluder:
+about 1 cm of penumbra per metre. Each shadow ray now aims at a point of the disc, spread
+uniformly over it by the per-pixel noise of #48 (`noise.slang`). The noise repeats with TAA's
+8-frame jitter, so TAA averages eight points into the penumbra. That takes one ray per
+pixel, as before, and no denoiser.
+
+The effect shows most at a low sun: a lamp post's thin shadow fades along its length, as its
+post covers less and less of the disc, and a building's long shadow blurs towards its far end.
+
+![A sun of 20°: hard shadows, then soft ones: the lamp posts' shadows fade, the buildings' far edges soften](images/city-blocks-soft-shadows.png)
+
+**Stability**, on the static south view at a 20° sun (pixels changing by more than two
+levels):
+
+| | frame 300 → 301 | frame 300 → 332 (same jitter) |
+|---|---|---|
+| hard | 1.48 % | 0.035 % |
+| soft | 1.54 % | 0.035 % |
+
+**Cost:** nothing measurable at 1600×900 (1.981 → 1.977 ms, noise). At 1440p, 0.02 ms: the
+flight 2.646 → 2.670 ms, `shading/standard` 0.512 → 0.525 ms. The rays are a little less
+coherent.
+
+**Checks:**
+- With `--hard-shadows`, the city's three captures are identical to the previous build.
+- The ballad (radius 0) and the bench are identical, and mesh against fallback is at 0.
+- Synchronization validation is silent.
 
 ## The city in the glass (issue #50, 2026-09-25)
 
