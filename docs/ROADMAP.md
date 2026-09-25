@@ -102,7 +102,9 @@ traffic per frame.
 
 Goal: the renderer skeleton every later system draws through.
 
-1. `forge-app`: window, input, frame loop, capture, debug overlay (egui), shared by demos.
+1. `forge-app`: window, input, frame loop, capture, debug overlay (egui), shared by demos. A
+   loading screen for heavy start-ups ✅ (issue #25: the CPU work on a thread, the shaders
+   compiled ahead after a change, the ballad and the city behind it).
 2. Render graph ✅ (2026-09-24, `forge-gpu::graph`, D-020): passes declare reads/writes,
    barriers derived, transient images aliased in one heap, deferred deletion by frame slot,
    a profiler zone per pass. Still to come on it: async compute and transfer queues,
