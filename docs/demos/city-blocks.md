@@ -28,6 +28,11 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Light from the street: probes updated by ray queries (DDGI) | #53 | ✅ five cascades around the camera, 0.77 ms at 900p, 1.05 ms at 1440p |
 | The sky's reflection dimmed in the streets by the probes | #68 | ✅ 0.11 ms at 1440p |
 | The sky's tables and the probes on the async compute queue, beside the geometry | #77 | ✅ 0.05–0.11 ms off the frame |
+| Pass 2's cluster cull over pass 1's rejects only | #92 | ✅ 0.14–0.27 ms off the frame (`docs/demos/meshlets.md`) |
+
+Where it stands (2026-09-25): the flight at 300 m/s at 1440p takes 3.38 ms of GPU with
+everything on, its p99 frame 3.8 ms (2.6 ms without the probes); the south view 1.96 ms at
+1600 × 900.
 
 ```
 cargo run --release -p city-blocks

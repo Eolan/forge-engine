@@ -1122,6 +1122,12 @@ rarely crosses a level (one capture in about 60 differed). A ballad TAA capture 
 from the golden in a few hundred edge pixels by at most about 20 levels is this effect; rerun
 it before believing it.
 
+On 2026-09-25 (while verifying #77) the mesh path's TAA frame 600 differed in nearly every
+run, 340–392 px apart, on the builds before and after #77 alike. The owner suggested a
+simpler scene. Without the starfield, 4 runs of 4 matched; but so did 4 runs without the
+dust, the starfield kept, while the ice moved 30 km away still flaked once in 4. No single
+feature carries it: a lighter frame moves the moment the GPU's variants switch, as #71 found.
+
 ## What the numbers say
 
 - Before the DAG almost every drawn triangle was smaller than a pixel (54 per pixel): a

@@ -241,6 +241,9 @@ against the build before in alternating runs (three each; these runs measure the
 | every page resident | 2.21 ms | 2.05 ms | 0.272 → 0.032 | 0.258 → 0.302 |
 
 Pass 1 pays 0.03–0.05 ms for its second ordered append.
+**Where it stands (2026-09-25, after #77 and #92):** the flight at 1440p takes 3.38 ms of GPU
+(three runs of 3000 frames: 3.37–3.39), its p99 frame 3.8 ms against the 8.33 of the 120 fps
+target; 2.6 ms without the probes. It was 3.81 ms after #68.
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target. Cluster cull 1
 (0.35 ms at the south view, 0.56 in the orbit) is now the largest geometry zone. Details in
 [city-blocks.md](demos/city-blocks.md) and [meshlets.md](demos/meshlets.md).

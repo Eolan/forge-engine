@@ -10,8 +10,9 @@
 # frame: no red) and the mesh path against the fallback. Exit code 1 when any image of either
 # list differs, so a script can stop on it.
 #
-# Known flake (#71): the fallback's TAA frame 600 (fb-ast-taa600) can differ by a few hundred
-# pixels from the same build; rerun its capture before looking further.
+# Known flake (#71): the ballad's TAA frame 600 on either path (fb-ast-taa600, mesh-ast-taa600)
+# can differ by a few hundred scattered edge pixels from the same build, FLIP mean <= 0.0015;
+# some days on nearly every run (docs/PROCESS.md, "Known flake").
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 base=${1:?usage: tools/compare.sh BASE NEW}

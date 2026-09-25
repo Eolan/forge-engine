@@ -93,10 +93,12 @@ under `captures/`, which git ignores.
    `cargo clippy --release --all-features --all-targets -- -D warnings` exactly as CI runs it.
    A plain clippy run hides a lint that CI then fails on.
 
-**Known flake (#71):** `fb-ast-taa600`, the fallback's TAA frame 600, can differ from the
-same build by a few hundred pixels, each at most 22 levels off. Rerun that capture; a second
-difference is real. Its ꟻLIP stays small: mean ≤ 0.0015, largest 0.06–0.12 in nine flakes.
-The mesh path's TAA frame flakes too, less often.
+**Known flake (#71):** the ballad's TAA frame 600 (`fb-ast-taa600`, `mesh-ast-taa600`) can
+differ from the same build by a few hundred pixels, each at most 22 levels off. How often
+depends on the GPU's timing: on 2026-09-25 the mesh path's differed in nearly every run
+(340–392 px), so a rerun proves nothing. Judge it by its signature instead: a few hundred
+single pixels scattered on edges over the whole frame, ꟻLIP mean ≤ 0.0015 and largest
+0.06–0.13 in seventeen flakes. A difference that does not look like that is real.
 
 **The perceptual check (issue #75).** For each differing pair, `imgdiff` prints LDR-ꟻLIP:
 the error a person would see when flipping between the two images, from 0 (none) to 1. It is
@@ -125,7 +127,7 @@ on every statistic, and its error maps are identical (0 px), at 30, 67 and 120 p
 |---|---|---|---|---|
 | city, the new instance order (#38) | 399 | 0.0002 | 0.053 | 0 |
 | city orbit, the same | 238 | 0.0006 | 0.045 | 0 |
-| #71's flake, nine reruns (fallback and mesh) | 236–396 | 0.0010–0.0015 | 0.061–0.116 | 0–1 |
+| #71's flake, seventeen flakes (fallback and mesh) | 236–396 | 0.0010–0.0015 | 0.061–0.129 | 0–5 |
 | ACES 2.0, the table against the per-pixel transform, six views (#76) | 0 above 2 levels | 0.003–0.012 | 0.034–0.046 | 0 |
 | ballad, GTAO on the fill off against on (#55) | 34 663 | 0.011 | 0.824 | 19 025 |
 | city, GTAO off against on (#48) | 171 102 | 0.026 | 0.496 | 37 730 |

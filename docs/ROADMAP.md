@@ -53,7 +53,13 @@ batch in `docs/PROCESS.md`.
    the ballad 1.40 → 1.31 ms, every view faster).
 
 The owner confirmed this order on 2026-09-25, and the direction: grow the demos toward the
-games rather than rebuild a game now.
+games rather than rebuild a game now. **All six were done the same day.** Where the demos
+stand: the city's flight at 1440p takes 3.38 ms of GPU with everything on (p99 frame 3.8 ms,
+against the 8.33 ms of 120 fps), its south view 1.96 ms at 1600 × 900; the ballad 1.31 ms at
+1600 × 900 and 2.67 ms at 1440p.
+
+**Phase 1's leftovers:** #78 (transient buffers, parallel recording of pass bodies), #94 (an
+HDR display output), #95 (more async overlap), #39 (the RTX 3080 run).
 
 **Proposed next, for the owner to pick:**
 - #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes
@@ -122,7 +128,9 @@ It always shows the best the engine can do at that moment and carries its own pr
   (issue #23: 10 000 chunks in 28 shapes, 0.808 ms), weathered crust around the fracture
   faces ✅ (issue #62: no measurable cost), ice blocks in shapes of their own ✅ (issue #63). LOD pops fixed ✅ (issue #65: the chunks weigh their
   normals when cooked, 4.8 times fewer pops above the floor, 1.30 ms). The rock's texture without
-  repeats ✅ (issue #66: hex-tiling, 0.04 ms).
+  repeats ✅ (issue #66: hex-tiling, 0.04 ms). ACES 2.0 as a fourth tone curve ✅ (issue #76).
+  Pass 2's cluster cull over pass 1's rejects only ✅ (issue #92: 1.40 → 1.31 ms, 2.67 ms at
+  1440p).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece; issue #12 keeps the chunks' edge wear and
@@ -145,7 +153,7 @@ It always shows the best the engine can do at that moment and carries its own pr
 - `forge-geom`: meshlets, procedural meshes. Demo `meshlets` (task/mesh shaders, HZB).
 - `tools/imgdiff`, docs skeleton.
 
-## Phase 1 — Render core (next)
+## Phase 1 — Render core (delivered 2026-09-25; leftovers in Checkpoint 2)
 
 **First, a profiling overlay on screen (owner's request, 2026-09-24) ✅:** F1 in every demo
 cycles a compact and a full view of GPU time per pass from named timestamp zones
@@ -216,7 +224,8 @@ Goal: the renderer skeleton every later system draws through.
    In steps (`docs/demos/city-blocks.md`): the renderer at a million instances ✅ (#33), the
    twenty props cooked and cached ✅ (#34), terrain and GPU placement ✅ (#35: a million instances
    in 4.96 ms), culling at scale ✅ (#37: 1.06 ms; #38: instance occlusion and cells of instances, the
-   south view 2.90 → 2.26 ms with the probes),
+   south view 2.90 → 2.26 ms with the probes; #92: pass 2 over pass 1's rejects, 2.16 →
+   1.96 ms), the sky tables and probes on the async compute queue ✅ (#77: 2.36 → 2.25 ms),
    streaming ✅ (#36, D-025: 128 KiB cluster pages, the flight at 300 m/s through a 48 MiB
    pool with no holes), the flight at 1440p ✅ (#13, 2026-09-25: 1.64 ms GPU with TAA, worst
    frame 2.58 ms on the 5070 Ti; the 3080 run is #39), materials ✅ (#20: brick, plaster,

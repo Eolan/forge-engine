@@ -93,9 +93,9 @@ and the date next to every number.
 |---|---|---|
 | `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle`, the material record (`material`: `Material` with render, physics and tag layers, `MaterialTable`, D-007; the render layer's reflectance since #56, the ice's bubbles since #61) |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
-| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers, memory budget detected), acceleration structures and ray queries (`accel`: BLAS and TLAS builds, reached by device address; D-029), `gpu-allocator` with every allocation counted by category and every host write counted as upload (`memory_report`: per-heap usage and budget from `VK_EXT_memory_budget`, issue #9), RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache (and, since #25, the list of entries a program asks for, compiled ahead behind the loading screen after a shader change), the global bindless set (sampled/storage images, samplers), mesh, vertex and compute pipelines, indirect dispatches and indexed indirect-count draws, `DeviceOptions` (mesh shaders left off for `--force-fallback`), device selection that checks every feature it enables and the bindless limits and names what a skipped GPU lacks (#67), limits read from the device (the acceleration structures' scratch alignment, the mesh draw's workgroup total), `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks, `Custom` accesses for third-party work; D-020), and `dlss` (DLSS through NVIDIA Streamline's interposer behind the `dlss` feature: modes, render sizes, tagging graph images, evaluation inside a graph pass; D-024) |
+| `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers, memory budget detected), acceleration structures and ray queries (`accel`: BLAS and TLAS builds, reached by device address; D-029), `gpu-allocator` with every allocation counted by category and every host write counted as upload (`memory_report`: per-heap usage and budget from `VK_EXT_memory_budget`, issue #9), RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache (and, since #25, the list of entries a program asks for, compiled ahead behind the loading screen after a shader change), the global bindless set (sampled/storage images, samplers), mesh, vertex and compute pipelines, indirect dispatches and indexed indirect-count draws, `DeviceOptions` (mesh shaders left off for `--force-fallback`), device selection that checks every feature it enables and the bindless limits and names what a skipped GPU lacks (#67), limits read from the device (the acceleration structures' scratch alignment, the mesh draw's workgroup total), graphics, async compute and transfer queues (`QueueKind`, #77), `Frames` (a timeline semaphore per queue, 2 in flight, GPU timestamps per submission, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks, `Custom` accesses for third-party work, a queue per pass with the batches and the waits between queues derived; D-020), and `dlss` (DLSS through NVIDIA Streamline's interposer behind the `dlss` feature: modes, render sizes, tagging graph images, evaluation inside a graph pass; D-024) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`; material sections through it, #41, D-027), 128 KiB cluster pages (`page`, D-025), the mesh cache (`cache`), procedural meshes (asteroid, fractured chunks with their fracture faces as section 1 since #60 and #62, the city's props and terrain), shared GPU layouts |
-| `forge-render` | phase 1 in progress | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances), `MeshletRenderer` (cluster LOD DAG, instance and cluster culls in compute appending in a fixed order, drawn by mesh shaders or the indirect-count fallback (`GeometryPath`, issue #5), a software rasteriser for dense clusters (#3), two-pass HZB occlusion from the previous frame's pyramid with no per-cluster state (#33), cluster pages resident or streamed through a pool (`streaming`, #36, D-025), the visibility buffer and its resolve by material class (#20, D-026), statistics), `material` (the GPU material table, `TextureSet`, stock rock and ice rows), `textures` (procedural tileable textures with mips), `mipcheck` (the resolve's texture LOD against a fragment shader's), `sky` (sky-view table, the sky's irradiance in nine SH coefficients (#47), aerial perspective, compose; D-023), `bloom` (the downsample/upsample chain; D-022), `gtao` (ambient occlusion from the depth, after XeGTAO; D-030), `dust` (a froxel volume of sunlit dust, shadowed by rays; D-032), `raytrace` (BLAS per mesh from its DAG, TLAS over the instances; D-029), `probes` (diffuse light from DDGI probes in cascades around the camera, updated by ray queries; D-036), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `DlssUpscaler` (DLSS in place of the TAA resolve, the scene drawn at DLSS's input size), `Starfield` (stars, nebula, a physical sun disc, a planet under its atmosphere), `Atmosphere` (Hillaire 2020 transmittance and multiple-scattering tables as graph passes, the per-pixel march for views from space), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral as run-time data); every renderer declares graph passes, none writes a barrier. Next: lighting tiers (ReSTIR direct light, the probes' reflections, NRD) |
+| `forge-render` | built (phase 1) | `MeshletSceneBuilder`/`MeshletScene` (many meshes, instances), `MeshletRenderer` (cluster LOD DAG, instance and cluster culls in compute appending in a fixed order, drawn by mesh shaders or the indirect-count fallback (`GeometryPath`, issue #5), a software rasteriser for dense clusters (#3), two-pass HZB occlusion from the previous frame's pyramid (#33), whose pass 1 lists what it leaves to pass 2 (#92), instance occlusion and cells of 64 instances (#38), cluster pages resident or streamed through a pool (`streaming`, #36, D-025), the visibility buffer and its resolve by material class (#20, D-026), statistics), `material` (the GPU material table, `TextureSet`, stock rock and ice rows), `textures` (procedural tileable textures with mips), `mipcheck` (the resolve's texture LOD against a fragment shader's), `sky` (sky-view table, the sky's irradiance in nine SH coefficients (#47), aerial perspective, compose; D-023; the tables on the async compute queue, #77), `bloom` (the downsample/upsample chain; D-022), `gtao` (ambient occlusion from the depth, after XeGTAO; D-030), `dust` (a froxel volume of sunlit dust, shadowed by rays; D-032), `raytrace` (BLAS per mesh from its DAG, TLAS over the instances; D-029), `probes` (diffuse light from DDGI probes in cascades around the camera, updated by ray queries on the async compute queue; D-036, #77), `Taa` (jittered HDR target, motion vectors, clipped history rescaled by exposure, display output), `DlssUpscaler` (DLSS in place of the TAA resolve, the scene drawn at DLSS's input size), `Starfield` (stars, nebula, a physical sun disc, a planet under its atmosphere), `Atmosphere` (Hillaire 2020 transmittance and multiple-scattering tables as graph passes, the per-pixel march for views from space), `LuminanceMeter` + `AutoExposure` (histogram metering, EV100), `Display` + `Tonemap` (AgX, ACES fit, PBR Neutral, ACES 2.0 as run-time data), `aces2` (ACES 2.0's output transform ported from OpenColorIO and its baked table, #76), `tonecheck` (both ACES 2.0 paths on the GPU against the CPU); every renderer declares graph passes, none writes a barrier. Next: lighting tiers (ReSTIR direct light, the probes' reflections, NRD) |
 | `forge-world` | planned | reference frames, cube-sphere/grid partition, cell streaming, HLOD, material table, weather state |
 | `forge-physics` | planned | binding of the chosen engine behind Forge types, per-construct spaces, material lookup, deformation writes |
 | `forge-anim` | planned | clips, blend graph, motion matching, IK, powered ragdoll tracking, contact events |
@@ -120,16 +120,22 @@ and the date next to every number.
   barrier and layout transition from the tracked state of each resource, lays out the
   frame's transient images (depth, HDR colour, motion vectors) in one heap where lifetimes
   allow aliasing, records the passes in declaration order with a profiler zone each, and
-  carries the final states into the next frame. Persistent images (`GraphImage`: depth
+  carries the final states into the next frame. A pass may ask for the async compute or the
+  transfer queue (#77): the graph moves it up to just after its last conflict, splits the
+  frame into batches (one submission each), and derives the timeline waits between queues
+  from each resource's last writer and readers per queue. Persistent images (`GraphImage`: depth
   pyramids, TAA histories) and buffers (`GraphBuffer`: work lists, visible-cluster lists, indirect
   arguments) keep their state between frames; resources a frame in flight may still use go
   through `Frames::destroy_later`. Nobody outside `forge-gpu` records a barrier.
 - **Audio thread**: real-time priority, never touches the pool, communicates by lock-free
   queues.
 - **Network thread**: `tokio` runtime for I/O only; packets are handed to the simulation.
-- **GPU**: one graphics queue now; async compute and a transfer queue are the graph's next
-  extension (a queue per pass, timeline waits and ownership transfers on crossing edges).
-  Two frames in flight on a timeline semaphore; the CPU never waits on the whole queue.
+- **GPU**: a graphics queue, and an async compute and a transfer queue when the device has
+  them (#77, D-020; `FORGE_ASYNC=0` keeps everything on graphics). The city's sky tables and
+  probe update run on the compute queue beside the geometry, its streamed page copies on the
+  transfer queue. Resources shared by queues are `CONCURRENT` (render targets stay on
+  graphics), so no ownership transfers. A frame ends on the graphics queue after every other
+  batch; two frames in flight on timeline semaphores; the CPU never waits on a whole queue.
 - **Pipelining**: simulation of frame N+1 overlaps rendering of frame N through an immutable
   frame packet (positions, transforms, visibility inputs) written by the simulation and read
   by the renderer.
@@ -203,22 +209,22 @@ The resolve is three kinds of pass:
 **Dense clusters go to a software rasteriser** (issue #3). The cluster cull marks a cluster
 dense when it is in front of the near plane, under 64 pixels across and has fewer than two
 pixels of its bounding sphere's screen rectangle per triangle: there the hardware's fixed
-cost per primitive dominates. In the first pass, when the renderer runs it, those clusters
-go to a second raster list instead of the hardware's: a compute workgroup per cluster
+cost per primitive dominates. In both passes (since #30, so that occlusion changes no pixel),
+when the renderer runs it, those clusters go to a second raster list instead of the hardware's: a compute workgroup per cluster
 transforms and snaps its vertices exactly as the fixed-function stages do (perspective
 division, the viewport, round-to-nearest-even to 1/256 pixel), then a thread per triangle
 culls back faces, walks the pixel centres of its bounding box with 32-bit edge functions and
 the top-left rule, interpolates the depth linearly in screen space and keeps
 `depth << 32 | id` with a 64-bit atomic maximum, only where it beats the hardware's pixel of
 that pass (nearer, or at equal depth the larger id: the hardware's depth test keeps the last
-drawn and it draws in id order, so every path resolves ties alike). A full-screen merge (an
-indirect draw, empty when no cluster went to software) writes those samples into the
+drawn and it draws in id order, so every path resolves ties alike). A merge (an indirect
+draw: a rectangle per software cluster, or one full-screen triangle when they are many, #32;
+empty when no cluster went to software) writes those samples into the
 visibility buffer and the depth and clears them; everything after the draw, from the depth
 pyramid to TAA, sees one image. The renderer runs it (`SwRaster::Auto`) when the recent
 frames held 1.5 M dense triangles or more, until they fall below 0.75 M: the raster pass and
-the merge cost about 0.02 ms, which a million dense triangles repay. The pass-2 clusters
-(the few newly visible) stay in hardware. It needs 64-bit buffer atomics; without them
-every cluster is drawn in hardware.
+the merge cost about 0.02 ms, which a million dense triangles repay. It needs 64-bit buffer
+atomics; without them every cluster is drawn in hardware.
 
 **Colour is physical and pre-exposed** (issue #7, D-022). Lights carry photometric units
 (the sun in lux, its disc in cd/m² from its solid angle) and every pass writes luminance
@@ -228,7 +234,8 @@ of the finished HDR image (`exposure/luminance histogram`: clear, count in share
 device-local memory, copy 1 KB to a cached per-slot readback, `HostRead`), read two frames
 later and followed on the CPU with separate speeds up and down. Temporal passes rescale
 their history by the exposure ratio. The display transform is chosen at run time from
-`tonemap.slang` (AgX, ACES fit, Khronos PBR Neutral) and applied where the last HDR pass
+`tonemap.slang` (AgX, ACES fit, Khronos PBR Neutral, and ACES 2.0's output transform through
+a baked 65³ table, #76, with the per-pixel transform as its reference) and applied where the last HDR pass
 writes the display image (the TAA resolve in the ballad, the stand-alone display pass
 elsewhere); nothing upstream knows which curve is on screen. Bloom (issue #44) is a half-size
 downsample/upsample chain of the same pre-exposed image, blended into the displayed image

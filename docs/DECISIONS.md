@@ -272,7 +272,8 @@ Which check applies:
    #71's flake, a baked table): proposed pass at the default 67 pixels per degree, every
    pixel below 0.15 and the mean below 0.02 (`imgdiff --max-flip 0.15 --max-flip-mean
    0.02`). Measured: the city's new instance order (#38) peaks at 0.053, #71's flake at
-   0.06–0.12 (means up to 0.0015). ACES 2.0's table against its per-pixel transform (#76)
+   0.06–0.13 over seventeen flakes (means up to 0.0015; the 0.129 of 2026-09-25 is the
+   closest to the threshold yet). ACES 2.0's table against its per-pixel transform (#76)
    is 1–2 levels everywhere: means 0.003–0.012, peaks up to 0.046. A faint one-pixel line
    reaches 0.17 and a 3×3 speck of 20 levels 0.26. (Revised in #76: the first proposal's
    mean of 0.003 failed the ACES 2.0 table, which nobody can tell apart.)
