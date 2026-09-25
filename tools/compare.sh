@@ -8,7 +8,8 @@
 # largest value (issue #75: how visible it is). Then the pairs within NEW that must match:
 # the A/B harness (occlusion and cone culling off against on, `--show-culled` against the plain
 # frame: no red) and the mesh path against the fallback. Exit code 1 when any image of either
-# list differs, so a script can stop on it.
+# list differs, so a script can stop on it. The same lines go to NEW/compare.txt, for a cloud
+# session to read (tools/report.sh gathers it). "0 px" on every line is the pass.
 #
 # Known flake (#71): the ballad's TAA frame 600 on either path (fb-ast-taa600, mesh-ast-taa600)
 # can differ by a few hundred scattered edge pixels from the same build, FLIP mean <= 0.0015;
@@ -45,19 +46,33 @@ pair() {
   fi
 }
 
-echo "== $base against $new"
-for image in "$new"/*.png; do
-  name=$(basename "$image" .png)
-  pair "$base/$name.png" "$image" "$name"
-done
-echo "== within $new: the A/B harness and mesh against fallback"
-for path in mesh fb; do
-  pair "$new/$path-orbit120.png" "$new/$path-noocc120.png" "$path orbit, occlusion off"
-  pair "$new/$path-ast240.png" "$new/$path-ast240-noocc.png" "$path ballad, occlusion off"
-  pair "$new/$path-ast240.png" "$new/$path-ast240-nocone.png" "$path ballad, cone off"
-  pair "$new/$path-ast240.png" "$new/$path-ast240-culled.png" "$path ballad, show-culled"
-done
-for name in static60 orbit120 nolod120 ast240 ast-notaa600 city60 cityorbit120 gallery60; do
-  pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
-done
-exit $status
+main() {
+  echo "tools/compare.sh $base $new, $(date -u +%FT%TZ)"
+  echo "== $base against $new"
+  local images=("$new"/*.png)
+  [ -f "${images[0]}" ] || { echo "no images in $new"; status=1; }
+  for image in "${images[@]}"; do
+    [ -f "$image" ] || continue
+    name=$(basename "$image" .png)
+    pair "$base/$name.png" "$image" "$name"
+  done
+  echo "== within $new: the A/B harness and mesh against fallback"
+  for path in mesh fb; do
+    pair "$new/$path-orbit120.png" "$new/$path-noocc120.png" "$path orbit, occlusion off"
+    pair "$new/$path-ast240.png" "$new/$path-ast240-noocc.png" "$path ballad, occlusion off"
+    pair "$new/$path-ast240.png" "$new/$path-ast240-nocone.png" "$path ballad, cone off"
+    pair "$new/$path-ast240.png" "$new/$path-ast240-culled.png" "$path ballad, show-culled"
+  done
+  for name in static60 orbit120 nolod120 ast240 ast-notaa600 city60 cityorbit120 gallery60; do
+    pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
+  done
+  if [ $status = 0 ]; then
+    echo "every line is 0 px: the pass (compare.txt in $new)"
+  else
+    echo "some lines differ: named above (compare.txt in $new)"
+  fi
+  return $status
+}
+
+main | tee "$new/compare.txt"
+exit "${PIPESTATUS[0]}"

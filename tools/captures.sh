@@ -5,15 +5,19 @@
 #
 #   tools/captures.sh OUT [BIN]
 #
-# OUT: the directory to write (created). BIN: the directory holding the demo binaries
+# OUT: the directory to write (created): the captures, each run's full log in OUT/logs/ and
+# OUT/summary.txt with each capture's outcome and its run's key lines (the GPU time, the
+# placement's checksum, errors). A cloud session reads the logs and the summary, not the
+# images: tools/report.sh gathers them to commit. BIN: the directory holding the demo binaries
 # (default target/release; a baseline built in another tree, see docs/PROCESS.md). The demos
-# open on the secondary monitor and never take focus (FORGE_MONITOR). Errors and panics are
-# printed; the batch takes a few minutes.
+# open on the secondary monitor and never take focus (FORGE_MONITOR). The batch takes a few
+# minutes; each capture prints a line as it lands.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/captures.sh OUT [BIN]}
 bin=${2:-$root/target/release}
-mkdir -p "$out"
+mkdir -p "$out/logs"
+summary=$out/summary.txt
 exe=""
 [ -f "$bin/asteroids.exe" ] && exe=.exe
 meshlets=$bin/meshlets$exe
@@ -23,14 +27,29 @@ for demo in "$meshlets" "$asteroids" "$city"; do
   [ -f "$demo" ] || { echo "missing $demo: build with cargo build --release" >&2; exit 1; }
 done
 cd "$root"
+echo "tools/captures.sh $out from $bin, $(date -u +%FT%TZ), commit $(git rev-parse --short HEAD 2>/dev/null)" | tee "$summary"
 
-# Runs a demo, printing only its errors and panics (colour codes stripped).
-run() { "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E "ERROR|Error|panicked" || true; }
-# capture NAME FRAME DEMO ARGS...: the frame FRAME of DEMO to OUT/NAME.png.
+status=0
+# Lines of a run's log worth keeping in the summary.
+keys="forge_app: gpu:|ERROR|Error|panicked|selected GPU|checksum|world's origin"
+# capture NAME FRAME DEMO ARGS...: the frame FRAME of DEMO to OUT/NAME.png, its log to
+# OUT/logs/NAME.log (colour codes stripped), its key lines to the summary.
 capture() {
   local name=$1 frame=$2 demo=$3
   shift 3
-  run "$demo" --frames $((frame + 1)) --capture "$out/$name.png" --capture-frame "$frame" "$@"
+  local log=$out/logs/$name.log start=$SECONDS
+  "$demo" --frames $((frame + 1)) --capture "$out/$name.png" --capture-frame "$frame" "$@" 2>&1 |
+    sed 's/\x1b\[[0-9;]*m//g' > "$log"
+  if [ -f "$out/$name.png" ]; then
+    echo "$name: captured in $((SECONDS - start)) s"
+    echo "== $name: captured in $((SECONDS - start)) s ($(basename "$demo") $*)" >> "$summary"
+  else
+    echo "$name: NO CAPTURE after $((SECONDS - start)) s, see $log"
+    echo "== $name: NO CAPTURE ($(basename "$demo") $*)" >> "$summary"
+    status=1
+  fi
+  grep -E "$keys" "$log" | grep -v "GOG" | cut -c1-300 >> "$summary"
+  grep -E "ERROR|panicked" "$log" | head -n 5
 }
 
 for path in mesh fb; do
@@ -54,4 +73,5 @@ for path in mesh fb; do
   capture "$path-cityorbit120" 120 "$city" --stream-pool 0 --orbit "${flag[@]}"
   capture "$path-gallery60" 60 "$city" --gallery "${flag[@]}"
 done
-echo "captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"
+echo "captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images; logs in $out/logs, summary in $summary" | tee -a "$summary"
+exit $status

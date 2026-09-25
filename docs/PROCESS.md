@@ -92,6 +92,19 @@ under `captures/`, which git ignores.
 5. **Before pushing:** `cargo test --release`, and
    `cargo clippy --release --all-features --all-targets -- -D warnings` exactly as CI runs it.
    A plain clippy run hides a lint that CI then fails on.
+6. **Leave a trace a cloud session can read.** Every script keeps its runs' full logs under
+   `OUT/logs/` and what it printed in `OUT/summary.txt` (`validate.sh` and `timings.sh` under
+   `captures/validate` and `captures/timings`), and `compare.sh` its lines in
+   `NEW/compare.txt`. `tools/report.sh NAME [DIR...]` gathers them, the machine and the build
+   (`env.txt`) and one contact sheet per directory into `reports/NAME/` (a few MB; the
+   full-size captures stay out), to commit and push: `git add reports/NAME && git commit -m
+   "Report NAME" && git push`. A cloud session reads the report from the branch; it cannot see
+   `captures/`. What the scripts' output means: `captures.sh` prints a line per capture and
+   says "NO CAPTURE" when a demo did not write one (its log says why); `compare.sh` ends with
+   "every line is 0 px: the pass" when nothing changed, which is the expected result of a
+   change that must not move pixels; `validate.sh` prints each run's duration and log length,
+   and a clean run shows no message under its header (the runs are short: a minute or two in
+   all); `origins.sh` is the one script whose differences are expected (issue #93).
 
 **Known flake (#71):** the ballad's TAA frame 600 (`fb-ast-taa600`, `mesh-ast-taa600`) can
 differ from the same build by a few hundred pixels, each at most 22 levels off. How often
@@ -181,9 +194,11 @@ GPU, and put its lines in the report. It becomes a 0 px check once D-004's amend
   capture or validation. So:
   - Changes that need no GPU (docs, research, tools, CPU code covered by tests) follow the
     local rules and may be pushed to `main` once CI's checks pass.
-  - Changes to rendering or shaders go to a branch, `cloud/<issue>-<slug>`, pushed without a
-    pull request, and the issue gets a comment saying what is left to verify. The owner, or a
-    local session, runs the verification batch and brings the branch into `main`.
+  - Changes to rendering or shaders go to a branch, `cloud/<issue>-<slug>` (or the branch the
+    cloud harness assigns, `claude/<name>`), pushed without a pull request, and the issue gets
+    a comment saying what is left to verify. The owner, or a local session, runs the
+    verification batch, commits its report to the branch (`tools/report.sh`, step 6 above) so
+    the cloud session can read the outcome, and brings the branch into `main`.
   - Research runs as one agent at a time, as locally.
 
 ## Review and merge

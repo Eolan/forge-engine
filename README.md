@@ -195,6 +195,7 @@ tools/compare.sh captures/base captures/new
 tools/validate.sh
 tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]
 tools/origins.sh captures/origins        # the far-origin check (issue #93)
+tools/report.sh 2026-09-26-batch         # the logs and summaries into reports/…, to commit for a cloud session
 ```
 
 What each script does and how to build a baseline from an older commit:
