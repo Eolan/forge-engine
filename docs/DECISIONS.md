@@ -906,3 +906,76 @@ whitens with the bubbles near the surface. Bubbly ice is lighter, 917 (1 − bub
 the physics density follows the same number. The ballad draws clear, bubbly and white blocks at no
 measurable cost.
 *(research: lighting-gi.md; D-029, D-031; issues #59, #61; demo: asteroids)*
+
+## D-034 — The environment state: a baked climate, weather as a function of seed and time, surface fields near players 🟡 (proposed 2026-09-25)
+
+Extends D-019 from one weather struct to a planetary climate field. The struct stays the thing
+every system reads (rendering, materials (D-007), vegetation, audio, physics and gameplay), but
+becomes a *sample*, `weather.sample(position, time) -> WeatherSample`, of three layers.
+
+**Climate atlas** (`forge-procgen::climate`, baked once per planet):
+- **Fields:** twelve monthly normals per cell, 16 bytes: mean temperature and diurnal range,
+  precipitation and wet-day probability, prevailing wind, humidity, cloud fraction.
+- **Grid:** the cube-sphere at level 7 (≈ 78 km on an Earth-sized planet, ≈ 19 MB, resident),
+  downscaled per level-6 terrain tile to ≈ 1.2 km with the lapse rate against the real heights
+  and Smith–Barstad orographic precipitation (≈ 3 MB per tile, cached).
+- **Build:** insolation by obliquity, a diffusive energy balance, circulation-cell winds and a
+  moisture sweep along them.
+- **Validation:** offline, against ExoPlaSim + `koppenpasta` on the same heightmap. These are GPL
+  tools, never linked.
+
+**Biomes:**
+- A data table of climate envelopes (BIOME1's indices; Whittaker first).
+- A soft nearest-point selection in climate space, blended by a scattered kernel whose radius is
+  the pair's transition width, then sharpened by local switches: drainage, slope, soil, fire
+  history.
+- Written as a biome-weight map (RGBA8 at 4 m) beside D-028's layer map. A species' density is its
+  viability × competition, so no vegetation is blended.
+
+**Weather** (`forge-world::weather`), a pure function of the atlas, the planet's seed and world
+time:
+- Synoptic noise travelling with each latitude band's wind, thresholded to the atlas's wet-day
+  probability and totals.
+- Convective cells with a diurnal peak; lightning as a seeded Poisson process.
+- Accepted only if thirty synthetic years per cell reproduce the atlas's statistics (Richardson
+  1981).
+- Authored weather is an event (centre, radius, start, duration, profile) blended on top.
+
+**Surface state:** wetness, puddle depth, snow depth and frost in a clipmap around each camera.
+- 3 × 512² at 0.5/2/8 m, ≈ 6 MB, updated a few times a second: a soil bucket (Manabe) and
+  degree-day snow (Hock), with exposure from one depth-from-above map shared with rain occlusion
+  and splashes.
+- Texels scrolling in, and the server's gameplay queries, integrate the last 72 game-hours of the
+  function at the point.
+- D-007's wet/frozen/snow overrides read these values.
+
+**Rendering** reads a camera-centred weather map (256² at 250 m, 64 km): Nubis-style clouds,
+precipitation particles shaded from a streak array, rain as extinction in the froxel volume
+(D-032), wet and snowy surfaces, lightning, weather fog.
+
+**Replication:** nothing continuous. Only the seed, the clock and weather events (D-010, D-016).
+
+*Not chosen:*
+- a stateful, server-authoritative global weather simulation: field replication and authority
+  for no visible gain at planet scale;
+- a climate model in the engine;
+- physically simulated storms: Stormscapes-class models are interactive over tens of kilometres
+  only (a regional "hero storm" later);
+- neural forecasting;
+- per-plant and per-animal simulation beyond the player's region;
+- one biome per planet (No Man's Sky).
+
+**Decisions needed:**
+1. Weather as a pure function of seed and time with events on top (recommended), or a simulated
+   field.
+2. The global atlas at level 7 (≈ 78 km, recommended).
+3. ExoPlaSim as an offline validation tool in the pipeline (GPL, separate process).
+
+**Phases:**
+- climate bake and biomes: Phase 2 (`island`);
+- weather and surface state: Phase 3 (`materials-yard`);
+- weather rendering: Phase 4 (`dusk-town`'s storm front);
+- audio: Phase 6;
+- ecosystems and seasons: Phase 8 (`four-km-forest`, across an altitude ecotone).
+
+*(research: planet-environment.md; extends D-019; D-007, D-014, D-016, D-028, D-032; issue #11)*

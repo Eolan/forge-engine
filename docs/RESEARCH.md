@@ -16,7 +16,7 @@ the system you are about to touch.
 | [research/task-system.md](research/task-system.md) | job system, frame pipelining, ECS scheduling | 45 | done, implemented (`forge-task`) |
 | [research/gpu-geometry.md](research/gpu-geometry.md) | mesh shaders, culling, virtual geometry, Vulkan features, Slang | 46 | done, phase 0 implemented (`forge-render`) |
 | [research/large-worlds.md](research/large-worlds.md) | coordinates, partitioning, streaming, LOD, impostors, terrain | 49 | done |
-| [research/lighting-gi.md](research/lighting-gi.md) | GI tiers, path tracing, shadows, sky, upscaling | 45 | done (weather rendering still to add) |
+| [research/lighting-gi.md](research/lighting-gi.md) | GI tiers, path tracing, shadows, sky, upscaling | 45 | done (weather rendering: planet-environment.md §4) |
 | [research/physics-fluids.md](research/physics-fluids.md) | rigid bodies, engines compared, characters, destruction, water | 45 | done |
 | [research/netcode.md](research/netcode.md) | transport, replication, prediction, server topology | 48 | done |
 | [research/audio.md](research/audio.md) | mixer, spatialisation, propagation, synthesis, middleware | 46 | done |
@@ -24,6 +24,7 @@ the system you are about to touch.
 | [research/animation.md](research/animation.md) | clips, motion matching, IK, physical characters, generated creatures | 42 | done |
 | [research/memory-streaming.md](research/memory-streaming.md) | allocators, Resizable BAR, SSD streaming, residency | 40 | done |
 | [research/procedural.md](research/procedural.md) | terrain, grammars, noise, ecosystems, settlements, DOD (from the previous projects) | ~90 | done, carried over |
+| [research/planet-environment.md](research/planet-environment.md) | climate bake, biomes and ecotones, ecosystems, weather rendering, the environment state model | 51 | done |
 
 ## Verdicts
 
@@ -130,11 +131,24 @@ erosion, hydrology) not noise; grammars propose and constraints dispose (model s
 before WFC); stateless hash-of-position instead of RNG streams; Dendry for locally
 evaluable global structure; villages from interest maps; Infinigen as the corpus.
 
+**Planetary environment.** A game climate is twelve months of a few fields and a lookup, with
+Köppen to validate and BIOME1-style plant tolerances to pick biomes. Every generator that looks
+right derives the fields from latitude, altitude and wind-carried moisture with rain shadows
+(mapgen4, Dwarf Fortress, AutoBiomes, Houdini 20.5's biome tools), not from noise. The physics is
+cheap enough to bake: insolation by obliquity, a Budyko–North energy balance, and Smith–Barstad
+orographic rain per terrain tile, with ExoPlaSim run offline as the oracle. Ecotones are soft
+where only the climate changes, and sharp where a feedback switches the ground (fire, water,
+shade), so biome weights are a scattered-kernel blend in climate space sharpened by local rules.
+Weather rendering is settled 2004–2013 technique: Garg–Nayar streaks, Lagarde's wet surfaces,
+depth-from-above occlusion for rain and snow, Nubis weather maps. Simulated weather
+(Stormscapes → Cyclogenesis) is interactive only over tens of kilometres. D-019's struct becomes a
+sample of three layers (proposed as D-034):
+- a baked climate atlas (≈ 78 km, 19 MB);
+- weather as a pure function of atlas, seed and time, so only the clock and events are
+  replicated;
+- wetness, puddles and snow integrated in a clipmap around cameras.
+
 ## Still to research
 
-- Planetary environment (`research/planet-environment.md`, queued 2026-09-24 with D-019): climate
-  and biome models for Earth-like planets, biome and weather transitions, ecosystems (flora,
-  fauna, succession), and weather rendering (rain, snow, wet surfaces, lightning, fog) as one
-  file, since the owner wants to simulate whole planets with biomes and their transitions.
 - Tools and editor: hot reload, the data model ("The Truth"), creation graphs — the
   previous bibliography's §6 covers the sources; a Forge-specific file comes with the editor.
