@@ -621,6 +621,35 @@ are what merges.
 The views at full detail, `--side 700` and the city keep the full-screen triangle in both
 passes, and their numbers are unchanged within noise.
 
+**Rectangles for pass 1 too?** Not at the counts where the break-even lies. With one
+software cluster allowed per 128, 64 or 32 pixels, the bench at `--lod-error 0.5` forced on
+(7 k software clusters) merges rectangles in pass 1 too, and its merge zone goes 0.014 →
+0.021 ms. Its dense clusters' rectangles add up to more than the screen. The threshold stays
+at 256.
+
+**The break-even today** (the bench, GPU ms per frame, forced on against forced off, two runs
+each):
+
+| `--lod-error` | dense triangles (static) | static | orbit |
+|---|---|---|---|
+| 0.5 | 0.53 M | +0.015 | +0.021 |
+| 0.4 | 1.37 M | −0.005 | +0.011 |
+| 0.35 | 2.08 M | −0.03 to −0.05 | +0.010 |
+| 0.3 | 3.10 M | −0.055 | −0.005 |
+| 0.25 | 4.60 M | −0.11 | −0.010 |
+
+It lies near 1.2 M dense triangles, between auto's 1.5 M (on) and 0.75 M (off), so the
+thresholds stay. At 0.5 the software rasteriser saves 0.008 ms of hardware drawing and
+spends 0.010 in its raster, 0.005 in pass 2's and 0.012 in the merges. The ideas left in #32
+(several clusters per workgroup, skipping the hardware-pixel check, a scanline loop for the
+larger triangles) cut into the raster's part: at most about 0.01 ms, and only between 0.75 M
+and 1.5 M dense triangles.
+
+**Forced on against forced off** (pixels apart, and beyond one level, no TAA): bench static
+0 / 0, orbit 0 / 0, orbit `--lod-error 0.25` 6 / 5, orbit `--no-lod` 20 / 9, ballad frame 240
+90 / 11 (since #65 its dense clusters are rasterised in software), ballad `--no-lod` 280 / 48.
+These are the silhouette pixels of #3, more of them in the denser belt.
+
 ## Next steps (from the research recommendation)
 
 1. ✅ (issue #5, 2026-09-24) Culling in compute, shared by the mesh-shader path and the
