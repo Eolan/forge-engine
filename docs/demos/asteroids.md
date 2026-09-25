@@ -290,9 +290,15 @@ ballad:
 - **Loading frames don't count.** Frame numbers, `--frames`, captures, the profile and the
   memory counters all start with the demo, so every capture is unchanged.
 - **They last at least 8 ms,** since the build needs the cores more than the dots need frames.
-- **Not covered yet:** on a cold shader cache (after a shader change), compilation happens in
-  the finishing step, about 10 s with the window frozen as before. The city still starts
-  through `run`.
+- **Shaders compile ahead.** After a shader change, the cache misses every entry, and the
+  finishing step used to compile them all: about 10 s, with the window frozen. The compiler
+  now records the entries a program asks for, and the shell lists them in
+  `shader-cache/<program>.entries` at the end of loading. At the next start, the loading
+  screen compiles that list into the cache on four threads, alongside the mesh build. After a
+  shader change, the ballad is ready in 3.9 s (33 entries compiled ahead) instead of 12 s
+  frozen.
+- **Not covered yet:** the overlay and loading shaders themselves compile before the loading
+  screen can show (four entries). The city still starts through `run`.
 
 **Checks:**
 - Every capture is identical to the previous build: both demos, both paths, the culling

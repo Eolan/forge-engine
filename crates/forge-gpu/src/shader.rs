@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 use ash::vk;
 use xxhash_rust::xxh3::Xxh3;
@@ -36,6 +37,18 @@ impl ShaderStage {
         }
     }
 
+    fn from_slang_name(name: &str) -> Option<Self> {
+        [
+            Self::Task,
+            Self::Mesh,
+            Self::Vertex,
+            Self::Fragment,
+            Self::Compute,
+        ]
+        .into_iter()
+        .find(|stage| stage.slang_name() == name)
+    }
+
     /// The Vulkan stage flag.
     pub fn vk(self) -> vk::ShaderStageFlags {
         match self {
@@ -48,6 +61,40 @@ impl ShaderStage {
     }
 }
 
+/// An entry list as text: one `file entry stage` line each.
+fn format_entries(entries: &[ShaderEntry]) -> String {
+    entries
+        .iter()
+        .map(|e| format!("{} {} {}\n", e.file, e.entry, e.stage.slang_name()))
+        .collect()
+}
+
+/// An entry list's text read back, skipping the lines it cannot read.
+fn parse_entries(text: &str) -> Vec<ShaderEntry> {
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let (file, entry, stage) = (words.next()?, words.next()?, words.next()?);
+            Some(ShaderEntry {
+                file: file.to_owned(),
+                entry: entry.to_owned(),
+                stage: ShaderStage::from_slang_name(stage)?,
+            })
+        })
+        .collect()
+}
+
+/// One entry point a program compiles: what [`ShaderCompiler::warm`] compiles ahead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShaderEntry {
+    /// The file, relative to the shader directory.
+    pub file: String,
+    /// The entry point.
+    pub entry: String,
+    /// Its stage.
+    pub stage: ShaderStage,
+}
+
 /// Compiles Slang to SPIR-V with `slangc`, caching by content hash.
 pub struct ShaderCompiler {
     slangc: PathBuf,
@@ -55,6 +102,22 @@ pub struct ShaderCompiler {
     cache_dir: PathBuf,
     optimize: bool,
     version: String,
+    /// Every entry asked for so far, in order (issue #25).
+    requested: Mutex<Vec<ShaderEntry>>,
+}
+
+/// A copy for another thread, with an empty request list.
+impl Clone for ShaderCompiler {
+    fn clone(&self) -> Self {
+        Self {
+            slangc: self.slangc.clone(),
+            shader_dir: self.shader_dir.clone(),
+            cache_dir: self.cache_dir.clone(),
+            optimize: self.optimize,
+            version: self.version.clone(),
+            requested: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl ShaderCompiler {
@@ -103,7 +166,73 @@ impl ShaderCompiler {
             cache_dir,
             optimize,
             version,
+            requested: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The cache directory (the compiled SPIR-V, and the entry lists of [`Self::save_entries`]).
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    /// Every entry asked of [`Self::compile`] so far, in order, without repeats.
+    pub fn requested(&self) -> Vec<ShaderEntry> {
+        self.requested
+            .lock()
+            .map(|list| list.clone())
+            .unwrap_or_default()
+    }
+
+    /// Writes the entries asked for so far to `path`, one `file entry stage` line each: the
+    /// list [`Self::warm`] compiles ahead at the next start (issue #25).
+    pub fn save_entries(&self, path: &Path) -> Result<()> {
+        fs::write(path, format_entries(&self.requested()))?;
+        Ok(())
+    }
+
+    /// The entries [`Self::save_entries`] wrote to `path` (none if it is missing or unreadable).
+    pub fn load_entries(path: &Path) -> Vec<ShaderEntry> {
+        parse_entries(&fs::read_to_string(path).unwrap_or_default())
+    }
+
+    /// Compiles `entries` into the cache on `threads` threads, so that the program's own
+    /// requests find them there: after a shader change, a loading screen compiles them while
+    /// it shows (issue #25). Returns how many were compiled, not found in the cache.
+    pub fn warm(&self, entries: &[ShaderEntry], threads: usize) -> Result<usize> {
+        let hash = self.source_hash()?;
+        let missing: Vec<&ShaderEntry> = entries
+            .iter()
+            .filter(|e| !self.cached_path(&e.file, &e.entry, hash).exists())
+            .collect();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads.max(1))
+                .map(|_| {
+                    scope.spawn(|| -> Result<()> {
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(e) = missing.get(i) else {
+                                return Ok(());
+                            };
+                            self.compile(&e.file, &e.entry, e.stage)?;
+                        }
+                    })
+                })
+                .collect();
+            workers.into_iter().try_for_each(|w| {
+                w.join().unwrap_or_else(|_| {
+                    Err(GpuError::Shader("a shader warm-up thread panicked".into()))
+                })
+            })
+        })?;
+        Ok(missing.len())
+    }
+
+    fn cached_path(&self, file: &str, entry: &str, hash: u64) -> PathBuf {
+        self.cache_dir.join(format!(
+            "{}@{entry}@{hash:016x}.spv",
+            file.trim_end_matches(".slang")
+        ))
     }
 
     fn source_hash(&self) -> Result<u64> {
@@ -130,11 +259,18 @@ impl ShaderCompiler {
 
     /// Compiles `entry` of `file` (relative to the shader directory) into SPIR-V words.
     pub fn compile(&self, file: &str, entry: &str, stage: ShaderStage) -> Result<Vec<u32>> {
+        let request = ShaderEntry {
+            file: file.to_owned(),
+            entry: entry.to_owned(),
+            stage,
+        };
+        if let Ok(mut list) = self.requested.lock()
+            && !list.contains(&request)
+        {
+            list.push(request);
+        }
         let hash = self.source_hash()?;
-        let cached = self.cache_dir.join(format!(
-            "{}@{entry}@{hash:016x}.spv",
-            file.trim_end_matches(".slang")
-        ));
+        let cached = self.cached_path(file, entry, hash);
         if let Ok(bytes) = fs::read(&cached)
             && bytes.len() % 4 == 0
             && !bytes.is_empty()
@@ -198,5 +334,31 @@ impl Device {
     pub fn destroy_shader_module(&self, module: vk::ShaderModule) {
         // SAFETY: modules may be destroyed as soon as the pipelines using them are created.
         unsafe { self.raw().destroy_shader_module(module, None) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_lists_read_back_and_skip_what_they_cannot_read() {
+        let entries = vec![
+            ShaderEntry {
+                file: "meshlet.slang".into(),
+                entry: "mesh_main".into(),
+                stage: ShaderStage::Mesh,
+            },
+            ShaderEntry {
+                file: "sky.slang".into(),
+                entry: "irradiance_main".into(),
+                stage: ShaderStage::Compute,
+            },
+        ];
+        let text = format_entries(&entries);
+        assert_eq!(parse_entries(&text), entries);
+        // A line with an unknown stage or missing words is skipped; the rest are kept.
+        let text = format!("{text}bad.slang main geometry\nhalf.slang\n");
+        assert_eq!(parse_entries(&text), entries);
     }
 }

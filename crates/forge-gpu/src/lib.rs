@@ -53,6 +53,6 @@ pub use memory_report::{BUDGET_WARNING, HeapReport, MemoryCategory, MemoryReport
 pub use pipeline::{
     ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline, VertexPipelineDesc,
 };
-pub use shader::{ShaderCompiler, ShaderStage};
+pub use shader::{ShaderCompiler, ShaderEntry, ShaderStage};
 pub use swapchain::Swapchain;
 pub use timers::{GpuTimerSlot, GpuTimers, GpuZone, MAX_MARKS_PER_FRAME};

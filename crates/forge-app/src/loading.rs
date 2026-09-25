@@ -5,11 +5,12 @@
 //! returns finishes the demo on the main thread (the uploads), and the demo takes over from
 //! frame 0 with a fresh profile, as if it had been built before the first frame.
 
+use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use forge_gpu::{FullscreenPipelineDesc, ImageAccess, Pipeline, ShaderStage, vk};
+use forge_gpu::{FullscreenPipelineDesc, ImageAccess, Pipeline, ShaderCompiler, ShaderStage, vk};
 use winit::keyboard::KeyCode;
 
 use crate::{Context, Demo, FrameInfo, Input, Profile};
@@ -22,16 +23,29 @@ pub type Finish<D> = Box<dyn FnOnce(&mut Context) -> Result<D> + Send>;
 /// animation needs a high frame rate.
 const LOADING_FRAME: Duration = Duration::from_millis(8);
 
+/// Threads compiling shaders ahead: `slangc` is a process per entry point.
+const SHADER_THREADS: usize = 4;
+
 /// The loading screen, then the demo.
 pub(crate) enum Stage<D> {
     Loading {
         pipeline: Pipeline,
         started: Instant,
         thread: Option<JoinHandle<Result<Finish<D>>>>,
+        /// Compiles the shaders the previous run asked for into the cache, while the loading
+        /// screen shows: after a shader change, the finishing step finds them there.
+        warm_up: Option<JoinHandle<forge_gpu::Result<usize>>>,
+        /// Where the program's shader entries are listed for the next start.
+        entries: PathBuf,
     },
     Running(D),
     /// The preparation or the finishing step failed: the next frame returns the error.
     Failed(Option<anyhow::Error>),
+}
+
+/// Whether a thread is done (or was never started).
+fn finished<T>(handle: &Option<JoinHandle<T>>) -> bool {
+    handle.as_ref().is_none_or(JoinHandle::is_finished)
 }
 
 impl<D: Demo> Stage<D> {
@@ -68,26 +82,50 @@ impl<D: Demo> Stage<D> {
         let thread = std::thread::Builder::new()
             .name("loading".to_owned())
             .spawn(prepare)?;
+        let program = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "program".to_owned());
+        let entries = ctx.shaders.cache_dir().join(format!("{program}.entries"));
+        let listed = ShaderCompiler::load_entries(&entries);
+        let compiler = ctx.shaders.clone();
+        let warm_up = std::thread::Builder::new()
+            .name("shader warm-up".to_owned())
+            .spawn(move || compiler.warm(&listed, SHADER_THREADS))?;
         ctx.loading = true;
         Ok(Self::Loading {
             pipeline,
             started: Instant::now(),
             thread: Some(thread),
+            warm_up: Some(warm_up),
+            entries,
         })
     }
 
     /// Once the preparation is done: finishes the demo and hands it the frames.
     fn poll(&mut self, ctx: &mut Context) {
         let Self::Loading {
-            started, thread, ..
+            started,
+            thread,
+            warm_up,
+            entries,
+            ..
         } = self
         else {
             return;
         };
-        if !thread.as_ref().is_some_and(JoinHandle::is_finished) {
+        if !finished(thread) || !finished(warm_up) {
             std::thread::sleep(LOADING_FRAME);
             return;
         }
+        match warm_up.take().map(JoinHandle::join) {
+            Some(Ok(Ok(compiled))) if compiled > 0 => {
+                tracing::info!(compiled, "shaders compiled ahead behind the loading screen");
+            }
+            Some(Ok(Err(error))) => tracing::warn!(%error, "shader warm-up"),
+            _ => {}
+        }
+        let entries = entries.clone();
         let prepared = thread.take().map(JoinHandle::join);
         let prepared_ms = started.elapsed().as_millis();
         let result = match prepared {
@@ -101,6 +139,9 @@ impl<D: Demo> Stage<D> {
         ctx.profile = Profile::new(ctx.profile.mode);
         *self = match result {
             Ok(demo) => {
+                if let Err(error) = ctx.shaders.save_entries(&entries) {
+                    tracing::warn!(%error, "cannot list the shader entries for the next start");
+                }
                 tracing::info!(
                     prepared_ms,
                     total_ms = started.elapsed().as_millis(),
