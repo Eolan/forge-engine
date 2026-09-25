@@ -27,6 +27,8 @@ crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedur
 crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indirect-count fallback, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
                       physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
+crates/forge-world    world frames (phase 2): f64 reference frames in an integer sector grid, positions in cells for the GPU (#93),
+                      the flat grid and the cube sphere cut into u64-named cells, cell streaming plans with hysteresis
 shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, aces2, tonemap, display, overlay, mipcheck, tonecheck)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable

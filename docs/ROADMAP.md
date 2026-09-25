@@ -243,7 +243,11 @@ origin (the tooling and the predicted numbers ✅ 2026-09-25; the record built o
 branch 2026-09-26, to verify), then D-004's amendment decided.
 
 1. `forge-world`: reference frames (`f64`), integer sector grid, cube-sphere and flat-grid
-   partitions, cell streaming with HLOD proxies, `u64` cell ids.
+   partitions, cell streaming with HLOD proxies, `u64` cell ids. Started 2026-09-26 on the
+   cloud branch (D-037 🟡): the frame tree with sectors of 2⁴⁰ m, the cells record the GPU
+   takes (#93), both partitions with `u64` cell ids, and the streaming plan with hysteresis,
+   all unit-tested; the HLOD proxies' content and the persistence of cells come with the
+   terrain.
 2. Terrain: lift genesis (uplift, stream-power erosion, hydrology, priority flood) and the
    cube-sphere CDLOD from the previous projects; volumetric near field (dual contouring /
    Transvoxel) for overhangs and caves; SDF bricks for edits.

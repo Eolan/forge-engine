@@ -710,6 +710,7 @@ dependencies = [
  "forge-core",
  "forge-geom",
  "forge-gpu",
+ "forge-world",
  "glam",
  "tracing",
 ]
@@ -726,6 +727,14 @@ dependencies = [
  "parking_lot",
  "tracing",
  "tracy-client",
+]
+
+[[package]]
+name = "forge-world"
+version = "0.1.0"
+dependencies = [
+ "forge-core",
+ "glam",
 ]
 
 [[package]]

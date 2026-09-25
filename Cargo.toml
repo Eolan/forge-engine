@@ -18,6 +18,7 @@ forge-gpu = { path = "crates/forge-gpu" }
 forge-geom = { path = "crates/forge-geom" }
 forge-app = { path = "crates/forge-app" }
 forge-render = { path = "crates/forge-render" }
+forge-world = { path = "crates/forge-world" }
 
 # Graphics & windowing
 ash = "0.38"

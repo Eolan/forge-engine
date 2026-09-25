@@ -47,7 +47,7 @@ Where Forge uses them:
 - `crossbeam-channel`: forge-task
 - `crossbeam-deque`: forge-task
 - `crossbeam-utils`: forge-task
-- `glam`: asteroids, city-blocks, forge-app, forge-core, forge-geom, forge-render, meshlets
+- `glam`: asteroids, city-blocks, forge-app, forge-core, forge-geom, forge-render, forge-world, meshlets
 - `gpu-allocator`: forge-gpu
 - `image`: contact-sheet, forge-app, imgdiff
 - `libloading`: forge-gpu

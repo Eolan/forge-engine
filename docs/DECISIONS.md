@@ -1283,3 +1283,35 @@ positive numbers only (`wrap_cells`).
 - the froxel fog lit by the probes.
 
 *(research: lighting-gi.md, Majercik et al. and the implementation notes on the probes; D-008, D-029, D-030; issue #53; demo: city-blocks)*
+
+## D-037 — World partition: sectors of 2⁴⁰ m, cells of 1 km, `u64` cell ids, a clipmap of cells 🟡 (proposed 2026-09-26)
+
+`forge-world` (the cloud branch, `docs/HANDOVER.md`) fixes four numbers that D-004 left open;
+each is a constant or a layout, changed in one place if the owner prefers another.
+
+- **Sectors of 2⁴⁰ m (1.1 × 10¹² m, 7.35 AU), `i64` per axis.** A position inside a sector's
+  frame is at most 2⁴⁰ m from its corner, so an `f64` resolves it to 0.24 mm; a star system's
+  frame under a sector reaches 10¹³ m (2 mm) as the research asked; the product of a sector
+  difference with the size is exact, and `i64` sectors span 2¹⁰³ m. *Not chosen:* a light-year
+  (not a power of two: the difference would round) and 2⁵⁰ m (0.125 m at a sector's far corner).
+- **Cells of 1 km (2¹⁰ m) for the GPU record** (#93): the offset inside a cell is exact to
+  0.12 mm, the record before #93's precision at the origin; the cell difference times the size
+  is exact to 2²⁴ cells. *Not chosen:* 64 km (7.8 mm, the old record's precision at 100 km).
+- **Cell ids** (`CellId`, 64 bits): kind (2), level (5), face (3), x (27), y (27). On the cube
+  sphere 27 levels reach 1.7 cm cells on a 1 500 km planet; on the flat grid ±67 million cells.
+  A parent's id and its children's are arithmetic on the bits, as S2's. *Not chosen:* S2's
+  Hilbert-curve ids (locality on disk is the page pool's business, not the id's).
+- **The streaming plan is a clipmap of cells**, every level from the finest to the coarsest
+  loaded within `rings` cells of that level around the viewer (2.5: about twenty cells a level),
+  the finest resident cell drawn over a point, so a coarse proxy stands in until the fine cells
+  arrive; a loaded cell unloads once its centre lies beyond `(reach + half a diagonal) × (1 +
+  hysteresis)` (0.25). The cells within reach are found by sampling the disc at half a cell's
+  spacing, which crosses the cube sphere's face borders without a neighbour table. *Not chosen:*
+  annuli per level (a hole appears where the fine level's disc and the coarse annulus disagree
+  on a border cell).
+
+The frame tree walks a position up to the lowest ancestor two frames share (a ship placed on
+its planet never meets its star's 10¹¹ m: Dungeon Siege's space walk) and across sectors by
+the integer difference. Everything is deterministic: integers, `f64`, and `forge_core::dmath`
+for the cube sphere's `atan` and `tan` (D-016).
+*(research: large-worlds.md §1, §5, §8; D-004 and its amendment; issue #93)*

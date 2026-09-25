@@ -15,5 +15,6 @@ bytemuck = { workspace = true }
 forge-core = { workspace = true }
 forge-geom = { workspace = true }
 forge-gpu = { workspace = true }
+forge-world = { workspace = true }
 glam = { workspace = true }
 tracing = { workspace = true }
