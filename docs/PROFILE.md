@@ -77,6 +77,10 @@ exposure (EV100, target, compensation, curve) the last.
     1500 frames each).
 - Hex-tiling the rock's texture (#66): nine samples per texture instead of three.
   `shading/standard` 0.133 → 0.171 ms, and 1.29 → 1.33 ms in all at 1600 × 900.
+- Pass 2 rasterises its dense clusters in software too (#30), so occlusion changes no pixel.
+  `meshlet pass 2` 0.014 → 0.007 ms, `software raster 2` 0.008 and the second merge 0.009.
+  In all: 1.356 ms before and after at 1600 × 900, 2.750 → 2.783 ms at 1440p (the second
+  merge), and 5.98 → 5.64 ms at full detail.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

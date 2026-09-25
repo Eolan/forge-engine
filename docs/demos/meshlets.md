@@ -189,8 +189,7 @@ the two runs had different holes at start-up. Reserved, both are 0.
 | the same without occlusion: fallback against mesh path | 0 | 0 |
 
 With a fixed exposure (`--ev100 14.5`) the ballad's four full-detail images split 3 pixels
-(±1) apart: the mesh path's single pass against the other three, which agree. Exact depth
-ties again, or the two stages transforming a vertex 1 ulp apart; issue #30.
+apart. Issue #30 found two causes, below ("Occlusion changes no pixel at full detail").
 
 **Numbers** (GPU per frame over whole runs; listed clusters as means of the logged title
 windows; the ballad measured 0.330–0.335 ms with this build and 0.331–0.334 with the
@@ -208,7 +207,7 @@ previous commit in the same session, 0.326 earlier in the day):
 
 Dense clusters, the ones with fewer than 2 pixels of their bounding sphere's screen rectangle
 per triangle (`--sw-raster-area`), under 64 pixels across and in front of the near plane,
-can be rasterised in compute instead of by the hardware (Nanite's split). In the first pass
+can be rasterised in compute instead of by the hardware (Nanite's split). In each pass
 the cluster cull appends them to a second raster list, in the same fixed order as
 everything else. A workgroup per cluster transforms its vertices with the mesh shader's
 arithmetic, then does the fixed-function steps itself: perspective division, the viewport
@@ -222,7 +221,8 @@ it draws in id order. To make that true across both passes, pass 2 now fills the
 pass 1 instead of from the back; every golden capture is unchanged. A full-screen merge,
 drawn indirectly with zero vertices when nothing went to software, writes the samples into
 the visibility buffer and the depth and clears them. The depth pyramid, the resolve, the sky
-and TAA see one image. Pass 2, the few newly visible clusters, stays in hardware.
+and TAA see one image. Pass 2 stayed in hardware until issue #30; it now rasterises its dense
+clusters the same way, so a cluster is drawn alike whichever pass draws it.
 
 **When it runs.** The cull counts the triangles of the dense clusters every frame, running
 or not, and `--sw-raster auto` (the default; **R** cycles auto → on → off, **H** tints its
@@ -272,7 +272,9 @@ the pixels). Auto keeps the ballad in hardware.
 - A tiled 64-bit layout (a 2×2 quad per 32-byte sector) measured the same.
 - Merging only the 16-pixel tiles the software rasteriser touched cost more in marking than
   it saved where it runs (full detail 1.07 → 1.16 ms).
-- A second software raster in pass 2 cost more than it saved.
+- A second software raster in pass 2 cost more than it saved. Issue #30 turned it on after
+  all: it keeps occlusion from changing pixels, and since #65 the ballad has enough newly
+  visible dense clusters for it to pay.
 
 Validation and synchronization validation are silent on both paths, with DLSS too.
 
@@ -530,6 +532,65 @@ the tiles that hold ice; the ice pass shades those. The bench costs 0.197 ms ins
 default view colours the clusters (**M**). There, ice instances now keep the ice's highlight
 and rim, so 1.4 % of the pixels moved against the old captures. With the colours off, the
 ballad's captures are identical to the single resolve's (`docs/demos/asteroids.md`).
+
+## Occlusion changes no pixel at full detail (issue #30, 2026-09-25)
+
+`asteroids --fixed-step --no-lod --no-taa --ev100 14.5`, frame 240: occlusion on and off gave
+images 3 pixels apart on both paths, one of them by 19 levels. Two tools found two causes:
+- a debug `printf` at those pixels, run under the validation layer with
+  `VK_LAYER_PRINTF_ENABLE=1` and `VK_LAYER_PRINTF_TO_STDOUT=1`, printing each pixel's instance,
+  cluster, triangle and depth;
+- the per-frame image hashes (`FORGE_HASH_IMAGES`).
+
+- **Which rasteriser drew a cluster depended on the pass.** Only pass 1 rasterised dense
+  clusters in software; pass 2 drew them in hardware. With occlusion off there is a single
+  pass, so a cluster that had just become visible went to software instead. The two
+  rasterisers disagree on near ties (#3, above). At (139, 782), two triangles of one cluster
+  lie 4 ulp apart in depth, and each rasteriser keeps a different one. Pass 2 now
+  rasterises its dense clusters in software too.
+- **The other pixels, one level apart, move with timing, not with the culling.** With the
+  software rasteriser off, three scattered pixels still differed. Their triangle and depth
+  were the same in both modes in every frame. The first image that differs is the colour
+  after the starfield, which gives one of two results a rounding step apart depending on
+  timing (issue #71). Bloom spreads that difference across a rounding boundary: without bloom,
+  or without AO, the four images agree. A device wait after every frame moves these pixels
+  from one configuration to another.
+
+**Checks** (image hashes over 241 frames, occlusion on against off, each path):
+
+| | depth and AO differ in | the starfield differs in |
+|---|---|---|
+| before | 239 of 241 frames (from frame 2) | 231–235 frames |
+| after | 0 | 40–56 |
+| after, one configuration run twice | 0 | 25–48 |
+
+- The 19-level pixel is gone, and mesh and fallback agree in both modes.
+- In the capture batch, every capture without TAA is identical to the previous build at
+  tolerance 0. The ballad's TAA frame 600 moves 371 pixels by more than two levels: 3 % move
+  by one level or more, the mean is 0.03 and the maximum 14. It is the same on both paths and
+  in 6 of 6 runs. Pass 2's dense clusters now carry the software rasteriser's depth, whose
+  last bits move TAA's reprojection (#3).
+- Validation is silent.
+
+**Cost** (GPU ms per frame, old and new builds alternating, three runs each):
+
+| View | before | after |
+|---|---|---|
+| ballad, 1600 × 900 | 1.356 | 1.356 |
+| ballad, 1440p | 2.750 | 2.783 |
+| ballad `--no-lod` | 5.98 | **5.64** (pass 2: 0.505 → 0.020, plus 0.159 in software) |
+| ballad `--no-lod`, fallback | 6.52 | **5.70** |
+| bench `--no-lod` | 1.049 | 1.055 |
+| `meshlets --side 700` | 1.377 | 1.382 |
+| city-blocks, orbit | 3.006 | 2.976 |
+
+The bench at 1 px and the city's default view rasterise nothing in software and are
+unchanged. The cost is the second full-screen merge whenever pass 2 has software clusters:
+0.01 ms at 1600 × 900 and 0.03 ms at 1440p. Merging only the rectangles of pass 2's clusters
+would remove it (issue #32).
+
+**For the harness:** at full detail with bloom on, a few pixels one level apart are #71's
+effect. Rerun the capture, or compare with `--bloom 0`.
 
 ## Next steps (from the research recommendation)
 

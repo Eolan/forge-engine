@@ -1978,11 +1978,11 @@ impl MeshletRenderer {
         let scene = params.scene;
         let hzb = self.hzb[pyramid].extent();
         let work = &self.work_lists[slot.index];
-        // Only the first pass rasterises in software: pass 2 draws the few clusters that
-        // became visible, and a second raster and merge would cost more than they save.
+        // Both passes rasterise their dense clusters in software: a cluster is drawn the same
+        // way whichever pass draws it, so occlusion changes no pixel (issue #30).
         let mut flags = params.flags;
         flags.0 &= !FLAG_SW_RASTER;
-        if pass != PASS_REMAINDER && self.software_raster(params) {
+        if self.software_raster(params) {
             flags.0 |= FLAG_SW_RASTER;
         }
         flags.0 &= !FLAG_PREV_PYRAMID;
@@ -2290,6 +2290,13 @@ impl MeshletRenderer {
             self.draw_pass(
                 graph,
                 "geometry/meshlet pass 2 (newly visible)",
+                second,
+                &params,
+                slot,
+            );
+            self.software_passes(
+                graph,
+                "geometry/software raster 2 (newly visible)",
                 second,
                 &params,
                 slot,
