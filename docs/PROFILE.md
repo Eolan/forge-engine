@@ -66,6 +66,8 @@ exposure (EV100, target, compensation, curve) the last.
   measurable GPU time (0.831–0.837 ms with and without, alternating runs).
 - The ice blocks (#63): 42 meshes, the build 1.8 → 2.4 s; the GPU 0.815 → 0.80 ms, as the smoother blocks
   simplify better.
+- At 1440p (`--width 2560 --height 1440`, since tonight's last commit) the whole ballad takes
+  1.63 ms over 600 frames, against 0.80 ms at 1600 × 900: every system on, 10 000 asteroids.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

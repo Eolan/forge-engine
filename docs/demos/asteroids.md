@@ -5,7 +5,7 @@ every system that lands (see the showcase section of [ROADMAP.md](../ROADMAP.md)
 records what it shows today and the numbers it produced.
 
 Run: `cargo run --release -p asteroids`.
-Options: `--count N` asteroids (10 000; 3000 until #23), `--variants N` chunk shapes per
+Options: `--width W --height H` (1600 × 900), `--count N` asteroids (10 000; 3000 until #23), `--variants N` chunk shapes per
 size class (4; 1 until #23), `--length M` belt length (1200), `--duration S`
 seconds per lap (90), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG` (18; 0
 hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for

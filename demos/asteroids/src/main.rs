@@ -84,6 +84,12 @@ struct Args {
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
+    /// Window width in pixels (the render size, before any DLSS mode scales it).
+    #[arg(long, default_value_t = 1600)]
+    width: u32,
+    /// Window height in pixels.
+    #[arg(long, default_value_t = 900)]
+    height: u32,
     /// Number of asteroids in the field (3000 until issue #23).
     #[arg(long, default_value_t = 10000)]
     count: u32,
@@ -1264,6 +1270,8 @@ fn main() -> Result<()> {
         // to DLSS at run time.
         streamline: cfg!(feature = "dlss"),
         force_fallback: args.force_fallback,
+        width: args.width,
+        height: args.height,
         ..AppConfig::default()
     };
     // The meshes and their cluster DAGs (about 2.4 s) build behind the loading screen (issue #25);
