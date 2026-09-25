@@ -17,7 +17,7 @@ use crate::textures::TextureData;
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
 pub const TEXTURE_NONE: u32 = u32::MAX;
 
-/// Mirrors `Material` in `meshlet.slang` (80 bytes).
+/// Mirrors `Material` in `meshlet.slang` (96 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMaterial {
@@ -34,7 +34,9 @@ pub struct GpuMaterial {
     inv_texture_scale: f32,
     normal_strength: f32,
     reflectance: f32,
-    pad: [u32; 3],
+    /// Ice: light scattered per metre by its bubbles ([`bubble_scattering`]).
+    scattering: f32,
+    pad: [u32; 2],
 }
 
 const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 96);
@@ -146,6 +148,18 @@ impl Drop for TextureSet {
     }
 }
 
+/// Radius of the air bubbles in ice, metres: lake and glacier ice hold bubbles of a tenth of a
+/// millimetre to a few millimetres (issue #61).
+pub const BUBBLE_RADIUS: f32 = 0.001;
+
+/// Light scattered per metre by ice holding `bubbles` of its volume in air bubbles of
+/// [`BUBBLE_RADIUS`]: bubbles far larger than the wavelength block twice their cross-section
+/// (the extinction paradox), so the coefficient is `2 · πr² · n = 1.5 · bubbles / r`
+/// with `n = bubbles / (4/3 πr³)` bubbles per cubic metre.
+pub fn bubble_scattering(bubbles: f32) -> f32 {
+    1.5 * bubbles.max(0.0) / BUBBLE_RADIUS
+}
+
 /// The GPU rows of `table`, their textures resolved through `textures`.
 pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<GpuMaterial> {
     let texture = |id: Option<TextureId>| match (id, textures) {
@@ -171,7 +185,8 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 inv_texture_scale: 1.0 / r.texture_scale.max(1e-3),
                 normal_strength: r.normal_strength,
                 reflectance: r.reflectance,
-                pad: [0; 3],
+                scattering: bubble_scattering(r.bubbles),
+                pad: [0; 2],
             }
         })
         .collect()
@@ -234,6 +249,16 @@ pub mod stock {
         }
     }
 
+    /// [`ice`] holding `bubbles` of its volume in air (issue #61), named `name`: whiter and
+    /// less translucent as they grow, and lighter.
+    pub fn bubbly_ice(name: &str, bubbles: f32) -> Material {
+        let mut ice = ice();
+        ice.name = name.to_owned();
+        ice.render.bubbles = bubbles;
+        ice.physics.density *= 1.0 - bubbles;
+        ice
+    }
+
     /// The asteroid fields' rule since Phase 0: a fifth of the rocks are ice, by the second
     /// byte of their instance hash (`hash_color(id).y < 0.2` in the shader's terms).
     pub fn is_ice(instance_id: u32) -> bool {
@@ -274,5 +299,23 @@ mod tests {
         // Without a texture set, a named texture is none rather than a wrong index.
         assert_eq!(rows[1].albedo_texture, TEXTURE_NONE);
         assert_eq!(rows[0].normal_texture, TEXTURE_NONE);
+    }
+
+    #[test]
+    fn bubbles_scatter_the_light_and_lighten_the_ice() {
+        // A thousandth of the volume in bubbles of a millimetre: 1.5 per metre, a mean free
+        // path of 67 cm.
+        assert_eq!(bubble_scattering(0.0), 0.0);
+        assert!((bubble_scattering(1e-3) - 1.5).abs() < 1e-6);
+        let white = stock::bubbly_ice("white ice", 3e-3);
+        assert_eq!(white.name, "white ice");
+        assert_eq!(white.render.class, ShadingClass::Ice);
+        assert!((white.physics.density - 917.0 * 0.997).abs() < 1e-3);
+        let mut table = MaterialTable::new();
+        table.add(stock::ice());
+        table.add(white);
+        let rows = gpu_rows(&table, None);
+        assert_eq!(rows[1].scattering, 0.0);
+        assert!((rows[2].scattering - 4.5).abs() < 1e-5);
     }
 }

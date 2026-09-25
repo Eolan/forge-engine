@@ -57,6 +57,9 @@ struct Args {
     /// Opaque ice: no sunlight through its thickness (Y toggles it).
     #[arg(long)]
     no_translucency: bool,
+    /// One ice for every block: #59's clear ice, instead of three densities of bubbles.
+    #[arg(long)]
+    clear_ice: bool,
     /// Draw without the sunlit dust between the rocks (V toggles it).
     #[arg(long)]
     no_dust: bool,
@@ -907,6 +910,16 @@ impl Demo for Ballad {
     }
 }
 
+/// Which of the ballad's three ices an ice asteroid is made of (issue #61), by the third byte
+/// of its instance hash: 35 % clear, 40 % bubbly, 25 % white.
+fn ice_kind(id: u32) -> usize {
+    match forge_render::material::instance_hash(id)[2] {
+        0..=88 => 0,
+        89..=190 => 1,
+        _ => 2,
+    }
+}
+
 /// The field: a few distinct asteroid meshes, thousands of instances clustered along a
 /// curved belt, and a camera path weaving through it.
 fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
@@ -958,7 +971,17 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         rock.render.texture_scale = 4.0;
         materials.add(rock)
     };
-    let ice = materials.add(stock::ice());
+    // Ice of three densities (issue #61): clear blocks glow deep blue through metres of ice,
+    // bubbly ones turn white and glow only at their thin edges.
+    let ice = if args.clear_ice {
+        [materials.add(stock::ice()); 3]
+    } else {
+        [
+            materials.add(stock::bubbly_ice("clear ice", 3e-5)),
+            materials.add(stock::bubbly_ice("ice", 6e-4)),
+            materials.add(stock::bubbly_ice("white ice", 3e-3)),
+        ]
+    };
     builder.set_materials(&materials, Some(textures));
     // The field stays still until Phase 3: its structures are built once (issue #45).
     builder.set_ray_traced(!args.no_shadows);
@@ -1081,7 +1104,11 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         builder.add_instance_with_material(
             mesh_ids[mesh],
             Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
-            if stock::is_ice(id) { ice } else { rock },
+            if stock::is_ice(id) {
+                ice[ice_kind(id)]
+            } else {
+                rock
+            },
         );
         placed += 1;
     }

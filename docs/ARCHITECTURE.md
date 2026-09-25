@@ -91,7 +91,7 @@ and the date next to every number.
 
 | Crate | Status | Contents |
 |---|---|---|
-| `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle`, the material record (`material`: `Material` with render, physics and tag layers, `MaterialTable`, D-007; the render layer's reflectance since #56) |
+| `forge-core` | built | `Seed`/`SplitMix64`, `dmath` (libm-backed), `hash` (pcg3d/pcg4d/mix64), generational `Handle`, the material record (`material`: `Material` with render, physics and tag layers, `MaterialTable`, D-007; the render layer's reflectance since #56, the ice's bubbles since #61) |
 | `forge-task` | built, measured | work-stealing pool with 3 priorities, `Counter` continuations, `scope`/`join`/`par_*`, `TaskGraph`, `BlockingPool`, `Task<T>` |
 | `forge-gpu` | built | `ash` Vulkan 1.3+ device (mesh shaders, ray query, min-reduction samplers, memory budget detected), acceleration structures and ray queries (`accel`: BLAS and TLAS builds, reached by device address; D-029), `gpu-allocator` with every allocation counted by category and every host write counted as upload (`memory_report`: per-heap usage and budget from `VK_EXT_memory_budget`, issue #9), RAII `Buffer`/`Image`(with mip views)/`Pipeline`/`Surface`, swapchain, Slang compiler with cache, the global bindless set (sampled/storage images, samplers), mesh, vertex and compute pipelines, indirect dispatches and indexed indirect-count draws, `DeviceOptions` (mesh shaders left off for `--force-fallback`), `Frames` (timeline semaphore, 2 in flight, GPU timestamps, deferred deletion), safe `Commands`, and the **render graph** (`graph`: declared accesses → derived barriers, transient images aliased in one heap, per-pass profiler zones, host reads declared for readbacks, `Custom` accesses for third-party work; D-020), and `dlss` (DLSS through NVIDIA Streamline's interposer behind the `dlss` feature: modes, render sizes, tagging graph images, evaluation inside a graph pass; D-024) |
 | `forge-geom` | built | meshlet building and the cluster LOD DAG (`meshopt`; material sections through it, #41, D-027), 128 KiB cluster pages (`page`, D-025), the mesh cache (`cache`), procedural meshes (asteroid, the city's props and terrain), shared GPU layouts |
@@ -164,7 +164,7 @@ one shading code path for the mesh-shader, software and fallback rasterisers, an
 point for material classification (D-007).
 
 **Shading goes by material class** (issue #20, D-026). The D-007 record
-(`forge_core::material`) has a render layer. Its GPU form is an 80-byte row of the material
+(`forge_core::material`) has a render layer. Its GPU form is a 96-byte row of the material
 table, and every instance names its row: its mesh's by default, or its own.
 
 The resolve is three kinds of pass:

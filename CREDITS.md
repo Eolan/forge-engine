@@ -97,6 +97,14 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Translucent ice.** Colin Barré-Brisebois, Marc Bouchard, "Approximating Translucency for a
   Fast, Cheap and Convincing Subsurface Scattering Look", GDC 2011: thickness-driven
   translucency, here measured by rays.
+- **Ice density.** P. Mullen, S. G. Warren, "Theory of the Optical Properties of Lake Ice",
+  JGR 1988: bubbles scatter the light inside ice and set its look. J. H. Joseph,
+  W. J. Wiscombe, J. A. Weinman, "The Delta-Eddington Approximation for Radiative Flux
+  Transfer", J. Atmos. Sci. 1976: the forward peak kept in the straight beam. Henrik Wann
+  Jensen, Stephen R. Marschner, Marc Levoy, Pat Hanrahan, "A Practical Model for Subsurface
+  Light Transport", SIGGRAPH 2001: the diffusion approximation's effective attenuation. H. C.
+  van de Hulst, "Light Scattering by Small Particles", 1957: large spheres block twice their
+  cross-section.
 - **Volumetric dust.** Bartlomiej Wronski, "Volumetric Fog: Unified Compute Shader-Based Solution
   to Atmospheric Scattering", SIGGRAPH 2014, and Sébastien Hillaire, "Towards Unified and
   Physically-Based Volumetric Lighting in Frostbite", SIGGRAPH 2015: the froxel volume and its

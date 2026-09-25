@@ -110,7 +110,7 @@ public struct Material
     public float inv_texture_scale; // texture repeats per metre of object space
     public float normal_strength;
     public float reflectance;       // Fresnel's F0: the share reflected at normal incidence (issue #56)
-    public uint pad0;
+    public float scattering;        // ice: light scattered per metre by its bubbles (issue #61)
     public uint pad1;
     public uint pad2;
 };
@@ -1613,7 +1613,7 @@ struct Surface
 {
     float3 n;               // world-space normal, interpolated
     float3 view;            // unit, world space, from the surface towards the camera (issue #49)
-    float3 transmitted;     // the share of sunlight crossing the ice to this point, per channel (issue #59), else 0
+    float3 transmitted;     // the sunlight crossing the ice to this point and leaving towards the camera, per channel (issues #59, #61), else 0
     float3 object_normal;   // object-space normal, interpolated
     float3 object_position; // object-space position
     float3 dpdx;            // its change per pixel to the right and down
@@ -1776,6 +1776,10 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
 // How much of the light crossing the ice leaves towards the camera rather than elsewhere
 // (issue #59): the rest scatters out of the view or is absorbed on the way.
 static const float ICE_GLOW = 0.3;
+// Bubbly ice is white (issue #61): the bubbles within this depth (m) of the surface send the
+// light back out before the ice absorbs it, and the colour tends to that of snow.
+static const float ICE_WHITENING_DEPTH = 0.5;
+static const float3 ICE_WHITE = float3(0.85, 0.90, 0.95);
 
 float3 shade_ice(Frame* f, Material mat, Surface s)
 {
@@ -1785,19 +1789,15 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         // Ice: bluish, brighter on the crests than in the hollows.
         float cavity = saturate(0.5 + 0.5 * dot(normalize(s.object_position), s.n));
         albedo = lerp(mat.color_a, mat.color_b, cavity);
+        albedo = lerp(albedo, ICE_WHITE, 1.0 - exp(-mat.scattering * ICE_WHITENING_DEPTH));
     }
     float ndl;
     float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, ndl);
     if (any(s.transmitted > 0.0))
     {
-        // The sunlight that crossed the ice (issue #59), tinted by it and scattered forwards
-        // towards the camera: the sun glows through the thin edges of a backlit rock.
-        float3 sun = normalize(f[0].sun_dir);
-        float3 to_camera = normalize(f[0].camera_pos - mul(s.model, float4(s.object_position, 1.0)).xyz);
-        float g = 0.5;
-        float cos_theta = dot(-sun, to_camera);
-        float phase = (1.0 - g * g) / (4.0 * 3.14159265 * pow(max(1.0 + g * g - 2.0 * g * cos_theta, 1e-4), 1.5));
-        color += ICE_GLOW * albedo * f[0].sun_color.rgb * (s.transmitted * phase * 3.14159265);
+        // The sunlight that crossed the ice (issues #59, #61), tinted by it: the sun glows
+        // through the thin edges of a backlit rock.
+        color += ICE_GLOW * albedo * f[0].sun_color.rgb * s.transmitted;
     }
     return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
@@ -1946,15 +1946,26 @@ float4 trace_reflection(Frame* f, float4* sky, float3 origin, float3 direction)
     return float4(albedo * light + mat.emissive, 1.0);
 }
 
-// Translucent ice (issue #59): the share of sunlight that crosses the ice to reach `world`,
-// the point of instance `instance` a pixel shows. A ray from the point towards the sun meets
-// the instance's surface one or more times, within its bounding sphere; the last crossing is
-// where the light went in. The rule ignores winding, and it holds whether the ray starts just
-// inside or just outside the traced cut (which may stand off the drawn surface by its error).
-// Then a shadow ray from there: the sun must reach it. Beer–Lambert over the thickness, per
-// channel: ice absorbs red more than blue, so thick ice glows blue.
-static const float3 ICE_EXTINCTION = float3(0.16, 0.10, 0.065); // per metre
-float3 ice_transmission(Frame* f, uint instance, float3 world)
+// Translucent ice (issues #59, #61): the sunlight that crosses the ice to reach `world`, the
+// point of instance `instance` a pixel shows, and leaves it towards the camera (per unit of the
+// sun's light, the phase's π included). A ray from the point towards the sun meets the
+// instance's surface one or more times, within its bounding sphere; the last crossing is where
+// the light went in. The rule ignores winding, and it holds whether the ray starts just inside
+// or just outside the traced cut (which may stand off the drawn surface by its error). Then a
+// shadow ray from there: the sun must reach it.
+//
+// Over that path, clear ice only absorbs (Beer–Lambert, per channel: ice absorbs red more than
+// blue, so thick ice glows blue), and the light keeps the sun's direction, spread forwards by
+// the surfaces (Henyey–Greenstein, g = 0.5). Bubbles (`scattering` per metre) scatter mostly
+// forwards (g = 0.8). The delta-Eddington approximation keeps their forward peak, g² of what
+// they scatter, in the straight beam; the rest follows the diffusion approximation. It leaves
+// the far side as a Lambertian surface would (a radiance of the share × E / π, the unit here),
+// dimmed by the effective attenuation √(3 σa (σa + σs')), since scattering lengthens the path
+// through the absorbing ice, and by 1 / (1 + ¾ σs' L), the share a scattering slab lets
+// through; σs' = σs (1 − g) is the reduced scattering.
+static const float3 ICE_ABSORPTION = float3(0.16, 0.10, 0.065); // per metre
+static const float BUBBLE_ANISOTROPY = 0.8;
+float3 ice_transmission(Frame* f, uint instance, float3 world, float scattering)
 {
     float3 sun = normalize(f[0].sun_dir);
     Instance inst = f[0].instances[instance];
@@ -1984,7 +1995,20 @@ float3 ice_transmission(Frame* f, uint instance, float3 world)
     s.Proceed();
     if (s.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         return float3(0.0);
-    return exp(-ICE_EXTINCTION * last);
+    float3 to_camera = normalize(f[0].camera_pos - world);
+    float g = 0.5;
+    float cos_theta = dot(-sun, to_camera);
+    float phase = (1.0 - g * g) / (4.0 * 3.14159265 * pow(max(1.0 + g * g - 2.0 * g * cos_theta, 1e-4), 1.5));
+    float scattered = scattering * (1.0 - BUBBLE_ANISOTROPY * BUBBLE_ANISOTROPY); // out of the forward peak
+    float3 straight = exp(-(ICE_ABSORPTION + scattered) * last);
+    float3 diffuse = float3(0.0);
+    if (scattering > 0.0)
+    {
+        float reduced = scattering * (1.0 - BUBBLE_ANISOTROPY);
+        float3 effective = sqrt(3.0 * ICE_ABSORPTION * (ICE_ABSORPTION + reduced));
+        diffuse = (1.0 - exp(-scattered * last)) * exp(-effective * last) / (1.0 + 0.75 * reduced * last);
+    }
+    return straight * phase * 3.14159265 + diffuse;
 }
 
 // The tile list after the classes': tiles holding a smooth row whose mirror ray `reflections_main`
@@ -2056,7 +2080,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, sun_disc_point(pixel, f[0].noise_frame));
     s.transmitted = float3(0.0);
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
-        s.transmitted = ice_transmission(f, record.x, mul(inst.model, float4(s.object_position, 1.0)).xyz);
+        s.transmitted = ice_transmission(f, record.x, mul(inst.model, float4(s.object_position, 1.0)).xyz, mat.scattering);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)

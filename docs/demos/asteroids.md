@@ -11,7 +11,7 @@ hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
-`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--round-rocks` (Phase 0's round rocks), `--no-occlusion`, `--no-cone`,
+`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--clear-ice` (#59's one clear ice), `--round-rocks` (Phase 0's round rocks), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -265,6 +265,52 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Ice of three densities (2026-09-25, issue #61)
+
+The owner asked for ice "translucent depending on their density and on how thick they are";
+#59 did the thickness. What makes ice dense or clear is its air. Clear ice holds almost no
+bubbles. White ice holds many, and they scatter the light inside it, as they set the look of
+lake ice (Mullen and Warren 1988). A row now says how much air its ice holds
+(`RenderLayer::bubbles`), and the ballad's ice asteroids take one of three rows by their
+instance hash:
+
+| Row | Bubbles | Scattering | Share | Density |
+|---|---|---|---|---|
+| clear ice | 3 · 10⁻⁵ | 0.045 /m | 35 % | 917 kg/m³ |
+| ice | 6 · 10⁻⁴ | 0.9 /m | 40 % | 916.4 kg/m³ |
+| white ice | 3 · 10⁻³ | 4.5 /m | 25 % | 914.2 kg/m³ |
+
+- **Scattering:** bubbles of about a millimetre, far larger than the wavelength, block twice
+  their cross-section (the extinction paradox), so the coefficient is 1.5 · bubbles / r.
+- **Through the ice:** bubbles scatter mostly forwards (g = 0.8). The delta-Eddington
+  approximation keeps that forward peak, g² of what they scatter, in the straight beam, which
+  still shows the sun. The rest follows the diffusion approximation:
+  - it leaves the far side like a Lambertian surface;
+  - it is dimmed by the effective attenuation √(3σa(σa + σs')), since scattering lengthens
+    the path through the absorbing ice;
+  - it is dimmed again by 1 / (1 + ¾σs'L), the share a scattering slab lets through.
+- **The surface:** the bubbles within half a metre whiten the albedo towards snow's.
+
+Towards the sun, the clear blocks still glow deep blue through metres of ice. The white ones
+glow only at their thin edges, dimly and evenly, and their thick cores stay dark. In side
+light, the white blocks read white. `--clear-ice` keeps #59's single clear row.
+
+![Towards the sun at frame 300 (dust off), then frame 600: #59's clear ice everywhere (left) and the three densities (right)](images/asteroids-ice-density.png)
+
+**Cost:** none measurable. `shading/ice` is 0.056–0.058 ms either way, and the ballad
+0.663–0.668 ms over 600 frames.
+
+**Checks:**
+- With `--clear-ice`, the captures without TAA are identical to the previous build. With
+  TAA, rounding below 8 bits reaches the history (the mechanism of issue #20): 0.008 % of
+  pixels differ by more than two levels at frame 600.
+- With the three ices, the whiter ice moves the automatic exposure by 0.015 EV, so most pixels
+  shift by a level; 1.5–2.6 % differ by more than two, the ice itself.
+- The culling harness and mesh against fallback stay at 0; the bench (clear stock ice) and
+  the city are unchanged.
+- Synchronization validation is silent. A test covers the scattering coefficient and the
+  lighter density.
 
 ## Rock chunks (2026-09-25, issue #60)
 
@@ -707,5 +753,6 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    the camera (transmission through the body, so the sun glows through thin edges; a
    material-layer job for the lighting phase, with the fracture generator shared with the
    destruction system). **First pass done (2026-09-25):** the chunks (#60, plane cuts, one Voronoi
-   cell each) and the translucent ice (#59, D-033: the sun through its thickness, by rays). Left:
-   density per material, fracture on impact with the destruction system (#12).
+   cell each) and the translucent ice (#59, D-033: the sun through its thickness, by rays). Then the
+   ice's density (#61: bubbles scatter the light inside it; clear, bubbly and white blocks).
+   Left: fracture on impact with the destruction system (#12).

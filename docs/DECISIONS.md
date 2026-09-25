@@ -897,4 +897,12 @@ scattered inside the body from the sky and the planet, and refraction of what li
 
 *Measured* (asteroids, RTX 5070 Ti, 1600×900): `shading/ice` 0.018 → 0.065 ms, the ballad
 0.646 → 0.694 ms. With `--no-translucency` the captures are those of the previous build.
-*(research: lighting-gi.md; D-029, D-031; issue #59; demo: asteroids)*
+**Density per row** (issue #61, 2026-09-25). D-007's render layer gains `bubbles`, the share
+of the ice's volume in air bubbles of about a millimetre, which scatter 1.5 · bubbles / r per
+metre (twice their cross-section, the extinction paradox). The straight beam keeps the
+bubbles' forward peak (delta-Eddington, g = 0.8), and the rest diffuses: it leaves the far side
+like a Lambertian surface, dimmed by √(3σa(σa + σs')) and by 1 / (1 + ¾σs'L). The albedo
+whitens with the bubbles near the surface. Bubbly ice is lighter, 917 (1 − bubbles) kg/m³, so
+the physics density follows the same number. The ballad draws clear, bubbly and white blocks at no
+measurable cost.
+*(research: lighting-gi.md; D-029, D-031; issues #59, #61; demo: asteroids)*

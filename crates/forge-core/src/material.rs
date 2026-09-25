@@ -95,6 +95,12 @@ pub struct RenderLayer {
     /// grazing angles: 0.04 for most dielectrics (stone, plaster, plastic, uncoated glass),
     /// 0.2–0.4 for coated glass (issue #56).
     pub reflectance: f32,
+    /// Ice: the share of its volume held in air bubbles and cracks, which scatter the light
+    /// inside it (issue #61). 0 is clear ice, which shows the sun through metres of it in
+    /// deep blue; about 0.001 is white ice at the scale of a rock, whose surface turns white
+    /// and which lets the light through only at its thin edges. Bubbly ice is lighter too:
+    /// its density is `917 (1 − bubbles)` kg/m³.
+    pub bubbles: f32,
 }
 
 impl Default for RenderLayer {
@@ -113,6 +119,7 @@ impl Default for RenderLayer {
             texture_scale: 1.0,
             normal_strength: 1.0,
             reflectance: 0.04,
+            bubbles: 0.0,
         }
     }
 }
