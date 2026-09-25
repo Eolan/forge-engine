@@ -67,13 +67,13 @@ the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
 is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
-what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **G** tone curve (ACES → PBR Neutral →
+what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **G** tone curve (ACES → PBR Neutral →
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
 (built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
 `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-shadows`, `--no-textures` (the
-untextured Phase 0 rock), `--no-occlusion`, `--no-cone`,
+untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
 sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,

@@ -55,7 +55,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   128 KiB pages, 0.316 ms; streamed in city-blocks), rock and ice as rows of the material
   table, shaded by class ✅ (issue #20, D-026: 0.34 ms), bloom ✅ (issue #44: 0.387 ms), the
   sun's ray-traced shadows between the rocks and the textured rock ✅ (issue #46, D-029:
-  0.444 ms).
+  0.444 ms), GTAO on the fill ✅ (issue #55, D-030: 0.554 ms; soft shadows opt-in, since
+  TAA smears their wide penumbrae in motion).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.

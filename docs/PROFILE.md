@@ -52,6 +52,9 @@ exposure (EV100, target, compensation, curve) the last.
   the textures and half for the rays, and `shading/ice` 0.010 → 0.016 ms.
 - The structures are built once at start: 267 k BLAS triangles in 8 ms, the TLAS in 1 ms,
   16 MiB in all.
+- GTAO on the fill (#55, D-030) brings it to 0.554 ms: 0.085 ms of passes. `shading/standard`
+  is 0.095 ms without it, up from 0.078: the registers of the city's mirror-ray code (#50),
+  which #52 moves to a pass of its own.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

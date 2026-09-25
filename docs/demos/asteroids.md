@@ -10,7 +10,8 @@ seconds per lap (90), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle D
 hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
-shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-occlusion`, `--no-cone`,
+shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
+`--soft-shadows`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -29,7 +30,7 @@ Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
-red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **G** tone curve,
+red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **G** tone curve,
 **-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
 Quality → Balanced → Performance → Ultra Performance, with `--features dlss`), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
@@ -264,6 +265,33 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Ambient occlusion on the fill (2026-09-25, issue #55)
+
+The rocks' shaded sides are lit by the space fill alone: a wrap term and a bluish fill from
+the nebula's side. Nothing occluded it, so the craters of the textured rock read flat in the
+shade. The ballad now computes GTAO (D-030, as in the city) and scales both terms by it,
+through the multi-bounce fit. The effect radius is 2 m (`--ao-radius`); **N** / `--no-ao`
+turns it off.
+
+![Frame 600: the fill unoccluded, then occluded by GTAO: the craters and the contacts between rocks read in the shade](images/asteroids-ao.png)
+
+**Soft shadows** (#54) are opt-in here: `--soft-shadows`, **Z**. The ballad's camera never
+stops, and its penumbrae are wide, since the rocks shadow each other from tens of metres. TAA
+smears the per-pixel sampling along the motion into streaks. #54's first sampling was
+independent points per frame, and it streaked in still frames as well. The shipped one is a
+Vogel disc turned per pixel, and it cleans up still frames. Motion still smears it. The city,
+with narrow penumbrae, keeps them on.
+
+**Cost** (1600×900, 1500 frames): 0.463 → 0.554 ms. The passes take 0.085 ms: the chain 0.024,
+gtao 0.043, the denoise 0.017. `shading/standard` has grown from 0.078 ms (#46) to 0.095 ms
+without AO. That is the registers of #50's mirror-ray code in the resolve; #52 moves it out.
+
+**Checks:**
+- With `--no-ao`, the captures with and without TAA are identical to the previous build, on
+  both paths.
+- The culling harness and mesh against fallback stay at 0 pixels with AO on.
+- Synchronization validation is silent.
 
 ## Shadows between the rocks, textured rock (2026-09-25, issue #46)
 

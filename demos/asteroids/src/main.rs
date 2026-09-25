@@ -26,8 +26,8 @@ use forge_render::material::{TextureSet, stock};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
-    Display, DlssMode, DlssUpscaler, FrameStats, HDR_FORMAT, LuminanceMeter, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap, UpscaleCamera,
+    Display, DlssMode, DlssUpscaler, FrameStats, Gtao, GtaoParams, HDR_FORMAT, LuminanceMeter,
+    MeshletRenderer, MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap, UpscaleCamera,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -42,6 +42,17 @@ struct Args {
     /// The Phase 0 rock: plain colours, no texture.
     #[arg(long)]
     no_textures: bool,
+    /// Leave the fill light unoccluded: no ambient occlusion (N toggles it).
+    #[arg(long)]
+    no_ao: bool,
+    /// Soft sun shadows: the rays aim within the sun's disc (Z toggles them). Off by default: the
+    /// ballad's camera never stops and its penumbrae are wide, and TAA smears their noise along
+    /// the motion into streaks (issue #55).
+    #[arg(long)]
+    soft_shadows: bool,
+    /// How far an occluder reaches for the ambient occlusion, metres.
+    #[arg(long, default_value_t = 2.0)]
+    ao_radius: f32,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -203,6 +214,9 @@ struct Ballad {
     /// Bloom before the tone curve (issue #44), on while `bloom_on`.
     bloom: Bloom,
     bloom_on: bool,
+    /// Ambient occlusion of the fill light (issue #55), on while `ao_on`.
+    gtao: Gtao,
+    ao_on: bool,
     taa_enabled: bool,
     /// DLSS, when the device has it; used instead of the TAA resolve while `dlss_on`.
     dlss: Option<DlssUpscaler>,
@@ -332,6 +346,12 @@ impl Ballad {
         taa.bloom_strength = args.bloom;
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
+        let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
+        let ao_on = !args.no_ao;
+        // The Sun's disc softens the shadows between the rocks when asked (issues #54, #55).
+        if args.soft_shadows {
+            renderer.sun_angular_radius = forge_render::starfield::SUN_ANGULAR_RADIUS_1AU;
+        }
         let tonemap = args.tonemap;
         let mut ballad = Self {
             args,
@@ -341,6 +361,8 @@ impl Ballad {
             taa,
             bloom,
             bloom_on,
+            gtao,
+            ao_on,
             taa_enabled,
             dlss,
             dlss_on,
@@ -470,6 +492,14 @@ impl Demo for Ballad {
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
+            KeyCode::KeyN => self.ao_on = !self.ao_on,
+            KeyCode::KeyZ => {
+                self.renderer.sun_angular_radius = if self.renderer.sun_angular_radius > 0.0 {
+                    0.0
+                } else {
+                    forge_render::starfield::SUN_ANGULAR_RADIUS_1AU
+                };
+            }
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::Minus => self.exposure.compensation -= 0.5,
             KeyCode::Equal => self.exposure.compensation += 0.5,
@@ -628,6 +658,9 @@ impl Demo for Ballad {
         // first, then the sky fills the pixels they left (depth-tested), then the resolve.
         // DLSS needs the jitter whatever T says.
         self.taa.enabled = self.taa_enabled || self.dlss_on;
+        // The soft shadows' noise repeats with the jitter (issue #54).
+        self.renderer.noise_frame =
+            (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
         let taa_frame = self.taa.begin(
             &mut frame.graph,
             self.camera.projection(ctx.aspect()),
@@ -657,6 +690,19 @@ impl Demo for Ballad {
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
+        // The fill light, occluded by what the depth shows around each pixel (issue #55).
+        let occlusion = self.ao_on.then(|| {
+            self.gtao.draw(
+                &mut frame.graph,
+                targets.depth,
+                extent,
+                GtaoParams {
+                    projection: taa_frame.jittered_projection,
+                    frame: self.taa.frame_index() % u64::from(self.taa.jitter_phases),
+                    radius: self.args.ao_radius,
+                },
+            )
+        });
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
@@ -664,7 +710,10 @@ impl Demo for Ballad {
             taa_frame.color,
             extent,
             None,
-            AmbientLight::default(),
+            AmbientLight {
+                sky: None,
+                occlusion,
+            },
         );
         let planet = self
             .atmosphere

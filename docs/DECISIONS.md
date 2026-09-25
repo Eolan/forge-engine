@@ -733,10 +733,12 @@ all. Its rays take 0.027 ms at 1600×900. `--no-shadows` or **J** turns them off
 demos.
 
 
-**Soft shadows** (issue #54, 2026-09-25). The shadow ray aims at a point of the sun's disc,
-uniform over it, from the per-pixel noise of D-030 (`noise.slang`). The noise repeats with
-TAA's 8-frame jitter, so TAA averages 8 points into the penumbra: one ray per pixel, no
-denoiser. `Frame::sun_angular_radius` is 0 in the ballad (hard) and the Sun's at 1 AU in
+**Soft shadows** (issue #54, 2026-09-25). The shadow ray aims at a point of the sun's disc:
+over TAA's 8-frame jitter cycle, a pixel takes the eight points of a Vogel disc, turned by an
+angle of its own from D-030's noise (`noise.slang`, since #55; independent points per frame
+streaked in wide penumbrae). TAA averages them into the penumbra: one ray per pixel, no
+denoiser. In motion TAA still smears wide penumbrae, so the ballad keeps hard shadows by
+default. `Frame::sun_angular_radius` is 0 in the ballad (hard) and the Sun's at 1 AU in
 the city. On a static view the slow change stays at hard shadows' 0.035 %, and the cost is
 0.02 ms at 1440p. The penumbra of a thin occluder (a lamp post) fades with distance, as it
 should. Wider penumbrae (a larger sun, an area light) would need more samples than TAA's
@@ -779,6 +781,9 @@ is 0.10 %. A second denoise pass did not move either figure.
 *Measured* (city-blocks, RTX 5070 Ti): the passes cost 0.13 ms at 1600×900 (the south view
 1.683 → 1.852 ms) and 0.25 ms at 1440p (the flight 2.204 → 2.456 ms). With `--no-ao` the
 captures are those of the previous build; mesh and fallback stay at 0 pixels apart.
+
+**The ballad** (issue #55) applies it to its space fill, the wrap and the nebula's fill, with a
+2 m radius: 0.085 ms at 1600×900, 0.463 → 0.554 ms.
 *(research: lighting-gi.md §8; issue #48; demo: city-blocks)*
 
 ## D-031 — Reflections start with the sky: Fresnel-weighted, from the sky-view table ✅ (2026-09-25)

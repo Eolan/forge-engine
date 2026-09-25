@@ -1523,6 +1523,9 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
     float3 fill = float3(0.10, 0.12, 0.18) * 0.25 * (0.5 + 0.5 * n.y);
+    // Both stand for light from around the surface: the occlusion takes its share (issue #55).
+    if (ao >= 0.0)
+        return albedo * (diffuse * sun + (wrap + fill) * occlusion_bounce(ao, albedo)) + specular * sun;
     return albedo * (diffuse * sun + wrap + fill) + specular * sun;
 }
 
@@ -1802,6 +1805,20 @@ static const uint TILE_GROUPS_X = 64;
 // ones; the start also moves along the normal so grazing surfaces do not shadow themselves.
 static const float SHADOW_BIAS = 0.15;
 
+// Where on the sun's disc a pixel's shadow ray aims in frame `frame` of TAA's cycle (issue
+// #54), as `sun_shadow`'s (radius², turn): the eight points of a Vogel disc (the golden-angle
+// spiral, evenly spread in area), one a frame, turned by an angle of the pixel's own. TAA
+// averages the eight into the penumbra; the per-pixel turn dithers what eight points cannot
+// resolve, where independent points per frame left streaks in the wide penumbrae of the
+// ballad.
+static const uint SUN_DISC_POINTS = 8;
+float2 sun_disc_point(uint2 pixel, uint frame)
+{
+    float k = float(frame % SUN_DISC_POINTS);
+    float turn = spatio_temporal_noise(pixel, 0u).x;
+    return float2((k + 0.5) / float(SUN_DISC_POINTS), frac(turn + k * 0.381966011));
+}
+
 // 0 when something lies between `world` and the sun, else 1: one ray, the first hit ends it.
 // With a sun disc (`Frame::sun_angular_radius`, issue #54) the ray aims at a point of it,
 // uniform over the disc from `jitter` (two values in [0, 1): `noise.slang`'s, which repeat with
@@ -1958,7 +1975,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         s.traced = trace_reflection(f, s.sky, world + s.n * 0.05, reflect(-s.view, s.n));
     }
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
-        s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, spatio_temporal_noise(pixel, f[0].noise_frame));
+        s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, sun_disc_point(pixel, f[0].noise_frame));
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)

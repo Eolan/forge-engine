@@ -59,10 +59,11 @@ Options:
 ## Soft shadows (issue #54, 2026-09-25)
 
 The sun is a disc 0.53° across, so a shadow's edge softens with the distance to its occluder:
-about 1 cm of penumbra per metre. Each shadow ray now aims at a point of the disc, spread
-uniformly over it by the per-pixel noise of #48 (`noise.slang`). The noise repeats with TAA's
-8-frame jitter, so TAA averages eight points into the penumbra. That takes one ray per
-pixel, as before, and no denoiser.
+about 1 cm of penumbra per metre. Each shadow ray now aims at a point of the disc. A pixel
+takes the eight points of a Vogel disc (the golden-angle spiral) over TAA's 8-frame jitter
+cycle, turned by an angle of its own from #48's noise (`noise.slang`), and TAA averages them
+into the penumbra: one ray per pixel, as before, and no denoiser. The first version used
+independent noise points per frame, which left streaks in wide penumbrae (#55).
 
 The effect shows most at a low sun: a lamp post's thin shadow fades along its length, as its
 post covers less and less of the disc, and a building's long shadow blurs towards its far end.
@@ -75,7 +76,8 @@ levels):
 | | frame 300 → 301 | frame 300 → 332 (same jitter) |
 |---|---|---|
 | hard | 1.48 % | 0.035 % |
-| soft | 1.54 % | 0.035 % |
+| soft, independent points (#54) | 1.54 % | 0.035 % |
+| soft, the Vogel disc (#55, shipped) | 1.54 % | 0.036 % |
 
 **Cost:** nothing measurable at 1600×900 (1.981 → 1.977 ms, noise). At 1440p, 0.02 ms: the
 flight 2.646 → 2.670 ms, `shading/standard` 0.512 → 0.525 ms. The rays are a little less
