@@ -7,8 +7,9 @@
 #   tools/report.sh NAME [DIR...]
 #
 # NAME: the report's name, e.g. 2026-09-26-origins. DIR: capture directories written by
-# tools/captures.sh, origins.sh, validate.sh or timings.sh (default: every directory under
-# captures/ holding a summary.txt). Then: git add reports/NAME && git commit && git push.
+# tools/captures.sh, origins.sh, validate.sh or timings.sh run with FORGE_KEEP_LOGS=1 (default:
+# every directory under captures/ holding a summary.txt). Then: git add reports/NAME &&
+# git commit && git push.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 name=${1:?usage: tools/report.sh NAME [DIR...]}
@@ -20,7 +21,7 @@ if [ ${#dirs[@]} -eq 0 ]; then
     [ -f "$d/summary.txt" ] && dirs+=("${d%/}")
   done
 fi
-[ ${#dirs[@]} -gt 0 ] || { echo "no capture directory with a summary.txt under captures/" >&2; exit 1; }
+[ ${#dirs[@]} -gt 0 ] || { echo "no capture directory with a summary.txt under captures/: run the scripts with FORGE_KEEP_LOGS=1" >&2; exit 1; }
 report=reports/$name
 mkdir -p "$report"
 sheet=target/release/contact-sheet

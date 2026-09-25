@@ -223,6 +223,7 @@ What each script does and how to build a baseline from an older commit:
 | `FORGE_PARANOID_BARRIERS=1` | a full memory barrier before every dispatch, draw and blit (debugging); a comma-separated list of pass-label prefixes (`ao/,dust/`) limits it to those passes. |
 | `FORGE_FP_PRECISE=1` | compile the shaders with `-fp-mode precise`: no contraction into FMAs (debugging, issue #71). |
 | `FORGE_GRAPH_LOG=1` | log the render graph's compiled plan (batches and their queues and waits, passes, derived barriers, transient placement) whenever it changes. |
+| `FORGE_KEEP_LOGS=1` | the batch scripts (`tools/*.sh`) keep every run's log and a summary under their output directory, for `tools/report.sh` and a cloud session; off, they print as before. |
 | `FORGE_GRAPH_NO_ALIAS=1` | give every transient image its own memory instead of the aliased heap (debugging). |
 | `FORGE_STALL_MS=N` | sleep N ms after every frame (debugging; it was the workaround for the TAA run-to-run difference the render graph resolved, see `docs/demos/asteroids.md`). |
 | `FORGE_NO_TITLE=1` | never update the window title (debugging). |

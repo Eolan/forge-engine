@@ -55,12 +55,16 @@ is `f32` and `f64` with `sqrt` only.
 |---|---|---|---|---|---|---|
 | `--spacing 32` | 513² | 4.5 s | 0.03 s | 519 m | 1 837 | 63 |
 | `--spacing 16` | 1025² | 19.9 s | 0.13 s | 530 m | 3 487 | 2 774 |
-| `--spacing 4` (the target) | 4097² | 3.1 s a step (about 8 min for 150; the run's full numbers follow in the handover) | 3.1 s | | | |
+| `--spacing 4` (the target) | 4097² | 470 s | 3.13 s | 545 m | 13 706 | 155 106 |
 
-Single-threaded, in the cloud container (the owner's 9800X3D will be faster). The per-step
-cost is the flood's heap over every cell: the research's basin graph (Cordonnier–Bovy–Braun)
-replaces it with work on the depressions alone, and the stack's basins run in parallel on the
-job system; both are #97, the speed-up the 4 m run needs.
+Single-threaded, in the cloud container (the owner's 9800X3D will be faster); the 4 m run's
+stages 1–2 take 5.5 s, the hydrology 2.2 s, the previews 0.9 s, the whole run 8 minutes. The
+per-step cost is the flood's heap over every cell: the research's basin graph
+(Cordonnier–Bovy–Braun) replaces it with work on the depressions alone, and the stack's basins
+run in parallel on the job system; both are #97, the speed-up the 4 m run needs. At 4 m the
+lakes cover 3.7 % of the samples (155 k of 4 M land samples) against 1 % at 16 m: the finer
+grid holds more small depressions, which the sediment rule fills more slowly; a lake area
+limit, or the basin graph's spill rule, is part of #97 as well.
 
 ![The 16 km island at 16 m after 150 steps: the sea, hypsometric tints under a hillshade, rivers above 0.5 km² of catchment, lakes](images/island-overview-16m.png)
 

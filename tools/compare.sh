@@ -8,8 +8,9 @@
 # largest value (issue #75: how visible it is). Then the pairs within NEW that must match:
 # the A/B harness (occlusion and cone culling off against on, `--show-culled` against the plain
 # frame: no red) and the mesh path against the fallback. Exit code 1 when any image of either
-# list differs, so a script can stop on it. The same lines go to NEW/compare.txt, for a cloud
-# session to read (tools/report.sh gathers it). "0 px" on every line is the pass.
+# list differs, so a script can stop on it. "0 px" on every line is the pass. With
+# FORGE_KEEP_LOGS=1 the same lines go to NEW/compare.txt, for a cloud session to read
+# (tools/report.sh gathers it).
 #
 # Known flake (#71): the ballad's TAA frame 600 on either path (fb-ast-taa600, mesh-ast-taa600)
 # can differ by a few hundred scattered edge pixels from the same build, FLIP mean <= 0.0015;
@@ -67,12 +68,15 @@ main() {
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   if [ $status = 0 ]; then
-    echo "every line is 0 px: the pass (compare.txt in $new)"
+    echo "every line is 0 px: the pass"
   else
-    echo "some lines differ: named above (compare.txt in $new)"
+    echo "some lines differ: named above"
   fi
   return $status
 }
 
-main | tee "$new/compare.txt"
-exit "${PIPESTATUS[0]}"
+if [ "${FORGE_KEEP_LOGS:-0}" != 0 ]; then
+  main | tee "$new/compare.txt"
+  exit "${PIPESTATUS[0]}"
+fi
+main

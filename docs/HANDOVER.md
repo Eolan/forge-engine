@@ -39,17 +39,19 @@ commit 3 applied, the same script is the acceptance test of the new record (belo
 
 ### 2. Logs and reports (commit 2)
 
-What: every script keeps each run's full log under `OUT/logs/` and what it printed in
-`OUT/summary.txt`; `compare.sh` writes `NEW/compare.txt`; `tools/report.sh NAME [DIR...]`
-gathers them, the machine and the build, and one contact sheet per directory into
-`reports/NAME/` (a few MB), to commit and push so a cloud session can read the outcome.
+What: with `FORGE_KEEP_LOGS=1`, every script keeps each run's full log under `OUT/logs/` and
+what it printed in `OUT/summary.txt`, and `compare.sh` writes `NEW/compare.txt`;
+`tools/report.sh NAME [DIR...]` gathers them, the machine and the build, and one contact sheet
+per directory into `reports/NAME/` (a few MB), to commit and push so a cloud session can read
+the outcome. Without the variable (a local session, as the owner asked) the scripts print as
+before and keep nothing.
 
-Test: run the batch as usual, then `tools/report.sh 2026-09-26-batch && git add reports &&
-git commit -m "Report 2026-09-26-batch" && git push`. Expected: `reports/2026-09-26-batch/`
-with `env.txt`, one folder per capture directory holding `summary.txt`, `compare.txt`, `logs/`
-and `sheet.png`. What "nothing happened" means is now printed: `compare.sh` ends with "every
-line is 0 px: the pass" when nothing changed, `validate.sh` prints each run's duration and log
-length, `captures.sh` says "NO CAPTURE" when a demo wrote none.
+Test: nothing to test for a local session. When a cloud session needs the results,
+`FORGE_KEEP_LOGS=1 tools/captures.sh …` and so on, then `tools/report.sh 2026-09-26-batch &&
+git add reports && git commit -m "Report 2026-09-26-batch" && git push`. What "nothing
+happened" means is now printed either way: `compare.sh` ends with "every line is 0 px: the
+pass" when nothing changed, `validate.sh` prints each run's duration and log length,
+`captures.sh` says "NO CAPTURE" when a demo wrote none.
 
 ### 3. The cells record (commit 3) — the one to test with care
 

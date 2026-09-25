@@ -5,18 +5,18 @@
 #
 #   tools/captures.sh OUT [BIN]
 #
-# OUT: the directory to write (created): the captures, each run's full log in OUT/logs/ and
-# OUT/summary.txt with each capture's outcome and its run's key lines (the GPU time, the
-# placement's checksum, errors). A cloud session reads the logs and the summary, not the
-# images: tools/report.sh gathers them to commit. BIN: the directory holding the demo binaries
-# (default target/release; a baseline built in another tree, see docs/PROCESS.md). The demos
-# open on the secondary monitor and never take focus (FORGE_MONITOR). The batch takes a few
-# minutes; each capture prints a line as it lands.
+# OUT: the directory to write (created). BIN: the directory holding the demo binaries (default
+# target/release; a baseline built in another tree, see docs/PROCESS.md). The demos open on the
+# secondary monitor and never take focus (FORGE_MONITOR). The batch takes a few minutes; each
+# capture prints a line as it lands, and a demo's errors and panics. With FORGE_KEEP_LOGS=1 each
+# run's full log is kept in OUT/logs/ and its key lines in OUT/summary.txt, for a cloud session
+# to read (tools/report.sh gathers them); a local session needs neither.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/captures.sh OUT [BIN]}
 bin=${2:-$root/target/release}
-mkdir -p "$out/logs"
+keep=${FORGE_KEEP_LOGS:-0}
+mkdir -p "$out"
 summary=$out/summary.txt
 exe=""
 [ -f "$bin/asteroids.exe" ] && exe=.exe
@@ -27,29 +27,38 @@ for demo in "$meshlets" "$asteroids" "$city"; do
   [ -f "$demo" ] || { echo "missing $demo: build with cargo build --release" >&2; exit 1; }
 done
 cd "$root"
-echo "tools/captures.sh $out from $bin, $(date -u +%FT%TZ), commit $(git rev-parse --short HEAD 2>/dev/null)" | tee "$summary"
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+header="tools/captures.sh $out from $bin, $(date -u +%FT%TZ), commit $(git rev-parse --short HEAD 2>/dev/null)"
+echo "$header"
+if [ "$keep" != 0 ]; then
+  mkdir -p "$out/logs"
+  echo "$header" > "$summary"
+fi
 
 status=0
 # Lines of a run's log worth keeping in the summary.
 keys="forge_app: gpu:|ERROR|Error|panicked|selected GPU|checksum|world's origin"
-# capture NAME FRAME DEMO ARGS...: the frame FRAME of DEMO to OUT/NAME.png, its log to
-# OUT/logs/NAME.log (colour codes stripped), its key lines to the summary.
+# capture NAME FRAME DEMO ARGS...: the frame FRAME of DEMO to OUT/NAME.png; its errors printed,
+# its log kept with FORGE_KEEP_LOGS=1.
 capture() {
   local name=$1 frame=$2 demo=$3
   shift 3
-  local log=$out/logs/$name.log start=$SECONDS
+  local start=$SECONDS
   "$demo" --frames $((frame + 1)) --capture "$out/$name.png" --capture-frame "$frame" "$@" 2>&1 |
     sed 's/\x1b\[[0-9;]*m//g' > "$log"
-  if [ -f "$out/$name.png" ]; then
-    echo "$name: captured in $((SECONDS - start)) s"
-    echo "== $name: captured in $((SECONDS - start)) s ($(basename "$demo") $*)" >> "$summary"
-  else
-    echo "$name: NO CAPTURE after $((SECONDS - start)) s, see $log"
-    echo "== $name: NO CAPTURE ($(basename "$demo") $*)" >> "$summary"
+  local verdict="captured in $((SECONDS - start)) s"
+  if [ ! -f "$out/$name.png" ]; then
+    verdict="NO CAPTURE after $((SECONDS - start)) s"
     status=1
   fi
-  grep -E "$keys" "$log" | grep -v "GOG" | cut -c1-300 >> "$summary"
+  echo "$name: $verdict"
   grep -E "ERROR|panicked" "$log" | head -n 5
+  if [ "$keep" != 0 ]; then
+    cp "$log" "$out/logs/$name.log"
+    echo "== $name: $verdict ($(basename "$demo") $*)" >> "$summary"
+    grep -E "$keys" "$log" | grep -v "GOG" | cut -c1-300 >> "$summary"
+  fi
 }
 
 for path in mesh fb; do
@@ -73,5 +82,7 @@ for path in mesh fb; do
   capture "$path-cityorbit120" 120 "$city" --stream-pool 0 --orbit "${flag[@]}"
   capture "$path-gallery60" 60 "$city" --gallery "${flag[@]}"
 done
-echo "captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images; logs in $out/logs, summary in $summary" | tee -a "$summary"
+closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"
+[ "$keep" != 0 ] && closing="$closing; logs in $out/logs, summary in $summary" && echo "$closing" >> "$summary"
+echo "$closing"
 exit $status
