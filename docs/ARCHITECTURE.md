@@ -104,7 +104,7 @@ and the date next to every number.
 | `forge-sim` | planned | `bevy_ecs` storage with the Forge executor, gameplay systems, simulation LOD |
 | `forge-procgen` | planned | terrain genesis (uplift, erosion, hydrology), ecosystems, settlements, grammars, noise/SDF library |
 | `forge-app` | built | window, input, frame loop that owns each frame's `FrameGraph` (swapchain import, demo passes, overlay, capture, present), a loading screen for demos whose start-up is heavy CPU work (`run_loading`, #25: the work runs on a thread, the loading frames do not count), PNG capture, fly camera, the profiler overlay (F1: GPU and CPU zones, the memory group) and Tracy frame marks, zones and memory plots (`profiling`), the Vulkan API through Streamline when asked (`AppConfig::streamline`, feature `dlss`) and the preferred GPU is NVIDIA's (#67), else the plain loader |
-| `tools/imgdiff` | built | pixel comparison of captures (the golden-image check; exit code for CI) |
+| `tools/imgdiff` | built | pixel and perceptual (LDR-ꟻLIP) comparison of captures (the golden-image check; exit code for CI) |
 | `tools/credits` | built | the Rust crates in the build with version, licence, authors and repository (`docs/credits-crates.md`), from `cargo metadata`; `--check` in CI. The rest of the credits are in `CREDITS.md` |
 
 ## 3. Frame model

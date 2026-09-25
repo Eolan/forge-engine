@@ -32,7 +32,7 @@ demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
 demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster pages streamed, the 300 m/s flight
-tools/imgdiff         pixel comparison of captures (golden images)
+tools/imgdiff         pixel and perceptual (LDR-FLIP) comparison of captures (golden images)
 tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
 tools/credits         the Rust crates in the build, their licences and authors (docs/credits-crates.md; CI checks it)
 tools/*.sh            the verification batch (docs/PROCESS.md): captures, their comparison, validation, timings
@@ -174,6 +174,12 @@ crops and the diff side by side, enlarged, for looking at a difference.
 `--then next_a.png next_b.png` counts the pixels whose change to the next frame differs between
 the two sequences: LOD pops against a full-detail reference
 ([docs/demos/asteroids.md](docs/demos/asteroids.md), issue #65).
+
+When pixels differ it also prints the perceptual error LDR-ꟻLIP (NVIDIA's metric, issue #75):
+its mean, weighted quartiles, p50/p99/p99.9 and largest value. `--flip-map map.png` writes
+the error map, `--ppd` sets the viewing distance, and `--max-flip X` / `--max-flip-mean Y`
+make the exit code judge by ꟻLIP instead of the pixel count. Which check applies where:
+[docs/PROCESS.md](docs/PROCESS.md), "The perceptual check".
 
 ### The verification batch
 

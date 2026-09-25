@@ -83,7 +83,8 @@ under `captures/`, which git ignores.
        against the plain frame, where red shows as a difference;
      - the mesh path against the fallback.
    - Every line must read `0 px`, unless the change is meant to alter the image. In that case,
-     the report names the images and says why they changed.
+     the report names the images, says why they changed, and gives their ꟻLIP numbers (see
+     below).
 4. **Validation:** `tools/validate.sh` runs every demo and path with the validation layer,
    synchronization validation included. A clean run prints only its header lines and the mip
    check's verdict ("mip check passed").
@@ -93,7 +94,44 @@ under `captures/`, which git ignores.
 
 **Known flake (#71):** `fb-ast-taa600`, the fallback's TAA frame 600, can differ from the
 same build by a few hundred pixels, each at most 21 levels off. Rerun that capture; a second
-difference is real.
+difference is real. Its ꟻLIP stays small (mean ≤ 0.0015, largest ≤ 0.103 in four flakes).
+
+**The perceptual check (issue #75).** For each differing pair, `imgdiff` prints LDR-ꟻLIP:
+the error a person would see when flipping between the two images, from 0 (none) to 1. It is
+computed at 67 pixels per degree by default, a 4K monitor 0.7 m wide seen from 0.7 m
+(`--ppd`), with `a` as the reference. It prints the mean (ꟻLIP's usual number), the weighted
+quartiles of NVIDIA's tool, p50, p99, p99.9, the largest value and where it is, and how many
+pixels reach 0.1, 0.2 and 0.5. `--flip-map map.png` writes the error map: black is no error,
+pale yellow the largest. `compare.sh` puts the mean and the largest value on each line that
+differs.
+
+Which check applies where:
+- **The A/B harness, mesh against fallback, refactors and speed-ups:** 0 px. ꟻLIP is only
+  there to help read a failure.
+- **Changes that may move pixels invisibly** (an order, TAA history, the flake): the
+  numbers go in the report. The proposed threshold (D-017, 🟡 until the owner accepts it)
+  is every pixel below 0.15 and a mean below 0.003: `imgdiff --max-flip 0.15
+  --max-flip-mean 0.003` judges by it.
+- **Look changes:** the mean, p99, largest value and error map go in the report, and the
+  owner judges.
+
+Measured on 2026-09-25 at 1600 × 900. The port matches NVIDIA's tool (v1.7) to six decimals
+on every statistic, and its error maps are identical (0 px), at 30, 67 and 120 ppd:
+
+| Pair | Pixels that differ | ꟻLIP mean | Largest | Pixels ≥ 0.1 |
+|---|---|---|---|---|
+| city, the new instance order (#38) | 399 | 0.0002 | 0.053 | 0 |
+| city orbit, the same | 238 | 0.0006 | 0.045 | 0 |
+| #71's flake, four reruns | 236–396 | 0.0010–0.0015 | 0.061–0.103 | 0–1 |
+| ballad, GTAO on the fill off against on (#55) | 34 663 | 0.011 | 0.824 | 19 025 |
+| city, GTAO off against on (#48) | 171 102 | 0.026 | 0.496 | 37 730 |
+| ballad golden image, AgX against ACES | 1 396 860 | 0.374 | 0.561 | 1 340 244 |
+| on grey 128: one pixel 20 levels brighter | 1 | — | 0.079 | 0 |
+| a line of one pixel, 20 levels brighter | 128 | — | 0.169 | 380 |
+| a 3 × 3 block, 20 levels brighter | 9 | — | 0.261 | 21 |
+| one white pixel | 1 | — | 0.379 | 13 |
+
+It costs about 0.2 s per differing 1600 × 900 pair. Identical pairs skip it.
 
 **Performance:** `tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]` times the usual views. It
 covers the city (still, orbit, flight, every page resident), meshlets (still, orbit,

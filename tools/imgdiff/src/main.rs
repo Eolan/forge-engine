@@ -7,8 +7,15 @@
 //!
 //! For motion: `--then next_a.png next_b.png` counts the pixels whose change to the next frame
 //! differs between the two sequences (LOD pops against a full-detail reference, issue #65).
+//!
+//! Whether a person would see the difference: when any pixel differs, the perceptual error
+//! LDR-ꟻLIP ([`flip`], issue #75) prints its mean, weighted quartiles, percentiles and
+//! largest value, `a` taken as the reference. `--flip-map` writes its error map. With
+//! `--max-flip` or `--max-flip-mean`, the exit code judges ꟻLIP instead of the pixel count.
 
 #![forbid(unsafe_code)]
+
+mod flip;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -57,6 +64,24 @@ struct Args {
     /// `--out` then writes these pixels, and `--crops` shows them beside the crops.
     #[arg(long, num_args = 2, value_names = ["NEXT_A", "NEXT_B"])]
     then: Option<Vec<PathBuf>>,
+    /// Skip the perceptual error (LDR-ꟻLIP).
+    #[arg(long)]
+    no_flip: bool,
+    /// Pixels per degree of visual angle for ꟻLIP. The default is the reference's: a 0.7 m
+    /// wide 3840-pixel monitor seen from 0.7 m, about 67.
+    #[arg(long)]
+    ppd: Option<f32>,
+    /// Write the ꟻLIP error map (magma colours: black is no error, pale yellow the largest).
+    #[arg(long)]
+    flip_map: Option<PathBuf>,
+    /// Judge by ꟻLIP instead of the pixel count: exit code 1 when a pixel's error reaches
+    /// this value.
+    #[arg(long)]
+    max_flip: Option<f32>,
+    /// Judge by ꟻLIP instead of the pixel count: exit code 1 when the mean error reaches this
+    /// value.
+    #[arg(long)]
+    max_flip_mean: Option<f32>,
 }
 
 fn parse_point(text: &str) -> std::result::Result<[u32; 2], String> {
@@ -146,6 +171,11 @@ fn parse_rect(text: &str) -> std::result::Result<[u32; 4], String> {
 
 fn main() -> Result<ExitCode> {
     let args = Args::parse();
+    let judge_by_flip = args.max_flip.is_some() || args.max_flip_mean.is_some();
+    anyhow::ensure!(
+        !(judge_by_flip && args.no_flip),
+        "--max-flip and --max-flip-mean need ꟻLIP: drop --no-flip"
+    );
     let a = image::open(&args.a)
         .with_context(|| format!("open {}", args.a.display()))?
         .to_rgba8();
@@ -200,6 +230,32 @@ fn main() -> Result<ExitCode> {
         different as f64 * 100.0 / total as f64,
         sum_error as f64 / total as f64
     );
+    let mut flip_fails = false;
+    if !args.no_flip {
+        let ppd = args.ppd.unwrap_or_else(flip::default_ppd);
+        // Identical images have no error anywhere: skip the filtering.
+        let (errors, s) = if max_error > 0 {
+            let errors = flip::error_map(&a, &b, ppd);
+            let s = flip::stats(&errors, width);
+            (errors, s)
+        } else {
+            (vec![0.0; total as usize], flip::Stats::default())
+        };
+        let [p50, p99, p999] = s.percentiles;
+        let [q1, q3] = s.weighted_quartiles;
+        let [above_1, above_2, above_5] = s.above;
+        println!(
+            "LDR-FLIP at {ppd:.1} ppd: mean {:.6}, weighted median {:.6}, weighted quartiles {q1:.6} / {q3:.6}, p50 {p50:.6}, p99 {p99:.6}, p99.9 {p999:.6}, max {:.6} at ({}, {}), pixels >= 0.1: {above_1}, >= 0.2: {above_2}, >= 0.5: {above_5}",
+            s.mean, s.weighted_median, s.max, s.max_at.0, s.max_at.1
+        );
+        flip_fails = args.max_flip.is_some_and(|limit| s.max >= limit)
+            || args.max_flip_mean.is_some_and(|limit| s.mean >= limit);
+        if let Some(path) = &args.flip_map {
+            flip::magma_image(&errors, width, height)
+                .save(path)
+                .with_context(|| format!("write {}", path.display()))?;
+        }
+    }
     if let Some([x, y]) = args.background_at {
         let background = *a.get_pixel(x.min(width - 1), y.min(height - 1));
         let mut inside_at = Vec::new();
@@ -255,7 +311,12 @@ fn main() -> Result<ExitCode> {
             .save(path)
             .with_context(|| format!("write {}", path.display()))?;
     }
-    Ok(if different > args.max_different {
+    let fails = if judge_by_flip {
+        flip_fails
+    } else {
+        different > args.max_different
+    };
+    Ok(if fails {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS

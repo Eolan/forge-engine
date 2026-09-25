@@ -260,6 +260,25 @@ A system is done when its demo runs on both machines with numbers in `docs/demos
 demo supports `--frames` and `--capture`; `tools/imgdiff` compares captures with a tolerance
 and an exit code. p50/p99/max, never means.
 
+**Amendment 🟡 proposed (2026-09-25, #75): a perceptual check beside the pixel count.**
+Whenever pixels differ, `imgdiff` also prints LDR-ꟻLIP (Andersson et al. 2020). It is a port
+of NVIDIA's reference that matches it to six decimals and to the pixel of its error map.
+Which check applies:
+1. **The image must not change** (the culling A/B harness, mesh against fallback, a
+   refactor, a speed-up): 0 px, as now.
+2. **Pixels may move where nobody would see it** (an instance order, TAA history rounding,
+   #71's flake): proposed pass at the default 67 pixels per degree, every pixel below 0.15
+   and the mean below 0.003 (`imgdiff --max-flip 0.15 --max-flip-mean 0.003`). Measured:
+   the city's new instance order (#38) peaks at 0.053, #71's flake at 0.061–0.103 (means up
+   to 0.0015). A faint one-pixel line reaches 0.17 and a 3×3 speck of 20 levels 0.26.
+3. **The look is meant to change** (a tone curve, a sampler, AO): no threshold. The report
+   gives the mean, p99, largest value and error map, and the owner judges. Measured: GTAO on
+   against off, means 0.011–0.026 and peaks 0.50–0.82; AgX against ACES, mean 0.37.
+4. **Another GPU** (#39, #67): thresholds after the first captures there.
+
+ꟻLIP's mean is its usual pooled number and is kept for that. The proposed check leans on the
+largest value. The measurements are in `docs/PROCESS.md`, "The perceptual check".
+
 ## D-018 — Memory and streaming ✅ (2026-09-24)
 
 **CPU:** a tagged heap over one reserved virtual range (2 MiB blocks, per-worker blocks,

@@ -40,7 +40,8 @@ batch in `docs/PROCESS.md`.
 2. #38, a hierarchy over instances ✅ (cells of 64 instances and a sorted table: the city's
    instance culls 0.40 → 0.14 ms). Its third idea, pass 2 over pass 1's rejects only, is
    #92.
-3. #75, a perceptual metric: ꟻLIP in `imgdiff`.
+3. #75, a perceptual metric: ꟻLIP in `imgdiff` ✅ (it matches NVIDIA's tool; thresholds
+   proposed in D-017, 🟡).
 4. #76, ACES 2.0's output transform as a fourth tone curve.
 5. #77, async compute and transfer queues in the render graph. #78 (transient buffers,
    parallel recording) follows once CPU recording shows in the overlay.
@@ -192,8 +193,8 @@ Goal: the renderer skeleton every later system draws through.
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
    Bloom ✅ (issue #44: the downsample/upsample chain of Jimenez 2014 before the tone
-   curve, 0.04 ms at 900p). Still to come: ACES 2.0's output transform (#76), a perceptual
-   golden-image metric (#75).
+   curve, 0.04 ms at 900p). A perceptual golden-image metric ✅ (#75: LDR-ꟻLIP in
+   `imgdiff`). Still to come: ACES 2.0's output transform (#76).
    Hillaire atmosphere ✅ (2026-09-24, D-023: transmittance and multiple-scattering tables
    as graph passes, the per-pixel march for planets seen from space; the planet-view table ✅
    (issue #26: two fetches instead of the march, 0.333 → 0.105 ms at 50°); the sky-view table, the aerial perspective and the sun seen from the

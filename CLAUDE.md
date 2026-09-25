@@ -37,7 +37,8 @@ Rendering changes additionally run the verification batch (`docs/PROCESS.md`, `t
 - **`tools/captures.sh`:** before and after the change.
 - **`tools/compare.sh`:** the culling A/B harness (`--no-occlusion`, `--no-cone`) and the mesh
   path against the fallback must differ in **0 pixels**, and `--show-culled` must show no red.
-  Images the change is meant to alter are named in the report.
+  Images the change is meant to alter are named in the report, with the ꟻLIP numbers
+  `compare.sh` prints (how visible the change is; `docs/PROCESS.md`, "The perceptual check").
 - **`tools/validate.sh`:** no validation errors. The GOG overlay layer's naming warnings are
   noise.
 
