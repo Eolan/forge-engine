@@ -25,9 +25,9 @@ use forge_render::SwRaster;
 use forge_render::material::{TextureSet, stock};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
-    Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags, Display, DlssMode,
-    DlssUpscaler, FrameStats, HDR_FORMAT, LuminanceMeter, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, Starfield, Taa, Tonemap, UpscaleCamera,
+    AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
+    Display, DlssMode, DlssUpscaler, FrameStats, HDR_FORMAT, LuminanceMeter, MeshletRenderer,
+    MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap, UpscaleCamera,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -664,7 +664,7 @@ impl Demo for Ballad {
             taa_frame.color,
             extent,
             None,
-            None,
+            AmbientLight::default(),
         );
         let planet = self
             .atmosphere

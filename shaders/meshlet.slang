@@ -152,6 +152,8 @@ public static const uint FLAG_PREV_PYRAMID = 2048;
 public static const uint FLAG_STREAMING = 4096;     // a streamed scene: the cut follows the resident pages (`lod_selected`)
 // Trace the sun's shadows against `Frame::tlas` (issue #45).
 public static const uint FLAG_SHADOWS = 8192;
+// Show the ambient occlusion in grey (issue #48).
+public static const uint FLAG_SHOW_AO = 16384;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -1435,7 +1437,18 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
 
 // The sun's light on a surface of `albedo` with normal `n`, in units of a white Lambertian
 // surface facing the sun. Returns the light and `ndl`, which the ice's scattering needs.
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, out float ndl)
+// Ambient occlusion with the light that bounces inside the occluded region: bright surfaces
+// lose less than their visibility says (Jimenez et al. 2016, the cubic fit of their
+// multi-bounce reference, per colour channel).
+float3 occlusion_bounce(float visibility, float3 albedo)
+{
+    float3 a = 2.0404 * albedo - 0.3324;
+    float3 b = -4.7951 * albedo + 0.6417;
+    float3 c = 2.7552 * albedo + 0.6903;
+    return max(float3(visibility), ((visibility * a + b) * visibility + c) * visibility);
+}
+
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     // The sun is far, so a half vector from the light and the camera-to-surface direction
@@ -1446,9 +1459,15 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     float3 half_vector = normalize(light + view);
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
     float3 sun = f[0].sun_color.rgb;
-    // Under a sky: the light the sky and the ground send the normal (issue #47).
+    // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
+    // how much of it the surface sees (issue #48).
     if (sky != nullptr)
-        return albedo * (diffuse * sun + sh_irradiance(sky, n)) + specular * sun;
+    {
+        float3 ambient = sh_irradiance(sky, n);
+        if (ao >= 0.0)
+            ambient *= occlusion_bounce(ao, albedo);
+        return albedo * (diffuse * sun + ambient) + specular * sun;
+    }
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
     float3 fill = float3(0.10, 0.12, 0.18) * 0.25 * (0.5 + 0.5 * n.y);
@@ -1535,6 +1554,7 @@ struct Surface
     uint lod_level;
     float shadow;           // 1 in the sun, 0 where a shadow ray met something (issue #45)
     float4* sky;            // the sky's irradiance coefficients (sh.slang), null in space (issue #47)
+    float ao;               // how much of the sky the surface sees (issue #48); -1: no occlusion computed
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -1600,7 +1620,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -1677,7 +1697,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, ndl) + emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, ndl) + emissive;
 }
 
 float3 shade_ice(Frame* f, Material mat, Surface s)
@@ -1690,7 +1710,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(mat.color_a, mat.color_b, cavity);
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, ndl);
     return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
 
@@ -1709,6 +1729,8 @@ struct ResolvePush
     uint tile_capacity;
     float4 background;
     float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
+    uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF
+    uint pad_ao;
 };
 
 [[vk::push_constant]]
@@ -1790,6 +1812,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.lod_level = m.lod_level;
     s.shadow = 1.0;
     s.sky = resolve_push.sky;
+    s.ao = resolve_push.ao_image != 0xFFFFFFFFu
+        ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
+        : -1.0;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
@@ -1801,6 +1826,8 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
     if (software && (f[0].flags & FLAG_SHOW_RASTER) != 0)
         color = lerp(color, float3(0.1, 0.9, 0.3), 0.6); // the software rasteriser's pixels
+    if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
+        color = float3(s.ao * 0.25); // the occlusion, as a light grey surface in the sun
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
     return class_index;

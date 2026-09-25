@@ -19,6 +19,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Bloom | #44 | ✅ 0.04 ms at 900p |
 | The sun's shadows by ray query | #45 | ✅ a BLAS per prop from its DAG, a TLAS over the million instances |
 | Sky light: the sky's irradiance on the shaded sides | #47 | ✅ nine SH coefficients a frame, 0.016 ms |
+| Ambient occlusion of the sky's light (GTAO) | #48 | ✅ 0.13 ms at 900p, 0.25 ms at 1440p |
 
 ```
 cargo run --release -p city-blocks
@@ -26,7 +27,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -40,12 +41,62 @@ Options:
 - `--no-shadows` draws without the sun's ray-traced shadows (**J** toggles them).
 - `--no-sky-light` lights the shaded sides with the ballad's constant fill instead of the sky
   (**I** toggles it).
+- `--no-ao` leaves the sky's light unoccluded (**N** toggles the occlusion), `--ao-radius M`
+  sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (**V**).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## Ambient occlusion (issue #48, 2026-09-25)
+
+The sky's light is now occluded where the depth around a pixel hides part of the sky. The
+method is GTAO (Jimenez et al. 2016, D-030), ported from Intel's XeGTAO (MIT; the notice is in
+`shaders/third-party/`). It runs four passes a frame, all from the depth (`forge_render::gtao`):
+- **`ao/depth chain`**: every pixel's distance along the view axis, and four levels below
+  it, each a 2×2 average weighted towards the near samples;
+- **`ao/gtao`**: per pixel, 3 directions and 3 samples each way along each, read from the
+  level that matches the sample's distance. The highest horizons bound the visible arc,
+  integrated against a normal rebuilt from the depth. The effect radius is 1.5 m
+  (`--ao-radius`), widened by XeGTAO's factor of 1.457;
+- **`ao/denoise`**: a 3×3 blur that does not cross depth edges.
+
+The resolve scales the sky's irradiance (#47) by it, with the paper's multi-bounce fit: a
+white wall loses less than a dark one. The sun keeps its own shadow ray. The effect lives
+in contacts and recesses: the inside of a basin, the foot of a pedestal, window reveals, the
+base of a building. In the sun it touches only the sky's part of the light, so it shows
+most on the shaded sides.
+
+![Left to right: without AO, with it, and the occlusion alone (V); the gallery's fountain and terrace, cropped](images/city-blocks-ao.png)
+
+**Stability.** The noise that places the samples changes every frame, and TAA averages it.
+XeGTAO's noise repeats every 64 frames, which is 8 cycles of TAA's jitter, so TAA's history
+drifted between patterns. Repeating the noise with the jitter (every 8 frames) fixes that.
+On the static south view, pixels changing by more than two levels:
+
+| | frame 300 → 301 | frame 300 → 332 (same jitter) |
+|---|---|---|
+| without AO | 1.55 % | 0.09 % |
+| AO, XeGTAO's 64-frame noise | 1.61 % | 0.24 % |
+| AO, the noise on the jitter's 8 frames | 1.60 % | 0.10 % |
+
+A second denoise pass changed neither figure (1.59 % and 0.10 %) and cost 0.04 ms at 1440p,
+so there is one.
+
+**Cost** (RTX 5070 Ti):
+
+| | without | with | the passes |
+|---|---|---|---|
+| the south view, 1600×900 | 1.683 ms | 1.852 ms | chain 0.026, gtao 0.084, denoise 0.019 |
+| the flight at 1440p | 2.204 ms | 2.456 ms | chain 0.046, gtao 0.156, denoise 0.048 |
+
+**Checks:**
+- With `--no-ao`, the city's three captures are identical to the previous build.
+- The ballad and the bench are identical (0 pixels), and mesh against fallback is at 0 with
+  AO on (the occlusion reads only the depth, the same on both paths).
+- Synchronization validation is silent, with the occlusion view too.
 
 ## Sky light (issue #47, 2026-09-25)
 
@@ -68,8 +119,8 @@ What a surface receives, per unit of the sun's illuminance above the air (logged
 
 The sky alone gives a roof 0.075 of the sun, about 10 klux, as a clear sky does. Most of a
 wall's light comes up from the planet's sunlit ground (albedo 0.3). Nothing occludes it yet:
-a wall at the foot of a tower gets the same light as one in the open. Ambient occlusion comes
-next.
+a wall at the foot of a tower gets the same light as one in the open, except for what the
+ambient occlusion of #48 (above) takes away.
 
 ![Sun at 63° (top, EV 15) and 20° (bottom, EV 13): the constant fill on the left, the sky light on the right](images/city-blocks-sky-light.png)
 

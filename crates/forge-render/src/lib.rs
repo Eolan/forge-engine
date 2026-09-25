@@ -13,6 +13,7 @@ pub mod blit;
 pub mod bloom;
 pub mod display;
 pub mod exposure;
+pub mod gtao;
 pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
@@ -32,9 +33,10 @@ pub use bloom::Bloom;
 pub use display::{Display, Tonemap};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;
+pub use gtao::{Gtao, GtaoParams};
 pub use meshlet::{
-    CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, MeshId, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, SwRaster,
+    AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, MeshId,
+    MeshletRenderer, MeshletScene, MeshletSceneBuilder, SwRaster,
 };
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
 pub use starfield::Starfield;

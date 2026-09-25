@@ -9,7 +9,8 @@
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
-//! threshold, T TAA, B bloom, J shadows, I sky light, Tab wireframe, G tone curve, Esc quit.
+//! threshold, T TAA, B bloom, J shadows, I sky light, N ambient occlusion, V its view, Tab
+//! wireframe, G tone curve, Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -32,9 +33,10 @@ use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
-    Atmosphere, AtmosphereParams, Bloom, CullCamera, CullFlags, FrameStats, GroundSky,
-    MeshletRenderer, MeshletScene, MeshletSceneBuilder, Residency, SkyParams, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100, sh_irradiance,
+    AmbientLight, Atmosphere, AtmosphereParams, Bloom, CullCamera, CullFlags, FrameStats,
+    GroundSky, Gtao, GtaoParams, MeshletRenderer, MeshletScene, MeshletSceneBuilder, Residency,
+    SkyParams, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100,
+    sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -126,6 +128,15 @@ struct Args {
     /// toggles it).
     #[arg(long)]
     no_sky_light: bool,
+    /// Leave the sky's light unoccluded: no ambient occlusion (N toggles it).
+    #[arg(long)]
+    no_ao: bool,
+    /// How far an occluder reaches for the ambient occlusion, metres.
+    #[arg(long, default_value_t = 1.5)]
+    ao_radius: f32,
+    /// Show the ambient occlusion in grey instead of the shading (V toggles it).
+    #[arg(long)]
+    show_ao: bool,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -160,6 +171,9 @@ struct Gallery {
     sky: GroundSky,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
+    /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
+    gtao: Gtao,
+    ao_on: bool,
     tonemap: Tonemap,
     scene: MeshletScene,
     camera: FlyCamera,
@@ -202,6 +216,8 @@ impl Gallery {
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let sky_light = !args.no_sky_light;
+        let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
+        let ao_on = !args.no_ao;
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
         let atmosphere_params = AtmosphereParams::earth();
         let elevation = args.sun_elevation.to_radians();
@@ -233,6 +249,9 @@ impl Gallery {
         }
         if !args.no_shadows {
             flags.0 |= CullFlags::SHADOWS;
+        }
+        if args.show_ao {
+            flags.0 |= CullFlags::SHOW_AO;
         }
         let mut camera = if args.gallery {
             FlyCamera {
@@ -273,6 +292,8 @@ impl Gallery {
             atmosphere,
             sky,
             sky_light,
+            gtao,
+            ao_on,
             scene,
             camera,
             flags,
@@ -323,6 +344,8 @@ impl Demo for Gallery {
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::KeyI => self.sky_light = !self.sky_light,
+            KeyCode::KeyN => self.ao_on = !self.ao_on,
+            KeyCode::KeyV => self.flags.toggle(CullFlags::SHOW_AO),
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;
@@ -476,6 +499,19 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
         );
+        // The sky's light, occluded by what the depth shows around each pixel (issue #48).
+        let occlusion = (self.sky_light && self.ao_on).then(|| {
+            self.gtao.draw(
+                &mut frame.graph,
+                targets.depth,
+                extent,
+                GtaoParams {
+                    projection: taa_frame.jittered_projection,
+                    frame: self.taa.frame_index() % u64::from(self.taa.jitter_phases),
+                    radius: self.args.ao_radius,
+                },
+            )
+        });
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
@@ -483,7 +519,10 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
             None,
-            self.sky_light.then_some(sky.light),
+            AmbientLight {
+                sky: self.sky_light.then_some(sky.light),
+                occlusion,
+            },
         );
         self.sky.compose(
             &mut frame.graph,

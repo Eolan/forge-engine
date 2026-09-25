@@ -58,6 +58,8 @@ impl CullFlags {
     pub const SHOW_RASTER: u32 = 1024;
     /// Trace the sun's shadows (issue #45; a scene with a top-level acceleration structure).
     pub const SHADOWS: u32 = 8192;
+    /// Show the ambient occlusion in grey instead of the shading (issue #48; debug view).
+    pub const SHOW_AO: u32 = 16384;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -320,9 +322,21 @@ struct ResolvePush {
     background: [f32; 4],
     /// The sky's irradiance coefficients (`sh.slang`, issue #47), or 0: space's constant fill.
     sky: u64,
+    /// Sampled index of the ambient occlusion scaling the sky's light (issue #48), or `u32::MAX`.
+    ao_image: u32,
+    pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<ResolvePush>() == 72);
+const _: () = assert!(std::mem::size_of::<ResolvePush>() == 80);
+
+/// What lights the resolve besides the sun (issues #47, #48).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AmbientLight {
+    /// The sky's irradiance; `None` keeps space's constant fill.
+    pub sky: Option<SkyLight>,
+    /// Ambient occlusion ([`crate::Gtao`]: r32f, the frame's size) scaling the sky's light.
+    pub occlusion: Option<ImageHandle>,
+}
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
 /// it grows in rows, so a class can hold more tiles than one dimension of a grid allows.
@@ -2274,8 +2288,9 @@ impl MeshletRenderer {
     /// `None`) and lists the 8×8 tiles that show each other class; each other class then
     /// shades its pixels in its tiles. A pixel's triangle is fetched, its attributes
     /// reconstructed at the pixel centre from analytic barycentrics, and lit with the
-    /// instance's row of the material table. Under a `sky` (issue #47), a surface takes the
-    /// sky's irradiance for its normal besides the sun; without one, space's constant fill.
+    /// instance's row of the material table. Under `ambient.sky` (issue #47), a surface takes
+    /// the sky's irradiance for its normal besides the sun, scaled by `ambient.occlusion`
+    /// (issue #48); without a sky, space's constant fill.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve<'f>(
         &'f self,
@@ -2285,7 +2300,7 @@ impl MeshletRenderer {
         color: ImageHandle,
         extent: vk::Extent2D,
         background: Option<[f32; 4]>,
-        sky: Option<SkyLight>,
+        ambient: AmbientLight,
     ) {
         debug_assert!(tile_count(extent) <= tile_count(self.extent));
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -2304,7 +2319,11 @@ impl MeshletRenderer {
             use_background: u32::from(background.is_some()),
             tile_capacity: tile_count(self.extent),
             background: background.unwrap_or([0.0; 4]),
-            sky: sky.map_or(0, |s| s.address),
+            sky: ambient.sky.map_or(0, |s| s.address),
+            ao_image: ambient
+                .occlusion
+                .map_or(u32::MAX, |ao| resources.sampled(ao).0),
+            pad: 0,
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -2330,8 +2349,11 @@ impl MeshletRenderer {
             .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
             .buffer(args, BufferAccess::ShaderReadWrite(compute));
-        if let Some(sky) = sky {
+        if let Some(sky) = ambient.sky {
             builder = builder.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+        }
+        if let Some(ao) = ambient.occlusion {
+            builder = builder.image(ao, ImageAccess::Sampled(compute));
         }
         builder.run(move |resources, commands| {
             commands.bind_pipeline(standard);
@@ -2355,8 +2377,11 @@ impl MeshletRenderer {
                 .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
-            if let Some(sky) = sky {
+            if let Some(sky) = ambient.sky {
                 builder = builder.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+            }
+            if let Some(ao) = ambient.occlusion {
+                builder = builder.image(ao, ImageAccess::Sampled(compute));
             }
             builder.run(move |resources, commands| {
                 commands.bind_pipeline(pipeline);

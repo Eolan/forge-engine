@@ -134,7 +134,8 @@ Goal: the renderer skeleton every later system draws through.
    as graph passes, the per-pixel march for planets seen from space; the planet-view table
    #26 for big planets; the sky-view table, the aerial perspective and the sun seen from the
    ground ✅ with city-blocks, issue #43; the sky's irradiance on the shaded sides ✅, nine SH
-   coefficients a frame, issue #47). TAA ✅. DLSS ✅ (2026-09-24, D-024: Streamline's interposer behind the `dlss`
+   coefficients a frame, issue #47; its ambient occlusion by GTAO ✅, issue #48,
+   D-030). TAA ✅. DLSS ✅ (2026-09-24, D-024: Streamline's interposer behind the `dlss`
    feature, TAA the default, every mode switchable at run time, the LOD error in output
    pixels).
    **Demo:** `city-blocks` — a million GPU-placed instances of twenty props with the DAG,

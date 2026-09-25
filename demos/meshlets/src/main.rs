@@ -22,8 +22,8 @@ use forge_render::material::stock;
 use forge_render::meshlet::DrawParams;
 use forge_render::mipcheck::MipCheck;
 use forge_render::{
-    CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, Tonemap, exposure_from_ev100,
+    AmbientLight, CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer,
+    MeshletScene, MeshletSceneBuilder, Tonemap, exposure_from_ev100,
 };
 use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
@@ -304,7 +304,7 @@ impl Demo for Bench {
             color,
             extent,
             Some([0.02, 0.02, 0.03, 1.0]),
-            None,
+            AmbientLight::default(),
         );
         if let Some(check) = &self.mip_check {
             check.record(&mut frame.graph, frame.slot, extent);

@@ -725,3 +725,41 @@ all. Its rays take 0.027 ms at 1600×900. `--no-shadows` or **J** turns them off
 demos.
 
 *(research: lighting-gi.md; D-008; issues #45, #46; demos: city-blocks, asteroids)*
+
+## D-030 — Ambient occlusion: GTAO from the depth, after XeGTAO, occluding the sky's light ✅ (2026-09-25)
+
+Research step (3) feeds the sky's light to every surface (D-023's note, issue #47). Nothing
+occluded that light, so contacts and recesses were lit like open ground. lighting-gi.md §8
+recommends GTAO (Jimenez, Wu, Pesce, Jarabo 2016) for every tier, porting Intel's XeGTAO
+(MIT). This is that port (issue #48, `shaders/gtao.slang`, `forge_render::gtao`). XeGTAO's
+notice is in `shaders/third-party/XeGTAO-LICENSE.txt`.
+
+**The passes** (all compute, on transients of the frame's size):
+- **A distance chain:** the view-axis distance from the reversed-Z depth, and four levels,
+  each a 2×2 average weighted towards the near samples (XeGTAO's filter, so a thin
+  occluder survives).
+- **GTAO:** 3 slices and 3 steps per side, which is XeGTAO's "high" preset. The samples are
+  placed by a Hilbert-curve index into the R2 sequence, and their distance picks the level
+  they read. The normal is rebuilt from the depth with XeGTAO's edge-aware cross products.
+  The effect radius is 1.5 m (×1.457); the constants are XeGTAO's.
+- **One 3×3 denoise** that does not cross depth edges.
+
+**In the resolve.** The occlusion scales only the sky's irradiance: the sun has its own
+shadow ray (D-029). It is applied through the paper's multi-bounce fit on the surface's
+albedo, so bright materials lose less. Scenes without a sky do not compute it.
+
+**One departure from XeGTAO:** the noise repeats with TAA's jitter (8 frames) instead of
+every 64. With 64, TAA's history drifted between patterns: on a static view, 0.24 % of the
+pixels changed by more than two levels over 32 frames, against 0.09 % without AO. With 8 it
+is 0.10 %. A second denoise pass did not move either figure.
+
+**Left for later:**
+- specular occlusion and bent normals from the same horizons;
+- a normal from the visibility buffer instead of the depth (exact on thin geometry);
+- occlusion at the scale of a street, beyond a few metres of screen-space radius. That is
+  the probes' job, or rays against the TLAS the shadows already use.
+
+*Measured* (city-blocks, RTX 5070 Ti): the passes cost 0.13 ms at 1600×900 (the south view
+1.683 → 1.852 ms) and 0.25 ms at 1440p (the flight 2.204 → 2.456 ms). With `--no-ao` the
+captures are those of the previous build; mesh and fallback stay at 0 pixels apart.
+*(research: lighting-gi.md §8; issue #48; demo: city-blocks)*

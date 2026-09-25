@@ -91,6 +91,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Sky light.** Ravi Ramamoorthi, Pat Hanrahan, "An Efficient Representation for Irradiance
   Environment Maps", SIGGRAPH 2001: the sky's irradiance as nine spherical-harmonic
   coefficients.
+- **Ambient occlusion.** Jorge Jimenez, Xian-Chun Wu, Angelo Pesce, Adrian Jarabo, "Practical
+  Real-Time Strategies for Accurate Indirect Occlusion", SIGGRAPH 2016: GTAO and its
+  multi-bounce fit. Forge ports Intel's implementation, XeGTAO (Filip Strugar and
+  contributors; MIT, notice in `shaders/third-party/XeGTAO-LICENSE.txt`). Its sample noise
+  combines a Hilbert curve with Martin Roberts' R2 sequence ("The Unreasonable Effectiveness
+  of Quasirandom Sequences", 2018).
 - **Triplanar normal maps.** Ben Golus, "Normal Mapping for a Triplanar Shader", 2017: the
   whiteout blend the materials' normal maps use.
 - **Tone curves.**

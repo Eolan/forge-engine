@@ -984,3 +984,20 @@ as the default. What the port taught:
 - **Pre-exposure.** Passing the frame's pre-exposure (relative to a fixed EV100) kept the
   output at the input's level. DLSS undoes it on the way out, so its history can follow the
   automatic exposure the way the TAA's rescaled history does.
+
+## Implementation notes from Forge: sky light and GTAO (2026-09-25, issues #47, #48)
+
+- **The sky-view table is already an environment map.** Hillaire's table covers the whole
+  sphere around the camera, with the planet's sunlit ground below the horizon. Nine SH
+  coefficients of it, convolved with the cosine (Ramamoorthi and Hanrahan), give a
+  surface's sky light for 0.016 ms, ground bounce included. Under the default sun a roof gets
+  0.075 of the sun and a wall about 0.20, most of it from the ground.
+- **GTAO's noise has to follow the TAA's.** XeGTAO cycles its noise over 64 frames. Forge's
+  TAA jitters over 8, and its history then drifted from pattern to pattern: 0.24 % of a
+  static view's pixels changed by more than two levels over 32 frames, against 0.09 %
+  without AO. Repeating the noise every 8 frames brought it to 0.10 %; a second denoise
+  pass did nothing for it.
+- **Screen-space AO is contact AO at city scale.** A 1.5 m radius (2.2 m with XeGTAO's
+  multiplier) reads recesses, basins and the feet of walls. It does not reach the sky
+  hidden by a street's buildings, which is the probes' work (step 3), or rays against the
+  shadows' TLAS.
