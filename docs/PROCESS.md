@@ -57,6 +57,76 @@ login, safe to re-run):
 6. Answer review comments in the same session (`claude --resume task-<n>`), then stop. The
    session does not merge.
 
+## The verification batch (`tools/`, issue #74)
+
+Every rendering change is checked with the same batch. It runs on the owner's machine: the
+demos need the RTX 5070 Ti and open on the secondary monitor without taking focus. It writes
+under `captures/`, which git ignores.
+
+1. **Build the whole workspace first:** `cargo build --release`. Rebuilding only the demo you
+   changed leaves the other demos stale. A stale binary writes an older frame block, and every
+   capture then "differs" for the wrong reason.
+2. **Capture the baseline before changing anything:** `tools/captures.sh captures/base`.
+   - This writes 26 captures: meshlets, the ballad at fixed steps, and city-blocks, each on the
+     mesh path and on the fallback.
+   - To capture an older commit, build it in a tree of its own:
+     `git worktree add --detach ../forge-base <commit>`, then `cargo build --release` in that
+     tree, then `tools/captures.sh captures/base ../forge-base/target/release`.
+   - Each tree must be built in place, because the shader, shader-cache and mesh-cache roots
+     are compiled into the binaries from `CARGO_MANIFEST_DIR`.
+   - Remove the tree afterwards with `git worktree remove ../forge-base`.
+3. **After the change, capture again and compare:**
+   - `tools/captures.sh captures/new`, then `tools/compare.sh captures/base captures/new`.
+   - The script prints the pixels that differ per image, then checks the pairs within the new
+     batch:
+     - the A/B harness: occlusion off and cone culling off against on, and `--show-culled`
+       against the plain frame, where red shows as a difference;
+     - the mesh path against the fallback.
+   - Every line must read `0 px`, unless the change is meant to alter the image. In that case,
+     the report names the images and says why they changed.
+4. **Validation:** `tools/validate.sh` runs every demo and path with the validation layer,
+   synchronization validation included. A clean run prints only its header lines and the mip
+   check's verdict ("mip check passed").
+5. **Before pushing:** `cargo test --release`, and
+   `cargo clippy --release --all-features --all-targets -- -D warnings` exactly as CI runs it.
+   A plain clippy run hides a lint that CI then fails on.
+
+**Known flake (#71):** `fb-ast-taa600`, the fallback's TAA frame 600, can differ from the
+same build by a few hundred pixels, each at most 21 levels off. Rerun that capture; a second
+difference is real.
+
+**Performance:** `tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]` times the usual views. It
+covers the city (still, orbit, flight, every page resident), meshlets (still, orbit,
+`--side 700`) and the ballad at 900p and 1440p. Each view runs three times per build,
+alternating between the two builds. ZONES is a regex that also prints the matching GPU
+zones, for example `cull`. Put the numbers before and after, or the F1 overlay's, in the
+report and in `docs/PROFILE.md`.
+
+**Debugging aids:**
+- `FORGE_TRACE_FRAMES=<file>` with `FORGE_HASH_IMAGES=1` writes per-frame hashes of the
+  targets. The variable takes a path: `=1` writes a file named `1`.
+- `FORGE_WAIT_IDLE=1`.
+- Vulkan debug printf: `VK_LAYER_PRINTF_ENABLE=1 VK_LAYER_PRINTF_TO_STDOUT=1` with
+  `--validate`.
+- `FORGE_GRAPH_LOG=1` prints the render graph's plan.
+
+## Sessions handed over: a fresh local session or a cloud session
+
+- **Where to start:** `CLAUDE.md` holds the rules and the owner's standing preferences.
+  `docs/ROADMAP.md` §"Checkpoint 2" holds the order of work, and the issues hold the tasks.
+  Claude's auto-memory stays on the owner's machine, so anything a session must know lives in
+  these files.
+- **Local session:** it works as above, on `main`, one issue at a time.
+- **Cloud session:** it has no GPU. It can build, test, lint and format exactly as CI does,
+  write docs and research, and do CPU-side work with unit tests. It cannot run a demo, a
+  capture or validation. So:
+  - Changes that need no GPU (docs, research, tools, CPU code covered by tests) follow the
+    local rules and may be pushed to `main` once CI's checks pass.
+  - Changes to rendering or shaders go to a branch, `cloud/<issue>-<slug>`, pushed without a
+    pull request, and the issue gets a comment saying what is left to verify. The owner, or a
+    local session, runs the verification batch and brings the branch into `main`.
+  - Research runs as one agent at a time, as locally.
+
 ## Review and merge
 
 - Every PR gets an automated review from a separate session (`/code-review --comment` on

@@ -4,7 +4,7 @@ Systems are built in the order below, each closed by a demo with numbers (`docs/
 tests, and decisions (`DECISIONS.md`). Phases overlap where crates are independent; nothing
 in a later phase may be started before the decision it depends on is accepted.
 
-## Checkpoint 1 — 2026-09-24 (this one)
+## Checkpoint 1 — 2026-09-24
 
 Delivered: research files for task systems, GPU geometry, large worlds, lighting (+ the
 files still being written: physics, netcode, audio, vegetation/materials, animation, memory);
@@ -27,6 +27,50 @@ below is kept as the record of what was asked:
 | D-010 transport | see netcode.md (QUIC datagrams expected) | netcode |
 | D-011 audio stack | see audio.md | audio |
 | D-013 vegetation ladder | mesh → cards → octahedral → voxel aggregate → canopy | forest demo |
+
+## Checkpoint 2 — 2026-09-25 (this one): the order of work
+
+Phase 1 is delivered except the leftovers below. Its numbers are in `docs/PROFILE.md` and
+the demo pages. A session starts from the top of this list: one issue, verified with the
+batch in `docs/PROCESS.md`.
+
+**The owner's picks (2026-09-25), in order:**
+1. #74, the verification batch in the repository ✅ (`tools/captures.sh`, `compare.sh`,
+   `validate.sh`, `timings.sh`).
+2. #38, a hierarchy over instances. Instance occlusion is already done (dcb2ae9).
+3. #75, a perceptual metric: ꟻLIP in `imgdiff`.
+4. #76, ACES 2.0's output transform as a fourth tone curve.
+5. #77, async compute and transfer queues in the render graph. #78 (transient buffers,
+   parallel recording) follows once CPU recording shows in the overlay.
+
+**Proposed next, for the owner to pick:**
+- #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes
+  #69 and is the first step of the space battle (#80).
+- Phase 2, with its `island` demo as the first step of rebuilding tropical-island (#81): a
+  concrete game target for the world systems.
+
+**Waiting:**
+- #39 waits for the RTX 3080.
+- #67 and #28 wait for an AMD card.
+- #71 waits for the owner: close it, or report it upstream.
+- #70 is parked.
+- #69 goes with #79.
+
+**Ideas for later** (the owner's inbox, `docs/TODO.md`, filed 2026-09-25 under the milestone
+"Later"):
+- the space battle (#80);
+- tropical-island (#81) and the shooter (#82), rebuilt on Forge;
+- materials that fit each object (#83);
+- the living city (#84) and its pieces:
+  - layout (#85);
+  - modular buildings (#86, to decide early);
+  - streets and vehicles (#87);
+  - seamless interiors (#88);
+  - destruction (#89);
+  - city life (#90);
+- a more organic town (#91).
+
+Older ideas: #12, #17, #24.
 
 ## The living showcase: `asteroids` (the ballad)
 
@@ -71,7 +115,7 @@ It always shows the best the engine can do at that moment and carries its own pr
   their fracture on impact for the ship fight in the belt.
 - Phase 4: the lighting tiers — sun with ray-traced shadows, reflections on ice and metal,
   volumetric dust and the nebula lit by the sun, path-traced reference frames.
-- Phase 5–7: **space ships in pursuit of other ships**, firing lasers and missiles,
+- Phase 5–7 (the space battle, #80, may become a demo of its own): **space ships in pursuit of other ships**, firing lasers and missiles,
   destroying each other and sometimes crashing into asteroids; a second player flying
   alongside over the network; spatial audio for thrusters, impacts and explosions; ship
   animation (thruster gimbals, damage states).
@@ -110,8 +154,8 @@ Goal: the renderer skeleton every later system draws through.
    compiled ahead after a change, the ballad and the city behind it).
 2. Render graph ✅ (2026-09-24, `forge-gpu::graph`, D-020): passes declare reads/writes,
    barriers derived, transient images aliased in one heap, deferred deletion by frame slot,
-   a profiler zone per pass. Still to come on it: async compute and transfer queues,
-   transient buffers, parallel recording of pass bodies. (Lesson from the previous project:
+   a profiler zone per pass. Still to come on it: async compute and transfer queues (#77),
+   transient buffers and parallel recording of pass bodies (#78). (Lesson from the previous project:
    undeclared buffer uses made NVIDIA replay stale indirect arguments.)
 3. Compute culling shared by both paths + `vkCmdDrawIndexedIndirectCount` fallback ✅
    (2026-09-24, issue #5): an instance cull and a cluster cull per mesh pass append the
@@ -140,8 +184,8 @@ Goal: the renderer skeleton every later system draws through.
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
    Bloom ✅ (issue #44: the downsample/upsample chain of Jimenez 2014 before the tone
-   curve, 0.04 ms at 900p). Still to come: ACES 2.0's output transform, a perceptual golden-image
-   metric.
+   curve, 0.04 ms at 900p). Still to come: ACES 2.0's output transform (#76), a perceptual
+   golden-image metric (#75).
    Hillaire atmosphere ✅ (2026-09-24, D-023: transmittance and multiple-scattering tables
    as graph passes, the per-pixel march for planets seen from space; the planet-view table ✅
    (issue #26: two fetches instead of the march, 0.333 → 0.105 ms at 50°); the sky-view table, the aerial perspective and the sun seen from the
@@ -253,5 +297,5 @@ Goal: the renderer skeleton every later system draws through.
 
 ## Phase 10 — The games again
 
-Rebuild `tropical-island`, `world` and `shooter` on Forge, in that order, reusing their
-generation rules and lessons.
+Rebuild `tropical-island` (#81), `world` and `shooter` (#82) on Forge, in that order,
+reusing their generation rules and lessons.

@@ -35,6 +35,7 @@ demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster 
 tools/imgdiff         pixel comparison of captures (golden images)
 tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
 tools/credits         the Rust crates in the build, their licences and authors (docs/credits-crates.md; CI checks it)
+tools/*.sh            the verification batch (docs/PROCESS.md): captures, their comparison, validation, timings
 docs/                 ARCHITECTURE, DECISIONS, ROADMAP, RESEARCH + research/ and demos/
 CREDITS.md            the people, libraries, assets and published techniques Forge builds on
 ```
@@ -172,6 +173,19 @@ crops and the diff side by side, enlarged, for looking at a difference.
 `--then next_a.png next_b.png` counts the pixels whose change to the next frame differs between
 the two sequences: LOD pops against a full-detail reference
 ([docs/demos/asteroids.md](docs/demos/asteroids.md), issue #65).
+
+### The verification batch
+
+```
+tools/captures.sh captures/base          # before the change (after cargo build --release)
+tools/captures.sh captures/new           # after it
+tools/compare.sh captures/base captures/new
+tools/validate.sh
+tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]
+```
+
+What each script does and how to build a baseline from an older commit:
+[docs/PROCESS.md](docs/PROCESS.md) (issue #74).
 
 ### Environment variables (all demos)
 
