@@ -25,6 +25,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Soft shadows: the sun's disc over TAA's jitter | #54 | ✅ 0.02 ms at 1440p |
 | Coated glass: a reflectance per row, the towers as curtain walls | #56 | ✅ no cost |
 | A day over the city: the sun crosses the sky, the exposure follows | #57 | ✅ `--day S`, 0.016 ms of metering |
+| Light from the street: probes updated by ray queries (DDGI) | #53 | ✅ five cascades around the camera, 0.77 ms at 900p, 1.05 ms at 1440p |
 
 ```
 cargo run --release -p city-blocks
@@ -32,7 +33,8 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass, **Z** soft or hard shadows, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass, **Z** soft or hard shadows, **P** the probes' light, **U** that
+light alone, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -48,10 +50,15 @@ Options:
   (**I** toggles it).
 - `--no-ao` leaves the sky's light unoccluded (**N** toggles the occlusion), `--ao-radius M`
   sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (**V**).
+- `--no-probes` lights the shaded sides with the open sky's light instead of the probes'
+  (**P** toggles them), `--show-gi` shows that light alone on white surfaces (**U**),
+  `--probe-rays N` sets the rays per probe (128) and `--probe-cascades N` the cascades (5).
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--no-ray-reflections` reflects only the sky in the glass (**Y** toggles the mirror rays).
 - `--hard-shadows` aims every shadow ray at the sun's centre (**Z** toggles soft and hard).
 - `--day S` runs a day in S seconds, sunrise to sunset and again, with automatic exposure.
+- `--view x,y,z,yaw,pitch` starts the camera there (metres, then degrees; yaw 0 looks north,
+  along −z), e.g. `--view=-8,1.7,1135,-50,10` in a street.
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
@@ -69,6 +76,100 @@ The city starts through `forge_app::run_loading`, like the ballad
 - **Shaders compile ahead:** after a shader change, the city's entries in
   `shader-cache/city-blocks.entries` compile behind the loading screen too.
 - **Unchanged:** every capture, the frame numbering and the profile.
+
+## Light from the street: probes (issue #53, 2026-09-25)
+
+Until now a shaded wall got the open sky's light everywhere (#47), and GTAO took off only its
+first metres (#48). So a street between 40 m buildings was lit like a rooftop. It also missed
+where most of a wall's sky light comes from: the sunlit ground bouncing back, which in a
+street is often in shadow.
+
+The probes (DDGI, D-036) measure what each place really receives: the sky the buildings leave
+and the light bouncing off them. Rays update them every frame, so they follow the sun
+through `--day`.
+
+![Above: the street view without and with the probes. Below: the south view without and with them. The shaded brick front, the street in shadow and the towers' shaded sides lose the open sky's blue and take the light of what faces them](images/city-blocks-probes.png)
+
+![The same views showing only the sky's and the city's light on white surfaces (U): the open sky's without the probes, the probes' with them. The streets darken between the buildings, the feet of the walls take the ground's light, and the shaded sides take their neighbours' colours](images/city-blocks-probe-light.png)
+
+**How:**
+- **The cascades.** Five of 24 × 12 × 24 probes, 4, 8, 16, 32 and 64 m apart, follow the
+  camera. The finest reaches 40 m around it, the coarsest 640 m, and the open sky's light
+  takes over beyond.
+- **The rays.** Each probe traces 128 rays a frame. A hit is lit by the sun (a shadow ray)
+  and by the probes themselves, so the light bounces once more every frame; a miss takes the
+  sky-view table.
+- **The maps.** Each probe keeps the irradiance (6 × 6 texels) and the distance to what its
+  rays met (14 × 14), and each update keeps 97 % of what they held.
+- **Settling.** In its first 8 updates a probe moves out of walls and away from nearby
+  surfaces, and it turns off inside buildings or where nothing is near; then it keeps its
+  place. About a fifth of each cascade lights something.
+- **Shading.** Each pixel blends the eight probes around it, weighted by whether each can see
+  it, in place of the open sky's light. GTAO still darkens the contacts, and what the glass's
+  mirror rays meet takes the probes' light too.
+
+```
+city-blocks --view=-8,1.7,1135,-50,10
+```
+
+**P** turns the probes off and on (`--no-probes`), and **U** shows their light alone
+(`--show-gi`). `--probe-rays N` and `--probe-cascades N` change the defaults, and
+`--view x,y,z,yaw,pitch` starts the camera anywhere, e.g. in a street.
+
+**Cost** (RTX 5070 Ti), GPU ms a frame:
+
+| | without | with | the probes' passes | their sampling |
+|---|---|---|---|---|
+| south view, 1600 × 900 | 1.83 | 2.60 | 0.58 | 0.19 |
+| south view, 2560 × 1440 | 3.06 | 4.10 | 0.62 | 0.46 |
+| flight at 300 m/s, 2560 × 1440 | 2.91 | 3.68 (worst frames 3.94) | 0.41 | 0.37 |
+
+- **The passes.** `gi/probe rays` is 0.37–0.40 ms, `gi/probe blend` 0.20 ms and
+  `gi/probe state` under 0.01 ms. In the flight they are cheaper, 0.41 ms, since most of the
+  volume there is empty air.
+- **The sampling** in the resolve and the mirror rays grows with the pixels.
+- **Memory:** 85 MiB: the two atlases (53 MiB), the rays (35 MiB) and the probes' state.
+
+**Stability:** pixels changing by more than two levels, with a static camera and TAA on:
+
+| | frame 300 → 301 | frame 300 → 332 (same jitter) |
+|---|---|---|
+| south view, without | 1.54 % | 0.089 % |
+| south view, with | 2.04 % | 0.18 % |
+| street view, without | 1.30 % | 0.029 % |
+| street view, with | 1.48 % | 0.026 % |
+
+- **Ray directions.** They repeat with TAA's 8-frame jitter, as the ambient occlusion's noise
+  does. A new random rotation every frame kept the maps wandering (0.27 % on the south view).
+- **The south view.** Its extra change is in single pixels at window edges, which the darker
+  shade makes more contrasted.
+- **In motion.** Along the flight, 0.13 % of the pixels change from one frame to the next
+  differently from the same flight without probes (by more than 16 levels; `imgdiff --then`).
+  The LOD pops of #65 measured 2.4 %.
+
+**Found on the way:**
+- **A remainder that came out unsigned.** On this driver, `-281 % 24` came out as 23 where
+  the SPIR-V's signed remainder means −17. That put the probes behind the camera 16 cells
+  from where they were sampled: brown ground, lit by rocks 64 m away. `wrap_cells` now only
+  takes remainders of positive numbers.
+- **Probes that never settled.** Some probes between two surfaces kept moving and switching
+  on and off (35 a frame on the street view), and each switch restarted their maps: the
+  street view's slow change was 0.61 %. Probes now settle after 8 updates.
+
+**Checks:**
+- With `--no-probes` every capture of the city, mesh and fallback, streamed and in the
+  gallery, is identical to the previous build, as are the ballad and the bench.
+- The culling harness and mesh against fallback stay at 0.
+- Synchronization validation is silent on every demo and path, the probes included.
+- New tests cover the octahedral map and its border, the cascades' reach and the rays'
+  rotation.
+
+**Left for later** (issues filed):
+- **Reflections.** The probes darken the sky's light but not its reflection, so shaded
+  asphalt still mirrors the open sky (#68).
+- **Moving geometry.** A settled probe does not move again, so doors and vehicles will need
+  their probes woken (#69).
+- **Sampling cost.** The lookup could move out of the resolve into a pass of its own (#70).
 
 ## A day over the city (issue #57, 2026-09-25)
 

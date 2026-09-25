@@ -118,6 +118,18 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   contributors; MIT, notice in `shaders/third-party/XeGTAO-LICENSE.txt`). Its sample noise
   combines a Hilbert curve with Martin Roberts' R2 sequence ("The Unreasonable Effectiveness
   of Quasirandom Sequences", 2018).
+- **Diffuse light from probes.** Zander Majercik, Jean-Philippe Guertin, Derek Nowrouzezahrai,
+  Morgan McGuire, "Dynamic Diffuse Global Illumination with Ray-Traced Irradiance Fields",
+  *Journal of Computer Graphics Techniques* 8(2), 2019, and Zander Majercik, Adam Marrs, Josef
+  Spjut, Morgan McGuire, "Scaling Probe-Based Real-Time Dynamic Global Illumination for
+  Production", *JCGT* 10(2), 2021: the probes, their visibility test, relocation,
+  classification and bias (issue #53). `shaders/probes.slang` is written from the papers.
+  NVIDIA's RTXGI-DDGI SDK (NVIDIA RTX SDKs License) was read for its constants; none of its
+  code is used. The probes' maps use the octahedral mapping of Zina H. Cigolle, Sam Donow,
+  Daniel Evangelakos, Michael Mara, Morgan McGuire, Quirin Meyer, "A Survey of Efficient
+  Representations for Independent Unit Vectors", *JCGT* 3(2), 2014, and their rays turn by
+  Ken Shoemake's uniform random rotations ("Uniform Random Rotations", *Graphics Gems III*,
+  1992).
 - **Triplanar normal maps.** Ben Golus, "Normal Mapping for a Triplanar Shader", 2017: the
   whiteout blend the materials' normal maps use.
 - **Hex-tiling.** Morten S. Mikkelsen, "Practical Real-Time Hex-Tiling", *Journal of Computer

@@ -430,7 +430,8 @@ exposure is metered (D-022).
 This is the sky term of research step (3), without the probes: it is the same everywhere in
 the scene, so nothing occludes it yet. Screen-space ambient occlusion is the next step, and
 probe GI the one after. At the default sun, a roof receives 0.075 of the sun and a wall about
-0.20, most of it from the ground; the pass costs 0.016 ms.
+0.20, most of it from the ground; the pass costs 0.016 ms. Both followed: GTAO (D-030) and
+the probes (D-036), which replace this light where they reach and fall back on it beyond.
 
 ## D-024 — DLSS through Streamline's interposer, optional, TAA as the default ✅ (2026-09-24)
 
@@ -785,7 +786,8 @@ is 0.10 %. A second denoise pass did not move either figure.
 - specular occlusion and bent normals from the same horizons;
 - a normal from the visibility buffer instead of the depth (exact on thin geometry);
 - occlusion at the scale of a street, beyond a few metres of screen-space radius. That is
-  the probes' job, or rays against the TLAS the shadows already use.
+  the probes' job, or rays against the TLAS the shadows already use. Done by the probes
+  (D-036, issue #53); GTAO stays on top of them for the contacts.
 
 *Measured* (city-blocks, RTX 5070 Ti): the passes cost 0.13 ms at 1600×900 (the south view
 1.683 → 1.852 ms) and 0.25 ms at 1440p (the flight 2.204 → 2.456 ms). With `--no-ao` the
@@ -1073,3 +1075,69 @@ sides goes through engine evaluators on `dmath`.
 - the editor: its own research file.
 
 *(research: data-driven.md; extends D-007; D-006, D-010, D-016, D-018, D-026, D-034; issue #64)*
+
+## D-036 — Diffuse light from DDGI probes: cascades around the camera, updated by ray queries ✅ (2026-09-25)
+
+Issue #53 set out three ways to occlude the city's sky light at street scale. The owner picked
+the first on 2026-09-25: DDGI probes updated by ray queries. It is research step (3) and
+D-008's T1 tier, and it brings bounce light with it. The code is written from the two papers
+(Majercik et al., JCGT 2019 and 2021; `shaders/probes.slang`, `shaders/probe_update.slang`,
+`forge_render::probes`). NVIDIA's RTXGI-DDGI SDK was read for its constants only: its
+licence (NVIDIA RTX SDKs License) is free and royalty-free, but ported files would keep
+NVIDIA's notice and terms, unlike the workspace's MIT/Apache.
+
+**The layout:**
+- **Cascades.** Five cascades of 24 × 12 × 24 probes, 4, 8, 16, 32 and 64 m apart, each
+  centred on the camera. A probe keeps its slot while the cascade scrolls: slots are world
+  cells modulo the counts, so only the planes entering a cascade are new.
+- **Maps.** Each probe has an octahedral irradiance map (6 × 6 texels, RGBA16F) and a map of
+  the mean and mean square of the distance to what it sees (14 × 14, RG16F), each with a
+  one-texel border, in two atlases.
+- **Memory:** 85 MiB with the rays' buffer.
+
+**The update:** three compute passes a frame, before the resolve.
+- **The rays**, 128 per probe:
+  - The first 32 keep fixed directions and reach 3.5 cells; they only tell the probe where
+    it stands.
+  - The other 96 turn with a random rotation that repeats with TAA's jitter (as D-030's
+    noise does), so a still scene's maps settle into one cycle.
+  - Hits are lit by the sun through a shadow ray and by the probes of the frame before (one
+    more bounce a frame); misses take the sky-view table.
+- **The state.** During its first 8 updates a probe moves through back faces out of walls
+  and away from surfaces nearer than a quarter of a cell. It turns inactive inside something
+  or with nothing within a cell of it. Then it keeps its place and state until it leaves the
+  cascade. Left free, probes between two surfaces changed state every frame, and every change
+  restarted their maps.
+- **The blend.** Each probe's maps keep 97 % of what they held; a new or re-activated probe
+  starts from its first rays.
+
+**The lookup** (resolve and mirror-ray hits):
+- **The eight probes** around the point, found after the 2021 paper's bias (towards the
+  viewer, in proportion to the spacing). Each is weighted by the trilinear weight, a smooth
+  back-face term and a Chebyshev visibility test on its distance map, with small weights
+  crushed. The square roots of the irradiance are blended, then squared.
+- **The cascades,** finest first, each fading out over its last cell measured from the camera
+  (not from the volume, so the fade stays still as the volume scrolls). The open sky's
+  irradiance (#47) takes over beyond the coarsest.
+- **What it replaces:** the open sky's irradiance on the diffuse side, and the rough
+  reflections' blur of it. GTAO stays on top for the contacts.
+
+**One driver note:** a signed remainder of a negative number came out as the unsigned one on
+the RTX 5070 Ti's driver, misplacing probes by 16 cells. The code takes remainders of
+positive numbers only (`wrap_cells`).
+
+*Measured* (city-blocks, RTX 5070 Ti):
+- **Cost:** 0.77 ms on the south view at 1600 × 900 and 1.05 ms at 1440p. The passes are
+  0.58–0.62 ms of that and the sampling the rest; the 1440p flight costs 0.77 ms.
+- **Stability:** the street view's slow change stays at its level without probes (0.026 %
+  against 0.029 %); the south view's rises from 0.089 % to 0.18 %.
+- **Identity:** `--no-probes` gives the previous build's pixels.
+
+**Left for later** (issues filed):
+- the sky's reflection occluded by the probes (#68);
+- probes woken again when geometry moves (doors, vehicles, rebuilt blocks; #69);
+- the lookup in a pass of its own instead of the resolve's registers (#70);
+- the T0 updater (SDF marches instead of rays) for GPUs without ray queries;
+- the froxel fog lit by the probes.
+
+*(research: lighting-gi.md, Majercik et al. and the implementation notes on the probes; D-008, D-029, D-030; issue #53; demo: city-blocks)*

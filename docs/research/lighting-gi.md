@@ -1001,3 +1001,29 @@ as the default. What the port taught:
   multiplier) reads recesses, basins and the feet of walls. It does not reach the sky
   hidden by a street's buildings, which is the probes' work (step 3), or rays against the
   shadows' TLAS.
+
+## Implementation notes from Forge: DDGI probes (2026-09-25, issue #53, D-036)
+
+- **Written from the papers.** The 2019 and 2021 JCGT papers give the whole algorithm. The
+  RTXGI-DDGI SDK is under the NVIDIA RTX SDKs License: free and royalty-free, but ported
+  source keeps NVIDIA's notice and terms. It served as a reference for constants.
+- **Cost is the fixed rays, not the shaded ones.** At first every probe traced its 32
+  relocation rays to 60 km each frame, and the ray pass took 0.69 ms. Capped at 3.5 cells and
+  left unshaded, it took 0.44 ms. With probes that settle, stop tracing them, and turn off
+  inside buildings or in open air, it takes 0.37–0.40 ms. About a fifth of each cascade
+  lights something in the city.
+- **Relocation must stop.** Probes between two surfaces (pushed off the ground into what reads
+  as the inside of a ledge, moved back through it) changed state every frame. Every change
+  restarted their maps, and a mirror window showed it as drift (0.61 % of pixels over 32
+  frames). A probe now settles after 8 updates, which the 2021 paper's relocation at
+  initialisation already suggests.
+- **Rotations on TAA's cycle.** A new random rotation of the rays every frame kept the maps
+  wandering (0.27 % slow change on a static view). Repeating 8 rotations with TAA's jitter
+  halves it, as it did for GTAO's noise.
+- **Negative remainders.** On the RTX 5070 Ti's driver, a signed remainder of a negative
+  number (SPIR-V `OpSRem`) came out as the unsigned one. A ring buffer indexed by world
+  cells hits this at the first negative cell; take remainders of positive numbers.
+- **The lookup's cost is in the resolve.** It is 0.46 ms of the 1.05 ms at 1440p, more than
+  the probes' own passes. Removing its integer divisions barely moved it. The resolve's
+  registers are the likelier cause, as they were for the mirror rays (#52), so a pass of its
+  own is next.

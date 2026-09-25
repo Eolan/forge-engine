@@ -15,6 +15,9 @@ public RWTexture2D<float> g_storage_images_r32f[];
 [[vk::binding(1, 0)]]
 [[vk::image_format("rgba16f")]]
 public RWTexture2D<float4> g_storage_images_rgba16f[];
+[[vk::binding(1, 0)]]
+[[vk::image_format("rg16f")]]
+public RWTexture2D<float2> g_storage_images_rg16f[];
 
 [[vk::binding(2, 0)]]
 public SamplerState g_samplers[];

@@ -36,8 +36,8 @@ use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, Residency, SkyParams, StreamingConfig, StreamingStats, SwRaster, Taa,
-    Tonemap, exposure_from_ev100, sh_irradiance,
+    MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
+    StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -97,6 +97,10 @@ struct Args {
     /// Start framed on this prop (its name in the log, e.g. `fountain`; the gallery only).
     #[arg(long)]
     focus: Option<String>,
+    /// Start the camera at `x,y,z,yaw,pitch`: metres, then degrees (yaw 0 looks north, along
+    /// −z; 90 west; pitch up is positive), e.g. `--view=-8,1.7,1135,-50,10` in a street.
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    view: Option<Vec<f32>>,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -135,6 +139,21 @@ struct Args {
     /// How far an occluder reaches for the ambient occlusion, metres.
     #[arg(long, default_value_t = 1.5)]
     ao_radius: f32,
+    /// Light the shaded sides with the open sky's irradiance, without the probes' light: the
+    /// sky the streets' buildings leave and the light bouncing off the city (P toggles them;
+    /// devices without ray queries have none).
+    #[arg(long)]
+    no_probes: bool,
+    /// Rays per probe and frame (64 to 256).
+    #[arg(long, default_value_t = ProbeParams::default().rays)]
+    probe_rays: u32,
+    /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
+    #[arg(long, default_value_t = ProbeParams::default().cascades)]
+    probe_cascades: u32,
+    /// Show the diffuse light alone, on white surfaces, instead of the shading: the probes'
+    /// (the open sky's with `--no-probes`); U toggles it.
+    #[arg(long)]
+    show_gi: bool,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
@@ -189,6 +208,11 @@ struct Gallery {
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
     gtao: Gtao,
     ao_on: bool,
+    /// Diffuse light from probes (issue #53), on while `probes_on`; `probes_live` while they
+    /// were updated every frame (else they start over).
+    probes: Option<Probes>,
+    probes_on: bool,
+    probes_live: bool,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     meter: LuminanceMeter,
@@ -280,6 +304,9 @@ impl Gallery {
         if args.show_ao {
             flags.0 |= CullFlags::SHOW_AO;
         }
+        if args.show_gi {
+            flags.0 |= CullFlags::SHOW_GI;
+        }
         if !args.no_reflections {
             flags.0 |= CullFlags::SKY_REFLECTIONS;
         }
@@ -301,6 +328,43 @@ impl Gallery {
                 speed: 80.0,
                 ..FlyCamera::default()
             }
+        };
+        if let Some(v) = &args.view {
+            anyhow::ensure!(v.len() == 5, "--view takes x,y,z,yaw,pitch");
+            camera.position = Vec3::new(v[0], v[1], v[2]);
+            camera.yaw = v[3].to_radians();
+            camera.pitch = v[4].to_radians();
+        }
+        // The probes trace the scene's TLAS (issue #53).
+        let probes_on = !args.no_probes;
+        anyhow::ensure!(
+            (64..=256).contains(&args.probe_rays),
+            "--probe-rays takes 64 to 256"
+        );
+        anyhow::ensure!(
+            (1..=forge_render::probes::MAX_CASCADES as u32).contains(&args.probe_cascades),
+            "--probe-cascades takes 1 to {}",
+            forge_render::probes::MAX_CASCADES
+        );
+        let probes = if ctx.device.features().ray_query && scene.rays().is_some() {
+            let params = ProbeParams {
+                rays: args.probe_rays,
+                cascades: args.probe_cascades,
+                ..ProbeParams::default()
+            };
+            let probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
+            let p = probes.params();
+            tracing::info!(
+                probes = p.probe_count(),
+                cascades = p.cascades,
+                spacing_m = p.spacing,
+                rays = p.rays,
+                mib = %format_args!("{:.1}", probes.bytes() as f64 / f64::from(1 << 20)),
+                "diffuse light probes"
+            );
+            Some(probes)
+        } else {
+            None
         };
         if let Some(name) = &args.focus {
             let prop = placed
@@ -327,6 +391,9 @@ impl Gallery {
             sky_light,
             gtao,
             ao_on,
+            probes,
+            probes_on,
+            probes_live: false,
             day_time: 0.0,
             meter,
             auto_exposure,
@@ -402,7 +469,9 @@ impl Demo for Gallery {
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::KeyI => self.sky_light = !self.sky_light,
             KeyCode::KeyN => self.ao_on = !self.ao_on,
+            KeyCode::KeyP => self.probes_on = !self.probes_on,
             KeyCode::KeyV => self.flags.toggle(CullFlags::SHOW_AO),
+            KeyCode::KeyU => self.flags.toggle(CullFlags::SHOW_GI),
             KeyCode::KeyF => self.flags.toggle(CullFlags::SKY_REFLECTIONS),
             KeyCode::KeyY => self.flags.toggle(CullFlags::RAY_REFLECTIONS),
             KeyCode::KeyZ => {
@@ -515,6 +584,31 @@ impl Demo for Gallery {
                 "sky light, per unit of sun illuminance"
             );
         }
+        if self.frame == 120 {
+            // What the probes found around the camera (issue #53): per cascade, the probes that
+            // light something, and how many of those moved off their cell's centre.
+            if let Some(probes) = self.probes.as_ref().filter(|_| self.probes_live) {
+                let states = probes.read_states(&ctx.device)?;
+                let per = states.len() / probes.params().cascades as usize;
+                let (active, moved): (Vec<usize>, Vec<usize>) = states
+                    .chunks(per)
+                    .map(|c| {
+                        let on: Vec<_> = c.iter().filter(|s| s[3] % 4.0 != 1.0).collect();
+                        let moved = on
+                            .iter()
+                            .filter(|s| Vec3::from_slice(&s[..3]).length() > 0.01)
+                            .count();
+                        (on.len(), moved)
+                    })
+                    .unzip();
+                tracing::info!(
+                    per_cascade = per,
+                    ?active,
+                    ?moved,
+                    "probes lighting something"
+                );
+            }
+        }
         // The soft shadows' noise repeats with TAA's jitter (issue #54).
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
@@ -581,6 +675,28 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
         );
+        // The probes' light in place of the open sky's (issue #53): after the sky's tables,
+        // which light their rays' misses, before the resolve.
+        let probes = match &mut self.probes {
+            Some(probes) if self.probes_on && self.sky_light => {
+                if !self.probes_live {
+                    probes.reset();
+                }
+                self.probes_live = true;
+                Some(probes.update(
+                    &mut frame.graph,
+                    frame.slot,
+                    self.renderer.frame_address(frame.slot),
+                    sky.light,
+                    self.camera.position,
+                    self.taa.frame_index() % u64::from(self.taa.jitter_phases),
+                ))
+            }
+            _ => {
+                self.probes_live = false;
+                None
+            }
+        };
         // The sky's light, occluded by what the depth shows around each pixel (issue #48).
         let occlusion = (self.sky_light && self.ao_on).then(|| {
             self.gtao.draw(
@@ -604,6 +720,7 @@ impl Demo for Gallery {
             AmbientLight {
                 sky: self.sky_light.then_some(sky.light),
                 occlusion,
+                probes,
             },
         );
         self.sky.compose(

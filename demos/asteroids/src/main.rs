@@ -785,6 +785,7 @@ impl Demo for Ballad {
             AmbientLight {
                 sky: None,
                 occlusion,
+                probes: None,
             },
         );
         let planet = self

@@ -163,6 +163,11 @@ resolve) it takes 2.66 ms.
 With soft shadows (#54: 0.02 ms) it takes 2.67 ms.
 With the mirror rays moved to a pass of their own (#52: the resolve 0.523 → 0.376 ms, the
 rays 0.098 ms) it takes 2.61 ms.
+With the probes (#53, D-036: `gi/probe *` 0.41 ms, their sampling 0.37 ms across the resolve
+and the mirror rays) it takes 3.68 ms, against 2.91 ms in the same runs without them (these
+runs are 3000 frames of the loop). Its worst frames take 3.94 ms. On the static south view the
+probes cost 0.77 ms at 1600 × 900 (1.83 → 2.60) and 1.05 ms at 1440p (3.06 → 4.10), of which
+0.46 ms is the sampling: the next place to look (a pass of its own, as for the mirror rays).
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
 next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 

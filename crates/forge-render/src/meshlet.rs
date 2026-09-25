@@ -17,6 +17,7 @@ use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
 
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
+use crate::probes::ProbeLight;
 use crate::raytrace::{self, SceneRays};
 use crate::sky::SkyLight;
 use crate::streaming::{PageSource, PageStore, PageStreamer, Residency, StreamingStats};
@@ -68,6 +69,9 @@ impl CullFlags {
     /// Translucent ice: the sun through its thickness, by rays (issue #59; with a TLAS and ray
     /// queries).
     pub const TRANSLUCENCY: u32 = 131072;
+    /// Under a sky, show the diffuse light alone on white surfaces instead of the shading:
+    /// the probes' where they reach, else the open sky's (issue #53; debug view).
+    pub const SHOW_GI: u32 = 262144;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -339,17 +343,22 @@ struct ResolvePush {
     ao_image: u32,
     /// Storage index of the mirror rays' requests (direction, weight; issue #52), or `u32::MAX`.
     request_image: u32,
+    /// The probes' `ProbeField` (`probes.slang`, issue #53), or 0: the sky's irradiance.
+    probes: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<ResolvePush>() == 80);
+const _: () = assert!(std::mem::size_of::<ResolvePush>() == 88);
 
-/// What lights the resolve besides the sun (issues #47, #48).
+/// What lights the resolve besides the sun (issues #47, #48, #53).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AmbientLight {
     /// The sky's irradiance; `None` keeps space's constant fill.
     pub sky: Option<SkyLight>,
     /// Ambient occlusion ([`crate::Gtao`]: r32f, the frame's size) scaling the sky's light.
     pub occlusion: Option<ImageHandle>,
+    /// Under a sky, the probes' light ([`crate::Probes::update`]) in place of the sky's
+    /// irradiance, on the pixels and on what the mirror rays meet.
+    pub probes: Option<ProbeLight>,
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -1823,6 +1832,13 @@ impl MeshletRenderer {
         self.hzb[0].extent()
     }
 
+    /// The device address of frame slot `slot`'s `Frame` block (`meshlet.slang`), written by
+    /// [`MeshletRenderer::draw`]: the scene's tables, its TLAS and the sun, for passes that
+    /// trace the scene outside the renderer ([`crate::Probes::update`]).
+    pub fn frame_address(&self, slot: FrameSlot) -> u64 {
+        self.frame_buffers[slot.index].address()
+    }
+
     /// Sizes the visible-cluster list for `clusters` before the first frame that needs them
     /// (at most [`VISIBLE_MAX_CAPACITY`]), for a caller that knows its demand: with LOD off a
     /// frame lists at most [`MeshletScene::finest_clusters`]. Without it the list only grows
@@ -2376,6 +2392,7 @@ impl MeshletRenderer {
                 .occlusion
                 .map_or(u32::MAX, |ao| resources.sampled(ao).0),
             request_image: request.map_or(u32::MAX, |r| resources.storage(r, 0).0),
+            probes: ambient.sky.and(ambient.probes).map_or(0, |p| p.address),
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -2412,6 +2429,12 @@ impl MeshletRenderer {
         if let Some(ao) = ambient.occlusion {
             builder = builder.image(ao, ImageAccess::Sampled(compute));
         }
+        if let Some(p) = ambient.sky.and(ambient.probes) {
+            builder = builder
+                .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .image(p.irradiance, ImageAccess::Sampled(compute))
+                .image(p.distance, ImageAccess::Sampled(compute));
+        }
         builder.run(move |resources, commands| {
             commands.bind_pipeline(standard);
             commands.push_constants(standard, &push(resources));
@@ -2445,6 +2468,12 @@ impl MeshletRenderer {
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
             }
+            if let Some(p) = ambient.sky.and(ambient.probes) {
+                builder = builder
+                    .buffer(p.data, BufferAccess::ShaderRead(compute))
+                    .image(p.irradiance, ImageAccess::Sampled(compute))
+                    .image(p.distance, ImageAccess::Sampled(compute));
+            }
             builder.run(move |resources, commands| {
                 commands.bind_pipeline(pipeline);
                 commands.push_constants(pipeline, &push(resources));
@@ -2468,6 +2497,12 @@ impl MeshletRenderer {
                 .image(sky.table, ImageAccess::Sampled(compute));
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
+            }
+            if let Some(p) = ambient.sky.and(ambient.probes) {
+                builder = builder
+                    .buffer(p.data, BufferAccess::ShaderRead(compute))
+                    .image(p.irradiance, ImageAccess::Sampled(compute))
+                    .image(p.distance, ImageAccess::Sampled(compute));
             }
             builder.run(move |resources, commands| {
                 commands.bind_pipeline(pipeline);

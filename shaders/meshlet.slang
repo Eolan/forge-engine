@@ -24,6 +24,7 @@ import barycentrics;
 import sh;
 import skyview;
 import noise;
+import probes;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -166,6 +167,8 @@ public static const uint FLAG_SKY_REFLECTIONS = 32768;
 public static const uint FLAG_RAY_REFLECTIONS = 65536;
 // Translucent ice: the sun through its thickness (issue #59).
 public static const uint FLAG_TRANSLUCENCY = 131072;
+// Show the diffuse light alone, on white (issue #53).
+public static const uint FLAG_SHOW_GI = 262144;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -1510,7 +1513,7 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     return fresnel * occlusion * environment;
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float reflectance, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     // The sun is far, so a half vector from the light and the camera-to-surface direction
@@ -1522,10 +1525,13 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
     float3 sun = f[0].sun_color.rgb;
     // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
-    // how much of it the surface sees (issue #48).
+    // how much of it the surface sees (issue #48). With probes, what they measured there
+    // instead: the sky the street's buildings leave and the light bouncing off them (issue #53).
     if (sky != nullptr)
     {
         float3 irradiance = sh_irradiance(sky, n);
+        if (probes != nullptr)
+            irradiance = probe_irradiance(probes, world, n, view, irradiance);
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
         if ((f[0].flags & FLAG_SKY_REFLECTIONS) == 0)
             return albedo * (diffuse * sun + ambient) + specular * sun;
@@ -1754,6 +1760,8 @@ struct Surface
     float shadow;           // 1 in the sun, 0 where a shadow ray met something (issue #45)
     float4* sky;            // the sky's irradiance coefficients (sh.slang), null in space (issue #47)
     float ao;               // how much of the sky the surface sees (issue #48); -1: no occlusion computed
+    float3 world;           // world-space position
+    ProbeField* probes;     // the diffuse light's probes (probes.slang, issue #53), or null: the sky's irradiance unoccluded
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -1833,7 +1841,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -1913,7 +1921,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, ndl) + emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, ndl) + emissive;
 }
 
 // How much of the light crossing the ice leaves towards the camera rather than elsewhere
@@ -1935,7 +1943,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(albedo, ICE_WHITE, 1.0 - exp(-mat.scattering * ICE_WHITENING_DEPTH));
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, ndl);
     if (any(s.transmitted > 0.0))
     {
         // The sunlight that crossed the ice (issues #59, #61), tinted by it: the sun glows
@@ -1962,6 +1970,7 @@ struct ResolvePush
     float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
     uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF
     uint request_image;  // storage index of the mirror rays' requests (issue #52), or 0xFFFFFFFF
+    ProbeField* probes;  // the diffuse light's probes (probes.slang, issue #53), or null
 };
 
 [[vk::push_constant]]
@@ -2031,11 +2040,96 @@ static const float RAY_REFLECTION_POWER = 60.0;
 // most props much less), which would otherwise hide a window behind its own facade.
 static const float REFLECTION_START = 1.5;
 
+// The surface a ray met (issues #50, #53), shaded plainly: the row's two colours mixed by the
+// instance (its texture's last mip, the texture's average, for the texture). Its normal faces
+// the ray; `back` says whether the ray met the triangle's back (the meshes wind
+// counter-clockwise seen from outside, so a ray from inside a closed mesh meets back faces).
+struct RayHit
+{
+    float3 position;
+    float3 n;
+    float3 albedo;
+    float3 emissive;
+    bool back;
+};
+
+// Whether a ray along `direction` met the back of triangle `primitive` of instance `instance`
+// (`RayHit::back` without the shading).
+bool ray_back_face(Frame* f, uint instance, uint primitive, float3 direction)
+{
+    RtScene* rs = f[0].rt_scene;
+    Instance inst = f[0].instances[instance];
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    uint tri = mesh.first_triangle + primitive;
+    float3 p[3];
+    [unroll]
+    for (uint k = 0; k < 3; k++)
+    {
+        uint v = mesh.first_vertex + rs[0].indices[tri * 3 + k];
+        p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
+    }
+    float3 face = mul(inst.model, float4(cross(p[1] - p[0], p[2] - p[0]), 0.0)).xyz;
+    return dot(face, direction) > 0.0;
+}
+
+RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin, float3 direction, float t)
+{
+    RtScene* rs = f[0].rt_scene;
+    Instance inst = f[0].instances[instance];
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    uint tri = mesh.first_triangle + primitive;
+    float3 p[3];
+    [unroll]
+    for (uint k = 0; k < 3; k++)
+    {
+        uint v = mesh.first_vertex + rs[0].indices[tri * 3 + k];
+        p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
+    }
+    float3 object_position = p[0] + b.x * (p[1] - p[0]) + b.y * (p[2] - p[0]);
+    float3 face = mul(inst.model, float4(cross(p[1] - p[0], p[2] - p[0]), 0.0)).xyz;
+    RayHit hit;
+    hit.n = dot(face, face) > 1e-20 ? normalize(face) : -direction;
+    hit.back = dot(hit.n, direction) > 0.0;
+    if (hit.back)
+        hit.n = -hit.n; // the side the ray came from
+    hit.position = origin + direction * t;
+    uint row = inst.material + rs[0].sections[tri];
+    Material mat = f[0].materials[row];
+    if (mat.class_index == MATERIAL_CLASS_LAYERED)
+    {
+        // The layer under the hit, nearest texel (`shade_layered` blends two).
+        Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.albedo_texture)];
+        uint2 size;
+        map.GetDimensions(size.x, size.y);
+        float2 texel = (object_position.xz * mat.inv_texture_scale + 0.5) * float2(size);
+        int2 at = clamp(int2(texel), int2(0, 0), int2(size) - 1);
+        mat = f[0].materials[row + 1 + map.Load(int3(at, 0))];
+    }
+    hit.albedo = lerp(mat.color_a, mat.color_b, hash_color(inst.id).x);
+    if (mat.albedo_texture != TEXTURE_NONE)
+        hit.albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
+    hit.emissive = mat.emissive;
+    return hit;
+}
+
+// The light `hit` sends back along the ray that met it (travelling along `direction`), in the
+// resolve's units: the sun through a shadow ray, and the sky's irradiance or, with probes,
+// what they measured there (issue #53: the light bounces again, one bounce a frame).
+float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 direction)
+{
+    float3 sun = normalize(f[0].sun_dir);
+    float ndl = max(dot(hit.n, sun), 0.0);
+    float shadow = ndl > 0.0 ? sun_shadow(f, hit.position, hit.n, float2(0.0)) : 0.0;
+    float3 ambient = sh_irradiance(sky, hit.n);
+    if (probes != nullptr)
+        ambient = probe_irradiance(probes, hit.position, hit.n, -direction, ambient);
+    float3 light = ndl * shadow * f[0].sun_color.rgb + ambient;
+    return hit.albedo * light + hit.emissive;
+}
+
 // What the mirror ray from `origin` along `direction` meets (issue #50): the light leaving the
-// cut's triangle towards the ray, in the resolve's units, with w = 1; w = 0 on a miss. The hit
-// is shaded plainly: the row's two colours mixed by the instance (its texture's last mip, the
-// texture's average, for the texture), the sun through a shadow ray, and the sky's irradiance.
-float4 trace_reflection(Frame* f, float4* sky, float3 origin, float3 direction)
+// cut's triangle towards the ray, in the resolve's units, with w = 1; w = 0 on a miss.
+float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction)
 {
     RayDesc ray;
     ray.Origin = origin;
@@ -2049,44 +2143,8 @@ float4 trace_reflection(Frame* f, float4* sky, float3 origin, float3 direction)
     }
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
         return float4(0.0);
-    RtScene* rs = f[0].rt_scene;
-    Instance inst = f[0].instances[q.CommittedInstanceID()];
-    RtMesh mesh = rs[0].meshes[inst.mesh];
-    uint tri = mesh.first_triangle + q.CommittedPrimitiveIndex();
-    float3 p[3];
-    [unroll]
-    for (uint k = 0; k < 3; k++)
-    {
-        uint v = mesh.first_vertex + rs[0].indices[tri * 3 + k];
-        p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
-    }
-    float2 b = q.CommittedTriangleBarycentrics();
-    float3 object_position = p[0] + b.x * (p[1] - p[0]) + b.y * (p[2] - p[0]);
-    float3 face = mul(inst.model, float4(cross(p[1] - p[0], p[2] - p[0]), 0.0)).xyz;
-    float3 n = dot(face, face) > 1e-20 ? normalize(face) : -direction;
-    if (dot(n, direction) > 0.0)
-        n = -n; // the side the ray came from
-    float3 hit = origin + direction * q.CommittedRayT();
-    uint row = inst.material + rs[0].sections[tri];
-    Material mat = f[0].materials[row];
-    if (mat.class_index == MATERIAL_CLASS_LAYERED)
-    {
-        // The layer under the hit, nearest texel (`shade_layered` blends two).
-        Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.albedo_texture)];
-        uint2 size;
-        map.GetDimensions(size.x, size.y);
-        float2 texel = (object_position.xz * mat.inv_texture_scale + 0.5) * float2(size);
-        int2 at = clamp(int2(texel), int2(0, 0), int2(size) - 1);
-        mat = f[0].materials[row + 1 + map.Load(int3(at, 0))];
-    }
-    float3 albedo = lerp(mat.color_a, mat.color_b, hash_color(inst.id).x);
-    if (mat.albedo_texture != TEXTURE_NONE)
-        albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
-    float3 sun = normalize(f[0].sun_dir);
-    float ndl = max(dot(n, sun), 0.0);
-    float shadow = ndl > 0.0 ? sun_shadow(f, hit, n, float2(0.0)) : 0.0;
-    float3 light = ndl * shadow * f[0].sun_color.rgb + sh_irradiance(sky, n);
-    return float4(albedo * light + mat.emissive, 1.0);
+    RayHit hit = ray_hit(f, q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, direction, q.CommittedRayT());
+    return float4(hit_radiance(f, sky, probes, hit, direction), 1.0);
 }
 
 // Translucent ice (issues #59, #61): the sunlight that crosses the ice to reach `world`, the
@@ -2165,7 +2223,8 @@ bool wants_mirror_ray<let SHADOWS : int>(Frame* f, Material mat)
 {
     const uint flags = FLAG_SKY_REFLECTIONS | FLAG_RAY_REFLECTIONS;
     return SHADOWS != 0 && f[0].tlas != 0 && f[0].rt_scene != nullptr && resolve_push.sky != nullptr
-        && (f[0].flags & flags) == flags && mat.specular_power >= RAY_REFLECTION_POWER;
+        && (f[0].flags & flags) == flags && mat.specular_power >= RAY_REFLECTION_POWER
+        && (f[0].flags & FLAG_SHOW_GI) == 0;
 }
 
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
@@ -2219,6 +2278,8 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
         : -1.0;
     s.view = s.sky != nullptr ? normalize(f[0].camera_pos - mul(inst.model, float4(s.object_position, 1.0)).xyz) : float3(0.0, 1.0, 0.0);
+    s.world = mul(inst.model, float4(s.object_position, 1.0)).xyz;
+    s.probes = resolve_push.probes; // read under a sky only
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, sun_disc_point(pixel, f[0].noise_frame));
     s.transmitted = float3(0.0);
@@ -2235,6 +2296,14 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         color = lerp(color, float3(0.1, 0.9, 0.3), 0.6); // the software rasteriser's pixels
     if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
         color = float3(s.ao * 0.25); // the occlusion, as a light grey surface in the sun
+    if ((f[0].flags & FLAG_SHOW_GI) != 0 && s.sky != nullptr)
+    {
+        // The light the sky and the city send a white surface, without the sun's own and the
+        // occlusion: the probes' where they reach, the open sky's elsewhere.
+        color = sh_irradiance(s.sky, s.n);
+        if (s.probes != nullptr)
+            color = probe_irradiance(s.probes, s.world, s.n, s.view, color);
+    }
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
@@ -2348,7 +2417,7 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     float3 world = mul(inst.model, float4(object_position, 1.0)).xyz;
     float4* sky = resolve_push.sky;
-    float4 hit = trace_reflection(f, sky, world + n * 0.05, request.xyz);
+    float4 hit = trace_reflection(f, sky, resolve_push.probes, world + n * 0.05, request.xyz);
     if (hit.w <= 0.0)
         return;
     float4 up_table = sky[SH_COEFFICIENTS];
@@ -2356,6 +2425,87 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];
     float3 added = request.w * (hit.xyz - mirror) * (f[0].sun_illuminance * f[0].exposure / 3.14159265);
     color[pixel] = float4(color[pixel].rgb + added, 1.0);
+}
+
+// ------------------------------------------------------------- probe rays ---
+
+// The probes' rays (issue #53, probes.slang): a thread per ray, 64 rays a workgroup, from the
+// probe's position (its cell's centre and its offset). A miss takes the sky-view table's light
+// in its direction; a front face is shaded like a mirror ray's hit, lit by the probes as the
+// frame before left them (so light bounces once more every frame); a back face keeps only its
+// distance, negated. The fixed rays keep only their distances, up to PROBE_FIXED_REACH cells
+// (relocation and classification look no farther, and need no light), and an inactive probe
+// traces those alone.
+static const uint PROBE_TRACE_GROUP = 64;
+static const float PROBE_FIXED_REACH = 3.5;
+
+struct ProbeTracePush
+{
+    Frame* frame;
+    ProbeField* field;
+    float4* sky;      // the sky's irradiance and its table (sky.slang)
+    uint probe_count; // probes of every cascade
+    uint pad;
+};
+
+[[vk::push_constant]]
+ProbeTracePush probe_push;
+
+[shader("compute")]
+[numthreads(PROBE_TRACE_GROUP, 1, 1)]
+void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
+{
+    ProbeField* field = probe_push.field;
+    uint probe = group.z * 65535u + group.y;
+    uint ray = group.x * PROBE_TRACE_GROUP + thread;
+    if (probe >= probe_push.probe_count || ray >= field[0].rays)
+        return;
+    ProbeSlot slot = probe_slot(field, probe);
+    float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_ACTIVE) : field[0].probe_data[probe];
+    // A settled probe (probes.slang) needs no fixed rays; an inactive one no others.
+    bool fixed = ray < PROBE_FIXED_RAYS;
+    bool settled = !slot.fresh && probe_age(data.w) >= PROBE_SETTLE_UPDATES;
+    if (fixed ? settled : probe_state(data.w) == PROBE_INACTIVE)
+        return;
+    Frame* f = probe_push.frame;
+    float4* sky = probe_push.sky;
+    float3 origin = slot.position + data.xyz;
+    float3 direction = probe_ray_direction(field, ray);
+    RayDesc desc;
+    desc.Origin = origin;
+    desc.Direction = direction;
+    desc.TMin = 0.0;
+    desc.TMax = fixed ? PROBE_FIXED_REACH * slot.spacing : PROBE_MISS_DISTANCE;
+    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, desc);
+    while (q.Proceed())
+    {
+    }
+    float3 radiance = float3(0.0);
+    float distance = PROBE_MISS_DISTANCE;
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        float t = q.CommittedRayT();
+        if (fixed)
+        {
+            distance = ray_back_face(f, q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), direction) ? -t : t;
+        }
+        else
+        {
+            RayHit hit = ray_hit(f, q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, direction, t);
+            distance = hit.back ? -t : t;
+            if (!hit.back)
+                radiance = hit_radiance(f, sky, field, hit, direction);
+        }
+    }
+    else if (!fixed)
+    {
+        float4 up_table = sky[SH_COEFFICIENTS];
+        radiance = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265;
+    }
+    if (any(isnan(radiance)) || any(isinf(radiance)))
+        radiance = float3(0.0); // one bad texel would spread through the blends for good
+    field[0].ray_data[probe * field[0].rays + ray] = pack_ray(radiance, distance);
 }
 
 // The resolve's entry points: without shadow rays, and with them (`_rt`, devices with ray
