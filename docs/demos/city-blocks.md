@@ -27,6 +27,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | A day over the city: the sun crosses the sky, the exposure follows | #57 | ✅ `--day S`, 0.016 ms of metering |
 | Light from the street: probes updated by ray queries (DDGI) | #53 | ✅ five cascades around the camera, 0.77 ms at 900p, 1.05 ms at 1440p |
 | The sky's reflection dimmed in the streets by the probes | #68 | ✅ 0.11 ms at 1440p |
+| The sky's tables and the probes on the async compute queue, beside the geometry | #77 | ✅ 0.05–0.11 ms off the frame |
 
 ```
 cargo run --release -p city-blocks
@@ -79,6 +80,40 @@ The city starts through `forge_app::run_loading`, like the ballad
 - **Shaders compile ahead:** after a shader change, the city's entries in
   `shader-cache/city-blocks.entries` compile behind the loading screen too.
 - **Unchanged:** every capture, the frame numbering and the profile.
+
+## The sky and the probes beside the geometry: async compute (issue #77, 2026-09-25)
+
+Besides its graphics queue, the GPU has queues of its own for compute and for copies, which
+run at the same time. A pass can now ask for one of them, and the render graph synchronizes
+the queues itself (D-020):
+- **On the compute queue:** the sky's tables (`sky/sky-view table`, `sky/aerial
+  perspective`, `sky/irradiance`) and the probes' update (`gi/probe rays`, `gi/probe state`,
+  `gi/probe blend`). They run while the graphics queue culls and draws the geometry.
+- **On the transfer queue:** the streamed cluster pages' copies (`streaming/upload`).
+- **The frame.** Each queue gets batches of passes, placed as early as their inputs allow.
+  A batch waits for another queue only where a resource crosses between them, and the frame
+  ends on the graphics queue, after every other batch.
+
+| View (1600 × 900) | before | async |
+|---|---|---|
+| south view | 2.36 ms | 2.25 ms |
+| orbit | 2.86 ms | 2.79 ms |
+| flight | 2.23 ms | 2.15 ms |
+| every page resident | 2.24 ms | 2.19 ms |
+
+The profiler names the zones of the other queues (`gi/probe rays [compute]`). They read
+longer than before (the probes 0.60 → 1.35 ms), since they share the GPU with the geometry:
+the frame's GPU time is now its span over the queues (docs/PROFILE.md). `FORGE_ASYNC=0` puts
+every pass back on the graphics queue, as before; the times then match the build before.
+
+Checks:
+- Every capture of the city, the ballad and the bench is at 0 px against the build before,
+  and with `FORGE_ASYNC=0` against the async build (#71's known flake aside).
+- Synchronization validation is silent on every demo and path, async on and off.
+
+**Next:** the probes still wait for the previous frame's resolve, which reads their atlases.
+Double-buffering the atlases and the sky's tables would let them start during the previous
+frame's tail (#95).
 
 ## The sky's reflection in the streets (issue #68, 2026-09-25)
 

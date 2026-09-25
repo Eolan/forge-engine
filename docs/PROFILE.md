@@ -5,9 +5,13 @@ per item: what is expensive, why, and how it gets attacked. The overlay is the l
 this page is the record and the discussion.
 
 How it measures: GPU zones are timestamp queries written at pass boundaries
-(`Commands::mark("group/name")`), read back two frames later, smoothed (8 % per frame); the
-first timestamp waits for all earlier commands so the first zone does not absorb the previous
-frame's tail. CPU zones are wall-clock spans of the main-thread frame loop. Frames overlap on
+(`Commands::mark("group/name")`), read back two frames later, smoothed (8 % per frame); each
+submission's first timestamp waits for the earlier work on its queue, so its first zone does
+not absorb the previous frame's tail. Since #77 a frame runs on up to three queues (graphics,
+async compute, transfer). A zone off the graphics queue carries its queue's name
+(`gi/probe rays [compute]`) and measures time shared with the graphics work beside it, so it
+reads longer than the same pass alone, and the zones no longer add up to the frame. The
+frame's GPU time is its span, from the first timestamp on any queue to the last. CPU zones are wall-clock spans of the main-thread frame loop. Frames overlap on
 the GPU (two in flight), so the per-pass sum can exceed the wall-clock frame: the frame time
 is the truth, the zones are the split. With `--features profiling` the same GPU zones appear
 in Tracy's GPU timeline next to the CPU zones. At exit every demo logs the GPU zones (`gpu:`)
@@ -204,6 +208,22 @@ view goes 2.52 → 2.26 ms, the orbit 2.89 → 2.71, the flight 2.36 → 2.13. T
 go 0.40 → 0.14 ms. The instance cull's old 0.31 ms was mostly one thread writing the
 terrain's thousands of work items, not the million tests. The clears ahead of the culls now
 have their own zone (`geometry/cull clears`, 0.008 ms).
+With async compute (#77: the sky's tables and the probes' update on the compute queue, the
+streaming copies on the transfer queue), measured against the build before in interleaved
+runs (three each):
+
+| View | before | async | `FORGE_ASYNC=0` |
+|---|---|---|---|
+| south view | 2.36 ms | 2.25 ms | 2.31 → 2.32 ms |
+| orbit | 2.86 ms | 2.79 ms | 2.80 → 2.79 ms |
+| flight | 2.23 ms | 2.15 ms | 2.21 → 2.21 ms |
+| every page resident | 2.24 ms | 2.19 ms | 2.24 → 2.24 ms |
+
+The serial column compares the two builds in a run of its own. The meshlets bench and the
+ballad have no async pass and do not move (within 0.01 ms). The probes' zones read 0.60 →
+1.35 ms and the geometry passes a third to a half longer, since they now share the GPU: the
+frame's span is what shrank. The overlap is limited: the probes still wait for the previous
+frame's resolve, which reads their atlases (#95).
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target. The two cluster
 culls (0.21 and 0.22 ms) are the largest geometry zones left; pass 2 over pass 1's rejects only
 is the idea for them (#92). Details in [city-blocks.md](demos/city-blocks.md).

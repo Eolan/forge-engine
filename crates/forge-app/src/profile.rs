@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 
-use forge_gpu::{BUDGET_WARNING, GpuZone, MemoryCategory, MemoryReport, vk};
+use forge_gpu::{BUDGET_WARNING, GpuZone, MemoryCategory, MemoryReport, QueueKind, vk};
 
 use crate::overlay::{Canvas, Color};
 
@@ -101,6 +101,10 @@ pub struct Profile {
     run_gpu: Vec<(String, f64)>,
     /// Frames whose GPU zones were summed.
     run_frames: u64,
+    /// The frame's GPU time, first timestamp to last on every queue (smoothed), and its sum
+    /// over the run: with async queues the zones overlap and no longer add up to it.
+    gpu_span: f64,
+    run_span: f64,
     /// CPU milliseconds per zone summed over the run, with the number of samples, in the
     /// order the frame loop first reported them.
     run_cpu: Vec<(String, f64, u64)>,
@@ -118,6 +122,8 @@ impl Profile {
             toggled: Vec::new(),
             run_gpu: Vec::new(),
             run_frames: 0,
+            gpu_span: 0.0,
+            run_span: 0.0,
             run_cpu: Vec::new(),
         }
     }
@@ -135,7 +141,12 @@ impl Profile {
             .map(|(label, sum)| (label.as_str(), sum / frames))
             .collect();
         zones.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let total: f64 = zones.iter().map(|z| z.1).sum();
+        // The frame's span when known (queues overlap), else the zones' sum.
+        let total = if self.run_span > 0.0 {
+            self.run_span / frames
+        } else {
+            zones.iter().map(|z| z.1).sum()
+        };
         let mut line = format!("{total:.3} ms per frame over {} frames:", self.run_frames);
         for (label, ms) in zones {
             line += &format!(" {label} {ms:.3},");
@@ -227,7 +238,10 @@ impl Profile {
         }
     }
 
-    pub(crate) fn gpu_zones(&mut self, zones: &[GpuZone]) {
+    /// A frame's GPU zones and its span (first timestamp to last, every queue). Zones of
+    /// another queue than graphics are shown with it (`gi/probe rays [compute]`): they
+    /// overlap the graphics zones, so the GPU total is the span, not their sum.
+    pub(crate) fn gpu_zones(&mut self, zones: &[GpuZone], span_ms: Option<f64>) {
         if zones.is_empty() {
             return;
         }
@@ -235,15 +249,24 @@ impl Profile {
             zone.seen = false;
         }
         for zone in zones {
-            upsert(&mut self.gpu, zone.label, zone.ms);
-            match self
-                .run_gpu
-                .iter_mut()
-                .find(|(label, _)| label == zone.label)
-            {
+            let label = if zone.queue == QueueKind::Graphics {
+                std::borrow::Cow::Borrowed(zone.label)
+            } else {
+                std::borrow::Cow::Owned(format!("{} [{}]", zone.label, zone.queue.name()))
+            };
+            upsert(&mut self.gpu, &label, zone.ms);
+            match self.run_gpu.iter_mut().find(|(l, _)| *l == label) {
                 Some((_, sum)) => *sum += zone.ms,
-                None => self.run_gpu.push((zone.label.to_owned(), zone.ms)),
+                None => self.run_gpu.push((label.into_owned(), zone.ms)),
             }
+        }
+        if let Some(span) = span_ms {
+            self.gpu_span = if self.gpu_span == 0.0 {
+                span
+            } else {
+                self.gpu_span + (span - self.gpu_span) * SMOOTHING
+            };
+            self.run_span += span;
         }
         self.run_frames += 1;
         self.gpu.retain(|z| z.seen);
@@ -290,7 +313,11 @@ impl Profile {
     /// Draws the profile into `canvas`.
     pub(crate) fn layout(&self, canvas: &mut Canvas, title: &str, extent: vk::Extent2D) {
         let (mean, p50, p99) = self.percentiles();
-        let gpu_total: f64 = self.gpu.iter().map(|z| z.ms).sum();
+        let gpu_total: f64 = if self.gpu_span > 0.0 {
+            self.gpu_span
+        } else {
+            self.gpu.iter().map(|z| z.ms).sum()
+        };
         let cpu_total: f64 = self.cpu.iter().filter(|z| !is_wait(z)).map(|z| z.ms).sum();
         let width = canvas.cols().min(NAME_COLUMNS + BAR_CELLS + 30);
         let groups = self.groups();
@@ -643,10 +670,17 @@ mod tests {
             ms,
             start_ticks: 0,
             end_ticks: 0,
+            queue: QueueKind::Graphics,
         };
-        profile.gpu_zones(&[zone("shading/resolve", 0.1), zone("geometry/cull", 0.2)]);
+        profile.gpu_zones(
+            &[zone("shading/resolve", 0.1), zone("geometry/cull", 0.2)],
+            None,
+        );
         // A zone missing from a frame counts as zero there; a repeated label adds up.
-        profile.gpu_zones(&[zone("geometry/cull", 0.3), zone("geometry/cull", 0.1)]);
+        profile.gpu_zones(
+            &[zone("geometry/cull", 0.3), zone("geometry/cull", 0.1)],
+            None,
+        );
         assert_eq!(
             profile.gpu_run_summary().as_deref(),
             Some("0.350 ms per frame over 2 frames: geometry/cull 0.300, shading/resolve 0.050")
@@ -675,11 +709,15 @@ mod tests {
             ms,
             start_ticks: 0,
             end_ticks: 0,
+            queue: QueueKind::Graphics,
         };
-        profile.gpu_zones(&[zone("geometry/pass 1", 4.0), zone("temporal/resolve", 1.0)]);
+        profile.gpu_zones(
+            &[zone("geometry/pass 1", 4.0), zone("temporal/resolve", 1.0)],
+            None,
+        );
         profile.cpu_zone("cpu/update", 0.1);
         assert_eq!(profile.groups(), vec!["geometry", "temporal", "cpu"]);
-        profile.gpu_zones(&[zone("geometry/pass 1", 8.0)]);
+        profile.gpu_zones(&[zone("geometry/pass 1", 8.0)], None);
         // The first sample is taken as is, the second moves it by the smoothing weight.
         let pass1 = profile
             .gpu

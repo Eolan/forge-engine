@@ -26,10 +26,10 @@ pub use forge_gpu::TransientDesc;
 /// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
 pub use forge_gpu::vk;
 use forge_gpu::{
-    Buffer, BufferAccess, BufferDesc, Commands, Device, DeviceOptions, FRAMES_IN_FLIGHT,
-    FrameGraph, FrameSlot, Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance,
-    MemoryCategory, MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface,
-    Swapchain, VENDOR_NVIDIA,
+    Buffer, BufferAccess, BufferDesc, Device, DeviceOptions, FRAMES_IN_FLIGHT, FrameGraph,
+    FrameSlot, Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance, MemoryCategory,
+    MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface, Swapchain,
+    VENDOR_NVIDIA,
 };
 pub use input::Input;
 pub use loading::Finish;
@@ -278,8 +278,6 @@ struct State<D: Demo> {
     last_frame: Instant,
     last_title: Instant,
     config: AppConfig,
-    /// `FORGE_FRAME_BARRIER=1`: a full memory barrier at the start of every frame (debugging).
-    debug_frame_barrier: bool,
     /// `FORGE_WAIT_IDLE=1`: wait for the device after every submit (debugging).
     debug_wait_idle: bool,
     /// `FORGE_NO_TITLE=1`: never update the window title (debugging).
@@ -474,7 +472,6 @@ impl<D: Demo> State<D> {
             last_frame: Instant::now(),
             last_title: Instant::now(),
             config,
-            debug_frame_barrier: std::env::var_os("FORGE_FRAME_BARRIER").is_some_and(|v| v != "0"),
             debug_wait_idle: std::env::var_os("FORGE_WAIT_IDLE").is_some_and(|v| v != "0"),
             debug_no_title: std::env::var_os("FORGE_NO_TITLE").is_some_and(|v| v != "0"),
             debug_stall_ms: std::env::var("FORGE_STALL_MS")
@@ -592,7 +589,9 @@ impl<D: Demo> State<D> {
         if self.ctx.loading {
             self.ctx.counted_from = slot.frame_number + 1;
         } else if slot.frame_number >= self.ctx.counted_from + FRAMES_IN_FLIGHT as u64 {
-            self.ctx.profile.gpu_zones(self.ctx.frames.gpu_zones());
+            self.ctx
+                .profile
+                .gpu_zones(self.ctx.frames.gpu_zones(), slot.previous_gpu_ms);
         }
         #[cfg(feature = "profiling")]
         self.tracy_gpu_zones();
@@ -654,9 +653,7 @@ impl<D: Demo> State<D> {
             })
             .transpose()?;
 
-        let cb = self.ctx.frames.begin(slot)?;
-        let device = Arc::clone(&self.ctx.device);
-        let timer_slot = self.ctx.frames.timer_slot(slot);
+        self.ctx.frames.begin(slot)?;
         let record_start = Instant::now();
         {
             #[cfg(feature = "profiling")]
@@ -717,20 +714,11 @@ impl<D: Demo> State<D> {
                 .pass("app/present")
                 .image(target, ImageAccess::Present)
                 .run(|_, _| Ok(()));
-            let commands = Commands::new(&device, cb).with_timers(&timer_slot);
-            if self.debug_frame_barrier {
-                // Debugging aid (`FORGE_FRAME_BARRIER=1`): serialise frames on the GPU.
-                commands.memory_barrier(
-                    vk::PipelineStageFlags2::ALL_COMMANDS,
-                    vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-                    vk::PipelineStageFlags2::ALL_COMMANDS,
-                    vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-                );
-            }
-            self.graph_stats =
-                self.ctx
-                    .graph
-                    .execute(frame.graph, &commands, &mut self.ctx.frames)?;
+            // `FORGE_FRAME_BARRIER=1` (serialise frames on the GPU) lives in the graph now.
+            self.graph_stats = self
+                .ctx
+                .graph
+                .execute(frame.graph, &mut self.ctx.frames, slot)?;
         }
         self.ctx
             .profile

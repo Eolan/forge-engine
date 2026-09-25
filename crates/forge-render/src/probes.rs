@@ -24,7 +24,7 @@ use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, BufferHandle, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT,
     FrameGraph, FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle,
-    MemoryCategory, MemoryLocation, Pipeline, Result, ShaderCompiler, ShaderStage, vk,
+    MemoryCategory, MemoryLocation, Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, vk,
 };
 use glam::{IVec3, Mat3, Quat, Vec3};
 
@@ -431,6 +431,7 @@ impl Probes {
         let trace = &this.trace;
         graph
             .pass("gi/probe rays")
+            .queue(QueueKind::Compute)
             .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
             .image(sky.table, ImageAccess::Sampled(compute))
             .image(irradiance, ImageAccess::Sampled(compute))
@@ -460,6 +461,7 @@ impl Probes {
         let state = &this.state;
         graph
             .pass("gi/probe state")
+            .queue(QueueKind::Compute)
             .buffer(rays, BufferAccess::ShaderRead(compute))
             .buffer(data, BufferAccess::ShaderReadWrite(compute))
             .run(move |_, commands| {
@@ -471,6 +473,7 @@ impl Probes {
         let blend = &this.blend;
         graph
             .pass("gi/probe blend")
+            .queue(QueueKind::Compute)
             .buffer(rays, BufferAccess::ShaderRead(compute))
             .buffer(data, BufferAccess::ShaderRead(compute))
             .image(irradiance, ImageAccess::StorageReadWrite(compute))

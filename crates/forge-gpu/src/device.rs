@@ -28,6 +28,48 @@ pub struct DeviceFeatures {
     pub int64_atomics: bool,
 }
 
+/// The queues a render-graph pass can run on (issue #77).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum QueueKind {
+    /// Graphics, compute and present: every pass that does not ask for another.
+    #[default]
+    Graphics,
+    /// A compute-only family: async compute beside the graphics queue. Graphics when the
+    /// device has none, or with `FORGE_ASYNC=0`.
+    Compute,
+    /// A transfer-only family: the copy engines. Graphics when the device has none, or with
+    /// `FORGE_ASYNC=0`.
+    Transfer,
+}
+
+impl QueueKind {
+    /// Every kind, in index order.
+    pub const ALL: [QueueKind; 3] = [QueueKind::Graphics, QueueKind::Compute, QueueKind::Transfer];
+
+    /// Position in [`Self::ALL`].
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Lower-case name for logs and the profiler.
+    pub fn name(self) -> &'static str {
+        match self {
+            QueueKind::Graphics => "graphics",
+            QueueKind::Compute => "compute",
+            QueueKind::Transfer => "transfer",
+        }
+    }
+}
+
+/// One queue the device created.
+#[derive(Clone, Copy, Debug)]
+struct QueueSlot {
+    family: u32,
+    queue: vk::Queue,
+    /// Whether its family writes timestamps (`timestampValidBits` > 0).
+    timestamps: bool,
+}
+
 /// Choices made when creating a device.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DeviceOptions {
@@ -59,6 +101,13 @@ pub struct Device {
     raw: ash::Device,
     graphics_family: u32,
     graphics_queue: vk::Queue,
+    /// Per [`QueueKind`]: its own queue, or the graphics one it falls back to.
+    queues: [QueueSlot; 3],
+    /// Whether each kind has a queue of its own (not the graphics fallback).
+    separate: [bool; 3],
+    /// The distinct families of the queues above: resources shared between queues are
+    /// created `CONCURRENT` over these when there is more than one.
+    families: Vec<u32>,
     features: DeviceFeatures,
     mesh_limits: Option<MeshShaderLimits>,
     timestamp_period_ns: f32,
@@ -223,10 +272,44 @@ impl Device {
                 .push_next(&mut ray_query)
                 .push_next(&mut ray_tracing);
         }
+        // Async compute and copies (issue #77): a compute-only family and a transfer-only one,
+        // never the video or optical-flow engines. `FORGE_ASYNC=0` keeps the single queue.
+        // SAFETY: property query on a valid physical device.
+        let families =
+            unsafe { raw_instance.get_physical_device_queue_family_properties(best.physical) };
+        let async_on = std::env::var_os("FORGE_ASYNC").is_none_or(|v| v != "0");
+        let engines = vk::QueueFlags::VIDEO_DECODE_KHR
+            | vk::QueueFlags::VIDEO_ENCODE_KHR
+            | vk::QueueFlags::OPTICAL_FLOW_NV;
+        let pick = |want: vk::QueueFlags, avoid: vk::QueueFlags| {
+            families
+                .iter()
+                .position(|f| {
+                    f.queue_count > 0
+                        && f.queue_flags.contains(want)
+                        && !f.queue_flags.intersects(avoid)
+                })
+                .map(|i| i as u32)
+                .filter(|_| async_on)
+        };
+        let compute_family = pick(vk::QueueFlags::COMPUTE, vk::QueueFlags::GRAPHICS | engines);
+        let transfer_family = pick(
+            vk::QueueFlags::TRANSFER,
+            vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | engines,
+        );
+        let mut family_list = vec![best.graphics_family];
+        family_list.extend(compute_family);
+        family_list.extend(transfer_family);
+        family_list.dedup();
         let priorities = [1.0_f32];
-        let queue_info = [vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(best.graphics_family)
-            .queue_priorities(&priorities)];
+        let queue_info: Vec<_> = family_list
+            .iter()
+            .map(|&family| {
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(family)
+                    .queue_priorities(&priorities)
+            })
+            .collect();
         let info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&extensions)
@@ -235,6 +318,25 @@ impl Device {
         let raw = unsafe { raw_instance.create_device(best.physical, &info, None)? };
         // SAFETY: the queue was requested in `queue_info`.
         let graphics_queue = unsafe { raw.get_device_queue(best.graphics_family, 0) };
+        let slot = |family: u32| QueueSlot {
+            family,
+            // SAFETY: one queue of every family in `family_list` was requested above.
+            queue: unsafe { raw.get_device_queue(family, 0) },
+            timestamps: families[family as usize].timestamp_valid_bits > 0,
+        };
+        let graphics_slot = slot(best.graphics_family);
+        let queues = [
+            graphics_slot,
+            compute_family.map_or(graphics_slot, slot),
+            transfer_family.map_or(graphics_slot, slot),
+        ];
+        let separate = [true, compute_family.is_some(), transfer_family.is_some()];
+        tracing::info!(
+            graphics = best.graphics_family,
+            compute = ?compute_family,
+            transfer = ?transfer_family,
+            "queue families"
+        );
 
         let mut mesh_props = vk::PhysicalDeviceMeshShaderPropertiesEXT::default();
         let mut acceleration_props =
@@ -310,6 +412,9 @@ impl Device {
             raw,
             graphics_family: best.graphics_family,
             graphics_queue,
+            queues,
+            separate,
+            families: family_list,
             features: best.features,
             mesh_limits,
             timestamp_period_ns,
@@ -619,6 +724,48 @@ impl Device {
     /// Family index of [`Self::graphics_queue`].
     pub fn graphics_family(&self) -> u32 {
         self.graphics_family
+    }
+
+    /// The queue that runs work of `kind`: its own, or the graphics queue.
+    pub fn queue(&self, kind: QueueKind) -> vk::Queue {
+        self.queues[kind.index()].queue
+    }
+
+    /// The family of [`Self::queue`].
+    pub fn queue_family(&self, kind: QueueKind) -> u32 {
+        self.queues[kind.index()].family
+    }
+
+    /// The kind that really runs work asked of `kind`: `kind` itself when the device has a
+    /// queue for it, otherwise [`QueueKind::Graphics`].
+    pub fn resolve_queue(&self, kind: QueueKind) -> QueueKind {
+        if self.separate[kind.index()] {
+            kind
+        } else {
+            QueueKind::Graphics
+        }
+    }
+
+    /// Whether the family of [`Self::queue`] writes timestamps.
+    pub fn queue_timestamps(&self, kind: QueueKind) -> bool {
+        self.queues[kind.index()].timestamps
+    }
+
+    /// The distinct queue families in use. With more than one, buffers, and images that are
+    /// not render targets, are created `CONCURRENT` over them.
+    pub fn queue_families(&self) -> &[u32] {
+        &self.families
+    }
+
+    /// Whether an image of `usage` is created `CONCURRENT` over [`Self::queue_families`]:
+    /// every image but a render target, when the device has several queue families. Render
+    /// targets stay `EXCLUSIVE`, which keeps colour compression on AMD (issue #77).
+    pub fn image_concurrent(&self, usage: vk::ImageUsageFlags) -> bool {
+        self.families.len() > 1
+            && !usage.intersects(
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            )
     }
 
     /// Optional features detected.

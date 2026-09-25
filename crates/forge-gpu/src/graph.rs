@@ -17,13 +17,24 @@
 //!    and writes the final states back into the imported resources so the next frame
 //!    continues from them.
 //!
-//! Rules: one graphics queue; passes run in declaration order; nothing is culled or
-//! reordered (every declared pass runs, every declared access is honoured). Consecutive
-//! passes with the same label share one profiler zone. Cross-queue passes (async compute,
-//! transfers) are the next extension: a pass gets a queue and edges that cross queues become
-//! timeline waits and ownership transfers. Immutable resources (textures uploaded once) are
-//! imported with their upload state ([`GraphImage::uploaded`]): declaring them costs nothing
-//! and keeps the rule that every access is declared.
+//! Rules: passes run in declaration order on the graphics queue; nothing is culled (every
+//! declared pass runs, every declared access is honoured). Consecutive passes with the same
+//! label share one profiler zone. Immutable resources (textures uploaded once) are imported
+//! with their upload state ([`GraphImage::uploaded`]): declaring them costs nothing and keeps
+//! the rule that every access is declared.
+//!
+//! Queues (issue #77): a pass may ask for the async compute or the transfer queue
+//! ([`PassBuilder::queue`]; graphics when the device has no such queue, or with
+//! `FORGE_ASYNC=0`). Such a pass moves up to just after the last pass it conflicts with (a
+//! shared resource that one of them writes), so it overlaps the graphics passes in between.
+//! The frame becomes a list of batches, one submission each: consecutive passes on one queue
+//! that wait for the same batches of the other queues. Every resource remembers which batch
+//! last wrote it and which read it since, on each queue, from frame to frame; an access from
+//! another queue becomes a timeline wait, and a barrier on the new queue from all its earlier
+//! work. The last batch is graphics and waits for every other queue's last one, so a frame
+//! slot is free when its graphics work is. Resources shared by queues must be `CONCURRENT`
+//! (every buffer, and every image but a render target: [`Device::image_concurrent`]); an
+//! async pass may not use a transient (its memory could be aliased while it runs).
 //!
 //! Transients (`depth`, the HDR colour target, motion vectors) live in one heap laid out from
 //! their lifetimes: two images whose pass ranges never overlap share memory. The first use of
@@ -45,10 +56,22 @@ use ash::vk;
 
 use crate::bindless::{SampledImageId, StorageImageId};
 use crate::commands::Commands;
-use crate::device::Device;
+use crate::device::{Device, QueueKind};
 use crate::error::{GpuError, Result};
-use crate::frame::Frames;
+use crate::frame::{Batch, FrameSlot, Frames};
 use crate::memory::{Buffer, Image, ImageDesc, TransientHeap};
+
+/// Which queue last touched a resource, and the batches of other queues a new access may
+/// have to wait for (issue #77). Carried from frame to frame like [`ResourceState`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct QueueSync {
+    /// The queue of the last access.
+    last: QueueKind,
+    /// The batch that last wrote the resource: its queue and timeline value.
+    writer: Option<(QueueKind, u64)>,
+    /// Per queue: the latest batch that read it since that write (0: none).
+    readers: [u64; 3],
+}
 
 /// The last known use of an image subresource or a buffer, kept between frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,6 +328,7 @@ pub struct GraphImage {
     sampled: Option<SampledImageId>,
     storage: Vec<StorageImageId>,
     states: Vec<Cell<ResourceState>>,
+    sync: Cell<QueueSync>,
     name: String,
 }
 
@@ -358,6 +382,7 @@ impl GraphImage {
             sampled,
             storage,
             states,
+            sync: Cell::new(QueueSync::default()),
             name: desc.name.to_owned(),
         }
     }
@@ -420,6 +445,7 @@ impl GraphImage {
             mip_levels: self.image.mip_levels(),
             sampled_layout: self.sampled_layout,
             transient: None,
+            concurrent: self.device.image_concurrent(self.image.usage()),
             name: self.name.clone(),
         }
     }
@@ -448,6 +474,7 @@ impl Drop for GraphImage {
 pub struct GraphBuffer {
     buffer: Buffer,
     state: Cell<ResourceState>,
+    sync: Cell<QueueSync>,
 }
 
 impl GraphBuffer {
@@ -457,6 +484,7 @@ impl GraphBuffer {
         Self {
             buffer,
             state: Cell::new(ResourceState::UNDEFINED),
+            sync: Cell::new(QueueSync::default()),
         }
     }
 
@@ -560,6 +588,8 @@ struct PassDecl {
     label: &'static str,
     images: Vec<ImageUse>,
     buffers: Vec<BufferUse>,
+    /// The queue it asked for; resolved against the device by [`RenderGraph::execute`].
+    queue: QueueKind,
 }
 
 type PassBody<'f> = Box<dyn FnOnce(&Resources<'_>, &Commands<'_>) -> Result<()> + 'f>;
@@ -624,6 +654,7 @@ impl<'f> FrameGraph<'f> {
                 label,
                 images: Vec::new(),
                 buffers: Vec::new(),
+                queue: QueueKind::Graphics,
             },
         }
     }
@@ -663,6 +694,14 @@ impl<'f> PassBuilder<'_, 'f> {
             mip: Some(level),
             access,
         });
+        self
+    }
+
+    /// Runs the pass on `queue` (graphics by default). On the compute or transfer queue it
+    /// moves up to just after the last pass it conflicts with and overlaps the graphics work
+    /// in between; its accesses must be ones that queue supports (compute stages, or copies).
+    pub fn queue(mut self, queue: QueueKind) -> Self {
+        self.decl.queue = queue;
         self
     }
 
@@ -777,36 +816,211 @@ struct ImageMeta {
     sampled_layout: vk::ImageLayout,
     /// For transients: the memory range in the heap (`None` when not aliased).
     transient: Option<Option<(u64, u64)>>,
+    /// Whether it is `CONCURRENT`, so a pass on another queue than graphics may use it.
+    concurrent: bool,
     name: String,
 }
 
-/// The barriers and mark of one pass.
+/// The barriers and mark of one pass, and the batch it is recorded in.
 #[derive(Clone, Debug, Default)]
 struct CompiledPass {
     image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
     memory_barrier: Option<vk::MemoryBarrier2<'static>>,
-    /// Closes the profiler zone after the pass (the next pass has another label).
+    /// Closes the profiler zone after the pass (the next pass has another label, or runs in
+    /// another batch).
     mark: Option<&'static str>,
+    /// Index into the batches.
+    batch: usize,
 }
 
-/// Derives the barriers of every pass and advances `image_states` / `buffer_states` to
-/// the end of the frame. Pure: tests run it on null handles.
+/// One submission: consecutive passes on one queue that wait for the same batches of the
+/// other queues (issue #77).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CompiledBatch {
+    queue: QueueKind,
+    /// Per queue: the timeline value to wait for (0 for none) and the stages that wait.
+    waits: [(u64, vk::PipelineStageFlags2); 3],
+    /// The value it signals on its queue's timeline.
+    signal: u64,
+}
+
+/// Derives the barriers of every pass on one queue (graphics) and advances `image_states` /
+/// `buffer_states` to the end of the frame. Pure: tests run it on null handles.
+#[cfg(test)]
 fn compile(
     passes: &[PassDecl],
     images: &[ImageMeta],
     image_states: &mut [Vec<ResourceState>],
     buffer_states: &mut [ResourceState],
 ) -> Result<Vec<CompiledPass>> {
+    let mut image_sync = vec![QueueSync::default(); images.len()];
+    let mut buffer_sync = vec![QueueSync::default(); buffer_states.len()];
+    let mut next = [0_u64; 3];
+    let (compiled, _) = compile_queued(
+        passes,
+        images,
+        image_states,
+        buffer_states,
+        &mut image_sync,
+        &mut buffer_sync,
+        &mut |kind| {
+            next[kind.index()] += 1;
+            next[kind.index()]
+        },
+    )?;
+    Ok(compiled)
+}
+
+/// A barrier from everything this queue did before, for a resource another queue used
+/// since: the timeline wait orders the other queue's work, this orders this queue's own.
+fn cross_queue(
+    state: &mut ResourceState,
+    dst: ResourceState,
+) -> Option<(ResourceState, ResourceState)> {
+    let src = ResourceState {
+        layout: state.layout,
+        stage: vk::PipelineStageFlags2::ALL_COMMANDS,
+        access: vk::AccessFlags2::MEMORY_WRITE,
+        write: true,
+    };
+    *state = dst;
+    Some((src, dst))
+}
+
+/// The stages a timeline wait blocks: the access's, or every stage for the host's or none.
+fn wait_stages(stage: vk::PipelineStageFlags2) -> vk::PipelineStageFlags2 {
+    if stage.is_empty() || stage.contains(vk::PipelineStageFlags2::HOST) {
+        vk::PipelineStageFlags2::ALL_COMMANDS
+    } else {
+        stage
+    }
+}
+
+/// Adds to `waits` what an access on `queue` to a resource with `sync` must wait for: the
+/// batch of another queue that last wrote it, and for a write, the batches of other queues
+/// that read it since.
+fn access_waits(
+    waits: &mut [(u64, vk::PipelineStageFlags2); 3],
+    sync: &QueueSync,
+    queue: QueueKind,
+    write: bool,
+    stage: vk::PipelineStageFlags2,
+) {
+    let mut wait = |kind: QueueKind, value: u64| {
+        let entry = &mut waits[kind.index()];
+        entry.0 = entry.0.max(value);
+        entry.1 |= wait_stages(stage);
+    };
+    if let Some((kind, value)) = sync.writer
+        && kind != queue
+    {
+        wait(kind, value);
+    }
+    if write {
+        for kind in QueueKind::ALL {
+            let value = sync.readers[kind.index()];
+            if kind != queue && value > 0 {
+                wait(kind, value);
+            }
+        }
+    }
+}
+
+/// Records an access on `queue`, in the batch that signals `signal`, in `sync`.
+fn record_access(sync: &mut QueueSync, queue: QueueKind, write: bool, signal: u64) {
+    sync.last = queue;
+    if write {
+        sync.writer = Some((queue, signal));
+        sync.readers = [0; 3];
+    } else {
+        let reader = &mut sync.readers[queue.index()];
+        *reader = (*reader).max(signal);
+    }
+}
+
+/// Derives the batches, the barriers of every pass and the timeline waits between queues,
+/// and advances the states and the queue records of every resource to the end of the frame.
+/// `passes` are in execution order ([`schedule`]) with their queues resolved; `reserve`
+/// hands out each queue's next timeline value. The last batch is graphics and waits for the
+/// last batch of every other queue. Pure: tests run it on null handles.
+fn compile_queued(
+    passes: &[PassDecl],
+    images: &[ImageMeta],
+    image_states: &mut [Vec<ResourceState>],
+    buffer_states: &mut [ResourceState],
+    image_sync: &mut [QueueSync],
+    buffer_sync: &mut [QueueSync],
+    reserve: &mut dyn FnMut(QueueKind) -> u64,
+) -> Result<(Vec<CompiledPass>, Vec<CompiledBatch>)> {
     let mut first_use = vec![true; images.len()];
     let mut compiled = Vec::with_capacity(passes.len());
-    for (index, pass) in passes.iter().enumerate() {
-        let mut out = CompiledPass::default();
-        let mut seen: Vec<(u32, Option<u32>)> = Vec::new();
+    let mut batches: Vec<CompiledBatch> = Vec::new();
+    for pass in passes {
+        let queue = pass.queue;
+        // What the pass waits for on the other queues, and whether its resources may cross.
+        let mut waits = [(0_u64, vk::PipelineStageFlags2::NONE); 3];
         for use_ in &pass.images {
             let i = use_.handle.0 as usize;
             let meta = images.get(i).ok_or_else(|| {
                 GpuError::Graph(format!("pass '{}' uses an unknown image", pass.label))
             })?;
+            if queue != QueueKind::Graphics && meta.transient.is_some() {
+                return Err(GpuError::Graph(format!(
+                    "pass '{}' on the {} queue uses transient '{}': its memory may be aliased while it runs",
+                    pass.label,
+                    queue.name(),
+                    meta.name
+                )));
+            }
+            if queue != QueueKind::Graphics && !meta.concurrent {
+                return Err(GpuError::Graph(format!(
+                    "pass '{}' on the {} queue uses '{}', which only the graphics queue may use (a render target or the swapchain)",
+                    pass.label,
+                    queue.name(),
+                    meta.name
+                )));
+            }
+            let dst = use_.access.state(meta.sampled_layout);
+            access_waits(&mut waits, &image_sync[i], queue, dst.write, dst.stage);
+        }
+        for use_ in &pass.buffers {
+            let i = use_.handle.0 as usize;
+            let sync = buffer_sync.get(i).ok_or_else(|| {
+                GpuError::Graph(format!("pass '{}' uses an unknown buffer", pass.label))
+            })?;
+            let dst = use_.access.state();
+            access_waits(&mut waits, sync, queue, dst.write, dst.stage);
+        }
+        // The pass joins the open batch when that batch is on its queue and already waits
+        // for everything it needs; otherwise it opens a batch.
+        let joins = batches.last().is_some_and(|b| {
+            b.queue == queue && (0..3).all(|k| waits[k].0 == 0 || waits[k].0 <= b.waits[k].0)
+        });
+        if joins {
+            let batch = batches.last_mut().expect("checked above");
+            for (open, need) in batch.waits.iter_mut().zip(waits) {
+                if need.0 > 0 {
+                    open.1 |= need.1;
+                }
+            }
+        } else {
+            batches.push(CompiledBatch {
+                queue,
+                waits,
+                signal: reserve(queue),
+            });
+        }
+        let batch = batches.len() - 1;
+        let signal = batches[batch].signal;
+
+        let mut out = CompiledPass {
+            batch,
+            ..CompiledPass::default()
+        };
+        let mut seen: Vec<(u32, Option<u32>)> = Vec::new();
+        for use_ in &pass.images {
+            let i = use_.handle.0 as usize;
+            let meta = &images[i];
             let clashes = seen.iter().any(|&(h, mip)| {
                 h == use_.handle.0 && (mip.is_none() || use_.mip.is_none() || mip == use_.mip)
             });
@@ -859,10 +1073,16 @@ fn compile(
                 }
                 None => (0, meta.mip_levels),
             };
+            let crossing = image_sync[i].last != queue;
             // One barrier per run of consecutive mips that need the same transition.
             let mut run: Option<(u32, u32, ResourceState, ResourceState)> = None;
             for level in base..base + count {
-                let step = transition(&mut image_states[i][level as usize], dst);
+                let state = &mut image_states[i][level as usize];
+                let step = if crossing {
+                    cross_queue(state, dst)
+                } else {
+                    transition(state, dst)
+                };
                 let extends = matches!(
                     (step, run),
                     (Some((s, d)), Some((_, _, rs, rd))) if rs == s && rd == d
@@ -885,14 +1105,12 @@ fn compile(
                 out.image_barriers
                     .push(image_barrier(meta, start, len, src, dst));
             }
+            record_access(&mut image_sync[i], queue, dst.write, signal);
         }
         let mut seen_buffers: Vec<u32> = Vec::new();
         let mut memory: Option<vk::MemoryBarrier2<'static>> = None;
         for use_ in &pass.buffers {
             let i = use_.handle.0 as usize;
-            let state = buffer_states.get_mut(i).ok_or_else(|| {
-                GpuError::Graph(format!("pass '{}' uses an unknown buffer", pass.label))
-            })?;
             if seen_buffers.contains(&use_.handle.0) {
                 return Err(GpuError::Graph(format!(
                     "pass '{}' declares a buffer twice",
@@ -900,7 +1118,14 @@ fn compile(
                 )));
             }
             seen_buffers.push(use_.handle.0);
-            if let Some((src, dst)) = transition(state, use_.access.state())
+            let state = &mut buffer_states[i];
+            let dst = use_.access.state();
+            let step = if buffer_sync[i].last != queue {
+                cross_queue(state, dst)
+            } else {
+                transition(state, dst)
+            };
+            if let Some((src, dst)) = step
                 && src.stage != vk::PipelineStageFlags2::NONE
             {
                 let barrier = memory.get_or_insert_with(vk::MemoryBarrier2::default);
@@ -909,15 +1134,84 @@ fn compile(
                 barrier.dst_stage_mask |= dst.stage;
                 barrier.dst_access_mask |= dst.access;
             }
+            record_access(&mut buffer_sync[i], queue, dst.write, signal);
         }
         out.memory_barrier = memory;
-        let next_label = passes.get(index + 1).map(|p| p.label);
-        if next_label != Some(pass.label) {
-            out.mark = Some(pass.label);
-        }
         compiled.push(out);
     }
-    Ok(compiled)
+    // The frame ends on the graphics queue, after every other queue's last batch.
+    if batches
+        .last()
+        .is_none_or(|b| b.queue != QueueKind::Graphics)
+    {
+        batches.push(CompiledBatch {
+            queue: QueueKind::Graphics,
+            waits: [(0, vk::PipelineStageFlags2::NONE); 3],
+            signal: reserve(QueueKind::Graphics),
+        });
+    }
+    let last = batches.len() - 1;
+    for kind in [QueueKind::Compute, QueueKind::Transfer] {
+        let latest = batches
+            .iter()
+            .filter(|b| b.queue == kind)
+            .map(|b| b.signal)
+            .max();
+        if let Some(value) = latest {
+            let wait = &mut batches[last].waits[kind.index()];
+            if wait.0 < value {
+                *wait = (value, wait.1 | vk::PipelineStageFlags2::ALL_COMMANDS);
+            }
+        }
+    }
+    // Zones close where the label changes or the batch does.
+    for index in 0..compiled.len() {
+        let next = passes
+            .get(index + 1)
+            .map(|p| p.label)
+            .zip(compiled.get(index + 1).map(|c| c.batch));
+        if next != Some((passes[index].label, compiled[index].batch)) {
+            compiled[index].mark = Some(passes[index].label);
+        }
+    }
+    Ok((compiled, batches))
+}
+
+/// Whether two passes touch a resource that one of them writes.
+fn conflicts(a: &PassDecl, b: &PassDecl) -> bool {
+    let image_write = |u: &ImageUse| u.access.state(vk::ImageLayout::GENERAL).write;
+    let images = a.images.iter().any(|ua| {
+        b.images.iter().any(|ub| {
+            ua.handle == ub.handle
+                && (ua.mip.is_none() || ub.mip.is_none() || ua.mip == ub.mip)
+                && (image_write(ua) || image_write(ub))
+        })
+    });
+    let buffers = a.buffers.iter().any(|ua| {
+        b.buffers.iter().any(|ub| {
+            ua.handle == ub.handle && (ua.access.state().write || ub.access.state().write)
+        })
+    });
+    images || buffers
+}
+
+/// The order passes run in: declaration order, except that a pass on another queue than
+/// graphics moves up to just after the last pass before it that it conflicts with, so it
+/// overlaps the graphics passes in between (issue #77).
+fn schedule(passes: &[PassDecl]) -> Vec<usize> {
+    let mut order: Vec<usize> = Vec::with_capacity(passes.len());
+    for (i, pass) in passes.iter().enumerate() {
+        if pass.queue == QueueKind::Graphics {
+            order.push(i);
+            continue;
+        }
+        let at = order
+            .iter()
+            .rposition(|&k| conflicts(&passes[k], pass))
+            .map_or(0, |p| p + 1);
+        order.insert(at, i);
+    }
+    order
 }
 
 fn image_barrier(
@@ -1079,6 +1373,10 @@ pub struct GraphStats {
     pub heap_rebuilds: u64,
     /// Resources waiting in the deferred-deletion queue.
     pub pending_destructions: usize,
+    /// Submissions of the frame (one per batch, issue #77).
+    pub batches: u32,
+    /// Passes per queue, in [`QueueKind::ALL`] order.
+    pub queue_passes: [u32; 3],
 }
 
 /// The persistent side of the graph: the transient heap, statistics, logging.
@@ -1089,6 +1387,9 @@ pub struct RenderGraph {
     stats: GraphStats,
     log: bool,
     allow_alias: bool,
+    /// `FORGE_FRAME_BARRIER=1`: a full barrier at the start of each queue's first batch, which
+    /// serialises frames on the GPU (a debugging aid).
+    frame_barrier: bool,
     last_plan: u64,
 }
 
@@ -1103,6 +1404,7 @@ impl RenderGraph {
             stats: GraphStats::default(),
             log: flag("FORGE_GRAPH_LOG"),
             allow_alias: !flag("FORGE_GRAPH_NO_ALIAS"),
+            frame_barrier: flag("FORGE_FRAME_BARRIER"),
             last_plan: 0,
         }
     }
@@ -1112,14 +1414,16 @@ impl RenderGraph {
         self.stats
     }
 
-    /// Lays out the transients, derives the barriers, records every pass into `commands` and
-    /// writes the final resource states back. `frames` receives resources retired by a
-    /// transient relayout.
+    /// Resolves each pass's queue, orders the passes ([`schedule`]), lays out the
+    /// transients, derives the batches and barriers, records every batch into a command
+    /// buffer of `slot` and queues it on `frames` for [`Frames::submit`], and writes the
+    /// final resource states back. `frames` also receives resources retired by a transient
+    /// relayout.
     pub fn execute(
         &mut self,
         frame: FrameGraph<'_>,
-        commands: &Commands<'_>,
         frames: &mut Frames,
+        slot: FrameSlot,
     ) -> Result<GraphStats> {
         let FrameGraph {
             extent,
@@ -1127,6 +1431,20 @@ impl RenderGraph {
             buffers,
             passes,
         } = frame;
+        // Queues as the device has them, then the order they run in.
+        let mut passes = passes;
+        for pass in &mut passes {
+            pass.decl.queue = self.device.resolve_queue(pass.decl.queue);
+        }
+        let order = {
+            let decls: Vec<PassDecl> = passes.iter().map(|p| p.decl.clone()).collect();
+            schedule(&decls)
+        };
+        let mut slots: Vec<Option<Pass<'_>>> = passes.into_iter().map(Some).collect();
+        let passes: Vec<Pass<'_>> = order
+            .iter()
+            .map(|&i| slots[i].take().expect("each pass is scheduled once"))
+            .collect();
         let decls: Vec<PassDecl> = passes.iter().map(|p| p.decl.clone()).collect();
 
         // Transient lifetimes, then their placement; reuse the cache when it matches.
@@ -1183,6 +1501,7 @@ impl RenderGraph {
                         mip_levels: 1,
                         sampled_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                         transient: None,
+                        concurrent: false,
                         name: raw.name.to_owned(),
                     });
                     resolved.push(ResolvedImage {
@@ -1231,6 +1550,7 @@ impl RenderGraph {
                             mip_levels: 1,
                             sampled_layout: vk::ImageLayout::UNDEFINED,
                             transient: None,
+                            concurrent: false,
                             name: format!("{} (unused)", desc.name),
                         });
                         resolved.push(ResolvedImage {
@@ -1250,8 +1570,27 @@ impl RenderGraph {
             }
         }
         let mut buffer_states: Vec<ResourceState> = buffers.iter().map(|b| b.state.get()).collect();
+        let mut image_sync: Vec<QueueSync> = images
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| match entry {
+                ImageEntry::Imported(image) => image.sync.get(),
+                ImageEntry::Transient(_) => request_of_image[i]
+                    .map_or_else(QueueSync::default, |r| cache.images[r].sync.get()),
+                ImageEntry::Raw(_) => QueueSync::default(),
+            })
+            .collect();
+        let mut buffer_sync: Vec<QueueSync> = buffers.iter().map(|b| b.sync.get()).collect();
 
-        let compiled = compile(&decls, &metas, &mut image_states, &mut buffer_states)?;
+        let (compiled, batches) = compile_queued(
+            &decls,
+            &metas,
+            &mut image_states,
+            &mut buffer_states,
+            &mut image_sync,
+            &mut buffer_sync,
+            &mut |kind| frames.reserve_value(kind),
+        )?;
 
         // Record.
         let names: Vec<String> = metas.iter().map(|m| m.name.clone()).collect();
@@ -1272,18 +1611,45 @@ impl RenderGraph {
             aliased: cache.placement.aliased,
             heap_rebuilds: self.stats.heap_rebuilds,
             pending_destructions: frames.pending_destructions(),
+            batches: batches.len() as u32,
             ..GraphStats::default()
         };
-        for (pass, plan) in passes.into_iter().zip(&compiled) {
-            let memory = plan.memory_barrier.as_slice();
-            commands.barriers(memory, &plan.image_barriers);
-            stats.image_barriers += plan.image_barriers.len() as u32;
-            stats.memory_barriers += memory.len() as u32;
-            commands.set_pass(pass.decl.label);
-            (pass.run)(&resources, commands)?;
-            if let Some(label) = plan.mark {
-                commands.mark(label);
+        let timers = frames.timer_slot(slot);
+        let mut work = passes.into_iter().zip(&compiled).peekable();
+        let mut started = [false; 3];
+        for (index, batch) in batches.iter().enumerate() {
+            let cb = frames.command_buffer(slot, batch.queue)?;
+            timers.start(cb, batch.queue);
+            let commands = Commands::new(&self.device, cb).with_timers(&timers);
+            if self.frame_barrier && !started[batch.queue.index()] {
+                // Debugging aid (`FORGE_FRAME_BARRIER=1`): serialise frames on the GPU.
+                let everything = vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE;
+                commands.memory_barrier(
+                    vk::PipelineStageFlags2::ALL_COMMANDS,
+                    everything,
+                    vk::PipelineStageFlags2::ALL_COMMANDS,
+                    everything,
+                );
             }
+            started[batch.queue.index()] = true;
+            while let Some((pass, plan)) = work.next_if(|(_, plan)| plan.batch == index) {
+                let memory = plan.memory_barrier.as_slice();
+                commands.barriers(memory, &plan.image_barriers);
+                stats.image_barriers += plan.image_barriers.len() as u32;
+                stats.memory_barriers += memory.len() as u32;
+                stats.queue_passes[batch.queue.index()] += 1;
+                commands.set_pass(pass.decl.label);
+                (pass.run)(&resources, &commands)?;
+                if let Some(label) = plan.mark {
+                    commands.mark(label);
+                }
+            }
+            frames.push_batch(Batch {
+                queue: batch.queue,
+                command_buffer: cb,
+                waits: batch.waits,
+                signal: batch.signal,
+            });
         }
 
         // Persist the states.
@@ -1294,19 +1660,22 @@ impl RenderGraph {
                     for (cell, state) in image.states.iter().zip(states) {
                         cell.set(*state);
                     }
+                    image.sync.set(image_sync[i]);
                 }
                 ImageEntry::Transient(_) => {
                     if let Some(r) = request_of_image[i] {
                         for (cell, state) in cache.images[r].states.iter().zip(states) {
                             cell.set(*state);
                         }
+                        cache.images[r].sync.set(image_sync[i]);
                     }
                 }
                 ImageEntry::Raw(_) => {}
             }
         }
-        for (buffer, state) in buffers.iter().zip(&buffer_states) {
+        for ((buffer, state), sync) in buffers.iter().zip(&buffer_states).zip(&buffer_sync) {
             buffer.state.set(*state);
+            buffer.sync.set(*sync);
         }
         self.stats = stats;
 
@@ -1316,6 +1685,7 @@ impl RenderGraph {
                 decl.label.hash(&mut hasher);
                 plan.image_barriers.len().hash(&mut hasher);
                 plan.memory_barrier.is_some().hash(&mut hasher);
+                plan.batch.hash(&mut hasher);
             }
             cache.placement.entries.len().hash(&mut hasher);
             let hash = hasher.finish();
@@ -1323,7 +1693,14 @@ impl RenderGraph {
                 self.last_plan = hash;
                 tracing::info!(
                     "render graph plan:\n{}",
-                    describe(&decls, &metas, &compiled, &cache.placement, &stats)
+                    describe(
+                        &decls,
+                        &metas,
+                        &compiled,
+                        &batches,
+                        &cache.placement,
+                        &stats
+                    )
                 );
             }
         }
@@ -1382,6 +1759,7 @@ fn describe(
     passes: &[PassDecl],
     images: &[ImageMeta],
     compiled: &[CompiledPass],
+    batches: &[CompiledBatch],
     placement: &Placement,
     stats: &GraphStats,
 ) -> String {
@@ -1406,7 +1784,25 @@ fn describe(
             placed.size / 1024
         );
     }
+    let mut batch = usize::MAX;
     for (pass, plan) in passes.iter().zip(compiled) {
+        if plan.batch != batch {
+            batch = plan.batch;
+            let b = &batches[batch];
+            let mut waits = String::new();
+            for kind in QueueKind::ALL {
+                let (value, stages) = b.waits[kind.index()];
+                if value > 0 {
+                    let _ = write!(waits, ", waits for {} {value} at {stages:?}", kind.name());
+                }
+            }
+            let _ = writeln!(
+                text,
+                "  batch {batch} on {} (signals {}{waits})",
+                b.queue.name(),
+                b.signal
+            );
+        }
         let _ = writeln!(text, "  pass '{}'", pass.label);
         for b in &plan.image_barriers {
             let name = images
@@ -1499,6 +1895,7 @@ mod tests {
                 L::GENERAL
             },
             transient,
+            concurrent: true,
             name: name.to_owned(),
         }
     }
@@ -1515,6 +1912,7 @@ mod tests {
                 })
                 .collect(),
             buffers: Vec::new(),
+            queue: QueueKind::Graphics,
         }
     }
 
@@ -1727,6 +2125,7 @@ mod tests {
                         access: BufferAccess::ShaderWrite(S::COMPUTE_SHADER),
                     },
                 ],
+                queue: QueueKind::Graphics,
             },
             PassDecl {
                 label: "g/draw",
@@ -1741,6 +2140,7 @@ mod tests {
                         access: BufferAccess::IndirectArgs,
                     },
                 ],
+                queue: QueueKind::Graphics,
             },
         ];
         let plan = compile(&passes, &[], &mut [], &mut buffers).unwrap();
@@ -1849,5 +2249,134 @@ mod tests {
             !plan(&incompatible, true).aliased,
             "no common memory type: no heap"
         );
+    }
+
+    fn on(queue: QueueKind, mut decl: PassDecl) -> PassDecl {
+        decl.queue = queue;
+        decl
+    }
+
+    /// Runs the scheduler and the compiler as `execute` does, from persistent `sync`.
+    fn frame(
+        passes: &[PassDecl],
+        images: &[ImageMeta],
+        states: &mut [Vec<ResourceState>],
+        sync: &mut [QueueSync],
+        next: &mut [u64; 3],
+    ) -> Result<(Vec<&'static str>, Vec<CompiledPass>, Vec<CompiledBatch>)> {
+        let order = schedule(passes);
+        let ordered: Vec<PassDecl> = order.iter().map(|&i| passes[i].clone()).collect();
+        let (compiled, batches) = compile_queued(
+            &ordered,
+            images,
+            states,
+            &mut [],
+            sync,
+            &mut [],
+            &mut |kind| {
+                next[kind.index()] += 1;
+                next[kind.index()]
+            },
+        )?;
+        Ok((ordered.iter().map(|p| p.label).collect(), compiled, batches))
+    }
+
+    #[test]
+    fn an_async_pass_moves_up_to_its_last_conflict_and_graphics_waits_for_its_result() {
+        use QueueKind::{Compute, Graphics};
+        let images = [meta("x", 1, None), meta("y", 1, None), meta("z", 1, None)];
+        let mut states = vec![vec![ResourceState::UNDEFINED]; 3];
+        let mut sync = vec![QueueSync::default(); 3];
+        let mut next = [0; 3];
+        let write = ImageAccess::StorageWrite(S::COMPUTE_SHADER);
+        let read = ImageAccess::Sampled(S::COMPUTE_SHADER);
+        let passes = [
+            pass("g/a", &[(0, None, write)]),
+            pass("g/b", &[(1, None, write)]),
+            on(
+                Compute,
+                pass("c/probes", &[(0, None, read), (2, None, write)]),
+            ),
+            pass("g/c", &[(2, None, read)]),
+        ];
+        let (order, compiled, batches) =
+            frame(&passes, &images, &mut states, &mut sync, &mut next).unwrap();
+        // The probes need only what g/a wrote: they run beside g/b.
+        assert_eq!(order, ["g/a", "c/probes", "g/b", "g/c"]);
+        assert_eq!(
+            compiled.iter().map(|c| c.batch).collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        let queues: Vec<_> = batches.iter().map(|b| b.queue).collect();
+        assert_eq!(queues, [Graphics, Compute, Graphics, Graphics]);
+        assert_eq!(batches[1].waits[Graphics.index()], (1, S::COMPUTE_SHADER));
+        assert_eq!(batches[2].waits, [(0, S::NONE); 3], "g/b waits for nothing");
+        assert_eq!(
+            batches[3].waits[Compute.index()].0,
+            1,
+            "g/c waits for the probes"
+        );
+        // Crossing queues, the reads are ordered after everything their queue did before.
+        let barrier = compiled[3].image_barriers[0];
+        assert_eq!(barrier.src_stage_mask, S::ALL_COMMANDS);
+        assert_eq!(sync[2].readers[Graphics.index()], batches[3].signal);
+
+        // Next frame the probes write z again: after last frame's graphics read of it.
+        let passes = [
+            on(
+                Compute,
+                pass("c/probes", &[(0, None, read), (2, None, write)]),
+            ),
+            pass("g/c", &[(2, None, read)]),
+        ];
+        let (_, _, next_batches) =
+            frame(&passes, &images, &mut states, &mut sync, &mut next).unwrap();
+        assert_eq!(next_batches[0].queue, Compute);
+        assert_eq!(next_batches[0].waits[Graphics.index()].0, batches[3].signal);
+    }
+
+    #[test]
+    fn a_frame_ends_on_the_graphics_queue_after_every_async_batch() {
+        use QueueKind::{Compute, Graphics};
+        let images = [meta("x", 1, None)];
+        let mut states = vec![vec![ResourceState::UNDEFINED]];
+        let mut sync = vec![QueueSync::default()];
+        let mut next = [0; 3];
+        let passes = [
+            pass(
+                "g/a",
+                &[(0, None, ImageAccess::StorageWrite(S::COMPUTE_SHADER))],
+            ),
+            on(
+                Compute,
+                pass(
+                    "c/b",
+                    &[(0, None, ImageAccess::StorageReadWrite(S::COMPUTE_SHADER))],
+                ),
+            ),
+        ];
+        let (_, _, batches) = frame(&passes, &images, &mut states, &mut sync, &mut next).unwrap();
+        assert_eq!(batches.len(), 3);
+        let join = batches[2];
+        assert_eq!(join.queue, Graphics);
+        assert_eq!(join.waits[Compute.index()].0, batches[1].signal);
+    }
+
+    #[test]
+    fn an_async_pass_may_not_use_a_transient_or_a_render_target() {
+        let mut states = vec![vec![ResourceState::UNDEFINED]];
+        let passes = [on(
+            QueueKind::Compute,
+            pass(
+                "c/a",
+                &[(0, None, ImageAccess::StorageWrite(S::COMPUTE_SHADER))],
+            ),
+        )];
+        let transient = [meta("t", 1, Some(None))];
+        let mut sync = vec![QueueSync::default()];
+        assert!(frame(&passes, &transient, &mut states, &mut sync, &mut [0; 3]).is_err());
+        let mut target = meta("target", 1, None);
+        target.concurrent = false;
+        assert!(frame(&passes, &[target], &mut states, &mut sync, &mut [0; 3]).is_err());
     }
 }

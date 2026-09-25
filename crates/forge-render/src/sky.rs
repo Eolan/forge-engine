@@ -20,7 +20,7 @@ use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, BufferHandle, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT,
     FrameGraph, FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle,
-    MemoryCategory, MemoryLocation, Pipeline, Result, ShaderCompiler, ShaderStage, vk,
+    MemoryCategory, MemoryLocation, Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, vk,
 };
 use glam::{Mat4, Vec3};
 
@@ -206,6 +206,7 @@ impl GroundSky {
         let pipeline = &self.sky_view_pipeline;
         graph
             .pass("sky/sky-view table")
+            .queue(QueueKind::Compute)
             .image(transmittance, ImageAccess::Sampled(compute))
             .image(multiple_scattering, ImageAccess::Sampled(compute))
             .image(sky_view, ImageAccess::StorageWrite(compute))
@@ -249,6 +250,7 @@ impl GroundSky {
         let pipeline = &self.irradiance_pipeline;
         graph
             .pass("sky/irradiance")
+            .queue(QueueKind::Compute)
             .image(sky_view, ImageAccess::Sampled(compute))
             .buffer(irradiance, BufferAccess::ShaderWrite(compute))
             .run(move |_, commands| {
@@ -260,6 +262,7 @@ impl GroundSky {
         let pipeline = &self.aerial_pipeline;
         graph
             .pass("sky/aerial perspective")
+            .queue(QueueKind::Compute)
             .image(transmittance, ImageAccess::Sampled(compute))
             .image(multiple_scattering, ImageAccess::Sampled(compute))
             .image(aerial, ImageAccess::StorageWrite(compute))

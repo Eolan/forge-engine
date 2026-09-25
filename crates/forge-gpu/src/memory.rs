@@ -261,8 +261,16 @@ impl Device {
         let size = desc.size.max(4);
         let info = vk::BufferCreateInfo::default()
             .size(size)
-            .usage(desc.usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .usage(desc.usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+        // Every buffer may be read on any queue (issue #77): concurrent costs nothing for
+        // buffers.
+        let families = self.queue_families();
+        let info = if families.len() > 1 {
+            info.sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(families)
+        } else {
+            info.sharing_mode(vk::SharingMode::EXCLUSIVE)
+        };
         // SAFETY: valid create info on a live device.
         let raw = unsafe { self.raw().create_buffer(&info, None)? };
         // SAFETY: `raw` is a live buffer.
@@ -631,6 +639,7 @@ impl Device {
     /// without creating it (`vkGetDeviceImageMemoryRequirements`, Vulkan 1.3).
     pub fn image_memory_requirements(&self, desc: &ImageDesc<'_>) -> vk::MemoryRequirements {
         let (info, _, _) = image_create_info(desc);
+        let info = self.with_image_sharing(info, desc.usage);
         let query = vk::DeviceImageMemoryRequirements::default().create_info(&info);
         let mut requirements = vk::MemoryRequirements2::default();
         // SAFETY: valid create info; the out structure is a plain default.
@@ -723,9 +732,25 @@ impl Device {
         )
     }
 
+    /// `info` made `CONCURRENT` over the queue families when [`Device::image_concurrent`]
+    /// says so for `usage`.
+    fn with_image_sharing<'a>(
+        &'a self,
+        info: vk::ImageCreateInfo<'a>,
+        usage: vk::ImageUsageFlags,
+    ) -> vk::ImageCreateInfo<'a> {
+        if self.image_concurrent(usage) {
+            info.sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(self.queue_families())
+        } else {
+            info
+        }
+    }
+
     /// Creates the Vulkan image of `desc` without memory.
     fn create_unbound_image(&self, desc: &ImageDesc<'_>) -> Result<(vk::Image, vk::Extent2D, u32)> {
         let (info, extent, mip_levels) = image_create_info(desc);
+        let info = self.with_image_sharing(info, desc.usage);
         // SAFETY: valid create info.
         let raw = unsafe { self.raw().create_image(&info, None)? };
         Ok((raw, extent, mip_levels))

@@ -44,8 +44,10 @@ batch in `docs/PROCESS.md`.
    proposed in D-017, 🟡).
 4. #76, ACES 2.0's output transform as a fourth tone curve ✅ (a baked table within 1–2
    levels of the per-pixel transform on real frames).
-5. #77, async compute and transfer queues in the render graph. #78 (transient buffers,
-   parallel recording) follows once CPU recording shows in the overlay.
+5. #77, async compute and transfer queues in the render graph ✅ (the city's sky tables and
+   probe update on the compute queue, its streaming copies on the transfer queue: 2.36 →
+   2.25 ms). #78 (transient buffers, parallel recording) follows once CPU recording shows in
+   the overlay. More overlap: #95.
 6. #92, the second cluster cull over the first one's rejects only.
 
 The owner confirmed this order on 2026-09-25, and the direction: grow the demos toward the
@@ -164,8 +166,9 @@ Goal: the renderer skeleton every later system draws through.
    compiled ahead after a change, the ballad and the city behind it).
 2. Render graph ✅ (2026-09-24, `forge-gpu::graph`, D-020): passes declare reads/writes,
    barriers derived, transient images aliased in one heap, deferred deletion by frame slot,
-   a profiler zone per pass. Still to come on it: async compute and transfer queues (#77),
-   transient buffers and parallel recording of pass bodies (#78). (Lesson from the previous project:
+   a profiler zone per pass. Async compute and transfer queues ✅ (#77: a queue per pass,
+   batches and timeline waits derived). Still to come on it: transient buffers and parallel
+   recording of pass bodies (#78). (Lesson from the previous project:
    undeclared buffer uses made NVIDIA replay stale indirect arguments.)
 3. Compute culling shared by both paths + `vkCmdDrawIndexedIndirectCount` fallback ✅
    (2026-09-24, issue #5): an instance cull and a cluster cull per mesh pass append the

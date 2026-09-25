@@ -170,6 +170,14 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - Lasse Jon Fuglsang Pedersen (Playdead), "Temporal Reprojection Anti-Aliasing in INSIDE",
     GDC 2016.
 
+**The render graph** (`forge-gpu::graph`, D-020):
+- **The frame graph.** Yuriy O'Donnell, "FrameGraph: Extensible Rendering Architecture in
+  Frostbite", GDC 2017: passes declaring what they read and write, barriers and transient
+  memory derived from them.
+- **Queues.** Hans-Kristian Arntzen, "Render graphs and Vulkan — a deep dive", 2017 (Granite),
+  and Epic Games' Render Dependency Graph documentation: the author picks a pass's queue and
+  the graph derives the waits between queues (issue #77).
+
 **Core** (`forge-core`, `forge-task`):
 - **Hashes.** Mark Jarzynski, Marc Olano, "Hash Functions for GPU Rendering", JCGT 2020: the
   PCG3D and PCG4D hashes, and the one-word PCG hash of the debugging image hash

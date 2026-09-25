@@ -150,7 +150,13 @@ report and in `docs/PROFILE.md`.
 - `FORGE_WAIT_IDLE=1`.
 - Vulkan debug printf: `VK_LAYER_PRINTF_ENABLE=1 VK_LAYER_PRINTF_TO_STDOUT=1` with
   `--validate`.
-- `FORGE_GRAPH_LOG=1` prints the render graph's plan.
+- `FORGE_GRAPH_LOG=1` prints the render graph's plan: its batches, the queue of each and the
+  timeline values it waits for, then each pass and its barriers.
+- `FORGE_ASYNC=0` keeps everything on the graphics queue (no async compute, no transfer
+  queue, `EXCLUSIVE` sharing): the serial reference to compare an async frame with (issue
+  #77). Captures must match in both modes.
+- `FORGE_FRAME_BARRIER=1` puts a full barrier at the start of each queue's first batch,
+  which serialises frames on the GPU.
 
 ## Sessions handed over: a fresh local session or a cloud session
 

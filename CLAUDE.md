@@ -60,7 +60,10 @@ update `docs/PROFILE.md`.
 - Every pass is a render-graph pass (`graph.pass("group/name")`, D-020) declaring the images
   and buffers it reads and writes; the graph derives the barriers and the profiler zone.
   Nobody outside `forge-gpu` records a barrier; if a pass needs a resource the graph cannot
-  express, extend the graph. `FORGE_GRAPH_LOG=1` shows the derived plan.
+  express, extend the graph. `FORGE_GRAPH_LOG=1` shows the derived plan. A compute pass that
+  doesn't need this frame's geometry can ask for the async compute queue, and copies for the
+  transfer queue (`.queue(QueueKind::Compute)`, issue #77). Such passes can't use transients
+  or render targets. `FORGE_ASYNC=0` gives the serial frame to compare with.
 - Docs are part of the change: a new system gets a research file, a decision entry, a demo
   page with numbers; a changed number gets updated where it is quoted.
 - Never copy credentials into the repo or the docs (`server-auth.md`, `.env`,

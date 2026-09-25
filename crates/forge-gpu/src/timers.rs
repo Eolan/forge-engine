@@ -1,11 +1,14 @@
 //! Named GPU timing zones from timestamp queries.
 //!
-//! Every frame slot owns a range of timestamps. [`GpuTimers::begin`] writes the first one
-//! (top of pipe); every [`GpuTimerSlot::mark`] writes one more at the bottom of the pipe and
-//! names the work since the previous mark; [`GpuTimers::end`] closes the frame. When the
-//! slot is reused two frames later, [`GpuTimers::read`] turns the timestamps into
-//! [`GpuZone`]s: consecutive differences, so the passes of a frame add up to the frame.
-//! Labels are `group/name` (`geometry/meshlet pass 1`); the profiler groups by prefix.
+//! Every frame slot owns a range of timestamps, reset from the host when the slot is reused.
+//! Each batch of the frame (one per submission, issue #77) starts with a timestamp
+//! ([`GpuTimerSlot::start`]); every [`GpuTimerSlot::mark`] writes one more at the bottom of the
+//! pipe and names the work since the previous one; [`GpuTimers::end`] closes the frame. When
+//! the slot is reused two frames later, [`GpuTimers::read`] turns the timestamps into
+//! [`GpuZone`]s: consecutive differences within each batch, so on one queue the passes of a
+//! frame add up to that queue's work. Queues overlap, so the frame's time is its span
+//! ([`GpuTimers::span_ms`]), not the sum of its zones. Labels are `group/name`
+//! (`geometry/meshlet pass 1`); the profiler groups by prefix.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -13,11 +16,11 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::device::Device;
+use crate::device::{Device, QueueKind};
 use crate::error::Result;
 
-/// Timestamps per frame slot (the first is the frame start, the last the frame end).
-pub const MAX_MARKS_PER_FRAME: u32 = 64;
+/// Timestamps per frame slot (a start per batch, a mark per zone, the frame's end).
+pub const MAX_MARKS_PER_FRAME: u32 = 96;
 
 /// One measured span of GPU work.
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +33,17 @@ pub struct GpuZone {
     pub start_ticks: u64,
     /// Raw GPU timestamp of this mark.
     pub end_ticks: u64,
+    /// The queue it ran on.
+    pub queue: QueueKind,
+}
+
+/// What one timestamp was.
+#[derive(Clone, Copy, Debug)]
+struct Entry {
+    label: &'static str,
+    queue: QueueKind,
+    /// The first timestamp of a batch (closes no zone).
+    start: bool,
 }
 
 /// The timestamp range of one frame slot; [`crate::Commands::mark`] writes into it. Main
@@ -39,41 +53,50 @@ pub struct GpuTimerSlot {
     pool: vk::QueryPool,
     base: u32,
     count: Cell<u32>,
-    labels: RefCell<Vec<&'static str>>,
+    entries: RefCell<Vec<Entry>>,
+    /// The queue of the batch being recorded, and whether its family writes timestamps.
+    queue: Cell<QueueKind>,
+    enabled: Cell<bool>,
 }
 
 impl GpuTimerSlot {
-    /// Writes a timestamp (bottom of pipe) that closes the span called `label`. Silently
-    /// ignored past [`MAX_MARKS_PER_FRAME`].
-    pub fn mark(&self, cb: vk::CommandBuffer, label: &'static str) {
-        self.mark_at(cb, label, vk::PipelineStageFlags2::BOTTOM_OF_PIPE);
+    /// Opens a batch on `queue`: a timestamp that waits for the work before it on the queue.
+    pub fn start(&self, cb: vk::CommandBuffer, queue: QueueKind) {
+        self.queue.set(queue);
+        self.enabled.set(self.device.queue_timestamps(queue));
+        self.write(cb, "start", true, vk::PipelineStageFlags2::ALL_COMMANDS);
     }
 
-    fn mark_at(&self, cb: vk::CommandBuffer, label: &'static str, stage: vk::PipelineStageFlags2) {
+    /// Writes a timestamp (bottom of pipe) that closes the span called `label`. Silently
+    /// ignored past [`MAX_MARKS_PER_FRAME`], and on a queue without timestamps.
+    pub fn mark(&self, cb: vk::CommandBuffer, label: &'static str) {
+        self.write(cb, label, false, vk::PipelineStageFlags2::BOTTOM_OF_PIPE);
+    }
+
+    fn write(
+        &self,
+        cb: vk::CommandBuffer,
+        label: &'static str,
+        start: bool,
+        stage: vk::PipelineStageFlags2,
+    ) {
         let count = self.count.get();
-        if count >= MAX_MARKS_PER_FRAME {
+        if count >= MAX_MARKS_PER_FRAME || !self.enabled.get() {
             return;
         }
         // SAFETY: the command buffer is recording and the query index is inside the slot's
-        // range, which `GpuTimers::begin` reset for this frame.
+        // range, which `GpuTimers::reset` reset for this frame.
         unsafe {
             self.device
                 .raw()
                 .cmd_write_timestamp2(cb, stage, self.pool, self.base + count)
         };
-        self.labels.borrow_mut().push(label);
+        self.entries.borrow_mut().push(Entry {
+            label,
+            queue: self.queue.get(),
+            start,
+        });
         self.count.set(count + 1);
-    }
-
-    fn reset(&self, cb: vk::CommandBuffer) {
-        // SAFETY: recording; the previous frame on this slot has completed (the caller waited).
-        unsafe {
-            self.device
-                .raw()
-                .cmd_reset_query_pool(cb, self.pool, self.base, MAX_MARKS_PER_FRAME)
-        };
-        self.count.set(0);
-        self.labels.borrow_mut().clear();
     }
 }
 
@@ -105,7 +128,9 @@ impl GpuTimers {
                     pool,
                     base: i as u32 * MAX_MARKS_PER_FRAME,
                     count: Cell::new(0),
-                    labels: RefCell::new(Vec::with_capacity(MAX_MARKS_PER_FRAME as usize)),
+                    entries: RefCell::new(Vec::with_capacity(MAX_MARKS_PER_FRAME as usize)),
+                    queue: Cell::new(QueueKind::Graphics),
+                    enabled: Cell::new(false),
                 })
             })
             .collect();
@@ -122,21 +147,29 @@ impl GpuTimers {
         Rc::clone(&self.slots[index])
     }
 
-    /// Starts a frame on `slot`: resets its range and writes the start timestamp. The start
-    /// waits for all earlier commands (the previous frame's tail), so the first zone measures
-    /// only its own work.
-    pub fn begin(&self, cb: vk::CommandBuffer, slot: usize) {
+    /// Resets `slot`'s range from the host before its frame is recorded: every queue can
+    /// then write into it, whatever order the batches run in. The slot's previous frame has
+    /// completed (the caller waited).
+    pub fn reset(&self, slot: usize) {
         let s = &self.slots[slot];
-        s.reset(cb);
-        s.mark_at(cb, "start", vk::PipelineStageFlags2::ALL_COMMANDS);
+        // SAFETY: the pool is live and no pending work uses the slot's range.
+        unsafe {
+            self.device
+                .raw()
+                .reset_query_pool(self.pool, s.base, MAX_MARKS_PER_FRAME)
+        };
+        s.count.set(0);
+        s.entries.borrow_mut().clear();
     }
 
-    /// Ends a frame on `slot`: the work since the last mark is `app/end of frame`.
+    /// Ends a frame on `slot` in its last batch (graphics): the work since the last mark is
+    /// `app/end of frame`.
     pub fn end(&mut self, cb: vk::CommandBuffer, slot: usize) {
         let s = &self.slots[slot];
-        s.mark_at(
+        s.write(
             cb,
             "app/end of frame",
+            false,
             vk::PipelineStageFlags2::ALL_COMMANDS,
         );
         self.submitted[slot] = s.count.get();
@@ -167,15 +200,26 @@ impl GpuTimers {
             return Vec::new();
         }
         let period = f64::from(self.device.timestamp_period_ns()) / 1.0e6;
-        let labels = s.labels.borrow();
+        let entries = s.entries.borrow();
+        // Each batch opens with a start entry, so a mark's previous entry is its batch's.
         (1..count)
+            .filter(|&i| !entries[i].start)
             .map(|i| GpuZone {
-                label: labels[i],
+                label: entries[i].label,
                 ms: stamps[i].saturating_sub(stamps[i - 1]) as f64 * period,
                 start_ticks: stamps[i - 1],
                 end_ticks: stamps[i],
+                queue: entries[i].queue,
             })
             .collect()
+    }
+
+    /// The frame's GPU time: from the first zone's start to the last zone's end, on any
+    /// queue. `None` without zones.
+    pub fn span_ms(device: &Device, zones: &[GpuZone]) -> Option<f64> {
+        let start = zones.iter().map(|z| z.start_ticks).min()?;
+        let end = zones.iter().map(|z| z.end_ticks).max()?;
+        Some(end.saturating_sub(start) as f64 * f64::from(device.timestamp_period_ns()) / 1.0e6)
     }
 }
 

@@ -630,3 +630,17 @@ overlap in Nsight Graphics' GPU Trace or Radeon GPU Profiler.
    switch.
 7. **Tests:** synchronisation validation in both modes; serial and async captures 0 px apart;
    the AMD iGPU (see #67), since NVIDIA ignores sharing modes and would hide ownership bugs.
+
+*Outcome (2026-09-25, #77):* built along this bearing, with four choices of its own.
+- **Moving passes up.** The graph moves an async pass up by itself, to just after its last
+  conflict. The city's sky tables are declared after its geometry, and so are the probes;
+  moved up, they start with the frame.
+- **Where batches split.** A batch splits wherever a pass needs a wait its batch lacks, not
+  only where the queue changes. Otherwise a pass that does not need the other queue's result
+  (GTAO) would wait for it.
+- **Sharing.** Every buffer, and every image but a render target, is `CONCURRENT`. The
+  probes read material textures through bindless, where the graph cannot see them.
+- **Barriers.** Where a resource changes queue, the barrier on the new queue starts from
+  `ALL_COMMANDS`, rather than tracking a state per queue.
+
+The measured gain is in D-020. The AMD test waits for a GPU selector (#67), and more overlap is #95.

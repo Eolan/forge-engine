@@ -330,11 +330,10 @@ memory; their first use in a frame waits for whatever last touched that memory, 
 frame or the previous one.
 Persistent images and buffers (`GraphImage`, `GraphBuffer`) carry their state across
 frames; anything a frame in flight may still use is destroyed through the frame slots
-(`Frames::destroy_later`). Nothing is culled or reordered, there is one queue, and nobody
-outside `forge-gpu` records a barrier. Async compute and transfer queues are the next
-extension (a queue per pass, timeline waits and ownership transfers on crossing edges),
-as are transient buffers. The graph lives in `forge-gpu` (not `forge-render` as first
-planned) because the app shell and every renderer draw through it and the barrier
+(`Frames::destroy_later`). Nothing is culled, and nobody outside `forge-gpu` records a
+barrier. Transient buffers are the next extension (#78). The graph lives in `forge-gpu`
+(not `forge-render` as first planned) because the app shell and every renderer draw through
+it and the barrier
 vocabulary is Vulkan's; the module is written without `unsafe`.
 *Measured:* the ballad and the bench through the graph are pixel-identical to the
 hand-written barriers (0 pixels over seven captures, and 0 between the aliased heap and
@@ -343,6 +342,36 @@ is 19 passes, 37 image barriers and 3 memory barriers, its three transients 25.6
 aliases in that frame yet (colour, depth and motion vectors are all alive at the resolve);
 the heap pays once post-processing chains arrive. *(research: task-system.md §F,
 memory-streaming.md §2; issue #1)*
+
+**Queues (issue #77, 2026-09-25).**
+- **Picking a queue.** A pass may ask for the async compute queue or the transfer queue
+  (`PassBuilder::queue`). The device takes a queue on a compute-only family and one on a
+  transfer-only family, never the video or optical-flow engines. `FORGE_ASYNC=0`, or a device
+  without them, keeps every pass on graphics.
+- **Scheduling.** A pass on another queue moves up to just after the last pass it conflicts
+  with (a shared resource that one of them writes). The author picks the queue; the graph
+  derives the rest, as in Unreal's RDG, Frostbite and Granite.
+- **Batches.** The frame is a list of batches, one submission each: consecutive passes on one
+  queue that need the same waits. Each queue signals a timeline semaphore.
+- **Waits.** Every resource remembers, from frame to frame, the batch that last wrote it and
+  the batches that read it since, per queue. An access from another queue becomes a timeline
+  wait at its stages, plus a barrier on its own queue from everything that queue did before.
+  The last batch is graphics and waits for every other queue's last one, so a frame slot is
+  free when its graphics work is.
+- **Sharing.** Every buffer, and every image except a render target, is `CONCURRENT` over the
+  families, with no ownership transfers. NVIDIA ignores the mode; on AMD a `CONCURRENT` image
+  loses DCC, so render targets stay `EXCLUSIVE`. The graph refuses them on another queue, and
+  transients too, whose memory could be aliased under a pass on another queue.
+- **Timing.** Timestamps are per batch. A frame's GPU time is its span, first stamp to last on
+  any queue, since zones overlap.
+
+*Measured:* the city's sky tables and probe update run on the compute queue, and its
+streaming copies on the transfer queue. Its frame goes 2.36 → 2.25 ms at 1600 × 900, the
+orbit 2.86 → 2.79, the flight 2.23 → 2.15. The probes stretch 0.60 → 1.35 ms beside the
+geometry passes, which slow by a third to a half, but the span shrinks. The demos without an
+async pass do not move, nor does anything with `FORGE_ASYNC=0`. Captures match the serial
+frame, and synchronization validation is clean.
+*(research: gpu-geometry.md, "Research for issue #77")*
 
 ## D-021 — Visibility buffer: a 32-bit id next to the hardware depth, shading in compute ✅ (2026-09-24)
 

@@ -207,10 +207,11 @@ What each script does and how to build a baseline from an older commit:
 | `FORGE_SYNC_VALIDATION=1` | with `--validate`: the validation layer's synchronization (hazard) checks. Slow. |
 | `FORGE_GPU_AV=1` | with `--validate`: GPU-assisted validation (out-of-bounds device-address and descriptor accesses). Slow. |
 | `FORGE_WAIT_IDLE=1` | wait for the GPU after every frame (debugging). |
-| `FORGE_FRAME_BARRIER=1` | a full memory barrier at the start of every frame (debugging). |
+| `FORGE_FRAME_BARRIER=1` | a full memory barrier at the start of each queue's first batch of every frame (debugging). |
+| `FORGE_ASYNC=0` | no async compute or transfer queue: every pass on the graphics queue, as before issue #77 (the serial reference). |
 | `FORGE_PARANOID_BARRIERS=1` | a full memory barrier before every dispatch, draw and blit (debugging); a comma-separated list of pass-label prefixes (`ao/,dust/`) limits it to those passes. |
 | `FORGE_FP_PRECISE=1` | compile the shaders with `-fp-mode precise`: no contraction into FMAs (debugging, issue #71). |
-| `FORGE_GRAPH_LOG=1` | log the render graph's compiled plan (passes, derived barriers, transient placement) whenever it changes. |
+| `FORGE_GRAPH_LOG=1` | log the render graph's compiled plan (batches and their queues and waits, passes, derived barriers, transient placement) whenever it changes. |
 | `FORGE_GRAPH_NO_ALIAS=1` | give every transient image its own memory instead of the aliased heap (debugging). |
 | `FORGE_STALL_MS=N` | sleep N ms after every frame (debugging; it was the workaround for the TAA run-to-run difference the render graph resolved, see `docs/demos/asteroids.md`). |
 | `FORGE_NO_TITLE=1` | never update the window title (debugging). |

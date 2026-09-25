@@ -25,7 +25,7 @@ use forge_core::material::{MaterialId, MaterialTable, ShadingClass};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, FullscreenPipelineDesc, GpuError, GraphBuffer, GraphImage, ImageAccess, ImageDesc,
-    ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, Result,
+    ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, QueueKind, Result,
     ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc, vk,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -2521,12 +2521,17 @@ impl MeshletRenderer {
         };
         let frame_address = self.frame_buffers[slot.index].address();
 
-        // Streaming: this frame's pages and page-table entries, before anything reads them.
-        if let Some(streamer) = scene.streamer.as_ref() {
-            let (staging, plan) = (streamer.staging(slot.index), &streamer.plans[slot.index]);
+        // Streaming: this frame's pages and page-table entries, before anything reads them, on
+        // the copy engines (issue #77). Frames with nothing to copy declare nothing.
+        if let Some(streamer) = scene.streamer.as_ref()
+            && let plan = &streamer.plans[slot.index]
+            && !(plan.pages.is_empty() && plan.table.is_empty())
+        {
+            let staging = streamer.staging(slot.index);
             let (pool, table): (&'f Buffer, &'f Buffer) = (&scene.pool, &scene.page_table);
             graph
                 .pass("streaming/upload")
+                .queue(QueueKind::Transfer)
                 .buffer(io.pool, BufferAccess::TransferDst)
                 .buffer(io.page_table, BufferAccess::TransferDst)
                 .run(move |_, commands| {
