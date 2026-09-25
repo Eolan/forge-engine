@@ -64,6 +64,8 @@ exposure (EV100, target, compensation, curve) the last.
   the extra asteroids add shading, dust shadow rays and geometry.
 - The weathered crust (#62): its sections add seams, 12.6 → 13.2 M cluster slots, and no
   measurable GPU time (0.831–0.837 ms with and without, alternating runs).
+- The ice blocks (#63): 42 meshes, the build 1.8 → 2.4 s; the GPU 0.815 → 0.80 ms, as the smoother blocks
+  simplify better.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

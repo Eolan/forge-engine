@@ -56,6 +56,9 @@ struct Args {
     /// The Phase 0 rocks: round displaced spheres instead of fractured chunks.
     #[arg(long)]
     round_rocks: bool,
+    /// The ice in the rock's shapes, not its own blockier ones (issue #63).
+    #[arg(long)]
+    rock_shaped_ice: bool,
     /// No weathered crust: the chunks' old surface drawn like their fracture faces (issue #62).
     #[arg(long)]
     no_crust: bool,
@@ -923,6 +926,9 @@ impl Demo for Ballad {
     }
 }
 
+/// Ice shapes per size class (issue #63).
+const ICE_SHAPES: usize = 2;
+
 /// Which of the ballad's three ices an ice asteroid is made of (issue #61), by the third byte
 /// of its instance hash: 35 % clear, 40 % bubbly, 25 % white.
 fn ice_kind(id: u32) -> usize {
@@ -948,23 +954,34 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         (160, 14.0, 0.25),
         (192, 30.0, 0.22),
     ];
-    // Every size class in `args.variants` shapes (issue #23): each cut by its own planes, and
-    // all but the first stretched along two axes, as real asteroids are rarely round. Built in
-    // parallel; class `c`'s variant `v` is `meshes[c * variants + v]`.
+    // Every size class in `args.variants` rock shapes (issue #23): each cut by its own planes,
+    // and all but the first stretched along two axes, as real asteroids are rarely round. Then
+    // the ice's own shapes, ICE_SHAPES per class (issue #63): a smoother body cut by more
+    // planes, so the ice reads as blocks. Built in parallel; class `c`'s rock variant `v` is
+    // `meshes[c * variants + v]`, its ice shape `v` follows all the rock.
     let variants = args.variants.max(1) as usize;
-    let mut meshes: Vec<Option<MeshletMesh>> =
-        (0..recipes.len() * variants).map(|_| None).collect();
     let round = args.round_rocks;
+    let ice_shapes = if args.rock_shaped_ice || round {
+        0
+    } else {
+        ICE_SHAPES
+    };
+    let jobs: Vec<(usize, usize, bool)> = (0..recipes.len())
+        .flat_map(|i| (0..variants).map(move |v| (i, v, false)))
+        .chain((0..recipes.len()).flat_map(|i| (0..ice_shapes).map(move |v| (i, v, true))))
+        .collect();
+    let mut meshes: Vec<Option<MeshletMesh>> = jobs.iter().map(|_| None).collect();
     let no_crust = args.no_crust;
     pool.scope(|s| {
-        for (k, slot) in meshes.iter_mut().enumerate() {
-            let (i, v) = (k / variants, k % variants);
+        for (slot, &(i, v, ice)) in meshes.iter_mut().zip(&jobs) {
             let (segments, radius, roughness) = recipes[i];
             s.spawn(move |_| {
                 // Angular chunks with fractured facets (issue #60), or the Phase 0 round rocks.
-                let seed = Seed::new(700 + i as u64 + 100 * v as u64);
+                let seed = Seed::new(if ice { 900 } else { 700 } + i as u64 + 100 * v as u64);
                 let mut mesh = if round {
                     procedural::asteroid(seed, segments, radius, roughness)
+                } else if ice {
+                    procedural::chunk(seed, segments, radius, roughness * 0.3, 20 + (i + v) as u32)
                 } else {
                     procedural::chunk(seed, segments, radius, roughness, 8 + (i + v) as u32)
                 };
@@ -1159,9 +1176,14 @@ fn build_field(ctx: &Context, args: &Args) -> Result<(MeshletScene, Path)> {
         );
         // The shape within its class, by a hash of the instance: the placement draws the same
         // numbers as with one shape.
-        let variant = (hash_cell3(0x5EED_0023, id as i32, 0, 0) % variants as u64) as usize;
+        let shape = hash_cell3(0x5EED_0023, id as i32, 0, 0);
+        let shape = if ice && ice_shapes > 0 {
+            recipes.len() * variants + mesh * ice_shapes + (shape % ice_shapes as u64) as usize
+        } else {
+            mesh * variants + (shape % variants as u64) as usize
+        };
         builder.add_instance_with_material(
-            mesh_ids[mesh * variants + variant],
+            mesh_ids[shape],
             Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
             if ice { ice_rows[ice_kind(id)] } else { rock },
         );

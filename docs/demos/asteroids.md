@@ -13,7 +13,8 @@ deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
 `--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-translucency`, `--clear-ice` (#59's one clear ice), `--ice-belt D` (the ice in its own belt D metres
-away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round rocks), `--no-crust` (no weathered crust on the chunks), `--no-occlusion`, `--no-cone`,
+away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round rocks), `--no-crust` (no weathered crust on the chunks), `--rock-shaped-ice` (the ice in the rock's
+shapes), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -270,6 +271,30 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## Ice blocks (2026-09-25, issue #63)
+
+The owner asked for "the ice ones more like ice blocks/chunks". Until now the ice asteroids
+used the rock's chunk shapes, bumps and all, and read as blue rocks. The ice now has its own
+shapes, two per size class:
+- **Smoother body:** a third of the rock's displacement.
+- **More cuts:** 20 planes and up instead of 8 and up, so the pieces are crisp, faceted blocks.
+- **The shape:** each ice asteroid takes one by a hash of its id, so the placement does not
+  change.
+
+`--rock-shaped-ice` keeps the ice in the rock's shapes.
+
+![Towards the sun at frame 300 (dust off): the ice in the rock's shapes, then its own blocks](images/asteroids-ice-blocks.png)
+
+**Numbers:** 28 → 42 meshes, and the mesh build takes 1.8 → 2.4 s (the field is ready in
+2.7 s). The GPU time drops a little, 0.815 → 0.80 ms in alternating runs: the smoother blocks
+simplify better.
+
+**Checks:**
+- `--rock-shaped-ice` gives the previous build's captures exactly.
+- The culling harness and mesh against fallback stay at 0; the bench and the city are
+  unchanged.
+- Synchronization validation is silent.
 
 ## Weathered crust (2026-09-25, issue #62)
 
