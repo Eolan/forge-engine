@@ -34,10 +34,10 @@ use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
-    AmbientLight, Atmosphere, AtmosphereParams, Bloom, CullCamera, CullFlags, FrameStats,
-    GroundSky, Gtao, GtaoParams, MeshletRenderer, MeshletScene, MeshletSceneBuilder, Residency,
-    SkyParams, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100,
-    sh_irradiance,
+    AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
+    FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder, Residency, SkyParams, StreamingConfig, StreamingStats, SwRaster, Taa,
+    Tonemap, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -148,6 +148,10 @@ struct Args {
     /// Hard sun shadows: one ray to the sun's centre instead of its disc (Z toggles them).
     #[arg(long)]
     hard_shadows: bool,
+    /// A day over the city: the sun rises in the east, crosses the south and sets in the west in
+    /// this many seconds, then again, and the exposure follows it (issue #57).
+    #[arg(long)]
+    day: Option<f32>,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -185,6 +189,12 @@ struct Gallery {
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
     gtao: Gtao,
     ao_on: bool,
+    /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
+    day_time: f32,
+    meter: LuminanceMeter,
+    auto_exposure: AutoExposure,
+    /// Seconds the last update advanced.
+    step: f32,
     tonemap: Tonemap,
     scene: MeshletScene,
     camera: FlyCamera,
@@ -228,6 +238,8 @@ impl Gallery {
         let bloom_on = args.bloom > 0.0;
         let sky_light = !args.no_sky_light;
         let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
+        let meter = LuminanceMeter::new(&ctx.device, &ctx.shaders)?;
+        let auto_exposure = AutoExposure::new(args.ev100);
         let ao_on = !args.no_ao;
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
         let atmosphere_params = AtmosphereParams::earth();
@@ -315,6 +327,10 @@ impl Gallery {
             sky_light,
             gtao,
             ao_on,
+            day_time: 0.0,
+            meter,
+            auto_exposure,
+            step: 1.0 / 60.0,
             scene,
             camera,
             flags,
@@ -331,6 +347,26 @@ impl Gallery {
             started: None,
             settled: false,
         })
+    }
+
+    /// `--day` (issue #57): the sun at `t` of the day (0 sunrise, 0.5 noon, 1 sunset). It rises from
+    /// 4° below the eastern horizon to 70° in the south and sets in the west, and its colour is
+    /// the sunlight through the air.
+    fn set_sun_of_day(&mut self, t: f32) {
+        let pi = std::f32::consts::PI;
+        let elevation = (-4.0_f32 + 74.0 * (pi * t).sin()).to_radians();
+        let azimuth = pi * t;
+        self.renderer.sun_dir = Vec3::new(
+            elevation.cos() * azimuth.cos(),
+            elevation.sin(),
+            elevation.cos() * azimuth.sin(),
+        );
+        let params = &self.atmosphere.params;
+        self.renderer.sun_color = Vec3::from(params.transmittance(
+            Vec3::new(0.0, params.bottom_radius + 0.05, 0.0),
+            self.renderer.sun_dir,
+            64,
+        ));
     }
 
     fn cull_camera(&self, aspect: f32) -> CullCamera {
@@ -392,6 +428,11 @@ impl Demo for Gallery {
         if self.frame > 0 {
             self.frame_ms.push(ms);
             self.run_frame_ms.push(ms);
+        }
+        self.step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+        if let Some(length) = self.args.day {
+            self.day_time += self.step;
+            self.set_sun_of_day((self.day_time / length.max(1.0)).fract());
         }
         if self.args.fly {
             // Counter-clockwise seen from above, facing along the path, a little down.
@@ -479,7 +520,15 @@ impl Demo for Gallery {
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
         let camera = self.cull_camera(ctx.aspect());
         let extent = ctx.extent();
-        let exposure = exposure_from_ev100(self.args.ev100);
+        // The day's light changes by orders of magnitude: meter it (the histogram of two frames
+        // ago); otherwise the fixed exposure of `--ev100`.
+        let exposure = if self.args.day.is_some() {
+            let histogram = self.meter.take(frame.slot);
+            self.auto_exposure.update(histogram.as_ref(), self.step);
+            self.auto_exposure.exposure()
+        } else {
+            exposure_from_ev100(self.args.ev100)
+        };
         // Draw jittered into TAA's HDR target, cull with the unjittered camera, resolve
         // through the history and the tone curve into the swapchain.
         let taa_frame = self.taa.begin(
@@ -564,6 +613,16 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
         );
+        if self.args.day.is_some() {
+            // Meter the finished HDR scene for the exposure of the frames to come.
+            self.meter.measure(
+                &mut frame.graph,
+                frame.slot,
+                taa_frame.color,
+                extent,
+                exposure,
+            );
+        }
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);

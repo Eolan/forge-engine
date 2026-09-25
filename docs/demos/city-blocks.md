@@ -24,6 +24,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | The city in the glass: mirror rays against the TLAS | #50 | ✅ 0.17 ms at 1440p |
 | Soft shadows: the sun's disc over TAA's jitter | #54 | ✅ 0.02 ms at 1440p |
 | Coated glass: a reflectance per row, the towers as curtain walls | #56 | ✅ no cost |
+| A day over the city: the sun crosses the sky, the exposure follows | #57 | ✅ `--day S`, 0.016 ms of metering |
 
 ```
 cargo run --release -p city-blocks
@@ -50,12 +51,37 @@ Options:
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--no-ray-reflections` reflects only the sky in the glass (**Y** toggles the mirror rays).
 - `--hard-shadows` aims every shadow ray at the sun's centre (**Z** toggles soft and hard).
+- `--day S` runs a day in S seconds, sunrise to sunset and again, with automatic exposure.
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## A day over the city (issue #57, 2026-09-25)
+
+`--day S` runs a day in S seconds, then again. The sun rises 4° below the eastern horizon,
+crosses the south at 70° and sets in the west. Everything that follows the sun runs per frame
+already:
+- the sky-view table and the aerial perspective (#43);
+- the sky's irradiance (#47);
+- the shadows (#45, #54) and the reflections (#49, #50).
+
+The sunlight's colour is recomputed per frame through the air: white at noon, orange at the
+horizon, nothing below it. The exposure follows the scene through the ballad's histogram
+metering and automatic exposure (D-022). Without `--day`, the city keeps its fixed EV 15 and
+its pixels.
+
+![A 20 s day at frames 20, 90, 250, 600, 950 and 1170: twilight, the morning's long shadows, noon, the afternoon, and the sunset's orange on the western faces](images/city-blocks-day.png)
+
+```
+city-blocks --day 60
+```
+
+**Cost:** the luminance histogram, 0.016 ms. **Checks:** without `--day` the city's captures
+are identical to the previous build; with it, synchronization validation is silent on both
+paths.
 
 ## Coated glass (issue #56, 2026-09-25)
 

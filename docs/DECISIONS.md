@@ -423,6 +423,10 @@ it (`GroundSky::compose`). The resolve lights every material class with the sun 
 irradiance for the pixel's normal, in the same units (a white Lambertian surface facing
 the sun). Scenes without a sky keep the constant fill.
 
+**A moving sun** (issue #57): with `city-blocks --day`, the sun crosses the sky and every pass
+above follows it per frame; the sunlight's colour is recomputed through the air, and the
+exposure is metered (D-022).
+
 This is the sky term of research step (3), without the probes: it is the same everywhere in
 the scene, so nothing occludes it yet. Screen-space ambient occlusion is the next step, and
 probe GI the one after. At the default sun, a roof receives 0.075 of the sun and a wall about

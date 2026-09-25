@@ -143,7 +143,8 @@ colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H*
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
 `--no-taa`, `--no-shadows`, `--no-sky-light`, `--no-ao`, `--ao-radius M`, `--show-ao`, `--no-reflections`, `--no-ray-reflections`, `--hard-shadows`, `--no-lod`, `--no-occlusion`, `--lod-error PX`,
-`--sw-raster auto|on|off`, `--ev100 EV`, `--force-fallback`. At 1440p the flight at 300 m/s runs
+`--sw-raster auto|on|off`, `--ev100 EV`, `--day S` (a day in S seconds, automatic exposure),
+`--force-fallback`. At 1440p the flight at 300 m/s runs
 at 2.67 ms of GPU with everything on. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
 
 ### `task-bench` — job system

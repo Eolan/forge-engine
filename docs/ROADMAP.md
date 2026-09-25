@@ -184,7 +184,8 @@ Goal: the renderer skeleton every later system draws through.
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's
    jitter, 0.02 ms at 1440p); structures that follow streaming and motion next.
 3. Clouds (Nubis-style), froxel fog, night sky; weather rendering (rain, snow, lightning,
-   wet surfaces) driven by the shared weather state.
+   wet surfaces) driven by the shared weather state. The sun already moves: `city-blocks --day`
+   (issue #57) runs sunrise to sunset with automatic exposure.
 4. T2/T3: ReSTIR GI, radiance cache, Ray Reconstruction, path-traced reference with cluster
    acceleration structures.
    **Demo:** `dusk-town` — seeded coastal town, dusk to night, 20 k emitters, a storm front,
