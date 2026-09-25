@@ -288,7 +288,8 @@ ballad:
 ![The loading screen](images/asteroids-loading.png)
 
 - **Loading frames don't count.** Frame numbers, `--frames`, captures, the profile and the
-  memory counters all start with the demo, so every capture is unchanged.
+  memory counters all start with the demo, so every capture is unchanged. The finishing step's
+  time stays out of the first update's CPU zone and out of the next frame's time.
 - **They last at least 8 ms,** since the build needs the cores more than the dots need frames.
 - **Shaders compile ahead.** After a shader change, the cache misses every entry, and the
   finishing step used to compile them all: about 10 s, with the window frozen. The compiler

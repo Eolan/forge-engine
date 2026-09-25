@@ -531,15 +531,22 @@ impl<D: Demo> State<D> {
             g.heap_rebuilds,
             g.pending_destructions
         ));
+        let was_loading = self.ctx.loading;
         let update_start = Instant::now();
         {
             #[cfg(feature = "profiling")]
             let _zone = tracy_client::span!("update");
             self.demo.update(&mut self.ctx, &self.input, dt);
         }
-        self.ctx
-            .profile
-            .cpu_zone("cpu/update", ms_since(update_start));
+        if was_loading && !self.ctx.loading {
+            // The demo started in this update, behind the loading screen (issue #25): its
+            // start-up is neither the update's time nor the next frame's.
+            self.last_frame = Instant::now();
+        } else {
+            self.ctx
+                .profile
+                .cpu_zone("cpu/update", ms_since(update_start));
+        }
         self.input.end_frame();
 
         let wait_start = Instant::now();
