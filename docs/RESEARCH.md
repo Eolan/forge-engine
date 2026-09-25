@@ -143,7 +143,7 @@ shade), so biome weights are a scattered-kernel blend in climate space sharpened
 Weather rendering is settled 2004–2013 technique: Garg–Nayar streaks, Lagarde's wet surfaces,
 depth-from-above occlusion for rain and snow, Nubis weather maps. Simulated weather
 (Stormscapes → Cyclogenesis) is interactive only over tens of kilometres. D-019's struct becomes a
-sample of three layers (proposed as D-034):
+sample of three layers (D-034):
 - a baked climate atlas (≈ 78 km, 19 MB);
 - weather as a pure function of atlas, seed and time, so only the clock and events are
   replicated;
@@ -154,7 +154,7 @@ between code and content and references content by stable id, not by path (Unrea
 Ids, Unity's asset IDs, Godot's `uid://`, completed only in 4.4). Every moddable game layers data
 with a load order and a conflict rule: Bethesda's rule of one, Paradox's LIOS, Minecraft data packs,
 RimWorld's XPath patches, Factorio's three data rounds sorted by dependency depth. D-007's table is
-already that pattern. What Forge needs (proposed as D-035):
+already that pattern. What Forge needs (D-035):
 - `package:path` ids, with dense per-table indices from the sorted set;
 - RON records with schema versions;
 - packages merged by add/replace/patch, with a conflict report;

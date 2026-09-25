@@ -907,7 +907,7 @@ the physics density follows the same number. The ballad draws clear, bubbly and 
 measurable cost.
 *(research: lighting-gi.md; D-029, D-031; issues #59, #61; demo: asteroids)*
 
-## D-034 — The environment state: a baked climate, weather as a function of seed and time, surface fields near players 🟡 (proposed 2026-09-25)
+## D-034 — The environment state: a baked climate, weather as a function of seed and time, surface fields near players ✅ (2026-09-25)
 
 Extends D-019 from one weather struct to a planetary climate field. The struct stays the thing
 every system reads (rendering, materials (D-007), vegetation, audio, physics and gameplay), but
@@ -965,11 +965,23 @@ precipitation particles shaded from a streak array, rain as extinction in the fr
 - per-plant and per-animal simulation beyond the player's region;
 - one biome per planet (No Man's Sky).
 
-**Decisions needed:**
-1. Weather as a pure function of seed and time with events on top (recommended), or a simulated
-   field.
-2. The global atlas at level 7 (≈ 78 km, recommended).
-3. ExoPlaSim as an offline validation tool in the pipeline (GPL, separate process).
+**The director** (owner, 2026-09-25): the weather can be steered, by a game AI or by the scripts
+designers and players write for scenarios, cinematics and ambiance.
+- A director's command is an authored event with a mode: *blend* on top of the function (a storm
+  front), or *override* it (the weather fixed, over a region or the whole planet, for as long as
+  the event lasts).
+- Commands chain on game events: rain when the convoy arrives, then fog after the rain.
+- They travel in the replicated event stream like any event, so every machine evaluates the same
+  weather (D-010, D-016); fixed weather costs nothing to keep.
+- The surface state integrates whatever the weather was: rain a director starts wets the ground
+  like natural rain.
+
+**Decisions taken** (owner, 2026-09-25), the three recommendations:
+1. Weather as a pure function of seed and time, with events on top (and the director's overrides).
+2. The global atlas at level 7 (≈ 78 km).
+3. ExoPlaSim as an offline validation tool only (GPL, a separate process).
+
+Weather comes after the current rendering work.
 
 **Phases:**
 - climate bake and biomes: Phase 2 (`island`);
@@ -980,7 +992,7 @@ precipitation particles shaded from a streak array, rain as extinction in the fr
 
 *(research: planet-environment.md; extends D-019; D-007, D-014, D-016, D-028, D-032; issue #11)*
 
-## D-035 — Content as packages: namespaced ids, layered records, a deterministic merge 🟡 (proposed 2026-09-25)
+## D-035 — Content as packages: namespaced ids, layered records, a deterministic merge ✅ (2026-09-25)
 
 Extends D-007 from one material table to every data table, and says where game code and mod code
 attach. Three layers:
@@ -1039,12 +1051,11 @@ sides goes through engine evaluators on `dmath`.
 - Lua in the deterministic simulation (Factorio had to replace its maths and iteration order);
 - native-code mods (fractureiser, 2023).
 
-**Decisions needed:**
-1. Namespaced string ids with dense per-table indices from the sorted set (recommended), or UUIDs.
-2. RON + serde with per-table schema versions (recommended), or a custom schema language.
-3. Field-level patches with a conflict report (recommended), or record-level replacement only.
-4. Whether mods are a goal for the Phase 10 games: data-only packages first (recommended), Wasm code
-   mods later, or no third-party content at all.
+**Decisions taken** (owner, 2026-09-25), the four recommendations:
+1. Namespaced string ids, with dense per-table indices from the sorted set.
+2. RON + serde, with per-table schema versions.
+3. Field-level patches, with a conflict report.
+4. Mods are a goal for the Phase 10 games: data-only packages first, Wasm code mods later.
 
 **Phases:**
 - `forge-data`, and the stock materials moved from demo code into packages: Phase 2 (before

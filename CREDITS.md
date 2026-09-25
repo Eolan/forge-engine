@@ -22,6 +22,8 @@ in. CI checks the crate list.
 
   The clause is 7.1(b) of the supplement to the DLSS licence that comes with the Streamline
   SDK (`bin/x64/nvngx_dlss.license.txt`).
+  Development builds show none of it (owner, 2026-09-25): the splash and the about box come
+  with the first public release, with the other tools and frameworks that ask for the same.
 - **Permissive licences** (MIT, Apache-2.0, BSD, Zlib, ISC, BSL-1.0): the notices and licence
   texts go with the binaries. A tool such as `cargo-about` builds that file from the same
   metadata as the crate list.

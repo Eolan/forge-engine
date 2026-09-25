@@ -65,7 +65,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   faces ✅ (issue #62: no measurable cost), ice blocks in shapes of their own ✅ (issue #63).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
-  big ones), with proper impulses on every piece.
+  big ones), with proper impulses on every piece; issue #12 keeps the chunks' edge wear and
+  their fracture on impact for the ship fight in the belt.
 - Phase 4: the lighting tiers — sun with ray-traced shadows, reflections on ice and metal,
   volumetric dust and the nebula lit by the sun, path-traced reference frames.
 - Phase 5–7: **space ships in pursuit of other ships**, firing lasers and missiles,
@@ -187,12 +188,14 @@ Goal: the renderer skeleton every later system draws through.
 1. T1 hybrid: ray-query DDGI probes, ReSTIR direct lighting, hybrid reflections (the sky's
    term ✅, issue #49, D-031: Fresnel-weighted from the sky-view table; mirror rays in the
    glass ✅, issue #50; coated glass ✅, issue #56), NRD. Ahead of the probes: the sky's irradiance ✅ (#47) and GTAO ✅ (#48, D-030).
+   The probes come next, in the city (issue #53, the owner's pick of 2026-09-25): sky occlusion
+   at street scale and bounce light, updated by rays so they follow the sun through `--day`.
 2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's
    jitter, 0.02 ms at 1440p); structures that follow streaming and motion next.
 3. Clouds (Nubis-style), froxel fog (the first froxel volume ✅: the ballad's dust, #58, D-032), night sky; weather rendering (rain, snow, lightning,
-   wet surfaces) driven by the shared weather state. The sun already moves: `city-blocks --day`
+   wet surfaces) driven by the shared weather state (D-034) and its director. The sun already moves: `city-blocks --day`
    (issue #57) runs sunrise to sunset with automatic exposure.
 4. T2/T3: ReSTIR GI, radiance cache, Ray Reconstruction, path-traced reference with cluster
    acceleration structures.
