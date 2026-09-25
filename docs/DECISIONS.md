@@ -409,6 +409,25 @@ The scene's sunlight takes the sun's colour through the air (`MeshletRenderer::s
 the ballad keeps its space white). City-blocks stands on the Earth's surface: at 1600×900
 the three passes cost 0.013 + 0.011 + 0.025 ms.
 
+**Sky light** (issue #47, 2026-09-25). A fourth pass, `sky/irradiance`, projects the
+sky-view table onto nine spherical-harmonic coefficients convolved with the clamped cosine
+(Ramamoorthi and Hanrahan 2001; `shaders/sh.slang`, mirrored in `forge_render::sky` with
+tests):
+- one workgroup sums 4096 directions of a Fibonacci sphere and reduces them in a fixed
+  order, so the coefficients are the same on every run;
+- the table holds the planet's sunlit ground below the horizon, so the coefficients carry
+  its bounce as well as the sky's light.
+
+The tables' passes now run before the resolve (`GroundSky::tables`) and the compose after
+it (`GroundSky::compose`). The resolve lights every material class with the sun plus that
+irradiance for the pixel's normal, in the same units (a white Lambertian surface facing
+the sun). Scenes without a sky keep the constant fill.
+
+This is the sky term of research step (3), without the probes: it is the same everywhere in
+the scene, so nothing occludes it yet. Screen-space ambient occlusion is the next step, and
+probe GI the one after. At the default sun, a roof receives 0.075 of the sun and a wall about
+0.20, most of it from the ground; the pass costs 0.016 ms.
+
 ## D-024 — DLSS through Streamline's interposer, optional, TAA as the default ✅ (2026-09-24)
 
 DLSS Super Resolution runs through NVIDIA Streamline 2.14 (the SDK in `streamline-sdk/`,

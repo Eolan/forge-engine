@@ -18,6 +18,7 @@ use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
 
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::raytrace::{self, SceneRays};
+use crate::sky::SkyLight;
 use crate::streaming::{PageSource, PageStore, PageStreamer, Residency, StreamingStats};
 use forge_core::material::{MaterialId, MaterialTable, ShadingClass};
 use forge_gpu::{
@@ -317,9 +318,11 @@ struct ResolvePush {
     use_background: u32,
     tile_capacity: u32,
     background: [f32; 4],
+    /// The sky's irradiance coefficients (`sh.slang`, issue #47), or 0: space's constant fill.
+    sky: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<ResolvePush>() == 64);
+const _: () = assert!(std::mem::size_of::<ResolvePush>() == 72);
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
 /// it grows in rows, so a class can hold more tiles than one dimension of a grid allows.
@@ -2271,7 +2274,9 @@ impl MeshletRenderer {
     /// `None`) and lists the 8×8 tiles that show each other class; each other class then
     /// shades its pixels in its tiles. A pixel's triangle is fetched, its attributes
     /// reconstructed at the pixel centre from analytic barycentrics, and lit with the
-    /// instance's row of the material table.
+    /// instance's row of the material table. Under a `sky` (issue #47), a surface takes the
+    /// sky's irradiance for its normal besides the sun; without one, space's constant fill.
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -2280,6 +2285,7 @@ impl MeshletRenderer {
         color: ImageHandle,
         extent: vk::Extent2D,
         background: Option<[f32; 4]>,
+        sky: Option<SkyLight>,
     ) {
         debug_assert!(tile_count(extent) <= tile_count(self.extent));
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -2298,6 +2304,7 @@ impl MeshletRenderer {
             use_background: u32::from(background.is_some()),
             tile_capacity: tile_count(self.extent),
             background: background.unwrap_or([0.0; 4]),
+            sky: sky.map_or(0, |s| s.address),
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -2314,7 +2321,7 @@ impl MeshletRenderer {
                 Ok(())
             });
         let standard = &self.pipeline_resolve[ShadingClass::Standard.index() as usize];
-        graph
+        let mut builder = graph
             .pass("shading/standard")
             .image(targets.visibility, ImageAccess::Sampled(compute))
             .image(color, ImageAccess::StorageWrite(compute))
@@ -2322,17 +2329,20 @@ impl MeshletRenderer {
             .buffer(targets.pages, BufferAccess::ShaderRead(compute))
             .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
-            .buffer(args, BufferAccess::ShaderReadWrite(compute))
-            .run(move |resources, commands| {
-                commands.bind_pipeline(standard);
-                commands.push_constants(standard, &push(resources));
-                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
-                Ok(())
-            });
+            .buffer(args, BufferAccess::ShaderReadWrite(compute));
+        if let Some(sky) = sky {
+            builder = builder.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+        }
+        builder.run(move |resources, commands| {
+            commands.bind_pipeline(standard);
+            commands.push_constants(standard, &push(resources));
+            commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+            Ok(())
+        });
         for class in &ShadingClass::ALL[1..] {
             let pipeline = &self.pipeline_resolve[class.index() as usize];
             let offset = u64::from(class.index()) * 16;
-            graph
+            let mut builder = graph
                 .pass(match class {
                     ShadingClass::Standard => "shading/standard",
                     ShadingClass::Ice => "shading/ice",
@@ -2344,13 +2354,16 @@ impl MeshletRenderer {
                 .buffer(targets.pages, BufferAccess::ShaderRead(compute))
                 .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
-                .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute))
-                .run(move |resources, commands| {
-                    commands.bind_pipeline(pipeline);
-                    commands.push_constants(pipeline, &push(resources));
-                    commands.dispatch_indirect(args_buffer, offset);
-                    Ok(())
-                });
+                .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
+            if let Some(sky) = sky {
+                builder = builder.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+            }
+            builder.run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &push(resources));
+                commands.dispatch_indirect(args_buffer, offset);
+                Ok(())
+            });
         }
     }
 

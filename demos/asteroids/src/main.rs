@@ -664,6 +664,7 @@ impl Demo for Ballad {
             taa_frame.color,
             extent,
             None,
+            None,
         );
         let planet = self
             .atmosphere

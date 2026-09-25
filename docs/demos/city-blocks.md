@@ -18,6 +18,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | The sky from the ground: sky-view table, aerial perspective, the sun | #43 | ✅ 0.05 ms for the three passes |
 | Bloom | #44 | ✅ 0.04 ms at 900p |
 | The sun's shadows by ray query | #45 | ✅ a BLAS per prop from its DAG, a TLAS over the million instances |
+| Sky light: the sky's irradiance on the shaded sides | #47 | ✅ nine SH coefficients a frame, 0.016 ms |
 
 ```
 cargo run --release -p city-blocks
@@ -25,7 +26,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -37,12 +38,49 @@ Options:
 - `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
   page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
 - `--no-shadows` draws without the sun's ray-traced shadows (**J** toggles them).
+- `--no-sky-light` lights the shaded sides with the ballad's constant fill instead of the sky
+  (**I** toggles it).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## Sky light (issue #47, 2026-09-25)
+
+The shaded sides were lit by the ballad's model for space: a constant wrap and a bluish fill,
+1–3 % of the sun, the same in every direction. Now they take the light the sky and the ground
+send them.
+- **`sky/irradiance`** projects the sky-view table (sky and sunlit ground, per unit of the
+  sun's illuminance) onto nine spherical-harmonic coefficients, convolved with the clamped
+  cosine (Ramamoorthi and Hanrahan 2001). One workgroup sums 4096 directions and reduces them
+  in a fixed order, so the result is the same on every run.
+- **The resolve** adds that irradiance for the pixel's normal to the sun's light, on every
+  class of material. The ballad and the bench, which have no sky, keep the constant fill.
+
+What a surface receives, per unit of the sun's illuminance above the air (logged at frame 30):
+
+| sun | roof | wall facing the sun | wall facing away | floor (the ground's bounce) | the sun on a roof |
+|---|---|---|---|---|---|
+| 63° (default) | 0.075 | 0.204 | 0.195 | 0.286 | 0.772 |
+| 20° | 0.051 | 0.105 | 0.090 | 0.096 | 0.235 |
+
+The sky alone gives a roof 0.075 of the sun, about 10 klux, as a clear sky does. Most of a
+wall's light comes up from the planet's sunlit ground (albedo 0.3). Nothing occludes it yet:
+a wall at the foot of a tower gets the same light as one in the open. Ambient occlusion comes
+next.
+
+![Sun at 63° (top, EV 15) and 20° (bottom, EV 13): the constant fill on the left, the sky light on the right](images/city-blocks-sky-light.png)
+
+**Cost:** `sky/irradiance` takes 0.016 ms, its single group's latency, and shading does not
+change. The south view goes 1.660 → 1.677 ms, the 1440p flight 2.192 → 2.200 ms.
+
+**Checks:**
+- With `--no-sky-light`, the city's three captures are identical to the previous build.
+- The ballad and the bench are identical (0 pixels), and mesh against fallback is at 0 in
+  the city too.
+- Synchronization validation is silent.
 
 ## Shadows (issue #45, 2026-09-25)
 

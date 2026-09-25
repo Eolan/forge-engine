@@ -7,6 +7,7 @@
 // pre-exposed illuminance.
 import bindless;
 import atmosphere;
+import sh;
 
 // Must match GpuSky in sky.rs.
 struct Sky
@@ -29,6 +30,7 @@ struct Sky
     uint height;
     uint2 pad;
     Planet* planet;
+    float4* irradiance;       // the sky's irradiance, SH_COEFFICIENTS coefficients (irradiance_main)
 };
 
 struct Push
@@ -223,4 +225,61 @@ void compose_main(uint3 id : SV_DispatchThreadID)
     float4 air = aerial_at(s, uv, distance);
     float4 c = color[id.xy];
     color[id.xy] = float4(c.rgb * air.a + air.rgb * s[0].scale.x, c.a);
+}
+
+// The sky's irradiance (issue #47): the sky-view table, which holds the light the air and the
+// planet's ground send towards the camera from every direction, projected on the first nine
+// spherical harmonics and convolved with the clamped cosine (sh.slang). One group of
+// IRRADIANCE_THREADS threads, each summing IRRADIANCE_SAMPLES directions of a Fibonacci
+// sphere, then a reduction in a fixed order: the result does not depend on timing. The
+// resolve reads it as the light a surface receives from the sky and the ground, per unit of
+// sun illuminance (the sun's disc is not in the table: the resolve adds the sun itself).
+static const uint IRRADIANCE_THREADS = 256;
+static const uint IRRADIANCE_SAMPLES = 16;
+groupshared float3 g_irradiance[IRRADIANCE_THREADS];
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void irradiance_main(uint3 id : SV_GroupThreadID)
+{
+    Sky* s = push.sky;
+    Planet p = s[0].planet[0];
+    float3 up, forward, right;
+    local_frame(p, s[0].sun.xyz, up, forward, right);
+    const uint count = IRRADIANCE_THREADS * IRRADIANCE_SAMPLES;
+    float3 sum[SH_COEFFICIENTS];
+    [unroll]
+    for (uint k = 0; k < SH_COEFFICIENTS; k++)
+        sum[k] = float3(0.0);
+    for (uint j = 0; j < IRRADIANCE_SAMPLES; j++)
+    {
+        uint i = id.x + j * IRRADIANCE_THREADS;
+        float z = 1.0 - (2.0 * float(i) + 1.0) / float(count);
+        float r = sqrt(max(1.0 - z * z, 0.0));
+        float phi = float(i) * 2.39996323; // the golden angle
+        float3 d = float3(r * cos(phi), z, r * sin(phi));
+        float elevation = asin(clamp(dot(d, up), -1.0, 1.0));
+        float3 flat = d - up * dot(d, up);
+        float azimuth = dot(flat, flat) > 1e-10 ? acos(clamp(dot(normalize(flat), forward), -1.0, 1.0)) : 0.0;
+        float3 luminance = sample_image_level(s[0].sky_view, SAMPLER_LINEAR_CLAMP, sky_view_uv(elevation, azimuth), 0.0).rgb;
+        float b[9];
+        sh_basis(d, b);
+        [unroll]
+        for (uint k = 0; k < SH_COEFFICIENTS; k++)
+            sum[k] += luminance * b[k];
+    }
+    for (uint k = 0; k < SH_COEFFICIENTS; k++)
+    {
+        g_irradiance[id.x] = sum[k];
+        GroupMemoryBarrierWithGroupSync();
+        for (uint stride = IRRADIANCE_THREADS / 2; stride > 0; stride /= 2)
+        {
+            if (id.x < stride)
+                g_irradiance[id.x] += g_irradiance[id.x + stride];
+            GroupMemoryBarrierWithGroupSync();
+        }
+        if (id.x == 0)
+            s[0].irradiance[k] = float4(g_irradiance[0] * (4.0 * PI / float(count)) * sh_cosine_band(k), 0.0);
+        GroupMemoryBarrierWithGroupSync();
+    }
 }

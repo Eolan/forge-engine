@@ -21,6 +21,7 @@
 import bindless;
 import vis64;
 import barycentrics;
+import sh;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -1434,7 +1435,7 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
 
 // The sun's light on a surface of `albedo` with normal `n`, in units of a white Lambertian
 // surface facing the sun. Returns the light and `ndl`, which the ice's scattering needs.
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     // The sun is far, so a half vector from the light and the camera-to-surface direction
@@ -1444,10 +1445,13 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     float3 view = normalize(f[0].camera_pos - (object_position + 0.0)); // object space ≈ world offset
     float3 half_vector = normalize(light + view);
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
+    float3 sun = f[0].sun_color.rgb;
+    // Under a sky: the light the sky and the ground send the normal (issue #47).
+    if (sky != nullptr)
+        return albedo * (diffuse * sun + sh_irradiance(sky, n)) + specular * sun;
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
     float3 fill = float3(0.10, 0.12, 0.18) * 0.25 * (0.5 + 0.5 * n.y);
-    float3 sun = f[0].sun_color.rgb;
     return albedo * (diffuse * sun + wrap + fill) + specular * sun;
 }
 
@@ -1530,6 +1534,7 @@ struct Surface
     uint meshlet_index;
     uint lod_level;
     float shadow;           // 1 in the sun, 0 where a shadow ray met something (issue #45)
+    float4* sky;            // the sky's irradiance coefficients (sh.slang), null in space (issue #47)
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -1595,7 +1600,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -1672,7 +1677,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, ndl) + emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, ndl) + emissive;
 }
 
 float3 shade_ice(Frame* f, Material mat, Surface s)
@@ -1685,7 +1690,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(mat.color_a, mat.color_b, cavity);
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, ndl);
     return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
 
@@ -1703,6 +1708,7 @@ struct ResolvePush
     uint use_background; // write `background` to empty pixels (else leave them for the sky)
     uint tile_capacity;
     float4 background;
+    float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
 };
 
 [[vk::push_constant]]
@@ -1783,6 +1789,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.meshlet_index = meshlet_index;
     s.lod_level = m.lod_level;
     s.shadow = 1.0;
+    s.sky = resolve_push.sky;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n);
     // The classes work in units of a white Lambertian surface facing the sun; the frame

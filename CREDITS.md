@@ -88,6 +88,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Physical light units and pre-exposure.** Sébastien Lagarde, Charles de Rousiers, "Moving
   Frostbite to Physically Based Rendering", SIGGRAPH 2014.
 - **Automatic exposure.** Krzysztof Narkowicz, "Automatic Exposure", 2016.
+- **Sky light.** Ravi Ramamoorthi, Pat Hanrahan, "An Efficient Representation for Irradiance
+  Environment Maps", SIGGRAPH 2001: the sky's irradiance as nine spherical-harmonic
+  coefficients.
 - **Triplanar normal maps.** Ben Golus, "Normal Mapping for a Triplanar Shader", 2017: the
   whiteout blend the materials' normal maps use.
 - **Tone curves.**

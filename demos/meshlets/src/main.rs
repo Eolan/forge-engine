@@ -304,6 +304,7 @@ impl Demo for Bench {
             color,
             extent,
             Some([0.02, 0.02, 0.03, 1.0]),
+            None,
         );
         if let Some(check) = &self.mip_check {
             check.record(&mut frame.graph, frame.slot, extent);

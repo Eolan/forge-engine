@@ -9,7 +9,7 @@
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
-//! threshold, T TAA, Tab wireframe, G tone curve, Esc quit.
+//! threshold, T TAA, B bloom, J shadows, I sky light, Tab wireframe, G tone curve, Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -34,7 +34,7 @@ use forge_render::textures::{self, TextureData};
 use forge_render::{
     Atmosphere, AtmosphereParams, Bloom, CullCamera, CullFlags, FrameStats, GroundSky,
     MeshletRenderer, MeshletScene, MeshletSceneBuilder, Residency, SkyParams, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100,
+    StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -122,6 +122,10 @@ struct Args {
     /// have none).
     #[arg(long)]
     no_shadows: bool,
+    /// Light the shaded sides with space's constant fill instead of the sky's irradiance (I
+    /// toggles it).
+    #[arg(long)]
+    no_sky_light: bool,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -154,6 +158,8 @@ struct Gallery {
     /// The Earth's atmosphere the city stands in, and the sky seen from the ground (issue #43).
     atmosphere: Atmosphere,
     sky: GroundSky,
+    /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
+    sky_light: bool,
     tonemap: Tonemap,
     scene: MeshletScene,
     camera: FlyCamera,
@@ -195,6 +201,7 @@ impl Gallery {
         taa.bloom_strength = args.bloom;
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
+        let sky_light = !args.no_sky_light;
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
         let atmosphere_params = AtmosphereParams::earth();
         let elevation = args.sun_elevation.to_radians();
@@ -265,6 +272,7 @@ impl Gallery {
             bloom_on,
             atmosphere,
             sky,
+            sky_light,
             scene,
             camera,
             flags,
@@ -314,6 +322,7 @@ impl Demo for Gallery {
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
+            KeyCode::KeyI => self.sky_light = !self.sky_light,
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;
@@ -393,6 +402,25 @@ impl Demo for Gallery {
             ));
             ctx.profile.counter(last.software_line(self.args.sw_raster));
         }
+        if self.frame == 30 {
+            // The sky's light once it has been computed, per unit of the sun's illuminance
+            // above the air (issue #47): what a roof, a floor and the walls facing towards and
+            // away from the sun receive from the sky and the ground, beside the sun's own on
+            // the roof.
+            let c = self.sky.read_irradiance(&ctx.device)?;
+            let sun = self.renderer.sun_dir.normalize();
+            let flat = Vec3::new(sun.x, 0.0, sun.z).normalize_or(Vec3::X);
+            let luma = |e: Vec3| e.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+            let e = |n: Vec3| luma(sh_irradiance(&c, n));
+            tracing::info!(
+                roof = %format_args!("{:.3}", e(Vec3::Y)),
+                floor = %format_args!("{:.3}", e(-Vec3::Y)),
+                wall_to_sun = %format_args!("{:.3}", e(flat)),
+                wall_away = %format_args!("{:.3}", e(-flat)),
+                sun_on_roof = %format_args!("{:.3}", luma(self.renderer.sun_color) * sun.y),
+                "sky light, per unit of sun illuminance"
+            );
+        }
         let camera = self.cull_camera(ctx.aspect());
         let extent = ctx.extent();
         let exposure = exposure_from_ev100(self.args.ev100);
@@ -430,15 +458,9 @@ impl Demo for Gallery {
             self.camera.position.z * 1e-3,
         );
         let air = self.atmosphere.frame(&mut frame.graph, frame.slot, view_km);
-        self.renderer.resolve(
-            &mut frame.graph,
-            frame.slot,
-            targets,
-            taa_frame.color,
-            extent,
-            None,
-        );
-        self.sky.draw(
+        // The sky's tables first: the resolve lights the shaded sides with its irradiance
+        // (issue #47).
+        let sky = self.sky.tables(
             &mut frame.graph,
             frame.slot,
             &air,
@@ -450,6 +472,22 @@ impl Demo for Gallery {
                 luminance_scale: self.renderer.sun_illuminance * exposure,
                 aerial_far_km: 8.0,
             },
+            targets.depth,
+            taa_frame.color,
+            extent,
+        );
+        self.renderer.resolve(
+            &mut frame.graph,
+            frame.slot,
+            targets,
+            taa_frame.color,
+            extent,
+            None,
+            self.sky_light.then_some(sky.light),
+        );
+        self.sky.compose(
+            &mut frame.graph,
+            &sky,
             targets.depth,
             taa_frame.color,
             extent,

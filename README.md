@@ -27,7 +27,7 @@ crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedur
 crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indirect-count fallback, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
                       physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
-shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, taa, exposure, tonemap, display, overlay, mipcheck)
+shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, sh, bloom, taa, exposure, tonemap, display, overlay, mipcheck)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
@@ -135,14 +135,16 @@ time, under a second after), then streamed: 128 KiB cluster pages read from the 
 as the LOD cut asks for them, through a 512 MiB pool. Every prop is made of textured
 materials (brick, plaster, concrete, glass windows, marble, rock), and the ground of layers:
 asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42), under a
-physical sky with haze by distance (`--sun-elevation DEG`, issue #43). Keys: **L** / **K** LOD and its
+physical sky with haze by distance (`--sun-elevation DEG`, issue #43), lit by the sun with
+ray-traced shadows (issue #45) and by the sky's light (issue #47). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
-**[** / **]** LOD threshold, **T** TAA, **B** bloom, **J** shadows, **Tab** wireframe, **G** tone curve. Options:
+**[** / **]** LOD threshold, **T** TAA, **B** bloom, **J** shadows, **I** sky light, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,
-`--no-taa`, `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
-`--ev100 EV`, `--force-fallback`. At 1440p the flight at 300 m/s runs at 1.64 ms of GPU (1.83 with the materials). Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
+`--no-taa`, `--no-shadows`, `--no-sky-light`, `--no-lod`, `--no-occlusion`, `--lod-error PX`,
+`--sw-raster auto|on|off`, `--ev100 EV`, `--force-fallback`. At 1440p the flight at 300 m/s runs
+at 2.20 ms of GPU with everything on. Numbers: [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
 
 ### `task-bench` — job system
 

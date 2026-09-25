@@ -274,7 +274,7 @@ The rocks now shade each other. The ballad builds the ray-traced sun shadows the
 - a top-level structure over the 3000 asteroids, built in 1 ms; 16 MiB in all.
 
 The field stays still until Phase 3, so both are built once at start. The resolve traces one
-ray per sun-facing pixel, and a rock in another's shadow is lit by the sky alone. **J**
+ray per sun-facing pixel, and a rock in another's shadow is lit by the fill alone. **J**
 toggles the shadows; `--no-shadows` starts without them.
 
 The rock row takes the procedural rock texture and its relief (albedo and normal, triplanar,

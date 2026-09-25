@@ -36,7 +36,7 @@ pub use meshlet::{
     CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, MeshId, MeshletRenderer,
     MeshletScene, MeshletSceneBuilder, SwRaster,
 };
-pub use sky::{GroundSky, SkyParams};
+pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
 pub use starfield::Starfield;
 pub use streaming::{Residency, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
