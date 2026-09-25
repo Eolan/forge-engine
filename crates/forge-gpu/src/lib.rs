@@ -11,6 +11,7 @@
 
 #![allow(unsafe_code)]
 
+mod accel;
 mod bindless;
 mod commands;
 mod device;
@@ -29,6 +30,7 @@ mod streamline;
 mod swapchain;
 mod timers;
 
+pub use accel::{AccelerationStructure, BlasTriangles};
 pub use ash;
 pub use ash::vk;
 pub use bindless::{

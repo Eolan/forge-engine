@@ -644,3 +644,58 @@ Left for later: layer maps streamed in tiles with the terrain's cells (Phase 2),
 layer for sharper transitions (height blending), and decals for road markings.
 *(research: vegetation-materials.md §8, large-worlds.md; D-007, D-014, D-026; demo:
 city-blocks)*
+
+## D-029 — Sun shadows by ray query: a BLAS per mesh from its DAG, a TLAS over the instances ✅ (2026-09-25)
+
+D-008 makes hardware ray tracing required for players, and its first tier casts the sun's
+shadows with rays. This is that tier's first piece (issue #45). It is built on ray queries
+from the compute resolve, with no ray-tracing pipeline and no shader binding table.
+
+**`forge-gpu`** enables `VK_KHR_acceleration_structure` and `VK_KHR_ray_query` on devices
+that have them (`FORGE_NO_RAY_QUERY=1` turns them off for testing).
+- `Device::build_blases` and `Device::build_tlas` build static structures in one-shot
+  submissions: prefer fast trace, scratch aligned to 256 bytes.
+- Shaders reach a structure by its device address (`RaytracingAccelerationStructure(address)`,
+  SPIR-V's `OpConvertUToAccelerationStructureKHR`), so the bindless set needs no new binding.
+
+**The geometry.** One bottom-level structure per mesh (`forge_render::raytrace`):
+- **The cut:** the finest cut of its cluster DAG that fits 40 000 triangles (600 000 for the
+  terrain), at a single object-space error. That is one watertight surface, read from the
+  cluster pages, streamed ones included.
+- **Why not the full detail:** it would cost 26 M triangles for the city's twenty props and
+  its terrain. The cut costs 1.39 M. A shadow needs the silhouette rather than the bricks.
+- **The price:** the traced surface may stand up to the cut's error off the drawn one. That is
+  0.01–0.35 m for most props, about 1 m for the two towers (3 M triangles down to 40 000)
+  and 0.02 m for the terrain. Shadow rays start 0.15 m off the surface, along the normal and
+  towards the sun. A recessed window pane may be shadowed by the coarse facade in front of
+  it; the glass is dark anyway.
+
+**The instances.** One top-level structure over every instance. A compute pass
+(`tlas_instances_main`) writes the 64-byte records from the scene's instance table, because
+the city places its million instances on the GPU:
+- the model's top three rows;
+- the instance index;
+- back faces traced too;
+- the mesh's structure.
+
+**The rays.** The resolve's `_rt` entry points, compiled only on devices with ray queries,
+trace one ray per sun-facing pixel. Its flags are accept-first-hit, skip-closest-hit and
+force-opaque. The standard, ice and layered classes scale the sun's diffuse and specular
+light by the result (`CullFlags::SHADOWS`).
+
+**Left for later:**
+- soft shadows (the sun's disc, a few rays with blue noise and a denoiser);
+- structures that follow streamed and moving geometry (refits, rebuilds, cluster
+  structures);
+- the ballad (its rocks tumble in Phase 3).
+
+*Measured* (city-blocks, RTX 5070 Ti):
+- **The build, once:** 1.39 M BLAS triangles in 58 ms (the cuts read from the pages included);
+  the TLAS over 1 000 001 instances in 12 ms. 278 MiB in all.
+- **The shadow rays:** `shading/standard` 0.094 → 0.136 ms and `shading/layered` 0.030 → 0.040
+  at 1600×900 (the south view 1.591 → 1.660 ms); 0.203 → 0.326 and 0.041 → 0.057 in the 1440p
+  flight (2.023 → 2.192 ms).
+- **Checks:** with `--no-shadows`, or without ray queries (`FORGE_NO_RAY_QUERY=1`), the captures
+  are those of the previous build. The other demos have no top-level structure and are
+  unchanged, though they run the `_rt` pipelines. Synchronization validation is silent.
+*(research: lighting-gi.md; D-008; issue #45; demo: city-blocks)*

@@ -149,6 +149,8 @@ static const uint SOFTWARE_BIT = 0x40000000u; // rasterised in compute
 // The previous frame's pyramid and culling camera (`Frame::prev_*`) are valid.
 public static const uint FLAG_PREV_PYRAMID = 2048;
 public static const uint FLAG_STREAMING = 4096;     // a streamed scene: the cut follows the resident pages (`lod_selected`)
+// Trace the sun's shadows against `Frame::tlas` (issue #45).
+public static const uint FLAG_SHADOWS = 8192;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -232,6 +234,7 @@ public struct Frame
     public uint* page_need;         // streaming: per page, the largest error in pixels it takes away (a float's bits)
     public Material* materials;     // the material table (D-007), indexed by `Instance::material`
     public float4 sun_color;        // rgb: the sunlight's colour at the scene (white-ish in space, filtered by the air on a planet)
+    public uint64_t tlas;           // the scene's top-level acceleration structure (0: none; issue #45)
 };
 
 struct Push
@@ -1431,16 +1434,16 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
 
 // The sun's light on a surface of `albedo` with normal `n`, in units of a white Lambertian
 // surface facing the sun. Returns the light and `ndl`, which the ice's scattering needs.
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     // The sun is far, so a half vector from the light and the camera-to-surface direction
     // approximated by the object's outward normal is close enough for a highlight this soft.
     ndl = dot(n, light);
-    float diffuse = max(ndl, 0.0);
+    float diffuse = max(ndl, 0.0) * shadow;
     float3 view = normalize(f[0].camera_pos - (object_position + 0.0)); // object space ≈ world offset
     float3 half_vector = normalize(light + view);
-    float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? 1.0 : 0.0);
+    float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
     float3 fill = float3(0.10, 0.12, 0.18) * 0.25 * (0.5 + 0.5 * n.y);
@@ -1526,6 +1529,7 @@ struct Surface
     uint instance_id;
     uint meshlet_index;
     uint lod_level;
+    float shadow;           // 1 in the sun, 0 where a shadow ray met something (issue #45)
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -1591,7 +1595,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -1668,7 +1672,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, ndl) + emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, ndl) + emissive;
 }
 
 float3 shade_ice(Frame* f, Material mat, Surface s)
@@ -1681,7 +1685,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(mat.color_a, mat.color_b, cavity);
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, ndl);
     return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
 
@@ -1711,9 +1715,32 @@ ResolvePush resolve_push;
 // starts every list at (TILE_GROUPS_X, 0, 1) and no tiles).
 static const uint TILE_GROUPS_X = 64;
 
+// How far a shadow ray starts off the surface, metres: the traced surfaces are cuts of the
+// meshes' DAGs (crates/forge-render/src/raytrace.rs) and may stand a little in front of the drawn
+// ones; the start also moves along the normal so grazing surfaces do not shadow themselves.
+static const float SHADOW_BIAS = 0.15;
+
+// 0 when something lies between `world` and the sun, else 1: one ray, the first hit ends it.
+float sun_shadow(Frame* f, float3 world, float3 n)
+{
+    float3 sun = normalize(f[0].sun_dir);
+    if (dot(n, sun) <= 0.0)
+        return 1.0; // facing away: the sun does not light it anyway
+    RayDesc ray;
+    ray.Origin = world + (n + sun) * SHADOW_BIAS;
+    ray.Direction = sun;
+    ray.TMin = 0.0;
+    ray.TMax = 50000.0;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    q.Proceed();
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+}
+
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
-// of class `class_index` (a compile-time constant at every call). Returns the class it has.
-uint shade_pixel(uint class_index, uint2 pixel, uint vis)
+// of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
+// shadow ray in (devices with ray queries). Returns the class it has.
+uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
 {
     Frame* f = resolve_push.frame;
     uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
@@ -1755,6 +1782,9 @@ uint shade_pixel(uint class_index, uint2 pixel, uint vis)
     s.instance_id = inst.id;
     s.meshlet_index = meshlet_index;
     s.lod_level = m.lod_level;
+    s.shadow = 1.0;
+    if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
+        s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)
@@ -1773,9 +1803,7 @@ uint shade_pixel(uint class_index, uint2 pixel, uint vis)
 // standard pixels are shaded, and the tile joins the list of every other class it shows.
 groupshared uint g_tile_classes;
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void resolve_standard_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID, uint index : SV_GroupIndex)
+void resolve_standard<let SHADOWS : int>(uint3 group, uint3 thread, uint index)
 {
     if (index == 0)
         g_tile_classes = 0;
@@ -1787,7 +1815,7 @@ void resolve_standard_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThre
         uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(pixel, 0));
         if (vis != VISIBILITY_EMPTY)
         {
-            uint class_index = shade_pixel(MATERIAL_CLASS_STANDARD, pixel, vis);
+            uint class_index = shade_pixel<SHADOWS>(MATERIAL_CLASS_STANDARD, pixel, vis);
             if (class_index != MATERIAL_CLASS_STANDARD)
                 others = 1u << class_index;
         }
@@ -1810,7 +1838,7 @@ void resolve_standard_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThre
 }
 
 // One thread per pixel of one of `class_index`'s tiles: its pixels of that class are shaded.
-void resolve_tiles(uint class_index, uint3 group, uint3 thread)
+void resolve_tiles<let SHADOWS : int>(uint class_index, uint3 group, uint3 thread)
 {
     uint tile_index = group.y * TILE_GROUPS_X + group.x;
     if (tile_index >= resolve_push.class_args[class_index * 4 + 3])
@@ -1821,21 +1849,91 @@ void resolve_tiles(uint class_index, uint3 group, uint3 thread)
         return;
     uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(pixel, 0));
     if (vis != VISIBILITY_EMPTY)
-        shade_pixel(class_index, pixel, vis);
+        shade_pixel<SHADOWS>(class_index, pixel, vis);
+}
+
+// The resolve's entry points: without shadow rays, and with them (`_rt`, devices with ray
+// queries; `MeshletRenderer::new` picks).
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_standard_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID, uint index : SV_GroupIndex)
+{
+    resolve_standard<0>(group, thread, index);
 }
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void resolve_ice_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 {
-    resolve_tiles(MATERIAL_CLASS_ICE, group, thread);
+    resolve_tiles<0>(MATERIAL_CLASS_ICE, group, thread);
 }
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void resolve_layered_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 {
-    resolve_tiles(MATERIAL_CLASS_LAYERED, group, thread);
+    resolve_tiles<0>(MATERIAL_CLASS_LAYERED, group, thread);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_standard_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID, uint index : SV_GroupIndex)
+{
+    resolve_standard<1>(group, thread, index);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_ice_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    resolve_tiles<1>(MATERIAL_CLASS_ICE, group, thread);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_layered_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    resolve_tiles<1>(MATERIAL_CLASS_LAYERED, group, thread);
+}
+
+// ------------------------------------------------------------ ray tracing ---
+
+// The top-level acceleration structure's records (issue #45, crates/forge-render/src/raytrace.rs):
+// a thread per instance writes its VkAccelerationStructureInstanceKHR, 64 bytes: the model's
+// top three rows, the instance index (24 bits) and a full mask, no SBT offset, back faces
+// traced too, and the address of its mesh's bottom-level structure.
+struct TlasPush
+{
+    Instance* instances;
+    uint64_t* blas;   // per mesh
+    uint* records;    // 16 words per instance
+    uint count;
+    uint pad;
+};
+
+[[vk::push_constant]]
+TlasPush tlas_push;
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void tlas_instances_main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= tlas_push.count)
+        return;
+    Instance inst = tlas_push.instances[id.x];
+    uint* r = tlas_push.records + id.x * 16;
+    [unroll]
+    for (uint row = 0; row < 3; row++)
+    {
+        [unroll]
+        for (uint column = 0; column < 4; column++)
+            r[row * 4 + column] = asuint(inst.model[row][column]);
+    }
+    r[12] = (id.x & 0xFFFFFFu) | (0xFFu << 24);
+    r[13] = 0x1u << 24; // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
+    uint64_t blas = tlas_push.blas[inst.mesh];
+    r[14] = uint(blas);
+    r[15] = uint(blas >> 32);
 }
 
 // ---------------------------------------------------------------- placement ---

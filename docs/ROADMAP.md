@@ -172,7 +172,9 @@ Goal: the renderer skeleton every later system draws through.
 ## Phase 4 — Lighting tiers
 
 1. T1 hybrid: ray-query DDGI probes, ReSTIR direct lighting, hybrid reflections, NRD.
-2. Shadows: stable cascades + PCSS now, virtual shadow maps once clusters stream.
+2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
+   of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p); soft
+   shadows, and structures that follow streaming and motion, next.
 3. Clouds (Nubis-style), froxel fog, night sky; weather rendering (rain, snow, lightning,
    wet surfaces) driven by the shared weather state.
 4. T2/T3: ReSTIR GI, radiance cache, Ray Reconstruction, path-traced reference with cluster

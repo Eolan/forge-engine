@@ -17,6 +17,7 @@ use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
 
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
+use crate::raytrace::{self, SceneRays};
 use crate::streaming::{PageSource, PageStore, PageStreamer, Residency, StreamingStats};
 use forge_core::material::{MaterialId, MaterialTable, ShadingClass};
 use forge_gpu::{
@@ -54,6 +55,8 @@ impl CullFlags {
     pub const GROUP_WINDOW_OFF: u32 = 256;
     /// Tint the pixels the software rasteriser drew (debug view).
     pub const SHOW_RASTER: u32 = 1024;
+    /// Trace the sun's shadows (issue #45; a scene with a top-level acceleration structure).
+    pub const SHADOWS: u32 = 8192;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -276,6 +279,8 @@ struct GpuFrame {
     materials: u64,
     /// The sunlight's colour at the scene (rgb; w unused).
     sun_color: [f32; 4],
+    /// The scene's top-level acceleration structure (0: none, no shadow rays).
+    tlas: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -491,6 +496,8 @@ pub struct MeshletSceneBuilder {
     materials: Vec<GpuMaterial>,
     /// The textures its rows sample.
     textures: Option<TextureSet>,
+    /// Build acceleration structures for shadow rays (issue #45), when the device has ray queries.
+    ray_traced: bool,
 }
 
 impl MeshletSceneBuilder {
@@ -619,6 +626,13 @@ impl MeshletSceneBuilder {
         self.textures = textures;
     }
 
+    /// Asks for acceleration structures (issue #45): one per mesh at [`MeshletSceneBuilder::build_with`]
+    /// (a cut of its DAG), the top-level one at [`MeshletScene::build_tlas`] once the instances
+    /// are written. Ignored on devices without ray queries.
+    pub fn set_ray_traced(&mut self, on: bool) {
+        self.ray_traced = on;
+    }
+
     /// Adds an instance of `mesh` with a uniform-scale transform, in its mesh's material.
     pub fn add_instance(&mut self, mesh: MeshId, model: Mat4) {
         let material = MaterialId(self.meshes[mesh.0 as usize].material);
@@ -694,6 +708,28 @@ impl MeshletSceneBuilder {
     ) -> Result<MeshletScene> {
         let page_count = self.store.sources.len() as u32;
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        // The meshes' cuts for the shadow rays, read while the page store is still here.
+        let rays = if self.ray_traced && device.features().ray_query {
+            let start = std::time::Instant::now();
+            let cuts = self
+                .meshes
+                .iter()
+                .map(|mesh| {
+                    let first = mesh.meshlet_offset as usize;
+                    let meshlets = &self.meshlets[first..first + mesh.meshlet_count as usize];
+                    let budget = if mesh.radius > 1000.0 {
+                        raytrace::TERRAIN_BUDGET
+                    } else {
+                        raytrace::TRIANGLE_BUDGET
+                    };
+                    raytrace::mesh_cut(meshlets, &self.store, budget)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let ms = start.elapsed().as_secs_f64() * 1e3;
+            Some(SceneRays::new(device, &cuts, ms)?)
+        } else {
+            None
+        };
         // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
         let pool_usage = usage | vk::BufferUsageFlags::INDEX_BUFFER;
         let (pool, page_table, streamer) = match residency {
@@ -854,6 +890,7 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
+            rays,
             materials: device.create_buffer_with_data(
                 &self.materials,
                 usage,
@@ -897,6 +934,8 @@ pub struct MeshletScene {
     /// Per frame slot: the status words that keep the instance cull's appends in a fixed
     /// order (one per instance-cull workgroup; the cluster culls' are the renderer's).
     lookback: Vec<GraphBuffer>,
+    /// Acceleration structures for shadow rays, when asked for and supported.
+    rays: Option<SceneRays>,
     /// The material table ([`GpuMaterial`] rows) and the textures they sample.
     materials: Buffer,
     /// Rows in `materials`.
@@ -923,6 +962,21 @@ pub struct MeshletScene {
 }
 
 impl MeshletScene {
+    /// Builds the top-level acceleration structure over the instances (issue #45), once they
+    /// are written (after GPU placement). Nothing without [`MeshletSceneBuilder::set_ray_traced`]
+    /// or ray queries.
+    pub fn build_tlas(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
+        if let Some(rays) = &mut self.rays {
+            rays.build_tlas(device, shaders, &self.instances, self.instance_count)?;
+        }
+        Ok(())
+    }
+
+    /// The acceleration structures, when the scene has them.
+    pub fn rays(&self) -> Option<&SceneRays> {
+        self.rays.as_ref()
+    }
+
     /// Bytes of texture the materials sample (every mip level).
     pub fn texture_bytes(&self) -> u64 {
         self.textures.as_ref().map_or(0, TextureSet::bytes)
@@ -1506,10 +1560,22 @@ impl MeshletRenderer {
             device.destroy_shader_module(module);
             pipeline
         };
+        // With ray queries, the variants that trace the sun's shadows when a scene has a TLAS.
+        let rt = device.features().ray_query;
+        let entry = |plain: &'static str, traced: &'static str| if rt { traced } else { plain };
         let pipeline_resolve = [
-            shading_pipeline("resolve_standard_main", "shading standard")?,
-            shading_pipeline("resolve_ice_main", "shading ice")?,
-            shading_pipeline("resolve_layered_main", "shading layered")?,
+            shading_pipeline(
+                entry("resolve_standard_main", "resolve_standard_rt_main"),
+                "shading standard",
+            )?,
+            shading_pipeline(
+                entry("resolve_ice_main", "resolve_ice_rt_main"),
+                "shading ice",
+            )?,
+            shading_pipeline(
+                entry("resolve_layered_main", "resolve_layered_rt_main"),
+                "shading layered",
+            )?,
         ];
         for module in [
             geometry,
@@ -1915,6 +1981,7 @@ impl MeshletRenderer {
                 .map_or(0, |s| s.need_buffer.address()),
             materials: scene.materials.address(),
             sun_color: self.sun_color.extend(0.0).to_array(),
+            tlas: scene.rays.as_ref().map_or(0, SceneRays::tlas_address),
         }
     }
 

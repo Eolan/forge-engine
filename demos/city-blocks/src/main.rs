@@ -118,6 +118,10 @@ struct Args {
     /// The sun's elevation over the horizon, degrees (63.4: the renderer's default sun).
     #[arg(long, default_value_t = 63.4)]
     sun_elevation: f32,
+    /// Draw without the sun's ray-traced shadows (X toggles them; devices without ray queries
+    /// have none).
+    #[arg(long)]
+    no_shadows: bool,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -220,6 +224,9 @@ impl Gallery {
         if !args.no_occlusion {
             flags.0 |= CullFlags::OCCLUSION;
         }
+        if !args.no_shadows {
+            flags.0 |= CullFlags::SHADOWS;
+        }
         let mut camera = if args.gallery {
             FlyCamera {
                 position: Vec3::new(0.0, 70.0, 230.0),
@@ -307,6 +314,7 @@ impl Demo for Gallery {
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
+            KeyCode::KeyX => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;
                 self.taa.reset_history();
@@ -957,6 +965,7 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         ms = layers_start.elapsed().as_millis(),
         "ground layers"
     );
+    builder.set_ray_traced(!args.no_shadows);
     let mut materials = CityMaterials::new(&ctx.device)?;
     materials.ground(&layers, texels, terrain.size)?;
     materials.apply(&mut builder, &props, &ids);
@@ -989,7 +998,7 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
     } else {
         Residency::All
     };
-    let scene = builder.build_with(&ctx.device, residency)?;
+    let mut scene = builder.build_with(&ctx.device, residency)?;
     tracing::info!(
         pages = scene.page_count,
         mib = (u64::from(scene.page_count) * forge_geom::PAGE_SIZE as u64) >> 20,
@@ -1020,6 +1029,18 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
     if !report.matches_mirror {
         tracing::warn!("the placed meshes differ from the CPU mirror: the scene's counts are off");
     }
+    // The sun's shadows trace against every placed instance (issue #45).
+    scene.build_tlas(&ctx.device, &ctx.shaders)?;
+    if let Some(rays) = scene.rays() {
+        tracing::info!(
+            blas_triangles = rays.triangles,
+            max_cut_error = %format_args!("{:.3}", rays.max_cut_error),
+            mib = rays.bytes() >> 20,
+            blas_ms = %format_args!("{:.0}", rays.blas_ms),
+            tlas_ms = %format_args!("{:.0}", rays.tlas_ms),
+            "acceleration structures"
+        );
+    }
     tracing::info!(
         instances = scene.instance_count,
         triangles = scene.total_triangles,
@@ -1041,6 +1062,7 @@ fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed
     let mut placed = Vec::with_capacity(props.len());
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
     CityMaterials::new(&ctx.device)?.apply(&mut builder, &props, &ids);
+    builder.set_ray_traced(!args.no_shadows);
     for (i, (spec, mesh)) in props.iter().zip(&meshes).enumerate() {
         let id = ids[i];
         let (column, row) = (i as u32 % COLUMNS, i as u32 / COLUMNS);
@@ -1056,7 +1078,8 @@ fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed
             radius: mesh.radius,
         });
     }
-    let scene = builder.build(&ctx.device)?;
+    let mut scene = builder.build(&ctx.device)?;
+    scene.build_tlas(&ctx.device, &ctx.shaders)?;
     tracing::info!(
         props = scene.instance_count,
         triangles = scene.total_triangles,

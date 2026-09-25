@@ -14,7 +14,7 @@ use crate::instance::Instance;
 pub struct DeviceFeatures {
     /// `VK_EXT_mesh_shader` with both task and mesh stages.
     pub mesh_shader: bool,
-    /// `VK_KHR_ray_query` + acceleration structures.
+    /// `VK_KHR_ray_query`, acceleration structures and the ray-tracing pipeline extension.
     pub ray_query: bool,
     /// `VK_EXT_sampler_filter_minmax` (min-reduction sampling for depth pyramids).
     pub sampler_minmax: bool,
@@ -63,6 +63,8 @@ pub struct Device {
     name: String,
     swapchain_loader: khr::swapchain::Device,
     mesh_loader: Option<ext::mesh_shader::Device>,
+    /// Acceleration structures, with ray queries.
+    acceleration_loader: Option<khr::acceleration_structure::Device>,
     debug_utils: Option<ext::debug_utils::Device>,
     allocator: Mutex<Option<Allocator>>,
     bindless: Mutex<Option<Bindless>>,
@@ -119,6 +121,12 @@ impl Device {
             tracing::info!("mesh shaders left disabled (fallback paths forced)");
             best.features.mesh_shader = false;
         }
+        if best.features.ray_query
+            && std::env::var_os("FORGE_NO_RAY_QUERY").is_some_and(|v| v != "0")
+        {
+            tracing::info!("ray queries left disabled (FORGE_NO_RAY_QUERY)");
+            best.features.ray_query = false;
+        }
         tracing::info!(device = %best.name, features = ?best.features, "selected GPU");
 
         let mut extensions: Vec<*const i8> = Vec::new();
@@ -136,6 +144,12 @@ impl Device {
         }
         if let Some(name) = best.index_type_uint8 {
             extensions.push(name.as_ptr());
+        }
+        if best.features.ray_query {
+            extensions.push(khr::acceleration_structure::NAME.as_ptr());
+            extensions.push(khr::ray_query::NAME.as_ptr());
+            extensions.push(khr::deferred_host_operations::NAME.as_ptr());
+            extensions.push(khr::ray_tracing_pipeline::NAME.as_ptr());
         }
 
         let base = vk::PhysicalDeviceFeatures::default()
@@ -199,6 +213,17 @@ impl Device {
         if best.features.index_type_uint8 {
             features2 = features2.push_next(&mut uint8);
         }
+        let mut acceleration = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+            .acceleration_structure(true);
+        let mut ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
+        let mut ray_tracing =
+            vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
+        if best.features.ray_query {
+            features2 = features2
+                .push_next(&mut acceleration)
+                .push_next(&mut ray_query)
+                .push_next(&mut ray_tracing);
+        }
         let priorities = [1.0_f32];
         let queue_info = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(best.graphics_family)
@@ -239,6 +264,10 @@ impl Device {
         })?;
 
         let swapchain_loader = khr::swapchain::Device::new(raw_instance, &raw);
+        let acceleration_loader = best
+            .features
+            .ray_query
+            .then(|| khr::acceleration_structure::Device::new(raw_instance, &raw));
         let mesh_loader = best
             .features
             .mesh_shader
@@ -278,6 +307,7 @@ impl Device {
             name: best.name,
             swapchain_loader,
             mesh_loader,
+            acceleration_loader,
             debug_utils,
             allocator: Mutex::new(Some(allocator)),
             bindless: Mutex::new(Some(bindless)),
@@ -381,7 +411,12 @@ impl Device {
         }
         let features = DeviceFeatures {
             mesh_shader: mesh_ext && mesh.task_shader == vk::TRUE && mesh.mesh_shader == vk::TRUE,
-            ray_query: has(khr::ray_query::NAME) && has(khr::acceleration_structure::NAME),
+            // Slang declares SPV_KHR_ray_tracing next to SPV_KHR_ray_query for a structure reached
+            // by address (OpConvertUToAccelerationStructureKHR), which the ray-tracing pipeline
+            // extension covers: the three come together.
+            ray_query: has(khr::ray_query::NAME)
+                && has(khr::acceleration_structure::NAME)
+                && has(khr::ray_tracing_pipeline::NAME),
             sampler_minmax: has(ext::sampler_filter_minmax::NAME)
                 && v12.sampler_filter_minmax == vk::TRUE,
             memory_budget: has(ext::memory_budget::NAME),
@@ -474,6 +509,11 @@ impl Device {
     /// Mesh-shader functions when available.
     pub fn mesh_loader(&self) -> Option<&ext::mesh_shader::Device> {
         self.mesh_loader.as_ref()
+    }
+
+    /// The acceleration-structure functions, on a device with ray queries.
+    pub fn acceleration_loader(&self) -> Option<&khr::acceleration_structure::Device> {
+        self.acceleration_loader.as_ref()
     }
 
     pub(crate) fn memory_counters(&self) -> &crate::memory_report::MemoryCounters {

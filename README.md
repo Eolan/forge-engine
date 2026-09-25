@@ -136,7 +136,7 @@ materials (brick, plaster, concrete, glass windows, marble, rock), and the groun
 asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42), under a
 physical sky with haze by distance (`--sun-elevation DEG`, issue #43). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
-**[** / **]** LOD threshold, **T** TAA, **B** bloom, **Tab** wireframe, **G** tone curve. Options:
+**[** / **]** LOD threshold, **T** TAA, **B** bloom, **X** shadows, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,

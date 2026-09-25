@@ -17,6 +17,7 @@ pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
 pub mod placement;
+pub mod raytrace;
 pub mod sky;
 pub mod starfield;
 pub mod streaming;

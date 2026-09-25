@@ -16,6 +16,8 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Windows of glass: material sections within a mesh | #41 | ✅ two sections per building through the DAG |
 | Streets, sidewalks, plazas: terrain layers | #42 | ✅ a layer map from the city's grid, 0.031 ms |
 | The sky from the ground: sky-view table, aerial perspective, the sun | #43 | ✅ 0.05 ms for the three passes |
+| Bloom | #44 | ✅ 0.04 ms at 900p |
+| The sun's shadows by ray query | #45 | ✅ a BLAS per prop from its DAG, a TLAS over the million instances |
 
 ```
 cargo run --release -p city-blocks
@@ -23,7 +25,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **X** shadows, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -34,12 +36,32 @@ Options:
   city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead).
 - `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
   page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
+- `--no-shadows` draws without the sun's ray-traced shadows (**X** toggles them).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## Shadows (issue #45, 2026-09-25)
+
+The sun casts ray-traced shadows (D-008's first tier, D-029): the buildings over the streets,
+the lamp posts on the sidewalks, the rocks on each other.
+- **The structures, built once at start-up:** one bottom-level structure per prop, from a cut
+  of its cluster DAG that fits 40 000 triangles (600 000 for the terrain); one top-level
+  structure over the million placed instances, its records written from the instance table
+  on the GPU. The BLASes take 58 ms, the TLAS 12 ms, 278 MiB in all.
+- **The rays:** the resolve traces one shadow ray per sun-facing pixel (a ray query, the first
+  hit ends it).
+- **Options:** `--no-shadows` or **X** draws without. Devices without ray queries have none.
+
+![The south edge at a sun of 20°, without shadows and with them](images/city-blocks-shadows.png)
+
+| RTX 5070 Ti | without shadows | with shadows |
+|---|---|---|
+| the south edge, 1600×900 | 1.591 ms | 1.660 ms (standard 0.094 → 0.136, layered 0.030 → 0.040) |
+| the flight at 1440p | 2.023 ms | 2.192 ms (standard 0.203 → 0.326, layered 0.041 → 0.057) |
 
 ## The sky (issue #43, 2026-09-25)
 
@@ -161,10 +183,10 @@ cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
 - **The RTX 3080** half of the target (60 fps at 1440p) waits for a run on the server PC
   (#39).
 
-![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials, glass, streets and sky of #20, #41, #42 and #43](images/city-blocks-profile.png)
+![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials, glass, streets, sky, bloom and shadows of #20 to #45](images/city-blocks-profile.png)
 
 **Golden captures** (1600 × 900, every page resident, so that a capture does not depend on
-the I/O's timing; re-taken with the materials, glass, streets and sky of #20 to #43). Two runs of each are identical to
+the I/O's timing; re-taken with the materials, glass, streets, sky, bloom and shadows of #20 to #45). Two runs of each are identical to
 the pixel.
 
 | The south edge, frame 60 | The orbit, frame 240 |

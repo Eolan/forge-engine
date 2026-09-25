@@ -121,6 +121,7 @@ With the textured materials of #20 the flight takes 1.79 ms (shading 0.09 → 0.
 With the streets of #42 (D-028: `shading/layered` 0.03–0.05 ms) the flight takes 1.87 ms.
 Under the sky of #43 (`sky/*` 0.05 ms at 900p, the compose 0.055 at 1440p) it takes 1.94 ms.
 With bloom (#44, `post/bloom` 0.08 ms at 1440p) it takes 2.02 ms.
+With the sun's ray-traced shadows (#45, D-029: about 0.14 ms of rays at 1440p) it takes 2.19 ms.
 **Priority:** the RTX 3080 run (#39). Nothing here needs work for the target; the culls'
 next step (#38) waits for a scene that does. Details in [city-blocks.md](demos/city-blocks.md).
 
