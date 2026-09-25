@@ -313,6 +313,14 @@ the row its windows take: dark, bluish, a sharp highlight. The sections go throu
 The buildings cook to 3–4 % more clusters. The south view draws 58 k clusters and 3.72 M
 triangles instead of 50 k and 3.43 M.
 
+*Fixed in #51 (2026-09-25):* at coarse levels some panes showed a triangle in the facade's
+colour. Simplification had moved a corner onto the facade's copy, and a triangle took its first
+vertex's section. It now takes the section most of its vertices carry (cook version 4):
+
+![One window column of the south view, left to right: before the fix, after it, and at full detail (`--no-lod`)](images/city-blocks-window-sections.png)
+
+A sliver remains where two of a pane's corners moved.
+
 **Streets (issue #42, D-028).** The terrain's row is a layered one: a layer map, a byte per
 square metre, generated from the city's grid (45 ms), picks per texel among the rows after
 it:

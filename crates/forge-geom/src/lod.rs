@@ -389,6 +389,11 @@ fn emit_clusters(
 ) -> Vec<usize> {
     let adapter = subset.adapter();
     let section_of = |local: u32| sections.of_vertex[subset.global[local as usize] as usize];
+    // A triangle's section is its vertices' majority (issue #51): at coarse levels, permissive
+    // simplification can move a pane's corner onto the facade's copy of a border vertex.
+    let triangle_section = |vertices: &[u32], t: &[u8; 3]| {
+        majority_section(t.map(|l| section_of(vertices[l as usize])))
+    };
     let build = |indices: &[u32]| {
         meshopt::build_meshlets(
             indices,
@@ -402,7 +407,7 @@ fn emit_clusters(
     let mut emit = |vertices: &[u32], triangles: &[u8], dag: &mut ClusterDag| {
         // A cluster holds at most two sections, its triangles sorted by section: the
         // record packs both and where the second starts (`GpuMeshlet::section`).
-        let section = |t: &[u8; 3]| section_of(vertices[t[0] as usize]);
+        let section = |t: &[u8; 3]| triangle_section(vertices, t);
         let mut order: Vec<&[u8; 3]> = triangles.as_chunks::<3>().0.iter().collect();
         order.sort_by_key(|t| section(t));
         let first = section(order[0]);
@@ -475,7 +480,7 @@ fn emit_clusters(
             .as_chunks::<3>()
             .0
             .iter()
-            .map(|t| section_of(meshlet.vertices[t[0] as usize]))
+            .map(|t| triangle_section(meshlet.vertices, t))
             .collect();
         present.sort_unstable();
         present.dedup();
@@ -491,7 +496,7 @@ fn emit_clusters(
                 .as_chunks::<3>()
                 .0
                 .iter()
-                .filter(|t| section_of(meshlet.vertices[t[0] as usize]) == s)
+                .filter(|t| triangle_section(meshlet.vertices, t) == s)
                 .flat_map(|t| t.iter().map(|&l| meshlet.vertices[l as usize]))
                 .collect();
             for piece in build(&part).iter() {
@@ -500,6 +505,16 @@ fn emit_clusters(
         }
     }
     ids
+}
+
+/// The section two or three of a triangle's vertices share (the second vertex's when all
+/// three differ).
+fn majority_section(s: [u8; 3]) -> u8 {
+    if s[0] == s[1] || s[0] == s[2] {
+        s[0]
+    } else {
+        s[1]
+    }
 }
 
 /// Every vertex's material section (see [`build_dag`]).
@@ -537,4 +552,19 @@ fn enclosing_sphere(spheres: &[[f32; 4]]) -> ([f32; 3], f32) {
         radius = radius.max(d + s[3]);
     }
     (sphere.center, radius)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::majority_section;
+
+    #[test]
+    fn a_triangle_takes_the_section_most_of_its_vertices_carry() {
+        // A pane whose corner was moved onto the facade's copy stays glass (issue #51).
+        assert_eq!(majority_section([0, 1, 1]), 1);
+        assert_eq!(majority_section([1, 0, 1]), 1);
+        assert_eq!(majority_section([1, 1, 0]), 1);
+        assert_eq!(majority_section([0, 0, 1]), 0);
+        assert_eq!(majority_section([2, 2, 2]), 2);
+    }
 }

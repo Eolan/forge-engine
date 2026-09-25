@@ -630,6 +630,14 @@ pixels as before):
   (windows keep their glass until they are a few pixels wide). GPU per frame: 1.10 → 1.35 ms
   with every page resident, 1.25 → 1.47 ms streamed (the culls 0.27 → 0.37 each); the flight
   at 1440p 1.79 → 1.83 ms.
+
+**Note (issue #51, 2026-09-25):** at coarse levels, permissive simplification can move a
+pane's corner onto the facade's copy of a border vertex. The triangle's section was its first
+vertex's, so some panes showed half their area in the facade's colour; full detail had none.
+A triangle's section is now the one most of its vertices carry, and the cook version went to 4.
+The large half-panes are gone. A sliver remains where two of the three corners are facade
+copies; fixing those needs the section carried from the finer level through simplification.
+
 *(research: gpu-geometry.md (Nanite's materials per triangle); D-007, D-026; demo:
 city-blocks)*
 
