@@ -15,6 +15,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Materials: brick, plaster, concrete, glass, grass, rock | #20 | ✅ a row per prop, textured, 1.79 ms for the 1440p flight |
 | Windows of glass: material sections within a mesh | #41 | ✅ two sections per building through the DAG |
 | Streets, sidewalks, plazas: terrain layers | #42 | ✅ a layer map from the city's grid, 0.031 ms |
+| The sky from the ground: sky-view table, aerial perspective, the sun | #43 | ✅ 0.05 ms for the three passes |
 
 ```
 cargo run --release -p city-blocks
@@ -33,11 +34,36 @@ Options:
   city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead).
 - `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
   page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
+- `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## The sky (issue #43, 2026-09-25)
+
+The city stands on the surface of an Earth-sized planet under the ballad's atmosphere
+(Hillaire 2020, D-023). The flat background is gone; three passes a frame replace it:
+- **`sky/sky-view table`**, 192 × 108 directions around the camera;
+- **`sky/aerial perspective`**, a 32 × 32 × 32 volume to 8 km;
+- **`sky/compose`**, the sky and the sun's disc behind the city and the haze of distance
+  over it.
+
+The sunlight on the city is the sun seen through the air: warm and dimmer at a low sun.
+`--sun-elevation` sets it.
+
+![The city from the orbit at a sun of 63° (the default, EV 15), 20° (EV 14.5) and 6° (EV 13)](images/city-blocks-skies.png)
+
+```
+city-blocks --stream-pool 0 --orbit --frames 241 --capture sky.png --capture-frame 240 --sun-elevation 20 --ev100 14.5
+```
+
+**Cost:**
+- at 1600×900 the three passes cost 0.014 + 0.011 + 0.024 ms (the south view 1.491 → 1.541 ms);
+- at 1440p the compose takes 0.055 ms (the flight 1.868 → 1.938 ms).
+
+The sun's disc is clamped below fp16's range once pre-exposed.
 
 ## Materials (issue #20, 2026-09-25)
 
@@ -134,10 +160,10 @@ cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
 - **The RTX 3080** half of the target (60 fps at 1440p) waits for a run on the server PC
   (#39).
 
-![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials of #20, the glass of #41 and the streets of #42: geometry 1.33 and shading 0.25 of 1.78 ms, 552 fps](images/city-blocks-profile.png)
+![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials, glass, streets and sky of #20, #41, #42 and #43](images/city-blocks-profile.png)
 
 **Golden captures** (1600 × 900, every page resident, so that a capture does not depend on
-the I/O's timing; re-taken with the materials, glass and streets of #20, #41 and #42). Two runs of each are identical to
+the I/O's timing; re-taken with the materials, glass, streets and sky of #20 to #43). Two runs of each are identical to
 the pixel.
 
 | The south edge, frame 60 | The orbit, frame 240 |

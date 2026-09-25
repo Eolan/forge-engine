@@ -231,6 +231,7 @@ public struct Frame
     public uint2* roots;            // (instance, local cluster) per root entry of the instance cull, `work_capacity` of them
     public uint* page_need;         // streaming: per page, the largest error in pixels it takes away (a float's bits)
     public Material* materials;     // the material table (D-007), indexed by `Instance::material`
+    public float4 sun_color;        // rgb: the sunlight's colour at the scene (white-ish in space, filtered by the air on a planet)
 };
 
 struct Push
@@ -1443,7 +1444,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
     float3 fill = float3(0.10, 0.12, 0.18) * 0.25 * (0.5 + 0.5 * n.y);
-    float3 sun = float3(1.0, 0.96, 0.9);
+    float3 sun = f[0].sun_color.rgb;
     return albedo * (diffuse * sun + wrap + fill) + specular * sun;
 }
 

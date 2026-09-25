@@ -16,6 +16,7 @@ pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
 pub mod placement;
+pub mod sky;
 pub mod starfield;
 pub mod streaming;
 pub mod taa;
@@ -32,6 +33,7 @@ pub use meshlet::{
     CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, MeshId, MeshletRenderer,
     MeshletScene, MeshletSceneBuilder, SwRaster,
 };
+pub use sky::{GroundSky, SkyParams};
 pub use starfield::Starfield;
 pub use streaming::{Residency, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};

@@ -32,8 +32,9 @@ use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
-    CullCamera, CullFlags, FrameStats, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
-    Residency, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100,
+    Atmosphere, AtmosphereParams, CullCamera, CullFlags, FrameStats, GroundSky, MeshletRenderer,
+    MeshletScene, MeshletSceneBuilder, Residency, SkyParams, StreamingConfig, StreamingStats,
+    SwRaster, Taa, Tonemap, exposure_from_ev100,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -114,6 +115,9 @@ struct Args {
     /// captures; with `--vsync` at 60 Hz, still 300 m/s).
     #[arg(long)]
     fixed_step: bool,
+    /// The sun's elevation over the horizon, degrees (63.4: the renderer's default sun).
+    #[arg(long, default_value_t = 63.4)]
+    sun_elevation: f32,
     /// Draw without TAA (no jitter, no history): the raw frame, aliased.
     #[arg(long)]
     no_taa: bool,
@@ -137,6 +141,9 @@ struct Gallery {
     renderer: MeshletRenderer,
     /// Anti-aliasing: jittered frames into a history, resolved through the tone curve.
     taa: Taa,
+    /// The Earth's atmosphere the city stands in, and the sky seen from the ground (issue #43).
+    atmosphere: Atmosphere,
+    sky: GroundSky,
     tonemap: Tonemap,
     scene: MeshletScene,
     camera: FlyCamera,
@@ -175,6 +182,21 @@ impl Gallery {
             ctx.swapchain.format(),
         )?;
         taa.enabled = !args.no_taa;
+        // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
+        let atmosphere_params = AtmosphereParams::earth();
+        let elevation = args.sun_elevation.to_radians();
+        renderer.sun_dir = Vec3::new(
+            0.8 * elevation.cos(),
+            elevation.sin(),
+            0.6 * elevation.cos(),
+        );
+        renderer.sun_color = Vec3::from(atmosphere_params.transmittance(
+            Vec3::new(0.0, atmosphere_params.bottom_radius + 0.05, 0.0),
+            renderer.sun_dir,
+            64,
+        ));
+        let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
+        let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
         let (scene, placed) = if args.gallery {
             build_gallery(ctx, &args)?
         } else {
@@ -223,6 +245,8 @@ impl Gallery {
             args,
             renderer,
             taa,
+            atmosphere,
+            sky,
             scene,
             camera,
             flags,
@@ -378,14 +402,37 @@ impl Demo for Gallery {
                 sw_raster_area: self.args.sw_raster_area,
             },
         )?;
-        // A pale sky behind the props.
+        // The ground of the city is the surface of an Earth-sized planet: the camera in its
+        // frame, in km. The sky fills what the resolve leaves and hazes the rest (issue #43).
+        let view_km = Vec3::new(
+            self.camera.position.x * 1e-3,
+            self.atmosphere.params.bottom_radius + self.camera.position.y.max(1.0) * 1e-3,
+            self.camera.position.z * 1e-3,
+        );
+        let air = self.atmosphere.frame(&mut frame.graph, frame.slot, view_km);
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
             targets,
             taa_frame.color,
             extent,
-            Some([0.55, 0.62, 0.72, 1.0]),
+            None,
+        );
+        self.sky.draw(
+            &mut frame.graph,
+            frame.slot,
+            &air,
+            SkyParams {
+                view_proj: taa_frame.jittered_projection * self.camera.view(),
+                camera: self.camera.position,
+                sun_dir: self.renderer.sun_dir,
+                sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
+                luminance_scale: self.renderer.sun_illuminance * exposure,
+                aerial_far_km: 8.0,
+            },
+            targets.depth,
+            taa_frame.color,
+            extent,
         );
         let motion = self
             .taa

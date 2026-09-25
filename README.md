@@ -133,7 +133,8 @@ cooked into cluster DAGs on the job system and cached in `mesh-cache/` (13 s the
 time, under a second after), then streamed: 128 KiB cluster pages read from the cache files
 as the LOD cut asks for them, through a 512 MiB pool. Every prop is made of textured
 materials (brick, plaster, concrete, glass windows, marble, rock), and the ground of layers:
-asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42). Keys: **L** / **K** LOD and its
+asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, #42), under a
+physical sky with haze by distance (`--sun-elevation DEG`, issue #43). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
 **[** / **]** LOD threshold, **T** TAA, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),

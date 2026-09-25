@@ -383,6 +383,21 @@ view, 0.14–0.16 ms with the ballad's planet (18° radius) in view and 0.31 ms 
 filling the screen, which a planet-view table would make a lookup (#26). *(research:
 lighting-gi.md §6; issue #8)*
 
+**The ground view** (issue #43, 2026-09-25) is `forge_render::sky`, three passes a frame over
+the same tables:
+- **A sky-view table** (192 × 108): the in-scattered light around the camera, the elevation
+  squashed towards the horizon, the azimuth taken from the sun's. Rays that meet the planet
+  add its ground, lit by the sun and the sky and seen through the air.
+- **An aerial-perspective volume** (32 × 32 froxels × 32 slices to 8 km, quadratic in
+  depth, a 1024 × 32 atlas): the light gathered and the mean transmittance from the camera
+  to each slice.
+- **A compose pass:** the sky and the sun's disc where the depth is empty; elsewhere
+  `colour × T + L`, from the pixel's distance.
+
+The scene's sunlight takes the sun's colour through the air (`MeshletRenderer::sun_color`;
+the ballad keeps its space white). City-blocks stands on the Earth's surface: at 1600×900
+the three passes cost 0.013 + 0.011 + 0.025 ms.
+
 ## D-024 — DLSS through Streamline's interposer, optional, TAA as the default ✅ (2026-09-24)
 
 DLSS Super Resolution runs through NVIDIA Streamline 2.14 (the SDK in `streamline-sdk/`,

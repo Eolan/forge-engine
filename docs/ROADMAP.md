@@ -128,8 +128,8 @@ Goal: the renderer skeleton every later system draws through.
    Still to come: bloom, ACES 2.0's output transform, a perceptual golden-image metric.
    Hillaire atmosphere ✅ (2026-09-24, D-023: transmittance and multiple-scattering tables
    as graph passes, the per-pixel march for planets seen from space; the planet-view table
-   #26 for big planets, the sky-view and aerial-perspective tables with the first ground
-   demo). TAA ✅. DLSS ✅ (2026-09-24, D-024: Streamline's interposer behind the `dlss`
+   #26 for big planets; the sky-view table, the aerial perspective and the sun seen from the
+   ground ✅ with city-blocks, issue #43). TAA ✅. DLSS ✅ (2026-09-24, D-024: Streamline's interposer behind the `dlss`
    feature, TAA the default, every mode switchable at run time, the LOD error in output
    pixels).
    **Demo:** `city-blocks` — a million GPU-placed instances of twenty props with the DAG,

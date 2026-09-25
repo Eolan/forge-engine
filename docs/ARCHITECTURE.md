@@ -219,8 +219,10 @@ elsewhere); nothing upstream knows which curve is on screen.
 compute passes when it changes (transmittance, multiple scattering; Hillaire 2020) and a
 per-pixel march through the shell for views from space, in the same pre-exposed units:
 the ground is lit through the air, and the stars and the sun seen through it are dimmed
-and reddened by its transmittance. Empty space has no medium. Cameras inside an
-atmosphere will add the sky-view and aerial-perspective tables.
+and reddened by its transmittance. Empty space has no medium. Cameras inside an atmosphere
+(issue #43) add a sky-view table around the camera, an aerial-perspective volume to 8 km, and
+a compose pass that draws the sky and the sun behind the scene and hazes the scene by distance;
+the sunlight on the scene takes the sun's colour through the air.
 
 **The resolve is TAA or DLSS** (issue #8, D-024). The scene is drawn jittered into a
 pre-exposed HDR target either way, and the motion vectors (UV offsets from depth and the two

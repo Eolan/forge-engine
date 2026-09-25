@@ -274,8 +274,11 @@ struct GpuFrame {
     page_need: u64,
     /// The material table ([`GpuMaterial`] rows).
     materials: u64,
+    /// The sunlight's colour at the scene (rgb; w unused).
+    sun_color: [f32; 4],
 }
 
+const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
 // Both passes' blocks share one buffer at this stride.
 const _: () = assert!(std::mem::size_of::<GpuFrame>() as u64 <= FRAME_BLOCK_STRIDE);
 
@@ -1293,6 +1296,9 @@ pub struct MeshletRenderer {
     pub sun_dir: Vec3,
     /// Illuminance of the sun at the scene, in lux (the rocks return albedo × E / π).
     pub sun_illuminance: f32,
+    /// The sunlight's colour at the scene: (1, 0.96, 0.9) by default (the ballad's, in space);
+    /// on a planet, the sun through the air.
+    pub sun_color: Vec3,
 }
 
 /// What to draw this frame.
@@ -1601,6 +1607,7 @@ impl MeshletRenderer {
             visible_max,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
             sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
+            sun_color: Vec3::new(1.0, 0.96, 0.9),
         })
     }
 
@@ -1907,6 +1914,7 @@ impl MeshletRenderer {
                 .as_ref()
                 .map_or(0, |s| s.need_buffer.address()),
             materials: scene.materials.address(),
+            sun_color: self.sun_color.extend(0.0).to_array(),
         }
     }
 
