@@ -27,8 +27,9 @@ pub struct GpuVertex {
     pub pad0: f32,
     /// Object-space normal.
     pub normal: [f32; 3],
-    /// Padding.
-    pub pad1: f32,
+    /// The vertex's material section as a number (issue #41): an attribute the simplifier
+    /// weighs, so a section dissolves into its neighbour only once that is cheap.
+    pub section: f32,
 }
 
 /// Meshlet record shared with the shaders (112 bytes, natural layout).
@@ -74,8 +75,10 @@ pub struct GpuMeshlet {
     pub parent_error: f32,
     /// LOD level (0 = full detail).
     pub lod_level: u32,
-    /// Padding.
-    pub pad2: u32,
+    /// The material sections of the cluster's triangles (issue #41), `a | b << 8 | split << 16`:
+    /// triangles before `split` are in section `a`, the others in `b` (0 for a mesh without
+    /// sections). An instance draws section `s` with the row after its own by `s`.
+    pub section: u32,
 }
 
 /// How a mesh is cooked.
@@ -139,19 +142,9 @@ impl MeshletMesh {
 
     /// [`MeshletMesh::build`] with explicit options.
     pub fn build_with(mesh: &TriMesh, options: CookOptions) -> Self {
-        let vertices: Vec<GpuVertex> = mesh
-            .positions
-            .iter()
-            .zip(&mesh.normals)
-            .map(|(p, n)| GpuVertex {
-                position: *p,
-                pad0: 0.0,
-                normal: *n,
-                pad1: 0.0,
-            })
-            .collect();
-        let indices = meshopt::optimize_vertex_cache(&mesh.indices, vertices.len());
-        let mut dag = lod::build_dag(&indices, &vertices, options.normal_weight);
+        let (vertices, indices, vertex_section) = split_sections(mesh);
+        let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
+        let mut dag = lod::build_dag(&indices, &vertices, &vertex_section, options.normal_weight);
         let pages = page::pack(&mut dag, &vertices);
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
@@ -217,6 +210,65 @@ pub struct PageFile {
     pub path: std::path::PathBuf,
     /// Where page 0 starts.
     pub offset: u64,
+}
+
+/// The cooking vertices, the triangle list and each vertex's section. A vertex whose
+/// triangles lie in several sections is split into one copy per section (same position and
+/// normal): no edge then joins two sections, meshoptimizer treats the copies as a seam and
+/// keeps the border while it simplifies, and every triangle the DAG makes lies in the
+/// section of its vertices.
+fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u8>) {
+    let mut vertices: Vec<GpuVertex> = mesh
+        .positions
+        .iter()
+        .zip(&mesh.normals)
+        .map(|(p, n)| GpuVertex {
+            position: *p,
+            pad0: 0.0,
+            normal: *n,
+            section: 0.0,
+        })
+        .collect();
+    let mut vertex_section = vec![u8::MAX; vertices.len()];
+    let mut copies: std::collections::HashMap<(u32, u8), u32> = std::collections::HashMap::new();
+    let mut indices = mesh.indices.clone();
+    for (t, tri) in indices.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+        let section = mesh.section(t);
+        for v in tri {
+            let owner = &mut vertex_section[*v as usize];
+            if *owner == u8::MAX {
+                *owner = section;
+            } else if *owner != section {
+                let original = *v;
+                *v = *copies.entry((original, section)).or_insert_with(|| {
+                    vertices.push(GpuVertex {
+                        section: f32::from(section),
+                        ..vertices[original as usize]
+                    });
+                    vertex_section.push(section);
+                    (vertices.len() - 1) as u32
+                });
+            }
+        }
+    }
+    // Vertices no triangle uses keep section 0.
+    for (v, s) in vertex_section.iter_mut().enumerate() {
+        if *s == u8::MAX {
+            *s = 0;
+        }
+        vertices[v].section = f32::from(*s);
+    }
+    (vertices, indices, vertex_section)
+}
+
+/// The section of triangle `t` of a cluster whose packed sections are `packed`
+/// ([`GpuMeshlet::section`]).
+pub fn triangle_section(packed: u32, t: u32) -> u32 {
+    if t < (packed >> 16) & 0xFF {
+        packed & 0xFF
+    } else {
+        (packed >> 8) & 0xFF
+    }
 }
 
 fn bounding_sphere(positions: &[[f32; 3]]) -> ([f32; 3], f32) {

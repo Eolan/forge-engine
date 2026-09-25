@@ -255,15 +255,19 @@ const BOX_FACES: [(Vec3, Vec3, Vec3); 6] = [
 /// A closed box `size` (x, y, z) standing on y = 0 around `origin`, each face a grid of cells
 /// of about `cell` metres, every vertex moved along its face's normal by
 /// `displace(face, s, t, face_width, face_height)` (s, t: metres along the face's right and up
-/// axes from its corner). Edge vertices are shared between faces and never move, so the
-/// box stays closed.
+/// axes from its corner), which also gives the vertex's section. Edge vertices are shared
+/// between faces and never move, so the box stays closed. A triangle is in a vertex section
+/// only when all three of its vertices are; `mesh.sections` gets one entry per triangle.
 fn displaced_box(
     mesh: &mut TriMesh,
     origin: Vec3,
     size: Vec3,
     cell: f32,
-    displace: &dyn Fn(usize, f32, f32, f32, f32) -> f32,
+    displace: &dyn Fn(usize, f32, f32, f32, f32) -> (f32, u8),
 ) {
+    // Keep `sections` one per triangle even when the mesh so far had none.
+    mesh.sections.resize(mesh.indices.len() / 3, 0);
+    let mut vertex_section: HashMap<u32, u8> = HashMap::new();
     let segments = (size / cell).ceil().max(Vec3::ONE);
     let half = size * 0.5;
     let center = origin + Vec3::new(0.0, half.y, 0.0);
@@ -290,13 +294,17 @@ fn displaced_box(
                 let key = quantize(flat);
                 let index = *welded.entry(key).or_insert_with(|| {
                     let border = i == 0 || j == 0 || i == nu || j == nv;
-                    let d = if border {
-                        0.0
+                    let (d, section) = if border {
+                        (0.0, 0)
                     } else {
                         displace(face, s, t, face_w, face_h)
                     };
                     mesh.positions.push((flat + normal * d).to_array());
-                    (mesh.positions.len() - 1) as u32
+                    let index = (mesh.positions.len() - 1) as u32;
+                    if section != 0 {
+                        vertex_section.insert(index, section);
+                    }
+                    index
                 });
                 grid.push(index);
             }
@@ -309,10 +317,24 @@ fn displaced_box(
                 let c = grid[((j + 1) * stride + i) as usize];
                 let d = grid[((j + 1) * stride + i + 1) as usize];
                 mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+                let section = |tri: [u32; 3]| {
+                    let s = tri.map(|v| vertex_section.get(&v).copied().unwrap_or(0));
+                    if s[0] == s[1] && s[1] == s[2] {
+                        s[0]
+                    } else {
+                        0
+                    }
+                };
+                mesh.sections.push(section([a, c, b]));
+                mesh.sections.push(section([b, c, d]));
             }
         }
     }
 }
+
+/// The section of a building's window panes (issue #41): its instances draw it with the material
+/// row after theirs.
+pub const GLASS: u8 = 1;
 
 /// 0 outside `[lo, hi]`, 1 inside it more than `bevel` from either end, linear between.
 fn window(x: f32, lo: f32, hi: f32, bevel: f32) -> f32 {
@@ -321,20 +343,23 @@ fn window(x: f32, lo: f32, hi: f32, bevel: f32) -> f32 {
 
 /// A building: side faces carry flush corner pilasters, a plinth, shop fronts on the ground
 /// floor, a ledge at every floor line, recessed windows with bevelled reveals in regular
-/// bays, and a cornice under the roof line; the flat roof carries a few boxy units.
+/// bays, and a cornice under the roof line; the flat roof carries a few boxy units. The
+/// window panes, the flat backs of the recesses, are section [`GLASS`]; the rest is section 0.
 pub fn building(b: &Building) -> TriMesh {
     let mut mesh = TriMesh::default();
-    let facade = |face: usize, s: f32, t: f32, face_w: f32, face_h: f32| -> f32 {
+    // The recess at `w` of a window `depth` deep: glass where the reveal's bevel has ended.
+    let recess = |w: f32, depth: f32| (-depth * w, if w >= 1.0 { GLASS } else { 0 });
+    let facade = |face: usize, s: f32, t: f32, face_w: f32, face_h: f32| -> (f32, u8) {
         if face == 2 || face == 3 {
-            return 0.0; // roof and floor
+            return (0.0, 0); // roof and floor
         }
         let top = face_h;
         if s < b.corner || s > face_w - b.corner || t < 0.35 {
-            return 0.0; // pilasters and plinth, flush with the edges
+            return (0.0, 0); // pilasters and plinth, flush with the edges
         }
         if t > top - 0.9 {
             // Cornice: a band standing out, stepping back to the roof line.
-            return if t < top - 0.2 { 0.3 } else { 0.1 };
+            return (if t < top - 0.2 { 0.3 } else { 0.1 }, 0);
         }
         let usable = face_w - 2.0 * b.corner;
         let bays = (usable / b.bay).floor().max(1.0);
@@ -344,18 +369,18 @@ pub fn building(b: &Building) -> TriMesh {
             // Shop fronts: wide, deep windows over a low sill.
             let w = window(x, bay * 0.08, bay * 0.92, 0.08)
                 * window(t, 0.6, b.ground_floor - 0.7, 0.08);
-            return -0.4 * w;
+            return recess(w, 0.4);
         }
         let floor_t = (t - b.ground_floor) % b.floor_height;
         if floor_t < 0.25 || floor_t > b.floor_height - 0.05 {
-            return 0.12; // the floor line's ledge
+            return (0.12, 0); // the floor line's ledge
         }
         let half = bay * b.window_ratio * 0.5;
         let sill = 0.9;
         let lintel = (b.floor_height - 0.45).max(sill + 0.5);
         let w = window(x, bay * 0.5 - half, bay * 0.5 + half, 0.07)
             * window(floor_t, sill, lintel, 0.07);
-        -0.25 * w
+        recess(w, 0.25)
     };
     displaced_box(
         &mut mesh,
@@ -376,7 +401,7 @@ pub fn building(b: &Building) -> TriMesh {
             Vec3::new(x, b.height, z),
             size,
             (b.cell * 2.0).max(0.1),
-            &|_, _, _, _, _| 0.0,
+            &|_, _, _, _, _| (0.0, 0),
         );
     }
     mesh.recompute_normals();
@@ -667,6 +692,60 @@ mod tests {
             }
         }
         assert!(edges.values().all(|&v| v == 0), "an edge without its twin");
+    }
+
+    #[test]
+    fn window_panes_are_glass_and_keep_their_section_up_the_dag() {
+        let b = Building {
+            width: 10.0,
+            depth: 8.0,
+            height: 12.0,
+            cell: 0.25,
+            ground_floor: 4.0,
+            floor_height: 3.2,
+            bay: 3.0,
+            window_ratio: 0.5,
+            corner: 0.8,
+            roof_units: 1,
+            seed: 1,
+        };
+        let mesh = building(&b);
+        assert_eq!(mesh.sections.len(), mesh.triangle_count());
+        let glass = mesh.sections.iter().filter(|&&s| s == GLASS).count();
+        assert!(
+            glass > 100 && glass < mesh.triangle_count() / 2,
+            "{glass} glass triangles"
+        );
+        let built = crate::MeshletMesh::build_with(
+            &mesh,
+            crate::meshlet::CookOptions { normal_weight: 1.0 },
+        );
+        let at_level = |level: u32, section: u32| -> usize {
+            built
+                .meshlets
+                .iter()
+                .filter(|m| m.lod_level == level)
+                .map(|m| {
+                    (0..m.triangle_count)
+                        .filter(|&t| crate::meshlet::triangle_section(m.section, t) == section)
+                        .count()
+                })
+                .sum()
+        };
+        // Level 0 holds exactly the glass triangles in glass clusters, and the coarser levels
+        // still have glass clusters (the panes simplify, their borders stay).
+        assert_eq!(at_level(0, u32::from(GLASS)), glass);
+        assert_eq!(at_level(0, 0), mesh.triangle_count() - glass);
+        assert!(at_level(1, u32::from(GLASS)) > 0);
+        // Clusters mix the facade and its glass instead of splitting at every pane.
+        assert!(built.meshlets.iter().any(|m| (m.section >> 16) & 0xFF != 0));
+        assert!(
+            built
+                .meshlets
+                .iter()
+                .all(|m| (m.section & 0xFF) <= u32::from(GLASS)
+                    && (m.section >> 8 & 0xFF) <= u32::from(GLASS))
+        );
     }
 
     #[test]

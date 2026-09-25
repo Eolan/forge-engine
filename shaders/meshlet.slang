@@ -59,7 +59,7 @@ public struct Meshlet
     public float self_error;
     public float parent_error;
     public uint lod_level;
-    public uint pad2;
+    public uint section;         // its triangles' material sections, a | b << 8 | split << 16 (`triangle_section`)
 };
 
 static const uint LOD_LEVELS = 16; // forge_geom::MAX_LEVELS
@@ -268,6 +268,13 @@ PagedVertex paged_vertex(Frame* f, uint base, uint i)
 uint paged_index(Frame* f, uint base, Meshlet m, uint t, uint k)
 {
     return load_byte(f[0].pool, base + m.vertex_count * PAGED_VERTEX_BYTES + t * 3 + k);
+}
+
+// The material section of triangle `t` of cluster `m`: before the split its first section,
+// after it its second (forge_geom::meshlet::triangle_section).
+uint triangle_section(Meshlet m, uint t)
+{
+    return t < ((m.section >> 16) & 0xFFu) ? (m.section & 0xFFu) : ((m.section >> 8) & 0xFFu);
 }
 
 // The 16-bit octahedral normal of a paged vertex (forge_geom::page::decode_normal).
@@ -1628,13 +1635,14 @@ uint shade_pixel(uint class_index, uint2 pixel, uint vis)
     uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
     uint2 record = f[0].visible[slot];
     Instance inst = f[0].instances[record.x];
-    Material mat = f[0].materials[inst.material];
+    uint meshlet_index = record.y & MESHLET_INDEX_MASK;
+    Meshlet m = f[0].meshlets[meshlet_index];
+    // The instance names its first section's row; the others follow it (issue #41).
+    Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
     if (mat.class_index != class_index)
         return mat.class_index;
-    uint meshlet_index = record.y & MESHLET_INDEX_MASK;
     bool culled_debug = (record.y & CULLED_BIT) != 0;
     bool software = (record.y & SOFTWARE_BIT) != 0;
-    Meshlet m = f[0].meshlets[meshlet_index];
     uint base = payload_base(f, m);
     PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
     PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));

@@ -592,6 +592,15 @@ impl CityMaterials {
         };
         let mut table = MaterialTable::new();
         let mut add = |name: &str, layer: RenderLayer| table.add(Material::new(name, layer));
+        // A building's window panes are its section 1 (`forge_geom::city::GLASS`): each facade row
+        // is followed by the row its windows take.
+        let windows = RenderLayer {
+            color_a: [0.10, 0.13, 0.16],
+            color_b: [0.07, 0.09, 0.12],
+            roughness: RenderLayer::roughness_for_power(300.0),
+            specular: 0.8,
+            ..RenderLayer::default()
+        };
         let grass = add(
             "grass",
             textured(grass, [1.0; 3], [1.1, 1.05, 0.9], 12.0, 6.0, 0.02),
@@ -600,10 +609,12 @@ impl CityMaterials {
             "brick (red)",
             textured(brick, [1.0; 3], [1.1, 0.95, 0.9], 2.0, 10.0, 0.04),
         );
+        add("brick (red): windows", windows);
         let brick_brown = add(
             "brick (brown)",
             textured(brick, [0.8, 0.8, 0.85], [0.75, 0.7, 0.65], 2.0, 10.0, 0.04),
         );
+        add("brick (brown): windows", windows);
         let concrete_grey = add(
             "concrete",
             textured(
@@ -615,6 +626,7 @@ impl CityMaterials {
                 0.05,
             ),
         );
+        add("concrete: windows", windows);
         let plaster_ochre = add(
             "plaster (ochre)",
             textured(
@@ -626,6 +638,7 @@ impl CityMaterials {
                 0.04,
             ),
         );
+        add("plaster (ochre): windows", windows);
         let plaster_cream = add(
             "plaster (cream)",
             textured(
@@ -637,6 +650,7 @@ impl CityMaterials {
                 0.04,
             ),
         );
+        add("plaster (cream): windows", windows);
         let sandstone = add(
             "sandstone",
             textured(
@@ -648,6 +662,7 @@ impl CityMaterials {
                 0.04,
             ),
         );
+        add("sandstone: windows", windows);
         let glass = add(
             "dark glass",
             textured(
@@ -659,6 +674,7 @@ impl CityMaterials {
                 0.35,
             ),
         );
+        add("dark glass: windows", windows);
         let stone = add(
             "stone",
             textured(

@@ -540,7 +540,7 @@ ballad's captures are identical to the single resolve's (`docs/demos/asteroids.m
    clusters ✅ (issue #3, above).
 3. Visibility buffer: done (a 32-bit id next to the hardware depth, analytic barycentrics in
    compute, issue #6; the software rasteriser merges into it, #3), shading by material class
-   ✅ (issue #20, D-026, above); next material sections within a mesh (#41).
+   ✅ (issue #20, D-026, above); material sections within a mesh ✅ (#41, D-027); next terrain layers (#42).
 4. Streaming of cluster pages ✅ (issue #36, D-025: `docs/demos/city-blocks.md`) and, on
    RTX hardware, cluster acceleration structures (`VK_NV_cluster_acceleration_structure`)
    so the same clusters feed ray tracing.

@@ -15,12 +15,20 @@ pub struct TriMesh {
     pub normals: Vec<[f32; 3]>,
     /// Triangle list, counter-clockwise front faces.
     pub indices: Vec<u32>,
+    /// Per triangle, its material section (issue #41): the mesh's instances draw section `s`
+    /// with the material row after theirs by `s`. Empty: every triangle is section 0.
+    pub sections: Vec<u8>,
 }
 
 impl TriMesh {
     /// Number of triangles.
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
+    }
+
+    /// The section of triangle `t` (0 when the mesh has none).
+    pub fn section(&self, t: usize) -> u8 {
+        self.sections.get(t).copied().unwrap_or(0)
     }
 
     /// Recomputes area-weighted vertex normals from the faces.
@@ -134,6 +142,7 @@ pub fn asteroid(seed: Seed, segments: u32, radius: f32, roughness: f32) -> TriMe
         positions,
         normals: Vec::new(),
         indices,
+        sections: Vec::new(),
     };
     mesh.recompute_normals();
     mesh

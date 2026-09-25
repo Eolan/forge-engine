@@ -476,6 +476,8 @@ pub struct MeshletSceneBuilder {
     total_triangles: u64,
     /// Per mesh: its finest-level clusters (LOD level 0).
     mesh_finest: Vec<u32>,
+    /// Per mesh: its highest material section (its instances need that many rows after theirs).
+    mesh_sections: Vec<u32>,
     finest_clusters: u64,
     /// Work items if every instance were visible with every level possible (groups of 32
     /// clusters), or its roots when it has more of those: the bound of the work lists.
@@ -591,6 +593,13 @@ impl MeshletSceneBuilder {
         });
         self.mesh_finest
             .push(mesh.meshlets.iter().filter(|m| m.lod_level == 0).count() as u32);
+        self.mesh_sections.push(
+            mesh.meshlets
+                .iter()
+                .map(|m| (m.section & 0xFF).max((m.section >> 8) & 0xFF))
+                .max()
+                .unwrap_or(0),
+        );
         id
     }
 
@@ -758,6 +767,19 @@ impl MeshletSceneBuilder {
         };
         if self.materials.is_empty() {
             self.materials = gpu_rows(&MaterialTable::new(), None);
+        }
+        // A mesh's sections take the rows after its instance's: they must exist.
+        if let Some(bad) = self.instances.iter().find(|i| {
+            (i.material + self.mesh_sections[i.mesh as usize]) as usize >= self.materials.len()
+        }) {
+            return Err(GpuError::Unsupported(format!(
+                "instance {} of mesh {} takes material {} and {} section rows after it, but the \n                 table has {} rows",
+                bad.id,
+                bad.mesh,
+                bad.material,
+                self.mesh_sections[bad.mesh as usize],
+                self.materials.len()
+            )));
         }
         let max_meshlets = self
             .meshes

@@ -13,6 +13,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Streaming of cluster pages | #36 | ✅ 128 KiB pages from the cache files; the flight at 300 m/s in a 48 MiB pool, no holes |
 | The flight, 1440p, numbers | #13 | ✅ the flight at 300 m/s at 1440p: worst frame 2.6 ms (385 fps) on the 5070 Ti |
 | Materials: brick, plaster, concrete, glass, grass, rock | #20 | ✅ a row per prop, textured, 1.79 ms for the 1440p flight |
+| Windows of glass: material sections within a mesh | #41 | ✅ two sections per building through the DAG |
 
 ```
 cargo run --release -p city-blocks
@@ -66,7 +67,7 @@ reconstructs. A value noise over several repeats varies their brightness, so the
 not show its 12 m tile. The texture level of detail is checked against a fragment shader's
 in `docs/demos/meshlets.md` ("Textures and the mip check").
 
-![Close-ups from the gallery: red brick, ochre plaster, dark glass next to concrete, rock](images/city-blocks-materials.png)
+![Close-ups from the gallery: red brick, ochre plaster, a dark-glass tower next to concrete, rock; every window is glass (#41)](images/city-blocks-materials.png)
 
 **What it costs** (RTX 5070 Ti):
 
@@ -74,14 +75,24 @@ in `docs/demos/meshlets.md` ("Textures and the mip check").
 |---|---|---|---|
 | the south edge, 1600×900 | 0.052 ms | 0.099 ms | 1.257 → 1.249 ms |
 | the flight at 1440p, TAA | 0.090 ms | 0.215 ms | 1.652 → 1.788 ms |
+| the same with glass windows (#41) | | 0.215 ms | 1.830 ms |
+| the south edge with glass windows (#41) | | 0.100 ms | 1.465 ms (the culls 0.36 + 0.38) |
 
 The flight's frame stays under 1.8 ms against the 8.33 ms of the 120 fps target.
 
-**Left for later:**
-- **Streets.** The terrain is one material, so the streets are grass like the hills; terrain
-  layers are #42.
-- **Glass.** A building is one material, so its windows are recesses in the facade rather
-  than glass; material sections within a mesh are #41.
+**Windows (issue #41, D-027).** A building has two material sections: its facade, and its
+window panes, the flat backs of the recesses. Each facade row in the table is followed by
+the row its windows take: dark, bluish, a sharp highlight. The sections go through the cook:
+- vertices on their borders are split;
+- the simplifier may cross a border, but pays half a metre of error to do so, so windows
+  keep their glass until they are a few pixels wide;
+- a cluster holds up to two sections, its triangles sorted by section.
+
+The buildings cook to 3–4 % more clusters. The south view draws 58 k clusters and 3.72 M
+triangles instead of 50 k and 3.43 M.
+
+**Left for later:** the terrain is one material, so the streets are grass like the hills;
+terrain layers are #42.
 
 ## The flight (issue #13, 2026-09-25)
 
@@ -113,10 +124,10 @@ cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
 - **The RTX 3080** half of the target (60 fps at 1440p) waits for a run on the server PC
   (#39).
 
-![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials of #20: geometry 1.32 and shading 0.20 of 1.70 ms, 576 fps](images/city-blocks-profile.png)
+![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials of #20 and the glass of #41: geometry 1.34 and shading 0.22 of 1.74 ms, 561 fps](images/city-blocks-profile.png)
 
 **Golden captures** (1600 × 900, every page resident, so that a capture does not depend on
-the I/O's timing; re-taken with the materials of #20). Two runs of each are identical to
+the I/O's timing; re-taken with the materials of #20 and the glass of #41). Two runs of each are identical to
 the pixel.
 
 | The south edge, frame 60 | The orbit, frame 240 |

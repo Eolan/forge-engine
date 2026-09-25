@@ -550,3 +550,40 @@ the cluster DAG (#41).
 
 *(research: gpu-geometry.md, vegetation-materials.md §8; D-007, D-021; demos: meshlets,
 asteroids, city-blocks)*
+
+## D-027 — Material sections through the cluster DAG ✅ (2026-09-25)
+
+A mesh may carry material sections, a number per triangle (`TriMesh::sections`). An
+instance draws section `s` with the material row `s` after its own, so the instance still
+names one row, and an override still picks all of them (issue #41). The city's buildings
+have two sections: the facade, and the window panes, the flat backs of the recesses. Their
+rows follow each other in the table.
+
+**Through the cook:**
+- **Vertices on section borders are split,** one copy per section, so no triangle joins two
+  sections.
+- **Group borders are found by position** (meshoptimizer's position remap), so both copies of
+  a border vertex lock together and neighbouring groups stay watertight.
+- **The section is also a vertex attribute of the simplification,** weighted at 0.5 m of
+  error per unit. Meshes with sections simplify in meshoptimizer's permissive mode: a
+  collapse may cross a section border, and pays that weight for it. With the borders kept as
+  seams instead, the window outlines outlived every level. The south view then drew 71 k
+  clusters instead of 50 k, and its culls took 0.37 ms instead of 0.23.
+- **A cluster holds at most two sections.** Its triangles are sorted by section, and its
+  record packs `a | b << 8 | split << 16`. Splitting every cluster at section borders had
+  lowered the fill from 0.69 to 0.65 and drawn 79 k clusters. The rare cluster that meets
+  three sections is clustered again, section by section.
+
+**On the GPU** the resolve takes the triangle's section from its index (`triangle_section`)
+and reads row `instance.material + section`. The builder refuses an instance whose rows
+would run past the table.
+
+*Measured* (city-blocks, RTX 5070 Ti; the other demos have no sections and draw the same
+pixels as before):
+- **The buildings** have 3–4 % more clusters (fill 0.69 → 0.67).
+- **The south view** draws 58 k clusters and 3.72 M triangles instead of 50 k and 3.43 M
+  (windows keep their glass until they are a few pixels wide). GPU per frame: 1.10 → 1.35 ms
+  with every page resident, 1.25 → 1.47 ms streamed (the culls 0.27 → 0.37 each); the flight
+  at 1440p 1.79 → 1.83 ms.
+*(research: gpu-geometry.md (Nanite's materials per triangle); D-007, D-026; demo:
+city-blocks)*

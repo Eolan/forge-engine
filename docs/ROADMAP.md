@@ -118,8 +118,9 @@ Goal: the renderer skeleton every later system draws through.
    classification ✅ (issue #20, 2026-09-25, D-026: the D-007 table on the GPU, a classify
    pass over 8×8 tiles and one dispatch per shading class, procedural textures projected
    triplanar and sampled with the reconstructed derivatives, within 0.06 of a level of a
-   fragment shader's). Still to come: material sections within a mesh (#41), terrain layers
-   (#42). The software rasteriser's 64-bit depth|id samples are merged into it (#3).
+   fragment shader's). Material sections within a mesh ✅ (#41, D-027: a building's
+   windows are glass). Still to come: terrain layers (#42). The software rasteriser's
+   64-bit depth|id samples are merged into it (#3).
 6. HDR pipeline ✅ (2026-09-24, D-022): physical light units (the sun in lux, its disc from
    its solid angle), pre-exposed fp16 targets, histogram exposure with EV100 adaptation,
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
