@@ -25,8 +25,8 @@ without losing the others.
 | 10 | `ebebcfd` Route the erosion through the basin graph, in parallel: the 4 m island in two minutes | #97: `forge_procgen::flow::drain`, the step on `forge-task`; 3.5–4× a step | no (the same field, faster) |
 | 11 | `a5b7e2a` Build the stack in parallel and keep the erosion's buffers: the 4 m island in 50 s | #97's second part: `Drainage`, `Erosion`; 9.5× the first per-step time in all | no (the same field, faster) |
 | 12 | `c2dbcb4` Print the eroded field's digest in genesis, for D-016 checks across machines | `Field2::digest`; seed 7's values recorded | no (compare the digest) |
-| 13 | (below) Trace the rivers as polylines with Strahler orders and widths (stage 4) | `forge_procgen::hydrology`, the network's numbers in `genesis` | no |
-| 14 | (below) Add the water research for the island's sea, shores, rivers and lakes | `docs/research/water.md` (Phase 2 item 3) | no |
+| 13 | `7ccfd59` Trace the rivers as polylines with Strahler orders and widths (stage 4) | `forge_procgen::hydrology`, the network's numbers in `genesis` | no |
+| 14 | `a8e1f1d` Add the water research for the island's sea, shores, rivers and lakes | `docs/research/water.md` (Phase 2 item 3) | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -218,6 +218,11 @@ field's digest: seed 7, 150 steps, should give `0189d031eff0fb84` at 16 m and
 `9eacfe0f827fa7dd` at 4 m on the 9800X3D as here (D-016); if not, that is a finding of its
 own (`docs/demos/island.md`, "Digests").
 
+### 12. The field's digest (commit 12)
+
+`genesis` ends with the eroded field's FNV-1a digest (`Field2::digest`); the values for seed 7
+are in commit 11's test above and in `docs/demos/island.md`. Nothing else changes.
+
 ### 13. The rivers as polylines (commit 13)
 
 `forge_procgen::hydrology::trace_rivers`: from the flow, the river cells (0.5 km² of catchment)
@@ -268,6 +273,10 @@ detail.
 4. **The erosion at 4 m** (#97, commits 10–11: 3.13 s to 0.33 s a step here): what remains
    sequential is the basin labelling (0.1 s of the 0.27 s drain) and the pass sort; the lake
    rule (a fill mode with a spill rule, or an area limit) is the open part of the issue.
+5. **The water**, following `docs/research/water.md`'s recommendation: the CPU side first
+   (the spectrum as a pure function of the seed, the coast distance and the water mask baked
+   by genesis, the river ribbons from commit 13's polylines), then on the dev PC the FFT
+   cascades on the compute queue and the forward surface pass under TAA.
 5. **Re-verify the two research files** (#99) from a machine with a full network.
 
 ## What needs the owner
