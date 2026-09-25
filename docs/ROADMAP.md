@@ -56,7 +56,8 @@ It always shows the best the engine can do at that moment and carries its own pr
   table, shaded by class ✅ (issue #20, D-026: 0.34 ms), bloom ✅ (issue #44: 0.387 ms), the
   sun's ray-traced shadows between the rocks and the textured rock ✅ (issue #46, D-029:
   0.444 ms), GTAO on the fill ✅ (issue #55, D-030: 0.554 ms; soft shadows opt-in, since
-  TAA smears their wide penumbrae in motion).
+  TAA smears their wide penumbrae in motion), the belt's sunlit dust with shafts from the TLAS ✅
+  (issue #58, D-032: 0.644 ms).
 - Phase 3: physics — asteroids tumble and collide; **collisions and laser or missile damage
   break them according to their mass** (Voronoi fracture into debris, support graphs for the
   big ones), with proper impulses on every piece.
@@ -183,7 +184,7 @@ Goal: the renderer skeleton every later system draws through.
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's
    jitter, 0.02 ms at 1440p); structures that follow streaming and motion next.
-3. Clouds (Nubis-style), froxel fog, night sky; weather rendering (rain, snow, lightning,
+3. Clouds (Nubis-style), froxel fog (the first froxel volume ✅: the ballad's dust, #58, D-032), night sky; weather rendering (rain, snow, lightning,
    wet surfaces) driven by the shared weather state. The sun already moves: `city-blocks --day`
    (issue #57) runs sunrise to sunset with automatic exposure.
 4. T2/T3: ReSTIR GI, radiance cache, Ray Reconstruction, path-traced reference with cluster

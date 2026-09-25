@@ -11,7 +11,7 @@ hides it), `--vsync`, `--validate`, `--fixed-step` (path advances per frame, for
 deterministic captures), `--frames N`, `--capture file.png --capture-frame N`,
 `--capture-every N` (a PNG sequence), `--no-taa`, `--no-shadows` (no ray-traced sun
 shadows), `--no-textures` (the Phase 0 rock, untextured), `--no-ao`, `--ao-radius M` (2),
-`--soft-shadows`, `--no-occlusion`, `--no-cone`,
+`--soft-shadows`, `--no-dust`, `--dust E` (its extinction per metre, 1e-4), `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -30,7 +30,7 @@ Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
-red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **G** tone curve,
+red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **V** the belt's dust (`--no-dust`), **G** tone curve,
 **-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
 Quality → Balanced → Performance → Ultra Performance, with `--features dlss`), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
@@ -265,6 +265,39 @@ shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which
 Material classification and the material table came with #20 (below). The software
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
+
+## The belt's dust (2026-09-25, issue #58)
+
+The belt is no longer empty space: thin dust between the rocks scatters the sun's light
+towards the camera (D-032). It follows Wronski 2014 and Hillaire 2015, as the city's aerial
+perspective does (`forge_render::dust`):
+- **`dust/light`:** a froxel volume of 160 × 90 × 64 in front of the camera, quadratic in
+  depth to 700 m. Each froxel takes the dust's extinction there (value noise in world space,
+  so the dust stays put as the camera flies) and the sunlight it scatters: Henyey–Greenstein
+  with g = 0.7, forwards. A shadow ray against the ballad's TLAS darkens the dust in the
+  rocks' shadow. The sample jitters within the froxel over TAA's 8-frame cycle.
+- **`dust/integrate`:** each froxel column, front to back.
+- **`dust/apply`:** each pixel's colour is dimmed by the dust in front of it and brightened by
+  what that dust scatters. The sky sees the whole volume.
+
+The densest dust takes 1e-4 of the light per metre (`--dust`), a few per cent over the belt.
+That is enough for depth: the far rocks recede into a sunlit haze, and a glow grows around the
+sun. The rocks between the camera and the sun leave darker dust in front of them, faint
+shafts. `--no-dust` / **V** removes it; devices without ray queries have none.
+
+![Frame 600 and the view towards the sun at frame 900, each without dust and with it](images/asteroids-dust.png)
+
+**In motion** (the ballad never stops), consecutive frames differ in 7.7 % of the pixels by
+more than four levels with dust, against 8.8 % without. The difference maps show only the
+rocks' moving edges, with no froxel blocks.
+
+**Cost:** 0.105 ms. `dust/light` takes 0.073, with its 0.9 M shadow rays; integrate 0.015; apply
+0.017. The ballad goes 0.538 → 0.644 ms.
+
+**Checks:**
+- With `--no-dust`, the captures are identical to the previous build.
+- The culling harness and mesh against fallback stay at 0 pixels with the dust on.
+- Synchronization validation is silent, and so is a run without ray queries.
 
 ## Ambient occlusion on the fill (2026-09-25, issue #55)
 

@@ -94,6 +94,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Reflections.** Christophe Schlick, "An Inexpensive BRDF Model for Physically-based
   Rendering", Eurographics 1994: the Fresnel approximation. The specular occlusion follows
   Lagarde and de Rousiers (2014, above).
+- **Volumetric dust.** Bartlomiej Wronski, "Volumetric Fog: Unified Compute Shader-Based Solution
+  to Atmospheric Scattering", SIGGRAPH 2014, and Sébastien Hillaire, "Towards Unified and
+  Physically-Based Volumetric Lighting in Frostbite", SIGGRAPH 2015: the froxel volume and its
+  integration. The phase function is Louis G. Henyey and Jesse L. Greenstein's, "Diffuse
+  Radiation in the Galaxy", 1941.
 - **Ambient occlusion.** Jorge Jimenez, Xian-Chun Wu, Angelo Pesce, Adrian Jarabo, "Practical
   Real-Time Strategies for Accurate Indirect Occlusion", SIGGRAPH 2016: GTAO and its
   multi-bounce fit. Forge ports Intel's implementation, XeGTAO (Filip Strugar and

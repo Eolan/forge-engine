@@ -26,8 +26,9 @@ use forge_render::material::{TextureSet, stock};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
-    Display, DlssMode, DlssUpscaler, FrameStats, Gtao, GtaoParams, HDR_FORMAT, LuminanceMeter,
-    MeshletRenderer, MeshletScene, MeshletSceneBuilder, Starfield, Taa, Tonemap, UpscaleCamera,
+    Display, DlssMode, DlssUpscaler, DustParams, DustVolume, FrameStats, Gtao, GtaoParams,
+    HDR_FORMAT, LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, Starfield, Taa,
+    Tonemap, UpscaleCamera,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -50,6 +51,12 @@ struct Args {
     /// the motion into streaks (issue #55).
     #[arg(long)]
     soft_shadows: bool,
+    /// Draw without the sunlit dust between the rocks (V toggles it).
+    #[arg(long)]
+    no_dust: bool,
+    /// Extinction of the densest dust, per metre (the belt's dust scatters all it takes).
+    #[arg(long, default_value_t = 1e-4)]
+    dust: f32,
     /// How far an occluder reaches for the ambient occlusion, metres.
     #[arg(long, default_value_t = 2.0)]
     ao_radius: f32,
@@ -214,6 +221,10 @@ struct Ballad {
     /// Bloom before the tone curve (issue #44), on while `bloom_on`.
     bloom: Bloom,
     bloom_on: bool,
+    /// Sunlit dust between the rocks (issue #58), on devices with ray queries, on while
+    /// `dust_on`.
+    dust: Option<DustVolume>,
+    dust_on: bool,
     /// Ambient occlusion of the fill light (issue #55), on while `ao_on`.
     gtao: Gtao,
     ao_on: bool,
@@ -347,6 +358,12 @@ impl Ballad {
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
+        let dust = if ctx.device.features().ray_query {
+            Some(DustVolume::new(&ctx.device, &ctx.shaders)?)
+        } else {
+            None
+        };
+        let dust_on = !args.no_dust;
         let ao_on = !args.no_ao;
         // The Sun's disc softens the shadows between the rocks when asked (issues #54, #55).
         if args.soft_shadows {
@@ -361,6 +378,8 @@ impl Ballad {
             taa,
             bloom,
             bloom_on,
+            dust,
+            dust_on,
             gtao,
             ao_on,
             taa_enabled,
@@ -493,6 +512,7 @@ impl Demo for Ballad {
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::KeyN => self.ao_on = !self.ao_on,
+            KeyCode::KeyV => self.dust_on = !self.dust_on,
             KeyCode::KeyZ => {
                 self.renderer.sun_angular_radius = if self.renderer.sun_angular_radius > 0.0 {
                     0.0
@@ -729,6 +749,30 @@ impl Demo for Ballad {
             exposure,
             planet,
         );
+        // The belt's dust, lit by the sun between the rocks (issue #58).
+        if let Some(dust) = self.dust.as_ref().filter(|_| self.dust_on) {
+            let sun_luminance = self.renderer.sun_illuminance * exposure;
+            dust.draw(
+                &mut frame.graph,
+                frame.slot,
+                DustParams {
+                    view_proj: draw_view_proj,
+                    camera: self.camera.position,
+                    sun_dir: self.renderer.sun_dir,
+                    sun_color: self.renderer.sun_color,
+                    sun_luminance,
+                    extinction: self.args.dust,
+                    far: 700.0,
+                    anisotropy: 0.7,
+                    fill: Vec3::new(0.10, 0.12, 0.18) * 0.02 * sun_luminance,
+                    tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                    frame: (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32,
+                },
+                targets.depth,
+                taa_frame.color,
+                extent,
+            );
+        }
         // Meter the finished HDR scene (the next frames' exposure), then resolve it: TAA into
         // its history and, through the tone curve, the swapchain; or DLSS into an HDR image at
         // the window's size that the display pass takes through the curve.

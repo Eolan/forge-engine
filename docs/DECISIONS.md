@@ -841,3 +841,34 @@ smooth, no normal map) and its windows are mildly coated (0.08), so the mirror r
 the towers mirror the sky and their neighbours. Stability and cost are unchanged. Metals (F0
 from the albedo) come with the material work.
 *(research: lighting-gi.md §7; issues #49, #50, #56; demo: city-blocks)*
+
+## D-032 — Participating media start with the belt's dust: a froxel volume, shadowed by rays ✅ (2026-09-25)
+
+lighting-gi.md §6 names the froxel volume as the near-field fog to build (Wronski 2014,
+generalised by Hillaire 2015), with the aerial-perspective table as the far field. The
+ballad's roadmap and the owner's reference look ask for "volumetric light between the rocks".
+This is the first froxel volume (issue #58, `shaders/dust.slang`, `forge_render::dust`):
+- **The volume:** 160 × 90 froxels × 64 slices, quadratic in depth to the volume's far end.
+  It is laid out as 2-D atlases, as the aerial perspective is, since the bindless set holds
+  2-D images.
+- **The medium:** extinction from value noise in world space, all of it scattering, with a
+  Henyey–Greenstein phase (g = 0.7).
+- **The light:** the sun through one shadow ray per froxel against the scene's TLAS (the
+  shafts), plus a small fill.
+- **Temporal:** the sample jitters within the froxel over TAA's 8-frame cycle, and TAA averages
+  it. The noise is D-030's.
+- **The integration:** front to back per column, exact for constant light over a slice; each
+  pixel reads it at its depth, and the sky reads the whole volume.
+
+It needs ray queries for its shadows, as the ballad's other rays do, and without them the
+ballad has none.
+
+**Left for later:** local lights injected into the same grid, temporal reprojection of the volume
+instead of TAA alone, the city's haze in the same volume (it has the aerial perspective's
+far field), and volumetric GI from the probes.
+
+*Measured* (asteroids, RTX 5070 Ti, 1600×900): 0.105 ms in all; `dust/light` is 0.073 of
+it. In motion, consecutive frames change no more than without dust (7.7 % against 8.8 % of the
+pixels by more than four levels). With `--no-dust` the captures are those of the previous
+build.
+*(research: lighting-gi.md §6; issue #58; demo: asteroids)*

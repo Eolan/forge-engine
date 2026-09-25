@@ -55,6 +55,8 @@ exposure (EV100, target, compensation, curve) the last.
 - GTAO on the fill (#55, D-030) brings it to 0.554 ms: 0.085 ms of passes. The mirror-ray
   code of the city (#50) had raised `shading/standard` to 0.095 ms without AO; since #52 moved
   it to a pass of its own, 0.082 ms, and the ballad takes 0.540 ms (0.448 without AO).
+- The belt's dust (#58, D-032) adds 0.105 ms: 0.538 → 0.644 ms. `dust/light` takes 0.073 of it,
+  one shadow ray per froxel.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

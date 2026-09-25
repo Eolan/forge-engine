@@ -27,7 +27,7 @@ crates/forge-geom     meshlets and the cluster LOD DAG (meshoptimizer), procedur
 crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indirect-count fallback, two-pass HZB occlusion, visibility buffer + compute resolve), TAA, starfield,
                       physical exposure (luminance histogram, EV100), display transform (AgX / ACES / PBR Neutral), blit
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
-shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, taa, exposure, tonemap, display, overlay, mipcheck)
+shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, tonemap, display, overlay, mipcheck)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
@@ -67,13 +67,13 @@ the path and fly freely, **T** TAA,
 **O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
 **]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
 is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
-what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **G** tone curve (ACES → PBR Neutral →
+what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **V** the belt's dust, **G** tone curve (ACES → PBR Neutral →
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
 (built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
 `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-shadows`, `--no-textures` (the
-untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-occlusion`, `--no-cone`,
+untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-dust`, `--dust E`, `--no-occlusion`, `--no-cone`,
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
 sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
