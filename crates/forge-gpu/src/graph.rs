@@ -266,17 +266,27 @@ impl BufferAccess {
 }
 
 /// Moves a subresource from `state` to `dst`. Returns the barrier to record, or `None` when
-/// a read follows reads in the same layout (the new stages are then remembered so a later
-/// write waits for every reader).
+/// a read follows reads in the same layout whose stages and accesses already cover it. The
+/// new stages are remembered so a later write waits for every reader.
+///
+/// A read in a stage (or of an access) the earlier readers do not cover gets a barrier from
+/// them (issue #71): the barrier that followed the last write reached those readers' stages
+/// only, so without one this read could run before the write finished (the TAA motion
+/// vectors' fragment reads of the depth, after the dust's compute read, did about once in 60
+/// frames). Chained from the readers, it waits for the write and sees it.
 fn transition(
     state: &mut ResourceState,
     dst: ResourceState,
 ) -> Option<(ResourceState, ResourceState)> {
     let needed = state.layout != dst.layout || state.write || dst.write;
     if !needed {
+        let covered = (state.stage.contains(vk::PipelineStageFlags2::ALL_COMMANDS)
+            || state.stage.contains(dst.stage))
+            && state.access.contains(dst.access);
+        let src = *state;
         state.stage |= dst.stage;
         state.access |= dst.access;
-        return None;
+        return (!covered).then_some((src, dst));
     }
     let src = *state;
     *state = dst;
@@ -1521,6 +1531,10 @@ mod tests {
                 "c/read",
                 &[(0, None, ImageAccess::Sampled(S::COMPUTE_SHADER))],
             ),
+            pass(
+                "c/read again",
+                &[(0, None, ImageAccess::Sampled(S::FRAGMENT_SHADER))],
+            ),
             pass("d/draw", &[(0, None, ImageAccess::ColorAttachment)]),
         ];
         let plan = compile(&passes, &images, &mut states, &mut []).unwrap();
@@ -1540,11 +1554,18 @@ mod tests {
             L::GENERAL,
             "imported storage-capable image samples in GENERAL"
         );
+        // A read in a stage the first reader did not cover waits for it, which waited for the
+        // write (issue #71); the layout stays.
+        let chained = &plan[2].image_barriers[0];
+        assert_eq!(chained.src_stage_mask, S::FRAGMENT_SHADER);
+        assert_eq!(chained.dst_stage_mask, S::COMPUTE_SHADER);
+        assert_eq!(chained.old_layout, L::GENERAL);
+        assert_eq!(chained.new_layout, L::GENERAL);
         assert!(
-            plan[2].image_barriers.is_empty(),
-            "read after read needs no barrier"
+            plan[3].image_barriers.is_empty(),
+            "a read the earlier readers cover needs no barrier"
         );
-        let write = &plan[3].image_barriers[0];
+        let write = &plan[4].image_barriers[0];
         assert_eq!(
             write.src_stage_mask,
             S::FRAGMENT_SHADER | S::COMPUTE_SHADER,
@@ -1552,7 +1573,7 @@ mod tests {
         );
         assert_eq!(states[0][0].layout, L::COLOR_ATTACHMENT_OPTIMAL);
         assert!(states[0][0].write);
-        assert_eq!(plan.iter().filter(|p| p.mark.is_some()).count(), 4);
+        assert_eq!(plan.iter().filter(|p| p.mark.is_some()).count(), 5);
     }
 
     #[test]
@@ -1595,14 +1616,28 @@ mod tests {
             .map(|b| b.subresource_range.base_mip_level)
             .collect();
         assert_eq!(mips, vec![0, 1]);
-        // The whole-image read at the end: mips 0 and 1 were last read (same layout, no
-        // barrier), mip 2 was written → exactly one barrier, for mip 2.
-        assert_eq!(plan[3].image_barriers.len(), 1);
+        // The whole-image read at the end, in the task stage: mips 0 and 1 were last read by
+        // compute (same layout: one barrier chained from those reads, issue #71), mip 2 was
+        // written (a barrier from the write).
+        let ranges: Vec<(u32, u32, vk::PipelineStageFlags2)> = plan[3]
+            .image_barriers
+            .iter()
+            .map(|b| {
+                (
+                    b.subresource_range.base_mip_level,
+                    b.subresource_range.level_count,
+                    b.src_stage_mask,
+                )
+            })
+            .collect();
         assert_eq!(
-            plan[3].image_barriers[0].subresource_range.base_mip_level,
-            2
+            ranges,
+            vec![(0, 2, S::COMPUTE_SHADER), (2, 1, S::COMPUTE_SHADER)]
         );
-        assert_eq!(plan[3].image_barriers[0].subresource_range.level_count, 1);
+        assert_eq!(
+            plan[3].image_barriers[1].src_access_mask,
+            A::SHADER_STORAGE_WRITE
+        );
     }
 
     #[test]

@@ -899,8 +899,10 @@ impl MeshletSceneBuilder {
                     device
                         .create_buffer(BufferDesc {
                             size: 32,
-                            usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
-                            location: MemoryLocation::CpuToGpu,
+                            usage: usage
+                                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                                | vk::BufferUsageFlags::TRANSFER_DST,
+                            location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Frame,
                             name: &format!("cluster cull grid {i}"),
                         })
@@ -912,8 +914,10 @@ impl MeshletSceneBuilder {
                     device
                         .create_buffer(BufferDesc {
                             size: std::mem::size_of_val(&CLUSTER_ARGS_START) as u64,
-                            usage: usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
-                            location: MemoryLocation::CpuToGpu,
+                            usage: usage
+                                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                                | vk::BufferUsageFlags::TRANSFER_DST,
+                            location: MemoryLocation::GpuOnly,
                             category: MemoryCategory::Frame,
                             name: &format!("cluster draw grids {i}"),
                         })
@@ -2092,12 +2096,7 @@ impl MeshletRenderer {
         let block2 = self.frame_block(slot, &params, PASS_REMAINDER, pyramid, prev);
         self.frame_buffers[slot.index].write(0, &[block1]);
         self.frame_buffers[slot.index].write(FRAME_BLOCK_STRIDE, &[block2]);
-        // The grids start empty every frame, (x, y, z, count) for the cluster cull and for the
-        // draw of each pass, and so do the culls' tickets; the last workgroup of each cull
-        // writes the grid it leads to.
         let scene = params.scene;
-        scene.indirect[slot.index].write(0, &[0_u32, 0, 1, 0, 0, 0, 0, 0]);
-        scene.clusters[slot.index].write(0, &CLUSTER_ARGS_START);
 
         let extent = params.extent;
         debug_assert_eq!(
@@ -2195,8 +2194,16 @@ impl MeshletRenderer {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let need: Option<&'f GraphBuffer> = scene.streamer.as_ref().map(|s| &s.need_buffer);
         let need_bytes = u64::from(scene.page_count.max(1)) * 4;
+        // The grids start empty every frame, (x, y, z, count) for the cluster cull and for the
+        // draw of each pass, and so do the culls' tickets; the last workgroup of each cull
+        // writes the grid it leads to. Reset on the GPU (issue #71): written by the host, they
+        // raced the device's writes of two frames before, which nothing made available to it.
+        let (indirect, clusters): (&'f GraphBuffer, &'f GraphBuffer) =
+            (&scene.indirect[slot.index], &scene.clusters[slot.index]);
         let mut clears = graph
             .pass("geometry/instance cull")
+            .buffer(io.indirect, BufferAccess::TransferDst)
+            .buffer(io.clusters, BufferAccess::TransferDst)
             .buffer(io.lookback, BufferAccess::TransferDst)
             .buffer(io.cluster_lookback, BufferAccess::TransferDst)
             .buffer(io.stats, BufferAccess::TransferDst);
@@ -2204,6 +2211,8 @@ impl MeshletRenderer {
             clears = clears.buffer(handle, BufferAccess::TransferDst);
         }
         clears.run(move |_, commands| {
+            commands.update_buffer(indirect, 0, &[0, 0, 1, 0, 0, 0, 0, 0]);
+            commands.update_buffer(clusters, 0, &CLUSTER_ARGS_START);
             commands.fill_buffer(lookback, 0, u64::from(instance_groups) * 8, 0);
             commands.fill_buffer(cluster_lookback, 0, cluster_lookback_bytes, 0);
             commands.fill_buffer(stats, 0, STATS_BYTES, 0);

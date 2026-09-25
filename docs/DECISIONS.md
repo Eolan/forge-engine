@@ -274,10 +274,13 @@ Every pass declares the images (per mip level where it matters) and buffers it r
 writes, with an access kind (`ColorAttachment`, `DepthAttachment`, `Sampled(stages)`,
 `StorageWrite(stages)`, `IndirectArgs`, …); the graph derives every barrier and layout
 transition from the tracked state of each subresource and records the passes in
-declaration order, one profiler zone per pass label. Per-frame images are transients of the
-graph, laid out in one heap from their lifetimes (largest first, first fit among the images
-whose lifetimes intersect), so images that never coexist share memory; their first use in
-a frame waits for whatever last touched that memory, in this frame or the previous one.
+declaration order, one profiler zone per pass label. A read after a write waits for the
+write; a read in a stage or of an access the earlier readers do not cover waits for them,
+and so for the write (since #71; before, only the first reader waited). Per-frame images
+are transients of the graph, laid out in one heap from their lifetimes (largest first,
+first fit among the images whose lifetimes intersect), so images that never coexist share
+memory; their first use in a frame waits for whatever last touched that memory, in this
+frame or the previous one.
 Persistent images and buffers (`GraphImage`, `GraphBuffer`) carry their state across
 frames; anything a frame in flight may still use is destroyed through the frame slots
 (`Frames::destroy_later`). Nothing is culled or reordered, there is one queue, and nobody

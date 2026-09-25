@@ -299,6 +299,23 @@ impl<'a> Commands<'a> {
         }
     }
 
+    /// Writes `data` into `buffer` at `offset` from the command buffer (`vkCmdUpdateBuffer`:
+    /// at most 65 536 bytes, `TRANSFER_DST` usage): small per-frame resets of GPU-written
+    /// buffers, ordered by the render graph like any transfer.
+    pub fn update_buffer(&self, buffer: &crate::Buffer, offset: u64, data: &[u32]) {
+        debug_assert!(std::mem::size_of_val(data) <= 65_536);
+        // SAFETY: recording state; the caller keeps the range inside the buffer and the
+        // buffer alive until the frame completes. The data is copied into the command buffer.
+        unsafe {
+            self.device.raw().cmd_update_buffer(
+                self.cb,
+                buffer.raw(),
+                offset,
+                bytemuck::cast_slice(data),
+            );
+        }
+    }
+
     /// Copies `size` bytes from the start of `src` to the start of `dst`
     /// (`TRANSFER_SRC` / `TRANSFER_DST` usage).
     pub fn copy_buffer(&self, src: &crate::Buffer, dst: &crate::Buffer, size: u64) {

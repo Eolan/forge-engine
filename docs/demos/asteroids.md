@@ -985,6 +985,21 @@ the output"), which makes the draw order, and so the image, independent of timin
 order moved the golden once (14 946 pixels at ±1 with TAA and automatic exposure; identical
 with a fixed exposure or without TAA); it is identical from run to run since.
 
+**Still open: issue #71 (2026-09-25).** The frame-600 TAA capture still differs now and then:
+- about 4 runs in 10 on the fallback path, fewer on the mesh path;
+- each time a few hundred scattered edge pixels, and never the same ones twice.
+
+Waiting for the GPU after every frame (`FORGE_WAIT_IDLE=1`) or a full barrier before every
+compute dispatch (`FORGE_PARANOID_BARRIERS=1`) hides it; aliasing and the exposure feedback
+play no part. The hunt fixed two real hazards without removing it:
+- **The render graph** gave a barrier only to the first reader after a write. A later read in
+  another stage (the TAA motion vectors' fragment reads of the depth, after the dust's compute
+  read) waited for nothing. It now gets a barrier chained from the earlier readers.
+- **The culls' grids and tickets** were reset by the host, with nothing making the device's
+  writes of two frames before available to it. They are reset on the GPU now.
+
+Until #71 is found, rerun a single differing ballad TAA capture before believing it.
+
 ## What the numbers say
 
 - Before the DAG almost every drawn triangle was smaller than a pixel (54 per pixel): a
