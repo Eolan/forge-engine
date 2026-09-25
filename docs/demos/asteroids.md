@@ -298,8 +298,9 @@ ballad:
   screen compiles that list into the cache on four threads, alongside the mesh build. After a
   shader change, the ballad is ready in 3.9 s (33 entries compiled ahead) instead of 12 s
   frozen.
+- **The city** starts behind it too: its props cook, or load from the cache, on the thread.
 - **Not covered yet:** the overlay and loading shaders themselves compile before the loading
-  screen can show (four entries). The city still starts through `run`.
+  screen can show (four entries).
 
 **Checks:**
 - Every capture is identical to the previous build: both demos, both paths, the culling

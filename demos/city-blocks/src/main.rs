@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
+use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, Input};
 use forge_core::material::{
     Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
 };
@@ -224,7 +224,7 @@ const SPACING: f32 = 60.0;
 const COLUMNS: u32 = 5;
 
 impl Gallery {
-    fn new(ctx: &mut Context, args: Args) -> Result<Self> {
+    fn new(ctx: &mut Context, args: Args, cooked: Cooked) -> Result<Self> {
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let mut taa = Taa::new(
             &ctx.device,
@@ -261,9 +261,9 @@ impl Gallery {
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
         let (scene, placed) = if args.gallery {
-            build_gallery(ctx, &args)?
+            build_gallery(ctx, &args, cooked)?
         } else {
-            (build_city(ctx, &args)?, Vec::new())
+            (build_city(ctx, &args, cooked)?, Vec::new())
         };
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM);
         if !args.no_lod {
@@ -1105,9 +1105,32 @@ impl CityMaterials {
     }
 }
 
+/// The props a run draws (the city's twenty and its terrain, or the gallery's twenty), cooked
+/// or loaded from the cache, and the milliseconds the props took summed.
+struct Cooked {
+    meshes: Vec<MeshletMesh>,
+    ms: f64,
+}
+
+/// Cooks (or loads) the props of this run: the start-up's CPU work, which runs behind the
+/// loading screen (issue #25).
+fn cook(args: &Args) -> Cooked {
+    let mut props = city_props();
+    if !args.gallery {
+        props.push(PropSpec {
+            name: "terrain".to_owned(),
+            kind: PropKind::Terrain(Terrain::city()),
+        });
+    }
+    // The streamed city keeps its pages on the GPU only (issue #36).
+    let pages_in_memory = args.gallery || args.stream_pool == 0;
+    let (meshes, ms) = cook_props(&props, args.recook, pages_in_memory);
+    Cooked { meshes, ms }
+}
+
 /// The city: the terrain and the twenty props cooked (or loaded), the terrain placed once
 /// at the origin and `args.instances` props placed over it by the GPU.
-fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
+fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene> {
     let start = Instant::now();
     let terrain = Terrain::city();
     let mut props = city_props();
@@ -1116,7 +1139,7 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
         kind: PropKind::Terrain(terrain.clone()),
     });
     let streamed = args.stream_pool > 0;
-    let (meshes, cook_ms) = cook_props(&props, args.recook, !streamed);
+    let (meshes, cook_ms) = (cooked.meshes, cooked.ms);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
     let layout = CityLayout::city(args.instances);
@@ -1233,10 +1256,14 @@ fn build_city(ctx: &Context, args: &Args) -> Result<MeshletScene> {
 
 /// Cooks (or loads) every prop of the city set in parallel and lays one of each out on a
 /// grid, `SPACING` metres apart.
-fn build_gallery(ctx: &Context, args: &Args) -> Result<(MeshletScene, Vec<Placed>)> {
+fn build_gallery(
+    ctx: &Context,
+    args: &Args,
+    cooked: Cooked,
+) -> Result<(MeshletScene, Vec<Placed>)> {
     let start = Instant::now();
     let props = city_props();
-    let (meshes, total_ms) = cook_props(&props, args.recook, true);
+    let (meshes, total_ms) = (cooked.meshes, cooked.ms);
     let mut builder = MeshletSceneBuilder::new();
     let mut placed = Vec::with_capacity(props.len());
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
@@ -1285,7 +1312,12 @@ fn main() -> Result<()> {
         height: args.height,
         ..AppConfig::default()
     };
-    forge_app::run(config, move |ctx| Gallery::new(ctx, args))
+    // The props cook (or load from the cache) behind the loading screen (issue #25).
+    forge_app::run_loading(config, move || {
+        let cooked = cook(&args);
+        let finish: Finish<Gallery> = Box::new(move |ctx| Gallery::new(ctx, args, cooked));
+        Ok(finish)
+    })
 }
 
 /// [`Terrain::heights`] on the job system, 64 rows to a job.

@@ -59,6 +59,17 @@ Options:
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
 
+## Loading screen (issue #25, 2026-09-25)
+
+The city starts through `forge_app::run_loading`, like the ballad
+([asteroids.md](asteroids.md), "Loading screen"):
+- **On the thread:** the props cook, or load from the cache, while the window shows the
+  loading animation. From a warm cache that takes milliseconds; after a cook-version change
+  (like #51's) it is several seconds of cooking, and the window no longer sits frozen.
+- **Shaders compile ahead:** after a shader change, the city's entries in
+  `shader-cache/city-blocks.entries` compile behind the loading screen too.
+- **Unchanged:** every capture, the frame numbering and the profile.
+
 ## A day over the city (issue #57, 2026-09-25)
 
 `--day S` runs a day in S seconds, then again. The sun rises 4° below the eastern horizon,
