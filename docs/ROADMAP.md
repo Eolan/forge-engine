@@ -143,8 +143,8 @@ Goal: the renderer skeleton every later system draws through.
    curve, 0.04 ms at 900p). Still to come: ACES 2.0's output transform, a perceptual golden-image
    metric.
    Hillaire atmosphere ✅ (2026-09-24, D-023: transmittance and multiple-scattering tables
-   as graph passes, the per-pixel march for planets seen from space; the planet-view table
-   #26 for big planets; the sky-view table, the aerial perspective and the sun seen from the
+   as graph passes, the per-pixel march for planets seen from space; the planet-view table ✅
+   (issue #26: two fetches instead of the march, 0.333 → 0.105 ms at 50°); the sky-view table, the aerial perspective and the sun seen from the
    ground ✅ with city-blocks, issue #43; the sky's irradiance on the shaded sides ✅, nine SH
    coefficients a frame, issue #47; its ambient occlusion by GTAO ✅, issue #48,
    D-030). TAA ✅. DLSS ✅ (2026-09-24, D-024: Streamline's interposer behind the `dlss`

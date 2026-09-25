@@ -142,3 +142,39 @@ void multiple_scattering_main(uint3 id : SV_DispatchThreadID)
     float3 psi = luminance / (1.0 - min(transfer, 0.95));
     g_storage_images_rgba16f[NonUniformResourceIndex(lut_push.output)][id.xy] = float4(psi, 1.0);
 }
+
+// ---- The planet seen from space (issue #26): luminance over (b, phi), then transmittance -----
+
+struct PlanetViewPush
+{
+    float4 sun;               // xyz: towards the sun
+    Planet* planet;
+    uint transmittance;       // sampled image of the transmittance table
+    uint multiple_scattering; // sampled image of the multiple-scattering table
+    uint luminance_out;       // storage image of the planet-view table
+    uint transmittance_out;   // storage image of its one-row transmittance
+};
+
+[[vk::push_constant]]
+PlanetViewPush view_push;
+
+// One texel of the planet-view table: `cross_atmosphere` along its ray, with the steps the
+// sky's march takes, so that the table and the march it replaces agree at the texels. Row 0
+// of the second table takes the ray's transmittance.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void planet_view_main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= PLANET_VIEW_WIDTH || id.y >= PLANET_VIEW_HEIGHT)
+        return;
+    Planet p = view_push.planet[0];
+    float3 sun = normalize(view_push.sun.xyz);
+    PlanetViewFrame frame = planet_view_frame(p, sun);
+    float b = planet_view_b(p, (float(id.x) + 0.5) / float(PLANET_VIEW_WIDTH));
+    float phi = PI * (float(id.y) + 0.5) / float(PLANET_VIEW_HEIGHT);
+    float3 direction = planet_view_direction(frame, b, phi);
+    Crossing c = cross_atmosphere(p, view_push.transmittance, view_push.multiple_scattering, direction, sun, SPACE_MARCH_STEPS);
+    g_storage_images_rgba16f[NonUniformResourceIndex(view_push.luminance_out)][id.xy] = float4(c.luminance, 1.0);
+    if (id.y == 0)
+        g_storage_images_rgba16f[NonUniformResourceIndex(view_push.transmittance_out)][uint2(id.x, 0)] = float4(c.transmittance, 1.0);
+}

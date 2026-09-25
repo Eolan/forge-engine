@@ -19,13 +19,12 @@ struct Push
     Planet* planet;             // the planet and its atmosphere; null = none
     uint transmittance;         // the atmosphere's tables (sampled images)
     uint multiple_scattering;
-    uint2 pad;
+    uint planet_view;           // the planet-view table and its transmittance row (issue #26);
+    uint planet_view_transmittance; // 0xFFFFFFFF: march every pixel instead
 };
 
 // Pre-exposed values above this are white on any curve; fp16 overflows at 65504.
 static const float MAX_PRE_EXPOSED = 16384.0;
-// Segments of a view ray through the atmosphere.
-static const uint ATMOSPHERE_STEPS = 16;
 
 [[vk::push_constant]]
 Push push;
@@ -142,49 +141,73 @@ float4 frag_main(VertexOut input) : SV_Target
     float4 far = mul(push.inv_view_proj, float4(input.ndc, 0.0001, 1.0));
     float4 near = mul(push.inv_view_proj, float4(input.ndc, 1.0, 1.0));
     float3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
-
-    // Milky-way-like band and a dusty nebula from low-frequency noise.
-    float band = exp(-4.0 * abs(dir.y + 0.15 * dir.x));
-    float n1 = value_noise(dir * 6.0 + 3.0, 7u);
-    float n2 = value_noise(dir * 14.0 + 9.0, 11u);
-    float n3 = value_noise(dir * 30.0 + 1.0, 13u);
-    float dust = saturate(n1 * 0.6 + n2 * 0.3 + n3 * 0.1 - 0.35) * 2.2;
-    float3 nebula = band * dust * float3(0.25, 0.28, 0.42) * 0.35 + band * 0.02 * float3(0.6, 0.6, 0.8);
-    float3 warm = value_noise(dir * 4.0 + 20.0, 17u) * band * float3(0.30, 0.16, 0.10) * 0.25;
-
-    // Angular size of one pixel, from the screen-space derivatives of the direction.
+    // Angular size of one pixel, from the screen-space derivatives of the direction (before
+    // any branch: the whole quad takes them).
     float pixel_size = max(length(ddx(dir)), length(ddy(dir)));
-    float3 color = stars(dir, 160.0, 0.010, 1.0, pixel_size) * 0.9 + stars(dir, 60.0, 0.006, 2.0, pixel_size) * 1.6 + nebula * 1.8 + warm * 1.5;
-
-    // The sun: a glow (authored, like the stars) around a physical disc whose edge is
-    // antialiased over one pixel. The angle comes from the cross product, which keeps its
-    // precision where acos(dot) would not.
     float3 sun = normalize(push.sun_dir);
-    float s = saturate(dot(dir, sun));
-    color += float3(1.0, 0.95, 0.85) * (pow(s, 200.0) * 0.8 + pow(s, 12.0) * 0.06 + pow(s, 3.0) * 0.01);
-    float sun_offset = asin(min(length(cross(dir, sun)), 1.0));
-    float disc = dot(dir, sun) > 0.0 ? saturate((push.sun_angle - sun_offset) / max(pixel_size, 1e-6) + 0.5) : 0.0;
-    color = color * push.luminance_unit + float3(1.0, 0.95, 0.85) * disc * push.sun_disc;
 
-    // The planet: its ground hides what is behind it; its atmosphere dims and reddens the
-    // stars and the sun seen through it and adds the light it scatters.
-    if (push.planet != nullptr && dot(dir, push.planet_dir) > push.planet_cos)
+    // The planet first: where its ground hides the sky, the stars are not worked out at all.
+    bool planet = push.planet != nullptr && dot(dir, push.planet_dir) > push.planet_cos;
+    Crossing c;
+    c.crosses = false;
+    c.hits_ground = false;
+    if (planet)
     {
         Planet p = push.planet[0];
-        Crossing c = cross_atmosphere(p, push.transmittance, push.multiple_scattering, dir, sun, ATMOSPHERE_STEPS);
-        if (c.crosses)
+        if (push.planet_view != 0xFFFFFFFFu)
         {
-            if (c.hits_ground)
-            {
-                float3 n = normalize(c.ground);
-                Ground g = planet_ground(n);
-                float3 light = ground_illuminance(p, push.transmittance, push.multiple_scattering, c.ground, n, sun);
-                float night = 1.0 - smoothstep(-0.1, 0.05, dot(n, sun));
-                color = (g.albedo * light + float3(1.0, 0.75, 0.45) * g.lights * night) * push.luminance_unit;
-            }
-            // Luminance per unit of sun illuminance, times the pre-exposed illuminance (π × the unit).
-            color = color * c.transmittance + c.luminance * (push.luminance_unit * 3.14159265);
+            // Two fetches from the planet-view table (issue #26) instead of the march; where
+            // the ray lands is worked out here, for the ground's own lighting.
+            float2 uv = planet_view_uv(p, planet_view_frame(p, sun), dir);
+            c.luminance = sample_table(push.planet_view, uv);
+            c.transmittance = sample_table(push.planet_view_transmittance, float2(uv.x, 0.5));
+            float near_t, far_t;
+            c.crosses = sphere_span(p.view_position.xyz, dir, p.radii.y, near_t, far_t);
+            c.hits_ground = sphere_span(p.view_position.xyz, dir, p.radii.x, near_t, far_t) && near_t > 0.0;
+            c.ground = p.view_position.xyz + dir * near_t;
         }
+        else
+            c = cross_atmosphere(p, push.transmittance, push.multiple_scattering, dir, sun, SPACE_MARCH_STEPS);
+    }
+
+    float3 color = 0.0;
+    if (c.crosses && c.hits_ground)
+    {
+        Planet p = push.planet[0];
+        float3 n = normalize(c.ground);
+        Ground g = planet_ground(n);
+        float3 light = ground_illuminance(p, push.transmittance, push.multiple_scattering, c.ground, n, sun);
+        float night = 1.0 - smoothstep(-0.1, 0.05, dot(n, sun));
+        color = (g.albedo * light + float3(1.0, 0.75, 0.45) * g.lights * night) * push.luminance_unit;
+    }
+    else
+    {
+        // Milky-way-like band and a dusty nebula from low-frequency noise.
+        float band = exp(-4.0 * abs(dir.y + 0.15 * dir.x));
+        float n1 = value_noise(dir * 6.0 + 3.0, 7u);
+        float n2 = value_noise(dir * 14.0 + 9.0, 11u);
+        float n3 = value_noise(dir * 30.0 + 1.0, 13u);
+        float dust = saturate(n1 * 0.6 + n2 * 0.3 + n3 * 0.1 - 0.35) * 2.2;
+        float3 nebula = band * dust * float3(0.25, 0.28, 0.42) * 0.35 + band * 0.02 * float3(0.6, 0.6, 0.8);
+        float3 warm = value_noise(dir * 4.0 + 20.0, 17u) * band * float3(0.30, 0.16, 0.10) * 0.25;
+        color = stars(dir, 160.0, 0.010, 1.0, pixel_size) * 0.9 + stars(dir, 60.0, 0.006, 2.0, pixel_size) * 1.6 + nebula * 1.8 + warm * 1.5;
+
+        // The sun: a glow (authored, like the stars) around a physical disc whose edge is
+        // antialiased over one pixel. The angle comes from the cross product, which keeps its
+        // precision where acos(dot) would not.
+        float s = saturate(dot(dir, sun));
+        color += float3(1.0, 0.95, 0.85) * (pow(s, 200.0) * 0.8 + pow(s, 12.0) * 0.06 + pow(s, 3.0) * 0.01);
+        float sun_offset = asin(min(length(cross(dir, sun)), 1.0));
+        float disc = dot(dir, sun) > 0.0 ? saturate((push.sun_angle - sun_offset) / max(pixel_size, 1e-6) + 0.5) : 0.0;
+        color = color * push.luminance_unit + float3(1.0, 0.95, 0.85) * disc * push.sun_disc;
+    }
+
+    // The planet's atmosphere dims and reddens what is seen through it (its ground, or the
+    // stars and the sun) and adds the light it scatters.
+    if (c.crosses)
+    {
+        // Luminance per unit of sun illuminance, times the pre-exposed illuminance (π × the unit).
+        color = color * c.transmittance + c.luminance * (push.luminance_unit * 3.14159265);
     }
 
     return float4(min(color, MAX_PRE_EXPOSED), 1.0);

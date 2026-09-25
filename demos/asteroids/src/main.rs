@@ -125,6 +125,10 @@ struct Args {
     /// Angular radius of the planet in degrees (0 hides it).
     #[arg(long, default_value_t = 18.0)]
     planet_angle: f32,
+    /// Draw the planet's atmosphere by marching every pixel's ray instead of through the
+    /// planet-view table (issue #26): the reference the table is checked against.
+    #[arg(long)]
+    planet_march: bool,
     /// Look in this direction, "x,y,z", instead of along the path (stills of the sky).
     #[arg(long, value_parser = parse_vec3)]
     look: Option<Vec3>,
@@ -315,7 +319,9 @@ impl Ballad {
         let atmosphere = if args.planet_angle > 0.0 {
             let params = AtmosphereParams::earth();
             let view = params.view_from_space(args.planet_dir, args.planet_angle.to_radians());
-            Some((Atmosphere::new(&ctx.device, &ctx.shaders, params)?, view))
+            let mut atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, params)?;
+            atmosphere.planet_view = !args.planet_march;
+            Some((atmosphere, view))
         } else {
             None
         };
@@ -820,10 +826,10 @@ impl Demo for Ballad {
         if let Some(h) = hasher {
             h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
         }
-        let planet = self
-            .atmosphere
-            .as_mut()
-            .map(|(atmosphere, view)| atmosphere.frame(&mut frame.graph, frame.slot, *view));
+        let sun_dir = self.renderer.sun_dir;
+        let planet = self.atmosphere.as_mut().map(|(atmosphere, view)| {
+            atmosphere.frame(&mut frame.graph, frame.slot, *view, sun_dir)
+        });
         self.starfield.draw(
             &mut frame.graph,
             taa_frame.color,

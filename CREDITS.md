@@ -85,8 +85,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 
 **Light and image** (`forge-render`, `shaders/`):
 - **The atmosphere.** Sébastien Hillaire, "A Scalable and Production Ready Sky and Atmosphere
-  Rendering Technique", EGSR 2020. Its Earth preset comes from Eric Bruneton, "Precomputed
-  Atmospheric Scattering: a New Implementation", 2017.
+  Rendering Technique", EGSR 2020. Its Earth preset, the transmittance table's mapping and
+  the planet-view table's split at the horizon (issue #26) come from Eric Bruneton,
+  "Precomputed Atmospheric Scattering: a New Implementation", 2017.
 - **Physical light units and pre-exposure.** Sébastien Lagarde, Charles de Rousiers, "Moving
   Frostbite to Physically Based Rendering", SIGGRAPH 2014.
 - **Automatic exposure.** Krzysztof Narkowicz, "Automatic Exposure", 2016.

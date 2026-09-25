@@ -956,6 +956,39 @@ the ballad. What the port taught:
   every other pixel (+0.01 ms with the planet out of view); in view the ballad's planet adds
   0.04–0.06 ms, a planet filling the screen 0.2 ms. Because the camera barely moves
   relative to the planet, a view-direction table around it (#26) would make that a lookup.
+- **The planet-view table (issue #26, 2026-09-25): prior art.** No table for views from
+  outside the atmosphere turned up in print or in open code.
+  - Hillaire's paper switches from the sky-view table to a per-pixel march in space: most of
+    that table would render empty space. So does its MIT reference code, which also moves
+    the ray's start to the top of the atmosphere
+    ([RenderSkyRayMarching.hlsl](https://github.com/sebh/UnrealEngineSkyAtmosphere)).
+  - Unreal's documentation mentions the switch, and that it can hitch
+    ([Sky Atmosphere](https://dev.epicgames.com/documentation/en-us/unreal-engine/sky-atmosphere-component-in-unreal-engine)).
+  - Bevy 0.17 advises its ray-marched mode for planets seen from space
+    ([notes](https://bevy.org/news/bevy-0-17/)).
+  - Bruneton's 4-D table does not depend on the camera; a viewer in space is moved to the top
+    of the atmosphere along the ray
+    ([functions.glsl](https://ebruneton.github.io/precomputed_atmospheric_scattering/atmosphere/functions.glsl.html), BSD-3).
+  - CosmoScout VR uses it from orbit, with a 1024 × 512 transmittance table and 64 steps of
+    the view–sun angle against banding around the sun
+    ([Eurographics 2024](https://elib.dlr.de/204028/1/v43i2_15_15010.pdf)).
+  - Elek 2009 and Frostbite 2016 drop the view–sun azimuth, and with it the planet's shadow
+    in the air.
+
+  Forge's table borrows two ideas:
+  - **The closest-approach axis:** the silhouette and the top of the atmosphere stay on fixed
+    texels wherever the camera is. On this axis, the rays that reach the ground and those
+    that pass above it are split at the ground's radius, as Bruneton splits them at the
+    horizon.
+  - **The mirrored azimuth** of Hillaire's sky-view table.
+
+  Two points of the review remain open:
+  - The 16-segment march the table reproduces is itself coarse along a grazing chord (about
+    2 260 km in 16 segments, against an 8 km scale height). A table built once can afford far
+    more segments, checked against a march of 256 or more.
+  - Storing Rayleigh and Mie apart, without their phase functions, would keep Mie's forward
+    peak out of the table. At 512 × 256 the sun rising over the limb already stays within
+    1/255.
 
 ## Implementation notes from Forge: DLSS (2026-09-24, issue #8, D-024)
 

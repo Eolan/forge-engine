@@ -662,7 +662,9 @@ impl Demo for Gallery {
             self.atmosphere.params.bottom_radius + self.camera.position.y.max(1.0) * 1e-3,
             self.camera.position.z * 1e-3,
         );
-        let air = self.atmosphere.frame(&mut frame.graph, frame.slot, view_km);
+        let air =
+            self.atmosphere
+                .frame(&mut frame.graph, frame.slot, view_km, self.renderer.sun_dir);
         // The sky's tables first: the resolve lights the shaded sides with its irradiance
         // (issue #47).
         let sky = self.sky.tables(

@@ -83,6 +83,10 @@ exposure (EV100, target, compensation, curve) the last.
   merge), and 5.98 → 5.64 ms at full detail.
 - Pass 2 merges by rectangles, one per software cluster (#32): the merge zone 0.058 → 0.039 ms
   at 1440p (2.735 → 2.721 ms in all) and 0.024 → 0.020 ms at 1600 × 900.
+- The planet-view table (#26): a planet seen from space is two fetches from a table instead
+  of a 16-segment march per pixel, and the stars are no longer worked out behind its ground.
+  The sky pass facing a 50° planet goes 0.333 → 0.105 ms, and facing the ballad's 18° planet
+  0.159 → 0.132. Along the path it stays 0.117 ms.
 
 The software rasteriser (issue #3) does not run in this frame. The ballad holds 0.08 M
 triangles in dense clusters, and auto mode starts at 1.5 M. Forced on, the frame costs

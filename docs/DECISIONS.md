@@ -401,6 +401,30 @@ view, 0.14–0.16 ms with the ballad's planet (18° radius) in view and 0.31 ms 
 filling the screen, which a planet-view table would make a lookup (#26). *(research:
 lighting-gi.md §6; issue #8)*
 
+**The planet-view table** (issue #26, 2026-09-25) makes the view from outside a lookup.
+- **What it holds:** from a camera outside the shell, a ray is fixed by its closest approach
+  to the planet's centre and its azimuth around the planet's direction, from the sun's side
+  (mirror-symmetric). A 512 × 256 table over those two holds the march's luminance. A one-row
+  table holds the transmittance, which does not depend on the sun.
+- **Its axes:** the closest-approach axis splits at the ground's radius and is never filtered
+  across (Bruneton's split at the horizon). Rays to the ground go by 1 − √(1 − b / R): linear
+  at the disc's centre, where the ground under the ray moves across the terminator linearly,
+  and packed towards its edge. Rays above the ground go by the square root of their lowest
+  point's height.
+- **Its texels** are the same 16-segment march, so the table and the march agree there.
+- **When it is built:** when the atmosphere, the camera's position relative to the planet or
+  the sun changes (once in the ballad).
+- **The reference:** `--planet-march` keeps the per-pixel march.
+
+No published table for views from outside turned up. Hillaire's reference code, like Bevy,
+marches every pixel from space; Bruneton's 4-D table moves the camera to the top of the
+atmosphere (lighting-gi.md §6).
+
+*Measured:* within 1/255 of the march everywhere at 18° and 50°, lit from the side, from
+behind, and with the sun rising over the limb. The sky pass at 50° goes 0.333 → 0.105 ms:
+0.215 with the table, and 0.105 once the stars are no longer worked out behind the ground.
+That reorder alone takes the march to 0.225.
+
 **The ground view** (issue #43, 2026-09-25) is `forge_render::sky`, three passes a frame over
 the same tables:
 - **A sky-view table** (192 × 108): the in-scattered light around the camera, the elevation

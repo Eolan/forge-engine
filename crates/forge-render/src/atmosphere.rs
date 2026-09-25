@@ -33,6 +33,12 @@ const LUT_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 const GROUP_SIZE: u32 = 8;
 /// Profiler zone of the table passes (they run only when the atmosphere changes).
 const LABEL: &str = "sky/atmosphere tables";
+/// The planet-view table (issue #26, `PLANET_VIEW_*` in `atmosphere.slang`): the light scattered
+/// towards a camera outside the atmosphere, over the rays' closest approach to the planet ×
+/// their azimuth from the sun's side.
+pub const PLANET_VIEW_SIZE: [u32; 2] = [512, 256];
+/// Profiler zone of its pass, which runs when the camera, the sun or the atmosphere moves.
+const PLANET_VIEW_LABEL: &str = "sky/planet-view table";
 
 /// An atmosphere: a Rayleigh layer, an aerosol (Mie) layer and an absorbing ozone layer over a
 /// spherical ground. Distances in kilometres, coefficients per kilometre.
@@ -188,6 +194,24 @@ struct LutPush {
     height: u32,
 }
 
+/// `PlanetViewPush` in `atmosphere_luts.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct PlanetViewPush {
+    /// xyz: towards the sun.
+    sun: [f32; 4],
+    planet: u64,
+    transmittance: u32,
+    multiple_scattering: u32,
+    luminance_out: u32,
+    transmittance_out: u32,
+    pad: [u32; 2],
+}
+
+/// What the planet-view table was built for: the atmosphere, the camera in the planet's frame
+/// and the direction to the sun.
+type PlanetViewKey = (AtmosphereParams, [f32; 3], [f32; 3]);
+
 /// What the passes of a frame that draw the atmosphere need: the planet's data by device
 /// address and the two tables, to declare as sampled.
 #[derive(Clone, Copy, Debug)]
@@ -203,6 +227,9 @@ pub struct AtmosphereFrame {
     /// Cosine of the angular radius of the top of the atmosphere seen from the camera (−1
     /// from inside it): view rays outside that cone miss the atmosphere.
     pub cos_top: f32,
+    /// From a camera outside the atmosphere, the planet-view table and its transmittance row
+    /// (issue #26); `None` from inside it or with [`Atmosphere::planet_view`] off.
+    pub planet_view: Option<(ImageHandle, ImageHandle)>,
 }
 
 /// The atmosphere's tables, their passes and the per-frame planet data.
@@ -211,6 +238,15 @@ pub struct Atmosphere {
     multiple_scattering_pipeline: Pipeline,
     transmittance: GraphImage,
     multiple_scattering: GraphImage,
+    planet_view_pipeline: Pipeline,
+    /// The planet-view table and its transmittance row (issue #26).
+    view_table: GraphImage,
+    view_transmittance: GraphImage,
+    /// What the planet-view table holds.
+    view_built: Option<PlanetViewKey>,
+    /// Draw a planet seen from space through the planet-view table (the default), else by
+    /// marching every pixel's ray (the reference the table is checked against).
+    pub planet_view: bool,
     planets: Vec<Buffer>,
     /// The atmosphere drawn; changing it rebuilds the tables.
     pub params: AtmosphereParams,
@@ -225,14 +261,14 @@ impl Atmosphere {
         shaders: &ShaderCompiler,
         params: AtmosphereParams,
     ) -> Result<Self> {
-        let compute = |entry: &str, name: &str| -> Result<Pipeline> {
+        let compute = |entry: &str, name: &str, push_bytes: usize| -> Result<Pipeline> {
             let module = device.create_shader_module(
                 &shaders.compile("atmosphere_luts.slang", entry, ShaderStage::Compute)?,
                 name,
             )?;
             let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
                 shader: (module, entry),
-                push_constant_bytes: std::mem::size_of::<LutPush>() as u32,
+                push_constant_bytes: push_bytes as u32,
                 name,
             });
             device.destroy_shader_module(module);
@@ -264,11 +300,28 @@ impl Atmosphere {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            transmittance_pipeline: compute("transmittance_main", "atmosphere transmittance")?,
+            transmittance_pipeline: compute(
+                "transmittance_main",
+                "atmosphere transmittance",
+                std::mem::size_of::<LutPush>(),
+            )?,
             multiple_scattering_pipeline: compute(
                 "multiple_scattering_main",
                 "atmosphere multiple scattering",
+                std::mem::size_of::<LutPush>(),
             )?,
+            planet_view_pipeline: compute(
+                "planet_view_main",
+                "atmosphere planet view",
+                std::mem::size_of::<PlanetViewPush>(),
+            )?,
+            view_table: table(PLANET_VIEW_SIZE, "atmosphere planet view")?,
+            view_transmittance: table(
+                [PLANET_VIEW_SIZE[0], 1],
+                "atmosphere planet view transmittance",
+            )?,
+            view_built: None,
+            planet_view: true,
             transmittance: table(TRANSMITTANCE_SIZE, "atmosphere transmittance")?,
             multiple_scattering: table(MULTIPLE_SCATTERING_SIZE, "atmosphere multiple scattering")?,
             planets,
@@ -279,16 +332,27 @@ impl Atmosphere {
 
     /// Writes this frame's planet data with the camera at `view_position` (km, relative to the
     /// planet's centre, world axes), imports the tables and, when the atmosphere changed since
-    /// they were built, declares the passes "sky/atmosphere tables" that rebuild them.
+    /// they were built, declares the passes "sky/atmosphere tables" that rebuild them. From
+    /// outside the atmosphere, with [`Atmosphere::planet_view`], it also imports the planet-view
+    /// table, rebuilt ("sky/planet-view table") when the atmosphere, the camera or `sun` (the
+    /// direction to the sun) changed since it was built.
     pub fn frame<'f>(
         &'f mut self,
         graph: &mut FrameGraph<'f>,
         slot: FrameSlot,
         view_position: Vec3,
+        sun: Vec3,
     ) -> AtmosphereFrame {
         self.planets[slot.index].write(0, &[self.params.gpu(view_position)]);
         let rebuild = self.built != Some(self.params);
         self.built = Some(self.params);
+        let outside = view_position.length() > self.params.top_radius;
+        let view_key = (self.params, view_position.to_array(), sun.to_array());
+        let view_rebuild = self.view_built != Some(view_key);
+        let use_view = outside && self.planet_view;
+        if use_view {
+            self.view_built = Some(view_key);
+        }
         let this: &'f Self = self;
         let planet = this.planets[slot.index].address();
         let transmittance = graph.import(&this.transmittance);
@@ -335,6 +399,39 @@ impl Atmosphere {
                     Ok(())
                 });
         }
+        let planet_view = use_view.then(|| {
+            let table = graph.import(&this.view_table);
+            let table_transmittance = graph.import(&this.view_transmittance);
+            if view_rebuild {
+                let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+                let pipeline = &this.planet_view_pipeline;
+                graph
+                    .pass(PLANET_VIEW_LABEL)
+                    .image(transmittance, ImageAccess::Sampled(compute))
+                    .image(multiple_scattering, ImageAccess::Sampled(compute))
+                    .image(table, ImageAccess::StorageWrite(compute))
+                    .image(table_transmittance, ImageAccess::StorageWrite(compute))
+                    .run(move |resources, commands| {
+                        commands.bind_pipeline(pipeline);
+                        commands.push_constants(
+                            pipeline,
+                            &PlanetViewPush {
+                                sun: sun.extend(0.0).to_array(),
+                                planet,
+                                transmittance: resources.sampled(transmittance).0,
+                                multiple_scattering: resources.sampled(multiple_scattering).0,
+                                luminance_out: resources.storage(table, 0).0,
+                                transmittance_out: resources.storage(table_transmittance, 0).0,
+                                pad: [0; 2],
+                            },
+                        );
+                        let [w, h] = PLANET_VIEW_SIZE;
+                        commands.dispatch(w.div_ceil(GROUP_SIZE), h.div_ceil(GROUP_SIZE), 1);
+                        Ok(())
+                    });
+            }
+            (table, table_transmittance)
+        });
         let distance = view_position.length();
         let top = this.params.top_radius;
         let cos_top = if distance > top {
@@ -349,6 +446,7 @@ impl Atmosphere {
             multiple_scattering,
             direction: -view_position.normalize_or(Vec3::NEG_Z),
             cos_top,
+            planet_view,
         }
     }
 }

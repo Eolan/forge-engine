@@ -912,6 +912,48 @@ cargo run --release -p asteroids -- --fixed-step --look=-0.45,0.10,-1.0 --frames
 cargo run --release -p asteroids -- --fixed-step --planet-angle 50 --look=0.27891,0.29307,-0.91451 --sun-dir=0.40811,0.31726,-0.85603 --frames 601 --capture sunrise.png --capture-frame 600
 ```
 
+### The planet through a table (2026-09-25, issue #26)
+
+Every pixel of the planet used to march its ray through the air in 16 segments: 0.31 ms of
+sky pass for a planet filling the screen. From outside the atmosphere, a view ray is fixed
+by two numbers: how close it passes to the planet's centre, and its azimuth around the
+planet's direction, from the sun's side. The **planet-view table** (512 × 256) holds the
+march's luminance over those two, and a one-row table holds its transmittance, which does
+not depend on the sun. The pixel then takes two fetches, and still works out its own
+ground's lighting and where its ray lands.
+- **The axes:** the table splits at the ground's radius and never filters across it.
+  - Rays to the ground are packed towards the disc's edge, and stay linear at its centre,
+    where the ground under the ray crosses the terminator linearly. A first packing by the
+    landing angle left the centre's first texel 561 km out, which put 164 pixels up to 8
+    levels off at the disc's centre.
+  - Rays above the ground are packed towards it, by the square root of their lowest height.
+- **When it is built:** when the atmosphere, the camera's position relative to the planet or
+  the sun changes. In the ballad that happens once (`sky/planet-view table`).
+- **The reference:** `--planet-march` draws the planet by marching every pixel, as before.
+- **The stars** are no longer worked out behind the planet's ground, which hides them. That
+  changes no pixel, on either path.
+
+**Checks** (fixed exposure, no TAA, facing the planet), the table against the march:
+
+| Planet, sun | pixels beyond 2 levels | largest difference |
+|---|---|---|
+| 18°, 50°, lit from the side | 0, 0 | 1 level |
+| 18°, 50°, the sun behind the planet | 0, 0 | 1 level |
+| 18°, the sun rising over the limb (17.5° to 20° from the centre) | 0 | 1 level |
+| 18°, the sun behind the camera | 0 | 1 level |
+
+The thin limb and the sun's glow on it are the same in both.
+
+**Cost** (sky pass, 2000-frame runs):
+
+| View | march | table |
+|---|---|---|
+| a 50° planet, facing it | 0.333 ms | **0.105 ms** (0.215 before the stars were skipped) |
+| the 18° planet, facing it | 0.159 ms | 0.132 ms |
+| along the path, and facing away | 0.117 ms | 0.117 ms |
+
+The table's pass costs 0.02 ms, once.
+
 ## DLSS (2026-09-24, issue #8)
 
 With `--features dlss` the Vulkan API comes through NVIDIA Streamline's interposer, and
@@ -1059,7 +1101,7 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    (a million-triangle city, not a rock field).
 2. Bloom and the sun's hard ray-traced shadows: done (above). Next: soft shadows from the
    sun's disc, a closer planet if the owner wants its air to read as a band, the planet-view
-   table (#26), volumetric dust and the nebula lit by the sun.
+   table (#26, done: above), volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,
    crashes (Phases 5–7), a second player, spatial audio.
 4. Look (owner's request, 2026-09-24, after the systems): rock asteroids as angular

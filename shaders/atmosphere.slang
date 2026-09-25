@@ -221,6 +221,89 @@ public Crossing cross_atmosphere(Planet p, uint transmittance, uint multiple_sca
     return c;
 }
 
+// ---- The planet seen from space: a table around its direction (issue #26) ------------------
+//
+// From a camera outside the atmosphere, a view ray is fixed by two numbers: its closest
+// approach to the planet's centre `b` (as `sphere_span` measures it) and its azimuth `phi`
+// around the direction to the planet, from the half-plane that holds the sun. The medium is
+// spherically symmetric, so `phi` and `-phi` see the same light: phi runs over [0, pi]. The
+// planet-view table holds `cross_atmosphere`'s luminance over (b, phi), built when the camera
+// or the sun moves (atmosphere_luts.slang); a one-row table holds the transmittance, which
+// does not depend on the sun. Along b the left half covers the rays that end on the ground,
+// the right half those that pass above it, each packed towards the ground's edge where a
+// grazing ray's path through the air changes fastest; filtering never mixes the two halves.
+
+public static const uint PLANET_VIEW_WIDTH = 512;  // along b, half for each kind of ray
+public static const uint PLANET_VIEW_HEIGHT = 256; // along phi
+// Segments of the march through the shell for a camera outside it (the table's and the sky's).
+public static const uint SPACE_MARCH_STEPS = 16;
+
+// The camera's frame around the planet: `toward` the planet's centre, `across` the sun's side
+// of the plane through it (any side when the sun is on that line), `third` completing it.
+public struct PlanetViewFrame
+{
+    public float3 toward;
+    public float3 across;
+    public float3 third;
+    public float distance;
+};
+
+public PlanetViewFrame planet_view_frame(Planet p, float3 sun)
+{
+    PlanetViewFrame v;
+    v.distance = length(p.view_position.xyz);
+    v.toward = -p.view_position.xyz / v.distance;
+    float3 side = sun - v.toward * dot(sun, v.toward);
+    if (dot(side, side) < 1e-8)
+        side = abs(v.toward.y) < 0.9 ? cross(v.toward, float3(0.0, 1.0, 0.0)) : cross(v.toward, float3(1.0, 0.0, 0.0));
+    v.across = normalize(side);
+    v.third = cross(v.toward, v.across);
+    return v;
+}
+
+// Texture coordinate along b: the ground half by 1 − √(1 − b / ground radius), linear at the
+// disc's centre (where the ground under the ray moves linearly across the terminator) and
+// packed towards its edge; the upper half by the square root of its closest approach's height,
+// packed towards the ground.
+public float planet_view_u(Planet p, float b)
+{
+    float half_texel = 0.5 / float(PLANET_VIEW_WIDTH);
+    if (b < p.radii.x)
+        return clamp(0.5 * (1.0 - sqrt(1.0 - b / p.radii.x)), half_texel, 0.5 - half_texel);
+    float h = saturate((b - p.radii.x) / (p.radii.y - p.radii.x));
+    return clamp(0.5 + 0.5 * sqrt(h), 0.5 + half_texel, 1.0 - half_texel);
+}
+
+// The b of the texel column at `u` (its centre), the inverse of `planet_view_u`.
+public float planet_view_b(Planet p, float u)
+{
+    if (u < 0.5)
+    {
+        float x = 1.0 - 2.0 * u;
+        return p.radii.x * (1.0 - x * x);
+    }
+    float h = 2.0 * u - 1.0;
+    return p.radii.x + h * h * (p.radii.y - p.radii.x);
+}
+
+// The view ray with closest approach `b` and azimuth `phi`.
+public float3 planet_view_direction(PlanetViewFrame v, float b, float phi)
+{
+    float s = b / v.distance;
+    float c = sqrt(max((1.0 - s) * (1.0 + s), 0.0));
+    return v.toward * c + (v.across * cos(phi) + v.third * sin(phi)) * s;
+}
+
+// Where the ray `direction` from the camera falls in the planet-view table.
+public float2 planet_view_uv(Planet p, PlanetViewFrame v, float3 direction)
+{
+    float3 origin = p.view_position.xyz;
+    float b = length(origin + direction * -dot(origin, direction));
+    float phi = atan2(abs(dot(direction, v.third)), dot(direction, v.across));
+    float half_texel = 0.5 / float(PLANET_VIEW_HEIGHT);
+    return float2(planet_view_u(p, b), clamp(phi / PI, half_texel, 1.0 - half_texel));
+}
+
 // Light arriving on the ground at `position` with unit normal `normal`, per unit of sun
 // illuminance: the sun through the atmosphere on the facing side, plus the skylight as the
 // multiple-scattering table's mean luminance over the upper hemisphere (π L).
