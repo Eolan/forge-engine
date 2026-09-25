@@ -48,6 +48,10 @@ capture) before and after, and update `docs/PROFILE.md`.
   projection; f64 frames and camera-relative f32 (D-004). Determinism rules in D-016.
 - Shaders: one Slang file per pass in `shaders/`, buffers by device address (`T*` in a
   per-frame block), one global bindless set for images/samplers.
+- Cross-vendor (the RTX 5070 Ti and AMD's RX 9070 XT and above, issue #67): no assumption on
+  the subgroup size (`WaveGetLaneCount()`, `uint4` ballots, or a required size), at most
+  32 KB of groupshared memory per workgroup (AMD's Windows limit), limits read from the
+  device, and vendor SDKs optional and loaded only for their vendor (Streamline on NVIDIA).
 - Every pass is a render-graph pass (`graph.pass("group/name")`, D-020) declaring the images
   and buffers it reads and writes; the graph derives the barriers and the profiler zone.
   Nobody outside `forge-gpu` records a barrier; if a pass needs a resource the graph cannot

@@ -22,6 +22,12 @@ pub const BINDING_SAMPLERS: u32 = 2;
 const MAX_SAMPLED_IMAGES: u32 = 65_536;
 const MAX_STORAGE_IMAGES: u32 = 16_384;
 
+/// The set's sampled and storage image slots, which device selection checks against the
+/// device's update-after-bind limits.
+pub(crate) const fn image_capacity() -> (u32, u32) {
+    (MAX_SAMPLED_IMAGES, MAX_STORAGE_IMAGES)
+}
+
 /// Fixed sampler slots, mirrored in `bindless.slang`.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +99,7 @@ impl Bindless {
             .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
             .push_next(&mut flags_info);
         // SAFETY: valid create infos on a live device; the sizes are within the limits the
-        // device advertises (checked at device selection: 1M update-after-bind images here).
+        // device advertises (checked at device selection, `image_capacity`).
         let layout = unsafe { raw.create_descriptor_set_layout(&layout_info, None)? };
         let sizes = [
             vk::DescriptorPoolSize {

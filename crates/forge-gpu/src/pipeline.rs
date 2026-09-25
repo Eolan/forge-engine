@@ -4,7 +4,7 @@ use std::sync::Arc;
 use ash::vk;
 
 use crate::device::Device;
-use crate::error::Result;
+use crate::error::{GpuError, Result};
 
 /// A pipeline and its layout. Destroyed on drop (the GPU must be done with it).
 pub struct Pipeline {
@@ -46,7 +46,8 @@ impl Drop for Pipeline {
 
 /// Description of a task/mesh/fragment pipeline rendering with dynamic rendering.
 pub struct MeshPipelineDesc<'a> {
-    /// Optional task stage: module and entry point name.
+    /// Optional task stage: module and entry point name. Not supported yet: the device leaves
+    /// `taskShader` off, and [`Device::create_mesh_pipeline`] refuses one.
     pub task: Option<(vk::ShaderModule, &'a str)>,
     /// Mesh stage.
     pub mesh: (vk::ShaderModule, &'a str),
@@ -274,8 +275,14 @@ impl Device {
         })
     }
 
-    /// Creates a mesh-shading pipeline. Requires the mesh-shader feature.
+    /// Creates a mesh-shading pipeline. Requires the mesh-shader feature; a task stage is not
+    /// supported yet (the device leaves `taskShader` off: no pass has one, issue #67).
     pub fn create_mesh_pipeline(self: &Arc<Self>, desc: &MeshPipelineDesc<'_>) -> Result<Pipeline> {
+        if desc.task.is_some() {
+            return Err(GpuError::Unsupported(
+                "task stages need the taskShader feature, which the device leaves off".into(),
+            ));
+        }
         let names: Vec<CString> = [
             desc.task.map(|t| t.1),
             Some(desc.mesh.1),

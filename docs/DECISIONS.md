@@ -439,12 +439,14 @@ DLSS Super Resolution runs through NVIDIA Streamline 2.14 (the SDK in `streamlin
 git-ignored), with the binding lifted from the `world` project into `forge-gpu`
 (`streamline.rs`, every FFI structure's size and padding checked at compile time). It
 is **optional**: the `dlss` feature (Windows) loads `sl.interposer.dll` in place of the
-Vulkan loader (`Instance::with_streamline`, `AppConfig::streamline`). The device offers
-`Device::dlss()` when its GPU runs it. Without the feature `Dlss` is an uninhabited type,
-so renderers and demos compile without feature gates. **TAA stays the default and the
-fallback**; U switches TAA → DLAA → Quality → Balanced → Performance → Ultra Performance
-at run time (`--upscaler` at start), and the profiler zones are `temporal/TAA resolve` or
-`temporal/DLSS` + `post/display transform`.
+Vulkan loader (`Instance::with_streamline`, `AppConfig::streamline`), and only when the GPU
+the device selection prefers is NVIDIA's (issue #67: a plain instance asks first,
+`Device::preferred_vendor`); any failure through Streamline falls back to the plain loader.
+The device offers `Device::dlss()` when its GPU runs it. Without the feature `Dlss` is an
+uninhabited type, so renderers and demos compile without feature gates. **TAA stays the
+default and the fallback**; U switches TAA → DLAA → Quality → Balanced → Performance →
+Ultra Performance at run time (`--upscaler` at start), and the profiler zones are
+`temporal/TAA resolve` or `temporal/DLSS` + `post/display transform`.
 
 DLSS reads the same inputs as the TAA resolve: the jittered pre-exposed HDR colour, the
 reversed-Z depth, the motion vectors (UV offsets, unjittered) and a 1 × 1 exposure of 1.

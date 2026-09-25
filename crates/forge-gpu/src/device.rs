@@ -47,6 +47,9 @@ pub struct MeshShaderLimits {
     pub max_output_vertices: u32,
     /// Maximum primitives a mesh workgroup may emit.
     pub max_output_primitives: u32,
+    /// Most mesh workgroups one draw may launch (`maxMeshWorkGroupTotalCount`: 4 194 304 on
+    /// NVIDIA and on AMD's RADV).
+    pub max_total_work_groups: u32,
 }
 
 /// A logical device with its graphics queue, extension loaders and memory allocator.
@@ -65,6 +68,9 @@ pub struct Device {
     mesh_loader: Option<ext::mesh_shader::Device>,
     /// Acceleration structures, with ray queries.
     acceleration_loader: Option<khr::acceleration_structure::Device>,
+    /// `minAccelerationStructureScratchOffsetAlignment` (256 on the RTX 5070 Ti and the
+    /// RX 9070 XT), with ray queries; 1 without.
+    scratch_alignment: u64,
     debug_utils: Option<ext::debug_utils::Device>,
     allocator: Mutex<Option<Allocator>>,
     bindless: Mutex<Option<Bindless>>,
@@ -87,7 +93,12 @@ struct Candidate {
     index_type_uint8: Option<&'static CStr>,
     score: u32,
     name: String,
+    /// PCI vendor id ([`VENDOR_NVIDIA`], AMD 0x1002, …).
+    vendor_id: u32,
 }
+
+/// NVIDIA's PCI vendor id: the only vendor NVIDIA Streamline (DLSS) is loaded for (issue #67).
+pub const VENDOR_NVIDIA: u32 = 0x10DE;
 
 impl Device {
     /// Picks the best physical device that can present to `surface` (when given) and creates
@@ -103,20 +114,9 @@ impl Device {
         options: DeviceOptions,
     ) -> Result<Arc<Self>> {
         let raw_instance = instance.raw();
-        // SAFETY: plain enumeration on a live instance.
-        let physicals = unsafe { raw_instance.enumerate_physical_devices()? };
-        let mut candidates: Vec<Candidate> = Vec::new();
-        for physical in physicals {
-            if let Some(c) = Self::evaluate(&instance, physical, surface)? {
-                candidates.push(c);
-            }
-        }
-        let mut best = candidates
-            .into_iter()
-            .max_by_key(|c| c.score)
-            .ok_or_else(|| {
-                GpuError::Unsupported("no Vulkan 1.3 device with a graphics queue".into())
-            })?;
+        let mut best = Self::best_candidate(&instance, surface)?.ok_or_else(|| {
+            GpuError::Unsupported("no Vulkan 1.3 device with a graphics queue".into())
+        })?;
         if options.no_mesh_shader && best.features.mesh_shader {
             tracing::info!("mesh shaders left disabled (fallback paths forced)");
             best.features.mesh_shader = false;
@@ -197,9 +197,8 @@ impl Device {
             .subgroup_size_control(true)
             // Required of every Vulkan 1.3 device; Streamline (DLSS) creates private data slots.
             .private_data(true);
-        let mut mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT::default()
-            .task_shader(true)
-            .mesh_shader(true);
+        // Mesh shaders only: no pass has a task stage.
+        let mut mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT::default().mesh_shader(true);
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(base)
             .push_next(&mut v11)
@@ -238,20 +237,31 @@ impl Device {
         let graphics_queue = unsafe { raw.get_device_queue(best.graphics_family, 0) };
 
         let mut mesh_props = vk::PhysicalDeviceMeshShaderPropertiesEXT::default();
+        let mut acceleration_props =
+            vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
         let mut props2 = vk::PhysicalDeviceProperties2::default();
         if best.features.mesh_shader {
             props2 = props2.push_next(&mut mesh_props);
+        }
+        if best.features.ray_query {
+            props2 = props2.push_next(&mut acceleration_props);
         }
         // SAFETY: property query on a valid physical device.
         unsafe { raw_instance.get_physical_device_properties2(best.physical, &mut props2) };
         let timestamp_period_ns = props2.properties.limits.timestamp_period;
         let limits = props2.properties.limits;
         let max_anisotropy = props2.properties.limits.max_sampler_anisotropy;
+        let scratch_alignment = u64::from(
+            acceleration_props
+                .min_acceleration_structure_scratch_offset_alignment
+                .max(1),
+        );
         let mesh_limits = best.features.mesh_shader.then_some(MeshShaderLimits {
             preferred_task_invocations: mesh_props.max_preferred_task_work_group_invocations,
             preferred_mesh_invocations: mesh_props.max_preferred_mesh_work_group_invocations,
             max_output_vertices: mesh_props.max_mesh_output_vertices,
             max_output_primitives: mesh_props.max_mesh_output_primitives,
+            max_total_work_groups: mesh_props.max_mesh_work_group_total_count,
         });
 
         let allocator = Allocator::new(&AllocatorCreateDesc {
@@ -308,6 +318,7 @@ impl Device {
             swapchain_loader,
             mesh_loader,
             acceleration_loader,
+            scratch_alignment,
             debug_utils,
             allocator: Mutex::new(Some(allocator)),
             bindless: Mutex::new(Some(bindless)),
@@ -320,6 +331,33 @@ impl Device {
                 .and_then(|v| v.parse::<u64>().ok())
                 .map(|mb| mb << 20),
         }))
+    }
+
+    /// The PCI vendor id of the GPU [`Device::with_options`] would select on `instance` (for
+    /// `surface`), without creating a device, or `None` when no GPU qualifies. The app asks a
+    /// plain instance first, so NVIDIA Streamline's interposer is loaded only for an NVIDIA GPU
+    /// (issue #67).
+    pub fn preferred_vendor(
+        instance: &Instance,
+        surface: Option<vk::SurfaceKHR>,
+    ) -> Result<Option<u32>> {
+        Ok(Self::best_candidate(instance, surface)?.map(|c| c.vendor_id))
+    }
+
+    /// The highest-scoring GPU of `instance` that meets the baseline (the last of equals).
+    fn best_candidate(
+        instance: &Instance,
+        surface: Option<vk::SurfaceKHR>,
+    ) -> Result<Option<Candidate>> {
+        // SAFETY: plain enumeration on a live instance.
+        let physicals = unsafe { instance.raw().enumerate_physical_devices()? };
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for physical in physicals {
+            if let Some(c) = Self::evaluate(instance, physical, surface)? {
+                candidates.push(c);
+            }
+        }
+        Ok(candidates.into_iter().max_by_key(|c| c.score))
     }
 
     fn evaluate(
@@ -380,10 +418,12 @@ impl Device {
             return Ok(None);
         };
 
+        let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
         let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
         let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT::default();
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut v11)
             .push_next(&mut v12)
             .push_next(&mut v13);
         let mesh_ext = has(ext::mesh_shader::NAME);
@@ -399,18 +439,116 @@ impl Device {
         }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
-        let fragment_stores_and_atomics = features2.features.fragment_stores_and_atomics;
-        let baseline = v12.timeline_semaphore == vk::TRUE
-            && v12.buffer_device_address == vk::TRUE
-            && v12.descriptor_indexing == vk::TRUE
-            && v13.dynamic_rendering == vk::TRUE
-            && v13.synchronization2 == vk::TRUE;
-        if !baseline {
-            tracing::info!(device = %name, "skipped: missing baseline features");
+        let base = features2.features;
+        let fragment_stores_and_atomics = base.fragment_stores_and_atomics;
+        // Everything `with_options` enables unconditionally (issue #67): a device without one of
+        // them is skipped by name here, rather than failing at device creation.
+        let on = |b: vk::Bool32| b == vk::TRUE;
+        let required = [
+            ("shaderInt64", on(base.shader_int64)),
+            ("shaderInt16", on(base.shader_int16)),
+            ("samplerAnisotropy", on(base.sampler_anisotropy)),
+            ("multiDrawIndirect", on(base.multi_draw_indirect)),
+            (
+                "drawIndirectFirstInstance",
+                on(base.draw_indirect_first_instance),
+            ),
+            ("fillModeNonSolid", on(base.fill_mode_non_solid)),
+            ("geometryShader", on(base.geometry_shader)),
+            ("shaderDrawParameters", on(v11.shader_draw_parameters)),
+            ("timelineSemaphore", on(v12.timeline_semaphore)),
+            ("bufferDeviceAddress", on(v12.buffer_device_address)),
+            ("descriptorIndexing", on(v12.descriptor_indexing)),
+            ("runtimeDescriptorArray", on(v12.runtime_descriptor_array)),
+            (
+                "shaderSampledImageArrayNonUniformIndexing",
+                on(v12.shader_sampled_image_array_non_uniform_indexing),
+            ),
+            (
+                "shaderStorageBufferArrayNonUniformIndexing",
+                on(v12.shader_storage_buffer_array_non_uniform_indexing),
+            ),
+            (
+                "shaderStorageImageArrayNonUniformIndexing",
+                on(v12.shader_storage_image_array_non_uniform_indexing),
+            ),
+            (
+                "descriptorBindingPartiallyBound",
+                on(v12.descriptor_binding_partially_bound),
+            ),
+            (
+                "descriptorBindingSampledImageUpdateAfterBind",
+                on(v12.descriptor_binding_sampled_image_update_after_bind),
+            ),
+            (
+                "descriptorBindingStorageImageUpdateAfterBind",
+                on(v12.descriptor_binding_storage_image_update_after_bind),
+            ),
+            (
+                "descriptorBindingStorageBufferUpdateAfterBind",
+                on(v12.descriptor_binding_storage_buffer_update_after_bind),
+            ),
+            (
+                "descriptorBindingUpdateUnusedWhilePending",
+                on(v12.descriptor_binding_update_unused_while_pending),
+            ),
+            (
+                "descriptorBindingVariableDescriptorCount",
+                on(v12.descriptor_binding_variable_descriptor_count),
+            ),
+            ("scalarBlockLayout", on(v12.scalar_block_layout)),
+            ("hostQueryReset", on(v12.host_query_reset)),
+            ("drawIndirectCount", on(v12.draw_indirect_count)),
+            ("shaderFloat16", on(v12.shader_float16)),
+            ("shaderInt8", on(v12.shader_int8)),
+            (
+                "storageBuffer8BitAccess",
+                on(v12.storage_buffer8_bit_access),
+            ),
+            (
+                "uniformAndStorageBuffer8BitAccess",
+                on(v12.uniform_and_storage_buffer8_bit_access),
+            ),
+            ("dynamicRendering", on(v13.dynamic_rendering)),
+            ("synchronization2", on(v13.synchronization2)),
+            ("maintenance4", on(v13.maintenance4)),
+            (
+                "shaderDemoteToHelperInvocation",
+                on(v13.shader_demote_to_helper_invocation),
+            ),
+            ("subgroupSizeControl", on(v13.subgroup_size_control)),
+            ("privateData", on(v13.private_data)),
+        ];
+        let missing: Vec<&str> = required
+            .iter()
+            .filter(|(_, present)| !present)
+            .map(|(feature, _)| *feature)
+            .collect();
+        if !missing.is_empty() {
+            tracing::info!(device = %name, ?missing, "skipped: missing required features");
+            return Ok(None);
+        }
+        // The bindless set's sizes (`bindless.rs`) against the update-after-bind limits.
+        let mut v12_props = vk::PhysicalDeviceVulkan12Properties::default();
+        let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut v12_props);
+        // SAFETY: property query with a properly chained struct.
+        unsafe { raw.get_physical_device_properties2(physical, &mut props2) };
+        let (sampled, storage) = crate::bindless::image_capacity();
+        if v12_props.max_descriptor_set_update_after_bind_sampled_images < sampled
+            || v12_props.max_per_stage_descriptor_update_after_bind_sampled_images < sampled
+            || v12_props.max_descriptor_set_update_after_bind_storage_images < storage
+            || v12_props.max_per_stage_descriptor_update_after_bind_storage_images < storage
+        {
+            tracing::info!(
+                device = %name,
+                sampled,
+                storage,
+                "skipped: the bindless set exceeds its update-after-bind limits"
+            );
             return Ok(None);
         }
         let features = DeviceFeatures {
-            mesh_shader: mesh_ext && mesh.task_shader == vk::TRUE && mesh.mesh_shader == vk::TRUE,
+            mesh_shader: mesh_ext && mesh.mesh_shader == vk::TRUE,
             // Slang declares SPV_KHR_ray_tracing next to SPV_KHR_ray_query for a structure reached
             // by address (OpConvertUToAccelerationStructureKHR), which the ray-tracing pipeline
             // extension covers: the three come together.
@@ -442,6 +580,7 @@ impl Device {
             index_type_uint8: uint8_ext.filter(|_| features.index_type_uint8),
             score,
             name,
+            vendor_id: props.vendor_id,
         }))
     }
 
@@ -449,6 +588,12 @@ impl Device {
     /// ([`Instance::with_streamline`]) and this GPU runs it.
     pub fn dlss(&self) -> Option<&crate::dlss::Dlss> {
         self.dlss.as_ref()
+    }
+
+    /// Alignment of an acceleration structure build's scratch address, from the device
+    /// (`minAccelerationStructureScratchOffsetAlignment`; issue #67).
+    pub fn scratch_alignment(&self) -> u64 {
+        self.scratch_alignment
     }
 
     /// The raw device.

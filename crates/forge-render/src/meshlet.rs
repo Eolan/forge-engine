@@ -1390,7 +1390,8 @@ pub struct MeshletRenderer {
     lists: Vec<VisibleList>,
     /// Slots every frame slot's list grows to (see [`MeshletRenderer::begin_frame`]).
     visible_target: u32,
-    /// [`VISIBLE_MAX_CAPACITY`], or less when the fallback's `maxDrawIndirectCount` is lower.
+    /// [`VISIBLE_MAX_CAPACITY`], or less when the fallback's `maxDrawIndirectCount` or the mesh
+    /// path's `maxMeshWorkGroupTotalCount` is lower.
     visible_max: u32,
     /// Direction *to* the sun (world space), used by the visibility resolve.
     pub sun_dir: Vec3,
@@ -1687,8 +1688,12 @@ impl MeshletRenderer {
                 Ok(GraphBuffer::new(b))
             })
             .collect::<Result<Vec<_>>>()?;
+        // One mesh workgroup per hardware-drawn cluster: the list stays within what one draw
+        // may launch (issue #67), as the fallback's within its indirect draw count.
         let visible_max = match path {
-            GeometryPath::MeshShader => VISIBLE_MAX_CAPACITY,
+            GeometryPath::MeshShader => device.mesh_limits().map_or(VISIBLE_MAX_CAPACITY, |l| {
+                VISIBLE_MAX_CAPACITY.min(l.max_total_work_groups)
+            }),
             GeometryPath::IndirectCount => {
                 VISIBLE_MAX_CAPACITY.min(device.limits().max_draw_indirect_count)
             }

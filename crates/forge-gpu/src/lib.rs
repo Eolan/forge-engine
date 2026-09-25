@@ -38,7 +38,7 @@ pub use bindless::{
     StorageImageId,
 };
 pub use commands::Commands;
-pub use device::{Device, DeviceFeatures, DeviceOptions, MeshShaderLimits};
+pub use device::{Device, DeviceFeatures, DeviceOptions, MeshShaderLimits, VENDOR_NVIDIA};
 pub use dlss::{Dlss, DlssFrame, DlssImage, DlssImages, DlssMode, DlssToken};
 pub use error::{GpuError, Result};
 pub use frame::{FRAMES_IN_FLIGHT, FrameSlot, Frames};

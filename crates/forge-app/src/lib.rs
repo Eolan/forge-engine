@@ -29,7 +29,7 @@ use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, Commands, Device, DeviceOptions, FRAMES_IN_FLIGHT,
     FrameGraph, FrameSlot, Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance,
     MemoryCategory, MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface,
-    Swapchain,
+    Swapchain, VENDOR_NVIDIA,
 };
 pub use input::Input;
 pub use loading::Finish;
@@ -361,29 +361,59 @@ impl<D: Demo> State<D> {
         let window_handle = window.window_handle()?.as_raw();
         let validation = config.validate || cfg!(debug_assertions);
         let root = workspace_root_from(env!("CARGO_MANIFEST_DIR"));
-        let instance = if config.streamline {
-            let sdk = std::env::var_os("FORGE_STREAMLINE_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| root.join("streamline-sdk/bin/x64"));
-            match Instance::with_streamline(c"forge", validation, Some(display), &sdk) {
-                Ok(instance) => instance,
-                Err(error) => {
-                    tracing::warn!(%error, sdk = %sdk.display(), "no Streamline: DLSS unavailable");
-                    Instance::new(c"forge", validation, Some(display))?
+        let options = DeviceOptions {
+            no_mesh_shader: config.force_fallback,
+        };
+        // NVIDIA Streamline's interposer becomes the Vulkan loader, so it is loaded only when the
+        // GPU the device selection prefers is NVIDIA's (issue #67): a plain instance asks first.
+        // Any failure through Streamline (instance, surface or device) falls back to the plain
+        // loader: DLSS is an option, TAA the floor.
+        let streamlined = if config.streamline {
+            let vendor = {
+                let probe = Arc::new(Instance::new(c"forge", validation, Some(display))?);
+                let surface = probe.create_surface(display, window_handle)?;
+                Device::preferred_vendor(&probe, Some(surface.raw()))?
+            };
+            if vendor == Some(VENDOR_NVIDIA) {
+                let sdk = std::env::var_os("FORGE_STREAMLINE_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| root.join("streamline-sdk/bin/x64"));
+                let through = || -> forge_gpu::Result<_> {
+                    let instance = Arc::new(Instance::with_streamline(
+                        c"forge",
+                        validation,
+                        Some(display),
+                        &sdk,
+                    )?);
+                    let surface = instance.create_surface(display, window_handle)?;
+                    let device =
+                        Device::with_options(Arc::clone(&instance), Some(surface.raw()), options)?;
+                    Ok((instance, surface, device))
+                };
+                match through() {
+                    Ok(gpu) => Some(gpu),
+                    Err(error) => {
+                        tracing::warn!(%error, sdk = %sdk.display(), "no Streamline: DLSS unavailable");
+                        None
+                    }
                 }
+            } else {
+                tracing::info!(vendor = ?vendor, "no Streamline: DLSS needs an NVIDIA GPU");
+                None
             }
         } else {
-            Instance::new(c"forge", validation, Some(display))?
+            None
         };
-        let instance = Arc::new(instance);
-        let surface = instance.create_surface(display, window_handle)?;
-        let device = Device::with_options(
-            Arc::clone(&instance),
-            Some(surface.raw()),
-            DeviceOptions {
-                no_mesh_shader: config.force_fallback,
-            },
-        )?;
+        let (instance, surface, device) = match streamlined {
+            Some(gpu) => gpu,
+            None => {
+                let instance = Arc::new(Instance::new(c"forge", validation, Some(display))?);
+                let surface = instance.create_surface(display, window_handle)?;
+                let device =
+                    Device::with_options(Arc::clone(&instance), Some(surface.raw()), options)?;
+                (instance, surface, device)
+            }
+        };
         let size = window.inner_size();
         let swapchain = Swapchain::new(
             Arc::clone(&device),

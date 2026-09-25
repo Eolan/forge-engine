@@ -14,10 +14,6 @@ use crate::error::{GpuError, Result};
 use crate::memory::{Buffer, BufferDesc};
 use crate::memory_report::MemoryCategory;
 
-/// Alignment of a build's scratch address (`minAccelerationStructureScratchOffsetAlignment`
-/// is at most 256 on the devices that matter).
-const SCRATCH_ALIGNMENT: u64 = 256;
-
 /// An acceleration structure and the buffer that holds it. Destroyed on drop (after the
 /// device is idle, like every resource).
 pub struct AccelerationStructure {
@@ -119,7 +115,7 @@ impl Device {
         let address = unsafe { loader.get_acceleration_structure_device_address(&address_info) };
         self.set_name(raw, name);
         let scratch = self.create_buffer(BufferDesc {
-            size: sizes.build_scratch_size + SCRATCH_ALIGNMENT,
+            size: sizes.build_scratch_size + self.scratch_alignment(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             location: MemoryLocation::GpuOnly,
             category: MemoryCategory::Transfer,
@@ -148,7 +144,10 @@ impl Device {
             .iter()
             .zip(&geometries)
             .map(|(b, g)| {
-                let scratch = b.scratch.address().next_multiple_of(SCRATCH_ALIGNMENT);
+                let scratch = b
+                    .scratch
+                    .address()
+                    .next_multiple_of(self.scratch_alignment());
                 vk::AccelerationStructureBuildGeometryInfoKHR::default()
                     .ty(b.ty)
                     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)

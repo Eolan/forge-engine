@@ -16,7 +16,7 @@ The post (17 Sep 2018) that introduced the task/mesh pipeline as the replacement
 **Kubisch, C. "Mesh Shading for Vulkan." Khronos Blog, 2022; Khronos, "VK_EXT_mesh_shader proposal."** [web] [still-current]
 https://www.khronos.org/blog/mesh-shading-for-vulkan — https://github.com/KhronosGroup/Vulkan-Docs/blob/main/proposals/VK_EXT_mesh_shader.adoc
 Published 1 Sep 2022 with Vulkan 1.3.226 for DirectX 12 compatibility. Tessellation gives "very limited control over the triangles created," geometry shaders use a single-thread model that runs poorly, API portability is easy but "portability in performance among vendors is much harder," and task shaders "may add overhead" unless they cull or amplify. The proposal lists the properties to read at startup (`maxPreferredTask/MeshWorkGroupInvocations`, `maxMeshOutputVertices/Primitives`, `maxTaskPayloadSize`, compact-output preferences) and states that mesh shaders "are not necessarily a performance win"; their purpose is flexibility.
-*Bearing:* Forge must query the preference properties and keep a per-vendor tuning table (32 invocations on the RTX 5070 Ti, 128 on RDNA).
+*Bearing:* Forge must query the preference properties and keep a per-vendor tuning table (32 invocations on the RTX 5070 Ti; on the RX 9070 XT, 128 under RADV and 256 under AMD's Windows driver, per their gpuinfo reports, issue #67).
 
 **Kristóf, T. "How mesh shaders are implemented in an AMD driver" and "Mesh shaders arrive on your Linux computers." timur.hu, 2022.** [web] [still-current]
 https://timur.hu/blog/2022/how-mesh-shaders-are-implemented — https://timur.hu/blog/2022/mesh-shaders-arrive-on-linux — AMD RDNA Performance Guide: https://gpuopen.com/learn/rdna-performance-guide/
