@@ -170,6 +170,21 @@ without fast doubles.
 *Bearing:* integer sector addressing with doubles inside a system is Forge's frame hierarchy; the
 dual-float noise library is the pattern for planet-scale procedural evaluation in Slang.
 
+**Peter Freese. "Solving Accuracy Problems in Large World Coordinates." In Andrew Kirmse (ed.),
+*Game Programming Gems 4*, ch. 2.3, pp. 157–170. Charles River Media, 2004 (ISBN
+1-58450-205-9).** [book] [foundational]
+<http://www.gameenginegems.net/gemsdb/article.php?id=280> (the Gems database entry; the chapter
+is not online)
+
+The first published "far position": an integer segment index plus a float offset inside the
+segment, a hybrid of fixed point (the segments) and floating point (the offset). A difference is
+taken segment first, in integers, so the large parts cancel exactly and only the small offsets
+meet in floating point. Added on 2026-09-25 at the owner's request.
+*Bearing:* the pattern behind UE5's tile + offset and `big_space`'s cells below. It is the form
+proposed for the GPU instance table (#93, a 🟡 amendment to D-004): `(int3 cell, float3 local)`,
+with the camera-relative position computed cell first. A million GPU-placed instances then need no
+per-frame rewrite and no doubles on the GPU.
+
 **Aevyrie et al. `big_space` — floating origin and nested integer grids for Bevy. GitHub,
 2022–2026.** [code] [recent]
 <https://github.com/aevyrie/big_space>
@@ -910,6 +925,11 @@ Zucker & Higashi 2018, Rouwé 2022, Green 2008.
   ResearchGate, GDC Vault search, the Unreal Fest session page, DuckDuckGo (CAPTCHA), Mojeek (403),
   Bing (locale-mangled results for quoted queries), web.archive.org (not permitted by the
   fetcher), Semantic Scholar after roughly ten calls (429).
+- **Added on 2026-09-25 (#93):** Freese 2004. The title, chapter 2.3, the pages, the editor, the
+  publisher and the ISBN come from the Gems database entry and the Library of Congress table of
+  contents. The method ("far positions", a segment plus an offset) comes from search results and
+  from Godot issue #18136, which cites it; the Ogre forum thread on it did not load. The chapter
+  itself was not read, so nothing beyond the segment-first difference is cited from it.
 - **Numbers to re-check before they enter a spec:** UE5's shader tile size (256k units in the 5.8
   docs; it has changed between 5.x releases), Star Citizen's "700,000 entities" (secondary
   source), Space Engineers' cluster sizes (2014 blog), and the H-PLOC speed-ups (paper figures on

@@ -44,12 +44,18 @@ batch in `docs/PROCESS.md`.
 4. #76, ACES 2.0's output transform as a fourth tone curve.
 5. #77, async compute and transfer queues in the render graph. #78 (transient buffers,
    parallel recording) follows once CPU recording shows in the overlay.
+6. #92, the second cluster cull over the first one's rejects only.
+
+The owner confirmed this order on 2026-09-25, and the direction: grow the demos toward the
+games rather than rebuild a game now.
 
 **Proposed next, for the owner to pick:**
 - #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes
   #69 and is the first step of the space battle (#80).
 - Phase 2, with its `island` demo as the first step of rebuilding tropical-island (#81): a
-  concrete game target for the world systems.
+  concrete game target for the world systems. It starts with #93, large-world coordinates on
+  the GPU (a 🟡 amendment to D-004): the city and the belt moved far from the origin, measured
+  before and after, then the owner decides.
 
 **Waiting:**
 - #39 waits for the RTX 3080.

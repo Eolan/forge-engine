@@ -92,6 +92,19 @@ Epic's own account; each client renders relative to its own camera instead). Rig
 viewport height; Z-up sources (Blender, GIS) swapped at import.
 *(research: large-worlds.md §1–2, §9)*
 
+**Amendment 🟡 proposed (2026-09-25, #93): the GPU instance table in integer cells.** The
+renderer does not yet send camera-relative positions: the instance table holds world-space
+`f32` (`Instance::model` and `center`), compared with `Frame::camera_pos`. For a million
+instances the GPU places itself, camera-relative would mean rewriting the table every frame or
+doubles on the GPU. Proposed, after Freese (*Game Programming Gems 4*, 2004): the table stores
+`(int3 cell, float3 local)`, with rotation and scale in a `float3x4` so the 96-byte record
+holds; the frame block gives the camera the same way. The culls, LOD and draws compute
+`float3(cell − camera_cell) · cell_size + (local − camera_local)`, which is exact near the
+camera, with a power-of-two cell size in metres. The CPU frames stay `f64`. First, measure: the
+city and the belt moved 10⁴ to 10⁷ m from the origin, compared with the origin's image, and GPU
+timings before and after. Only that measurement is built, behind a flag, until the owner decides.
+*(research: large-worlds.md §1, Freese 2004)*
+
 ## D-005 — Our own job system, with the "leave cores free" rule ✅ (2026-09-24)
 
 `forge-task`: work-stealing deques per worker, three priorities, dependency counters that
