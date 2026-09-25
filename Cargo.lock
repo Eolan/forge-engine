@@ -318,6 +318,7 @@ dependencies = [
  "forge-core",
  "forge-geom",
  "forge-gpu",
+ "forge-procgen",
  "forge-render",
  "forge-task",
  "glam",

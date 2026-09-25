@@ -12,10 +12,12 @@
 //!   integer drainage areas (Braun & Willett 2013).
 //! - [`erosion`]: the implicit stream-power law with hillslope diffusion, uplift against
 //!   erosion until mountains and valleys appear.
+//! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
 //!   sea, rivers and lakes), which is how the pipeline is looked at before a GPU draws it.
 //!
-//! `cargo run --release -p genesis` (tools/genesis) runs the pipeline and writes the previews.
+//! `cargo run --release -p genesis` (tools/genesis) runs the pipeline and writes the previews;
+//! `city-blocks --island SEED` cooks the island's heightfield into a cluster DAG and draws it.
 
 #![forbid(unsafe_code)]
 
@@ -23,10 +25,12 @@ pub mod erosion;
 pub mod field;
 pub mod flow;
 pub mod island;
+pub mod layers;
 pub mod noise;
 pub mod preview;
 
 pub use erosion::{ErosionParams, erode};
 pub use field::Field2;
 pub use flow::{Flow, priority_flood, route};
-pub use island::{IslandFields, IslandParams, island_fields};
+pub use island::{IslandFields, IslandParams, cached_island, generate_island, island_fields};
+pub use layers::{LayerRule, slope_layers};

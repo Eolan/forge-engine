@@ -14,17 +14,30 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | Hydrology: rivers as polylines with widths, lakes by Fill–Spill–Merge (stage 4) | rivers and lakes are marked, not yet traced |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
 | Materials from the fields, the layer map (stage 6) | planned |
-| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | #96: `PropKind::Terrain` takes a parametric terrain today; a heightfield variant is the hook |
+| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | built, to see on a GPU: `city-blocks --island SEED` (#96 for the props and the demo of its own) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
 
 ```
 cargo run --release -p genesis -- --spacing 16 --steps 150 --out captures/island
+cargo run --release -p city-blocks -- --island 7
 ```
 
-`--seed N`, `--spacing M` (16: 1025² samples; 4: the 4097² target), `--steps N`, `--k`
-(erodibility), `--diffusion`, `--uplift` (metres per step at the heart), `--every N` (a
+`genesis`: `--seed N`, `--spacing M` (16: 1025² samples; 4: the 4097² target), `--steps N`,
+`--k` (erodibility), `--diffusion`, `--uplift` (metres per step at the heart), `--every N` (a
 hillshade every N steps). It prints each stage's time and writes `uplift.png`, `height.png`
 (16-bit), `hillshade.png`, `flow.png` (log drainage) and `overview.png`.
+
+`city-blocks --island SEED` draws the island in the engine (stage 7, written in the cloud
+and not yet seen on a GPU): the heightfield (`--island-spacing`, 8 m by default: 2049²,
+8.4 M triangles like the city's ground; 4 m for the 4097² target, 33.5 M) is generated once
+into `mesh-cache/island-<key>.f32`, cooked into a cluster DAG through the same path as the
+city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached, and
+drawn as the scene's one instance on the ground's layered material, rock where the ground is
+steeper than 0.45 or higher than 380 m and grass elsewhere (`forge_procgen::slope_layers`, a
+texel every 4 m), under the city's sky, with the sun's shadows, the probes and TAA. The camera
+starts over the sea south of the island, looking north at its coast; `--view` and the usual
+keys apply, `--origin` too. The first start costs the erosion (about 75 s at 8 m on one
+core) and the cook (about the city's 13 s); the next ones load both.
 
 ## The genesis, on the CPU (2026-09-26)
 

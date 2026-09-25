@@ -18,10 +18,12 @@ without losing the others.
 | 3 | `fab6d74` Store the instances in integer cells and draw relative to the camera | #93 step 2: the 80-byte record, camera-relative matrices, the scene frame | **yes, the whole batch** |
 | 4 | `aaeeb63` Add the terrain genesis research for the island demo | `docs/research/terrain-genesis.md` | no |
 | 5 | `264a9fb` Add forge-world: frames, sectors, cells, partitions and streaming plans | Phase 2's first crate, 16 tests, D-037 🟡 | no |
-| 6 | (below) Add forge-procgen and genesis: the island's terrain on the CPU | Phase 2's terrain, stages 1–4 with PNG previews, `docs/demos/island.md` | no |
-| 7 | (below) Add the dynamic-scenes research for moving geometry | `docs/research/dynamic-scenes.md` (#79, #69, #95) | no |
+| 6 | `d2f0c3c` Add forge-procgen and genesis: the island's terrain on the CPU | Phase 2's terrain, stages 1–4 with PNG previews, `docs/demos/island.md` | no |
+| 7 | `484911f` Keep the batch's logs only with FORGE_KEEP_LOGS=1; the island's 4 m numbers | the logs opt-in, as the owner asked | no |
+| 8 | (below) Draw the island in the engine: `city-blocks --island SEED` | `PropKind::Heightfield`, the island cooked like the city's ground, stage 6's first layer rule | **yes** |
+| 9 | (below) Add the dynamic-scenes research for moving geometry | `docs/research/dynamic-scenes.md` (#79, #69, #95) | no |
 
-The SHAs of 6 and 7 are in `git log` on the branch; they were committed after this file was
+The SHAs of 8 and 9 are in `git log` on the branch; they were committed after this file was
 first written.
 
 ### 1. `--origin` and the measurement (commit 1)
@@ -132,7 +134,40 @@ target. `docs/demos/island.md` has the pictures the cloud session looked at, the
 what is next: the hand-off to the cluster-DAG cook, so the island is drawn by today's renderer.
 Nothing on the GPU changes with this commit.
 
-### 7. The dynamic-scenes research (commit 7)
+### 7. The logs opt-in (commit 7)
+
+`FORGE_KEEP_LOGS=1` for the batch scripts, as asked; nothing to test.
+
+### 8. The island in the engine (commit 8) — the second one to test with care
+
+What (`docs/demos/island.md`): `cargo run --release -p city-blocks -- --island 7`. A
+`PropKind::Heightfield` in `forge-geom` takes any heightfield through the cook path the city's
+terrain uses (`heightfield_mesh` is the same grid mesh, `terrain_mesh` now calls it); the
+island's field (8 m, 2049², 8.4 M triangles by default; `--island-spacing 4` for 4097²) is
+generated once into `mesh-cache/island-<key>.f32` (`forge_procgen::cached_island`), cooked and
+cached like a prop, and drawn as the scene's one instance on the ground's layered material with
+a slope-and-altitude layer rule (`forge_procgen::slope_layers`); the city's sky, shadows,
+probes and TAA as they are. The city itself is untouched: without `--island` nothing changes,
+and `terrain_mesh` gives the same vertices as before (the test
+`the_terrain_faces_up_and_is_flat_in_the_city` still passes).
+
+Test: `cargo run --release -p city-blocks -- --island 7`. The first start generates the field
+(about 75 s of erosion on one core at 8 m; the log says `island heightfield … from_cache=false`)
+and cooks it (about the city's 13 s); the next start loads both. Expected: the island seen
+from the sea to the south, ridges and valleys, grass below and rock on the steep ground and
+the peaks, its shadows and the sky; the F1 overlay's GPU time in the same range as the city's
+south view (one mesh of the city's ground's size, no props). Then `--island-spacing 4`
+(8 minutes of erosion once, the cook of 33.5 M triangles, a bigger cache file), and a capture
+for `docs/demos/island.md`.
+
+If it fails: a crash in the cook is a `forge-geom` matter (the same code the city's terrain
+takes, so unlikely); a black or missing island with a clean log means the layer map or the
+material rows (compare `build_island` with `build_city`'s `CityMaterials::ground`); a wrong
+camera is `--view`. The cook's cache key includes the island's parameters, so a change of
+`--island-steps` or `--island-spacing` cooks a new mesh and leaves the old file (`--recook`
+removes the current key's file only).
+
+### 9. The dynamic-scenes research (commit 9)
 
 `docs/research/dynamic-scenes.md` for #79 (moving instances), #69 (probes woken by movers) and
 #95 (async overlap), with the same network caveat as commit 4. Its recommendation is the plan

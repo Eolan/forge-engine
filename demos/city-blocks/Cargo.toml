@@ -17,6 +17,7 @@ forge-app = { workspace = true }
 forge-core = { workspace = true }
 forge-geom = { workspace = true }
 forge-gpu = { workspace = true }
+forge-procgen = { workspace = true }
 forge-render = { workspace = true }
 forge-task = { workspace = true }
 glam = { workspace = true }

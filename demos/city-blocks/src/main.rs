@@ -28,7 +28,8 @@ use forge_core::material::{
 };
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
-use forge_geom::city::{PropKind, PropSpec, Terrain, city_props};
+use forge_geom::city::{Heightfield, PropKind, PropSpec, Terrain, city_props};
+use forge_procgen::{ErosionParams, Field2, IslandParams};
 use forge_render::material::TextureSet;
 use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
@@ -120,6 +121,18 @@ struct Args {
     /// it): the image drifts, the farther the more.
     #[arg(long, default_value_t = 0.0)]
     origin: f32,
+    /// Draw the island of `forge-procgen` (`docs/demos/island.md`) instead of the city: a
+    /// 16 km island generated from this seed, its heightfield cooked into a cluster DAG like the
+    /// city's ground and cached. The first start generates it (a minute or two of erosion at
+    /// 8 m), the next ones load it.
+    #[arg(long)]
+    island: Option<u64>,
+    /// Metres between the island's samples (8: 2049², 8.4 M triangles; 4: the 4097² target).
+    #[arg(long, default_value_t = 8.0)]
+    island_spacing: f64,
+    /// Erosion steps of the island.
+    #[arg(long, default_value_t = 150)]
+    island_steps: u32,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -305,6 +318,8 @@ impl Gallery {
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
         let (scene, placed) = if args.gallery {
             build_gallery(ctx, &args, cooked)?
+        } else if args.island.is_some() {
+            (build_island(ctx, &args, cooked)?, Vec::new())
         } else {
             (build_city(ctx, &args, cooked)?, Vec::new())
         };
@@ -335,7 +350,15 @@ impl Gallery {
         if args.show_culled {
             flags.0 |= CullFlags::SHOW_CULLED;
         }
-        let mut camera = if args.gallery {
+        let mut camera = if args.island.is_some() {
+            // Over the sea south of the island, looking north at its coast and its ridges.
+            FlyCamera {
+                position: Vec3::new(0.0, 300.0, 6800.0),
+                pitch: -0.08,
+                speed: 120.0,
+                ..FlyCamera::default()
+            }
+        } else if args.gallery {
             FlyCamera {
                 position: Vec3::new(0.0, 70.0, 230.0),
                 pitch: -0.3,
@@ -1275,17 +1298,134 @@ struct Cooked {
 /// Cooks (or loads) the props of this run: the start-up's CPU work, which runs behind the
 /// loading screen (issue #25).
 fn cook(args: &Args) -> Cooked {
-    let mut props = city_props();
-    if !args.gallery {
-        props.push(PropSpec {
-            name: "terrain".to_owned(),
-            kind: PropKind::Terrain(Terrain::city()),
-        });
-    }
+    let props = if args.island.is_some() {
+        // The island alone (`docs/demos/island.md`); its props come later.
+        vec![island_prop(args)]
+    } else {
+        let mut props = city_props();
+        if !args.gallery {
+            props.push(PropSpec {
+                name: "terrain".to_owned(),
+                kind: PropKind::Terrain(Terrain::city()),
+            });
+        }
+        props
+    };
     // The streamed city keeps its pages on the GPU only (issue #36).
     let pages_in_memory = args.gallery || args.stream_pool == 0;
     let (meshes, ms) = cook_props(&props, args.recook, pages_in_memory);
     Cooked { meshes, ms }
+}
+
+/// The island's generation settings from the arguments (`--island`, `--island-spacing`,
+/// `--island-steps`): the 16 km island of `forge-procgen` with its default erosion.
+fn island_settings(args: &Args) -> (IslandParams, ErosionParams) {
+    let seed = forge_core::Seed::new(args.island.unwrap_or(7));
+    let params = IslandParams::island_16km(seed, args.island_spacing);
+    let erosion = ErosionParams {
+        steps: args.island_steps,
+        ..ErosionParams::island()
+    };
+    (params, erosion)
+}
+
+/// The island's heightfield, generated once and kept in `mesh-cache/` beside the cooked
+/// meshes (`forge_procgen::cached_island`).
+fn island_heights(args: &Args) -> Field2<f32> {
+    let (params, erosion) = island_settings(args);
+    let dir = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("mesh-cache");
+    let start = Instant::now();
+    let (height, from_cache) =
+        forge_procgen::cached_island(&dir, &params, &erosion).expect("the island's cache file");
+    let (lo, hi) = height.min_max();
+    tracing::info!(
+        seed = args.island.unwrap_or(7),
+        samples = height.size,
+        spacing_m = height.spacing,
+        from_cache,
+        ms = start.elapsed().as_millis(),
+        height_m = %format_args!("{lo:.0}-{hi:.0}"),
+        "island heightfield"
+    );
+    height
+}
+
+/// The island as a prop named `terrain` (so it takes the ground's layered material), its
+/// samples generated only when the cooked mesh is not in the cache.
+fn island_prop(args: &Args) -> PropSpec {
+    let (params, erosion) = island_settings(args);
+    let for_source = args.clone();
+    PropSpec {
+        name: "terrain".to_owned(),
+        kind: PropKind::Heightfield(Heightfield {
+            key: forge_procgen::island::island_key(&params, &erosion),
+            samples: params.size,
+            spacing: params.spacing as f32,
+            source: std::sync::Arc::new(move || island_heights(&for_source).data),
+        }),
+    }
+}
+
+/// The island (`docs/demos/island.md`): its heightfield cooked (or loaded) as the one
+/// instance of the scene, on the ground's layered material with rock where the ground is
+/// steep or high and grass elsewhere.
+fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene> {
+    let start = Instant::now();
+    let props = vec![island_prop(args)];
+    let streamed = args.stream_pool > 0;
+    let (meshes, cook_ms) = (cooked.meshes, cooked.ms);
+    let mut builder = MeshletSceneBuilder::new();
+    let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
+    // The layers from the field: a texel every 4 m over the 16 km (stage 6's first rule).
+    let height = island_heights(args);
+    let extent = height.extent() as f32;
+    let texels = 4096;
+    let layers = forge_procgen::slope_layers(
+        &height,
+        &forge_procgen::LayerRule {
+            grass: placement::layer::GRASS,
+            rock: placement::layer::ROCK,
+            rock_slope: 0.45,
+            rock_above: 380.0,
+        },
+        texels,
+    );
+    builder.set_ray_traced(!args.no_shadows);
+    let mut materials = CityMaterials::new(&ctx.device)?;
+    materials.ground(&layers.data, texels, extent)?;
+    materials.apply(&mut builder, &props, &ids);
+    builder.set_origin(scene_origin(args));
+    builder.add_instance(ids[0], Mat4::IDENTITY);
+    let residency = if streamed {
+        Residency::Streamed(StreamingConfig::from_mib(
+            args.stream_pool,
+            args.stream_upload,
+        ))
+    } else {
+        Residency::All
+    };
+    let mut scene = builder.build_with(&ctx.device, residency)?;
+    tracing::info!(
+        pages = scene.page_count,
+        mib = (u64::from(scene.page_count) * forge_geom::PAGE_SIZE as u64) >> 20,
+        streamed,
+        "cluster pages"
+    );
+    // The sun's shadows and the probes trace against the island (issue #45, #53).
+    scene.build_tlas(&ctx.device, &ctx.shaders)?;
+    tracing::info!(
+        origin_m = args.origin,
+        f32_spacing_m = forge_render::precision::ulp(args.origin.abs() + 0.5 * extent),
+        "the scene's offset from the world's origin"
+    );
+    tracing::info!(
+        triangles = scene.total_triangles,
+        clusters = scene.instance_meshlets(),
+        cook_ms = %format_args!("{cook_ms:.0}"),
+        wall_ms = start.elapsed().as_millis(),
+        "island ready"
+    );
+    Ok(scene)
 }
 
 /// The city: the terrain and the twenty props cooked (or loaded), the terrain placed once

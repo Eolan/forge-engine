@@ -157,7 +157,9 @@ colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H*
 `--sw-raster auto|on|off`, `--instance-occlusion auto|on|off`, `--no-instance-cells`, `--show-culled`, `--ev100 EV`, `--day S` (a day in S seconds, automatic exposure),
 `--view x,y,z,yaw,pitch` (start the camera there, e.g. in a street), `--origin M` (the city
 moved M metres from the world's origin along every axis, the camera with it: the far-origin
-check, issue #93), `--force-fallback`. At
+check, issue #93), `--island SEED` (the 16 km island of `forge-procgen` instead of the city,
+`docs/demos/island.md`; `--island-spacing M` (8), `--island-steps N` (150)),
+`--force-fallback`. At
 1440p the flight at 300 m/s runs at 3.38 ms of GPU with everything on, its p99 frame 3.8 ms
 (2.6 ms without the probes; 2026-09-25, after #77 and #92). Numbers:
 [docs/demos/city-blocks.md](docs/demos/city-blocks.md).

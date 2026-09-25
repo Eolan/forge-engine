@@ -8,6 +8,8 @@
 //! parameters (see `crate::cache`).
 
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
 
 use forge_core::Seed;
 use forge_core::hash::unit_f32;
@@ -52,6 +54,41 @@ pub enum PropKind {
     Lathe(Lathe),
     /// The ground (see [`terrain_mesh`]).
     Terrain(Terrain),
+    /// A ground made elsewhere (the island of `forge-procgen`; see [`heightfield_mesh`]).
+    Heightfield(Heightfield),
+}
+
+/// A heightfield generated outside this crate, meshed like the city's ground. Its samples
+/// come through `source`, called only when the mesh is not in the cache, so a field that
+/// takes a minute to generate costs nothing on a warm start; `key` names its parameters and
+/// is the cache key's input (with the samples per side and the spacing).
+#[derive(Clone)]
+pub struct Heightfield {
+    /// The parameters as text, unique per field (a seed, a spacing, the generator's settings).
+    pub key: String,
+    /// Samples per side.
+    pub samples: u32,
+    /// Metres between samples.
+    pub spacing: f32,
+    /// The samples, row-major, `samples × samples` of them, as [`Terrain::heights`] lays them
+    /// out.
+    pub source: Arc<dyn Fn() -> Vec<f32> + Send + Sync>,
+}
+
+impl fmt::Debug for Heightfield {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Heightfield")
+            .field("key", &self.key)
+            .field("samples", &self.samples)
+            .field("spacing", &self.spacing)
+            .finish()
+    }
+}
+
+impl PartialEq for Heightfield {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.samples == other.samples && self.spacing == other.spacing
+    }
 }
 
 impl PropSpec {
@@ -71,6 +108,7 @@ impl PropSpec {
             } => rubble(*seed, *pieces, *segments),
             PropKind::Lathe(l) => lathe(l),
             PropKind::Terrain(t) => terrain_mesh(t),
+            PropKind::Heightfield(h) => heightfield_mesh(h.samples, h.spacing, &(h.source)()),
         }
     }
 
@@ -81,7 +119,10 @@ impl PropSpec {
             normal_weight: match self.kind {
                 PropKind::Building(_) => 1.0,
                 PropKind::Lathe(_) => 0.5,
-                PropKind::Boulder { .. } | PropKind::Rubble { .. } | PropKind::Terrain(_) => 0.0,
+                PropKind::Boulder { .. }
+                | PropKind::Rubble { .. }
+                | PropKind::Terrain(_)
+                | PropKind::Heightfield(_) => 0.0,
             },
         }
     }
@@ -218,14 +259,25 @@ impl Terrain {
 /// The terrain as a grid mesh: vertex `j × samples + i` at the sample of
 /// [`Terrain::heights`], two counter-clockwise triangles per cell seen from above.
 pub fn terrain_mesh(t: &Terrain) -> TriMesh {
-    let n = t.samples();
-    let half = t.size * 0.5;
+    heightfield_mesh(t.samples(), t.spacing, &t.heights())
+}
+
+/// A heightfield of `samples × samples` heights (row-major) as a grid mesh centred on the
+/// origin: vertex `j × samples + i` at `(−half + i × spacing, height, −half + j × spacing)`
+/// with `half` the grid's half side, two counter-clockwise triangles per cell seen from above.
+pub fn heightfield_mesh(samples: u32, spacing: f32, heights: &[f32]) -> TriMesh {
+    let n = samples;
+    assert_eq!(
+        heights.len(),
+        (n as usize) * (n as usize),
+        "a heightfield of {n} × {n} samples"
+    );
+    let half = (n - 1) as f32 * spacing * 0.5;
     let mut mesh = TriMesh::default();
     mesh.positions.reserve((n * n) as usize);
-    let heights = t.heights();
     for j in 0..n {
         for i in 0..n {
-            let (x, z) = (-half + i as f32 * t.spacing, -half + j as f32 * t.spacing);
+            let (x, z) = (-half + i as f32 * spacing, -half + j as f32 * spacing);
             mesh.positions.push([x, heights[(j * n + i) as usize], z]);
         }
     }

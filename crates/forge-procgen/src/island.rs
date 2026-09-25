@@ -1,9 +1,15 @@
 //! Stages 1 and 2 of the terrain pipeline (`docs/research/terrain-genesis.md`): the island's
-//! mask and the fields the erosion runs on, an uplift rate, a hardness and a rainfall.
+//! mask and the fields the erosion runs on, an uplift rate, a hardness and a rainfall; and the
+//! whole island as one call, [`generate_island`], cached on disk by [`cached_island`].
+
+use std::io;
+use std::path::Path;
 
 use forge_core::Seed;
 
+use crate::erosion::{ErosionParams, erode};
 use crate::field::Field2;
+use crate::flow::Flow;
 use crate::noise::{fbm, ridged};
 
 /// What shapes the island.
@@ -67,6 +73,80 @@ pub struct IslandFields {
 /// A seed's 64 bits for a noise lattice.
 fn lattice(seed: Seed, purpose: u64) -> u64 {
     seed.derive(purpose).rng().next_u64()
+}
+
+/// The island's heightfield: stages 1–3 from a flat sea, and the last step's flow.
+pub fn generate_island(p: &IslandParams, erosion: &ErosionParams) -> (Field2<f32>, Flow) {
+    let fields = island_fields(p);
+    let mut height = fields.shape.map(|_| 0.0_f32);
+    let flow = erode(
+        &mut height,
+        &fields.uplift,
+        &fields.hardness,
+        &fields.rain,
+        erosion,
+    );
+    (height, flow)
+}
+
+/// The text that names an island's heightfield: its parameters, and so its cache key.
+pub fn island_key(p: &IslandParams, erosion: &ErosionParams) -> String {
+    format!("{p:?} {erosion:?}")
+}
+
+/// FNV-1a over `bytes` (stable across platforms and runs).
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// The island's heightfield from `dir` when it was generated before with the same
+/// parameters, else generated and stored there (`island-<key>.f32`: the samples per side, the
+/// spacing, then the heights as little-endian `f32`), so the minute of erosion is paid once.
+/// Returns the field and whether it came from the file.
+pub fn cached_island(
+    dir: &Path,
+    p: &IslandParams,
+    erosion: &ErosionParams,
+) -> io::Result<(Field2<f32>, bool)> {
+    let key = fnv1a64(island_key(p, erosion).as_bytes());
+    let file = dir.join(format!("island-{key:016x}.f32"));
+    if let Ok(bytes) = std::fs::read(&file)
+        && bytes.len() >= 12
+    {
+        let size = u32::from_le_bytes(bytes[0..4].try_into().expect("4 bytes"));
+        let spacing = f64::from_le_bytes(bytes[4..12].try_into().expect("8 bytes"));
+        let count = (size as usize) * (size as usize);
+        if size == p.size && spacing == p.spacing && bytes.len() == 12 + 4 * count {
+            let data = bytes[12..]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect();
+            return Ok((
+                Field2 {
+                    size,
+                    spacing,
+                    data,
+                },
+                true,
+            ));
+        }
+    }
+    let (height, _) = generate_island(p, erosion);
+    std::fs::create_dir_all(dir)?;
+    let mut bytes = Vec::with_capacity(12 + 4 * height.len());
+    bytes.extend_from_slice(&height.size.to_le_bytes());
+    bytes.extend_from_slice(&height.spacing.to_le_bytes());
+    for h in &height.data {
+        bytes.extend_from_slice(&h.to_le_bytes());
+    }
+    let partial = file.with_extension("f32.part");
+    std::fs::write(&partial, &bytes)?;
+    std::fs::rename(&partial, &file)?;
+    Ok((height, false))
 }
 
 /// Stages 1 and 2: the mask, then the uplift, hardness and rain fields.
@@ -168,5 +248,33 @@ mod tests {
             ..p
         };
         assert_ne!(island_fields(&other).shape, f.shape);
+    }
+
+    #[test]
+    fn the_cached_island_is_the_generated_one() {
+        let p = IslandParams {
+            size: 33,
+            ..IslandParams::island_16km(Seed::new(11), 512.0)
+        };
+        let erosion = ErosionParams {
+            steps: 20,
+            ..ErosionParams::island()
+        };
+        let dir = std::env::temp_dir().join(format!("forge-island-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (first, from_cache) = cached_island(&dir, &p, &erosion).unwrap();
+        assert!(!from_cache);
+        let (second, from_cache) = cached_island(&dir, &p, &erosion).unwrap();
+        assert!(from_cache);
+        assert_eq!(first, second);
+        assert_eq!(first, generate_island(&p, &erosion).0);
+        // Other parameters, another file.
+        let other = ErosionParams {
+            steps: 21,
+            ..erosion
+        };
+        assert!(!cached_island(&dir, &p, &other).unwrap().1);
+        assert_ne!(island_key(&p, &erosion), island_key(&p, &other));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
