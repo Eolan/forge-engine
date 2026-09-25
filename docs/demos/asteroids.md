@@ -750,6 +750,12 @@ extra sample), and 0.08 ms in city-blocks' 1440p flight.
 its pixels by more than two levels, from the resolve's recompiled arithmetic. Two runs are
 identical.
 
+**One level per tap (issue #72):** each step down reads level L−1 while it writes level L.
+Its taps used the trilinear clamp sampler, which may fetch level L at weight 0, and a weight
+of 0 does not hide a NaN. They now use a sampler that filters bilinearly within the level
+and picks the nearest mip (`SAMPLER_LINEAR_CLAMP_NEAREST_MIP`). Every capture is identical
+to the previous build.
+
 ## Rock and ice as material rows (2026-09-25, issue #20)
 
 The ballad's two looks were two branches of the resolve, chosen by a hash of the instance

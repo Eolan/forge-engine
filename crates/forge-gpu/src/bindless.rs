@@ -43,9 +43,13 @@ pub enum SamplerKind {
     /// Linear 2×2 footprint, clamp, `min` reduction (for hierarchical-Z pyramids;
     /// `VK_EXT_sampler_filter_minmax`).
     MinReductionClamp = 4,
+    /// Bilinear within one level, nearest mip, clamp to edge: for taps at an explicit level
+    /// while the same dispatch writes another level of the image (a linear mip filter may
+    /// fetch the next level even at weight 0, and a weight of 0 does not hide a NaN).
+    LinearClampNearestMip = 5,
 }
 
-const SAMPLER_COUNT: u32 = 5;
+const SAMPLER_COUNT: u32 = 6;
 
 /// Handle of a registered sampled image (an index into binding 0).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -173,6 +177,9 @@ impl Bindless {
                     if has_minmax {
                         info = info.push_next(&mut reduction);
                     }
+                }
+                5 => {
+                    info = info.mipmap_mode(vk::SamplerMipmapMode::NEAREST);
                 }
                 _ => {}
             }

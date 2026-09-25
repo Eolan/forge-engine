@@ -27,6 +27,7 @@ public static const uint SAMPLER_NEAREST_CLAMP = 1;
 public static const uint SAMPLER_LINEAR_REPEAT = 2;
 public static const uint SAMPLER_ANISOTROPIC_REPEAT = 3;
 public static const uint SAMPLER_MIN_REDUCTION_CLAMP = 4;
+public static const uint SAMPLER_LINEAR_CLAMP_NEAREST_MIP = 5;
 
 public float4 sample_image(uint image, uint sampler, float2 uv)
 {

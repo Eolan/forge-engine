@@ -24,9 +24,11 @@ float luma(float3 c)
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
+// Bilinear within `src_level` only: the downsample writes the level after it, which a linear
+// mip filter could fetch (issue #72).
 float3 tap(float2 uv)
 {
-    return g_sampled_images[NonUniformResourceIndex(push.src)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, push.src_level).rgb;
+    return g_sampled_images[NonUniformResourceIndex(push.src)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP_NEAREST_MIP], uv, push.src_level).rgb;
 }
 
 // The mean of a 2×2 box, weighted against fireflies on the first step (1 / (1 + luma)).
