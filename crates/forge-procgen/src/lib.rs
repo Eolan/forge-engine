@@ -31,8 +31,8 @@ pub mod layers;
 pub mod noise;
 pub mod preview;
 
-pub use erosion::{ErosionParams, erode};
+pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
-pub use flow::{Flow, drain, priority_flood, route};
+pub use flow::{Drainage, Flow, drain, priority_flood, route};
 pub use island::{IslandFields, IslandParams, cached_island, generate_island, island_fields};
 pub use layers::{LayerRule, slope_layers};

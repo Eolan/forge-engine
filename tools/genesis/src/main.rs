@@ -2,7 +2,7 @@
 //! pipeline of `forge-procgen` over a 16 km island, stage by stage with timings, and the PNG
 //! previews of each stage in `--out` (`docs/research/terrain-genesis.md`, "What to build
 //! first"). Default: 16 m samples (1025²), seconds; `--spacing 4` is the island's target
-//! (4097², sixteen times the work), a minute or two on the job system.
+//! (4097², sixteen times the work), under a minute on the job system.
 
 #![forbid(unsafe_code)]
 
@@ -90,19 +90,18 @@ fn main() -> Result<()> {
 
     let start = Instant::now();
     let mut height: Field2<f32> = fields.shape.map(|_| 0.0);
-    let mut flow = None;
+    let mut run = erosion::Erosion::new();
     let mut timings = erosion::StepTimings::default();
     for s in 0..args.steps {
-        let (f, t) = erosion::step_timed(
+        timings += erosion::step_timed(
             &mut height,
             &fields.uplift,
             &fields.hardness,
             &fields.rain,
             &erosion_params,
             &pool,
+            &mut run,
         );
-        flow = Some(f);
-        timings += t;
         if let Some(every) = args.every
             && (s + 1) % every == 0
         {
@@ -121,19 +120,18 @@ fn main() -> Result<()> {
             );
         }
     }
-    let flow = flow.unwrap_or_else(|| {
+    let flow = if args.steps == 0 {
         erosion::erode(
             &mut height,
             &fields.uplift,
             &fields.hardness,
             &fields.rain,
-            &ErosionParams {
-                steps: 0,
-                ..erosion_params
-            },
+            &erosion_params,
             &pool,
         )
-    });
+    } else {
+        run.take_flow()
+    };
     let per_step = start.elapsed().as_secs_f64() / f64::from(args.steps.max(1));
     println!(
         "stage 3, erosion: {:.1} s, {:.3} s a step (uplift {:.3}, drain {:.3}, incise {:.3}, diffuse {:.3})",

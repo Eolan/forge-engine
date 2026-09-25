@@ -38,7 +38,7 @@ drawn as the scene's one instance on the ground's layered material, rock where t
 steeper than 0.45 or higher than 380 m and grass elsewhere (`forge_procgen::slope_layers`, a
 texel every 4 m), under the city's sky, with the sun's shadows, the probes and TAA. The camera
 starts over the sea south of the island, looking north at its coast; `--view` and the usual
-keys apply, `--origin` too. The first start costs the erosion (25 s at 8 m on four cores) and
+keys apply, `--origin` too. The first start costs the erosion (13 s at 8 m on four cores) and
 the cook (about the city's 13 s); the next ones load both.
 
 ## The genesis, on the CPU (2026-09-26)
@@ -71,34 +71,46 @@ is `f32` and `f64` with `sqrt` only.
 
 | Run (seed 7, 150 steps) | Samples | Erosion | Per step | Was (flood, one thread) | Peaks | River samples | Lake samples |
 |---|---|---|---|---|---|---|---|
-| `--spacing 16` | 1025² | 5.5 s | 0.037 s | 0.13 s | 530 m | 3 657 | 4 387 |
-| `--spacing 8` | 2049² | 25 s | 0.167 s | 0.66 s | — | 7 336 | 62 819 |
-| `--spacing 4` (the target) | 4097² | 128 s | 0.851 s | 3.13 s | 545 m | 14 809 | 181 377 |
+| `--spacing 16` | 1025² | 3.1 s | 0.021 s | 0.13 s | 530 m | 3 657 | 4 387 |
+| `--spacing 8` | 2049² | 13 s | 0.087 s | 0.66 s | — | 7 336 | 62 819 |
+| `--spacing 4` (the target) | 4097² | 50 s | 0.331 s | 3.13 s | 545 m | 14 809 | 181 377 |
 
 In the cloud container, four cores (the owner's 9800X3D has eight, faster); the 4 m run's
-stages 1–2 take 5.6 s, the hydrology 2.3 s, the previews 0.8 s, the whole run 2 minutes 20.
-The 8 m row's counts are after 20 steps (a timing run).
+stages 1–2 take 5.4 s, the hydrology 3.0 s, the previews 1.1 s, the whole run one minute. The
+8 m row is a 20-step timing run (its counts are after 20 steps).
 
-**Where the time goes** (#97, the first part). Before, the priority flood was 89 % of a step:
-a heap over every cell, `n log n` with a large constant. The basin graph does linear work on
-the raw D8 receivers and touches the depressions alone (523 pits at 8 m, a graph of a few
-hundred thousand passes sorted once); the D8 receivers, the passes, the uplift, the diffusion
-and the implicit update (the stack's segments, whole drainage trees each) run on `forge-task`.
-A step at 4 m is now `uplift 0.005, drain 0.727, incise 0.051, diffuse 0.055` seconds. Of the
-drain, about a tenth is the parallel D8 and passes; the rest is sequential: labelling the
-basins (a walk to each cell's root), and above all the stack (the donor lists, the depth-first
-order from the outlets, the areas; 92 ms of the 145 ms at 8 m). `--threads 0` at 16 m gives
-0.066 s a step against 0.041 with four workers: about half of the serial step is parallel work.
-The next lever is that stack: Cordonnier's parallel construction (the trees below the outlets
-on the workers, merged by index) or a fixed-size buffer set kept across steps; either is the
-second part of #97. The result is the same bytes with any thread count (a test runs the
-erosion with none and with three workers). The carve changes the field slightly against the
-flood's routing (water leaves a lake by one path rather than over the whole flooded flat), so
-the counts above differ from the first runs' (3 487 river and 2 774 lake samples at 16 m); the
+**Where the time goes** (#97). Before, the priority flood was 89 % of a step: a heap over
+every cell, `n log n` with a large constant. Three changes, each measured at 4 m:
+
+1. *The basin graph* (`flow::drain`): linear work on the raw D8 receivers, the depressions
+   alone cost anything (523 pits at 8 m; the passes are kept per row, the lowest per basin
+   pair, then sorted once); the D8 receivers, the passes, the uplift, the diffusion and the
+   implicit update (the stack's segments, whole drainage trees each) on `forge-task`: 3.13 s
+   to 0.85 s a step.
+2. *The stack in parallel* (`Drainage::build`): the donor lists counted and filled by row
+   bands (a receiver is a neighbour, so a band writes one row past itself; the even bands run
+   together, then the odd ones, and the lists come out in the sequential order), a parallel
+   prefix sum, the trees below each band's outlets walked into a part of their own, the parts
+   concatenated with each cell's position stored through atomics, the areas per segment:
+   0.85 s to 0.73 s.
+3. *Buffers kept across steps* (`Drainage`, `Erosion`): a step touches a dozen arrays of
+   67 MB at 4097²; paging fresh ones in each step cost more than the work on them (the
+   position copy alone was 53 ms, the area gather 50 ms, the fill copy 54 ms): 0.73 s to
+   0.33 s.
+
+A step at 4 m is now `uplift 0.004, drain 0.270, incise 0.042, diffuse 0.014` seconds. What
+remains sequential in the drain: labelling the basins (a walk to each cell's root, about
+0.1 s), the pass sort and Kruskal (about 0.05 s), the prefix over the parts; the rest is
+parallel but memory-bound on four cores. `--threads 0` at 16 m gives 0.055 s a step against
+0.021 with four workers. The result is the same bytes with any thread count and with kept or
+fresh buffers (tests run the drainage and the erosion with none and with three workers, and
+reuse a drainage across two fields). The carve changes the field slightly against the flood's
+routing (water leaves a lake by one path rather than over the whole flooded flat), so the
+counts above differ from the first runs' (3 487 river and 2 774 lake samples at 16 m); the
 pictures below are from the new field. At 4 m the lakes cover 3.5 % of the land samples
 (181 k of 5.2 M) against 1.4 % at 16 m: the finer grid holds more small depressions, which the
 sediment rule fills more slowly; a lake area limit, or the basin graph's fill mode with a
-spill rule, is still part of #97.
+spill rule, is the part of #97 that remains.
 
 ![The 16 km island at 16 m after 150 steps: the sea, hypsometric tints under a hillshade, rivers above 0.5 km² of catchment, lakes](images/island-overview-16m.png)
 

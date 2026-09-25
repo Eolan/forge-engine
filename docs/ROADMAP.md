@@ -253,8 +253,8 @@ branch 2026-09-26, to verify), then D-004's amendment decided.
    Transvoxel) for overhangs and caves; SDF bricks for edits. Started 2026-09-26 on the cloud
    branch (`forge-procgen`, `tools/genesis`, `docs/demos/island.md`): the island's mask and
    uplift, D8 drainage with the depressions carved through the basin graph, the implicit
-   stream-power erosion on the job system, PNG previews; a 16 km island at 16 m in 6 s, at 4 m
-   in two minutes; the field cooked into a cluster DAG and drawn by `city-blocks --island`.
+   stream-power erosion on the job system, PNG previews; a 16 km island at 16 m in 3 s, at 4 m
+   in 50 s; the field cooked into a cluster DAG and drawn by `city-blocks --island`.
    Next: the island's own demo with props (#96), the amplification to 2 m and the materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,

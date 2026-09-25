@@ -22,7 +22,8 @@ without losing the others.
 | 7 | `484911f` Keep the batch's logs only with FORGE_KEEP_LOGS=1; the island's 4 m numbers | the logs opt-in, as the owner asked | no |
 | 8 | `42c4097` Draw the island in the engine: `city-blocks --island SEED` | `PropKind::Heightfield`, the island cooked like the city's ground, stage 6's first layer rule | **yes** |
 | 9 | `8d0d54a` Add the dynamic-scenes research for moving geometry | `docs/research/dynamic-scenes.md` (#79, #69, #95) | no |
-| 10 | (below) Route the erosion through the basin graph, in parallel: the 4 m island in two minutes | #97: `forge_procgen::flow::drain`, the step on `forge-task`; 3.5–4× a step | no (the same field, faster) |
+| 10 | `ebebcfd` Route the erosion through the basin graph, in parallel: the 4 m island in two minutes | #97: `forge_procgen::flow::drain`, the step on `forge-task`; 3.5–4× a step | no (the same field, faster) |
+| 11 | (below) Build the stack in parallel and keep the erosion's buffers: the 4 m island in 50 s | #97's second part: `Drainage`, `Erosion`; 9.5× the first per-step time in all | no (the same field, faster) |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -150,14 +151,14 @@ and `terrain_mesh` gives the same vertices as before (the test
 `the_terrain_faces_up_and_is_flat_in_the_city` still passes).
 
 Test: `cargo run --release -p city-blocks -- --island 7`. The first start generates the field
-(about 25 s of erosion at 8 m on the cloud's four cores after commit 10, less on the 9800X3D;
+(13 s of erosion at 8 m on the cloud's four cores after commits 10–11, less on the 9800X3D;
 the log says `island heightfield … from_cache=false`) and cooks it (about the city's 13 s);
 the next start loads both. Expected: the island seen
 from the sea to the south, ridges and valleys, grass below and rock on the steep ground and
 the peaks, its shadows and the sky; the F1 overlay's GPU time in the same range as the city's
 south view (one mesh of the city's ground's size, no props). Then `--island-spacing 4`
-(two minutes of erosion once, the cook of 33.5 M triangles, a bigger cache file), and a
-capture for `docs/demos/island.md`.
+(50 s of erosion once here, the cook of 33.5 M triangles, a bigger cache file), and a capture
+for `docs/demos/island.md`.
 
 If it fails: a crash in the cook is a `forge-geom` matter (the same code the city's terrain
 takes, so unlikely); a black or missing island with a clean log means the layer map or the
@@ -189,12 +190,27 @@ mesh (`--recook`) to see the new field, or keep the old one; both draw. The refe
 routing (`priority_flood` + `route`) stays for the tests and the final lakes.
 
 Test: `cargo run --release -p genesis -- --spacing 16 --steps 150` and read the `stage 3` line:
-the per-step time and its breakdown; then `--spacing 4` (two minutes on four cores here, the
-9800X3D's sixteen threads should be under a minute); `--threads 0` gives the serial time and
-the same `river`/`lake` counts. `cargo test -p forge-procgen` (nine tests) covers the
-invariants: every cell reaches an outlet, the stack visits receivers first, the segments hold
-whole trees, the pit of a cone leaves through the same pass as the flood's, and the parallel
-and serial runs give the same bytes.
+the per-step time and its breakdown; then `--spacing 4` (128 s on four cores here after this
+commit, 50 s after commit 11); `--threads 0` gives the serial time and the same `river`/`lake`
+counts. `cargo test -p forge-procgen` (nine tests) covers the invariants: every cell reaches
+an outlet, the stack visits receivers first, the segments hold whole trees, the pit of a cone
+leaves through the same pass as the flood's, and the parallel and serial runs give the same
+bytes.
+
+### 11. The stack in parallel, the buffers kept (commit 11)
+
+What (`docs/demos/island.md`, "Where the time goes", items 2 and 3): `Drainage::build` makes
+the donor lists by row bands (even bands together, then odd: a receiver is a neighbour, so the
+lists come out in the sequential order), a parallel prefix sum, the trees below each band's
+outlets walked on the workers into parts, the parts concatenated with the positions stored
+through atomics, the areas per segment; and a `Drainage` / `Erosion` keeps every buffer from
+one step to the next (paging in a dozen fresh 67 MB arrays a step cost more than the work on
+them). `erosion::step` takes an `&mut Erosion` and the flow is read from it. The field is the
+same to the bit (the counts of every run above are unchanged).
+
+Test: as for commit 10; the 4 m run should take about 50 s of erosion here and well under a
+minute on the 9800X3D (#97's first "done" box). `cargo test -p forge-procgen` also reuses a
+drainage across two fields and compares with fresh buffers.
 
 ## How to give the cloud session its results
 
@@ -217,10 +233,9 @@ detail.
 3. **#79, moving geometry**, following `docs/research/dynamic-scenes.md`: a movers range of the
    instance table, previous transforms for motion vectors, movers tested in pass 2, the TLAS
    rebuilt per frame or split, probes woken by the movers' spheres (#69).
-4. **The erosion at 4 m in seconds** (#97, the first part done in commit 10): the remaining
-   cost is the sequential stack (donors, the depth-first order, the areas), two thirds of a
-   step; the next lever is Cordonnier's parallel stack (the trees below the outlets built on
-   the workers, merged by index) or buffers kept across steps.
+4. **The erosion at 4 m** (#97, commits 10–11: 3.13 s to 0.33 s a step here): what remains
+   sequential is the basin labelling (0.1 s of the 0.27 s drain) and the pass sort; the lake
+   rule (a fill mode with a spill rule, or an area limit) is the open part of the issue.
 5. **Re-verify the two research files** (#99) from a machine with a full network.
 
 ## What needs the owner
@@ -242,5 +257,5 @@ detail.
 - DLSS's reprojection gets the camera's step through TAA's `previous_from_current`; it was not
   exercised (the `dlss` feature builds, Windows only).
 - The two research files were verified through github.com and the search engine's records.
-- The erosion's stack is built sequentially each step (0.4 s of the 0.7 s a step at 4097²);
-  the parallel work is the rest.
+- The erosion's basin labelling is sequential (0.1 s of the 0.33 s a step at 4097²); the
+  rest is parallel and memory-bound on four cores.

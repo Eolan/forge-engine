@@ -11,14 +11,14 @@
 //! The work runs on a [`TaskPool`]: rows in parallel for the uplift, the D8 receivers and
 //! the diffusion, the stack's segments (whole drainage trees) in parallel for the incision;
 //! the arithmetic per cell is the same in any order, so the result does not depend on the
-//! number of threads (D-016).
+//! number of threads (D-016). A run keeps its buffers in an [`Erosion`].
 
 use std::time::{Duration, Instant};
 
 use forge_task::TaskPool;
 
 use crate::field::Field2;
-use crate::flow::{Flow, drain};
+use crate::flow::{Drainage, Flow};
 
 /// The erosion's parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,8 +74,34 @@ impl std::ops::AddAssign for StepTimings {
     }
 }
 
+/// The buffers of a run of steps, kept from one to the next (the drainage's and the two
+/// scratch fields of the update and the diffusion).
+#[derive(Default)]
+pub struct Erosion {
+    drainage: Drainage,
+    new: Vec<f32>,
+    before: Vec<f32>,
+}
+
+impl Erosion {
+    /// Empty buffers.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The last step's flow.
+    pub fn flow(&self) -> &Flow {
+        self.drainage.flow()
+    }
+
+    /// The last step's flow, moved out.
+    pub fn take_flow(&mut self) -> Flow {
+        self.drainage.take_flow()
+    }
+}
+
 /// One erosion step over `height` (modified in place): uplift, drain, incise, diffuse.
-/// Returns the flow of the step.
+/// The step's flow is `erosion.flow()` afterwards.
 pub fn step(
     height: &mut Field2<f32>,
     uplift: &Field2<f32>,
@@ -83,11 +109,12 @@ pub fn step(
     rain: &Field2<f32>,
     p: &ErosionParams,
     pool: &TaskPool,
-) -> Flow {
-    step_timed(height, uplift, hardness, rain, p, pool).0
+    erosion: &mut Erosion,
+) {
+    step_timed(height, uplift, hardness, rain, p, pool, erosion);
 }
 
-/// [`step`], with where its time went.
+/// [`step`], returning where its time went.
 pub fn step_timed(
     height: &mut Field2<f32>,
     uplift: &Field2<f32>,
@@ -95,7 +122,8 @@ pub fn step_timed(
     rain: &Field2<f32>,
     p: &ErosionParams,
     pool: &TaskPool,
-) -> (Flow, StepTimings) {
+    erosion: &mut Erosion,
+) -> StepTimings {
     let n = height.size as usize;
     let mut t = StepTimings::default();
     let start = Instant::now();
@@ -110,17 +138,17 @@ pub fn step_timed(
     // The water is routed with the depressions carved; the height keeps them, and their
     // cells rise towards their receivers above (sediment settling in the lake).
     let start = Instant::now();
-    let flow = drain(height, p.sea_level, pool);
+    let flow = erosion.drainage.drain(height, p.sea_level, pool);
     t.drain = start.elapsed();
     let start = Instant::now();
-    incise(height, &flow, hardness, rain, p, pool);
+    incise(height, flow, hardness, rain, p, pool, &mut erosion.new);
     t.incise = start.elapsed();
     let start = Instant::now();
     if p.diffusion > 0.0 {
-        diffuse(height, p.diffusion, p.sea_level, pool);
+        diffuse(height, p.diffusion, p.sea_level, pool, &mut erosion.before);
     }
     t.diffuse = start.elapsed();
-    (flow, t)
+    t
 }
 
 /// The implicit stream-power update, the stack's segments (whole trees) on their own tasks:
@@ -132,6 +160,7 @@ fn incise(
     rain: &Field2<f32>,
     p: &ErosionParams,
     pool: &TaskPool,
+    new: &mut Vec<f32>,
 ) {
     let n = height.size as usize;
     let cell_area = (height.spacing * height.spacing) as f32;
@@ -143,8 +172,8 @@ fn incise(
         }
     };
     let old: &Field2<f32> = height;
-    let mut new = vec![0.0_f32; flow.stack.len()];
-    flow.par_segments(pool, &mut new, |_, first, slice| {
+    new.resize(flow.stack.len(), 0.0);
+    flow.par_segments(pool, new, |_, first, slice| {
         for k in 0..slice.len() {
             let i = flow.stack[first + k] as usize;
             let r = flow.receiver[i] as usize;
@@ -161,6 +190,7 @@ fn incise(
             slice[k] = ((old.data[i] + f * receiver_height) / (1.0 + f)).max(p.sea_level);
         }
     });
+    let new = &*new;
     pool.par_chunks_mut(&mut height.data, n, |row, chunk| {
         for (x, h) in chunk.iter_mut().enumerate() {
             let position = flow.position[row * n + x];
@@ -172,10 +202,20 @@ fn incise(
 }
 
 /// One explicit diffusion sweep: `h += D · ∇²h`, on land, the border left as it is.
-fn diffuse(height: &mut Field2<f32>, diffusion: f64, sea_level: f32, pool: &TaskPool) {
+fn diffuse(
+    height: &mut Field2<f32>,
+    diffusion: f64,
+    sea_level: f32,
+    pool: &TaskPool,
+    before: &mut Vec<f32>,
+) {
     let n = height.size as usize;
     let factor = (diffusion / (height.spacing * height.spacing)).min(0.24) as f32;
-    let before = height.data.clone();
+    before.resize(height.len(), 0.0);
+    pool.par_chunks_mut(before, n, |y, row| {
+        row.copy_from_slice(&height.data[y * n..y * n + n])
+    });
+    let before = &*before;
     pool.par_chunks_mut(&mut height.data, n, |y, row| {
         if y == 0 || y + 1 == n {
             return;
@@ -192,7 +232,8 @@ fn diffuse(height: &mut Field2<f32>, diffusion: f64, sea_level: f32, pool: &Task
     });
 }
 
-/// `p.steps` steps of [`step`]; returns the last step's flow.
+/// `p.steps` steps of [`step`]; returns the last step's flow (the field's own when there is
+/// no step).
 pub fn erode(
     height: &mut Field2<f32>,
     uplift: &Field2<f32>,
@@ -201,11 +242,14 @@ pub fn erode(
     p: &ErosionParams,
     pool: &TaskPool,
 ) -> Flow {
-    let mut flow = drain(height, p.sea_level, pool);
-    for _ in 0..p.steps {
-        flow = step(height, uplift, hardness, rain, p, pool);
+    let mut erosion = Erosion::new();
+    if p.steps == 0 {
+        erosion.drainage.drain(height, p.sea_level, pool);
     }
-    flow
+    for _ in 0..p.steps {
+        step(height, uplift, hardness, rain, p, pool, &mut erosion);
+    }
+    erosion.take_flow()
 }
 
 #[cfg(test)]
