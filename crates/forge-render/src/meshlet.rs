@@ -60,6 +60,8 @@ impl CullFlags {
     pub const SHADOWS: u32 = 8192;
     /// Show the ambient occlusion in grey instead of the shading (issue #48; debug view).
     pub const SHOW_AO: u32 = 16384;
+    /// Under a sky, reflect it: Fresnel-weighted, sharp on smooth surfaces (issue #49).
+    pub const SKY_REFLECTIONS: u32 = 32768;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -2350,7 +2352,9 @@ impl MeshletRenderer {
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
             .buffer(args, BufferAccess::ShaderReadWrite(compute));
         if let Some(sky) = ambient.sky {
-            builder = builder.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+            builder = builder
+                .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+                .image(sky.table, ImageAccess::Sampled(compute));
         }
         if let Some(ao) = ambient.occlusion {
             builder = builder.image(ao, ImageAccess::Sampled(compute));
@@ -2378,7 +2382,9 @@ impl MeshletRenderer {
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
             if let Some(sky) = ambient.sky {
-                builder = builder.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+                builder = builder
+                    .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+                    .image(sky.table, ImageAccess::Sampled(compute));
             }
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));

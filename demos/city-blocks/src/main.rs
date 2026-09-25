@@ -9,8 +9,8 @@
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
-//! threshold, T TAA, B bloom, J shadows, I sky light, N ambient occlusion, V its view, Tab
-//! wireframe, G tone curve, Esc quit.
+//! threshold, T TAA, B bloom, J shadows, I sky light, N ambient occlusion, V its view, F sky
+//! reflections, Tab wireframe, G tone curve, Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -137,6 +137,9 @@ struct Args {
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
+    /// Draw without the sky's reflection in glass and at grazing angles (F toggles it).
+    #[arg(long)]
+    no_reflections: bool,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -253,6 +256,9 @@ impl Gallery {
         if args.show_ao {
             flags.0 |= CullFlags::SHOW_AO;
         }
+        if !args.no_reflections {
+            flags.0 |= CullFlags::SKY_REFLECTIONS;
+        }
         let mut camera = if args.gallery {
             FlyCamera {
                 position: Vec3::new(0.0, 70.0, 230.0),
@@ -346,6 +352,7 @@ impl Demo for Gallery {
             KeyCode::KeyI => self.sky_light = !self.sky_light,
             KeyCode::KeyN => self.ao_on = !self.ao_on,
             KeyCode::KeyV => self.flags.toggle(CullFlags::SHOW_AO),
+            KeyCode::KeyF => self.flags.toggle(CullFlags::SKY_REFLECTIONS),
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             KeyCode::KeyT => {
                 self.taa.enabled = !self.taa.enabled;

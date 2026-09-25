@@ -20,6 +20,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | The sun's shadows by ray query | #45 | ✅ a BLAS per prop from its DAG, a TLAS over the million instances |
 | Sky light: the sky's irradiance on the shaded sides | #47 | ✅ nine SH coefficients a frame, 0.016 ms |
 | Ambient occlusion of the sky's light (GTAO) | #48 | ✅ 0.13 ms at 900p, 0.25 ms at 1440p |
+| The sky's reflection: glass and grazing surfaces (Fresnel) | #49 | ✅ 0.03 ms at 1440p |
 
 ```
 cargo run --release -p city-blocks
@@ -27,7 +28,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **Tab** wireframe, **G** tone curve.
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Tab** wireframe, **G** tone curve.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -43,12 +44,48 @@ Options:
   (**I** toggles it).
 - `--no-ao` leaves the sky's light unoccluded (**N** toggles the occlusion), `--ao-radius M`
   sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (**V**).
+- `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## The sky's reflection (issue #49, 2026-09-25)
+
+Every surface now reflects the sky as a dielectric does (D-031). Schlick's Fresnel gives 4 %
+facing the camera, rising towards grazing angles, and a rough surface's rise is bounded by its
+roughness. What is reflected:
+- on smooth surfaces, the sky-view table in the mirror direction: the sky above the
+  horizon, the planet's hazy ground below it;
+- on rougher ones, a blend towards the sky's irradiance (#47), since the table has no
+  blurred levels;
+- scaled by a specular occlusion from GTAO (Lagarde and de Rousiers 2014).
+
+The diffuse part keeps what the Fresnel term leaves. The table's frame and index ride in the
+sky-light buffer after the nine coefficients.
+
+The effect is where it should be. The windows take the sky's colour. The dark glass towers turn
+towards the sky along their grazing edges. The street far ahead gets a faint sheen.
+`--no-reflections` / **F** draws without.
+
+![The dark glass tower and the skyline without the sky's reflection and with it](images/city-blocks-reflections.png)
+
+**Cost:** about 0.01 ms of shading at 1600×900 (the frame 1.820 → 1.824 ms) and 0.03 ms at
+1440p (the flight 2.468 → 2.497 ms).
+
+**A bug on the way.** `sun_light` computed its highlight's direction to the camera in a local
+named `view`, from the object-space position. The new world-space `view` parameter was
+shadowed by it, and Slang accepted the redeclaration. The first captures reflected the sky at
+normal incidence as if it were grazing: white windows. Debug views narrowed it down, and the
+local is now `highlight_view`. The highlight itself is unchanged, since the captures without
+reflections are identical.
+
+**Checks:**
+- With `--no-reflections`, the city's three captures are identical to the previous build.
+- The ballad and the bench are identical, and mesh against fallback is at 0.
+- Synchronization validation is silent.
 
 ## Ambient occlusion (issue #48, 2026-09-25)
 

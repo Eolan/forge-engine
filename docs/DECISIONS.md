@@ -763,3 +763,32 @@ is 0.10 %. A second denoise pass did not move either figure.
 1.683 → 1.852 ms) and 0.25 ms at 1440p (the flight 2.204 → 2.456 ms). With `--no-ao` the
 captures are those of the previous build; mesh and fallback stay at 0 pixels apart.
 *(research: lighting-gi.md §8; issue #48; demo: city-blocks)*
+
+## D-031 — Reflections start with the sky: Fresnel-weighted, from the sky-view table ✅ (2026-09-25)
+
+Research step (4) is hybrid reflections: rays on the RTX tiers (SSR first, then rays on a
+miss), and the sky where a ray finds nothing. This is that last term, the sky, and it is the
+whole reflection until the rays come (issue #49).
+
+**The model** (`sky_reflection` in `shaders/meshlet.slang`, every material class, under a
+sky):
+- Schlick's Fresnel with F0 = 0.04 (a dielectric), its rise at grazing angles bounded by
+  `1 − roughness`. The roughness is recovered from the Blinn-Phong exponent the rows carry.
+- What is reflected: the sky-view table in the mirror direction, blended towards the sky's
+  irradiance (D-023's note) by 2 × roughness². The table has no blurred levels, and its
+  low frequency suits the smooth rows (glass) best.
+- A specular occlusion from GTAO's visibility (D-030), after Lagarde and de Rousiers 2014.
+- The diffuse part is scaled by 1 − F.
+
+The table's frame (up, the sun's azimuth) and sampled index follow the nine coefficients in
+the sky-light buffer. The index is stored as a float value: its bits as a float would be a
+denormal, which a GPU may flush.
+
+**Next:** mirror rays against the shadows' TLAS for the smooth rows. Glass is flat, so one
+ray per pixel is exact and needs no denoiser. The hit is shaded from the cut's triangle and
+the instance's row, and the sky is kept for misses. Metals (F0 from albedo) come with the
+material work.
+
+*Measured* (city-blocks, RTX 5070 Ti): about 0.01 ms of shading at 1600×900 (the frame
+1.820 → 1.824 ms), 0.03 ms at 1440p (the flight 2.468 → 2.497 ms). With `--no-reflections` the captures are those of the previous build.
+*(research: lighting-gi.md §7; issue #49; demo: city-blocks)*

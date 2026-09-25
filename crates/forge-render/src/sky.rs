@@ -32,8 +32,11 @@ const SLICE: u32 = 32;
 const SLICES: u32 = 32;
 const GROUP: u32 = 8;
 /// The sky's irradiance: nine spherical-harmonic coefficients of 16 bytes (`SH_COEFFICIENTS`
-/// in `sh.slang`).
+/// in `sh.slang`)...
 const IRRADIANCE_BYTES: u64 = 9 * 16;
+/// ...then the camera's frame on the planet and the sky-view table's index, for the resolve's
+/// reflections (issue #49): up (xyz) and the index as a float value (w), forward.
+const SKY_LIGHT_BYTES: u64 = IRRADIANCE_BYTES + 2 * 16;
 
 /// Mirrors `Sky` in `sky.slang`.
 #[repr(C)]
@@ -87,6 +90,8 @@ pub struct SkyLight {
     pub buffer: BufferHandle,
     /// Its device address.
     pub address: u64,
+    /// The sky-view table the resolve samples for reflections (issue #49).
+    pub table: ImageHandle,
 }
 
 /// A frame's sky between [`GroundSky::tables`] and [`GroundSky::compose`].
@@ -154,7 +159,7 @@ impl GroundSky {
             })
             .collect::<Result<Vec<_>>>()?;
         let irradiance = GraphBuffer::new(device.create_buffer(BufferDesc {
-            size: IRRADIANCE_BYTES,
+            size: SKY_LIGHT_BYTES,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             location: MemoryLocation::GpuOnly,
             category: MemoryCategory::Frame,
@@ -272,6 +277,7 @@ impl GroundSky {
             light: SkyLight {
                 buffer: irradiance,
                 address: irradiance_address,
+                table: sky_view,
             },
         }
     }

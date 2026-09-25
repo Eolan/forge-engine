@@ -8,6 +8,7 @@
 import bindless;
 import atmosphere;
 import sh;
+import skyview;
 
 // Must match GpuSky in sky.rs.
 struct Sky
@@ -30,7 +31,7 @@ struct Sky
     uint height;
     uint2 pad;
     Planet* planet;
-    float4* irradiance;       // the sky's irradiance, SH_COEFFICIENTS coefficients (irradiance_main)
+    float4* irradiance;       // the sky's irradiance, SH_COEFFICIENTS coefficients, then up and forward (irradiance_main)
 };
 
 struct Push
@@ -41,8 +42,6 @@ struct Push
 [[vk::push_constant]]
 Push push;
 
-static const uint SKY_VIEW_WIDTH = 192;
-static const uint SKY_VIEW_HEIGHT = 108;
 // The aerial-perspective volume: SLICES depth slices of SLICE × SLICE froxels, laid side by
 // side in a 2-D atlas (the bindless set holds 2-D images).
 static const uint SLICE = 32;
@@ -56,19 +55,6 @@ void local_frame(Planet p, float3 sun, out float3 up, out float3 forward, out fl
     float3 flat_sun = sun - up * dot(sun, up);
     forward = dot(flat_sun, flat_sun) > 1e-8 ? normalize(flat_sun) : (abs(up.x) < 0.9 ? normalize(cross(up, float3(1, 0, 0))) : normalize(cross(up, float3(0, 0, 1))));
     right = cross(up, forward);
-}
-
-// Sky-view table coordinates of a direction at `elevation` over the horizontal and
-// `azimuth` from the sun's (0..π, the sky being symmetric about the sun's vertical plane):
-// elevation squashed so the texels crowd around the horizon.
-float2 sky_view_uv(float elevation, float azimuth)
-{
-    float e = elevation / (0.5 * PI);
-    float v = 0.5 + 0.5 * sign(e) * sqrt(abs(e));
-    float u = azimuth / PI;
-    // Keep the bilinear footprint inside the table.
-    float2 size = float2(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
-    return (float2(u, v) * (size - 1.0) + 0.5) / size;
 }
 
 float3 sky_view_direction(float2 uv, float3 up, float3 forward, float3 right)
@@ -281,5 +267,14 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
         if (id.x == 0)
             s[0].irradiance[k] = float4(g_irradiance[0] * (4.0 * PI / float(count)) * sh_cosine_band(k), 0.0);
         GroupMemoryBarrierWithGroupSync();
+    }
+    // After the coefficients, what the resolve needs to look the table up for reflections
+    // (issue #49): the camera's frame on the planet and the table's sampled index.
+    if (id.x == 0)
+    {
+        // The index as a float value (exact below 2^24): its bits would be a denormal, which
+        // the GPU may flush to zero.
+        s[0].irradiance[SH_COEFFICIENTS] = float4(up, float(s[0].sky_view));
+        s[0].irradiance[SH_COEFFICIENTS + 1] = float4(forward, 0.0);
     }
 }

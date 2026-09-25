@@ -91,6 +91,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Sky light.** Ravi Ramamoorthi, Pat Hanrahan, "An Efficient Representation for Irradiance
   Environment Maps", SIGGRAPH 2001: the sky's irradiance as nine spherical-harmonic
   coefficients.
+- **Reflections.** Christophe Schlick, "An Inexpensive BRDF Model for Physically-based
+  Rendering", Eurographics 1994: the Fresnel approximation. The specular occlusion follows
+  Lagarde and de Rousiers (2014, above).
 - **Ambient occlusion.** Jorge Jimenez, Xian-Chun Wu, Angelo Pesce, Adrian Jarabo, "Practical
   Real-Time Strategies for Accurate Indirect Occlusion", SIGGRAPH 2016: GTAO and its
   multi-bounce fit. Forge ports Intel's implementation, XeGTAO (Filip Strugar and

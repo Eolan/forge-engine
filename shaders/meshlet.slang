@@ -22,6 +22,7 @@ import bindless;
 import vis64;
 import barycentrics;
 import sh;
+import skyview;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -154,6 +155,8 @@ public static const uint FLAG_STREAMING = 4096;     // a streamed scene: the cut
 public static const uint FLAG_SHADOWS = 8192;
 // Show the ambient occlusion in grey (issue #48).
 public static const uint FLAG_SHOW_AO = 16384;
+// Under a sky, reflect it (issue #49).
+public static const uint FLAG_SKY_REFLECTIONS = 32768;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -1448,25 +1451,51 @@ float3 occlusion_bounce(float visibility, float3 albedo)
     return max(float3(visibility), ((visibility * a + b) * visibility + c) * visibility);
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, out float ndl)
+// The sky reflected by a dielectric (issue #49), in the resolve's units (a white Lambertian
+// surface facing the sun): the sky-view table in the mirror direction on a smooth surface,
+// fading into the sky's irradiance `irradiance` as it gets rough (the table has no blurred
+// levels), weighted by Schlick's Fresnel with 4 % at normal incidence and the roughness
+// bounding its rise at grazing angles. GTAO's visibility `ao` (or -1) occludes it as
+// Lagarde and de Rousiers do (Moving Frostbite to PBR, 2014). `fresnel` is the share the
+// surface reflects, which its diffuse part loses.
+float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float specular_power, float ao, out float fresnel)
+{
+    float roughness = sqrt(sqrt(2.0 / (specular_power + 2.0))); // RenderLayer::roughness_for_power, inverted
+    float nv = saturate(dot(n, view));
+    const float f0 = 0.04;
+    fresnel = f0 + (max(1.0 - roughness, f0) - f0) * pow(1.0 - nv, 5.0);
+    float4 up_table = sky[SH_COEFFICIENTS];
+    float3 forward = sky[SH_COEFFICIENTS + 1].xyz;
+    float3 r = reflect(-view, n);
+    // Luminance per unit of sun illuminance, times π: the resolve's units.
+    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265;
+    float3 environment = lerp(mirror, irradiance, saturate(2.0 * roughness * roughness));
+    float occlusion = ao >= 0.0 ? saturate(pow(nv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao) : 1.0;
+    return fresnel * occlusion * environment;
+}
+
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     // The sun is far, so a half vector from the light and the camera-to-surface direction
     // approximated by the object's outward normal is close enough for a highlight this soft.
     ndl = dot(n, light);
     float diffuse = max(ndl, 0.0) * shadow;
-    float3 view = normalize(f[0].camera_pos - (object_position + 0.0)); // object space ≈ world offset
-    float3 half_vector = normalize(light + view);
+    float3 highlight_view = normalize(f[0].camera_pos - (object_position + 0.0)); // object space ≈ world offset
+    float3 half_vector = normalize(light + highlight_view);
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
     float3 sun = f[0].sun_color.rgb;
     // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
     // how much of it the surface sees (issue #48).
     if (sky != nullptr)
     {
-        float3 ambient = sh_irradiance(sky, n);
-        if (ao >= 0.0)
-            ambient *= occlusion_bounce(ao, albedo);
-        return albedo * (diffuse * sun + ambient) + specular * sun;
+        float3 irradiance = sh_irradiance(sky, n);
+        float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
+        if ((f[0].flags & FLAG_SKY_REFLECTIONS) == 0)
+            return albedo * (diffuse * sun + ambient) + specular * sun;
+        float fresnel;
+        float3 reflection = sky_reflection(sky, irradiance, n, view, specular_power, ao, fresnel);
+        return albedo * (diffuse * sun + ambient) * (1.0 - fresnel) + specular * sun + reflection;
     }
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
@@ -1544,6 +1573,7 @@ float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p
 struct Surface
 {
     float3 n;               // world-space normal, interpolated
+    float3 view;            // unit, world space, from the surface towards the camera (issue #49)
     float3 object_normal;   // object-space normal, interpolated
     float3 object_position; // object-space position
     float3 dpdx;            // its change per pixel to the right and down
@@ -1620,7 +1650,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -1697,7 +1727,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, ndl) + emissive;
+    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, ndl) + emissive;
 }
 
 float3 shade_ice(Frame* f, Material mat, Surface s)
@@ -1710,7 +1740,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(mat.color_a, mat.color_b, cavity);
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, ndl);
     return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
 }
 
@@ -1815,6 +1845,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.ao = resolve_push.ao_image != 0xFFFFFFFFu
         ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
         : -1.0;
+    s.view = s.sky != nullptr ? normalize(f[0].camera_pos - mul(inst.model, float4(s.object_position, 1.0)).xyz) : float3(0.0, 1.0, 0.0);
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
