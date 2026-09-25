@@ -290,8 +290,11 @@ belt is 1.2 km long), 1 m at 10⁷ m. The predicted numbers are on the city's pa
 of the camera, where the model says a pixel or two at 10⁵ m, ten at 10⁶ m with the shadows off
 their rocks by centimetres, and at 10⁷ m a camera that advances in 1 m steps. `tools/origins.sh`
 takes frame 240 without TAA at each offset against the origin's; the captures wait for the
-owner's machine (this session ran in the cloud). At 0, the default, nothing changes: the offset
-is added as `+ 0`.
+owner's machine (this session ran in the cloud). Since the cells record (2026-09-26, the city's
+page, "Far from the origin", *Built*), the rocks are stored each in its own cell, the camera
+hands the renderer its cell and offset, the path stays around the field's centre, and the dust
+and the shadow rays work in the field's own frame: every offset should give the origin's frame
+to the pixel, or a few pixels from the split's 0.1 mm rounding.
 
 ## The rock's texture without repeats (2026-09-25, issue #66)
 

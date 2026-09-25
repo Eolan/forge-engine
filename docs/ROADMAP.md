@@ -70,8 +70,9 @@ HDR display output), #95 (more async overlap), #39 (the RTX 3080 run).
   before and after, then the owner decides. **Its measurement is built** (2026-09-25, a cloud
   session): `--origin` in both demos, `tools/origins.sh`, and a model that predicts the captures
   (an object 2 m from the camera 0.5 px off at 10 km, 45 px at 1 000 km, 800 px at 10 000 km;
-  cells of 1 km 0.013 px throughout; `docs/demos/city-blocks.md`). Next: the captures on the
-  5070 Ti, then the prototype behind a flag, then the decision.
+  cells of 1 km 0.013 px throughout; `docs/demos/city-blocks.md`). **The record itself is
+  built** on the cloud branch (2026-09-26, `docs/HANDOVER.md`): the captures decide, then the
+  owner.
 
 **Waiting:**
 - #39 waits for the RTX 3080.
@@ -238,8 +239,8 @@ Goal: the renderer skeleton every later system draws through.
 ## Phase 2 — World
 
 Opens with #93, large-world coordinates on the GPU: the city and the belt measured far from the
-origin (the tooling and the predicted numbers ✅ 2026-09-25, the captures next), then D-004's
-amendment decided, then built.
+origin (the tooling and the predicted numbers ✅ 2026-09-25; the record built on the cloud
+branch 2026-09-26, to verify), then D-004's amendment decided.
 
 1. `forge-world`: reference frames (`f64`), integer sector grid, cube-sphere and flat-grid
    partitions, cell streaming with HLOD proxies, `u64` cell ids.

@@ -114,6 +114,18 @@ cells of 1 km 0.013 px throughout (`docs/demos/city-blocks.md`, "Far from the or
 the captures on the 5070 Ti (step 1), the prototype behind a flag and its timings (steps 2–3),
 then the decision. The cell size is part of it: 1 km keeps the local part's spacing at 0.12 mm;
 64 km would give 7.8 mm, today's precision at 100 km.
+*The record is built (2026-09-26, the same cloud session, not yet run on a GPU;
+`docs/HANDOVER.md`):* `Instance` is an `int3 cell`, a `float3 local`, a unit quaternion, a
+uniform scale, the centre from the same cell and the radius (80 bytes, from 96;
+`forge_render::cells`, `meshlet.slang`); the frame block carries the camera's cell and offset,
+and every matrix is camera-relative; the TLAS, the probes and the dust work in a **scene frame**
+anchored at the scene's origin (`MeshletScene::origin`), rays starting from
+`relative + camera_in_scene`; cells of 1 km. The proposal's `float3x4` gave way to the
+quaternion: it is what keeps the record at 80 bytes. `tools/origins.sh` is the acceptance test:
+every offset against the origin's image, expected 0 px up to a few pixels from the split's
+0.1 mm rounding. The record before stays as the commit before, for `tools/timings.sh`'s A/B.
+The decision stays the owner's: keep the commit, change it (the cell size, the frame), or drop
+it.
 *(research: large-worlds.md §1, Freese 2004)*
 
 ## D-005 — Our own job system, with the "leave cores free" rule ✅ (2026-09-24)

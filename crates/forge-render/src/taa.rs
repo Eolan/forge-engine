@@ -22,6 +22,7 @@ use forge_gpu::{
 };
 use glam::{DMat4, Mat4, Vec2};
 
+use crate::cells::CellPos;
 use crate::display::{ToneTables, ToneTablesPush, Tonemap, format_encodes_srgb};
 
 /// Colour format of the offscreen scene target and the history.
@@ -149,6 +150,8 @@ pub struct Taa {
     extent: vk::Extent2D,
     frame_index: u64,
     previous_view_proj: Option<DMat4>,
+    /// Where the camera stood for `previous_view_proj` (issue #93).
+    previous_camera: Option<CellPos>,
     previous_exposure: f32,
     reset: bool,
     encode_srgb: bool,
@@ -219,6 +222,7 @@ impl Taa {
             extent,
             frame_index: 0,
             previous_view_proj: None,
+            previous_camera: None,
             previous_exposure: 0.0,
             reset: true,
             encode_srgb: !format_encodes_srgb(output_format),
@@ -259,14 +263,17 @@ impl Taa {
     }
 
     /// Starts a frame: declares the HDR colour target and returns the jittered projection to
-    /// draw with. `view_proj` is the *unjittered* world-to-clip of this frame (the
-    /// reprojection into the previous frame is derived from it and the previous one);
+    /// draw with. `view_proj` is the *unjittered* camera-relative-to-clip of this frame and
+    /// `camera` where the camera stands (the reprojection into the previous frame is derived
+    /// from them and the previous frame's: the previous clip of a point is its clip in the
+    /// previous camera's frame, which sits `camera − previous camera` away, issue #93);
     /// `exposure` is the frame's pre-exposure (the history is rescaled when it changes).
     pub fn begin<'f>(
         &mut self,
         graph: &mut FrameGraph<'f>,
         projection: Mat4,
         view_proj: Mat4,
+        camera: CellPos,
         exposure: f32,
     ) -> TaaFrame {
         let history_scale = if self.reset || self.previous_exposure <= 0.0 {
@@ -282,10 +289,16 @@ impl Taa {
         };
         let extent = self.extent;
         let current = view_proj.as_dmat4();
-        let previous_from_current = match self.previous_view_proj {
-            Some(previous) if !self.reset => previous * current.inverse(),
+        // A point `x` relative to this camera was `x + (camera − previous camera)` relative to
+        // the previous one; the step is small and exact in the cells' arithmetic.
+        let previous_from_current = match (self.previous_view_proj, self.previous_camera) {
+            (Some(previous), Some(previous_camera)) if !self.reset => {
+                let step = camera.relative_to(previous_camera).as_dvec3();
+                previous * DMat4::from_translation(step) * current.inverse()
+            }
             _ => DMat4::IDENTITY,
         };
+        self.previous_camera = Some(camera);
         let reset = self.reset;
         let blend = if self.reset || !self.enabled {
             1.0

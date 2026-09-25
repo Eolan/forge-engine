@@ -49,6 +49,14 @@ impl FlyCamera {
         Mat4::from_rotation_translation(self.rotation(), self.position).inverse()
     }
 
+    /// Camera-relative → view: the view of this camera standing at the origin, its rotation
+    /// alone. The renderer draws relative to the camera (D-004, issue #93): positions reach the
+    /// GPU as integer cells and `f32` offsets, and the shaders subtract the camera's before
+    /// this matrix applies, so no world-sized number meets an `f32` matrix.
+    pub fn view_rotation(&self) -> Mat4 {
+        Mat4::from_quat(self.rotation()).transpose()
+    }
+
     /// View → clip, reversed-Z with an infinite far plane.
     pub fn projection(&self, aspect: f32) -> Mat4 {
         glam::camera::rh::proj::directx::perspective_infinite_reverse(self.fov_y, aspect, self.near)

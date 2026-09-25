@@ -1,15 +1,15 @@
 //! The `f32` error of positions far from the world's origin (issue #93), predicted on the CPU.
 //!
-//! The renderer keeps the instance table in world-space `f32` (`Instance::model` and `center` in
-//! `shaders/meshlet.slang`) and the camera with it (`Frame::camera_pos`, the view matrix): the
-//! camera-relative `f32` of D-004 is not built yet. Far from the origin the positions' spacing
+//! Before issue #93's record ([`crate::cells`]), the renderer kept the instance table in
+//! world-space `f32` (a `float4x4 model` and a `center` in `shaders/meshlet.slang`) and the
+//! camera with it (a `camera_pos`, the view matrix). Far from the origin the positions' spacing
 //! grows, one [`ulp`] of an `f32` being 1 mm at 10 km and 1 m at 10 000 km, and the view
 //! transform takes a small difference of two large numbers. [`error`] reproduces the demos'
-//! arithmetic (the placement's `f32` translation, `FlyCamera::view`'s inverse, the shader's
-//! `view_proj × (model × vertex)`) in `f32` against the same geometry in `f64`, for today's
-//! record and for the proposed `(int3 cell, float3 local)` record, and gives the error in metres
-//! and in pixels. `--origin` in city-blocks and the ballad, with `tools/origins.sh`, measures the
-//! real thing; [`table`] is what the docs quote.
+//! arithmetic of that record (the placement's `f32` translation, `FlyCamera::view`'s inverse,
+//! the shader's `view_proj × (model × vertex)`) in `f32` against the same geometry in `f64`,
+//! and the `(int3 cell, float3 local)` record the renderer now uses, and gives the error in
+//! metres and in pixels. `--origin` in city-blocks and the ballad, with `tools/origins.sh`,
+//! measures the real thing; [`table`] is what the docs quote.
 
 use glam::{DMat4, DQuat, DVec2, DVec3, DVec4, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 
@@ -23,12 +23,13 @@ pub fn ulp(x: f32) -> f32 {
 /// How the GPU stores an instance's position and the camera's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Record {
-    /// Today: world-space `f32` (`Instance::model`), the camera the same, and a world-space
-    /// `view_proj`.
+    /// The record before issue #93: world-space `f32` (a `float4x4 model`), the camera the
+    /// same, and a world-space `view_proj`.
     WorldF32,
-    /// The proposal (D-004's amendment): an integer cell of `cell_size` metres and an `f32`
-    /// offset within it, for the instances and the camera; the shader takes the cell difference
-    /// in integers, so the camera-relative position is exact near the camera.
+    /// D-004's amendment, the record since ([`crate::cells`]): an integer cell of `cell_size`
+    /// metres and an `f32` offset within it, for the instances and the camera; the shader takes
+    /// the cell difference in integers, so the camera-relative position is exact near the
+    /// camera.
     CellLocal {
         /// Side of a cell, metres: a power of two, so its product with the cell difference is
         /// exact.
@@ -227,9 +228,9 @@ pub struct Row {
     pub offset_m: f64,
     /// The spacing of `f32` positions at the camera there ([`ulp`] of its largest coordinate).
     pub ulp_m: f32,
-    /// Today's record.
+    /// The record before issue #93.
     pub world_f32: Error,
-    /// Cells of 1 km with an `f32` offset inside.
+    /// Cells of 1 km with an `f32` offset inside (the record since).
     pub cells_1km: Error,
 }
 
@@ -237,7 +238,7 @@ pub struct Row {
 pub const OFFSETS_M: [f64; 5] = [0.0, 1e4, 1e5, 1e6, 1e7];
 
 /// The city's south view at 1440p moved by each of [`OFFSETS_M`] along every axis, for objects
-/// 2 m to 1 km in front of the camera: today's record against cells of 1 km.
+/// 2 m to 1 km in front of the camera: the record before issue #93 against cells of 1 km.
 pub fn table() -> Vec<Row> {
     let view = View::city_south_1440p();
     let samples = Sample::in_front(&view, &[2.0, 10.0, 100.0, 1000.0]);

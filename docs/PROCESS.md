@@ -164,9 +164,10 @@ city's south view and the ballad's frame 240 with the scene moved 10⁴, 10⁵, 
 the world's origin along every axis (`--origin`, the camera and everything anchored to the
 scene going with it), and compares each with the same view at the origin: pixels, ꟻLIP, the
 difference and the error map beside each capture. A renderer without a precision limit would
-give 0 px at every offset; today's world-space `f32` instance table does not (the numbers in
-`docs/research/large-worlds.md` §1). Run it for a change that touches how positions reach the
-GPU, and put its lines in the report. It becomes a 0 px check once D-004's amendment is built.
+give 0 px at every offset; the world-space `f32` instance table before #93 did not (the numbers
+in `docs/research/large-worlds.md` §1), and with the cells record (2026-09-26) it is a 0 px
+check, up to a few pixels from the split's 0.1 mm rounding. Run it for a change that touches
+how positions reach the GPU, and put its lines in the report.
 
 **Debugging aids:**
 - `FORGE_TRACE_FRAMES=<file>` with `FORGE_HASH_IMAGES=1` writes per-frame hashes of the

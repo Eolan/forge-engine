@@ -16,8 +16,9 @@ use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{ComputePipelineDesc, Device, Result, ShaderCompiler, ShaderStage, vk};
-use glam::Vec3;
+use glam::IVec3;
 
+use crate::cells::{CELL_SIZE, CellPos};
 use crate::meshlet::{MeshId, MeshletScene};
 
 /// The city's layout and the number of instances to place.
@@ -37,9 +38,10 @@ pub struct CityLayout {
     pub plaza_every: u32,
     /// Instances to place in all; what the city does not take goes to the hills as rocks.
     pub total: u32,
-    /// Where the city's centre sits in the world, metres (issue #93): the layout is made around
-    /// its own centre and the instances are written this far from the world's origin.
-    pub origin: Vec3,
+    /// Where the city's centre sits in the world (issue #93): the layout is made around its
+    /// own centre and the instances are written from this origin, each in its own cell (it is
+    /// the scene's origin, [`crate::MeshletSceneBuilder::set_origin`]).
+    pub origin: CellPos,
 }
 
 /// Slots per category, in the order the shader lays them out.
@@ -67,7 +69,7 @@ impl CityLayout {
             lamp_step: 25.0,
             plaza_every: 4,
             total,
-            origin: Vec3::ZERO,
+            origin: CellPos::ORIGIN,
         }
     }
 
@@ -180,10 +182,14 @@ struct GpuPlacement {
     pad: u32,
     building_meshes: [u32; 16],
     rock_meshes: [u32; 8],
-    /// The scene's offset from the world's origin (issue #93).
-    origin: [f32; 3],
-    pad2: f32,
+    /// The scene's origin: its cell and the offset inside it (issue #93).
+    origin_cell: [i32; 3],
+    pad2: i32,
+    origin_local: [f32; 3],
+    pad3: f32,
 }
+
+const _: () = assert!(std::mem::size_of::<GpuPlacement>() == 240);
 
 /// The ground the instances stand on: `samples × samples` heights, `spacing` metres apart,
 /// rows along +z, centred on the origin (the terrain mesh's vertices in cooking order).
@@ -340,19 +346,28 @@ fn spread_bits(v: u32) -> u32 {
     (x | (x << 1)) & 0x5555_5555
 }
 
-/// The instance records of `table` (`record` bytes each, the centre at bytes 64..76) reordered
-/// along a Morton curve of their centres' x and z over the square of half-side `half` around
-/// `origin`, ties kept in table order, so that runs of consecutive records are compact patches.
-fn morton_sorted(table: &[u8], record: usize, half: f32, origin: Vec3) -> Vec<u8> {
+/// The instance records of `table` (`record` bytes each; the cell at bytes 0..12, the centre
+/// at 48..60) reordered along a Morton curve of their centres' x and z over the square of
+/// half-side `half` around `origin`, ties kept in table order, so that runs of consecutive
+/// records are compact patches.
+fn morton_sorted(table: &[u8], record: usize, half: f32, origin: CellPos) -> Vec<u8> {
     let records: Vec<&[u8]> = table.chunks_exact(record).collect();
     let coordinate = |bytes: &[u8]| f32::from_le_bytes(bytes.try_into().expect("4 bytes"));
+    let cell_index = |bytes: &[u8]| i32::from_le_bytes(bytes.try_into().expect("4 bytes"));
     let cell = |v: f32| (((v + half) / (2.0 * half)).clamp(0.0, 1.0) * 65535.0) as u32;
     let mut keys: Vec<(u32, u32)> = records
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let x = coordinate(&r[64..68]) - origin.x;
-            let z = coordinate(&r[72..76]) - origin.z;
+            // The centre relative to the origin: the cells in integers first (issue #93).
+            let cells = IVec3::new(
+                cell_index(&r[0..4]),
+                cell_index(&r[4..8]),
+                cell_index(&r[8..12]),
+            );
+            let d = (cells - origin.cell).as_vec3() * CELL_SIZE;
+            let x = d.x + coordinate(&r[48..52]) - origin.local.x;
+            let z = d.z + coordinate(&r[56..60]) - origin.local.z;
             (spread_bits(cell(x)) | (spread_bits(cell(z)) << 1), i as u32)
         })
         .collect();
@@ -365,8 +380,8 @@ fn morton_sorted(table: &[u8], record: usize, half: f32, origin: Vec3) -> Vec<u8
 /// Fills `scene`'s slots `first..first + layout.total` (reserved with the counts of
 /// [`mesh_counts`]) on the GPU and reads them back for the report (its checksum is the table
 /// as placed), then writes them again in Morton order of their centres (issue #38). The city
-/// stands `layout.origin` from the world's origin (issue #93): the positions carry the offset,
-/// the Morton order is taken without it. Initialisation only.
+/// stands at `layout.origin` (issue #93): each instance is written in its own cell from there,
+/// and the Morton order is taken relative to it. Initialisation only.
 pub fn place(
     device: &Arc<Device>,
     shaders: &ShaderCompiler,
@@ -432,8 +447,10 @@ pub fn place(
         pad: 0,
         building_meshes,
         rock_meshes,
-        origin: layout.origin.to_array(),
-        pad2: 0.0,
+        origin_cell: layout.origin.cell.to_array(),
+        pad2: 0,
+        origin_local: layout.origin.local.to_array(),
+        pad3: 0.0,
     };
     let params = device.create_buffer_with_data(
         &[params],
@@ -450,7 +467,7 @@ pub fn place(
     let ms = start.elapsed().as_secs_f64() * 1e3;
 
     // The table as the GPU wrote it: its checksum, and its meshes against the mirror.
-    const INSTANCE_BYTES: u64 = 96;
+    const INSTANCE_BYTES: u64 = 80;
     let bytes = device.read_back(
         scene.instance_buffer(),
         u64::from(first) * INSTANCE_BYTES,
@@ -459,8 +476,8 @@ pub fn place(
     let checksum = fnv1a64(&bytes);
     let mut seen = std::collections::HashMap::<u32, u32>::new();
     for instance in bytes.as_chunks::<{ INSTANCE_BYTES as usize }>().0 {
-        // `mesh` follows the model (64 bytes), the centre (12) and the radius (4).
-        let mesh = u32::from_le_bytes(instance[80..84].try_into().expect("4 bytes"));
+        // `mesh` follows the cell (12 bytes).
+        let mesh = u32::from_le_bytes(instance[12..16].try_into().expect("4 bytes"));
         *seen.entry(mesh).or_default() += 1;
     }
     let mut expected = std::collections::HashMap::<u32, u32>::new();
@@ -540,31 +557,48 @@ mod tests {
 
     #[test]
     fn the_morton_order_keeps_every_record_and_packs_neighbours_together() {
-        // 256 records on a 16 × 16 grid of 10 m, in a scrambled order, their index as the id.
-        const RECORD: usize = 96;
+        // 256 records on a 16 × 16 grid of 10 m around an origin two cells out, in a scrambled
+        // order, their index as the id; the records west of the origin sit in the cell before.
+        const RECORD: usize = 80;
+        let origin = CellPos {
+            cell: IVec3::new(2, 0, 2),
+            local: glam::Vec3::new(100.0, 0.0, 100.0),
+        };
         let mut table = Vec::new();
         for k in 0..256_u32 {
             let i = (k * 97) % 256;
             let (x, z) = ((i % 16) as f32 * 10.0 - 75.0, (i / 16) as f32 * 10.0 - 75.0);
+            let at = origin.offset(glam::Vec3::new(x, 0.0, z));
             let mut record = [0_u8; RECORD];
-            record[64..68].copy_from_slice(&x.to_le_bytes());
-            record[72..76].copy_from_slice(&z.to_le_bytes());
-            record[84..88].copy_from_slice(&i.to_le_bytes());
+            for (axis, bytes) in [0..4, 4..8, 8..12].into_iter().enumerate() {
+                record[bytes].copy_from_slice(&at.cell[axis].to_le_bytes());
+            }
+            record[48..52].copy_from_slice(&at.local.x.to_le_bytes());
+            record[56..60].copy_from_slice(&at.local.z.to_le_bytes());
+            record[64..68].copy_from_slice(&i.to_le_bytes());
             table.extend_from_slice(&record);
         }
-        let sorted = morton_sorted(&table, RECORD, 80.0, Vec3::ZERO);
-        let field = |r: &[u8], at: usize| f32::from_le_bytes(r[at..at + 4].try_into().unwrap());
+        let sorted = morton_sorted(&table, RECORD, 80.0, origin);
         let records = sorted.as_chunks::<RECORD>().0;
+        let position = |r: &[u8]| {
+            let cell = |at: usize| i32::from_le_bytes(r[at..at + 4].try_into().unwrap());
+            let local = |at: usize| f32::from_le_bytes(r[at..at + 4].try_into().unwrap());
+            let p = CellPos {
+                cell: IVec3::new(cell(0), cell(4), cell(8)),
+                local: glam::Vec3::new(local(48), 0.0, local(56)),
+            };
+            p.relative_to(origin)
+        };
         let mut ids: Vec<u32> = records
             .iter()
-            .map(|r| u32::from_le_bytes(r[84..88].try_into().unwrap()))
+            .map(|r| u32::from_le_bytes(r[64..68].try_into().unwrap()))
             .collect();
         ids.sort_unstable();
         assert_eq!(ids, (0..256).collect::<Vec<_>>());
         // Along the curve, every run of 16 records is a 4 × 4 block of the grid.
         for run in records.chunks(16) {
-            for at in [64, 72] {
-                let values = run.iter().map(|r| field(r, at));
+            for axis in [0, 2] {
+                let values = run.iter().map(|r| position(r)[axis]);
                 let (lo, hi) = values.fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(v), h.max(v)));
                 assert_eq!(hi - lo, 30.0);
             }

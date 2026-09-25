@@ -68,7 +68,8 @@ const _: () = assert!(std::mem::size_of::<GpuSky>() == 176);
 pub struct SkyParams {
     /// The drawing camera's view-projection (jitter included), world metres.
     pub view_proj: Mat4,
-    /// The camera, world metres.
+    /// The camera in the frame of `view_proj`: zero when that is camera-relative (D-004,
+    /// issue #93), which it is for every demo; the sky needs only directions and distances.
     pub camera: Vec3,
     /// Towards the sun, world axes.
     pub sun_dir: Vec3,

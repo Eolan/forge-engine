@@ -357,8 +357,6 @@ impl Gallery {
             camera.yaw = v[3].to_radians();
             camera.pitch = v[4].to_radians();
         }
-        // The scene stands `--origin` from the world's origin (issue #93), the camera with it.
-        camera.position += Vec3::splat(args.origin);
         // The probes trace the scene's TLAS (issue #53).
         let probes_on = !args.no_probes;
         anyhow::ensure!(
@@ -460,16 +458,17 @@ impl Gallery {
         ));
     }
 
-    /// The scene's offset from the world's origin (`--origin`, issue #93).
-    fn origin(&self) -> Vec3 {
-        Vec3::splat(self.args.origin)
+    /// Where the camera stands in the world: the scene's origin (`--origin`, issue #93) and its
+    /// position in the scene.
+    fn camera_position(&self) -> forge_render::CellPos {
+        self.scene.origin().offset(self.camera.position)
     }
 
     fn cull_camera(&self, aspect: f32) -> CullCamera {
         CullCamera::new(
-            self.camera.view(),
+            self.camera.view_rotation(),
             self.camera.projection(aspect),
-            self.camera.position,
+            self.camera_position(),
             self.camera.near,
         )
     }
@@ -538,8 +537,7 @@ impl Demo for Gallery {
             const SPEED: f32 = 300.0;
             self.fly_time += if self.args.fixed_step { 1.0 / 60.0 } else { dt };
             let angle = self.fly_time * SPEED / RADIUS;
-            self.camera.position =
-                Vec3::new(angle.sin() * RADIUS, 140.0, angle.cos() * RADIUS) + self.origin();
+            self.camera.position = Vec3::new(angle.sin() * RADIUS, 140.0, angle.cos() * RADIUS);
             self.camera.yaw = angle - std::f32::consts::FRAC_PI_2;
             self.camera.pitch = -0.15;
         } else if self.args.orbit {
@@ -550,8 +548,7 @@ impl Demo for Gallery {
             } else {
                 (1500.0, 160.0, -0.12)
             };
-            self.camera.position =
-                Vec3::new(angle.sin() * radius, height, angle.cos() * radius) + self.origin();
+            self.camera.position = Vec3::new(angle.sin() * radius, height, angle.cos() * radius);
             self.camera.yaw = angle;
             self.camera.pitch = pitch;
         } else {
@@ -662,14 +659,17 @@ impl Demo for Gallery {
             &mut frame.graph,
             self.camera.projection(ctx.aspect()),
             camera.view_proj,
+            camera.position,
             exposure,
         );
+        // The camera in the scene frame, where the probes and the rays live (issue #93).
+        let camera_in_scene = camera.position.relative_to(self.scene.origin());
         let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
             DrawParams {
                 scene: &self.scene,
-                view_proj: taa_frame.jittered_projection * self.camera.view(),
+                view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
                 cull: camera,
                 lod_threshold_px: self.args.lod_error,
                 draw_jitter: taa_frame.jitter
@@ -687,11 +687,10 @@ impl Demo for Gallery {
         // The ground of the city is the surface of an Earth-sized planet: the camera in its
         // frame, in km (`--origin` moves the scene, not the planet). The sky fills what the
         // resolve leaves and hazes the rest (issue #43).
-        let in_scene = self.camera.position - self.origin();
         let view_km = Vec3::new(
-            in_scene.x * 1e-3,
-            self.atmosphere.params.bottom_radius + in_scene.y.max(1.0) * 1e-3,
-            in_scene.z * 1e-3,
+            self.camera.position.x * 1e-3,
+            self.atmosphere.params.bottom_radius + self.camera.position.y.max(1.0) * 1e-3,
+            self.camera.position.z * 1e-3,
         );
         let air =
             self.atmosphere
@@ -703,8 +702,8 @@ impl Demo for Gallery {
             frame.slot,
             &air,
             SkyParams {
-                view_proj: taa_frame.jittered_projection * self.camera.view(),
-                camera: self.camera.position,
+                view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                camera: Vec3::ZERO,
                 sun_dir: self.renderer.sun_dir,
                 sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
                 luminance_scale: self.renderer.sun_illuminance * exposure,
@@ -727,7 +726,7 @@ impl Demo for Gallery {
                     frame.slot,
                     self.renderer.frame_address(frame.slot),
                     sky.light,
-                    self.camera.position,
+                    camera_in_scene,
                     self.taa.frame_index() % u64::from(self.taa.jitter_phases),
                 ))
             }
@@ -1304,9 +1303,11 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
     let mut layout = CityLayout::city(args.instances);
-    // The city stands `--origin` from the world's origin (issue #93); it is laid out around its
-    // own centre and moved as a whole.
-    layout.origin = Vec3::splat(args.origin);
+    // The city stands `--origin` from the world's origin (issue #93): the scene's origin, an
+    // integer cell and an offset, from which each instance gets its own cell; the layout stays
+    // around its own centre.
+    layout.origin = scene_origin(args);
+    builder.set_origin(layout.origin);
     // The heightfield the terrain mesh was sampled from.
     let heights_start = std::time::Instant::now();
     let heights = parallel_heights(&terrain);
@@ -1336,7 +1337,7 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     materials.apply(&mut builder, &props, &ids);
     let id = |name: &str| ids[props.iter().position(|p| p.name == name).expect("prop")];
     let terrain_id = id("terrain");
-    builder.add_instance(terrain_id, Mat4::from_translation(layout.origin));
+    builder.add_instance(terrain_id, Mat4::IDENTITY);
     let city = CityMeshes {
         buildings: props
             .iter()
@@ -1441,6 +1442,7 @@ fn build_gallery(
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
     CityMaterials::new(&ctx.device)?.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
+    builder.set_origin(scene_origin(args));
     for (i, (spec, mesh)) in props.iter().zip(&meshes).enumerate() {
         let id = ids[i];
         let (column, row) = (i as u32 % COLUMNS, i as u32 / COLUMNS);
@@ -1448,7 +1450,7 @@ fn build_gallery(
             (column as f32 - (COLUMNS - 1) as f32 * 0.5) * SPACING,
             0.0,
             (row as f32 - 1.5) * SPACING,
-        ) + Vec3::splat(args.origin);
+        );
         builder.add_instance(id, Mat4::from_translation(position));
         placed.push(Placed {
             name: spec.name.clone(),
@@ -1490,6 +1492,12 @@ fn main() -> Result<()> {
         let finish: Finish<Gallery> = Box::new(move |ctx| Gallery::new(ctx, args, cooked));
         Ok(finish)
     })
+}
+
+/// The scene's origin (`--origin`, issue #93): the same distance along every axis, split into
+/// an integer cell and an offset from an `f64`, so the split is exact.
+fn scene_origin(args: &Args) -> forge_render::CellPos {
+    forge_render::CellPos::from_f64(glam::DVec3::splat(f64::from(args.origin)))
 }
 
 /// [`Terrain::heights`] on the job system, 64 rows to a job.

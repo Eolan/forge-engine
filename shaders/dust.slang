@@ -9,13 +9,12 @@ import noise;
 // Must match GpuDust in dust.rs.
 struct Dust
 {
-    float4x4 inv_view_proj; // clip → world (the drawing camera, jitter included)
-    float4 camera;          // xyz: the camera, world metres
+    float4x4 inv_view_proj; // clip → camera-relative (the drawing camera, jitter included; D-004)
+    float4 camera;          // xyz: the camera in the scene frame (the TLAS's and the noise's; issue #93)
     float4 sun;             // xyz: towards the sun; w: the sun's pre-exposed illuminance
     float4 sun_color;       // rgb: the sunlight's colour
     float4 params;          // x: extinction (1/m), y: the volume's far end (m), z: anisotropy g, w: noise scale (1/m)
     float4 fill;            // rgb: light scattered from the surroundings, pre-exposed units per unit extinction
-    float4 origin;          // xyz: the scene's offset from the world's origin (issue #93); the noise is taken in the scene
     uint64_t tlas;          // 0: no shafts
     uint light;             // storage index of the lit froxels: rgb scattered light, a extinction
     uint light_sampled;
@@ -49,11 +48,12 @@ float slice_distance(Dust* d, float k)
     return d[0].params.y * t * t;
 }
 
-// The world-space direction through the screen position `uv` (0..1, y down).
+// The direction through the screen position `uv` (0..1, y down): the inverse is camera-relative,
+// so the point it gives is the direction from the camera.
 float3 view_direction(Dust* d, float2 uv)
 {
     float4 far = mul(d[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0));
-    return normalize(far.xyz / far.w - d[0].camera.xyz);
+    return normalize(far.xyz / far.w);
 }
 
 // Smooth value noise over integer lattice cells, in [0, 1).
@@ -97,11 +97,10 @@ void light_main(uint3 id : SV_DispatchThreadID)
     float2 uv = (float2(id.xy) + 0.5) / float2(FROXELS_X, FROXELS_Y);
     float3 direction = view_direction(d, uv);
     float t = lerp(slice_distance(d, float(id.z)), slice_distance(d, float(id.z) + 1.0), jitter.x);
+    // The point in the scene frame (issue #93): the frame of the TLAS and of the noise, which
+    // then keeps its place in the scene wherever the scene stands in the world.
     float3 world = d[0].camera.xyz + direction * t;
-    // The noise in the scene's frame: it moves with the scene, not with the world's origin
-    // (issue #93). Far from the origin `world` itself is only as fine as an f32 there.
-    float3 scene = world - d[0].origin.xyz;
-    float shape = 0.6 * value_noise(scene * d[0].params.w) + 0.4 * value_noise(scene * d[0].params.w * 3.1 + 17.0);
+    float shape = 0.6 * value_noise(world * d[0].params.w) + 0.4 * value_noise(world * d[0].params.w * 3.1 + 17.0);
     float extinction = d[0].params.x * saturate(shape * 1.6 - 0.25);
     float3 sun = d[0].sun.xyz;
     float visible = 1.0;
@@ -184,8 +183,8 @@ void apply_main(uint3 id : SV_DispatchThreadID)
     float distance = d[0].params.y;
     if (depth > 0.0)
     {
-        float4 world = mul(d[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
-        distance = length(world.xyz / world.w - d[0].camera.xyz);
+        float4 relative = mul(d[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
+        distance = length(relative.xyz / relative.w);
     }
     float4 dust = dust_at(d, uv, distance);
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(d[0].color)];

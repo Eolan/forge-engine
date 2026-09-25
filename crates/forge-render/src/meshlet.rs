@@ -16,6 +16,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
 
+use crate::cells::CellPos;
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::probes::ProbeLight;
 use crate::raytrace::{self, SceneRays};
@@ -282,19 +283,30 @@ impl GpuMesh {
 const MAX_SHORTCUT_ROOTS: usize = 4;
 const _: () = assert!(std::mem::size_of::<GpuMesh>() == 400);
 
-/// Mirrors `Instance` in `meshlet.slang` (96 bytes).
+/// Mirrors `Instance` in `meshlet.slang` (80 bytes): an integer cell and an `f32` offset for
+/// the position, a quaternion and a uniform scale for the transform (issue #93).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuInstance {
-    model: [f32; 16],
+    /// The cell its position lies in ([`CellPos`], issue #93).
+    cell: [i32; 3],
+    mesh: u32,
+    /// Metres from the cell's corner.
+    local: [f32; 3],
+    /// Uniform scale.
+    scale: f32,
+    /// Unit quaternion, xyz w.
+    rotation: [f32; 4],
+    /// The bounding sphere's centre, from the same cell's corner.
     center: [f32; 3],
     radius: f32,
-    mesh: u32,
     id: u32,
     /// Its row in the material table.
     material: u32,
-    pad: u32,
+    pad: [u32; 2],
 }
+
+const _: () = assert!(std::mem::size_of::<GpuInstance>() == 80);
 
 /// Mirrors `Frame` in `meshlet.slang`.
 #[repr(C)]
@@ -306,7 +318,12 @@ struct GpuFrame {
     /// The previous frame's culling view (with `FLAG_PREV_PYRAMID`).
     prev_cull_view: [f32; 16],
     planes: [[f32; 4]; 6],
-    camera_pos: [f32; 3],
+    /// The culling camera's cell (xyz; issue #93).
+    camera_cell: [i32; 4],
+    /// The camera in the scene frame (xyz): where the rays and the probes live.
+    camera_in_scene: [f32; 4],
+    /// The culling camera's offset in its cell, metres.
+    camera_local: [f32; 3],
     instance_count: u32,
     /// Slots in `work`.
     work_capacity: u32,
@@ -655,6 +672,9 @@ pub struct MeshletSceneBuilder {
     root_pages: Vec<u32>,
     meshes: Vec<GpuMesh>,
     instances: Vec<GpuInstance>,
+    /// The scene's origin: instance transforms are given relative to it, and the rays and the
+    /// probes work in its frame (issue #93).
+    origin: CellPos,
     total_triangles: u64,
     /// Per mesh: its finest-level clusters (LOD level 0).
     mesh_finest: Vec<u32>,
@@ -813,23 +833,37 @@ impl MeshletSceneBuilder {
         self.add_instance_with_material(mesh, model, material);
     }
 
-    /// Adds an instance of `mesh` with a uniform-scale transform, in `material`.
+    /// Sets where the scene stands in the world (issue #93): every instance transform is given
+    /// relative to it, each instance is stored in its own cell from there, and the
+    /// acceleration structure, the probes and the dust work in its frame. The world's origin
+    /// unless set.
+    pub fn set_origin(&mut self, origin: CellPos) {
+        self.origin = origin;
+    }
+
+    /// Adds an instance of `mesh` with a uniform-scale transform relative to the scene's
+    /// origin ([`Self::set_origin`]), in `material`.
     pub fn add_instance_with_material(&mut self, mesh: MeshId, model: Mat4, material: MaterialId) {
         let info = self.meshes[mesh.0 as usize];
-        let scale = model.x_axis.truncate().length();
-        let center = model.transform_point3(Vec3::from(info.center));
+        let (scale, rotation, translation) = model.to_scale_rotation_translation();
+        let scale = scale.x;
+        let position = self.origin.offset(translation);
+        let center = rotation * (Vec3::from(info.center) * scale) + position.local;
         self.total_triangles += u64::from(info.triangle_count);
         self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]);
         self.work_bound += u64::from(info.work_bound());
         self.instance_meshlets += u64::from(info.meshlet_count);
         self.instances.push(GpuInstance {
-            model: model.to_cols_array(),
+            cell: position.cell.to_array(),
+            mesh: mesh.0,
+            local: position.local.to_array(),
+            scale,
+            rotation: rotation.to_array(),
             center: center.to_array(),
             radius: info.radius * scale,
-            mesh: mesh.0,
             id: self.instances.len() as u32,
             material: material.0,
-            pad: 0,
+            pad: [0; 2],
         });
     }
 
@@ -853,13 +887,16 @@ impl MeshletSceneBuilder {
             // Placeholders: the GPU pass writes every one of them before the first frame.
             self.instances.extend(std::iter::repeat_n(
                 GpuInstance {
-                    model: Mat4::IDENTITY.to_cols_array(),
+                    cell: [0; 3],
+                    mesh: mesh.0,
+                    local: [0.0; 3],
+                    scale: 1.0,
+                    rotation: [0.0, 0.0, 0.0, 1.0],
                     center: [0.0; 3],
                     radius: 0.0,
-                    mesh: mesh.0,
                     id: 0,
                     material: info.material,
-                    pad: 0,
+                    pad: [0; 2],
                 },
                 count as usize,
             ));
@@ -1085,8 +1122,9 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
+            // `CellBounds` in the shader: 32 bytes a cell (issue #93).
             cells: device.create_buffer(BufferDesc {
-                size: 16 * cell_count.max(1),
+                size: 32 * cell_count.max(1),
                 usage,
                 location: MemoryLocation::GpuOnly,
                 category: MemoryCategory::Geometry,
@@ -1118,6 +1156,7 @@ impl MeshletSceneBuilder {
             material_count: self.materials.len() as u32,
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
+            origin: self.origin,
             work_bound: self.work_bound,
             instance_meshlets: self.instance_meshlets,
             max_meshlets,
@@ -1143,6 +1182,9 @@ pub struct MeshletScene {
     pub page_count: u32,
     meshes: Buffer,
     instances: Buffer,
+    /// The scene's origin: the frame of the acceleration structure, the probes and the dust
+    /// (issue #93).
+    origin: CellPos,
     /// Per frame slot: the cluster cull's indirect grid (x, y, 1, work item count), the
     /// instance cull's ticket counter, the work items and roots it listed; then with occlusion
     /// pass 2's cluster cull grid over both segments of the lists, segment 2's work items and
@@ -1200,7 +1242,13 @@ impl MeshletScene {
     /// or ray queries.
     pub fn build_tlas(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
         if let Some(rays) = &mut self.rays {
-            rays.build_tlas(device, shaders, &self.instances, self.instance_count)?;
+            rays.build_tlas(
+                device,
+                shaders,
+                &self.instances,
+                self.instance_count,
+                self.origin,
+            )?;
         }
         Ok(())
     }
@@ -1240,6 +1288,13 @@ impl MeshletScene {
         Ok(())
     }
 
+    /// Where the scene stands ([`MeshletSceneBuilder::set_origin`]): the frame of its
+    /// acceleration structure, of the probes and of the dust. A camera's position in that
+    /// frame is `camera.relative_to(scene.origin())`.
+    pub fn origin(&self) -> CellPos {
+        self.origin
+    }
+
     /// The acceleration structures, when the scene has them.
     pub fn rays(&self) -> Option<&SceneRays> {
         self.rays.as_ref()
@@ -1255,7 +1310,7 @@ impl MeshletScene {
         self.instance_meshlets
     }
 
-    /// The instance table (`Instance` in `meshlet.slang`, 96 bytes each).
+    /// The instance table (`Instance` in `meshlet.slang`, 80 bytes each).
     pub(crate) fn instance_buffer(&self) -> &Buffer {
         &self.instances
     }
@@ -1271,15 +1326,17 @@ impl MeshletScene {
     }
 }
 
-/// The culling camera, frozen as a unit by the freeze flag.
+/// The culling camera, frozen as a unit by the freeze flag. Camera-relative (D-004, issue
+/// #93): `view` and `view_proj` take positions relative to `position`, which the shaders
+/// compute from the instances' cells; no world-sized number meets these matrices.
 #[derive(Clone, Copy, Debug)]
 pub struct CullCamera {
-    /// World → view.
+    /// Camera-relative → view: the camera's rotation alone (`FlyCamera::view_rotation`).
     pub view: Mat4,
-    /// World → clip.
+    /// Camera-relative → clip.
     pub view_proj: Mat4,
-    /// Camera position.
-    pub position: Vec3,
+    /// Where the camera stands.
+    pub position: CellPos,
     /// Projection scale x.
     pub p00: f32,
     /// Projection scale y.
@@ -1289,8 +1346,8 @@ pub struct CullCamera {
 }
 
 impl CullCamera {
-    /// From a view matrix, a projection matrix and the camera position.
-    pub fn new(view: Mat4, proj: Mat4, position: Vec3, near: f32) -> Self {
+    /// From the camera's rotation-only view matrix, a projection matrix and its position.
+    pub fn new(view: Mat4, proj: Mat4, position: CellPos, near: f32) -> Self {
         Self {
             view,
             view_proj: proj * view,
@@ -1464,7 +1521,10 @@ fn create_pyramid(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphIma
 /// first pass and the pyramid built from it.
 #[derive(Clone, Copy, Debug)]
 struct PrevCull {
+    /// Camera-relative to that frame's camera.
     view: Mat4,
+    /// Where that camera stood: this frame's positions are relative to another point.
+    camera: CellPos,
     p00: f32,
     p11: f32,
     jitter: Vec2,
@@ -1713,7 +1773,7 @@ pub struct MeshletRenderer {
 pub struct DrawParams<'a> {
     /// The scene tables.
     pub scene: &'a MeshletScene,
-    /// The drawing camera.
+    /// The drawing camera: camera-relative → clip (D-004), the camera at `cull.position`.
     pub view_proj: Mat4,
     /// The culling camera (equal to the drawing one unless frozen).
     pub cull: CullCamera,
@@ -2417,18 +2477,29 @@ impl MeshletRenderer {
         }
         let prev = prev.unwrap_or(PrevCull {
             view: Mat4::IDENTITY,
+            camera: params.cull.position,
             p00: 1.0,
             p11: 1.0,
             jitter: Vec2::ZERO,
             pyramid,
         });
+        // A point relative to this camera sits `camera − previous camera` further from the
+        // previous one (issue #93): a small step, exact in the cells' arithmetic.
+        let step = params.cull.position.relative_to(prev.camera);
         GpuFrame {
             view_proj: params.view_proj.to_cols_array(),
             cull_view_proj: params.cull.view_proj.to_cols_array(),
             cull_view: params.cull.view.to_cols_array(),
-            prev_cull_view: prev.view.to_cols_array(),
+            prev_cull_view: (prev.view * Mat4::from_translation(step)).to_cols_array(),
             planes: frustum_planes(params.cull.view_proj),
-            camera_pos: params.cull.position.to_array(),
+            camera_cell: params.cull.position.cell.extend(0).to_array(),
+            camera_in_scene: params
+                .cull
+                .position
+                .relative_to(scene.origin)
+                .extend(0.0)
+                .to_array(),
+            camera_local: params.cull.position.local.to_array(),
             instance_count: scene.instance_count,
             work_capacity: work.capacity,
             flags: flags.0,
@@ -2804,6 +2875,7 @@ impl MeshletRenderer {
             (false, _) => None,
             (true, true) => Some(PrevCull {
                 view: params.cull.view,
+                camera: params.cull.position,
                 p00: params.cull.p00,
                 p11: params.cull.p11,
                 jitter: params.draw_jitter,

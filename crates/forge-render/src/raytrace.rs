@@ -19,6 +19,7 @@ use forge_gpu::{
     MemoryCategory, MemoryLocation, Result, ShaderCompiler, ShaderStage, vk,
 };
 
+use crate::cells::CellPos;
 use crate::streaming::PageStore;
 
 /// Most triangles of a mesh's bottom-level structure (the terrain may take more, see
@@ -116,6 +117,9 @@ struct TlasPush {
     records: u64,
     count: u32,
     pad: u32,
+    /// The scene frame's origin (issue #93): the structure is built in that frame.
+    origin_cell: [i32; 4],
+    origin_local: [f32; 4],
 }
 
 /// Mirrors `RtMesh` in `meshlet.slang`: where a mesh's cut starts in the hit data.
@@ -251,13 +255,16 @@ impl SceneRays {
     }
 
     /// Builds the top-level structure over the `count` instances of `instances` (the
-    /// scene's table, written): their records by a compute pass, then the build.
+    /// scene's table, written): their records by a compute pass, then the build. The
+    /// structure lives in the scene frame, `origin` at its zero (issue #93): rays start from
+    /// `camera-relative + Frame::camera_in_scene`.
     pub(crate) fn build_tlas(
         &mut self,
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
         instances: &Buffer,
         count: u32,
+        origin: CellPos,
     ) -> Result<()> {
         let start = std::time::Instant::now();
         let module = device.create_shader_module(
@@ -285,6 +292,8 @@ impl SceneRays {
             records: records.address(),
             count,
             pad: 0,
+            origin_cell: origin.cell.extend(0).to_array(),
+            origin_local: origin.local.extend(0.0).to_array(),
         };
         device.execute_compute_once(|commands| {
             commands.bind_pipeline(&pipeline);

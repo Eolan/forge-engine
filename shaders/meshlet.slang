@@ -122,15 +122,37 @@ public static const uint MATERIAL_CLASS_LAYERED = 2;
 public static const uint MATERIAL_CLASSES = 3;
 static const uint TEXTURE_NONE = 0xFFFFFFFFu;
 
+// An instance's position is an integer cell of CELL_SIZE metres and an offset inside it
+// (issue #93, D-004's amendment; crates/forge-render/src/cells.rs): its camera-relative position
+// is the cell difference to the camera's, taken in integers, plus the difference of the offsets
+// (`instance_relative`), exact near the camera wherever the scene stands in the world. The
+// transform is a unit quaternion and a uniform scale (`instance_frame`).
 public struct Instance
 {
-    public float4x4 model;
-    public float3 center; // world-space bounding sphere of the instance
-    public float radius;
+    public int3 cell;
     public uint mesh;
+    public float3 local;    // metres from the cell's corner
+    public float scale;
+    public float4 rotation; // unit quaternion, xyz w
+    public float3 center;   // the bounding sphere's centre, from the same cell's corner
+    public float radius;
     public uint id;
-    public uint material; // its row in `Frame::materials`
-    public uint pad;
+    public uint material;   // its row in `Frame::materials`
+    public uint2 pad;
+};
+
+// Side of a cell, metres (forge_render::cells::CELL_SIZE): a power of two, so the product with
+// a cell difference is exact.
+public static const float CELL_SIZE = 1024.0;
+
+// With FLAG_INSTANCE_CELLS: the bounding sphere of a cell of 64 instances (issue #38), its
+// centre from the corner of the cell (`CELL_SIZE`) of the first of the 64 (issue #93).
+public struct CellBounds
+{
+    public int3 cell;
+    public float radius;
+    public float3 center;
+    public float pad;
 };
 
 public static const uint FLAG_FREEZE_CULLING = 1;
@@ -229,14 +251,19 @@ public struct RtScene
     public RtMesh* meshes;
 };
 
+// Every matrix is camera-relative (D-004, issue #93): the camera stands at the origin of the
+// space `view_proj` takes, and positions get there through `instance_relative`. Rays and the
+// probes live in the scene frame, `camera_in_scene` from the camera (`to_scene`).
 public struct Frame
 {
     public float4x4 view_proj;      // for drawing
     public float4x4 cull_view_proj; // for culling (frozen when FLAG_FREEZE_CULLING)
     public float4x4 cull_view;      // view matrix used for culling
-    public float4x4 prev_cull_view; // the previous frame's (with FLAG_PREV_PYRAMID)
+    public float4x4 prev_cull_view; // the previous frame's, from this frame's camera-relative space (with FLAG_PREV_PYRAMID)
     public float4 planes[6];        // frustum planes of `cull_view_proj`, inward normals
-    public float3 camera_pos;       // camera used for culling
+    public int4 camera_cell;        // the culling camera's cell (xyz)
+    public float4 camera_in_scene;  // xyz: the camera in the scene frame, the TLAS's and the probes'
+    public float3 camera_local;     // the culling camera's offset in its cell, metres
     public uint instance_count;
     public uint work_capacity;      // slots in `work`, and in `roots`
     public uint flags;
@@ -284,7 +311,7 @@ public struct Frame
     public uint64_t tlas;           // the scene's top-level acceleration structure (0: none; issue #45)
     public RtScene* rt_scene;       // what a ray's hit reads to shade its triangle (null: none; issue #50)
     public uint* deferred;          // with occlusion: instance cull 2's grid (x, y, 1, count), then the instances instance cull 1 deferred and the cells cell cull 2 opened (issue #38; DEFERRED_LIST)
-    public float4* cells;           // with FLAG_INSTANCE_CELLS: per cell of 64 instances in table order, their bounding sphere (xyz centre, w radius; issue #38)
+    public CellBounds* cells;       // with FLAG_INSTANCE_CELLS: per cell of 64 instances in table order, their bounding sphere (issue #38)
     public uint* cell_list;         // with FLAG_INSTANCE_CELLS: instance cull 1's grid (x, y, 1, listed cells), cell cull 2's grid over the deferred cells (4), the cell culls' tickets (8, 9), then from CELL_LIST the listed cells and after them the deferred ones
     public uint2* rejects;          // with occlusion: (instance, meshlet | CULLED_BIT) per cluster pass 1 selected in view but the previous pyramid hid, in cull order: pass 2's to test (issue #92)
     public uint rejects_capacity;   // slots in `rejects`
@@ -368,6 +395,81 @@ float3 decode_normal(uint e)
     n.x += n.x >= 0.0 ? -t : t;
     n.y += n.y >= 0.0 ? -t : t;
     return normalize(n);
+}
+
+// ------------------------------------------------- positions in cells (issue #93) ---
+
+// The rotation of a unit quaternion (xyz w) as a matrix, for `mul(m, v)`.
+float3x3 quat_matrix(float4 q)
+{
+    float x = q.x, y = q.y, z = q.z, w = q.w;
+    return float3x3(
+        float3(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)),
+        float3(2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)),
+        float3(2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)));
+}
+
+// The Hamilton product a ⊗ b: the rotation b, then a.
+float4 quat_mul(float4 a, float4 b)
+{
+    return float4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+
+// The instance's rotation and scale: object-space directions and offsets to camera-relative.
+float3x3 instance_frame(Instance inst)
+{
+    return quat_matrix(inst.rotation) * inst.scale;
+}
+
+// A point `cells` cells and `local` metres from the culling camera, in metres: the cell
+// difference in integers (exact), times the cell size (exact), plus the small offsets.
+float3 cells_relative(Frame* f, int3 cell, float3 local)
+{
+    return float3(cell - f[0].camera_cell.xyz) * CELL_SIZE + (local - f[0].camera_local);
+}
+
+// The instance's origin relative to the camera.
+float3 instance_relative(Frame* f, Instance inst)
+{
+    return cells_relative(f, inst.cell, inst.local);
+}
+
+// The instance's bounding sphere's centre relative to the camera.
+float3 instance_center_relative(Frame* f, Instance inst)
+{
+    return cells_relative(f, inst.cell, inst.center);
+}
+
+// A cell's bounding sphere's centre relative to the camera.
+float3 cell_center_relative(Frame* f, CellBounds b)
+{
+    return cells_relative(f, b.cell, b.center);
+}
+
+// An object-space point of the instance, relative to the camera (the old `mul(model, p)`).
+float3 instance_point(Frame* f, Instance inst, float3 p)
+{
+    return mul(instance_frame(inst), p) + instance_relative(f, inst);
+}
+
+// An object-space vector of the instance, turned and scaled (the old `mul(model, float4(v, 0))`).
+float3 instance_vector(Instance inst, float3 v)
+{
+    return mul(instance_frame(inst), v);
+}
+
+// A camera-relative position in the scene frame: where the rays and the probes live.
+float3 to_scene(Frame* f, float3 relative)
+{
+    return relative + f[0].camera_in_scene.xyz;
+}
+
+// The camera's world position as an f32, for the one place that mixed object space with world
+// space before issue #93 (`sun_light`'s highlight) and keeps its look: exact near the origin,
+// as coarse as an f32 far from it.
+float3 legacy_camera_world(Frame* f)
+{
+    return float3(f[0].camera_cell.xyz) * CELL_SIZE + f[0].camera_local;
 }
 
 bool sphere_in_frustum(Frame* f, float3 center, float radius)
@@ -466,7 +568,7 @@ bool visible_last_frame(Frame* f, float3 world_center, float radius)
 // L * p11 / d in NDC, i.e. half that times the viewport height in pixels.
 float lod_error_pixels(Frame* f, float3 center, float radius, float error)
 {
-    float d = max(length(center - f[0].camera_pos) - radius, f[0].znear);
+    float d = max(length(center) - radius, f[0].znear);
     return error * f[0].p11 * 0.5 * f[0].viewport_height / d;
 }
 
@@ -475,7 +577,7 @@ float lod_error_pixels(Frame* f, float3 center, float radius, float error)
 // their `self`, so the decision is consistent and watertight.
 // `streamed` is a compile-time constant of each cluster-cull entry point (`cluster_cull`):
 // the streamed cut's code and registers stay out of a resident scene's cull.
-bool lod_selected(Frame* f, Meshlet m, float4x4 model, float scale, bool streamed)
+bool lod_selected(Frame* f, Meshlet m, Instance inst, bool streamed)
 {
     if ((f[0].flags & FLAG_LOD) == 0)
     {
@@ -483,15 +585,16 @@ bool lod_selected(Frame* f, Meshlet m, float4x4 model, float scale, bool streame
         bool resident = !streamed || f[0].page_table[m.page] != PAGE_NONE;
         return m.lod_level == 0 && resident;
     }
-    float3 self_center = mul(model, float4(m.self_center, 1)).xyz;
+    float scale = inst.scale;
+    float3 self_center = instance_point(f, inst, m.self_center);
     float self_px = lod_error_pixels(f, self_center, m.self_radius * scale, m.self_error * scale);
     if (streamed)
-        return lod_selected_streamed(f, m, model, scale, self_px);
+        return lod_selected_streamed(f, m, inst, self_px);
     if (self_px > f[0].lod_threshold)
         return false;
     if (isinf(m.parent_error))
         return true;
-    float3 parent_center = mul(model, float4(m.parent_center, 1)).xyz;
+    float3 parent_center = instance_point(f, inst, m.parent_center);
     float parent_px = lod_error_pixels(f, parent_center, m.parent_radius * scale, m.parent_error * scale);
     return parent_px > f[0].lod_threshold;
 }
@@ -510,13 +613,14 @@ void want_page(Frame* f, uint page, float px)
 // two pages), so the cut stays one watertight surface through any resident set that holds
 // the roots. On the way it records which pages it wants: a drawn cluster its own page, a
 // too-coarse one its children's.
-bool lod_selected_streamed(Frame* f, Meshlet m, float4x4 model, float scale, float self_px)
+bool lod_selected_streamed(Frame* f, Meshlet m, Instance inst, float self_px)
 {
     if (f[0].page_table[m.page] == PAGE_NONE)
         return false;
     if (!isinf(m.parent_error))
     {
-        float3 parent_center = mul(model, float4(m.parent_center, 1)).xyz;
+        float scale = inst.scale;
+        float3 parent_center = instance_point(f, inst, m.parent_center);
         float parent_px = lod_error_pixels(f, parent_center, m.parent_radius * scale, m.parent_error * scale);
         if (parent_px <= f[0].lod_threshold)
             return false;
@@ -557,7 +661,7 @@ bool group_possible(Frame* f, Mesh* mesh, Instance* inst, uint local_group, floa
     if ((f[0].flags & FLAG_LOD) == 0)
         return l0 == 0;
     float k = f[0].p11 * 0.5 * f[0].viewport_height;
-    float dist = length(inst[0].center - f[0].camera_pos);
+    float dist = length(instance_center_relative(f, inst[0]));
     float t = f[0].lod_threshold;
     // Streaming draws a too-coarse cluster whose children are absent: only the parent bound
     // holds.
@@ -718,12 +822,11 @@ ClusterVerdict cull_rejected(Frame* f, uint entry)
     v.instance = r.x;
     v.meshlet = r.y & MESHLET_INDEX_MASK;
     v.culled_debug = (r.y & CULLED_BIT) != 0; // the normal cone rejected it (FLAG_SHOW_CULLED)
-    Instance* inst = f[0].instances + v.instance;
+    Instance inst = f[0].instances[v.instance];
     Meshlet m = f[0].meshlets[v.meshlet];
     describe_cluster(f, v, m);
-    float scale = length(inst[0].model[0].xyz);
-    float3 center = mul(inst[0].model, float4(m.center, 1)).xyz;
-    float world_radius = m.radius * scale;
+    float3 center = instance_point(f, inst, m.center);
+    float world_radius = m.radius * inst.scale;
     test_this_frame(f, v, center, world_radius, false);
     test_density(f, v, center, world_radius);
     return v;
@@ -786,9 +889,8 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     Mesh* mesh = f[0].meshes + inst[0].mesh;
     bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
     bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
-    bool instance_visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
-    // Uniform scale is assumed for the bounding spheres: take the length of the first column.
-    float scale = length(inst[0].model[0].xyz);
+    bool instance_visible = !frustum || sphere_in_frustum(f, instance_center_relative(f, inst[0]), inst[0].radius);
+    float scale = inst[0].scale;
     // Whole-group rejection from the per-level tables before any cluster is read.
     if (!instance_visible || (!root && !group_possible(f, mesh, inst, local_group, scale, streamed))
         || local_meshlet >= mesh[0].meshlet_count)
@@ -796,19 +898,19 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     v.meshlet = mesh[0].meshlet_offset + local_meshlet;
     Meshlet m = f[0].meshlets[v.meshlet];
     describe_cluster(f, v, m);
-    float3 center = mul(inst[0].model, float4(m.center, 1)).xyz;
+    float3 center = instance_point(f, inst[0], m.center);
     float world_radius = m.radius * scale;
-    bool visible = lod_selected(f, m, inst[0].model, scale, streamed);
+    bool visible = lod_selected(f, m, inst[0], streamed);
     visible = visible && (!frustum || sphere_in_frustum(f, center, world_radius));
     // Normal-cone culling (meshoptimizer): culled when dot(normalize(apex - camera), axis) >=
     // cutoff. A cutoff of 1 marks a cone wider than a hemisphere; meshoptimizer then leaves
     // the axis at zero, whose normalisation is NaN and would (silently) cull the meshlet:
-    // skip the test.
+    // skip the test. The apex is camera-relative: the camera is the origin.
     if (visible && (f[0].flags & FLAG_CONE_CULLING) != 0 && m.cone_cutoff < 1.0)
     {
-        float3 apex = mul(inst[0].model, float4(m.cone_apex, 1)).xyz;
-        float3 axis = normalize(mul(inst[0].model, float4(m.cone_axis, 0)).xyz);
-        bool cone_visible = dot(normalize(apex - f[0].camera_pos), axis) < m.cone_cutoff;
+        float3 apex = instance_point(f, inst[0], m.cone_apex);
+        float3 axis = normalize(instance_vector(inst[0], m.cone_axis));
+        bool cone_visible = dot(normalize(apex), axis) < m.cone_cutoff;
         if (!cone_visible && show_culled)
             v.culled_debug = true;
         else
@@ -1229,8 +1331,8 @@ uint instance_items(Frame* f, uint instance_index, uint base, bool write, uint t
 {
     Instance* inst = f[0].instances + instance_index;
     Mesh* mesh = f[0].meshes + inst[0].mesh;
-    float scale = length(inst[0].model[0].xyz);
-    float dist = length(inst[0].center - f[0].camera_pos);
+    float scale = inst[0].scale;
+    float dist = length(instance_center_relative(f, inst[0]));
     uint groups = (mesh[0].meshlet_count + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
     bool all = (f[0].flags & FLAG_GROUP_WINDOW_OFF) != 0;
     bool lod = (f[0].flags & FLAG_LOD) != 0;
@@ -1290,8 +1392,8 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
     {
         Instance* inst = f[0].instances + instance_index;
         Mesh* mesh = f[0].meshes + inst[0].mesh;
-        float dist = length(inst[0].center - f[0].camera_pos);
-        roots = instance_roots(f, mesh, length(inst[0].model[0].xyz), dist);
+        float dist = length(instance_center_relative(f, inst[0]));
+        roots = instance_roots(f, mesh, inst[0].scale, dist);
         count = roots > 0 ? 0u : instance_items(f, instance_index, 0, false, 0u);
     }
     s_counts[thread] = count;
@@ -1411,11 +1513,15 @@ void cull_main(uint thread : SV_GroupThreadID)
     }
     uint instance_index = cell * 64 + thread;
     bool visible = false;
+    float3 sphere_center = 0.0;
+    float sphere_radius = 0.0;
     if (in_cell && instance_index < f[0].instance_count)
     {
-        Instance* inst = f[0].instances + instance_index;
+        Instance inst = f[0].instances[instance_index];
+        sphere_center = instance_center_relative(f, inst);
+        sphere_radius = inst.radius;
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        visible = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
+        visible = !frustum || sphere_in_frustum(f, sphere_center, sphere_radius);
     }
     uint in_frustum = WaveActiveCountBits(visible);
     if (WaveIsFirstLane() && in_frustum > 0)
@@ -1425,10 +1531,7 @@ void cull_main(uint thread : SV_GroupThreadID)
     // deferred.
     bool hidden = false;
     if (visible && f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_HIDDEN_INSTANCES) != 0)
-    {
-        Instance* inst = f[0].instances + instance_index;
-        hidden = !visible_last_frame(f, inst[0].center, inst[0].radius);
-    }
+        hidden = !visible_last_frame(f, sphere_center, sphere_radius);
     uint hidden_count = WaveActiveCountBits(hidden);
     if (WaveIsFirstLane() && hidden_count > 0)
         InterlockedAdd(f[0].stats[STAT_INSTANCES_OCCLUDED], hidden_count);
@@ -1504,11 +1607,12 @@ void cell_cull_main(uint thread : SV_GroupThreadID)
     uint hidden_instances = 0;
     if (cell < cells)
     {
-        float4 sphere = f[0].cells[cell];
+        CellBounds bounds = f[0].cells[cell];
+        float3 sphere = cell_center_relative(f, bounds);
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        bool in_view = !frustum || sphere_in_frustum(f, sphere.xyz, sphere.w);
+        bool in_view = !frustum || sphere_in_frustum(f, sphere, bounds.radius);
         if (in_view && f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_INSTANCE_OCCLUSION) != 0)
-            deferred = !visible_last_frame(f, sphere.xyz, sphere.w);
+            deferred = !visible_last_frame(f, sphere, bounds.radius);
         listed = in_view && !deferred;
         if (deferred)
             hidden_instances = min(64u, f[0].instance_count - cell * 64);
@@ -1574,8 +1678,8 @@ void cell_cull_deferred_main(uint thread : SV_GroupThreadID)
     if (k < deferred_cells)
     {
         cell = f[0].cell_list[CELL_LIST + cell_count(f) + k];
-        float4 sphere = f[0].cells[cell];
-        open = (f[0].flags & FLAG_SHOW_CULLED) != 0 || occlusion_visible(f, sphere.xyz, sphere.w);
+        CellBounds bounds = f[0].cells[cell];
+        open = (f[0].flags & FLAG_SHOW_CULLED) != 0 || occlusion_visible(f, cell_center_relative(f, bounds), bounds.radius);
     }
     s_deferred[thread] = open ? 1u : 0u;
     GroupMemoryBarrierWithGroupSync();
@@ -1608,7 +1712,7 @@ void cell_cull_deferred_main(uint thread : SV_GroupThreadID)
 struct CellBoundsPush
 {
     Instance* instances;
-    float4* cells;
+    CellBounds* cells;
     uint count;
     uint pad;
 };
@@ -1622,7 +1726,7 @@ groupshared float s_bounds_reach[64];
 
 // Once, after the instances are written: a workgroup per cell of 64 instances, the sphere
 // around their spheres (centred on the box around them; a tree reduction, so the same table
-// gives the same bits).
+// gives the same bits), from the corner of the first instance's cell (issue #93).
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cell_bounds_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
@@ -1630,12 +1734,14 @@ void cell_bounds_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     CellBoundsPush p = cell_bounds_push;
     uint index = group.x * 64 + thread;
     bool valid = index < p.count;
+    int3 reference = p.instances[group.x * 64].cell;
     float3 c = 0.0;
     float r = 0.0;
     if (valid)
     {
-        c = p.instances[index].center;
-        r = p.instances[index].radius;
+        Instance inst = p.instances[index];
+        c = float3(inst.cell - reference) * CELL_SIZE + inst.center;
+        r = inst.radius;
     }
     s_bounds_min[thread] = valid ? c - r : float3(3.0e38);
     s_bounds_max[thread] = valid ? c + r : float3(-3.0e38);
@@ -1660,7 +1766,14 @@ void cell_bounds_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         GroupMemoryBarrierWithGroupSync();
     }
     if (thread == 0)
-        p.cells[group.x] = float4(centre, s_bounds_reach[0]);
+    {
+        CellBounds bounds;
+        bounds.cell = reference;
+        bounds.radius = s_bounds_reach[0];
+        bounds.center = centre;
+        bounds.pad = 0.0;
+        p.cells[group.x] = bounds;
+    }
 }
 
 // Instance cull 2 (issue #38), after pass 1 and the pyramid it builds: the instances instance
@@ -1699,17 +1812,17 @@ void cull_deferred_main(uint thread : SV_GroupThreadID)
         instance_index = cell * 64 + thread;
         if (instance_index < f[0].instance_count)
         {
-            Instance* inst = f[0].instances + instance_index;
+            Instance inst = f[0].instances[instance_index];
             bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-            candidate = !frustum || sphere_in_frustum(f, inst[0].center, inst[0].radius);
+            candidate = !frustum || sphere_in_frustum(f, instance_center_relative(f, inst), inst.radius);
         }
     }
     bool visible = false;
     bool hidden = false;
     if (candidate)
     {
-        Instance* inst = f[0].instances + instance_index;
-        visible = occlusion_visible(f, inst[0].center, inst[0].radius);
+        Instance inst = f[0].instances[instance_index];
+        visible = occlusion_visible(f, instance_center_relative(f, inst), inst.radius);
         hidden = !visible;
     }
     bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
@@ -1765,8 +1878,8 @@ void mesh_main(
     if (thread < m.vertex_count)
     {
         PagedVertex v = paged_vertex(f, base, thread);
-        float4 world = mul(inst.model, float4(v.position, 1));
-        verts[thread].position = mul(f[0].view_proj, world);
+        float3 relative = instance_point(f, inst, v.position);
+        verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
     }
 
     for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
@@ -1797,9 +1910,9 @@ FallbackVertex vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV
     uint2 record = f[0].visible[slot];
     Instance inst = f[0].instances[record.x];
     PagedVertex v = paged_vertex(f, 0, vertex_index);
-    float4 world = mul(inst.model, float4(v.position, 1));
+    float3 relative = instance_point(f, inst, v.position);
     FallbackVertex o;
-    o.position = mul(f[0].view_proj, world);
+    o.position = mul(f[0].view_proj, float4(relative, 1));
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
     return o;
 }
@@ -1845,12 +1958,12 @@ float4 merge_vert_main(uint id : SV_VertexID, uint cluster : SV_InstanceID) : SV
     uint2 record = f[0].visible[slot];
     Instance inst = f[0].instances[record.x];
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
-    float3 center = mul(inst.model, float4(m.center, 1)).xyz;
+    float3 center = instance_point(f, inst, m.center);
     float3 c = mul(f[0].cull_view, float4(center, 1)).xyz;
     float2 size = float2(float(f[0].target_width), float(f[0].target_height));
     float4 rect = float4(0.0, 0.0, size); // pixels; the whole target should the projection fail
     float4 aabb;
-    if (project_sphere(c, m.radius * length(inst.model[0].xyz), f[0].znear, f[0].p00, f[0].p11, aabb))
+    if (project_sphere(c, m.radius * inst.scale, f[0].znear, f[0].p00, f[0].p11, aabb))
     {
         aabb += f[0].draw_jitter.xyxy;
         rect = clamp(float4(floor(aabb.xy * size) - 1.0, ceil(aabb.zw * size) + 1.0), 0.0, size.xyxy);
@@ -2001,8 +2114,8 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
         // The mesh shader's transform, then the fixed-function steps: perspective division,
         // the viewport of `set_viewport_full` (y flipped) and the snap to sub-pixels.
         PagedVertex v = paged_vertex(f, base, thread);
-        float4 world = mul(inst.model, float4(v.position, 1));
-        float4 clip = mul(f[0].view_proj, world);
+        float3 relative = instance_point(f, inst, v.position);
+        float4 clip = mul(f[0].view_proj, float4(relative, 1));
         float3 ndc = clip.xyz / clip.w;
         float2 half_size = float2(f[0].target_width, f[0].target_height) * 0.5;
         float2 framebuffer = float2(ndc.x * half_size.x + half_size.x, half_size.y - ndc.y * half_size.y);
@@ -2081,7 +2194,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     // approximated by the object's outward normal is close enough for a highlight this soft.
     ndl = dot(n, light);
     float diffuse = max(ndl, 0.0) * shadow;
-    float3 highlight_view = normalize(f[0].camera_pos - (object_position + 0.0)); // object space ≈ world offset
+    float3 highlight_view = normalize(legacy_camera_world(f) - (object_position + 0.0)); // object space ≈ world offset (kept as it was; see docs/HANDOVER.md)
     float3 half_vector = normalize(light + highlight_view);
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
     float3 sun = f[0].sun_color.rgb;
@@ -2329,14 +2442,14 @@ struct Surface
     float3 object_position; // object-space position
     float3 dpdx;            // its change per pixel to the right and down
     float3 dpdy;
-    float4x4 model;
+    float3x3 frame;         // the instance's rotation and scale: object-space directions to the camera-relative space
     uint instance_id;
     uint meshlet_index;
     uint lod_level;
     float shadow;           // 1 in the sun, 0 where a shadow ray met something (issue #45)
     float4* sky;            // the sky's irradiance coefficients (sh.slang), null in space (issue #47)
     float ao;               // how much of the sky the surface sees (issue #48); -1: no occlusion computed
-    float3 world;           // world-space position
+    float3 world;           // the position in the scene frame (the rays' and the probes'; `to_scene`)
     ProbeField* probes;     // the diffuse light's probes (probes.slang, issue #53), or null: the sky's irradiance unoccluded
     bool traced;            // a mirror ray replaces the sky's reflection where it meets something (issues #50, #52)
 };
@@ -2394,7 +2507,7 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
             if (mat.albedo_texture != TEXTURE_NONE)
                 albedo *= texel * (0.7 + 0.6 * broad);
             if (mat.normal_texture != TEXTURE_NONE)
-                n = normalize(mul(s.model, float4(bent, 0)).xyz);
+                n = normalize(mul(s.frame, bent));
             return;
         }
         if (mat.albedo_texture != TEXTURE_NONE)
@@ -2406,7 +2519,7 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
         if (mat.normal_texture != TEXTURE_NONE)
         {
             float3 bent = triplanar_normal(mat.normal_texture, mat.normal_strength, s.object_normal, w, p, dpdx, dpdy);
-            n = normalize(mul(s.model, float4(bent, 0)).xyz);
+            n = normalize(mul(s.frame, bent));
         }
     }
 }
@@ -2645,7 +2758,7 @@ bool ray_back_face(Frame* f, uint instance, uint primitive, float3 direction)
         uint v = mesh.first_vertex + rs[0].indices[tri * 3 + k];
         p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
     }
-    float3 face = mul(inst.model, float4(cross(p[1] - p[0], p[2] - p[0]), 0.0)).xyz;
+    float3 face = instance_vector(inst, cross(p[1] - p[0], p[2] - p[0]));
     return dot(face, direction) > 0.0;
 }
 
@@ -2663,7 +2776,7 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
         p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
     }
     float3 object_position = p[0] + b.x * (p[1] - p[0]) + b.y * (p[2] - p[0]);
-    float3 face = mul(inst.model, float4(cross(p[1] - p[0], p[2] - p[0]), 0.0)).xyz;
+    float3 face = instance_vector(inst, cross(p[1] - p[0], p[2] - p[0]));
     RayHit hit;
     hit.n = dot(face, face) > 1e-20 ? normalize(face) : -direction;
     hit.back = dot(hit.n, direction) > 0.0;
@@ -2773,7 +2886,7 @@ float3 ice_transmission(Frame* f, uint instance, float3 world, float scattering)
     s.Proceed();
     if (s.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         return float3(0.0);
-    float3 to_camera = normalize(f[0].camera_pos - world);
+    float3 to_camera = normalize(f[0].camera_in_scene.xyz - world);
     float g = 0.5;
     float cos_theta = dot(-sun, to_camera);
     float phase = (1.0 - g * g) / (4.0 * 3.14159265 * pow(max(1.0 + g * g - 2.0 * g * cos_theta, 1e-4), 1.5));
@@ -2827,25 +2940,30 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
     PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
     PagedVertex v2 = paged_vertex(f, base, paged_index(f, base, m, tri, 2));
-    float4 c0 = mul(f[0].view_proj, mul(inst.model, float4(v0.position, 1)));
-    float4 c1 = mul(f[0].view_proj, mul(inst.model, float4(v1.position, 1)));
-    float4 c2 = mul(f[0].view_proj, mul(inst.model, float4(v2.position, 1)));
+    float3x3 frame = instance_frame(inst);
+    float3 relative = instance_relative(f, inst);
+    float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
+    float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
+    float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
     float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
     Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
     float3 o0 = decode_normal(v0.normal);
     float3 o1 = decode_normal(v1.normal);
     float3 o2 = decode_normal(v2.normal);
-    float3 n0 = normalize(mul(inst.model, float4(o0, 0)).xyz);
-    float3 n1 = normalize(mul(inst.model, float4(o1, 0)).xyz);
-    float3 n2 = normalize(mul(inst.model, float4(o2, 0)).xyz);
+    float3 n0 = normalize(mul(frame, o0));
+    float3 n1 = normalize(mul(frame, o1));
+    float3 n2 = normalize(mul(frame, o2));
     Surface s;
     s.n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
     s.object_normal = normalize(b.lambda.x * o0 + b.lambda.y * o1 + b.lambda.z * o2);
     s.object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     s.dpdx = b.ddx.x * v0.position + b.ddx.y * v1.position + b.ddx.z * v2.position;
     s.dpdy = b.ddy.x * v0.position + b.ddy.y * v1.position + b.ddy.z * v2.position;
-    s.model = inst.model;
+    // The surface relative to the camera, and in the scene frame for the rays and the probes.
+    float3 surface_relative = mul(frame, s.object_position) + relative;
+    float3 surface_scene = to_scene(f, surface_relative);
+    s.frame = frame;
     s.instance_id = inst.id;
     s.meshlet_index = meshlet_index;
     s.lod_level = m.lod_level;
@@ -2854,16 +2972,16 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.ao = resolve_push.ao_image != 0xFFFFFFFFu
         ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
         : -1.0;
-    s.view = s.sky != nullptr ? normalize(f[0].camera_pos - mul(inst.model, float4(s.object_position, 1.0)).xyz) : float3(0.0, 1.0, 0.0);
-    s.world = mul(inst.model, float4(s.object_position, 1.0)).xyz;
+    s.view = s.sky != nullptr ? normalize(-surface_relative) : float3(0.0, 1.0, 0.0);
+    s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
-        s.shadow = sun_shadow(f, mul(inst.model, float4(s.object_position, 1.0)).xyz, s.n, sun_disc_point(pixel, f[0].noise_frame));
+        s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame));
     s.transmitted = float3(0.0);
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
-        s.transmitted = ice_transmission(f, record.x, mul(inst.model, float4(s.object_position, 1.0)).xyz, mat.scattering);
+        s.transmitted = ice_transmission(f, record.x, surface_scene, mat.scattering);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)
@@ -2983,17 +3101,20 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
     PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
     PagedVertex v2 = paged_vertex(f, base, paged_index(f, base, m, tri, 2));
-    float4 c0 = mul(f[0].view_proj, mul(inst.model, float4(v0.position, 1)));
-    float4 c1 = mul(f[0].view_proj, mul(inst.model, float4(v1.position, 1)));
-    float4 c2 = mul(f[0].view_proj, mul(inst.model, float4(v2.position, 1)));
+    float3x3 frame = instance_frame(inst);
+    float3 relative = instance_relative(f, inst);
+    float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
+    float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
+    float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
     float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
     Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
-    float3 n = normalize(b.lambda.x * normalize(mul(inst.model, float4(decode_normal(v0.normal), 0)).xyz)
-        + b.lambda.y * normalize(mul(inst.model, float4(decode_normal(v1.normal), 0)).xyz)
-        + b.lambda.z * normalize(mul(inst.model, float4(decode_normal(v2.normal), 0)).xyz));
+    float3 n = normalize(b.lambda.x * normalize(mul(frame, decode_normal(v0.normal)))
+        + b.lambda.y * normalize(mul(frame, decode_normal(v1.normal)))
+        + b.lambda.z * normalize(mul(frame, decode_normal(v2.normal))));
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
-    float3 world = mul(inst.model, float4(object_position, 1.0)).xyz;
+    // In the scene frame: the ray's.
+    float3 world = to_scene(f, mul(frame, object_position) + relative);
     float4* sky = resolve_push.sky;
     float4 hit = trace_reflection(f, sky, resolve_push.probes, world + n * 0.05, request.xyz);
     if (hit.w <= 0.0)
@@ -3143,6 +3264,8 @@ struct TlasPush
     uint* records;    // 16 words per instance
     uint count;
     uint pad;
+    int4 origin_cell;    // the scene frame's origin (issue #93): its cell...
+    float4 origin_local; // ...and the offset inside it; the structure is built in that frame
 };
 
 [[vk::push_constant]]
@@ -3156,12 +3279,16 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
         return;
     Instance inst = tlas_push.instances[id.x];
     uint* r = tlas_push.records + id.x * 16;
+    // The transform in the scene frame: the cells in integers first, then the offsets.
+    float3x3 m = instance_frame(inst);
+    float3 t = float3(inst.cell - tlas_push.origin_cell.xyz) * CELL_SIZE + (inst.local - tlas_push.origin_local.xyz);
     [unroll]
     for (uint row = 0; row < 3; row++)
     {
         [unroll]
-        for (uint column = 0; column < 4; column++)
-            r[row * 4 + column] = asuint(inst.model[row][column]);
+        for (uint column = 0; column < 3; column++)
+            r[row * 4 + column] = asuint(m[row][column]);
+        r[row * 4 + 3] = asuint(t[row]);
     }
     r[12] = (id.x & 0xFFFFFFu) | (0xFFu << 24);
     r[13] = 0x1u << 24; // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
@@ -3207,8 +3334,10 @@ public struct Placement
     public uint pad;
     public uint building_meshes[16];
     public uint rock_meshes[8];
-    public float3 origin;       // the scene's offset from the world's origin (issue #93)
-    public float pad2;
+    public int3 origin_cell;    // the scene's origin (issue #93): its cell...
+    public int pad2;
+    public float3 origin_local; // ...and the offset inside it, metres
+    public float pad3;
 };
 
 struct PlacementPush
@@ -3259,29 +3388,26 @@ float ground(Placement* p, float x, float z)
 // `tilt` about the turned X axis, scaled by `scale`, in the mesh's material.
 void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float tilt, float scale)
 {
-    // The scene's offset from the world's origin (issue #93): the ground was sampled in the
-    // scene's frame; the world position is rounded to an f32 here, whose spacing grows with the
-    // offset (1 m at 10 000 km).
-    float3 world = position + p[0].origin;
-    float cy = cos(yaw), sy = sin(yaw), ct = cos(tilt), st = sin(tilt);
-    // R = Ry(yaw) × Rx(tilt), rows.
-    float3 r0 = float3(cy, sy * st, sy * ct);
-    float3 r1 = float3(0.0, ct, -st);
-    float3 r2 = float3(-sy, cy * st, cy * ct);
-    float4x4 model = float4x4(
-        float4(r0 * scale, world.x),
-        float4(r1 * scale, world.y),
-        float4(r2 * scale, world.z),
-        float4(0.0, 0.0, 0.0, 1.0));
+    // The instance's cell and offset (issue #93): the scene's origin, a cell and an offset,
+    // plus the position in the scene (the ground was sampled there), carried into the cell so
+    // the offset stays under CELL_SIZE. Wherever the scene stands, the offset is as fine as at
+    // the origin.
+    float3 local = p[0].origin_local + position;
+    int3 carry = int3(floor(local / CELL_SIZE));
+    // R = Ry(yaw) × Rx(tilt): the tilt first, then the turn, as a quaternion.
+    float4 q = quat_mul(float4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)), float4(sin(0.5 * tilt), 0.0, 0.0, cos(0.5 * tilt)));
     Mesh* m = p[0].meshes + mesh;
     Instance inst;
-    inst.model = model;
-    inst.center = mul(model, float4(m[0].center, 1.0)).xyz;
-    inst.radius = m[0].radius * scale;
+    inst.cell = p[0].origin_cell + carry;
     inst.mesh = mesh;
+    inst.local = local - float3(carry) * CELL_SIZE;
+    inst.scale = scale;
+    inst.rotation = q;
+    inst.center = mul(quat_matrix(q), m[0].center) * scale + inst.local;
+    inst.radius = m[0].radius * scale;
     inst.id = p[0].first + slot;
     inst.material = m[0].material;
-    inst.pad = 0u;
+    inst.pad = uint2(0u, 0u);
     p[0].instances[p[0].first + slot] = inst;
 }
 

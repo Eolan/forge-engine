@@ -350,7 +350,8 @@ impl Probes {
         self.reset = true;
     }
 
-    /// Declares this frame's three passes around the camera at `camera` (world metres), with
+    /// Declares this frame's three passes around the camera at `camera` (metres in the scene
+    /// frame, `camera.relative_to(scene.origin())`: the frame the rays trace in, issue #93), with
     /// the scene of the renderer's frame block at `frame` (its TLAS, instances and materials,
     /// [`crate::MeshletRenderer::frame_address`]) and the sky's light and table, and returns
     /// what the resolve reads.

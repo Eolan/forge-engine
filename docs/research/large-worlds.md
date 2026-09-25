@@ -241,8 +241,11 @@ rest is the view's 4 × 4 inverse and `view_proj × world` taking a small differ
 numbers the offset's size. The same geometry stored as Freese's segments, an integer cell of
 1 km and an `f32` inside it, the cell difference taken in integers, stays at 0.013 px and
 0.08 mm at every offset: the origin's own precision, since a local part never exceeds the cell.
-The numbers per distance are in `docs/demos/city-blocks.md`; the captures on the RTX 5070 Ti are
-the next step, then the decision.
+The numbers per distance are in `docs/demos/city-blocks.md`. The record followed the next day
+on the cloud branch (an 80-byte `Instance`: `int3 cell`, `float3 local`, a quaternion, a
+uniform scale; camera-relative matrices; the TLAS and the probes in a scene frame anchored at
+the scene's origin; `forge_render::cells`), so the same script becomes its acceptance test: the
+captures on the RTX 5070 Ti decide, then the owner.
 
 ---
 

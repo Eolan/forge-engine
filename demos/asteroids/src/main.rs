@@ -561,10 +561,12 @@ impl Ballad {
     }
 
     fn cull_camera(&self, aspect: f32) -> CullCamera {
+        // The camera in the world: the field's origin (`--origin`, issue #93) and its position
+        // along the path.
         CullCamera::new(
-            self.camera.view(),
+            self.camera.view_rotation(),
             self.camera.projection(aspect),
-            self.camera.position,
+            self.scene.origin().offset(self.camera.position),
             self.camera.near,
         )
     }
@@ -643,9 +645,10 @@ impl Demo for Ballad {
             None => (ahead - position).normalize_or_zero(),
         };
         // Look along the tangent with a gentle roll into the turns. The path is laid out around
-        // the field's own centre; the field stands `--origin` from the world's origin (issue #93).
+        // the field's own centre; the field's origin (`--origin`) is added where the camera is
+        // handed to the renderer (issue #93).
         let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-        self.camera.position = position + Vec3::splat(self.args.origin);
+        self.camera.position = position;
         self.camera.yaw = -flat.x.atan2(-flat.z);
         self.camera.pitch = forward.y.asin().clamp(-1.2, 1.2);
     }
@@ -783,9 +786,12 @@ impl Demo for Ballad {
             &mut frame.graph,
             self.camera.projection(ctx.aspect()),
             cull.view_proj,
+            cull.position,
             exposure,
         );
-        let draw_view_proj = taa_frame.jittered_projection * self.camera.view();
+        let draw_view_proj = taa_frame.jittered_projection * self.camera.view_rotation();
+        // The camera in the scene frame, where the rays and the dust live (issue #93).
+        let camera_in_scene = cull.position.relative_to(self.scene.origin());
         // `FORGE_HASH_IMAGES=1` (issue #71): the scene colour after each pass that writes it
         // (after the shading, the sky's pixels are still undefined), then the frame's other
         // images, in the frame trace.
@@ -872,8 +878,7 @@ impl Demo for Ballad {
                 frame.slot,
                 DustParams {
                     view_proj: draw_view_proj,
-                    camera: self.camera.position,
-                    origin: Vec3::splat(self.args.origin),
+                    camera: camera_in_scene,
                     sun_dir: self.renderer.sun_dir,
                     sun_color: self.renderer.sun_color,
                     sun_luminance,
@@ -1215,10 +1220,12 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
 
     // The belt: an S-shaped centre line; asteroids scattered around it with density peaks. It is
     // laid out around its own centre and stands `--origin` from the world's origin (issue #93):
-    // the offset goes on each instance's transform, and on the camera as it follows the path.
+    // the scene's origin, from which each instance gets its own cell.
+    builder.set_origin(forge_render::CellPos::from_f64(glam::DVec3::splat(
+        f64::from(args.origin),
+    )));
     let mut rng: SplitMix64 = Seed::new(4242).rng();
     let length = args.length;
-    let origin = Vec3::splat(args.origin);
     let centre = |t: f32| {
         Vec3::new(
             (t - 0.5) * length,
@@ -1337,7 +1344,7 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
         };
         builder.add_instance_with_material(
             mesh_ids[shape],
-            Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position + origin),
+            Mat4::from_scale_rotation_translation(Vec3::splat(scale), rotation, position),
             if ice { ice_rows[ice_kind(id)] } else { rock },
         );
         placed += 1;

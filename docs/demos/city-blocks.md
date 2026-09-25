@@ -123,13 +123,34 @@ steps. The cells stay at the origin's precision because a local part never excee
 
 **To measure** (the owner's machine: `tools/origins.sh captures/origins`): the south view and
 the ballad's frame 240 at each offset against the origin's, in pixels and ꟻLIP, with the
-difference and the error map beside each capture. Two things in those captures are not
-precision: the Morton keys are taken from the rounded centres, so a few instances near a key
-boundary (6 cm) change order, which changes the draw order at equal depth (#38's reordering was
-399 px); and the placement's checksum changes with the offset, as it should. Mesh against
-fallback and the A/B harness should still be 0 px at each offset. This session ran in the
-cloud, without a GPU: the captures are still to take, and the numbers above are the model's,
-not the card's.
+difference and the error map beside each capture. With the record before #93 (the commit
+before "Store the instances in integer cells"), two things in those captures are not precision:
+the Morton keys are taken from the rounded centres, so a few instances near a key boundary
+(6 cm) change order, which changes the draw order at equal depth (#38's reordering was 399 px);
+and the placement's checksum changes with the offset, as it should. Mesh against fallback and
+the A/B harness should still be 0 px at each offset. This session ran in the cloud, without a
+GPU: the captures are still to take, and the numbers above are the model's, not the card's.
+
+**Built (2026-09-26, the same cloud session; `docs/HANDOVER.md`):** the record the model
+predicted. `Instance` (80 bytes, from 96) holds an `int3 cell`, a `float3 local`, a unit
+quaternion, a uniform scale, the bounding sphere's centre from the same cell and its radius;
+the frame block carries the culling camera's cell and offset, and every matrix is
+camera-relative (`FlyCamera::view_rotation`): a shader gets a position as
+`float3(cell − camera_cell) × 1024 + (local − camera_local)`, exact near the camera wherever
+the scene stands. The TLAS, the probes and the dust work in a **scene frame** anchored at the
+scene's origin (`MeshletScene::origin`; `--origin` sets it), rays starting from
+`relative + camera_in_scene`; the placement writes each instance's cell from the origin's;
+the Morton order and the cells' spheres (#38) take the cells into account; TAA's and DLSS's
+reprojection add the camera's step between frames. The city's instance table shrinks from 96
+to 80 MB; the placement's checksum changes (the bytes did): the log has the new value, to be
+recorded here. **Expected on the GPU:** `tools/origins.sh` at 0 px at every offset, or a few
+pixels from the split's 0.1 mm rounding; `tools/captures.sh` against the commit before within
+D-017's thresholds (the vertex transform rounds differently: a quaternion instead of a matrix,
+camera-relative instead of world; a few hundred pixels by 1–2 levels, as #38's reordering),
+mesh against fallback and the A/B harness at 0 px; `tools/timings.sh` flat, or a little faster
+from the smaller table. One thing kept as it was on purpose: `sun_light`'s highlight direction
+mixed object space with the camera's world position; it still does (`legacy_camera_world`), so
+the ballad's highlights do not move. Fixing it is a look change for the owner to judge.
 
 ## Loading screen (issue #25, 2026-09-25)
 
@@ -779,9 +800,10 @@ terrain mesh's own vertices, which cooking keeps in grid order.
 
 **Determinism and cost.**
 - The CPU mirrors only the mesh choice (the same `pcg4d`), for the scene's per-mesh counts.
-- After the pass the table (96 MB) is read back once: its FNV-1a checksum goes to the log
-  (`ed6454c65dd1e823` on every run and on both paths so far), and its meshes are checked
-  against the mirror.
+- After the pass the table (80 MB since #93's record, 96 before) is read back once: its FNV-1a
+  checksum goes to the log (`ed6454c65dd1e823` on every run and on both paths with the record
+  before #93; the new record's value is in the log, to be recorded here), and its meshes are
+  checked against the mirror.
 - Two runs capture the same frame to the pixel.
 - The pass takes 3–6 ms once its shader is compiled (384 ms on the first run, compilation
   included).
@@ -792,7 +814,7 @@ terrain mesh's own vertices, which cooking keeps in grid order.
 | drawn | 500 k instances in view; the culls test 28 k work items and 791 k roots; 48 k clusters, 3.32 M triangles drawn (13 k clusters in software: auto mode, far rocks) |
 | GPU per frame | **1.05 ms** with every page resident (4.90 before #37): instance cull 0.31, cluster culls 0.23 + 0.23, meshlet pass 1 0.16, resolve 0.05, software raster and merge 0.03, depth pyramid 0.02; **1.12 ms** streamed (below) |
 | CPU per frame | 0.25 ms of work (record 0.09, submit + present 0.16), the rest waiting for the GPU |
-| memory | every page resident: 1.25 GiB allocated, geometry 1 160 MiB (983 of pages, 89 of cluster records, the instance table 96), work buffers 84; streamed through the default 512 MiB pool, geometry 689 MiB |
+| memory | every page resident: 1.25 GiB allocated, geometry 1 160 MiB (983 of pages, 89 of cluster records, the instance table 96, 80 since #93's record), work buffers 84; streamed through the default 512 MiB pool, geometry 689 MiB |
 | start-up | 13.3 s the first time (the terrain's cook), 0.85 s from the cache |
 
 The orbit (`--orbit`) views the whole city from 1.5 km out at 160 m: 1.52 ms.

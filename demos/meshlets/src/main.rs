@@ -184,9 +184,9 @@ impl Bench {
 
     fn cull_camera(&self, aspect: f32) -> CullCamera {
         CullCamera::new(
-            self.camera.view(),
+            self.camera.view_rotation(),
             self.camera.projection(aspect),
-            self.camera.position,
+            forge_render::CellPos::ORIGIN.offset(self.camera.position),
             self.camera.near,
         )
     }
