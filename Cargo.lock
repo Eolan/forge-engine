@@ -708,6 +708,7 @@ name = "forge-procgen"
 version = "0.1.0"
 dependencies = [
  "forge-core",
+ "forge-task",
  "glam",
  "image",
 ]
@@ -794,6 +795,7 @@ dependencies = [
  "clap",
  "forge-core",
  "forge-procgen",
+ "forge-task",
 ]
 
 [[package]]

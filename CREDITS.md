@@ -188,3 +188,14 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **The job model.** The continuation model follows Natalya Tatarchuk, "Destiny's Multithreaded
   Rendering Architecture", GDC 2015, and the engines surveyed in
   `docs/research/task-system.md`.
+- **Stream-power erosion.** Jean Braun, Sean D. Willett, "A very efficient O(n), implicit and
+  parallel method to solve the stream power equation governing fluvial incision and landscape
+  evolution", *Geomorphology* 180–181, 2013: the D8 receivers, the downstream-first stack and
+  the implicit update of `forge_procgen::erosion`.
+- **Priority flood.** Richard Barnes, Clarence Lehman, David Mulla, "Priority-flood: An optimal
+  depression-filling and watershed-labeling algorithm for digital elevation models", *Computers
+  & Geosciences* 62, 2014: `forge_procgen::flow::priority_flood`.
+- **The basin graph.** Guillaume Cordonnier, Benoît Bovy, Jean Braun, "A versatile, linear
+  complexity algorithm for flow routing in topographies with depressions", *Earth Surface
+  Dynamics* 7, 2019: `forge_procgen::flow::drain` (the pit basins, their lowest passes, the
+  spanning tree from the sea, carving).

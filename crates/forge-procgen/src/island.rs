@@ -6,6 +6,7 @@ use std::io;
 use std::path::Path;
 
 use forge_core::Seed;
+use forge_task::TaskPool;
 
 use crate::erosion::{ErosionParams, erode};
 use crate::field::Field2;
@@ -75,8 +76,13 @@ fn lattice(seed: Seed, purpose: u64) -> u64 {
     seed.derive(purpose).rng().next_u64()
 }
 
-/// The island's heightfield: stages 1–3 from a flat sea, and the last step's flow.
-pub fn generate_island(p: &IslandParams, erosion: &ErosionParams) -> (Field2<f32>, Flow) {
+/// The island's heightfield: stages 1–3 from a flat sea, and the last step's flow. The
+/// erosion runs on `pool`; the result is the same with any number of workers.
+pub fn generate_island(
+    p: &IslandParams,
+    erosion: &ErosionParams,
+    pool: &TaskPool,
+) -> (Field2<f32>, Flow) {
     let fields = island_fields(p);
     let mut height = fields.shape.map(|_| 0.0_f32);
     let flow = erode(
@@ -85,6 +91,7 @@ pub fn generate_island(p: &IslandParams, erosion: &ErosionParams) -> (Field2<f32
         &fields.hardness,
         &fields.rain,
         erosion,
+        pool,
     );
     (height, flow)
 }
@@ -103,12 +110,13 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 /// The island's heightfield from `dir` when it was generated before with the same
 /// parameters, else generated and stored there (`island-<key>.f32`: the samples per side, the
-/// spacing, then the heights as little-endian `f32`), so the minute of erosion is paid once.
+/// spacing, then the heights as little-endian `f32`), so the erosion is paid once.
 /// Returns the field and whether it came from the file.
 pub fn cached_island(
     dir: &Path,
     p: &IslandParams,
     erosion: &ErosionParams,
+    pool: &TaskPool,
 ) -> io::Result<(Field2<f32>, bool)> {
     let key = fnv1a64(island_key(p, erosion).as_bytes());
     let file = dir.join(format!("island-{key:016x}.f32"));
@@ -135,7 +143,7 @@ pub fn cached_island(
             ));
         }
     }
-    let (height, _) = generate_island(p, erosion);
+    let (height, _) = generate_island(p, erosion, pool);
     std::fs::create_dir_all(dir)?;
     let mut bytes = Vec::with_capacity(12 + 4 * height.len());
     bytes.extend_from_slice(&height.size.to_le_bytes());
@@ -262,18 +270,19 @@ mod tests {
         };
         let dir = std::env::temp_dir().join(format!("forge-island-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (first, from_cache) = cached_island(&dir, &p, &erosion).unwrap();
+        let pool = TaskPool::new(forge_task::PoolConfig::with_workers(0));
+        let (first, from_cache) = cached_island(&dir, &p, &erosion, &pool).unwrap();
         assert!(!from_cache);
-        let (second, from_cache) = cached_island(&dir, &p, &erosion).unwrap();
+        let (second, from_cache) = cached_island(&dir, &p, &erosion, &pool).unwrap();
         assert!(from_cache);
         assert_eq!(first, second);
-        assert_eq!(first, generate_island(&p, &erosion).0);
+        assert_eq!(first, generate_island(&p, &erosion, &pool).0);
         // Other parameters, another file.
         let other = ErosionParams {
             steps: 21,
             ..erosion
         };
-        assert!(!cached_island(&dir, &p, &other).unwrap().1);
+        assert!(!cached_island(&dir, &p, &other, &pool).unwrap().1);
         assert_ne!(island_key(&p, &erosion), island_key(&p, &other));
         let _ = std::fs::remove_dir_all(&dir);
     }

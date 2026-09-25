@@ -1335,8 +1335,9 @@ fn island_heights(args: &Args) -> Field2<f32> {
     let (params, erosion) = island_settings(args);
     let dir = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("mesh-cache");
     let start = Instant::now();
-    let (height, from_cache) =
-        forge_procgen::cached_island(&dir, &params, &erosion).expect("the island's cache file");
+    let pool = TaskPool::client();
+    let (height, from_cache) = forge_procgen::cached_island(&dir, &params, &erosion, &pool)
+        .expect("the island's cache file");
     let (lo, hi) = height.min_max();
     tracing::info!(
         seed = args.island.unwrap_or(7),

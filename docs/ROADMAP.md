@@ -252,9 +252,10 @@ branch 2026-09-26, to verify), then D-004's amendment decided.
    cube-sphere CDLOD from the previous projects; volumetric near field (dual contouring /
    Transvoxel) for overhangs and caves; SDF bricks for edits. Started 2026-09-26 on the cloud
    branch (`forge-procgen`, `tools/genesis`, `docs/demos/island.md`): the island's mask and
-   uplift, priority flood, D8 drainage and the implicit stream-power erosion, on the CPU with
-   PNG previews; a 16 km island at 16 m in 20 s. Next: the hand-off to the cluster-DAG cook so
-   today's renderer draws it, then the amplification to 2 m and the materials.
+   uplift, D8 drainage with the depressions carved through the basin graph, the implicit
+   stream-power erosion on the job system, PNG previews; a 16 km island at 16 m in 6 s, at 4 m
+   in two minutes; the field cooked into a cluster DAG and drawn by `city-blocks --island`.
+   Next: the island's own demo with props (#96), the amplification to 2 m and the materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day.

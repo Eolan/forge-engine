@@ -1,15 +1,24 @@
 //! Stage 3 of the terrain pipeline: uplift against the stream-power law, solved implicitly in
 //! the downstream-first order (Braun & Willett 2013, `docs/research/terrain-genesis.md` §1),
-//! with hillslope diffusion between the channels. Each step: the uplift rises, depressions are
-//! flooded and the water routed ([`crate::flow`]), every cell lowers towards its receiver by
-//! `Δt · K · A^m / Δx` of the difference (the implicit update with `n = 1`, unconditionally
-//! stable), then an explicit diffusion sweep smooths the slopes. The water is routed over the
-//! flooded field but the height keeps its depressions: a cell below its receiver rises towards
-//! it by the same rule, which is sediment settling in a lake, so lakes exist, then fill. A
-//! hundred and fifty steps from a flat island give ridges, valleys and a drainage network.
+//! with hillslope diffusion between the channels. Each step: the uplift rises, the water is
+//! routed with the depressions carved through their passes ([`crate::flow::drain`]), every
+//! cell lowers towards its receiver by `Δt · K · A^m / Δx` of the difference (the implicit
+//! update with `n = 1`, unconditionally stable), then an explicit diffusion sweep smooths the
+//! slopes. The height keeps its depressions: a cell below its receiver rises towards it by the
+//! same rule, which is sediment settling in a lake, so lakes exist, then fill. A hundred and
+//! fifty steps from a flat island give ridges, valleys and a drainage network.
+//!
+//! The work runs on a [`TaskPool`]: rows in parallel for the uplift, the D8 receivers and
+//! the diffusion, the stack's segments (whole drainage trees) in parallel for the incision;
+//! the arithmetic per cell is the same in any order, so the result does not depend on the
+//! number of threads (D-016).
+
+use std::time::{Duration, Instant};
+
+use forge_task::TaskPool;
 
 use crate::field::Field2;
-use crate::flow::{Flow, priority_flood, route};
+use crate::flow::{Flow, drain};
 
 /// The erosion's parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,7 +52,29 @@ impl ErosionParams {
     }
 }
 
-/// One erosion step over `height` (modified in place): uplift, flood, route, incise, diffuse.
+/// Where a step's time went (`genesis` prints the sum over a run).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StepTimings {
+    /// Adding the uplift.
+    pub uplift: Duration,
+    /// Routing the water, depressions included.
+    pub drain: Duration,
+    /// The implicit stream-power update along the stack.
+    pub incise: Duration,
+    /// The diffusion sweep.
+    pub diffuse: Duration,
+}
+
+impl std::ops::AddAssign for StepTimings {
+    fn add_assign(&mut self, o: Self) {
+        self.uplift += o.uplift;
+        self.drain += o.drain;
+        self.incise += o.incise;
+        self.diffuse += o.diffuse;
+    }
+}
+
+/// One erosion step over `height` (modified in place): uplift, drain, incise, diffuse.
 /// Returns the flow of the step.
 pub fn step(
     height: &mut Field2<f32>,
@@ -51,56 +82,114 @@ pub fn step(
     hardness: &Field2<f32>,
     rain: &Field2<f32>,
     p: &ErosionParams,
+    pool: &TaskPool,
 ) -> Flow {
-    for (h, &u) in height.data.iter_mut().zip(&uplift.data) {
-        if *h > p.sea_level || u > 0.0 {
-            *h += u;
+    step_timed(height, uplift, hardness, rain, p, pool).0
+}
+
+/// [`step`], with where its time went.
+pub fn step_timed(
+    height: &mut Field2<f32>,
+    uplift: &Field2<f32>,
+    hardness: &Field2<f32>,
+    rain: &Field2<f32>,
+    p: &ErosionParams,
+    pool: &TaskPool,
+) -> (Flow, StepTimings) {
+    let n = height.size as usize;
+    let mut t = StepTimings::default();
+    let start = Instant::now();
+    pool.par_chunks_mut(&mut height.data, n, |row, chunk| {
+        for (h, &u) in chunk.iter_mut().zip(&uplift.data[row * n..row * n + n]) {
+            if *h > p.sea_level || u > 0.0 {
+                *h += u;
+            }
         }
-    }
-    // The water is routed over the flooded field; the height keeps its depressions, whose
-    // cells rise towards their receivers below (sediment settling in the lake).
-    let filled = priority_flood(height, p.sea_level);
-    let flow = route(&filled, p.sea_level);
-    let cell_area = (height.spacing * height.spacing) as f32;
-    for &c in &flow.stack {
-        let i = c as usize;
-        if flow.is_outlet(i) {
-            continue;
-        }
-        let r = flow.receiver[i] as usize;
-        let drainage =
-            (f64::from(flow.area[i]) * f64::from(cell_area) * f64::from(rain.data[i])).powf(p.m);
-        let f = (p.k * f64::from(hardness.data[i]) * drainage / f64::from(flow.distance[i])) as f32;
-        // Implicit: the receiver is already at its new height.
-        height.data[i] = (height.data[i] + f * height.data[r]) / (1.0 + f);
-        if height.data[i] < p.sea_level {
-            height.data[i] = p.sea_level;
-        }
-    }
+    });
+    t.uplift = start.elapsed();
+    // The water is routed with the depressions carved; the height keeps them, and their
+    // cells rise towards their receivers above (sediment settling in the lake).
+    let start = Instant::now();
+    let flow = drain(height, p.sea_level, pool);
+    t.drain = start.elapsed();
+    let start = Instant::now();
+    incise(height, &flow, hardness, rain, p, pool);
+    t.incise = start.elapsed();
+    let start = Instant::now();
     if p.diffusion > 0.0 {
-        diffuse(height, p.diffusion, p.sea_level);
+        diffuse(height, p.diffusion, p.sea_level, pool);
     }
-    flow
+    t.diffuse = start.elapsed();
+    (flow, t)
+}
+
+/// The implicit stream-power update, the stack's segments (whole trees) on their own tasks:
+/// a cell's new height needs its receiver's, an outlet's or one earlier in the segment.
+fn incise(
+    height: &mut Field2<f32>,
+    flow: &Flow,
+    hardness: &Field2<f32>,
+    rain: &Field2<f32>,
+    p: &ErosionParams,
+    pool: &TaskPool,
+) {
+    let n = height.size as usize;
+    let cell_area = (height.spacing * height.spacing) as f32;
+    let power = |drainage: f64| -> f64 {
+        if p.m == 0.5 {
+            drainage.sqrt()
+        } else {
+            forge_core::dmath::powf(drainage, p.m)
+        }
+    };
+    let old: &Field2<f32> = height;
+    let mut new = vec![0.0_f32; flow.stack.len()];
+    flow.par_segments(pool, &mut new, |_, first, slice| {
+        for k in 0..slice.len() {
+            let i = flow.stack[first + k] as usize;
+            let r = flow.receiver[i] as usize;
+            let receiver_height = if flow.is_outlet(r) {
+                old.data[r]
+            } else {
+                slice[flow.position[r] as usize - first]
+            };
+            let drainage =
+                power(f64::from(flow.area[i]) * f64::from(cell_area) * f64::from(rain.data[i]));
+            let f =
+                (p.k * f64::from(hardness.data[i]) * drainage / f64::from(flow.distance[i])) as f32;
+            // Implicit: the receiver is already at its new height.
+            slice[k] = ((old.data[i] + f * receiver_height) / (1.0 + f)).max(p.sea_level);
+        }
+    });
+    pool.par_chunks_mut(&mut height.data, n, |row, chunk| {
+        for (x, h) in chunk.iter_mut().enumerate() {
+            let position = flow.position[row * n + x];
+            if position != u32::MAX {
+                *h = new[position as usize];
+            }
+        }
+    });
 }
 
 /// One explicit diffusion sweep: `h += D · ∇²h`, on land, the border left as it is.
-fn diffuse(height: &mut Field2<f32>, diffusion: f64, sea_level: f32) {
-    let n = height.size;
+fn diffuse(height: &mut Field2<f32>, diffusion: f64, sea_level: f32, pool: &TaskPool) {
+    let n = height.size as usize;
     let factor = (diffusion / (height.spacing * height.spacing)).min(0.24) as f32;
     let before = height.data.clone();
-    for y in 1..n - 1 {
-        for x in 1..n - 1 {
-            let i = height.index(x, y);
+    pool.par_chunks_mut(&mut height.data, n, |y, row| {
+        if y == 0 || y + 1 == n {
+            return;
+        }
+        for (x, out) in row.iter_mut().enumerate().skip(1).take(n - 2) {
+            let i = y * n + x;
             let h = before[i];
             if h <= sea_level {
                 continue;
             }
-            let laplacian =
-                before[i - 1] + before[i + 1] + before[i - n as usize] + before[i + n as usize]
-                    - 4.0 * h;
-            height.data[i] = (h + factor * laplacian).max(sea_level);
+            let laplacian = before[i - 1] + before[i + 1] + before[i - n] + before[i + n] - 4.0 * h;
+            *out = (h + factor * laplacian).max(sea_level);
         }
-    }
+    });
 }
 
 /// `p.steps` steps of [`step`]; returns the last step's flow.
@@ -110,10 +199,11 @@ pub fn erode(
     hardness: &Field2<f32>,
     rain: &Field2<f32>,
     p: &ErosionParams,
+    pool: &TaskPool,
 ) -> Flow {
-    let mut flow = route(&priority_flood(height, p.sea_level), p.sea_level);
+    let mut flow = drain(height, p.sea_level, pool);
     for _ in 0..p.steps {
-        flow = step(height, uplift, hardness, rain, p);
+        flow = step(height, uplift, hardness, rain, p, pool);
     }
     flow
 }
@@ -123,6 +213,7 @@ mod tests {
     use super::*;
     use crate::island::{IslandParams, island_fields};
     use forge_core::Seed;
+    use forge_task::PoolConfig;
 
     #[test]
     fn uplift_against_erosion_raises_mountains_that_drain_to_the_sea() {
@@ -136,12 +227,14 @@ mod tests {
             steps: 60,
             ..ErosionParams::island()
         };
+        let serial = TaskPool::new(PoolConfig::with_workers(0));
         let flow = erode(
             &mut height,
             &fields.uplift,
             &fields.hardness,
             &fields.rain,
             &erosion,
+            &serial,
         );
         let (lo, hi) = height.min_max();
         assert_eq!(lo, 0.0);
@@ -166,7 +259,8 @@ mod tests {
             }
         }
         assert!(best.1 > 20, "the largest river drains {} cells", best.1);
-        // Deterministic.
+        // Deterministic, and the same with three workers as with none.
+        let parallel = TaskPool::new(PoolConfig::with_workers(3));
         let mut again = fields.shape.map(|_| 0.0_f32);
         erode(
             &mut again,
@@ -174,6 +268,7 @@ mod tests {
             &fields.hardness,
             &fields.rain,
             &erosion,
+            &parallel,
         );
         assert_eq!(again, height);
     }

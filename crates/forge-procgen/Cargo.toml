@@ -1,6 +1,6 @@
 [package]
 name = "forge-procgen"
-description = "Forge procedural generation on the CPU: fields, lattice noise, terrain genesis (island mask, uplift, priority flood, drainage, stream-power erosion) and PNG previews."
+description = "Forge procedural generation on the CPU: fields, lattice noise, terrain genesis (island mask, uplift, basin-graph drainage, stream-power erosion on the job system) and PNG previews."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,5 +12,6 @@ workspace = true
 
 [dependencies]
 forge-core = { workspace = true }
+forge-task = { workspace = true }
 glam = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
