@@ -61,19 +61,8 @@ struct Args {
 
 /// The wind that blows from `from` (a compass point, north up in the previews).
 fn wind_from(from: &str, contrast: f64) -> Result<forge_procgen::Wind> {
-    // WIND_STEPS: 0 = +x (east), 1 = +x+y (south-east), 2 = +y (south), … clockwise.
-    let towards = match from.to_ascii_lowercase().as_str() {
-        "w" => 0,
-        "nw" => 1,
-        "n" => 2,
-        "ne" => 3,
-        "e" => 4,
-        "se" => 5,
-        "s" => 6,
-        "sw" => 7,
-        other => anyhow::bail!("unknown wind origin {other}: n, ne, e, se, s, sw, w or nw"),
-    };
-    Ok(forge_procgen::Wind { towards, contrast })
+    forge_procgen::Wind::from_compass(from, contrast)
+        .with_context(|| format!("unknown wind origin {from}: n, ne, e, se, s, sw, w or nw"))
 }
 
 fn main() -> Result<()> {

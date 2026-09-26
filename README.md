@@ -158,7 +158,8 @@ colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H*
 `--view x,y,z,yaw,pitch` (start the camera there, e.g. in a street), `--origin M` (the city
 moved M metres from the world's origin along every axis, the camera with it: the far-origin
 check, issue #93), `--island SEED` (the 16 km island of `forge-procgen` instead of the city,
-`docs/demos/island.md`; `--island-spacing M` (8), `--island-steps N` (150)),
+`docs/demos/island.md`; `--island-spacing M` (8), `--island-steps N` (150), `--island-wind W` (a
+compass point, orographic rain) with `--island-rain-contrast C`),
 `--force-fallback`. At
 1440p the flight at 300 m/s runs at 3.38 ms of GPU with everything on, its p99 frame 3.8 ms
 (2.6 ms without the probes; 2026-09-25, after #77 and #92). Numbers:

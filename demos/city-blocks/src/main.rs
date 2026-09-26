@@ -133,6 +133,13 @@ struct Args {
     /// Erosion steps of the island.
     #[arg(long, default_value_t = 150)]
     island_steps: u32,
+    /// The island's prevailing wind, by the compass point it blows from (n, ne, e, se, s,
+    /// sw, w, nw): orographic rain, the windward slopes wetter. Without it the rain is flat.
+    #[arg(long)]
+    island_wind: Option<String>,
+    /// How far the island's orographic rain departs from flat (0 flat, 1 the model).
+    #[arg(long, default_value_t = 1.0)]
+    island_rain_contrast: f64,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1321,7 +1328,13 @@ fn cook(args: &Args) -> Cooked {
 /// `--island-steps`): the 16 km island of `forge-procgen` with its default erosion.
 fn island_settings(args: &Args) -> (IslandParams, ErosionParams) {
     let seed = forge_core::Seed::new(args.island.unwrap_or(7));
-    let params = IslandParams::island_16km(seed, args.island_spacing);
+    let mut params = IslandParams::island_16km(seed, args.island_spacing);
+    if let Some(from) = &args.island_wind {
+        params.wind = forge_procgen::Wind::from_compass(from, args.island_rain_contrast);
+        if params.wind.is_none() {
+            tracing::warn!(wind = %from, "unknown wind origin (n, ne, e, se, s, sw, w, nw): the rain stays flat");
+        }
+    }
     let erosion = ErosionParams {
         steps: args.island_steps,
         ..ErosionParams::island()

@@ -143,7 +143,8 @@ gets a rain of 1.70 and the lee 0.21 (cells from 0.05 to the clamp at 10); the w
 cut by dense valleys and the east stays smooth (the picture below); the dry lee keeps its
 depressions, 39 lakes against the calm island's 11, the largest 32 ha. At contrast 0.5:
 1.34 against 0.61, 20 lakes. The refreshes cost 0.2 s over the run. Which contrast looks right
-is the owner's call on the GPU; the calm island is unchanged (its digest is the same).
+is the owner's call on the GPU (`city-blocks --island 7 --island-wind w`, another cache
+key); the calm island is unchanged (its digest is the same).
 
 ![The island with a west wind, at 16 m: the windward coast dissected, the lee smooth](images/island-hillshade-16m-west-wind.png)
 

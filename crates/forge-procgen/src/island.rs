@@ -39,6 +39,25 @@ pub struct Wind {
     pub contrast: f64,
 }
 
+impl Wind {
+    /// The wind that blows from a compass point (`n`, `ne`, `e`, `se`, `s`, `sw`, `w`, `nw`,
+    /// north being the top of the previews, `−y`), or `None` for anything else.
+    pub fn from_compass(from: &str, contrast: f64) -> Option<Self> {
+        let towards = match from.trim().to_ascii_lowercase().as_str() {
+            "w" => 0,
+            "nw" => 1,
+            "n" => 2,
+            "ne" => 3,
+            "e" => 4,
+            "se" => 5,
+            "s" => 6,
+            "sw" => 7,
+            _ => return None,
+        };
+        Some(Self { towards, contrast })
+    }
+}
+
 /// What shapes the island.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IslandParams {
