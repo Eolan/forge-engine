@@ -446,10 +446,34 @@ float3 cell_center_relative(Frame* f, CellBounds b)
     return cells_relative(f, b.cell, b.center);
 }
 
+// An instance's rotation and scale and its origin relative to the camera, built once where
+// several of its points are needed (the cluster cull takes up to five per cluster). Rebuilt
+// at every point, the quaternion's matrix and the camera's cell and offset made the streamed
+// city's cull 1 a third slower under async compute (#93: 0.35 → 0.48 ms, 0.32 once built once).
+struct InstancePose
+{
+    float3x3 frame;
+    float3 origin;
+};
+
+InstancePose instance_pose(Frame* f, Instance inst)
+{
+    InstancePose pose;
+    pose.frame = instance_frame(inst);
+    pose.origin = instance_relative(f, inst);
+    return pose;
+}
+
+// An object-space point of a posed instance, relative to the camera.
+float3 pose_point(InstancePose pose, float3 p)
+{
+    return mul(pose.frame, p) + pose.origin;
+}
+
 // An object-space point of the instance, relative to the camera (the old `mul(model, p)`).
 float3 instance_point(Frame* f, Instance inst, float3 p)
 {
-    return mul(instance_frame(inst), p) + instance_relative(f, inst);
+    return pose_point(instance_pose(f, inst), p);
 }
 
 // An object-space vector of the instance, turned and scaled (the old `mul(model, float4(v, 0))`).
@@ -578,7 +602,7 @@ float lod_error_pixels(Frame* f, float3 center, float radius, float error)
 // their `self`, so the decision is consistent and watertight.
 // `streamed` is a compile-time constant of each cluster-cull entry point (`cluster_cull`):
 // the streamed cut's code and registers stay out of a resident scene's cull.
-bool lod_selected(Frame* f, Meshlet m, Instance inst, bool streamed)
+bool lod_selected(Frame* f, Meshlet m, InstancePose pose, float scale, bool streamed)
 {
     if ((f[0].flags & FLAG_LOD) == 0)
     {
@@ -586,16 +610,15 @@ bool lod_selected(Frame* f, Meshlet m, Instance inst, bool streamed)
         bool resident = !streamed || f[0].page_table[m.page] != PAGE_NONE;
         return m.lod_level == 0 && resident;
     }
-    float scale = inst.scale;
-    float3 self_center = instance_point(f, inst, m.self_center);
+    float3 self_center = pose_point(pose, m.self_center);
     float self_px = lod_error_pixels(f, self_center, m.self_radius * scale, m.self_error * scale);
     if (streamed)
-        return lod_selected_streamed(f, m, inst, self_px);
+        return lod_selected_streamed(f, m, pose, scale, self_px);
     if (self_px > f[0].lod_threshold)
         return false;
     if (isinf(m.parent_error))
         return true;
-    float3 parent_center = instance_point(f, inst, m.parent_center);
+    float3 parent_center = pose_point(pose, m.parent_center);
     float parent_px = lod_error_pixels(f, parent_center, m.parent_radius * scale, m.parent_error * scale);
     return parent_px > f[0].lod_threshold;
 }
@@ -614,14 +637,13 @@ void want_page(Frame* f, uint page, float px)
 // two pages), so the cut stays one watertight surface through any resident set that holds
 // the roots. On the way it records which pages it wants: a drawn cluster its own page, a
 // too-coarse one its children's.
-bool lod_selected_streamed(Frame* f, Meshlet m, Instance inst, float self_px)
+bool lod_selected_streamed(Frame* f, Meshlet m, InstancePose pose, float scale, float self_px)
 {
     if (f[0].page_table[m.page] == PAGE_NONE)
         return false;
     if (!isinf(m.parent_error))
     {
-        float scale = inst.scale;
-        float3 parent_center = instance_point(f, inst, m.parent_center);
+        float3 parent_center = pose_point(pose, m.parent_center);
         float parent_px = lod_error_pixels(f, parent_center, m.parent_radius * scale, m.parent_error * scale);
         if (parent_px <= f[0].lod_threshold)
             return false;
@@ -899,9 +921,10 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     v.meshlet = mesh[0].meshlet_offset + local_meshlet;
     Meshlet m = f[0].meshlets[v.meshlet];
     describe_cluster(f, v, m);
-    float3 center = instance_point(f, inst[0], m.center);
+    InstancePose pose = instance_pose(f, inst[0]);
+    float3 center = pose_point(pose, m.center);
     float world_radius = m.radius * scale;
-    bool visible = lod_selected(f, m, inst[0], streamed);
+    bool visible = lod_selected(f, m, pose, scale, streamed);
     visible = visible && (!frustum || sphere_in_frustum(f, center, world_radius));
     // Normal-cone culling (meshoptimizer): culled when dot(normalize(apex - camera), axis) >=
     // cutoff. A cutoff of 1 marks a cone wider than a hemisphere; meshoptimizer then leaves
@@ -909,8 +932,8 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     // skip the test. The apex is camera-relative: the camera is the origin.
     if (visible && (f[0].flags & FLAG_CONE_CULLING) != 0 && m.cone_cutoff < 1.0)
     {
-        float3 apex = instance_point(f, inst[0], m.cone_apex);
-        float3 axis = normalize(instance_vector(inst[0], m.cone_axis));
+        float3 apex = pose_point(pose, m.cone_apex);
+        float3 axis = normalize(mul(pose.frame, m.cone_axis));
         bool cone_visible = dot(normalize(apex), axis) < m.cone_cutoff;
         if (!cone_visible && show_culled)
             v.culled_debug = true;
