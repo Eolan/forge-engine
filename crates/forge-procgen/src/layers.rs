@@ -7,6 +7,7 @@
 //! the fields they need.
 
 use crate::field::Field2;
+use crate::flow::Flow;
 use crate::hydrology::{self, Lakes, Rivers};
 
 /// Paints `rivers` (traced on a field of `spacing` metres) into `layers` as `layer`: every
@@ -86,6 +87,103 @@ pub fn paint_lakes(
         }
     }
     painted
+}
+
+/// The topographic wetness index, ln(a / tan β) (Beven & Kirkby 1979): `a` the catchment per
+/// metre of contour (the cells draining through a sample, times the cell's area, over the
+/// spacing), `tan β` the slope (Horn's, at least 0.001). High in the valley bottoms and on the
+/// flats that gather water, low on the steep ridges. The index is box-blurred over `blur`
+/// samples each way, so that D8's one-sample channels read as valleys.
+pub fn wetness(height: &Field2<f32>, flow: &Flow, blur: u32) -> Field2<f32> {
+    let spacing = height.spacing as f32;
+    let raw = Field2::from_fn(height.size, height.spacing, |x, y| {
+        let i = (y * height.size + x) as usize;
+        let (gx, gy) = height.gradient(x, y);
+        let tan = (gx * gx + gy * gy).sqrt().max(0.001);
+        (flow.area[i].max(1) as f32 * spacing / tan).ln()
+    });
+    box_blur(&raw, blur)
+}
+
+/// `field` averaged over a square of `radius` samples each way (clamped at the border), by
+/// running sums along the rows and then the columns.
+fn box_blur(field: &Field2<f32>, radius: u32) -> Field2<f32> {
+    let n = field.size as usize;
+    let r = radius as usize;
+    let pass = |src: &[f32], stride: usize, step: usize| -> Vec<f32> {
+        let mut out = vec![0.0_f32; n * n];
+        for line in 0..n {
+            let at = |k: usize| src[line * stride + k * step];
+            let mut sum = 0.0_f64;
+            // The window of the first sample, clamped to the line.
+            for k in 0..=r.min(n - 1) {
+                sum += f64::from(at(k));
+            }
+            for k in 0..n {
+                let (lo, hi) = (k.saturating_sub(r), (k + r).min(n - 1));
+                out[line * stride + k * step] = (sum / (hi - lo + 1) as f64) as f32;
+                if k + r + 1 < n {
+                    sum += f64::from(at(k + r + 1));
+                }
+                if k >= r {
+                    sum -= f64::from(at(k - r));
+                }
+            }
+        }
+        out
+    };
+    let rows = pass(&field.data, n, 1);
+    let data = pass(&rows, 1, n);
+    Field2 {
+        size: field.size,
+        spacing: field.spacing,
+        data,
+    }
+}
+
+/// Repaints the texels of `layers` that are `grass` by their `wetness` (bilinear at the
+/// texel's centre): the driest `dry_share` of them `dry`, the wettest `lush_share` `lush`, the
+/// shares taken over the grass texels themselves (every 16th, for the quantiles). Returns how
+/// many turned dry and how many lush.
+pub fn paint_moisture(
+    layers: &mut Field2<u8>,
+    wetness: &Field2<f32>,
+    grass: u8,
+    (dry, dry_share): (u8, f64),
+    (lush, lush_share): (u8, f64),
+) -> (usize, usize) {
+    let cell = layers.spacing;
+    let n = layers.size;
+    let at = |i: usize| {
+        let (x, y) = ((i as u32) % n, (i as u32) / n);
+        wetness.sample((f64::from(x) + 0.5) * cell, (f64::from(y) + 0.5) * cell)
+    };
+    let mut sample: Vec<f32> = (0..layers.data.len())
+        .step_by(16)
+        .filter(|&i| layers.data[i] == grass)
+        .map(at)
+        .collect();
+    if sample.is_empty() {
+        return (0, 0);
+    }
+    sample.sort_by(f32::total_cmp);
+    let quantile = |q: f64| sample[((q * sample.len() as f64) as usize).min(sample.len() - 1)];
+    let (dry_below, lush_above) = (quantile(dry_share), quantile(1.0 - lush_share));
+    let (mut dried, mut greened) = (0, 0);
+    for i in 0..layers.data.len() {
+        if layers.data[i] != grass {
+            continue;
+        }
+        let w = at(i);
+        if w < dry_below {
+            layers.data[i] = dry;
+            dried += 1;
+        } else if w > lush_above {
+            layers.data[i] = lush;
+            greened += 1;
+        }
+    }
+    (dried, greened)
 }
 
 /// The distance from `p` to the segment `a`–`b`.

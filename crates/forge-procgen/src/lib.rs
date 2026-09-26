@@ -48,5 +48,7 @@ pub use island::{
     IslandFields, IslandParams, Wind, cached_island, generate_island, island_fields,
     orographic_rain, refresh_rain,
 };
-pub use layers::{LayerRule, Shore, paint_lakes, paint_rivers, slope_layers};
+pub use layers::{
+    LayerRule, Shore, paint_lakes, paint_moisture, paint_rivers, slope_layers, wetness,
+};
 pub use ocean::{Ocean, OceanParams, OceanSurface};
