@@ -1,6 +1,6 @@
 # #93 on the RTX 5070 Ti (2026-09-26): what the batch found
 
-The branch `claude/keen-sagan-vk91st` at `6c4a270`, plus `ce318a8` (the fix below), against
+The branch `claude/keen-sagan-vk91st` at `6c4a270`, plus `7e13674` (the fix below; `ce318a8` in `env.txt`, before a rebase onto the research commit `0986b79`), against
 `main` at `f915145`. The toolchain here: rustc 1.98.1, slangc 2026.13.1 (the Vulkan SDK's; the
 cloud had 2026.18.3). Not merged: three of the owner's pass conditions do not hold as written
 (below). The directories hold each run's summary, logs and contact sheet; `crops/` the details.
@@ -17,7 +17,7 @@ cloud had 2026.18.3). Not merged: three of the owner's pass conditions do not ho
 - Timed serially (`FORGE_ASYNC=0`), the streamed city takes the same time on both builds (2.11
   against 2.12 ms), `cluster cull 1` a little less (0.254 → 0.248 ms).
 
-## Found and fixed on the branch (`ce318a8`)
+## Found and fixed on the branch (`7e13674`)
 
 `sun_light`'s highlight took `legacy_camera_world(f)`, the camera's **world** position: with
 `--origin` it moved every highlight. The first `origins.sh` (`origins-first/`) differed by the
