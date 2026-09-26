@@ -15,14 +15,15 @@ without losing the others.
   new arithmetic; `tools/origins.sh` at 0 px and the batch are its acceptance) and commit 8
   (the island drawn by `city-blocks --island 7`). Everything else is CPU code with tests, or
   docs, and can be read and merged on its own.
-- **What the night produced, in numbers:** the 80-byte instance record with integer cells
+- **What the night produced, in numbers** (the seven research files are terrain genesis,
+  dynamic scenes, water, city generation, HDR output, the render graph's next step and the
+  planet's terrain; their plans are on #78, #79, #86, #93, #94, #96 and #97): the 80-byte instance record with integer cells
   (predicted 0.5 px of drift at 10 km before, 0.013 px after); `forge-world` (16 tests) and
   D-037 🟡; the island's genesis on the CPU with the erosion 9.5× faster (3.13 → 0.33 s a step
   at 4097², the 4 m island in 50 s on four cores, the same bytes with any thread count, digests
   recorded); rivers, lakes, the coast distance and the sea's spectrum baked; the island drawn
-  in the engine; an optional wind; four research files (terrain genesis, dynamic scenes, water,
-  city generation) with their plans on the issues (#79, #93, #96, #97, #86); D-038 🟡 (the
-  water pass) and D-039 🟡 (the buildings).
+  in the engine; an optional wind; seven research files with their plans on the issues;
+  D-038 🟡 (the water pass) and D-039 🟡 (the buildings).
 - **Where to start on the owner's machine:** `git fetch origin claude/keen-sagan-vk91st`,
   build it, `cargo test --release`, then `cargo run --release -p genesis -- --spacing 16`
   (three seconds, look at `captures/island/overview.png`), then the batch for commit 3, then
@@ -56,6 +57,7 @@ without losing the others.
 | 22 | `7797c8c`, `540babc`, `a710343`, `360c588` | this file's opening block; `network.png` (the rivers by order) and its picture; the crater-lake and rough-seas tests of the basin graph; the architecture row | no |
 | 23 | `b3bd804` Add the HDR-output research for #94 | `docs/research/hdr-output.md` | no |
 | 24 | `37fc891` Add the render-graph research for #78 | `docs/research/render-graph-next.md` | no |
+| 25 | `828c905` Add the planet-terrain research for the island's planet variant | `docs/research/planet-terrain.md` | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -348,6 +350,20 @@ parallel recording is not worth building yet (recording is 0.08–0.10 ms of an 
 0.5 ms or over 100 passes), a synthetic N-pass frame and the CPU-zone split come first; when it
 pays, a command pool per frame slot, queue and worker, a job per chunk of passes with its own
 primary command buffer, one submit per batch; events cannot cross queues. Summarised on #78.
+
+### 25. The planet-terrain research (commit 25)
+
+`docs/research/planet-terrain.md` for the island's planet variant (orbit to ground): D-037's
+cube sphere confirmed as what every planet renderer converged on; tiles as cluster-DAG props
+(`PropKind::Heightfield` plus a skirt and a halo) per cell of the clipmap, the six level-0
+tiles always resident and the page pool streaming the rest, instead of a second LOD scheme
+(spherical clipmaps, CDLOD or concurrent binary trees; the CBT is the spike to run against it
+later); cracks by locked borders and skirts, pops by a swap rule (the parent under a pixel of
+error) judged by ꟻLIP on a scripted descent; Cesium's horizon test on an occlusion point per
+tile; the island as an uplift override of the coarse genesis so the far tiles show its shape.
+Orders of magnitude: a coarse genesis of 6 × 1025² in about 20 s, a 257² tile amplified in
+tens of milliseconds and cooked in 0.2 s, three or four tiles a second at 300 m/s, about 200
+resident, 1–2 ms of terrain at 1440p at every altitude, a digest per tile's field.
 
 ## How to give the cloud session its results
 
