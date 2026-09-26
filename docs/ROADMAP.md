@@ -58,7 +58,10 @@ stand: the city's flight at 1440p takes 3.38 ms of GPU with everything on (p99 f
 against the 8.33 ms of 120 fps), its south view 1.96 ms at 1600 × 900; the ballad 1.31 ms at
 1600 × 900 and 2.67 ms at 1440p.
 
-**Phase 1's leftovers:** #78 (transient buffers, parallel recording of pass bodies), #94 (an
+**Phase 1's leftovers:** #78 (transient buffers, parallel recording of pass bodies; researched
+2026-09-26, `docs/research/render-graph-next.md`: transient buffers through the existing
+lifetime heap with a poison mode for the device-address hazard first; parallel recording only
+past a measured gate, since recording is 0.1 ms of the frame today), #94 (an
 HDR display output; researched 2026-09-26, `docs/research/hdr-output.md`: the swapchain pair
 to enable, the OS white level to read, ACES 2.0's presets as a rebake, paper white as the one
 real decision, everything but the present verifiable on an SDR monitor), #95 (more async

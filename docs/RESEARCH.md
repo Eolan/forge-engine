@@ -29,6 +29,7 @@ the system you are about to touch.
 | [research/water.md](research/water.md) | ocean spectra and FFT cascades, shores and shallow water, rivers and lakes, water shading, the genesis hand-off, engines' water systems | 34 | done (Phase 2 item 3, `island`) |
 | [research/city-generation.md](research/city-generation.md) | road networks and hierarchy, blocks and lots, districts and landmarks, buildings from grammars and kits, interiors, a city through the cluster DAG, engines' city pipelines | 44 | done (issues #85, #86; the decision for #86 proposed 🟡) |
 | [research/hdr-output.md](research/hdr-output.md) | HDR display output: Vulkan's swapchain colour spaces and metadata, Windows' composition and reference white, PQ and 10-bit dithering, ACES 2.0's HDR presets and OCIO's builtins, the engines' display mappers, UI at paper white, calibration, verification without an HDR monitor | 27 | done (issue #94; sources on GitHub read, the rest confirmed by search only, #99) |
+| [research/render-graph-next.md](research/render-graph-next.md) | render graph, next: transient buffers (lifetimes, aliasing rules, heap packing bounds, device addresses and what validation cannot see), parallel recording of pass bodies (pools per worker, chunks, barriers per command buffer, one submit per queue), split barriers and events against the queues, when it pays and how to measure it | 22 | done (issue #78; Granite, the spec sources, the samples and the layers read on GitHub, the vendor and engine pages confirmed by search only, #99) |
 
 ## Verdicts
 
@@ -201,6 +202,29 @@ overlay (HGiG's MinTML/MaxTML/MaxFFTML, Windows' own app). Ten-bit PQ steps are 
 luminance, so the display pass dithers half a code. Everything but the present is verifiable on an
 SDR monitor through an offscreen 10-bit target and a "fake HDR" preview; the cost is a few
 thousandths of a millisecond.
+
+**Render graph, next (#78).** Transient buffers are the lifetime analysis and the first-fit heap
+D-020 already runs for images, extended to buffers the way Unreal's transient allocator does it and
+Frostbite did not (an atomic linear allocator for buffers) and Granite still does not ("Buffers are
+never transient"). Vulkan adds three rules: a buffer next to an image in the heap is padded to
+`bufferImageGranularity`, any overlapping use with a write needs a memory dependency (the graph's
+first-use barrier already is one), and the contents after the other alias writes are undefined,
+which makes a stale device address the one new bug, and one that neither synchronization validation
+("hazards related to memory aliasing are not detected properly") nor GPU-assisted validation (an
+aliased buffer is a valid address range) can see, so Forge writes a poison mode and hands out
+addresses only inside pass bodies. The packing is dynamic storage allocation, NP-complete, with
+LOAD (the peak of live bytes) as the bound to print next to the heap size; a smarter order is worth
+about 11 % at most. Parallel recording has one published shape (Granite's task per physical pass is
+the closest code): pools per worker per frame in flight, the plan frozen before the jobs start,
+each job recording a chunk of consecutive passes with its barriers into its own primary command
+buffer, the buffers of a batch submitted in order in one `vkQueueSubmit2`; NVIDIA and AMD both
+warn that submissions cost a kernel call and every command buffer carries driver work, and a 2026
+measurement on an RTX 5070 puts fifteen redundant barriers at 29 % of GPU span, so chunks, not
+passes, and no extra barriers. Events split a barrier but cannot cross queues; #77's timelines stay.
+Forge's recording is 0.08–0.10 ms of an 8.33 ms budget today, so the order is: transient buffers
+and the poison mode, the meshlet lists migrated one by one at 0 px, the CPU zones split in the
+overlay, a synthetic 100-pass frame to size the gate, and parallel recording only once the bodies
+pass 0.5 ms or a frame passes 100 passes.
 
 ## Still to research
 
