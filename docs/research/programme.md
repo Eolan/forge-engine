@@ -141,7 +141,34 @@ VOICE_ADDS
 **Game AI and ecosystems.** Settled: ecosystems as rule systems over the climate atlas
 (succession, fauna by tolerance, planet-environment.md §3); the simulation runs on a fixed
 tick with simulation LOD and digests (`forge-sim`); animation reacts to the world through
-events. *game-ai-ecosystems.md adds:* AI_ADDS
+events. *game-ai-ecosystems.md adds:* the shape the owner chose (utility over needs inside schedule
+packages, a small reactive tree, smart objects that advertise, reserve and carry the
+animation, a planner for reconstruction only) is what The Sims, ArenaNet (Mark & Lewis, GDC
+2015), Bethesda's Creation Kit and F.E.A.R. published, with Evans' Sims 3 Boltzmann pick and
+its temperature as the personality knob; navigation on generated and deformable terrain is
+Recast's voxel pipeline per tile with the tile cache (about 2 ms a tile rebuild) plus
+Polyanya's any-angle query, and the lesson that `recastnavigation-rs` needed a deterministic
+fork of Recast for lock-step play, so Forge's generator pins its float paths from day one
+(`rerecast` is the port to diff against, `big-brain` is not deterministic by contract, so
+the scorer is Forge's); every living world that works is an AI level of detail with numbers
+(Assassin's Creed Unity's 40 real AIs and 120 high-resolution bodies in a crowd of 10 000,
+Stalker's offline graph, Watch Dogs: Legion's population as database rows) and Stalker 2 is
+the documented failure (a cut offline radius made spawns visible), which gives the planet
+three layers (statistics per climate cell in game-day steps, regional records on the cell
+graph to a few kilometres, full agents within a few hundred metres), hand-offs as pure
+functions of the seed and a "no spawn within 150 m of a view frustum" test; animals are the
+same machinery with per-species senses, a herd as a group agent (Horizon's roles, Couzin's
+zones as species data), home ranges for predators, populations as damped densities
+calibrated against NetLogo's Wolf Sheep model in Grimm's ODD form (D-016's fixed order,
+written by ecologists); ship AI has not changed since Elite's TACTICS routine and FreeSpace's
+goal stack, its mathematics (Isaacs' pursuit barrier, Balch & Arkin's formations, Açıkmeşe's
+convex descent) is deterministic while the learned agents (GT Sophy, AlphaDogfight) stay off
+the server tick; budgets from the sources (Reynolds' 15 000 boids at 60 fps on a PS3, the
+City Sample's 35 000 pedestrians, Cities: Skylines' 65 536 citizens) give an estimate of
+20–50 full agents per millisecond per core, to be replaced by the overlay's numbers; the
+build order: `forge-sim`'s tick and digest, the navmesh rebuilt around a crater, twenty
+villagers, two animal archetypes and a herd, the LOD, the crowd and carts, the
+reconstruction planner, the ballad's ships, the planet layers last.
 
 **Players in sync, and how many.** Settled: QUIC datagrams and streams, acked-baseline
 deltas, cell interest, 60 Hz simulation and 30 Hz snapshots, inputs redundant, determinism

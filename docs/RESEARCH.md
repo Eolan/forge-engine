@@ -32,6 +32,7 @@ the system you are about to touch.
 | [research/render-graph-next.md](research/render-graph-next.md) | render graph, next: transient buffers (lifetimes, aliasing rules, heap packing bounds, device addresses and what validation cannot see), parallel recording of pass bodies (pools per worker, chunks, barriers per command buffer, one submit per queue), split barriers and events against the queues, when it pays and how to measure it | 22 | done (issue #78; Granite, the spec sources, the samples and the layers read on GitHub, the vendor and engine pages confirmed by search only, #99) |
 | [research/planet-terrain.md](research/planet-terrain.md) | planet terrain from orbit to the ground: the cube sphere and its alternatives (S2, Cesium's quadtree, HEALPix), LOD on the sphere (spherical clipmaps, CDLOD, concurrent binary trees, Nanite's landscape, Forge's DAG per tile), precision, horizon culling, skirts and pops, tiles generated on demand and streamed through the page pool, the planet games and the open source, the atmosphere from orbit, what to measure | 32 | done (Phase 2's planet variant of `island`, D-037 🟡; the Cesium formats, the CBT demos and the Godot planets read on GitHub, the rest confirmed by search only, #99) |
 | [research/civilisations-styles.md](research/civilisations-styles.md) | civilisations and styles: vernacular form as parameters (climate, materials, culture), style grammars per culture and era (Palladio to CGA's Pompeii and Puuc Maya, Islamic patterns and muqarnas, Gothic tracery, skyscrapers, brutalism, greebles, space habitats), decor and props (Infinigen Indoors, ShapeAssembly, layout solvers, set dressing), materials by mathematics and by example, weathering and ageing, the games' culture sets, the `Civilisation` record over D-039's style sets | 46 | done (the owner's brief behind #81–#91; five READMEs read on GitHub, the rest confirmed by search only, #99) |
+| [research/game-ai-ecosystems.md](research/game-ai-ecosystems.md) | game AI and ecosystems: decision architectures (behaviour trees, utility over needs, GOAP and HTN planners, schedules and packages, smart objects, the director and barks, where learned policies stand), navigation (Recast's tiles rebuilt where the terrain changes, Polyanya, flow fields, ORCA, Reynolds' steering, sparse voxel octrees for flight, lanes for traffic), crowds and the simulation LOD (AC Unity's 40/120/10 000, A-Life and Stalker 2's lesson, Census), animals and their populations (needs, senses, herds, territories, Wolf Sheep Predation and ODD), ship AI in 6 DoF (Elite, FreeSpace, Isaacs, formations, convex landing), the planet-scale layers with their hand-offs and digests, the Rust crates | 41 (+ a table of 16 projects) | done (the owner's brief behind #84, #87, #90 and #80; Phase 3's `forge-sim`; thirteen repositories read on GitHub, the rest confirmed by search only, #99) |
 
 ## Verdicts
 
@@ -282,6 +283,44 @@ megastructures on their own paths; textures cooked from generator graphs to KTX2
 response function and the record over the two existing sets, then the material generator, wear, a
 primitive set, a futuristic set for the belt's bases, props and dressing, and only then a third and
 fourth culture to measure how much of a culture is data.
+
+**Game AI and ecosystems.** Behaviour selection has four published shapes and the owner has
+picked two of them for the villagers and the animals (utility scoring over needs inside a schedule
+of packages re-evaluated by condition — The Sims' advertisements and Boltzmann pick, ArenaNet's
+Infinite Axis Utility System, Oblivion's and Skyrim's package stacks — with a small behaviour tree
+for interrupts in Isla's Halo 2 shape) and a planner (F.E.A.R.'s GOAP, Humphreys' total-order HTN
+if it outgrows it) for the reconstruction jobs alone; smart objects carry the affordance, the
+reservation and the animation, so a new prop is data. Navigation is Recast's voxel pipeline on
+tiles the terrain edits invalidate (Mononen's tile cache rebuilt one tile in about 2 ms in 2011),
+Polyanya's any-angle query with layer flags for doors and fire, flow fields per attractor for the
+market (Supreme Commander 2, Planet Coaster's 10 000 guests), ORCA for the last metre, Reynolds'
+steering under everything, a sparse voxel octree with Theta* for birds, fish and ships, and the
+road polylines as a lane graph for the traffic, never the navmesh. Every living world that works
+is an AI level of detail — Assassin's Creed Unity's 40 real AIs and 120 bodies inside 10 000,
+Stalker's A-Life offline graph and Stalker 2's 2024 failure when its radius and memory were cut,
+Watch Dogs: Legion's population as database rows — and that is the planet's shape too: a
+statistical layer per climate cell in game-day steps, a regional layer of records on the cell
+graph out to kilometres, a full layer within a few hundred metres, with hand-offs that are pure
+functions of the seed (spawn at need zones, fold deaths and births back into densities) and
+Chenney's consistency and completeness as the tests. Animals are the same machinery with needs,
+per-species senses, a herd as a group agent with Couzin's zones and Horizon's role split, a home
+range for predators, and populations calibrated against NetLogo's Wolf Sheep Predation and written
+in Grimm's ODD form; ships are Elite's page of rules and FreeSpace's goal stack as utility actions
+over thrust-limited steering, a threat table, formation slots (Balch & Arkin) and a PID autopilot,
+with Isaacs' barrier deciding turn-in against run and convex descent guidance kept for a landing
+that may never come; learned policies (GT Sophy, AlphaStar, the AlphaDogfight hierarchy) win but are
+not a function of a seed, so they stay off the tick. In Rust the geometry exists to read and to
+diff against (`rerecast`, the deterministic fork behind `recastnavigation-rs`, `polyanya`, `dodgy`,
+`landmass`), the decision crates are the right shape but not the right contract (`big-brain` three
+Bevy versions behind, `bevy_behave`'s entity-per-task), so Forge writes the generator, the query,
+ORCA, the scorer, the schedules, the smart objects, the LOD and the digests, and depends on
+`pathfinding` and a small tree crate. The build order starts with `forge-sim`'s tick and digest,
+then the navmesh over the island rebuilt around a crater, twenty villagers with schedules and smart
+objects, two animal archetypes and a herd, the LOD with its radius test, the crowd and the carts,
+the reconstruction planner, the ships for the ballad, and only then the planet's layers; the budget
+to measure is about 20–50 full agents per millisecond per core, thousands of regional records, and
+a few hundred nanoseconds per species per cell per game-day, all estimates until the overlay says
+otherwise.
 
 ## Still to research
 
