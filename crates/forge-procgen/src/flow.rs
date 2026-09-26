@@ -848,4 +848,116 @@ mod tests {
         });
         assert!(seen.iter().all(|&v| v == 1));
     }
+
+    #[test]
+    fn a_crater_lake_leaves_through_the_notch_in_its_rim_and_nested_bowls_reach_the_sea() {
+        // A ring mountain 100 m high at radius 20 around a bowl 20 m deep at the centre, on a
+        // plain sloping to the sea at the border; one notch in the rim, down to 60 m, is the
+        // only way out for the bowl's water: every bowl cell must drain through it.
+        let n = 81_u32;
+        let notch_angle = 0.7_f32;
+        let field = Field2::from_fn(n, 10.0, |x, y| {
+            let (dx, dy) = (x as f32 - 40.0, y as f32 - 40.0);
+            let r = (dx * dx + dy * dy).sqrt();
+            let angle = dy.atan2(dx);
+            let rim = if (angle - notch_angle).abs() < 0.12 {
+                60.0
+            } else {
+                100.0
+            };
+            if r < 20.0 {
+                // The bowl: 20 m at the centre, rising to the rim's foot at 40 m.
+                20.0 + r + (r / 20.0).powi(4) * (rim - 40.0)
+            } else if r < 24.0 {
+                // The rim's outer slope, down to the plain at 50 m (below the notch).
+                rim - (rim - 50.0) * (r - 20.0) / 4.0
+            } else {
+                (50.0 - (r - 24.0) * 2.5).max(-5.0)
+            }
+        });
+        let serial = TaskPool::new(forge_task::PoolConfig::with_workers(0));
+        let parallel = TaskPool::new(forge_task::PoolConfig::with_workers(3));
+        let flow = drain(&field, 0.0, &serial);
+        check_invariants(&field, &flow);
+        assert_eq!(drain(&field, 0.0, &parallel), flow);
+        // The notch: the lowest rim cell.
+        let notch = (0..field.len())
+            .filter(|&i| {
+                let (x, y) = field.coords(i);
+                let (dx, dy) = (x as f32 - 40.0, y as f32 - 40.0);
+                let r = (dx * dx + dy * dy).sqrt();
+                (19.5..21.5).contains(&r)
+            })
+            .min_by(|&a, &b| field.data[a].total_cmp(&field.data[b]))
+            .unwrap();
+        // Every bowl cell's path crosses the rim exactly where the notch is (within a cell).
+        let (nx, ny) = field.coords(notch);
+        for i in 0..field.len() {
+            let (x, y) = field.coords(i);
+            let (dx, dy) = (x as f32 - 40.0, y as f32 - 40.0);
+            if (dx * dx + dy * dy).sqrt() >= 18.0 {
+                continue;
+            }
+            let mut c = i;
+            let mut crossed = None;
+            while !flow.is_outlet(c) {
+                let (cx, cy) = field.coords(c);
+                let (ddx, ddy) = (cx as f32 - 40.0, cy as f32 - 40.0);
+                if (ddx * ddx + ddy * ddy).sqrt() >= 19.5 && crossed.is_none() {
+                    crossed = Some((cx, cy));
+                }
+                c = flow.receiver[c] as usize;
+            }
+            let (cx, cy) = crossed.expect("the bowl's water reaches the border");
+            assert!(
+                (cx as i32 - nx as i32).abs() <= 2 && (cy as i32 - ny as i32).abs() <= 2,
+                "cell {i} leaves the crater at ({cx}, {cy}), the notch is at ({nx}, {ny})"
+            );
+        }
+        // The flood agrees on the spill height: the bowl fills to the pass the carve found
+        // (the highest cell on the centre's way out), which sits at the notch.
+        let filled = priority_flood(&field, 0.0);
+        let centre = field.index(40, 40);
+        let mut c = centre;
+        let mut pass = centre;
+        while !flow.is_outlet(c) {
+            if field.data[c] > field.data[pass] {
+                pass = c;
+            }
+            c = flow.receiver[c] as usize;
+        }
+        let (px, py) = field.coords(pass);
+        let (pdx, pdy) = (px as f32 - 40.0, py as f32 - 40.0);
+        let pass_angle = pdy.atan2(pdx);
+        let pass_radius = (pdx * pdx + pdy * pdy).sqrt();
+        assert!(
+            (pass_angle - notch_angle).abs() < 0.15 && (18.5..22.0).contains(&pass_radius),
+            "the pass at ({px}, {py}) is not in the notch"
+        );
+        assert!(
+            (filled.data[centre] - field.data[pass]).abs() < 0.5,
+            "flood {} vs pass {}",
+            filled.data[centre],
+            field.data[pass]
+        );
+        // Several rough seas: the invariants hold, and the same water leaves either way.
+        for seed in 1..6_u64 {
+            let rough = Field2::from_fn(64, 10.0, |x, y| {
+                let n = fbm(seed, f64::from(x) / 5.0, f64::from(y) / 5.0, 3, 2.0, 0.5) as f32;
+                let (dx, dy) = (x as f32 - 32.0, y as f32 - 32.0);
+                25.0 * n + 12.0 - (dx * dx + dy * dy).sqrt() * 0.3
+            });
+            let flow = drain(&rough, 0.0, &serial);
+            check_invariants(&rough, &flow);
+            assert_eq!(drain(&rough, 0.0, &parallel), flow);
+            let reference = route(&priority_flood(&rough, 0.0), 0.0);
+            let outflow = |f: &Flow| -> u32 {
+                (0..rough.len())
+                    .filter(|&i| f.is_outlet(i))
+                    .map(|i| f.area[i])
+                    .sum()
+            };
+            assert_eq!(outflow(&flow), outflow(&reference));
+        }
+    }
 }
