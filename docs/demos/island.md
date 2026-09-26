@@ -14,8 +14,8 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets (stage 4) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
-| Materials from the fields, the layer map (stage 6) | planned |
-| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`; its first look has false shadows, no sea and pale rock ("In the engine" below, #96) |
+| Materials from the fields, the layer map (stage 6) | started: sea, sand, grass and rock from the height and the slope (`forge_procgen::slope_layers`, "In the engine" below); moisture, soil and the rivers' banks planned |
+| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
 
 ```
@@ -38,12 +38,13 @@ first seen on the 5070 Ti on 2026-09-26: "In the engine" below): the heightfield
 8.4 M triangles like the city's ground; 4 m for the 4097² target, 33.5 M) is generated once
 into `mesh-cache/island-<key>.f32`, cooked into a cluster DAG through the same path as the
 city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached, and
-drawn as the scene's one instance on the ground's layered material, rock where the ground is
-steeper than 0.45 or higher than 380 m and grass elsewhere (`forge_procgen::slope_layers`, a
-texel every 4 m), under the city's sky, with the sun's shadows, the probes and TAA. The camera
-starts over the sea south of the island, looking north at its coast; `--view` and the usual
-keys apply, `--origin` too. The first start costs the erosion (13 s at 8 m on four cores) and
-the cook (about the city's 13 s); the next ones load both.
+drawn on its own layered ground: the sea's stand-in below 0 m, sand on the shore, rock where
+the ground is steeper than 0.45 and grass elsewhere (`forge_procgen::slope_layers`, a texel
+every 4 m), with a flat sea around it to the horizon, under the city's sky at a 30° sun, with
+the sun's shadows, the probes and TAA. The camera starts over the sea south of the island,
+looking north at its coast; `--view` and the usual keys apply, `--origin` and
+`--sun-elevation` too. The first start costs the erosion (5 s at 8 m on the 9800X3D, 13 s on
+the cloud's four cores) and the cook (11–16 s); the next ones load both.
 
 ## The genesis, on the CPU (2026-09-26)
 
@@ -214,10 +215,42 @@ What the first look shows, for #96 to fix before the props:
   pixels were left in the view from 1 200 m): that view is now within 583 px of the one
   without shadows, and the batch is unchanged (0 px; the props and rocks keep 0.15 m, since a
   larger start moved the rocks' own shadows in the ballad).
-- **No sea.** The sea floor is the field's 0 m, drawn as grass to the domain's edge. The water
-  pass is D-038 🟡; until then the ground needs a shore and a sea-floor layer.
-- **Rock that reads as snow.** Above 380 m and on slopes over 0.45 the ground takes the city's
-  rock layer, a pale grey that reads white from afar, with stair-stepped edges where the layer
-  map's 4 m texels change.
+- **No sea** (a stand-in the same day). The sea floor was the field's 0 m, drawn as grass to the
+  domain's edge.
+- **Rock that reads as snow** (fixed the same day). Above 380 m and on slopes over 0.45 the
+  ground took the city's rock layer, a pale grey that reads white from afar, with
+  stair-stepped edges where the layer map's 4 m texels changed.
 - **A camera to place with care.** `--view` takes an absolute height, and the land rises past
   500 m: a view at 250 m, 2.5 km in from the south coast, is under the ground.
+
+**The island's own ground (2026-09-26).** The island no longer borrows the city's ground rows:
+- `CityMaterials::island_ground` gives it four rows after its layered row: a deeper green, sand,
+  the sea and a dark volcanic rock.
+- `forge_procgen::slope_layers` takes a `Shore`: the sea at and below 0 m, sand on gentle ground
+  up to 2.5 m, rock on slopes over 0.45 (no longer above an altitude: a tropical island is green
+  to its peaks), grass elsewhere.
+- The slope is Horn's gradient interpolated between the samples, rather than the nearest
+  sample's, so a layer's border no longer steps with the 8 m grid. The 4096² map takes 190 ms.
+
+The sea is a **stand-in** until the water pass (D-038 🟡): the sea floor shaded smooth and dark
+(reflectance 0.02, a Blinn-Phong power of 400), so it reflects the sky. A flat skirt 262 km
+across (`sea_prop`, 0.2 m under the field's 0 m) carries it to the horizon; the field alone
+stopped 8 km out, where the atmosphere's brown ground showed.
+
+Two more changes:
+- The island's sun stands at 30° by default (the city keeps 63.4°): from the default view a high
+  sun lit the slopes head-on and flattened them.
+- The island's prop is named `island`: as `terrain` it shared the city's cache file, and each
+  evicted the other (an 11–16 s re-cook at every switch).
+
+GPU: 0.74 ms a frame from the default view, the same as before (the layered shading 0.11 ms).
+The batch is unchanged (26 images at 0 px).
+
+![The island from the default view with its own ground: the sea's stand-in, sand along the shore, rock on the steep slopes, a 30° sun](images/island-engine-sea.png)
+
+![From the west, 400 m up: the skirt carries the sea to the horizon](images/island-engine-west.png)
+
+One artefact is left, not the island's: seen from low over the sea, a line runs across it where
+the probes' last cascade ends, about 900 m out. Inside the cascades #68 dims the sea's sky
+reflection by what the probes see towards the mirror direction, and they see the sea as nearly
+black, since their rays shade diffusely (#100).

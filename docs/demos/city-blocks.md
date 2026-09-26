@@ -68,7 +68,7 @@ Options:
   along −z), e.g. `--view=-8,1.7,1135,-50,10` in a street.
 - `--origin M` moves the city M metres from the world's origin along every axis, the camera
   with it: the far-origin check (issue #93, below).
-- `--sun-elevation DEG` sets the sun over the horizon (63.4; at low suns `--ev100 13` or so keeps the exposure).
+- `--sun-elevation DEG` sets the sun over the horizon (63.4 over the city, 30 over the island; at low suns `--ev100 13` or so keeps the exposure).
 - `--width W --height H` sets the window (1600 × 900; `--width 2560 --height 1440` for the
   target); `--no-taa` draws without TAA.
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,

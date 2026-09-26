@@ -161,9 +161,10 @@ struct Args {
     /// captures; with `--vsync` at 60 Hz, still 300 m/s).
     #[arg(long)]
     fixed_step: bool,
-    /// The sun's elevation over the horizon, degrees (63.4: the renderer's default sun).
-    #[arg(long, default_value_t = 63.4)]
-    sun_elevation: f32,
+    /// The sun's elevation over the horizon, degrees (63.4 over the city, the renderer's default
+    /// sun; 30 over the island, where a high sun flattens the relief).
+    #[arg(long)]
+    sun_elevation: Option<f32>,
     /// Draw without the sun's ray-traced shadows (J toggles them; devices without ray queries
     /// have none).
     #[arg(long)]
@@ -306,7 +307,8 @@ impl Gallery {
         let ao_on = !args.no_ao;
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
         let atmosphere_params = AtmosphereParams::earth();
-        let elevation = args.sun_elevation.to_radians();
+        let default_elevation = if args.island.is_some() { 30.0 } else { 63.4 };
+        let elevation = args.sun_elevation.unwrap_or(default_elevation).to_radians();
         renderer.sun_dir = Vec3::new(
             0.8 * elevation.cos(),
             elevation.sin(),
@@ -1278,6 +1280,76 @@ impl CityMaterials {
         Ok(ground)
     }
 
+    /// The island's ground (`docs/demos/island.md`, #96): its layer map (`island_layer`) and a
+    /// row per layer after the layered row, for a tropical island rather than the city's
+    /// hills: a deeper green, sand on the beaches, dark volcanic rock on the steep ground, and
+    /// the sea floor shaded as calm water, smooth and dark, the sea's stand-in until the water
+    /// is drawn (D-038).
+    fn island_ground(&mut self, layers: &[u8], texels: u32, size: f32) -> Result<MaterialId> {
+        let map = self
+            .textures
+            .add_layer_map("island layers", texels, texels, layers)?;
+        let [rock, concrete, _, grass] = self.sets;
+        let ground = self.table.add(Material::new(
+            "island ground",
+            RenderLayer {
+                class: ShadingClass::Layered,
+                albedo_texture: Some(map),
+                texture_scale: size,
+                ..RenderLayer::default()
+            },
+        ));
+        let rows = [
+            (
+                "island: grass",
+                textured(
+                    grass,
+                    [0.72, 0.9, 0.55],
+                    [0.82, 0.98, 0.62],
+                    12.0,
+                    6.0,
+                    0.02,
+                ),
+            ),
+            (
+                "island: sand",
+                textured(
+                    concrete,
+                    [0.86, 0.76, 0.56],
+                    [0.94, 0.85, 0.66],
+                    2.0,
+                    10.0,
+                    0.04,
+                ),
+            ),
+            (
+                "island: sea",
+                RenderLayer {
+                    color_a: [0.015, 0.05, 0.07],
+                    color_b: [0.02, 0.06, 0.08],
+                    roughness: RenderLayer::roughness_for_power(400.0),
+                    specular: 0.5,
+                    reflectance: 0.02,
+                    ..RenderLayer::default()
+                },
+            ),
+            (
+                "island: rock",
+                textured(rock, [0.3, 0.3, 0.29], [0.38, 0.37, 0.35], 6.0, 14.0, 0.05),
+            ),
+        ];
+        assert_eq!(rows.len(), usize::from(island_layer::COUNT));
+        for (name, layer) in rows {
+            let row = self.table.add(Material::new(name, layer));
+            if name == "island: sea" {
+                // The sea around the island's square (`sea_prop`) is that row alone.
+                self.by_prop.insert("sea", row);
+            }
+        }
+        self.by_prop.insert("island", ground);
+        Ok(ground)
+    }
+
     /// The row `prop` is made of (the default grey for a prop the table does not know).
     fn of(&self, prop: &str) -> MaterialId {
         self.by_prop
@@ -1306,8 +1378,8 @@ struct Cooked {
 /// loading screen (issue #25).
 fn cook(args: &Args) -> Cooked {
     let props = if args.island.is_some() {
-        // The island alone (`docs/demos/island.md`); its props come later.
-        vec![island_prop(args)]
+        // The island and the sea around it (`docs/demos/island.md`); its props come later.
+        vec![island_prop(args), sea_prop()]
     } else {
         let mut props = city_props();
         if !args.gallery {
@@ -1322,6 +1394,20 @@ fn cook(args: &Args) -> Cooked {
     let pages_in_memory = args.gallery || args.stream_pool == 0;
     let (meshes, ms) = cook_props(&props, args.recook, pages_in_memory);
     Cooked { meshes, ms }
+}
+
+/// The island's ground layers (`CityMaterials::island_ground`, `forge_procgen::slope_layers`).
+mod island_layer {
+    /// Grass, on the gentle ground above the beaches.
+    pub const GRASS: u8 = 0;
+    /// Sand, on the land's first metres above the sea.
+    pub const SAND: u8 = 1;
+    /// The sea floor at 0 m, shaded as calm water.
+    pub const SEA: u8 = 2;
+    /// Rock, where the ground is steep.
+    pub const ROCK: u8 = 3;
+    /// How many layers there are.
+    pub const COUNT: u8 = 4;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -1364,13 +1450,14 @@ fn island_heights(args: &Args) -> Field2<f32> {
     height
 }
 
-/// The island as a prop named `terrain` (so it takes the ground's layered material), its
-/// samples generated only when the cooked mesh is not in the cache.
+/// The island as a prop (on its layered ground, `CityMaterials::island_ground`), its samples
+/// generated only when the cooked mesh is not in the cache. Named `island`, not `terrain`:
+/// the cache keeps one file per name, and the city's ground and the island evicted each other.
 fn island_prop(args: &Args) -> PropSpec {
     let (params, erosion) = island_settings(args);
     let for_source = args.clone();
     PropSpec {
-        name: "terrain".to_owned(),
+        name: "island".to_owned(),
         kind: PropKind::Heightfield(Heightfield {
             key: forge_procgen::island::island_key(&params, &erosion),
             samples: params.size,
@@ -1380,12 +1467,28 @@ fn island_prop(args: &Args) -> PropSpec {
     }
 }
 
+/// The sea around the island's square (#96): a flat heightfield 262 km across, 0.2 m under
+/// the island's sea floor, on the sea's row, so that the stand-in sea reaches the horizon
+/// instead of stopping at the field's edge 8 km out.
+fn sea_prop() -> PropSpec {
+    const SAMPLES: u32 = 33;
+    PropSpec {
+        name: "sea".to_owned(),
+        kind: PropKind::Heightfield(Heightfield {
+            key: "a flat sea 0.2 m under the island's".to_owned(),
+            samples: SAMPLES,
+            spacing: 8192.0,
+            source: Arc::new(|| vec![-0.2; (SAMPLES * SAMPLES) as usize]),
+        }),
+    }
+}
+
 /// The island (`docs/demos/island.md`): its heightfield cooked (or loaded) as the one
 /// instance of the scene, on the ground's layered material with rock where the ground is
 /// steep or high and grass elsewhere.
 fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene> {
     let start = Instant::now();
-    let props = vec![island_prop(args)];
+    let props = vec![island_prop(args), sea_prop()];
     let streamed = args.stream_pool > 0;
     let (meshes, cook_ms) = (cooked.meshes, cooked.ms);
     let mut builder = MeshletSceneBuilder::new();
@@ -1394,22 +1497,35 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     let height = island_heights(args);
     let extent = height.extent() as f32;
     let texels = 4096;
+    let layers_start = Instant::now();
     let layers = forge_procgen::slope_layers(
         &height,
         &forge_procgen::LayerRule {
-            grass: placement::layer::GRASS,
-            rock: placement::layer::ROCK,
+            grass: island_layer::GRASS,
+            rock: island_layer::ROCK,
             rock_slope: 0.45,
-            rock_above: 380.0,
+            // Green to the peaks, as on a tropical island: rock where it is steep.
+            rock_above: f32::INFINITY,
+            shore: Some(forge_procgen::Shore {
+                sea: island_layer::SEA,
+                sand: island_layer::SAND,
+                sand_below: 2.5,
+            }),
         },
         texels,
     );
+    tracing::info!(
+        texels,
+        ms = layers_start.elapsed().as_millis(),
+        "island layer map"
+    );
     builder.set_ray_traced(!args.no_shadows);
     let mut materials = CityMaterials::new(&ctx.device)?;
-    materials.ground(&layers.data, texels, extent)?;
+    materials.island_ground(&layers.data, texels, extent)?;
     materials.apply(&mut builder, &props, &ids);
     builder.set_origin(scene_origin(args));
     builder.add_instance(ids[0], Mat4::IDENTITY);
+    builder.add_instance(ids[1], Mat4::IDENTITY);
     let residency = if streamed {
         Residency::Streamed(StreamingConfig::from_mib(
             args.stream_pool,
