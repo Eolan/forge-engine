@@ -77,7 +77,12 @@ overlap), #39 (the RTX 3080 run).
   does not see, where the record before broke down at 1 000 km; no view slower
   (`docs/demos/city-blocks.md`, "Far from the origin"). The cloud branch of that night
   (`docs/HANDOVER.md`) is merged: `forge-world`, the island's genesis in `forge-procgen`, and
-  the island drawn by `city-blocks --island` (#96: its shadows, sea and rock come next).
+  the island drawn by `city-blocks --island`. The island now has its ground, rivers, lakes,
+  rocks and a stand-in sea (#96, `docs/demos/island.md`, "In the engine"). What waits for the
+  owner:
+  - its look (`city-blocks --island 7`), before the `island` demo of its own;
+  - D-038 for the real water;
+  - #97's lakes and 4 m flanks.
 
 **Waiting:**
 - #39 waits for the RTX 3080.
@@ -260,8 +265,15 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    uplift, D8 drainage with the depressions carved through the basin graph, the implicit
    stream-power erosion on the job system, PNG previews; a 16 km island at 16 m in 3 s, at 4 m
    in 50 s on the cloud's four cores (23 s on the 9800X3D, the same digests); the field cooked
-   into a cluster DAG and drawn by `city-blocks --island` (first seen 2026-09-26: #96 next).
-   Next: the island's own demo with props (#96), the amplification to 2 m and the materials.
+   into a cluster DAG and drawn by `city-blocks --island`. On the 5070 Ti the same day (#96):
+   - its own ground: sand, rock by the slope over 8 m, and the rivers and lakes of stage 4
+     painted in;
+   - a sea floor from the coast distance, under a sea plane that stands in for the water;
+   - 300 000 rocks placed by the GPU on the land;
+   - a first view on the coast;
+   - the island in the batch, the validation and the timings (1.34 ms from the coast).
+   Next: the owner's judgement of the look, then the `island` demo of its own (#96 step 3), the
+   amplification to 2 m (stage 5, tiles with locked borders) and more of stage 6's materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute
    queue and a forward surface pass first, then the shore from the coast distance, the rivers
