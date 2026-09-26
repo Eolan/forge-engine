@@ -52,7 +52,9 @@ without losing the others.
 | 18 | `58247fc` Rain summed over the catchment, and an opt-in wind with orographic rain | `Wind`, `orographic_rain`, `genesis --wind-from`; the calm island's digest unchanged | no |
 | 19 | `f48c29d` Give city-blocks the island's wind | `--island-wind`, `--island-rain-contrast` | no |
 | 20 | `f9bbf07` Propose D-038: the water surface as a forward pass, FFT cascades on the compute queue | `docs/DECISIONS.md` 🟡 | no |
-| 21 | (below) Add the city-generation research; propose D-039 for #86 | `docs/research/city-generation.md` (#85, #86), D-039 🟡 | no |
+| 21 | `9871c1c` Add the city-generation research; propose D-039 for #86 | `docs/research/city-generation.md` (#85, #86), D-039 🟡 | no |
+| 22 | `7797c8c`, `540babc`, `a710343`, `360c588` | this file's opening block; `network.png` (the rivers by order) and its picture; the crater-lake and rough-seas tests of the basin graph; the architecture row | no |
+| 23 | (below) Add the HDR-output research for #94 | `docs/research/hdr-output.md` | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
