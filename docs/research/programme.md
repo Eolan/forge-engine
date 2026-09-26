@@ -176,11 +176,18 @@ database (netcode.md). *many-players.md adds:* PLAYERS_ADDS
 - **The server as the authority (netcode.md, D-010).** Clients predict, the server decides;
   world edits, damage and repairs are replicated as records, not as geometry.
 
-## 4. The order of work: start small
+## 4. The order of work: the engine's foundations first, in any case
 
-The roadmap's phases already order the foundations; the brief adds content axes (cultures,
-eras, planets, species, ships) that multiply whatever exists. The rule proposed here: **no
-axis grows before one vertical slice touches every system once**, on the island, small.
+The owner's rule (2026-09-26): **the game engine's foundations come first, in any case.** The
+roadmap's phases are that order (`forge-sim`, `forge-physics`, `forge-net`, `forge-audio`,
+`forge-anim`, the vegetation ladder, memory and streaming); the brief adds content axes
+(cultures, eras, planets, species, ships) that multiply whatever the foundations can carry.
+So the research below is not a list of work items: it is what each foundation must be shaped
+to carry when its phase comes (records for world edits in the data model, a medium per
+listener in the audio, cells and events in the netcode, a body plan in the animation, a tick
+with simulation LOD and digests in the simulation), so that the content axes fit later without
+rebuilding. The second rule follows from the first: **no axis grows before one vertical slice
+touches every foundation once**, on the island, small.
 
 1. **Phase 2, now.** The island's genesis, its water (D-038 🟡) and its planet variant
    (planet-terrain.md) as planned; then the first culture: a tropical medieval village on the
