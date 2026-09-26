@@ -7,7 +7,7 @@
 //! the fields they need.
 
 use crate::field::Field2;
-use crate::hydrology::{self, Rivers};
+use crate::hydrology::{self, Lakes, Rivers};
 
 /// Paints `rivers` (traced on a field of `spacing` metres) into `layers` as `layer`: every
 /// texel whose centre lies within half a river's width of its course, the width from the
@@ -44,6 +44,43 @@ pub fn paint_rivers(
                             painted += 1;
                         }
                     }
+                }
+            }
+        }
+    }
+    painted
+}
+
+/// Paints the lakes (traced on a field of `size × size` samples `spacing` metres apart) into
+/// `layers` as `layer`: every texel whose nearest sample lies under a lake at least `min_area`
+/// m² wide and above `above` metres (a sea flooded by the priority flood is not a lake).
+/// Returns the texels painted.
+pub fn paint_lakes(
+    layers: &mut Field2<u8>,
+    lakes: &Lakes,
+    (size, spacing): (u32, f64),
+    layer: u8,
+    min_area: f64,
+    above: f32,
+) -> usize {
+    let wanted: Vec<bool> = lakes
+        .lakes
+        .iter()
+        .map(|l| l.area(spacing) >= min_area && l.level > above)
+        .collect();
+    let cell = layers.spacing;
+    let last = f64::from(size - 1);
+    let mut painted = 0;
+    for ty in 0..layers.size {
+        let sy = ((f64::from(ty) + 0.5) * cell / spacing).round().min(last) as u32;
+        for tx in 0..layers.size {
+            let sx = ((f64::from(tx) + 0.5) * cell / spacing).round().min(last) as u32;
+            let lake = lakes.lake_of[(sy * size + sx) as usize];
+            if lake != u32::MAX && wanted[lake as usize] {
+                let texel = &mut layers.data[(ty * layers.size + tx) as usize];
+                if *texel != layer {
+                    *texel = layer;
+                    painted += 1;
                 }
             }
         }
@@ -278,5 +315,41 @@ mod tests {
         // those 3 m off 7.4–92.6 m (42).
         assert_eq!(painted, 2 * 44 + 2 * 42);
         assert_eq!(layers.get(1, 25), 0);
+    }
+
+    #[test]
+    fn lakes_are_painted_where_they_stand_and_small_or_sea_ones_are_not() {
+        use crate::hydrology::Lake;
+        // A 10 × 10 field of 10 m cells: a 3 × 3 lake at 20 m (9 cells, 900 m²), a one-cell
+        // pond (100 m²), and a "lake" at the sea's level.
+        let lake = |cells: Vec<u32>, level: f32| Lake {
+            level,
+            cells,
+            depth: 1.0,
+            outlet: 0,
+        };
+        let big: Vec<u32> = (2..5)
+            .flat_map(|y| (2..5).map(move |x| y * 10 + x))
+            .collect();
+        let lakes = Lakes {
+            lakes: vec![lake(big, 20.0), lake(vec![77], 20.0), lake(vec![90], 0.0)],
+            lake_of: (0..100_u32)
+                .map(|i| match i {
+                    22..=24 | 32..=34 | 42..=44 => 0,
+                    77 => 1,
+                    90 => 2,
+                    _ => u32::MAX,
+                })
+                .collect(),
+        };
+        // 5 m texels over the 100 m: each sample is nearest to about 2 × 2 of them.
+        let mut layers = Field2::from_fn(20, 5.0, |_, _| 0_u8);
+        let painted = paint_lakes(&mut layers, &lakes, (10, 10.0), 9, 500.0, 1.0);
+        assert!(painted > 0);
+        // The big lake's middle sample (33, at 30 m) is painted; the pond and the sea are not.
+        assert_eq!(layers.get(6, 6), 9);
+        assert_eq!(layers.get(14, 14), 0);
+        assert_eq!(layers.get(0, 18), 0);
+        assert!(layers.data.iter().filter(|&&l| l == 9).count() == painted);
     }
 }

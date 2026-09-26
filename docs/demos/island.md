@@ -14,7 +14,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets (stage 4) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
-| Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, the rivers painted at their width (`forge_procgen::slope_layers`, `paint_rivers`; "In the engine" below); moisture, soil and the rivers' banks planned |
+| Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
 
@@ -241,8 +241,12 @@ What the first look shows, for #96 to fix before the props:
   catchment, 8 m at least, so a stream narrower than a texel still draws a steady line. They
   are a fifth layer, water over a dark bed, shaded like the sea. At 8 m that makes 43 rivers and
   45 121 texels, in 52 ms.
+- So are the lakes of a hectare or more (`trace_lakes` over a priority flood of the drawn field,
+  as `genesis` traces them; `paint_lakes`), on the same layer. They cover the depression's floor
+  rather than standing flat at their level: a stand-in, like the sea. At 8 m that makes 31
+  lakes and 153 040 texels. With the rivers it takes 0.5 s at the start, most of it the flood.
 
-![From 1 500 m: the rivers wind down the valleys to the coast](images/island-engine-rivers.png)
+![From 1 500 m: the rivers wind down the valleys to the coast, past the highland lakes](images/island-engine-rivers.png)
 
 The sea is a **stand-in** until the water pass (D-038 🟡): one opaque plane at 0 m, 262 km across
 (`sea_prop`), shaded smooth and dark (reflectance 0.02, a Blinn-Phong power of 400). It is smooth

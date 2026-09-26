@@ -1622,11 +1622,29 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         island_layer::STREAM,
         8.0,
     );
+    // And its lakes of a hectare or more (as `genesis` traces them: the priority flood's water
+    // standing over half a metre above the drawn field), on the same layer.
+    let filled = forge_procgen::priority_flood(&height, 0.0);
+    let lakes = forge_procgen::trace_lakes(&height, &filled, &flow, 0.5);
+    let lake_texels = forge_procgen::paint_lakes(
+        &mut layers,
+        &lakes,
+        (height.size, height.spacing),
+        island_layer::STREAM,
+        10_000.0,
+        0.5,
+    );
     tracing::info!(
         rivers = rivers.rivers.len(),
         texels = painted,
+        lakes = lakes
+            .lakes
+            .iter()
+            .filter(|l| l.area(height.spacing) >= 10_000.0 && l.level > 0.5)
+            .count(),
+        lake_texels,
         ms = rivers_start.elapsed().as_millis(),
-        "island rivers"
+        "island rivers and lakes"
     );
     builder.set_ray_traced(!args.no_shadows);
     let mut materials = CityMaterials::new(&ctx.device)?;
