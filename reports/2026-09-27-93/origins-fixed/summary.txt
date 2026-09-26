@@ -1,0 +1,56 @@
+tools/origins.sh ../forge-engine/captures/origins2 from /d/sources/workspace-engines/forge-cloud/target/release, offsets 10000 100000 1000000 10000000, 2026-09-26T06:34:39Z, commit 6c4a270
+== city-o0: captured in 8 s (city-blocks.exe --stream-pool 0 --origin 0)
+2026-09-26T06:34:39.308745Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:34:47.121463Z  INFO city_blocks: instances placed placed=1000000 buildings=2304 lamps=9600 plaza_props=180 rocks=987916 ms=2.8 checksum=4e10743a3499dc0e matches_cpu_mirror=true
+2026-09-26T06:34:47.121485Z  INFO city_blocks: the scene's offset from the world's origin origin_m=0.0 f32_spacing_m=0.0001220703125
+2026-09-26T06:34:47.331630Z  INFO forge_app: gpu: 2.188 ms per frame over 59 frames: gi/probe rays [compute] 0.853, gi/probe blend [compute] 0.392, geometry/cluster cull 1 (visible last frame) 0.351, shading/standard 0.351, geometry/meshlet pass 1 (visible last frame) 0.291, shading/reflections 0.14
+== ast-o0: captured in 5 s (asteroids.exe --fixed-step --no-taa --origin 0)
+2026-09-26T06:34:47.792527Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:34:52.168817Z  INFO asteroids: the scene's offset from the world's origin origin_m=0.0 f32_spacing_m=6.103515625e-5
+2026-09-26T06:34:52.526559Z  INFO forge_app: gpu: 1.300 ms per frame over 239 frames: geometry/software raster 1 (visible last frame) 0.201, shading/standard 0.182, geometry/cluster cull 1 (visible last frame) 0.166, sky/starfield + planet 0.127, dust/light 0.105, shading/ice 0.094, geometry/meshlet
+== city-o10000: captured in 3 s (city-blocks.exe --stream-pool 0 --origin 10000)
+2026-09-26T06:34:52.919314Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:34:54.951325Z  INFO city_blocks: instances placed placed=1000000 buildings=2304 lamps=9600 plaza_props=180 rocks=987916 ms=2.7 checksum=5cbc28788f1ef4d8 matches_cpu_mirror=true
+2026-09-26T06:34:54.951349Z  INFO city_blocks: the scene's offset from the world's origin origin_m=10000.0 f32_spacing_m=0.0009765625
+2026-09-26T06:34:55.136414Z  INFO forge_app: gpu: 2.016 ms per frame over 59 frames: gi/probe rays [compute] 0.766, gi/probe blend [compute] 0.356, shading/standard 0.323, geometry/cluster cull 1 (visible last frame) 0.308, geometry/meshlet pass 1 (visible last frame) 0.265, shading/reflections 0.14
+== ast-o10000: captured in 3 s (asteroids.exe --fixed-step --no-taa --origin 10000)
+2026-09-26T06:34:55.518463Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:34:58.514971Z  INFO asteroids: the scene's offset from the world's origin origin_m=10000.0 f32_spacing_m=0.0009765625
+2026-09-26T06:34:58.855348Z  INFO forge_app: gpu: 1.251 ms per frame over 239 frames: geometry/software raster 1 (visible last frame) 0.192, shading/standard 0.171, geometry/cluster cull 1 (visible last frame) 0.159, sky/starfield + planet 0.126, dust/light 0.101, shading/ice 0.089, geometry/meshlet
+== city-o100000: captured in 2 s (city-blocks.exe --stream-pool 0 --origin 100000)
+2026-09-26T06:34:59.228934Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:35:01.253498Z  INFO city_blocks: instances placed placed=1000000 buildings=2304 lamps=9600 plaza_props=180 rocks=987916 ms=2.7 checksum=e0f7e8daa9320ac1 matches_cpu_mirror=true
+2026-09-26T06:35:01.253520Z  INFO city_blocks: the scene's offset from the world's origin origin_m=100000.0 f32_spacing_m=0.0078125
+2026-09-26T06:35:01.438353Z  INFO forge_app: gpu: 2.024 ms per frame over 59 frames: gi/probe rays [compute] 0.765, gi/probe blend [compute] 0.358, shading/standard 0.323, geometry/cluster cull 1 (visible last frame) 0.304, geometry/meshlet pass 1 (visible last frame) 0.268, shading/reflections 0.14
+== ast-o100000: captured in 4 s (asteroids.exe --fixed-step --no-taa --origin 100000)
+2026-09-26T06:35:01.869864Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:35:04.764736Z  INFO asteroids: the scene's offset from the world's origin origin_m=100000.0 f32_spacing_m=0.0078125
+2026-09-26T06:35:05.095766Z  INFO forge_app: gpu: 1.225 ms per frame over 239 frames: geometry/software raster 1 (visible last frame) 0.186, shading/standard 0.165, geometry/cluster cull 1 (visible last frame) 0.161, sky/starfield + planet 0.123, dust/light 0.096, shading/ice 0.084, geometry/meshlet
+== city-o1000000: captured in 2 s (city-blocks.exe --stream-pool 0 --origin 1000000)
+2026-09-26T06:35:05.484659Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:35:07.499311Z  INFO city_blocks: instances placed placed=1000000 buildings=2304 lamps=9600 plaza_props=180 rocks=987916 ms=2.7 checksum=0067cd4343fc4afd matches_cpu_mirror=true
+2026-09-26T06:35:07.499335Z  INFO city_blocks: the scene's offset from the world's origin origin_m=1000000.0 f32_spacing_m=0.0625
+2026-09-26T06:35:07.680482Z  INFO forge_app: gpu: 2.034 ms per frame over 59 frames: gi/probe rays [compute] 0.765, gi/probe blend [compute] 0.357, shading/standard 0.326, geometry/cluster cull 1 (visible last frame) 0.301, geometry/meshlet pass 1 (visible last frame) 0.273, shading/reflections 0.13
+== ast-o1000000: captured in 4 s (asteroids.exe --fixed-step --no-taa --origin 1000000)
+2026-09-26T06:35:08.067692Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:35:10.998769Z  INFO asteroids: the scene's offset from the world's origin origin_m=1000000.0 f32_spacing_m=0.0625
+2026-09-26T06:35:11.347801Z  INFO forge_app: gpu: 1.288 ms per frame over 239 frames: geometry/software raster 1 (visible last frame) 0.198, shading/standard 0.180, geometry/cluster cull 1 (visible last frame) 0.163, sky/starfield + planet 0.130, dust/light 0.103, shading/ice 0.090, geometry/meshlet
+== city-o10000000: captured in 3 s (city-blocks.exe --stream-pool 0 --origin 10000000)
+2026-09-26T06:35:11.771668Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:35:13.794379Z  INFO city_blocks: instances placed placed=1000000 buildings=2304 lamps=9600 plaza_props=180 rocks=987916 ms=2.7 checksum=f82cee40e26bd4e5 matches_cpu_mirror=true
+2026-09-26T06:35:13.794402Z  INFO city_blocks: the scene's offset from the world's origin origin_m=10000000.0 f32_spacing_m=1.0
+2026-09-26T06:35:13.986367Z  INFO forge_app: gpu: 2.145 ms per frame over 59 frames: gi/probe rays [compute] 0.848, gi/probe blend [compute] 0.374, shading/standard 0.343, geometry/cluster cull 1 (visible last frame) 0.340, geometry/meshlet pass 1 (visible last frame) 0.287, shading/reflections 0.14
+== ast-o10000000: captured in 3 s (asteroids.exe --fixed-step --no-taa --origin 10000000)
+2026-09-26T06:35:14.390584Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:35:17.330535Z  INFO asteroids: the scene's offset from the world's origin origin_m=10000000.0 f32_spacing_m=1.0
+2026-09-26T06:35:17.687759Z  INFO forge_app: gpu: 1.307 ms per frame over 239 frames: geometry/software raster 1 (visible last frame) 0.205, shading/standard 0.180, geometry/cluster cull 1 (visible last frame) 0.165, sky/starfield + planet 0.130, dust/light 0.104, shading/ice 0.093, geometry/meshlet
+== against the same view at the origin
+city at 10000 m: 2755 px differ (max 21), FLIP mean 0.001714, max 0.096262
+ballad at 10000 m: 1666 px differ (max 131), FLIP mean 0.000510, max 0.288035
+city at 100000 m: 2579 px differ (max 21), FLIP mean 0.001563, max 0.096261
+ballad at 100000 m: 1666 px differ (max 131), FLIP mean 0.000514, max 0.288035
+city at 1000000 m: 2640 px differ (max 21), FLIP mean 0.001564, max 0.096260
+ballad at 1000000 m: 1665 px differ (max 131), FLIP mean 0.000498, max 0.288131
+city at 10000000 m: 2548 px differ (max 21), FLIP mean 0.001536, max 0.096261
+ballad at 10000000 m: 1666 px differ (max 131), FLIP mean 0.000510, max 0.288035
+captures, differences and error maps in ../forge-engine/captures/origins2; logs in ../forge-engine/captures/origins2/logs, summary in ../forge-engine/captures/origins2/summary.txt

@@ -1,0 +1,29 @@
+2026-09-26T06:43:47.349588Z  INFO forge_app: window placed monitor=Some("\\\\.\\DISPLAY2") x=-2560 y=0 monitors=2
+2026-09-26T06:43:47.370254Z  INFO forge_gpu::instance: Vulkan validation layer enabled
+2026-09-26T06:43:47.370268Z  INFO forge_gpu::instance: Vulkan synchronization validation enabled
+2026-09-26T06:43:47.370708Z  WARN vulkan: Layer name GalaxyOverlayVkLayer does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:43:47.370722Z  WARN vulkan: Layer name GalaxyOverlayVkLayer_VERBOSE does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:43:47.370728Z  WARN vulkan: Layer name GalaxyOverlayVkLayer_DEBUG does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:43:47.489923Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:43:47.570744Z  INFO forge_gpu::device: queue families graphics=0 compute=Some(2) transfer=Some(1)
+2026-09-26T06:43:47.586652Z  INFO forge_gpu::swapchain: swapchain created extent=Extent2D { width: 1600, height: 900 } present_mode=MAILBOX format=B8G8R8A8_SRGB images=3
+2026-09-26T06:43:47.744753Z  INFO forge_gpu::shader: shader compiler slangc=C:\VulkanSDK\1.4.357.0\Bin\slangc.exe version=2026.13.1-1-g84792eb15
+2026-09-26T06:43:47.761564Z  INFO forge_app::overlay: overlay font ready cell_w=9 cell_h=20
+2026-09-26T06:43:47.779783Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:43:47.779852Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:43:47.782449Z  INFO forge_render::meshlet: meshlet renderer ready path="mesh shaders" visible_capacity=65536
+2026-09-26T06:43:47.953089Z  INFO meshlets: asteroid mesh built pages=27 triangles=110592 meshlets=2634 cone_cullable_pct=71.0 mean_cone_cutoff="0.948" ms=152
+2026-09-26T06:43:47.958319Z  INFO meshlets: scene ready instances=1152 meshlets_per_instance=2634 total_triangles=127401984
+2026-09-26T06:43:48.146218Z  INFO forge_gpu::shader: compiled shader="mipcheck.slang" entry="reference_vert"
+2026-09-26T06:43:48.332837Z  INFO forge_gpu::shader: compiled shader="mipcheck.slang" entry="reference_frag"
+2026-09-26T06:43:48.535429Z  INFO forge_gpu::shader: compiled shader="mipcheck.slang" entry="analytic_main"
+2026-09-26T06:43:48.730723Z  INFO forge_gpu::shader: compiled shader="mipcheck.slang" entry="compare_main"
+2026-09-26T06:43:48.984342Z  INFO forge_gpu::shader: compiled shader="tonecheck.slang" entry="check_main"
+2026-09-26T06:43:48.986482Z  INFO forge_render::meshlet: cull work list reserved from=16384 to=95616
+2026-09-26T06:43:48.987082Z  INFO forge_gpu::graph: render graph transients laid out transients=5 heap_bytes=39321600 requested_bytes=52428800 aliased=true
+2026-09-26T06:43:49.215395Z  INFO forge_app: memory: VRAM 372.6 of 15227.0 MiB (2.4%); allocated 78.25 MiB in 384.0 MiB of blocks: geometry 3.75, render targets 16.32, transient heap 37.50, textures 13.65, GPU work buffers 6.34, per-frame data 0.50, staging + readback 0.19, outside the allocator 89.7 MiB; uploads 1.66 KiB/frame (0.42 MiB/s), read back 0.07 KiB/frame
+2026-09-26T06:43:49.215415Z  INFO forge_app: gpu: 3.810 ms per frame over 58 frames: check/mip compare 3.365, check/tone 0.164, shading/standard 0.072, geometry/meshlet pass 1 (visible last frame) 0.069, check/mip analytic 0.026, geometry/depth pyramid 0.025, geometry/cluster cull 1 (visible last frame) 0.019, geometry/cluster cull 2 (occlusion) 0.015, geometry/instance cull 0.013, post/display transform 0.013, check/mip reference 0.012, shading/ice 0.011, geometry/meshlet pass 2 (newly visible) 0.003, geometry/cull clears 0.003, shading/layered 0.001, app/present 0.000, app/end of frame 0.000
+2026-09-26T06:43:49.215425Z  INFO forge_app: cpu: 3.716 ms per frame over 60 frames: cpu/update 0.000, cpu/wait for GPU (frame slot) 2.875, cpu/acquire swapchain image 0.011, cpu/record commands 0.497, cpu/submit + present 0.332
+2026-09-26T06:43:49.219475Z  INFO meshlets: mip check passed: the resolve's derivatives pick the fragment shader's level max_levels=0.062 mean_levels=0.0085 pixels=781624
+2026-09-26T06:43:49.230781Z  INFO meshlets: tone check passed: both ACES 2.0 paths agree with the CPU transform analytic_codes=0.002 table_codes=0.137 table_error=p50 0.109, p99 1.497, p99.9 5.584, max 13.83 colours=4096
+2026-09-26T06:43:49.271750Z  INFO forge_app: exited cleanly frames=60

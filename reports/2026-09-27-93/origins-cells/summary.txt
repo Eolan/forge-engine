@@ -1,0 +1,22 @@
+tools/origins.sh captures/origins-cells target/release "1024 10240 1 100", the branch with the highlight fix (ce318a8's shader), 2026-09-26
+== against the same view at the origin
+city at 1024 m: 0 px
+ballad at 1024 m: 0 px
+city at 10240 m: 0 px
+ballad at 10240 m: 0 px
+city at 1 m: 5564 px differ (max 23), FLIP mean 0.002498, max 0.123545
+ballad at 1 m: 0 px
+city at 100 m: 5804 px differ (max 22), FLIP mean 0.002665, max 0.115889
+ballad at 100 m: 242 px differ (max 70), FLIP mean 0.000187, max 0.166846
+
+== the city at 0 against 1 m, frame 60, --stream-pool 0, with the traced terms switched off one by one
+everything on: 5564 px (max 23), FLIP mean 0.002498, max 0.1235
+--no-shadows: 910 px (max 17), FLIP mean 0.001234, max 0.0459
+--no-ao: 5537 px (max 29), FLIP mean 0.002467, max 0.1180
+--no-probes: 3001 px (max 16), FLIP mean 0.001560, max 0.0974
+--no-reflections: 2982 px (max 15), FLIP mean 0.002161, max 0.0843
+all four off: 979 px (max 14), FLIP mean 0.001263, max 0.0653
+
+== the far offsets against each other (origins-fixed)
+ballad 10^4 against 10^5, 10^6, 10^7: 12, 13, 12 px (max 29)
+city 10^4 against 10^5, 10^6, 10^7: 698, 848, 749 px (max 11)

@@ -1,0 +1,36 @@
+tools/timings.sh base ../forge-engine/target/release, new target/release, 2026-09-26T06:44:19Z, commit 6c4a270
+city | base: 1.989 1.982 1.987 | new: 2.181 2.179 2.197
+   base: geometry/cluster cull 1 (visible last frame) 0.351;geometry/instance cull 0.083;geometry/instance cull 2 (occlusion) 0.047;geometry/cluster cull 2 (occlusion) 0.034;geometry/cell cull 0.014;geometry/cell cull 2 (occlusion) 0.010;geometry/cull clears 0.008;
+   new:  geometry/cluster cull 1 (visible last frame) 0.481;geometry/instance cull 0.082;geometry/cluster cull 2 (occlusion) 0.050;geometry/instance cull 2 (occlusion) 0.050;geometry/cell cull 0.015;geometry/cell cull 2 (occlusion) 0.010;geometry/cull clears 0.008;
+city orbit | base: 2.469 2.465 2.470 | new: 2.420 2.432 2.417
+   base: geometry/cluster cull 1 (visible last frame) 0.546;geometry/instance cull 0.197;geometry/instance cull 2 (occlusion) 0.074;geometry/cluster cull 2 (occlusion) 0.034;geometry/cell cull 0.014;geometry/cull clears 0.008;geometry/cell cull 2 (occlusion) 0.006;
+   new:  geometry/cluster cull 1 (visible last frame) 0.509;geometry/instance cull 0.197;geometry/instance cull 2 (occlusion) 0.077;geometry/cluster cull 2 (occlusion) 0.033;geometry/cell cull 0.015;geometry/cull clears 0.008;geometry/cell cull 2 (occlusion) 0.006;
+city fly | base: 1.984 1.953 1.990 | new: 2.035 2.049 2.027
+   base: geometry/cluster cull 1 (visible last frame) 0.258;geometry/instance cull 0.092;geometry/cluster cull 2 (occlusion) 0.054;geometry/cell cull 0.012;geometry/cull clears 0.008;geometry/instance cull 2 (occlusion) 0.000;geometry/cell cull 2 (occlusion) 0.000;
+   new:  geometry/cluster cull 1 (visible last frame) 0.318;geometry/instance cull 0.091;geometry/cluster cull 2 (occlusion) 0.047;geometry/cell cull 0.013;geometry/cull clears 0.008;geometry/instance cull 2 (occlusion) 0.000;geometry/cell cull 2 (occlusion) 0.000;
+city resident | base: 2.007 2.035 2.006 | new: 1.983 1.967 1.969
+   base: geometry/cluster cull 1 (visible last frame) 0.302;geometry/instance cull 0.073;geometry/instance cull 2 (occlusion) 0.044;geometry/cluster cull 2 (occlusion) 0.034;geometry/cell cull 0.014;geometry/cell cull 2 (occlusion) 0.010;geometry/cull clears 0.005;
+   new:  geometry/cluster cull 1 (visible last frame) 0.298;geometry/instance cull 0.076;geometry/instance cull 2 (occlusion) 0.044;geometry/cluster cull 2 (occlusion) 0.030;geometry/cell cull 0.015;geometry/cell cull 2 (occlusion) 0.010;geometry/cull clears 0.005;
+meshlets | base: 0.227 0.226 0.227 | new: 0.228 0.228 0.226
+   base: geometry/cluster cull 1 (visible last frame) 0.021;geometry/instance cull 0.013;geometry/cluster cull 2 (occlusion) 0.011;geometry/cull clears 0.005;
+   new:  geometry/cluster cull 1 (visible last frame) 0.021;geometry/instance cull 0.013;geometry/cluster cull 2 (occlusion) 0.011;geometry/cull clears 0.003;
+meshlets orbit | base: 0.144 0.143 0.142 | new: 0.144 0.143 0.143
+   base: geometry/cluster cull 1 (visible last frame) 0.012;geometry/instance cull 0.010;geometry/cluster cull 2 (occlusion) 0.009;geometry/cull clears 0.003;
+   new:  geometry/cluster cull 1 (visible last frame) 0.012;geometry/instance cull 0.011;geometry/cluster cull 2 (occlusion) 0.009;geometry/cull clears 0.003;
+meshlets side 700 | base: 1.350 1.347 1.348 | new: 1.339 1.336 1.340
+   base: geometry/instance cull 0.152;geometry/cluster cull 1 (visible last frame) 0.142;geometry/cluster cull 2 (occlusion) 0.054;geometry/cell cull 0.012;geometry/cull clears 0.005;geometry/instance cull 2 (occlusion) 0.000;geometry/cell cull 2 (occlusion) 0.000;
+   new:  geometry/instance cull 0.148;geometry/cluster cull 1 (visible last frame) 0.132;geometry/cluster cull 2 (occlusion) 0.050;geometry/cell cull 0.014;geometry/cull clears 0.004;geometry/instance cull 2 (occlusion) 0.000;geometry/cell cull 2 (occlusion) 0.000;
+ballad 900p | base: 1.298 1.276 1.286 | new: 1.271 1.268 1.276
+   base: geometry/cluster cull 1 (visible last frame) 0.162;geometry/instance cull 0.031;geometry/cluster cull 2 (occlusion) 0.016;geometry/cull clears 0.004;
+   new:  geometry/cluster cull 1 (visible last frame) 0.159;geometry/instance cull 0.030;geometry/cluster cull 2 (occlusion) 0.016;geometry/cull clears 0.003;
+ballad 1440p | base: 2.612 2.621 2.625 | new: 2.611 2.618 2.622
+   base: geometry/cluster cull 1 (visible last frame) 0.254;geometry/instance cull 0.035;geometry/cluster cull 2 (occlusion) 0.021;geometry/cull clears 0.004;
+   new:  geometry/cluster cull 1 (visible last frame) 0.250;geometry/instance cull 0.036;geometry/cluster cull 2 (occlusion) 0.022;geometry/cull clears 0.004;
+
+== serial (FORGE_ASYNC=0), the streamed city south view, city-blocks --frames 3000, two runs each
+base 1: 2.111 ms; probe rays 0.371, cluster cull 1 0.254, meshlet pass 1 0.215, probe blend 0.201, instance cull 0.071
+new  1: 2.118 ms; probe rays 0.372, cluster cull 1 0.248, meshlet pass 1 0.215, probe blend 0.200, instance cull 0.075
+base 2: 2.113 ms; probe rays 0.371, cluster cull 1 0.255, meshlet pass 1 0.214, probe blend 0.202, instance cull 0.071
+new  2: 2.118 ms; probe rays 0.375, cluster cull 1 0.249, meshlet pass 1 0.217, probe blend 0.203, instance cull 0.075
+
+== async (default), the same view, one run each: base 1.980 ms (probe rays [compute] 0.792, cluster cull 1 0.355); new 2.136 ms (probe rays [compute] 0.945, cluster cull 1 0.443). FORGE_GRAPH_LOG=1 prints the same plan for both builds.

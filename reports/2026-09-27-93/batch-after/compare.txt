@@ -1,0 +1,46 @@
+tools/compare.sh ../forge-engine/captures/before ../forge-engine/captures/after, 2026-09-26T06:42:40Z
+== ../forge-engine/captures/before against ../forge-engine/captures/after
+fb-ast-notaa600: 2505 px differ (max 167), FLIP mean 0.003029, max 0.434791
+fb-ast-taa600: 763 px differ (max 51), FLIP mean 0.003243, max 0.393890
+fb-ast240-culled: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+fb-ast240-nocone: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+fb-ast240-noocc: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+fb-ast240: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+fb-city60: 7547 px differ (max 26), FLIP mean 0.003910, max 0.139406
+fb-cityorbit120: 4535 px differ (max 59), FLIP mean 0.004717, max 0.156020
+fb-gallery60: 210 px differ (max 8), FLIP mean 0.000929, max 0.046006
+fb-nolod120: 383 px differ (max 192), FLIP mean 0.001449, max 0.357633
+fb-noocc120: 205 px differ (max 186), FLIP mean 0.000974, max 0.309500
+fb-orbit120: 205 px differ (max 186), FLIP mean 0.000974, max 0.309500
+fb-static60: 51 px differ (max 188), FLIP mean 0.000393, max 0.259269
+mesh-ast-notaa600: 2505 px differ (max 167), FLIP mean 0.003029, max 0.434791
+mesh-ast-taa600: 763 px differ (max 51), FLIP mean 0.003243, max 0.393890
+mesh-ast240-culled: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+mesh-ast240-nocone: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+mesh-ast240-noocc: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+mesh-ast240: 3371 px differ (max 136), FLIP mean 0.001560, max 0.392159
+mesh-city60: 7547 px differ (max 26), FLIP mean 0.003910, max 0.139406
+mesh-cityorbit120: 4535 px differ (max 59), FLIP mean 0.004717, max 0.156020
+mesh-gallery60: 210 px differ (max 8), FLIP mean 0.000929, max 0.046006
+mesh-nolod120: 383 px differ (max 192), FLIP mean 0.001449, max 0.357633
+mesh-noocc120: 205 px differ (max 186), FLIP mean 0.000974, max 0.309500
+mesh-orbit120: 205 px differ (max 186), FLIP mean 0.000974, max 0.309500
+mesh-static60: 51 px differ (max 188), FLIP mean 0.000393, max 0.259269
+== within ../forge-engine/captures/after: the A/B harness and mesh against fallback
+mesh orbit, occlusion off: 0 px
+mesh ballad, occlusion off: 0 px
+mesh ballad, cone off: 0 px
+mesh ballad, show-culled: 0 px
+fb orbit, occlusion off: 0 px
+fb ballad, occlusion off: 0 px
+fb ballad, cone off: 0 px
+fb ballad, show-culled: 0 px
+mesh against fallback, static60: 0 px
+mesh against fallback, orbit120: 0 px
+mesh against fallback, nolod120: 0 px
+mesh against fallback, ast240: 0 px
+mesh against fallback, ast-notaa600: 0 px
+mesh against fallback, city60: 0 px
+mesh against fallback, cityorbit120: 0 px
+mesh against fallback, gallery60: 0 px
+some lines differ: named above

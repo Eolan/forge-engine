@@ -1,0 +1,21 @@
+2026-09-26T06:42:04.287873Z  INFO forge_app: window placed monitor=Some("\\\\.\\DISPLAY2") x=-2560 y=0 monitors=2
+2026-09-26T06:42:04.424628Z  INFO forge_gpu::device: mesh shaders left disabled (fallback paths forced)
+2026-09-26T06:42:04.424643Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:42:04.498280Z  INFO forge_gpu::device: queue families graphics=0 compute=Some(2) transfer=Some(1)
+2026-09-26T06:42:04.511069Z  INFO forge_gpu::swapchain: swapchain created extent=Extent2D { width: 1600, height: 900 } present_mode=MAILBOX format=B8G8R8A8_SRGB images=3
+2026-09-26T06:42:04.654131Z  INFO forge_gpu::shader: shader compiler slangc=C:\VulkanSDK\1.4.357.0\Bin\slangc.exe version=2026.13.1-1-g84792eb15
+2026-09-26T06:42:04.670506Z  INFO forge_app::overlay: overlay font ready cell_w=9 cell_h=20
+2026-09-26T06:42:04.681625Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:42:04.681651Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:42:04.684162Z  INFO forge_render::meshlet: meshlet renderer ready path="indirect-count fallback" visible_capacity=65536
+2026-09-26T06:42:04.855395Z  INFO meshlets: asteroid mesh built pages=27 triangles=110592 meshlets=2634 cone_cullable_pct=71.0 mean_cone_cutoff="0.948" ms=154
+2026-09-26T06:42:04.859303Z  INFO meshlets: scene ready instances=1152 meshlets_per_instance=2634 total_triangles=127401984
+2026-09-26T06:42:04.859655Z  INFO forge_render::meshlet: visible-cluster list reserved from=65536 to=1375488 list_mib=10.5
+2026-09-26T06:42:04.859779Z  INFO forge_render::meshlet: cull work list reserved from=16384 to=95616
+2026-09-26T06:42:04.860190Z  INFO forge_gpu::graph: render graph transients laid out transients=3 heap_bytes=19660800 requested_bytes=26214400 aliased=true
+2026-09-26T06:42:04.889593Z  INFO forge_render::meshlet: pass 2 reject list grown wanted=817728 from=65536 to=1048576
+2026-09-26T06:42:05.034758Z  INFO forge_app: captured frame 120 path=../forge-engine/captures/after/fb-nolod120.png
+2026-09-26T06:42:05.035883Z  INFO forge_app: memory: VRAM 372.6 of 15227.0 MiB (2.4%); allocated 147.28 MiB in 384.0 MiB of blocks: geometry 3.75, render targets 16.32, transient heap 18.75, textures 4.17, GPU work buffers 103.79, per-frame data 0.50, staging + readback 0.00, outside the allocator 89.7 MiB; uploads 1.49 KiB/frame (1.00 MiB/s), read back 46.56 KiB/frame
+2026-09-26T06:42:05.035901Z  INFO forge_app: gpu: 1.333 ms per frame over 119 frames: geometry/software raster 1 (visible last frame) 0.502, geometry/meshlet pass 1 (visible last frame) 0.247, geometry/cluster cull 1 (visible last frame) 0.193, geometry/meshlet pass 2 (newly visible) 0.115, geometry/cluster cull 2 (occlusion) 0.082, shading/standard 0.075, geometry/software raster 2 (newly visible) 0.027, geometry/depth pyramid 0.025, geometry/software raster merge 0.025, post/display transform 0.014, geometry/instance cull 0.013, shading/ice 0.011, geometry/cull clears 0.003, shading/layered 0.001, app/present 0.000, app/end of frame 0.000
+2026-09-26T06:42:05.035909Z  INFO forge_app: cpu: 1.292 ms per frame over 121 frames: cpu/update 0.000, cpu/wait for GPU (frame slot) 1.074, cpu/acquire swapchain image 0.001, cpu/record commands 0.092, cpu/submit + present 0.126
+2026-09-26T06:42:05.073635Z  INFO forge_app: exited cleanly frames=121

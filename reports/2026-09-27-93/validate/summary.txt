@@ -1,0 +1,46 @@
+tools/validate.sh /d/sources/workspace-engines/forge-cloud/target/release, 2026-09-26T06:43:43Z, commit 6c4a270
+== /d/sources/workspace-engines/forge-cloud/target/release/asteroids.exe --frames 90
+   4 s, 68 log lines
+2026-09-26T06:43:43.882316Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: t
+2026-09-26T06:43:47.034872Z  INFO forge_app: gpu: 1.227 ms per frame over 88 frames: geometry/software raster 1 (visible last frame) 0.168, shading/standard 0.146, geometry/cluster cull 1 (visible las
+== /d/sources/workspace-engines/forge-cloud/target/release/meshlets.exe --mip-check --tone-check --frames 60
+      1 2026-09-26T06:43:49.219475Z  INFO meshlets: mip check passed: the resolve's derivatives pick the fragment shader's level max_levels=0.062 mean_levels=0.0085 pixels=781624
+      1 2026-09-26T06:43:49.230781Z  INFO meshlets: tone check passed: both ACES 2.0 paths agree with the CPU transform analytic_codes=0.002 table_codes=0.137 table_error=p50 0.109, p99 1.497, p99.9 5.584, max 13.83 colours=4096
+   2 s, 29 log lines
+2026-09-26T06:43:47.489923Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: t
+2026-09-26T06:43:49.215415Z  INFO forge_app: gpu: 3.810 ms per frame over 58 frames: check/mip compare 3.365, check/tone 0.164, shading/standard 0.072, geometry/meshlet pass 1 (visible last frame) 0.0
+== /d/sources/workspace-engines/forge-cloud/target/release/city-blocks.exe --frames 90
+   2 s, 58 log lines
+2026-09-26T06:43:49.653563Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: t
+2026-09-26T06:43:51.077375Z  INFO forge_app: gpu: 2.203 ms per frame over 88 frames: gi/probe rays [compute] 1.047, geometry/cluster cull 1 (visible last frame) 0.470, shading/standard 0.325, gi/probe
+== /d/sources/workspace-engines/forge-cloud/target/release/city-blocks.exe --stream-pool 0 --frames 60
+   2 s, 56 log lines
+2026-09-26T06:43:51.528152Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: t
+2026-09-26T06:43:53.750749Z  INFO forge_app: gpu: 2.029 ms per frame over 58 frames: gi/probe rays [compute] 0.776, gi/probe blend [compute] 0.349, shading/standard 0.334, geometry/cluster cull 1 (vis
+== /d/sources/workspace-engines/forge-cloud/target/release/city-blocks.exe --gallery --frames 60
+   1 s, 47 log lines
+2026-09-26T06:43:54.190430Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: true, ray_query: true, sampler_minmax: true, memory_budget: t
+2026-09-26T06:43:55.567091Z  INFO forge_app: gpu: 0.539 ms per frame over 58 frames: gi/probe rays [compute] 0.121, gi/probe blend [compute] 0.099, shading/standard 0.069, temporal/TAA resolve 0.054, 
+== /d/sources/workspace-engines/forge-cloud/target/release/asteroids.exe --frames 90 --force-fallback
+   4 s, 69 log lines
+2026-09-26T06:43:56.014856Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: 
+2026-09-26T06:43:59.152895Z  INFO forge_app: gpu: 1.348 ms per frame over 88 frames: geometry/software raster 1 (visible last frame) 0.176, geometry/meshlet pass 1 (visible last frame) 0.155, shading/
+== /d/sources/workspace-engines/forge-cloud/target/release/meshlets.exe --mip-check --tone-check --frames 60 --force-fallback
+      1 2026-09-26T06:44:00.303281Z  INFO meshlets: mip check passed: the resolve's derivatives pick the fragment shader's level max_levels=0.062 mean_levels=0.0085 pixels=781624
+      1 2026-09-26T06:44:00.314709Z  INFO meshlets: tone check passed: both ACES 2.0 paths agree with the CPU transform analytic_codes=0.002 table_codes=0.137 table_error=p50 0.109, p99 1.497, p99.9 5.584, max 13.83 colours=4096
+   1 s, 25 log lines
+2026-09-26T06:43:59.589145Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: 
+2026-09-26T06:44:00.298991Z  INFO forge_app: gpu: 4.104 ms per frame over 58 frames: check/mip compare 3.564, check/tone 0.171, geometry/meshlet pass 1 (visible last frame) 0.158, shading/standard 0.0
+== /d/sources/workspace-engines/forge-cloud/target/release/city-blocks.exe --frames 90 --force-fallback
+   2 s, 59 log lines
+2026-09-26T06:44:00.752365Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: 
+2026-09-26T06:44:02.158760Z  INFO forge_app: gpu: 2.565 ms per frame over 88 frames: geometry/meshlet pass 1 (visible last frame) 0.974, gi/probe rays [compute] 0.849, geometry/cluster cull 1 (visible
+== /d/sources/workspace-engines/forge-cloud/target/release/city-blocks.exe --stream-pool 0 --frames 60 --force-fallback
+   3 s, 57 log lines
+2026-09-26T06:44:02.596284Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: 
+2026-09-26T06:44:04.836945Z  INFO forge_app: gpu: 2.315 ms per frame over 58 frames: geometry/meshlet pass 1 (visible last frame) 0.851, gi/probe rays [compute] 0.629, shading/standard 0.336, geometry
+== /d/sources/workspace-engines/forge-cloud/target/release/city-blocks.exe --gallery --frames 60 --force-fallback
+   1 s, 48 log lines
+2026-09-26T06:44:05.274025Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: 
+2026-09-26T06:44:06.706577Z  INFO forge_app: gpu: 0.519 ms per frame over 58 frames: gi/probe rays [compute] 0.102, gi/probe blend [compute] 0.090, shading/standard 0.071, geometry/meshlet pass 1 (vis
+logs in /d/sources/workspace-engines/forge-cloud/captures/validate/logs, summary in /d/sources/workspace-engines/forge-cloud/captures/validate/summary.txt

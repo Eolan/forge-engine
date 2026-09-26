@@ -1,0 +1,59 @@
+2026-09-26T06:44:00.607529Z  INFO forge_app: window placed monitor=Some("\\\\.\\DISPLAY2") x=-2560 y=0 monitors=2
+2026-09-26T06:44:00.632081Z  INFO forge_gpu::instance: Vulkan validation layer enabled
+2026-09-26T06:44:00.632098Z  INFO forge_gpu::instance: Vulkan synchronization validation enabled
+2026-09-26T06:44:00.632710Z  WARN vulkan: Layer name GalaxyOverlayVkLayer does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:44:00.632731Z  WARN vulkan: Layer name GalaxyOverlayVkLayer_VERBOSE does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:44:00.632747Z  WARN vulkan: Layer name GalaxyOverlayVkLayer_DEBUG does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:44:00.752350Z  INFO forge_gpu::device: mesh shaders left disabled (fallback paths forced)
+2026-09-26T06:44:00.752365Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:44:00.828479Z  INFO forge_gpu::device: queue families graphics=0 compute=Some(2) transfer=Some(1)
+2026-09-26T06:44:00.843520Z  INFO forge_gpu::swapchain: swapchain created extent=Extent2D { width: 1600, height: 900 } present_mode=MAILBOX format=B8G8R8A8_SRGB images=3
+2026-09-26T06:44:00.983693Z  INFO forge_gpu::shader: shader compiler slangc=C:\VulkanSDK\1.4.357.0\Bin\slangc.exe version=2026.13.1-1-g84792eb15
+2026-09-26T06:44:01.000628Z  INFO forge_app::overlay: overlay font ready cell_w=9 cell_h=20
+2026-09-26T06:44:01.011070Z  INFO forge_gpu::graph: render graph transients laid out transients=0 heap_bytes=0 requested_bytes=0 aliased=false
+2026-09-26T06:44:01.018286Z  INFO city_blocks: prop ready prop=house-narrow triangles=516996 clusters=12460 levels=16 roots=2 fill=0.67 ms=1 from_cache=true
+2026-09-26T06:44:01.018336Z  INFO city_blocks: prop ready prop=house-wide triangles=632360 clusters=15067 levels=14 roots=1 fill=0.68 ms=2 from_cache=true
+2026-09-26T06:44:01.018386Z  INFO city_blocks: prop ready prop=corner-block triangles=1218700 clusters=29335 levels=15 roots=1 fill=0.67 ms=4 from_cache=true
+2026-09-26T06:44:01.018420Z  INFO city_blocks: prop ready prop=terrace triangles=828024 clusters=19846 levels=14 roots=2 fill=0.67 ms=3 from_cache=true
+2026-09-26T06:44:01.018476Z  INFO city_blocks: prop ready prop=apartments triangles=1515320 clusters=36583 levels=16 roots=2 fill=0.67 ms=3 from_cache=true
+2026-09-26T06:44:01.018549Z  INFO city_blocks: prop ready prop=office triangles=2031844 clusters=49124 levels=15 roots=1 fill=0.67 ms=5 from_cache=true
+2026-09-26T06:44:01.018624Z  INFO city_blocks: prop ready prop=hotel triangles=2224996 clusters=53950 levels=16 roots=1 fill=0.66 ms=6 from_cache=true
+2026-09-26T06:44:01.018662Z  INFO city_blocks: prop ready prop=warehouse triangles=1004636 clusters=23955 levels=15 roots=1 fill=0.68 ms=3 from_cache=true
+2026-09-26T06:44:01.018696Z  INFO city_blocks: prop ready prop=school triangles=925772 clusters=22145 levels=14 roots=2 fill=0.67 ms=3 from_cache=true
+2026-09-26T06:44:01.018720Z  INFO city_blocks: prop ready prop=clinic triangles=614396 clusters=14775 levels=14 roots=1 fill=0.67 ms=2 from_cache=true
+2026-09-26T06:44:01.018813Z  INFO city_blocks: prop ready prop=tower-slim triangles=2831692 clusters=68753 levels=16 roots=1 fill=0.66 ms=8 from_cache=true
+2026-09-26T06:44:01.018926Z  INFO city_blocks: prop ready prop=tower-wide triangles=3020748 clusters=73848 levels=16 roots=2 fill=0.66 ms=8 from_cache=true
+2026-09-26T06:44:01.018944Z  INFO city_blocks: prop ready prop=boulder-1 triangles=529200 clusters=12638 levels=14 roots=1 fill=0.67 ms=1 from_cache=true
+2026-09-26T06:44:01.018973Z  INFO city_blocks: prop ready prop=boulder-2 triangles=750000 clusters=17887 levels=14 roots=1 fill=0.68 ms=2 from_cache=true
+2026-09-26T06:44:01.018989Z  INFO city_blocks: prop ready prop=boulder-3 triangles=504300 clusters=12020 levels=13 roots=1 fill=0.68 ms=1 from_cache=true
+2026-09-26T06:44:01.019010Z  INFO city_blocks: prop ready prop=rubble-1 triangles=559872 clusters=13337 levels=16 roots=3 fill=0.68 ms=1 from_cache=true
+2026-09-26T06:44:01.019043Z  INFO city_blocks: prop ready prop=rubble-2 triangles=870912 clusters=20792 levels=16 roots=2 fill=0.68 ms=2 from_cache=true
+2026-09-26T06:44:01.019104Z  INFO city_blocks: prop ready prop=column triangles=1839104 clusters=44750 levels=15 roots=1 fill=0.66 ms=5 from_cache=true
+2026-09-26T06:44:01.019199Z  INFO city_blocks: prop ready prop=fountain triangles=2794400 clusters=68656 levels=16 roots=1 fill=0.66 ms=6 from_cache=true
+2026-09-26T06:44:01.019223Z  INFO city_blocks: prop ready prop=lamp-post triangles=612352 clusters=15143 levels=14 roots=1 fill=0.65 ms=1 from_cache=true
+2026-09-26T06:44:01.019461Z  INFO city_blocks: prop ready prop=terrain triangles=8000000 clusters=185814 levels=14 roots=173 fill=0.69 ms=15 from_cache=true
+2026-09-26T06:44:01.042065Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:44:01.042130Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:44:01.044872Z  INFO forge_render::meshlet: meshlet renderer ready path="indirect-count fallback" visible_capacity=65536
+2026-09-26T06:44:01.294985Z  INFO city_blocks: terrain heights samples=4004001 ms=192
+2026-09-26T06:44:01.342080Z  INFO city_blocks: ground layers texels=4000 ms=47
+2026-09-26T06:44:01.461848Z  INFO city_blocks: city textures textures=8 mib=10 ms=119
+2026-09-26T06:44:01.589319Z  INFO forge_render::meshlet: cluster pages streamed pages=7963 pool_pages=4096 root_pages=22 upload_pages=64
+2026-09-26T06:44:01.638200Z  INFO city_blocks: cluster pages pages=7963 mib=995 streamed=true
+2026-09-26T06:44:01.903488Z  INFO city_blocks: instances placed placed=1000000 buildings=2304 lamps=9600 plaza_props=180 rocks=987916 ms=5.0 checksum=4e10743a3499dc0e matches_cpu_mirror=true
+2026-09-26T06:44:01.903517Z  INFO city_blocks: the scene's offset from the world's origin origin_m=0.0 f32_spacing_m=0.0001220703125
+2026-09-26T06:44:01.916415Z  INFO city_blocks: acceleration structures blas_triangles=1394328 max_cut_error=1.200 mib=278 hit_data_mib=34 blas_ms=87 tlas_ms=11
+2026-09-26T06:44:01.916434Z  INFO city_blocks: city ready instances=1000001 triangles=644610951012 clusters=15383048747 cook_ms=81 wall_ms=841
+2026-09-26T06:44:01.923305Z  INFO city_blocks: diffuse light probes probes=34560 cascades=5 spacing_m=4.0 rays=128 mib=84.9
+2026-09-26T06:44:01.923555Z  INFO forge_app::loading: loaded prepared_ms=20 total_ms=921
+2026-09-26T06:44:01.923696Z  INFO forge_render::meshlet: cull work list reserved from=16384 to=1048576
+2026-09-26T06:44:01.927094Z  INFO forge_gpu::graph: render graph transients laid out transients=9 heap_bytes=45875200 requested_bytes=72106496 aliased=true
+2026-09-26T06:44:01.932963Z  INFO forge_render::meshlet: visible-cluster list grown wanted=794053 from=65536 to=2097152 list_mib=16.0
+2026-09-26T06:44:01.940100Z  INFO forge_render::meshlet: pass 2 reject list grown wanted=822447 from=65536 to=1048576
+2026-09-26T06:44:02.002564Z  INFO city_blocks: sky light, per unit of sun illuminance roof=0.075 floor=0.286 wall_to_sun=0.204 wall_away=0.195 sun_on_roof=0.772
+2026-09-26T06:44:02.024621Z  INFO city_blocks: streaming settled frame=39 ms=100 resident=463
+2026-09-26T06:44:02.158728Z  INFO forge_app: memory: VRAM 1707.0 of 15227.0 MiB (11.2%); allocated 1399.60 MiB in 1664.0 MiB of blocks: geometry 988.11, render targets 94.67, transient heap 43.75, textures 30.60, GPU work buffers 225.90, per-frame data 0.50, staging + readback 16.06, outside the allocator 146.1 MiB; uploads 629.32 KiB/frame (235.30 MiB/s), read back 31.18 KiB/frame
+2026-09-26T06:44:02.158760Z  INFO forge_app: gpu: 2.565 ms per frame over 88 frames: geometry/meshlet pass 1 (visible last frame) 0.974, gi/probe rays [compute] 0.849, geometry/cluster cull 1 (visible last frame) 0.475, shading/standard 0.341, gi/probe blend [compute] 0.241, shading/reflections 0.141, geometry/instance cull 0.083, ao/gtao 0.082, shading/layered 0.077, temporal/TAA resolve 0.055, post/bloom 0.049, geometry/cluster cull 2 (occlusion) 0.037, geometry/instance cull 2 (occlusion) 0.034, geometry/meshlet pass 2 (newly visible) 0.030, sky/sky-view table [compute] 0.028, sky/compose 0.027, sky/aerial perspective [compute] 0.024, ao/depth chain 0.024, geometry/depth pyramid 0.023, ao/denoise 0.017, sky/irradiance [compute] 0.017, geometry/cell cull 0.015, streaming/upload [transfer] 0.012, temporal/motion vectors 0.010, geometry/cell cull 2 (occlusion) 0.008, geometry/cull clears 0.007, sky/atmosphere tables 0.004, gi/probe state [compute] 0.004, shading/ice 0.003, geometry/software raster 1 (visible last frame) 0.001, geometry/software raster merge 0.001, geometry/software raster 2 (newly visible) 0.000, app/end of frame 0.000, app/present 0.000
+2026-09-26T06:44:02.158770Z  INFO forge_app: cpu: 2.537 ms per frame over 90 frames: cpu/wait for GPU (frame slot) 1.102, cpu/acquire swapchain image 0.018, cpu/record commands 0.893, cpu/submit + present 0.524, cpu/update 0.001
+2026-09-26T06:44:02.161711Z  INFO city_blocks: frame times (ms) over the run frames=89 p50="2.57" p99="4.30" max="5.49"
+2026-09-26T06:44:02.216306Z  INFO forge_app: exited cleanly frames=90

@@ -1,0 +1,69 @@
+2026-09-26T06:43:55.873148Z  INFO forge_app: window placed monitor=Some("\\\\.\\DISPLAY2") x=-2560 y=0 monitors=2
+2026-09-26T06:43:55.895215Z  INFO forge_gpu::instance: Vulkan validation layer enabled
+2026-09-26T06:43:55.895231Z  INFO forge_gpu::instance: Vulkan synchronization validation enabled
+2026-09-26T06:43:55.895697Z  WARN vulkan: Layer name GalaxyOverlayVkLayer does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:43:55.895709Z  WARN vulkan: Layer name GalaxyOverlayVkLayer_VERBOSE does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:43:55.895714Z  WARN vulkan: Layer name GalaxyOverlayVkLayer_DEBUG does not conform to naming standard (Policy #LLP_LAYER_3) id=Loader Message kind=GENERAL
+2026-09-26T06:43:56.014845Z  INFO forge_gpu::device: mesh shaders left disabled (fallback paths forced)
+2026-09-26T06:43:56.014856Z  INFO forge_gpu::device: selected GPU device=NVIDIA GeForce RTX 5070 Ti features=DeviceFeatures { mesh_shader: false, ray_query: true, sampler_minmax: true, memory_budget: true, index_type_uint8: true, int64_atomics: true }
+2026-09-26T06:43:56.089559Z  INFO forge_gpu::device: queue families graphics=0 compute=Some(2) transfer=Some(1)
+2026-09-26T06:43:56.104984Z  INFO forge_gpu::swapchain: swapchain created extent=Extent2D { width: 1600, height: 900 } present_mode=MAILBOX format=B8G8R8A8_SRGB images=3
+2026-09-26T06:43:56.242128Z  INFO forge_gpu::shader: shader compiler slangc=C:\VulkanSDK\1.4.357.0\Bin\slangc.exe version=2026.13.1-1-g84792eb15
+2026-09-26T06:43:56.259072Z  INFO forge_app::overlay: overlay font ready cell_w=9 cell_h=20
+2026-09-26T06:43:56.269537Z  INFO forge_gpu::graph: render graph transients laid out transients=0 heap_bytes=0 requested_bytes=0 aliased=false
+2026-09-26T06:43:58.546349Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:43:58.546420Z  INFO forge_render::meshlet: depth pyramid created hzb_width=1024 hzb_height=512 mips=11
+2026-09-26T06:43:58.549070Z  INFO forge_render::meshlet: meshlet renderer ready path="indirect-count fallback" visible_capacity=65536
+2026-09-26T06:43:58.749494Z  INFO asteroids: cluster DAG mesh=0 levels=[301, 185, 99, 53, 26, 14, 6, 3, 2, 1] dag_triangles=55202
+2026-09-26T06:43:58.749516Z  INFO asteroids: cluster DAG mesh=1 levels=[303, 185, 104, 54, 28, 14, 7, 3, 2, 1] dag_triangles=55208
+2026-09-26T06:43:58.749519Z  INFO asteroids: cluster DAG mesh=2 levels=[302, 188, 102, 53, 29, 14, 7, 3, 2, 1] dag_triangles=55202
+2026-09-26T06:43:58.749522Z  INFO asteroids: cluster DAG mesh=3 levels=[299, 181, 100, 51, 27, 13, 7, 3, 2, 1] dag_triangles=55200
+2026-09-26T06:43:58.749525Z  INFO asteroids: cluster DAG mesh=4 levels=[528, 318, 172, 90, 46, 23, 12, 5, 3, 1] dag_triangles=98120
+2026-09-26T06:43:58.749527Z  INFO asteroids: cluster DAG mesh=5 levels=[531, 321, 173, 92, 45, 23, 12, 6, 2, 1] dag_triangles=98142
+2026-09-26T06:43:58.749530Z  INFO asteroids: cluster DAG mesh=6 levels=[533, 319, 170, 89, 44, 22, 11, 5, 2, 1] dag_triangles=98120
+2026-09-26T06:43:58.749532Z  INFO asteroids: cluster DAG mesh=7 levels=[532, 320, 175, 91, 46, 23, 13, 6, 3, 1] dag_triangles=98124
+2026-09-26T06:43:58.749535Z  INFO asteroids: cluster DAG mesh=8 levels=[667, 407, 219, 112, 58, 30, 14, 8, 3, 2, 1] dag_triangles=124244
+2026-09-26T06:43:58.749540Z  INFO asteroids: cluster DAG mesh=9 levels=[665, 400, 217, 112, 60, 30, 14, 7, 3, 2, 1] dag_triangles=124270
+2026-09-26T06:43:58.749543Z  INFO asteroids: cluster DAG mesh=10 levels=[669, 400, 216, 113, 57, 30, 14, 7, 3, 2, 1] dag_triangles=124248
+2026-09-26T06:43:58.749545Z  INFO asteroids: cluster DAG mesh=11 levels=[675, 409, 222, 117, 57, 29, 14, 7, 3, 2, 1] dag_triangles=124256
+2026-09-26T06:43:58.749547Z  INFO asteroids: cluster DAG mesh=12 levels=[1184, 695, 375, 195, 99, 51, 25, 12, 6, 3, 2, 1] dag_triangles=220962
+2026-09-26T06:43:58.749549Z  INFO asteroids: cluster DAG mesh=13 levels=[1191, 702, 381, 195, 100, 49, 23, 12, 7, 3, 2, 1] dag_triangles=220950
+2026-09-26T06:43:58.749552Z  INFO asteroids: cluster DAG mesh=14 levels=[1181, 699, 371, 191, 97, 49, 27, 13, 6, 3, 2, 1] dag_triangles=220974
+2026-09-26T06:43:58.749554Z  INFO asteroids: cluster DAG mesh=15 levels=[1188, 704, 385, 202, 103, 51, 24, 12, 7, 3, 2, 1] dag_triangles=220978
+2026-09-26T06:43:58.749557Z  INFO asteroids: cluster DAG mesh=16 levels=[2104, 1246, 659, 339, 170, 89, 45, 21, 11, 5, 2, 1] dag_triangles=392806
+2026-09-26T06:43:58.749560Z  INFO asteroids: cluster DAG mesh=17 levels=[2105, 1241, 668, 342, 171, 85, 44, 23, 11, 5, 2, 1] dag_triangles=392824
+2026-09-26T06:43:58.749562Z  INFO asteroids: cluster DAG mesh=18 levels=[2103, 1245, 655, 337, 167, 87, 45, 23, 12, 5, 2, 1] dag_triangles=392854
+2026-09-26T06:43:58.749564Z  INFO asteroids: cluster DAG mesh=19 levels=[2117, 1243, 660, 336, 176, 88, 44, 22, 11, 5, 2, 1] dag_triangles=392812
+2026-09-26T06:43:58.749567Z  INFO asteroids: cluster DAG mesh=20 levels=[3282, 1938, 1031, 541, 268, 132, 69, 34, 17, 8, 3, 2, 1] dag_triangles=613846
+2026-09-26T06:43:58.749569Z  INFO asteroids: cluster DAG mesh=21 levels=[3270, 1947, 1038, 533, 271, 138, 71, 36, 18, 9, 4, 2, 1] dag_triangles=613912
+2026-09-26T06:43:58.749572Z  INFO asteroids: cluster DAG mesh=22 levels=[3278, 1934, 1016, 520, 262, 136, 65, 34, 17, 8, 4, 2, 1] dag_triangles=613792
+2026-09-26T06:43:58.749574Z  INFO asteroids: cluster DAG mesh=23 levels=[3278, 1941, 1034, 524, 269, 135, 68, 34, 17, 8, 4, 2, 1] dag_triangles=613846
+2026-09-26T06:43:58.749577Z  INFO asteroids: cluster DAG mesh=24 levels=[4700, 2766, 1474, 766, 388, 195, 97, 48, 24, 12, 6, 3, 2, 1] dag_triangles=884018
+2026-09-26T06:43:58.749579Z  INFO asteroids: cluster DAG mesh=25 levels=[4749, 2800, 1478, 751, 380, 194, 99, 51, 25, 12, 6, 3, 1] dag_triangles=883966
+2026-09-26T06:43:58.749582Z  INFO asteroids: cluster DAG mesh=26 levels=[4710, 2774, 1475, 760, 386, 198, 100, 50, 24, 12, 6, 3, 2, 1] dag_triangles=884120
+2026-09-26T06:43:58.749584Z  INFO asteroids: cluster DAG mesh=27 levels=[4733, 2784, 1470, 747, 384, 197, 99, 49, 24, 12, 5, 3, 2, 1] dag_triangles=884072
+2026-09-26T06:43:58.749586Z  INFO asteroids: cluster DAG mesh=28 levels=[294, 173, 90, 48, 23, 12, 5, 3, 2, 1] dag_triangles=55184
+2026-09-26T06:43:58.749588Z  INFO asteroids: cluster DAG mesh=29 levels=[294, 171, 94, 49, 25, 13, 6, 3, 2, 1] dag_triangles=55190
+2026-09-26T06:43:58.749590Z  INFO asteroids: cluster DAG mesh=30 levels=[524, 305, 164, 85, 43, 22, 11, 5, 3, 2, 1] dag_triangles=98192
+2026-09-26T06:43:58.749593Z  INFO asteroids: cluster DAG mesh=31 levels=[525, 305, 167, 86, 41, 22, 10, 5, 2, 1] dag_triangles=98132
+2026-09-26T06:43:58.749595Z  INFO asteroids: cluster DAG mesh=32 levels=[656, 392, 208, 106, 55, 27, 13, 7, 3, 2, 1] dag_triangles=124266
+2026-09-26T06:43:58.749597Z  INFO asteroids: cluster DAG mesh=33 levels=[663, 393, 212, 110, 55, 28, 14, 7, 3, 2, 1] dag_triangles=124266
+2026-09-26T06:43:58.749600Z  INFO asteroids: cluster DAG mesh=34 levels=[1169, 688, 362, 185, 95, 48, 24, 11, 5, 3, 1] dag_triangles=220888
+2026-09-26T06:43:58.749602Z  INFO asteroids: cluster DAG mesh=35 levels=[1171, 694, 372, 195, 98, 48, 24, 13, 7, 3, 2, 1] dag_triangles=221010
+2026-09-26T06:43:58.749604Z  INFO asteroids: cluster DAG mesh=36 levels=[2082, 1231, 647, 331, 170, 83, 41, 21, 11, 4, 2, 1] dag_triangles=392906
+2026-09-26T06:43:58.749607Z  INFO asteroids: cluster DAG mesh=37 levels=[2106, 1234, 653, 329, 169, 82, 39, 20, 10, 4, 2, 1] dag_triangles=392830
+2026-09-26T06:43:58.749609Z  INFO asteroids: cluster DAG mesh=38 levels=[3278, 1918, 1011, 513, 258, 128, 63, 33, 16, 8, 3, 2, 1] dag_triangles=613882
+2026-09-26T06:43:58.749611Z  INFO asteroids: cluster DAG mesh=39 levels=[3264, 1917, 1005, 522, 264, 130, 67, 35, 16, 7, 3, 2, 1] dag_triangles=613880
+2026-09-26T06:43:58.749614Z  INFO asteroids: cluster DAG mesh=40 levels=[4698, 2759, 1444, 742, 368, 187, 93, 46, 24, 11, 5, 3, 2, 1] dag_triangles=884150
+2026-09-26T06:43:58.749616Z  INFO asteroids: cluster DAG mesh=41 levels=[4707, 2766, 1460, 750, 375, 188, 96, 47, 23, 11, 5, 3, 1] dag_triangles=884022
+2026-09-26T06:43:59.001739Z  INFO asteroids: acceleration structures blas_triangles=1596628 mib=97 blas_ms=71 tlas_ms=3
+2026-09-26T06:43:59.001756Z  INFO asteroids: the scene's offset from the world's origin origin_m=0.0 f32_spacing_m=6.103515625e-5
+2026-09-26T06:43:59.001760Z  INFO asteroids: asteroid field ready meshes=42 mesh_build_ms=2263 placement_attempts=25125 instances=10000 meshlets=12900369 total_triangles=531303168 total_ms=2690
+2026-09-26T06:43:59.008398Z  INFO forge_render::meshlet: visible-cluster list reserved from=65536 to=240000 list_mib=1.8
+2026-09-26T06:43:59.017277Z  INFO forge_app::loading: loaded prepared_ms=2266 total_ms=2756
+2026-09-26T06:43:59.017418Z  INFO forge_render::meshlet: cull work list reserved from=16384 to=407143
+2026-09-26T06:43:59.022784Z  INFO forge_gpu::graph: render graph transients laid out transients=10 heap_bytes=40632320 requested_bytes=79970816 aliased=true
+2026-09-26T06:43:59.152867Z  INFO forge_app: memory: VRAM 940.7 of 15227.0 MiB (6.2%); allocated 494.70 MiB in 896.0 MiB of blocks: geometry 371.05, render targets 42.49, transient heap 38.75, textures 10.99, GPU work buffers 30.91, per-frame data 0.50, staging + readback 0.00, outside the allocator 145.8 MiB; uploads 1.79 KiB/frame (1.16 MiB/s), read back 1.05 KiB/frame
+2026-09-26T06:43:59.152895Z  INFO forge_app: gpu: 1.348 ms per frame over 88 frames: geometry/software raster 1 (visible last frame) 0.176, geometry/meshlet pass 1 (visible last frame) 0.155, shading/standard 0.150, geometry/cluster cull 1 (visible last frame) 0.150, sky/starfield + planet 0.135, dust/light 0.105, shading/ice 0.087, temporal/TAA resolve 0.059, post/bloom 0.044, ao/gtao 0.043, geometry/instance cull 0.029, geometry/depth pyramid 0.028, ao/depth chain 0.024, dust/apply 0.023, geometry/cluster cull 2 (occlusion) 0.021, geometry/meshlet pass 2 (newly visible) 0.020, geometry/software raster merge 0.019, exposure/luminance histogram 0.018, ao/denoise 0.017, dust/integrate 0.015, temporal/motion vectors 0.010, geometry/software raster 2 (newly visible) 0.008, sky/atmosphere tables 0.006, geometry/cull clears 0.004, shading/layered 0.001, sky/planet-view table 0.001, app/present 0.000, app/end of frame 0.000
+2026-09-26T06:43:59.152903Z  INFO forge_app: cpu: 1.439 ms per frame over 90 frames: cpu/wait for GPU (frame slot) 0.258, cpu/acquire swapchain image 0.008, cpu/record commands 0.930, cpu/submit + present 0.242, cpu/update 0.001
+2026-09-26T06:43:59.200791Z  INFO forge_app: exited cleanly frames=90
