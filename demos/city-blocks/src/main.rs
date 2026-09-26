@@ -1506,6 +1506,8 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             rock_slope: 0.45,
             // Green to the peaks, as on a tropical island: rock where it is steep.
             rock_above: f32::INFINITY,
+            // The slope over 8 m whatever the spacing, so 4 m draws the rock 8 m draws.
+            slope_over: 8.0,
             shore: Some(forge_procgen::Shore {
                 sea: island_layer::SEA,
                 sand: island_layer::SAND,

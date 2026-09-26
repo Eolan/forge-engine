@@ -246,6 +246,21 @@ Two more changes:
 GPU: 0.74 ms a frame from the default view, the same as before (the layered shading 0.11 ms).
 The batch is unchanged (26 images at 0 px).
 
+**At 4 m** (`--island-spacing 4`, the 4097² target), the first start takes:
+- 25 s to generate the field (a 67 MB `.f32`);
+- 72 s to cook it into 33.5 M triangles, 784 586 clusters in 16 levels (a 1.10 GB `.fmesh`).
+
+Its 7 721 pages (965 MB) stream through the default 512 MB pool. The shadow structure's cut
+stands 2.4 m off (rays start 4.8 m off). The GPU takes 0.84 ms from the default view, against
+0.74 at 8 m: cluster cull 1 grows 0.06 → 0.18 ms, and the probes' blend 0.07 → 0.15. The cache
+keeps one file per prop, so switching between 8 and 4 m re-cooks.
+
+Much of the 4 m island's lower flanks is rock, where at 8 m it was grass. This is the field,
+not the rule: the erosion at 4 m cuts the flanks above 0.45 over 8 m. The rule now measures the
+slope over 8 m at any spacing (`LayerRule::slope_over`), which changed 0.3 % of the 4 m frame's
+pixels and nothing at 8 m. Whether the 4 m flanks should be that steep is a question for the
+erosion's parameters at 4 m (#97), and a look to judge.
+
 ![The island from the default view with its own ground: the sea's stand-in, sand along the shore, rock on the steep slopes, a 30° sun](images/island-engine-sea.png)
 
 ![From the west, 400 m up: the skirt carries the sea to the horizon](images/island-engine-west.png)

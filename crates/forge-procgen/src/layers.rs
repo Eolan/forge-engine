@@ -18,6 +18,10 @@ pub struct LayerRule {
     pub rock_slope: f32,
     /// Metres above which the ground is rock whatever its slope.
     pub rock_above: f32,
+    /// Metres over which the slope is measured (Horn's kernel reaches that far each way, in
+    /// whole samples, at least one): the same rule at any spacing, where a finer grid's local
+    /// steepness turned more of the ground to rock (4 m against 8 m, #96).
+    pub slope_over: f64,
     /// The shore's layers, for a field whose sea is at 0 m (the island's).
     pub shore: Option<Shore>,
 }
@@ -41,8 +45,9 @@ pub struct Shore {
 pub fn slope_layers(height: &Field2<f32>, rule: &LayerRule, texels: u32) -> Field2<u8> {
     let extent = height.extent();
     let cell = extent / f64::from(texels);
+    let reach = (rule.slope_over / height.spacing).round().max(1.0) as i32;
     let slopes = Field2::from_fn(height.size, height.spacing, |x, y| {
-        let (gx, gy) = height.gradient(x, y);
+        let (gx, gy) = horn(height, x, y, reach);
         (gx * gx + gy * gy).sqrt()
     });
     Field2::from_fn(texels, cell, |x, y| {
@@ -58,6 +63,21 @@ pub fn slope_layers(height: &Field2<f32>, rule: &LayerRule, texels: u32) -> Fiel
     })
 }
 
+/// Horn's gradient (∂/∂x, ∂/∂y) at sample (x, y) over `reach` samples each way, per metre
+/// (`Field2::gradient` at a reach of one); the border uses the samples it has.
+fn horn(height: &Field2<f32>, x: u32, y: u32, reach: i32) -> (f32, f32) {
+    let n = height.size as i32 - 1;
+    let at = |dx: i32, dy: i32| {
+        let sx = (x as i32 + dx * reach).clamp(0, n) as u32;
+        let sy = (y as i32 + dy * reach).clamp(0, n) as u32;
+        height.get(sx, sy)
+    };
+    let dx = (at(1, -1) + 2.0 * at(1, 0) + at(1, 1)) - (at(-1, -1) + 2.0 * at(-1, 0) + at(-1, 1));
+    let dy = (at(-1, 1) + 2.0 * at(0, 1) + at(1, 1)) - (at(-1, -1) + 2.0 * at(0, -1) + at(1, -1));
+    let scale = 1.0 / (8.0 * reach as f32 * height.spacing as f32);
+    (dx * scale, dy * scale)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,6 +91,7 @@ mod tests {
             rock: 4,
             rock_slope: 0.45,
             rock_above: 1000.0,
+            slope_over: 2.0,
             shore: None,
         };
         let layers = slope_layers(&height, &rule, 25);
@@ -106,6 +127,7 @@ mod tests {
             rock: 4,
             rock_slope: 0.45,
             rock_above: 1000.0,
+            slope_over: 2.0,
             shore: Some(Shore {
                 sea: 2,
                 sand: 1,
@@ -129,6 +151,7 @@ mod tests {
             rock: 4,
             rock_slope: 0.5,
             rock_above: 1000.0,
+            slope_over: 8.0,
             shore: None,
         };
         // Texels of 2 m. The nearest sample's slope made rock of every texel from 76 to 92 m
@@ -136,5 +159,38 @@ mod tests {
         let layers = slope_layers(&height, &rule, 80);
         let rock: Vec<u32> = (0..80).filter(|&x| layers.get(x, 40) == 4).collect();
         assert_eq!(rock, (39..=44).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_slope_is_measured_over_the_same_metres_at_any_spacing() {
+        // A 0.3 incline with ripples 16 m long and 2 m high: over 4 m each way they add up to
+        // 0.5 of slope, over 8 m (a whole ripple) they cancel.
+        let ground = |spacing: f64, size: u32| {
+            Field2::from_fn(size, spacing, |x, _| {
+                let m = x as f64 * spacing;
+                (0.3 * m + 2.0 * (std::f64::consts::TAU * m / 16.0).sin()) as f32
+            })
+        };
+        let rule = LayerRule {
+            grass: 0,
+            rock: 4,
+            rock_slope: 0.45,
+            rock_above: 1000.0,
+            slope_over: 8.0,
+            shore: None,
+        };
+        let rock_share = |height: &Field2<f32>, rule: &LayerRule| {
+            let layers = slope_layers(height, rule, 64);
+            layers.data.iter().filter(|&&l| l == 4).count() as f64 / layers.data.len() as f64
+        };
+        let (fine, coarse) = (ground(4.0, 65), ground(8.0, 33));
+        assert_eq!(rock_share(&fine, &rule), 0.0);
+        assert_eq!(rock_share(&coarse, &rule), 0.0);
+        // Over the finer grid's own 4 m, the ripples make rock.
+        let local = LayerRule {
+            slope_over: 4.0,
+            ..rule
+        };
+        assert!(rock_share(&fine, &local) > 0.25);
     }
 }
