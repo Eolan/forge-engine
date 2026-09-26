@@ -28,6 +28,7 @@ the system you are about to touch.
 | [research/data-driven.md](research/data-driven.md) | data model, reflection, asset ids, packages and load order, scripting, Wasm, hot reload, modding | 49 | done |
 | [research/water.md](research/water.md) | ocean spectra and FFT cascades, shores and shallow water, rivers and lakes, water shading, the genesis hand-off, engines' water systems | 34 | done (Phase 2 item 3, `island`) |
 | [research/city-generation.md](research/city-generation.md) | road networks and hierarchy, blocks and lots, districts and landmarks, buildings from grammars and kits, interiors, a city through the cluster DAG, engines' city pipelines | 44 | done (issues #85, #86; the decision for #86 proposed 🟡) |
+| [research/hdr-output.md](research/hdr-output.md) | HDR display output: Vulkan's swapchain colour spaces and metadata, Windows' composition and reference white, PQ and 10-bit dithering, ACES 2.0's HDR presets and OCIO's builtins, the engines' display mappers, UI at paper white, calibration, verification without an HDR monitor | 27 | done (issue #94; sources on GitHub read, the rest confirmed by search only, #99) |
 
 ## Verdicts
 
@@ -181,6 +182,25 @@ style set per district with its regional trim sheets, a merged proxy per far bui
 portals as records for the interiors; the kits themselves generated at cook time, since there is
 no art team. A `CityPlan` of typed records (roads, blocks, lots, districts, landmarks, buildings as
 module instances) is the point cloud the City Sample's rules processor consumes.
+
+**HDR display output.** On Windows the game presents 10-bit PQ over Rec.2020 or linear fp16 scRGB
+(1.0 = 80 nits), the compositor converts both, and the one OS value to read is the user's SDR white
+level, or UI and desktop-like content look dim (Microsoft's Advanced Color guide). Vulkan lists the
+same two pairs on NVIDIA and AMD through `VK_EXT_swapchain_colorspace`, which Forge's instance does
+not enable yet, leaves the PQ encoding to the shader, and carries mastering metadata through
+`VK_EXT_hdr_metadata`, which the presentation engine may ignore; `ash` 0.38 has both. ACES 2.0's
+output transform is the first standard curve with HDR presets (500/1000/2000/4000 nits, P3-D65 or
+Rec.2020 limiting, PQ), OpenColorIO 2.4–2.5 implements them as builtins, and Forge's port already
+passes OCIO's 1000-nit P3 test values, so HDR is a rebake of the 65³ table with the shaper's top at
+the transform's own clamp (4096 at 1000 nits) and PQ-encoded 16-bit UNORM texels. The look decision:
+the presets put a scene white at 107 nits at 1000 nits (grey 14.5), below Windows' desktop white
+and BT.2408's 203 nits, and every shipped engine (Frostbite, Unreal, Unity, Call of Duty, Sucker
+Punch) exposes a paper-white control and draws the UI at it, so Forge needs a paper-white gain in
+front of the transform and the overlay written at that white, plus a three-pattern calibration
+overlay (HGiG's MinTML/MaxTML/MaxFFTML, Windows' own app). Ten-bit PQ steps are about 1 % of
+luminance, so the display pass dithers half a code. Everything but the present is verifiable on an
+SDR monitor through an offscreen 10-bit target and a "fake HDR" preview; the cost is a few
+thousandths of a millisecond.
 
 ## Still to research
 

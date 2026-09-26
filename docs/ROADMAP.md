@@ -59,7 +59,10 @@ against the 8.33 ms of 120 fps), its south view 1.96 ms at 1600 × 900; the ball
 1600 × 900 and 2.67 ms at 1440p.
 
 **Phase 1's leftovers:** #78 (transient buffers, parallel recording of pass bodies), #94 (an
-HDR display output), #95 (more async overlap), #39 (the RTX 3080 run).
+HDR display output; researched 2026-09-26, `docs/research/hdr-output.md`: the swapchain pair
+to enable, the OS white level to read, ACES 2.0's presets as a rebake, paper white as the one
+real decision, everything but the present verifiable on an SDR monitor), #95 (more async
+overlap), #39 (the RTX 3080 run).
 
 **Proposed next, for the owner to pick:**
 - #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes
