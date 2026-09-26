@@ -290,9 +290,9 @@ impl Ocean {
                 let (u1, u2) = (rng.next_f64().max(1.0e-12), rng.next_f64());
                 let radius = (-2.0 * ln(u1)).sqrt();
                 let (sn, cs) = sin_cos(std::f64::consts::TAU * u2);
-                h0.push(
-                    C(radius * cs, radius * sn).scale(amplitude * std::f64::consts::FRAC_1_SQRT_2),
-                );
+                // Half the amplitude on each of the pair `k`, `−k`, so the surface's variance
+                // is the spectrum's energy `Σ S Δk²` and `Hs = 4 √m0` holds on the tile.
+                h0.push(C(radius * cs, radius * sn).scale(0.5 * amplitude));
                 omega.push(w);
             }
         }
@@ -304,10 +304,11 @@ impl Ocean {
         }
     }
 
-    /// The significant wave height, metres: four times the root of the spectrum's energy.
+    /// The significant wave height, metres: four times the root of the surface's variance,
+    /// which is the energy of the realised amplitudes on both `k` and `−k`.
     pub fn significant_wave_height(&self) -> f64 {
         let energy: f64 = self.h0.iter().map(|c| c.0 * c.0 + c.1 * c.1).sum();
-        4.0 * energy.sqrt()
+        4.0 * (2.0 * energy).sqrt()
     }
 
     /// The surface `time` seconds in.
@@ -478,9 +479,29 @@ mod tests {
         let hs = ocean.significant_wave_height();
         assert!(hs > 0.5 && hs < 6.0, "significant height {hs}");
         let (surface, numbers) = report(&ocean, 3.0);
-        // Zero mean, real, a height of the order of Hs, some displacement, little folding.
-        let mean: f32 = surface.height.data.iter().sum::<f32>() / surface.height.len() as f32;
-        assert!(mean.abs() < 0.05 * hs as f32, "mean {mean}");
+        // Zero mean, real, the tile's variance the spectrum's energy (Hs = 4 √m0), some
+        // displacement, little folding.
+        let count = surface.height.len() as f64;
+        let mean = surface
+            .height
+            .data
+            .iter()
+            .map(|&h| f64::from(h))
+            .sum::<f64>()
+            / count;
+        assert!(mean.abs() < 0.05 * hs, "mean {mean}");
+        let variance = surface
+            .height
+            .data
+            .iter()
+            .map(|&h| (f64::from(h) - mean).powi(2))
+            .sum::<f64>()
+            / count;
+        let measured = 4.0 * variance.sqrt();
+        assert!(
+            (measured - hs).abs() < 0.35 * hs,
+            "tile Hs {measured} vs spectrum {hs}"
+        );
         assert!(numbers.highest > 0.2 * hs as f32 && numbers.highest < 1.5 * hs as f32);
         assert!(numbers.displacement > 0.0 && numbers.folded < 0.2);
         // The slopes are the height's derivative, roughly (a central difference).

@@ -98,13 +98,16 @@ pub fn trace_rivers(height: &Field2<f32>, flow: &Flow, min_area: u32) -> Rivers 
         }
         let mine = &mut donors[slot[i] as usize];
         mine.sort_by_key(|&d| (std::cmp::Reverse(flow.area[d as usize]), d));
-        order[i] = match mine.as_slice() {
-            [] => 1,
-            [one] => order[*one as usize],
-            [first, second, ..] => {
-                let (a, b) = (order[*first as usize], order[*second as usize]);
-                if a == b { a + 1 } else { a.max(b) }
-            }
+        // Strahler: the donors' highest order, one more when two or more donors share it.
+        let highest = mine.iter().map(|&d| order[d as usize]).max().unwrap_or(0);
+        let sharing = mine
+            .iter()
+            .filter(|&&d| order[d as usize] == highest)
+            .count();
+        order[i] = match (highest, sharing) {
+            (0, _) => 1,
+            (h, s) if s >= 2 => h + 1,
+            (h, _) => h,
         };
         let r = flow.receiver[i] as usize;
         if slot[r] != u32::MAX {

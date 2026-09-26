@@ -133,13 +133,14 @@ open lake rule).
 `sea-hillshade.png`). The signed coast distance (`coast_distance`: an exact Euclidean distance
 transform, rows then columns in parallel; positive inland, negative at sea, zero on the coast
 line) is what the shore's waves, foam line and wet band key on in the water research's plan;
-seed 7's island reaches 4.6 km inland at most; 0.04 s at 16 m, 0.65 s at 4 m. The sea
+seed 7's island reaches 4.6 km inland at most; 0.04 s at 16 m, about a second at 4 m. The sea
 (`Ocean::new`, `surface(time)`): a JONSWAP spectrum for a 12 m/s wind over 200 km of fetch,
 the TMA factor for a 50 m shelf, Hasselmann's spreading with Horvath's swell term (0.3),
 Gaussian amplitudes from the seed on every wave vector of a 256 m patch at 256² (waves shorter
 than 2 m left to the next cascade), the inverse FFT with `dmath` twiddles: a significant wave
-height of 3.36 m, the tile from −3.85 to 3.71 m, horizontal displacements up to 3.58 m
-(choppiness 1), no folding; the eight transforms of a surface take 18 ms on one core, which is
+height of 3.36 m (`Hs = 4 √m0`, and the tile's variance is checked against it), the tile from
+−2.72 to 2.62 m, horizontal displacements up to 2.53 m (choppiness 1), no folding; the eight
+transforms of a surface take 18 ms on one core, which is
 the CPU side D-009 needs (the lowest cascade re-run for the physics) and the reference the GPU
 cascades will be diffed against. What the pictures show: a sea of 30–60 m waves running with
 the wind, crests broken by the spreading; nothing of it is drawn in the engine yet (the surface
