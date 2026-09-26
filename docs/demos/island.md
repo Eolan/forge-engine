@@ -11,7 +11,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | D8 drainage, the downstream-first stack, integer areas; depressions by the basin graph each step, by priority flood for the reference and the lakes | ✅ `forge_procgen::flow` |
 | The implicit stream-power erosion with diffusion, rows and drainage trees in parallel on the job system; lakes as filling depressions (stage 3) | ✅ `forge_procgen::erosion` |
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes | ✅ `forge_procgen::preview`, `tools/genesis` |
-| Hydrology: rivers as polylines with Strahler orders and widths (stage 4) | ✅ `forge_procgen::hydrology`; lakes are marked, not yet traced (Fill–Spill–Merge) |
+| Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets (stage 4) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
 | Materials from the fields, the layer map (stage 6) | planned |
@@ -71,9 +71,11 @@ is `f32` and `f64` with `sqrt` only.
    tributary upstream to its head, every other river donor met on the way starts a tributary,
    so each river runs from a head to the sea or to its junction with a larger one; Strahler
    orders bottom-up, widths `w = 0.005 √A` (Leopold & Maddock's exponent: 5 m at a square
-   kilometre of catchment, 14 m at the island's largest). Lakes where a final priority flood
-   (Barnes 2014, once) stands more than 0.5 m over the eroded field; their tracing
-   (Fill–Spill–Merge) is not done.
+   kilometre of catchment, 14 m at the island's largest). Lakes (`hydrology::trace_lakes`)
+   where a final priority flood (Barnes 2014, once) stands more than 0.5 m over the eroded
+   field: each 4-connected patch with the flood's level there, its deepest point and its
+   outlet (the lake cell draining out lowest), which is what the water plan's lake planes
+   need (polygon, level, outlet).
 
 | Run (seed 7, 150 steps) | Samples | Erosion | Per step | Was (flood, one thread) | Peaks | River samples | Lake samples |
 |---|---|---|---|---|---|---|---|
@@ -122,8 +124,10 @@ spill rule, is the part of #97 that remains.
 the longest 6.3 km, orders up to 3; at 4 m, 42 rivers, 24 to the sea, 82 km, the longest
 7.5 km, orders up to 2 (the same square kilometres of catchment are more cells, and the finer
 network branches differently), the widest 14 m at both; the tracing takes 0.7 s at 4 m. These
-polylines are what the water research (`docs/research/water.md`, item 4 of its
-recommendation) turns into river ribbons with flow maps.
+polylines are what the water research (`docs/research/water.md`, item 3 of its
+recommendation) turns into river ribbons with flow maps. The lakes: 11 at 16 m, the largest
+41.5 ha, the deepest 19.7 m; 2 614 at 4 m, the largest 52.2 ha, the deepest 30.9 m (the finer grid's many small depressions, #97's
+open lake rule).
 
 **The water's fields** (`genesis`, its `stage 5` line; `coast.png`, `sea-height.png`,
 `sea-hillshade.png`). The signed coast distance (`coast_distance`: an exact Euclidean distance

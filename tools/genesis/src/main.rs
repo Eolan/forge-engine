@@ -177,13 +177,17 @@ fn main() -> Result<()> {
         .flat_map(|r| r.area.iter())
         .map(|&a| forge_procgen::hydrology::width(f64::from(a) * params.spacing * params.spacing))
         .fold(0.0, f64::max);
+    let ponds = forge_procgen::trace_lakes(&height, &filled, &flow, 0.5);
     println!(
-        "stage 4, hydrology: {:.2} s; {rivers} river samples above 0.5 km² of catchment, {lakes} lake samples; {} rivers ({trunks} to the sea, {} km in all, the longest {:.1} km, order up to {}, up to {widest:.0} m wide)",
+        "stage 4, hydrology: {:.2} s; {rivers} river samples above 0.5 km² of catchment, {lakes} lake samples; {} rivers ({trunks} to the sea, {} km in all, the longest {:.1} km, order up to {}, up to {widest:.0} m wide); {} lakes, the largest {:.1} ha, the deepest {:.1} m",
         start.elapsed().as_secs_f64(),
         network.rivers.len(),
         (network.total_length() / 1000.0).round(),
         longest / 1000.0,
-        network.max_order()
+        network.max_order(),
+        ponds.lakes.len(),
+        ponds.largest_area(params.spacing) / 10_000.0,
+        ponds.deepest()
     );
 
     // Stage 5 for the water: the coast distance, and the sea's spectrum as a tile.

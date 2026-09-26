@@ -27,7 +27,8 @@ without losing the others.
 | 12 | `c2dbcb4` Print the eroded field's digest in genesis, for D-016 checks across machines | `Field2::digest`; seed 7's values recorded | no (compare the digest) |
 | 13 | `7ccfd59` Trace the rivers as polylines with Strahler orders and widths (stage 4) | `forge_procgen::hydrology`, the network's numbers in `genesis` | no |
 | 14 | `a8e1f1d` Add the water research for the island's sea, shores, rivers and lakes | `docs/research/water.md` (Phase 2 item 3) | no |
-| 15 | (below) Bake the coast distance and the sea's spectrum on the CPU: the water's first fields | `forge_procgen::coast`, `forge_procgen::ocean`, `genesis`'s stage 5 | no |
+| 15 | `2424750` Bake the coast distance and the sea's spectrum on the CPU: the water's first fields | `forge_procgen::coast`, `forge_procgen::ocean`, `genesis`'s stage 5 | no |
+| 16 | (below) Trace the lakes: level, depth, outlet and cells per flooded patch | `hydrology::trace_lakes`, the lakes' numbers in `genesis` | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -263,6 +264,14 @@ CPU transform of the lowest cascade is one of the three options the research nam
 Test: `cargo test -p forge-procgen` (a disc's coast distance is its radius less the distance
 to the centre; the inverse transform of one wave vector is a cosine; a breeze gives metres of
 waves, zero mean, the same bytes twice) and the `stage 5` line and pictures of a `genesis` run.
+
+### 16. The lakes (commit 16)
+
+`hydrology::trace_lakes`: the 4-connected patches where the final flood stands over the eroded
+field, each with its level, deepest point, outlet and cells; the water plan's lake planes take
+their polygon, level and outlet from it, and #97's lake rule now has numbers (`genesis`'s
+`stage 4` line: 11 lakes at 16 m, the largest 41.5 ha). Test: `cargo test -p forge-procgen`
+(the cone's pit is one lake of one cell at its spill level).
 
 ## How to give the cloud session its results
 

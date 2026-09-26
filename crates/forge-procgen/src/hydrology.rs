@@ -5,7 +5,9 @@
 //! from a head to an outlet or to its junction with a larger river. Strahler orders (Strahler
 //! 1957) come bottom-up: a head is 1, a junction of two equals is one more. Widths follow the
 //! hydraulic geometry of Leopold & Maddock (1953), `w ∝ √Q` with the catchment as the
-//! discharge. Everything is a pure function of the flow, in index order (D-016).
+//! discharge. Lakes ([`trace_lakes`]) are the connected patches where the final flood stands
+//! over the eroded field, each with its level, its outlet and its cells. Everything is a pure
+//! function of the flow and the flood, in index order (D-016).
 
 use crate::field::Field2;
 use crate::flow::Flow;
@@ -182,6 +184,118 @@ impl Rivers {
     }
 }
 
+/// One lake: a flooded depression.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lake {
+    /// The water's level, metres (the flood's height over the depression).
+    pub level: f32,
+    /// The cells under water, in index order.
+    pub cells: Vec<u32>,
+    /// The deepest point below the level, metres.
+    pub depth: f32,
+    /// The cell the water leaves by: the lake cell whose receiver is outside the lake and
+    /// lowest, or the lake's lowest-index cell when none drains out (the border).
+    pub outlet: u32,
+}
+
+impl Lake {
+    /// The lake's area, m², for a field `spacing` metres apart.
+    pub fn area(&self, spacing: f64) -> f64 {
+        self.cells.len() as f64 * spacing * spacing
+    }
+}
+
+/// The lakes of a field.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Lakes {
+    /// Every lake, in the index order of their first cell.
+    pub lakes: Vec<Lake>,
+    /// Per cell, the lake it is under (`u32::MAX` for none).
+    pub lake_of: Vec<u32>,
+}
+
+/// The lakes: the 4-connected patches of cells where `filled` (a priority flood of `height`)
+/// stands more than `min_depth` over `height`, each with the flood's level there (the same
+/// across the patch up to the flood's ε), its deepest point and its outlet along `flow`.
+pub fn trace_lakes(
+    height: &Field2<f32>,
+    filled: &Field2<f32>,
+    flow: &Flow,
+    min_depth: f32,
+) -> Lakes {
+    let (n, count) = (height.size as usize, height.len());
+    let under = |i: usize| filled.data[i] - height.data[i] > min_depth;
+    let mut lake_of = vec![u32::MAX; count];
+    let mut lakes = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    for start in 0..count {
+        if lake_of[start] != u32::MAX || !under(start) {
+            continue;
+        }
+        let id = lakes.len() as u32;
+        lake_of[start] = id;
+        queue.push_back(start);
+        let mut cells = Vec::new();
+        while let Some(i) = queue.pop_front() {
+            cells.push(i as u32);
+            let (x, y) = (i % n, i / n);
+            let neighbours = [
+                (x > 0).then(|| i - 1),
+                (x + 1 < n).then(|| i + 1),
+                (y > 0).then(|| i - n),
+                (y + 1 < n).then(|| i + n),
+            ];
+            for j in neighbours.into_iter().flatten() {
+                if lake_of[j] == u32::MAX && under(j) {
+                    lake_of[j] = id;
+                    queue.push_back(j);
+                }
+            }
+        }
+        cells.sort_unstable();
+        let level = cells
+            .iter()
+            .map(|&c| filled.data[c as usize])
+            .fold(f32::MIN, f32::max);
+        let depth = cells
+            .iter()
+            .map(|&c| level - height.data[c as usize])
+            .fold(0.0, f32::max);
+        let outlet = cells
+            .iter()
+            .copied()
+            .filter(|&c| lake_of[flow.receiver[c as usize] as usize] != id)
+            .min_by(|&a, &b| {
+                filled.data[a as usize]
+                    .total_cmp(&filled.data[b as usize])
+                    .then(a.cmp(&b))
+            })
+            .unwrap_or(cells[0]);
+        lakes.push(Lake {
+            level,
+            cells,
+            depth,
+            outlet,
+        });
+    }
+    Lakes { lakes, lake_of }
+}
+
+impl Lakes {
+    /// The largest lake's area, m².
+    pub fn largest_area(&self, spacing: f64) -> f64 {
+        self.lakes
+            .iter()
+            .map(|l| l.area(spacing))
+            .fold(0.0, f64::max)
+    }
+
+    /// The deepest lake's depth, metres.
+    pub fn deepest(&self) -> f32 {
+        self.lakes.iter().map(|l| l.depth).fold(0.0, f32::max)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +363,29 @@ mod tests {
         }
         // Deterministic.
         assert_eq!(trace_rivers(&fork, &flow, 30), rivers);
+    }
+
+    #[test]
+    fn a_pit_next_to_the_peak_is_one_lake_at_its_spill_level() {
+        use crate::flow::{priority_flood, route};
+        let mut cone = Field2::from_fn(7, 10.0, |x, y| {
+            let (dx, dy) = (x as f32 - 3.0, y as f32 - 3.0);
+            30.0 - 5.0 * (dx * dx + dy * dy).sqrt()
+        });
+        cone.set(4, 3, 5.0);
+        let filled = priority_flood(&cone, 0.0);
+        let flow = route(&filled, 0.0);
+        let lakes = trace_lakes(&cone, &filled, &flow, 0.5);
+        assert_eq!(lakes.lakes.len(), 1);
+        let lake = &lakes.lakes[0];
+        assert_eq!(lake.cells, vec![cone.index(4, 3) as u32]);
+        assert_eq!(lake.outlet, cone.index(4, 3) as u32);
+        assert!((lake.level - filled.get(4, 3)).abs() < 1e-6);
+        assert!((lake.depth - (filled.get(4, 3) - 5.0)).abs() < 1e-6);
+        assert!((lake.area(10.0) - 100.0).abs() < 1e-6);
+        assert_eq!(lakes.lake_of[cone.index(4, 3)], 0);
+        assert_eq!(lakes.lake_of.iter().filter(|&&l| l != u32::MAX).count(), 1);
+        // No lake without a flood.
+        assert!(trace_lakes(&cone, &cone, &flow, 0.5).lakes.is_empty());
     }
 }

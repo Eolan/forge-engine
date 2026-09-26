@@ -15,7 +15,7 @@
 //!   erosion until mountains and valleys appear, rows and drainage trees in parallel on the
 //!   job system.
 //! - [`hydrology`]: stage 4, the river network as polylines with Strahler orders and widths
-//!   from the catchment.
+//!   from the catchment, and the lakes with their levels and outlets.
 //! - [`coast`]: the signed distance to the coast, what the shore's water keys on.
 //! - [`ocean`]: the open sea's directional spectrum (JONSWAP/TMA) and its inverse FFT on the
 //!   CPU, the reference the GPU's cascades are diffed against.
@@ -43,7 +43,7 @@ pub use coast::coast_distance;
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
 pub use flow::{Drainage, Flow, drain, priority_flood, route};
-pub use hydrology::{Mouth, River, Rivers, trace_rivers};
+pub use hydrology::{Lake, Lakes, Mouth, River, Rivers, trace_lakes, trace_rivers};
 pub use island::{IslandFields, IslandParams, cached_island, generate_island, island_fields};
 pub use layers::{LayerRule, slope_layers};
 pub use ocean::{Ocean, OceanParams, OceanSurface};
