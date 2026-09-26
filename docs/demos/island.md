@@ -12,6 +12,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | The implicit stream-power erosion with diffusion, rows and drainage trees in parallel on the job system; lakes as filling depressions (stage 3) | ✅ `forge_procgen::erosion` |
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths (stage 4) | ✅ `forge_procgen::hydrology`; lakes are marked, not yet traced (Fill–Spill–Merge) |
+| The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
 | Materials from the fields, the layer map (stage 6) | planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | built, to see on a GPU: `city-blocks --island SEED` (#96 for the props and the demo of its own) |
@@ -123,6 +124,22 @@ the longest 6.3 km, orders up to 3; at 4 m, 42 rivers, 24 to the sea, 82 km, the
 network branches differently), the widest 14 m at both; the tracing takes 0.7 s at 4 m. These
 polylines are what the water research (`docs/research/water.md`, item 4 of its
 recommendation) turns into river ribbons with flow maps.
+
+**The water's fields** (`genesis`, its `stage 5` line; `coast.png`, `sea-height.png`,
+`sea-hillshade.png`). The signed coast distance (`coast_distance`: an exact Euclidean distance
+transform, rows then columns in parallel; positive inland, negative at sea, zero on the coast
+line) is what the shore's waves, foam line and wet band key on in the water research's plan;
+seed 7's island reaches 4.6 km inland at most; 0.04 s at 16 m, 0.65 s at 4 m. The sea
+(`Ocean::new`, `surface(time)`): a JONSWAP spectrum for a 12 m/s wind over 200 km of fetch,
+the TMA factor for a 50 m shelf, Hasselmann's spreading with Horvath's swell term (0.3),
+Gaussian amplitudes from the seed on every wave vector of a 256 m patch at 256² (waves shorter
+than 2 m left to the next cascade), the inverse FFT with `dmath` twiddles: a significant wave
+height of 3.36 m, the tile from −3.85 to 3.71 m, horizontal displacements up to 3.58 m
+(choppiness 1), no folding; the eight transforms of a surface take 18 ms on one core, which is
+the CPU side D-009 needs (the lowest cascade re-run for the physics) and the reference the GPU
+cascades will be diffed against. What the pictures show: a sea of 30–60 m waves running with
+the wind, crests broken by the spreading; nothing of it is drawn in the engine yet (the surface
+pass is the water plan's first item on a GPU).
 
 **Digests** (D-016). `genesis` ends with a 64-bit FNV-1a of the field's bits
 (`Field2::digest`), the same on every machine and with any thread count; seed 7 after 150

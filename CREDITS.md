@@ -199,3 +199,17 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   complexity algorithm for flow routing in topographies with depressions", *Earth Surface
   Dynamics* 7, 2019: `forge_procgen::flow::drain` (the pit basins, their lowest passes, the
   spanning tree from the sea, carving).
+- **Strahler orders and river widths.** Arthur N. Strahler, "Quantitative analysis of watershed
+  geomorphology", *Transactions of the American Geophysical Union* 38, 1957; Luna B. Leopold,
+  Thomas Maddock Jr., "The hydraulic geometry of stream channels and some physiographic
+  implications", USGS Professional Paper 252, 1953: `forge_procgen::hydrology`.
+- **The distance transform.** Pedro F. Felzenszwalb, Daniel P. Huttenlocher, "Distance
+  Transforms of Sampled Functions", *Theory of Computing* 8, 2012: `forge_procgen::coast`.
+- **Ocean waves.** Jerry Tessendorf, "Simulating Ocean Water", SIGGRAPH course notes,
+  2001–2004 (the Fourier synthesis, the choppy displacement, the Jacobian's foam); Klaus
+  Hasselmann et al., "Measurements of wind-wave growth and swell decay during the Joint North
+  Sea Wave Project (JONSWAP)", *Deutsche Hydrographische Zeitschrift* Ergänzungsheft A8, 1973;
+  Evert Bouws, Hans Günther, Wolfgang Rosenthal, Cornelis L. Vincent, "Similarity of the wind
+  wave spectrum in finite depth water", *Journal of Geophysical Research* 90, 1985 (the TMA
+  factor); Christopher J. Horvath, "Empirical directional wave spectra for computer graphics",
+  *DigiPro* 2015 (the spreading with a swell parameter): `forge_procgen::ocean`.

@@ -27,6 +27,7 @@ without losing the others.
 | 12 | `c2dbcb4` Print the eroded field's digest in genesis, for D-016 checks across machines | `Field2::digest`; seed 7's values recorded | no (compare the digest) |
 | 13 | `7ccfd59` Trace the rivers as polylines with Strahler orders and widths (stage 4) | `forge_procgen::hydrology`, the network's numbers in `genesis` | no |
 | 14 | `a8e1f1d` Add the water research for the island's sea, shores, rivers and lakes | `docs/research/water.md` (Phase 2 item 3) | no |
+| 15 | (below) Bake the coast distance and the sea's spectrum on the CPU: the water's first fields | `forge_procgen::coast`, `forge_procgen::ocean`, `genesis`'s stage 5 | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -248,6 +249,20 @@ tutorial; Ubisoft's water talks are St-Amour 2013, Wroński 2014, Grujic 2018 an
 SIGGRAPH talk), and no public Frostbite ocean talk exists. It also flags that D-009's
 "spectrum evaluated identically on CPU and GPU" is not free with an FFT and proposes a 🟡
 decision when Phase 3 starts.
+
+### 15. The water's first fields (commit 15)
+
+The CPU side the water research says to build first: `coast_distance` (a signed Euclidean
+distance to the coast, metres, exact, rows and columns in parallel) and `ocean` (the
+JONSWAP/TMA directional spectrum with Horvath's spreading, Gaussian amplitudes from the seed,
+the inverse FFT with `dmath`, into heights, choppy displacements, slopes and the Jacobian).
+`genesis` prints a `stage 5` line and writes `coast.png`, `sea-height.png` and
+`sea-hillshade.png` (`docs/demos/island.md`, "The water's fields"). The GPU's cascades
+(`ocean.slang`, not written) are to be diffed against `Ocean::surface` sample by sample; the
+CPU transform of the lowest cascade is one of the three options the research names for D-009.
+Test: `cargo test -p forge-procgen` (a disc's coast distance is its radius less the distance
+to the centre; the inverse transform of one wave vector is a cosine; a breeze gives metres of
+waves, zero mean, the same bytes twice) and the `stage 5` line and pictures of a `genesis` run.
 
 ## How to give the cloud session its results
 

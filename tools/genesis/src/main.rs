@@ -1,7 +1,8 @@
 //! `genesis --seed 7 --spacing 16 --steps 150 --out captures/island`: the terrain genesis
 //! pipeline of `forge-procgen` over a 16 km island, stage by stage with timings, and the PNG
 //! previews of each stage in `--out` (`docs/research/terrain-genesis.md`, "What to build
-//! first"), and the field's digest, the same on every machine (D-016). Default: 16 m samples (1025²), seconds; `--spacing 4` is the island's target
+//! first"), the water's fields (the coast distance, the sea's spectrum as a tile), and the
+//! field's digest, the same on every machine (D-016). Default: 16 m samples (1025²), seconds; `--spacing 4` is the island's target
 //! (4097², sixteen times the work), under a minute on the job system.
 
 #![forbid(unsafe_code)]
@@ -185,7 +186,31 @@ fn main() -> Result<()> {
         network.max_order()
     );
 
+    // Stage 5 for the water: the coast distance, and the sea's spectrum as a tile.
     let start = Instant::now();
+    let coast = forge_procgen::coast_distance(&height, erosion_params.sea_level, &pool);
+    let coast_seconds = start.elapsed().as_secs_f64();
+    let (_, inland) = coast.min_max();
+    let ocean = forge_procgen::Ocean::new(forge_procgen::OceanParams::breeze(Seed::new(args.seed)));
+    let (sea, numbers) = forge_procgen::ocean::report(&ocean, 0.0);
+    println!(
+        "stage 5, the water's fields: coast distance {coast_seconds:.2} s, {:.1} km inland at most; the sea's {}² tile ({} m, {} m/s wind) {:.3} s, significant height {:.2} m, {:.2}–{:.2} m, displacement up to {:.2} m, {:.1} % folded",
+        inland / 1000.0,
+        ocean.params.size,
+        ocean.params.patch,
+        ocean.params.wind_speed,
+        numbers.seconds,
+        numbers.significant_height,
+        numbers.lowest,
+        numbers.highest,
+        numbers.displacement,
+        100.0 * numbers.folded
+    );
+
+    let start = Instant::now();
+    preview::write_height(&coast, &args.out.join("coast.png"))?;
+    preview::write_height(&sea.height, &args.out.join("sea-height.png"))?;
+    preview::write_hillshade(&sea.height, &args.out.join("sea-hillshade.png"))?;
     preview::write_height(&height, &args.out.join("height.png"))?;
     preview::write_hillshade(&height, &args.out.join("hillshade.png"))?;
     preview::write_flow(&flow, height.size, &args.out.join("flow.png"))?;

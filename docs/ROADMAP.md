@@ -259,7 +259,8 @@ branch 2026-09-26, to verify), then D-004's amendment decided.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute
    queue and a forward surface pass first, then the shore from the coast distance, the rivers
-   from stage 4's polylines, the lakes at their level).
+   from stage 4's polylines, the lakes at their level). Started on the CPU the same night: the
+   coast distance and the sea's spectrum with its inverse FFT (`forge_procgen::ocean`).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day.
 

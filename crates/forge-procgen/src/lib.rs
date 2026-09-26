@@ -16,6 +16,9 @@
 //!   job system.
 //! - [`hydrology`]: stage 4, the river network as polylines with Strahler orders and widths
 //!   from the catchment.
+//! - [`coast`]: the signed distance to the coast, what the shore's water keys on.
+//! - [`ocean`]: the open sea's directional spectrum (JONSWAP/TMA) and its inverse FFT on the
+//!   CPU, the reference the GPU's cascades are diffed against.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
 //!   sea, rivers and lakes), which is how the pipeline is looked at before a GPU draws it.
@@ -25,6 +28,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod coast;
 pub mod erosion;
 pub mod field;
 pub mod flow;
@@ -32,11 +36,14 @@ pub mod hydrology;
 pub mod island;
 pub mod layers;
 pub mod noise;
+pub mod ocean;
 pub mod preview;
 
+pub use coast::coast_distance;
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
 pub use flow::{Drainage, Flow, drain, priority_flood, route};
 pub use hydrology::{Mouth, River, Rivers, trace_rivers};
 pub use island::{IslandFields, IslandParams, cached_island, generate_island, island_fields};
 pub use layers::{LayerRule, slope_layers};
+pub use ocean::{Ocean, OceanParams, OceanSurface};
