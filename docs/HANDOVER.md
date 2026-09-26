@@ -54,7 +54,8 @@ without losing the others.
 | 20 | `f9bbf07` Propose D-038: the water surface as a forward pass, FFT cascades on the compute queue | `docs/DECISIONS.md` 🟡 | no |
 | 21 | `9871c1c` Add the city-generation research; propose D-039 for #86 | `docs/research/city-generation.md` (#85, #86), D-039 🟡 | no |
 | 22 | `7797c8c`, `540babc`, `a710343`, `360c588` | this file's opening block; `network.png` (the rivers by order) and its picture; the crater-lake and rough-seas tests of the basin graph; the architecture row | no |
-| 23 | (below) Add the HDR-output research for #94 | `docs/research/hdr-output.md` | no |
+| 23 | `b3bd804` Add the HDR-output research for #94 | `docs/research/hdr-output.md` | no |
+| 24 | (below) Add the render-graph research for #78 | `docs/research/render-graph-next.md` | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -324,6 +325,22 @@ without a GPU. The decision it asks the owner to take is D-039 🟡 in `docs/DEC
 buildings as grammar-derived assemblies of kit modules on a 0.5 m grid, a style set per
 district, a proxy per far building. Same network caveat as the other research files (#99).
 
+### 23. The HDR-output research (commit 23)
+
+`docs/research/hdr-output.md` for #94: what the swapchain needs (`VK_EXT_swapchain_colorspace`
+on the instance, the `A2B10G10R10` + PQ and `R16G16B16A16_SFLOAT` + scRGB pairs, no OETF from
+the implementation), what Windows needs (the user's SDR white level through `windows-sys`),
+ACES 2.0's HDR presets as a rebake of the 65³ table, paper white as the one real decision (an
+exposure offset in stops, the overlay at paper white, a calibration overlay), and how to verify
+it all on an SDR monitor (an offscreen mode with a preview pass, 16-bit PQ captures, round-trip
+tests). Eight steps, about three days, a few thousandths of a millisecond. Summarised on #94.
+
+### 24. The render-graph research (commit 24)
+
+`docs/research/render-graph-next.md` for #78 (transient buffers, parallel recording of pass
+bodies), written by the last research agent of the night; its recommendation is on the issue
+once it lands. The roadmap keeps #78 behind the measurement of the CPU recording time.
+
 ## How to give the cloud session its results
 
 `tools/report.sh NAME` after the batch, then commit and push `reports/NAME/`. The cloud
@@ -352,7 +369,9 @@ detail.
    river ribbons from commit 13's polylines and the water mask remain, then on the dev PC the
    FFT cascades on the compute queue (diffed against `Ocean::surface`), the ring mesh and the
    forward surface pass under TAA, the sea first and the shore second.
-6. **Re-verify the research files** (#99) from a machine with a full network.
+6. **HDR output** (#94), following `docs/research/hdr-output.md`: the swapchain pair and the
+   OS white level first, the presets as a rebake, the offscreen preview so it is testable here.
+7. **Re-verify the research files** (#99) from a machine with a full network.
 
 ## What needs the owner
 
