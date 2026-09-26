@@ -31,6 +31,7 @@ the system you are about to touch.
 | [research/hdr-output.md](research/hdr-output.md) | HDR display output: Vulkan's swapchain colour spaces and metadata, Windows' composition and reference white, PQ and 10-bit dithering, ACES 2.0's HDR presets and OCIO's builtins, the engines' display mappers, UI at paper white, calibration, verification without an HDR monitor | 27 | done (issue #94; sources on GitHub read, the rest confirmed by search only, #99) |
 | [research/render-graph-next.md](research/render-graph-next.md) | render graph, next: transient buffers (lifetimes, aliasing rules, heap packing bounds, device addresses and what validation cannot see), parallel recording of pass bodies (pools per worker, chunks, barriers per command buffer, one submit per queue), split barriers and events against the queues, when it pays and how to measure it | 22 | done (issue #78; Granite, the spec sources, the samples and the layers read on GitHub, the vendor and engine pages confirmed by search only, #99) |
 | [research/planet-terrain.md](research/planet-terrain.md) | planet terrain from orbit to the ground: the cube sphere and its alternatives (S2, Cesium's quadtree, HEALPix), LOD on the sphere (spherical clipmaps, CDLOD, concurrent binary trees, Nanite's landscape, Forge's DAG per tile), precision, horizon culling, skirts and pops, tiles generated on demand and streamed through the page pool, the planet games and the open source, the atmosphere from orbit, what to measure | 32 | done (Phase 2's planet variant of `island`, D-037 🟡; the Cesium formats, the CBT demos and the Godot planets read on GitHub, the rest confirmed by search only, #99) |
+| [research/civilisations-styles.md](research/civilisations-styles.md) | civilisations and styles: vernacular form as parameters (climate, materials, culture), style grammars per culture and era (Palladio to CGA's Pompeii and Puuc Maya, Islamic patterns and muqarnas, Gothic tracery, skyscrapers, brutalism, greebles, space habitats), decor and props (Infinigen Indoors, ShapeAssembly, layout solvers, set dressing), materials by mathematics and by example, weathering and ageing, the games' culture sets, the `Civilisation` record over D-039's style sets | 46 | done (the owner's brief behind #81–#91; five READMEs read on GitHub, the rest confirmed by search only, #99) |
 
 ## Verdicts
 
@@ -252,6 +253,35 @@ pages, a quarter of a second to produce and cook, 3–4 wanted a second at 300 m
 checked at one and six workers. The CBT is the spike to run against it afterwards, with the same
 field as a texture; the island is placed on the planet as an uplift override of the coarse graph
 so the far tiles already show its shape.
+
+**Civilisations and styles.** Why buildings look the way they do is already written as
+parameters: Rapoport puts culture first with climate, materials and technology as modifiers,
+Oliver's encyclopedia catalogues the result by region, and the bioclimatic school (Olgyay's four
+regions, Givoni's chart, the Mahoney tables) turns twelve months of temperature and humidity into
+orientation, wall mass, opening ratio, roof and courtyard-or-stilts — a hundred-line function of
+D-034's atlas cell. A style is a grammar with attributes, fifty years over: Palladio, Wright, the
+Queen Anne house, Siza's Malagueira (1 200 houses from a corpus of thirty-five), the Yingzao Fashi's
+rank-to-module system, Knight's tatami grid, Kaplan's star patterns, Havemann's Gothic tracery, CGA
+on Pompeii and the Puuc Maya; each contributes a column (plan rule, grid, bands, openings, roof,
+articulation, ornament, detail field, era) of D-039's control grammar, so a culture and an era are
+data over one split grammar. Decor is generators plus solvers (Infinigen Indoors' 79 BSD generators
+and constraint DSL, ShapeAssembly's cuboid programs, Merrell's and Yu's layout terms, Fisher's
+clutter, Germer's dress-when-streamed rooms); materials are the canon plus recursive stamps and
+phasor noise for masonry and weave, by-example synthesis cooked once, and ageing by flow, patina,
+slab erosion, γ-ton exposure and appearance strips, with the neural material work reference only
+(P3/P8, D-016). Every shipped game hand-sets a few architecture sets per culture group (Age of
+Empires II's eleven-plus, Age of Empires IV's four ages per civilisation, Minecraft's five biome
+pools, RimWorld's five styles, No Man's Sky's six archetypes at seven-to-three per race) and
+generates only within a set, as data where the game is data-driven; none generates the set, which
+is Forge's gap and Forge's sameness risk. The proposal: a `Civilisation` record as a D-035 layer
+that selects and patches D-039's style sets per building class, with resources → palette, class
+frequencies, permission lists, motifs, a wear profile and a climate response derived from the
+atlas; the 0.5 m grid from a hut to a habitat's curved floor, with tents, organic forms and
+megastructures on their own paths; textures cooked from generator graphs to KTX2 by content hash
+(about 100–150 MiB and 10–20 s per style set, estimates); and a build order that starts with the
+response function and the record over the two existing sets, then the material generator, wear, a
+primitive set, a futuristic set for the belt's bases, props and dressing, and only then a third and
+fourth culture to measure how much of a culture is data.
 
 ## Still to research
 

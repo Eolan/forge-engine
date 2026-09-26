@@ -51,7 +51,29 @@ Forge" and a build order that starts small.
 **Civilisations, styles, decor, materials.** Settled: streets and lots are solved (Parish &
 Müller, tensor fields, Vanegas 2012); buildings are kit assemblies decided by a split grammar
 (D-039 🟡); materials are trim sheets and tileables per region with one unified row; the
-climate atlas exists to answer to. *civilisations-styles.md adds:* CIVILISATIONS_ADDS
+climate atlas exists to answer to. *civilisations-styles.md adds:* the climate response is an algorithm, not a mood: the Mahoney tables
+(Koenigsberger 1974) and Givoni's chart take the monthly temperature and humidity D-034's
+atlas already stores per cell and give the opening share, the wall mass, the roof and the
+layout, about a hundred lines that the `Civilisation` record overrides culture-first
+(Rapoport); every published style grammar (Palladio, Wright's Prairie houses, Flemming's Queen
+Anne, Duarte's Malagueira, Li's Yingzao Fashi, Knight's tatami grid, Kaplan's star patterns,
+Havemann's Gothic tracery, CGA on Pompeii and the Puuc Maya) is a small rule set plus
+attributes, and each contributes one column of D-039's control grammar (plan rule, grid,
+bands, openings, roof, articulation, ornament, detail, era), so a culture and an era are data
+over one split grammar, parametricism being the one deliberate grid-breaker handled as
+landmark overrides and the 1.8 m tatami bay the test that a style set may declare its own
+bay; props and rooms come from Infinigen Indoors (BSD-3: 79 procedural object generators and
+a constraint solver for arrangement) with ShapeAssembly's cuboid programs as the
+representation and a culture parameter block per generator, so the decor layer needs no new
+research; materials per culture need two operators beyond the noise canon (a recursive stamp
+for every masonry bond, phasor noise for weave, thatch and corrugation) and ageing as a
+process (Dorsey's flow and patina at module cook, γ-ton exposure on D-029's TLAS per
+instance, a wear scalar per instance row); a style set is 100–150 MiB of textures and as much
+of cluster pages, 10–20 s to cook 300 modules; no shipped game generates the set (Age of
+Empires II hand-made eleven, Civilization VI culture groups by era, No Man's Sky six
+archetypes), so sameness is the risk and asymmetry rules, landmarks per culture, authored
+overrides, wear and a repetition metric are the antidote; the build order proves the era
+axis (a primitive and a futuristic set) before widening the culture axis.
 
 **Creatures and their animation.** Settled: motion matching needs capture, so the honest
 humanoid is a blend space with inertialization and IK; contact is kinematic first, powered
