@@ -240,7 +240,7 @@ public struct RtMesh
     public uint first_vertex;
     public uint first_triangle;
     public float cut_error;  // how far the cut may stand from the drawn surface, object space
-    public uint pad;
+    public float shadow_start; // how far its surfaces' shadow rays start, object space (0: SHADOW_BIAS; terrain, #96)
 };
 
 public struct RtScene
@@ -2716,11 +2716,26 @@ float2 sun_disc_point(uint2 pixel, uint frame)
     return float2((k + 0.5) / float(SUN_DISC_POINTS), frac(turn + k * 0.381966011));
 }
 
+// How far a shadow ray from a drawn surface of `inst` starts: SHADOW_BIAS, or its mesh's
+// `shadow_start` scaled with the instance where that is further. Only a terrain sets one
+// (twice its cut's error, `TERRAIN_SHADOW_START` in raytrace.rs): the island's 8.4 M triangles
+// of relief cut to 600 000 stand up to a metre off the drawn slopes, which shadowed themselves
+// from 0.15 m (#96); the city's flat ground stays at SHADOW_BIAS.
+float shadow_bias(Frame* f, Instance inst)
+{
+    RtScene* rs = f[0].rt_scene;
+    if (rs == nullptr)
+        return SHADOW_BIAS;
+    return max(SHADOW_BIAS, rs[0].meshes[inst.mesh].shadow_start * inst.scale);
+}
+
 // 0 when something lies between `world` and the sun, else 1: one ray, the first hit ends it.
 // With a sun disc (`Frame::sun_angular_radius`, issue #54) the ray aims at a point of it,
 // uniform over the disc from `jitter` (two values in [0, 1): `noise.slang`'s, which repeat with
-// TAA's jitter so TAA averages the points into a penumbra); (0, 0) is the disc's centre.
-float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter)
+// TAA's jitter so TAA averages the points into a penumbra); (0, 0) is the disc's centre. The
+// ray starts `bias` metres off the surface (`shadow_bias`; SHADOW_BIAS from a traced hit, which
+// lies on the cut itself).
+float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter, float bias)
 {
     float3 sun = normalize(f[0].sun_dir);
     if (dot(n, sun) <= 0.0)
@@ -2735,7 +2750,7 @@ float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter)
         direction = normalize(sun + (t * cos(phi) + b * sin(phi)) * r);
     }
     RayDesc ray;
-    ray.Origin = world + (n + sun) * SHADOW_BIAS;
+    ray.Origin = world + (n + sun) * bias;
     ray.Direction = direction;
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
@@ -2833,7 +2848,7 @@ float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float
 {
     float3 sun = normalize(f[0].sun_dir);
     float ndl = max(dot(hit.n, sun), 0.0);
-    float shadow = ndl > 0.0 ? sun_shadow(f, hit.position, hit.n, float2(0.0)) : 0.0;
+    float shadow = ndl > 0.0 ? sun_shadow(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS) : 0.0;
     float3 ambient = sh_irradiance(sky, hit.n);
     if (probes != nullptr)
         ambient = probe_irradiance(probes, hit.position, hit.n, -direction, ambient);
@@ -3002,7 +3017,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
-        s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame));
+        s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst));
     s.transmitted = float3(0.0);
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
         s.transmitted = ice_transmission(f, record.x, surface_scene, mat.scattering);

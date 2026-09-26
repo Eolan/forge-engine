@@ -869,7 +869,10 @@ extension on. Every RTX card has all three.
   0.01–0.35 m for most props, about 1 m for the two towers (3 M triangles down to 40 000)
   and 0.02 m for the terrain. Shadow rays start 0.15 m off the surface, along the normal and
   towards the sun. A recessed window pane may be shadowed by the coarse facade in front of
-  it; the glass is dark anyway.
+  it; the glass is dark anyway. A terrain's rays start twice its cut's error off where that is
+  further (2026-09-26, #96: the island's 8.4 M triangles of relief cut to 600 000 have an error
+  of 1.03 m, and from 0.15 m its slopes shadowed themselves; at once the error some still did).
+  Props keep 0.15 m, since their creases hold contact shadows.
 
 **The instances.** One top-level structure over every instance. A compute pass
 (`tlas_instances_main`) writes the 64-byte records from the scene's instance table, because

@@ -17,8 +17,9 @@ two fixes on the way (the highlight's camera, and each instance's pose built onc
 in the cull, which removed a 0.19 ms regression of the streamed city under async compute); the
 genesis digests of seed 7 (`0189d031eff0fb84` at 16 m, `9eacfe0f827fa7dd` at 4 m, the same as
 the cloud's: D-016 holds across the two machines; the 4 m erosion in 19 s on the 9800X3D);
-and commit 8's island in the engine, which draws (0.75 ms of GPU) but shows false shadows on its
-slopes, no sea and pale rock (`docs/demos/island.md`, "In the engine"; #96). The owner accepted D-004's
+and commit 8's island in the engine, which draws (0.75 ms of GPU) but showed false shadows on
+its slopes (fixed the same day), no sea and pale rock (`docs/demos/island.md`, "In the engine";
+#96). The owner accepted D-004's
 amendment and D-017 with a margin for isolated pixels (`docs/DECISIONS.md`). D-037, D-038 and
 D-039 stay 🟡. The rest of this file is the cloud session's handover as it wrote it.
 

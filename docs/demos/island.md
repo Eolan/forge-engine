@@ -205,11 +205,15 @@ the city's sky with TAA.
 ![From 1 200 m: the dark polygons across the slopes are shadow rays that hit the traced surface; with `--no-shadows` they are gone](images/island-engine-shadows.png)
 
 What the first look shows, for #96 to fix before the props:
-- **Shadows where there are none.** Dark, sharp-edged polygons cover the slopes facing the sun;
-  `--no-shadows` removes them all. The shadow structure is a cut of the cluster DAG capped at
-  600 000 triangles for a terrain (D-029), fine for the city's flat ground, but the island's
-  8.4 M triangles of relief cut to 600 000 stand metres off the drawn surface in places, far
-  beyond the rays' 0.15 m start.
+- **Shadows where there are none** (fixed the same day). Dark, sharp-edged polygons covered the
+  slopes facing the sun; `--no-shadows` removed them all. The shadow structure is a cut of the
+  cluster DAG capped at 600 000 triangles for a terrain (D-029), fine for the city's flat
+  ground (an error of 0.02 m), but the island's 8.4 M triangles of relief cut to 600 000 have
+  an error of 1.03 m, far beyond the rays' 0.15 m start. A terrain's shadow rays now start
+  twice its cut's error off (`raytrace::TERRAIN_SHADOW_START`; at once the error, 6 100 false
+  pixels were left in the view from 1 200 m): that view is now within 583 px of the one
+  without shadows, and the batch is unchanged (0 px; the props and rocks keep 0.15 m, since a
+  larger start moved the rocks' own shadows in the ballad).
 - **No sea.** The sea floor is the field's 0 m, drawn as grass to the domain's edge. The water
   pass is D-038 🟡; until then the ground needs a shore and a sea-floor layer.
 - **Rock that reads as snow.** Above 380 m and on slopes over 0.45 the ground takes the city's

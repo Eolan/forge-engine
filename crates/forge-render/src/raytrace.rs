@@ -27,6 +27,12 @@ use crate::streaming::PageStore;
 pub const TRIANGLE_BUDGET: u32 = 40_000;
 /// Budget of a mesh whose sphere is wider than a kilometre (terrain).
 pub const TERRAIN_BUDGET: u32 = 600_000;
+/// How far a terrain's shadow rays start off its drawn surface, in multiples of its cut's
+/// error (issue #96): the error is the simplifier's estimate, not a bound. On the island's
+/// slopes (8.4 M triangles cut to 600 000, an error of 1 m) rays started at the error still met
+/// the cut in places; at twice the error none did. Props and rocks keep the shader's
+/// `SHADOW_BIAS`: their creases hold the contact shadows a larger start would skip.
+pub const TERRAIN_SHADOW_START: f32 = 2.0;
 
 /// A mesh's DAG cut: the positions and triangle list of its clusters.
 pub(crate) struct Cut {
@@ -36,6 +42,9 @@ pub(crate) struct Cut {
     pub sections: Vec<u32>,
     /// The cut's object-space error.
     pub error: f32,
+    /// How far the shadow rays of the mesh's drawn surfaces start off them, object space; 0
+    /// for the shader's `SHADOW_BIAS` (see [`TERRAIN_SHADOW_START`]).
+    pub shadow_start: f32,
 }
 
 /// Triangles of the cut of `meshlets` (one mesh's clusters) at error `e`.
@@ -80,6 +89,7 @@ pub(crate) fn mesh_cut(meshlets: &[GpuMeshlet], store: &PageStore, budget: u32) 
         indices: Vec::new(),
         sections: Vec::new(),
         error,
+        shadow_start: 0.0,
     };
     for m in clusters {
         let base = at[&m.page] + m.payload as usize;
@@ -129,7 +139,7 @@ struct GpuRtMesh {
     first_vertex: u32,
     first_triangle: u32,
     cut_error: f32,
-    pad: u32,
+    shadow_start: f32,
 }
 
 /// Mirrors `RtScene` in `meshlet.slang`: what a ray's hit reads to shade its triangle (issue
@@ -196,7 +206,7 @@ impl SceneRays {
                 first_vertex: (positions.len() / 3) as u32,
                 first_triangle: sections.len() as u32,
                 cut_error: c.error,
-                pad: 0,
+                shadow_start: c.shadow_start,
             });
             positions.extend(c.positions.iter().flatten());
             indices.extend_from_slice(&c.indices);

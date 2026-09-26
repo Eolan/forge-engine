@@ -1427,6 +1427,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     );
     // The sun's shadows and the probes trace against the island (issue #45, #53).
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
+    log_rays(&scene);
     tracing::info!(
         origin_m = args.origin,
         f32_spacing_m = forge_render::precision::ulp(args.origin.abs() + 0.5 * extent),
@@ -1559,17 +1560,7 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     scene.build_cells(&ctx.device, &ctx.shaders)?;
     // The sun's shadows trace against every placed instance (issue #45).
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
-    if let Some(rays) = scene.rays() {
-        tracing::info!(
-            blas_triangles = rays.triangles,
-            max_cut_error = %format_args!("{:.3}", rays.max_cut_error),
-            mib = rays.bytes() >> 20,
-            hit_data_mib = rays.hit_bytes >> 20,
-            blas_ms = %format_args!("{:.0}", rays.blas_ms),
-            tlas_ms = %format_args!("{:.0}", rays.tlas_ms),
-            "acceleration structures"
-        );
-    }
+    log_rays(&scene);
     tracing::info!(
         instances = scene.instance_count,
         triangles = scene.total_triangles,
@@ -1646,6 +1637,22 @@ fn main() -> Result<()> {
         let finish: Finish<Gallery> = Box::new(move |ctx| Gallery::new(ctx, args, cooked));
         Ok(finish)
     })
+}
+
+/// The acceleration structures' size, build time and how far their cuts may stand off the
+/// drawn surfaces (issue #45).
+fn log_rays(scene: &MeshletScene) {
+    if let Some(rays) = scene.rays() {
+        tracing::info!(
+            blas_triangles = rays.triangles,
+            max_cut_error = %format_args!("{:.3}", rays.max_cut_error),
+            mib = rays.bytes() >> 20,
+            hit_data_mib = rays.hit_bytes >> 20,
+            blas_ms = %format_args!("{:.0}", rays.blas_ms),
+            tlas_ms = %format_args!("{:.0}", rays.tlas_ms),
+            "acceleration structures"
+        );
+    }
 }
 
 /// The scene's origin (`--origin`, issue #93): the same distance along every axis, split into

@@ -928,12 +928,17 @@ impl MeshletSceneBuilder {
                 .map(|mesh| {
                     let first = mesh.meshlet_offset as usize;
                     let meshlets = &self.meshlets[first..first + mesh.meshlet_count as usize];
-                    let budget = if mesh.radius > 1000.0 {
+                    let terrain = mesh.radius > 1000.0;
+                    let budget = if terrain {
                         raytrace::TERRAIN_BUDGET
                     } else {
                         raytrace::TRIANGLE_BUDGET
                     };
-                    raytrace::mesh_cut(meshlets, &self.store, budget)
+                    let mut cut = raytrace::mesh_cut(meshlets, &self.store, budget)?;
+                    if terrain {
+                        cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
+                    }
+                    Ok(cut)
                 })
                 .collect::<Result<Vec<_>>>()?;
             let ms = start.elapsed().as_secs_f64() * 1e3;
