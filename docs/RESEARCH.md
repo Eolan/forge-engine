@@ -30,6 +30,7 @@ the system you are about to touch.
 | [research/city-generation.md](research/city-generation.md) | road networks and hierarchy, blocks and lots, districts and landmarks, buildings from grammars and kits, interiors, a city through the cluster DAG, engines' city pipelines | 44 | done (issues #85, #86; the decision for #86 proposed 🟡) |
 | [research/hdr-output.md](research/hdr-output.md) | HDR display output: Vulkan's swapchain colour spaces and metadata, Windows' composition and reference white, PQ and 10-bit dithering, ACES 2.0's HDR presets and OCIO's builtins, the engines' display mappers, UI at paper white, calibration, verification without an HDR monitor | 27 | done (issue #94; sources on GitHub read, the rest confirmed by search only, #99) |
 | [research/render-graph-next.md](research/render-graph-next.md) | render graph, next: transient buffers (lifetimes, aliasing rules, heap packing bounds, device addresses and what validation cannot see), parallel recording of pass bodies (pools per worker, chunks, barriers per command buffer, one submit per queue), split barriers and events against the queues, when it pays and how to measure it | 22 | done (issue #78; Granite, the spec sources, the samples and the layers read on GitHub, the vendor and engine pages confirmed by search only, #99) |
+| [research/planet-terrain.md](research/planet-terrain.md) | planet terrain from orbit to the ground: the cube sphere and its alternatives (S2, Cesium's quadtree, HEALPix), LOD on the sphere (spherical clipmaps, CDLOD, concurrent binary trees, Nanite's landscape, Forge's DAG per tile), precision, horizon culling, skirts and pops, tiles generated on demand and streamed through the page pool, the planet games and the open source, the atmosphere from orbit, what to measure | 32 | done (Phase 2's planet variant of `island`, D-037 🟡; the Cesium formats, the CBT demos and the Godot planets read on GitHub, the rest confirmed by search only, #99) |
 
 ## Verdicts
 
@@ -225,6 +226,32 @@ Forge's recording is 0.08–0.10 ms of an 8.33 ms budget today, so the order is:
 and the poison mode, the meshlet lists migrated one by one at 0 px, the CPU zones split in the
 overlay, a synthetic 100-pass frame to size the gate, and parallel recording only once the bodies
 pass 0.5 ms or a frame passes 100 passes.
+
+**Planet terrain.** The partition is settled and in the code: D-037's equi-angular cube sphere
+with S2-style ids is what every planet renderer converged on (Cesium's geographic quadtree pays
+at the poles, HEALPix's equal areas come on rhombi). The heightfield LOD literature offers three
+ways of avoiding a mesh hierarchy — spherical and ellipsoidal clipmaps, CDLOD's morph, a
+longest-edge bisection kept on the GPU in a concurrent binary tree ("planetary scale geometry out
+of very coarse meshes" in under 0.2 ms) — and Forge already has the hierarchy, as Epic's landscape
+has since 5.3, so a planet's tiles are cluster-DAG props like the city's ground: one per cell of
+D-037's clipmap, 257² samples plus a halo of 8 for matching normals, cooked from a field the
+genesis amplifies at streaming time in `Low` jobs from a coarse global graph (six faces of 1025²,
+about 20 s), locked at their borders so equal levels never crack, a skirt for the level change,
+the six level-0 tiles always resident, the pages streamed by the existing pool. The horizon is
+Cesium's two-dot-product test on one occlusion point per tile in the instance cull; precision and
+depth are D-004 as they stand; the atmosphere from space is D-023 with the terrain's depth as the
+march's floor; the shadows a BLAS per tile from its coarse cut. Every shipped planet (Elite, No
+Man's Sky, Star Citizen's fifth planet tech, Space Engineers, KSP2) generates tiles at run time
+around a quadtree, and the ones that look right at walking distance are adding a global
+simulation behind them, which the coarse genesis is. "No pop" gets a definition: a finer tile
+replaces its parent only when the parent's clusters there are under a pixel of error, and the
+LDR-ꟻLIP between the frames before and after every swap of a scripted descent stays under
+D-017's 0.15 peak. Orders of magnitude: a tile is 131 k triangles, about 2 100 clusters and 27
+pages, a quarter of a second to produce and cook, 3–4 wanted a second at 300 m/s, 200 resident, a
+128–256 MiB pool, 1–2 ms of terrain at 1440p at every altitude, and a digest per tile's field
+checked at one and six workers. The CBT is the spike to run against it afterwards, with the same
+field as a texture; the island is placed on the planet as an uplift override of the coarse graph
+so the far tiles already show its shape.
 
 ## Still to research
 

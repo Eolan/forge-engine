@@ -268,7 +268,11 @@ branch 2026-09-26, to verify), then D-004's amendment decided.
    from stage 4's polylines, the lakes at their level). Started on the CPU the same night: the
    coast distance and the sea's spectrum with its inverse FFT (`forge_procgen::ocean`).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
-   golden shots at four times of day.
+   golden shots at four times of day. The planet variant is researched
+   (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of
+   D-037's clipmap with skirts and halos, the six level-0 tiles always resident, horizon culling
+   by an occlusion point per tile, swaps allowed under a pixel of error and judged by ꟻLIP, the
+   island placed as an uplift override of the coarse genesis.
 
 ## Phase 3 — Simulation, physics, materials, weather
 
