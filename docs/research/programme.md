@@ -1,0 +1,253 @@
+# Research — The programme: from the island to a universe, what is known and what to build first
+
+> Written 2026-09-26 on the owner's brief: procedural decor, objects, materials, textures and
+> architecture of different styles (visitable buildings for different civilisations and
+> cultures, by culture, weather, biome and planet, from primitive to medieval to current to
+> futuristic); creatures with their animation; biomes, planets, solar systems, galaxies;
+> spaceships, stations and ground bases; realistic clouds, atmospheres, oceans, beaches and
+> water interactions, rivers and torrents; destructible architecture and terrain deformation
+> (an explosion, a ship crashing on the ground, on a river, in the ocean); a crafting system
+> that builds tools, buildings and cities and levels or repairs terrain (a ship crashed on a
+> city, the rubble removed and the ground healed by players or NPCs); animation from nature
+> reacting to the weather to complex animal movement; a sound system that follows the medium
+> (none in space), with proximity chat for players and NPCs and group chat; game AI for NPCs,
+> creatures, animals, ships and ecosystems; all in sync for 1 to 16 players, and the research
+> on how many players one unified world can hold. "Start small using good foundations for the
+> engine and build upon that step by step. The ideas in GitHub issues will help us prioritise."
+
+This file is the map, not the research: it says, for every capability the brief names, what
+the existing research files already establish (their verdicts are in `docs/RESEARCH.md`),
+which new file fills the gap and what it recommends, which engine foundation it rests on,
+where it sits in `docs/ROADMAP.md`'s phases and which issues carry it, and it ends with the
+order of work, the consistency issues the brief raises and the questions the owner should
+answer before the code. Everything below is CPU-side research written in the cloud without a
+GPU; the sources' verification grades are in each file (#99).
+
+## 1. The map
+
+| The brief asks for | Already researched (file, section) | The gap file (this programme) | Rests on | Phase | Issues |
+|---|---|---|---|---|---|
+| Buildings, decor, materials and textures per civilisation, culture, climate, biome, planet, era | city-generation.md (roads, lots, grammar-driven kit assemblies, D-039 🟡); vegetation-materials.md §4–§5 (trim sheets, materials without an art team); procedural.md §2, §4, §5 (grammars, settlements, texturing by maths); planet-environment.md (the climate atlas a civilisation answers to) | **civilisations-styles.md** | D-035 packages, D-039's style sets and module grid, the cluster DAG cook, the unified material row (D-026) | 8, 10 | #83, #85, #86, #87, #88, #91 |
+| Creatures, humans, animals: generated bodies and their animation | animation.md §3–§5 and its verdict (generated creatures after Spore, IK, powered ragdolls, foot events) | **creatures.md** | `forge-anim` (Phase 7), Jolt's ragdolls (D-009), the material layer's contacts | 7 | none yet |
+| Biomes, planets, solar systems, galaxies | planet-environment.md (climate, biomes, ecosystems, weather); planet-terrain.md (the planet from orbit to the ground); large-worlds.md and D-037 (frames, sectors, cells) | **universe-generation.md** | `forge-world`'s frame tree (sectors of 2⁴⁰ m, systems, bodies), D-016 determinism | 2 | #93 |
+| Spaceships, stations, ground bases | gpu-geometry.md (the cluster DAG any hull goes through); city-generation.md (kits and grammars); physics-fluids.md §3 (vehicles) | **spacecraft-structures.md** | D-039's kits and grammar, one physics space per construct (D-009), the instance cells (#38) | 3, 5–7 of the ballad | #80, #24, #12 |
+| Clouds, atmospheres | lighting-gi.md §6 (sky, atmosphere, clouds, fog, night); planet-environment.md §4 (weather rendering, Nubis weather maps); D-023 (Hillaire's tables, the march from space) | none needed now: the research is done, the build is Phase 4 item 3 | the froxel volume (D-032), the weather state (D-034) | 4 | none yet |
+| Oceans, beaches, water interactions, rivers, torrents | water.md (spectra, cascades, shores, rivers, lakes, the genesis hand-off; D-038 🟡); physics-fluids.md §5 (the far/mid/near water tiers, buoyancy, shallow water) | none needed now; the interaction tier (wakes, splashes, whitewater, buoyancy) is physics-fluids.md's near tier and Phase 3 item 4 | the coast distance, the river polylines and the lake levels the genesis bakes | 2–3 | #96, #97 |
+| Destructible architecture, terrain deformation, crashes on ground, river or sea | physics-fluids.md §4 (destruction: pre-fracture, Chaos, Teardown), §5 (fluids); large-worlds.md (SDF bricks for edits) | **destruction-deformation.md** | Jolt (D-009), the SDF edit layer, the drainage recompute (`forge_procgen::flow::drain`), the replication of world edits | 3 | #89, #12, #24 |
+| Crafting, building, levelling and repairing terrain, removing rubble, NPC reconstruction | data-driven.md (records, packages, load order); procedural.md §6 | **crafting-building-repair.md** | world edits as a package layer over the deterministic generator (D-035 + D-016), the module grid (D-039), the SDF edit layer | 3, 10 | #82, #84 |
+| Nature reacting to the weather; complex animal movement | vegetation-materials.md §1–§2 (wind, deformation); animation.md §3–§4; planet-environment.md §5 (the weather fields) | creatures.md covers the animals; the wind field is Phase 8 item 1 | the shared wind field, the foot events | 7, 8 | none yet |
+| Sound that follows the medium, none in space; proximity chat for NPCs and players; group chat | audio.md §2 (spatialisation, propagation, the acoustic LOD), §6 (multiplayer voice chat); netcode.md §8 (voice) | **voice-chat-media.md** (short: the media conventions, NPC proximity speech, channels) | `forge-audio` (Phase 6), `forge-net`'s datagrams (D-010) | 5, 6 | none yet |
+| Game AI for NPCs, creatures, animals, ships; ecosystems | planet-environment.md §3 (ecosystems: flora, succession, fauna); procedural.md §4 (ecosystems as rule systems); animation.md §5 | **game-ai-ecosystems.md** | `forge-sim` (Phase 3 item 1: the fixed tick, simulation LOD, digests), navigation over generated and deformable terrain | 3, 10 | #90, #84, #87 |
+| 1 to 16 players in sync; how many players one unified world can hold | netcode.md (transport, replication, prediction, determinism, §6 server architecture for a living world, the replication layer, Star Citizen and SpatialOS) | **many-players.md** (short: the two tiers and the 2026 state of single-shard scaling) | D-010, D-016, the frame tree, cell interest | 5 | none yet |
+
+The gap files are written one at a time in the order of the rows' weight for the first
+game (the island, #81): civilisations and styles, game AI and ecosystems, destruction and
+deformation, the universe, spacecraft and structures, creatures, crafting and repair, then
+the two short ones. Each follows the house format and ends with a "Recommendation for
+Forge" and a build order that starts small.
+
+## 2. What is already settled, and what each new file adds
+
+**Civilisations, styles, decor, materials.** Settled: streets and lots are solved (Parish &
+Müller, tensor fields, Vanegas 2012); buildings are kit assemblies decided by a split grammar
+(D-039 🟡); materials are trim sheets and tileables per region with one unified row; the
+climate atlas exists to answer to. *civilisations-styles.md adds:* CIVILISATIONS_ADDS
+
+**Creatures and their animation.** Settled: motion matching needs capture, so the honest
+humanoid is a blend space with inertialization and IK; contact is kinematic first, powered
+ragdolls track the pose; generated creatures follow Spore (author against chain roles, derive
+the gait from the body plan, IK onto the ground); parameters and events are replicated, never
+poses; the IK layer emits foot events for the deformation and the sound. *creatures.md adds:*
+CREATURES_ADDS
+
+**Biomes, planets, systems, galaxies.** Settled: a game climate is twelve months of a few
+fields baked from latitude, altitude and wind-carried moisture, biomes by plant tolerances,
+ecotones soft or sharp by feedback (D-034); the planet is D-037's cube sphere with tiles as
+cluster-DAG props streamed through the page pool (planet-terrain.md); the frame tree holds
+sectors of 2⁴⁰ m, systems, bodies and constructs (`forge-world`). *universe-generation.md
+adds:* UNIVERSE_ADDS
+
+**Spacecraft, stations, bases.** Settled: any hull is clusters in pages through the same cook;
+a construct has its own physics space (D-009) and its own frame; kits and grammars build
+buildings, and D-039's module grid was chosen to hold from a hut to a station corridor.
+*spacecraft-structures.md adds:* SPACECRAFT_ADDS
+
+**Clouds and atmospheres.** Settled and not re-researched: Hillaire 2020's tables and the
+per-pixel march from space are built (D-023); Nubis-style clouds with weather maps, froxel fog
+(the first volume is built, D-032) and the weather director are Phase 4 item 3; the numbers to
+beat are the belt's dust volume's. Other planets' atmospheres are Hillaire's model with other
+compositions and the climate atlas's pressure and humidity as inputs.
+
+**Oceans, beaches, rivers, torrents.** Settled: water.md's plan (D-038 🟡): FFT cascades on
+the compute queue and a forward surface pass, the shore from the coast distance the genesis
+already bakes, rivers as ribbons over the traced polylines with flow maps, lakes at their
+levels; the near tier (buoyancy, splashes, wakes, whitewater on the torrents) is
+physics-fluids.md §5's shallow-water field and particles, Phase 3 item 4. Torrents are the
+steep reaches of the river network (a waterfall split where the slope breaks, Emilien 2015)
+with the same ribbon and a foam rule.
+
+**Destruction, deformation, crashes.** Settled: pre-fractured kit modules with Jolt's
+constraints, Chaos and Teardown as the two published shapes (physics-fluids.md §4); terrain
+edits as SDF bricks near the camera (large-worlds.md); the drainage is now a linear re-run
+(`flow::drain`, 0.27 s for the whole 4 m island, milliseconds for a tile).
+*destruction-deformation.md adds:* DESTRUCTION_ADDS
+
+**Crafting, building, repair.** Settled: content is records in packages with a load order
+and a conflict rule (D-035), the module grid is the building unit (D-039), the generator is
+deterministic (D-016) so the baseline is always known. *crafting-building-repair.md adds:*
+CRAFTING_ADDS
+
+**Sound, media, chat.** Settled: the data layer (events, buses, RTPCs, states, HDR loudness,
+virtual voices) is Forge's to write; Steam Audio is the spatialiser; a three-tier acoustic
+LOD; impacts from modal banks per material; rain and wind from the weather fields; voice over
+the netcode's datagrams with Opus (audio.md §6, netcode.md §8). *voice-chat-media.md adds:*
+VOICE_ADDS
+
+**Game AI and ecosystems.** Settled: ecosystems as rule systems over the climate atlas
+(succession, fauna by tolerance, planet-environment.md §3); the simulation runs on a fixed
+tick with simulation LOD and digests (`forge-sim`); animation reacts to the world through
+events. *game-ai-ecosystems.md adds:* AI_ADDS
+
+**Players in sync, and how many.** Settled: QUIC datagrams and streams, acked-baseline
+deltas, cell interest, 60 Hz simulation and 30 Hz snapshots, inputs redundant, determinism
+same-binary only, clients talk to a replication layer, workers stateless with a write-behind
+database (netcode.md). *many-players.md adds:* PLAYERS_ADDS
+
+## 3. The foundations everything rests on (already decided or proposed)
+
+- **Determinism by construction (D-016).** Every generator is a pure function of a seed and
+  a parameter record, with digests; the island's field is the same bytes on any machine and
+  with any thread count (the 4 m island's digest is `9eacfe0f827fa7dd`). A universe that
+  clients and the server generate independently needs this at every scale: galaxy, system,
+  planet, tile, building, creature. Nothing in the brief is possible without it.
+- **Content as packages with a load order (D-035).** Civilisations, style sets, kits,
+  recipes, creature archetypes and world edits are records in packages merged by add,
+  replace and patch. A "repair" is a record that cancels a "damage" record; both are layers
+  over the generator's baseline, never edits of it.
+- **The frame tree and the cells (D-004, D-037, `forge-world`).** Sectors of 2⁴⁰ m, systems,
+  bodies, constructs; `f64` frames and camera-relative `f32` rendering; 1 km cells on the
+  GPU record. Galaxies and ships live in the same tree.
+- **The cluster DAG and the instance table (D-025, #38).** Every mesh, from a hut's wall
+  module to a station's hull to a creature's body, is clusters in pages, instanced by the
+  million; kits, not unique geometry (D-039).
+- **The unified material row (D-026, D-028).** Render layers, physics, sound, tags, weather
+  overrides and a deform block in one row: a civilisation's palette and a crash's debris
+  are rows, and the sound and the footprints follow.
+- **The environment state (D-034, D-019).** A baked climate atlas, weather as a function of
+  seed and time, wetness and snow in a clipmap. Cultures answer to the atlas; the wind field
+  drives the trees, the sound and the rain.
+- **The job system and the simulation tick (`forge-task`, Phase 3's `forge-sim`).** Fixed
+  tick, simulation LOD, digests; the AI, the ecosystems and the physics run there.
+- **The server as the authority (netcode.md, D-010).** Clients predict, the server decides;
+  world edits, damage and repairs are replicated as records, not as geometry.
+
+## 4. The order of work: start small
+
+The roadmap's phases already order the foundations; the brief adds content axes (cultures,
+eras, planets, species, ships) that multiply whatever exists. The rule proposed here: **no
+axis grows before one vertical slice touches every system once**, on the island, small.
+
+1. **Phase 2, now.** The island's genesis, its water (D-038 🟡) and its planet variant
+   (planet-terrain.md) as planned; then the first culture: a Mediterranean village on the
+   island's coast from city-generation.md's layout and one style set (D-039 🟡), and the
+   first `Civilisation` record that selects it (civilisations-styles.md). One culture, one era,
+   one island: the look judged on the GPU before a second of anything.
+2. **Phase 3.** `forge-sim`'s tick, Jolt and the material layer as planned; on them the first
+   forms of three things the brief asks for: destruction as pre-fractured kit modules and
+   debris instances (destruction-deformation.md), terrain deformation as the SDF edit layer
+   with a local re-run of the drainage (a crater fills, a river finds its way), and crafting
+   as records that place or remove modules and terrain edits (crafting-building-repair.md).
+   The crash demo: a hull, one construct with its own physics space, dropped on the village,
+   on the river and in the sea, with the debris, the splash and the repair afterwards.
+3. **Phase 4.** Clouds and weather rendering as planned (the research is done); nothing new
+   from the brief.
+4. **Phase 5.** `forge-net` for the co-op tier first (1–16 players, a dedicated or listen
+   server, full replication of a cell around each player), with the protocol shaped for the
+   second tier from the start (records for every world edit, cell interest, authority
+   handoff between workers); proximity voice over the same datagrams (voice-chat-media.md);
+   many-players.md's numbers as the ceiling to design against, not to build yet.
+5. **Phase 6.** `forge-audio` with the media conventions (air, water, vacuum, the suit),
+   the NPC proximity speech and the channels.
+6. **Phase 7.** The first generated creature (a quadruped from a body plan with a
+   synthesised gait, creatures.md) and the humanoid rig with a parametric body; the animals'
+   locomotion driven by game-ai-ecosystems.md's utility layer.
+7. **Phase 8.** The wind field the trees, the sound and the rain share; the second and third
+   style sets (a primitive and a futuristic one) to prove the era axis on the same grammar
+   and module grid, with their trim sheets and procedural materials.
+8. **Phase 10 and after.** The universe around the island (universe-generation.md: the
+   system, then the galaxy, as frames of the tree with deterministic ids), spacecraft and
+   stations as constructs from the same kits and grammars (spacecraft-structures.md), the
+   ecosystems' simulation LOD across a planet, the second player tier.
+
+**The vertical slice to aim at**, as one demo that grows (`island`): a village of one culture
+on the island, one creature and a few animals living there, a ship that crashes on it (once on
+the ground, once in the river, once in the sea), an NPC and a player who clear the rubble and
+heal the ground, two players in the same instance talking by proximity, the sound following
+the medium, at 120 fps with TAA. Every system appears once and small; the numbers of every
+step go in its demo page. Only then: a second culture, a second era, a second planet, a
+second species, sixteen players.
+
+## 5. Consistency issues the brief raises, and the questions for the owner
+
+**Issues to settle before the code.**
+
+- **One shard or shared seeds.** "A single unified game world / universe" for as many players
+  as possible is a persistent shard with a database, a replication layer and server meshing
+  (netcode.md §6: Star Citizen took five years, SpatialOS is the warning); "1 to 16 players in
+  sync" is a co-op session on one server. The engine can be built for the first while shipping
+  the second, if world edits are records and interest is per cell from day one, but the
+  persistence model (who owns a crater on a planet nobody is visiting) is a design decision,
+  not an engine one. No Man's Sky's answer is a shared deterministic universe with per-session
+  state and a thin persistence of player edits; that is the cheapest consistent choice.
+- **Determinism against the GPU.** Everything that decides is CPU and deterministic (the
+  generators, the physics on the server, the AI); everything on the GPU is visual (the sea's
+  FFT, the foam, the clouds). A crash that reroutes a river is a server decision replayed as
+  records, never a GPU simulation trusted by two machines.
+- **Eras multiply content.** From huts to habitats is one grammar with era parameters
+  (materials, module kits, motifs, floor heights) or it is six engines. The proposed D-039
+  module grid holds from a stone hut to a station corridor; it breaks for tents, organic
+  forms and megastructures, which need their own generators (civilisations-styles.md says
+  which). The kits are generated at cook time; there is no art team, so "same generator,
+  different palette" sameness is the risk and wear, landmarks and authored overrides are the
+  antidote.
+- **Destruction must be reversible and cheap to persist.** A destroyed module is a record; a
+  crater is an SDF edit record; the generator knows the baseline, so a repair is the removal
+  of records plus a local re-run of the drainage, and "an NPC repairs the terrain" is a
+  planner emitting those records over time. Physical debris is visual after it settles.
+- **How physical a crash is.** A hull hitting the sea at 200 m/s is a splash and a buoyant
+  wreck in the near water tier, not a fluid simulation; a hull hitting a river is debris in
+  the SDF layer and the drainage re-run; the visual part (particles, the plume) is separate
+  from the decision part (where the debris lands, what breaks). The brief's "good physics"
+  is Jolt's rigid bodies plus these two hand-offs, and the research files say so; a full
+  coupled simulation is out of reach in real time and in this team.
+- **Creatures without capture.** There is no motion capture: humans get a blend space and IK
+  first (animation.md), creatures get synthesised gaits from body plans; the humanoid's
+  clothing per culture is a content axis as large as the buildings' and should follow the
+  same kit-and-grammar route.
+- **Sound in space is a convention.** Silence, the suit's own sounds, muffled hull sounds,
+  or the cinematic lie: the owner picks the feel; the engine needs only the medium per
+  listener (air, water, vacuum, inside a hull) and a propagation rule per medium.
+- **Voice chat is a product decision as well as a feature.** Own transport over QUIC with
+  Opus (netcode.md §8, audio.md §6) is cheap; moderation, recording and privacy are not
+  engine questions but they decide whether proximity chat ships.
+
+**Questions for the owner** (answers change the plan; defaults in brackets):
+
+1. Is the universe one persistent shard, or a shared deterministic universe with per-session
+   state and thin persistence of player edits? [the second, until the netcode's second tier]
+2. Which eras first: the village (Mediterranean, current-ish), then primitive and futuristic
+   to prove the axis, or medieval before futuristic? [village, primitive, futuristic]
+3. How many cultures and species at the first showcase? [one culture, one humanoid, one
+   generated quadruped and a few animals]
+4. The first multiplayer demo: how many players, dedicated or listen server, on the island?
+   [four players, a dedicated server on the server PC, sixteen as the test]
+5. Voice: own transport with Opus, or a provider (Steam Voice, Vivox)? [own, positional]
+6. The sound-in-space convention? [the suit and the hull: muffled, no exterior sound]
+7. How physical the crash and the river: records and the drainage re-run (proposed) or a
+   simulated flow near the debris? [records and the re-run; a shallow-water field near the
+   player is Phase 3 item 4 anyway]
+8. The AI's ambition for NPCs: utility and behaviour trees with schedules (proposed), or
+   planners and learned policies? [utility with schedules; planners for the reconstruction
+   tasks only]
+9. Breadth before depth: should the planet's other biomes and a second civilisation come
+   before the island's village is judged? [no: the vertical slice first]
