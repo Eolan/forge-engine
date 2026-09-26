@@ -94,7 +94,8 @@ Epic's own account; each client renders relative to its own camera instead). Rig
 viewport height; Z-up sources (Blender, GIS) swapped at import.
 *(research: large-worlds.md §1–2, §9)*
 
-**Amendment 🟡 proposed (2026-09-25, #93): the GPU instance table in integer cells.** The
+**Amendment ✅ (proposed 2026-09-25, #93; accepted 2026-09-26): the GPU instance table in
+integer cells.** The
 renderer does not yet send camera-relative positions: the instance table holds world-space
 `f32` (`Instance::model` and `center`), compared with `Frame::camera_pos`. For a million
 instances the GPU places itself, camera-relative would mean rewriting the table every frame or
@@ -126,6 +127,19 @@ every offset against the origin's image, expected 0 px up to a few pixels from t
 0.1 mm rounding. The record before stays as the commit before, for `tools/timings.sh`'s A/B.
 The decision stays the owner's: keep the commit, change it (the cell size, the frame), or drop
 it.
+*Accepted (2026-09-26, on the 5070 Ti; the owner: keep it if it improves things with no
+issue).* `tools/origins.sh` (`reports/2026-09-27-93/`): offsets of whole cells (1 024 and
+10 240 m) give **0 px** in both demos, so nothing depends on the world position any more; at
+10⁴–10⁷ m the image differs from the origin's by the same small amount at every offset (the city
+2 550–2 750 px, ꟻLIP mean 0.0015–0.0017; the ballad 1 666 px, 0.0005), the rounding of the
+offset inside a cell spread by the traced shadows and TAA, where the record before broke down
+(1.1–1.3 M px at 10⁶ m, blocks of the frame black). The batch against the record before passes
+D-017 as accepted (every mean at most 0.0047, the peaks isolated pixels); the A/B harness, mesh
+against fallback and the validation are clean; with the instance's frame built once per cluster
+in the cull, every timed view is as fast as before or faster. Two findings on the way: the
+highlight took the camera's world position (fixed: the scene frame's), and the cull's
+per-point rebuild of the quaternion's matrix (fixed: `InstancePose`). Exact 0 px at every
+whole-metre offset would need the offsets on a fixed grid (2⁻¹³ m); not needed now.
 *(research: large-worlds.md §1, Freese 2004)*
 
 ## D-005 — Our own job system, with the "leave cores free" rule ✅ (2026-09-24)
@@ -283,7 +297,8 @@ A system is done when its demo runs on both machines with numbers in `docs/demos
 demo supports `--frames` and `--capture`; `tools/imgdiff` compares captures with a tolerance
 and an exit code. p50/p99/max, never means.
 
-**Amendment 🟡 proposed (2026-09-25, #75): a perceptual check beside the pixel count.**
+**Amendment ✅ (proposed 2026-09-25, #75; accepted 2026-09-26 with a margin): a perceptual
+check beside the pixel count.**
 Whenever pixels differ, `imgdiff` also prints LDR-ꟻLIP (Andersson et al. 2020). It is a port
 of NVIDIA's reference that matches it to six decimals and to the pixel of its error map.
 Which check applies:
@@ -307,6 +322,14 @@ Which check applies:
 classes: GTAO's means overlap the ACES 2.0 table's. The proposed check leans on the largest
 value, with the mean as a guard against a shift over the whole frame. The measurements are
 in `docs/PROCESS.md`, "The perceptual check".
+*Accepted (2026-09-26), with a margin of error:* the first change of arithmetic to face the
+check, #93's instance record in cells, kept every mean far under 0.02 (at most 0.0047) while
+22 of the batch's 26 pairs peaked at 0.26–0.43. Each peak was an isolated pixel: a silhouette
+pixel or a shadow edge on a rock moved by less than a pixel, and the two batches look the same.
+The owner took the thresholds with that margin: the mean below 0.02 is the gate for class 2; a
+largest value above 0.15 sends the reviewer to the error map and the crops
+(`imgdiff --crop --crops`), and isolated pixels pass, while a cluster of them (a speck, a line,
+a patch) fails.
 
 ## D-018 — Memory and streaming ✅ (2026-09-24)
 

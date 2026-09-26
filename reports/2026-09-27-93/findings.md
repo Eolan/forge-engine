@@ -1,5 +1,13 @@
 # #93 on the RTX 5070 Ti (2026-09-26): what the batch found
 
+**Outcome (later the same day).** The owner accepted D-017 with a margin of error (isolated
+pixels above 0.15 pass when the means hold, point 2 below) and D-004's amendment if it improves
+things with no issue. Point 3 was fixed: the cluster cull now builds each instance's frame and
+camera-relative origin once per cluster (`InstancePose` in `meshlet.slang`). With it the
+streamed city's south view takes 1.98 ms against `main`'s 1.98 (cull 1 0.349 → 0.324 ms) and
+the flight 1.94 against 1.95. Point 1's residual passes D-017 as accepted. The branch was merged
+into `main`; the full numbers are in `docs/demos/city-blocks.md` and `docs/PROFILE.md`.
+
 The branch `claude/keen-sagan-vk91st` at `6c4a270`, plus `7e13674` (the fix below; `ce318a8` in `env.txt`, before a rebase onto the research commit `0986b79`), against
 `main` at `f915145`. The toolchain here: rustc 1.98.1, slangc 2026.13.1 (the Vulkan SDK's; the
 cloud had 2026.18.3). Not merged: three of the owner's pass conditions do not hold as written

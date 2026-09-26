@@ -128,9 +128,11 @@ Which check applies where:
 - **The A/B harness, mesh against fallback, refactors and speed-ups:** 0 px. ꟻLIP is only
   there to help read a failure.
 - **Changes that may move pixels invisibly** (an order, TAA history, the flake, a baked
-  table): the numbers go in the report. The proposed threshold (D-017, 🟡 until the owner
-  accepts it) is every pixel below 0.15 and a mean below 0.02: `imgdiff --max-flip 0.15
-  --max-flip-mean 0.02` judges by it. The mean alone does not tell visible from invisible:
+  table): the numbers go in the report. The threshold (D-017, accepted 2026-09-26 with a
+  margin) is a mean below 0.02 and every pixel below 0.15: `imgdiff --max-flip 0.15
+  --max-flip-mean 0.02` judges by it. A largest value above 0.15 sends the reviewer to the
+  error map and the crops; isolated pixels (a silhouette or a shadow edge moved by less than
+  a pixel, as in #93) pass, a speck, a line or a patch fails. The mean alone does not tell visible from invisible:
   the ACES 2.0 table's 1-level differences over a whole frame reach 0.012, GTAO's 0.011.
 - **Look changes:** the mean, p99, largest value and error map go in the report, and the
   owner judges.

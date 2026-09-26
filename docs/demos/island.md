@@ -15,7 +15,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
 | Materials from the fields, the layer map (stage 6) | planned |
-| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | built, to see on a GPU: `city-blocks --island SEED` (#96 for the props and the demo of its own) |
+| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`; its first look has false shadows, no sea and pale rock ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
 
 ```
@@ -33,8 +33,8 @@ time, the erosion step's breakdown, and writes `uplift.png`, `height.png` (16-bi
 Strahler order and the lakes over the hillshade), `coast.png`, `sea-height.png`,
 `sea-hillshade.png` and, with a wind, `rain.png`.
 
-`city-blocks --island SEED` draws the island in the engine (stage 7, written in the cloud
-and not yet seen on a GPU): the heightfield (`--island-spacing`, 8 m by default: 2049²,
+`city-blocks --island SEED` draws the island in the engine (stage 7, written in the cloud,
+first seen on the 5070 Ti on 2026-09-26: "In the engine" below): the heightfield (`--island-spacing`, 8 m by default: 2049²,
 8.4 M triangles like the city's ground; 4 m for the 4097² target, 33.5 M) is generated once
 into `mesh-cache/island-<key>.f32`, cooked into a cluster DAG through the same path as the
 city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached, and
@@ -174,7 +174,10 @@ proposed as D-038 🟡).
 (`Field2::digest`), the same on every machine and with any thread count; seed 7 after 150
 steps: `0189d031eff0fb84` at 16 m (the same with `--threads 0`), `9eacfe0f827fa7dd` at 4 m,
 both from the cloud container. A different value on the owner's machine is a D-016 bug to
-find before the planet's tiles depend on it.
+find before the planet's tiles depend on it. *On the owner's machine (2026-09-26, Ryzen 7
+9800X3D, 16 workers): the same two digests.* There the 4 m erosion takes 19.2 s (0.128 s a
+step: drain 0.106, incise 0.015, diffuse 0.005, uplift 0.003) and the whole 4 m run 23 s; the
+16 m run takes 1.4 s.
 
 ![The 16 km island at 16 m after 150 steps: the sea, hypsometric tints under a hillshade, rivers above 0.5 km² of catchment, lakes](images/island-overview-16m.png)
 
@@ -188,3 +191,29 @@ with stages 5–6), and highlands more uniform than a real range (orographic rai
 with layers are the levers). The immediate next step is stage 7 with what exists: the
 heightfield handed to the cluster-DAG cook the city's ground uses, so today's renderer draws
 the island with TAA and the F1 overlay, and the look is judged in the engine, not on a map.
+
+## In the engine, first seen on the 5070 Ti (2026-09-26)
+
+`cargo run --release -p city-blocks -- --island 7` works on the owner's machine: the first
+start generates the 8 m field in 5.2 s and cooks it in 16.2 s (8.39 M triangles, 195 568
+clusters, 1 922 pages of 240 MB, streamed); the next ones load both. The GPU takes 0.72–0.78 ms
+a frame at 1600 × 900 (the probes' rays 0.16–0.24 ms, the layered shading 0.12–0.14), under
+the city's sky with TAA.
+
+![The island from the default view, over the sea to the south: the relief reads, but the sea is a green plain, the rock white, and the slopes carry dark patches](images/island-engine-first.png)
+
+![From 1 200 m: the dark polygons across the slopes are shadow rays that hit the traced surface; with `--no-shadows` they are gone](images/island-engine-shadows.png)
+
+What the first look shows, for #96 to fix before the props:
+- **Shadows where there are none.** Dark, sharp-edged polygons cover the slopes facing the sun;
+  `--no-shadows` removes them all. The shadow structure is a cut of the cluster DAG capped at
+  600 000 triangles for a terrain (D-029), fine for the city's flat ground, but the island's
+  8.4 M triangles of relief cut to 600 000 stand metres off the drawn surface in places, far
+  beyond the rays' 0.15 m start.
+- **No sea.** The sea floor is the field's 0 m, drawn as grass to the domain's edge. The water
+  pass is D-038 🟡; until then the ground needs a shore and a sea-floor layer.
+- **Rock that reads as snow.** Above 380 m and on slopes over 0.45 the ground takes the city's
+  rock layer, a pale grey that reads white from afar, with stair-stepped edges where the layer
+  map's 4 m texels change.
+- **A camera to place with care.** `--view` takes an absolute height, and the land rises past
+  500 m: a view at 250 m, 2.5 km in from the south coast, is under the ground.

@@ -9,6 +9,19 @@ an order where every commit builds and tests on its own, so you can bring them i
 by one (`git cherry-pick <sha>`), run the batch after each, and drop the one you do not want
 without losing the others.
 
+## Where it stands (2026-09-26, the owner's machine)
+
+The whole branch is merged into `main`. Checked on the RTX 5070 Ti: the batch, the
+validation, `tools/origins.sh` and the timings for commit 3 (`reports/2026-09-27-93/`), with
+two fixes on the way (the highlight's camera, and each instance's pose built once per cluster
+in the cull, which removed a 0.19 ms regression of the streamed city under async compute); the
+genesis digests of seed 7 (`0189d031eff0fb84` at 16 m, `9eacfe0f827fa7dd` at 4 m, the same as
+the cloud's: D-016 holds across the two machines; the 4 m erosion in 19 s on the 9800X3D);
+and commit 8's island in the engine, which draws (0.75 ms of GPU) but shows false shadows on its
+slopes, no sea and pale rock (`docs/demos/island.md`, "In the engine"; #96). The owner accepted D-004's
+amendment and D-017 with a margin for isolated pixels (`docs/DECISIONS.md`). D-037, D-038 and
+D-039 stay 🟡. The rest of this file is the cloud session's handover as it wrote it.
+
 ## Read this first
 
 - **What needs the GPU:** commit 3 (the cells record: every pixel of both demos goes through
@@ -400,7 +413,8 @@ detail.
 
 ## What needs the owner
 
-- The decision on D-004's amendment (after the batch), D-037, D-017.
+- ~~The decision on D-004's amendment (after the batch)~~ and ~~D-017~~: accepted
+  2026-09-26. D-037 remains.
 - #71: close it, or allow a public minimal reproduction for NVIDIA.
 - #67: the GPU selector, so a session can test on the AMD integrated GPU.
 - Whether the cloud branch's commits go to `main` one by one (the cherry-picks above) or as one

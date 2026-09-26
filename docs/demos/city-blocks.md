@@ -142,18 +142,41 @@ scene's origin (`MeshletScene::origin`; `--origin` sets it), rays starting from
 `relative + camera_in_scene`; the placement writes each instance's cell from the origin's;
 the Morton order and the cells' spheres (#38) take the cells into account; TAA's and DLSS's
 reprojection add the camera's step between frames. The city's instance table shrinks from 96
-to 80 MB; the placement's checksum changes (the bytes did): the log has the new value, to be
-recorded here. **Expected on the GPU:** `tools/origins.sh` at 0 px at every offset, or a few
-pixels from the split's 0.1 mm rounding; `tools/captures.sh` against the commit before within
-D-017's thresholds (the vertex transform rounds differently: a quaternion instead of a matrix,
-camera-relative instead of world; a few hundred pixels by 1–2 levels, as #38's reordering),
-mesh against fallback and the A/B harness at 0 px; `tools/timings.sh` flat, or a little faster
-from the smaller table. One thing kept as it was on purpose: `sun_light`'s highlight direction
-mixed object space with the camera's world position; it still does, with the camera in the
-scene frame (`legacy_camera_position`), so the ballad's highlights do not move. Fixing it is a
-look change for the owner to judge (#98). The world position itself, as first written, moved
-every highlight with `--origin`: on the 5070 Ti the first `tools/origins.sh` differed by 63 000
+to 80 MB; the placement's checksum is `4e10743a3499dc0e` (it was `ed6454c65dd1e823`: the bytes
+changed). One thing kept as it was on purpose: `sun_light`'s highlight direction mixed object
+space with the camera's world position; it still does, with the camera in the scene frame
+(`legacy_camera_position`), so the ballad's highlights do not move. Fixing it is a look change
+for the owner to judge (#98). The world position itself, as first written, moved every
+highlight with `--origin`: on the 5070 Ti the first `tools/origins.sh` differed by 63 000
 pixels in the city and 42 000 in the ballad at every offset, the same from 10 km to 10 000 km.
+
+**Measured on the 5070 Ti (2026-09-26; `reports/2026-09-27-93/`), D-004's amendment
+accepted.** `tools/origins.sh`, each offset against the origin's image:
+
+| Offset | City, record before | City, cells | Ballad, record before | Ballad, cells |
+|---|---|---|---|---|
+| 1 024 m, 10 240 m (whole cells) | | **0 px** | | **0 px** |
+| 10⁴ m | 139 809 px, ꟻLIP mean 0.031 | 2 755 px, 0.0017 | 46 828 px, 0.023 | 1 666 px, 0.0005 |
+| 10⁵ m | 344 622 px, 0.041 | 2 579 px, 0.0016 | 111 939 px, 0.033 | 1 666 px, 0.0005 |
+| 10⁶ m | 1.12 M px, 0.53 (blocks black) | 2 640 px, 0.0016 | 1.30 M px, 0.35 | 1 665 px, 0.0005 |
+| 10⁷ m | 1.34 M px, 0.40 | 2 548 px, 0.0015 | 1.18 M px, 0.28 | 1 666 px, 0.0005 |
+
+Nothing depends on the world position any more (whole cells: 0 px). What remains at the far
+offsets does not grow with the distance: it is the rounding of the offset inside a cell (0.06 mm
+there, finer at the origin), which the traced sun shadows turn into pixels along the occluders'
+edges (910 px with `--no-shadows` for a 1 m move, 5 564 with them) and TAA spreads over its
+60 jittered frames, mostly by 4 levels or less (the city's largest ꟻLIP value 0.096, the
+ballad's 0.29 on one pixel). Exact 0 px at every whole-metre offset would need the offsets on
+a fixed grid (2⁻¹³ m, 0.12 mm); not built. Against the record before, the batch's 26 images all
+move a little (the vertex transform rounds differently): every ꟻLIP mean at most 0.0047, the
+peaks single silhouette or shadow-edge pixels (D-017 as accepted); the A/B harness, mesh
+against fallback and `--show-culled` at 0 px, `tools/validate.sh` clean. The timings, against
+the record before (three alternating runs each, `docs/PROFILE.md`): the south view 1.98 →
+1.99 ms, the orbit 2.42 → 2.36, the flight 1.96 → 1.94, every page resident 1.96 → 1.94;
+cluster cull 1 0.35 → 0.33 ms at the south view and 0.54 → 0.48 in the orbit. As first written
+the cull rebuilt the quaternion's matrix at each of a cluster's points (its centre, the LOD's
+two centres, the cone's apex and axis), and the streamed views lost 0.06–0.19 ms under async
+compute; it now builds the instance's pose once per cluster (`InstancePose`).
 
 ## Loading screen (issue #25, 2026-09-25)
 
@@ -804,9 +827,9 @@ terrain mesh's own vertices, which cooking keeps in grid order.
 **Determinism and cost.**
 - The CPU mirrors only the mesh choice (the same `pcg4d`), for the scene's per-mesh counts.
 - After the pass the table (80 MB since #93's record, 96 before) is read back once: its FNV-1a
-  checksum goes to the log (`ed6454c65dd1e823` on every run and on both paths with the record
-  before #93; the new record's value is in the log, to be recorded here), and its meshes are
-  checked against the mirror.
+  checksum goes to the log (`4e10743a3499dc0e` on every run and on both paths since #93's
+  record; `ed6454c65dd1e823` with the record before), and its meshes are checked against the
+  mirror.
 - Two runs capture the same frame to the pixel.
 - The pass takes 3–6 ms once its shader is compiled (384 ms on the first run, compilation
   included).

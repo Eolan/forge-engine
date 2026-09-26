@@ -289,12 +289,18 @@ belt is 1.2 km long), 1 m at 10⁷ m. The predicted numbers are on the city's pa
 (`docs/demos/city-blocks.md`, "Far from the origin"); the corridor keeps the rocks 14 m clear
 of the camera, where the model says a pixel or two at 10⁵ m, ten at 10⁶ m with the shadows off
 their rocks by centimetres, and at 10⁷ m a camera that advances in 1 m steps. `tools/origins.sh`
-takes frame 240 without TAA at each offset against the origin's; the captures wait for the
-owner's machine (this session ran in the cloud). Since the cells record (2026-09-26, the city's
-page, "Far from the origin", *Built*), the rocks are stored each in its own cell, the camera
-hands the renderer its cell and offset, the path stays around the field's centre, and the dust
-and the shadow rays work in the field's own frame: every offset should give the origin's frame
-to the pixel, or a few pixels from the split's 0.1 mm rounding.
+takes frame 240 without TAA at each offset against the origin's. Since the cells record
+(2026-09-26, the city's page, "Far from the origin", *Built*), the rocks are stored each in its
+own cell, the camera hands the renderer its cell and offset, the path stays around the field's
+centre, and the dust and the shadow rays work in the field's own frame.
+**Measured on the 5070 Ti (2026-09-26):** with the record before, frame 240 differed from the
+origin's by 46 828 px at 10⁴ m (ꟻLIP mean 0.023), 111 939 px at 10⁵ m (0.033), 1.30 M px at
+10⁶ m (0.35) and 1.18 M px at 10⁷ m (0.28). With the cells, offsets of whole cells (1 024 and
+10 240 m) give **0 px**, and every far offset the same 1 665–1 666 px (ꟻLIP mean 0.0005, one
+pixel at 0.29): the rounding of the offset inside a cell, which the shadow rays turn into
+pixels on the rocks' shadow edges; it does not grow with the distance. The batch's ballad
+frames against the record before: 763–3 371 px, means 0.0016–0.0032, the peaks single pixels
+on a silhouette or a shadow edge (D-017 as accepted, 2026-09-26).
 
 ## The rock's texture without repeats (2026-09-25, issue #66)
 

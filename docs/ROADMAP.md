@@ -41,7 +41,7 @@ batch in `docs/PROCESS.md`.
    instance culls 0.40 → 0.14 ms). Its third idea, pass 2 over pass 1's rejects only, is
    #92.
 3. #75, a perceptual metric: ꟻLIP in `imgdiff` ✅ (it matches NVIDIA's tool; thresholds
-   proposed in D-017, 🟡).
+   in D-017, accepted 2026-09-26 with a margin for isolated pixels).
 4. #76, ACES 2.0's output transform as a fourth tone curve ✅ (a baked table within 1–2
    levels of the per-pixel transform on real frames).
 5. #77, async compute and transfer queues in the render graph ✅ (the city's sky tables and
@@ -72,13 +72,12 @@ overlap), #39 (the RTX 3080 run).
   #69 and is the first step of the space battle (#80).
 - Phase 2, with its `island` demo as the first step of rebuilding tropical-island (#81): a
   concrete game target for the world systems. It starts with #93, large-world coordinates on
-  the GPU (a 🟡 amendment to D-004): the city and the belt moved far from the origin, measured
-  before and after, then the owner decides. **Its measurement is built** (2026-09-25, a cloud
-  session): `--origin` in both demos, `tools/origins.sh`, and a model that predicts the captures
-  (an object 2 m from the camera 0.5 px off at 10 km, 45 px at 1 000 km, 800 px at 10 000 km;
-  cells of 1 km 0.013 px throughout; `docs/demos/city-blocks.md`). **The record itself is
-  built** on the cloud branch (2026-09-26, `docs/HANDOVER.md`): the captures decide, then the
-  owner.
+  the GPU ✅ (2026-09-26, D-004's amendment accepted): the instances in integer cells of 1 km,
+  every offset of whole cells drawn to the pixel, the far offsets within a rounding the eye
+  does not see, where the record before broke down at 1 000 km; no view slower
+  (`docs/demos/city-blocks.md`, "Far from the origin"). The cloud branch of that night
+  (`docs/HANDOVER.md`) is merged: `forge-world`, the island's genesis in `forge-procgen`, and
+  the island drawn by `city-blocks --island` (#96: its shadows, sea and rock come next).
 
 **Waiting:**
 - #39 waits for the RTX 3080.
@@ -244,9 +243,9 @@ Goal: the renderer skeleton every later system draws through.
 
 ## Phase 2 — World
 
-Opens with #93, large-world coordinates on the GPU: the city and the belt measured far from the
-origin (the tooling and the predicted numbers ✅ 2026-09-25; the record built on the cloud
-branch 2026-09-26, to verify), then D-004's amendment decided.
+Opens with #93, large-world coordinates on the GPU ✅: the city and the belt measured far from
+the origin (the tooling and the predicted numbers 2026-09-25; the record in cells built on the
+cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted.
 
 1. `forge-world`: reference frames (`f64`), integer sector grid, cube-sphere and flat-grid
    partitions, cell streaming with HLOD proxies, `u64` cell ids. Started 2026-09-26 on the
@@ -260,7 +259,8 @@ branch 2026-09-26, to verify), then D-004's amendment decided.
    branch (`forge-procgen`, `tools/genesis`, `docs/demos/island.md`): the island's mask and
    uplift, D8 drainage with the depressions carved through the basin graph, the implicit
    stream-power erosion on the job system, PNG previews; a 16 km island at 16 m in 3 s, at 4 m
-   in 50 s; the field cooked into a cluster DAG and drawn by `city-blocks --island`.
+   in 50 s on the cloud's four cores (23 s on the 9800X3D, the same digests); the field cooked
+   into a cluster DAG and drawn by `city-blocks --island` (first seen 2026-09-26: #96 next).
    Next: the island's own demo with props (#96), the amplification to 2 m and the materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute

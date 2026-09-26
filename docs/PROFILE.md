@@ -241,6 +241,21 @@ against the build before in alternating runs (three each; these runs measure the
 | every page resident | 2.21 ms | 2.05 ms | 0.272 → 0.032 | 0.258 → 0.302 |
 
 Pass 1 pays 0.03–0.05 ms for its second ordered append.
+With #93's instance record (2026-09-26: 80 bytes in cells of 1 km with a quaternion instead of a
+96-byte world matrix; the cull builds each instance's pose once per cluster), against the
+build before in alternating runs (three each, medians):
+
+| View | before | after | cluster cull 1 |
+|---|---|---|---|
+| south view | 1.98 ms | 1.99 ms | 0.352 → 0.327 |
+| orbit | 2.42 ms | 2.36 ms | 0.535 → 0.477 |
+| flight | 1.96 ms | 1.94 ms | 0.254 → 0.255 |
+| every page resident | 1.96 ms | 1.94 ms | 0.300 → 0.292 |
+
+The meshlets bench (0.225, 0.143 ms orbiting, 1.33 → 1.32 at side 700) and the ballad (1.26
+and 2.67–2.68 ms) do not move. Rebuilding the quaternion's matrix at each of a cluster's five
+points instead made the streamed views slower under async compute (south 1.99 → 2.18 ms, cull
+1 0.35 → 0.48) while their serial time did not move: the cull overlapped the probe rays worse.
 **Where it stands (2026-09-25, after #77 and #92):** the flight at 1440p takes 3.38 ms of GPU
 (three runs of 3000 frames: 3.37–3.39), its p99 frame 3.8 ms against the 8.33 of the 120 fps
 target; 2.6 ms without the probes. It was 3.81 ms after #68.
