@@ -2,10 +2,67 @@
 //! fields (`docs/research/terrain-genesis.md`, "Recommendation for Forge"), as the layer map
 //! the terrain's layered material samples (D-028). Today's rule is slope and altitude: rock
 //! where the ground is steep or high, grass elsewhere, and with a shore the sea below 0 m and
-//! sand on the land's first metres above it; the others (wet soil along the rivers, snow above
-//! a line) follow with the fields they need.
+//! sand on the land's first metres above it; and the rivers of stage 4 painted over it at their
+//! width (`paint_rivers`). The others (wet soil along the rivers, snow above a line) follow with
+//! the fields they need.
 
 use crate::field::Field2;
+use crate::hydrology::{self, Rivers};
+
+/// Paints `rivers` (traced on a field of `spacing` metres) into `layers` as `layer`: every
+/// texel whose centre lies within half a river's width of its course, the width from the
+/// catchment (`hydrology::width`) and at least `min_width` metres, so that a stream narrower
+/// than a texel still draws a steady line rather than one that breaks up. Returns the texels
+/// painted.
+pub fn paint_rivers(
+    layers: &mut Field2<u8>,
+    rivers: &Rivers,
+    spacing: f64,
+    layer: u8,
+    min_width: f32,
+) -> usize {
+    let cell = layers.spacing as f32;
+    let last = layers.size as i64 - 1;
+    let cell_area = spacing * spacing;
+    let mut painted = 0;
+    for river in &rivers.rivers {
+        for (k, pair) in river.points.windows(2).enumerate() {
+            let (a, b) = ([pair[0][0], pair[0][1]], [pair[1][0], pair[1][1]]);
+            let area = f64::from(river.area[k].max(river.area[k + 1])) * cell_area;
+            let half = 0.5 * (hydrology::width(area) as f32).max(min_width);
+            // The texels of the segment's box, grown by the half width.
+            let lo = |v: f32| (((v - half) / cell).floor() as i64).clamp(0, last);
+            let hi = |v: f32| (((v + half) / cell).ceil() as i64).clamp(0, last);
+            for ty in lo(a[1].min(b[1]))..=hi(a[1].max(b[1])) {
+                for tx in lo(a[0].min(b[0]))..=hi(a[0].max(b[0])) {
+                    let p = [(tx as f32 + 0.5) * cell, (ty as f32 + 0.5) * cell];
+                    if segment_distance(p, a, b) <= half {
+                        let (tx, ty) = (tx as u32, ty as u32);
+                        let texel = &mut layers.data[(ty * layers.size + tx) as usize];
+                        if *texel != layer {
+                            *texel = layer;
+                            painted += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    painted
+}
+
+/// The distance from `p` to the segment `a`–`b`.
+fn segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let length2 = dx * dx + dy * dy;
+    let t = if length2 > 0.0 {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (ex, ey) = (p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+    (ex * ex + ey * ey).sqrt()
+}
 
 /// Which layer goes where.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -192,5 +249,34 @@ mod tests {
             ..rule
         };
         assert!(rock_share(&fine, &local) > 0.25);
+    }
+
+    #[test]
+    fn a_river_is_painted_at_its_width_and_no_wider() {
+        use crate::hydrology::{Mouth, River};
+        // A river along y = 50 m from x = 10 to 90 m, on a field of 10 m cells. Its catchment,
+        // 4 000 cells of 100 m², is 0.4 km²: `width` gives 3.2 m, the minimum 8 m.
+        let river = River {
+            cells: vec![0, 1],
+            points: vec![[10.0, 50.0, 0.0], [90.0, 50.0, 0.0]],
+            area: vec![4000, 4000],
+            order: 1,
+            mouth: Mouth::Outlet(1),
+        };
+        let rivers = Rivers {
+            rivers: vec![river],
+            river_of: Vec::new(),
+            order: Vec::new(),
+        };
+        // 2 m texels over 100 m.
+        let mut layers = Field2::from_fn(50, 2.0, |_, _| 0_u8);
+        let painted = paint_rivers(&mut layers, &rivers, 10.0, 7, 8.0);
+        // Texel centres at 47, 49, 51 and 53 m lie within 4 m of the course; 45 and 55 do not.
+        let across: Vec<u32> = (0..50).filter(|&y| layers.get(25, y) == 7).collect();
+        assert_eq!(across, vec![23, 24, 25, 26]);
+        // Along it, the ends round: the rows 1 m off the course reach 6.1–93.9 m (44 texels),
+        // those 3 m off 7.4–92.6 m (42).
+        assert_eq!(painted, 2 * 44 + 2 * 42);
+        assert_eq!(layers.get(1, 25), 0);
     }
 }

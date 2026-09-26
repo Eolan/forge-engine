@@ -1332,6 +1332,18 @@ impl CityMaterials {
                 "island: rock",
                 textured(rock, [0.3, 0.3, 0.29], [0.38, 0.37, 0.35], 6.0, 14.0, 0.05),
             ),
+            (
+                // Water over a dark bed, as the sea's row: the rivers' stand-in (D-038).
+                "island: stream",
+                RenderLayer {
+                    color_a: [0.02, 0.045, 0.05],
+                    color_b: [0.025, 0.05, 0.055],
+                    roughness: RenderLayer::roughness_for_power(200.0),
+                    specular: 0.5,
+                    reflectance: 0.02,
+                    ..RenderLayer::default()
+                },
+            ),
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
@@ -1434,8 +1446,10 @@ mod island_layer {
     pub const SEABED: u8 = 2;
     /// Rock, where the ground is steep.
     pub const ROCK: u8 = 3;
+    /// A river, painted over the others at its width (`forge_procgen::paint_rivers`).
+    pub const STREAM: u8 = 4;
     /// How many layers there are.
-    pub const COUNT: u8 = 4;
+    pub const COUNT: u8 = 5;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -1572,7 +1586,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     let extent = height.extent() as f32;
     let texels = 4096;
     let layers_start = Instant::now();
-    let layers = forge_procgen::slope_layers(
+    let mut layers = forge_procgen::slope_layers(
         &height,
         &forge_procgen::LayerRule {
             grass: island_layer::GRASS,
@@ -1594,6 +1608,25 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         texels,
         ms = layers_start.elapsed().as_millis(),
         "island layer map"
+    );
+    // The rivers of stage 4 over it: the drawn field's drainage, the rivers above 0.5 km² of
+    // catchment (as `genesis` traces them), painted at their width, 8 m at least (two texels).
+    let rivers_start = Instant::now();
+    let flow = forge_procgen::drain(&height, 0.0, &TaskPool::client());
+    let min_area = (500_000.0 / (height.spacing * height.spacing)) as u32 + 1;
+    let rivers = forge_procgen::trace_rivers(&height, &flow, min_area);
+    let painted = forge_procgen::paint_rivers(
+        &mut layers,
+        &rivers,
+        height.spacing,
+        island_layer::STREAM,
+        8.0,
+    );
+    tracing::info!(
+        rivers = rivers.rivers.len(),
+        texels = painted,
+        ms = rivers_start.elapsed().as_millis(),
+        "island rivers"
     );
     builder.set_ray_traced(!args.no_shadows);
     let mut materials = CityMaterials::new(&ctx.device)?;
