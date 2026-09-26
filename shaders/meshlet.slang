@@ -464,12 +464,13 @@ float3 to_scene(Frame* f, float3 relative)
     return relative + f[0].camera_in_scene.xyz;
 }
 
-// The camera's world position as an f32, for the one place that mixed object space with world
-// space before issue #93 (`sun_light`'s highlight) and keeps its look: exact near the origin,
-// as coarse as an f32 far from it.
-float3 legacy_camera_world(Frame* f)
+// The camera's position for the one place that mixed object space with world space before
+// issue #93 (`sun_light`'s highlight, #98), which keeps its look: the camera in the scene frame,
+// the world position it took when every scene stood at the world's origin. The world position
+// itself would move the highlights with `--origin`.
+float3 legacy_camera_position(Frame* f)
 {
-    return float3(f[0].camera_cell.xyz) * CELL_SIZE + f[0].camera_local;
+    return f[0].camera_in_scene.xyz;
 }
 
 bool sphere_in_frustum(Frame* f, float3 center, float radius)
@@ -2194,7 +2195,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, floa
     // approximated by the object's outward normal is close enough for a highlight this soft.
     ndl = dot(n, light);
     float diffuse = max(ndl, 0.0) * shadow;
-    float3 highlight_view = normalize(legacy_camera_world(f) - (object_position + 0.0)); // object space ≈ world offset (kept as it was; see docs/HANDOVER.md)
+    float3 highlight_view = normalize(legacy_camera_position(f) - (object_position + 0.0)); // object space ≈ world offset (kept as it was; see docs/HANDOVER.md)
     float3 half_vector = normalize(light + highlight_view);
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
     float3 sun = f[0].sun_color.rgb;

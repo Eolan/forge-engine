@@ -149,8 +149,11 @@ D-017's thresholds (the vertex transform rounds differently: a quaternion instea
 camera-relative instead of world; a few hundred pixels by 1–2 levels, as #38's reordering),
 mesh against fallback and the A/B harness at 0 px; `tools/timings.sh` flat, or a little faster
 from the smaller table. One thing kept as it was on purpose: `sun_light`'s highlight direction
-mixed object space with the camera's world position; it still does (`legacy_camera_world`), so
-the ballad's highlights do not move. Fixing it is a look change for the owner to judge.
+mixed object space with the camera's world position; it still does, with the camera in the
+scene frame (`legacy_camera_position`), so the ballad's highlights do not move. Fixing it is a
+look change for the owner to judge (#98). The world position itself, as first written, moved
+every highlight with `--origin`: on the 5070 Ti the first `tools/origins.sh` differed by 63 000
+pixels in the city and 42 000 in the ballad at every offset, the same from 10 km to 10 000 km.
 
 ## Loading screen (issue #25, 2026-09-25)
 

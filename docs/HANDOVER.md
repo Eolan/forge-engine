@@ -100,8 +100,9 @@ work in a **scene frame** anchored at the scene's origin (`MeshletScene::origin`
 sets it), rays starting from `relative + camera_in_scene`. The placement writes cells and a
 quaternion; the Morton order and the cells of 64 (#38) take the cells into account; TAA's and
 DLSS's reprojection add the camera's step between frames. `sun_light`'s highlight keeps its old
-world-space approximation on purpose (`legacy_camera_world`), so the ballad's look does not
-move.
+world-space approximation on purpose (`legacy_camera_position`, the camera in the scene frame),
+so the ballad's look does not move. *Found on the 5070 Ti (2026-09-26):* as first written it took
+the camera's world position, which moved every highlight with `--origin`; fixed on this branch.
 
 Test, in this order:
 1. `cargo build --release`, then `tools/captures.sh captures/cells` and `tools/compare.sh
