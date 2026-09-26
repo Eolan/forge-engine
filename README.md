@@ -29,7 +29,7 @@ crates/forge-render   meshlet renderer (compute culling, mesh shaders or an indi
 crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hooks
 crates/forge-world    world frames (phase 2): f64 reference frames in an integer sector grid, positions in cells for the GPU (#93),
                       the flat grid and the cube sphere cut into u64-named cells, cell streaming plans with hysteresis
-crates/forge-procgen  procedural generation on the CPU (phase 2): fields, lattice noise, the island's terrain genesis
+crates/forge-procgen  procedural generation on the CPU (phase 2): fields, lattice noise, the island's terrain genesis, its rivers, lakes, coast distance and sea spectrum
                       (mask, uplift, priority flood, drainage, stream-power erosion), PNG previews
 shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, aces2, tonemap, display, overlay, mipcheck, tonecheck)
 demos/task-bench      job-system benchmarks and the frame-pacing demonstration
