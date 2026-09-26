@@ -40,11 +40,24 @@ GPU; the sources' verification grades are in each file (#99).
 | Game AI for NPCs, creatures, animals, ships; ecosystems | planet-environment.md §3 (ecosystems: flora, succession, fauna); procedural.md §4 (ecosystems as rule systems); animation.md §5 | **game-ai-ecosystems.md** | `forge-sim` (Phase 3 item 1: the fixed tick, simulation LOD, digests), navigation over generated and deformable terrain | 3, 10 | #90, #84, #87 |
 | 1 to 16 players in sync; how many players one unified world can hold | netcode.md (transport, replication, prediction, determinism, §6 server architecture for a living world, the replication layer, Star Citizen and SpatialOS) | **many-players.md** (short: the two tiers and the 2026 state of single-shard scaling) | D-010, D-016, the frame tree, cell interest | 5 | none yet |
 
-The gap files are written one at a time in the order of the rows' weight for the first
-game (the island, #81): civilisations and styles, game AI and ecosystems, destruction and
-deformation, the universe, spacecraft and structures, creatures, crafting and repair, then
-the two short ones. Each follows the house format and ends with a "Recommendation for
-Forge" and a build order that starts small.
+The gap files are written one at a time, in the order of what the two demos need (the
+owner's answer of 2026-09-26: the demos drive the priorities): civilisations and styles (done),
+game AI and ecosystems, spacecraft and structures (the battle), creatures (the island's
+animals and its fantasy), destruction, deformation and fluids (both demos), crafting and
+repair, the universe, then the short primer on voice and media; the question of many players
+is folded into §5 below rather than a file, since the hardware and the player count (two
+now, four to sixteen later) put it years out. Each file follows the house format and ends
+with a "Recommendation for Forge" and a build order that starts small.
+
+**The two demos that set the priorities.** (a) *The island* (#81): a fantasy world at a
+medieval level of technology, a tropical island first with architecture that fits the place,
+other islands with other climates visitable later, still medieval; so the first style set is
+a **tropical medieval** one and the first axis to prove is **climate at a fixed era**, not the
+era axis (D-039's "Mediterranean village first" becomes "tropical medieval village first";
+the downtown set waits for city-blocks). (b) *The battle* (#80): spaceships fighting in an
+asteroid belt, perhaps with the Earth in the background; so ship generation and damage,
+asteroid destruction, ship AI, the planet seen from space and the sound convention in vacuum
+come before the universe's systems and galaxies.
 
 ## 2. What is already settled, and what each new file adds
 
@@ -170,10 +183,12 @@ eras, planets, species, ships) that multiply whatever exists. The rule proposed 
 axis grows before one vertical slice touches every system once**, on the island, small.
 
 1. **Phase 2, now.** The island's genesis, its water (D-038 🟡) and its planet variant
-   (planet-terrain.md) as planned; then the first culture: a Mediterranean village on the
-   island's coast from city-generation.md's layout and one style set (D-039 🟡), and the
-   first `Civilisation` record that selects it (civilisations-styles.md). One culture, one era,
-   one island: the look judged on the GPU before a second of anything.
+   (planet-terrain.md) as planned; then the first culture: a tropical medieval village on the
+   island's coast from city-generation.md's layout and one style set (D-039 🟡, its climate
+   response from the atlas: stilts, verandas, steep thatched roofs, shade), and the first
+   `Civilisation` record that selects it (civilisations-styles.md). One culture, one era, one
+   island: the look judged on the GPU before a second of anything; the second island, with
+   another climate at the same era, is the first axis to prove.
 2. **Phase 3.** `forge-sim`'s tick, Jolt and the material layer as planned; on them the first
    forms of three things the brief asks for: destruction as pre-fractured kit modules and
    debris instances (destruction-deformation.md), terrain deformation as the SDF edit layer
@@ -253,23 +268,31 @@ second species, sixteen players.
   Opus (netcode.md §8, audio.md §6) is cheap; moderation, recording and privacy are not
   engine questions but they decide whether proximity chat ships.
 
-**Questions for the owner** (answers change the plan; defaults in brackets):
+**The questions, and the owner's answers of 2026-09-26** (everything below stays research
+and implementation propositions, no code yet):
 
-1. Is the universe one persistent shard, or a shared deterministic universe with per-session
-   state and thin persistence of player edits? [the second, until the netcode's second tier]
-2. Which eras first: the village (Mediterranean, current-ish), then primitive and futuristic
-   to prove the axis, or medieval before futuristic? [village, primitive, futuristic]
-3. How many cultures and species at the first showcase? [one culture, one humanoid, one
-   generated quadruped and a few animals]
-4. The first multiplayer demo: how many players, dedicated or listen server, on the island?
-   [four players, a dedicated server on the server PC, sixteen as the test]
-5. Voice: own transport with Opus, or a provider (Steam Voice, Vivox)? [own, positional]
-6. The sound-in-space convention? [the suit and the hull: muffled, no exterior sound]
-7. How physical the crash and the river: records and the drainage re-run (proposed) or a
-   simulated flow near the debris? [records and the re-run; a shallow-water field near the
-   player is Phase 3 item 4 anyway]
-8. The AI's ambition for NPCs: utility and behaviour trees with schedules (proposed), or
-   planners and learned policies? [utility with schedules; planners for the reconstruction
-   tasks only]
-9. Breadth before depth: should the planet's other biomes and a second civilisation come
-   before the island's village is judged? [no: the vertical slice first]
+1. *One shard or shared seeds?* Both are possible; starting small it is per-session state
+   when players start a new game; EVE Online's and No Man's Sky's approaches are interesting;
+   the hardware is very limited for now. → The engine keeps the records-and-cells shape that
+   allows the second tier; nothing of the shard is built.
+2. *Which eras first?* The island game is a fantasy world at a medieval level of technology, a
+   tropical island first with architecture fitting the place, other islands with other
+   climates later, still medieval; the other demo is the space battle in the belt, perhaps
+   with the Earth behind. → The first style set is tropical medieval; the first axis is
+   climate at a fixed era; the battle's ships and damage come before the universe.
+3. *How many cultures and species?* One culture, one humanoid, one generated quadruped and a
+   few animals. → As proposed.
+4. *Players?* Two at most for now; four to sixteen depending on the demo later. → The co-op
+   tier only; a listen server is enough for two.
+5. *Voice?* The owner will research the technologies; the game may not use Steam for a while.
+   → voice-chat-media.md is written as a primer on the options (own transport with Opus over
+   the netcode's datagrams, WebRTC, Mumble, the providers), not a recommendation.
+6. *Sound in space?* The suit and the hull, muffled, no exterior sound. → Settled.
+7. *How physical the fluids?* Something that resembles reality depending on gravity and the
+   environment, real time within a budget, never all of the hardware; games that do not need
+   it use static decor. → destruction-deformation.md covers the tiers (static, analytic,
+   shallow water, particles) with gravity as a parameter (waves disperse as `ω² = g k`, the
+   splash and the run-up scale with `g`), and the records-and-re-run answer for rivers.
+8. *NPC AI?* Utility and behaviour trees with schedules, planners for reconstruction only. →
+   Settled.
+9. *Breadth before depth?* Not for now. → The vertical slice first.

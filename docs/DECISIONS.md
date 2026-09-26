@@ -1402,7 +1402,11 @@ The layout around it (#85), from the same research: a district field, roads by a
 under Parish & Müller's constraints (the village by interest maps and cost paths), blocks from
 the graph's faces, lots by oriented-box splits and straight-skeleton strips, landmarks as
 package overrides merged as layers, a `CityPlan` of typed records with a digest and a map PNG
-judged before any building exists; the first two style sets a Mediterranean village (#91) and
-a downtown (city-blocks). The module grid is the part that cannot be retrofitted.
+judged before any building exists. The first style set is a tropical medieval village (#81:
+the owner's answer of 2026-09-26, a fantasy world at a medieval level of technology, the
+architecture fitting the place, other islands with other climates at the same era next), the
+downtown for city-blocks second and the Mediterranean village (#91) after; the climate
+response comes from the atlas as `civilisations-styles.md` says. The module grid is the part
+that cannot be retrofitted.
 *(research: city-generation.md §3–§6; procedural.md §2, §4; vegetation-materials.md §4; issues
 #84, #85, #86, #88, #89, #91)*
