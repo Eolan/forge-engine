@@ -55,7 +55,7 @@ without losing the others.
 | 21 | `9871c1c` Add the city-generation research; propose D-039 for #86 | `docs/research/city-generation.md` (#85, #86), D-039 🟡 | no |
 | 22 | `7797c8c`, `540babc`, `a710343`, `360c588` | this file's opening block; `network.png` (the rivers by order) and its picture; the crater-lake and rough-seas tests of the basin graph; the architecture row | no |
 | 23 | `b3bd804` Add the HDR-output research for #94 | `docs/research/hdr-output.md` | no |
-| 24 | (below) Add the render-graph research for #78 | `docs/research/render-graph-next.md` | no |
+| 24 | `37fc891` Add the render-graph research for #78 | `docs/research/render-graph-next.md` | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -338,8 +338,16 @@ tests). Eight steps, about three days, a few thousandths of a millisecond. Summa
 ### 24. The render-graph research (commit 24)
 
 `docs/research/render-graph-next.md` for #78 (transient buffers, parallel recording of pass
-bodies), written by the last research agent of the night; its recommendation is on the issue
-once it lands. The roadmap keeps #78 behind the measurement of the CPU recording time.
+bodies). Its findings: the shipped graphs alias images and rarely buffers, and Forge's offset
+heap already does the lifetime placement, so transient buffers are the same analysis with the
+`bufferImageGranularity` padding and a two-heap fallback; the one new bug class is a stale
+device address after an alias writes, which no validation layer catches, hence a
+`FORGE_GRAPH_POISON=1` mode and `compare.sh` at 0 px between poison, no-alias and default;
+parallel recording is not worth building yet (recording is 0.08–0.10 ms of an 8.3 ms frame for
+26–40 passes; each command buffer and submit costs the driver), so a numeric gate (bodies over
+0.5 ms or over 100 passes), a synthetic N-pass frame and the CPU-zone split come first; when it
+pays, a command pool per frame slot, queue and worker, a job per chunk of passes with its own
+primary command buffer, one submit per batch; events cannot cross queues. Summarised on #78.
 
 ## How to give the cloud session its results
 
