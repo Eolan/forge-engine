@@ -263,6 +263,31 @@ target; 2.6 ms without the probes. It was 3.81 ms after #68.
 (0.35 ms at the south view, 0.56 in the orbit) is now the largest geometry zone. Details in
 [city-blocks.md](demos/city-blocks.md) and [meshlets.md](demos/meshlets.md).
 
+## `city-blocks --island 7` — the island (#96, 2026-09-26)
+
+The scene has three parts:
+- the island: 8.4 M triangles at 8 m, streamed;
+- 300 000 rocks on its land;
+- a flat sea plane with traced mirror rays.
+
+No pass of its own; the city's passes at 1600 × 900, 3 000 frames:
+
+| Zone | First view (the coast) | The whole island from the sea |
+|---|---|---|
+| **GPU in all** | **1.34 ms** | **1.08 ms** |
+| gi/probe rays [compute] | 0.42 | 0.25 |
+| gi/probe blend [compute] | 0.14 | 0.20 |
+| shading/standard (the sea, the rocks) | 0.19 | 0.14 |
+| shading/reflections (the sea's mirror rays) | 0.13 | 0.06 |
+| shading/layered (the ground) | 0.12 | 0.04 |
+| geometry/software raster 1 (distant rocks) | 0.00 | 0.20 |
+| geometry/cluster cull 1 | 0.06 | 0.09 |
+| geometry/instance cull | 0.04 | 0.10 |
+
+The probes are the largest part near the rocks. From the sea, the rocks go to the software
+rasteriser. Before the rocks and the plane the island took 0.74 ms, and 0.84 ms at 4 m
+([island.md](demos/island.md), "In the engine").
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the
