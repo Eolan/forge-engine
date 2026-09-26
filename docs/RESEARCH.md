@@ -27,6 +27,7 @@ the system you are about to touch.
 | [research/planet-environment.md](research/planet-environment.md) | climate bake, biomes and ecotones, ecosystems, weather rendering, the environment state model | 51 | done |
 | [research/data-driven.md](research/data-driven.md) | data model, reflection, asset ids, packages and load order, scripting, Wasm, hot reload, modding | 49 | done |
 | [research/water.md](research/water.md) | ocean spectra and FFT cascades, shores and shallow water, rivers and lakes, water shading, the genesis hand-off, engines' water systems | 34 | done (Phase 2 item 3, `island`) |
+| [research/city-generation.md](research/city-generation.md) | road networks and hierarchy, blocks and lots, districts and landmarks, buildings from grammars and kits, interiors, a city through the cluster DAG, engines' city pipelines | 44 | done (issues #85, #86; the decision for #86 proposed 🟡) |
 
 ## Verdicts
 
@@ -166,6 +167,20 @@ development. Mod code, if wanted, runs as Wasm components under wasmtime, with i
 settings and fuel, server-side by default. Wasm 3.0 specifies a deterministic profile, whereas
 Factorio had to replace Lua's maths and iteration order to keep lockstep. The editor is the long pole
 (Bevy still has none) and can wait; the data model is what to decide now.
+
+**City generation.** Streets are solved twice: Parish & Müller's propose-validate-commit loop
+for the hierarchy and Chen et al.'s tensor fields for the pattern, both seconds of CPU for a 4 km
+city, with Emilien's interest maps and Galin's cost paths for a village; lots are Vanegas et al.
+2012 (oriented-box splits for the grid, straight-skeleton strips for the old town); districts a
+land-use field, landmarks authored overrides merged as layers, judged by Lynch's five elements.
+Research grammars (Instant Architecture, CGA, CGA++) make unique buildings; every shipped city
+(Skyrim, The Division, Watch Dogs: Legion, Epic's City Sample: 24 kits, 7 000 buildings of hundreds
+of instances) assembles kits. Forge's proposal (D-039 🟡): a CGA-style split grammar whose
+terminals are kit modules on a 0.5 m grid, instanced through the existing cluster-DAG path, a
+style set per district with its regional trim sheets, a merged proxy per far building, rooms and
+portals as records for the interiors; the kits themselves generated at cook time, since there is
+no art team. A `CityPlan` of typed records (roads, blocks, lots, districts, landmarks, buildings as
+module instances) is the point cloud the City Sample's rules processor consumes.
 
 ## Still to research
 

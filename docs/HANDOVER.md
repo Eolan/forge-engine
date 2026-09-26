@@ -30,7 +30,10 @@ without losing the others.
 | 15 | `2424750` Bake the coast distance and the sea's spectrum on the CPU: the water's first fields | `forge_procgen::coast`, `forge_procgen::ocean`, `genesis`'s stage 5 | no |
 | 16 | `a04c2c2` Trace the lakes: level, depth, outlet and cells per flooded patch | `hydrology::trace_lakes`, the lakes' numbers in `genesis` | no |
 | 17 | `8a6b99b` Scale the sea's amplitudes so the tile's variance is the spectrum's energy; Strahler over all donors | two fixes from a re-read | no |
-| 18 | (below) Rain summed over the catchment, and an opt-in wind with orographic rain | `Wind`, `orographic_rain`, `genesis --wind-from`; the calm island's digest unchanged | no |
+| 18 | `58247fc` Rain summed over the catchment, and an opt-in wind with orographic rain | `Wind`, `orographic_rain`, `genesis --wind-from`; the calm island's digest unchanged | no |
+| 19 | `f48c29d` Give city-blocks the island's wind | `--island-wind`, `--island-rain-contrast` | no |
+| 20 | `f9bbf07` Propose D-038: the water surface as a forward pass, FFT cascades on the compute queue | `docs/DECISIONS.md` 🟡 | no |
+| 21 | (below) Add the city-generation research; propose D-039 for #86 | `docs/research/city-generation.md` (#85, #86), D-039 🟡 | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -288,6 +291,18 @@ smooth, 39 lakes against 11); `--rain-contrast 0.5` for a softer version. `cargo
 forge-procgen` (a west wind rains on the west, the mean stays 1, a windy island is another
 field, deterministically).
 
+### 21. The city-generation research and D-039 (commit 21)
+
+`docs/research/city-generation.md` for #85 (layout) and #86 (buildings, "decide early"): road
+networks (Parish & Müller, tensor fields, Emilien's villages, Galin's cost paths), blocks and
+lots (Vanegas 2012), districts and landmarks, buildings (Wonka 2003, Müller 2006's CGA, the
+kit-based practice of every shipped city, Wave Function Collapse for interiors), a city of
+modules through the cluster DAG, and the engines' pipelines (Epic's City Sample, CityEngine,
+Houdini); its recommendation is a seven-stage pipeline with a data model and a build order
+without a GPU. The decision it asks the owner to take is D-039 🟡 in `docs/DECISIONS.md`:
+buildings as grammar-derived assemblies of kit modules on a 0.5 m grid, a style set per
+district, a proxy per far building. Same network caveat as the other research files (#99).
+
 ## How to give the cloud session its results
 
 `tools/report.sh NAME` after the batch, then commit and push `reports/NAME/`. The cloud
@@ -330,6 +345,9 @@ detail.
 - The island's lakes (#97): 2 614 at 4 m against 11 at 16 m; whether the finer grid's small
   depressions should be filled by rule (an area limit, or the basin graph's fill mode with a
   spill rule) is a look to judge on the GPU.
+- D-039 🟡 (`docs/DECISIONS.md`, for #86): buildings as grammar-derived assemblies of kit modules
+  with a style set per district; the module grid is the part that cannot be retrofitted, which
+  is why #86 says to decide early.
 - D-038 🟡 (`docs/DECISIONS.md`): the water surface as a forward pass after the opaque resolve
   with the FFT cascades on the compute queue, the plan the water research recommends; to
   approve, amend or drop before anyone writes `ocean.slang`.

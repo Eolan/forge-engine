@@ -1372,3 +1372,37 @@ of `forge_procgen::hydrology`; `docs/demos/island.md`, "The water's fields").
 
 *(research: water.md §1–§5 and its recommendation; D-009, D-016, D-020, D-023, D-029, D-031;
 issue #96)*
+
+## D-039 — Buildings are grammar-derived assemblies of kit modules; a style set per district; a proxy per far building 🟡 (proposed 2026-09-26)
+
+Proposed from `docs/research/city-generation.md` (§3–§6 and its recommendation) for #86, which
+asks for this decision early, with #85's layout pipeline around it; nothing of it is built.
+
+A building is a `BuildingPlan`: a mass model fitted to its lot, refined by a CGA-style split
+grammar (split, repeat, component split, insert, context queries) whose terminals are modules
+of a style set, never raw geometry, except the roof surface from the lot's straight skeleton and
+authored landmarks. Modules sit on a grid of 0.5 m steps and per-style floor heights, exterior
+walls in the footprint's outer step so interiors share the grid, rotated in quarter turns; each
+module is a cooked cluster-DAG prop carrying its material rows, its variants and its tags
+(portals, walkable slabs, stair links, structural role, break-up). A style set is a package
+record (D-035): module generators and parameters, the control grammar's attributes, a regional
+material set and a contrast rule; districts assign style sets. Module instances are ordinary
+instances; a building is a cell of the instance hierarchy (#38) with a merged proxy cooked from
+its assembly, drawn when the building's projected size falls below a threshold, and blocks get
+a proxy beyond. Rooms and portals are records of the plan, instantiated when #88 streams them.
+Everything is a pure function of the seed, the terrain fields and the packages (D-016, D-035).
+
+*Not chosen:* unique geometry per building from the grammar (no instancing, no unit for
+interiors, destruction or navigation, hours of cooking per city); hand-assembled kits (no art
+team, and the assembly is what the grammar automates); Wave Function Collapse as the primary
+generator (no hierarchy; kept for interiors and the village's irregular grid); CityEngine or
+Houdini in the loop (commercial, editor-time, not a pure function on the client and the server).
+
+The layout around it (#85), from the same research: a district field, roads by a tensor field
+under Parish & Müller's constraints (the village by interest maps and cost paths), blocks from
+the graph's faces, lots by oriented-box splits and straight-skeleton strips, landmarks as
+package overrides merged as layers, a `CityPlan` of typed records with a digest and a map PNG
+judged before any building exists; the first two style sets a Mediterranean village (#91) and
+a downtown (city-blocks). The module grid is the part that cannot be retrofitted.
+*(research: city-generation.md §3–§6; procedural.md §2, §4; vegetation-materials.md §4; issues
+#84, #85, #86, #88, #89, #91)*
