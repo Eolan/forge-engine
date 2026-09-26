@@ -15,7 +15,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
 | Materials from the fields, the layer map (stage 6) | started: sea, sand, grass and rock from the height and the slope (`forge_procgen::slope_layers`, "In the engine" below); moisture, soil and the rivers' banks planned |
-| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground and a stand-in sea ("In the engine" below, #96) |
+| The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
 
 ```
@@ -37,14 +37,18 @@ Strahler order and the lakes over the hillshade), `coast.png`, `sea-height.png`,
 first seen on the 5070 Ti on 2026-09-26: "In the engine" below): the heightfield (`--island-spacing`, 8 m by default: 2049²,
 8.4 M triangles like the city's ground; 4 m for the 4097² target, 33.5 M) is generated once
 into `mesh-cache/island-<key>.f32`, cooked into a cluster DAG through the same path as the
-city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached, and
-drawn on its own layered ground: the sea's stand-in below 0 m, sand on the shore, rock where
-the ground is steeper than 0.45 and grass elsewhere (`forge_procgen::slope_layers`, a texel
-every 4 m), with a flat sea around it to the horizon, under the city's sky at a 30° sun, with
-the sun's shadows, the probes and TAA. The camera starts over the sea south of the island,
-looking north at its coast; `--view` and the usual keys apply, `--origin` and
-`--sun-elevation` too. The first start costs the erosion (5 s at 8 m on the 9800X3D, 13 s on
-the cloud's four cores) and the cook (11–16 s); the next ones load both.
+city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached.
+It is drawn on its own layered ground: sand on the shore, rock where the ground is steeper than
+0.45, grass elsewhere, and a sea floor falling away from the coast (`forge_procgen::slope_layers`
+with a texel every 4 m, and `forge_procgen::sea_floor`). Around it:
+- 300 000 rocks, placed by the GPU on its land;
+- a flat plane at 0 m that stands in for the sea out to the horizon;
+- the city's sky at a 30° sun, with the sun's shadows, the probes, the mirror rays and TAA.
+
+The camera starts on the south coast looking inland; `--view` and the usual keys apply, and so
+do `--origin`, `--sun-elevation` and `--instances`. The first start costs the erosion (5 s at
+8 m on the 9800X3D, 13 s on the cloud's four cores) and the cook (11–16 s); the next ones load
+both.
 
 ## The genesis, on the CPU (2026-09-26)
 
@@ -232,10 +236,31 @@ What the first look shows, for #96 to fix before the props:
 - The slope is Horn's gradient interpolated between the samples, rather than the nearest
   sample's, so a layer's border no longer steps with the 8 m grid. The 4096² map takes 190 ms.
 
-The sea is a **stand-in** until the water pass (D-038 🟡): the sea floor shaded smooth and dark
-(reflectance 0.02, a Blinn-Phong power of 400), so it reflects the sky. A flat skirt 262 km
-across (`sea_prop`, 0.2 m under the field's 0 m) carries it to the horizon; the field alone
-stopped 8 km out, where the atmosphere's brown ground showed.
+The sea is a **stand-in** until the water pass (D-038 🟡): one opaque plane at 0 m, 262 km across
+(`sea_prop`), shaded smooth and dark (reflectance 0.02, a Blinn-Phong power of 400). It is smooth
+enough for the traced mirror rays (D-031), so it reflects the island and the sky. It reaches the
+horizon, where the field alone stopped 8 km out and showed the atmosphere's brown ground.
+
+Under it the field now has a **sea floor** (`forge_procgen::sea_floor`). The erosion leaves the
+sea flat at its base level, 0 m. Each sea sample is lowered to 60 m × (1 − e^(d / 1 500 m)), with
+`d` its signed distance to the coast: 4 % of slope at the shore, levelling off at 60 m. This is
+the floor depth the water research asks the genesis for. It is applied to the drawn field after
+the erosion, so the genesis digests do not change. The coast is where the plane meets the ground,
+between the samples. With the flat sea it ran along the 8 m grid's edges, a sawtooth at close
+range. The layer below 0 m is a wet sand (`island_layer::SEABED`), out of sight under the plane.
+
+**Rocks** (`placement::RockRule::Land`): the GPU placement puts 300 000 of the city's boulders and
+rubble (`--instances`) on the island's land above 3 m. Each slot tries up to 32 candidates over
+the square, keeping one on land with a chance that rises with the slope: 15 % on the flat, all
+of them from a slope of 0.6. They are shaded in the island's dark rock. A slot that finds no land
+lies 50 m under the ground. The city's placement is unchanged: its checksum is still
+`4e10743a3499dc0e`, and the batch is 0 px. (A first version wrote the city's rocks' height as
+`ground − (0.15 r + 0)`, which the compiler no longer fused into one FMA, and 21 pixels of the
+city's orbit moved; the expression is the city's again.)
+
+**The first view** is now on the south coast, as #96's plan asks: 25 m over the water, 150 m off
+the beach due south of the centre, looking inland. The beach is found in the field (`island_camera`),
+so the view holds for any seed. The whole island from the sea is `--view 0,300,6800,0,-0.08`.
 
 Two more changes:
 - The island's sun stands at 30° by default (the city keeps 63.4°): from the default view a high
@@ -243,7 +268,13 @@ Two more changes:
 - The island's prop is named `island`: as `terrain` it shared the city's cache file, and each
   evicted the other (an 11–16 s re-cook at every switch).
 
-GPU: 0.74 ms a frame from the default view, the same as before (the layered shading 0.11 ms).
+GPU, at 1600 × 900:
+- **1.36 ms** from the coast, where the probes' rays take 0.43 ms among the rocks, the plane's
+  shading 0.19 and its mirror rays 0.13;
+- **1.12 ms** for the whole island from the sea, where the distant rocks go to the software
+  rasteriser (0.20 ms);
+- 0.74 ms before the rocks and the plane.
+
 The batch is unchanged (26 images at 0 px).
 
 **At 4 m** (`--island-spacing 4`, the 4097² target), the first start takes:
@@ -261,11 +292,14 @@ slope over 8 m at any spacing (`LayerRule::slope_over`), which changed 0.3 % of 
 pixels and nothing at 8 m. Whether the 4 m flanks should be that steep is a question for the
 erosion's parameters at 4 m (#97), and a look to judge.
 
-![The island from the default view with its own ground: the sea's stand-in, sand along the shore, rock on the steep slopes, a 30° sun](images/island-engine-sea.png)
+![The first view, on the south coast: rocks on the grass and on the steep ground, the beach, the island mirrored in the sea's stand-in](images/island-engine-coast.png)
 
-![From the west, 400 m up: the skirt carries the sea to the horizon](images/island-engine-west.png)
+![The whole island from the sea, 300 m up: its own ground, sand along the shore, rock on the steep slopes, the reflection, a 30° sun](images/island-engine-sea.png)
 
-One artefact is left, not the island's: seen from low over the sea, a line runs across it where
-the probes' last cascade ends, about 900 m out. Inside the cascades #68 dims the sea's sky
-reflection by what the probes see towards the mirror direction, and they see the sea as nearly
-black, since their rays shade diffusely (#100).
+![From the west, 400 m up: the sea's plane reaches the horizon](images/island-engine-west.png)
+
+Without the traced rays (`--no-reflections`, or a GPU without ray queries), a line runs across
+the sea where the probes' last cascade ends, about 900 m out. #68 dims an untraced sky
+reflection by what the probes see towards the mirror direction, and their rays, which shade
+diffusely, see the sea as nearly black (#100). The traced mirror rays skip that dimming, so the
+default frames show no line.

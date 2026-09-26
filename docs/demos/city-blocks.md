@@ -46,7 +46,7 @@ light alone, **Tab** wireframe, **G** tone curve.
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
 - `--focus NAME` frames one prop of the gallery (`fountain`, `tower-wide`, …).
-- `--instances N` sets how many instances are placed (1 000 000).
+- `--instances N` sets how many instances are placed (1 000 000; 300 000 rocks on the island).
 - `--recook` cooks every prop and the terrain again.
 - `--orbit` gives a scripted camera; `--fly` flies a loop at 300 m/s, 140 m up, over the
   city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead).

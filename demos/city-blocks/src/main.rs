@@ -143,9 +143,10 @@ struct Args {
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
-    /// Instances placed over the terrain (the city takes about 12 k, the hills the rest).
-    #[arg(long, default_value_t = 1_000_000)]
-    instances: u32,
+    /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
+    /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
+    #[arg(long)]
+    instances: Option<u32>,
     /// Stream the city's cluster pages through a pool of this many MiB (0: every page
     /// resident, read once at start).
     #[arg(long, default_value_t = 512)]
@@ -360,13 +361,7 @@ impl Gallery {
             flags.0 |= CullFlags::SHOW_CULLED;
         }
         let mut camera = if args.island.is_some() {
-            // Over the sea south of the island, looking north at its coast and its ridges.
-            FlyCamera {
-                position: Vec3::new(0.0, 300.0, 6800.0),
-                pitch: -0.08,
-                speed: 120.0,
-                ..FlyCamera::default()
-            }
+            island_camera(&args)
         } else if args.gallery {
             FlyCamera {
                 position: Vec3::new(0.0, 70.0, 230.0),
@@ -1282,9 +1277,9 @@ impl CityMaterials {
 
     /// The island's ground (`docs/demos/island.md`, #96): its layer map (`island_layer`) and a
     /// row per layer after the layered row, for a tropical island rather than the city's
-    /// hills: a deeper green, sand on the beaches, dark volcanic rock on the steep ground, and
-    /// the sea floor shaded as calm water, smooth and dark, the sea's stand-in until the water
-    /// is drawn (D-038).
+    /// hills: a deeper green, sand on the beaches, wet sand under the sea, dark volcanic rock
+    /// on the steep ground. Then the sea's row, calm water, smooth and dark, for the plane that
+    /// stands in for the sea until the water is drawn (D-038, `sea_prop`).
     fn island_ground(&mut self, layers: &[u8], texels: u32, size: f32) -> Result<MaterialId> {
         let map = self
             .textures
@@ -1323,15 +1318,15 @@ impl CityMaterials {
                 ),
             ),
             (
-                "island: sea",
-                RenderLayer {
-                    color_a: [0.015, 0.05, 0.07],
-                    color_b: [0.02, 0.06, 0.08],
-                    roughness: RenderLayer::roughness_for_power(400.0),
-                    specular: 0.5,
-                    reflectance: 0.02,
-                    ..RenderLayer::default()
-                },
+                "island: seabed",
+                textured(
+                    concrete,
+                    [0.5, 0.45, 0.34],
+                    [0.56, 0.5, 0.38],
+                    2.0,
+                    10.0,
+                    0.04,
+                ),
             ),
             (
                 "island: rock",
@@ -1340,13 +1335,46 @@ impl CityMaterials {
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
-            let row = self.table.add(Material::new(name, layer));
-            if name == "island: sea" {
-                // The sea around the island's square (`sea_prop`) is that row alone.
-                self.by_prop.insert("sea", row);
-            }
+            self.table.add(Material::new(name, layer));
         }
         self.by_prop.insert("island", ground);
+        let sea = self.table.add(Material::new(
+            "island: sea",
+            RenderLayer {
+                color_a: [0.015, 0.05, 0.07],
+                color_b: [0.02, 0.06, 0.08],
+                roughness: RenderLayer::roughness_for_power(400.0),
+                specular: 0.5,
+                reflectance: 0.02,
+                ..RenderLayer::default()
+            },
+        ));
+        self.by_prop.insert("sea", sea);
+        // The island's boulders and rubble: the same dark volcanic rock, not the city's pale
+        // stone, with the city rock's cavity darkening.
+        let boulders = self.table.add(Material::new(
+            "island: boulders",
+            RenderLayer {
+                cavity: 0.2,
+                ..textured(
+                    rock,
+                    [0.34, 0.33, 0.31],
+                    [0.42, 0.39, 0.35],
+                    3.0,
+                    14.0,
+                    0.06,
+                )
+            },
+        ));
+        for prop in [
+            "boulder-1",
+            "boulder-2",
+            "boulder-3",
+            "rubble-1",
+            "rubble-2",
+        ] {
+            self.by_prop.insert(prop, boulders);
+        }
         Ok(ground)
     }
 
@@ -1378,8 +1406,8 @@ struct Cooked {
 /// loading screen (issue #25).
 fn cook(args: &Args) -> Cooked {
     let props = if args.island.is_some() {
-        // The island and the sea around it (`docs/demos/island.md`); its props come later.
-        vec![island_prop(args), sea_prop()]
+        // The island, the sea around it and the rocks on it (`docs/demos/island.md`).
+        island_props(args)
     } else {
         let mut props = city_props();
         if !args.gallery {
@@ -1402,8 +1430,8 @@ mod island_layer {
     pub const GRASS: u8 = 0;
     /// Sand, on the land's first metres above the sea.
     pub const SAND: u8 = 1;
-    /// The sea floor at 0 m, shaded as calm water.
-    pub const SEA: u8 = 2;
+    /// The sea floor, under the sea's plane (wet sand).
+    pub const SEABED: u8 = 2;
     /// Rock, where the ground is steep.
     pub const ROCK: u8 = 3;
     /// How many layers there are.
@@ -1437,6 +1465,11 @@ fn island_heights(args: &Args) -> Field2<f32> {
     let pool = TaskPool::client();
     let (height, from_cache) = forge_procgen::cached_island(&dir, &params, &erosion, &pool)
         .expect("the island's cache file");
+    // The sea floor under the flat sea (#96): the sea's plane then meets the ground along the
+    // coast, between the samples.
+    let mut height = height;
+    let coast = forge_procgen::coast_distance(&height, 0.0, &pool);
+    forge_procgen::sea_floor(&mut height, &coast, 0.0, SEA_FLOOR.0, SEA_FLOOR.1);
     let (lo, hi) = height.min_max();
     tracing::info!(
         seed = args.island.unwrap_or(7),
@@ -1450,6 +1483,10 @@ fn island_heights(args: &Args) -> Field2<f32> {
     height
 }
 
+/// The island's sea floor (`forge_procgen::sea_floor`): metres of depth it levels off at, and
+/// the metres from the coast that set its slope (60 over 1 500: 4 % at the shore).
+const SEA_FLOOR: (f32, f32) = (60.0, 1500.0);
+
 /// The island as a prop (on its layered ground, `CityMaterials::island_ground`), its samples
 /// generated only when the cooked mesh is not in the cache. Named `island`, not `terrain`:
 /// the cache keeps one file per name, and the city's ground and the island evicted each other.
@@ -1459,7 +1496,12 @@ fn island_prop(args: &Args) -> PropSpec {
     PropSpec {
         name: "island".to_owned(),
         kind: PropKind::Heightfield(Heightfield {
-            key: forge_procgen::island::island_key(&params, &erosion),
+            key: format!(
+                "{}, sea floor {} m over {} m",
+                forge_procgen::island::island_key(&params, &erosion),
+                SEA_FLOOR.0,
+                SEA_FLOOR.1
+            ),
             samples: params.size,
             spacing: params.spacing as f32,
             source: std::sync::Arc::new(move || island_heights(&for_source).data),
@@ -1467,18 +1509,50 @@ fn island_prop(args: &Args) -> PropSpec {
     }
 }
 
-/// The sea around the island's square (#96): a flat heightfield 262 km across, 0.2 m under
-/// the island's sea floor, on the sea's row, so that the stand-in sea reaches the horizon
-/// instead of stopping at the field's edge 8 km out.
+/// The island's first view (#96): on its south coast looking inland, 25 m over the water
+/// 150 m off the beach due south of the centre, found in the field (the first sample above
+/// 1 m walking north from the domain's south edge), so it holds for any seed. From farther out,
+/// the whole island: `--view 0,300,6800,0,-0.08`.
+fn island_camera(args: &Args) -> FlyCamera {
+    let height = island_heights(args);
+    let n = height.size;
+    let half = height.extent() * 0.5;
+    let beach = (0..n)
+        .rev()
+        .find(|&j| height.get(n / 2, j) > 1.0)
+        .map_or(0.0, |j| f64::from(j) * height.spacing - half);
+    FlyCamera {
+        position: Vec3::new(0.0, 25.0, (beach + 150.0) as f32),
+        pitch: 0.03,
+        speed: 60.0,
+        ..FlyCamera::default()
+    }
+}
+
+/// The island's props, in the order `build_island` reads them: the island, the sea around it,
+/// and the city's boulders and rubble for its rocks (the same cache files as the city's).
+fn island_props(args: &Args) -> Vec<PropSpec> {
+    let mut props = vec![island_prop(args), sea_prop()];
+    props.extend(
+        city_props()
+            .into_iter()
+            .filter(|p| matches!(p.kind, PropKind::Boulder { .. } | PropKind::Rubble { .. })),
+    );
+    props
+}
+
+/// The sea's stand-in until the water pass (D-038, #96): one opaque plane at 0 m, 262 km
+/// across, over the island's sea floor and out to the horizon, on the sea's row. The coast is
+/// where it meets the ground.
 fn sea_prop() -> PropSpec {
     const SAMPLES: u32 = 33;
     PropSpec {
         name: "sea".to_owned(),
         kind: PropKind::Heightfield(Heightfield {
-            key: "a flat sea 0.2 m under the island's".to_owned(),
+            key: "a flat sea at 0 m".to_owned(),
             samples: SAMPLES,
             spacing: 8192.0,
-            source: Arc::new(|| vec![-0.2; (SAMPLES * SAMPLES) as usize]),
+            source: Arc::new(|| vec![0.0; (SAMPLES * SAMPLES) as usize]),
         }),
     }
 }
@@ -1488,7 +1562,7 @@ fn sea_prop() -> PropSpec {
 /// steep or high and grass elsewhere.
 fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene> {
     let start = Instant::now();
-    let props = vec![island_prop(args), sea_prop()];
+    let props = island_props(args);
     let streamed = args.stream_pool > 0;
     let (meshes, cook_ms) = (cooked.meshes, cooked.ms);
     let mut builder = MeshletSceneBuilder::new();
@@ -1509,7 +1583,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             // The slope over 8 m whatever the spacing, so 4 m draws the rock 8 m draws.
             slope_over: 8.0,
             shore: Some(forge_procgen::Shore {
-                sea: island_layer::SEA,
+                sea: island_layer::SEABED,
                 sand: island_layer::SAND,
                 sand_below: 2.5,
             }),
@@ -1525,9 +1599,27 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     let mut materials = CityMaterials::new(&ctx.device)?;
     materials.island_ground(&layers.data, texels, extent)?;
     materials.apply(&mut builder, &props, &ids);
-    builder.set_origin(scene_origin(args));
+    let mut layout = CityLayout::island(args.instances.unwrap_or(300_000));
+    layout.origin = scene_origin(args);
+    builder.set_origin(layout.origin);
     builder.add_instance(ids[0], Mat4::IDENTITY);
     builder.add_instance(ids[1], Mat4::IDENTITY);
+    // The rocks: the GPU placement over the island's own heights (`placement::RockRule::Land`).
+    let rocks: Vec<MeshId> = ids[2..].to_vec();
+    let meshes = CityMeshes {
+        buildings: Vec::new(),
+        rocks: rocks.clone(),
+        // No city: none of these is placed.
+        lamp: rocks[0],
+        fountain: rocks[0],
+        column: rocks[0],
+    };
+    let first = builder.reserve_instances(&placement::mesh_counts(&layout, &meshes));
+    let ground = Ground {
+        heights: &height.data,
+        samples: height.size,
+        spacing: height.spacing as f32,
+    };
     let residency = if streamed {
         Residency::Streamed(StreamingConfig::from_mib(
             args.stream_pool,
@@ -1543,7 +1635,25 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         streamed,
         "cluster pages"
     );
-    // The sun's shadows and the probes trace against the island (issue #45, #53).
+    let report = placement::place(
+        &ctx.device,
+        &ctx.shaders,
+        &scene,
+        first,
+        &layout,
+        &meshes,
+        &ground,
+    )?;
+    tracing::info!(
+        rocks = report.placed,
+        ms = %format_args!("{:.1}", report.ms),
+        checksum = %format_args!("{:016x}", report.checksum),
+        matches_cpu_mirror = report.matches_mirror,
+        "island rocks placed"
+    );
+    // The instance culls read the sorted table by cells of 64 (issue #38).
+    scene.build_cells(&ctx.device, &ctx.shaders)?;
+    // The sun's shadows and the probes trace against the island and its rocks (#45, #53).
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
     log_rays(&scene);
     tracing::info!(
@@ -1575,7 +1685,7 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     let (meshes, cook_ms) = (cooked.meshes, cooked.ms);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
-    let mut layout = CityLayout::city(args.instances);
+    let mut layout = CityLayout::city(args.instances.unwrap_or(1_000_000));
     // The city stands `--origin` from the world's origin (issue #93): the scene's origin, an
     // integer cell and an offset, from which each instance gets its own cell; the layout stays
     // around its own centre.

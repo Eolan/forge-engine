@@ -39,7 +39,7 @@ pub mod noise;
 pub mod ocean;
 pub mod preview;
 
-pub use coast::coast_distance;
+pub use coast::{coast_distance, sea_floor};
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
 pub use flow::{Drainage, Flow, drain, priority_flood, route};

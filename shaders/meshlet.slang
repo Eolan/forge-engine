@@ -3370,13 +3370,13 @@ public struct Placement
     public uint lamp_mesh;
     public uint fountain_mesh;
     public uint column_mesh;
-    public uint pad;
+    public uint rock_rule;      // ROCKS_IN_HILLS (the city) or ROCKS_ON_LAND (the island, #96)
     public uint building_meshes[16];
     public uint rock_meshes[8];
     public int3 origin_cell;    // the scene's origin (issue #93): its cell...
     public int pad2;
     public float3 origin_local; // ...and the offset inside it, metres
-    public float pad3;
+    public float rock_above;    // ROCKS_ON_LAND: metres above which the ground takes rocks
 };
 
 struct PlacementPush
@@ -3450,6 +3450,31 @@ void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float
     p[0].instances[p[0].first + slot] = inst;
 }
 
+// Where `Placement::rock_rule` puts the rocks.
+static const uint ROCKS_IN_HILLS = 0; // the four bands of hills around the city
+static const uint ROCKS_ON_LAND = 1;  // the island's land (#96)
+
+// ROCKS_ON_LAND: candidates over the whole square until one stands on land above `rock_above`
+// metres and is kept, with a chance that rises with the slope (more rocks on the steep ground,
+// a few on the flat); `found` is false when 32 candidates found none.
+float2 rock_on_land(Placement* p, uint slot, out bool found)
+{
+    float h = p[0].half_size;
+    float d = p[0].spacing;
+    float2 at = float2(0.0);
+    found = false;
+    for (uint k = 0; k < 32 && !found; k++)
+    {
+        float4 c = random4(p, slot, 16u + k);
+        at = float2(lerp(-h, h, c.x), lerp(-h, h, c.y));
+        float gx = (ground(p, at.x + d, at.y) - ground(p, at.x - d, at.y)) / (2.0 * d);
+        float gz = (ground(p, at.x, at.y + d) - ground(p, at.x, at.y - d)) / (2.0 * d);
+        float keep = lerp(0.15, 1.0, saturate(length(float2(gx, gz)) / 0.6));
+        found = ground(p, at.x, at.y) > p[0].rock_above && c.z < keep;
+    }
+    return at;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void place_main(uint3 id : SV_DispatchThreadID)
@@ -3515,11 +3540,19 @@ void place_main(uint3 id : SV_DispatchThreadID)
     float ns = 2.0 * h * (h - c), ew = 2.0 * c * (h - c); // areas of one north/south and one east/west band
     float pick = r.x * 2.0 * (ns + ew);
     float2 at;
-    if (pick < 2.0 * ns)
+    bool on_land = true;
+    if (p[0].rock_rule == ROCKS_ON_LAND)
+        at = rock_on_land(p, slot, on_land);
+    else if (pick < 2.0 * ns)
         at = float2(lerp(-h, h, r.y), lerp(c, h, r.z) * (pick < ns ? 1.0 : -1.0));
     else
         at = float2(lerp(c, h, r.y) * (pick < 2.0 * ns + ew ? 1.0 : -1.0), lerp(-c, c, r.z));
     float scale = lerp(0.5, 1.6, q.x * q.x);
     float radius = p[0].meshes[mesh].radius * scale;
-    place(p, slot, mesh, float3(at.x, ground(p, at.x, at.y) - 0.15 * radius, at.y), r.w * 6.2831853, (q.y - 0.5) * 0.4, scale);
+    float y = ground(p, at.x, at.y) - 0.15 * radius;
+    // A rock that found no land lies 50 m under the ground, out of sight (its slot is taken).
+    // Apart, so the city's rocks keep the arithmetic, and the bits, they had.
+    if (!on_land)
+        y -= 50.0;
+    place(p, slot, mesh, float3(at.x, y, at.y), r.w * 6.2831853, (q.y - 0.5) * 0.4, scale);
 }

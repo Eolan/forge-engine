@@ -42,6 +42,22 @@ pub struct CityLayout {
     /// own centre and the instances are written from this origin, each in its own cell (it is
     /// the scene's origin, [`crate::MeshletSceneBuilder::set_origin`]).
     pub origin: CellPos,
+    /// Where the rocks go.
+    pub rocks: RockRule,
+}
+
+/// Where the rocks go (`rock_rule` in `meshlet.slang`'s placement).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RockRule {
+    /// Uniform over the four bands of hills around the city.
+    Hills,
+    /// Over the whole ground where it stands above `above` metres, more of them on the steep
+    /// ground (the island, #96); a rock that finds no such ground in 32 tries lies out of sight
+    /// 50 m under it.
+    Land {
+        /// Metres above which the ground takes rocks (above the beaches).
+        above: f32,
+    },
 }
 
 /// Slots per category, in the order the shader lays them out.
@@ -70,6 +86,17 @@ impl CityLayout {
             plaza_every: 4,
             total,
             origin: CellPos::ORIGIN,
+            rocks: RockRule::Hills,
+        }
+    }
+
+    /// The island's layout (#96): no city, `total` rocks on its land above 3 m.
+    pub fn island(total: u32) -> Self {
+        Self {
+            seed: 9696,
+            city_half: 0.0,
+            rocks: RockRule::Land { above: 3.0 },
+            ..Self::city(total)
         }
     }
 
@@ -179,14 +206,14 @@ struct GpuPlacement {
     lamp_mesh: u32,
     fountain_mesh: u32,
     column_mesh: u32,
-    pad: u32,
+    rock_rule: u32,
     building_meshes: [u32; 16],
     rock_meshes: [u32; 8],
     /// The scene's origin: its cell and the offset inside it (issue #93).
     origin_cell: [i32; 3],
     pad2: i32,
     origin_local: [f32; 3],
-    pad3: f32,
+    rock_above: f32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuPlacement>() == 240);
@@ -444,13 +471,19 @@ pub fn place(
         lamp_mesh: meshes.lamp.index(),
         fountain_mesh: meshes.fountain.index(),
         column_mesh: meshes.column.index(),
-        pad: 0,
+        rock_rule: match layout.rocks {
+            RockRule::Hills => 0,
+            RockRule::Land { .. } => 1,
+        },
         building_meshes,
         rock_meshes,
         origin_cell: layout.origin.cell.to_array(),
         pad2: 0,
         origin_local: layout.origin.local.to_array(),
-        pad3: 0.0,
+        rock_above: match layout.rocks {
+            RockRule::Hills => 0.0,
+            RockRule::Land { above } => above,
+        },
     };
     let params = device.create_buffer_with_data(
         &[params],

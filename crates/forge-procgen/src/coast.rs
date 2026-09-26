@@ -104,10 +104,55 @@ pub fn coast_distance(height: &Field2<f32>, sea_level: f32, pool: &TaskPool) -> 
     distance
 }
 
+/// The sea floor under a field whose sea stands flat at `sea_level` (the island's, the
+/// erosion's base level): each sea sample lowered to `depth × (1 − e^(d / width))` under the
+/// level, `d` its signed distance to the coast (`coast`, negative at sea), so the floor leaves
+/// the shore at a slope of `depth / width` and levels off at `depth`. Land samples keep their
+/// height. The water's shore work reads the floor's depth (`docs/research/water.md` §2, §5), and
+/// a sea drawn as a plane at the level then meets the ground between the samples, along the
+/// coast, instead of along the grid's edges where the flat sea met the first land sample (#96).
+pub fn sea_floor(
+    height: &mut Field2<f32>,
+    coast: &Field2<f32>,
+    sea_level: f32,
+    depth: f32,
+    width: f32,
+) {
+    assert_eq!(height.size, coast.size, "the coast distance of this field");
+    for (h, &d) in height.data.iter_mut().zip(&coast.data) {
+        if *h <= sea_level {
+            *h = sea_level - depth * (1.0 - forge_core::dmath::exp(d.min(0.0) / width));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use forge_task::PoolConfig;
+
+    #[test]
+    fn the_sea_floor_falls_away_from_the_coast_and_the_land_keeps_its_height() {
+        // A 20-sample strip of land in a sea, 10 m samples.
+        let mut field = Field2::from_fn(
+            65,
+            10.0,
+            |x, _| if (22..42).contains(&x) { 5.0 } else { 0.0 },
+        );
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let coast = coast_distance(&field, 0.0, &pool);
+        sea_floor(&mut field, &coast, 0.0, 60.0, 150.0);
+        let row: Vec<f32> = (0..65).map(|x| field.get(x, 32)).collect();
+        assert!(row[22..42].iter().all(|&h| h == 5.0), "the land: {row:?}");
+        // Deeper with every sample away from the strip, towards 60 m.
+        for pair in row[..22].windows(2) {
+            assert!(pair[0] < pair[1] && pair[1] < 0.0, "{row:?}");
+        }
+        assert!(
+            row[21] > -5.0 && row[0] < -45.0 && row[0] > -60.0,
+            "{row:?}"
+        );
+    }
 
     #[test]
     fn the_coast_distance_of_a_disc_is_its_radius_less_the_distance_to_the_centre() {
