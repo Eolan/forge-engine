@@ -163,7 +163,8 @@ transforms of a surface take 18 ms on one core, which is
 the CPU side D-009 needs (the lowest cascade re-run for the physics) and the reference the GPU
 cascades will be diffed against. What the pictures show: a sea of 30–60 m waves running with
 the wind, crests broken by the spreading; nothing of it is drawn in the engine yet (the surface
-pass is the water plan's first item on a GPU).
+pass is the water plan's first item on a GPU; its place in the frame and the cascades' queue are
+proposed as D-038 🟡).
 
 **Digests** (D-016). `genesis` ends with a 64-bit FNV-1a of the field's bits
 (`Field2::digest`), the same on every machine and with any thread count; seed 7 after 150

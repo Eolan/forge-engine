@@ -1315,3 +1315,60 @@ its planet never meets its star's 10¹¹ m: Dungeon Siege's space walk) and acro
 the integer difference. Everything is deterministic: integers, `f64`, and `forge_core::dmath`
 for the cube sphere's `atan` and `tan` (D-016).
 *(research: large-worlds.md §1, §5, §8; D-004 and its amendment; issue #93)*
+
+## D-038 — The water surface: a forward pass after the opaque resolve, FFT cascades on the compute queue 🟡 (proposed 2026-09-26)
+
+Proposed from `docs/research/water.md` ("Recommendation for Forge") for Phase 2's third item,
+the island's sea, shores, rivers and lakes; nothing of it is built on the GPU yet. The CPU side
+exists on the cloud branch (`forge_procgen::ocean`, `forge_procgen::coast`, the rivers and lakes
+of `forge_procgen::hydrology`; `docs/demos/island.md`, "The water's fields").
+
+- **Where the water sits in the frame.** A forward pass after the opaque resolve and the sky's
+  compose, before TAA: `water/scene-copy` (a transient copy of the HDR image for refraction; the
+  graph derives the barriers) then `water/surface` (a graphics pass through the mesh path with
+  the indirect fallback, depth-tested against the opaque depth and writing depth, colour and
+  motion vectors, so TAA and the aerial perspective treat it as a surface). It reads the
+  cascades, the shore fields, the sky-view table (D-031), the aerial-perspective volume (D-023)
+  and the sun's shadow by ray query (D-029) as the standard class does. *Not chosen:* the water
+  as a visibility-buffer material class (it needs the opaque depth for the depth colour and the
+  intersection fade, and the shaded HDR image for refraction, both after the resolve); a
+  screen-space-only water (no horizon, no far sea).
+- **The waves are FFT cascades on the async compute queue** (`.queue(QueueKind::Compute)`,
+  #77: they depend on nothing in the frame's geometry): `water/spectrum` once per parameter
+  change, then `water/evolve`, `water/fft-rows`, `water/fft-cols`, `water/derive` per cascade
+  (displacement, slopes, the Jacobian's mean and variance, foam accumulated and decayed) into
+  persistent images with mips. Three cascades of 256² (patches near 1 km, 100 m and 10 m), a
+  fourth of 512² at 4 m when the camera is on the deck. A 256-point row is 2 KB of groupshared,
+  under the 32 KB cross-vendor limit, with no assumption on the subgroup size. The spectrum is
+  the CPU module's (JONSWAP with the TMA depth factor, Horvath's spreading with a swell term,
+  Gaussian amplitudes from `pcg3d(kx, ky, seed)`), and the GPU's lowest cascade is diffed
+  against `Ocean::surface` sample by sample (the same bytes within fp16) before it ships.
+  *Not chosen:* Gerstner sums for the open sea (they repeat and cost per wave); a single large
+  FFT (it tiles visibly and wastes texels near the camera).
+- **The surface mesh is a viewer-centred clipmap of rings** (Crest's, or Unreal's quadtree
+  tile list), built in compute each frame and drawn through the mesh path, displaced by the
+  cascades with the high cascades faded by distance. *Not chosen:* a projected grid alone (the
+  horizon swims and the tessellation is uneven under motion).
+- **Against the shimmer the owner sees first:** the unresolved cascades' slope variance goes
+  into the BRDF's roughness (Bruneton, Neyret & Holzschuch 2010 over Ross 2005's Gaussian sea),
+  the whitecap coverage is the Jacobian's filtered statistic, and the ꟻLIP between consecutive
+  frames of a still camera is the metric (`tools/compare.sh`), not the eye alone.
+- **What is deterministic and what is only visual** (D-016): the spectrum's amplitudes and
+  phases, the coast distance, the river polylines and the lake levels are seed-derived and the
+  same on every machine, so the sea's height at a point and time is a function the server can
+  evaluate; the GPU's transform, the foam, the wetness and the reflections are visual and never
+  feed gameplay. D-009's "spectrum evaluated identically on CPU and GPU" is not free with an
+  FFT: the options are the lowest cascade re-run on the CPU with `dmath` (a 256² transform is
+  18 ms on one core today, once per tick), a readback for the client's prediction only, or a
+  matched band-limited Gerstner sum for the physics; that choice waits for Phase 3's boats.
+- **Order of building, for the look:** the sea (cascades, the ring mesh, depth colour, the
+  glitter without shimmer), the shore (TMA damping and a shore fade from the coast distance,
+  Gerstner trains along `−∇d`, a foam line, wet sand written to a clip the terrain's material
+  reads), the rivers (ribbons from the polylines with flow maps, widths and depths from the
+  catchment), the lakes (a plane per lake at its level). Expected at 1440p on the 5070 Ti, to
+  be replaced by the F1 overlay's numbers: the FFT chain 0.1–0.3 ms hidden on the compute
+  queue, the surface pass 0.3–0.8 ms when the camera is at sea plus 0.1–0.2 ms of raster, the
+  shore and river work per water pixel.
+
+*(research: water.md §1–§5 and its recommendation; D-009, D-016, D-020, D-023, D-029, D-031;
+issue #96)*

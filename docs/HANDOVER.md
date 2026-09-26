@@ -330,6 +330,9 @@ detail.
 - The island's lakes (#97): 2 614 at 4 m against 11 at 16 m; whether the finer grid's small
   depressions should be filled by rule (an area limit, or the basin graph's fill mode with a
   spill rule) is a look to judge on the GPU.
+- D-038 🟡 (`docs/DECISIONS.md`): the water surface as a forward pass after the opaque resolve
+  with the FFT cascades on the compute queue, the plan the water research recommends; to
+  approve, amend or drop before anyone writes `ocean.slang`.
 - D-009's "spectrum evaluated identically on CPU and GPU" once the sea moves to the GPU: the
   water research names three options (the lowest cascade re-run on the CPU with `dmath`, a
   readback for prediction only, a matched Gerstner band for physics); a 🟡 entry when Phase 3
