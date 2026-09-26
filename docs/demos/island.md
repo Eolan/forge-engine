@@ -26,9 +26,11 @@ cargo run --release -p city-blocks -- --island 7
 `genesis`: `--seed N`, `--spacing M` (16: 1025² samples; 4: the 4097² target), `--steps N`,
 `--k` (erodibility), `--diffusion`, `--uplift` (metres per step at the heart), `--every N` (a
 hillshade every N steps), `--threads N` (workers besides the main thread; the default is one
-per hardware thread, `0` is serial, the result is the same). It prints each stage's time, the
-erosion step's breakdown, and writes `uplift.png`, `height.png` (16-bit), `hillshade.png`,
-`flow.png` (log drainage) and `overview.png`.
+per hardware thread, `0` is serial, the result is the same), `--wind-from W` (a compass point,
+north up: orographic rain, see below) with `--rain-contrast C` (1). It prints each stage's
+time, the erosion step's breakdown, and writes `uplift.png`, `height.png` (16-bit),
+`hillshade.png`, `flow.png` (log drainage), `overview.png`, `coast.png`, `sea-height.png`,
+`sea-hillshade.png` and, with a wind, `rain.png`.
 
 `city-blocks --island SEED` draws the island in the engine (stage 7, written in the cloud
 and not yet seen on a GPU): the heightfield (`--island-spacing`, 8 m by default: 2049²,
@@ -54,7 +56,14 @@ is `f32` and `f64` with `sqrt` only.
    it is positive; the domain's edge stays sea, since it is the outlet.
 2. **Uplift**: zero at the coast, rising inland as the square root of the shape, times ridged
    noise (a 3 km period, four octaves) so the mountains have crests; 4 m per step at the heart.
-   Hardness, a factor on the erodibility, in 1.8 km patches; rain flat for now.
+   Hardness, a factor on the erodibility, in 1.8 km patches. Rain flat by default; with a
+   wind (`IslandParams::wind`, `island::orographic_rain`), moisture rides the wind's lines from
+   the upwind edge, fills up over the sea (5 km to saturate), rains out as the ground rises
+   under it (400 m of climb empties it) and a little on every flat kilometre, so the windward
+   slopes are wet and the lee dry; the raw rain is scaled to a mean of 1 over the land and
+   pulled towards flat by the wind's contrast; it is refreshed from the relief every ten
+   steps. The rain enters the erosion summed over the catchment (the discharge), which is the
+   area when it is flat.
 3. **Erosion** (`erosion::step`, 150 times): the uplift is added; the water is routed
    (`flow::drain`: D8 receivers on the raw field, Braun & Willett 2013; every pit's basin
    labelled, the lowest pass between adjacent basins, the spanning tree of the passes from the
@@ -128,6 +137,15 @@ polylines are what the water research (`docs/research/water.md`, item 3 of its
 recommendation) turns into river ribbons with flow maps. The lakes: 11 at 16 m, the largest
 41.5 ha, the deepest 19.7 m; 2 614 at 4 m, the largest 52.2 ha, the deepest 30.9 m (the finer grid's many small depressions, #97's
 open lake rule).
+
+**The wind** (`--wind-from w`, seed 7 at 16 m): at contrast 1 the windward half of the land
+gets a rain of 1.70 and the lee 0.21 (cells from 0.05 to the clamp at 10); the west coast is
+cut by dense valleys and the east stays smooth (the picture below); the dry lee keeps its
+depressions, 39 lakes against the calm island's 11, the largest 32 ha. At contrast 0.5:
+1.34 against 0.61, 20 lakes. The refreshes cost 0.2 s over the run. Which contrast looks right
+is the owner's call on the GPU; the calm island is unchanged (its digest is the same).
+
+![The island with a west wind, at 16 m: the windward coast dissected, the lee smooth](images/island-hillshade-16m-west-wind.png)
 
 **The water's fields** (`genesis`, its `stage 5` line; `coast.png`, `sea-height.png`,
 `sea-hillshade.png`). The signed coast distance (`coast_distance`: an exact Euclidean distance

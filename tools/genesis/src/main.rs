@@ -49,6 +49,31 @@ struct Args {
     /// everything on the main thread, the result is the same).
     #[arg(long)]
     threads: Option<usize>,
+    /// The prevailing wind's origin (n, ne, e, se, s, sw, w, nw; north is the top of the
+    /// previews): orographic rain, refreshed from the relief every ten steps. Without it the
+    /// rain is flat.
+    #[arg(long)]
+    wind_from: Option<String>,
+    /// How far the orographic rain departs from flat (0 flat, 1 the model).
+    #[arg(long, default_value_t = 1.0)]
+    rain_contrast: f64,
+}
+
+/// The wind that blows from `from` (a compass point, north up in the previews).
+fn wind_from(from: &str, contrast: f64) -> Result<forge_procgen::Wind> {
+    // WIND_STEPS: 0 = +x (east), 1 = +x+y (south-east), 2 = +y (south), … clockwise.
+    let towards = match from.to_ascii_lowercase().as_str() {
+        "w" => 0,
+        "nw" => 1,
+        "n" => 2,
+        "ne" => 3,
+        "e" => 4,
+        "se" => 5,
+        "s" => 6,
+        "sw" => 7,
+        other => anyhow::bail!("unknown wind origin {other}: n, ne, e, se, s, sw, w or nw"),
+    };
+    Ok(forge_procgen::Wind { towards, contrast })
 }
 
 fn main() -> Result<()> {
@@ -57,6 +82,9 @@ fn main() -> Result<()> {
     let mut params = IslandParams::island_16km(Seed::new(args.seed), args.spacing);
     if let Some(uplift) = args.uplift {
         params.uplift = uplift;
+    }
+    if let Some(from) = &args.wind_from {
+        params.wind = Some(wind_from(from, args.rain_contrast)?);
     }
     let erosion_params = ErosionParams {
         k: args.k,
@@ -93,12 +121,18 @@ fn main() -> Result<()> {
     let mut height: Field2<f32> = fields.shape.map(|_| 0.0);
     let mut run = erosion::Erosion::new();
     let mut timings = erosion::StepTimings::default();
+    let mut rain = fields.rain.clone();
+    let mut rain_seconds = 0.0;
     for s in 0..args.steps {
+        let started = Instant::now();
+        if forge_procgen::refresh_rain(&params, &height, erosion_params.sea_level, s, &mut rain) {
+            rain_seconds += started.elapsed().as_secs_f64();
+        }
         timings += erosion::step_timed(
             &mut height,
             &fields.uplift,
             &fields.hardness,
-            &fields.rain,
+            &rain,
             &erosion_params,
             &pool,
             &mut run,
@@ -143,6 +177,39 @@ fn main() -> Result<()> {
         timings.incise.as_secs_f64() / f64::from(args.steps.max(1)),
         timings.diffuse.as_secs_f64() / f64::from(args.steps.max(1)),
     );
+    if let Some(wind) = params.wind {
+        // Windward and lee halves of the land, split across the wind through the centre.
+        let (dx, dy) = forge_procgen::island::WIND_STEPS[usize::from(wind.towards) % 8];
+        let half = f64::from(params.size - 1) * 0.5;
+        let (mut wind_sum, mut wind_count, mut lee_sum, mut lee_count) = (0.0, 0, 0.0, 0);
+        for i in 0..height.len() {
+            if height.data[i] <= erosion_params.sea_level {
+                continue;
+            }
+            let (x, y) = height.coords(i);
+            let along =
+                (f64::from(x) - half) * f64::from(dx) + (f64::from(y) - half) * f64::from(dy);
+            if along < 0.0 {
+                wind_sum += f64::from(rain.data[i]);
+                wind_count += 1;
+            } else {
+                lee_sum += f64::from(rain.data[i]);
+                lee_count += 1;
+            }
+        }
+        println!(
+            "  orographic rain from the {} ({rain_seconds:.2} s in all): windward half {:.2}, lee half {:.2}, {:.2}–{:.2}",
+            args.wind_from
+                .as_deref()
+                .unwrap_or("?")
+                .to_ascii_uppercase(),
+            wind_sum / f64::from(wind_count.max(1)),
+            lee_sum / f64::from(lee_count.max(1)),
+            rain.min_max().0,
+            rain.min_max().1
+        );
+        preview::write_height(&rain, &args.out.join("rain.png"))?;
+    }
 
     // Stage 4, the first part: lakes where the flood raised the eroded field, rivers by area.
     let start = Instant::now();

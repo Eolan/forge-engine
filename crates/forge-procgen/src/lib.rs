@@ -44,6 +44,9 @@ pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
 pub use flow::{Drainage, Flow, drain, priority_flood, route};
 pub use hydrology::{Lake, Lakes, Mouth, River, Rivers, trace_lakes, trace_rivers};
-pub use island::{IslandFields, IslandParams, cached_island, generate_island, island_fields};
+pub use island::{
+    IslandFields, IslandParams, Wind, cached_island, generate_island, island_fields,
+    orographic_rain, refresh_rain,
+};
 pub use layers::{LayerRule, slope_layers};
 pub use ocean::{Ocean, OceanParams, OceanSurface};

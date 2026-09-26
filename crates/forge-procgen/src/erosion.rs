@@ -79,6 +79,7 @@ impl std::ops::AddAssign for StepTimings {
 #[derive(Default)]
 pub struct Erosion {
     drainage: Drainage,
+    discharge: Vec<f32>,
     new: Vec<f32>,
     before: Vec<f32>,
 }
@@ -141,7 +142,16 @@ pub fn step_timed(
     let flow = erosion.drainage.drain(height, p.sea_level, pool);
     t.drain = start.elapsed();
     let start = Instant::now();
-    incise(height, flow, hardness, rain, p, pool, &mut erosion.new);
+    incise(
+        height,
+        flow,
+        hardness,
+        rain,
+        p,
+        pool,
+        &mut erosion.discharge,
+        &mut erosion.new,
+    );
     t.incise = start.elapsed();
     let start = Instant::now();
     if p.diffusion > 0.0 {
@@ -152,7 +162,10 @@ pub fn step_timed(
 }
 
 /// The implicit stream-power update, the stack's segments (whole trees) on their own tasks:
-/// a cell's new height needs its receiver's, an outlet's or one earlier in the segment.
+/// the discharge first (the rain summed over the catchment, upstream first, in cells: the area
+/// when the rain is flat), then a cell's new height, which needs its receiver's, an outlet's or
+/// one earlier in the segment.
+#[allow(clippy::too_many_arguments)]
 fn incise(
     height: &mut Field2<f32>,
     flow: &Flow,
@@ -160,10 +173,24 @@ fn incise(
     rain: &Field2<f32>,
     p: &ErosionParams,
     pool: &TaskPool,
+    discharge: &mut Vec<f32>,
     new: &mut Vec<f32>,
 ) {
     let n = height.size as usize;
     let cell_area = (height.spacing * height.spacing) as f32;
+    discharge.resize(flow.stack.len(), 0.0);
+    flow.par_segments(pool, discharge, |_, first, slice| {
+        slice.fill(0.0);
+        for k in (0..slice.len()).rev() {
+            let i = flow.stack[first + k] as usize;
+            slice[k] += rain.data[i];
+            let r = flow.receiver[i] as usize;
+            if !flow.is_outlet(r) {
+                slice[flow.position[r] as usize - first] += slice[k];
+            }
+        }
+    });
+    let discharge = &*discharge;
     let power = |drainage: f64| -> f64 {
         if p.m == 0.5 {
             drainage.sqrt()
@@ -182,8 +209,7 @@ fn incise(
             } else {
                 slice[flow.position[r] as usize - first]
             };
-            let drainage =
-                power(f64::from(flow.area[i]) * f64::from(cell_area) * f64::from(rain.data[i]));
+            let drainage = power(f64::from(discharge[first + k]) * f64::from(cell_area));
             let f =
                 (p.k * f64::from(hardness.data[i]) * drainage / f64::from(flow.distance[i])) as f32;
             // Implicit: the receiver is already at its new height.

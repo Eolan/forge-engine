@@ -29,6 +29,8 @@ without losing the others.
 | 14 | `a8e1f1d` Add the water research for the island's sea, shores, rivers and lakes | `docs/research/water.md` (Phase 2 item 3) | no |
 | 15 | `2424750` Bake the coast distance and the sea's spectrum on the CPU: the water's first fields | `forge_procgen::coast`, `forge_procgen::ocean`, `genesis`'s stage 5 | no |
 | 16 | `a04c2c2` Trace the lakes: level, depth, outlet and cells per flooded patch | `hydrology::trace_lakes`, the lakes' numbers in `genesis` | no |
+| 17 | `8a6b99b` Scale the sea's amplitudes so the tile's variance is the spectrum's energy; Strahler over all donors | two fixes from a re-read | no |
+| 18 | (below) Rain summed over the catchment, and an opt-in wind with orographic rain | `Wind`, `orographic_rain`, `genesis --wind-from`; the calm island's digest unchanged | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -272,6 +274,19 @@ field, each with its level, deepest point, outlet and cells; the water plan's la
 their polygon, level and outlet from it, and #97's lake rule now has numbers (`genesis`'s
 `stage 4` line: 11 lakes at 16 m, the largest 41.5 ha). Test: `cargo test -p forge-procgen`
 (the cone's pit is one lake of one cell at its spill level).
+
+### 18. The discharge and the wind (commit 18)
+
+The incision now uses the rain summed over the catchment (the discharge; the area when the
+rain is flat, so the calm island's digest is unchanged, `0189d031eff0fb84`), and
+`IslandParams::wind` turns on an orographic rain refreshed from the relief every ten steps
+(`island::orographic_rain`: moisture along the wind's lines, rained out by the climb, a mean of
+1 over the land, a contrast knob). Off by default: nothing changes without `--wind-from`. Test:
+`cargo run --release -p genesis -- --spacing 16 --wind-from w` and compare `hillshade.png` with
+the calm run's (`docs/demos/island.md`, "The wind": the windward coast dissected, the lee
+smooth, 39 lakes against 11); `--rain-contrast 0.5` for a softer version. `cargo test -p
+forge-procgen` (a west wind rains on the west, the mean stays 1, a windy island is another
+field, deterministically).
 
 ## How to give the cloud session its results
 

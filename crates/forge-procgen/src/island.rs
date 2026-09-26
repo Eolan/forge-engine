@@ -6,12 +6,38 @@ use std::io;
 use std::path::Path;
 
 use forge_core::Seed;
+use forge_core::dmath::exp;
 use forge_task::TaskPool;
 
-use crate::erosion::{ErosionParams, erode};
+use crate::erosion::{Erosion, ErosionParams, step};
 use crate::field::Field2;
-use crate::flow::Flow;
+use crate::flow::{Flow, drain};
 use crate::noise::{fbm, ridged};
+
+/// The eight compass steps the wind can take, `(dx, dy)` in the field's grid (`x` along the
+/// columns, `y` along the rows): 0 is +x, then clockwise in image terms.
+pub const WIND_STEPS: [(i32, i32); 8] = [
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+];
+
+/// Steps between two refreshes of the orographic rain from the current relief.
+pub const RAIN_EVERY: u32 = 10;
+
+/// The prevailing wind, for the orographic rain.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wind {
+    /// Where it blows to: an index into [`WIND_STEPS`].
+    pub towards: u8,
+    /// How far the rain departs from flat: 0 leaves it flat, 1 is the model as it is.
+    pub contrast: f64,
+}
 
 /// What shapes the island.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,6 +59,8 @@ pub struct IslandParams {
     pub uplift: f64,
     /// Kilometres per period of the ridges' largest wander.
     pub ridge_scale_km: f64,
+    /// The prevailing wind; `None` rains the same everywhere.
+    pub wind: Option<Wind>,
 }
 
 impl IslandParams {
@@ -47,6 +75,7 @@ impl IslandParams {
             coast_scale_km: 5.0,
             uplift: 4.0,
             ridge_scale_km: 3.0,
+            wind: None,
         }
     }
 
@@ -76,8 +105,90 @@ fn lattice(seed: Seed, purpose: u64) -> u64 {
     seed.derive(purpose).rng().next_u64()
 }
 
+/// The orographic rain over `height` for `wind`, a factor around 1 on the drainage: moisture
+/// rides the wind from the upwind edge, fills up over the sea (5 km to saturate), rains out as
+/// the ground rises under it (400 m of climb empties it) and a little on every flat kilometre
+/// (halving over 40 km), so the windward slopes are wet and the lee is dry. The raw rain is
+/// scaled to a mean of 1 over the land, then pulled towards or away from 1 by the wind's
+/// `contrast`, and kept between 0.05 and 10. A sequential walk of the wind's lines, the same
+/// on every machine (D-016).
+pub fn orographic_rain(height: &Field2<f32>, sea_level: f32, wind: Wind) -> Field2<f32> {
+    let n = height.size as i32;
+    let (dx, dy) = WIND_STEPS[usize::from(wind.towards) % 8];
+    let step_len = height.spacing
+        * if dx != 0 && dy != 0 {
+            std::f64::consts::SQRT_2
+        } else {
+            1.0
+        };
+    let mut raw = Field2::new(height.size, height.spacing);
+    for y in 0..n {
+        for x in 0..n {
+            // Start where no upwind neighbour lies inside the field.
+            let (ux, uy) = (x - dx, y - dy);
+            if ux >= 0 && uy >= 0 && ux < n && uy < n {
+                continue;
+            }
+            let mut moisture = 1.0_f64;
+            let (mut cx, mut cy) = (x, y);
+            let mut previous = f64::from(height.get(x as u32, y as u32));
+            while cx >= 0 && cy >= 0 && cx < n && cy < n {
+                let h = f64::from(height.get(cx as u32, cy as u32));
+                if h <= f64::from(sea_level) {
+                    moisture = (moisture + step_len / 5000.0).min(1.0);
+                } else {
+                    let rise = (h - previous).max(0.0);
+                    let rain = (moisture * (1.0 - exp(-rise / 400.0))
+                        + moisture * step_len / 40_000.0)
+                        .min(moisture);
+                    moisture -= rain;
+                    raw.set(cx as u32, cy as u32, (rain / step_len) as f32);
+                }
+                previous = h;
+                cx += dx;
+                cy += dy;
+            }
+        }
+    }
+    let (sum, land) = raw
+        .data
+        .iter()
+        .zip(&height.data)
+        .filter(|(_, h)| **h > sea_level)
+        .fold((0.0_f64, 0_usize), |(s, c), (r, _)| {
+            (s + f64::from(*r), c + 1)
+        });
+    let mean = if land > 0 { sum / land as f64 } else { 1.0 };
+    raw.map(|r| {
+        if mean > 0.0 {
+            (1.0 + wind.contrast * (f64::from(r) / mean - 1.0)).clamp(0.05, 10.0) as f32
+        } else {
+            1.0
+        }
+    })
+}
+
+/// Refreshes `rain` from the relief at `step` when the island has a wind and the step is a
+/// refresh step (every [`RAIN_EVERY`], the first included); returns whether it did.
+pub fn refresh_rain(
+    p: &IslandParams,
+    height: &Field2<f32>,
+    sea_level: f32,
+    step: u32,
+    rain: &mut Field2<f32>,
+) -> bool {
+    match p.wind {
+        Some(wind) if step.is_multiple_of(RAIN_EVERY) => {
+            *rain = orographic_rain(height, sea_level, wind);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// The island's heightfield: stages 1–3 from a flat sea, and the last step's flow. The
-/// erosion runs on `pool`; the result is the same with any number of workers.
+/// erosion runs on `pool`; the result is the same with any number of workers. With a wind,
+/// the rain follows the relief ([`refresh_rain`]).
 pub fn generate_island(
     p: &IslandParams,
     erosion: &ErosionParams,
@@ -85,14 +196,25 @@ pub fn generate_island(
 ) -> (Field2<f32>, Flow) {
     let fields = island_fields(p);
     let mut height = fields.shape.map(|_| 0.0_f32);
-    let flow = erode(
-        &mut height,
-        &fields.uplift,
-        &fields.hardness,
-        &fields.rain,
-        erosion,
-        pool,
-    );
+    let mut rain = fields.rain;
+    let mut run = Erosion::new();
+    for s in 0..erosion.steps {
+        refresh_rain(p, &height, erosion.sea_level, s, &mut rain);
+        step(
+            &mut height,
+            &fields.uplift,
+            &fields.hardness,
+            &rain,
+            erosion,
+            pool,
+            &mut run,
+        );
+    }
+    let flow = if erosion.steps == 0 {
+        drain(&height, erosion.sea_level, pool)
+    } else {
+        run.take_flow()
+    };
     (height, flow)
 }
 
@@ -256,6 +378,62 @@ mod tests {
             ..p
         };
         assert_ne!(island_fields(&other).shape, f.shape);
+    }
+
+    #[test]
+    fn a_west_wind_rains_on_the_west_and_leaves_the_mean_at_one() {
+        let p = IslandParams {
+            size: 65,
+            ..IslandParams::island_16km(Seed::new(3), 256.0)
+        };
+        let pool = TaskPool::new(forge_task::PoolConfig::with_workers(0));
+        let erosion = ErosionParams {
+            steps: 30,
+            ..ErosionParams::island()
+        };
+        let (height, _) = generate_island(&p, &erosion, &pool);
+        let west = Wind {
+            towards: 0,
+            contrast: 1.0,
+        };
+        let rain = orographic_rain(&height, 0.0, west);
+        let half = |from: u32, to: u32| {
+            let (mut s, mut c) = (0.0, 0);
+            for y in 0..65 {
+                for x in from..to {
+                    if height.get(x, y) > 0.0 {
+                        s += f64::from(rain.get(x, y));
+                        c += 1;
+                    }
+                }
+            }
+            (s, c)
+        };
+        let (ws, wc) = half(0, 32);
+        let (es, ec) = half(32, 65);
+        assert!(ws / wc as f64 > es / ec as f64, "west {ws} east {es}");
+        assert!(((ws + es) / (wc + ec) as f64 - 1.0).abs() < 1e-3);
+        assert!(rain.data.iter().all(|&r| (0.05..=10.0).contains(&r)));
+        // No contrast, no change; the same wind, the same rain; a windy island erodes to
+        // another field than a calm one, deterministically.
+        let flat = orographic_rain(
+            &height,
+            0.0,
+            Wind {
+                contrast: 0.0,
+                ..west
+            },
+        );
+        assert!(flat.data.iter().all(|&r| (r - 1.0).abs() < 1e-6));
+        assert_eq!(orographic_rain(&height, 0.0, west), rain);
+        let windy = IslandParams {
+            wind: Some(west),
+            ..p
+        };
+        let (blown, _) = generate_island(&windy, &erosion, &pool);
+        assert_ne!(blown, height);
+        assert_eq!(generate_island(&windy, &erosion, &pool).0, blown);
+        assert_ne!(island_key(&p, &erosion), island_key(&windy, &erosion));
     }
 
     #[test]
