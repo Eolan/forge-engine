@@ -274,6 +274,13 @@ fn main() -> Result<()> {
     preview::write_height(&height, &args.out.join("height.png"))?;
     preview::write_hillshade(&height, &args.out.join("hillshade.png"))?;
     preview::write_flow(&flow, height.size, &args.out.join("flow.png"))?;
+    preview::write_network(
+        &height,
+        &network,
+        &ponds,
+        erosion_params.sea_level,
+        &args.out.join("network.png"),
+    )?;
     preview::write_overview(
         &height,
         &flow,

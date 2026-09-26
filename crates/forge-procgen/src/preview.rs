@@ -8,6 +8,7 @@ use image::{ImageBuffer, Luma, Rgb};
 
 use crate::field::Field2;
 use crate::flow::Flow;
+use crate::hydrology::{Lakes, Rivers};
 
 /// The height as a 16-bit grey PNG, black the lowest sample and white the highest.
 pub fn write_height(height: &Field2<f32>, path: &Path) -> image::ImageResult<()> {
@@ -52,6 +53,38 @@ pub fn write_flow(flow: &Flow, size: u32, path: &Path) -> image::ImageResult<()>
     let image = ImageBuffer::from_fn(size, size, |x, y| {
         let a = flow.area[(y * size + x) as usize] as f32;
         Luma([(a.ln() / max.ln() * 255.0) as u8])
+    });
+    image.save(path)
+}
+
+/// The network: the hillshade in grey, the sea dark, the lakes a flat blue, the rivers by
+/// Strahler order from a pale blue (first order) to a deep one (fourth and above).
+pub fn write_network(
+    height: &Field2<f32>,
+    rivers: &Rivers,
+    lakes: &Lakes,
+    sea_level: f32,
+    path: &Path,
+) -> image::ImageResult<()> {
+    let sun = sun_direction(315.0, 45.0);
+    let image = ImageBuffer::from_fn(height.size, height.size, |x, y| {
+        let i = height.index(x, y);
+        if height.get(x, y) <= sea_level {
+            return Rgb([26, 62, 118]);
+        }
+        if lakes.lake_of[i] != u32::MAX {
+            return Rgb([70, 130, 190]);
+        }
+        match rivers.order[i] {
+            0 => {
+                let g = (60.0 + 195.0 * shade(height, x, y, sun)) as u8;
+                Rgb([g, g, g])
+            }
+            1 => Rgb([120, 170, 230]),
+            2 => Rgb([70, 130, 220]),
+            3 => Rgb([30, 90, 200]),
+            _ => Rgb([10, 50, 160]),
+        }
     });
     image.save(path)
 }

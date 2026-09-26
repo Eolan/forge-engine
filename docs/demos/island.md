@@ -10,7 +10,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | The island's mask, uplift, hardness and rain fields (stages 1–2) | ✅ `forge_procgen::island` |
 | D8 drainage, the downstream-first stack, integer areas; depressions by the basin graph each step, by priority flood for the reference and the lakes | ✅ `forge_procgen::flow` |
 | The implicit stream-power erosion with diffusion, rows and drainage trees in parallel on the job system; lakes as filling depressions (stage 3) | ✅ `forge_procgen::erosion` |
-| PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes | ✅ `forge_procgen::preview`, `tools/genesis` |
+| PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets (stage 4) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
@@ -29,7 +29,8 @@ hillshade every N steps), `--threads N` (workers besides the main thread; the de
 per hardware thread, `0` is serial, the result is the same), `--wind-from W` (a compass point,
 north up: orographic rain, see below) with `--rain-contrast C` (1). It prints each stage's
 time, the erosion step's breakdown, and writes `uplift.png`, `height.png` (16-bit),
-`hillshade.png`, `flow.png` (log drainage), `overview.png`, `coast.png`, `sea-height.png`,
+`hillshade.png`, `flow.png` (log drainage), `overview.png`, `network.png` (the rivers by
+Strahler order and the lakes over the hillshade), `coast.png`, `sea-height.png`,
 `sea-hillshade.png` and, with a wind, `rain.png`.
 
 `city-blocks --island SEED` draws the island in the engine (stage 7, written in the cloud
@@ -134,7 +135,8 @@ the longest 6.3 km, orders up to 3; at 4 m, 42 rivers, 24 to the sea, 82 km, the
 7.5 km, orders up to 2 (the same square kilometres of catchment are more cells, and the finer
 network branches differently), the widest 14 m at both; the tracing takes 0.7 s at 4 m. These
 polylines are what the water research (`docs/research/water.md`, item 3 of its
-recommendation) turns into river ribbons with flow maps. The lakes: 11 at 16 m, the largest
+recommendation) turns into river ribbons with flow maps (`network.png` below draws them by
+order, first-order streams pale, the trunks deep). The lakes: 11 at 16 m, the largest
 41.5 ha, the deepest 19.7 m; 2 614 at 4 m, the largest 52.2 ha, the deepest 30.9 m (the finer grid's many small depressions, #97's
 open lake rule).
 
@@ -165,6 +167,8 @@ cascades will be diffed against. What the pictures show: a sea of 30–60 m wave
 the wind, crests broken by the spreading; nothing of it is drawn in the engine yet (the surface
 pass is the water plan's first item on a GPU; its place in the frame and the cascades' queue are
 proposed as D-038 🟡).
+
+![The network at 16 m: rivers by Strahler order over the hillshade, the lakes flat](images/island-network-16m.png)
 
 **Digests** (D-016). `genesis` ends with a 64-bit FNV-1a of the field's bits
 (`Field2::digest`), the same on every machine and with any thread count; seed 7 after 150
