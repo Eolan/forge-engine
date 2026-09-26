@@ -9,6 +9,25 @@ an order where every commit builds and tests on its own, so you can bring them i
 by one (`git cherry-pick <sha>`), run the batch after each, and drop the one you do not want
 without losing the others.
 
+## Read this first
+
+- **What needs the GPU:** commit 3 (the cells record: every pixel of both demos goes through
+  new arithmetic; `tools/origins.sh` at 0 px and the batch are its acceptance) and commit 8
+  (the island drawn by `city-blocks --island 7`). Everything else is CPU code with tests, or
+  docs, and can be read and merged on its own.
+- **What the night produced, in numbers:** the 80-byte instance record with integer cells
+  (predicted 0.5 px of drift at 10 km before, 0.013 px after); `forge-world` (16 tests) and
+  D-037 🟡; the island's genesis on the CPU with the erosion 9.5× faster (3.13 → 0.33 s a step
+  at 4097², the 4 m island in 50 s on four cores, the same bytes with any thread count, digests
+  recorded); rivers, lakes, the coast distance and the sea's spectrum baked; the island drawn
+  in the engine; an optional wind; four research files (terrain genesis, dynamic scenes, water,
+  city generation) with their plans on the issues (#79, #93, #96, #97, #86); D-038 🟡 (the
+  water pass) and D-039 🟡 (the buildings).
+- **Where to start on the owner's machine:** `git fetch origin claude/keen-sagan-vk91st`,
+  build it, `cargo test --release`, then `cargo run --release -p genesis -- --spacing 16`
+  (three seconds, look at `captures/island/overview.png`), then the batch for commit 3, then
+  `city-blocks --island 7`. The rest of this file is the detail per commit.
+
 ## The commits, in order, and how to test each
 
 | # | Commit | What | GPU needed to verify |
