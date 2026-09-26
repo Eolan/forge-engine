@@ -28,7 +28,7 @@ without losing the others.
 | 13 | `7ccfd59` Trace the rivers as polylines with Strahler orders and widths (stage 4) | `forge_procgen::hydrology`, the network's numbers in `genesis` | no |
 | 14 | `a8e1f1d` Add the water research for the island's sea, shores, rivers and lakes | `docs/research/water.md` (Phase 2 item 3) | no |
 | 15 | `2424750` Bake the coast distance and the sea's spectrum on the CPU: the water's first fields | `forge_procgen::coast`, `forge_procgen::ocean`, `genesis`'s stage 5 | no |
-| 16 | (below) Trace the lakes: level, depth, outlet and cells per flooded patch | `hydrology::trace_lakes`, the lakes' numbers in `genesis` | no |
+| 16 | `a04c2c2` Trace the lakes: level, depth, outlet and cells per flooded patch | `hydrology::trace_lakes`, the lakes' numbers in `genesis` | no |
 
 ### 1. `--origin` and the measurement (commit 1)
 
@@ -286,22 +286,22 @@ detail.
 1. **Decide D-004's amendment** after the batch on commit 3 (keep, change, drop) and, with it,
    D-037's numbers. D-017's ꟻLIP thresholds (max < 0.15, mean < 0.02) are what step 1 above
    judges by; they are still 🟡.
-2. **The island in the engine** (#96, stage 7 of `docs/demos/island.md`): a
-   `PropKind::Heightfield` next to `PropKind::Terrain` in `forge-geom`, the island's 4 m field
-   cooked into a cluster DAG like the city's ground, `city-blocks --island` first, then an
-   `island` demo with the sky, the probes and TAA. A local session can do it in a day; the
-   renderer needs nothing new.
+2. **The island's own demo** (#96): commit 8 draws the field through `city-blocks --island`;
+   what remains is the `island` demo with the props placed on it (the city's placement pass
+   with the slope and altitude rules), the camera paths and the golden shots, once the field
+   has been seen on the GPU and judged.
 3. **#79, moving geometry**, following `docs/research/dynamic-scenes.md`: a movers range of the
    instance table, previous transforms for motion vectors, movers tested in pass 2, the TLAS
    rebuilt per frame or split, probes woken by the movers' spheres (#69).
 4. **The erosion at 4 m** (#97, commits 10–11: 3.13 s to 0.33 s a step here): what remains
    sequential is the basin labelling (0.1 s of the 0.27 s drain) and the pass sort; the lake
    rule (a fill mode with a spill rule, or an area limit) is the open part of the issue.
-5. **The water**, following `docs/research/water.md`'s recommendation: the CPU side first
-   (the spectrum as a pure function of the seed, the coast distance and the water mask baked
-   by genesis, the river ribbons from commit 13's polylines), then on the dev PC the FFT
-   cascades on the compute queue and the forward surface pass under TAA.
-5. **Re-verify the two research files** (#99) from a machine with a full network.
+5. **The water**, following `docs/research/water.md`'s recommendation: the CPU side is
+   started (commits 15 and 16: the spectrum, the coast distance, the lakes' levels); the
+   river ribbons from commit 13's polylines and the water mask remain, then on the dev PC the
+   FFT cascades on the compute queue (diffed against `Ocean::surface`), the ring mesh and the
+   forward surface pass under TAA, the sea first and the shore second.
+6. **Re-verify the research files** (#99) from a machine with a full network.
 
 ## What needs the owner
 
@@ -312,6 +312,13 @@ detail.
   merge once the batch is green on the whole branch.
 - `sun_light`'s highlight direction (#98): fixing the old approximation (object space taken
   for world space) moves the ballad's highlights; a look change to judge.
+- The island's lakes (#97): 2 614 at 4 m against 11 at 16 m; whether the finer grid's small
+  depressions should be filled by rule (an area limit, or the basin graph's fill mode with a
+  spill rule) is a look to judge on the GPU.
+- D-009's "spectrum evaluated identically on CPU and GPU" once the sea moves to the GPU: the
+  water research names three options (the lowest cascade re-run on the CPU with `dmath`, a
+  readback for prediction only, a matched Gerstner band for physics); a 🟡 entry when Phase 3
+  starts.
 
 ## Known limits of what was done
 
@@ -321,6 +328,9 @@ detail.
   differs); the acceptance is D-017's thresholds and `origins.sh` at 0 px.
 - DLSS's reprojection gets the camera's step through TAA's `previous_from_current`; it was not
   exercised (the `dlss` feature builds, Windows only).
-- The two research files were verified through github.com and the search engine's records.
+- The research files were verified through github.com and the search engine's records.
+- Nothing of the water is drawn: the sea's tile and the coast distance were judged on their
+  PNGs only, and the spectrum's parameters (a 12 m/s breeze, 200 km of fetch, a 50 m shelf) are
+  a first guess to tune on the screen.
 - The erosion's basin labelling is sequential (0.1 s of the 0.33 s a step at 4097²); the
   rest is parallel and memory-bound on four cores.
