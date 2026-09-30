@@ -89,6 +89,9 @@ pub struct VertexPipelineDesc<'a> {
     pub wireframe: bool,
     /// Depth test with reversed-Z (`GREATER_OR_EQUAL`) and write.
     pub depth_test: bool,
+    /// Blend each output over its attachment by the output's own alpha, which then replaces
+    /// the attachment's alpha (as [`FullscreenPipelineDesc::alpha_blend`]); opaque otherwise.
+    pub alpha_blend: bool,
     /// Debug name.
     pub name: &'a str,
 }
@@ -327,6 +330,7 @@ impl Device {
                 cull_mode: desc.cull_mode,
                 wireframe: desc.wireframe,
                 depth_test: desc.depth_test,
+                alpha_blend: false,
                 name: desc.name,
             },
         )
@@ -360,6 +364,7 @@ impl Device {
                 cull_mode: desc.cull_mode,
                 wireframe: desc.wireframe,
                 depth_test: desc.depth_test,
+                alpha_blend: desc.alpha_blend,
                 name: desc.name,
             },
         )
@@ -400,6 +405,13 @@ impl Device {
             .map(|_| {
                 vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(vk::ColorComponentFlags::RGBA)
+                    .blend_enable(state.alpha_blend)
+                    .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                    .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                    .color_blend_op(vk::BlendOp::ADD)
+                    .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                    .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                    .alpha_blend_op(vk::BlendOp::ADD)
             })
             .collect();
         let blend =
@@ -462,5 +474,6 @@ struct RasterState<'a> {
     cull_mode: vk::CullModeFlags,
     wireframe: bool,
     depth_test: bool,
+    alpha_blend: bool,
     name: &'a str,
 }

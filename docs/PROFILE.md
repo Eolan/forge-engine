@@ -420,6 +420,25 @@ each). `shading/layered` +0.012 ms at the coast (0.382 → 0.396), nothing measu
 +0.045 ms above the beach (0.465 → 0.510), where most pixels are within reach. Three runs each,
 alternating, on a slightly slower GPU than the runs above.
 
+**The rivers** (#105 step 6, 2026-10-01). 43 ribbons of 16 397 points, four quads across,
+drawn in `water/surface` after the sea: 390 000 vertices, each reading the ground's heights
+twice. Their mirror and shadow rays join the sea's in `water/reflections`. Three runs each,
+alternating, against the wet sand's commit (the waves held at 12 s):
+
+| View | frame | water/surface | water/reflections |
+|---|---|---|---|
+| coast (a river mouth far off) | 1.721 → 1.736 ms | 0.136 → 0.153 | 0.208 → 0.208 |
+| the largest river's valley from 200 m | 1.809 → 1.840 ms | 0.142 → 0.162 | 0.120 → 0.121 |
+| two streams on the plain from 40 m | 1.536 → 1.577 ms | 0.058 → 0.079 | 0.017 → 0.035 |
+| a stream from 16 m | 1.457 → 1.541 ms | 0.056 → 0.082 | 0.017 → 0.050 |
+| the island from 2.5 km up | 2.176 → 2.206 ms | 0.179 → 0.195 | 0.080 → 0.081 |
+
+- **The vertices** cost about 0.017 ms wherever the camera is: every ribbon is drawn every
+  frame, and the clipper throws away what is off screen. The lever: a draw per river, or per
+  stretch of 64 points, culled by its bounds.
+- **The rays** grow with the river's pixels, as the sea's do: 0.03 ms for the stream seen from
+  16 m.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

@@ -40,8 +40,9 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterShore,
-    WaterShoreTrain, WaterSurface, WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
+    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterRiverPoint,
+    WaterShore, WaterShoreTrain, WaterSurface, WaterSurfaceParams, exposure_from_ev100,
+    sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -507,6 +508,7 @@ impl Gallery {
                     .join(", "),
                 "shore trains"
             );
+            let rivers = island_ribbons(&height);
             let surface = WaterSurface::new(
                 &ctx.device,
                 &ctx.shaders,
@@ -518,8 +520,13 @@ impl Gallery {
                     coast: &coast.data,
                     bin: SHORE_BIN as f32,
                     trains: &trains,
+                    rivers: &rivers,
                 }),
             )?;
+            tracing::info!(
+                mib = %format_args!("{:.1}", surface.river_bytes() as f64 / f64::from(1 << 20)),
+                "the rivers' points and the ground they rest on"
+            );
             Some((water, surface, oceans))
         } else {
             None
@@ -947,6 +954,7 @@ impl Demo for Gallery {
                         * (self.renderer.sun_illuminance * exposure),
                     sky_scale: self.renderer.sun_illuminance * exposure,
                     time: self.sea_time_submitted,
+                    pixel: 2.0 / (taa_frame.jittered_projection.y_axis.y * extent.height as f32),
                 },
                 taa_frame.color,
                 targets.depth,
@@ -1696,6 +1704,65 @@ fn island_heights(args: &Args) -> Field2<f32> {
     height
 }
 
+/// The island's rivers (stage 4 on the drawn field, as `genesis` traces them): where more than
+/// 0.5 km² drains through a sample of `flow`.
+fn island_rivers(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_procgen::Rivers {
+    let min_area = (500_000.0 / (height.spacing * height.spacing)) as u32 + 1;
+    forge_procgen::trace_rivers(height, flow, min_area)
+}
+
+/// The island's rivers as the water draws them (#105, D-038's rivers): each smoothed into a
+/// ribbon of points 4 m apart with its width, depth and speed, in the sea's frame (the field
+/// centred on the origin), the tributaries first.
+fn island_ribbons(height: &Field2<f32>) -> Vec<Vec<WaterRiverPoint>> {
+    let start = Instant::now();
+    let flow = forge_procgen::drain(height, 0.0, &TaskPool::client());
+    let rivers = island_rivers(height, &flow);
+    let ribbons = forge_procgen::ribbons(height, &rivers, &forge_procgen::RibbonParams::default());
+    let half = (0.5 * height.extent()) as f32;
+    let points = ribbons.iter().flat_map(|r| &r.points);
+    let widest = points
+        .clone()
+        .fold(0.0_f32, |m, p| m.max(2.0 * p.half_width));
+    let steepest = points.clone().fold(0.0_f32, |m, p| m.max(p.slope));
+    let deepest = points.clone().fold(0.0_f32, |m, p| m.max(p.depth));
+    let fast = points.clone().filter(|p| p.speed >= 2.5).count();
+    // Where the largest river (the last drawn) meets the sea, for placing a view.
+    let mouth = ribbons
+        .last()
+        .and_then(|r| r.points.last())
+        .map_or([0.0; 2], |p| [p.position[0] - half, p.position[1] - half]);
+    tracing::info!(
+        rivers = ribbons.len(),
+        largest_mouth = %format_args!("{:.0},{:.0}", mouth[0], mouth[1]),
+        points = points.clone().count(),
+        widest_m = %format_args!("{widest:.1}"),
+        deepest_m = %format_args!("{deepest:.2}"),
+        steepest = %format_args!("{steepest:.2}"),
+        points_over_2_5_m_s = fast,
+        ms = start.elapsed().as_millis(),
+        "island rivers"
+    );
+    ribbons
+        .iter()
+        .map(|r| {
+            r.points
+                .iter()
+                .map(|p| WaterRiverPoint {
+                    position: [p.position[0] - half, p.position[1] - half],
+                    direction: p.direction,
+                    half_width: p.half_width,
+                    depth: p.depth,
+                    speed: p.speed,
+                    slope: p.slope,
+                    fade: p.fade,
+                    ground: p.ground,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The island's sea floor (`forge_procgen::sea_floor`): metres of depth it levels off at, and
 /// the metres from the coast that set its slope (60 over 1 500: 4 % at the shore).
 const SEA_FLOOR: (f32, f32) = (60.0, 1500.0);
@@ -1893,15 +1960,19 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         (island_layer::DRY_GRASS, 0.25),
         (island_layer::LUSH_GRASS, 0.25),
     );
-    let min_area = (500_000.0 / (height.spacing * height.spacing)) as u32 + 1;
-    let rivers = forge_procgen::trace_rivers(&height, &flow, min_area);
-    let painted = forge_procgen::paint_rivers(
-        &mut layers,
-        &rivers,
-        height.spacing,
-        island_layer::STREAM,
-        8.0,
-    );
+    let rivers = island_rivers(&height, &flow);
+    // With the water, the rivers are ribbons of their own (`WaterShore::rivers`).
+    let painted = if args.water {
+        0
+    } else {
+        forge_procgen::paint_rivers(
+            &mut layers,
+            &rivers,
+            height.spacing,
+            island_layer::STREAM,
+            8.0,
+        )
+    };
     // And its lakes of a hectare or more (as `genesis` traces them: the priority flood's water
     // standing over half a metre above the drawn field), on the same layer.
     let filled = forge_procgen::priority_flood(&height, 0.0);

@@ -600,3 +600,74 @@ Its third part: the wet sand.
   coast unchanged.
 - **Checks:** the batch changes the water images by the wet band (9 046 px, ꟻLIP mean 0.0031);
   the A/B harness and mesh against fallback at 0 px; validation clean.
+
+**The rivers** (step 6, D-038's rivers). The rivers of stage 4 become water of their own:
+`forge_procgen::river` makes each a ribbon, and `water/surface` draws the ribbons after the sea.
+- **The courses:** the drawn field's rivers above 0.5 km² of catchment, as the layer map traced
+  them (43 at 8 m), each from its head to the sea or to the larger river it joins.
+  - Four passes of a binomial filter and three of Chaikin's corner cutting smooth the D8
+    course, its ends kept, and it is resampled every 4 m: 16 397 points. The grid's stair steps
+    straighten, and its right-angled turns open into bends.
+  - Per point: the width from the catchment as before (`w = 0.005 √A`: 3.5 m at the
+    threshold, 14 m at the largest mouth); the depth `0.3 (A / km²)^⅜` m (Leopold & Maddock's
+    exponent, 0.23 to 0.65 m here); the speed by Chézy's formula, `15 √(d S)` over the smoothed
+    bed's slope, from 0.3 to 3 m/s; the direction downstream.
+  - In a bend the half width stays under 0.8 of the bend's radius, so the inner bank never
+    folds over itself. A river fades in over its first 40 m.
+- **On the ground:** the 8 m field cannot hold a bed a few metres wide. A channel carved into it
+  would be a trench of 8 m triangles, and the water's outline would follow them. So the ribbon
+  lies on the ground as the island's mesh draws it, and its outline is its own. Each vertex
+  (four quads across) stands at the highest the ground reaches under the quads around it,
+  sampled every half metre with the cells split as the mesh splits them, plus 0.1 m and a
+  quarter of the depth. The depth the water shows is the ribbon's profile across, deepest in the
+  middle. Once the 2 m field is drawn (#106), the beds can be carved and the water set at a level
+  in them.
+- **In the pass:** after the sea, blended over what is under by how much of the pixel the
+  river covers:
+  - the banks, soft over half a metre or two pixels;
+  - the head's fade, and the last 30 m to the coast, where the sea's swash takes over;
+  - far away, a pixel either side at least, with the coverage scaled by the share the river
+    fills (after Persson's phone-wire anti-aliasing), lifted by one and a half pixels' footprint
+    over the ground's coarser levels of detail.
+  The tributaries are drawn first, and the larger river, lifted more, covers their ends.
+- **The water:**
+  - the finest cascade's slopes on an 8 m tile, carried down the river by a flow map (Vlachos
+    2010): two phases 2 s apart, cross-faded, each restarting where the other is strongest,
+    their timing offset by a noise so the fade does not pulse; faster in the middle than by the
+    banks;
+  - the sky and the sun as the sea has them (the shading is shared), and the mirror and shadow
+    rays asked for as the sea's, so the banks and the rocks show in it;
+  - under it, the ground's light on a grey-brown sediment towards the middle, through the
+    ribbon's depth (absorption 1.4, 0.4, 0.5 m⁻¹: fresh water with a little tannin and silt);
+  - white water in riffles about 30 m apart, where the bed falls more than 6 % and the stream
+    runs fast.
+- **The ground:** with `--water` the rivers are no longer painted into the layer map. The lakes
+  still are, until the lakes' step.
+
+![A stream on the eastern plain from 16 m up: painted into the ground's layers before (left), a ribbon of water now (right)](../../reports/2026-09-30-105/rivers-stream.png)
+
+![The largest river down its valley to the west coast, from 200 m up: before and now](../../reports/2026-09-30-105/rivers-valley.png)
+
+- **What to look at:**
+  - From above, a river over a plain shows its bed and a faint sky, greyer than the painted
+    stand-in, which mirrored the sky more than water does.
+  - In a narrow 8 m valley the ribbon rests on the highest ground under it, so its water can
+    stand up to about a metre over the valley's bottom. From low down across the valley, it
+    shows as a sheet a little above the ground.
+  - The valleys' sides step every 8 m (#106), and their shadows cross the rivers in stripes.
+  - No waterfalls: the eroded field has no cliffs (the steepest reach falls 33 % over 24 m).
+    The steep reaches have white water instead.
+- **Stability** (still camera, waves held at 12 s, TAA on; pixels changing by more than two
+  levels, frame to frame and over 32 frames): the stream from 16 m 0.18 → 0.26 % and 0.0017 →
+  0.0020 %; the plain 0.31 → 0.33 % and 0.0019 → 0.0021 %; the valley 0.59 % and 0.015 % either
+  way; the island from 2.5 km 0.87 → 0.82 % and 0.0003 → 0.0006 %. The ripples' reflections move
+  with the jitter from one frame to the next, and nothing crawls.
+- **Cost:** `water/surface` +0.015 to 0.026 ms (the ribbons' vertices, drawn whether in view or
+  not, and the river's pixels), and `water/reflections` +0.02 to 0.03 ms where a river fills
+  the view: the frame 1.46 → 1.54 ms for the stream from 16 m (`docs/PROFILE.md`). At start,
+  77 ms for the drainage, the courses and the ground under the ribbons; 17 MiB on the GPU, the
+  ground's heights in full precision (16 MiB at 8 m) and the points.
+- **Checks:** the batch changes the water images by a river mouth and a gully in the first
+  view (506 px, ꟻLIP mean 0.0003), #71's flake aside; the A/B harness and mesh against
+  fallback at 0 px; validation clean; tests (two new in `forge_procgen::river`, among them
+  that the ribbon never dips under the drawn ground), clippy, fmt.

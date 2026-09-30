@@ -2002,6 +2002,7 @@ impl MeshletRenderer {
                     cull_mode: vk::CullModeFlags::BACK,
                     wireframe,
                     depth_test: true,
+                    alpha_blend: false,
                     name,
                 }),
             }

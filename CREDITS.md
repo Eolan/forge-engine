@@ -247,3 +247,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Physically based wet surfaces", blog, 2013
   (<https://seblagarde.wordpress.com/2013/03/19/water-drop-3a-physically-based-wet-surfaces/>):
   the water film darkens a porous surface and smooths it to water's reflection.
+- **The rivers** (`forge_procgen::river`, `shaders/water.slang`, issue #105). Flow maps after
+  Alex Vlachos, "Water Flow in Portal 2", SIGGRAPH 2010, *Advances in Real-Time Rendering in 3D
+  Graphics and Games* (two phases of a texture advected along the flow and cross-faded); the
+  courses smoothed by George M. Chaikin, "An algorithm for high speed curve generation",
+  *Computer Graphics and Image Processing* 3, 1974, 346–349; the depth by the hydraulic
+  geometry of Leopold and Maddock (1953, above) and the speed by Chézy's formula (Antoine de
+  Chézy, 1775); far away, a ribbon kept a pixel wide with its coverage scaled, after Emil
+  Persson's "Phone-Wire AA" demo, 2012 (<https://www.humus.name/index.php?page=3D&ID=89>).

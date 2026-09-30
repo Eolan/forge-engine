@@ -99,6 +99,7 @@ impl MipCheck {
             cull_mode: vk::CullModeFlags::NONE,
             wireframe: false,
             depth_test: false,
+            alpha_blend: false,
             name: "mip check reference",
         });
         device.destroy_shader_module(vertex);

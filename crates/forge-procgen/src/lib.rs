@@ -23,6 +23,8 @@
 //!   CPU, the reference the GPU's cascades are diffed against.
 //! - [`shore`]: the shore's waves: the floor's depth against the coast distance, and per train
 //!   of waves the time its crests take to the shore and their shoaling, for the GPU.
+//! - [`river`]: the rivers' surfaces: each river's course smoothed into a ribbon of points with
+//!   its width, depth and speed, for the GPU.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
 //!   sea, rivers and lakes), which is how the pipeline is looked at before a GPU draws it.
@@ -43,6 +45,7 @@ pub mod layers;
 pub mod noise;
 pub mod ocean;
 pub mod preview;
+pub mod river;
 pub mod shore;
 
 pub use amplify::{AmplifyParams, amplify};
@@ -62,4 +65,5 @@ pub use layers::{
     LayerRule, Shore, paint_lakes, paint_moisture, paint_rivers, slope_layers, wetness,
 };
 pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
+pub use river::{Ribbon, RibbonParams, RibbonPoint, drawn_height, ribbons};
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};

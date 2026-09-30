@@ -257,6 +257,15 @@ struct WaterCascadeView
     float shelf;       // the TMA factor there at the depth the spectrum was made for
 };
 
+// A point of a river's ribbon (`GpuRiverPoint` in water.rs, from `forge_procgen::RibbonPoint`).
+struct RiverPoint
+{
+    float4 a; // world x, z (the sea's frame), the half width (m), the depth in the middle (m)
+    float4 b; // downstream (world x, z; unit), the speed (m/s), the bed's slope
+    float4 c; // how much of the river is drawn (0..1), 1 where a segment starts (0 at a river's last point), the ground under the last vertex across, 0
+    float4 d; // the ground under the first four vertices across: the highest the drawn ground stands under the quads around each (m)
+};
+
 // Mirrors `GpuWaterSurface` in water.rs.
 struct WaterSurface
 {
@@ -285,7 +294,10 @@ struct WaterSurface
     uint train_count;
     float shore_bin;      // metres a bin
     float time;           // the sea's clock, seconds
-    float2 pad;
+    float pixel;          // metres a pixel spans a metre away
+    uint river_points;
+    float* ground;        // the floor's heights (the shore's samples) in full precision, or null: no rivers
+    RiverPoint* rivers;   // `river_points` of them, one river after the other
 };
 
 struct SurfacePush
@@ -608,6 +620,54 @@ float smith_visibility(float nv, float nl, float a2)
     return 0.5 / max(v + l, 1e-6);
 }
 
+// The light on a water surface of normal `n` and GGX roughness² `a2`, seen from `v`, besides
+// what lies under it.
+struct WaterLight
+{
+    float3 mirror;         // the mirror direction, kept above the horizon
+    float fresnel;         // Schlick's, F0 0.02
+    float blur;            // how far the reflection is blurred towards the sky's irradiance
+    float3 reflected;      // the sky it reflects
+    float3 sun;            // the sun's highlight
+    float3 sun_light;      // the sun's light on the level surface
+    float3 lit;            // the sky's and the sun's light on the level surface
+    float scale;           // the sky's luminance scale
+};
+
+WaterLight water_light(WaterSurface* w, float3 n, float3 v, float a2)
+{
+    WaterLight o;
+    float nv = max(dot(n, v), 1e-4);
+    float f0 = 0.02;
+    o.fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
+    float4 up_table = w[0].sky_light[SH_COEFFICIENTS];
+    float3 up = up_table.xyz;
+    float3 forward = w[0].sky_light[SH_COEFFICIENTS + 1].xyz;
+    o.scale = w[0].sun_radiance.w;
+    // The sky in the mirror direction (kept above the horizon: a wave's back cannot reflect
+    // the sea), blurred towards the sky's irradiance as the surface roughens.
+    float3 r = reflect(-v, n);
+    r.y = abs(r.y);
+    o.mirror = normalize(r);
+    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up, forward, o.mirror) * o.scale;
+    float3 sky_irradiance = sh_irradiance(w[0].sky_light, float3(0.0, 1.0, 0.0)) * o.scale / PI;
+    o.blur = saturate(2.0 * a2);
+    o.reflected = lerp(mirror, sky_irradiance, o.blur);
+    // The sun's highlight.
+    float3 l = normalize(w[0].sun.xyz);
+    float nl = dot(n, l);
+    o.sun = 0.0;
+    if (nl > 0.0)
+    {
+        float3 h = normalize(l + v);
+        float fh = f0 + (1.0 - f0) * pow(1.0 - saturate(dot(v, h)), 5.0);
+        o.sun = w[0].sun_radiance.rgb * ggx(saturate(dot(n, h)), a2) * smith_visibility(nv, nl, a2) * fh * nl;
+    }
+    o.sun_light = w[0].sun_radiance.rgb * saturate(l.y);
+    o.lit = sky_irradiance * PI + o.sun_light;
+    return o;
+}
+
 // What the surface writes (`trace_requested` in meshlet.rs traces the rays against the scene):
 // - its colour;
 // - the mirror ray it asks for: the direction, and the weight of what the ray meets in place
@@ -654,34 +714,15 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     slope += waves.slope;
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
     float3 v = normalize(-input.relative);
-    float nv = max(dot(n, v), 1e-4);
     // GGX's α² from the unresolved slopes' variance (α² = 2σ²), over a calm surface's.
     float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
-    float f0 = 0.02;
-    float fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
-    float4 up_table = w[0].sky_light[SH_COEFFICIENTS];
-    float3 up = up_table.xyz;
-    float3 forward = w[0].sky_light[SH_COEFFICIENTS + 1].xyz;
-    float scale = w[0].sun_radiance.w;
-    // The sky in the mirror direction (kept above the horizon: a wave's back cannot reflect
-    // the sea), blurred towards the sky's irradiance as the surface roughens.
-    float3 r = reflect(-v, n);
-    r.y = abs(r.y);
-    r = normalize(r);
-    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up, forward, r) * scale;
-    float3 sky_irradiance = sh_irradiance(w[0].sky_light, float3(0.0, 1.0, 0.0)) * scale / PI;
-    float blur = saturate(2.0 * a2);
-    float3 reflected = lerp(mirror, sky_irradiance, blur);
-    // The sun's highlight.
-    float3 l = normalize(w[0].sun.xyz);
-    float nl = dot(n, l);
-    float3 sun = 0.0;
-    if (nl > 0.0)
-    {
-        float3 h = normalize(l + v);
-        float fh = f0 + (1.0 - f0) * pow(1.0 - saturate(dot(v, h)), 5.0);
-        sun = w[0].sun_radiance.rgb * ggx(saturate(dot(n, h)), a2) * smith_visibility(nv, nl, a2) * fh * nl;
-    }
+    WaterLight light = water_light(w, n, v, a2);
+    float fresnel = light.fresnel;
+    float scale = light.scale;
+    float3 r = light.mirror;
+    float blur = light.blur;
+    float3 reflected = light.reflected;
+    float3 sun = light.sun;
     // What lies under the water: the scene behind this pixel, dimmed along the path the view
     // ray takes through the water to it, and the light the water scatters back on the way.
     uint2 pixel = uint2(input.position.xy);
@@ -696,8 +737,8 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     }
     float3 transmittance = exp(-w[0].absorption.rgb * path);
     float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
-    float3 sun_light = w[0].sun_radiance.rgb * saturate(l.y); // the sun's on the level surface
-    float3 lit = sky_irradiance * PI + sun_light;
+    float3 sun_light = light.sun_light;
+    float3 lit = light.lit;
     float3 inside = under * transmittance + w[0].scatter.rgb * lit * (1.0 - transmittance);
     float3 color = reflected * fresnel + inside * (1.0 - fresnel) + sun;
     // Foam, lit like a white diffuse surface: where the waves fold (the Jacobian under ~0.45),
@@ -728,6 +769,221 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     float brightest = max(o.color.r, max(o.color.g, o.color.b));
     bool shade = max(sun_share.r, max(sun_share.g, sun_share.b)) > SUN_REQUEST_MIN_SHARE * brightest;
     o.sun = shade ? float4(sun_share, 1.0) : float4(0.0);
+    return o;
+}
+
+// ----------------------------------------------------------------- the rivers ---
+//
+// D-038's rivers: each river of the island's network as a ribbon over the ground
+// (`forge_procgen::ribbons`: the D8 course smoothed, its width, depth and speed from the
+// catchment and the bed's slope), drawn after the sea in the same pass and blended over what is
+// there by how much of the pixel it covers. The 8 m field cannot hold a bed a few metres wide,
+// so the water lies on the ground as the island's mesh draws it, a little above it, and its
+// depth is the ribbon's own profile across rather than the ground's: the outline is the
+// ribbon's, smooth, and not the triangles'. Its ripples are the finest cascade's slopes carried
+// down the river by a flow map (Vlachos 2010): two samples advected along the flow, each
+// restarted in turn half a period apart and cross-faded, so the texture never stretches. Far
+// away the ribbon stays a pixel wide either side, its coverage scaled by the share of that the
+// river fills (Persson's phone-wire anti-aliasing), so a stream thinner than a pixel stays a
+// steady faint line; it rises by the pixel's footprint, over what the ground's coarser levels
+// of detail may raise.
+
+// Quads across a ribbon (`RIVER_ACROSS` in water.rs).
+static const uint RIVER_ACROSS = 4;
+// Metres over the ground it rests on: a larger river is lifted more, so it covers the end of a
+// tributary.
+static const float RIVER_LIFT = 0.1;
+static const float RIVER_LIFT_PER_DEPTH = 0.25;
+// Far away: the lift in pixels' footprints.
+static const float RIVER_LIFT_PIXELS = 1.5;
+// Seconds between the restarts of a flow sample.
+static const float RIVER_FLOW_PERIOD = 2.0;
+// The ripples' tile against the finest cascade's patch, and their slopes' scale.
+static const float RIVER_RIPPLE_TILE = 0.5;
+static const float RIVER_RIPPLE_STRENGTH = 0.35;
+// Fresh water with a little tannin and silt (m⁻¹), and the light it scatters back.
+static const float3 RIVER_ABSORPTION = float3(1.4, 0.4, 0.5);
+static const float3 RIVER_SCATTER = float3(0.015, 0.025, 0.02);
+// The bed under the water towards the middle: the ground's light on wet, grey-brown sediment.
+static const float3 RIVER_BED = float3(0.55, 0.5, 0.42);
+// Metres of the banks' soft edge, at least (and two pixels far away).
+static const float RIVER_BANK = 0.5;
+// Metres between the riffles' white water, and the foam's cover where its pattern is too fine
+// to draw (the pattern's mean through the threshold).
+static const float RIVER_RIFFLES = 30.0;
+static const float RIVER_FOAM_MEAN = 0.3;
+// The river gives way to the sea over its last metres to the coast.
+static const float RIVER_MOUTH = 30.0;
+
+struct RiverOut
+{
+    float4 position : SV_Position;
+    float3 relative : POSITION;   // camera-relative metres
+    float2 flat : TEXCOORD0;      // camera-relative world x, z
+    float4 river : TEXCOORD1;     // across (−1..1), the coverage (the thinning far away, the fade), the depth (m), the speed (m/s)
+    float4 flow : TEXCOORD2;      // downstream (world x, z), the bed's slope, the half width drawn (m)
+};
+
+// The ground's height at `world` (x, z) as the island's mesh draws it: the field's samples, each
+// cell split along its (i + 1, j) – (i, j + 1) diagonal (`forge_geom::city::heightfield_mesh`).
+float ground_height(WaterSurface* w, float2 world)
+{
+    uint n = w[0].shore_texels;
+    float2 g = (world - w[0].shore_frame.xy) * w[0].shore_frame.z;
+    float2 cell = clamp(floor(g), 0.0, float(n - 2u));
+    float2 t = saturate(g - cell);
+    uint i = uint(cell.y) * n + uint(cell.x);
+    float a = w[0].ground[i];
+    float b = w[0].ground[i + 1u];
+    float c = w[0].ground[i + n];
+    float d = w[0].ground[i + n + 1u];
+    return t.x + t.y <= 1.0
+        ? a + t.x * (b - a) + t.y * (c - a)
+        : d + (1.0 - t.x) * (c - d) + (1.0 - t.y) * (b - d);
+}
+
+[shader("vertex")]
+RiverOut river_vert_main(uint id : SV_VertexID)
+{
+    WaterSurface* w = surface_push.surface;
+    uint segment = id / (RIVER_ACROSS * 6u);
+    uint rest = id % (RIVER_ACROSS * 6u);
+    // x across the ribbon, y along it.
+    int2 corner = QUAD_CORNERS[rest % 6u] + int2(int(rest / 6u), 0);
+    RiverOut o;
+    if (w[0].rivers[segment].c.y == 0.0)
+    {
+        o.position = float4(0.0, 0.0, 0.0, 0.0); // a river's last point: no segment
+        o.relative = 0.0;
+        o.flat = 0.0;
+        o.river = 0.0;
+        o.flow = 0.0;
+        return o;
+    }
+    RiverPoint p = w[0].rivers[segment + uint(corner.y)];
+    float3 camera = w[0].camera.xyz;
+    float2 centre = p.a.xy;
+    float footprint = length(float3(centre.x, ground_height(w, centre), centre.y) - camera) * w[0].pixel;
+    // At least a pixel either side, the coverage scaled to what the river fills.
+    float half_width = max(p.a.z, footprint);
+    float across = float(corner.x) / float(RIVER_ACROSS) * 2.0 - 1.0;
+    float2 world = centre + float2(-p.b.y, p.b.x) * (across * half_width);
+    // On the ground under the ribbon's quads (and, widened, under the vertex where it went).
+    float resting = corner.x < 4 ? p.d[corner.x] : p.c.z;
+    float height = max(resting, ground_height(w, world)) + RIVER_LIFT + RIVER_LIFT_PER_DEPTH * p.a.w + RIVER_LIFT_PIXELS * footprint;
+    float3 relative = float3(world.x, height, world.y) - camera;
+    o.position = mul(w[0].view_proj, float4(relative, 1.0));
+    o.relative = relative;
+    o.flat = relative.xz;
+    o.river = float4(across, p.c.x * p.a.z / half_width, p.a.w, p.b.z);
+    o.flow = float4(p.b.xy, p.b.w, half_width);
+    return o;
+}
+
+// Two samples of a texture advected along `velocity` (Vlachos 2010): the phases of each, a
+// period apart, and their weights, each sample's zero where it restarts.
+struct FlowPhases
+{
+    float2 offset0; // metres each sample has drifted
+    float2 offset1;
+    float weight0;
+    float weight1;
+};
+
+FlowPhases flow_phases(float2 world, float2 velocity, float time)
+{
+    // Each place restarts at its own time, so the cross-fade does not pulse over the river.
+    float phase = time / RIVER_FLOW_PERIOD + value_noise(world / 5.0);
+    float p0 = frac(phase);
+    float p1 = frac(phase + 0.5);
+    FlowPhases f;
+    f.offset0 = velocity * (p0 * RIVER_FLOW_PERIOD);
+    f.offset1 = velocity * (p1 * RIVER_FLOW_PERIOD);
+    f.weight0 = 1.0 - abs(1.0 - 2.0 * p0);
+    f.weight1 = 1.0 - f.weight0;
+    return f;
+}
+
+[shader("fragment")]
+SurfaceTargets river_frag_main(RiverOut input)
+{
+    WaterSurface* w = surface_push.surface;
+    float across = input.river.x;
+    float2 world = input.flat + w[0].camera.xz;
+    // How much of the pixel the river covers: its banks, soft over half a metre or two pixels
+    // but never more than half the half width drawn (far away the whole ribbon is two pixels,
+    // and its coverage must add up to the river's share), its thinning far away and its fade
+    // from the head; over its last metres to the coast it gives way to the sea.
+    ShorePoint shore = shore_point(w, input.flat);
+    float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
+    float bank = (1.0 - abs(across)) * input.flow.w;
+    float soft = min(max(RIVER_BANK, 2.0 * footprint), 0.5 * input.flow.w);
+    float coverage = input.river.y * smoothstep(0.0, soft, bank)
+        * smoothstep(0.0, RIVER_MOUTH, shore.distance);
+    // The flow: faster in the middle than by the banks.
+    float2 down = input.flow.xy / max(length(input.flow.xy), 1e-4);
+    float2 velocity = down * (input.river.w * (1.0 - 0.4 * across * across));
+    FlowPhases f = flow_phases(world, velocity, w[0].time);
+    // The ripples: the finest cascade's slopes on a smaller tile, carried downstream. Cross-faded,
+    // with the contrast two unrelated samples lose halfway put back.
+    WaterCascadeView cv = w[0].cascades[WATER_CASCADES - 1];
+    float tile = cv.inv_patch / RIVER_RIPPLE_TILE;
+    float2 offset = cv.offset / RIVER_RIPPLE_TILE;
+    float4 s0 = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, (input.flat - f.offset0) * tile + offset);
+    float4 s1 = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, (input.flat - f.offset1) * tile + offset + float2(0.37, 0.61));
+    float norm = rsqrt(f.weight0 * f.weight0 + f.weight1 * f.weight1);
+    float strength = RIVER_RIPPLE_STRENGTH / RIVER_RIPPLE_TILE;
+    float2 ripple = (s0.xy * f.weight0 + s1.xy * f.weight1) * (norm * strength);
+    float variance = (f.weight0 * max(s0.w - dot(s0.xy, s0.xy), 0.0) + f.weight1 * max(s1.w - dot(s1.xy, s1.xy), 0.0))
+        * (strength * strength);
+    // The surface falls downstream with its bed.
+    float2 slope = ripple - down * min(input.flow.z, 0.3);
+    float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
+    float3 v = normalize(-input.relative);
+    float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
+    WaterLight light = water_light(w, n, v, a2);
+    // What lies under: the ground, its light on a bed of sediment towards the middle, seen
+    // through the ribbon's depth (a parabola across, deepest in the middle) along the view ray.
+    uint2 pixel = uint2(input.position.xy);
+    float2 uv = (float2(pixel) + 0.5) / float2(w[0].width, w[0].height);
+    float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
+    float luminance = dot(under, float3(0.2126, 0.7152, 0.0722));
+    under = lerp(under, luminance * RIVER_BED, 1.0 - smoothstep(0.3, 0.95, abs(across)));
+    float depth = input.river.z * (1.0 - across * across);
+    float3 transmittance = exp(-RIVER_ABSORPTION * (depth / max(v.y, 0.2)));
+    float3 inside = under * transmittance + RIVER_SCATTER * light.lit * (1.0 - transmittance);
+    float3 color = light.reflected * light.fresnel + inside * (1.0 - light.fresnel) + light.sun;
+    // White water in riffles where the bed is steep and the stream fast, broken up by a pattern
+    // carried down with the flow; finer than two pixels, the pattern gives way to its mean.
+    float riffles = smoothstep(0.45, 0.75, value_noise(world / RIVER_RIFFLES));
+    float rapids = smoothstep(0.06, 0.2, input.flow.z) * smoothstep(1.5, 3.0, input.river.w) * riffles;
+    float foam = 0.0;
+    if (rapids > 0.0)
+    {
+        float n0 = value_noise((world - f.offset0) / 0.8);
+        float n1 = value_noise((world - f.offset1) / 0.8 + 13.7);
+        float pattern = 0.5 + ((n0 - 0.5) * f.weight0 + (n1 - 0.5) * f.weight1) * norm;
+        float resolved = saturate(0.8 / (2.0 * footprint) - 1.0);
+        foam = rapids * lerp(RIVER_FOAM_MEAN, smoothstep(0.45, 0.8, pattern), resolved);
+    }
+    color = lerp(color, 0.8 * light.lit / PI, foam * 0.8);
+    float4 air = aerial_at(w[0].sky, uv, length(input.relative) * 0.001);
+    color = color * air.a + air.rgb * light.scale;
+    // Blended by the coverage, as are the rays asked for (`trace_requested` normalises the
+    // direction): what the mirror ray meets and what the sun lights of the river's share.
+    SurfaceTargets o;
+    o.color = float4(min(color, 32768.0), coverage);
+    float weight = light.fresnel * (1.0 - light.blur) * (1.0 - foam * 0.8) * air.a * coverage;
+    o.request = weight >= REQUEST_MIN_WEIGHT ? float4(light.mirror, weight) : float4(0.0);
+    float3 sun_share = light.sun + RIVER_SCATTER * light.sun_light * (1.0 - transmittance) * (1.0 - light.fresnel);
+    sun_share = lerp(sun_share, 0.8 * light.sun_light / PI, foam * 0.8) * air.a;
+    sun_share = min(sun_share, o.color.rgb) * coverage;
+    float brightest = max(o.color.r, max(o.color.g, o.color.b)) * coverage;
+    bool shade = max(sun_share.r, max(sun_share.g, sun_share.b)) > SUN_REQUEST_MIN_SHARE * brightest;
+    o.sun = shade ? float4(sun_share, 1.0) : float4(0.0);
+    // Nothing of the river here: leave the pixel, its depth and its rays to what is under.
+    if (coverage < 1.0 / 255.0)
+        discard;
     return o;
 }
 

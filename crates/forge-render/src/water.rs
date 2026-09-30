@@ -437,10 +437,56 @@ struct GpuWaterSurface {
     train_count: u32,
     shore_bin: f32,
     time: f32,
-    pad: [f32; 2],
+    pixel: f32,
+    river_points: u32,
+    ground: u64,
+    rivers: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 656);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 672);
+
+/// Quads across a river's ribbon (`RIVER_ACROSS` in `water.slang`).
+const RIVER_ACROSS: u32 = 4;
+
+/// Mirrors `RiverPoint` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuRiverPoint {
+    /// World x, z, the half width, the depth.
+    a: [f32; 4],
+    /// Downstream (x, z), the speed, the bed's slope.
+    b: [f32; 4],
+    /// The fade, 1 where a segment starts (0 at a river's last point), the ground under the
+    /// last vertex across, 0.
+    c: [f32; 4],
+    /// The ground under the first four vertices across.
+    d: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<GpuRiverPoint>() == 64);
+
+/// A point of a river's ribbon (`forge_procgen::RibbonPoint`), as the surface draws it.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterRiverPoint {
+    /// World x and z (the sea's frame), metres, on the river's smoothed course.
+    pub position: [f32; 2],
+    /// Downstream, unit (world x and z).
+    pub direction: [f32; 2],
+    /// Half the river's width, metres.
+    pub half_width: f32,
+    /// The water's depth in the middle, metres.
+    pub depth: f32,
+    /// The water's speed, m/s.
+    pub speed: f32,
+    /// The bed's slope downstream.
+    pub slope: f32,
+    /// How much of the river is drawn there, 0..1 (it fades in from its head).
+    pub fade: f32,
+    /// Per vertex across, from `position − side × half_width` to `position + side ×
+    /// half_width` with `side = (−direction.z, direction.x)`: the highest the drawn ground
+    /// stands under the quads around the vertex, metres (`forge_procgen::RibbonPoint::ground`).
+    pub ground: [f32; RIVER_ACROSS as usize + 1],
+}
 
 /// Shore trains the surface draws at most (`WATER_MAX_TRAINS` in `water.slang`).
 const MAX_TRAINS: usize = 4;
@@ -502,6 +548,10 @@ pub struct WaterShore<'a> {
     pub bin: f32,
     /// The trains, [`MAX_TRAINS`] at most, their tables of one length.
     pub trains: &'a [WaterShoreTrain<'a>],
+    /// The rivers over the land, each a ribbon of points from its head, in the order they are
+    /// drawn (a tributary before the river that covers its end). They lie on the ground that
+    /// `floor` describes, drawn as the island's mesh draws it.
+    pub rivers: &'a [Vec<WaterRiverPoint>],
 }
 
 /// Mirrors `SurfacePush` and `CopyPush` in `water.slang`.
@@ -540,6 +590,9 @@ pub struct WaterSurfaceParams {
     pub sky_scale: f32,
     /// The sea's clock, seconds (the cascades' time): the shore's trains move with it.
     pub time: f32,
+    /// Metres a pixel spans a metre away (the vertical field of view over the image's height):
+    /// far away, the rivers stay a pixel wide either side.
+    pub pixel: f32,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -547,10 +600,11 @@ pub struct WaterSurfaceParams {
 /// through copied first (`water/scene-copy`). It reflects the sky and takes the sun's light,
 /// and asks for the rays that bring the scene in ([`RayRequests`]): the mirror rays that put it
 /// in the reflection (step 3), and the shadow rays that take the sun away where it shades the
-/// water (step 4).
+/// water (step 4). With the shore come the rivers, ribbons drawn in the same pass over the land.
 pub struct WaterSurface {
     copy: Pipeline,
     surface: Pipeline,
+    rivers: Pipeline,
     blocks: Vec<Buffer>,
     /// Without it the sea is deep everywhere.
     shore: Option<ShoreFields>,
@@ -572,6 +626,10 @@ struct ShoreFields {
     bin: f32,
     /// Per frame slot, the ground's `ShoreGround` block.
     ground: Vec<Buffer>,
+    /// The rivers' points one river after the other, and the floor's heights in full
+    /// precision, which the ribbons lie on (none without rivers).
+    rivers: Option<(Buffer, Buffer)>,
+    river_points: u32,
 }
 
 impl WaterSurface {
@@ -608,10 +666,35 @@ impl WaterSurface {
             cull_mode: vk::CullModeFlags::NONE,
             wireframe: false,
             depth_test: true,
+            alpha_blend: false,
             name: "water surface",
         });
         device.destroy_shader_module(vertex);
         device.destroy_shader_module(fragment);
+        // The rivers blend over what is under them by how much of the pixel they cover: their
+        // soft edges, their thinning far away.
+        let river_vertex = device.create_shader_module(
+            &shaders.compile("water.slang", "river_vert_main", ShaderStage::Vertex)?,
+            "water river vertices",
+        )?;
+        let river_fragment = device.create_shader_module(
+            &shaders.compile("water.slang", "river_frag_main", ShaderStage::Fragment)?,
+            "water rivers",
+        )?;
+        let rivers = device.create_vertex_pipeline(&VertexPipelineDesc {
+            vertex: (river_vertex, "river_vert_main"),
+            fragment: (river_fragment, "river_frag_main"),
+            color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
+            depth_format: Some(vk::Format::D32_SFLOAT),
+            push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
+            cull_mode: vk::CullModeFlags::NONE,
+            wireframe: false,
+            depth_test: true,
+            alpha_blend: true,
+            name: "water rivers",
+        });
+        device.destroy_shader_module(river_vertex);
+        device.destroy_shader_module(river_fragment);
         let blocks = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -691,6 +774,42 @@ impl WaterSurface {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
+                // The rivers' points, each marking whether a segment starts there.
+                let points: Vec<GpuRiverPoint> = s
+                    .rivers
+                    .iter()
+                    .flat_map(|river| {
+                        river.iter().enumerate().map(|(k, p)| GpuRiverPoint {
+                            a: [p.position[0], p.position[1], p.half_width, p.depth],
+                            b: [p.direction[0], p.direction[1], p.speed, p.slope],
+                            c: [
+                                p.fade,
+                                f32::from(u8::from(k + 1 < river.len())),
+                                p.ground[4],
+                                0.0,
+                            ],
+                            d: [p.ground[0], p.ground[1], p.ground[2], p.ground[3]],
+                        })
+                    })
+                    .collect();
+                let rivers = (!points.is_empty())
+                    .then(|| -> Result<_> {
+                        Ok((
+                            device.create_buffer_with_data(
+                                &points,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                                MemoryCategory::Work,
+                                "water rivers",
+                            )?,
+                            device.create_buffer_with_data(
+                                s.floor,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                                MemoryCategory::Work,
+                                "water ground heights",
+                            )?,
+                        ))
+                    })
+                    .transpose()?;
                 Ok(ShoreFields {
                     image,
                     frame: [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
@@ -701,15 +820,26 @@ impl WaterSurface {
                     bins: bins as u32,
                     bin: s.bin,
                     ground,
+                    rivers,
+                    river_points: points.len() as u32,
                 })
             })
             .transpose()?;
         Ok(Self {
             copy: copy?,
             surface: surface?,
+            rivers: rivers?,
             blocks,
             shore,
         })
+    }
+
+    /// Bytes of the rivers' points and of the heights they lie on (0 without rivers).
+    pub fn river_bytes(&self) -> u64 {
+        self.shore
+            .as_ref()
+            .and_then(|s| s.rivers.as_ref())
+            .map_or(0, |(points, heights)| points.size() + heights.size())
     }
 
     /// The shore as the ground's shading reads it in this frame, at the sea's `time` (the
@@ -850,7 +980,10 @@ impl WaterSurface {
         let sky_address = sky.address();
         let sky_light = sky.light.address;
         let surface = &self.surface;
+        let river_pipeline = &self.rivers;
         let shore: Option<&'f ShoreFields> = self.shore.as_ref();
+        let rivers = shore.and_then(|s| s.rivers.as_ref());
+        let river_points = shore.map_or(0, |s| s.river_points);
         let shore_image = shore.map(|s| graph.import(&s.image));
         let mut pass = graph
             .pass("water/surface")
@@ -909,7 +1042,10 @@ impl WaterSurface {
                     train_count: shore.map_or(0, |s| s.train_count),
                     shore_bin: shore.map_or(1.0, |s| s.bin),
                     time: params.time,
-                    pad: [0.0; 2],
+                    pixel: params.pixel,
+                    river_points,
+                    ground: rivers.map_or(0, |(_, heights)| heights.address()),
+                    rivers: rivers.map_or(0, |(points, _)| points.address()),
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.
@@ -954,6 +1090,18 @@ impl WaterSurface {
                 },
             );
             commands.draw(LEVELS * GRID * GRID * 6, 1);
+            // The rivers over the land, a segment between each pair of a river's points.
+            if river_points > 1 {
+                commands.bind_pipeline(river_pipeline);
+                commands.push_constants(
+                    river_pipeline,
+                    &SurfacePush {
+                        surface: address,
+                        pad: [0; 2],
+                    },
+                );
+                commands.draw((river_points - 1) * RIVER_ACROSS * 6, 1);
+            }
             commands.end_rendering();
             Ok(())
         });
