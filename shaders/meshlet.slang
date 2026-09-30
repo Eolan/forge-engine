@@ -2739,7 +2739,10 @@ float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter, float bias)
 {
     float3 sun = normalize(f[0].sun_dir);
     if (dot(n, sun) <= 0.0)
-        return 1.0; // facing away: the sun does not light it anyway
+        // Facing away: the surface's own geometry shades it. Not 1: the shading bends `n` by
+        // the normal map, and a bump tilted towards the sun then caught it at full strength on
+        // a wall in shade, in bright specks that sparkled under TAA's jitter.
+        return 0.0;
     float3 direction = sun;
     if (f[0].sun_angular_radius > 0.0)
     {

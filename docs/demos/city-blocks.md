@@ -77,6 +77,30 @@ Options:
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral|aces2|aces2-analytic`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
 
+## Specks on walls in shade (issue #102, 2026-09-30)
+
+Walls facing away from the sun showed bright specks at the rims of their normal map's bumps,
+in the sun's colour. They sparkled as TAA's jitter moved the samples (the owner's capture:
+plaster, close up).
+
+**Cause.** `sun_shadow` returned 1, unshadowed, for a surface whose own normal faces away from
+the sun, since the sun would not light it anyway. The shading bends the normal by the normal
+map, though, so a bump tilted towards the sun got full, unshadowed sunlight. It now returns 0:
+the surface's own geometry shades it.
+
+**Effect.**
+- On the close view `--stream-pool 0 --view 6,9,1138,-90,8`, the specks are gone. Consecutive
+  frames of the still camera differ in 8 880 px instead of 17 597. What's left moving is the
+  bricks' mortar, the towers' windows and the shadows' penumbrae, which TAA averages.
+- The batch against the build before:
+  - the ballad: 1 609–3 419 px, single pixels on the rocks' dark sides (ꟻLIP mean at most 0.0026,
+    peak 0.41);
+  - the city: 456–522 px (mean at most 0.0014);
+  - the gallery and the island: under 10 px;
+  - the A/B harness and mesh against fallback: 0 px.
+
+![The plaster wall in shade before and after, and the pixels that changed](images/city-wall-specks.png)
+
 ## Far from the origin (issue #93, 2026-09-25)
 
 The first step of Phase 2's large-world coordinates: measure what today's renderer does when
