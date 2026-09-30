@@ -244,8 +244,10 @@ Checks:
 - Synchronization validation is silent on every demo and path, async on and off.
 
 **Next:** the probes still wait for the previous frame's resolve, which reads their atlases.
-Double-buffering the atlases and the sky's tables would let them start during the previous
-frame's tail (#95).
+Double-buffering the atlases and the sky's tables lets them start during the previous frame's
+tail, but on the 5070 Ti that gains nothing. They then contend with the resolve (south
+2.06 → 2.13 ms, #95; `docs/PROFILE.md`), so the change is kept as a patch in
+`reports/2026-09-30-95/` for the RTX 3080 and AMD.
 
 ## The sky's reflection in the streets (issue #68, 2026-09-25)
 

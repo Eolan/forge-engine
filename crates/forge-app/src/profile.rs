@@ -101,8 +101,9 @@ pub struct Profile {
     run_gpu: Vec<(String, f64)>,
     /// Frames whose GPU zones were summed.
     run_frames: u64,
-    /// The frame's GPU time, first timestamp to last on every queue (smoothed), and its sum
-    /// over the run: with async queues the zones overlap and no longer add up to it.
+    /// The frame's GPU time, first timestamp to last on every queue, from the previous
+    /// frame's end at the earliest (smoothed), and its sum over the run: with async queues the
+    /// zones overlap and no longer add up to it.
     gpu_span: f64,
     run_span: f64,
     /// CPU milliseconds per zone summed over the run, with the number of samples, in the
@@ -238,7 +239,8 @@ impl Profile {
         }
     }
 
-    /// A frame's GPU zones and its span (first timestamp to last, every queue). Zones of
+    /// A frame's GPU zones and its span (first timestamp to last, every queue, from the
+    /// previous frame's end at the earliest: `GpuTimers::frame_ms`). Zones of
     /// another queue than graphics are shown with it (`gi/probe rays [compute]`): they
     /// overlap the graphics zones, so the GPU total is the span, not their sum.
     pub(crate) fn gpu_zones(&mut self, zones: &[GpuZone], span_ms: Option<f64>) {

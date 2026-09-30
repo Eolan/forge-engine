@@ -31,7 +31,8 @@ pub struct FrameSlot {
     /// Monotonic frame number.
     pub frame_number: u64,
     /// GPU time of the previous frame that used this slot, in milliseconds: from its first
-    /// timestamp to its last, on every queue (overlapping work counts once).
+    /// timestamp (or the frame before's last, if later) to its last, on every queue
+    /// (overlapping work counts once: [`GpuTimers::frame_ms`]).
     pub previous_gpu_ms: Option<f64>,
 }
 
@@ -69,6 +70,8 @@ pub struct Frames {
     render_finished: Vec<vk::Semaphore>,
     timers: GpuTimers,
     last_zones: Vec<GpuZone>,
+    /// The last timestamp of the frame whose zones `last_zones` holds.
+    last_end: Option<u64>,
     frame_number: u64,
     batches: Vec<Batch>,
     /// Resources retired by [`Frames::destroy_later`], tagged with the frame that may still
@@ -142,6 +145,7 @@ impl Frames {
             render_finished,
             timers,
             last_zones: Vec::new(),
+            last_end: None,
             frame_number: 0,
             batches: Vec::new(),
             garbage: Vec::new(),
@@ -191,8 +195,10 @@ impl Frames {
             // SAFETY: live timeline semaphore.
             unsafe { self.device.raw().wait_semaphores(&info, u64::MAX)? };
             // The frame that wrote the slot's timestamps has completed (timeline wait above).
+            // Slots are read in frame order: `last_end` is the frame before's.
             self.last_zones = self.timers.read(index);
-            previous_gpu_ms = GpuTimers::span_ms(&self.device, &self.last_zones);
+            previous_gpu_ms = GpuTimers::frame_ms(&self.device, &self.last_zones, self.last_end);
+            self.last_end = GpuTimers::end_ticks(&self.last_zones);
             // Every frame up to that one has completed: its retired resources can go.
             let completed = self.frame_number - FRAMES_IN_FLIGHT as u64;
             self.garbage.retain(|(frame, _)| *frame > completed);

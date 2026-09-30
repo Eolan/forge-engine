@@ -47,7 +47,8 @@ batch in `docs/PROCESS.md`.
 5. #77, async compute and transfer queues in the render graph ✅ (the city's sky tables and
    probe update on the compute queue, its streaming copies on the transfer queue: 2.36 →
    2.25 ms). #78 (transient buffers, parallel recording) follows once CPU recording shows in
-   the overlay. More overlap: #95.
+   the overlay. More overlap (#95, double-buffered probe atlases and sky tables) was measured
+   on 2026-09-30 and gains nothing on the 5070 Ti (patch in `reports/2026-09-30-95/`).
 6. #92, the second cluster cull over the first one's rejects only ✅ (pass 1 lists what the
    previous pyramid hid: the city's cluster cull 2 0.28 → 0.03 ms, its frame 2.16 → 1.96 ms,
    the ballad 1.40 → 1.31 ms, every view faster).
@@ -64,8 +65,8 @@ lifetime heap with a poison mode for the device-address hazard first; parallel r
 past a measured gate, since recording is 0.1 ms of the frame today), #94 (an
 HDR display output; researched 2026-09-26, `docs/research/hdr-output.md`: the swapchain pair
 to enable, the OS white level to read, ACES 2.0's presets as a rebake, paper white as the one
-real decision, everything but the present verifiable on an SDR monitor), #95 (more async
-overlap), #39 (the RTX 3080 run).
+real decision, everything but the present verifiable on an SDR monitor), #39 (the RTX 3080
+run, which can also retry #95's double buffer).
 
 **Proposed next, for the owner to pick:**
 - #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes

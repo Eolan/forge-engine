@@ -7,7 +7,8 @@
 //! the slot is reused two frames later, [`GpuTimers::read`] turns the timestamps into
 //! [`GpuZone`]s: consecutive differences within each batch, so on one queue the passes of a
 //! frame add up to that queue's work. Queues overlap, so the frame's time is its span
-//! ([`GpuTimers::span_ms`]), not the sum of its zones. Labels are `group/name`
+//! ([`GpuTimers::frame_ms`], from the previous frame's end when it started earlier), not the
+//! sum of its zones. Labels are `group/name`
 //! (`geometry/meshlet pass 1`); the profiler groups by prefix.
 
 use std::cell::{Cell, RefCell};
@@ -215,11 +216,20 @@ impl GpuTimers {
     }
 
     /// The frame's GPU time: from the first zone's start to the last zone's end, on any
-    /// queue. `None` without zones.
-    pub fn span_ms(device: &Device, zones: &[GpuZone]) -> Option<f64> {
-        let start = zones.iter().map(|z| z.start_ticks).min()?;
-        let end = zones.iter().map(|z| z.end_ticks).max()?;
+    /// queue, but not before `previous_end`, the previous frame's last timestamp. A frame's
+    /// async work can start while the previous frame's graphics work runs (issue #95); that
+    /// part overlaps work already counted, so frames' times add up to the GPU's busy time.
+    /// `None` without zones.
+    pub fn frame_ms(device: &Device, zones: &[GpuZone], previous_end: Option<u64>) -> Option<f64> {
+        let first = zones.iter().map(|z| z.start_ticks).min()?;
+        let start = previous_end.map_or(first, |end| end.max(first));
+        let end = Self::end_ticks(zones)?;
         Some(end.saturating_sub(start) as f64 * f64::from(device.timestamp_period_ns()) / 1.0e6)
+    }
+
+    /// The frame's last timestamp (ticks), on any queue. `None` without zones.
+    pub fn end_ticks(zones: &[GpuZone]) -> Option<u64> {
+        zones.iter().map(|z| z.end_ticks).max()
     }
 }
 

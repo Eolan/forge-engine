@@ -11,7 +11,9 @@ not absorb the previous frame's tail. Since #77 a frame runs on up to three queu
 async compute, transfer). A zone off the graphics queue carries its queue's name
 (`gi/probe rays [compute]`) and measures time shared with the graphics work beside it, so it
 reads longer than the same pass alone, and the zones no longer add up to the frame. The
-frame's GPU time is its span, from the first timestamp on any queue to the last. CPU zones are wall-clock spans of the main-thread frame loop. Frames overlap on
+frame's GPU time is its span, from the first timestamp on any queue to the last, starting at
+the previous frame's last timestamp when its async work began earlier (#95: that part
+overlaps the previous frame, whose time already counts it). CPU zones are wall-clock spans of the main-thread frame loop. Frames overlap on
 the GPU (two in flight), so the per-pass sum can exceed the wall-clock frame: the frame time
 is the truth, the zones are the split. With `--features profiling` the same GPU zones appear
 in Tracy's GPU timeline next to the CPU zones. At exit every demo logs the GPU zones (`gpu:`)
@@ -228,6 +230,16 @@ ballad have no async pass and do not move (within 0.01 ms). The probes' zones re
 1.35 ms and the geometry passes a third to a half longer, since they now share the GPU: the
 frame's span is what shrank. The overlap is limited: the probes still wait for the previous
 frame's resolve, which reads their atlases (#95).
+Removing that wait (#95, 2026-09-30) gains nothing on the 5070 Ti. With the probe atlases and
+state and the sky's tables double-buffered, frame N's probes and sky run during frame N−1's
+resolve, TAA and post. The city then takes 2.06 → 2.13 ms south, 2.53 → 2.53 orbiting and
+3.57 → 3.66 at 1440p (three runs each, alternating). Serially it takes 2.24 → 2.24,
+2.66 → 2.63 and 3.85 → 3.75. The probe blend reads 0.34 → 0.72 ms and the resolve
+(`shading/standard`) 0.35 → 0.55 ms: beside the resolve, the probes contend for the units the
+geometry passes left idle. The change stays out of the engine, and its patch and numbers are
+in `reports/2026-09-30-95/`. What stays is the frame's measure. A frame whose async work starts
+during the previous one is timed from that frame's end, so the overlap is not counted twice
+(the span read 3.90 ms for a 2.1 ms frame). Without overlap the number is the same.
 With pass 2's cluster cull over pass 1's rejects only (#92: pass 1 lists the 80–160 k clusters
 the previous pyramid hid, pass 2 tests those alone instead of walking pass 1's work again),
 against the build before in alternating runs (three each; these runs measure the same build

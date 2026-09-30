@@ -684,6 +684,10 @@ probe rays beside the resolve's own rays and texture reads contend for the same 
 and AMD warns off overlapping export-bound shaders, so the batch should be measured with and without
 each member. Expectation: a gain of the same order as #77's 0.11 ms, not more, and a cleaner
 critical path for the mover build and wake.
+*Measured (2026-09-30):* none on the 5070 Ti. The probes beside the resolve contend with it
+(south 2.06 → 2.13 ms; `docs/PROFILE.md`, `reports/2026-09-30-95/`), so the double buffer is not
+in the engine. The mover build and the wake would therefore run beside the geometry passes, as
+the probe update does today.
 
 **Demo plan.** A flag in each demo, off by default (`--movers N`), so the golden captures stay put;
 a separate binary only if the flag grows heavy. *Belt:* N ships (100, 1 000, 10 000) on seeded

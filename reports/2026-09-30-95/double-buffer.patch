@@ -1,0 +1,416 @@
+diff --git a/crates/forge-render/src/probes.rs b/crates/forge-render/src/probes.rs
+index 1d89dbd..cfa25bb 100644
+--- a/crates/forge-render/src/probes.rs
++++ b/crates/forge-render/src/probes.rs
+@@ -75,11 +75,15 @@ struct GpuProbeField {
+     irradiance_texel: [f32; 2],
+     distance_texel: [f32; 2],
+     hysteresis: f32,
++    /// The storage indices of the previous update's atlases, which the blend reads.
++    irradiance_previous: u32,
++    distance_previous: u32,
+     pad0: u32,
+-    pad1: [u32; 2],
++    /// The previous update's probe state, which the state pass reads.
++    probe_data_previous: u64,
+ }
+ 
+-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 336);
++const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 344);
+ 
+ /// Mirrors `ProbeTracePush` in `meshlet.slang`.
+ #[repr(C)]
+@@ -197,10 +201,18 @@ pub struct Probes {
+     trace: Pipeline,
+     state: Pipeline,
+     blend: Pipeline,
+-    irradiance: GraphImage,
+-    distance: GraphImage,
++    /// The atlases and the probes' state, double-buffered (issue #95): an update reads the copy
++    /// the previous one wrote and writes the other, which the resolve then reads. The next
++    /// frame's update never writes what this frame's resolve reads, so the compute queue can
++    /// start it while the graphics queue finishes this frame.
++    irradiance: [GraphImage; 2],
++    distance: [GraphImage; 2],
+     rays: GraphBuffer,
+-    data: GraphBuffer,
++    data: [GraphBuffer; 2],
++    /// Which copy the last update wrote.
++    current: usize,
++    /// Per frame slot, two records: the rays' (the previous copies: the rays read the maps
++    /// and the state before this frame's update) and the update's and the resolve's.
+     fields: Vec<Buffer>,
+     /// Per cascade, the origin of the last update.
+     origins: [IVec3; MAX_CASCADES],
+@@ -262,21 +274,24 @@ impl Probes {
+             category: MemoryCategory::Work,
+             name: "probe rays",
+         })?);
+-        let data = device.create_buffer(BufferDesc {
+-            size: probes * 16,
+-            usage: vk::BufferUsageFlags::STORAGE_BUFFER
+-                | vk::BufferUsageFlags::TRANSFER_DST
+-                | vk::BufferUsageFlags::TRANSFER_SRC,
+-            location: MemoryLocation::GpuOnly,
+-            category: MemoryCategory::Work,
+-            name: "probe state",
+-        })?;
+         let inactive = vec![[0.0, 0.0, 0.0, PROBE_INACTIVE]; probes as usize];
+-        device.write_buffer_staged(&data, 0, bytemuck::cast_slice(&inactive))?;
++        let state = |i: usize| -> Result<GraphBuffer> {
++            let data = device.create_buffer(BufferDesc {
++                size: probes * 16,
++                usage: vk::BufferUsageFlags::STORAGE_BUFFER
++                    | vk::BufferUsageFlags::TRANSFER_DST
++                    | vk::BufferUsageFlags::TRANSFER_SRC,
++                location: MemoryLocation::GpuOnly,
++                category: MemoryCategory::Work,
++                name: &format!("probe state {i}"),
++            })?;
++            device.write_buffer_staged(&data, 0, bytemuck::cast_slice(&inactive))?;
++            Ok(GraphBuffer::new(data))
++        };
+         let fields = (0..FRAMES_IN_FLIGHT)
+             .map(|i| {
+                 device.create_buffer(BufferDesc {
+-                    size: std::mem::size_of::<GpuProbeField>() as u64,
++                    size: 2 * std::mem::size_of::<GpuProbeField>() as u64,
+                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                     location: MemoryLocation::CpuToGpu,
+                     category: MemoryCategory::Frame,
+@@ -304,14 +319,25 @@ impl Probes {
+                 std::mem::size_of::<UpdatePush>(),
+                 "probe blend",
+             )?,
+-            irradiance: atlas(
+-                IRRADIANCE_TILE,
+-                vk::Format::R16G16B16A16_SFLOAT,
+-                "probe irradiance",
+-            )?,
+-            distance: atlas(DISTANCE_TILE, vk::Format::R16G16_SFLOAT, "probe distance")?,
++            irradiance: [
++                atlas(
++                    IRRADIANCE_TILE,
++                    vk::Format::R16G16B16A16_SFLOAT,
++                    "probe irradiance 0",
++                )?,
++                atlas(
++                    IRRADIANCE_TILE,
++                    vk::Format::R16G16B16A16_SFLOAT,
++                    "probe irradiance 1",
++                )?,
++            ],
++            distance: [
++                atlas(DISTANCE_TILE, vk::Format::R16G16_SFLOAT, "probe distance 0")?,
++                atlas(DISTANCE_TILE, vk::Format::R16G16_SFLOAT, "probe distance 1")?,
++            ],
+             rays,
+-            data: GraphBuffer::new(data),
++            data: [state(0)?, state(1)?],
++            current: 0,
+             fields,
+             origins: [IVec3::ZERO; MAX_CASCADES],
+             reset: true,
+@@ -329,10 +355,8 @@ impl Probes {
+             let [w, h] = self.params.atlas_size(tile);
+             u64::from(w) * u64::from(h)
+         };
+-        texels(IRRADIANCE_TILE) * 8
+-            + texels(DISTANCE_TILE) * 4
++        2 * (texels(IRRADIANCE_TILE) * 8 + texels(DISTANCE_TILE) * 4 + self.data[0].size())
+             + self.rays.size()
+-            + self.data.size()
+     }
+ 
+     /// Every probe's offset from its cell's centre (xyz, metres) and state and age (w: the
+@@ -340,7 +364,8 @@ impl Probes {
+     /// had, up to 8, `probe_state` in `probes.slang`) as the last submitted frame left them, in probe
+     /// order (`probe_index` in `probes.slang`). Waits for the device: for logs and tests.
+     pub fn read_states(&self, device: &Arc<Device>) -> Result<Vec<[f32; 4]>> {
+-        let bytes = device.read_back(&self.data, 0, self.data.size())?;
++        let data = &self.data[self.current];
++        let bytes = device.read_back(data, 0, data.size())?;
+         Ok(bytemuck::cast_slice(&bytes).to_vec())
+     }
+ 
+@@ -399,7 +424,10 @@ impl Probes {
+             let [w, h] = p.atlas_size(tile);
+             [1.0 / w as f32, 1.0 / h as f32]
+         };
+-        let field = GpuProbeField {
++        // This update reads the copies the last one wrote and writes the others (issue #95).
++        let (previous, current) = (self.current, 1 - self.current);
++        self.current = current;
++        let record = |data: usize, maps: usize| GpuProbeField {
+             rotation: [row(0), row(1), row(2)],
+             cascades,
+             counts: p.counts,
+@@ -407,26 +435,34 @@ impl Probes {
+             camera: camera.to_array(),
+             rays: p.rays,
+             ray_data: self.rays.address(),
+-            probe_data: self.data.address(),
+-            irradiance_image: self.irradiance.sampled().0,
+-            distance_image: self.distance.sampled().0,
+-            irradiance_storage: self.irradiance.storage(0).0,
+-            distance_storage: self.distance.storage(0).0,
++            probe_data: self.data[data].address(),
++            irradiance_image: self.irradiance[maps].sampled().0,
++            distance_image: self.distance[maps].sampled().0,
++            irradiance_storage: self.irradiance[maps].storage(0).0,
++            distance_storage: self.distance[maps].storage(0).0,
+             irradiance_texel: texel(IRRADIANCE_TILE),
+             distance_texel: texel(DISTANCE_TILE),
+             hysteresis: p.hysteresis,
++            irradiance_previous: self.irradiance[previous].storage(0).0,
++            distance_previous: self.distance[previous].storage(0).0,
+             pad0: 0,
+-            pad1: [0; 2],
++            probe_data_previous: self.data[previous].address(),
+         };
+-        self.fields[slot.index].write(0, &[field]);
++        // The rays trace with the maps and the state before this update; the update and the
++        // resolve read the new ones.
++        self.fields[slot.index].write(0, &[record(previous, previous), record(current, current)]);
+ 
+         let this: &'f Self = self;
+-        let address = this.fields[slot.index].address();
++        let rays_address = this.fields[slot.index].address();
++        let address = rays_address + std::mem::size_of::<GpuProbeField>() as u64;
+         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+         let rays = graph.import_buffer(&this.rays);
+-        let data = graph.import_buffer(&this.data);
+-        let irradiance = graph.import(&this.irradiance);
+-        let distance = graph.import(&this.distance);
++        let data_before = graph.import_buffer(&this.data[previous]);
++        let data = graph.import_buffer(&this.data[current]);
++        let irradiance_before = graph.import(&this.irradiance[previous]);
++        let distance_before = graph.import(&this.distance[previous]);
++        let irradiance = graph.import(&this.irradiance[current]);
++        let distance = graph.import(&this.distance[current]);
+         let count = p.probe_count();
+         let spread = [count.min(MAX_GROUPS), count.div_ceil(MAX_GROUPS)];
+         let trace = &this.trace;
+@@ -435,9 +471,9 @@ impl Probes {
+             .queue(QueueKind::Compute)
+             .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+             .image(sky.table, ImageAccess::Sampled(compute))
+-            .image(irradiance, ImageAccess::Sampled(compute))
+-            .image(distance, ImageAccess::Sampled(compute))
+-            .buffer(data, BufferAccess::ShaderRead(compute))
++            .image(irradiance_before, ImageAccess::Sampled(compute))
++            .image(distance_before, ImageAccess::Sampled(compute))
++            .buffer(data_before, BufferAccess::ShaderRead(compute))
+             .buffer(rays, BufferAccess::ShaderWrite(compute))
+             .run(move |_, commands| {
+                 commands.bind_pipeline(trace);
+@@ -445,7 +481,7 @@ impl Probes {
+                     trace,
+                     &TracePush {
+                         frame,
+-                        field: address,
++                        field: rays_address,
+                         sky: sky.address,
+                         probe_count: count,
+                         pad: 0,
+@@ -464,7 +500,8 @@ impl Probes {
+             .pass("gi/probe state")
+             .queue(QueueKind::Compute)
+             .buffer(rays, BufferAccess::ShaderRead(compute))
+-            .buffer(data, BufferAccess::ShaderReadWrite(compute))
++            .buffer(data_before, BufferAccess::ShaderRead(compute))
++            .buffer(data, BufferAccess::ShaderWrite(compute))
+             .run(move |_, commands| {
+                 commands.bind_pipeline(state);
+                 commands.push_constants(state, &push);
+@@ -472,11 +509,15 @@ impl Probes {
+                 Ok(())
+             });
+         let blend = &this.blend;
++        // The maps being written keep what an inactive probe's tiles held (the blend skips
++        // them, and no lookup reads them): read-write, not write-only.
+         graph
+             .pass("gi/probe blend")
+             .queue(QueueKind::Compute)
+             .buffer(rays, BufferAccess::ShaderRead(compute))
+             .buffer(data, BufferAccess::ShaderRead(compute))
++            .image(irradiance_before, ImageAccess::StorageRead(compute))
++            .image(distance_before, ImageAccess::StorageRead(compute))
+             .image(irradiance, ImageAccess::StorageReadWrite(compute))
+             .image(distance, ImageAccess::StorageReadWrite(compute))
+             .run(move |_, commands| {
+diff --git a/crates/forge-render/src/sky.rs b/crates/forge-render/src/sky.rs
+index dc25297..b6e47ed 100644
+--- a/crates/forge-render/src/sky.rs
++++ b/crates/forge-render/src/sky.rs
+@@ -14,6 +14,7 @@
+ //!   through the air; elsewhere the colour dimmed by the transmittance and lit by the air up
+ //!   to the pixel's distance.
+ 
++use std::cell::Cell;
+ use std::sync::Arc;
+ 
+ use bytemuck::{Pod, Zeroable};
+@@ -112,14 +113,19 @@ pub struct GroundSky {
+     irradiance_pipeline: Pipeline,
+     aerial_pipeline: Pipeline,
+     compose_pipeline: Pipeline,
+-    sky_view: GraphImage,
+-    aerial: GraphImage,
+-    irradiance: GraphBuffer,
++    // One copy per frame in flight (issue #95): a frame's tables are written while the
++    // previous frame's compose and resolve may still read its own.
++    sky_view: Vec<GraphImage>,
++    aerial: Vec<GraphImage>,
++    irradiance: Vec<GraphBuffer>,
+     params: Vec<Buffer>,
++    /// The copy the last declared frame writes.
++    last: Cell<usize>,
+ }
+ 
+ impl GroundSky {
+-    /// Compiles the passes and creates the two tables and the irradiance buffer.
++    /// Compiles the passes and creates the two tables and the irradiance buffer, one of each
++    /// per frame in flight.
+     pub fn new(device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<Self> {
+         let compute = |entry: &str, name: &str| -> Result<Pipeline> {
+             let module = device.create_shader_module(
+@@ -159,22 +165,33 @@ impl GroundSky {
+                 })
+             })
+             .collect::<Result<Vec<_>>>()?;
+-        let irradiance = GraphBuffer::new(device.create_buffer(BufferDesc {
+-            size: SKY_LIGHT_BYTES,
+-            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+-            location: MemoryLocation::GpuOnly,
+-            category: MemoryCategory::Frame,
+-            name: "sky irradiance",
+-        })?);
++        let irradiance = (0..FRAMES_IN_FLIGHT)
++            .map(|i| {
++                Ok(GraphBuffer::new(device.create_buffer(BufferDesc {
++                    size: SKY_LIGHT_BYTES,
++                    usage: vk::BufferUsageFlags::STORAGE_BUFFER
++                        | vk::BufferUsageFlags::TRANSFER_SRC,
++                    location: MemoryLocation::GpuOnly,
++                    category: MemoryCategory::Frame,
++                    name: &format!("sky irradiance {i}"),
++                })?))
++            })
++            .collect::<Result<Vec<_>>>()?;
++        let copies = |size: [u32; 2], name: &str| {
++            (0..FRAMES_IN_FLIGHT)
++                .map(|i| image(size, &format!("{name} {i}")))
++                .collect::<Result<Vec<_>>>()
++        };
+         Ok(Self {
+             sky_view_pipeline: compute("sky_view_main", "sky-view table")?,
+             irradiance_pipeline: compute("irradiance_main", "sky irradiance")?,
+             aerial_pipeline: compute("aerial_main", "aerial perspective")?,
+             compose_pipeline: compute("compose_main", "sky compose")?,
+-            sky_view: image(SKY_VIEW_SIZE, "sky-view table")?,
+-            aerial: image([SLICE * SLICES, SLICE], "aerial perspective")?,
++            sky_view: copies(SKY_VIEW_SIZE, "sky-view table")?,
++            aerial: copies([SLICE * SLICES, SLICE], "aerial perspective")?,
+             irradiance,
+             params,
++            last: Cell::new(0),
+         })
+     }
+ 
+@@ -193,10 +210,12 @@ impl GroundSky {
+         extent: vk::Extent2D,
+     ) -> SkyFrame {
+         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+-        let sky_view = graph.import(&self.sky_view);
+-        let aerial = graph.import(&self.aerial);
+-        let irradiance = graph.import_buffer(&self.irradiance);
+-        let irradiance_address = self.irradiance.address();
++        // The slot's copies: the frame that last used this slot has completed.
++        self.last.set(slot.index);
++        let sky_view = graph.import(&self.sky_view[slot.index]);
++        let aerial = graph.import(&self.aerial[slot.index]);
++        let irradiance = graph.import_buffer(&self.irradiance[slot.index]);
++        let irradiance_address = self.irradiance[slot.index].address();
+         let buffer: &'f Buffer = &self.params[slot.index];
+         let address = buffer.address();
+         let (transmittance, multiple_scattering) =
+@@ -323,7 +342,7 @@ impl GroundSky {
+     /// The sky's irradiance coefficients as the last submitted frame wrote them (rgb per
+     /// coefficient). Waits for the device: for logs and tests, not every frame.
+     pub fn read_irradiance(&self, device: &Arc<Device>) -> Result<[Vec3; 9]> {
+-        let bytes = device.read_back(&self.irradiance, 0, IRRADIANCE_BYTES)?;
++        let bytes = device.read_back(&self.irradiance[self.last.get()], 0, IRRADIANCE_BYTES)?;
+         let values: &[[f32; 4]] = bytemuck::cast_slice(&bytes[..IRRADIANCE_BYTES as usize]);
+         Ok(std::array::from_fn(|k| Vec3::from_slice(&values[k][..3])))
+     }
+diff --git a/shaders/probe_update.slang b/shaders/probe_update.slang
+index 07133c4..f5cd5bb 100644
+--- a/shaders/probe_update.slang
++++ b/shaders/probe_update.slang
+@@ -36,14 +36,17 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
+         return;
+     ProbeField* field = push.field;
+     ProbeSlot slot = probe_slot(field, probe);
+-    float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_INACTIVE) : field[0].probe_data[probe];
++    // The state is double-buffered (issue #95): read from the previous update's copy, written
++    // whole into this one, so the next frame's update never writes what this frame's resolve
++    // reads.
++    float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_INACTIVE) : field[0].probe_data_previous[probe];
+     float state_before = probe_state(data.w);
+     float age = probe_age(data.w);
+     if (age >= PROBE_SETTLE_UPDATES)
+     {
+         // Settled: it keeps its place and state; a reset lasts one update.
+-        if (state_before == PROBE_RESET)
+-            field[0].probe_data[probe] = float4(data.xyz, PROBE_ACTIVE + 4.0 * age);
++        float state = state_before == PROBE_RESET ? PROBE_ACTIVE : state_before;
++        field[0].probe_data[probe] = float4(data.xyz, state + 4.0 * age);
+         return;
+     }
+     float s = slot.spacing;
+@@ -138,6 +141,10 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
+     uint2 distance_tile = probe_tile(field, probe, DISTANCE_TILE);
+     RWTexture2D<float4> irradiance = g_storage_images_rgba16f[field[0].irradiance_storage];
+     RWTexture2D<float2> distance = g_storage_images_rg16f[field[0].distance_storage];
++    // The maps are double-buffered (issue #95): what they held comes from the previous
++    // update's copy, and every texel of an active probe's tiles is written into this one.
++    RWTexture2D<float4> irradiance_before = g_storage_images_rgba16f[field[0].irradiance_previous];
++    RWTexture2D<float2> distance_before = g_storage_images_rg16f[field[0].distance_previous];
+     if (thread < IRRADIANCE_TEXELS * IRRADIANCE_TEXELS)
+     {
+         uint2 t = uint2(thread % IRRADIANCE_TEXELS, thread / IRRADIANCE_TEXELS);
+@@ -153,7 +160,7 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
+             sum += w * ray.rgb;
+             total += w;
+         }
+-        float3 old = irradiance[irradiance_tile + 1 + t].rgb;
++        float3 old = irradiance_before[irradiance_tile + 1 + t].rgb;
+         float3 measured = total > 1e-3 ? sum / total : (reset ? float3(0.0) : old);
+         // `select`, not `lerp`: a map that was never written may hold anything, NaN included.
+         s_irradiance[thread] = h > 0.0 ? lerp(measured, old, h) : measured;
+@@ -172,7 +179,7 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
+             sum += w * float2(d, d * d);
+             total += w;
+         }
+-        float2 old = distance[distance_tile + 1 + t];
++        float2 old = distance_before[distance_tile + 1 + t];
+         float2 measured = total > 1e-6 ? sum / total : (reset ? float2(farthest, farthest * farthest) : old);
+         s_distance[thread] = h > 0.0 ? lerp(measured, old, h) : measured;
+     }
+diff --git a/shaders/probes.slang b/shaders/probes.slang
+index 5e95cdb..c0036be 100644
+--- a/shaders/probes.slang
++++ b/shaders/probes.slang
+@@ -81,8 +81,10 @@ public struct ProbeField
+     public float2 irradiance_texel; // 1 / the atlas's size in texels
+     public float2 distance_texel;
+     public float hysteresis;      // the share of the maps an update keeps
++    public uint irradiance_previous; // storage indices of the previous update's atlases (the blend reads them)
++    public uint distance_previous;
+     public uint pad0;
+-    public uint2 pad1;
++    public float4* probe_data_previous; // the previous update's probe state (the state pass reads it)
+ };
+ 
+ static const float PI = 3.14159265;
