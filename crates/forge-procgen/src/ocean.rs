@@ -123,8 +123,10 @@ fn jonswap(omega: f64, wind_speed: f64, fetch: f64) -> (f64, f64) {
     (shape * powf(3.3, r), omega_p)
 }
 
-/// The TMA factor of Kitaigorodskii (Bouws et al. 1985): how a finite depth caps the spectrum.
-fn tma(omega: f64, depth: f64) -> f64 {
+/// The TMA factor of Kitaigorodskii (Bouws et al. 1985): how a finite depth caps the spectrum
+/// at angular frequency `omega` in water `depth` metres deep (1 in deep water, 0 at no depth).
+/// The water's shore damps each cascade's waves by its root (issue #105, `water.slang`).
+pub fn tma(omega: f64, depth: f64) -> f64 {
     if depth.is_infinite() {
         return 1.0;
     }
@@ -350,6 +352,21 @@ impl Ocean {
             .collect()
     }
 
+    /// The angular frequency the realised amplitudes' energy centres on, rad/s: `ω(k)` weighted
+    /// by `|h0(k)|²`, 0 without energy. The shore damps a cascade by the TMA factor there
+    /// (issue #105).
+    pub fn mean_frequency(&self) -> f64 {
+        let (weighted, energy) =
+            self.h0
+                .iter()
+                .zip(&self.omega)
+                .fold((0.0, 0.0), |(w, e), (c, &omega)| {
+                    let power = c.0 * c.0 + c.1 * c.1;
+                    (w + power * omega, e + power)
+                });
+        if energy > 0.0 { weighted / energy } else { 0.0 }
+    }
+
     /// The significant wave height, metres: four times the root of the surface's variance,
     /// which is the energy of the realised amplitudes on both `k` and `−k`.
     pub fn significant_wave_height(&self) -> f64 {
@@ -571,5 +588,37 @@ mod tests {
             ..params
         });
         assert!(deep.significant_wave_height() > hs * 0.5);
+    }
+
+    #[test]
+    fn each_cascade_centres_on_a_frequency_inside_its_band_and_the_shallows_cap_the_long_waves() {
+        let params = |p: OceanParams| OceanParams { size: 64, ..p };
+        let oceans = OceanParams::cascades(Seed::new(5)).map(|p| Ocean::new(params(p)));
+        let mut previous = 0.0;
+        for ocean in &oceans {
+            let p = ocean.params;
+            let omega = ocean.mean_frequency();
+            let band = |wave: f64| dispersion(std::f64::consts::TAU / wave, p.depth).0;
+            let lowest = if p.longest_wave.is_finite() {
+                band(p.longest_wave)
+            } else {
+                band(p.patch)
+            };
+            assert!(
+                omega >= lowest && omega <= band(p.shortest_wave),
+                "{omega} outside {lowest}..{}",
+                band(p.shortest_wave)
+            );
+            assert!(omega > previous, "the cascades' frequencies rise");
+            previous = omega;
+        }
+        // The first cascade's energy centres near JONSWAP's peak (the breeze's 0.78 rad/s).
+        let (_, peak) = jonswap(1.0, 12.0, 200_000.0);
+        assert!((oceans[0].mean_frequency() / peak - 1.0).abs() < 0.35);
+        // TMA: nothing at no depth, the long waves capped first, deep water untouched.
+        assert_eq!(tma(peak, 0.0), 0.0);
+        assert!(tma(peak, 2.0) < tma(4.0 * peak, 2.0));
+        assert_eq!(tma(peak, f64::INFINITY), 1.0);
+        assert_eq!(tma(peak, 200.0), 1.0);
     }
 }

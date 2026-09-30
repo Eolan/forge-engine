@@ -38,8 +38,8 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterSurface,
-    WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
+    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterShore,
+    WaterSurface, WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -451,10 +451,15 @@ impl Gallery {
             let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
             let descs: Vec<WaterCascadeDesc> = oceans
                 .iter()
-                .map(|o| WaterCascadeDesc {
-                    patch: o.params.patch as f32,
-                    choppiness: o.params.choppiness as f32,
-                    samples: o.gpu_samples(),
+                .map(|o| {
+                    let omega = o.mean_frequency();
+                    WaterCascadeDesc {
+                        patch: o.params.patch as f32,
+                        choppiness: o.params.choppiness as f32,
+                        samples: o.gpu_samples(),
+                        omega: omega as f32,
+                        shelf: forge_procgen::tma(omega, o.params.depth) as f32,
+                    }
                 })
                 .collect();
             let water = WaterCascades::new(&ctx.device, &ctx.shaders, &descs)?;
@@ -465,10 +470,29 @@ impl Gallery {
                     "{:.2}",
                     oceans.iter().map(|o| o.significant_wave_height().powi(2)).sum::<f64>().sqrt()
                 ),
+                periods_s = %descs
+                    .iter()
+                    .map(|d| format!("{:.2}", std::f32::consts::TAU / d.omega))
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 mib = %format_args!("{:.1}", water.bytes() as f64 / f64::from(1 << 20)),
                 "sea cascades"
             );
-            let surface = WaterSurface::new(&ctx.device, &ctx.shaders)?;
+            // The shore the waves feel: the island's floor and its coast distance.
+            let height = island_heights(&args);
+            let coast = forge_procgen::coast_distance(&height, 0.0, &TaskPool::client());
+            let half = (0.5 * height.extent()) as f32;
+            let surface = WaterSurface::new(
+                &ctx.device,
+                &ctx.shaders,
+                Some(WaterShore {
+                    texels: height.size,
+                    spacing: height.spacing as f32,
+                    origin: [-half, -half],
+                    floor: &height.data,
+                    coast: &coast.data,
+                }),
+            )?;
             Some((water, surface, oceans))
         } else {
             None

@@ -516,3 +516,25 @@ and the same pass traces it.
 - **Cost:** the shadow rays add 0.03 ms to `water/reflections` at the coast and from the sea,
   0.07 ms at 1440p and 0.07 ms looking into the 10° sun, where they cross the island
   (`docs/PROFILE.md`).
+
+**The shore** (step 5, D-038's shore). Its first part: the waves feel the floor.
+- **The fields:** `water/surface` reads the island's floor height and signed coast distance
+  (`WaterShore`: one `RG16F` image of the 8 m field, 16 MiB at 2 049²).
+- **The damping:** each cascade is damped by the root of Kitaigorodskii's TMA factor (Bouws
+  et al. 1985) at the frequency its energy centres on (`Ocean::mean_frequency`: periods of
+  7.3, 3.5 and 1.2 s), in the local depth, relative to the 50 m its spectrum was made for. The
+  displacement, the slopes, their variance and the Jacobian all follow. Long waves die first
+  in the shallows, the open sea keeps its waves, and the factor falls to zero at the waterline
+  (as the square root of the depth), which stands for D-038's shore fade.
+- **What changes:** 150 m off the beach (6 m deep) the swell's cascade keeps 46 % of its
+  height, the others 89 % and 100 %. The patches of sand that showed through near the shore,
+  where the swell's troughs dipped under the floor, are gone.
+
+![The coast view and a low view 80 m off the beach, before the damping (left) and with it (right)](../../reports/2026-09-30-105/shore-damping.png)
+
+- **Cost:** `water/surface` 0.074 → 0.082 ms at the coast, 0.090 → 0.101 ms from the sea (a
+  texture read per vertex and fragment).
+- **Checks:** the batch changes only the four water images (ꟻLIP mean 0.036); the A/B harness
+  and mesh against fallback at 0 px; validation clean.
+- **Next:** the shore's own waves (trains along the coast distance that shoal and break), the
+  foam line, and the wet sand.

@@ -393,6 +393,11 @@ alternating, the previous commit against this one:
   island cross its slopes and rocks on their way to the sun, where elsewhere they leave the
   scene at once.
 
+**The shore's damping** (#105 step 5, 2026-09-30). The surface reads the floor's depth per
+vertex and fragment and damps each cascade by it: `water/surface` 0.074 → 0.082 ms at the
+coast and 0.090 → 0.101 ms from the sea; the frame 1.64 → 1.66 and 1.45 → 1.46 ms (three runs
+each, alternating).
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

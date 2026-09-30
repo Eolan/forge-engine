@@ -58,4 +58,4 @@ pub use island::{
 pub use layers::{
     LayerRule, Shore, paint_lakes, paint_moisture, paint_rivers, slope_layers, wetness,
 };
-pub use ocean::{Ocean, OceanParams, OceanSurface};
+pub use ocean::{Ocean, OceanParams, OceanSurface, tma};

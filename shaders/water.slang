@@ -251,7 +251,8 @@ struct WaterCascadeView
     float texel;       // metres a texel
     uint displacement; // sampled indices (every mip)
     uint slopes;
-    uint2 pad;
+    float omega;       // the angular frequency its energy centres on, rad/s
+    float shelf;       // the TMA factor there at the depth the spectrum was made for
 };
 
 // Mirrors `GpuWaterSurface` in water.rs.
@@ -263,6 +264,7 @@ struct WaterSurface
     float4 sun_radiance;  // rgb: the sun's pre-exposed illuminance on a surface facing it; w: the sky's luminance scale
     float4 absorption;    // rgb: the water's absorption, m⁻¹
     float4 scatter;       // rgb: the light the water scatters back, per unit of irradiance
+    float4 shore_frame;   // the shore's first sample (world x, z) and 1 / its spacing
     WaterCascadeView cascades[WATER_CASCADES];
     float4 levels[WATER_MAX_LEVELS]; // per level: its centre relative to the camera (xy = world xz), its spacing (z)
     uint level_count;
@@ -271,7 +273,8 @@ struct WaterSurface
     uint scene_depth;     // sampled: its depth (r32f)
     uint width;
     uint height;
-    uint2 pad;
+    uint shore;           // sampled (rg16f): the floor's height, the signed coast distance; or ~0: deep everywhere
+    uint shore_texels;    // its samples a side
     Sky* sky;             // the ground sky's block (the aerial perspective)
     float4* sky_light;    // the sky's irradiance, then the sky-view table's frame (sky.slang)
 };
@@ -292,17 +295,61 @@ struct SurfaceOut
     float2 flat : TEXCOORD0;      // the undisplaced point, camera-relative (world x, z)
 };
 
+// ----------------------------------------------------------------- the shore ---
+//
+// The waves feel the floor (step 5, D-038's shore): each cascade is damped by the root of the
+// TMA factor of Kitaigorodskii (Bouws et al. 1985) at the frequency its energy centres on, in
+// the water's depth, relative to the depth its spectrum was made for. Long waves die first in
+// the shallows, and every cascade is still at the waterline, where the factor reaches zero; the
+// open sea keeps its waves.
+
+static const float GRAVITY = 9.81;
+static const uint NO_SHORE = 0xFFFFFFFFu;
+
+// The floor's height and the signed coast distance (metres, positive inland) under a point
+// `flat` (camera-relative world x, z). Without the fields, a deep sea everywhere.
+float2 shore_at(WaterSurface* w, float2 flat)
+{
+    if (w[0].shore == NO_SHORE)
+        return float2(-1.0e4, -1.0e4);
+    float2 world = flat + w[0].camera.xz;
+    float2 uv = ((world - w[0].shore_frame.xy) * w[0].shore_frame.z + 0.5) / float(w[0].shore_texels);
+    return sample_image_level(w[0].shore, SAMPLER_LINEAR_CLAMP, uv, 0.0).xy;
+}
+
+// Kitaigorodskii's factor at angular frequency `omega` in `depth` metres of water
+// (`forge_procgen::tma`).
+float tma(float omega, float depth)
+{
+    float wh = omega * sqrt(max(depth, 0.0) / GRAVITY);
+    if (wh <= 1.0)
+        return 0.5 * wh * wh;
+    if (wh < 2.0)
+        return 1.0 - 0.5 * (2.0 - wh) * (2.0 - wh);
+    return 1.0;
+}
+
+// How much of cascade `v`'s waves stand in `depth` metres of water: 1 at the spectrum's own
+// depth and deeper, 0 on land.
+float shore_damping(WaterCascadeView v, float depth)
+{
+    if (depth <= 0.0 || v.shelf <= 0.0)
+        return 0.0;
+    return min(sqrt(tma(v.omega, depth) / v.shelf), 1.0);
+}
+
 // A point's displacement from every cascade, each sampled at the mip whose texels match
-// `spacing` metres.
+// `spacing` metres and damped by the depth under the point.
 float3 displacement_at(WaterSurface* w, float2 flat, float spacing)
 {
+    float depth = -shore_at(w, flat).x;
     float3 d = 0.0;
     for (uint c = 0; c < WATER_CASCADES; c++)
     {
         WaterCascadeView v = w[0].cascades[c];
         float2 uv = flat * v.inv_patch + v.offset;
         float mip = log2(max(spacing / v.texel, 1.0));
-        d += sample_image_level(v.displacement, SAMPLER_LINEAR_REPEAT, uv, mip).xyz;
+        d += shore_damping(v, depth) * sample_image_level(v.displacement, SAMPLER_LINEAR_REPEAT, uv, mip).xyz;
     }
     return d;
 }
@@ -396,7 +443,10 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
 {
     WaterSurface* w = surface_push.surface;
     // The slopes: their mean from every cascade's mips, and the variance of those the mips
-    // average away (Bruneton, Neyret & Holzschuch 2010).
+    // average away (Bruneton, Neyret & Holzschuch 2010), each cascade damped by the depth as
+    // its displacement is (the slopes scale with the amplitude, their variance with its square,
+    // the Jacobian's departure from 1 to first order).
+    float depth = -shore_at(w, input.flat).x;
     float2 slope = 0.0;
     float variance = 0.0;
     float jacobian = 1.0;
@@ -405,9 +455,10 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
         WaterCascadeView cv = w[0].cascades[c];
         float2 uv = input.flat * cv.inv_patch + cv.offset;
         float4 s = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, uv);
-        slope += s.xy;
-        variance += max(s.w - dot(s.xy, s.xy), 0.0);
-        jacobian += s.z - 1.0;
+        float a = shore_damping(cv, depth);
+        slope += a * s.xy;
+        variance += a * a * max(s.w - dot(s.xy, s.xy), 0.0);
+        jacobian += a * (s.z - 1.0);
     }
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
     float3 v = normalize(-input.relative);

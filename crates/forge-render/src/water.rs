@@ -26,6 +26,7 @@ use forge_gpu::{
 };
 use glam::{DVec3, Mat4, Vec3};
 
+use crate::aces2::f32_to_f16;
 use crate::meshlet::RayRequests;
 use crate::sky::SkyFrame;
 use crate::taa::HDR_FORMAT;
@@ -78,6 +79,13 @@ pub struct WaterCascadeDesc {
     /// Per sample in index order: `h0(k)` (real, imaginary), `ω(k)`, 0
     /// (`forge_procgen::Ocean::gpu_samples`), [`WATER_SIZE`]² of them.
     pub samples: Vec<[f32; 4]>,
+    /// The angular frequency the cascade's energy centres on, rad/s
+    /// (`forge_procgen::Ocean::mean_frequency`): the shore damps the cascade by the root of the
+    /// TMA factor there (`forge_procgen::tma`, mirrored in `water.slang`).
+    pub omega: f32,
+    /// The TMA factor at `omega` in the depth the spectrum was made for (1 in deep water): the
+    /// shore damps relative to it, so the open sea keeps its waves.
+    pub shelf: f32,
 }
 
 /// A cascade's fields at one sample, as [`WaterCascades::read_fields`] returns them.
@@ -104,6 +112,8 @@ struct Cascade {
     slopes: GraphImage,
     patch: f32,
     choppiness: f32,
+    omega: f32,
+    shelf: f32,
 }
 
 /// What this frame's passes write, for the surface pass to read.
@@ -187,6 +197,8 @@ impl WaterCascades {
                     slopes: image(&format!("water slopes {c}"))?,
                     patch: desc.patch,
                     choppiness: desc.choppiness,
+                    omega: desc.omega,
+                    shelf: desc.shelf,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -392,7 +404,8 @@ struct GpuWaterCascadeView {
     texel: f32,
     displacement: u32,
     slopes: u32,
-    pad: [u32; 2],
+    omega: f32,
+    shelf: f32,
 }
 
 /// Mirrors `WaterSurface` in `water.slang`.
@@ -405,6 +418,7 @@ struct GpuWaterSurface {
     sun_radiance: [f32; 4],
     absorption: [f32; 4],
     scatter: [f32; 4],
+    shore_frame: [f32; 4],
     cascades: [GpuWaterCascadeView; SURFACE_CASCADES],
     levels: [[f32; 4]; MAX_LEVELS],
     level_count: u32,
@@ -413,12 +427,31 @@ struct GpuWaterSurface {
     scene_depth: u32,
     width: u32,
     height: u32,
-    pad: [u32; 2],
+    shore: u32,
+    shore_texels: u32,
     sky: u64,
     sky_light: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 544);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 560);
+
+/// The sea floor and the coast under the sea (issue #105's shore), on a square grid of samples:
+/// what the surface damps its waves by.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterShore<'a> {
+    /// Samples a side.
+    pub texels: u32,
+    /// Metres between samples.
+    pub spacing: f32,
+    /// The world x and z of the first sample (the sea's frame, metres).
+    pub origin: [f32; 2],
+    /// Per sample, row-major along +z: the floor's height, metres (the sea's level at 0, the
+    /// land above it).
+    pub floor: &'a [f32],
+    /// Per sample: the signed distance to the coast, metres, positive inland
+    /// (`forge_procgen::coast_distance`).
+    pub coast: &'a [f32],
+}
 
 /// Mirrors `SurfacePush` and `CopyPush` in `water.slang`.
 #[repr(C)]
@@ -466,11 +499,18 @@ pub struct WaterSurface {
     copy: Pipeline,
     surface: Pipeline,
     blocks: Vec<Buffer>,
+    /// The shore's fields (`RG16F`: the floor's height, the coast distance) and their frame
+    /// (the first sample's x and z, 1 / spacing); without them the sea is deep everywhere.
+    shore: Option<(GraphImage, [f32; 4], u32)>,
 }
 
 impl WaterSurface {
-    /// Compiles the passes.
-    pub fn new(device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<Self> {
+    /// Compiles the passes and uploads the shore's fields.
+    pub fn new(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        shore: Option<WaterShore<'_>>,
+    ) -> Result<Self> {
         let copy_module = device.create_shader_module(
             &shaders.compile("water.slang", "copy_main", ShaderStage::Compute)?,
             "water scene copy",
@@ -513,10 +553,48 @@ impl WaterSurface {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let shore = shore
+            .map(|s| -> Result<_> {
+                let count = (s.texels as usize) * (s.texels as usize);
+                assert!(
+                    s.floor.len() == count && s.coast.len() == count,
+                    "the shore's fields hold texels² samples"
+                );
+                let bytes: Vec<u8> = s
+                    .floor
+                    .iter()
+                    .zip(s.coast)
+                    .flat_map(|(&h, &d)| {
+                        let [a, b] = f32_to_f16(h).to_le_bytes();
+                        let [c, e] = f32_to_f16(d).to_le_bytes();
+                        [a, b, c, e]
+                    })
+                    .collect();
+                let image = GraphImage::uploaded(
+                    device,
+                    ImageDesc {
+                        width: s.texels,
+                        height: s.texels,
+                        format: vk::Format::R16G16_SFLOAT,
+                        usage: vk::ImageUsageFlags::SAMPLED,
+                        aspect: vk::ImageAspectFlags::COLOR,
+                        mip_levels: 1,
+                        name: "water shore",
+                    },
+                    &bytes,
+                )?;
+                Ok((
+                    image,
+                    [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
+                    s.texels,
+                ))
+            })
+            .transpose()?;
         Ok(Self {
             copy: copy?,
             surface: surface?,
             blocks,
+            shore,
         })
     }
 
@@ -615,7 +693,8 @@ impl WaterSurface {
                     texel: c.patch / WATER_SIZE as f32,
                     displacement: c.displacement.sampled().0,
                     slopes: c.slopes.sampled().0,
-                    pad: [0; 2],
+                    omega: c.omega,
+                    shelf: c.shelf,
                 }
             })
             .collect();
@@ -624,6 +703,10 @@ impl WaterSurface {
         let sky_address = sky.address();
         let sky_light = sky.light.address;
         let surface = &self.surface;
+        let shore = self
+            .shore
+            .as_ref()
+            .map(|(image, frame, texels)| (graph.import(image), *frame, *texels));
         let mut pass = graph
             .pass("water/surface")
             .image(color, ImageAccess::ColorAttachment)
@@ -639,6 +722,9 @@ impl WaterSurface {
             pass = pass
                 .image(displacement, ImageAccess::Sampled(vertex))
                 .image(slopes, ImageAccess::Sampled(fragment));
+        }
+        if let Some((image, _, _)) = shore {
+            pass = pass.image(image, ImageAccess::Sampled(vertex | fragment));
         }
         pass.run(move |resources, commands| {
             let mut cascade_views = [GpuWaterCascadeView::zeroed(); SURFACE_CASCADES];
@@ -657,6 +743,7 @@ impl WaterSurface {
                     sun_radiance: params.sun_radiance.extend(params.sky_scale).to_array(),
                     absorption: [0.35, 0.07, 0.05, 0.0],
                     scatter: [0.003, 0.013, 0.016, 0.0],
+                    shore_frame: shore.map_or([0.0; 4], |(_, frame, _)| frame),
                     cascades: cascade_views,
                     levels,
                     level_count: LEVELS,
@@ -665,7 +752,8 @@ impl WaterSurface {
                     scene_depth: resources.sampled(scene_depth).0,
                     width: extent.width,
                     height: extent.height,
-                    pad: [0; 2],
+                    shore: shore.map_or(u32::MAX, |(image, _, _)| resources.sampled(image).0),
+                    shore_texels: shore.map_or(0, |(_, _, texels)| texels),
                     sky: sky_address,
                     sky_light,
                 }],
