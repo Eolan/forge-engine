@@ -207,6 +207,11 @@ From 4 m to 2 m (8 193² samples) takes 1.5 s on the 9800X3D; from 8 m to 4 m, 0
 digests: `ede478ecd0115cff` at 2 m, `96fc0548933e001f` at 4 m from 8 m. The island in the
 engine still draws the 8 m or 4 m field: drawing 2 m needs the cook in tiles with locked
 borders (134 M triangles, the next step).
+The cook already locks them. Its simplifier runs with `SimplifyOptions::LockBorder`
+(`forge-geom`, `lod.rs`), which keeps every vertex on a mesh's open edge in place at every
+level. Tiles cooked alone therefore keep the same vertices along a shared edge and meet without
+cracks at any pair of levels. The cost is that the edges never coarsen, which the planet
+research's skirts avoid (`docs/research/planet-terrain.md`).
 
 ![A 2 km window of the island at 2 m, upsampled alone: smooth, the 4 m field's valleys](images/island-upsampled-2m.png)
 
