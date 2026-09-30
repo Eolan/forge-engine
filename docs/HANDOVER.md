@@ -23,6 +23,19 @@ its slopes (fixed the same day), no sea and pale rock (`docs/demos/island.md`, "
 amendment and D-017 with a margin for isolated pixels (`docs/DECISIONS.md`). D-037, D-038 and
 D-039 stay 🟡. The rest of this file is the cloud session's handover as it wrote it.
 
+**Since then (to 2026-09-30, on `main`):**
+- **The island (#96):** its ground has sand, rock, sea floor, rivers, lakes and grass by
+  moisture, with hex tiling, 300 000 rocks and a stand-in sea for the mirror rays. Stage 5's
+  amplification to 2 m runs on the CPU (`docs/demos/island.md`).
+- **#101:** the island and the resident city are in the A/B harness.
+- **#102:** the specks on walls in shade are fixed.
+- **#98:** the highlight's view vector is fixed, a look change to judge
+  (`reports/2026-09-30-98/`).
+- **#95:** measured. Double-buffering the probe atlases and the sky tables gains nothing on
+  the 5070 Ti; the patch is kept in `reports/2026-09-30-95/`. A frame whose async work starts
+  during the previous one is now timed from that frame's end.
+- **Still waiting on the owner:** the island's look, then its own demo and the 2 m tiles.
+
 ## Read this first
 
 - **What needs the GPU:** commit 3 (the cells record: every pixel of both demos goes through
@@ -391,9 +404,10 @@ detail.
 
 ## What is proposed next, in order
 
-1. **Decide D-004's amendment** after the batch on commit 3 (keep, change, drop) and, with it,
+1. ~~**Decide D-004's amendment** after the batch on commit 3 (keep, change, drop) and, with it,
    D-037's numbers. D-017's ꟻLIP thresholds (max < 0.15, mean < 0.02) are what step 1 above
-   judges by; they are still 🟡.
+   judges by; they are still 🟡.~~ D-004's amendment and D-017 were accepted on 2026-09-26;
+   D-037 remains.
 2. **The island's own demo** (#96): commit 8 draws the field through `city-blocks --island`;
    what remains is the `island` demo with the props placed on it (the city's placement pass
    with the slope and altitude rules), the camera paths and the golden shots, once the field
