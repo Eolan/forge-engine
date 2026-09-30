@@ -398,6 +398,22 @@ vertex and fragment and damps each cascade by it: `water/surface` 0.074 → 0.08
 coast and 0.090 → 0.101 ms from the sea; the frame 1.64 → 1.66 and 1.45 → 1.46 ms (three runs
 each, alternating).
 
+**The shore's waves** (#105 step 5, 2026-09-30). Three trains per vertex and pixel near the
+shore (a table read each, the coast distance's gradient, two value noises), the foam's pattern
+where there is foam. Against step 4 (before the damping), three runs each, alternating:
+
+| View | water/surface | frame |
+|---|---|---|
+| coast | 0.076 → 0.136 ms | 1.65 → 1.72 ms |
+| from the sea (the whole coast's shallows) | 0.090 → 0.164 ms | 1.45 → 1.52 ms |
+| the beach from 60 m up | 0.095 → 0.204 ms | 1.64 → 1.76 ms |
+
+- **Where it goes:** the vertex shader's trains 0.03 ms and the fragment's 0.03 ms from the sea,
+  measured by switching each off. The trains skip the water deeper than they reach (45 m for
+  the 12 s train), which leaves the shallows all round the island in the sea view.
+- **The levers:** an index buffer for the surface (it is drawn without one, so each vertex is
+  shaded six times), and the trains starting nearer the shore.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

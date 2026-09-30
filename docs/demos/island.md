@@ -536,5 +536,41 @@ and the same pass traces it.
   texture read per vertex and fragment).
 - **Checks:** the batch changes only the four water images (ꟻLIP mean 0.036); the A/B harness
   and mesh against fallback at 0 px; validation clean.
-- **Next:** the shore's own waves (trains along the coast distance that shoal and break), the
-  foam line, and the wet sand.
+
+Its second part: the shore's own waves (Uncharted 3's recipe, Gonzalez-Ochoa & Holder 2012).
+- **The trains:** three Gerstner trains of 9, 7 and 12 s (0.9, 0.6 and 0.5 m high in deep
+  water, around the swell's 7.3 s) come in along the coast distance's gradient.
+  - Their phase is ω (t + τ), τ the time a crest takes from the point to the shore.
+    `forge_procgen::shore` tabulates it against the coast distance, from the floor's mean depth
+    at each distance and the dispersion relation (a crest takes 47 s from 200 m out). So the
+    crests slow and bunch up over the shallows.
+  - Their height grows by shoaling (the energy flux kept: `√(cg₀ / cg)`, Green's law in
+    shallow water) until together they stand over 0.78 of the depth (McCowan's breaker
+    index). Past that they follow the depth down: the surf zone, about 40 m wide on the
+    south beach.
+  - Along the coast the sets rise and fall and the crests drift a little out of line (two
+    slow value noises), so the lines of surf are not ruled.
+  - They fade in where the floor is under a fifth of their deep wavelength (the cascades fade
+    out there), and out where they are shorter than four of the mesh's spacings or the
+    pixel's footprints.
+- **The foam:** the broken water on the front of each crest in the surf zone, left behind as
+  the crest moves on. Also the thinnest water at the swash's edge, from the view ray's path to
+  the floor. Both are broken up by two octaves of value noise that drift shorewards and fade to
+  their mean below two pixels.
+- **The swash:** at the shoreline each wave runs up the beach as a thin sheet: a quick
+  uprush, then a slow backwash, 0.3 of the trains' deep-water height at most.
+
+![The south beach from 60 m up at 10, 12 and 14 s: the crests come in, break and leave their foam](../../reports/2026-09-30-105/shore-waves.png)
+
+- **Stability** (still camera, waves still, TAA on), frame to frame and over 32 frames: the
+  beach from 60 m up 0.019 % and 0.0002 %, the coast 1.46 % and 0.0019 %, from the sea 0.83 %
+  and 0.0001 %. The damped shallows move less than before, so the coast and the sea are
+  steadier than at step 4 (1.62 % and 0.98 %).
+- **Cost:** `water/surface` 0.082 → 0.136 ms at the coast, 0.101 → 0.164 ms from the sea (the
+  whole coast's shallows in view), 0.095 (before the damping) → 0.204 ms above the beach. The
+  frame: 1.65 → 1.72, 1.45 → 1.52 and 1.64 → 1.76 ms against step 4. The surface is drawn
+  without indices, each vertex six times: an index buffer is the lever.
+- **From low down** the surf is seen edge on and reads as a light band along the beach. The
+  crest that curls over is D-038's later step for the golden shots (a baked mesh along the
+  wavefront, as Horizon's).
+- **Next:** the wet sand.

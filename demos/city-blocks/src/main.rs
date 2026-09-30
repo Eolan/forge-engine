@@ -29,7 +29,9 @@ use forge_core::material::{
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{Heightfield, PropKind, PropSpec, Terrain, city_props};
-use forge_procgen::{ErosionParams, Field2, IslandParams, Ocean, OceanParams};
+use forge_procgen::{
+    ErosionParams, Field2, IslandParams, Ocean, OceanParams, ShoreProfile, ShoreTrain,
+};
 use forge_render::material::TextureSet;
 use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
@@ -39,7 +41,7 @@ use forge_render::{
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
     StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterShore,
-    WaterSurface, WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
+    WaterShoreTrain, WaterSurface, WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -478,10 +480,33 @@ impl Gallery {
                 mib = %format_args!("{:.1}", water.bytes() as f64 / f64::from(1 << 20)),
                 "sea cascades"
             );
-            // The shore the waves feel: the island's floor and its coast distance.
+            // The shore the waves feel: the island's floor and its coast distance, and the
+            // trains that come in to it, timed over the floor's profile.
             let height = island_heights(&args);
             let coast = forge_procgen::coast_distance(&height, 0.0, &TaskPool::client());
             let half = (0.5 * height.extent()) as f32;
+            let profile = ShoreProfile::new(&height, &coast, 0.0, SHORE_BIN, SHORE_BINS);
+            let tables: Vec<_> = SHORE_TRAINS.iter().map(|t| t.table(&profile)).collect();
+            let trains: Vec<WaterShoreTrain> = SHORE_TRAINS
+                .iter()
+                .zip(&tables)
+                .map(|(t, table)| WaterShoreTrain {
+                    omega: t.omega() as f32,
+                    height: t.height as f32,
+                    table,
+                })
+                .collect();
+            tracing::info!(
+                depth_m = %[50.0, 100.0, 200.0, 500.0]
+                    .map(|d| format!("{d:.0} m out {:.1}", profile.depth_at(d)))
+                    .join(", "),
+                seconds_to_shore_from_200_m = %tables
+                    .iter()
+                    .map(|t| format!("{:.0}", t[(200.0 / SHORE_BIN) as usize][0]))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                "shore trains"
+            );
             let surface = WaterSurface::new(
                 &ctx.device,
                 &ctx.shaders,
@@ -491,6 +516,8 @@ impl Gallery {
                     origin: [-half, -half],
                     floor: &height.data,
                     coast: &coast.data,
+                    bin: SHORE_BIN as f32,
+                    trains: &trains,
                 }),
             )?;
             Some((water, surface, oceans))
@@ -914,6 +941,7 @@ impl Demo for Gallery {
                     sun_radiance: self.renderer.sun_color
                         * (self.renderer.sun_illuminance * exposure),
                     sky_scale: self.renderer.sun_illuminance * exposure,
+                    time: self.sea_time_submitted,
                 },
                 taa_frame.color,
                 targets.depth,
@@ -1665,6 +1693,26 @@ fn island_heights(args: &Args) -> Field2<f32> {
 /// The island's sea floor (`forge_procgen::sea_floor`): metres of depth it levels off at, and
 /// the metres from the coast that set its slope (60 over 1 500: 4 % at the shore).
 const SEA_FLOOR: (f32, f32) = (60.0, 1500.0);
+
+/// The shore's wave trains (#105): the breeze's swell as three periods around its peak (the
+/// swell cascade centres on 7.3 s), heights in deep water.
+const SHORE_TRAINS: [ShoreTrain; 3] = [
+    ShoreTrain {
+        period: 9.0,
+        height: 0.9,
+    },
+    ShoreTrain {
+        period: 7.0,
+        height: 0.6,
+    },
+    ShoreTrain {
+        period: 12.0,
+        height: 0.5,
+    },
+];
+/// Metres a bin of the trains' tables, and the bins: 4 km out.
+const SHORE_BIN: f64 = 4.0;
+const SHORE_BINS: usize = 1024;
 
 /// The island as a prop (on its layered ground, `CityMaterials::island_ground`), its samples
 /// generated only when the cooked mesh is not in the cache. Named `island`, not `terrain`:

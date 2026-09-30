@@ -234,3 +234,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   E. Torrance, "Microfacet Models for Refraction through Rough Surfaces", EGSR 2007 (GGX), with
   Eric Heitz, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs",
   *JCGT* 3(2), 2014 (the height-correlated masking).
+- **The shore's waves** (`forge_procgen::shore`, `shaders/water.slang`, issue #105). Trains of
+  waves timed along the coast distance, after Carlos Gonzalez-Ochoa and Doug Holder, "Water
+  Technology of Uncharted", GDC 2012; Gerstner's trochoidal waves (Franz Joseph von Gerstner,
+  "Theorie der Wellen", 1802), as brought to graphics by Alain Fournier and William T. Reeves,
+  "A simple model of ocean waves", SIGGRAPH 1986; their shoaling by the conservation of energy
+  flux, which in shallow water is George Green, "On the motion of waves in a variable canal of
+  small depth and width", *Transactions of the Cambridge Philosophical Society* 6, 1838,
+  457–462; and the breaker index 0.78 of John McCowan, "On the highest wave of permanent
+  type", *Philosophical Magazine* 38, 1894, 351–358.

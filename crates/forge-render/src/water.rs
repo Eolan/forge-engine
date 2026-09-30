@@ -419,6 +419,7 @@ struct GpuWaterSurface {
     absorption: [f32; 4],
     scatter: [f32; 4],
     shore_frame: [f32; 4],
+    trains: [[f32; 4]; MAX_TRAINS],
     cascades: [GpuWaterCascadeView; SURFACE_CASCADES],
     levels: [[f32; 4]; MAX_LEVELS],
     level_count: u32,
@@ -431,12 +432,33 @@ struct GpuWaterSurface {
     shore_texels: u32,
     sky: u64,
     sky_light: u64,
+    shore_table: u64,
+    shore_bins: u32,
+    train_count: u32,
+    shore_bin: f32,
+    time: f32,
+    pad: [f32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 560);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 656);
+
+/// Shore trains the surface draws at most (`WATER_MAX_TRAINS` in `water.slang`).
+const MAX_TRAINS: usize = 4;
+
+/// One of the shore's wave trains (`forge_procgen::ShoreTrain`), as the surface draws it.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterShoreTrain<'a> {
+    /// Radians a second.
+    pub omega: f32,
+    /// The height in deep water, crest to trough, metres.
+    pub height: f32,
+    /// Per boundary of the shore's bins, out from the shore: the time a crest takes from there
+    /// to the shore (seconds) and the shoaling coefficient (`ShoreTrain::table`).
+    pub table: &'a [[f32; 2]],
+}
 
 /// The sea floor and the coast under the sea (issue #105's shore), on a square grid of samples:
-/// what the surface damps its waves by.
+/// what the surface damps its waves by, and the trains of waves that come in to the shore.
 #[derive(Clone, Copy, Debug)]
 pub struct WaterShore<'a> {
     /// Samples a side.
@@ -451,6 +473,10 @@ pub struct WaterShore<'a> {
     /// Per sample: the signed distance to the coast, metres, positive inland
     /// (`forge_procgen::coast_distance`).
     pub coast: &'a [f32],
+    /// Metres a bin of the trains' tables.
+    pub bin: f32,
+    /// The trains, [`MAX_TRAINS`] at most, their tables of one length.
+    pub trains: &'a [WaterShoreTrain<'a>],
 }
 
 /// Mirrors `SurfacePush` and `CopyPush` in `water.slang`.
@@ -487,6 +513,8 @@ pub struct WaterSurfaceParams {
     pub sun_radiance: Vec3,
     /// The pre-exposed luminance of a unit of sun illuminance (the sky's scale).
     pub sky_scale: f32,
+    /// The sea's clock, seconds (the cascades' time): the shore's trains move with it.
+    pub time: f32,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -499,9 +527,24 @@ pub struct WaterSurface {
     copy: Pipeline,
     surface: Pipeline,
     blocks: Vec<Buffer>,
-    /// The shore's fields (`RG16F`: the floor's height, the coast distance) and their frame
-    /// (the first sample's x and z, 1 / spacing); without them the sea is deep everywhere.
-    shore: Option<(GraphImage, [f32; 4], u32)>,
+    /// Without it the sea is deep everywhere.
+    shore: Option<ShoreFields>,
+}
+
+/// The shore on the GPU ([`WaterShore`]).
+struct ShoreFields {
+    /// `RG16F`: the floor's height, the coast distance.
+    image: GraphImage,
+    /// The first sample's x and z, 1 / spacing, 0.
+    frame: [f32; 4],
+    texels: u32,
+    /// The trains' tables one after the other, `bins` entries each (none without trains).
+    tables: Option<Buffer>,
+    /// Per train: ω, the deep-water height, a phase offset, 0.
+    trains: [[f32; 4]; MAX_TRAINS],
+    train_count: u32,
+    bins: u32,
+    bin: f32,
 }
 
 impl WaterSurface {
@@ -583,11 +626,43 @@ impl WaterSurface {
                     },
                     &bytes,
                 )?;
-                Ok((
+                assert!(s.trains.len() <= MAX_TRAINS, "at most {MAX_TRAINS} trains");
+                let bins = s.trains.first().map_or(0, |t| t.table.len());
+                assert!(
+                    s.trains.iter().all(|t| t.table.len() == bins)
+                        && (s.trains.is_empty() || bins >= 2),
+                    "the trains' tables have one length, two entries at least"
+                );
+                let table: Vec<[f32; 2]> = s
+                    .trains
+                    .iter()
+                    .flat_map(|t| t.table.iter().copied())
+                    .collect();
+                let tables = (!table.is_empty())
+                    .then(|| {
+                        device.create_buffer_with_data(
+                            &table,
+                            vk::BufferUsageFlags::STORAGE_BUFFER,
+                            MemoryCategory::Work,
+                            "water shore trains",
+                        )
+                    })
+                    .transpose()?;
+                let mut trains = [[0.0; 4]; MAX_TRAINS];
+                for (i, (slot, t)) in trains.iter_mut().zip(s.trains).enumerate() {
+                    // Each train starts a third of a turn after the one before.
+                    *slot = [t.omega, t.height, i as f32 * 2.1, 0.0];
+                }
+                Ok(ShoreFields {
                     image,
-                    [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
-                    s.texels,
-                ))
+                    frame: [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
+                    texels: s.texels,
+                    tables,
+                    trains,
+                    train_count: s.trains.len() as u32,
+                    bins: bins as u32,
+                    bin: s.bin,
+                })
             })
             .transpose()?;
         Ok(Self {
@@ -703,10 +778,8 @@ impl WaterSurface {
         let sky_address = sky.address();
         let sky_light = sky.light.address;
         let surface = &self.surface;
-        let shore = self
-            .shore
-            .as_ref()
-            .map(|(image, frame, texels)| (graph.import(image), *frame, *texels));
+        let shore: Option<&'f ShoreFields> = self.shore.as_ref();
+        let shore_image = shore.map(|s| graph.import(&s.image));
         let mut pass = graph
             .pass("water/surface")
             .image(color, ImageAccess::ColorAttachment)
@@ -723,7 +796,7 @@ impl WaterSurface {
                 .image(displacement, ImageAccess::Sampled(vertex))
                 .image(slopes, ImageAccess::Sampled(fragment));
         }
-        if let Some((image, _, _)) = shore {
+        if let Some(image) = shore_image {
             pass = pass.image(image, ImageAccess::Sampled(vertex | fragment));
         }
         pass.run(move |resources, commands| {
@@ -743,7 +816,8 @@ impl WaterSurface {
                     sun_radiance: params.sun_radiance.extend(params.sky_scale).to_array(),
                     absorption: [0.35, 0.07, 0.05, 0.0],
                     scatter: [0.003, 0.013, 0.016, 0.0],
-                    shore_frame: shore.map_or([0.0; 4], |(_, frame, _)| frame),
+                    shore_frame: shore.map_or([0.0; 4], |s| s.frame),
+                    trains: shore.map_or([[0.0; 4]; MAX_TRAINS], |s| s.trains),
                     cascades: cascade_views,
                     levels,
                     level_count: LEVELS,
@@ -752,10 +826,18 @@ impl WaterSurface {
                     scene_depth: resources.sampled(scene_depth).0,
                     width: extent.width,
                     height: extent.height,
-                    shore: shore.map_or(u32::MAX, |(image, _, _)| resources.sampled(image).0),
-                    shore_texels: shore.map_or(0, |(_, _, texels)| texels),
+                    shore: shore_image.map_or(u32::MAX, |image| resources.sampled(image).0),
+                    shore_texels: shore.map_or(0, |s| s.texels),
                     sky: sky_address,
                     sky_light,
+                    shore_table: shore
+                        .and_then(|s| s.tables.as_ref())
+                        .map_or(0, |b| b.address()),
+                    shore_bins: shore.map_or(0, |s| s.bins),
+                    train_count: shore.map_or(0, |s| s.train_count),
+                    shore_bin: shore.map_or(1.0, |s| s.bin),
+                    time: params.time,
+                    pad: [0.0; 2],
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.

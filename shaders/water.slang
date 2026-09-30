@@ -242,6 +242,7 @@ void mips_main(uint3 id : SV_DispatchThreadID)
 
 static const uint WATER_CASCADES = 3;
 static const uint WATER_MAX_LEVELS = 16;
+static const uint WATER_MAX_TRAINS = 4;
 
 // Mirrors `GpuWaterCascadeView` in water.rs.
 struct WaterCascadeView
@@ -265,6 +266,7 @@ struct WaterSurface
     float4 absorption;    // rgb: the water's absorption, m⁻¹
     float4 scatter;       // rgb: the light the water scatters back, per unit of irradiance
     float4 shore_frame;   // the shore's first sample (world x, z) and 1 / its spacing
+    float4 trains[WATER_MAX_TRAINS]; // per shore train: ω (rad/s), its height in deep water (m), a phase offset, 0
     WaterCascadeView cascades[WATER_CASCADES];
     float4 levels[WATER_MAX_LEVELS]; // per level: its centre relative to the camera (xy = world xz), its spacing (z)
     uint level_count;
@@ -277,6 +279,12 @@ struct WaterSurface
     uint shore_texels;    // its samples a side
     Sky* sky;             // the ground sky's block (the aerial perspective)
     float4* sky_light;    // the sky's irradiance, then the sky-view table's frame (sky.slang)
+    float2* shore_table;  // per train, `shore_bins` entries out from the shore: seconds to the shore, the shoaling coefficient
+    uint shore_bins;
+    uint train_count;
+    float shore_bin;      // metres a bin
+    float time;           // the sea's clock, seconds
+    float2 pad;
 };
 
 struct SurfacePush
@@ -339,10 +347,9 @@ float shore_damping(WaterCascadeView v, float depth)
 }
 
 // A point's displacement from every cascade, each sampled at the mip whose texels match
-// `spacing` metres and damped by the depth under the point.
-float3 displacement_at(WaterSurface* w, float2 flat, float spacing)
+// `spacing` metres and damped by the `depth` under the point.
+float3 displacement_at(WaterSurface* w, float2 flat, float spacing, float depth)
 {
-    float depth = -shore_at(w, flat).x;
     float3 d = 0.0;
     for (uint c = 0; c < WATER_CASCADES; c++)
     {
@@ -352,6 +359,212 @@ float3 displacement_at(WaterSurface* w, float2 flat, float spacing)
         d += shore_damping(v, depth) * sample_image_level(v.displacement, SAMPLER_LINEAR_REPEAT, uv, mip).xyz;
     }
     return d;
+}
+
+// ---------------------------------------------------------- the shore's waves ---
+//
+// Trains of waves come in along the coast distance's gradient (Uncharted 3's recipe, Gonzalez-
+// Ochoa & Holder 2012; D-038's shore): each a Gerstner wave whose phase is ω (t + τ), τ the
+// time its crests take from the point to the shore (`forge_procgen::ShoreTrain::table`, over
+// the floor's profile), so they slow and bunch up over the shallows. Their height grows by the
+// table's shoaling coefficient until the trains together stand higher than 0.78 of the depth
+// (the breaker index), then follows the depth down: there they break, and the broken water is
+// foam. At the shoreline the last of each wave runs up the beach as a thin sheet (the swash).
+// The trains fade in where the floor starts to matter (the cascades fade out there), and out
+// where they are too short for what is drawn (the mesh's spacing, the pixel's footprint).
+
+static const float BREAKER_INDEX = 0.78;
+// How far up the beach the swash's sheet may reach, metres from the shoreline.
+static const float SWASH_REACH = 40.0;
+// The swash's run-up against the trains' heights in deep water (a gentle, dissipative beach).
+static const float RUN_UP = 0.3;
+
+// A hash of an integer lattice point, in [0, 1).
+float lattice_hash(int2 p)
+{
+    uint h = uint(p.x) * 0x8da6b343u ^ uint(p.y) * 0xd8163841u;
+    h = (h ^ (h >> 15)) * 0x2c1b3c6du;
+    h ^= h >> 12;
+    return float(h & 0xFFFFFFu) / 16777216.0;
+}
+
+// Smooth value noise in [0, 1): the lattice's hashes blended by a smoothstep.
+float value_noise(float2 x)
+{
+    int2 i = int2(floor(x));
+    float2 f = x - floor(x);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = lattice_hash(i);
+    float b = lattice_hash(i + int2(1, 0));
+    float c = lattice_hash(i + int2(0, 1));
+    float d = lattice_hash(i + int2(1, 1));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+// The shore under a point: the floor's depth and the coast distance.
+struct ShorePoint
+{
+    float depth;    // metres (negative on land)
+    float distance; // metres, positive inland
+};
+
+ShorePoint shore_point(WaterSurface* w, float2 flat)
+{
+    float2 s = shore_at(w, flat);
+    ShorePoint p;
+    p.depth = -s.x;
+    p.distance = s.y;
+    return p;
+}
+
+// The direction towards the shore at a point: the coast distance's gradient over a sample
+// either side, unit (world x and z).
+float2 shore_inland(WaterSurface* w, float2 flat)
+{
+    float e = 1.0 / w[0].shore_frame.z;
+    float2 g = float2(
+        shore_at(w, flat + float2(e, 0.0)).y - shore_at(w, flat - float2(e, 0.0)).y,
+        shore_at(w, flat + float2(0.0, e)).y - shore_at(w, flat - float2(0.0, e)).y);
+    return dot(g, g) > 1e-8 ? normalize(g) : float2(0.0);
+}
+
+// Train `t`'s table `distance` metres out from the shore: the seconds to the shore, the
+// shoaling coefficient, and the local wave number (ω times the time's rate along the way).
+float3 train_table(WaterSurface* w, uint t, float distance)
+{
+    uint n = w[0].shore_bins;
+    float x = clamp(distance / w[0].shore_bin, 0.0, float(n - 1) - 0.001);
+    uint j = uint(x);
+    float f = x - float(j);
+    float2 a = w[0].shore_table[t * n + j];
+    float2 b = w[0].shore_table[t * n + j + 1];
+    return float3(lerp(a, b, f), w[0].trains[t].x * (b.x - a.x) / w[0].shore_bin);
+}
+
+// What the trains do at a point.
+struct ShoreWaves
+{
+    float height;   // metres over the mean level
+    float2 offset;  // the horizontal displacement, world x and z, metres
+    float2 slope;   // ∂height/∂x, ∂height/∂z
+    float breaking; // 0 before the breaker line, rising as the trains break
+    float foam;     // the broken water's cover, 0..1, before its pattern
+    float swash;    // the sheet's height over the mean level up the beach, metres
+    float2 inland;  // towards the shore (zero where the trains are not)
+};
+
+// Train `t`'s height before it breaks, `distance` metres out over `depth` metres of water: its
+// height in deep water, shoaled, times the coast's `set`. Offshore the cascades carry the sea;
+// the trains rise where the floor matters (under a fifth of their deep wavelength).
+float train_height(WaterSurface* w, uint t, float distance, float depth, float set)
+{
+    float4 train = w[0].trains[t];
+    float deep_wavelength = 2.0 * PI * GRAVITY / (train.x * train.x);
+    float offshore = 1.0 - smoothstep(0.1 * deep_wavelength, 0.2 * deep_wavelength, depth);
+    return train_table(w, t, distance).y * train.y * set * offshore;
+}
+
+// The trains at `flat` over `p`, for a caller that resolves `resolve` metres (the mesh's
+// spacing, or the pixel's footprint): waves shorter than four of those fade to their mean.
+ShoreWaves shore_waves(WaterSurface* w, float2 flat, ShorePoint p, float resolve)
+{
+    ShoreWaves s;
+    s.height = 0.0;
+    s.offset = 0.0;
+    s.slope = 0.0;
+    s.breaking = 0.0;
+    s.foam = 0.0;
+    s.swash = 0.0;
+    s.inland = float2(0.0);
+    uint count = min(w[0].train_count, WATER_MAX_TRAINS);
+    if (count == 0 || w[0].shore == NO_SHORE || w[0].shore_table == nullptr || p.distance > SWASH_REACH)
+        return s;
+    // Out where the floor is too deep for any train (see `offshore` below): nothing to do.
+    float reach = 0.0;
+    for (uint t = 0; t < count; t++)
+        reach = max(reach, 0.2 * 2.0 * PI * GRAVITY / (w[0].trains[t].x * w[0].trains[t].x));
+    if (p.depth >= reach)
+        return s;
+    float2 inland = shore_inland(w, flat);
+    s.inland = inland;
+    float2 world = flat + w[0].camera.xz;
+    // Along the coast the sets rise and fall, and the crests drift a little out of line.
+    float set = 0.55 + 0.45 * value_noise(world / 350.0);
+    float drift = 2.2 * value_noise(world / 260.0 + 17.3);
+    float out_distance = max(-p.distance, 0.0);
+    float depth = max(p.depth, 0.0);
+    // First the trains' heights before breaking, and their run-up at the shoreline.
+    float total2 = 0.0;
+    float level = 0.0;
+    for (uint t = 0; t < count; t++)
+    {
+        float4 train = w[0].trains[t];
+        float height = train_height(w, t, out_distance, depth, set);
+        total2 += height * height;
+        // A quick uprush, a slow backwash.
+        float u = frac((train.x * w[0].time + drift + train.z) / (2.0 * PI));
+        float rush = u < 0.2 ? sin(0.5 * PI * u / 0.2) : 0.5 + 0.5 * cos(PI * (u - 0.2) / 0.8);
+        level += RUN_UP * train.y * set * rush;
+    }
+    // The breaker line: together the trains stand no higher than 0.78 of the depth.
+    float total = sqrt(total2);
+    float cap = BREAKER_INDEX * depth;
+    float scale = total > cap ? cap / max(total, 1e-6) : 1.0;
+    s.breaking = saturate(total / max(cap, 1e-3) - 1.0);
+    // Then the waves. Gerstner's sharpening is shared out so the crests never loop
+    // (Σ Q k a = 0.6: each train's share of the amplitudes, applied once they are summed).
+    float sum = 0.0;
+    float squeeze = 0.0;
+    float along = 0.0;
+    float push = 0.0;
+    float foam = 0.0;
+    for (uint t = 0; t < count; t++)
+    {
+        float4 train = w[0].trains[t];
+        float3 table = train_table(w, t, out_distance);
+        float number = max(table.z, 1e-4);
+        float lod = saturate(2.0 * PI / number / (4.0 * resolve) - 1.0);
+        float a = 0.5 * train_height(w, t, out_distance, depth, set) * scale * lod;
+        if (a <= 0.0)
+            continue;
+        float phase = train.x * (w[0].time + table.x) + drift + train.z;
+        float c = cos(phase);
+        float sn = sin(phase);
+        sum += a;
+        s.height += a * c;
+        push += (a / number) * sn;
+        along += a * number * sn;
+        squeeze += a * c;
+        // White water on the front of each crest, left behind as it moves on.
+        foam += a * exp(-5.0 * frac((phase + 0.6) / (2.0 * PI)));
+    }
+    if (sum > 0.0)
+    {
+        s.offset = inland * (0.6 / sum) * push;
+        s.slope = inland * along / (1.0 - (0.6 / sum) * squeeze);
+        s.foam = saturate(2.0 * s.breaking) * foam / sum;
+    }
+    // The sheet up the beach, and down over the last metres of sea, so the two meet.
+    s.swash = level * (1.0 - smoothstep(0.5 * SWASH_REACH, SWASH_REACH, p.distance));
+    if (p.distance >= 0.0)
+    {
+        s.height = s.swash;
+        s.offset = 0.0;
+        s.slope = 0.0;
+    }
+    else
+        s.height = max(s.height, s.swash * saturate(1.0 - out_distance / 6.0));
+    return s;
+}
+
+// The broken water's pattern at `world`, in [0, 1], drifting shorewards: two octaves of value
+// noise, each fading to its mean once it is finer than two of the pixel's `footprint`.
+float foam_pattern(WaterSurface* w, float2 world, float2 inland, float footprint)
+{
+    float2 x = world - inland * (0.4 * w[0].time);
+    float coarse = lerp(0.5, value_noise(x / 2.5), saturate(2.5 / (2.0 * footprint) - 1.0));
+    float fine = lerp(0.5, value_noise(x / 0.9 + 31.7), saturate(0.9 / (2.0 * footprint) - 1.0));
+    return smoothstep(0.25, 0.65, 0.65 * coarse + 0.35 * fine);
 }
 
 // Two triangles a quad, counter-clockwise seen from above.
@@ -397,7 +610,10 @@ SurfaceOut surface_vert_main(uint id : SV_VertexID)
     float morph = level + 1u < w[0].level_count ? saturate((reach - (nearest_edge - band)) / band) : 0.0;
     int2 odd = lattice & 1;
     flat -= float2(odd) * s * morph;
-    float3 d = displacement_at(w, flat, s * (1.0 + morph));
+    ShorePoint shore = shore_point(w, flat);
+    float3 d = displacement_at(w, flat, s * (1.0 + morph), shore.depth);
+    ShoreWaves waves = shore_waves(w, flat, shore, s * (1.0 + morph));
+    d += float3(waves.offset.x, waves.height, waves.offset.y);
     float3 relative = float3(flat.x + d.x, d.y - w[0].camera.y, flat.y + d.z);
     o.position = mul(w[0].view_proj, float4(relative, 1.0));
     o.relative = relative;
@@ -446,7 +662,7 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     // average away (Bruneton, Neyret & Holzschuch 2010), each cascade damped by the depth as
     // its displacement is (the slopes scale with the amplitude, their variance with its square,
     // the Jacobian's departure from 1 to first order).
-    float depth = -shore_at(w, input.flat).x;
+    ShorePoint shore = shore_point(w, input.flat);
     float2 slope = 0.0;
     float variance = 0.0;
     float jacobian = 1.0;
@@ -455,11 +671,15 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
         WaterCascadeView cv = w[0].cascades[c];
         float2 uv = input.flat * cv.inv_patch + cv.offset;
         float4 s = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, uv);
-        float a = shore_damping(cv, depth);
+        float a = shore_damping(cv, shore.depth);
         slope += a * s.xy;
         variance += a * a * max(s.w - dot(s.xy, s.xy), 0.0);
         jacobian += a * (s.z - 1.0);
     }
+    // The shore's trains, resolved to the pixel.
+    float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
+    ShoreWaves waves = shore_waves(w, input.flat, shore, footprint);
+    slope += waves.slope;
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
     float3 v = normalize(-input.relative);
     float nv = max(dot(n, v), 1e-4);
@@ -508,15 +728,22 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     float3 lit = sky_irradiance * PI + sun_light;
     float3 inside = under * transmittance + w[0].scatter.rgb * lit * (1.0 - transmittance);
     float3 color = reflected * fresnel + inside * (1.0 - fresnel) + sun;
-    // Foam where the waves fold (the Jacobian under ~0.45), lit like a white diffuse surface.
+    // Foam, lit like a white diffuse surface: where the waves fold (the Jacobian under ~0.45),
+    // where the shore's trains break, and along the swash's thin leading edge (the water's
+    // depth under the pixel from the view ray's path to the floor), the shore's broken up by a
+    // pattern that drifts shorewards.
     float foam = saturate((0.45 - jacobian) * 2.0);
+    float thickness = path * max(v.y, 0.0);
+    float edge = waves.swash > 0.02 ? 1.0 - smoothstep(0.0, 0.08, thickness) : 0.0;
+    float white = saturate(1.5 * waves.foam + 0.7 * edge);
+    if (white > 0.0)
+        foam = max(foam, white * foam_pattern(w, input.flat + w[0].camera.xz, waves.inland, footprint));
     color = lerp(color, 0.8 * lit / PI, foam * 0.8);
     // The air between the camera and the water, as the compose hazes everything else.
     float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);
     color = color * air.a + air.rgb * scale;
     SurfaceTargets o;
-    o.color = float4(min(color, 32768.0), 1.0);
-    // The mirror ray: what it meets replaces `mirror`, whose share of the pixel is the Fresnel
+    o.color = float4(min(color, 32768.0), 1.0);    // The mirror ray: what it meets replaces `mirror`, whose share of the pixel is the Fresnel
     // term's, less the blur, the foam and the air.
     float weight = fresnel * (1.0 - blur) * (1.0 - foam * 0.8) * air.a;
     o.request = weight >= REQUEST_MIN_WEIGHT ? float4(r, weight) : float4(0.0);
