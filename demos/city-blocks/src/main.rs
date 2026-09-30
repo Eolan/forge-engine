@@ -870,6 +870,10 @@ impl Demo for Gallery {
         } else {
             None
         };
+        // The sand the swash ran up is wet (#105): the resolve's layered ground reads the shore.
+        let wet_ground = self.water.as_ref().and_then(|(_, surface, _)| {
+            surface.wet_ground(&mut frame.graph, frame.slot, self.sea_time_submitted)
+        });
         // The probes' light in place of the open sky's (issue #53): after the sky's tables,
         // which light their rays' misses, before the resolve.
         let probes = match &mut self.probes {
@@ -918,6 +922,7 @@ impl Demo for Gallery {
                 sky: self.sky_light.then_some(sky.light),
                 occlusion,
                 probes,
+                wet_ground,
             },
         );
         self.sky.compose(
@@ -963,6 +968,7 @@ impl Demo for Gallery {
                         sky: self.sky_light.then_some(sky.light),
                         occlusion: None,
                         probes,
+                        wet_ground: None,
                     },
                 );
             }

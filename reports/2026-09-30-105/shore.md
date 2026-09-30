@@ -63,6 +63,37 @@ sea, where the whole coast's shallows are in view. The levers: an index buffer f
 - The white water is white, but the shallows over the sand are nearly as bright.
 - The crest that curls over is D-038's later step for the golden shots.
 
-**Checks:** the batch changes only the four water images (ꟻLIP mean 0.040; #71's flake aside, on both
+**Checks (the waves, 8f115f2):** the batch changes only the four water images (ꟻLIP mean 0.040; #71's flake aside, on both
 paths this time, ꟻLIP mean 0.0013 at most); the occlusion A/B and mesh against fallback are at
 0 px; `tools/validate.sh` is clean; tests (two new in `forge_procgen::shore`), clippy, fmt.
+
+## The wet sand
+
+`shore-wet.png`: the beach from 60 m up at 14 s, before (left) and with the wet sand (right).
+`shore-wet-zoom.png`: the same, closer.
+
+- **Where:** the swash is a function of position and time shared by the water and the ground
+  (`shaders/shore.slang`). The layered ground takes the highest reach over the last 19.5 s (14
+  instants), each dimmed by the drying since (25 s to lose 1/e), damp for 0.25 m of height
+  above it. The floor under the sea is left to the water.
+- **What:** the albedo halves; the surface turns smooth, with water's F0 and a sharp sky
+  reflection and sun highlight (Lagarde 2013).
+- **Against D-038:** the decision named a clip texture the water writes and the terrain reads.
+  The functions give the same decaying maximum run-up without the pass, the clip's edge or its
+  resolution, deterministically.
+- **For the owner's eye:** the swash's edge and the wet band follow the beach's height
+  contours, which step along the 8 m field's cells near sea level. The sand and grass boundary
+  above them steps the same way. The 2 m amplification is what would smooth them.
+
+**Cost** (three runs each, alternating, against the waves' commit): `shading/layered`
+0.382 → 0.396 ms at the coast, 0.207 → 0.203 ms from the sea (nothing measurable), 0.465 →
+0.510 ms above the beach, where most pixels are within the swash's reach. These runs found the
+GPU a little slower than the earlier ones; the pairs alternate, so the differences hold.
+
+**Stability** (still camera, waves held still): the beach from above 0.020 % frame to frame
+(0.016 % dry: the wet sand's sharper highlight), 0.0001 % over 32 frames either way; the coast
+1.32 % and 0.0022 % (1.31 % and 0.0019 % dry).
+
+**Checks:** the batch changes the water images by the wet band (9 046 px, ꟻLIP mean 0.0031),
+#71's flake aside; the occlusion A/B and mesh against fallback are at 0 px; `tools/validate.sh`
+is clean; tests, clippy, fmt.

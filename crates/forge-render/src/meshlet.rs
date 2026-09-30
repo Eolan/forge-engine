@@ -22,6 +22,7 @@ use crate::probes::ProbeLight;
 use crate::raytrace::{self, SceneRays};
 use crate::sky::SkyLight;
 use crate::streaming::{PageSource, PageStore, PageStreamer, Residency, StreamingStats};
+use crate::water::WetGround;
 use forge_core::material::{MaterialId, MaterialTable, ShadingClass};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
@@ -461,9 +462,11 @@ struct ResolvePush {
     request_image: u32,
     /// The probes' `ProbeField` (`probes.slang`, issue #53), or 0: the sky's irradiance.
     probes: u64,
+    /// The shore's `ShoreGround` block (issue #105: the wet sand), or 0: dry ground.
+    shore: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<ResolvePush>() == 88);
+const _: () = assert!(std::mem::size_of::<ResolvePush>() == 96);
 
 /// Mirrors `RequestedRaysPush` in `meshlet.slang`.
 #[repr(C)]
@@ -510,6 +513,9 @@ pub struct AmbientLight {
     /// Under a sky, the probes' light ([`crate::Probes::update`]) in place of the sky's
     /// irradiance, on the pixels and on what the mirror rays meet.
     pub probes: Option<ProbeLight>,
+    /// The shore (issue #105, [`crate::WaterSurface::wet_ground`]): the layered ground is wet
+    /// where the swash ran up.
+    pub wet_ground: Option<WetGround>,
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -3044,6 +3050,7 @@ impl MeshletRenderer {
                 .map_or(u32::MAX, |ao| resources.sampled(ao).0),
             request_image: request.map_or(u32::MAX, |r| resources.storage(r, 0).0),
             probes: ambient.sky.and(ambient.probes).map_or(0, |p| p.address),
+            shore: ambient.wet_ground.map_or(0, |g| g.address),
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -3079,6 +3086,9 @@ impl MeshletRenderer {
         }
         if let Some(ao) = ambient.occlusion {
             builder = builder.image(ao, ImageAccess::Sampled(compute));
+        }
+        if let Some(g) = ambient.wet_ground {
+            builder = builder.image(g.image, ImageAccess::Sampled(compute));
         }
         if let Some(p) = ambient.sky.and(ambient.probes) {
             builder = builder
@@ -3119,6 +3129,9 @@ impl MeshletRenderer {
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
             }
+            if let Some(g) = ambient.wet_ground {
+                builder = builder.image(g.image, ImageAccess::Sampled(compute));
+            }
             if let Some(p) = ambient.sky.and(ambient.probes) {
                 builder = builder
                     .buffer(p.data, BufferAccess::ShaderRead(compute))
@@ -3148,6 +3161,9 @@ impl MeshletRenderer {
                 .image(sky.table, ImageAccess::Sampled(compute));
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
+            }
+            if let Some(g) = ambient.wet_ground {
+                builder = builder.image(g.image, ImageAccess::Sampled(compute));
             }
             if let Some(p) = ambient.sky.and(ambient.probes) {
                 builder = builder

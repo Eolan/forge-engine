@@ -16,6 +16,7 @@ import atmosphere;
 import sh;
 import skyframe;
 import skyview;
+import shore;
 
 // Samples per side of a cascade (`WATER_SIZE` in water.rs).
 static const uint N = 256;
@@ -374,32 +375,6 @@ float3 displacement_at(WaterSurface* w, float2 flat, float spacing, float depth)
 // where they are too short for what is drawn (the mesh's spacing, the pixel's footprint).
 
 static const float BREAKER_INDEX = 0.78;
-// How far up the beach the swash's sheet may reach, metres from the shoreline.
-static const float SWASH_REACH = 40.0;
-// The swash's run-up against the trains' heights in deep water (a gentle, dissipative beach).
-static const float RUN_UP = 0.3;
-
-// A hash of an integer lattice point, in [0, 1).
-float lattice_hash(int2 p)
-{
-    uint h = uint(p.x) * 0x8da6b343u ^ uint(p.y) * 0xd8163841u;
-    h = (h ^ (h >> 15)) * 0x2c1b3c6du;
-    h ^= h >> 12;
-    return float(h & 0xFFFFFFu) / 16777216.0;
-}
-
-// Smooth value noise in [0, 1): the lattice's hashes blended by a smoothstep.
-float value_noise(float2 x)
-{
-    int2 i = int2(floor(x));
-    float2 f = x - floor(x);
-    float2 u = f * f * (3.0 - 2.0 * f);
-    float a = lattice_hash(i);
-    float b = lattice_hash(i + int2(1, 0));
-    float c = lattice_hash(i + int2(0, 1));
-    float d = lattice_hash(i + int2(1, 1));
-    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
-}
 
 // The shore under a point: the floor's depth and the coast distance.
 struct ShorePoint
@@ -477,7 +452,7 @@ ShoreWaves shore_waves(WaterSurface* w, float2 flat, ShorePoint p, float resolve
     s.swash = 0.0;
     s.inland = float2(0.0);
     uint count = min(w[0].train_count, WATER_MAX_TRAINS);
-    if (count == 0 || w[0].shore == NO_SHORE || w[0].shore_table == nullptr || p.distance > SWASH_REACH)
+    if (count == 0 || w[0].shore == NO_SHORE || w[0].shore_table == nullptr || p.distance > SHORE_SWASH_REACH)
         return s;
     // Out where the floor is too deep for any train (see `offshore` below): nothing to do.
     float reach = 0.0;
@@ -489,8 +464,8 @@ ShoreWaves shore_waves(WaterSurface* w, float2 flat, ShorePoint p, float resolve
     s.inland = inland;
     float2 world = flat + w[0].camera.xz;
     // Along the coast the sets rise and fall, and the crests drift a little out of line.
-    float set = 0.55 + 0.45 * value_noise(world / 350.0);
-    float drift = 2.2 * value_noise(world / 260.0 + 17.3);
+    float set = shore_set(world);
+    float drift = shore_drift(world);
     float out_distance = max(-p.distance, 0.0);
     float depth = max(p.depth, 0.0);
     // First the trains' heights before breaking, and their run-up at the shoreline.
@@ -501,10 +476,7 @@ ShoreWaves shore_waves(WaterSurface* w, float2 flat, ShorePoint p, float resolve
         float4 train = w[0].trains[t];
         float height = train_height(w, t, out_distance, depth, set);
         total2 += height * height;
-        // A quick uprush, a slow backwash.
-        float u = frac((train.x * w[0].time + drift + train.z) / (2.0 * PI));
-        float rush = u < 0.2 ? sin(0.5 * PI * u / 0.2) : 0.5 + 0.5 * cos(PI * (u - 0.2) / 0.8);
-        level += RUN_UP * train.y * set * rush;
+        level += SHORE_RUN_UP * train.y * set * shore_rush(train, w[0].time, drift);
     }
     // The breaker line: together the trains stand no higher than 0.78 of the depth.
     float total = sqrt(total2);
@@ -545,7 +517,7 @@ ShoreWaves shore_waves(WaterSurface* w, float2 flat, ShorePoint p, float resolve
         s.foam = saturate(2.0 * s.breaking) * foam / sum;
     }
     // The sheet up the beach, and down over the last metres of sea, so the two meet.
-    s.swash = level * (1.0 - smoothstep(0.5 * SWASH_REACH, SWASH_REACH, p.distance));
+    s.swash = level * shore_reach(p.distance);
     if (p.distance >= 0.0)
     {
         s.height = s.swash;

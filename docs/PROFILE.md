@@ -414,6 +414,12 @@ where there is foam. Against step 4 (before the damping), three runs each, alter
 - **The levers:** an index buffer for the surface (it is drawn without one, so each vertex is
   shaded six times), and the trains starting nearer the shore.
 
+**The wet sand** (#105 step 5, 2026-09-30). The layered ground reads the shore's field once a
+pixel and, within the swash's reach above the sea, its run-up at 14 past instants (three trains
+each). `shading/layered` +0.012 ms at the coast (0.382 → 0.396), nothing measurable from the sea,
++0.045 ms above the beach (0.465 → 0.510), where most pixels are within reach. Three runs each,
+alternating, on a slightly slower GPU than the runs above.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

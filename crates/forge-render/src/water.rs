@@ -445,6 +445,31 @@ const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 656);
 /// Shore trains the surface draws at most (`WATER_MAX_TRAINS` in `water.slang`).
 const MAX_TRAINS: usize = 4;
 
+/// Mirrors `ShoreGround` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuShoreGround {
+    frame: [f32; 4],
+    trains: [[f32; 4]; MAX_TRAINS],
+    shore: u32,
+    train_count: u32,
+    time: f32,
+    pad: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<GpuShoreGround>() == 96);
+
+/// What the ground's shading reads of the shore in a frame ([`WaterSurface::wet_ground`]): the
+/// sand is wet where the swash ran up (issue #105).
+#[derive(Clone, Copy, Debug)]
+pub struct WetGround {
+    /// The shore's fields (the floor's height, the coast distance), which the shading samples.
+    pub image: ImageHandle,
+    /// The frame's `ShoreGround` block (`meshlet.slang`): the fields' frame, the trains, the
+    /// sea's time.
+    pub address: u64,
+}
+
 /// One of the shore's wave trains (`forge_procgen::ShoreTrain`), as the surface draws it.
 #[derive(Clone, Copy, Debug)]
 pub struct WaterShoreTrain<'a> {
@@ -545,6 +570,8 @@ struct ShoreFields {
     train_count: u32,
     bins: u32,
     bin: f32,
+    /// Per frame slot, the ground's `ShoreGround` block.
+    ground: Vec<Buffer>,
 }
 
 impl WaterSurface {
@@ -653,6 +680,17 @@ impl WaterSurface {
                     // Each train starts a third of a turn after the one before.
                     *slot = [t.omega, t.height, i as f32 * 2.1, 0.0];
                 }
+                let ground = (0..FRAMES_IN_FLIGHT)
+                    .map(|i| {
+                        device.create_buffer(BufferDesc {
+                            size: std::mem::size_of::<GpuShoreGround>() as u64,
+                            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                            location: MemoryLocation::CpuToGpu,
+                            category: MemoryCategory::Frame,
+                            name: &format!("water shore ground {i}"),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 Ok(ShoreFields {
                     image,
                     frame: [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
@@ -662,6 +700,7 @@ impl WaterSurface {
                     train_count: s.trains.len() as u32,
                     bins: bins as u32,
                     bin: s.bin,
+                    ground,
                 })
             })
             .transpose()?;
@@ -670,6 +709,39 @@ impl WaterSurface {
             surface: surface?,
             blocks,
             shore,
+        })
+    }
+
+    /// The shore as the ground's shading reads it in this frame, at the sea's `time` (the
+    /// surface's time): the sand is wet where the swash ran up (issue #105). `None` without a
+    /// shore. Pass it to the resolve ([`crate::AmbientLight::wet_ground`]).
+    pub fn wet_ground<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        time: f32,
+    ) -> Option<WetGround> {
+        let shore = self.shore.as_ref()?;
+        let block = &shore.ground[slot.index];
+        block.write(
+            0,
+            &[GpuShoreGround {
+                frame: [
+                    shore.frame[0],
+                    shore.frame[1],
+                    shore.frame[2],
+                    shore.texels as f32,
+                ],
+                trains: shore.trains,
+                shore: shore.image.sampled().0,
+                train_count: shore.train_count,
+                time,
+                pad: 0.0,
+            }],
+        );
+        Some(WetGround {
+            image: graph.import(&shore.image),
+            address: block.address(),
         })
     }
 

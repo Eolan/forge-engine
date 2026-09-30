@@ -25,6 +25,7 @@ import sh;
 import skyview;
 import noise;
 import probes;
+import shore;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -2446,6 +2447,18 @@ void hex_triplanar(Material mat, float3 n, float3 w, float3 p, float3 dpdx, floa
 }
 
 // What the resolve knows of the surface behind a pixel.
+// The shore as the ground reads it (issue #105; `GpuShoreGround` in water.rs): the water's
+// shore fields and its trains, whose swash wets the sand (`shore_wetness`).
+struct ShoreGround
+{
+    float4 frame;     // the fields' first sample (world x, z), 1 / their spacing, their samples a side
+    float4 trains[4]; // per train: ω (rad/s), its height in deep water (m), a phase offset, 0
+    uint shore;       // sampled (rg16f): the floor's height, the signed coast distance
+    uint train_count;
+    float time;       // the sea's clock, the water surface's
+    float pad;
+};
+
 struct Surface
 {
     float3 n;               // world-space normal, interpolated
@@ -2465,6 +2478,7 @@ struct Surface
     float3 world;           // the position in the scene frame (the rays' and the probes'; `to_scene`)
     ProbeField* probes;     // the diffuse light's probes (probes.slang, issue #53), or null: the sky's irradiance unoccluded
     bool traced;            // a mirror ray replaces the sky's reflection where it meets something (issues #50, #52)
+    ShoreGround* shore;     // the shore whose swash wets the layered ground (issue #105), or null
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -2547,6 +2561,48 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     return sun_light(f, albedo, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + mat.emissive;
 }
 
+// The wet sand (issue #105). The swash's sheet is a function of position and time
+// (shore.slang), so the ground knows without a texture where it ran up: the highest reach over
+// the last WET_LOOKBACK instants WET_STEP seconds apart, each dimmed by the drying since
+// (WET_DRYING seconds to lose 1/e). The ground beyond the swash's reach is dry, and the floor
+// under the sea is left to the water, which shades what it covers.
+static const uint WET_LOOKBACK = 14;
+static const float WET_STEP = 1.5;
+static const float WET_DRYING = 25.0;
+// Metres of height above the sheet's reach over which the sand goes from wet to dry.
+static const float WET_DAMP = 0.25;
+// What the water film does to the ground (Lagarde, "Water drop 3a/3b: Physically based wet
+// surfaces", 2013): light bounces inside it and is absorbed, darkening a porous surface, and it
+// smooths the surface to water's own reflection.
+static const float WET_DARKENING = 0.5;
+static const float WET_POWER = 400.0;
+static const float WET_SPECULAR = 0.5;
+static const float WATER_F0 = 0.02;
+
+float shore_wetness(ShoreGround* g, float3 world)
+{
+    float2 uv = ((world.xz - g[0].frame.xy) * g[0].frame.z + 0.5) / g[0].frame.w;
+    float distance = sample_image_level(g[0].shore, SAMPLER_LINEAR_CLAMP, uv, 0.0).y;
+    if (world.y < 0.0 || distance >= SHORE_SWASH_REACH)
+        return 0.0;
+    float set = shore_set(world.xz);
+    float drift = shore_drift(world.xz);
+    float reach = shore_reach(distance);
+    uint count = min(g[0].train_count, 4u);
+    float wet = 0.0;
+    for (uint i = 0; i < WET_LOOKBACK; i++)
+    {
+        float ago = WET_STEP * float(i);
+        float level = 0.0;
+        for (uint t = 0; t < count; t++)
+            level += SHORE_RUN_UP * g[0].trains[t].y * set * shore_rush(g[0].trains[t], g[0].time - ago, drift);
+        // Damp for a hand's height above where the sheet reached (the water the sand draws up).
+        float reached = smoothstep(-WET_DAMP, 0.02, level * reach - world.y);
+        wet = max(wet, reached * exp(-ago / WET_DRYING));
+    }
+    return wet;
+}
+
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
 // over `1 / inv_texture_scale` metres of the object's x and z, centred on its origin); layer k
 // is the standard row `row + 1 + k`. The two layers weighing most among the four texels
@@ -2623,6 +2679,14 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             emissive = lerp(a.emissive, b.emissive, blend);
         }
     }
+    if (s.shore != nullptr)
+    {
+        float wet = shore_wetness(s.shore, s.world);
+        albedo *= lerp(1.0, WET_DARKENING, wet);
+        specular_power = lerp(specular_power, WET_POWER, wet);
+        specular = lerp(specular, WET_SPECULAR, wet);
+        reflectance = lerp(reflectance, WATER_F0, wet);
+    }
     float ndl;
     return sun_light(f, albedo, n, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
@@ -2674,6 +2738,7 @@ struct ResolvePush
     uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF
     uint request_image;  // storage index of the mirror rays' requests (issue #52), or 0xFFFFFFFF
     ProbeField* probes;  // the diffuse light's probes (probes.slang, issue #53), or null
+    ShoreGround* shore;  // the shore whose swash wets the sand (issue #105), or null
 };
 
 [[vk::push_constant]]
@@ -3006,6 +3071,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.view = normalize(-surface_relative);
     s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
+    s.shore = resolve_push.shore;
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)

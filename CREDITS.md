@@ -243,3 +243,7 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   small depth and width", *Transactions of the Cambridge Philosophical Society* 6, 1838,
   457–462; and the breaker index 0.78 of John McCowan, "On the highest wave of permanent
   type", *Philosophical Magazine* 38, 1894, 351–358.
+- **Wet sand** (`shaders/meshlet.slang`, issue #105). Sébastien Lagarde, "Water drop 3a/3b –
+  Physically based wet surfaces", blog, 2013
+  (<https://seblagarde.wordpress.com/2013/03/19/water-drop-3a-physically-based-wet-surfaces/>):
+  the water film darkens a porous surface and smooths it to water's reflection.

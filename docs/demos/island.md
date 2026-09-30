@@ -573,4 +573,30 @@ Its second part: the shore's own waves (Uncharted 3's recipe, Gonzalez-Ochoa & H
 - **From low down** the surf is seen edge on and reads as a light band along the beach. The
   crest that curls over is D-038's later step for the golden shots (a baked mesh along the
   wavefront, as Horizon's).
-- **Next:** the wet sand.
+
+Its third part: the wet sand.
+- **Where it is wet:** the swash is a function of position and time, shared by the water and
+  the ground (`shaders/shore.slang`), so the layered ground computes where the sheet ran up
+  without a texture. It takes the highest reach over the last 19.5 s (14 instants 1.5 s
+  apart), each dimmed by the drying since (25 s to lose 1/e), and stays damp for 0.25 m of
+  height above it. The floor under the sea is left to the water, which shades what it covers.
+- **What wet does** (Lagarde 2013): the albedo halves, and the surface turns smooth, with
+  water's F0 (0.02) and a sharp sky reflection and sun highlight.
+- **Against D-038:** the decision named a clip texture the water writes and the terrain
+  reads. The same maximum run-up, decaying, comes from the functions themselves, with no pass,
+  no clip edge to fade and no resolution limit, and it stays deterministic (D-016).
+- **The resolve** reads the shore's block (`WaterSurface::wet_ground`, `AmbientLight::wet_ground`):
+  the fields' frame, the trains and the sea's time.
+- **What shows the island's grid:** the swash's edge and the wet band follow the beach's
+  height contours, which step along the 8 m field's cells near sea level (the sand and grass
+  boundary above them steps the same way). The 2 m amplification is what smooths them.
+
+![The beach from above before the wet sand (left) and with it (right), at 14 s](../../reports/2026-09-30-105/shore-wet.png)
+
+- **Cost:** `shading/layered` +0.012 ms at the coast, nothing measurable from the sea, +0.045 ms
+  above the beach, where most pixels are within the swash's reach (`docs/PROFILE.md`).
+- **Stability** (still camera, waves still): the beach from above 0.020 % frame to frame
+  (0.016 % dry: the wet sand's sharper highlight), 0.0001 % over 32 frames either way; the
+  coast unchanged.
+- **Checks:** the batch changes the water images by the wet band (9 046 px, ꟻLIP mean 0.0031);
+  the A/B harness and mesh against fallback at 0 px; validation clean.
