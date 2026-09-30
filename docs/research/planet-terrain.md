@@ -5,7 +5,7 @@
 > `large-worlds.md` §1, §5 and §8 (coordinates, World Partition, D-014's far-field choice), to
 > `memory-streaming.md` §4 (the page pool) and to `planet-environment.md` (climate, weather,
 > clouds). Written 2026-09-26 for the planet variant of Phase 2's `island` demo
-> (`docs/ROADMAP.md`: "orbit-to-ground on the planet variant"), against D-037 🟡 (the
+> (`docs/ROADMAP.md`: "orbit-to-ground on the planet variant"), against D-037 ✅ (the
 > equi-angular cube sphere, the `u64` cell ids, the clipmap of cells) as `crates/forge-world`
 > implements it. Every citation was checked that day against a reachable page or, where the
 > network proxy refused the host, against the search engine's record of it; the distinction is
@@ -612,7 +612,7 @@ refit each frame over the ~200 resident tiles, the city's cost.
 Clouds over the planet are `planet-environment.md` §4 (the Nubis weather map generated from the
 weather function; the cloud layer itself is `lighting-gi.md` §6's item), and from orbit they are
 the planet's cloud fraction per climate cell (the 78 km atlas, D-034) rendered as the same layer
-seen from above. The ocean sphere is `water.md` (D-038 🟡): the FFT cascades near, Bruneton,
+seen from above. The ocean sphere is `water.md` (D-038 ✅): the FFT cascades near, Bruneton,
 Neyret and Holzschuch's geometry-to-BRDF transition so the sun's glitter is stable from the deck
 to the horizon and, with Dupuy and Bruneton's whitecaps, "for scales ranging from centimeter to
 planetary in real time"; the mesh under it is the spherical clipmap of §2 on the sea-level

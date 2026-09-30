@@ -171,7 +171,7 @@ the CPU side D-009 needs (the lowest cascade re-run for the physics) and the ref
 cascades will be diffed against. What the pictures show: a sea of 30–60 m waves running with
 the wind, crests broken by the spreading; nothing of it is drawn in the engine yet (the surface
 pass is the water plan's first item on a GPU; its place in the frame and the cascades' queue are
-proposed as D-038 🟡).
+D-038 ✅, accepted 2026-09-30).
 
 ![The network at 16 m: rivers by Strahler order over the hillshade, the lakes flat](images/island-network-16m.png)
 
@@ -295,7 +295,7 @@ height is absolute, so a view inland must clear the ground (up to 534 m).
 
 ![From 1 500 m: the rivers wind down the valleys to the coast, past the highland lakes](images/island-engine-rivers.png)
 
-The sea is a **stand-in** until the water pass (D-038 🟡): one opaque plane at 0 m, 262 km across
+The sea is a **stand-in** until the water pass (D-038 ✅): one opaque plane at 0 m, 262 km across
 (`sea_prop`), shaded smooth and dark (reflectance 0.02, a Blinn-Phong power of 400). It is smooth
 enough for the traced mirror rays (D-031), so it reflects the island and the sky. It reaches the
 horizon, where the field alone stopped 8 km out and showed the atmosphere's brown ground.

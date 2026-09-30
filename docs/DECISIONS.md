@@ -1310,7 +1310,7 @@ positive numbers only (`wrap_cells`).
 
 *(research: lighting-gi.md, Majercik et al. and the implementation notes on the probes; D-008, D-029, D-030; issue #53; demo: city-blocks)*
 
-## D-037 — World partition: sectors of 2⁴⁰ m, cells of 1 km, `u64` cell ids, a clipmap of cells 🟡 (proposed 2026-09-26)
+## D-037 — World partition: sectors of 2⁴⁰ m, cells of 1 km, `u64` cell ids, a clipmap of cells ✅ (2026-09-30)
 
 `forge-world` (the cloud branch, `docs/HANDOVER.md`) fixes four numbers that D-004 left open;
 each is a constant or a layout, changed in one place if the owner prefers another.
@@ -1340,9 +1340,10 @@ The frame tree walks a position up to the lowest ancestor two frames share (a sh
 its planet never meets its star's 10¹¹ m: Dungeon Siege's space walk) and across sectors by
 the integer difference. Everything is deterministic: integers, `f64`, and `forge_core::dmath`
 for the cube sphere's `atan` and `tan` (D-016).
-*(research: large-worlds.md §1, §5, §8; D-004 and its amendment; issue #93)*
+*(research: large-worlds.md §1, §5, §8; D-004 and its amendment; issue #93)* Proposed
+2026-09-26; accepted by the owner 2026-09-30 as proposed ("go with recommendations").
 
-## D-038 — The water surface: a forward pass after the opaque resolve, FFT cascades on the compute queue 🟡 (proposed 2026-09-26)
+## D-038 — The water surface: a forward pass after the opaque resolve, FFT cascades on the compute queue ✅ (2026-09-30)
 
 Proposed from `docs/research/water.md` ("Recommendation for Forge") for Phase 2's third item,
 the island's sea, shores, rivers and lakes; nothing of it is built on the GPU yet. The CPU side
@@ -1397,9 +1398,10 @@ of `forge_procgen::hydrology`; `docs/demos/island.md`, "The water's fields").
   shore and river work per water pixel.
 
 *(research: water.md §1–§5 and its recommendation; D-009, D-016, D-020, D-023, D-029, D-031;
-issue #96)*
+issue #96)* Proposed 2026-09-26; accepted by the owner 2026-09-30 as proposed ("go with
+recommendations"). The choice for D-009's physics band still waits for Phase 3's boats.
 
-## D-039 — Buildings are grammar-derived assemblies of kit modules; a style set per district; a proxy per far building 🟡 (proposed 2026-09-26)
+## D-039 — Buildings are grammar-derived assemblies of kit modules; a style set per district; a proxy per far building ✅ (2026-09-30)
 
 Proposed from `docs/research/city-generation.md` (§3–§6 and its recommendation) for #86, which
 asks for this decision early, with #85's layout pipeline around it; nothing of it is built.
@@ -1435,4 +1437,5 @@ downtown for city-blocks second and the Mediterranean village (#91) after; the c
 response comes from the atlas as `civilisations-styles.md` says. The module grid is the part
 that cannot be retrofitted.
 *(research: city-generation.md §3–§6; procedural.md §2, §4; vegetation-materials.md §4; issues
-#84, #85, #86, #88, #89, #91)*
+#84, #85, #86, #88, #89, #91)* Proposed 2026-09-26; accepted by the owner 2026-09-30 as
+proposed ("go with recommendations").

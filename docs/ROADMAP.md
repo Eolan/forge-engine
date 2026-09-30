@@ -79,11 +79,12 @@ run, which can also retry #95's double buffer).
   (`docs/demos/city-blocks.md`, "Far from the origin"). The cloud branch of that night
   (`docs/HANDOVER.md`) is merged: `forge-world`, the island's genesis in `forge-procgen`, and
   the island drawn by `city-blocks --island`. The island now has its ground, rivers, lakes,
-  rocks and a stand-in sea (#96, `docs/demos/island.md`, "In the engine"). What waits for the
-  owner:
-  - its look (`city-blocks --island 7`), before the `island` demo of its own;
-  - D-038 for the real water;
-  - #97's lakes and 4 m flanks.
+  rocks and a stand-in sea (#96, `docs/demos/island.md`, "In the engine").
+  - D-037, D-038 and D-039 were accepted on 2026-09-30. That opens the real water (D-038)
+    and, later, the buildings (D-039).
+  - #97's lake rule goes with the recommendation written there.
+  - Still waiting for the owner: the island's look (`city-blocks --island 7`), before the
+    `island` demo of its own, and the 4 m flanks.
 
 **Waiting:**
 - #39 waits for the RTX 3080.
@@ -255,7 +256,7 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
 
 1. `forge-world`: reference frames (`f64`), integer sector grid, cube-sphere and flat-grid
    partitions, cell streaming with HLOD proxies, `u64` cell ids. Started 2026-09-26 on the
-   cloud branch (D-037 🟡): the frame tree with sectors of 2⁴⁰ m, the cells record the GPU
+   cloud branch (D-037 ✅): the frame tree with sectors of 2⁴⁰ m, the cells record the GPU
    takes (#93), both partitions with `u64` cell ids, and the streaming plan with hysteresis,
    all unit-tested; the HLOD proxies' content and the persistence of cells come with the
    terrain.

@@ -27,12 +27,12 @@ GPU; the sources' verification grades are in each file (#99).
 
 | The brief asks for | Already researched (file, section) | The gap file (this programme) | Rests on | Phase | Issues |
 |---|---|---|---|---|---|
-| Buildings, decor, materials and textures per civilisation, culture, climate, biome, planet, era | city-generation.md (roads, lots, grammar-driven kit assemblies, D-039 🟡); vegetation-materials.md §4–§5 (trim sheets, materials without an art team); procedural.md §2, §4, §5 (grammars, settlements, texturing by maths); planet-environment.md (the climate atlas a civilisation answers to) | **civilisations-styles.md** | D-035 packages, D-039's style sets and module grid, the cluster DAG cook, the unified material row (D-026) | 8, 10 | #83, #85, #86, #87, #88, #91 |
+| Buildings, decor, materials and textures per civilisation, culture, climate, biome, planet, era | city-generation.md (roads, lots, grammar-driven kit assemblies, D-039 ✅); vegetation-materials.md §4–§5 (trim sheets, materials without an art team); procedural.md §2, §4, §5 (grammars, settlements, texturing by maths); planet-environment.md (the climate atlas a civilisation answers to) | **civilisations-styles.md** | D-035 packages, D-039's style sets and module grid, the cluster DAG cook, the unified material row (D-026) | 8, 10 | #83, #85, #86, #87, #88, #91 |
 | Creatures, humans, animals: generated bodies and their animation | animation.md §3–§5 and its verdict (generated creatures after Spore, IK, powered ragdolls, foot events) | **creatures.md** | `forge-anim` (Phase 7), Jolt's ragdolls (D-009), the material layer's contacts | 7 | none yet |
 | Biomes, planets, solar systems, galaxies | planet-environment.md (climate, biomes, ecosystems, weather); planet-terrain.md (the planet from orbit to the ground); large-worlds.md and D-037 (frames, sectors, cells) | **universe-generation.md** | `forge-world`'s frame tree (sectors of 2⁴⁰ m, systems, bodies), D-016 determinism | 2 | #93 |
 | Spaceships, stations, ground bases | gpu-geometry.md (the cluster DAG any hull goes through); city-generation.md (kits and grammars); physics-fluids.md §3 (vehicles) | **spacecraft-structures.md** | D-039's kits and grammar, one physics space per construct (D-009), the instance cells (#38) | 3, 5–7 of the ballad | #80, #24, #12 |
 | Clouds, atmospheres | lighting-gi.md §6 (sky, atmosphere, clouds, fog, night); planet-environment.md §4 (weather rendering, Nubis weather maps); D-023 (Hillaire's tables, the march from space) | none needed now: the research is done, the build is Phase 4 item 3 | the froxel volume (D-032), the weather state (D-034) | 4 | none yet |
-| Oceans, beaches, water interactions, rivers, torrents | water.md (spectra, cascades, shores, rivers, lakes, the genesis hand-off; D-038 🟡); physics-fluids.md §5 (the far/mid/near water tiers, buoyancy, shallow water) | none needed now; the interaction tier (wakes, splashes, whitewater, buoyancy) is physics-fluids.md's near tier and Phase 3 item 4 | the coast distance, the river polylines and the lake levels the genesis bakes | 2–3 | #96, #97 |
+| Oceans, beaches, water interactions, rivers, torrents | water.md (spectra, cascades, shores, rivers, lakes, the genesis hand-off; D-038 ✅); physics-fluids.md §5 (the far/mid/near water tiers, buoyancy, shallow water) | none needed now; the interaction tier (wakes, splashes, whitewater, buoyancy) is physics-fluids.md's near tier and Phase 3 item 4 | the coast distance, the river polylines and the lake levels the genesis bakes | 2–3 | #96, #97 |
 | Destructible architecture, terrain deformation, crashes on ground, river or sea | physics-fluids.md §4 (destruction: pre-fracture, Chaos, Teardown), §5 (fluids); large-worlds.md (SDF bricks for edits) | **destruction-deformation.md** | Jolt (D-009), the SDF edit layer, the drainage recompute (`forge_procgen::flow::drain`), the replication of world edits | 3 | #89, #12, #24 |
 | Crafting, building, levelling and repairing terrain, removing rubble, NPC reconstruction | data-driven.md (records, packages, load order); procedural.md §6 | **crafting-building-repair.md** | world edits as a package layer over the deterministic generator (D-035 + D-016), the module grid (D-039), the SDF edit layer | 3, 10 | #82, #84 |
 | Nature reacting to the weather; complex animal movement | vegetation-materials.md §1–§2 (wind, deformation); animation.md §3–§4; planet-environment.md §5 (the weather fields) | creatures.md covers the animals; the wind field is Phase 8 item 1 | the shared wind field, the foot events | 7, 8 | none yet |
@@ -63,7 +63,7 @@ come before the universe's systems and galaxies.
 
 **Civilisations, styles, decor, materials.** Settled: streets and lots are solved (Parish &
 Müller, tensor fields, Vanegas 2012); buildings are kit assemblies decided by a split grammar
-(D-039 🟡); materials are trim sheets and tileables per region with one unified row; the
+(D-039 ✅); materials are trim sheets and tileables per region with one unified row; the
 climate atlas exists to answer to. *civilisations-styles.md adds:* the climate response is an algorithm, not a mood: the Mahoney tables
 (Koenigsberger 1974) and Givoni's chart take the monthly temperature and humidity D-034's
 atlas already stores per cell and give the opening share, the wall mass, the roof and the
@@ -113,7 +113,7 @@ per-pixel march from space are built (D-023); Nubis-style clouds with weather ma
 beat are the belt's dust volume's. Other planets' atmospheres are Hillaire's model with other
 compositions and the climate atlas's pressure and humidity as inputs.
 
-**Oceans, beaches, rivers, torrents.** Settled: water.md's plan (D-038 🟡): FFT cascades on
+**Oceans, beaches, rivers, torrents.** Settled: water.md's plan (D-038 ✅): FFT cascades on
 the compute queue and a forward surface pass, the shore from the coast distance the genesis
 already bakes, rivers as ribbons over the traced polylines with flow maps, lakes at their
 levels; the near tier (buoyancy, splashes, wakes, whitewater on the torrents) is
@@ -216,9 +216,9 @@ with simulation LOD and digests in the simulation), so that the content axes fit
 rebuilding. The second rule follows from the first: **no axis grows before one vertical slice
 touches every foundation once**, on the island, small.
 
-1. **Phase 2, now.** The island's genesis, its water (D-038 🟡) and its planet variant
+1. **Phase 2, now.** The island's genesis, its water (D-038 ✅) and its planet variant
    (planet-terrain.md) as planned; then the first culture: a tropical medieval village on the
-   island's coast from city-generation.md's layout and one style set (D-039 🟡, its climate
+   island's coast from city-generation.md's layout and one style set (D-039 ✅, its climate
    response from the atlas: stilts, verandas, steep thatched roofs, shade), and the first
    `Civilisation` record that selects it (civilisations-styles.md). One culture, one era, one
    island: the look judged on the GPU before a second of anything; the second island, with
@@ -275,7 +275,7 @@ second species, sixteen players.
   FFT, the foam, the clouds). A crash that reroutes a river is a server decision replayed as
   records, never a GPU simulation trusted by two machines.
 - **Eras multiply content.** From huts to habitats is one grammar with era parameters
-  (materials, module kits, motifs, floor heights) or it is six engines. The proposed D-039
+  (materials, module kits, motifs, floor heights) or it is six engines. D-039's
   module grid holds from a stone hut to a station corridor; it breaks for tents, organic
   forms and megastructures, which need their own generators (civilisations-styles.md says
   which). The kits are generated at cook time; there is no art team, so "same generator,

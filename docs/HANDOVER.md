@@ -34,6 +34,8 @@ D-039 stay 🟡. The rest of this file is the cloud session's handover as it wro
 - **#95:** measured. Double-buffering the probe atlases and the sky tables gains nothing on
   the 5070 Ti; the patch is kept in `reports/2026-09-30-95/`. A frame whose async work starts
   during the previous one is now timed from that frame's end.
+- **Decisions:** D-037, D-038 and D-039 were accepted as proposed on 2026-09-30, with #97's
+  lake rule going by its recommendation.
 - **Still waiting on the owner:** the island's look, then its own demo and the 2 m tiles.
 
 ## Read this first
@@ -438,15 +440,14 @@ detail.
 - `sun_light`'s highlight direction (#98): fixed on 2026-09-30. The ballad's and the city's
   highlights moved, and the mean brightness did not. It is a look change to judge
   (`reports/2026-09-30-98/`).
-- The island's lakes (#97): 2 614 at 4 m against 11 at 16 m; whether the finer grid's small
+- ~~The island's lakes (#97): 2 614 at 4 m against 11 at 16 m; whether the finer grid's small
   depressions should be filled by rule (an area limit, or the basin graph's fill mode with a
-  spill rule) is a look to judge on the GPU.
-- D-039 🟡 (`docs/DECISIONS.md`, for #86): buildings as grammar-derived assemblies of kit modules
-  with a style set per district; the module grid is the part that cannot be retrofitted, which
-  is why #86 says to decide early.
-- D-038 🟡 (`docs/DECISIONS.md`): the water surface as a forward pass after the opaque resolve
-  with the FFT cascades on the compute queue, the plan the water research recommends; to
-  approve, amend or drop before anyone writes `ocean.slang`.
+  spill rule) is a look to judge on the GPU.~~ The owner, 2026-09-30: go with the
+  recommendation (#97).
+- ~~D-039 🟡 (`docs/DECISIONS.md`, for #86): buildings as grammar-derived assemblies of kit
+  modules with a style set per district.~~ Accepted 2026-09-30, as was D-037.
+- ~~D-038 🟡 (`docs/DECISIONS.md`): the water surface as a forward pass after the opaque resolve
+  with the FFT cascades on the compute queue.~~ Accepted 2026-09-30.
 - D-009's "spectrum evaluated identically on CPU and GPU" once the sea moves to the GPU: the
   water research names three options (the lowest cascade re-run on the CPU with `dmath`, a
   readback for prediction only, a matched Gerstner band for physics); a 🟡 entry when Phase 3
