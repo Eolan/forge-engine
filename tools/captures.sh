@@ -88,6 +88,9 @@ for path in mesh fb; do
   # through, so it would differ between the A/B runs (#101).
   capture "$path-island60" 60 "$city" --island 7 --stream-pool 0 --sw-raster on "${flag[@]}"
   capture "$path-island60-noocc" 60 "$city" --island 7 --stream-pool 0 --sw-raster on --no-occlusion "${flag[@]}"
+  # The island with its sea on the GPU (#105): at a fixed step, so the waves are the same.
+  capture "$path-water60" 60 "$city" --island 7 --water --fixed-step --stream-pool 0 --sw-raster on "${flag[@]}"
+  capture "$path-water60-noocc" 60 "$city" --island 7 --water --fixed-step --stream-pool 0 --sw-raster on --no-occlusion "${flag[@]}"
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"
 [ "$keep" != 0 ] && closing="$closing; logs in $out/logs, summary in $summary" && echo "$closing" >> "$summary"

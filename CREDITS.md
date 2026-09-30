@@ -225,3 +225,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   (`shaders/water.slang`), Stockham's autosort FFT as laid out for graphics processors by
   Naga K. Govindaraju, Brandon Lloyd, Yuri Dotsenko, Burton Smith and John Manferdelli, "High
   Performance Discrete Fourier Transforms on Graphics Processors", SC 2008.
+- **The sea's surface** (`shaders/water.slang`, issue #105). Frank Losasso and Hugues Hoppe,
+  "Geometry clipmaps: terrain rendering using nested regular grids", *ACM Transactions on
+  Graphics* 23(3), SIGGRAPH 2004 (the nested grids and their transitions); Eric Bruneton,
+  Fabrice Neyret and Nicolas Holzschuch, "Real-time Realistic Ocean Lighting using Seamless
+  Transitions from Geometry to BRDF", *Computer Graphics Forum* 29(2), 2010, 487–496 (the
+  slopes' variance as roughness); Bruce Walter, Stephen R. Marschner, Hongsong Li and Kenneth
+  E. Torrance, "Microfacet Models for Refraction through Rough Surfaces", EGSR 2007 (GGX), with
+  Eric Heitz, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs",
+  *JCGT* 3(2), 2014 (the height-correlated masking).

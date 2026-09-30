@@ -2,12 +2,14 @@
 //! waves, each a tiling patch of [`WATER_SIZE`]² samples evolved to the frame's time and
 //! transformed on the async compute queue into two persistent images: the displacement (x,
 //! height, y) and the slopes with the Jacobian, which marks the whitecaps (Tessendorf 2001).
-//! Four graph passes a frame, each over every cascade:
+//! Five graph passes a frame, each over every cascade:
 //! - `water/evolve`: the spectrum at the frame's time, the fields' spectra packed two to a
 //!   complex value;
 //! - `water/fft-rows` and `water/fft-cols`: the inverse transform, radix-2 Stockham in
 //!   groupshared memory, a workgroup per line;
-//! - `water/derive`: the fields unpacked into the images.
+//! - `water/derive`: the fields unpacked into the images;
+//! - `water/mips`: their mip chains, a level from the one below (the slopes image keeps the
+//!   squared slope too, so a mip knows the variance of the slopes it no longer resolves).
 //!
 //! The spectrum comes from the CPU (`forge_procgen::Ocean::gpu_samples`, uploaded once), so
 //! the GPU transforms the CPU's amplitudes and its surface is the CPU's `Ocean::surface` in
@@ -17,13 +19,21 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FrameGraph, GraphBuffer,
-    GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory, MemoryLocation, Pipeline,
-    QueueKind, Result, ShaderCompiler, ShaderStage, vk,
+    Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
+    FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
+    MemoryLocation, Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, TransientDesc,
+    VertexPipelineDesc, vk,
 };
+use glam::{DVec3, Mat4, Vec3};
+
+use crate::sky::SkyFrame;
+use crate::taa::HDR_FORMAT;
 
 /// Samples per side of a cascade (`N` in `water.slang`).
 pub const WATER_SIZE: u32 = 256;
+/// Mip levels of a cascade's images, down to one texel: the mean displacement, slope and
+/// squared slope over ever larger areas, for the surface far away.
+pub const WATER_MIPS: u32 = WATER_SIZE.ilog2() + 1;
 /// Complex values per sample in the work buffer (`FIELDS`).
 const FIELDS: u64 = 4;
 /// Threads per side of `evolve` and `derive`'s workgroups.
@@ -42,6 +52,19 @@ struct WaterPush {
     slopes: u32,
     pad0: u32,
     pad1: [u32; 2],
+}
+
+/// Mirrors `MipsPush` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct MipsPush {
+    displacement: u32,
+    slopes: u32,
+    displacement_out: u32,
+    slopes_out: u32,
+    level: u32,
+    size: u32,
+    pad: [u32; 2],
 }
 
 /// One cascade's spectrum and layout, from the CPU.
@@ -85,8 +108,8 @@ struct Cascade {
 /// What this frame's passes write, for the surface pass to read.
 #[derive(Clone, Debug)]
 pub struct WaterFrame {
-    /// Per cascade: the displacement image (x, height, y) and the slopes image (∂h/∂x, ∂h/∂y,
-    /// the Jacobian).
+    /// Per cascade, with their mips: the displacement image (x, height, y) and the slopes
+    /// image (∂h/∂x, ∂h/∂y, the Jacobian, the squared slope).
     pub cascades: Vec<(ImageHandle, ImageHandle)>,
 }
 
@@ -96,6 +119,7 @@ pub struct WaterCascades {
     rows: Pipeline,
     cols: Pipeline,
     derive: Pipeline,
+    mips: Pipeline,
     cascades: Vec<Cascade>,
 }
 
@@ -129,7 +153,7 @@ impl WaterCascades {
                     format: vk::Format::R16G16B16A16_SFLOAT,
                     usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
                     aspect: vk::ImageAspectFlags::COLOR,
-                    mip_levels: 1,
+                    mip_levels: WATER_MIPS,
                     name,
                 },
             )
@@ -170,6 +194,19 @@ impl WaterCascades {
             rows: compute("fft_rows_main", "water fft rows")?,
             cols: compute("fft_cols_main", "water fft cols")?,
             derive: compute("derive_main", "water derive")?,
+            mips: {
+                let module = device.create_shader_module(
+                    &shaders.compile("water.slang", "mips_main", ShaderStage::Compute)?,
+                    "water mips",
+                )?;
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                    shader: (module, "mips_main"),
+                    push_constant_bytes: std::mem::size_of::<MipsPush>() as u32,
+                    name: "water mips",
+                });
+                device.destroy_shader_module(module);
+                pipeline?
+            },
             cascades,
         })
     }
@@ -189,7 +226,7 @@ impl WaterCascades {
         let texels = u64::from(WATER_SIZE * WATER_SIZE);
         self.cascades
             .iter()
-            .map(|c| c.spectrum.size() + c.work.size() + 2 * texels * 8)
+            .map(|c| c.spectrum.size() + c.work.size() + 2 * texels * 8 * 4 / 3)
             .sum()
     }
 
@@ -253,14 +290,47 @@ impl WaterCascades {
                 .pass("water/derive")
                 .queue(QueueKind::Compute)
                 .buffer(work, BufferAccess::ShaderRead(compute))
-                .image(displacement, ImageAccess::StorageWrite(compute))
-                .image(slopes, ImageAccess::StorageWrite(compute))
+                .image_mip(displacement, 0, ImageAccess::StorageWrite(compute))
+                .image_mip(slopes, 0, ImageAccess::StorageWrite(compute))
                 .run(move |_, commands| {
                     commands.bind_pipeline(derive);
                     commands.push_constants(derive, &push);
                     commands.dispatch(groups, groups, 1);
                     Ok(())
                 });
+        }
+        // The mips, each level from the one below, every cascade in one pass a level.
+        let mips = &self.mips;
+        for level in 1..WATER_MIPS {
+            let size = WATER_SIZE >> level;
+            let mut pass = graph.pass("water/mips").queue(QueueKind::Compute);
+            for &(_, displacement, slopes) in &imported {
+                pass = pass
+                    .image_mip(displacement, level - 1, ImageAccess::Sampled(compute))
+                    .image_mip(slopes, level - 1, ImageAccess::Sampled(compute))
+                    .image_mip(displacement, level, ImageAccess::StorageWrite(compute))
+                    .image_mip(slopes, level, ImageAccess::StorageWrite(compute));
+            }
+            let images: Vec<_> = imported.iter().map(|&(_, d, s)| (d, s)).collect();
+            pass.run(move |resources, commands| {
+                commands.bind_pipeline(mips);
+                for &(displacement, slopes) in &images {
+                    commands.push_constants(
+                        mips,
+                        &MipsPush {
+                            displacement: resources.sampled(displacement).0,
+                            slopes: resources.sampled(slopes).0,
+                            displacement_out: resources.storage(displacement, level).0,
+                            slopes_out: resources.storage(slopes, level).0,
+                            level,
+                            size,
+                            pad: [0; 2],
+                        },
+                    );
+                    commands.dispatch(size.div_ceil(8), size.div_ceil(8), 1);
+                }
+                Ok(())
+            });
         }
         WaterFrame {
             cascades: imported.iter().map(|&(_, d, s)| (d, s)).collect(),
@@ -287,5 +357,331 @@ impl WaterCascades {
                 }
             })
             .collect())
+    }
+
+    /// Cascade `index`'s patch side, metres.
+    pub fn patch(&self, index: usize) -> f32 {
+        self.cascades[index].patch
+    }
+}
+
+// ------------------------------------------------------------------- surface ---
+
+/// Cascades the surface reads (`WATER_CASCADES` in `water.slang`).
+const SURFACE_CASCADES: usize = 3;
+/// Clipmap levels the block holds (`WATER_MAX_LEVELS`).
+const MAX_LEVELS: usize = 16;
+/// Quads a side of a clipmap level: a multiple of 4, so a level's hole falls on the next
+/// level's lattice.
+const GRID: u32 = 128;
+/// Metres between the finest level's vertices.
+const FINEST_SPACING: f64 = 0.5;
+/// Levels: the finest 64 m across, the coarsest 262 km (the stand-in sea's extent).
+const LEVELS: u32 = 13;
+
+/// Mirrors `WaterCascadeView` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuWaterCascadeView {
+    offset: [f32; 2],
+    inv_patch: f32,
+    texel: f32,
+    displacement: u32,
+    slopes: u32,
+    pad: [u32; 2],
+}
+
+/// Mirrors `WaterSurface` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuWaterSurface {
+    view_proj: [f32; 16],
+    camera: [f32; 4],
+    sun: [f32; 4],
+    sun_radiance: [f32; 4],
+    absorption: [f32; 4],
+    scatter: [f32; 4],
+    cascades: [GpuWaterCascadeView; SURFACE_CASCADES],
+    levels: [[f32; 4]; MAX_LEVELS],
+    level_count: u32,
+    grid: u32,
+    scene_color: u32,
+    scene_depth: u32,
+    width: u32,
+    height: u32,
+    pad: [u32; 2],
+    sky: u64,
+    sky_light: u64,
+}
+
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 544);
+
+/// Mirrors `SurfacePush` and `CopyPush` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SurfacePush {
+    surface: u64,
+    pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CopyPush {
+    color: u32,
+    depth: u32,
+    color_out: u32,
+    depth_out: u32,
+    width: u32,
+    height: u32,
+    pad: [u32; 2],
+}
+
+/// What a frame's sea surface needs besides the cascades and the sky.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterSurfaceParams {
+    /// The drawing camera's view-projection, camera-relative (jitter included).
+    pub view_proj: Mat4,
+    /// The camera in the sea's frame, metres: the sea's mean level is y = 0.
+    pub camera: DVec3,
+    /// Towards the sun.
+    pub sun_dir: Vec3,
+    /// The sun's pre-exposed illuminance on a surface facing it, per channel (the resolve's
+    /// sun colour times its illuminance times the exposure).
+    pub sun_radiance: Vec3,
+    /// The pre-exposed luminance of a unit of sun illuminance (the sky's scale).
+    pub sky_scale: f32,
+}
+
+/// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
+/// the cascades, drawn after the sky's compose (`water/surface`), with the scene it lets
+/// through copied first (`water/scene-copy`).
+pub struct WaterSurface {
+    copy: Pipeline,
+    surface: Pipeline,
+    blocks: Vec<Buffer>,
+}
+
+impl WaterSurface {
+    /// Compiles the passes.
+    pub fn new(device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<Self> {
+        let copy_module = device.create_shader_module(
+            &shaders.compile("water.slang", "copy_main", ShaderStage::Compute)?,
+            "water scene copy",
+        )?;
+        let copy = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (copy_module, "copy_main"),
+            push_constant_bytes: std::mem::size_of::<CopyPush>() as u32,
+            name: "water scene copy",
+        });
+        device.destroy_shader_module(copy_module);
+        let vertex = device.create_shader_module(
+            &shaders.compile("water.slang", "surface_vert_main", ShaderStage::Vertex)?,
+            "water surface vertices",
+        )?;
+        let fragment = device.create_shader_module(
+            &shaders.compile("water.slang", "surface_frag_main", ShaderStage::Fragment)?,
+            "water surface",
+        )?;
+        let surface = device.create_vertex_pipeline(&VertexPipelineDesc {
+            vertex: (vertex, "surface_vert_main"),
+            fragment: (fragment, "surface_frag_main"),
+            color_formats: &[HDR_FORMAT],
+            depth_format: Some(vk::Format::D32_SFLOAT),
+            push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
+            cull_mode: vk::CullModeFlags::NONE,
+            wireframe: false,
+            depth_test: true,
+            name: "water surface",
+        });
+        device.destroy_shader_module(vertex);
+        device.destroy_shader_module(fragment);
+        let blocks = (0..FRAMES_IN_FLIGHT)
+            .map(|i| {
+                device.create_buffer(BufferDesc {
+                    size: std::mem::size_of::<GpuWaterSurface>() as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("water surface {i}"),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            copy: copy?,
+            surface: surface?,
+            blocks,
+        })
+    }
+
+    /// Declares the copy of what the water lets through and the surface over `color` and
+    /// `depth` (the frame's HDR image and depth, after the sky's compose), from the cascades'
+    /// images of this frame (`waves`) and the sky's frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        cascades: &'f WaterCascades,
+        waves: &WaterFrame,
+        sky: &SkyFrame,
+        params: WaterSurfaceParams,
+        color: ImageHandle,
+        depth: ImageHandle,
+        extent: vk::Extent2D,
+    ) {
+        assert_eq!(
+            cascades.len(),
+            SURFACE_CASCADES,
+            "the surface reads three cascades"
+        );
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+        let vertex = vk::PipelineStageFlags2::VERTEX_SHADER;
+        let transient = |name, format| TransientDesc {
+            name,
+            width: extent.width,
+            height: extent.height,
+            format,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        };
+        let scene_color = graph.transient(transient("water scene color", HDR_FORMAT));
+        let scene_depth = graph.transient(transient("water scene depth", vk::Format::R32_SFLOAT));
+        let copy = &self.copy;
+        graph
+            .pass("water/scene-copy")
+            .image(color, ImageAccess::Sampled(compute))
+            .image(depth, ImageAccess::Sampled(compute))
+            .image(scene_color, ImageAccess::StorageWrite(compute))
+            .image(scene_depth, ImageAccess::StorageWrite(compute))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(copy);
+                commands.push_constants(
+                    copy,
+                    &CopyPush {
+                        color: resources.sampled(color).0,
+                        depth: resources.sampled(depth).0,
+                        color_out: resources.storage(scene_color, 0).0,
+                        depth_out: resources.storage(scene_depth, 0).0,
+                        width: extent.width,
+                        height: extent.height,
+                        pad: [0; 2],
+                    },
+                );
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
+
+        // The clipmap: each level centred on the camera snapped to twice its spacing, in f64,
+        // then relative to the camera.
+        let mut levels = [[0.0_f32; 4]; MAX_LEVELS];
+        for (l, level) in levels.iter_mut().enumerate().take(LEVELS as usize) {
+            let spacing = FINEST_SPACING * f64::from(1u32 << l);
+            let snap = |c: f64| (c / (2.0 * spacing)).floor() * 2.0 * spacing - c;
+            *level = [
+                snap(params.camera.x) as f32,
+                snap(params.camera.z) as f32,
+                spacing as f32,
+                0.0,
+            ];
+        }
+        let views: Vec<GpuWaterCascadeView> = cascades
+            .cascades
+            .iter()
+            .map(|c| {
+                let patch = f64::from(c.patch);
+                let offset = |v: f64| (v / patch).rem_euclid(1.0) as f32;
+                GpuWaterCascadeView {
+                    offset: [offset(params.camera.x), offset(params.camera.z)],
+                    inv_patch: 1.0 / c.patch,
+                    texel: c.patch / WATER_SIZE as f32,
+                    displacement: c.displacement.sampled().0,
+                    slopes: c.slopes.sampled().0,
+                    pad: [0; 2],
+                }
+            })
+            .collect();
+        let block: &'f Buffer = &self.blocks[slot.index];
+        let address = block.address();
+        let sky_address = sky.address();
+        let sky_light = sky.light.address;
+        let surface = &self.surface;
+        let mut pass = graph
+            .pass("water/surface")
+            .image(color, ImageAccess::ColorAttachment)
+            .image(depth, ImageAccess::DepthAttachment)
+            .image(scene_color, ImageAccess::Sampled(fragment))
+            .image(scene_depth, ImageAccess::Sampled(fragment))
+            .image(sky.light.table, ImageAccess::Sampled(fragment))
+            .image(sky.aerial(), ImageAccess::Sampled(fragment))
+            .buffer(sky.light.buffer, BufferAccess::ShaderRead(fragment));
+        for &(displacement, slopes) in &waves.cascades {
+            pass = pass
+                .image(displacement, ImageAccess::Sampled(vertex))
+                .image(slopes, ImageAccess::Sampled(fragment));
+        }
+        pass.run(move |resources, commands| {
+            let mut cascade_views = [GpuWaterCascadeView::zeroed(); SURFACE_CASCADES];
+            cascade_views.copy_from_slice(&views);
+            block.write(
+                0,
+                &[GpuWaterSurface {
+                    view_proj: params.view_proj.to_cols_array(),
+                    camera: [
+                        params.camera.x as f32,
+                        params.camera.y as f32,
+                        params.camera.z as f32,
+                        0.0,
+                    ],
+                    sun: params.sun_dir.normalize_or(Vec3::Y).extend(0.0).to_array(),
+                    sun_radiance: params.sun_radiance.extend(params.sky_scale).to_array(),
+                    absorption: [0.35, 0.07, 0.05, 0.0],
+                    scatter: [0.003, 0.013, 0.016, 0.0],
+                    cascades: cascade_views,
+                    levels,
+                    level_count: LEVELS,
+                    grid: GRID,
+                    scene_color: resources.sampled(scene_color).0,
+                    scene_depth: resources.sampled(scene_depth).0,
+                    width: extent.width,
+                    height: extent.height,
+                    pad: [0; 2],
+                    sky: sky_address,
+                    sky_light,
+                }],
+            );
+            let attachment = [vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(color))
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::STORE)];
+            let depth_attachment = vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(depth))
+                .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::STORE);
+            let info = vk::RenderingInfo::default()
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent,
+                })
+                .layer_count(1)
+                .color_attachments(&attachment)
+                .depth_attachment(&depth_attachment);
+            commands.begin_rendering(&info);
+            commands.bind_pipeline(surface);
+            commands.set_viewport_full(extent);
+            commands.push_constants(
+                surface,
+                &SurfacePush {
+                    surface: address,
+                    pad: [0; 2],
+                },
+            );
+            commands.draw(LEVELS * GRID * GRID * 6, 1);
+            commands.end_rendering();
+            Ok(())
+        });
     }
 }

@@ -323,8 +323,8 @@ rasteriser. Before the rocks and the plane the island took 0.74 ms, and 0.84 ms 
 ([island.md](demos/island.md), "In the engine").
 
 **The sea's cascades** (#105 step 1, 2026-09-30). The three FFT cascades, 256² each, are four
-passes on the async compute queue; nothing draws them yet. `--no-water` against the default,
-three runs each, from the coast view:
+passes on the async compute queue. Measured before the surface drew them, without them and
+with them, three runs each, from the coast view:
 
 | | 1600 × 900 | 2560 × 1440 |
 |---|---|---|
@@ -340,6 +340,19 @@ three runs each, from the coast view:
 - **The lever:** the column pass reads every line with a stride of a whole row, where the row
   pass reads contiguously. A transpose through groupshared memory would make it coalesced.
 - **The cascades' memory:** 12 MiB.
+
+**The sea's surface** (#105 step 2, `--water`, 2026-09-30). The cascades gain mip chains
+(`water/mips`), and the sea is drawn by `water/scene-copy` and `water/surface` in place of the
+stand-in plane. Three runs each, medians:
+
+| View | stand-in | water | water/surface | the compute chain |
+|---|---|---|---|---|
+| coast, 1600 × 900 | 1.26 ms | 1.43 ms | 0.07 | 0.22 |
+| from the sea, 1600 × 900 | 1.11 ms | 1.32 ms | 0.09 | 0.26 |
+| coast, 2560 × 1440 | 2.38 ms | 2.66 ms | 0.12 | 0.25 |
+
+The stand-in's traced reflections (0.13 ms) go with it. Its frame-to-frame stability is in
+[island.md](demos/island.md), "The surface".
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

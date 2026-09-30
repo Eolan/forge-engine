@@ -38,8 +38,8 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, exposure_from_ev100,
-    sh_irradiance,
+    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterSurface,
+    WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -192,9 +192,14 @@ struct Args {
     /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
     #[arg(long, default_value_t = ProbeParams::default().cascades)]
     probe_cascades: u32,
-    /// The island without its sea's waves (issue #105: their cascades on the GPU).
+    /// The island's sea on the GPU (issue #105, in progress): its FFT cascades. Off until
+    /// the surface drawn from them replaces the stand-in sea.
     #[arg(long)]
-    no_water: bool,
+    water: bool,
+    /// Holds the waves still at this many seconds (the shimmer's measure: what changes
+    /// between frames of a still camera is then the aliasing alone).
+    #[arg(long)]
+    sea_time: Option<f64>,
     /// A settled probe updates every this many frames, on its turn (1 to 8; issue #103).
     #[arg(long, default_value_t = ProbeParams::default().cadence)]
     probe_cadence: u32,
@@ -264,7 +269,7 @@ struct Gallery {
     /// The island's sea (issue #105): the GPU's cascades and the CPU's spectra they came
     /// from (the start-up check), the seconds of waves played, and the time the last
     /// submitted frame's waves were at.
-    water: Option<(WaterCascades, Vec<Ocean>)>,
+    water: Option<(WaterCascades, WaterSurface, Vec<Ocean>)>,
     sea_time: f64,
     sea_time_submitted: f32,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
@@ -441,7 +446,7 @@ impl Gallery {
         };
         // The island's sea (issue #105): three cascades of FFT waves on the async compute
         // queue, their spectra from the CPU's.
-        let water = if args.island.is_some() && !args.no_water {
+        let water = if args.island.is_some() && args.water {
             let seed = forge_core::Seed::new(args.island.unwrap_or(7)).derive(0x5EA);
             let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
             let descs: Vec<WaterCascadeDesc> = oceans
@@ -463,7 +468,8 @@ impl Gallery {
                 mib = %format_args!("{:.1}", water.bytes() as f64 / f64::from(1 << 20)),
                 "sea cascades"
             );
-            Some((water, oceans))
+            let surface = WaterSurface::new(&ctx.device, &ctx.shaders)?;
+            Some((water, surface, oceans))
         } else {
             None
         };
@@ -609,7 +615,10 @@ impl Demo for Gallery {
             self.run_frame_ms.push(ms);
         }
         self.step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
-        self.sea_time += f64::from(self.step);
+        self.sea_time = match self.args.sea_time {
+            Some(still) => still,
+            None => self.sea_time + f64::from(self.step),
+        };
         if let Some(length) = self.args.day {
             self.day_time += self.step;
             self.set_sun_of_day((self.day_time / length.max(1.0)).fract());
@@ -698,7 +707,7 @@ impl Demo for Gallery {
             );
         }
         if self.frame == 120
-            && let Some((water, oceans)) = &self.water
+            && let Some((water, _, oceans)) = &self.water
         {
             water_check(&ctx.device, water, oceans, self.sea_time_submitted)?;
         }
@@ -801,12 +810,15 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
         );
-        // The sea's waves (issue #105), on the async compute queue; nothing reads them yet.
-        if let Some((water, _)) = &self.water {
+        // The sea's waves (issue #105), on the async compute queue; the surface drawn from
+        // them after the sky's compose.
+        let waves = if let Some((water, _, _)) = &self.water {
             let time = self.sea_time as f32;
-            let _waves = water.update(&mut frame.graph, time);
             self.sea_time_submitted = time;
-        }
+            Some(water.update(&mut frame.graph, time))
+        } else {
+            None
+        };
         // The probes' light in place of the open sky's (issue #53): after the sky's tables,
         // which light their rays' misses, before the resolve.
         let probes = match &mut self.probes {
@@ -864,6 +876,26 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
         );
+        if let (Some((cascades, surface, _)), Some(waves)) = (&self.water, &waves) {
+            surface.draw(
+                &mut frame.graph,
+                frame.slot,
+                cascades,
+                waves,
+                &sky,
+                WaterSurfaceParams {
+                    view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                    camera: camera_in_scene.as_dvec3(),
+                    sun_dir: self.renderer.sun_dir,
+                    sun_radiance: self.renderer.sun_color
+                        * (self.renderer.sun_illuminance * exposure),
+                    sky_scale: self.renderer.sun_illuminance * exposure,
+                },
+                taa_frame.color,
+                targets.depth,
+                extent,
+            );
+        }
         if self.args.day.is_some() {
             // Meter the finished HDR scene for the exposure of the frames to come.
             self.meter.measure(
@@ -1807,7 +1839,10 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     layout.origin = scene_origin(args);
     builder.set_origin(layout.origin);
     builder.add_instance(ids[0], Mat4::IDENTITY);
-    builder.add_instance(ids[1], Mat4::IDENTITY);
+    // The stand-in sea, unless the water surface draws the sea (issue #105).
+    if !args.water {
+        builder.add_instance(ids[1], Mat4::IDENTITY);
+    }
     // The rocks: the GPU placement over the island's own heights (`placement::RockRule::Land`).
     let rocks: Vec<MeshId> = ids[2..].to_vec();
     let meshes = CityMeshes {

@@ -38,7 +38,7 @@ const IRRADIANCE_BYTES: u64 = 9 * 16;
 /// reflections (issue #49): up (xyz) and the index as a float value (w), forward.
 const SKY_LIGHT_BYTES: u64 = IRRADIANCE_BYTES + 2 * 16;
 
-/// Mirrors `Sky` in `sky.slang`.
+/// Mirrors `Sky` in `skyframe.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuSky {
@@ -104,6 +104,19 @@ pub struct SkyFrame {
     address: u64,
     /// The sky's irradiance, for the resolve.
     pub light: SkyLight,
+}
+
+impl SkyFrame {
+    /// The frame's `Sky` block (`skyframe.slang`), for a pass drawn after the compose that
+    /// hazes itself (the water surface, issue #105).
+    pub fn address(&self) -> u64 {
+        self.address
+    }
+
+    /// The aerial-perspective volume, for the same passes.
+    pub fn aerial(&self) -> ImageHandle {
+        self.aerial
+    }
 }
 
 /// The ground view's tables, their passes and the per-frame parameters.

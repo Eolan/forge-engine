@@ -391,8 +391,8 @@ default frames show no line.
 ## The sea on the GPU (issue #105, 2026-09-30)
 
 D-038 was accepted on 2026-09-30. Its first step puts the sea's waves on the GPU:
-`forge_render::water` and `shaders/water.slang`. Nothing draws them yet; the surface pass
-comes next.
+`forge_render::water` and `shaders/water.slang`. With `--water` the island draws its sea from
+them ("The surface" below); without it, the stand-in.
 
 - **Three cascades** of 256² samples (`OceanParams::cascades`): patches of 1 024, 128 and 16 m.
   - Each holds the waves the one before is too coarse for. The bands meet at 32 m and 4 m
@@ -415,6 +415,47 @@ comes next.
   difference is under 10⁻³ of its largest value, the half floats' precision. On the 5070 Ti the
   largest is 2.9 × 10⁻⁶ (the 1 024 m cascade's height: 1.8 µm of 2.94 m).
 - **The cost:** 0.07 ms of the frame at 1600 × 900 and 0.15 ms at 1440p (`docs/PROFILE.md`),
-  and 12 MiB. `--no-water` turns them off.
+  and 13 MiB with the mips. They run with `--water` only.
 - **Checks:** the batch is unchanged, and `tools/validate.sh` is clean, synchronization
   included.
+
+**The surface** (step 2, `--water`). The sea is drawn by two passes after the sky's compose:
+`water/scene-copy` (the HDR image and its depth, for what the water lets through), then
+`water/surface`.
+- **The mesh:** a clipmap of 13 levels of 128 × 128 quads, the finest 0.5 m apart and 64 m
+  across, the coarsest 262 km across (Losasso & Hoppe 2004).
+  - Each level is centred on the camera snapped to twice its spacing, and leaves out what the
+    finer level covers.
+  - Near its edge a level's odd vertices slide onto the coarser lattice, all the way by the
+    edge, so the levels meet without cracks and nothing pops.
+  - The cascades displace the vertices, each read at the mip that matches the spacing
+    (`water/mips` builds the chains).
+- **The shading:**
+  - The normal and the roughness come from the slopes' mips: the mean slope, and the variance
+    of those the mips average away, as GGX's α² (Bruneton, Neyret & Holzschuch 2010). Far away
+    the sea turns rough instead of shimmering.
+  - Schlick's Fresnel (F0 0.02) with the sky in the mirror direction, and the sun's GGX
+    highlight.
+  - Under the water, the copied scene is dimmed along the view ray's path to it (absorption
+    0.35, 0.07, 0.05 m⁻¹), with the light the water scatters back. The shallows show the sand,
+    and the deep sea turns blue.
+  - Foam where the Jacobian drops under 0.45, then the aerial perspective.
+- **The graph:** the surface writes depth, so TAA's motion vectors and the culling harness see
+  it as a surface. `--sea-time T` holds the waves still.
+
+![The coast view and the view from the sea: the stand-in on the left, the water on the right](../../reports/2026-09-30-105/sheet.png)
+
+- **What it lacks:** the island's reflection (the stand-in's traced mirror rays), the sun's
+  shadow on the water, and the shore's waves and foam line. That is why `--water` stays opt-in
+  until the owner has judged it (`reports/2026-09-30-105/`).
+- **Stability** (still camera, waves still, TAA on): pixels changing from one frame to the
+  next, 0.43 % at the coast (the stand-in 0.37 %) and 0.57 % from the sea (0.34 %). Over 32
+  frames at the same jitter phase, 0.0016 % and 0.0003 %: nothing crawls.
+- **Cost:** 1.26 → 1.43 ms at the coast, 1.11 → 1.32 ms from the sea, 2.38 → 2.66 ms at 1440p
+  (`docs/PROFILE.md`).
+- **Checks:**
+  - The batch gains the water's four captures: the occlusion A/B and mesh against fallback
+    are at 0 px.
+  - `tools/validate.sh` gains the water runs and is clean. It first showed the render graph
+    naming graphics stages in a compute-queue barrier after a vertex shader read the mips;
+    `forge-gpu` fixes that, with a test.

@@ -54,4 +54,7 @@ pub use starfield::Starfield;
 pub use streaming::{Residency, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
-pub use water::{WATER_SIZE, WaterCascadeDesc, WaterCascades, WaterFrame, WaterSample};
+pub use water::{
+    WATER_MIPS, WATER_SIZE, WaterCascadeDesc, WaterCascades, WaterFrame, WaterSample, WaterSurface,
+    WaterSurfaceParams,
+};

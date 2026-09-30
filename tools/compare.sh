@@ -66,8 +66,9 @@ main() {
     pair "$new/$path-city60.png" "$new/$path-city60-noocc.png" "$path city, occlusion off"
     pair "$new/$path-city60.png" "$new/$path-city60-culled.png" "$path city, show-culled"
     pair "$new/$path-island60.png" "$new/$path-island60-noocc.png" "$path island, occlusion off"
+    pair "$new/$path-water60.png" "$new/$path-water60-noocc.png" "$path island with water, occlusion off"
   done
-  for name in static60 orbit120 nolod120 ast240 ast-notaa600 city60 cityorbit120 gallery60 island60; do
+  for name in static60 orbit120 nolod120 ast240 ast-notaa600 city60 cityorbit120 gallery60 island60 water60; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   if [ $status = 0 ]; then

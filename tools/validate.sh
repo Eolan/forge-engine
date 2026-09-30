@@ -60,6 +60,7 @@ for path in "" --force-fallback; do
   validate "city-resident$tag" "$bin/city-blocks$exe" --stream-pool 0 --frames 60 $path
   validate "gallery$tag" "$bin/city-blocks$exe" --gallery --frames 60 $path
   validate "island$tag" "$bin/city-blocks$exe" --island 7 --stream-pool 0 --frames 60 $path
+  validate "water$tag" "$bin/city-blocks$exe" --island 7 --water --stream-pool 0 --frames 60 $path
 done
 [ "$keep" != 0 ] && say "logs in $out/logs, summary in $summary"
 exit 0

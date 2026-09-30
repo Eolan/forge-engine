@@ -1082,6 +1082,22 @@ fn compile_queued(
                 None => (0, meta.mip_levels),
             };
             let crossing = image_sync[i].last != queue;
+            if crossing {
+                // The mips this pass leaves alone were last used on the other queue too, and
+                // the image now counts as this queue's: their next barrier here starts from
+                // everything before it (the timeline wait orders the other queue's work),
+                // not from stages this queue may not have (issue #105: the water's mips,
+                // sampled by a vertex shader, then rebuilt on the compute queue).
+                for level in (0..meta.mip_levels).filter(|l| !(base..base + count).contains(l)) {
+                    let state = &mut image_states[i][level as usize];
+                    *state = ResourceState {
+                        stage: vk::PipelineStageFlags2::ALL_COMMANDS,
+                        access: vk::AccessFlags2::MEMORY_WRITE,
+                        write: true,
+                        ..*state
+                    };
+                }
+            }
             // One barrier per run of consecutive mips that need the same transition.
             let mut run: Option<(u32, u32, ResourceState, ResourceState)> = None;
             for level in base..base + count {
@@ -2408,6 +2424,52 @@ mod tests {
         let join = batches[2];
         assert_eq!(join.queue, Graphics);
         assert_eq!(join.waits[Compute.index()].0, batches[1].signal);
+    }
+
+    #[test]
+    fn mips_rebuilt_on_the_compute_queue_after_a_vertex_read_name_no_graphics_stage() {
+        use QueueKind::Compute;
+        // The water's images (issue #105): level 0 written, the mips built from it on the
+        // compute queue, every level sampled by a vertex shader on the graphics queue.
+        let images = [meta("waves", 3, None)];
+        let mut states = vec![vec![ResourceState::UNDEFINED; 3]];
+        let mut sync = vec![QueueSync::default()];
+        let mut next = [0; 3];
+        let write = ImageAccess::StorageWrite(S::COMPUTE_SHADER);
+        let read = ImageAccess::Sampled(S::COMPUTE_SHADER);
+        let passes = [
+            on(Compute, pass("c/derive", &[(0, Some(0), write)])),
+            on(
+                Compute,
+                pass("c/mips", &[(0, Some(0), read), (0, Some(1), write)]),
+            ),
+            on(
+                Compute,
+                pass("c/mips", &[(0, Some(1), read), (0, Some(2), write)]),
+            ),
+            pass(
+                "g/surface",
+                &[(0, None, ImageAccess::Sampled(S::VERTEX_SHADER))],
+            ),
+        ];
+        for _ in 0..2 {
+            let (_, compiled, batches) =
+                frame(&passes, &images, &mut states, &mut sync, &mut next).unwrap();
+            for (c, pass) in compiled.iter().enumerate() {
+                if batches[pass.batch].queue != Compute {
+                    continue;
+                }
+                for barrier in &pass.image_barriers {
+                    assert!(
+                        !barrier
+                            .src_stage_mask
+                            .intersects(S::VERTEX_SHADER | S::FRAGMENT_SHADER),
+                        "compute pass {c} waits on a graphics stage: {:?}",
+                        barrier.src_stage_mask
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -9,30 +9,7 @@ import bindless;
 import atmosphere;
 import sh;
 import skyview;
-
-// Must match GpuSky in sky.rs.
-struct Sky
-{
-    float4x4 inv_view_proj;   // clip → world (the drawing camera, jitter included)
-    float4 camera;            // xyz: the camera in world metres; w: metres per world unit (1)
-    float4 sun;               // xyz: towards the sun (world); w: cos of the sun disc's radius
-    float4 scale;             // x: pre-exposed luminance of a unit of sun illuminance; y: the
-                              // sun disc's luminance per unit illuminance (1 / solid angle);
-                              // z: the aerial perspective's far distance, km; w: unused
-    uint transmittance;       // sampled-image indices of the atmosphere's tables
-    uint multiple_scattering;
-    uint sky_view;            // sky-view table: sampled index (compose) / storage index (its pass)
-    uint sky_view_storage;
-    uint aerial;              // aerial-perspective atlas: sampled / storage indices
-    uint aerial_storage;
-    uint depth;               // the frame's depth (sampled)
-    uint color;               // the frame's HDR colour (storage, read and written)
-    uint width;
-    uint height;
-    uint2 pad;
-    Planet* planet;
-    float4* irradiance;       // the sky's irradiance, SH_COEFFICIENTS coefficients, then up and forward (irradiance_main)
-};
+import skyframe;
 
 struct Push
 {
@@ -42,10 +19,6 @@ struct Push
 [[vk::push_constant]]
 Push push;
 
-// The aerial-perspective volume: SLICES depth slices of SLICE × SLICE froxels, laid side by
-// side in a 2-D atlas (the bindless set holds 2-D images).
-static const uint SLICE = 32;
-static const uint SLICES = 32;
 static const float PI = 3.14159265;
 
 // The camera's frame on the planet: up, and the horizontal towards the sun's azimuth.
@@ -100,20 +73,6 @@ void sky_view_main(uint3 id : SV_DispatchThreadID)
     g_storage_images_rgba16f[NonUniformResourceIndex(s[0].sky_view_storage)][id.xy] = float4(luminance, 1.0);
 }
 
-// The world-space direction through the pixel at `uv` (0..1, y down).
-float3 view_direction(Sky* s, float2 uv)
-{
-    float4 far = mul(s[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0));
-    return normalize(far.xyz / far.w - s[0].camera.xyz);
-}
-
-// Depth (km) of slice boundary `k` (1..SLICES): quadratic, fine near the camera.
-float slice_distance(Sky* s, float k)
-{
-    float t = k / float(SLICES);
-    return s[0].scale.z * t * t;
-}
-
 // The aerial-perspective volume: a thread per froxel column marches the view ray slice by
 // slice, storing the light gathered and the mean transmittance up to each slice's far end.
 [shader("compute")]
@@ -150,29 +109,6 @@ void aerial_main(uint3 id : SV_DispatchThreadID)
         uint2 texel = uint2((k - 1) * SLICE + id.x, id.y);
         g_storage_images_rgba16f[NonUniformResourceIndex(s[0].aerial_storage)][texel] = float4(luminance, dot(throughput, float3(1.0 / 3.0)));
     }
-}
-
-// The aerial perspective at screen `uv` and `distance` km: bilinear within the two nearest
-// slices, linear between them.
-float4 aerial_at(Sky* s, float2 uv, float distance)
-{
-    float w = sqrt(saturate(distance / s[0].scale.z)) * float(SLICES) - 1.0;
-    float2 inside = clamp(uv * float(SLICE), 0.5, float(SLICE) - 0.5);
-    Texture2D<float4> atlas = g_sampled_images[NonUniformResourceIndex(s[0].aerial)];
-    SamplerState linear = g_samplers[SAMPLER_LINEAR_CLAMP];
-    float2 atlas_size = float2(SLICE * SLICES, SLICE);
-    if (w <= 0.0)
-    {
-        // Nearer than the first slice's far end: from nothing at the camera to that slice.
-        float4 first = atlas.SampleLevel(linear, inside / atlas_size, 0.0);
-        float f = saturate(w + 1.0);
-        return float4(first.rgb * f, lerp(1.0, first.a, f));
-    }
-    float k = min(floor(w), float(SLICES - 2));
-    float f = saturate(w - k);
-    float4 a = atlas.SampleLevel(linear, (inside + float2(k * SLICE, 0.0)) / atlas_size, 0.0);
-    float4 b = atlas.SampleLevel(linear, (inside + float2((k + 1.0) * SLICE, 0.0)) / atlas_size, 0.0);
-    return lerp(a, b, f);
 }
 
 // The compose pass, a thread per pixel: the sky and the sun where the depth is empty, the
