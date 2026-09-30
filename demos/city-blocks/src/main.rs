@@ -895,11 +895,11 @@ impl Demo for Gallery {
                 targets.depth,
                 extent,
             );
-            // The island in the water: its mirror rays, traced as the glass's (#105), with the
-            // same keys (F, Y).
-            if self.flags.has(CullFlags::SKY_REFLECTIONS)
-                && self.flags.has(CullFlags::RAY_REFLECTIONS)
-            {
+            // The island in the water and its shadow on it (#105): the water's mirror rays,
+            // traced as the glass's (F, Y), and its shadow rays (J).
+            let mirror_rays = self.flags.has(CullFlags::SKY_REFLECTIONS)
+                && self.flags.has(CullFlags::RAY_REFLECTIONS);
+            if mirror_rays || self.flags.has(CullFlags::SHADOWS) {
                 self.renderer.trace_requested(
                     &mut frame.graph,
                     "water/reflections",

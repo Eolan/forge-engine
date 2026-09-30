@@ -46,7 +46,7 @@ pub use forge_gpu::DlssMode;
 pub use gtao::{Gtao, GtaoParams};
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,
-    MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MirrorRequests, SwRaster,
+    MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder, RayRequests, SwRaster,
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};

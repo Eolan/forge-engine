@@ -237,7 +237,8 @@ void mips_main(uint3 id : SV_DispatchThreadID)
 // the fragment takes its normal and the variance of the slopes it no longer resolves from
 // the slopes' mips, reflects the sky, adds the sun's highlight, and lets through what lies
 // under the water, dimmed by the depth it crosses. It also asks for the mirror ray that puts
-// the scene in the reflection (step 3; `requested_reflections_main` in meshlet.slang).
+// the scene in the reflection (step 3) and the shadow ray that takes the sun away where the
+// scene shades the water (step 4; `requested_rays_main` in meshlet.slang).
 
 static const uint WATER_CASCADES = 3;
 static const uint WATER_MAX_LEVELS = 16;
@@ -372,17 +373,23 @@ float smith_visibility(float nv, float nl, float a2)
     return 0.5 / max(v + l, 1e-6);
 }
 
-// What the surface writes: its colour, and the mirror ray it asks for (the direction, and the
-// weight of what the ray meets in place of the sky it reflected; `trace_requested` in
-// meshlet.rs traces it against the scene).
+// What the surface writes (`trace_requested` in meshlet.rs traces the rays against the scene):
+// - its colour;
+// - the mirror ray it asks for: the direction, and the weight of what the ray meets in place
+//   of the sky it reflected;
+// - the shadow ray it asks for: the share of the colour the sun lights (rgb, which a blocked
+//   ray takes away), and 1 in w, or zero where that share is too small to matter.
 struct SurfaceTargets
 {
     float4 color : SV_Target0;
     float4 request : SV_Target1;
+    float4 sun : SV_Target2;
 };
 
 // Below this weight a mirror ray changes too little to trace.
 static const float REQUEST_MIN_WEIGHT = 0.001;
+// Below this share of the pixel's brightest channel, the sun's light is not worth a shadow ray.
+static const float SUN_REQUEST_MIN_SHARE = 0.01;
 
 [shader("fragment")]
 SurfaceTargets surface_frag_main(SurfaceOut input)
@@ -446,7 +453,8 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     }
     float3 transmittance = exp(-w[0].absorption.rgb * path);
     float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
-    float3 lit = sky_irradiance * PI + w[0].sun_radiance.rgb * saturate(l.y);
+    float3 sun_light = w[0].sun_radiance.rgb * saturate(l.y); // the sun's on the level surface
+    float3 lit = sky_irradiance * PI + sun_light;
     float3 inside = under * transmittance + w[0].scatter.rgb * lit * (1.0 - transmittance);
     float3 color = reflected * fresnel + inside * (1.0 - fresnel) + sun;
     // Foam where the waves fold (the Jacobian under ~0.45), lit like a white diffuse surface.
@@ -461,6 +469,15 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     // term's, less the blur, the foam and the air.
     float weight = fresnel * (1.0 - blur) * (1.0 - foam * 0.8) * air.a;
     o.request = weight >= REQUEST_MIN_WEIGHT ? float4(r, weight) : float4(0.0);
+    // The shadow ray: what the sun adds, through the same foam and air. The highlight, and the
+    // sunlight the water scatters back (the light under a shaded surface loses the sun too);
+    // the sea floor seen through the water was shaded by its own rays in the resolve.
+    float3 sun_share = sun + w[0].scatter.rgb * sun_light * (1.0 - transmittance) * (1.0 - fresnel);
+    sun_share = lerp(sun_share, 0.8 * sun_light / PI, foam * 0.8) * air.a;
+    sun_share = min(sun_share, o.color.rgb);
+    float brightest = max(o.color.r, max(o.color.g, o.color.b));
+    bool shade = max(sun_share.r, max(sun_share.g, sun_share.b)) > SUN_REQUEST_MIN_SHARE * brightest;
+    o.sun = shade ? float4(sun_share, 1.0) : float4(0.0);
     return o;
 }
 

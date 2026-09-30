@@ -376,6 +376,23 @@ one with the rays off (**Y**), and with them.
 - **The levers,** if the rays' cost matters: trace at half resolution and let TAA fill in, or
   keep the 300 000 rocks out of the water's rays with an instance mask.
 
+**The island's shadow on the water** (#105 step 4, 2026-09-30). The surface also asks for a
+shadow ray per pixel, and `water/reflections` traces it beside the mirror ray. Three runs each,
+alternating, the previous commit against this one:
+
+| View | previous commit | with the shadow rays | water/reflections |
+|---|---|---|---|
+| coast, 1600 × 900 | 1.62 ms | 1.65 ms | 0.17 → 0.20 |
+| from the sea, 1600 × 900 | 1.42 ms | 1.44 ms | 0.09 → 0.11 |
+| north-west into a 10° sun | 1.45 ms | 1.52 ms | 0.07 → 0.14 |
+| coast, 2560 × 1440 | 3.10 ms | 3.21 ms | 0.42 → 0.49 |
+
+- **A shadow ray costs less than a mirror ray** (the first hit ends it, and no hit is shaded):
+  0.03 ms of the frame at 900p, 0.07 at 1440p.
+- **Into a low sun** they cost the most, 0.07 ms: the rays from the water in front of the
+  island cross its slopes and rocks on their way to the sun, where elsewhere they leave the
+  scene at once.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

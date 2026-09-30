@@ -473,24 +473,27 @@ struct RequestedRaysPush {
     frame: u64,
     sky: u64,
     probes: u64,
-    request_image: u32,
+    mirror_image: u32,
+    sun_image: u32,
     depth_image: u32,
     color_image: u32,
     width: u32,
     height: u32,
-    pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<RequestedRaysPush>() == 112);
 
-/// The mirror rays a pass drawn after the resolve asks for ([`MeshletRenderer::trace_requested`],
-/// issue #105): per pixel, the direction and the weight of what a ray meets in place of the
-/// sky the pass reflected.
+/// The rays a pass drawn after the resolve asks for ([`MeshletRenderer::trace_requested`],
+/// issue #105), per pixel. Both images are `R16G16B16A16_SFLOAT` and hold zero where the pass
+/// asks no ray.
 #[derive(Clone, Copy, Debug)]
-pub struct MirrorRequests {
-    /// The requests (`R16G16B16A16_SFLOAT`): the direction (xyz, the scene frame's axes) and the
-    /// weight (w; zero where the pass asks no ray).
-    pub image: ImageHandle,
+pub struct RayRequests {
+    /// The mirror rays: the direction (xyz, the scene frame's axes) and the weight of what the
+    /// ray meets in place of the sky the pass reflected (w).
+    pub mirror: ImageHandle,
+    /// The shadow rays: the share of the pixel's colour the sun lights, which a ray blocked on
+    /// its way to the sun takes away (rgb), and 1 (w).
+    pub sun: ImageHandle,
     /// The depth the pass wrote, which places each ray's start.
     pub depth: ImageHandle,
     /// The drawing camera's view-projection, camera-relative (jitter included).
@@ -1755,7 +1758,8 @@ pub struct MeshletRenderer {
     pipeline_resolve: [Pipeline; MATERIAL_CLASSES],
     /// The mirror rays of the smooth rows (issue #52): devices with ray queries only.
     pipeline_reflections: Option<Pipeline>,
-    /// The mirror rays another pass asks for (issue #105): devices with ray queries only.
+    /// The mirror and shadow rays another pass asks for (issue #105): devices with ray queries
+    /// only.
     pipeline_requested: Option<Pipeline>,
     /// Per class, the tiles that show it, and every class's dispatch ([`create_shading_tiles`]).
     shading_tiles: [GraphBuffer; 2],
@@ -2078,15 +2082,15 @@ impl MeshletRenderer {
             None
         };
         let pipeline_requested = if rt {
-            let entry = "requested_reflections_main";
+            let entry = "requested_rays_main";
             let module = device.create_shader_module(
                 &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
-                "requested reflections",
+                "requested rays",
             )?;
             let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
                 shader: (module, entry),
                 push_constant_bytes: std::mem::size_of::<RequestedRaysPush>() as u32,
-                name: "requested reflections",
+                name: "requested rays",
             });
             device.destroy_shader_module(module);
             Some(pipeline?)
@@ -3160,18 +3164,23 @@ impl MeshletRenderer {
         }
     }
 
-    /// Traces the mirror rays a pass drawn after the resolve asked for (`label`; the sea's
-    /// surface, issue #105) against the scene and adds what they meet to `color`, lit as the
-    /// glass's rays are (the sun through a shadow ray, the sky's irradiance or the probes'). Only
-    /// under a sky, on devices with ray queries, with the reflection flags on (Y); otherwise the
-    /// pass keeps the sky it reflected.
+    /// Traces the rays a pass drawn after the resolve asked for (`label`; the sea's surface,
+    /// issue #105) against the scene, into `color`:
+    /// - the mirror rays add what they meet in place of the sky the pass reflected, lit as the
+    ///   glass's rays' hits are (the sun through a shadow ray, the sky's irradiance or the
+    ///   probes'), with the reflection flags on (F, Y);
+    /// - the shadow rays take the sun's share away where the scene stands between the pixel and
+    ///   the sun, with the shadows' flag on (J).
+    ///
+    /// Only under a sky and on devices with ray queries; otherwise the pass keeps the sky it
+    /// reflected and the sun everywhere.
     #[allow(clippy::too_many_arguments)]
     pub fn trace_requested<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
         label: &'static str,
         slot: FrameSlot,
-        requests: MirrorRequests,
+        requests: RayRequests,
         color: ImageHandle,
         extent: vk::Extent2D,
         ambient: AmbientLight,
@@ -3185,7 +3194,8 @@ impl MeshletRenderer {
         let probes = ambient.probes;
         let mut builder = graph
             .pass(label)
-            .image(requests.image, ImageAccess::Sampled(compute))
+            .image(requests.mirror, ImageAccess::Sampled(compute))
+            .image(requests.sun, ImageAccess::Sampled(compute))
             .image(requests.depth, ImageAccess::Sampled(compute))
             .image(color, ImageAccess::StorageReadWrite(compute))
             .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
@@ -3205,12 +3215,12 @@ impl MeshletRenderer {
                     frame,
                     sky: sky.address,
                     probes: probes.map_or(0, |p| p.address),
-                    request_image: resources.sampled(requests.image).0,
+                    mirror_image: resources.sampled(requests.mirror).0,
+                    sun_image: resources.sampled(requests.sun).0,
                     depth_image: resources.sampled(requests.depth).0,
                     color_image: resources.storage(color, 0).0,
                     width: extent.width,
                     height: extent.height,
-                    pad: 0,
                 },
             );
             commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);

@@ -26,7 +26,7 @@ use forge_gpu::{
 };
 use glam::{DVec3, Mat4, Vec3};
 
-use crate::meshlet::MirrorRequests;
+use crate::meshlet::RayRequests;
 use crate::sky::SkyFrame;
 use crate::taa::HDR_FORMAT;
 
@@ -379,7 +379,8 @@ const GRID: u32 = 128;
 const FINEST_SPACING: f64 = 0.5;
 /// Levels: the finest 64 m across, the coarsest 262 km (the stand-in sea's extent).
 const LEVELS: u32 = 13;
-/// The surface's second target: per pixel, the mirror ray it asks for (direction, weight).
+/// The surface's second and third targets: per pixel, the mirror ray it asks for (direction,
+/// weight) and the shadow ray (the sun's share of the colour, 1).
 const REQUEST_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 /// Mirrors `WaterCascadeView` in `water.slang`.
@@ -457,8 +458,10 @@ pub struct WaterSurfaceParams {
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
 /// the cascades, drawn after the sky's compose (`water/surface`), with the scene it lets
-/// through copied first (`water/scene-copy`). It reflects the sky, and asks for the mirror
-/// rays that bring the scene into the reflection (step 3, [`MirrorRequests`]).
+/// through copied first (`water/scene-copy`). It reflects the sky and takes the sun's light,
+/// and asks for the rays that bring the scene in ([`RayRequests`]): the mirror rays that put it
+/// in the reflection (step 3), and the shadow rays that take the sun away where it shades the
+/// water (step 4).
 pub struct WaterSurface {
     copy: Pipeline,
     surface: Pipeline,
@@ -489,7 +492,7 @@ impl WaterSurface {
         let surface = device.create_vertex_pipeline(&VertexPipelineDesc {
             vertex: (vertex, "surface_vert_main"),
             fragment: (fragment, "surface_frag_main"),
-            color_formats: &[HDR_FORMAT, REQUEST_FORMAT],
+            color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
             depth_format: Some(vk::Format::D32_SFLOAT),
             push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
             cull_mode: vk::CullModeFlags::NONE,
@@ -519,9 +522,9 @@ impl WaterSurface {
 
     /// Declares the copy of what the water lets through and the surface over `color` and
     /// `depth` (the frame's HDR image and depth, after the sky's compose), from the cascades'
-    /// images of this frame (`waves`) and the sky's frame. Returns the mirror rays the surface
-    /// asks for, which [`crate::MeshletRenderer::trace_requested`] traces against the scene;
-    /// untraced, the water reflects the sky alone.
+    /// images of this frame (`waves`) and the sky's frame. Returns the rays the surface asks
+    /// for, which [`crate::MeshletRenderer::trace_requested`] traces against the scene;
+    /// untraced, the water reflects the sky alone and takes the sun everywhere.
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
@@ -534,7 +537,7 @@ impl WaterSurface {
         color: ImageHandle,
         depth: ImageHandle,
         extent: vk::Extent2D,
-    ) -> MirrorRequests {
+    ) -> RayRequests {
         assert_eq!(
             cascades.len(),
             SURFACE_CASCADES,
@@ -554,10 +557,14 @@ impl WaterSurface {
         };
         let scene_color = graph.transient(transient("water scene color", HDR_FORMAT));
         let scene_depth = graph.transient(transient("water scene depth", vk::Format::R32_SFLOAT));
-        let requests = graph.transient(TransientDesc {
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            ..transient("water mirror ray requests", REQUEST_FORMAT)
-        });
+        let mut request = |name| {
+            graph.transient(TransientDesc {
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                ..transient(name, REQUEST_FORMAT)
+            })
+        };
+        let mirror_requests = request("water mirror ray requests");
+        let sun_requests = request("water shadow ray requests");
         let copy = &self.copy;
         graph
             .pass("water/scene-copy")
@@ -620,7 +627,8 @@ impl WaterSurface {
         let mut pass = graph
             .pass("water/surface")
             .image(color, ImageAccess::ColorAttachment)
-            .image(requests, ImageAccess::ColorAttachment)
+            .image(mirror_requests, ImageAccess::ColorAttachment)
+            .image(sun_requests, ImageAccess::ColorAttachment)
             .image(depth, ImageAccess::DepthAttachment)
             .image(scene_color, ImageAccess::Sampled(fragment))
             .image(scene_depth, ImageAccess::Sampled(fragment))
@@ -663,18 +671,22 @@ impl WaterSurface {
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.
+            let cleared = |image| {
+                vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(image))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(vk::ClearValue::default())
+            };
             let attachment = [
                 vk::RenderingAttachmentInfo::default()
                     .image_view(resources.view(color))
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::LOAD)
                     .store_op(vk::AttachmentStoreOp::STORE),
-                vk::RenderingAttachmentInfo::default()
-                    .image_view(resources.view(requests))
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .store_op(vk::AttachmentStoreOp::STORE)
-                    .clear_value(vk::ClearValue::default()),
+                cleared(mirror_requests),
+                cleared(sun_requests),
             ];
             let depth_attachment = vk::RenderingAttachmentInfo::default()
                 .image_view(resources.view(depth))
@@ -703,8 +715,9 @@ impl WaterSurface {
             commands.end_rendering();
             Ok(())
         });
-        MirrorRequests {
-            image: requests,
+        RayRequests {
+            mirror: mirror_requests,
+            sun: sun_requests,
             depth,
             view_proj: params.view_proj,
         }

@@ -445,9 +445,9 @@ them ("The surface" below); without it, the stand-in.
 
 ![The coast view and the view from the sea: the stand-in on the left, the water on the right](../../reports/2026-09-30-105/sheet.png)
 
-- **What it lacked:** the island's reflection (step 3, below), the sun's shadow on the water,
-  and the shore's waves and foam line. That is why `--water` stays opt-in until the owner has
-  judged it (`reports/2026-09-30-105/`).
+- **What it lacked:** the island's reflection (step 3, below), the sun's shadow on the water
+  (step 4, below), and the shore's waves and foam line. That is why `--water` stays opt-in
+  until the owner has judged it (`reports/2026-09-30-105/`).
 - **Stability** (still camera, waves still, TAA on): pixels changing from one frame to the
   next, 0.43 % at the coast (the stand-in 0.37 %) and 0.57 % from the sea (0.34 %). Over 32
   frames at the same jitter phase, 0.0016 % and 0.0003 %: nothing crawls.
@@ -490,3 +490,29 @@ glass's ray tracing answers (#50, #52).
   the coast. Over 32 frames at the same jitter phase, 0.0021 % and 0.0003 %: nothing crawls.
 - **Cost:** `water/reflections` takes 0.17 ms at the coast, 0.09 ms from the sea and 0.43 ms at
   1440p (`docs/PROFILE.md`).
+
+**The island's shadow on the water** (step 4). The surface asks for a shadow ray per pixel too,
+and the same pass traces it.
+- **The request:** a third target holds the share of the pixel's colour the sun lights, through
+  the same foam and air. It counts the highlight and the sunlight the water scatters back:
+  under a shaded surface the water loses the sun too. The sea floor seen through the water was
+  shaded by its own rays in the resolve. A share under 1 % of the pixel asks no ray.
+- **The ray:** towards a point of the sun's disc, as the ground's shadow rays, so TAA averages
+  the eight points into a penumbra. A blocked ray takes the share away. It starts 2 m off the
+  water, the terrain's own start (`TERRAIN_SHADOW_START`): the sea floor's traced surface may
+  stand a metre above the drawn one, above the water in the shallows.
+- **The key:** **J** (the shadows), as for everything else.
+
+![The island from the north-west against a 10° sun: without the water's shadow and with it](../../reports/2026-09-30-105/shadow-sheet.png)
+
+- **Where it shows:** under a low sun, on the side of the island away from it. At the default
+  30° the island's slopes facing the sea are gentler than the sun, so they shade almost none
+  of it: 54 pixels change in the view from the north-west. Under a 10° sun (`--sun-elevation
+  10 --view=-5600,300,-4200,-126.9,-4.6`), the shadow cuts the sun's glitter short of the shore,
+  and the shaded water keeps only the sky's blue.
+- **Stability:** under the 10° sun, 1.42 % of the pixels change from one frame to the next
+  (1.37 % without the shadow), and 0.017 % over 32 frames (0.021 %). The coast and the sea
+  views don't change.
+- **Cost:** the shadow rays add 0.03 ms to `water/reflections` at the coast and from the sea,
+  0.07 ms at 1440p and 0.07 ms looking into the 10° sun, where they cross the island
+  (`docs/PROFILE.md`).
