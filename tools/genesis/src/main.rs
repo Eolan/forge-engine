@@ -57,6 +57,11 @@ struct Args {
     /// How far the orographic rain departs from flat (0 flat, 1 the model).
     #[arg(long, default_value_t = 1.0)]
     rain_contrast: f64,
+    /// Amplify the eroded field to half its spacing (stage 5, `forge_procgen::amplify`): the
+    /// time and the digest, and the hillshades of a window of 1024 fine samples south of the
+    /// centre, upsampled alone (`upsampled.png`) and after the detail erosion (`amplified.png`).
+    #[arg(long)]
+    amplify: bool,
 }
 
 /// The wind that blows from `from` (a compass point, north up in the previews).
@@ -298,5 +303,38 @@ fn main() -> Result<()> {
         hi,
         height.digest()
     );
+
+    // Stage 5: the field at half its spacing, and a window of it before and after the detail.
+    if args.amplify {
+        let start = Instant::now();
+        let detail = forge_procgen::AmplifyParams::island(Seed::new(args.seed));
+        let sea = erosion_params.sea_level;
+        let fine = forge_procgen::amplify(&height, &flow.area, sea, &detail, &pool);
+        let seconds = start.elapsed().as_secs_f64();
+        let still = forge_procgen::AmplifyParams {
+            roughness: 0.0,
+            iterations: 0,
+            ..detail
+        };
+        let plain = forge_procgen::amplify(&height, &flow.area, sea, &still, &pool);
+        let window = 1024.min(fine.size);
+        let (x0, y0) = ((fine.size - window) / 2, (fine.size - window) * 5 / 8);
+        let crop =
+            |f: &Field2<f32>| Field2::from_fn(window, f.spacing, |x, y| f.get(x0 + x, y0 + y));
+        preview::write_hillshade(&crop(&plain), &args.out.join("upsampled.png"))?;
+        preview::write_hillshade(&crop(&fine), &args.out.join("amplified.png"))?;
+        let (lo, hi) = fine.min_max();
+        println!(
+            "stage 5, amplification to {} m: {:.1} s, {}² samples, {} iterations, height {:.0}–{:.0} m, digest {:016x}; a {:.1} km window in upsampled.png and amplified.png",
+            fine.spacing,
+            seconds,
+            fine.size,
+            detail.iterations,
+            lo,
+            hi,
+            fine.digest(),
+            f64::from(window) * fine.spacing / 1000.0
+        );
+    }
     Ok(())
 }

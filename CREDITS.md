@@ -205,6 +205,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   implications", USGS Professional Paper 252, 1953: `forge_procgen::hydrology`.
 - **The distance transform.** Pedro F. Felzenszwalb, Daniel P. Huttenlocher, "Distance
   Transforms of Sampled Functions", *Theory of Computing* 8, 2012: `forge_procgen::coast`.
+- **Amplification by erosion.** Hugo Schott, Éric Galin, Éric Guérin, Axel Paris, Adrien
+  Peytavie, "Terrain Amplification using Multi-scale Erosion", *ACM Transactions on Graphics*
+  43(4), 2024 (DOI 10.1145/3658200): upsampling ×2 and eroding at the finer level under the
+  coarser level's drainage, `forge_procgen::amplify`; with the talus rule of F. Kenton Musgrave,
+  Craig E. Kolb, Robert S. Mace, "The synthesis and rendering of eroded fractal terrains",
+  *Computer Graphics* 23(3) (SIGGRAPH '89), 41–50.
 - **The topographic wetness index.** Keith J. Beven, Michael J. Kirkby, "A physically based,
   variable contributing area model of basin hydrology", *Hydrological Sciences Bulletin* 24(1),
   1979, 43–69 (DOI 10.1080/02626667909491834): ln(a / tan β), `forge_procgen::layers::wetness`.

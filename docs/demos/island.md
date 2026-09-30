@@ -13,7 +13,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets (stage 4) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
-| Amplification to 2 m per tile with halos (stage 5) | planned |
+| Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); drawing at 2 m in tiles planned |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
@@ -183,6 +183,34 @@ find before the planet's tiles depend on it. *On the owner's machine (2026-09-26
 9800X3D, 16 workers): the same two digests.* There the 4 m erosion takes 19.2 s (0.128 s a
 step: drain 0.106, incise 0.015, diffuse 0.005, uplift 0.003) and the whole 4 m run 23 s; the
 16 m run takes 1.4 s.
+
+**Amplification** (stage 5, 2026-09-30; `forge_procgen::amplify`, `genesis --amplify`). The
+eroded field goes to half its spacing, after Schott et al. 2024 (each finer level erodes under
+the drainage the coarser one fixed):
+1. The field is filtered by [1, 2, 1] / 4, then upsampled ×2 by Catmull-Rom. The eroded field
+   carries a faint checkerboard at its sample scale, which Horn's gradient ignores but the cubic
+   turned into a hatching over the whole hillshade; the filter removes it.
+2. Half a metre of fractal detail goes on the land, its largest features 60 m across.
+3. Twenty explicit iterations of three operators, each reading the previous iteration's field:
+   - incision along the fine grid's own steepest descent, by the stream-power law with the
+     coarse drainage's catchment, filtered twice (0.0006 · A^0.5 · S; stronger, it carved the
+     coarse D8's straight runs into canals);
+   - talus towards 0.9 (42°), symmetric between neighbours;
+   - a little linear diffusion.
+
+Every operator reads only a sample's eight neighbours, so the field is worked in tiles of 512
+samples with a halo of 22. The tiles give the untiled field to the bit, with any number of
+workers (a test): the planet's tiles can be amplified alone at streaming time and still agree
+along their borders.
+
+From 4 m to 2 m (8 193² samples) takes 1.5 s on the 9800X3D; from 8 m to 4 m, 0.4 s. Seed 7's
+digests: `ede478ecd0115cff` at 2 m, `96fc0548933e001f` at 4 m from 8 m. The island in the
+engine still draws the 8 m or 4 m field: drawing 2 m needs the cook in tiles with locked
+borders (134 M triangles, the next step).
+
+![A 2 km window of the island at 2 m, upsampled alone: smooth, the 4 m field's valleys](images/island-upsampled-2m.png)
+
+![The same window amplified: the valleys deepened by the detail erosion, the slopes rougher](images/island-amplified-2m.png)
 
 ![The 16 km island at 16 m after 150 steps: the sea, hypsometric tints under a hillshade, rivers above 0.5 km² of catchment, lakes](images/island-overview-16m.png)
 

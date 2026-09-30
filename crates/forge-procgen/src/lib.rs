@@ -14,6 +14,8 @@
 //! - [`erosion`]: the implicit stream-power law with hillslope diffusion, uplift against
 //!   erosion until mountains and valleys appear, rows and drainage trees in parallel on the
 //!   job system.
+//! - [`amplify`]: stage 5, the eroded field at half its spacing with a detail erosion under the
+//!   coarse drainage, in tiles with halos that give the untiled field to the bit.
 //! - [`hydrology`]: stage 4, the river network as polylines with Strahler orders and widths
 //!   from the catchment, and the lakes with their levels and outlets.
 //! - [`coast`]: the signed distance to the coast, what the shore's water keys on.
@@ -28,6 +30,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod amplify;
 pub mod coast;
 pub mod erosion;
 pub mod field;
@@ -39,6 +42,7 @@ pub mod noise;
 pub mod ocean;
 pub mod preview;
 
+pub use amplify::{AmplifyParams, amplify};
 pub use coast::{coast_distance, sea_floor};
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
