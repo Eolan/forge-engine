@@ -191,6 +191,9 @@ struct Args {
     /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
     #[arg(long, default_value_t = ProbeParams::default().cascades)]
     probe_cascades: u32,
+    /// A settled probe updates every this many frames, on its turn (1 to 8; issue #103).
+    #[arg(long, default_value_t = ProbeParams::default().cadence)]
+    probe_cadence: u32,
     /// Show the diffuse light alone, on white surfaces, instead of the shading: the probes'
     /// (the open sky's with `--no-probes`); U toggles it.
     #[arg(long)]
@@ -400,10 +403,15 @@ impl Gallery {
             "--probe-cascades takes 1 to {}",
             forge_render::probes::MAX_CASCADES
         );
+        anyhow::ensure!(
+            (1..=8).contains(&args.probe_cadence),
+            "--probe-cadence takes 1 to 8"
+        );
         let probes = if ctx.device.features().ray_query && scene.rays().is_some() {
             let params = ProbeParams {
                 rays: args.probe_rays,
                 cascades: args.probe_cascades,
+                cadence: args.probe_cadence,
                 ..ProbeParams::default()
             };
             let probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
@@ -413,6 +421,7 @@ impl Gallery {
                 cascades = p.cascades,
                 spacing_m = p.spacing,
                 rays = p.rays,
+                cadence = p.cadence,
                 mib = %format_args!("{:.1}", probes.bytes() as f64 / f64::from(1 << 20)),
                 "diffuse light probes"
             );
@@ -753,13 +762,15 @@ impl Demo for Gallery {
                     probes.reset();
                 }
                 self.probes_live = true;
+                // The rotations repeat with the jitter, once per round of turns (issue #103).
+                let cycle = u64::from(self.taa.jitter_phases) * u64::from(probes.params().cadence);
                 Some(probes.update(
                     &mut frame.graph,
                     frame.slot,
                     self.renderer.frame_address(frame.slot),
                     sky.light,
                     camera_in_scene,
-                    self.taa.frame_index() % u64::from(self.taa.jitter_phases),
+                    self.taa.frame_index() % cycle,
                 ))
             }
             _ => {

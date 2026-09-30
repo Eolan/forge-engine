@@ -41,9 +41,14 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
     float age = probe_age(data.w);
     if (age >= PROBE_SETTLE_UPDATES)
     {
-        // Settled: it keeps its place and state; a reset lasts one update.
-        if (state_before == PROBE_RESET)
-            field[0].probe_data[probe] = float4(data.xyz, PROBE_ACTIVE + 4.0 * age);
+        // Settled: it keeps its place and state; a reset lasts one update. The first time,
+        // its age becomes PROBE_SETTLE_UPDATES + 1, which tells the blend it settled before
+        // this update (`probe_due`, issue #103).
+        if (state_before == PROBE_RESET || age == PROBE_SETTLE_UPDATES)
+        {
+            float state = state_before == PROBE_RESET ? PROBE_ACTIVE : state_before;
+            field[0].probe_data[probe] = float4(data.xyz, state + 4.0 * (PROBE_SETTLE_UPDATES + 1.0));
+        }
         return;
     }
     float s = slot.spacing;
@@ -123,8 +128,13 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
     if (state == PROBE_INACTIVE)
         return; // the whole group: its maps keep what they held
     ProbeSlot slot = probe_slot(field, probe);
+    float age = probe_age(data.w);
+    if (!probe_due(field, probe, slot, age, true))
+        return; // not its turn: its rays were not traced (issue #103)
     bool reset = slot.fresh || state == PROBE_RESET;
-    float h = reset ? 0.0 : field[0].hysteresis;
+    // A settled probe's update comes every `cadence` frames and keeps hysteresis^cadence, so
+    // a change settles in the same time.
+    float h = reset ? 0.0 : (age > PROBE_SETTLE_UPDATES ? field[0].settled_hysteresis : field[0].hysteresis);
     uint random = field[0].rays - PROBE_FIXED_RAYS;
     uint first = probe * field[0].rays + PROBE_FIXED_RAYS;
     for (uint i = thread; i < random; i += BLEND_GROUP)

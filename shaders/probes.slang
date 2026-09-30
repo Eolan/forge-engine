@@ -39,6 +39,9 @@ public static const float PROBE_RESET = 2.0;
 // (pushed off the one below into what reads as the inside of the one above, moved back
 // down through it) changed places and states every frame, and every change restarted their
 // maps: 35 flips a frame on the street view, its slow change 0.61 % of the pixels.
+// The state pass writes a settled probe's age as PROBE_SETTLE_UPDATES + 1, so the blend,
+// which runs after it, tells a probe that has just settled (its last update as a young
+// one) from one settled before (`probe_due`).
 public static const float PROBE_SETTLE_UPDATES = 8.0;
 
 public float probe_state(float w)
@@ -81,8 +84,9 @@ public struct ProbeField
     public float2 irradiance_texel; // 1 / the atlas's size in texels
     public float2 distance_texel;
     public float hysteresis;      // the share of the maps an update keeps
-    public uint pad0;
-    public uint2 pad1;
+    public float settled_hysteresis; // the same for a settled probe's update: hysteresis^cadence
+    public uint cadence;          // a settled probe updates every `cadence` frames (issue #103)
+    public uint phase;            // this frame's turn, 0..cadence-1
 };
 
 static const float PI = 3.14159265;
@@ -183,6 +187,23 @@ public ProbeSlot probe_slot(ProbeField* field, uint probe)
     s.position = (float3(s.cell) + 0.5) * c.spacing;
     s.fresh = any(s.cell < c.previous) || any(s.cell >= c.previous + n);
     return s;
+}
+
+// Whether probe `probe` takes this frame's update (issue #103): a new or young probe every
+// frame, a settled one every `cadence` frames, on its turn. The turns follow the probe's slot
+// (x + y + z), which a world cell keeps while its cascade scrolls, so neighbours take turns
+// and each probe keeps its own. `age` is the probe's before this frame's state pass; the blend,
+// after it, passes `after_state` and reads the age that pass wrote (PROBE_SETTLE_UPDATES + 1
+// for a probe settled before this update).
+public bool probe_due(ProbeField* field, uint probe, ProbeSlot slot, float age, bool after_state)
+{
+    bool young = after_state ? age <= PROBE_SETTLE_UPDATES : age < PROBE_SETTLE_UPDATES;
+    if (slot.fresh || young || field[0].cadence <= 1u)
+        return true;
+    uint3 n = field[0].counts;
+    uint local = probe % (n.x * n.y * n.z);
+    uint turn = local % n.x + (local / n.x) % n.y + local / (n.x * n.y);
+    return (turn + field[0].phase) % field[0].cadence == 0u;
 }
 
 // Where probe `probe`'s map of `texels` a side (its tile `tile` a side, border included)

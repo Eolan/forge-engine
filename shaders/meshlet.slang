@@ -3192,10 +3192,11 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         return;
     ProbeSlot slot = probe_slot(field, probe);
     float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_ACTIVE) : field[0].probe_data[probe];
-    // A settled probe (probes.slang) needs no fixed rays; an inactive one no others.
+    // A settled probe (probes.slang) needs no fixed rays; an inactive one no others, and a
+    // settled one traces the others on its turn only (issue #103).
     bool fixed = ray < PROBE_FIXED_RAYS;
     bool settled = !slot.fresh && probe_age(data.w) >= PROBE_SETTLE_UPDATES;
-    if (fixed ? settled : probe_state(data.w) == PROBE_INACTIVE)
+    if (fixed ? settled : (probe_state(data.w) == PROBE_INACTIVE || !probe_due(field, probe, slot, probe_age(data.w), false)))
         return;
     Frame* f = probe_push.frame;
     float4* sky = probe_push.sky;

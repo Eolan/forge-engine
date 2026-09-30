@@ -268,6 +268,28 @@ The meshlets bench (0.225, 0.143 ms orbiting, 1.33 → 1.32 at side 700) and the
 and 2.67–2.68 ms) do not move. Rebuilding the quaternion's matrix at each of a cluster's five
 points instead made the streamed views slower under async compute (south 1.99 → 2.18 ms, cull
 1 0.35 → 0.48) while their serial time did not move: the cull overlapped the probe rays worse.
+With the probes' cadence (#103, 2026-09-30), a settled probe updates every other frame on its
+turn, keeping the hysteresis squared, while new and young probes update every frame. Timed
+against cadence 1 and 4 on one build, three rounds alternating (medians):
+
+| View | cadence 1 | 2 (default) | 4 | probe rays, 1 → 2 → 4 |
+|---|---|---|---|---|
+| south view | 2.03 ms | 1.81 ms | 1.71 ms | 0.81 → 0.62 → 0.48 |
+| orbit | 2.50 ms | 2.42 ms | 2.37 ms | 0.66 → 0.56 → 0.47 |
+| flight | 2.06 ms | 1.96 ms | 1.91 ms | 0.60 → 0.50 → 0.42 |
+| south view, 1440p | 3.46 ms | 3.23 ms | 3.20 ms | 0.97 → 0.71 → 0.55 |
+
+- **Why less than half the rays' time:** the rays pass still runs every probe's young and
+  fixed rays each frame. The blend's groups for probes waiting their turn return at once
+  (0.32 → 0.29 ms south).
+- **Stability** (a static camera, TAA on, pixels changing by more than two levels over 32
+  frames): the south view 0.18 → 0.21 → 0.24 %, the street view 0.027 → 0.031 → 0.034 %.
+- **The look** against cadence 1 at frame 600: ꟻLIP mean 0.006 at 2 and 0.008 at 4, the
+  largest 0.10–0.11. The fixed-step flight at frames 300 and 900 gives the same (0.005–0.006,
+  the largest 0.09–0.12), so there is no visible lag at speed.
+- **The default is 2:** most of the gain for a small rise in the slow change;
+  `--probe-cadence 4` is there for a slower GPU.
+
 **Where it stands (2026-09-25, after #77 and #92):** the flight at 1440p takes 3.38 ms of GPU
 (three runs of 3000 frames: 3.37–3.39), its p99 frame 3.8 ms against the 8.33 of the 120 fps
 target; 2.6 ms without the probes. It was 3.81 ms after #68.

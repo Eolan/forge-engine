@@ -59,7 +59,8 @@ Options:
   sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (**V**).
 - `--no-probes` lights the shaded sides with the open sky's light instead of the probes'
   (**P** toggles them), `--show-gi` shows that light alone on white surfaces (**U**),
-  `--probe-rays N` sets the rays per probe (128) and `--probe-cascades N` the cascades (5).
+  `--probe-rays N` sets the rays per probe (128), `--probe-cascades N` the cascades (5) and
+  `--probe-cadence N` how many frames a settled probe waits between updates (2).
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--no-ray-reflections` reflects only the sky in the glass (**Y** toggles the mirror rays).
 - `--hard-shadows` aims every shadow ray at the sun's centre (**Z** toggles soft and hard).
@@ -76,6 +77,25 @@ Options:
   one, not by cells of 64, #38), `--show-culled` (what culling rejected drawn in red),
   `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral|aces2|aces2-analytic`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
+
+## The probes' cadence (issue #103, 2026-09-30)
+
+A probe that has settled (its first eight updates are over, and it no longer moves) updates
+every other frame, on its turn. Its turn follows its slot in the cascade (x + y + z), so
+neighbours alternate and a probe keeps its turn while the cascade scrolls. New and young
+probes update every frame, so the planes the camera brings in converge as fast as before.
+- **The same response time:** a settled probe's update keeps the hysteresis squared
+  (0.97² ≈ 0.94), so a change of light settles in the same time.
+- **The same directions:** a rotation of the rays lasts one round of turns, so every probe
+  still meets all eight rotations of the jitter's cycle (now 16 frames long).
+- **Cost:** the south view goes 2.03 → 1.81 ms, the 1440p south view 3.46 → 3.23 ms, and the
+  orbit and the flight 0.08–0.10 ms less (`docs/PROFILE.md`).
+- **Stability:** the south view's slow change goes 0.18 → 0.21 % and the street view's
+  0.027 → 0.031 %.
+- **The look:** it moves by an ꟻLIP mean of 0.006 at frame 600, and 0.005–0.006 in the
+  fixed-step flight, so there is no lag to see at speed.
+- **Other settings:** `--probe-cadence 1` gives the previous build's pixels; 4 saves another
+  0.1 ms for a slow change of 0.24 %.
 
 ## Specks on walls in shade (issue #102, 2026-09-30)
 

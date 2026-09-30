@@ -1306,7 +1306,10 @@ positive numbers only (`wrap_cells`).
 - a cheaper lookup (#70: a pass of its own saved only 0.09 ms at 1440p, and lost the normal
   map's effect on the light; parked);
 - the T0 updater (SDF marches instead of rays) for GPUs without ray queries;
-- the froxel fog lit by the probes.
+- the froxel fog lit by the probes;
+- the update's cadence (#103, done 2026-09-30): a settled probe updates every other frame,
+  keeping the hysteresis squared (the south view 2.03 → 1.81 ms, its slow change 0.18 →
+  0.21 %).
 
 *(research: lighting-gi.md, Majercik et al. and the implementation notes on the probes; D-008, D-029, D-030; issue #53; demo: city-blocks)*
 

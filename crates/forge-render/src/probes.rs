@@ -15,6 +15,9 @@
 //! - `gi/probe blend`: the other rays blended into the maps, keeping `hysteresis` of what
 //!   they held; a probe new to its cascade (it scrolled in) starts from its first rays.
 //!
+//! A settled probe (past its first eight updates) traces and blends every
+//! [`ProbeParams::cadence`] frames, on its turn (issue #103).
+//!
 //! The resolve then lights every pixel's diffuse side with the probes around it
 //! ([`crate::AmbientLight::probes`]) instead of the open sky's irradiance.
 
@@ -75,8 +78,9 @@ struct GpuProbeField {
     irradiance_texel: [f32; 2],
     distance_texel: [f32; 2],
     hysteresis: f32,
-    pad0: u32,
-    pad1: [u32; 2],
+    settled_hysteresis: f32,
+    cadence: u32,
+    phase: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 336);
@@ -114,11 +118,17 @@ pub struct ProbeParams {
     pub rays: u32,
     /// Share of the maps an update keeps: 0.97 lets a change settle in about 30 updates.
     pub hysteresis: f32,
+    /// A settled probe (one that has stopped moving, after its first eight updates) updates
+    /// every `cadence` frames, on its turn, keeping `hysteresis^cadence` so a change settles
+    /// in the same time (issue #103). New and young probes update every frame. 1: every probe
+    /// every frame.
+    pub cadence: u32,
 }
 
 impl Default for ProbeParams {
     /// The city's: 24 × 12 × 24 probes in five cascades 4, 8, 16, 32 and 64 m apart (the
-    /// finest reaches 40 m around the camera, the coarsest 640 m), 128 rays each.
+    /// finest reaches 40 m around the camera, the coarsest 640 m), 128 rays each, the settled
+    /// ones every other frame (issue #103: the south view 2.03 → 1.81 ms).
     fn default() -> Self {
         Self {
             counts: [24, 12, 24],
@@ -126,6 +136,7 @@ impl Default for ProbeParams {
             spacing: 4.0,
             rays: 128,
             hysteresis: 0.97,
+            cadence: 2,
         }
     }
 }
@@ -228,6 +239,7 @@ impl Probes {
             (FIXED_RAYS + 32..=MAX_RAYS).contains(&params.rays),
             "64 to 256 rays"
         );
+        assert!(params.cadence >= 1, "a cadence of at least 1");
         let compute = |file: &str, entry: &str, push: usize, name: &str| -> Result<Pipeline> {
             let module = device
                 .create_shader_module(&shaders.compile(file, entry, ShaderStage::Compute)?, name)?;
@@ -337,7 +349,8 @@ impl Probes {
 
     /// Every probe's offset from its cell's centre (xyz, metres) and state and age (w: the
     /// state, 0 active, 1 inactive, 2 active and starting over, plus 4 × the updates it has
-    /// had, up to 8, `probe_state` in `probes.slang`) as the last submitted frame left them, in probe
+    /// had, up to 8, then 9 once settled, `probe_state` in `probes.slang`) as the last
+    /// submitted frame left them, in probe
     /// order (`probe_index` in `probes.slang`). Waits for the device: for logs and tests.
     pub fn read_states(&self, device: &Arc<Device>) -> Result<Vec<[f32; 4]>> {
         let bytes = device.read_back(&self.data, 0, self.data.size())?;
@@ -356,11 +369,13 @@ impl Probes {
     /// [`crate::MeshletRenderer::frame_address`]) and the sky's light and table, and returns
     /// what the resolve reads.
     ///
-    /// `noise_frame` picks the rays' rotation. The city passes TAA's frame modulo its jitter's
-    /// period, as for the ambient occlusion (issue #48): the rotations then repeat with the
-    /// jitter, the maps of a still scene settle into the same cycle and TAA averages it, where
-    /// a new rotation every frame kept them wandering (measured: the static view's slow change
-    /// 0.27 % of pixels, 0.09 % without probes).
+    /// `noise_frame` picks the rays' rotation and the settled probes' turn. The city passes
+    /// TAA's frame modulo its jitter's period times the cadence, as for the ambient occlusion
+    /// (issue #48): the rotations then repeat with the jitter, the maps of a still scene settle
+    /// into the same cycle and TAA averages it, where a new rotation every frame kept them
+    /// wandering (measured: the static view's slow change 0.27 % of pixels, 0.09 % without
+    /// probes). A rotation lasts one round of turns (`cadence` frames), so every probe meets
+    /// each of the cycle's rotations.
     pub fn update<'f>(
         &'f mut self,
         graph: &mut FrameGraph<'f>,
@@ -390,7 +405,8 @@ impl Probes {
             };
         }
         self.reset = false;
-        let rotation = frame_rotation(noise_frame);
+        // One rotation per round of turns: each probe meets every rotation of the cycle.
+        let rotation = frame_rotation(noise_frame / u64::from(p.cadence));
         let row = |r: usize| {
             let v = rotation.row(r);
             [v.x, v.y, v.z, 0.0]
@@ -415,8 +431,9 @@ impl Probes {
             irradiance_texel: texel(IRRADIANCE_TILE),
             distance_texel: texel(DISTANCE_TILE),
             hysteresis: p.hysteresis,
-            pad0: 0,
-            pad1: [0; 2],
+            settled_hysteresis: p.hysteresis.powi(p.cadence as i32),
+            cadence: p.cadence,
+            phase: (noise_frame % u64::from(p.cadence)) as u32,
         };
         self.fields[slot.index].write(0, &[field]);
 
