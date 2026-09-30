@@ -64,6 +64,8 @@ main() {
     pair "$new/$path-ast240.png" "$new/$path-ast240-nocone.png" "$path ballad, cone off"
     pair "$new/$path-ast240.png" "$new/$path-ast240-culled.png" "$path ballad, show-culled"
     pair "$new/$path-city60.png" "$new/$path-city60-noocc.png" "$path city, occlusion off"
+    pair "$new/$path-city60.png" "$new/$path-city60-culled.png" "$path city, show-culled"
+    pair "$new/$path-island60.png" "$new/$path-island60-noocc.png" "$path island, occlusion off"
   done
   for name in static60 orbit120 nolod120 ast240 ast-notaa600 city60 cityorbit120 gallery60 island60; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"

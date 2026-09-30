@@ -334,6 +334,11 @@ impl Gallery {
             (build_city(ctx, &args, cooked)?, Vec::new())
         };
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM);
+        // The city's views list 0.44–1.03 M clusters on their first frame, the island's 0.45 M:
+        // reserved up front (16 MiB a frame slot, what growing reached anyway), no frame drops
+        // any. Grown on demand, the first two frames missed the nearest buildings and rocks
+        // (their fine clusters), a pop at the start whose trace TAA carried to frame 60.
+        renderer.reserve_visible(1 << 21);
         if !args.no_lod {
             flags.0 |= CullFlags::LOD;
         } else {

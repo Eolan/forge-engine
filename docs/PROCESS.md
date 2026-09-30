@@ -67,7 +67,7 @@ under `captures/`, which git ignores.
    changed leaves the other demos stale. A stale binary writes an older frame block, and every
    capture then "differs" for the wrong reason.
 2. **Capture the baseline before changing anything:** `tools/captures.sh captures/base`.
-   - This writes 30 captures: meshlets, the ballad at fixed steps, city-blocks and its island,
+   - This writes 34 captures: meshlets, the ballad at fixed steps, city-blocks and its island,
      each on the mesh path and on the fallback.
    - To capture an older commit, build it in a tree of its own:
      `git worktree add --detach ../forge-base <commit>`, then `cargo build --release` in that
@@ -80,7 +80,10 @@ under `captures/`, which git ignores.
    - The script prints the pixels that differ per image, then checks the pairs within the new
      batch:
      - the A/B harness: occlusion off and cone culling off against on, and `--show-culled`
-       against the plain frame, where red shows as a difference;
+       against the plain frame, where red shows as a difference. It runs on the meshlets
+       bench, the ballad, the resident city and the island. The island's runs pin
+       `--sw-raster on`: the automatic switch follows how many dense triangles the culls let
+       through, so occlusion off would move it (#101);
      - the mesh path against the fallback.
    - Every line must read `0 px`, unless the change is meant to alter the image. In that case,
      the report names the images, says why they changed, and gives their ꟻLIP numbers (see

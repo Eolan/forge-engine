@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Writes the capture batch every rendering change is checked with (issue #74; docs/PROCESS.md):
-# 30 fixed-step captures of meshlets, the ballad, city-blocks and its island (#96), on the mesh
+# 34 fixed-step captures of meshlets, the ballad, city-blocks and its island (#96), on the mesh
 # path and on the fallback (`--force-fallback`). Compare two batches with tools/compare.sh.
 #
 #   tools/captures.sh OUT [BIN]
@@ -80,10 +80,14 @@ for path in mesh fb; do
   # the gallery of the twenty props.
   capture "$path-city60" 60 "$city" --stream-pool 0 "${flag[@]}"
   capture "$path-city60-noocc" 60 "$city" --stream-pool 0 --no-occlusion "${flag[@]}"
+  capture "$path-city60-culled" 60 "$city" --stream-pool 0 --show-culled "${flag[@]}"
   capture "$path-cityorbit120" 120 "$city" --stream-pool 0 --orbit "${flag[@]}"
   capture "$path-gallery60" 60 "$city" --gallery "${flag[@]}"
   # The island (#96) from its first view on the coast: its heightfield, rocks and sea.
-  capture "$path-island60" 60 "$city" --island 7 --stream-pool 0 "${flag[@]}"
+  # The software rasteriser pinned on: its automatic switch follows how much the culls let
+  # through, so it would differ between the A/B runs (#101).
+  capture "$path-island60" 60 "$city" --island 7 --stream-pool 0 --sw-raster on "${flag[@]}"
+  capture "$path-island60-noocc" 60 "$city" --island 7 --stream-pool 0 --sw-raster on --no-occlusion "${flag[@]}"
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"
 [ "$keep" != 0 ] && closing="$closing; logs in $out/logs, summary in $summary" && echo "$closing" >> "$summary"
