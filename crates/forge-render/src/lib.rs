@@ -55,6 +55,7 @@ pub use streaming::{Residency, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
 pub use water::{
-    WATER_MIPS, WATER_SIZE, WaterCascadeDesc, WaterCascades, WaterFrame, WaterRiverPoint,
-    WaterSample, WaterShore, WaterShoreTrain, WaterSurface, WaterSurfaceParams, WetGround,
+    WATER_MIPS, WATER_SIZE, WaterCascadeDesc, WaterCascades, WaterFrame, WaterMouth,
+    WaterRiverPoint, WaterSample, WaterShore, WaterShoreTrain, WaterStone, WaterSurface,
+    WaterSurfaceParams, WetGround,
 };

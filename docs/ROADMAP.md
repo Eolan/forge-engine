@@ -287,8 +287,10 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    island in the water through traced mirror rays, and its shadow on the water through traced
    shadow rays, and the shore: the waves damped by the floor's depth, trains that shoal, break
    and run up the beach, their foam, and the wet sand; then the rivers, ribbons from stage 4's
-   courses with flow-mapped ripples, resting on the 8 m ground until the 2 m field can hold
-   their beds (`docs/demos/island.md`, "The sea on the GPU"). Next, D-038's order: the lakes.
+   courses with flow-mapped ripples, since the owner's look (2026-10-01) level water in channels
+   carved into the island's mesh on cells of a metre, over beds of gravel, out into the sea in a
+   plume at their mouths, around stones that break the water (`docs/demos/island.md`, "The sea
+   on the GPU"). Next, D-038's order: the lakes, on the same surface as the rivers' still water.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

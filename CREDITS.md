@@ -255,3 +255,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   geometry of Leopold and Maddock (1953, above) and the speed by Chézy's formula (Antoine de
   Chézy, 1775); far away, a ribbon kept a pixel wide with its coverage scaled, after Emil
   Persson's "Phone-Wire AA" demo, 2012 (<https://www.humus.name/index.php?page=3D&ID=89>).
+- **The rivers' channels, mouths and stones** (`forge_procgen::channel`, `shaders/water.slang`,
+  issue #105). The ground around the channels through the spline of Edwin Catmull and Raphael
+  Rom, "A class of local interpolating splines", in *Computer Aided Geometric Design*
+  (R. E. Barnhill and R. F. Riesenfeld, eds.), Academic Press, 1974, 317–326; the plumes at the
+  mouths as turbulent plane jets, whose width grows linearly and whose centre speed falls as the
+  root of the distance (Stephen B. Pope, *Turbulent Flows*, Cambridge University Press, 2000,
+  chapter 5); the water around a stone as the potential flow past a cylinder (G. K. Batchelor,
+  *An Introduction to Fluid Dynamics*, Cambridge University Press, 1967).

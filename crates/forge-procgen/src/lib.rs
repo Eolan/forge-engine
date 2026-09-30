@@ -23,8 +23,9 @@
 //!   CPU, the reference the GPU's cascades are diffed against.
 //! - [`shore`]: the shore's waves: the floor's depth against the coast distance, and per train
 //!   of waves the time its crests take to the shore and their shoaling, for the GPU.
-//! - [`river`]: the rivers' surfaces: each river's course smoothed into a ribbon of points with
-//!   its width, depth and speed, for the GPU.
+//! - [`river`]: the rivers' water: each river's course smoothed into a ribbon of points with
+//!   its width, depth, speed and a level that only falls, for the GPU.
+//! - [`channel`]: the rivers' channels carved under that water, on cells drawn finer.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
 //!   sea, rivers and lakes), which is how the pipeline is looked at before a GPU draws it.
@@ -35,6 +36,7 @@
 #![forbid(unsafe_code)]
 
 pub mod amplify;
+pub mod channel;
 pub mod coast;
 pub mod erosion;
 pub mod field;
@@ -49,6 +51,7 @@ pub mod river;
 pub mod shore;
 
 pub use amplify::{AmplifyParams, amplify};
+pub use channel::{ChannelParams, Channels, Stone, paint_beds, stones};
 pub use coast::{coast_distance, sea_floor};
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
@@ -65,5 +68,7 @@ pub use layers::{
     LayerRule, Shore, paint_lakes, paint_moisture, paint_rivers, slope_layers, wetness,
 };
 pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
-pub use river::{Ribbon, RibbonParams, RibbonPoint, drawn_height, ribbons};
+pub use river::{
+    Ribbon, RibbonParams, RibbonPoint, drawn_height, rest_on, ribbons, sea_mouth, smooth_height,
+};
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};

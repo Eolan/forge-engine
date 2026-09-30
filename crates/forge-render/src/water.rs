@@ -441,9 +441,121 @@ struct GpuWaterSurface {
     river_points: u32,
     ground: u64,
     rivers: u64,
+    mouths: u64,
+    mouth_count: u32,
+    stone_count: u32,
+    stones: u64,
+    mouth_grid: u64,
+    mouth_cells: u32,
+    mouth_cell: f32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 672);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 712);
+
+/// How far a river's plume reaches in its half widths, and how fast it spreads
+/// (`RIVER_PLUME_LENGTH` and `RIVER_PLUME_SPREAD` in `water.slang`).
+const PLUME_LENGTH: f32 = 60.0;
+const PLUME_SPREAD: f32 = 0.2;
+/// How far a plume's axis wanders, metres a metre out at most (`RIVER_PLUME_WANDER`).
+const PLUME_WANDER: f32 = 0.25;
+
+/// Cells a side of the grid that lists the mouths whose plume reaches each cell, and the mouths
+/// a cell lists at most (a byte each in a `u32`, `0xFF` for none).
+const MOUTH_CELLS: u32 = 128;
+const MOUTHS_PER_CELL: usize = 4;
+
+/// The grid of the mouths whose plumes reach each cell of the shore's square (`mouth_grid` in
+/// `water.slang`): per cell, up to four indices into `mouths` in a `u32`, `0xFF` where there
+/// is none. The plume's box: from 200 m up the river's channel to its reach out to sea, its
+/// width there either side.
+fn mouth_grid(mouths: &[WaterMouth], origin: [f32; 2], extent: f32) -> Vec<u32> {
+    let n = MOUTH_CELLS as usize;
+    let cell = extent / MOUTH_CELLS as f32;
+    let mut grid = vec![u32::MAX; n * n];
+    for (index, m) in mouths.iter().enumerate().take(MAX_MOUTHS) {
+        let reach = PLUME_LENGTH * m.half_width;
+        let spread = m.half_width + (PLUME_SPREAD + PLUME_WANDER) * reach + 3.0;
+        let (down, side) = (m.direction, [-m.direction[1], m.direction[0]]);
+        let corners = [
+            (-200.0, -spread),
+            (-200.0, spread),
+            (reach, -spread),
+            (reach, spread),
+        ]
+        .map(|(a, c)| {
+            [
+                m.position[0] + down[0] * a + side[0] * c,
+                m.position[1] + down[1] * a + side[1] * c,
+            ]
+        });
+        let range = |axis: usize| {
+            let lo = corners.iter().map(|p| p[axis]).fold(f32::MAX, f32::min);
+            let hi = corners.iter().map(|p| p[axis]).fold(f32::MIN, f32::max);
+            let at = |v: f32| {
+                (((v - origin[axis]) / cell).floor() as i64).clamp(0, n as i64 - 1) as usize
+            };
+            at(lo)..=at(hi)
+        };
+        for y in range(1) {
+            for x in range(0) {
+                let slot = &mut grid[y * n + x];
+                if let Some(free) =
+                    (0..MOUTHS_PER_CELL).find(|&k| (*slot >> (8 * k)) & 0xFF == 0xFF)
+                {
+                    *slot = (*slot & !(0xFF << (8 * free))) | ((index as u32) << (8 * free));
+                }
+            }
+        }
+    }
+    grid
+}
+
+/// Mirrors `RiverStone` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuRiverStone {
+    /// World x, z, the radius at the water's level (0 under it), the mean radius.
+    a: [f32; 4],
+}
+
+/// A stone in a river ([`WaterShore::stones`]): the water flows around it where it breaks the
+/// surface, and breaks white on it.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterStone {
+    /// World x and z (the sea's frame), metres.
+    pub position: [f32; 2],
+    /// The radius of its outline at the water's level, metres (0 where it stands under water).
+    pub waterline: f32,
+    /// Its mean radius, metres.
+    pub radius: f32,
+    /// The river point it stands past, counting the points of every river in
+    /// [`WaterShore::rivers`] one river after the other.
+    pub point: u32,
+}
+
+/// Mirrors `RiverMouth` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuRiverMouth {
+    /// World x, z, downstream (x, z).
+    a: [f32; 4],
+    /// The half width, the speed, 0, 0.
+    b: [f32; 4],
+}
+
+/// Where a river's water meets the sea's ([`WaterShore::mouths`]): from there the sea's surface
+/// carries the river's flow and its water out into a plume.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterMouth {
+    /// World x and z (the sea's frame), metres: the river's point whose level reaches the sea's.
+    pub position: [f32; 2],
+    /// Downstream, unit (world x and z).
+    pub direction: [f32; 2],
+    /// Half the river's width there, metres.
+    pub half_width: f32,
+    /// Its speed there, m/s.
+    pub speed: f32,
+}
 
 /// Quads across a river's ribbon (`RIVER_ACROSS` in `water.slang`).
 const RIVER_ACROSS: u32 = 4;
@@ -452,44 +564,57 @@ const RIVER_ACROSS: u32 = 4;
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuRiverPoint {
-    /// World x, z, the half width, the depth.
+    /// World x, z, the half width at the water's edge, the depth.
     a: [f32; 4],
-    /// Downstream (x, z), the speed, the bed's slope.
+    /// Downstream (x, z), the speed, the water surface's slope.
     b: [f32; 4],
     /// The fade, 1 where a segment starts (0 at a river's last point), the ground under the
-    /// last vertex across, 0.
+    /// last vertex across, the water's level.
     c: [f32; 4],
     /// The ground under the first four vertices across.
     d: [f32; 4],
+    /// The ribbon's half width (under the banks), the lowest bank before the carve, 0, 0.
+    e: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuRiverPoint>() == 64);
+const _: () = assert!(std::mem::size_of::<GpuRiverPoint>() == 80);
 
 /// A point of a river's ribbon (`forge_procgen::RibbonPoint`), as the surface draws it.
 #[derive(Clone, Copy, Debug)]
 pub struct WaterRiverPoint {
     /// World x and z (the sea's frame), metres, on the river's smoothed course.
     pub position: [f32; 2],
+    /// The water's level, metres: level across the river.
+    pub level: f32,
     /// Downstream, unit (world x and z).
     pub direction: [f32; 2],
-    /// Half the river's width, metres.
+    /// Half the river's width at its level, metres: where the water meets its banks.
     pub half_width: f32,
+    /// Half the ribbon's width, metres: past the water's edge, under the banks.
+    pub reach: f32,
     /// The water's depth in the middle, metres.
     pub depth: f32,
+    /// The lowest the ground stands on the banks before the channel is carved, metres.
+    pub bank: f32,
     /// The water's speed, m/s.
     pub speed: f32,
-    /// The bed's slope downstream.
+    /// The water surface's slope downstream.
     pub slope: f32,
-    /// How much of the river is drawn there, 0..1 (it fades in from its head).
+    /// How much of the river is drawn there, 0..1 (it fades in from its head, and out into a
+    /// lake, the river it joins or the sea).
     pub fade: f32,
-    /// Per vertex across, from `position − side × half_width` to `position + side ×
-    /// half_width` with `side = (−direction.z, direction.x)`: the highest the drawn ground
-    /// stands under the quads around the vertex, metres (`forge_procgen::RibbonPoint::ground`).
+    /// Per vertex across, from `position − side × reach` to `position + side × reach` with
+    /// `side = (−direction.z, direction.x)`: the highest the drawn ground stands under the quads
+    /// around the vertex, metres (`forge_procgen::RibbonPoint::ground`), where the water lies
+    /// far away.
     pub ground: [f32; RIVER_ACROSS as usize + 1],
 }
 
 /// Shore trains the surface draws at most (`WATER_MAX_TRAINS` in `water.slang`).
 const MAX_TRAINS: usize = 4;
+
+/// River mouths the sea's surface mixes in at most.
+const MAX_MOUTHS: usize = 64;
 
 /// Mirrors `ShoreGround` in `meshlet.slang`.
 #[repr(C)]
@@ -552,6 +677,10 @@ pub struct WaterShore<'a> {
     /// drawn (a tributary before the river that covers its end). They lie on the ground that
     /// `floor` describes, drawn as the island's mesh draws it.
     pub rivers: &'a [Vec<WaterRiverPoint>],
+    /// Where the rivers meet the sea (`MAX_MOUTHS` at most).
+    pub mouths: &'a [WaterMouth],
+    /// The stones in the rivers, in the order of the points they stand past.
+    pub stones: &'a [WaterStone],
 }
 
 /// Mirrors `SurfacePush` and `CopyPush` in `water.slang`.
@@ -630,6 +759,14 @@ struct ShoreFields {
     /// precision, which the ribbons lie on (none without rivers).
     rivers: Option<(Buffer, Buffer)>,
     river_points: u32,
+    /// The rivers' mouths at the sea, and the grid of those reaching each cell (none without).
+    mouths: Option<(Buffer, Buffer)>,
+    mouth_count: u32,
+    /// Metres a cell of the mouths' grid.
+    mouth_cell: f32,
+    /// The stones in the rivers (none without).
+    stones: Option<Buffer>,
+    stone_count: u32,
 }
 
 impl WaterSurface {
@@ -774,24 +911,34 @@ impl WaterSurface {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                // The rivers' points, each marking whether a segment starts there.
-                let points: Vec<GpuRiverPoint> = s
-                    .rivers
-                    .iter()
-                    .flat_map(|river| {
-                        river.iter().enumerate().map(|(k, p)| GpuRiverPoint {
+                // The rivers' points, each marking whether a segment starts there and where the
+                // stones past it start: per point, the first stone standing past it or a later
+                // point (the stones are in the points' order).
+                let total: usize = s.rivers.iter().map(Vec::len).sum();
+                let mut first = vec![0u32; total + 1];
+                for stone in s.stones {
+                    first[(stone.point as usize + 1).min(total)] += 1;
+                }
+                for g in 0..total {
+                    first[g + 1] += first[g];
+                }
+                let mut points: Vec<GpuRiverPoint> = Vec::with_capacity(total);
+                for river in s.rivers {
+                    for (k, p) in river.iter().enumerate() {
+                        points.push(GpuRiverPoint {
                             a: [p.position[0], p.position[1], p.half_width, p.depth],
                             b: [p.direction[0], p.direction[1], p.speed, p.slope],
                             c: [
                                 p.fade,
                                 f32::from(u8::from(k + 1 < river.len())),
                                 p.ground[4],
-                                0.0,
+                                p.level,
                             ],
                             d: [p.ground[0], p.ground[1], p.ground[2], p.ground[3]],
-                        })
-                    })
-                    .collect();
+                            e: [p.reach, p.bank, first[points.len()] as f32, 0.0],
+                        });
+                    }
+                }
                 let rivers = (!points.is_empty())
                     .then(|| -> Result<_> {
                         Ok((
@@ -810,6 +957,52 @@ impl WaterSurface {
                         ))
                     })
                     .transpose()?;
+                let mouths: Vec<GpuRiverMouth> = s
+                    .mouths
+                    .iter()
+                    .take(MAX_MOUTHS)
+                    .map(|m| GpuRiverMouth {
+                        a: [m.position[0], m.position[1], m.direction[0], m.direction[1]],
+                        b: [m.half_width, m.speed, 0.0, 0.0],
+                    })
+                    .collect();
+                let extent = s.texels.saturating_sub(1) as f32 * s.spacing;
+                let grid = mouth_grid(s.mouths, s.origin, extent);
+                let mouth_buffers = (!mouths.is_empty())
+                    .then(|| -> Result<_> {
+                        Ok((
+                            device.create_buffer_with_data(
+                                &mouths,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                                MemoryCategory::Work,
+                                "water river mouths",
+                            )?,
+                            device.create_buffer_with_data(
+                                &grid,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                                MemoryCategory::Work,
+                                "water river mouths grid",
+                            )?,
+                        ))
+                    })
+                    .transpose()?;
+                let stones: Vec<GpuRiverStone> = s
+                    .stones
+                    .iter()
+                    .map(|t| GpuRiverStone {
+                        a: [t.position[0], t.position[1], t.waterline, t.radius],
+                    })
+                    .collect();
+                let stone_buffer = (!stones.is_empty())
+                    .then(|| {
+                        device.create_buffer_with_data(
+                            &stones,
+                            vk::BufferUsageFlags::STORAGE_BUFFER,
+                            MemoryCategory::Work,
+                            "water river stones",
+                        )
+                    })
+                    .transpose()?;
                 Ok(ShoreFields {
                     image,
                     frame: [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
@@ -822,6 +1015,11 @@ impl WaterSurface {
                     ground,
                     rivers,
                     river_points: points.len() as u32,
+                    mouths: mouth_buffers,
+                    mouth_cell: extent / MOUTH_CELLS as f32,
+                    mouth_count: mouths.len() as u32,
+                    stones: stone_buffer,
+                    stone_count: stones.len() as u32,
                 })
             })
             .transpose()?;
@@ -1046,6 +1244,19 @@ impl WaterSurface {
                     river_points,
                     ground: rivers.map_or(0, |(_, heights)| heights.address()),
                     rivers: rivers.map_or(0, |(points, _)| points.address()),
+                    mouths: shore
+                        .and_then(|s| s.mouths.as_ref())
+                        .map_or(0, |(m, _)| m.address()),
+                    mouth_count: shore.map_or(0, |s| s.mouth_count),
+                    mouth_grid: shore
+                        .and_then(|s| s.mouths.as_ref())
+                        .map_or(0, |(_, g)| g.address()),
+                    mouth_cells: MOUTH_CELLS,
+                    mouth_cell: shore.map_or(1.0, |s| s.mouth_cell),
+                    stone_count: shore.map_or(0, |s| s.stone_count),
+                    stones: shore
+                        .and_then(|s| s.stones.as_ref())
+                        .map_or(0, |b| b.address()),
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.

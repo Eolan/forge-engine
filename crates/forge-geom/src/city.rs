@@ -73,6 +73,28 @@ pub struct Heightfield {
     /// The samples, row-major, `samples × samples` of them, as [`Terrain::heights`] lays them
     /// out.
     pub source: Arc<dyn Fn() -> Vec<f32> + Send + Sync>,
+    /// The cells drawn finer, from the samples (the island's river channels, #105), or none:
+    /// every cell two triangles. Part of the field, so `key` names its parameters too.
+    pub detail: Option<Arc<DetailSource>>,
+}
+
+/// What makes a heightfield's [`HeightfieldDetail`] from its samples.
+pub type DetailSource = dyn Fn(&[f32]) -> HeightfieldDetail + Send + Sync;
+
+/// Cells of a heightfield drawn finer than its samples (the island's river channels, #105):
+/// each split into `split × split` quads whose heights are given, the cells around them
+/// stitched to their edges without a crack (see [`refined_heightfield_mesh`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HeightfieldDetail {
+    /// Quads a side of a refined cell.
+    pub split: u32,
+    /// The refined cells, `j × (samples − 1) + i` for the cell whose first corner is sample
+    /// `(i, j)`, ascending.
+    pub cells: Vec<u32>,
+    /// Per refined cell in that order, `(split + 1)²` heights row-major along +z: its fine
+    /// vertices, corners included. Where two refined cells meet they give the same heights,
+    /// and on an edge a refined cell shares with a coarse one they lie on the coarse edge.
+    pub heights: Vec<f32>,
 }
 
 impl fmt::Debug for Heightfield {
@@ -81,13 +103,17 @@ impl fmt::Debug for Heightfield {
             .field("key", &self.key)
             .field("samples", &self.samples)
             .field("spacing", &self.spacing)
+            .field("detail", &self.detail.is_some())
             .finish()
     }
 }
 
 impl PartialEq for Heightfield {
     fn eq(&self, other: &Self) -> bool {
-        self.key == other.key && self.samples == other.samples && self.spacing == other.spacing
+        self.key == other.key
+            && self.samples == other.samples
+            && self.spacing == other.spacing
+            && self.detail.is_some() == other.detail.is_some()
     }
 }
 
@@ -108,7 +134,15 @@ impl PropSpec {
             } => rubble(*seed, *pieces, *segments),
             PropKind::Lathe(l) => lathe(l),
             PropKind::Terrain(t) => terrain_mesh(t),
-            PropKind::Heightfield(h) => heightfield_mesh(h.samples, h.spacing, &(h.source)()),
+            PropKind::Heightfield(h) => {
+                let heights = (h.source)();
+                match &h.detail {
+                    Some(detail) => {
+                        refined_heightfield_mesh(h.samples, h.spacing, &heights, &detail(&heights))
+                    }
+                    None => heightfield_mesh(h.samples, h.spacing, &heights),
+                }
+            }
         }
     }
 
@@ -287,6 +321,178 @@ pub fn heightfield_mesh(samples: u32, spacing: f32, heights: &[f32]) -> TriMesh 
             let a = j * n + i;
             let (b, c, d) = (a + 1, a + n, a + n + 1);
             mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+    mesh.recompute_normals();
+    mesh
+}
+
+/// [`heightfield_mesh`] with `detail`'s cells drawn finer: each split into `split × split`
+/// quads at the heights it gives (two triangles each, split along the same diagonal as the
+/// coarse cells). A coarse cell next to a refined one is a fan from its centre over its edges'
+/// fine vertices, which draws its two triangles as before when those vertices lie on its edges
+/// (its centre sits on the diagonal between them). The vertices on an edge are shared by the
+/// cells on either side, so the mesh has no T-junction and no crack.
+pub fn refined_heightfield_mesh(
+    samples: u32,
+    spacing: f32,
+    heights: &[f32],
+    detail: &HeightfieldDetail,
+) -> TriMesh {
+    let n = samples as usize;
+    assert_eq!(heights.len(), n * n, "a heightfield of {n} × {n} samples");
+    let side = n - 1;
+    let k = detail.split.max(1) as usize;
+    let per = (k + 1) * (k + 1);
+    assert_eq!(
+        detail.heights.len(),
+        detail.cells.len() * per,
+        "{per} heights per refined cell"
+    );
+    let half = side as f32 * spacing * 0.5;
+    let fine = spacing / k as f32;
+    let mut slot = vec![u32::MAX; side * side];
+    for (s, &c) in detail.cells.iter().enumerate() {
+        slot[c as usize] = s as u32;
+    }
+    let refined = |i: usize, j: usize| i < side && j < side && slot[j * side + i] != u32::MAX;
+    let mut mesh = TriMesh::default();
+    mesh.positions.reserve(n * n + detail.cells.len() * k * k);
+    for j in 0..n {
+        for i in 0..n {
+            let (x, z) = (-half + i as f32 * spacing, -half + j as f32 * spacing);
+            mesh.positions.push([x, heights[j * n + i], z]);
+        }
+    }
+    // The refined cells' corners at the detail's heights (the samples' where they meet a
+    // coarse cell).
+    for (s, &c) in detail.cells.iter().enumerate() {
+        let (i, j) = (c as usize % side, c as usize / side);
+        for (u, v) in [(0, 0), (k, 0), (0, k), (k, k)] {
+            let at = (j + v / k) * n + i + u / k;
+            mesh.positions[at][1] = detail.heights[s * per + v * (k + 1) + u];
+        }
+    }
+    // An edge's `k − 1` inner vertices, made by the first refined cell that meets it: edge
+    // `2 (j n + i)` from sample (i, j) along +x, `2 (j n + i) + 1` along +z.
+    let mut edges: HashMap<usize, u32> = HashMap::new();
+    let mut local = vec![0u32; per];
+    mesh.indices
+        .reserve(6 * (side * side + detail.cells.len() * (k * k - 1)));
+    for (s, &c) in detail.cells.iter().enumerate() {
+        let (i, j) = (c as usize % side, c as usize / side);
+        let cell_heights = &detail.heights[s * per..(s + 1) * per];
+        let x0 = -half + i as f32 * spacing;
+        let z0 = -half + j as f32 * spacing;
+        let position = |u: usize, v: usize| {
+            [
+                x0 + u as f32 * fine,
+                cell_heights[v * (k + 1) + u],
+                z0 + v as f32 * fine,
+            ]
+        };
+        // Bottom, top, left, right: the edge's key and the fine vertex of its t-th inner point.
+        let sides: [(usize, [usize; 2], [usize; 2]); 4] = [
+            (2 * (j * n + i), [1, 0], [0, 0]),
+            (2 * ((j + 1) * n + i), [1, 0], [0, k]),
+            (2 * (j * n + i) + 1, [0, 1], [0, 0]),
+            (2 * (j * n + i + 1) + 1, [0, 1], [k, 0]),
+        ];
+        let mut starts = [0u32; 4];
+        for (e, &(key, step, from)) in sides.iter().enumerate() {
+            starts[e] = *edges.entry(key).or_insert_with(|| {
+                let start = mesh.positions.len() as u32;
+                for t in 1..k {
+                    mesh.positions
+                        .push(position(from[0] + t * step[0], from[1] + t * step[1]));
+                }
+                start
+            });
+        }
+        let inner = mesh.positions.len() as u32;
+        for v in 1..k {
+            for u in 1..k {
+                mesh.positions.push(position(u, v));
+            }
+        }
+        for v in 0..=k {
+            for u in 0..=k {
+                let corner = (u == 0 || u == k) && (v == 0 || v == k);
+                local[v * (k + 1) + u] = if corner {
+                    ((j + v / k) * n + i + u / k) as u32
+                } else if v == 0 {
+                    starts[0] + (u - 1) as u32
+                } else if v == k {
+                    starts[1] + (u - 1) as u32
+                } else if u == 0 {
+                    starts[2] + (v - 1) as u32
+                } else if u == k {
+                    starts[3] + (v - 1) as u32
+                } else {
+                    inner + ((v - 1) * (k - 1) + (u - 1)) as u32
+                };
+            }
+        }
+        for v in 0..k {
+            for u in 0..k {
+                let a = local[v * (k + 1) + u];
+                let (b, c, d) = (
+                    local[v * (k + 1) + u + 1],
+                    local[(v + 1) * (k + 1) + u],
+                    local[(v + 1) * (k + 1) + u + 1],
+                );
+                mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+            }
+        }
+    }
+    // The coarse cells: two triangles, or a fan where a neighbour across an edge is refined.
+    let mut ring: Vec<u32> = Vec::with_capacity(4 * k);
+    for j in 0..side {
+        for i in 0..side {
+            if refined(i, j) {
+                continue;
+            }
+            let a = (j * n + i) as u32;
+            let (b, c, d) = (a + 1, a + n as u32, a + n as u32 + 1);
+            let below = j > 0 && refined(i, j - 1);
+            let above = refined(i, j + 1);
+            let left = i > 0 && refined(i - 1, j);
+            let right = refined(i + 1, j);
+            if !(below || above || left || right) {
+                mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+                continue;
+            }
+            let inner = |key: usize, t: usize| edges[&key] + (t - 1) as u32;
+            // Round the cell counter-clockwise seen from above: up the left edge, along the
+            // top, down the right edge, back along the bottom.
+            ring.clear();
+            ring.push(a);
+            if left {
+                ring.extend((1..k).map(|t| inner(2 * (j * n + i) + 1, t)));
+            }
+            ring.push(c);
+            if above {
+                ring.extend((1..k).map(|t| inner(2 * ((j + 1) * n + i), t)));
+            }
+            ring.push(d);
+            if right {
+                ring.extend((1..k).rev().map(|t| inner(2 * (j * n + i + 1) + 1, t)));
+            }
+            ring.push(b);
+            if below {
+                ring.extend((1..k).rev().map(|t| inner(2 * (j * n + i), t)));
+            }
+            let (pb, pc) = (mesh.positions[b as usize], mesh.positions[c as usize]);
+            let centre = mesh.positions.len() as u32;
+            mesh.positions.push([
+                0.5 * (pb[0] + pc[0]),
+                0.5 * (pb[1] + pc[1]),
+                0.5 * (pb[2] + pc[2]),
+            ]);
+            for m in 0..ring.len() {
+                let next = ring[(m + 1) % ring.len()];
+                mesh.indices.extend_from_slice(&[centre, ring[m], next]);
+            }
         }
     }
     mesh.recompute_normals();
@@ -717,6 +923,97 @@ pub fn city_props() -> Vec<PropSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refined_heightfield_has_no_crack_and_keeps_its_coarse_cells() {
+        // 6 × 6 samples 8 m apart; three cells split into 4 × 4 quads, their inner vertices a
+        // metre down (a channel), those on the region's outline on the coarse surface.
+        let (n, spacing, k) = (6usize, 8.0f32, 4usize);
+        let height = |i: usize, j: usize| 1.3 * i as f32 + 0.5 * (j * j) as f32;
+        let heights: Vec<f32> = (0..n * n).map(|s| height(s % n, s / n)).collect();
+        // The coarse surface at fine vertex (fx, fz) of the grid, split along the diagonal.
+        let drawn = |fx: usize, fz: usize| {
+            let (i, j) = ((fx / k).min(n - 2), (fz / k).min(n - 2));
+            let (tx, tz) = (
+                (fx - i * k) as f32 / k as f32,
+                (fz - j * k) as f32 / k as f32,
+            );
+            let (a, b, c, d) = (
+                height(i, j),
+                height(i + 1, j),
+                height(i, j + 1),
+                height(i + 1, j + 1),
+            );
+            if tx + tz <= 1.0 {
+                a + tx * (b - a) + tz * (c - a)
+            } else {
+                d + (1.0 - tx) * (c - d) + (1.0 - tz) * (b - d)
+            }
+        };
+        let cells = [(1, 1), (2, 1), (2, 2)];
+        let inside = |fx: usize, fz: usize| {
+            let covered = |x: usize, z: usize| cells.contains(&(x, z));
+            // A fine vertex is inside when every cell around it is refined.
+            let (x0, z0) = ((fx.max(1) - 1) / k, (fz.max(1) - 1) / k);
+            let (x1, z1) = (fx / k, fz / k);
+            covered(x0, z0) && covered(x1, z0) && covered(x0, z1) && covered(x1, z1)
+        };
+        let mut detail = HeightfieldDetail {
+            split: k as u32,
+            ..HeightfieldDetail::default()
+        };
+        let mut sorted = cells.map(|(i, j)| (j * (n - 1) + i) as u32);
+        sorted.sort_unstable();
+        for &c in &sorted {
+            let (i, j) = (c as usize % (n - 1), c as usize / (n - 1));
+            for v in 0..=k {
+                for u in 0..=k {
+                    let (fx, fz) = (i * k + u, j * k + v);
+                    let down = if inside(fx, fz) { 1.0 } else { 0.0 };
+                    detail.heights.push(drawn(fx, fz) - down);
+                }
+            }
+        }
+        detail.cells = sorted.to_vec();
+        let mesh = refined_heightfield_mesh(n as u32, spacing, &heights, &detail);
+        // Every inner edge has its twin; the border's edges are the field's outline.
+        let mut edges: HashMap<(u32, u32), i32> = HashMap::new();
+        let mut area = 0.0;
+        for tri in mesh.indices.as_chunks::<3>().0 {
+            for e in 0..3 {
+                let (a, c) = (tri[e], tri[(e + 1) % 3]);
+                *edges.entry((a.min(c), a.max(c))).or_default() += if a < c { 1 } else { -1 };
+            }
+            let p = tri.map(|t| Vec3::from(mesh.positions[t as usize]));
+            let normal = (p[1] - p[0]).cross(p[2] - p[0]);
+            assert!(normal.y > 0.0, "a triangle facing down");
+            area += 0.5 * normal.y;
+        }
+        let open = edges.values().filter(|&&v| v != 0).count();
+        assert_eq!(open, 4 * (n - 1), "only the outline's edges are open");
+        let side = (n - 1) as f32 * spacing;
+        assert!((area - side * side).abs() < 1e-2, "{area}");
+        // The fans draw the coarse cells as their two triangles: every vertex of the mesh lies
+        // on the coarse surface except the channel's.
+        let half = side * 0.5;
+        let fine = spacing / k as f32;
+        let channel = mesh
+            .positions
+            .iter()
+            .filter(|p| {
+                let (fx, fz) = ((p[0] + half) / fine, (p[2] + half) / fine);
+                let (ix, iz) = (fx.round() as usize, fz.round() as usize);
+                let on_grid = (fx - ix as f32).abs() < 1e-3 && (fz - iz as f32).abs() < 1e-3;
+                let expected = if on_grid { drawn(ix, iz) } else { p[1] };
+                (p[1] - expected).abs() > 1e-4
+            })
+            .count();
+        let inner = (0..=(n - 1) * k)
+            .flat_map(|fz| (0..=(n - 1) * k).map(move |fx| (fx, fz)))
+            .filter(|&(fx, fz)| inside(fx, fz))
+            .count();
+        assert_eq!(channel, inner);
+    }
 
     #[test]
     fn a_building_is_closed_and_its_count_as_estimated() {

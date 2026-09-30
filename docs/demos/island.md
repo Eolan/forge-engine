@@ -621,7 +621,8 @@ Its third part: the wet sand.
   sampled every half metre with the cells split as the mesh splits them, plus 0.1 m and a
   quarter of the depth. The depth the water shows is the ribbon's profile across, deepest in the
   middle. Once the 2 m field is drawn (#106), the beds can be carved and the water set at a level
-  in them.
+  in them. (Superseded the next day: the channels are carved on cells of a metre along the
+  rivers, below.)
 - **In the pass:** after the sea, blended over what is under by how much of the pixel the
   river covers:
   - the banks, soft over half a metre or two pixels;
@@ -671,3 +672,89 @@ Its third part: the wet sand.
   view (506 px, ꟻLIP mean 0.0003), #71's flake aside; the A/B harness and mesh against
   fallback at 0 px; validation clean; tests (two new in `forge_procgen::river`, among them
   that the ribbon never dips under the drawn ground), clippy, fmt.
+
+**The rivers' beds, level water, mouths and stones** (2026-10-01, after the owner's look at step
+6). The owner saw water that was not level across (it followed the ground's V), ribbons standing
+over the ground or leaving gaps at the banks, no bed to see, and rivers stopping short of the sea;
+and asked for water that flows around what stands in it. The ribbon on the ground gave way to
+water in a carved channel:
+- **Cells of a metre along the rivers.** `forge_procgen::Channels` lists the 8 m cells within
+  8 m of a river's water plus half a cell's diagonal (36 267, 2.9 M fine vertices) and gives the
+  ground there at any point. `forge_geom::city::refined_heightfield_mesh` draws those cells in
+  8 × 8 quads and every coarse cell beside them as a fan from its centre over its edges' fine
+  vertices, the same two planes as before: the vertices on an edge are shared, so there is no
+  T-junction and no crack (a test checks the twins of every edge). The cook takes the channels
+  from the samples (1.5 s) and the island's DAG simplifies them like the rest.
+- **The ground around a river** is the field's samples through a Catmull–Rom cubic within a
+  metre of the water, blended back to the 8 m planes by 8 m out, so the valleys the rivers run
+  in are smooth where the water meets them, and the cells beyond are untouched.
+- **The course settles on the valley's floor.** The corner cutting leaves a course on the
+  valley's side in a narrow bend; four passes move each point half way to the lowest ground
+  within 8 m across (a move costing 2 cm per square metre of it) and smooth it again.
+- **The water is level across** and only falls downstream: at each point the lowest ground in the
+  middle and on both banks (a little up and down the course), less a freeboard of `0.05 m + 4 %`
+  of the width; then the running minimum from the head, a fall steeper than 60 % spread upstream,
+  and two smoothing passes that keep both. Through a lake of a hectare the level is the lake's;
+  it never goes under the sea's; a tributary ends on its river's course at that river's level or
+  over it, and gives way to it in its channel. The depth is now `0.4 (A / km²)^⅜` m (0.31 to
+  0.87 m), a little deeper, which the future underwater view will want.
+- **The channel** is a parabola across from the level at the water's edge to the depth in the
+  middle, and past the edge a bank rising `0.5 x + 0.1 x²` until it meets the ground, which it
+  only ever lowers; where two channels meet the lower wins. The ribbon reaches `0.5 m + 10 %` of
+  the half width past the edge, under the banks, so the ground draws the water's outline.
+- **The bed** is a layer of its own, grey-brown gravel at the pebbles' scale (`island: river bed`,
+  painted at the water's width), and the water shows it: the surface pass sees the scene under it
+  through the true depth along the view ray, as the sea sees its floor (absorption 0.9, 0.35,
+  0.45 m⁻¹, a little tannin and silt). The faked sediment tint is gone. The edge fades over the
+  last 2 cm of depth, or a quarter of a pixel's footprint, wherever the water thins against
+  something.
+- **Far away** the channel can be under a pixel and the DAG fills it: past a footprint of a fifth
+  of the channel's depth under its banks the ribbon rises onto the ground as before (resting on
+  the carved ground now), and past four fifths it lies there in full, a pixel wide either side.
+- **The mouths.** A river's channel runs through the beach to the sea, and where its level comes
+  down to the sea's the sea fills it. The ribbon fades out over the last 0.3 m of level, and from
+  that point (25 mouths) the sea's own shading takes the river on: up the channel the water is
+  the river's, with its flow-mapped ripples and its absorption and scattering; out to sea it is
+  a jet that widens by 0.2 m a metre and slows as the root of the distance, its water mixing into
+  the sea's over 60 half widths, the plume's edge broken up by noise. The same ripple function
+  draws the river, the sea at a mouth and later the lakes (still water is the same ripples
+  unmoved), so no two animated layers ever fade over each other. A grid of 128 m cells lists
+  the mouths whose plume reaches each cell.
+- **The stones.** Past each point of a river drawn in full, a boulder with a chance of 3 %,
+  rising to a third where the water falls 15 %: across the middle 70 % of the water, 0.25 to
+  0.85 m and at least 0.8 of the depth there, so most break the surface (2 525 stones, 2 051
+  of them through the water). They are instances of the island's boulders standing on the
+  carved bed, and the GPU's rocks keep off the refined cells (their 8 m samples no longer follow
+  the ground there). In the surface pass the water parts around a stone's outline at the level
+  as a potential flow parts around a cylinder, piles up white in front of it and trails a wake
+  behind, widening and fading over 8 radii; a stone under the water roughens the surface over
+  it. Anything else standing in the water shows by the contact, the water's edge fading where it
+  thins against it; the stones' list is the place for a game's objects to join the flow. (A
+  line of foam wherever fast water thinned against anything drew the banks' metre triangles and
+  was left out.)
+
+![Down a river from 3 m over its water: a sheet of water over the valley's floor before (left), the river in its channel now (right)](../../reports/2026-10-01-105/beds-down.png)
+
+![A steep stream to the sea: stones breaking the water, white in front and in their wakes (right; before, this point was inside the uncarved ground)](../../reports/2026-10-01-105/beds-stones.png)
+
+![The largest river's mouth from 110 m: before, the ribbon stopped short of the sea; now the channel runs through the beach and the river's water goes out in a plume](../../reports/2026-10-01-105/beds-mouth.png)
+
+- **What to look at:**
+  - The plume reads as a brownish band from above; it may want to be fainter.
+  - From far away a river sits in its channel and shows less than the old ribbon did, which lay
+    on the ground and mirrored the sky at grazing angles.
+  - Where the 8 m field jumps 5 to 15 m between samples (#106's roughness), the level water cuts a
+    gorge through the spurs: a fifth of the points stand more than 2 m under their lowest bank.
+  - The 8 m cells beside the channels keep their facets and their shadows (#106).
+- **Cost** (`docs/PROFILE.md`): the frame +0.03 to 0.09 ms over seven views, most where the bed
+  fills the view (its layer blends with the grass's, `shading/layered` +0.09 ms down a river);
+  `water/surface` +0.003 to 0.011 ms, the plume's grid keeping the sea's share to 0.006 ms. At
+  start 0.75 s for the rivers' water and channels (twice: the ground's layers and the water), and
+  1.5 s more in the cook.
+- **Stability:** frame to frame the same or better in every view (down a river 1.00 → 0.42 %,
+  the old sheet of water shimmered over the stepped floor), over 32 frames within 0.004 %.
+- **Checks:** the batch changes only the island's images (52 582 px, ꟻLIP mean 0.0099; with the
+  water 56 139 px, 0.0106); the A/B harness and mesh against
+  fallback at 0 px; validation clean; tests (the refined mesh without a crack, the level under
+  the banks, the tributary at its river's level, the channel's profile and seams, the stones on
+  the bed), clippy, fmt.

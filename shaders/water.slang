@@ -260,10 +260,24 @@ struct WaterCascadeView
 // A point of a river's ribbon (`GpuRiverPoint` in water.rs, from `forge_procgen::RibbonPoint`).
 struct RiverPoint
 {
-    float4 a; // world x, z (the sea's frame), the half width (m), the depth in the middle (m)
-    float4 b; // downstream (world x, z; unit), the speed (m/s), the bed's slope
-    float4 c; // how much of the river is drawn (0..1), 1 where a segment starts (0 at a river's last point), the ground under the last vertex across, 0
+    float4 a; // world x, z (the sea's frame), the half width at the water's edge (m), the depth in the middle (m)
+    float4 b; // downstream (world x, z; unit), the speed (m/s), the water surface's slope
+    float4 c; // how much of the river is drawn (0..1), 1 where a segment starts (0 at a river's last point), the ground under the last vertex across, the water's level (m)
     float4 d; // the ground under the first four vertices across: the highest the drawn ground stands under the quads around each (m)
+    float4 e; // the ribbon's half width (m, under the banks), the lowest bank before the channel was carved (m), 0, 0
+};
+
+// Where a river's water meets the sea's (`GpuRiverMouth` in water.rs).
+struct RiverMouth
+{
+    float4 a; // world x, z (the sea's frame), downstream (world x, z; unit)
+    float4 b; // the half width (m), the speed (m/s), 0, 0
+};
+
+// A stone in a river (`GpuRiverStone` in water.rs).
+struct RiverStone
+{
+    float4 a; // world x, z (the sea's frame), the radius of its outline at the water's level (m; 0 under it), its mean radius (m)
 };
 
 // Mirrors `GpuWaterSurface` in water.rs.
@@ -298,6 +312,13 @@ struct WaterSurface
     uint river_points;
     float* ground;        // the floor's heights (the shore's samples) in full precision, or null: no rivers
     RiverPoint* rivers;   // `river_points` of them, one river after the other
+    RiverMouth* mouths;   // where the rivers meet the sea, `mouth_count` of them
+    uint mouth_count;
+    uint stone_count;
+    RiverStone* stones;   // the stones in the rivers, in the order of the points they stand past
+    uint* mouth_grid;     // per cell of the shore's square, up to four mouths whose plume reaches it (a byte each, 0xFF: none)
+    uint mouth_cells;     // the grid's cells a side
+    float mouth_cell;     // metres a cell
 };
 
 struct SurfacePush
@@ -712,6 +733,19 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
     ShoreWaves waves = shore_waves(w, input.flat, shore, footprint);
     slope += waves.slope;
+    // Where a river comes in: its water, and its ripples carried on its flow, as the river's
+    // ribbon draws them where it hands over to the sea (in its channel, where the sea's own waves
+    // are still), mixing out into the sea's in a plume.
+    Estuary estuary = estuary_at(w, input.flat + w[0].camera.xz);
+    if (estuary.fresh > 0.0)
+    {
+        RiverRipples ripples = river_ripples(w, input.flat, estuary.velocity);
+        slope += ripples.slope * estuary.fresh;
+        variance += ripples.variance * estuary.fresh;
+    }
+    // The river's water lies over the sea's in a layer that thins as it mixes out: all of the
+    // water in the channel, a metre and a half at the mouth, less out to sea.
+    float layer = estuary.fresh * RIVER_PLUME_LAYER;
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
     float3 v = normalize(-input.relative);
     // GGX's α² from the unresolved slopes' variance (α² = 2σ²), over a calm surface's.
@@ -735,11 +769,14 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
         float4 behind = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, floor_depth, 1.0));
         path = max(length(behind.xyz / behind.w) - surface_distance, 0.0);
     }
-    float3 transmittance = exp(-w[0].absorption.rgb * path);
+    float layer_path = min(path, layer / max(v.y, 0.05));
+    float3 layer_through = exp(-RIVER_ABSORPTION * layer_path);
+    float3 sea_through = exp(-w[0].absorption.rgb * (path - layer_path));
     float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
     float3 sun_light = light.sun_light;
     float3 lit = light.lit;
-    float3 inside = under * transmittance + w[0].scatter.rgb * lit * (1.0 - transmittance);
+    float3 inside = (under * sea_through + w[0].scatter.rgb * lit * (1.0 - sea_through)) * layer_through
+        + RIVER_SCATTER * lit * (1.0 - layer_through);
     float3 color = reflected * fresnel + inside * (1.0 - fresnel) + sun;
     // Foam, lit like a white diffuse surface: where the waves fold (the Jacobian under ~0.45),
     // where the shore's trains break, and along the swash's thin leading edge (the water's
@@ -763,7 +800,8 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     // The shadow ray: what the sun adds, through the same foam and air. The highlight, and the
     // sunlight the water scatters back (the light under a shaded surface loses the sun too);
     // the sea floor seen through the water was shaded by its own rays in the resolve.
-    float3 sun_share = sun + w[0].scatter.rgb * sun_light * (1.0 - transmittance) * (1.0 - fresnel);
+    float3 sun_share = sun + (w[0].scatter.rgb * sun_light * (1.0 - sea_through) * layer_through
+        + RIVER_SCATTER * sun_light * (1.0 - layer_through)) * (1.0 - fresnel);
     sun_share = lerp(sun_share, 0.8 * sun_light / PI, foam * 0.8) * air.a;
     sun_share = min(sun_share, o.color.rgb);
     float brightest = max(o.color.r, max(o.color.g, o.color.b));
@@ -774,58 +812,62 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
 
 // ----------------------------------------------------------------- the rivers ---
 //
-// D-038's rivers: each river of the island's network as a ribbon over the ground
-// (`forge_procgen::ribbons`: the D8 course smoothed, its width, depth and speed from the
-// catchment and the bed's slope), drawn after the sea in the same pass and blended over what is
-// there by how much of the pixel it covers. The 8 m field cannot hold a bed a few metres wide,
-// so the water lies on the ground as the island's mesh draws it, a little above it, and its
-// depth is the ribbon's own profile across rather than the ground's: the outline is the
-// ribbon's, smooth, and not the triangles'. Its ripples are the finest cascade's slopes carried
-// down the river by a flow map (Vlachos 2010): two samples advected along the flow, each
-// restarted in turn half a period apart and cross-faded, so the texture never stretches. Far
-// away the ribbon stays a pixel wide either side, its coverage scaled by the share of that the
-// river fills (Persson's phone-wire anti-aliasing), so a stream thinner than a pixel stays a
-// steady faint line; it rises by the pixel's footprint, over what the ground's coarser levels
-// of detail may raise.
+// D-038's rivers: each river of the island's network as a ribbon (`forge_procgen::ribbons`:
+// the D8 course smoothed, its width, depth and speed from the catchment and its water's fall),
+// drawn after the sea in the same pass and blended over what is there by how much of the pixel
+// it covers. The water is level across, at a level that only falls downstream and stands under
+// its banks, in the channel the island's mesh carves for it (`forge_procgen::Channels`): the
+// ribbon reaches past the water's edge under the banks, so the ground draws the edge, and what
+// lies under it is the bed, seen through the water's depth as the sea sees its floor. Its
+// ripples are the finest cascade's slopes carried down the river by a flow map (Vlachos 2010):
+// two samples advected along the flow, each restarted in turn half a period apart and
+// cross-faded, so the texture never stretches; still water is the same ripples unmoved. Far
+// away, where the ground's coarser levels of detail may fill the channel, the ribbon rises onto
+// the ground as drawn and stays a pixel wide either side, its coverage scaled by the share of
+// that the river fills (Persson's phone-wire anti-aliasing), so a stream thinner than a pixel
+// stays a steady faint line.
 
 // Quads across a ribbon (`RIVER_ACROSS` in water.rs).
 static const uint RIVER_ACROSS = 4;
-// Metres over the ground it rests on: a larger river is lifted more, so it covers the end of a
-// tributary.
-static const float RIVER_LIFT = 0.1;
-static const float RIVER_LIFT_PER_DEPTH = 0.25;
-// Far away: the lift in pixels' footprints.
+// Far away: the lift over the ground in pixels' footprints.
 static const float RIVER_LIFT_PIXELS = 1.5;
+// The footprint, as a share of the channel's depth under its banks, over which the ribbon
+// rises from its level onto the ground.
+static const float2 RIVER_DRAPE = float2(0.2, 0.8);
 // Seconds between the restarts of a flow sample.
 static const float RIVER_FLOW_PERIOD = 2.0;
 // The ripples' tile against the finest cascade's patch, and their slopes' scale.
 static const float RIVER_RIPPLE_TILE = 0.5;
 static const float RIVER_RIPPLE_STRENGTH = 0.35;
-// Fresh water with a little tannin and silt (m⁻¹), and the light it scatters back.
-static const float3 RIVER_ABSORPTION = float3(1.4, 0.4, 0.5);
-static const float3 RIVER_SCATTER = float3(0.015, 0.025, 0.02);
-// The bed under the water towards the middle: the ground's light on wet, grey-brown sediment.
-static const float3 RIVER_BED = float3(0.55, 0.5, 0.42);
-// Metres of the banks' soft edge, at least (and two pixels far away).
+// Fresh water with a little tannin and silt (m⁻¹): the bed shows through a metre of it.
+static const float3 RIVER_ABSORPTION = float3(0.9, 0.35, 0.45);
+static const float3 RIVER_SCATTER = float3(0.02, 0.026, 0.018);
+// Metres of the banks' soft edge far away, at least (and two pixels).
 static const float RIVER_BANK = 0.5;
+// The water's depth over which its edge fades where it meets the ground or anything in it:
+// metres, and pixels' footprints.
+static const float2 RIVER_CONTACT = float2(0.02, 0.25);
+// How much rougher a stone's wake is (added to the slopes' variance).
+static const float RIVER_WAKE_ROUGHNESS = 0.02;
 // Metres between the riffles' white water, and the foam's cover where its pattern is too fine
 // to draw (the pattern's mean through the threshold).
 static const float RIVER_RIFFLES = 30.0;
 static const float RIVER_FOAM_MEAN = 0.3;
-// The river gives way to the sea over its last metres to the coast.
-static const float RIVER_MOUTH = 30.0;
 
 struct RiverOut
 {
     float4 position : SV_Position;
     float3 relative : POSITION;   // camera-relative metres
     float2 flat : TEXCOORD0;      // camera-relative world x, z
-    float4 river : TEXCOORD1;     // across (−1..1), the coverage (the thinning far away, the fade), the depth (m), the speed (m/s)
-    float4 flow : TEXCOORD2;      // downstream (world x, z), the bed's slope, the half width drawn (m)
+    float4 river : TEXCOORD1;     // across (−1..1), the fade, the depth in the middle (m), the speed (m/s)
+    float4 flow : TEXCOORD2;      // downstream (world x, z), the water surface's slope, the half width drawn (m)
+    float4 edge : TEXCOORD3;      // the half width at the water's edge (m), the ribbon's (m), how far it has risen onto the ground (0..1), 0
+    nointerpolation uint segment : TEXCOORD4; // the segment's first point
 };
 
-// The ground's height at `world` (x, z) as the island's mesh draws it: the field's samples, each
-// cell split along its (i + 1, j) – (i, j + 1) diagonal (`forge_geom::city::heightfield_mesh`).
+// The ground's height at `world` (x, z) as the island's mesh draws its coarse cells: the field's
+// samples, each cell split along its (i + 1, j) – (i, j + 1) diagonal
+// (`forge_geom::city::heightfield_mesh`).
 float ground_height(WaterSurface* w, float2 world)
 {
     uint n = w[0].shore_texels;
@@ -858,25 +900,34 @@ RiverOut river_vert_main(uint id : SV_VertexID)
         o.flat = 0.0;
         o.river = 0.0;
         o.flow = 0.0;
+        o.edge = 0.0;
+        o.segment = 0u;
         return o;
     }
     RiverPoint p = w[0].rivers[segment + uint(corner.y)];
     float3 camera = w[0].camera.xyz;
     float2 centre = p.a.xy;
-    float footprint = length(float3(centre.x, ground_height(w, centre), centre.y) - camera) * w[0].pixel;
+    float level = p.c.w;
+    float footprint = length(float3(centre.x, level, centre.y) - camera) * w[0].pixel;
+    // Onto the ground as the pixel grows past a share of the channel's depth under its banks.
+    float channel = max(p.e.y - (level - p.a.w), p.a.w);
+    float drape = smoothstep(RIVER_DRAPE.x, RIVER_DRAPE.y, footprint / channel);
     // At least a pixel either side, the coverage scaled to what the river fills.
-    float half_width = max(p.a.z, footprint);
+    float half_width = max(p.e.x, footprint);
     float across = float(corner.x) / float(RIVER_ACROSS) * 2.0 - 1.0;
     float2 world = centre + float2(-p.b.y, p.b.x) * (across * half_width);
-    // On the ground under the ribbon's quads (and, widened, under the vertex where it went).
+    // Far away, on the ground under the ribbon's quads (and, widened, under the vertex).
     float resting = corner.x < 4 ? p.d[corner.x] : p.c.z;
-    float height = max(resting, ground_height(w, world)) + RIVER_LIFT + RIVER_LIFT_PER_DEPTH * p.a.w + RIVER_LIFT_PIXELS * footprint;
+    float draped = max(resting, ground_height(w, world)) + RIVER_LIFT_PIXELS * footprint;
+    float height = lerp(level, max(level, draped), drape);
     float3 relative = float3(world.x, height, world.y) - camera;
     o.position = mul(w[0].view_proj, float4(relative, 1.0));
     o.relative = relative;
     o.flat = relative.xz;
-    o.river = float4(across, p.c.x * p.a.z / half_width, p.a.w, p.b.z);
+    o.river = float4(across, p.c.x, p.a.w, p.b.z);
     o.flow = float4(p.b.xy, p.b.w, half_width);
+    o.edge = float4(p.a.z, p.e.x, drape, 0.0);
+    o.segment = segment;
     return o;
 }
 
@@ -904,70 +955,256 @@ FlowPhases flow_phases(float2 world, float2 velocity, float time)
     return f;
 }
 
+// The ripples of fresh water moving at `velocity` (world x, z; m/s) at `flat` (camera-relative
+// world x, z): the finest cascade's slopes on a smaller tile, carried downstream, cross-faded
+// with the contrast two unrelated samples lose halfway put back. Unmoved, the same ripples
+// stand still: the river's, a lake's and the sea's at a river's mouth are one surface.
+struct RiverRipples
+{
+    float2 slope;
+    float variance;   // of the slopes the mips average away
+    FlowPhases phases;
+    float norm;       // the cross-fade's contrast back
+};
+
+RiverRipples river_ripples(WaterSurface* w, float2 flat, float2 velocity)
+{
+    RiverRipples o;
+    FlowPhases f = flow_phases(flat + w[0].camera.xz, velocity, w[0].time);
+    WaterCascadeView cv = w[0].cascades[WATER_CASCADES - 1];
+    float tile = cv.inv_patch / RIVER_RIPPLE_TILE;
+    float2 offset = cv.offset / RIVER_RIPPLE_TILE;
+    float4 s0 = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, (flat - f.offset0) * tile + offset);
+    float4 s1 = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, (flat - f.offset1) * tile + offset + float2(0.37, 0.61));
+    float norm = rsqrt(f.weight0 * f.weight0 + f.weight1 * f.weight1);
+    float strength = RIVER_RIPPLE_STRENGTH / RIVER_RIPPLE_TILE;
+    o.slope = (s0.xy * f.weight0 + s1.xy * f.weight1) * (norm * strength);
+    o.variance = (f.weight0 * max(s0.w - dot(s0.xy, s0.xy), 0.0) + f.weight1 * max(s1.w - dot(s1.xy, s1.xy), 0.0))
+        * (strength * strength);
+    o.phases = f;
+    o.norm = norm;
+    return o;
+}
+
+// A river's water in the sea (D-038's rivers, where they meet the sea): how much of the water at
+// a point is the river's (0..1) and the flow it still carries.
+struct Estuary
+{
+    float fresh;
+    float2 velocity; // world x, z; m/s
+};
+
+// How far a river's plume reaches, in its half widths, and how fast it spreads (metres of half
+// width a metre out: a turbulent jet's).
+static const float RIVER_PLUME_LENGTH = 60.0;
+static const float RIVER_PLUME_SPREAD = 0.2;
+// How far the plume's axis wanders, in metres a metre out at most, and the metres of river water
+// lying over the sea's where the plume leaves the mouth.
+static const float RIVER_PLUME_WANDER = 0.25;
+static const float RIVER_PLUME_LAYER = 1.5;
+
+// The rivers' water at `world` (x, z). Up a river's channel from where its level reaches the
+// sea's, where the sea fills it, the water is the river's and moves at its speed. Out from there it is a jet that widens and slows (a plane
+// jet's centre speed falls as the root of the distance), its water mixing into the sea's, the
+// plume's edge broken up offshore. Only the mouths the grid lists for the point's cell are
+// looked at.
+Estuary estuary_at(WaterSurface* w, float2 world)
+{
+    Estuary e;
+    e.fresh = 0.0;
+    e.velocity = 0.0;
+    if (w[0].mouth_count == 0u)
+        return e;
+    int2 cell = int2(floor((world - w[0].shore_frame.xy) / w[0].mouth_cell));
+    if (any(cell < 0) || any(cell >= int(w[0].mouth_cells)))
+        return e;
+    uint listed = w[0].mouth_grid[uint(cell.y) * w[0].mouth_cells + uint(cell.x)];
+    for (uint k = 0; k < 4u; k++)
+    {
+        uint m = (listed >> (8u * k)) & 0xFFu;
+        if (m == 0xFFu)
+            break;
+        RiverMouth mouth = w[0].mouths[m];
+        float2 d = world - mouth.a.xy;
+        float2 down = mouth.a.zw;
+        float along = dot(d, down);
+        // Out to sea the plume's axis wanders, a quarter of the way out at most.
+        float wander = (value_noise(float2(max(along, 0.0) / 150.0, float(m) * 7.1)) - 0.5) * RIVER_PLUME_WANDER * 2.0 * max(along, 0.0);
+        float across = abs(d.x * down.y - d.y * down.x - wander);
+        float half_width = mouth.b.x;
+        float reach = RIVER_PLUME_LENGTH * half_width;
+        float spread = half_width + RIVER_PLUME_SPREAD * max(along, 0.0);
+        if (along > reach || along < -200.0 || across > spread + 3.0)
+            continue;
+        float fresh = 1.0 - smoothstep(0.5 * spread, spread + 3.0, across);
+        if (along < 0.0)
+            fresh *= 1.0 - smoothstep(150.0, 200.0, -along);
+        else
+        {
+            fresh *= sqrt(half_width / spread) * (1.0 - smoothstep(0.4 * reach, reach, along));
+            float broken = saturate(0.4 + 1.2 * value_noise(world / 90.0));
+            fresh *= lerp(1.0, broken, smoothstep(0.0, 6.0 * half_width, along));
+        }
+        e.fresh = max(e.fresh, fresh);
+        e.velocity += down * (mouth.b.y * fresh);
+    }
+    e.fresh = saturate(e.fresh);
+    return e;
+}
+
+// The stones in a river (`forge_procgen::stones`): where one breaks the surface the water parts
+// around its outline at the level as a potential flow parts around a cylinder (a uniform stream
+// and a doublet: `u − iv = U (1 − R²/z²)` in the stream's frame, each stone's change added), piles
+// up white in front of it and trails a wake behind, widening and fading; one under the water
+// only roughens the surface over it and a little way down. What else stands in the water shows
+// by the water thinning against it (the contact in `river_frag_main`).
+struct StoneFlow
+{
+    float2 velocity; // world x, z; m/s
+    float white;     // the white water's share, 0..1
+    float rough;     // how much rougher the surface is, 0..1
+};
+
+// Points either side of a segment whose stones reach it.
+static const uint RIVER_STONE_POINTS = 3;
+// A wake's spread (metres of half width a metre down) and its length in the stone's radii.
+static const float RIVER_WAKE_SPREAD = 0.2;
+static const float RIVER_WAKE_LENGTH = 8.0;
+
+StoneFlow stones_at(WaterSurface* w, uint segment, float2 world, float2 velocity)
+{
+    StoneFlow o;
+    o.velocity = velocity;
+    o.white = 0.0;
+    o.rough = 0.0;
+    float speed = length(velocity);
+    if (w[0].stone_count == 0u || speed < 1e-3)
+        return o;
+    uint lo = segment >= RIVER_STONE_POINTS ? segment - RIVER_STONE_POINTS : 0u;
+    uint hi = min(segment + RIVER_STONE_POINTS, w[0].river_points - 1u);
+    uint first = uint(w[0].rivers[lo].e.z);
+    uint last = uint(w[0].rivers[hi].e.z);
+    float2 down = velocity / speed;
+    float2 side = float2(-down.y, down.x);
+    float2 change = 0.0;
+    for (uint i = first; i < last; i++)
+    {
+        float4 s = w[0].stones[i].a;
+        float2 d = world - s.xy;
+        float x = dot(d, down);
+        float y = dot(d, side);
+        float r2 = max(dot(d, d), 1e-4);
+        float r = sqrt(r2);
+        float outline = s.z;
+        if (outline > 0.0)
+        {
+            float k = outline * outline / (r2 * r2);
+            float2 local = float2(1.0 - k * (x * x - y * y), -2.0 * k * x * y);
+            change += (down * (local.x - 1.0) + side * local.y) * speed;
+            float front = (r - outline) / (0.3 * outline + 0.05);
+            float pillow = exp(-front * front) * saturate(-x / r);
+            float spread = outline + RIVER_WAKE_SPREAD * max(x, 0.0);
+            float across = y / spread;
+            float wake = x > 0.0 ? exp(-across * across) * exp(-x / (RIVER_WAKE_LENGTH * outline)) : 0.0;
+            o.white = max(o.white, max(pillow, 0.7 * wake));
+            o.rough = max(o.rough, wake);
+        }
+        else
+        {
+            float radius = s.w;
+            float spread = radius + RIVER_WAKE_SPREAD * max(x, 0.0);
+            float across = y / spread;
+            float before = min(x, 0.0) / radius;
+            float trail = exp(-across * across) * exp(-max(x, 0.0) / (0.5 * RIVER_WAKE_LENGTH * radius)) * exp(-before * before);
+            o.rough = max(o.rough, 0.6 * trail);
+            o.white = max(o.white, 0.3 * trail);
+        }
+    }
+    // Never faster than twice the stream (the flanks of a cylinder's flow), which also keeps the
+    // points inside a stone, hidden under it, from running away.
+    float changed = length(change);
+    o.velocity = velocity + (changed > speed ? change * (speed / changed) : change);
+    // White water only where the stream runs fast enough to break.
+    o.white *= smoothstep(0.3, 1.5, speed);
+    return o;
+}
+
 [shader("fragment")]
 SurfaceTargets river_frag_main(RiverOut input)
 {
     WaterSurface* w = surface_push.surface;
     float across = input.river.x;
     float2 world = input.flat + w[0].camera.xz;
-    // How much of the pixel the river covers: its banks, soft over half a metre or two pixels
-    // but never more than half the half width drawn (far away the whole ribbon is two pixels,
-    // and its coverage must add up to the river's share), its thinning far away and its fade
-    // from the head; over its last metres to the coast it gives way to the sea.
-    ShorePoint shore = shore_point(w, input.flat);
     float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
-    float bank = (1.0 - abs(across)) * input.flow.w;
-    float soft = min(max(RIVER_BANK, 2.0 * footprint), 0.5 * input.flow.w);
-    float coverage = input.river.y * smoothstep(0.0, soft, bank)
-        * smoothstep(0.0, RIVER_MOUTH, shore.distance);
+    float half_drawn = input.flow.w;
+    float half_water = input.edge.x;
+    float drape = input.edge.z;
+    float out_from_middle = abs(across) * half_drawn;
+    // How much of the pixel the river covers. Near, the ribbon fades out past the water's edge
+    // under the banks, where the ground hides it anyway; far away, where it lies on the ground,
+    // its edges are soft over half a metre or two pixels but never more than half the half
+    // width drawn, and its coverage is the river's share of the width drawn. And its fade.
+    float near_cover = 1.0 - smoothstep(half_water, input.edge.y, out_from_middle);
+    float soft = min(max(RIVER_BANK, 2.0 * footprint), 0.5 * half_drawn);
+    float far_cover = min(half_water / half_drawn, 1.0) * smoothstep(0.0, soft, half_drawn - out_from_middle);
+    float coverage = input.river.y * lerp(near_cover, far_cover, drape);
     // The flow: faster in the middle than by the banks.
     float2 down = input.flow.xy / max(length(input.flow.xy), 1e-4);
-    float2 velocity = down * (input.river.w * (1.0 - 0.4 * across * across));
-    FlowPhases f = flow_phases(world, velocity, w[0].time);
-    // The ripples: the finest cascade's slopes on a smaller tile, carried downstream. Cross-faded,
-    // with the contrast two unrelated samples lose halfway put back.
-    WaterCascadeView cv = w[0].cascades[WATER_CASCADES - 1];
-    float tile = cv.inv_patch / RIVER_RIPPLE_TILE;
-    float2 offset = cv.offset / RIVER_RIPPLE_TILE;
-    float4 s0 = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, (input.flat - f.offset0) * tile + offset);
-    float4 s1 = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, (input.flat - f.offset1) * tile + offset + float2(0.37, 0.61));
-    float norm = rsqrt(f.weight0 * f.weight0 + f.weight1 * f.weight1);
-    float strength = RIVER_RIPPLE_STRENGTH / RIVER_RIPPLE_TILE;
-    float2 ripple = (s0.xy * f.weight0 + s1.xy * f.weight1) * (norm * strength);
-    float variance = (f.weight0 * max(s0.w - dot(s0.xy, s0.xy), 0.0) + f.weight1 * max(s1.w - dot(s1.xy, s1.xy), 0.0))
-        * (strength * strength);
-    // The surface falls downstream with its bed.
-    float2 slope = ripple - down * min(input.flow.z, 0.3);
+    float u = saturate(out_from_middle / max(half_water, 1e-3));
+    float2 velocity = down * (input.river.w * (1.0 - 0.4 * u * u));
+    // Around the stones, and rougher in their wakes.
+    StoneFlow stones = stones_at(w, input.segment, world, velocity);
+    RiverRipples ripples = river_ripples(w, input.flat, stones.velocity);
+    FlowPhases f = ripples.phases;
+    float norm = ripples.norm;
+    float variance = ripples.variance + RIVER_WAKE_ROUGHNESS * stones.rough;
+    // The surface falls downstream.
+    float2 slope = ripples.slope - down * min(input.flow.z, 0.3);
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
     float3 v = normalize(-input.relative);
     float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
     WaterLight light = water_light(w, n, v, a2);
-    // What lies under: the ground, its light on a bed of sediment towards the middle, seen
-    // through the ribbon's depth (a parabola across, deepest in the middle) along the view ray.
+    // What lies under: the bed, seen along the view ray through the water to it (the ribbon's
+    // own profile far away, where it lies on the ground), and the light the water scatters
+    // back on the way. Where the water thins to nothing against the ground, a stone or
+    // anything in it, its edge fades.
     uint2 pixel = uint2(input.position.xy);
     float2 uv = (float2(pixel) + 0.5) / float2(w[0].width, w[0].height);
     float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
-    float luminance = dot(under, float3(0.2126, 0.7152, 0.0722));
-    under = lerp(under, luminance * RIVER_BED, 1.0 - smoothstep(0.3, 0.95, abs(across)));
-    float depth = input.river.z * (1.0 - across * across);
-    float3 transmittance = exp(-RIVER_ABSORPTION * (depth / max(v.y, 0.2)));
+    float floor_depth = g_sampled_images_r[NonUniformResourceIndex(w[0].scene_depth)].Load(int3(pixel, 0));
+    float surface_distance = length(input.relative);
+    float path = 1e3;
+    if (floor_depth > 0.0)
+    {
+        float4 behind = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, floor_depth, 1.0));
+        path = max(length(behind.xyz / behind.w) - surface_distance, 0.0);
+    }
+    float thickness = path * max(v.y, 0.0);
+    float contact = smoothstep(0.0, max(RIVER_CONTACT.x, RIVER_CONTACT.y * footprint), thickness);
+    coverage *= lerp(contact, 1.0, drape);
+    float profile = input.river.z * (1.0 - u * u) / max(v.y, 0.2);
+    path = lerp(path, profile, drape);
+    float3 transmittance = exp(-RIVER_ABSORPTION * path);
     float3 inside = under * transmittance + RIVER_SCATTER * light.lit * (1.0 - transmittance);
     float3 color = light.reflected * light.fresnel + inside * (1.0 - light.fresnel) + light.sun;
-    // White water in riffles where the bed is steep and the stream fast, broken up by a pattern
-    // carried down with the flow; finer than two pixels, the pattern gives way to its mean.
+    // White water: in riffles where the water falls steeply and fast, and on and behind the
+    // stones; broken up by a pattern carried down with the flow, which finer than two pixels
+    // gives way to its mean. (Not along the banks: the water's edge there follows the carved
+    // ground's metre triangles, and a line of foam drew them.)
     float riffles = smoothstep(0.45, 0.75, value_noise(world / RIVER_RIFFLES));
     float rapids = smoothstep(0.06, 0.2, input.flow.z) * smoothstep(1.5, 3.0, input.river.w) * riffles;
+    float white = max(rapids, stones.white);
     float foam = 0.0;
-    if (rapids > 0.0)
+    if (white > 0.0)
     {
         float n0 = value_noise((world - f.offset0) / 0.8);
         float n1 = value_noise((world - f.offset1) / 0.8 + 13.7);
         float pattern = 0.5 + ((n0 - 0.5) * f.weight0 + (n1 - 0.5) * f.weight1) * norm;
         float resolved = saturate(0.8 / (2.0 * footprint) - 1.0);
-        foam = rapids * lerp(RIVER_FOAM_MEAN, smoothstep(0.45, 0.8, pattern), resolved);
+        foam = white * lerp(RIVER_FOAM_MEAN, smoothstep(0.45, 0.8, pattern), resolved);
     }
     color = lerp(color, 0.8 * light.lit / PI, foam * 0.8);
-    float4 air = aerial_at(w[0].sky, uv, length(input.relative) * 0.001);
+    float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);
     color = color * air.a + air.rgb * light.scale;
     // Blended by the coverage, as are the rays asked for (`trace_requested` normalises the
     // direction): what the mirror ray meets and what the sun lights of the river's share.

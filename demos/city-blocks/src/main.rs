@@ -28,7 +28,7 @@ use forge_core::material::{
 };
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
-use forge_geom::city::{Heightfield, PropKind, PropSpec, Terrain, city_props};
+use forge_geom::city::{Heightfield, HeightfieldDetail, PropKind, PropSpec, Terrain, city_props};
 use forge_procgen::{
     ErosionParams, Field2, IslandParams, Ocean, OceanParams, ShoreProfile, ShoreTrain,
 };
@@ -40,12 +40,12 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterRiverPoint,
-    WaterShore, WaterShoreTrain, WaterSurface, WaterSurfaceParams, exposure_from_ev100,
-    sh_irradiance,
+    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterMouth,
+    WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams,
+    exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
@@ -508,7 +508,7 @@ impl Gallery {
                     .join(", "),
                 "shore trains"
             );
-            let rivers = island_ribbons(&height);
+            let (rivers, mouths, stones) = island_ribbons(&height);
             let surface = WaterSurface::new(
                 &ctx.device,
                 &ctx.shaders,
@@ -521,6 +521,8 @@ impl Gallery {
                     bin: SHORE_BIN as f32,
                     trains: &trains,
                     rivers: &rivers,
+                    mouths: &mouths,
+                    stones: &stones,
                 }),
             )?;
             tracing::info!(
@@ -1538,6 +1540,11 @@ impl CityMaterials {
                 "island: lush grass",
                 textured(grass, [0.55, 0.8, 0.45], [0.62, 0.88, 0.5], 12.0, 6.0, 0.02),
             ),
+            (
+                // Grey-brown gravel under a film of silt, the rock's texture at pebbles' scale.
+                "island: river bed",
+                textured(rock, [0.4, 0.36, 0.29], [0.5, 0.45, 0.36], 0.7, 12.0, 0.04),
+            ),
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
@@ -1655,8 +1662,11 @@ mod island_layer {
     pub const DRY_GRASS: u8 = 5;
     /// Grass on the wettest ground: the valley bottoms.
     pub const LUSH_GRASS: u8 = 6;
+    /// A river's bed of gravel and silt, in its channel under the water (`--water`,
+    /// `forge_procgen::paint_beds`).
+    pub const RIVERBED: u8 = 7;
     /// How many layers there are.
-    pub const COUNT: u8 = 7;
+    pub const COUNT: u8 = 8;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -1711,14 +1721,56 @@ fn island_rivers(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_proc
     forge_procgen::trace_rivers(height, flow, min_area)
 }
 
-/// The island's rivers as the water draws them (#105, D-038's rivers): each smoothed into a
-/// ribbon of points 4 m apart with its width, depth and speed, in the sea's frame (the field
-/// centred on the origin), the tributaries first.
-fn island_ribbons(height: &Field2<f32>) -> Vec<Vec<WaterRiverPoint>> {
-    let start = Instant::now();
+/// The island's lakes of a hectare or more, as `genesis` traces them: the priority flood's
+/// water standing over half a metre above the drawn field.
+fn island_lakes(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_procgen::Lakes {
+    let filled = forge_procgen::priority_flood(height, 0.0);
+    forge_procgen::trace_lakes(height, &filled, flow, 0.5)
+}
+
+/// The island's rivers as water and beds (#105, D-038's rivers): each smoothed into a ribbon of
+/// points 4 m apart with its width, depth, speed and level, the tributaries first, and the
+/// channels carved for them, which the island's mesh draws (and the ribbons rest on far away).
+fn island_water(height: &Field2<f32>) -> (Vec<forge_procgen::Ribbon>, forge_procgen::Channels) {
     let flow = forge_procgen::drain(height, 0.0, &TaskPool::client());
     let rivers = island_rivers(height, &flow);
-    let ribbons = forge_procgen::ribbons(height, &rivers, &forge_procgen::RibbonParams::default());
+    let lakes = island_lakes(height, &flow);
+    let mut ribbons = forge_procgen::ribbons(
+        height,
+        &rivers,
+        &lakes,
+        &forge_procgen::RibbonParams::default(),
+    );
+    let channels =
+        forge_procgen::Channels::new(height, &ribbons, &forge_procgen::ChannelParams::default());
+    forge_procgen::rest_on(
+        &mut ribbons,
+        &|x, y| channels.height_at(height, x, y),
+        &TaskPool::client(),
+    );
+    (ribbons, channels)
+}
+
+/// The seed of the stones in the island's rivers.
+const RIVER_STONES: u64 = 0x5705_e105;
+
+/// The stones in the island's rivers (#105): boulders on the carved beds, which the water flows
+/// around.
+fn island_stones(
+    height: &Field2<f32>,
+    ribbons: &[forge_procgen::Ribbon],
+    channels: &forge_procgen::Channels,
+) -> Vec<forge_procgen::Stone> {
+    forge_procgen::stones(ribbons, channels, height, RIVER_STONES)
+}
+
+/// The island's rivers as the water draws them (#105, D-038's rivers), in the sea's frame (the
+/// field centred on the origin), the tributaries first, and where they meet the sea.
+fn island_ribbons(
+    height: &Field2<f32>,
+) -> (Vec<Vec<WaterRiverPoint>>, Vec<WaterMouth>, Vec<WaterStone>) {
+    let start = Instant::now();
+    let (ribbons, channels) = island_water(height);
     let half = (0.5 * height.extent()) as f32;
     let points = ribbons.iter().flat_map(|r| &r.points);
     let widest = points
@@ -1732,6 +1784,33 @@ fn island_ribbons(height: &Field2<f32>) -> Vec<Vec<WaterRiverPoint>> {
         .last()
         .and_then(|r| r.points.last())
         .map_or([0.0; 2], |p| [p.position[0] - half, p.position[1] - half]);
+    // Views down a few rivers, 20 m upstream of a point halfway down, 3 m over the water or the
+    // ground there: the largest, and the tenth, the twentieth and the thirtieth from it.
+    let views: Vec<String> = [1, 10, 20, 30]
+        .iter()
+        .filter_map(|&k| ribbons.len().checked_sub(k))
+        .map(|r| {
+            let points = &ribbons[r].points;
+            let p = points[points.len() / 2];
+            let (dx, dz) = (p.direction[0], p.direction[1]);
+            let at = [p.position[0] - 20.0 * dx, p.position[1] - 20.0 * dz];
+            let ground = channels.height_at(height, f64::from(at[0]), f64::from(at[1])) as f32;
+            let y = p.level.max(ground) + 3.0;
+            let yaw = (-dx).atan2(-dz).to_degrees();
+            format!(
+                "{:.0},{y:.1},{:.0},{yaw:.1},-10",
+                at[0] - half,
+                at[1] - half
+            )
+        })
+        .collect();
+    tracing::info!(views = %views.join("  "), "views down the rivers (--view)");
+    // How far the water stands under its banks: the channel's depth less the water's.
+    let freeboard = points
+        .clone()
+        .map(|p| p.bank - p.level)
+        .fold(0.0_f32, f32::max);
+    let cut_over_2_m = points.clone().filter(|p| p.bank - p.level > 2.0).count();
     tracing::info!(
         rivers = ribbons.len(),
         largest_mouth = %format_args!("{:.0},{:.0}", mouth[0], mouth[1]),
@@ -1740,19 +1819,37 @@ fn island_ribbons(height: &Field2<f32>) -> Vec<Vec<WaterRiverPoint>> {
         deepest_m = %format_args!("{deepest:.2}"),
         steepest = %format_args!("{steepest:.2}"),
         points_over_2_5_m_s = fast,
+        most_under_its_banks_m = %format_args!("{freeboard:.1}"),
+        points_over_2_m_under = cut_over_2_m,
+        refined_cells = channels.refined().len(),
         ms = start.elapsed().as_millis(),
         "island rivers"
     );
-    ribbons
+    let mouths: Vec<WaterMouth> = ribbons
+        .iter()
+        .filter_map(|r| {
+            let p = r.points[forge_procgen::sea_mouth(&r.points)?];
+            Some(WaterMouth {
+                position: [p.position[0] - half, p.position[1] - half],
+                direction: p.direction,
+                half_width: p.half_width,
+                speed: p.speed,
+            })
+        })
+        .collect();
+    let rivers = ribbons
         .iter()
         .map(|r| {
             r.points
                 .iter()
                 .map(|p| WaterRiverPoint {
                     position: [p.position[0] - half, p.position[1] - half],
+                    level: p.level,
                     direction: p.direction,
                     half_width: p.half_width,
+                    reach: p.reach,
                     depth: p.depth,
+                    bank: p.bank,
                     speed: p.speed,
                     slope: p.slope,
                     fade: p.fade,
@@ -1760,7 +1857,30 @@ fn island_ribbons(height: &Field2<f32>) -> Vec<Vec<WaterRiverPoint>> {
                 })
                 .collect()
         })
-        .collect()
+        .collect();
+    // The stones, by the index of their point among every river's points.
+    let mut first = Vec::with_capacity(ribbons.len());
+    let mut count = 0u32;
+    for r in &ribbons {
+        first.push(count);
+        count += r.points.len() as u32;
+    }
+    let stones: Vec<WaterStone> = island_stones(height, &ribbons, &channels)
+        .iter()
+        .map(|s| WaterStone {
+            position: [s.position[0] as f32 - half, s.position[1] as f32 - half],
+            waterline: s.waterline() as f32,
+            radius: s.radius as f32,
+            point: first[s.ribbon as usize] + s.point,
+        })
+        .collect();
+    tracing::info!(
+        stones = stones.len(),
+        breaking_the_water = stones.iter().filter(|s| s.waterline > 0.0).count(),
+        mouths = mouths.len(),
+        "the rivers' stones and mouths"
+    );
+    (rivers, mouths, stones)
 }
 
 /// The island's sea floor (`forge_procgen::sea_floor`): metres of depth it levels off at, and
@@ -1793,18 +1913,43 @@ const SHORE_BINS: usize = 1024;
 fn island_prop(args: &Args) -> PropSpec {
     let (params, erosion) = island_settings(args);
     let for_source = args.clone();
+    let (size, spacing) = (params.size, params.spacing);
     PropSpec {
         name: "island".to_owned(),
         kind: PropKind::Heightfield(Heightfield {
             key: format!(
-                "{}, sea floor {} m over {} m",
+                "{}, sea floor {} m over {} m, rivers {:?} carved {:?}",
                 forge_procgen::island::island_key(&params, &erosion),
                 SEA_FLOOR.0,
-                SEA_FLOOR.1
+                SEA_FLOOR.1,
+                forge_procgen::RibbonParams::default(),
+                forge_procgen::ChannelParams::default(),
             ),
             samples: params.size,
             spacing: params.spacing as f32,
             source: std::sync::Arc::new(move || island_heights(&for_source).data),
+            // The rivers' channels, carved into cells drawn in quads of a metre (#105).
+            detail: Some(std::sync::Arc::new(move |heights: &[f32]| {
+                let start = Instant::now();
+                let height = Field2 {
+                    size,
+                    spacing,
+                    data: heights.to_vec(),
+                };
+                let (_, channels) = island_water(&height);
+                let detail = HeightfieldDetail {
+                    split: channels.params().split,
+                    cells: channels.refined().to_vec(),
+                    heights: channels.detail(&height, &TaskPool::client()),
+                };
+                tracing::info!(
+                    cells = detail.cells.len(),
+                    fine_vertices = detail.heights.len(),
+                    ms = start.elapsed().as_millis(),
+                    "island river channels carved"
+                );
+                detail
+            })),
         }),
     }
 }
@@ -1904,6 +2049,7 @@ fn sea_prop() -> PropSpec {
             samples: SAMPLES,
             spacing: 8192.0,
             source: Arc::new(|| vec![0.0; (SAMPLES * SAMPLES) as usize]),
+            detail: None,
         }),
     }
 }
@@ -1946,8 +2092,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         ms = layers_start.elapsed().as_millis(),
         "island layer map"
     );
-    // The rivers of stage 4 over it: the drawn field's drainage, the rivers above 0.5 km² of
-    // catchment (as `genesis` traces them), painted at their width, 8 m at least (two texels).
+    // The moisture, the rivers and the lakes from the drawn field's drainage.
     let rivers_start = Instant::now();
     let flow = forge_procgen::drain(&height, 0.0, &TaskPool::client());
     // First the grass by its moisture (the topographic wetness index, blurred over 32 m): the
@@ -1960,23 +2105,17 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         (island_layer::DRY_GRASS, 0.25),
         (island_layer::LUSH_GRASS, 0.25),
     );
-    let rivers = island_rivers(&height, &flow);
-    // With the water, the rivers are ribbons of their own (`WaterShore::rivers`).
+    // The rivers run in the channels carved for them, which the island's mesh draws (#105):
+    // with the water, their beds of gravel under the ribbons (`WaterShore::rivers`); without
+    // it, their stand-in painted at the water's width.
+    let (ribbons, channels) = island_water(&height);
     let painted = if args.water {
-        0
+        forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::RIVERBED, 0.0)
     } else {
-        forge_procgen::paint_rivers(
-            &mut layers,
-            &rivers,
-            height.spacing,
-            island_layer::STREAM,
-            8.0,
-        )
+        forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::STREAM, 0.5)
     };
-    // And its lakes of a hectare or more (as `genesis` traces them: the priority flood's water
-    // standing over half a metre above the drawn field), on the same layer.
-    let filled = forge_procgen::priority_flood(&height, 0.0);
-    let lakes = forge_procgen::trace_lakes(&height, &filled, &flow, 0.5);
+    // And its lakes of a hectare or more, on the stream's layer.
+    let lakes = island_lakes(&height, &flow);
     let lake_texels = forge_procgen::paint_lakes(
         &mut layers,
         &lakes,
@@ -1986,7 +2125,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         0.5,
     );
     tracing::info!(
-        rivers = rivers.rivers.len(),
+        rivers = ribbons.len(),
         texels = painted,
         lakes = lakes
             .lakes
@@ -2011,6 +2150,32 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     if !args.water {
         builder.add_instance(ids[1], Mat4::IDENTITY);
     }
+    // The stones in the rivers (#105): the boulders, scaled to each stone, standing on the bed.
+    let boulders: Vec<(MeshId, f32)> = props
+        .iter()
+        .zip(&ids)
+        .filter_map(|(p, &id)| match p.kind {
+            PropKind::Boulder { radius, .. } => Some((id, radius)),
+            _ => None,
+        })
+        .collect();
+    let stones = island_stones(&height, &ribbons, &channels);
+    let half = 0.5 * extent;
+    for stone in &stones {
+        let (mesh, radius) = boulders[stone.pick as usize % boulders.len()];
+        builder.add_instance(
+            mesh,
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(stone.radius as f32 / radius),
+                Quat::from_rotation_y(stone.turn as f32 * std::f32::consts::TAU),
+                Vec3::new(
+                    stone.position[0] as f32 - half,
+                    stone.bed as f32,
+                    stone.position[1] as f32 - half,
+                ),
+            ),
+        );
+    }
     // The rocks: the GPU placement over the island's own heights (`placement::RockRule::Land`).
     let rocks: Vec<MeshId> = ids[2..].to_vec();
     let meshes = CityMeshes {
@@ -2022,8 +2187,18 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         column: rocks[0],
     };
     let first = builder.reserve_instances(&placement::mesh_counts(&layout, &meshes));
+    // No rock on the cells the channels are carved in: the placement reads the 8 m samples,
+    // which those cells no longer follow, so their corners are set far under the rocks' 3 m.
+    let mut rock_ground = height.data.clone();
+    let side = height.size - 1;
+    for &c in channels.refined() {
+        let (i, j) = (c % side, c / side);
+        for (di, dj) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            rock_ground[((j + dj) * height.size + i + di) as usize] = -1.0e6;
+        }
+    }
     let ground = Ground {
-        heights: &height.data,
+        heights: &rock_ground,
         samples: height.size,
         spacing: height.spacing as f32,
     };

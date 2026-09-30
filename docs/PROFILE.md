@@ -439,6 +439,28 @@ alternating, against the wet sand's commit (the waves held at 12 s):
 - **The rays** grow with the river's pixels, as the sea's do: 0.03 ms for the stream seen from
   16 m.
 
+**The rivers' beds, mouths and stones** (#105, 2026-10-01). The channels carved on cells of a
+metre (36 267 cells of 8 m refined, 2.9 M fine vertices in the island's mesh), a gravel layer
+under the water, the ribbons level in the channels, the sea's shading mixing the rivers in at 25
+mouths (a grid of 128 m cells lists the mouths reaching each), 2 525 stones as boulder instances
+and in the ribbons' flow. Three runs each, alternating, against step 6's commit:
+
+| View | frame | water/surface | water/reflections | shading/layered |
+|---|---|---|---|---|
+| coast | 1.662 → 1.695 ms | 0.148 → 0.154 | 0.196 → 0.200 | 0.342 → 0.343 |
+| the valley from 200 m | 1.738 → 1.786 ms | 0.153 → 0.164 | 0.115 → 0.119 | 0.444 → 0.447 |
+| the plain from 40 m | 1.495 → 1.530 ms | 0.073 → 0.076 | 0.033 → 0.034 | 0.380 → 0.397 |
+| the stream from 16 m | 1.439 → 1.471 ms | 0.078 → 0.082 | 0.044 → 0.043 | 0.349 → 0.369 |
+| the island from 2.5 km | 2.082 → 2.122 ms | 0.185 → 0.191 | 0.078 → 0.081 | 0.291 → 0.295 |
+| down a river from 3 m | 1.476 → 1.565 ms | 0.089 → 0.092 | 0.137 → 0.120 | 0.288 → 0.377 |
+| the mouth from 110 m | 1.720 → 1.777 ms | 0.157 → 0.166 | 0.113 → 0.123 | 0.538 → 0.556 |
+
+- **The bed's layer** blends with the grass's, two textured materials a pixel: +0.09 ms of
+  `shading/layered` where it fills the view.
+- **The plume** loops over the mouths the pixel's cell lists: 0.006 ms over the coast's sea (a
+  loop over all 25 mouths cost 0.04 ms).
+- **The rest** is geometry: the refined cells, and the stones drawn and traced.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the
