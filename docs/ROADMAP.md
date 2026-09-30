@@ -82,7 +82,8 @@ run, which can also retry #95's double buffer).
   rocks and a stand-in sea (#96, `docs/demos/island.md`, "In the engine").
   - D-037, D-038 and D-039 were accepted on 2026-09-30. That opens the real water (D-038)
     and, later, the buildings (D-039).
-  - #97's lake rule goes with the recommendation written there.
+  - #97's lake rule (2026-09-30): the depressions under 5 ha fill, and the 8 m and 4 m
+    islands keep the same 14–15 lakes (`docs/demos/island.md`, "The lake rule").
   - Still waiting for the owner: the island's look (`city-blocks --island 7`), before the
     `island` demo of its own, and the 4 m flanks.
 

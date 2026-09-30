@@ -62,6 +62,10 @@ struct Args {
     /// centre, upsampled alone (`upsampled.png`) and after the detail erosion (`amplified.png`).
     #[arg(long)]
     amplify: bool,
+    /// The lake rule (issue #97): after the erosion, the depressions under this many hectares
+    /// fill to their spill level; 0 keeps every one.
+    #[arg(long, default_value_t = IslandParams::island_16km(Seed::new(0), 16.0).lake_min_area_m2 / 10_000.0)]
+    lake_min_ha: f64,
 }
 
 /// The wind that blows from `from` (a compass point, north up in the previews).
@@ -80,6 +84,7 @@ fn main() -> Result<()> {
     if let Some(from) = &args.wind_from {
         params.wind = Some(wind_from(from, args.rain_contrast)?);
     }
+    params.lake_min_area_m2 = args.lake_min_ha * 10_000.0;
     let erosion_params = ErosionParams {
         k: args.k,
         diffusion: args.diffusion,
@@ -161,16 +166,42 @@ fn main() -> Result<()> {
     } else {
         run.take_flow()
     };
-    let per_step = start.elapsed().as_secs_f64() / f64::from(args.steps.max(1));
+    let erosion_seconds = start.elapsed().as_secs_f64();
+    let per_step = erosion_seconds / f64::from(args.steps.max(1));
     println!(
         "stage 3, erosion: {:.1} s, {:.3} s a step (uplift {:.3}, drain {:.3}, incise {:.3}, diffuse {:.3})",
-        start.elapsed().as_secs_f64(),
+        erosion_seconds,
         per_step,
         timings.uplift.as_secs_f64() / f64::from(args.steps.max(1)),
         timings.drain.as_secs_f64() / f64::from(args.steps.max(1)),
         timings.incise.as_secs_f64() / f64::from(args.steps.max(1)),
         timings.diffuse.as_secs_f64() / f64::from(args.steps.max(1)),
     );
+    // The lake rule (issue #97), as `generate_island` applies it: the small hollows fill.
+    let flow = if params.lake_min_area_m2 > 0.0 {
+        let start = Instant::now();
+        let fill = forge_procgen::fill_small_depressions(
+            &mut height,
+            erosion_params.sea_level,
+            params.lake_min_area_m2,
+        );
+        let flow = if fill.filled > 0 {
+            forge_procgen::drain(&height, erosion_params.sea_level, &pool)
+        } else {
+            flow
+        };
+        println!(
+            "the lake rule: {:.2} s; {} depressions under {} ha filled ({} samples), {} kept",
+            start.elapsed().as_secs_f64(),
+            fill.filled,
+            args.lake_min_ha,
+            fill.cells,
+            fill.kept
+        );
+        flow
+    } else {
+        flow
+    };
     if let Some(wind) = params.wind {
         // Windward and lee halves of the land, split across the wind through the centre.
         let (dx, dy) = forge_procgen::island::WIND_STEPS[usize::from(wind.towards) % 8];

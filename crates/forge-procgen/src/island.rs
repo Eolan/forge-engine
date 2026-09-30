@@ -80,6 +80,10 @@ pub struct IslandParams {
     pub ridge_scale_km: f64,
     /// The prevailing wind; `None` rains the same everywhere.
     pub wind: Option<Wind>,
+    /// After the erosion, the depressions smaller than this (m²) fill to their spill level
+    /// and the larger ones stay as lakes (the lake rule, issue #97,
+    /// [`crate::fill_small_depressions`]); 0 keeps every one.
+    pub lake_min_area_m2: f64,
 }
 
 impl IslandParams {
@@ -95,6 +99,7 @@ impl IslandParams {
             uplift: 4.0,
             ridge_scale_km: 3.0,
             wind: None,
+            lake_min_area_m2: 50_000.0,
         }
     }
 
@@ -205,9 +210,10 @@ pub fn refresh_rain(
     }
 }
 
-/// The island's heightfield: stages 1–3 from a flat sea, and the last step's flow. The
-/// erosion runs on `pool`; the result is the same with any number of workers. With a wind,
-/// the rain follows the relief ([`refresh_rain`]).
+/// The island's heightfield: stages 1–3 from a flat sea, then the lake rule
+/// ([`IslandParams::lake_min_area_m2`]), and its flow. The erosion runs on `pool`; the result
+/// is the same with any number of workers. With a wind, the rain follows the relief
+/// ([`refresh_rain`]).
 pub fn generate_island(
     p: &IslandParams,
     erosion: &ErosionParams,
@@ -229,7 +235,12 @@ pub fn generate_island(
             &mut run,
         );
     }
-    let flow = if erosion.steps == 0 {
+    let fill = if p.lake_min_area_m2 > 0.0 {
+        crate::fill_small_depressions(&mut height, erosion.sea_level, p.lake_min_area_m2)
+    } else {
+        crate::DepressionFill::default()
+    };
+    let flow = if erosion.steps == 0 || fill.filled > 0 {
         drain(&height, erosion.sea_level, pool)
     } else {
         run.take_flow()

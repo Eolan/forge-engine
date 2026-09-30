@@ -179,7 +179,8 @@ database (netcode.md). *many-players.md adds:* PLAYERS_ADDS
 
 - **Determinism by construction (D-016).** Every generator is a pure function of a seed and
   a parameter record, with digests; the island's field is the same bytes on any machine and
-  with any thread count (the 4 m island's digest is `9eacfe0f827fa7dd`). A universe that
+  with any thread count (the 4 m island's digest is `9e1b2858f066b672` with the lake rule,
+  `9eacfe0f827fa7dd` for the eroded field alone). A universe that
   clients and the server generate independently needs this at every scale: galaxy, system,
   planet, tile, building, creature. Nothing in the brief is possible without it.
 - **Content as packages with a load order (D-035).** Civilisations, style sets, kits,

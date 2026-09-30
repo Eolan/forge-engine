@@ -11,7 +11,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | D8 drainage, the downstream-first stack, integer areas; depressions by the basin graph each step, by priority flood for the reference and the lakes | ✅ `forge_procgen::flow` |
 | The implicit stream-power erosion with diffusion, rows and drainage trees in parallel on the job system; lakes as filling depressions (stage 3) | ✅ `forge_procgen::erosion` |
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
-| Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets (stage 4) | ✅ `forge_procgen::hydrology` |
+| Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets, the depressions under 5 ha filled (stage 4, the lake rule of #97) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); drawing at 2 m in tiles planned |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
@@ -132,8 +132,8 @@ routing (water leaves a lake by one path rather than over the whole flooded flat
 counts above differ from the first runs' (3 487 river and 2 774 lake samples at 16 m); the
 pictures below are from the new field. At 4 m the lakes cover 3.5 % of the land samples
 (181 k of 5.2 M) against 1.4 % at 16 m: the finer grid holds more small depressions, which the
-sediment rule fills more slowly; a lake area limit, or the basin graph's fill mode with a
-spill rule, is the part of #97 that remains.
+sediment rule fills more slowly. The lake rule (below, 2026-09-30) settles it with an area
+limit: 2.7 % at 4 m after it.
 
 **The network** (seed 7, 150 steps): at 16 m, 43 rivers, 27 of them to the sea, 68 km in all,
 the longest 6.3 km, orders up to 3; at 4 m, 42 rivers, 24 to the sea, 82 km, the longest
@@ -142,8 +142,30 @@ network branches differently), the widest 14 m at both; the tracing takes 0.7 s 
 polylines are what the water research (`docs/research/water.md`, item 3 of its
 recommendation) turns into river ribbons with flow maps (`network.png` below draws them by
 order, first-order streams pale, the trunks deep). The lakes: 11 at 16 m, the largest
-41.5 ha, the deepest 19.7 m; 2 614 at 4 m, the largest 52.2 ha, the deepest 30.9 m (the finer grid's many small depressions, #97's
-open lake rule).
+41.5 ha, the deepest 19.7 m; 2 614 at 4 m, the largest 52.2 ha, the deepest 30.9 m (the finer
+grid's many small depressions). The lake rule below keeps 7 lakes at 16 m, 14 at 8 m and 15 at
+4 m.
+
+**The lake rule** (#97, 2026-09-30; `hydrology::fill_small_depressions`,
+`IslandParams::lake_min_area_m2`, `genesis --lake-min-ha`). After the erosion, every
+depression of the flood under 5 ha fills with sediment to its spill level, and the larger ones
+stay as the lakes. A depression is a 4-connected patch where the priority flood stands over the
+field. Its cells take the flood's height, which keeps the flood's ε rise, so water still
+crosses the filled floor.
+- **Why an area:** small closed hollows silt up, and an area is the same limit at every
+  spacing. The finer grid's erosion leaves many more small hollows, which the sediment rule
+  fills slowly: 2 614 lakes at 4 m against 11 at 16 m.
+- **Why 5 ha:** at 1 ha the depressions kept were 11 at 16 m, 32 at 8 m and 42 at 4 m. At 5 ha
+  they are 7, 14 and 15. The two spacings the engine draws keep the same lakes, and their
+  water covers 2.11 and 2.22 km² (2.90 at 4 m before the rule). The 16 m field is a different
+  erosion and keeps fewer.
+- **The fill:** 5 413 hollows and 56 485 samples at 4 m in 1.3 s, 828 at 8 m, 20 at 16 m.
+- **The counts:** `genesis`'s lakes line still counts the patches deeper than half a metre
+  (496 at 4 m, 75 at 8 m): one lake with shallows splits into several there.
+- **In the engine:** the 8 m island paints 15 lakes of a hectare or more over 128 459 texels,
+  against 31 and 153 040 before.
+
+![The 4 m island without the lake rule, and the 8 m and 4 m islands with it: the same lakes at both spacings](images/island-lake-rule.png)
 
 **The wind** (`--wind-from w`, seed 7 at 16 m): at contrast 1 the windward half of the land
 gets a rain of 1.70 and the lee 0.21 (cells from 0.05 to the clamp at 10); the west coast is
@@ -180,7 +202,9 @@ D-038 ✅, accepted 2026-09-30).
 steps: `0189d031eff0fb84` at 16 m (the same with `--threads 0`), `9eacfe0f827fa7dd` at 4 m,
 both from the cloud container. A different value on the owner's machine is a D-016 bug to
 find before the planet's tiles depend on it. *On the owner's machine (2026-09-26, Ryzen 7
-9800X3D, 16 workers): the same two digests.* There the 4 m erosion takes 19.2 s (0.128 s a
+9800X3D, 16 workers): the same two digests.* Those are the eroded field's, which
+`--lake-min-ha 0` still gives. With the lake rule (2026-09-30, below) the island is
+`2d17199dba8598bf` at 16 m, `9b712f95a51a2ea1` at 8 m and `9e1b2858f066b672` at 4 m. There the 4 m erosion takes 19.2 s (0.128 s a
 step: drain 0.106, incise 0.015, diffuse 0.005, uplift 0.003) and the whole 4 m run 23 s; the
 16 m run takes 1.4 s.
 
@@ -204,7 +228,8 @@ workers (a test): the planet's tiles can be amplified alone at streaming time an
 along their borders.
 
 From 4 m to 2 m (8 193² samples) takes 1.5 s on the 9800X3D; from 8 m to 4 m, 0.4 s. Seed 7's
-digests: `ede478ecd0115cff` at 2 m, `96fc0548933e001f` at 4 m from 8 m. The island in the
+digests: `05a922f2380e03c5` at 2 m, `ce7d9331b56187e3` at 4 m from 8 m (with the lake rule;
+`ede478ecd0115cff` and `96fc0548933e001f` before it). The island in the
 engine still draws the 8 m or 4 m field: drawing 2 m needs the cook in tiles with locked
 borders (134 M triangles, the next step).
 The cook already locks them. Its simplifier runs with `SimplifyOptions::LockBorder`

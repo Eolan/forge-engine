@@ -284,6 +284,80 @@ pub fn trace_lakes(
     Lakes { lakes, lake_of }
 }
 
+/// What [`fill_small_depressions`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DepressionFill {
+    /// Depressions filled to their spill level.
+    pub filled: usize,
+    /// Cells raised.
+    pub cells: usize,
+    /// Depressions kept: the lakes.
+    pub kept: usize,
+}
+
+/// The lake rule (issue #97): every depression of the flood smaller than `min_area_m2` fills
+/// with sediment to its spill level; the larger ones stay, the lakes. A depression is a
+/// 4-connected patch where `priority_flood` stands over the field, as in [`trace_lakes`]; its
+/// cells take the flood's height, which keeps the flood's ε rise towards the outlet, so the
+/// water still crosses the filled floor. Small closed hollows silt up in nature; the limit is
+/// an area, the same at every spacing, so a finer grid, which holds many more small hollows
+/// (2 614 lakes at 4 m against 11 at 16 m before this rule), keeps the same lakes as a
+/// coarse one.
+pub fn fill_small_depressions(
+    height: &mut Field2<f32>,
+    sea_level: f32,
+    min_area_m2: f64,
+) -> DepressionFill {
+    let filled = crate::flow::priority_flood(height, sea_level);
+    let n = height.size as usize;
+    let min_cells = (min_area_m2 / (height.spacing * height.spacing)).ceil() as usize;
+    let flooded: Vec<bool> = filled
+        .data
+        .iter()
+        .zip(&height.data)
+        .map(|(f, h)| f > h)
+        .collect();
+    let under = |i: usize| flooded[i];
+    let mut seen = vec![false; height.len()];
+    let mut patch = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut result = DepressionFill::default();
+    for start in 0..height.len() {
+        if seen[start] || !under(start) {
+            continue;
+        }
+        seen[start] = true;
+        queue.push_back(start);
+        patch.clear();
+        while let Some(i) = queue.pop_front() {
+            patch.push(i);
+            let (x, y) = (i % n, i / n);
+            let neighbours = [
+                (x > 0).then(|| i - 1),
+                (x + 1 < n).then(|| i + 1),
+                (y > 0).then(|| i - n),
+                (y + 1 < n).then(|| i + n),
+            ];
+            for j in neighbours.into_iter().flatten() {
+                if !seen[j] && under(j) {
+                    seen[j] = true;
+                    queue.push_back(j);
+                }
+            }
+        }
+        if patch.len() < min_cells {
+            result.filled += 1;
+            result.cells += patch.len();
+            for &i in &patch {
+                height.data[i] = filled.data[i];
+            }
+        } else {
+            result.kept += 1;
+        }
+    }
+    result
+}
+
 impl Lakes {
     /// The largest lake's area, m².
     pub fn largest_area(&self, spacing: f64) -> f64 {
@@ -390,5 +464,37 @@ mod tests {
         assert_eq!(lakes.lake_of.iter().filter(|&&l| l != u32::MAX).count(), 1);
         // No lake without a flood.
         assert!(trace_lakes(&cone, &cone, &flow, 0.5).lakes.is_empty());
+    }
+
+    #[test]
+    fn the_lake_rule_fills_the_small_hollow_and_keeps_the_large_one() {
+        use crate::flow::priority_flood;
+        // A slope down to the sea at x = 0, with a 1-cell pit and a 3 × 3 basin, 10 m apart.
+        let mut field = Field2::from_fn(12, 10.0, |x, _| x as f32);
+        field.set(3, 5, 0.5);
+        for y in 4..7 {
+            for x in 7..10 {
+                field.set(x, y, 2.0);
+            }
+        }
+        let before = field.clone();
+        // 100 m² and 900 m²: a limit of 500 m² fills the pit alone.
+        let fill = fill_small_depressions(&mut field, 0.0, 500.0);
+        assert_eq!((fill.filled, fill.cells, fill.kept), (1, 1, 1), "{fill:?}");
+        assert!(field.get(3, 5) >= 2.0, "the pit fills to its spill level");
+        assert_eq!(field.get(8, 5), 2.0, "the basin stays");
+        // Nothing else moved, and the pit's cell drains now: no flood stands over it.
+        for i in 0..field.len() {
+            if i != field.index(3, 5) {
+                assert_eq!(field.data[i], before.data[i]);
+            }
+        }
+        let filled = priority_flood(&field, 0.0);
+        assert_eq!(filled.get(3, 5), field.get(3, 5));
+        // A limit of 0 keeps every depression.
+        let mut kept = before.clone();
+        let none = fill_small_depressions(&mut kept, 0.0, 0.0);
+        assert_eq!((none.filled, none.kept), (0, 2));
+        assert_eq!(kept, before);
     }
 }

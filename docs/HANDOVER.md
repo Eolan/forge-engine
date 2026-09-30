@@ -34,8 +34,11 @@ D-039 stay 🟡. The rest of this file is the cloud session's handover as it wro
 - **#95:** measured. Double-buffering the probe atlases and the sky tables gains nothing on
   the 5070 Ti; the patch is kept in `reports/2026-09-30-95/`. A frame whose async work starts
   during the previous one is now timed from that frame's end.
-- **Decisions:** D-037, D-038 and D-039 were accepted as proposed on 2026-09-30, with #97's
-  lake rule going by its recommendation.
+- **Decisions:** D-037, D-038 and D-039 were accepted as proposed on 2026-09-30.
+- **#97's lake rule:** the depressions under 5 ha fill. The island's digests changed
+  (`docs/demos/island.md`, "Digests"); `genesis --lake-min-ha 0` still gives the eroded ones
+  below.
+- **#103:** settled probes update every other frame (south view 2.03 → 1.81 ms).
 - **Still waiting on the owner:** the island's look, then its own demo and the 2 m tiles.
 
 ## Read this first
