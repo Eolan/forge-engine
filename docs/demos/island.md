@@ -589,7 +589,7 @@ Its third part: the wet sand.
   the fields' frame, the trains and the sea's time.
 - **What shows the island's grid:** the swash's edge and the wet band follow the beach's
   height contours, which step along the 8 m field's cells near sea level (the sand and grass
-  boundary above them steps the same way). The 2 m amplification is what smooths them.
+  boundary above them steps the same way). The 2 m amplification is what smooths them (#106).
 
 ![The beach from above before the wet sand (left) and with it (right), at 14 s](../../reports/2026-09-30-105/shore-wet.png)
 

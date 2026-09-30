@@ -83,7 +83,7 @@ paths this time, ꟻLIP mean 0.0013 at most); the occlusion A/B and mesh against
   resolution, deterministically.
 - **For the owner's eye:** the swash's edge and the wet band follow the beach's height
   contours, which step along the 8 m field's cells near sea level. The sand and grass boundary
-  above them steps the same way. The 2 m amplification is what would smooth them.
+  above them steps the same way. The 2 m amplification is what would smooth them (#106).
 
 **Cost** (three runs each, alternating, against the waves' commit): `shading/layered`
 0.382 → 0.396 ms at the coast, 0.207 → 0.203 ms from the sea (nothing measurable), 0.465 →
