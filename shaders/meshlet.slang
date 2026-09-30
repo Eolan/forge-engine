@@ -488,15 +488,6 @@ float3 to_scene(Frame* f, float3 relative)
     return relative + f[0].camera_in_scene.xyz;
 }
 
-// The camera's position for the one place that mixed object space with world space before
-// issue #93 (`sun_light`'s highlight, #98), which keeps its look: the camera in the scene frame,
-// the world position it took when every scene stood at the world's origin. The world position
-// itself would move the highlights with `--origin`.
-float3 legacy_camera_position(Frame* f)
-{
-    return f[0].camera_in_scene.xyz;
-}
-
 bool sphere_in_frustum(Frame* f, float3 center, float radius)
 {
     [unroll]
@@ -2211,15 +2202,13 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     return fresnel * occlusion * environment;
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 object_position, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
-    // The sun is far, so a half vector from the light and the camera-to-surface direction
-    // approximated by the object's outward normal is close enough for a highlight this soft.
     ndl = dot(n, light);
     float diffuse = max(ndl, 0.0) * shadow;
-    float3 highlight_view = normalize(legacy_camera_position(f) - (object_position + 0.0)); // object space ≈ world offset (kept as it was; see docs/HANDOVER.md)
-    float3 half_vector = normalize(light + highlight_view);
+    // The highlight's half vector, from the surface towards the camera (issue #98).
+    float3 half_vector = normalize(light + view);
     float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
     float3 sun = f[0].sun_color.rgb;
     // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
@@ -2555,7 +2544,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
         standard_surface(mat, s, albedo, n);
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + mat.emissive;
 }
 
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
@@ -2635,7 +2624,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         }
     }
     float ndl;
-    return sun_light(f, albedo, n, s.object_position, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+    return sun_light(f, albedo, n, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
 // How much of the light crossing the ice leaves towards the camera rather than elsewhere
@@ -2657,7 +2646,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(albedo, ICE_WHITE, 1.0 - exp(-mat.scattering * ICE_WHITENING_DEPTH));
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.object_position, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
+    float3 color = sun_light(f, albedo, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
     if (any(s.transmitted > 0.0))
     {
         // The sunlight that crossed the ice (issues #59, #61), tinted by it: the sun glows
@@ -3014,7 +3003,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.ao = resolve_push.ao_image != 0xFFFFFFFFu
         ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
         : -1.0;
-    s.view = s.sky != nullptr ? normalize(-surface_relative) : float3(0.0, 1.0, 0.0);
+    s.view = normalize(-surface_relative);
     s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);

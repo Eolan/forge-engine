@@ -167,10 +167,13 @@ scene's origin (`MeshletScene::origin`; `--origin` sets it), rays starting from
 the Morton order and the cells' spheres (#38) take the cells into account; TAA's and DLSS's
 reprojection add the camera's step between frames. The city's instance table shrinks from 96
 to 80 MB; the placement's checksum is `4e10743a3499dc0e` (it was `ed6454c65dd1e823`: the bytes
-changed). One thing kept as it was on purpose: `sun_light`'s highlight direction mixed object
-space with the camera's world position; it still does, with the camera in the scene frame
-(`legacy_camera_position`), so the ballad's highlights do not move. Fixing it is a look change
-for the owner to judge (#98). The world position itself, as first written, moved every
+changed). One thing was kept as it was on purpose: `sun_light`'s highlight direction mixed
+object space with the camera's world position. It kept doing so, with the camera in the scene
+frame (`legacy_camera_position`), so the ballad's highlights would not move. #98 fixed it on
+2026-09-30: the half vector now takes the direction from the surface to the camera. The
+highlights moved (ballad ꟻLIP mean 0.013–0.018, city 0.013, the mean brightness unchanged;
+`reports/2026-09-30-98/`), and the far offsets differ a little less than below. The world
+position itself, as first written, moved every
 highlight with `--origin`: on the 5070 Ti the first `tools/origins.sh` differed by 63 000
 pixels in the city and 42 000 in the ballad at every offset, the same from 10 km to 10 000 km.
 

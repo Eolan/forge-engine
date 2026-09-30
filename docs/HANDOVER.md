@@ -113,9 +113,10 @@ camera-relative (`FlyCamera::view_rotation`); a shader gets a position as
 work in a **scene frame** anchored at the scene's origin (`MeshletScene::origin`; `--origin`
 sets it), rays starting from `relative + camera_in_scene`. The placement writes cells and a
 quaternion; the Morton order and the cells of 64 (#38) take the cells into account; TAA's and
-DLSS's reprojection add the camera's step between frames. `sun_light`'s highlight keeps its old
+DLSS's reprojection add the camera's step between frames. `sun_light`'s highlight kept its old
 world-space approximation on purpose (`legacy_camera_position`, the camera in the scene frame),
-so the ballad's look does not move. *Found on the 5070 Ti (2026-09-26):* as first written it took
+so the ballad's look would not move. #98 replaced it on 2026-09-30 with the direction from the
+surface to the camera. *Found on the 5070 Ti (2026-09-26):* as first written it took
 the camera's world position, which moved every highlight with `--origin`; fixed on this branch.
 
 Test, in this order:
@@ -420,8 +421,9 @@ detail.
 - #67: the GPU selector, so a session can test on the AMD integrated GPU.
 - Whether the cloud branch's commits go to `main` one by one (the cherry-picks above) or as one
   merge once the batch is green on the whole branch.
-- `sun_light`'s highlight direction (#98): fixing the old approximation (object space taken
-  for world space) moves the ballad's highlights; a look change to judge.
+- `sun_light`'s highlight direction (#98): fixed on 2026-09-30. The ballad's and the city's
+  highlights moved, and the mean brightness did not. It is a look change to judge
+  (`reports/2026-09-30-98/`).
 - The island's lakes (#97): 2 614 at 4 m against 11 at 16 m; whether the finer grid's small
   depressions should be filled by rule (an area limit, or the basin graph's fill mode with a
   spill rule) is a look to judge on the GPU.

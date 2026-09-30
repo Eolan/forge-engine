@@ -69,7 +69,9 @@ timings when it would push the counters off the screen, and turns red when a hea
   density clumps), big rocks rare, no two rocks overlapping (a placement grid rejects
   intersections), a clear corridor kept around the flight path: **195 M source triangles,
   14.2 M meshlets** in the culling universe. A fifth of the rocks are ice: brighter, bluish,
-  with a specular highlight.
+  with a specular highlight. Since #98 (2026-09-30) the highlight follows each surface's own
+  direction to the camera. Before, every rock took the direction from the belt's origin, so the
+  highlights moved (ꟻLIP mean 0.013–0.018; `reports/2026-09-30-98/`).
 - The GPU-driven pipeline of the `meshlets` bench: one draw per pass, task-shader culling
   (frustum, normal cone, two-pass hierarchical-Z occlusion), mesh-shader emission, no
   descriptor sets, statistics read back without stalls.
