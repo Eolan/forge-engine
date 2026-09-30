@@ -354,6 +354,28 @@ stand-in plane. Three runs each, medians:
 The stand-in's traced reflections (0.13 ms) go with it. Its frame-to-frame stability is in
 [island.md](demos/island.md), "The surface".
 
+**The island in the water** (#105 step 3, 2026-09-30). The surface writes a mirror ray request
+per pixel, and `water/reflections` traces them against the TLAS (one thread a pixel, the hit
+lit through a shadow ray and the probes). Three runs each, alternating: the previous commit, this
+one with the rays off (**Y**), and with them.
+
+| View | previous commit | rays off | rays on | water/reflections |
+|---|---|---|---|---|
+| coast, 1600 × 900 | 1.47 ms | 1.56 ms | 1.64 ms | 0.17 |
+| from the sea, 1600 × 900 | 1.44 ms | 1.40 ms | 1.44 ms | 0.09 |
+| coast, 2560 × 1440 | | 2.76 ms | 3.19 ms | 0.43 |
+
+- **The request target** costs `water/surface` at most 0.003 ms. The frames with the rays
+  off scatter on both sides of the previous commit's: these views vary by about ±0.07 ms from
+  run to run (the GPU's clock moves every zone together).
+- **The rays** cost what their zone says: they grow with the water's pixels (0.43 ms for about
+  1.8 M at 1440p). The stand-in's rays took 0.13 ms at the coast, over a flat mirror whose
+  rays stay coherent; the waves scatter them.
+- **Step 2's numbers** (1.43 and 1.32 ms) were taken on a quieter GPU: the same build measures
+  1.47 and 1.44 ms today, while the stand-in measures as it did (1.25–1.31 and 1.12 ms).
+- **The levers,** if the rays' cost matters: trace at half resolution and let TAA fill in, or
+  keep the 300 000 rocks out of the water's rays with an instance mask.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

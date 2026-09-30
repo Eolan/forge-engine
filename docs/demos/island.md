@@ -12,7 +12,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | The implicit stream-power erosion with diffusion, rows and drainage trees in parallel on the job system; lakes as filling depressions (stage 3) | ✅ `forge_procgen::erosion` |
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets, the depressions under 5 ha filled (stage 4, the lake rule of #97) | ✅ `forge_procgen::hydrology` |
-| The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the GPU's three cascades (#105, `forge_render::water`) agree with it within 3 × 10⁻⁶ ("The sea on the GPU" below); the surface pass next |
+| The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the GPU's three cascades (#105, `forge_render::water`) agree with it within 3 × 10⁻⁶ ("The sea on the GPU" below); the surface drawn from them with `--water`, reflecting the island through traced mirror rays |
 | Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); drawing at 2 m in tiles planned |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
@@ -445,9 +445,9 @@ them ("The surface" below); without it, the stand-in.
 
 ![The coast view and the view from the sea: the stand-in on the left, the water on the right](../../reports/2026-09-30-105/sheet.png)
 
-- **What it lacks:** the island's reflection (the stand-in's traced mirror rays), the sun's
-  shadow on the water, and the shore's waves and foam line. That is why `--water` stays opt-in
-  until the owner has judged it (`reports/2026-09-30-105/`).
+- **What it lacked:** the island's reflection (step 3, below), the sun's shadow on the water,
+  and the shore's waves and foam line. That is why `--water` stays opt-in until the owner has
+  judged it (`reports/2026-09-30-105/`).
 - **Stability** (still camera, waves still, TAA on): pixels changing from one frame to the
   next, 0.43 % at the coast (the stand-in 0.37 %) and 0.57 % from the sea (0.34 %). Over 32
   frames at the same jitter phase, 0.0016 % and 0.0003 %: nothing crawls.
@@ -459,3 +459,34 @@ them ("The surface" below); without it, the stand-in.
   - `tools/validate.sh` gains the water runs and is clean. It first showed the render graph
     naming graphics stages in a compute-queue barrier after a vertex shader read the mips;
     `forge-gpu` fixes that, with a test.
+
+**The island in the water** (step 3). The surface asks for a mirror ray per pixel, and the
+glass's ray tracing answers (#50, #52).
+- **The request:** `water/surface` writes a second target beside its colour. It holds the
+  mirror direction it read the sky in, and the weight of what a ray meets there instead: the
+  Fresnel term, less the blur towards the sky's irradiance on a rough surface, the foam and the
+  air in front. The target starts at zero, so a pixel without water asks nothing.
+- **The rays:** `water/reflections` (`MeshletRenderer::trace_requested`), one thread a pixel.
+  It rebuilds the water's point from the depth the surface wrote, traces the ray against the
+  TLAS, and on a hit adds weight × (hit − sky). The hit is lit as the glass's are: the sun
+  through a shadow ray, and the probes' light.
+- **The keys:** **Y** (`--no-ray-reflections`) and **F** turn the rays off, as for the glass. A
+  GPU without ray queries keeps the sky.
+
+![The coast view and the view from the sea: the stand-in, the water with the sky alone, the water with the island traced](../../reports/2026-09-30-105/reflection-sheet.png)
+
+- **From the sea:** a darker, greener band under the island, broken by the waves.
+- **At the coast:** the wave faces turned towards the camera reflected the bright sky low over
+  the horizon. They now show the grass slopes and the beach behind the shore, in olive and sand
+  patches; the faces turned away still show the sky.
+- **The sea floor stays out:** a false colour of each ray's hit distance shows the rays from the
+  water near the camera reaching the slopes more than 100 m away. Next to none hit anything
+  under 0.5 m above the sea, so the floor's traced surface, which may stand up to a metre above
+  the drawn one, doesn't show through.
+- **Stability** (still camera, waves still, TAA on): 1.62 % of the pixels change from one frame
+  to the next at the coast (0.43 % with the sky alone) and 0.98 % from the sea (0.57 %). They
+  are isolated pixels on the edges of the reflected slopes, where a wave face's ray flips
+  between the island and the sky as the jitter moves; 0.21 % change by more than 8 levels at
+  the coast. Over 32 frames at the same jitter phase, 0.0021 % and 0.0003 %: nothing crawls.
+- **Cost:** `water/reflections` takes 0.17 ms at the coast, 0.09 ms from the sea and 0.43 ms at
+  1440p (`docs/PROFILE.md`).

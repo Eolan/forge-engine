@@ -236,7 +236,8 @@ void mips_main(uint3 id : SV_DispatchThreadID)
 // without cracks. The cascades displace it, each filtered to the vertex spacing by its mips;
 // the fragment takes its normal and the variance of the slopes it no longer resolves from
 // the slopes' mips, reflects the sky, adds the sun's highlight, and lets through what lies
-// under the water, dimmed by the depth it crosses.
+// under the water, dimmed by the depth it crosses. It also asks for the mirror ray that puts
+// the scene in the reflection (step 3; `requested_reflections_main` in meshlet.slang).
 
 static const uint WATER_CASCADES = 3;
 static const uint WATER_MAX_LEVELS = 16;
@@ -371,8 +372,20 @@ float smith_visibility(float nv, float nl, float a2)
     return 0.5 / max(v + l, 1e-6);
 }
 
+// What the surface writes: its colour, and the mirror ray it asks for (the direction, and the
+// weight of what the ray meets in place of the sky it reflected; `trace_requested` in
+// meshlet.rs traces it against the scene).
+struct SurfaceTargets
+{
+    float4 color : SV_Target0;
+    float4 request : SV_Target1;
+};
+
+// Below this weight a mirror ray changes too little to trace.
+static const float REQUEST_MIN_WEIGHT = 0.001;
+
 [shader("fragment")]
-float4 surface_frag_main(SurfaceOut input) : SV_Target
+SurfaceTargets surface_frag_main(SurfaceOut input)
 {
     WaterSurface* w = surface_push.surface;
     // The slopes: their mean from every cascade's mips, and the variance of those the mips
@@ -404,9 +417,11 @@ float4 surface_frag_main(SurfaceOut input) : SV_Target
     // the sea), blurred towards the sky's irradiance as the surface roughens.
     float3 r = reflect(-v, n);
     r.y = abs(r.y);
-    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up, forward, normalize(r)) * scale;
+    r = normalize(r);
+    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up, forward, r) * scale;
     float3 sky_irradiance = sh_irradiance(w[0].sky_light, float3(0.0, 1.0, 0.0)) * scale / PI;
-    float3 reflected = lerp(mirror, sky_irradiance, saturate(2.0 * a2));
+    float blur = saturate(2.0 * a2);
+    float3 reflected = lerp(mirror, sky_irradiance, blur);
     // The sun's highlight.
     float3 l = normalize(w[0].sun.xyz);
     float nl = dot(n, l);
@@ -440,7 +455,13 @@ float4 surface_frag_main(SurfaceOut input) : SV_Target
     // The air between the camera and the water, as the compose hazes everything else.
     float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);
     color = color * air.a + air.rgb * scale;
-    return float4(min(color, 32768.0), 1.0);
+    SurfaceTargets o;
+    o.color = float4(min(color, 32768.0), 1.0);
+    // The mirror ray: what it meets replaces `mirror`, whose share of the pixel is the Fresnel
+    // term's, less the blur, the foam and the air.
+    float weight = fresnel * (1.0 - blur) * (1.0 - foam * 0.8) * air.a;
+    o.request = weight >= REQUEST_MIN_WEIGHT ? float4(r, weight) : float4(0.0);
+    return o;
 }
 
 // ------------------------------------------------------------- scene copy ---

@@ -465,6 +465,38 @@ struct ResolvePush {
 
 const _: () = assert!(std::mem::size_of::<ResolvePush>() == 88);
 
+/// Mirrors `RequestedRaysPush` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct RequestedRaysPush {
+    inv_view_proj: [f32; 16],
+    frame: u64,
+    sky: u64,
+    probes: u64,
+    request_image: u32,
+    depth_image: u32,
+    color_image: u32,
+    width: u32,
+    height: u32,
+    pad: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<RequestedRaysPush>() == 112);
+
+/// The mirror rays a pass drawn after the resolve asks for ([`MeshletRenderer::trace_requested`],
+/// issue #105): per pixel, the direction and the weight of what a ray meets in place of the
+/// sky the pass reflected.
+#[derive(Clone, Copy, Debug)]
+pub struct MirrorRequests {
+    /// The requests (`R16G16B16A16_SFLOAT`): the direction (xyz, the scene frame's axes) and the
+    /// weight (w; zero where the pass asks no ray).
+    pub image: ImageHandle,
+    /// The depth the pass wrote, which places each ray's start.
+    pub depth: ImageHandle,
+    /// The drawing camera's view-projection, camera-relative (jitter included).
+    pub view_proj: Mat4,
+}
+
 /// What lights the resolve besides the sun (issues #47, #48, #53).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AmbientLight {
@@ -1723,6 +1755,8 @@ pub struct MeshletRenderer {
     pipeline_resolve: [Pipeline; MATERIAL_CLASSES],
     /// The mirror rays of the smooth rows (issue #52): devices with ray queries only.
     pipeline_reflections: Option<Pipeline>,
+    /// The mirror rays another pass asks for (issue #105): devices with ray queries only.
+    pipeline_requested: Option<Pipeline>,
     /// Per class, the tiles that show it, and every class's dispatch ([`create_shading_tiles`]).
     shading_tiles: [GraphBuffer; 2],
     /// The two depth pyramids ([`create_pyramids`]).
@@ -2043,6 +2077,22 @@ impl MeshletRenderer {
         } else {
             None
         };
+        let pipeline_requested = if rt {
+            let entry = "requested_reflections_main";
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                "requested reflections",
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: std::mem::size_of::<RequestedRaysPush>() as u32,
+                name: "requested reflections",
+            });
+            device.destroy_shader_module(module);
+            Some(pipeline?)
+        } else {
+            None
+        };
         for module in [
             geometry,
             frag,
@@ -2137,6 +2187,7 @@ impl MeshletRenderer {
             pipeline_merge,
             pipeline_resolve,
             pipeline_reflections,
+            pipeline_requested,
             shading_tiles: create_shading_tiles(device, extent)?,
             hzb,
             prev: Cell::new(None),
@@ -3107,6 +3158,64 @@ impl MeshletRenderer {
                 Ok(())
             });
         }
+    }
+
+    /// Traces the mirror rays a pass drawn after the resolve asked for (`label`; the sea's
+    /// surface, issue #105) against the scene and adds what they meet to `color`, lit as the
+    /// glass's rays are (the sun through a shadow ray, the sky's irradiance or the probes'). Only
+    /// under a sky, on devices with ray queries, with the reflection flags on (Y); otherwise the
+    /// pass keeps the sky it reflected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn trace_requested<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        label: &'static str,
+        slot: FrameSlot,
+        requests: MirrorRequests,
+        color: ImageHandle,
+        extent: vk::Extent2D,
+        ambient: AmbientLight,
+    ) {
+        let (Some(pipeline), Some(sky)) = (self.pipeline_requested.as_ref(), ambient.sky) else {
+            return;
+        };
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let frame = self.frame_buffers[slot.index].address();
+        let inverse = requests.view_proj.inverse().to_cols_array();
+        let probes = ambient.probes;
+        let mut builder = graph
+            .pass(label)
+            .image(requests.image, ImageAccess::Sampled(compute))
+            .image(requests.depth, ImageAccess::Sampled(compute))
+            .image(color, ImageAccess::StorageReadWrite(compute))
+            .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+            .image(sky.table, ImageAccess::Sampled(compute));
+        if let Some(p) = probes {
+            builder = builder
+                .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .image(p.irradiance, ImageAccess::Sampled(compute))
+                .image(p.distance, ImageAccess::Sampled(compute));
+        }
+        builder.run(move |resources, commands| {
+            commands.bind_pipeline(pipeline);
+            commands.push_constants(
+                pipeline,
+                &RequestedRaysPush {
+                    inv_view_proj: inverse,
+                    frame,
+                    sky: sky.address,
+                    probes: probes.map_or(0, |p| p.address),
+                    request_image: resources.sampled(requests.image).0,
+                    depth_image: resources.sampled(requests.depth).0,
+                    color_image: resources.storage(color, 0).0,
+                    width: extent.width,
+                    height: extent.height,
+                    pad: 0,
+                },
+            );
+            commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+            Ok(())
+        });
     }
 
     /// One cluster cull over the work list: every work item's 32 clusters are culled and the

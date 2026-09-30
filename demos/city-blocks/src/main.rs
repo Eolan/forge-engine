@@ -10,8 +10,8 @@
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
 //! threshold, T TAA, B bloom, J shadows, I sky light, N ambient occlusion, V its view, F sky
-//! reflections, Y mirror rays in the glass, Z soft or hard shadows, Tab wireframe, G tone curve,
-//! Esc quit.
+//! reflections, Y mirror rays in the glass and the water, Z soft or hard shadows, Tab wireframe,
+//! G tone curve, Esc quit.
 
 #![forbid(unsafe_code)]
 
@@ -213,8 +213,8 @@ struct Args {
     /// Draw without the sky's reflection in glass and at grazing angles (F toggles it).
     #[arg(long)]
     no_reflections: bool,
-    /// Reflect only the sky in the glass, without the mirror rays against the city (Y toggles
-    /// them; devices without ray queries have none).
+    /// Reflect only the sky in the glass and the water, without the mirror rays against the
+    /// scene (Y toggles them; devices without ray queries have none).
     #[arg(long)]
     no_ray_reflections: bool,
     /// Hard sun shadows: one ray to the sun's centre instead of its disc (Z toggles them).
@@ -877,7 +877,7 @@ impl Demo for Gallery {
             extent,
         );
         if let (Some((cascades, surface, _)), Some(waves)) = (&self.water, &waves) {
-            surface.draw(
+            let requests = surface.draw(
                 &mut frame.graph,
                 frame.slot,
                 cascades,
@@ -895,6 +895,25 @@ impl Demo for Gallery {
                 targets.depth,
                 extent,
             );
+            // The island in the water: its mirror rays, traced as the glass's (#105), with the
+            // same keys (F, Y).
+            if self.flags.has(CullFlags::SKY_REFLECTIONS)
+                && self.flags.has(CullFlags::RAY_REFLECTIONS)
+            {
+                self.renderer.trace_requested(
+                    &mut frame.graph,
+                    "water/reflections",
+                    frame.slot,
+                    requests,
+                    taa_frame.color,
+                    extent,
+                    AmbientLight {
+                        sky: self.sky_light.then_some(sky.light),
+                        occlusion: None,
+                        probes,
+                    },
+                );
+            }
         }
         if self.args.day.is_some() {
             // Meter the finished HDR scene for the exposure of the frames to come.

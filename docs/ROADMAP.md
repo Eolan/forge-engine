@@ -281,7 +281,11 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute
    queue and a forward surface pass first, then the shore from the coast distance, the rivers
    from stage 4's polylines, the lakes at their level). Started on the CPU the same night: the
-   coast distance and the sea's spectrum with its inverse FFT (`forge_procgen::ocean`).
+   coast distance and the sea's spectrum with its inverse FFT (`forge_procgen::ocean`). On the
+   GPU since D-038's acceptance (#105, `city-blocks --island 7 --water`, opt-in until the owner
+   has judged it): the three FFT cascades on the async compute queue, the clipmap surface, and
+   the island in the water through traced mirror rays (`docs/demos/island.md`, "The sea on the
+   GPU"). Next: the sun's shadow on the water, then the shore.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

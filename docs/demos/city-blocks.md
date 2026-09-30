@@ -40,7 +40,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass, **Z** soft or hard shadows, **P** the probes' light, **U** that
+what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass and the water, **Z** soft or hard shadows, **P** the probes' light, **U** that
 light alone, **Tab** wireframe, **G** tone curve.
 
 Options:
@@ -62,7 +62,7 @@ Options:
   `--probe-rays N` sets the rays per probe (128), `--probe-cascades N` the cascades (5) and
   `--probe-cadence N` how many frames a settled probe waits between updates (2).
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
-- `--no-ray-reflections` reflects only the sky in the glass (**Y** toggles the mirror rays).
+- `--no-ray-reflections` reflects only the sky in the glass and the water (**Y** toggles the mirror rays).
 - `--hard-shadows` aims every shadow ray at the sun's centre (**Z** toggles soft and hard).
 - `--day S` runs a day in S seconds, sunrise to sunset and again, with automatic exposure.
 - `--view x,y,z,yaw,pitch` starts the camera there (metres, then degrees; yaw 0 looks north,

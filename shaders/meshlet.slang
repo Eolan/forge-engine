@@ -3157,6 +3157,55 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     color[pixel] = float4(color[pixel].rgb + added, 1.0);
 }
 
+// The mirror rays a pass drawn after the resolve asks for (the sea's surface, issue #105).
+// It shaded its pixels with the sky in the mirror direction and stored, per pixel, that
+// direction and the weight W of what a ray meets there instead (zero: no ray), and the depth
+// it wrote places the ray's start. As in `reflections_main`, a hit adds W × (hit − sky).
+struct RequestedRaysPush
+{
+    float4x4 inv_view_proj; // clip → camera-relative metres (the drawing camera, jitter included)
+    Frame* frame;
+    float4* sky;            // the sky's irradiance and its table (sky.slang)
+    ProbeField* probes;     // or null: the sky's irradiance
+    uint request_image;     // sampled (rgba16f): direction, weight
+    uint depth_image;       // sampled: the depth the pass wrote
+    uint color_image;       // storage (rgba16f): read and written
+    uint width;
+    uint height;
+    uint pad;
+};
+
+[[vk::push_constant]]
+RequestedRaysPush requested_push;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void requested_reflections_main(uint3 id : SV_DispatchThreadID)
+{
+    RequestedRaysPush p = requested_push;
+    Frame* f = p.frame;
+    const uint flags = FLAG_SKY_REFLECTIONS | FLAG_RAY_REFLECTIONS;
+    if (id.x >= p.width || id.y >= p.height || f[0].tlas == 0 || f[0].rt_scene == nullptr
+        || (f[0].flags & flags) != flags || (f[0].flags & FLAG_SHOW_GI) != 0)
+        return;
+    int3 at = int3(id.xy, 0);
+    float4 request = g_sampled_images[NonUniformResourceIndex(p.request_image)].Load(at);
+    if (request.w <= 0.0)
+        return;
+    float depth = g_sampled_images_r[NonUniformResourceIndex(p.depth_image)].Load(at);
+    float2 ndc = float2((float(id.x) + 0.5) / float(p.width) * 2.0 - 1.0, 1.0 - (float(id.y) + 0.5) / float(p.height) * 2.0);
+    float4 point = mul(p.inv_view_proj, float4(ndc, depth, 1.0));
+    float3 direction = normalize(request.xyz);
+    float4 hit = trace_reflection(f, p.sky, p.probes, to_scene(f, point.xyz / point.w), direction);
+    if (hit.w <= 0.0)
+        return;
+    float4 up_table = p.sky[SH_COEFFICIENTS];
+    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, p.sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265;
+    RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(p.color_image)];
+    float3 added = request.w * (hit.xyz - mirror) * (f[0].sun_illuminance * f[0].exposure / 3.14159265);
+    color[id.xy] = float4(color[id.xy].rgb + added, 1.0);
+}
+
 // ------------------------------------------------------------- probe rays ---
 
 // The probes' rays (issue #53, probes.slang): a thread per ray, 64 rays a workgroup, from the

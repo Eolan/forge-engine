@@ -26,6 +26,7 @@ use forge_gpu::{
 };
 use glam::{DVec3, Mat4, Vec3};
 
+use crate::meshlet::MirrorRequests;
 use crate::sky::SkyFrame;
 use crate::taa::HDR_FORMAT;
 
@@ -378,6 +379,8 @@ const GRID: u32 = 128;
 const FINEST_SPACING: f64 = 0.5;
 /// Levels: the finest 64 m across, the coarsest 262 km (the stand-in sea's extent).
 const LEVELS: u32 = 13;
+/// The surface's second target: per pixel, the mirror ray it asks for (direction, weight).
+const REQUEST_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 /// Mirrors `WaterCascadeView` in `water.slang`.
 #[repr(C)]
@@ -454,7 +457,8 @@ pub struct WaterSurfaceParams {
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
 /// the cascades, drawn after the sky's compose (`water/surface`), with the scene it lets
-/// through copied first (`water/scene-copy`).
+/// through copied first (`water/scene-copy`). It reflects the sky, and asks for the mirror
+/// rays that bring the scene into the reflection (step 3, [`MirrorRequests`]).
 pub struct WaterSurface {
     copy: Pipeline,
     surface: Pipeline,
@@ -485,7 +489,7 @@ impl WaterSurface {
         let surface = device.create_vertex_pipeline(&VertexPipelineDesc {
             vertex: (vertex, "surface_vert_main"),
             fragment: (fragment, "surface_frag_main"),
-            color_formats: &[HDR_FORMAT],
+            color_formats: &[HDR_FORMAT, REQUEST_FORMAT],
             depth_format: Some(vk::Format::D32_SFLOAT),
             push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
             cull_mode: vk::CullModeFlags::NONE,
@@ -515,7 +519,9 @@ impl WaterSurface {
 
     /// Declares the copy of what the water lets through and the surface over `color` and
     /// `depth` (the frame's HDR image and depth, after the sky's compose), from the cascades'
-    /// images of this frame (`waves`) and the sky's frame.
+    /// images of this frame (`waves`) and the sky's frame. Returns the mirror rays the surface
+    /// asks for, which [`crate::MeshletRenderer::trace_requested`] traces against the scene;
+    /// untraced, the water reflects the sky alone.
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
@@ -528,7 +534,7 @@ impl WaterSurface {
         color: ImageHandle,
         depth: ImageHandle,
         extent: vk::Extent2D,
-    ) {
+    ) -> MirrorRequests {
         assert_eq!(
             cascades.len(),
             SURFACE_CASCADES,
@@ -548,6 +554,10 @@ impl WaterSurface {
         };
         let scene_color = graph.transient(transient("water scene color", HDR_FORMAT));
         let scene_depth = graph.transient(transient("water scene depth", vk::Format::R32_SFLOAT));
+        let requests = graph.transient(TransientDesc {
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            ..transient("water mirror ray requests", REQUEST_FORMAT)
+        });
         let copy = &self.copy;
         graph
             .pass("water/scene-copy")
@@ -610,6 +620,7 @@ impl WaterSurface {
         let mut pass = graph
             .pass("water/surface")
             .image(color, ImageAccess::ColorAttachment)
+            .image(requests, ImageAccess::ColorAttachment)
             .image(depth, ImageAccess::DepthAttachment)
             .image(scene_color, ImageAccess::Sampled(fragment))
             .image(scene_depth, ImageAccess::Sampled(fragment))
@@ -651,11 +662,20 @@ impl WaterSurface {
                     sky_light,
                 }],
             );
-            let attachment = [vk::RenderingAttachmentInfo::default()
-                .image_view(resources.view(color))
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::LOAD)
-                .store_op(vk::AttachmentStoreOp::STORE)];
+            // The requests start at zero: no ray where the water is not drawn.
+            let attachment = [
+                vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(color))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE),
+                vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(requests))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(vk::ClearValue::default()),
+            ];
             let depth_attachment = vk::RenderingAttachmentInfo::default()
                 .image_view(resources.view(depth))
                 .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -683,5 +703,10 @@ impl WaterSurface {
             commands.end_rendering();
             Ok(())
         });
+        MirrorRequests {
+            image: requests,
+            depth,
+            view_proj: params.view_proj,
+        }
     }
 }
