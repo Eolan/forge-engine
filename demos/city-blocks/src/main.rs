@@ -29,7 +29,7 @@ use forge_core::material::{
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{Heightfield, PropKind, PropSpec, Terrain, city_props};
-use forge_procgen::{ErosionParams, Field2, IslandParams};
+use forge_procgen::{ErosionParams, Field2, IslandParams, Ocean, OceanParams};
 use forge_render::material::TextureSet;
 use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
@@ -38,7 +38,8 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, exposure_from_ev100, sh_irradiance,
+    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, exposure_from_ev100,
+    sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Vec3};
@@ -191,6 +192,9 @@ struct Args {
     /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
     #[arg(long, default_value_t = ProbeParams::default().cascades)]
     probe_cascades: u32,
+    /// The island without its sea's waves (issue #105: their cascades on the GPU).
+    #[arg(long)]
+    no_water: bool,
     /// A settled probe updates every this many frames, on its turn (1 to 8; issue #103).
     #[arg(long, default_value_t = ProbeParams::default().cadence)]
     probe_cadence: u32,
@@ -257,6 +261,12 @@ struct Gallery {
     probes: Option<Probes>,
     probes_on: bool,
     probes_live: bool,
+    /// The island's sea (issue #105): the GPU's cascades and the CPU's spectra they came
+    /// from (the start-up check), the seconds of waves played, and the time the last
+    /// submitted frame's waves were at.
+    water: Option<(WaterCascades, Vec<Ocean>)>,
+    sea_time: f64,
+    sea_time_submitted: f32,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     meter: LuminanceMeter,
@@ -429,6 +439,34 @@ impl Gallery {
         } else {
             None
         };
+        // The island's sea (issue #105): three cascades of FFT waves on the async compute
+        // queue, their spectra from the CPU's.
+        let water = if args.island.is_some() && !args.no_water {
+            let seed = forge_core::Seed::new(args.island.unwrap_or(7)).derive(0x5EA);
+            let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
+            let descs: Vec<WaterCascadeDesc> = oceans
+                .iter()
+                .map(|o| WaterCascadeDesc {
+                    patch: o.params.patch as f32,
+                    choppiness: o.params.choppiness as f32,
+                    samples: o.gpu_samples(),
+                })
+                .collect();
+            let water = WaterCascades::new(&ctx.device, &ctx.shaders, &descs)?;
+            tracing::info!(
+                cascades = water.len(),
+                patches_m = ?oceans.iter().map(|o| o.params.patch).collect::<Vec<_>>(),
+                significant_height_m = %format_args!(
+                    "{:.2}",
+                    oceans.iter().map(|o| o.significant_wave_height().powi(2)).sum::<f64>().sqrt()
+                ),
+                mib = %format_args!("{:.1}", water.bytes() as f64 / f64::from(1 << 20)),
+                "sea cascades"
+            );
+            Some((water, oceans))
+        } else {
+            None
+        };
         if let Some(name) = &args.focus {
             let prop = placed
                 .iter()
@@ -457,6 +495,9 @@ impl Gallery {
             probes,
             probes_on,
             probes_live: false,
+            water,
+            sea_time: 0.0,
+            sea_time_submitted: 0.0,
             day_time: 0.0,
             meter,
             auto_exposure,
@@ -568,6 +609,7 @@ impl Demo for Gallery {
             self.run_frame_ms.push(ms);
         }
         self.step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+        self.sea_time += f64::from(self.step);
         if let Some(length) = self.args.day {
             self.day_time += self.step;
             self.set_sun_of_day((self.day_time / length.max(1.0)).fract());
@@ -654,6 +696,11 @@ impl Demo for Gallery {
                 sun_on_roof = %format_args!("{:.3}", luma(self.renderer.sun_color) * sun.y),
                 "sky light, per unit of sun illuminance"
             );
+        }
+        if self.frame == 120
+            && let Some((water, oceans)) = &self.water
+        {
+            water_check(&ctx.device, water, oceans, self.sea_time_submitted)?;
         }
         if self.frame == 120 {
             // What the probes found around the camera (issue #53): per cascade, the probes that
@@ -754,6 +801,12 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
         );
+        // The sea's waves (issue #105), on the async compute queue; nothing reads them yet.
+        if let Some((water, _)) = &self.water {
+            let time = self.sea_time as f32;
+            let _waves = water.update(&mut frame.graph, time);
+            self.sea_time_submitted = time;
+        }
         // The probes' light in place of the open sky's (issue #53): after the sky's tables,
         // which light their rays' misses, before the resolve.
         let probes = match &mut self.probes {
@@ -1558,6 +1611,51 @@ fn island_prop(args: &Args) -> PropSpec {
             source: std::sync::Arc::new(move || island_heights(&for_source).data),
         }),
     }
+}
+
+/// One field of a GPU cascade's sample.
+type FieldOf = fn(&forge_render::WaterSample) -> f32;
+
+/// The sea's start-up check (issue #105): every cascade the GPU transformed, read back and
+/// compared field by field with the CPU's `Ocean::surface` at the same time. Each field's
+/// largest difference over its largest magnitude; it passes under 10⁻³, the precision of the
+/// half floats the images keep.
+fn water_check(
+    device: &Arc<forge_gpu::Device>,
+    water: &WaterCascades,
+    oceans: &[Ocean],
+    time: f32,
+) -> Result<()> {
+    let mut worst = 0.0_f32;
+    let mut fields = Vec::new();
+    for (c, ocean) in oceans.iter().enumerate() {
+        let gpu = water.read_fields(device, c)?;
+        let cpu = ocean.surface(f64::from(time));
+        let pairs: [(&str, &[f32], FieldOf); 6] = [
+            ("height", &cpu.height.data, |s| s.height),
+            ("dx", &cpu.dx.data, |s| s.dx),
+            ("dy", &cpu.dy.data, |s| s.dy),
+            ("slope_x", &cpu.slope_x.data, |s| s.slope_x),
+            ("slope_y", &cpu.slope_y.data, |s| s.slope_y),
+            ("jacobian", &cpu.jacobian.data, |s| s.jacobian),
+        ];
+        for (name, reference, get) in pairs {
+            let scale = reference.iter().fold(1e-6_f32, |m, v| m.max(v.abs()));
+            let error = gpu
+                .iter()
+                .zip(reference)
+                .map(|(g, r)| (get(g) - r).abs())
+                .fold(0.0_f32, f32::max);
+            worst = worst.max(error / scale);
+            fields.push(format!("{c}/{name} {error:.1e} of {scale:.2}"));
+        }
+    }
+    if worst < 1e-3 {
+        tracing::info!(time, worst = %format_args!("{worst:.1e}"), fields = %fields.join(", "), "water check passed: the GPU's cascades agree with the CPU's surface");
+    } else {
+        tracing::warn!(time, worst = %format_args!("{worst:.1e}"), fields = %fields.join(", "), "water check FAILED: a GPU cascade departs from the CPU's surface");
+    }
+    Ok(())
 }
 
 /// The island's first view (#96): on its south coast looking inland, 25 m over the water

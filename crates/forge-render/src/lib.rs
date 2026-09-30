@@ -33,6 +33,7 @@ pub mod textures;
 pub mod tonecheck;
 pub mod upscale;
 pub mod visibility;
+pub mod water;
 
 pub use atmosphere::{Atmosphere, AtmosphereFrame, AtmosphereParams};
 pub use blit::blit;
@@ -53,3 +54,4 @@ pub use starfield::Starfield;
 pub use streaming::{Residency, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
+pub use water::{WATER_SIZE, WaterCascadeDesc, WaterCascades, WaterFrame, WaterSample};

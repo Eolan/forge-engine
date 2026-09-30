@@ -41,6 +41,9 @@ pub struct OceanParams {
     pub choppiness: f64,
     /// Waves shorter than this, metres, are left out (they are the next cascade's).
     pub shortest_wave: f64,
+    /// Waves this long or longer, metres, are left out (they are the previous cascade's);
+    /// `f64::INFINITY` keeps every one the patch holds.
+    pub longest_wave: f64,
 }
 
 impl OceanParams {
@@ -58,7 +61,38 @@ impl OceanParams {
             swell: 0.3,
             choppiness: 1.0,
             shortest_wave: 2.0,
+            longest_wave: f64::INFINITY,
         }
+    }
+
+    /// The breeze split into three cascades for the GPU (D-038, issue #105): patches of
+    /// 1 024, 128 and 16 m, 256² samples each, each holding the waves the one before is too
+    /// coarse for. The bands meet at 32 m and 4 m (eight samples a wave at the coarser
+    /// cascade), the shortest wave 0.25 m.
+    pub fn cascades(seed: Seed) -> [Self; 3] {
+        let breeze = Self::breeze(seed);
+        [
+            Self {
+                seed: seed.derive(0),
+                patch: 1024.0,
+                shortest_wave: 32.0,
+                ..breeze
+            },
+            Self {
+                seed: seed.derive(1),
+                patch: 128.0,
+                shortest_wave: 4.0,
+                longest_wave: 32.0,
+                ..breeze
+            },
+            Self {
+                seed: seed.derive(2),
+                patch: 16.0,
+                shortest_wave: 0.25,
+                longest_wave: 4.0,
+                ..breeze
+            },
+        ]
     }
 }
 
@@ -260,6 +294,7 @@ impl Ocean {
         let mut h0 = Vec::with_capacity(count);
         let mut omega = Vec::with_capacity(count);
         let k_max = std::f64::consts::TAU / params.shortest_wave;
+        let k_min = std::f64::consts::TAU / params.longest_wave;
         let (_, omega_p) = jonswap(1.0, params.wind_speed, params.fetch);
         for y in 0..n {
             for x in 0..n {
@@ -274,7 +309,7 @@ impl Ocean {
                 let (kx, ky) = (m(x) * dk, m(y) * dk);
                 let kk = (kx * kx + ky * ky).sqrt();
                 k.push((kx, ky));
-                if kk == 0.0 || kk > k_max {
+                if kk == 0.0 || kk > k_max || kk <= k_min {
                     h0.push(C::default());
                     omega.push(0.0);
                     continue;
@@ -302,6 +337,17 @@ impl Ocean {
             h0,
             omega,
         }
+    }
+
+    /// The spectrum as the GPU's cascades take it (issue #105), per sample in index order:
+    /// `h0(k)` (real, imaginary) and `ω(k)`, then 0. The GPU evolves and transforms these
+    /// bytes, so its surface is this one's up to its `f32` arithmetic.
+    pub fn gpu_samples(&self) -> Vec<[f32; 4]> {
+        self.h0
+            .iter()
+            .zip(&self.omega)
+            .map(|(h, &w)| [h.0 as f32, h.1 as f32, w as f32, 0.0])
+            .collect()
     }
 
     /// The significant wave height, metres: four times the root of the surface's variance,

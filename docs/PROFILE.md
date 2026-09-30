@@ -322,6 +322,25 @@ The probes are the largest part near the rocks. From the sea, the rocks go to th
 rasteriser. Before the rocks and the plane the island took 0.74 ms, and 0.84 ms at 4 m
 ([island.md](demos/island.md), "In the engine").
 
+**The sea's cascades** (#105 step 1, 2026-09-30). The three FFT cascades, 256² each, are four
+passes on the async compute queue; nothing draws them yet. `--no-water` against the default,
+three runs each, from the coast view:
+
+| | 1600 × 900 | 2560 × 1440 |
+|---|---|---|
+| without the waves | 1.27 ms | 2.38 ms |
+| with them | 1.34 ms | 2.53 ms |
+| water/fft-cols | 0.10 | 0.10 |
+| water/fft-rows | 0.07 | 0.06 |
+| water/evolve | 0.03 | 0.03 |
+| water/derive | 0.02 | 0.01 |
+
+- **The research's estimate:** 0.1–0.3 ms, hidden behind the geometry. They cost the frame
+  0.07 ms at 900p and 0.15 ms at 1440p, where there is more graphics work to share with.
+- **The lever:** the column pass reads every line with a stride of a whole row, where the row
+  pass reads contiguously. A transpose through groupshared memory would make it coalesced.
+- **The cascades' memory:** 12 MiB.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

@@ -12,7 +12,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | The implicit stream-power erosion with diffusion, rows and drainage trees in parallel on the job system; lakes as filling depressions (stage 3) | ✅ `forge_procgen::erosion` |
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets, the depressions under 5 ha filled (stage 4, the lake rule of #97) | ✅ `forge_procgen::hydrology` |
-| The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
+| The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the GPU's three cascades (#105, `forge_render::water`) agree with it within 3 × 10⁻⁶ ("The sea on the GPU" below); the surface pass next |
 | Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); drawing at 2 m in tiles planned |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
@@ -387,3 +387,34 @@ the sea where the probes' last cascade ends, about 900 m out. #68 dims an untrac
 reflection by what the probes see towards the mirror direction, and their rays, which shade
 diffusely, see the sea as nearly black (#100). The traced mirror rays skip that dimming, so the
 default frames show no line.
+
+## The sea on the GPU (issue #105, 2026-09-30)
+
+D-038 was accepted on 2026-09-30. Its first step puts the sea's waves on the GPU:
+`forge_render::water` and `shaders/water.slang`. Nothing draws them yet; the surface pass
+comes next.
+
+- **Three cascades** of 256² samples (`OceanParams::cascades`): patches of 1 024, 128 and 16 m.
+  - Each holds the waves the one before is too coarse for. The bands meet at 32 m and 4 m
+    (eight samples a wave at the coarser cascade), and the shortest wave is 0.25 m.
+  - The breeze of `genesis`'s stage 5 (12 m/s, 200 km of fetch, a 50 m shelf) gives a
+    significant height of 3.4 m over the three.
+- **Four passes each frame on the async compute queue:**
+  - `water/evolve`: the spectrum at the frame's time, and the spectra of eight fields packed
+    two to a complex value. Their spectra are Hermitian, so the transform of A + iB is a + ib.
+  - `water/fft-rows` and `water/fft-cols`: the inverse transform, radix-2 Stockham in 16 KB of
+    groupshared memory, a workgroup per line.
+  - `water/derive`: two half-float images per cascade. One holds the displacement (x, height,
+    z); the other the slopes and the Jacobian, which marks the whitecaps.
+- **The spectrum is the CPU's:** `Ocean::gpu_samples`, uploaded once. The GPU transforms the
+  CPU's amplitudes, and its surface is `Ocean::surface` in single precision.
+  - At the four wave vectors that are their own opposite (0 and N/2 on each axis), the evolve
+    pass keeps the real part of each field's coefficient, as the CPU's transform does.
+- **The start-up check:** at frame 120 the island reads every cascade back and compares its
+  six fields with `Ocean::surface` at the same time. It passes when each field's largest
+  difference is under 10⁻³ of its largest value, the half floats' precision. On the 5070 Ti the
+  largest is 2.9 × 10⁻⁶ (the 1 024 m cascade's height: 1.8 µm of 2.94 m).
+- **The cost:** 0.07 ms of the frame at 1600 × 900 and 0.15 ms at 1440p (`docs/PROFILE.md`),
+  and 12 MiB. `--no-water` turns them off.
+- **Checks:** the batch is unchanged, and `tools/validate.sh` is clean, synchronization
+  included.

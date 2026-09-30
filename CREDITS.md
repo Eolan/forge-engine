@@ -221,4 +221,7 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Evert Bouws, Hans Günther, Wolfgang Rosenthal, Cornelis L. Vincent, "Similarity of the wind
   wave spectrum in finite depth water", *Journal of Geophysical Research* 90, 1985 (the TMA
   factor); Christopher J. Horvath, "Empirical directional wave spectra for computer graphics",
-  *DigiPro* 2015 (the spreading with a swell parameter): `forge_procgen::ocean`.
+  *DigiPro* 2015 (the spreading with a swell parameter): `forge_procgen::ocean`. On the GPU
+  (`shaders/water.slang`), Stockham's autosort FFT as laid out for graphics processors by
+  Naga K. Govindaraju, Brandon Lloyd, Yuri Dotsenko, Burton Smith and John Manferdelli, "High
+  Performance Discrete Fourier Transforms on Graphics Processors", SC 2008.
