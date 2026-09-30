@@ -1344,6 +1344,14 @@ impl CityMaterials {
                     ..RenderLayer::default()
                 },
             ),
+            (
+                "island: dry grass",
+                textured(grass, [0.9, 0.88, 0.55], [0.98, 0.94, 0.6], 12.0, 6.0, 0.02),
+            ),
+            (
+                "island: lush grass",
+                textured(grass, [0.55, 0.8, 0.45], [0.62, 0.88, 0.5], 12.0, 6.0, 0.02),
+            ),
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
@@ -1448,8 +1456,12 @@ mod island_layer {
     pub const ROCK: u8 = 3;
     /// A river, painted over the others at its width (`forge_procgen::paint_rivers`).
     pub const STREAM: u8 = 4;
+    /// Grass on the driest ground: the ridges (`forge_procgen::paint_moisture`).
+    pub const DRY_GRASS: u8 = 5;
+    /// Grass on the wettest ground: the valley bottoms.
+    pub const LUSH_GRASS: u8 = 6;
     /// How many layers there are.
-    pub const COUNT: u8 = 5;
+    pub const COUNT: u8 = 7;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -1613,6 +1625,16 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     // catchment (as `genesis` traces them), painted at their width, 8 m at least (two texels).
     let rivers_start = Instant::now();
     let flow = forge_procgen::drain(&height, 0.0, &TaskPool::client());
+    // First the grass by its moisture (the topographic wetness index, blurred over 32 m): the
+    // driest quarter dry grass on the ridges, the wettest quarter lush in the valley bottoms.
+    let wetness = forge_procgen::wetness(&height, &flow, 4);
+    let (dried, greened) = forge_procgen::paint_moisture(
+        &mut layers,
+        &wetness,
+        island_layer::GRASS,
+        (island_layer::DRY_GRASS, 0.25),
+        (island_layer::LUSH_GRASS, 0.25),
+    );
     let min_area = (500_000.0 / (height.spacing * height.spacing)) as u32 + 1;
     let rivers = forge_procgen::trace_rivers(&height, &flow, min_area);
     let painted = forge_procgen::paint_rivers(
@@ -1643,8 +1665,10 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             .filter(|l| l.area(height.spacing) >= 10_000.0 && l.level > 0.5)
             .count(),
         lake_texels,
+        dry_texels = dried,
+        lush_texels = greened,
         ms = rivers_start.elapsed().as_millis(),
-        "island rivers and lakes"
+        "island moisture, rivers and lakes"
     );
     builder.set_ray_traced(!args.no_shadows);
     let mut materials = CityMaterials::new(&ctx.device)?;

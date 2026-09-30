@@ -205,6 +205,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   implications", USGS Professional Paper 252, 1953: `forge_procgen::hydrology`.
 - **The distance transform.** Pedro F. Felzenszwalb, Daniel P. Huttenlocher, "Distance
   Transforms of Sampled Functions", *Theory of Computing* 8, 2012: `forge_procgen::coast`.
+- **The topographic wetness index.** Keith J. Beven, Michael J. Kirkby, "A physically based,
+  variable contributing area model of basin hydrology", *Hydrological Sciences Bulletin* 24(1),
+  1979, 43–69 (DOI 10.1080/02626667909491834): ln(a / tan β), `forge_procgen::layers::wetness`.
 - **Ocean waves.** Jerry Tessendorf, "Simulating Ocean Water", SIGGRAPH course notes,
   2001–2004 (the Fourier synthesis, the choppy displacement, the Jacobian's foam); Klaus
   Hasselmann et al., "Measurements of wind-wave growth and swell decay during the Joint North

@@ -14,7 +14,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets (stage 4) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the first step of `docs/research/water.md`'s plan, the GPU's cascades to be diffed against it |
 | Amplification to 2 m per tile with halos (stage 5) | planned |
-| Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
+| Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
 
@@ -245,6 +245,12 @@ What the first look shows, for #96 to fix before the props:
   as `genesis` traces them; `paint_lakes`), on the same layer. They cover the depression's floor
   rather than standing flat at their level: a stand-in, like the sea. At 8 m that makes 31
   lakes and 153 040 texels. With the rivers it takes 0.5 s at the start, most of it the flood.
+- Before those, the grass takes its moisture. The measure is the topographic wetness index,
+  ln(a / tan β) (Beven & Kirkby 1979; `forge_procgen::wetness`): the catchment per metre of
+  contour over the slope, box-blurred over 32 m so that D8's one-sample channels read as
+  valleys. The driest quarter of the grass texels becomes dry grass on the ridges, the wettest
+  quarter lush grass in the valley bottoms (`paint_moisture`), which brings out the relief from
+  afar. That's 1.2 M texels each way; the whole step now takes 0.6 s at the start.
 
 ![From 1 500 m: the rivers wind down the valleys to the coast, past the highland lakes](images/island-engine-rivers.png)
 
