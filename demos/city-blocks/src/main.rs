@@ -1355,7 +1355,16 @@ impl CityMaterials {
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
-            self.table.add(Material::new(name, layer));
+            // Hex tiling (#66) on every textured row: grass, sand and rock are stochastic, and
+            // the rock's 6 m repeat showed as a grid on the island's steep slopes.
+            let hex_tiling = layer.albedo_texture.is_some();
+            self.table.add(Material::new(
+                name,
+                RenderLayer {
+                    hex_tiling,
+                    ..layer
+                },
+            ));
         }
         self.by_prop.insert("island", ground);
         let sea = self.table.add(Material::new(
@@ -1547,12 +1556,18 @@ fn island_camera(args: &Args) -> FlyCamera {
         .rev()
         .find(|&j| height.get(n / 2, j) > 1.0)
         .map_or(0.0, |j| f64::from(j) * height.spacing - half);
-    FlyCamera {
+    let camera = FlyCamera {
         position: Vec3::new(0.0, 25.0, (beach + 150.0) as f32),
         pitch: 0.03,
         speed: 60.0,
         ..FlyCamera::default()
-    }
+    };
+    tracing::info!(
+        beach_z = %format_args!("{beach:.0}"),
+        camera = %format_args!("{:.0},{:.0},{:.0}", camera.position.x, camera.position.y, camera.position.z),
+        "island first view (--view takes x,y,z,yaw,pitch in degrees)"
+    );
+    camera
 }
 
 /// The island's props, in the order `build_island` reads them: the island, the sea around it,
