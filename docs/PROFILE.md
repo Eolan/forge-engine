@@ -274,12 +274,12 @@ No pass of its own; the city's passes at 1600 × 900, 3 000 frames:
 
 | Zone | First view (the coast) | The whole island from the sea |
 |---|---|---|
-| **GPU in all** | **1.34 ms** | **1.08 ms** |
+| **GPU in all** | **1.39 ms** (1.34 before hex tiling) | **1.08 ms** |
 | gi/probe rays [compute] | 0.42 | 0.25 |
 | gi/probe blend [compute] | 0.14 | 0.20 |
 | shading/standard (the sea, the rocks) | 0.19 | 0.14 |
 | shading/reflections (the sea's mirror rays) | 0.13 | 0.06 |
-| shading/layered (the ground) | 0.12 | 0.04 |
+| shading/layered (the ground, hex-tiled) | 0.15 | 0.04 |
 | geometry/software raster 1 (distant rocks) | 0.00 | 0.20 |
 | geometry/cluster cull 1 | 0.06 | 0.09 |
 | geometry/instance cull | 0.04 | 0.10 |

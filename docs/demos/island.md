@@ -251,6 +251,14 @@ What the first look shows, for #96 to fix before the props:
   valleys. The driest quarter of the grass texels becomes dry grass on the ridges, the wettest
   quarter lush grass in the valley bottoms (`paint_moisture`), which brings out the relief from
   afar. That's 1.2 M texels each way; the whole step now takes 0.6 s at the start.
+- Every textured row of the island takes hex tiling (#66). Near the coast the rock's 6 m repeat
+  showed as a grid on the steep slopes. The layered shading grows from 0.118 to 0.154 ms, and
+  the first view from 1.34 to 1.39 ms.
+
+To place a view on the island, the log's line `island first view` gives the first view's
+position and the beach it found (for seed 7: the beach at z = 5 080 m, the camera at
+0,25,5 230). `--view` takes x, y and z in metres, then the yaw and the pitch in degrees; the
+height is absolute, so a view inland must clear the ground (up to 534 m).
 
 ![From 1 500 m: the rivers wind down the valleys to the coast, past the highland lakes](images/island-engine-rivers.png)
 
