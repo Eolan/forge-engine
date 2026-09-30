@@ -67,7 +67,7 @@ under `captures/`, which git ignores.
    changed leaves the other demos stale. A stale binary writes an older frame block, and every
    capture then "differs" for the wrong reason.
 2. **Capture the baseline before changing anything:** `tools/captures.sh captures/base`.
-   - This writes 28 captures: meshlets, the ballad at fixed steps, city-blocks and its island,
+   - This writes 30 captures: meshlets, the ballad at fixed steps, city-blocks and its island,
      each on the mesh path and on the fallback.
    - To capture an older commit, build it in a tree of its own:
      `git worktree add --detach ../forge-base <commit>`, then `cargo build --release` in that

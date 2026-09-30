@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Writes the capture batch every rendering change is checked with (issue #74; docs/PROCESS.md):
-# 28 fixed-step captures of meshlets, the ballad, city-blocks and its island (#96), on the mesh
+# 30 fixed-step captures of meshlets, the ballad, city-blocks and its island (#96), on the mesh
 # path and on the fallback (`--force-fallback`). Compare two batches with tools/compare.sh.
 #
 #   tools/captures.sh OUT [BIN]
@@ -79,6 +79,7 @@ for path in mesh fb; do
   # city-blocks: every page resident (streaming would make the start depend on timing), and
   # the gallery of the twenty props.
   capture "$path-city60" 60 "$city" --stream-pool 0 "${flag[@]}"
+  capture "$path-city60-noocc" 60 "$city" --stream-pool 0 --no-occlusion "${flag[@]}"
   capture "$path-cityorbit120" 120 "$city" --stream-pool 0 --orbit "${flag[@]}"
   capture "$path-gallery60" 60 "$city" --gallery "${flag[@]}"
   # The island (#96) from its first view on the coast: its heightfield, rocks and sea.
