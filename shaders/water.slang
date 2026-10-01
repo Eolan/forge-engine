@@ -1154,6 +1154,8 @@ struct FreshWater
     float drape;     // how far it lies on the ground far away (0: at its level)
     float depth;     // its own depth there, which the view sees through where it lies on the ground
     float white;     // the white water's share, before its pattern
+    float3 absorption; // its water's, m⁻¹
+    float3 scatter;  // the light its water scatters back, per unit of irradiance
 };
 
 // The shading of fresh water: the ripples carried on its flow, the sky, the sun, the mirror and
@@ -1189,8 +1191,8 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     float contact = smoothstep(0.0, max(RIVER_CONTACT.x, RIVER_CONTACT.y * footprint), thickness);
     float coverage = s.coverage * lerp(contact, 1.0, s.drape);
     path = lerp(path, s.depth / max(v.y, 0.2), s.drape);
-    float3 transmittance = exp(-RIVER_ABSORPTION * path);
-    float3 inside = under * transmittance + RIVER_SCATTER * light.lit * (1.0 - transmittance);
+    float3 transmittance = exp(-s.absorption * path);
+    float3 inside = under * transmittance + s.scatter * light.lit * (1.0 - transmittance);
     float3 color = light.reflected * light.fresnel + inside * (1.0 - light.fresnel) + light.sun;
     float foam = 0.0;
     if (s.white > 0.0)
@@ -1210,7 +1212,7 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     o.color = float4(min(color, 32768.0), coverage);
     float weight = light.fresnel * (1.0 - light.blur) * (1.0 - foam * 0.8) * air.a * coverage;
     o.request = weight >= REQUEST_MIN_WEIGHT ? float4(light.mirror, weight) : float4(0.0);
-    float3 sun_share = light.sun + RIVER_SCATTER * light.sun_light * (1.0 - transmittance) * (1.0 - light.fresnel);
+    float3 sun_share = light.sun + s.scatter * light.sun_light * (1.0 - transmittance) * (1.0 - light.fresnel);
     sun_share = lerp(sun_share, 0.8 * light.sun_light / PI, foam * 0.8) * air.a;
     sun_share = min(sun_share, o.color.rgb) * coverage;
     float brightest = max(o.color.r, max(o.color.g, o.color.b)) * coverage;
@@ -1261,6 +1263,8 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.drape = drape;
     s.depth = input.river.z * (1.0 - u * u);
     s.white = max(rapids, stones.white);
+    s.absorption = RIVER_ABSORPTION;
+    s.scatter = RIVER_SCATTER;
     return fresh_water(w, s);
 }
 
@@ -1270,7 +1274,13 @@ SurfaceTargets river_frag_main(RiverOut input)
 // priority flood's depression and a sample more), drawn after the sea and before the rivers,
 // which blend over the lakes they run into. The mask clips the plane to the lake (softened over
 // a sample), and within it the ground rising through the plane draws the shore. Its water is the
-// rivers' (`fresh_water`), still but where a river runs in (its jet, as at the sea's mouths).
+// rivers' (`fresh_water`) with the lake's own colour, still but where a river runs in (its jet
+// and its water, as at the sea's mouths).
+
+// Lake water (D-038's lake type): darker than the rivers', its dissolved matter taking the blue,
+// clearer of silt (m⁻¹, and the light it scatters back).
+static const float3 LAKE_ABSORPTION = float3(1.0, 0.6, 1.2);
+static const float3 LAKE_SCATTER = float3(0.008, 0.012, 0.008);
 
 struct LakeOut
 {
@@ -1326,13 +1336,17 @@ SurfaceTargets lake_frag_main(LakeOut input)
     s.position = input.position;
     s.relative = input.relative;
     s.flat = input.flat;
-    s.velocity = estuary_at(w, world).velocity;
+    // Still water but where a river runs in: its jet's flow, and its water mixing into the lake's.
+    Estuary estuary = estuary_at(w, world);
+    s.velocity = estuary.velocity;
     s.fall = 0.0;
     s.rough = 0.0;
     s.coverage = smoothstep(0.25, 0.75, mask);
     s.drape = 0.0;
     s.depth = 0.0;
     s.white = 0.0;
+    s.absorption = lerp(LAKE_ABSORPTION, RIVER_ABSORPTION, estuary.fresh);
+    s.scatter = lerp(LAKE_SCATTER, RIVER_SCATTER, estuary.fresh);
     return fresh_water(w, s);
 }
 

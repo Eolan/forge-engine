@@ -74,3 +74,12 @@ channels and shores 0.8 s.
 - **Tests:** a basin's water covers its depression and a sample more and nothing beyond its rim
   (`forge_procgen::lake`), and the channels' tests with the shores' smoothing in place; clippy,
   fmt.
+
+## Later the same night: darker lakes
+
+From the air (the island from 2.5 km) the lakes read as pale patches: shallow water shows its bed,
+and the bed was the sea floor's sand-coloured silt under the rivers' clear water. The lakes now
+have a bed of dark mud (`island: lake bed`) and water of their own, darker than the rivers'
+(absorption 1.0, 0.6, 1.2 m⁻¹), mixing to the rivers' along an inflow's jet.
+`lakes-dark.png`: the island from 2.5 km and the round lake, before (left) and now (right). The
+batch is unchanged (0 px: no lake in its views); validation clean.

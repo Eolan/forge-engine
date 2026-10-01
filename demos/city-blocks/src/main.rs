@@ -1549,6 +1549,18 @@ impl CityMaterials {
                 "island: river bed",
                 textured(rock, [0.4, 0.36, 0.29], [0.5, 0.45, 0.36], 0.7, 12.0, 0.04),
             ),
+            (
+                // Dark wet mud under the lakes: fine silt and what the plants left.
+                "island: lake bed",
+                textured(
+                    concrete,
+                    [0.2, 0.18, 0.14],
+                    [0.26, 0.23, 0.17],
+                    2.0,
+                    10.0,
+                    0.04,
+                ),
+            ),
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
@@ -1669,8 +1681,10 @@ mod island_layer {
     /// A river's bed of gravel and silt, in its channel under the water (`--water`,
     /// `forge_procgen::paint_beds`).
     pub const RIVERBED: u8 = 7;
+    /// A lake's bed of dark mud, under its water (`--water`, `forge_procgen::paint_lake_beds`).
+    pub const LAKEBED: u8 = 8;
     /// How many layers there are.
-    pub const COUNT: u8 = 8;
+    pub const COUNT: u8 = 9;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -2208,7 +2222,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             &height,
             &|x, y| channels.height_at(&height, x, y),
             &lake_waters,
-            island_layer::SEABED,
+            island_layer::LAKEBED,
         )
     } else {
         forge_procgen::paint_lakes(

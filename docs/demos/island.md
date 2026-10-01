@@ -780,8 +780,12 @@ through it take its level:
   carries its ripples out into the lake as at the sea. The lakes are drawn before the rivers, and
   a river's ribbon fades out over its last three points into the lake at the lake's own level, so
   the handover is between two surfaces with the same ripples, level and water.
-- **The bed** under a lake is the sea floor's silt wherever the plane stands over the ground (the
-  ground as drawn, refined cells included); the GPU's rocks keep off the lakes.
+- **The bed** under a lake is dark mud (`island: lake bed`) wherever the plane stands over the
+  ground (the ground as drawn, refined cells included), and the lake's water its own, darker
+  than the rivers' (absorption 1.0, 0.6, 1.2 m⁻¹: the dissolved matter taking the blue), mixing
+  to the rivers' along an inflow's jet; the GPU's rocks keep off the lakes. (At first the bed was
+  the sea floor's silt and the water the rivers': from the air the lakes read as pale patches,
+  `reports/2026-10-01-105/lakes-dark.png`.)
 
 ![The largest lake from 30 m over its south shore: painted before (left), water now (right)](../../reports/2026-10-01-105/lakes-west.png)
 
