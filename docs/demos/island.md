@@ -1139,3 +1139,47 @@ Seed 7:
 | up the steep river | 0.102 |
 
 The batch changes the island's two views only (`island60` 0.0040, `water60` 0.0052).
+
+**The steep valleys' look** (#118, 2026-10-01; `forge_render::textures::{gravel, scree,
+scrub}`, `forge_procgen::paint_scrub`, `paint_valley_ground`, `bank_stones`). Most of the hill
+rivers fall over 4 % and keep D-041's V valleys (#116). The owner chose to make them read better
+through their look rather than wider floors: "go with the look: rocky beds, scree, plants on
+the walls". Three procedural texture sets and three ground layers do it, so nothing is
+downloaded:
+- **Rocky beds.** Where a reach falls 2.5–4 % or more (the share of its texels growing with the
+  fall, the threshold wandering with noise), the texels within 2.5 m ± 1.5 m of its water become
+  cobbles and gravel. The water draws them under it as its bed (#114's tint over them), and
+  beside it they are the floor `carve_valleys` left (23 810 texels).
+- **Stones on the banks.** On that floor beside the water, a boulder past each point with a
+  chance of up to two fifths from a 6 % fall, half a metre to three metres from the water's edge
+  and 0.3–1.1 m across: 2 525 more boulders, clear of the water.
+- **Scree.** On the walls' foot steeper than 0.55 (29°), up to 5 m ± 3 m over the nearest steep
+  river's water, the pale broken rock (3 498 texels). On a third of those texels, a rubble pile
+  at a fifth to two fifths of its size: 1 212 piles of broken rock.
+- **Plants on the walls.** The rock of the valleys' walls under 1.4 (54°), up to 30 m ± 12 m over
+  the water, becomes scrub, in patches (23 048 texels). Over the whole island, the wetter two
+  thirds of the rock under 1.0 (45°) does too: the hollows (190 072 texels). The dry spurs and
+  the cliffs stay bare.
+- **The textures.**
+  - Gravel: rounded cobbles over pebbles, grey, brown and ochre, 2.5 m a repeat.
+  - Scree: flat-faced fragments with dark cracks, 4 m.
+  - Scrub: seven rounded shrubs across 16 m, each its own green, over stony soil in their shade.
+
+  All 512 × 512, tileable and hex-tiled like the others, generated in 210 ms at start (the
+  island's only).
+
+Before (left, d6699a7) and now (right), frame 60: `reports/2026-10-01-118/look-steep.png` (the
+slot from 3 m and 40 m, up the steep river, the hills from 250 m), `look-wide.png` (a bench in
+the highlands from 40 m, the island from 2.5 km), `look-zoom.png` (the scrub on the slot's sunlit
+wall from 40 m). ꟻLIP means: slot 0.076, slot from 40 m 0.136, up the steep river 0.048, the
+hills 0.037, the bench 0.053, the island 0.0041, the first view 0.0073. The batch changes the
+island's two views only (`island60` 0.0062, `water60` 0.0073).
+
+**The cost.** More layers meet in the valleys' pixels, which is the layered shading's third
+layer (#111):
+- in the slot: `shading/layered` 0.565 → 0.617 ms;
+- up the steep river: 0.599 → 0.681 ms, and the frame 1.960 → 2.057 ms;
+- elsewhere, under 0.03 ms.
+
+The scrub is a texture, read as shrubs from a few metres up. Close to the walls, shrubs as props
+wait for Phase 8's vegetation (D-013).

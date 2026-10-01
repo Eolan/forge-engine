@@ -745,7 +745,7 @@ own hash:
 
 **Textures.** The textures are procedural: rock, concrete, brick and grass, albedo and normal
 maps, 512 × 512 with their mips. They are generated in parallel at start-up in 140 ms and
-take 10.7 MiB. Cluster pages hold no texture coordinates, so the textures are projected along
+take 10.7 MiB. The island adds gravel, scree and scrub for its valleys (#118, 210 ms). Cluster pages hold no texture coordinates, so the textures are projected along
 each object's axes (triplanar) and sampled with the derivatives the visibility resolve
 reconstructs. A value noise over several repeats varies their brightness, so the grass does
 not show its 12 m tile. The texture level of detail is checked against a fragment shader's

@@ -1508,6 +1508,29 @@ impl CityMaterials {
             .textures
             .add_layer_map("island layers", texels, texels, layers)?;
         let [rock, concrete, _, grass] = self.sets;
+        // The valleys' own sets (#118), the island's only: generated here, in parallel.
+        let start = Instant::now();
+        let mut valley_sets: [Option<[TextureData; 2]>; 3] = Default::default();
+        TaskPool::client().scope(|s| {
+            for (i, slot) in valley_sets.iter_mut().enumerate() {
+                s.spawn(move |_| {
+                    *slot = Some(match i {
+                        0 => textures::gravel(15, 512),
+                        1 => textures::scree(16, 512),
+                        _ => textures::scrub(17, 512),
+                    });
+                });
+            }
+        });
+        let mut ids = Vec::new();
+        for set in valley_sets.iter().flatten() {
+            ids.push((self.textures.add(&set[0])?, self.textures.add(&set[1])?));
+        }
+        let [gravel, scree, scrub] = [ids[0], ids[1], ids[2]];
+        tracing::info!(
+            ms = start.elapsed().as_millis(),
+            "island textures: gravel, scree and scrub"
+        );
         let ground = self.table.add(Material::new(
             "island ground",
             RenderLayer {
@@ -1608,6 +1631,29 @@ impl CityMaterials {
                     10.0,
                     0.04,
                 ),
+            ),
+            (
+                // Cobbles and gravel in the steeper rivers' beds, a little glossy, a shade lighter than the
+                // island's dark rock (#118).
+                "island: gravel",
+                textured(
+                    gravel,
+                    [0.45, 0.45, 0.44],
+                    [0.5, 0.48, 0.45],
+                    2.5,
+                    18.0,
+                    0.06,
+                ),
+            ),
+            (
+                // Scree at the foot of the valleys' walls: the broken rock, paler than the walls' (#118).
+                "island: scree",
+                textured(scree, [0.4, 0.4, 0.39], [0.46, 0.45, 0.43], 4.0, 14.0, 0.05),
+            ),
+            (
+                // Scrub on the steep ground: the shrubs' clumps over stony soil (#118).
+                "island: scrub",
+                textured(scrub, [1.0, 1.0, 1.0], [1.1, 1.08, 0.95], 16.0, 6.0, 0.02),
             ),
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
@@ -1733,8 +1779,16 @@ mod island_layer {
     /// A lake's bed of dark mud, under a metre or more of its water (unless `--no-water`,
     /// `forge_procgen::paint_lake_beds`).
     pub const LAKEBED: u8 = 8;
+    /// Cobbles and gravel: the beds and floors of the steeper rivers' reaches, under their water
+    /// and beside it (#118, `forge_procgen::paint_valley_ground`).
+    pub const GRAVEL: u8 = 9;
+    /// Scree: broken rock at the foot of the steep walls of those rivers' valleys (#118).
+    pub const SCREE: u8 = 10;
+    /// Scrub: low shrubs on the steep ground that holds soil, the wetter rock (#118,
+    /// `forge_procgen::paint_scrub`).
+    pub const SCRUB: u8 = 11;
     /// How many layers there are.
-    pub const COUNT: u8 = 9;
+    pub const COUNT: u8 = 12;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -1920,6 +1974,9 @@ fn make_island_water(height: &Field2<f32>) -> IslandWater {
 
 /// The seed of the stones in the island's rivers.
 const RIVER_STONES: u64 = 0x5705_e105;
+
+/// The seed of the rubble on the island's scree (#118).
+const SCREE_RUBBLE: u64 = 0x5c2e_e2ab;
 
 /// The stones in the island's rivers (#105): boulders on the carved beds, which the water flows
 /// around.
@@ -2589,10 +2646,44 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             0.5,
         )
     };
+    // The steep ground's scrub (#118): plants on the wetter rock, the hollows and the valleys'
+    // sides, in patches; the dry spurs and the cliffs stay bare.
+    let scrubbed = forge_procgen::paint_scrub(
+        &mut layers,
+        &height,
+        &wetness,
+        (island_layer::ROCK, island_layer::SCRUB),
+        &forge_procgen::ScrubRule::default(),
+    );
+    // The steeper rivers' valleys (#118): gravel in their beds and beside their water, scree at
+    // the foot of their walls, scrub on the rock of the walls above.
+    let valleys = forge_procgen::paint_valley_ground(
+        &mut layers,
+        &height,
+        &ribbons,
+        &[
+            island_layer::GRASS,
+            island_layer::DRY_GRASS,
+            island_layer::LUSH_GRASS,
+            island_layer::RIVERBANK,
+            island_layer::ROCK,
+            island_layer::SCRUB,
+        ],
+        &forge_procgen::ValleyGround {
+            gravel: island_layer::GRAVEL,
+            scree: island_layer::SCREE,
+            scrub: island_layer::SCRUB,
+            rock: island_layer::ROCK,
+            ..forge_procgen::ValleyGround::default()
+        },
+    );
     tracing::info!(
         rivers = ribbons.len(),
         texels = painted,
         bank_texels = banks,
+        scrub_texels = %format_args!("{scrubbed} in hollows, {} on valley walls", valleys.scrub),
+        gravel_texels = valleys.gravel,
+        scree_texels = valleys.scree,
         lakes = lakes
             .lakes
             .iter()
@@ -2625,7 +2716,61 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             _ => None,
         })
         .collect();
-    let stones = island_stones(&height, &ribbons, &channels);
+    let mut stones = island_stones(&height, &ribbons, &channels);
+    // And beside the steeper rivers' water, on their gravel (#118), clear of the water.
+    let banked = forge_procgen::bank_stones(&ribbons, &channels, &height, RIVER_STONES ^ 0xba);
+    stones.extend_from_slice(&banked);
+    // On the scree at the foot of their walls, the rubble piles scaled down to broken rock: a
+    // pile on a third of its texels, 0.2 to 0.4 of its size, sunk a little.
+    let rubble: Vec<(MeshId, Mat4)> = {
+        let piles: Vec<MeshId> = props
+            .iter()
+            .zip(&ids)
+            .filter_map(|(p, &id)| matches!(p.kind, PropKind::Rubble { .. }).then_some(id))
+            .collect();
+        let cell = f64::from(extent) / f64::from(texels);
+        let half = f64::from(extent) * 0.5;
+        layers
+            .data
+            .iter()
+            .enumerate()
+            .filter(|&(_, &layer)| layer == island_layer::SCREE)
+            .filter_map(|(i, _)| {
+                let (x, y) = ((i as u32 % texels) as i32, (i as u32 / texels) as i32);
+                let draw = |salt: u64| {
+                    forge_core::hash::unit_f32(forge_core::hash::hash_cell2(
+                        SCREE_RUBBLE ^ salt,
+                        x,
+                        y,
+                    ))
+                };
+                (draw(0) < 1.0 / 3.0).then(|| {
+                    let at = [
+                        (f64::from(x) + draw(1) as f64) * cell,
+                        (f64::from(y) + draw(2) as f64) * cell,
+                    ];
+                    let ground = channels.height_at(&height, at[0], at[1]) as f32;
+                    let mesh = piles[(draw(3) * piles.len() as f32) as usize % piles.len()];
+                    (
+                        mesh,
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::splat(0.2 + 0.2 * draw(4)),
+                            Quat::from_rotation_y(draw(5) * std::f32::consts::TAU),
+                            Vec3::new((at[0] - half) as f32, ground - 0.1, (at[1] - half) as f32),
+                        ),
+                    )
+                })
+            })
+            .collect()
+    };
+    for (mesh, transform) in &rubble {
+        builder.add_instance(*mesh, *transform);
+    }
+    tracing::info!(
+        bank_stones = banked.len(),
+        rubble_on_scree = rubble.len(),
+        "the steep valleys' stones and rubble"
+    );
     let half = 0.5 * extent;
     for stone in &stones {
         let (mesh, radius) = boulders[stone.pick as usize % boulders.len()];

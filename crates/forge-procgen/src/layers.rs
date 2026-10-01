@@ -9,6 +9,7 @@
 use crate::field::Field2;
 use crate::flow::Flow;
 use crate::hydrology::{self, Lakes, Rivers};
+use crate::noise;
 
 /// Paints `rivers` (traced on a field of `spacing` metres) into `layers` as `layer`: every
 /// texel whose centre lies within half a river's width of its course, the width from the
@@ -184,6 +185,97 @@ pub fn paint_moisture(
         }
     }
     (dried, greened)
+}
+
+/// How the scrub takes the steep ground (#118).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrubRule {
+    /// The slopes, rise over run, between which the ground may take scrub: from where it is rock
+    /// ([`LayerRule::rock_slope`]) to where it stays bare.
+    pub slopes: (f32, f32),
+    /// The wettest share of those texels that takes it.
+    pub share: f64,
+    /// How far the threshold wanders with noise, in shares.
+    pub wander: f64,
+    /// Metres over which the noise wanders.
+    pub patch: f64,
+    /// Metres over which the slope is measured ([`LayerRule::slope_over`]).
+    pub slope_over: f64,
+    /// The noise's seed.
+    pub seed: u64,
+}
+
+impl Default for ScrubRule {
+    /// From 0.45 (24°) to 1.0 (45°), the wettest two thirds, wandering by a quarter over 48 m,
+    /// the slope over 8 m.
+    fn default() -> Self {
+        Self {
+            slopes: (0.45, 1.0),
+            share: 0.65,
+            wander: 0.25,
+            patch: 48.0,
+            slope_over: 8.0,
+            seed: 0x5c2b_0118,
+        }
+    }
+}
+
+/// Scrub on the steep ground that holds soil (#118): every texel of `rock` (over `height`'s
+/// square) whose slope is between `rule.slopes` and whose wetness ranks among the wettest
+/// `rule.share` of those becomes `scrub`. The steeper the ground the less it holds (its rank
+/// falls by up to a half towards `rule.slopes.1`), and the threshold wanders with noise, so the
+/// scrub fills the hollows and the valleys' sides in patches while the dry spurs and the cliffs
+/// stay bare. Returns the texels painted.
+pub fn paint_scrub(
+    layers: &mut Field2<u8>,
+    height: &Field2<f32>,
+    wetness: &Field2<f32>,
+    (rock, scrub): (u8, u8),
+    rule: &ScrubRule,
+) -> usize {
+    let cell = layers.spacing;
+    let n = layers.size;
+    let centre = |i: usize| {
+        let (x, y) = ((i as u32) % n, (i as u32) / n);
+        ((f64::from(x) + 0.5) * cell, (f64::from(y) + 0.5) * cell)
+    };
+    let reach = (rule.slope_over / height.spacing).round().max(1.0) as i32;
+    let slopes = Field2::from_fn(height.size, height.spacing, |x, y| {
+        let (gx, gy) = horn(height, x, y, reach);
+        (gx * gx + gy * gy).sqrt()
+    });
+    let (lo, hi) = rule.slopes;
+    let candidate = |i: usize, layer: u8| {
+        if layer != rock {
+            return None;
+        }
+        let (x, y) = centre(i);
+        let slope = slopes.sample(x, y);
+        (slope < hi).then(|| (wetness.sample(x, y), slope))
+    };
+    let mut sample: Vec<f32> = (0..layers.data.len())
+        .step_by(16)
+        .filter_map(|i| candidate(i, layers.data[i]).map(|(w, _)| w))
+        .collect();
+    if sample.is_empty() {
+        return 0;
+    }
+    sample.sort_by(f32::total_cmp);
+    let rank = |w: f32| sample.partition_point(|&s| s < w) as f64 / sample.len() as f64;
+    let mut painted = 0;
+    for i in 0..layers.data.len() {
+        let Some((w, slope)) = candidate(i, layers.data[i]) else {
+            continue;
+        };
+        let (x, y) = centre(i);
+        let steepness = f64::from(((slope - lo) / (hi - lo)).clamp(0.0, 1.0));
+        let wobble = noise::fbm(rule.seed, x / rule.patch, y / rule.patch, 3, 2.0, 0.5);
+        if rank(w) - 0.5 * steepness + rule.wander * wobble > 1.0 - rule.share {
+            layers.data[i] = scrub;
+            painted += 1;
+        }
+    }
+    painted
 }
 
 /// The distance from `p` to the segment `a`–`b`.
@@ -449,5 +541,38 @@ mod tests {
         assert_eq!(layers.get(14, 14), 0);
         assert_eq!(layers.get(0, 18), 0);
         assert!(layers.data.iter().filter(|&&l| l == 9).count() == painted);
+    }
+
+    #[test]
+    fn scrub_takes_the_wetter_rock_and_leaves_the_cliffs() {
+        // Rock rising 0.6 m a metre to x = 160 m, then a cliff of 1.3; wet to the north of
+        // y = 160 m, dry to the south.
+        let height = Field2::from_fn(81, 4.0, |x, _| {
+            let x = x as f32 * 4.0;
+            if x < 160.0 {
+                0.6 * x
+            } else {
+                96.0 + 1.3 * (x - 160.0)
+            }
+        });
+        let wetness = Field2::from_fn(81, 4.0, |_, y| if y < 40 { 10.0 } else { 2.0 });
+        let mut layers = Field2::from_fn(80, 4.0, |_, _| 1u8);
+        let painted = paint_scrub(
+            &mut layers,
+            &height,
+            &wetness,
+            (1, 2),
+            &ScrubRule::default(),
+        );
+        let count = |xs: std::ops::Range<u32>, ys: std::ops::Range<u32>| {
+            ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
+                .filter(|&(x, y)| layers.get(x, y) == 2)
+                .count()
+        };
+        // Away from the cliff's foot and the field's edges: most of the wet slope, none of the
+        // dry one, none of the cliff.
+        assert!(count(4..36, 4..36) > 32 * 32 / 2, "{painted}");
+        assert_eq!(count(4..36, 44..76), 0);
+        assert_eq!(count(44..76, 0..80), 0);
     }
 }

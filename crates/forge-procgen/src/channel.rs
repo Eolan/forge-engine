@@ -526,6 +526,51 @@ pub fn stones(
     out
 }
 
+/// The stones beside the steeper rivers' water (#118): on the gravel of their floors, past each
+/// point drawn in full a stone with a chance of up to two fifths where the water falls 6 % or
+/// more (none under 2.5 %), on either side, half a metre to three metres past the water's edge,
+/// 0.3 to 1.1 m across. They stand clear of the water. Every draw is a hash of `seed`, the
+/// ribbon and the point (D-016).
+pub fn bank_stones(
+    ribbons: &[Ribbon],
+    channels: &Channels,
+    height: &Field2<f32>,
+    seed: u64,
+) -> Vec<Stone> {
+    let mut out = Vec::new();
+    for (r, ribbon) in ribbons.iter().enumerate() {
+        for (k, pair) in ribbon.points.windows(2).enumerate() {
+            let (p, next) = (pair[0], pair[1]);
+            if p.fade < 0.9 || next.fade < 0.9 {
+                continue;
+            }
+            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, k as i32, salt)));
+            if draw(0) >= 0.4 * smoothstep(0.025, 0.06, f64::from(p.slope)) {
+                continue;
+            }
+            let side = if draw(1) < 0.5 { -1.0 } else { 1.0 };
+            let across = side * (f64::from(p.half_width) + 0.5 + 2.5 * draw(2));
+            let (dx, dy) = (
+                f64::from(next.position[0] - p.position[0]),
+                f64::from(next.position[1] - p.position[1]),
+            );
+            let t = draw(3);
+            let q = offset(&p, t * (dx * dx + dy * dy).sqrt(), across);
+            out.push(Stone {
+                position: q,
+                bed: channels.height_at(height, q[0], q[1]),
+                radius: 0.3 + 0.8 * draw(4) * draw(4),
+                level: f64::from(p.level) + f64::from(next.level - p.level) * t,
+                turn: draw(5),
+                pick: (draw(6) * 65536.0) as u32,
+                ribbon: r as u32,
+                point: k as u32,
+            });
+        }
+    }
+    out
+}
+
 /// Paints each river's bed into `layers` as `layer`: the texels whose centre lies within the
 /// water's half width and `beyond` metres more of the course. Returns the texels painted.
 pub fn paint_beds(layers: &mut Field2<u8>, ribbons: &[Ribbon], layer: u8, beyond: f64) -> usize {
@@ -676,6 +721,24 @@ mod tests {
                 s.bed,
                 channels.height_at(&valley, s.position[0], s.position[1])
             );
+        }
+        // Beside the water of the 10 % fall, stones on the floor half a metre to three metres
+        // past its edge, the same every time.
+        let banked = bank_stones(&ribbons, &channels, &valley, 7);
+        assert!(!banked.is_empty());
+        assert_eq!(banked, super::bank_stones(&ribbons, &channels, &valley, 7));
+        for s in &banked {
+            let p = ribbons[0].points[s.point as usize];
+            let q = [f64::from(p.position[0]), f64::from(p.position[1])];
+            let along = [f64::from(p.direction[0]), f64::from(p.direction[1])];
+            let (dx, dy) = (s.position[0] - q[0], s.position[1] - q[1]);
+            let across = (dx * along[1] - dy * along[0]).abs();
+            let half = f64::from(p.half_width);
+            assert!(
+                across >= half + 0.5 - 1e-6 && across <= half + 3.0 + 1e-6,
+                "{across}"
+            );
+            assert!((0.3..=1.1).contains(&s.radius));
         }
         // The fine heights match the carve, and they are the field's on the refined region's
         // outline (where the coarse cells meet it).

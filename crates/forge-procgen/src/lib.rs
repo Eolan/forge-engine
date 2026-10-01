@@ -27,7 +27,8 @@
 //!   its width, depth, speed and a level that only falls, for the GPU.
 //! - [`channel`]: the rivers' channels carved under that water, on cells drawn finer.
 //! - [`valley`]: the rivers' valleys carved into the field: a floor for the water, a bench or a
-//!   floodplain on the gentler reaches, the walls' foot lowered to meet it.
+//!   floodplain on the gentler reaches, the walls' foot lowered to meet it; and the steep
+//!   valleys' ground painted: gravel beds, scree at the walls' foot, scrub on the walls.
 //! - [`lake`]: the lakes' water, a level plane each and the mask of the samples it covers.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
@@ -56,7 +57,7 @@ pub mod shore;
 pub mod valley;
 
 pub use amplify::{AmplifyParams, amplify};
-pub use channel::{ChannelParams, Channels, Stone, paint_banks, paint_beds, stones};
+pub use channel::{ChannelParams, Channels, Stone, bank_stones, paint_banks, paint_beds, stones};
 pub use coast::{coast_distance, sea_floor, smooth_shore};
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
@@ -71,11 +72,14 @@ pub use island::{
 };
 pub use lake::{LakeWater, lake_waters, paint_lake_beds};
 pub use layers::{
-    LayerRule, Shore, paint_lakes, paint_moisture, paint_rivers, slope_layers, wetness,
+    LayerRule, ScrubRule, Shore, paint_lakes, paint_moisture, paint_rivers, paint_scrub,
+    slope_layers, wetness,
 };
 pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
 pub use river::{
     Ribbon, RibbonParams, RibbonPoint, drawn_height, rest_on, ribbons, sea_mouth, smooth_height,
 };
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};
-pub use valley::{ValleyParams, ValleyStats, carve_valleys};
+pub use valley::{
+    ValleyGround, ValleyPainted, ValleyParams, ValleyStats, carve_valleys, paint_valley_ground,
+};

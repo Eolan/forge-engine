@@ -304,6 +304,173 @@ pub fn grass(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// The nearest of `cells × cells` jittered points to texture coordinates `(u, v)` (periodic):
+/// its distance and the second nearest's, in cells, its cell, and the offset from `(u, v)` to it
+/// in cells.
+fn worley(seed: u64, u: f32, v: f32, cells: u32) -> (f32, f32, (i32, i32), [f32; 2]) {
+    let (x, y) = (u * cells as f32, v * cells as f32);
+    let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+    let p = cells as i32;
+    let mut best = (f32::MAX, f32::MAX, (0, 0), [0.0; 2]);
+    for j in -1..=1 {
+        for i in -1..=1 {
+            let cell = ((cx + i).rem_euclid(p), (cy + j).rem_euclid(p));
+            let px = (cx + i) as f32 + 0.1 + 0.8 * unit_f32(hash_cell2(seed, cell.0, cell.1));
+            let py =
+                (cy + j) as f32 + 0.1 + 0.8 * unit_f32(hash_cell2(seed ^ 0x51DE, cell.0, cell.1));
+            let (dx, dy) = (px - x, py - y);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d < best.0 {
+                best = (d, best.0, cell, [dx, dy]);
+            } else if d < best.1 {
+                best.1 = d;
+            }
+        }
+    }
+    best
+}
+
+/// A river's bed of rounded cobbles and pebbles (#118): grey, brown and ochre stones packed
+/// together, dark sand and silt in the gaps between them.
+pub fn gravel(seed: u64, size: u32) -> [TextureData; 2] {
+    // A stone's rise from the gap: rounded, highest at its middle.
+    let stones = |u: f32, v: f32, cells: u32, salt: u64| {
+        let (f1, f2, cell, _) = worley(seed ^ salt, u, v, cells);
+        let edge = f2 - f1;
+        (smoothstep(0.0, 0.35, edge).sqrt(), edge, cell)
+    };
+    let heights = grid(size, |u, v| {
+        let (cobble, _, _) = stones(u, v, 20, 0xC0B);
+        let (pebble, _, _) = stones(u, v, 56, 0x9EB);
+        cobble.max(0.55 * pebble) + 0.05 * fbm(seed ^ 0x6A1, u, v, 64, 2)
+    });
+    let colours = grid(size, |u, v| {
+        let (cobble, edge, cell) = stones(u, v, 20, 0xC0B);
+        let (pebble, small_edge, small) = stones(u, v, 56, 0x9EB);
+        let tone = |cell: (i32, i32), salt: u64| {
+            let h = hash_cell2(seed ^ salt, cell.0, cell.1);
+            let kind = unit_f32(h);
+            let light = 0.75 + 0.5 * unit_f32(h.rotate_left(17));
+            let colour = if kind < 0.5 {
+                [0.30, 0.30, 0.29]
+            } else if kind < 0.8 {
+                [0.33, 0.27, 0.21]
+            } else {
+                [0.40, 0.32, 0.20]
+            };
+            colour.map(|c| c * light)
+        };
+        let grain = 0.85 + 0.3 * fbm(seed ^ 0x6A11, u, v, 128, 2);
+        let gap = [0.08, 0.07, 0.055];
+        let small_stone = mix3(gap, tone(small, 0x9EB), smoothstep(0.02, 0.1, small_edge));
+        let under = mix3(gap, small_stone, f32::from(u8::from(pebble > 0.2)));
+        let big = tone(cell, 0xC0B).map(|c| c * (0.8 + 0.2 * cobble));
+        mix3(under, big, smoothstep(0.03, 0.1, edge)).map(|c| c * grain)
+    });
+    [
+        albedo_texture("gravel albedo", size, colours),
+        normal_texture("gravel normal", size, &heights, size as f32 / 40.0),
+    ]
+}
+
+/// Scree (#118): broken rock fallen from the walls above, angular fragments of pale grey stone,
+/// each a flat face tilted its own way, dark in the cracks between them.
+pub fn scree(seed: u64, size: u32) -> [TextureData; 2] {
+    // A fragment's face: a plane through its point, tilted by its cell's hash, sunk into the
+    // cracks between fragments.
+    let fragment = |u: f32, v: f32, cells: u32, salt: u64| {
+        let (f1, f2, cell, offset) = worley(seed ^ salt, u, v, cells);
+        let h = hash_cell2(seed ^ salt ^ 0x7117, cell.0, cell.1);
+        let (a, b) = (unit_f32(h) - 0.5, unit_f32(h.rotate_left(23)) - 0.5);
+        let face = 0.6 + 0.5 * (a * offset[0] + b * offset[1]);
+        let crack = smoothstep(0.0, 0.12, f2 - f1);
+        (face * crack, f2 - f1, cell, f1)
+    };
+    let heights = grid(size, |u, v| {
+        let (big, _, _, _) = fragment(u, v, 14, 0x5C2);
+        let (small, _, _, _) = fragment(u, v, 40, 0x5C3);
+        big.max(0.6 * small)
+    });
+    let colours = grid(size, |u, v| {
+        let (big, edge, cell, _) = fragment(u, v, 14, 0x5C2);
+        let (small, small_edge, small_cell, _) = fragment(u, v, 40, 0x5C3);
+        let tone = |cell: (i32, i32), salt: u64| {
+            let h = hash_cell2(seed ^ salt, cell.0, cell.1);
+            let grey = 0.36 + 0.18 * unit_f32(h);
+            let warm = 0.04 * unit_f32(h.rotate_left(11));
+            [grey + warm, grey + 0.5 * warm, grey * 0.96]
+        };
+        let grain = 0.85 + 0.3 * fbm(seed ^ 0x5C4, u, v, 96, 2);
+        let crack = [0.07, 0.065, 0.06];
+        let chips = mix3(
+            crack,
+            tone(small_cell, 0x5C3),
+            smoothstep(0.01, 0.06, small_edge),
+        );
+        let under = mix3(crack, chips, f32::from(u8::from(small > 0.15)));
+        let face = tone(cell, 0x5C2).map(|c| c * (0.75 + 0.35 * big));
+        mix3(under, face, smoothstep(0.02, 0.07, edge)).map(|c| c * grain)
+    });
+    [
+        albedo_texture("scree albedo", size, colours),
+        normal_texture("scree normal", size, &heights, size as f32 / 48.0),
+    ]
+}
+
+/// Scrub on steep ground (#118): rounded shrubs, seven across a repeat, each its own shade of
+/// dark green, olive or blue-green, their leaves breaking their outline, over stony soil darker
+/// in their shade.
+pub fn scrub(seed: u64, size: u32) -> [TextureData; 2] {
+    const SHRUBS: u32 = 7;
+    // The nearest shrub: how far inside its crown a point is (1 at its heart, 0 at its edge,
+    // below 0 outside), and its hash.
+    let crown = |u: f32, v: f32| {
+        let (f1, _, cell, _) = worley(seed, u, v, SHRUBS);
+        let h = hash_cell2(seed ^ 0xC20, cell.0, cell.1);
+        let radius = 0.42 + 0.22 * unit_f32(h);
+        let ragged = 0.16 * (fbm(seed ^ 0x1EAF, u, v, 64, 2) - 0.5);
+        (1.0 - f1 / (radius + ragged), h)
+    };
+    let leaves = |u: f32, v: f32| {
+        let (f1, _, _, _) = worley(seed ^ 0x1EAF, u, v, 112);
+        1.0 - smoothstep(0.0, 0.8, f1)
+    };
+    let heights = grid(size, |u, v| {
+        let (c, _) = crown(u, v);
+        let dome = c.max(0.0).sqrt();
+        dome * (0.85 + 0.15 * leaves(u, v)) + 0.04 * fbm(seed ^ 0x5011, u, v, 48, 2)
+    });
+    let colours = grid(size, |u, v| {
+        let (c, h) = crown(u, v);
+        let kind = unit_f32(h.rotate_left(13));
+        let green = if kind < 0.45 {
+            [0.03, 0.062, 0.024]
+        } else if kind < 0.75 {
+            [0.058, 0.068, 0.026]
+        } else {
+            [0.03, 0.058, 0.044]
+        };
+        let light = 0.8 + 0.4 * unit_f32(h.rotate_left(29));
+        let leaf = leaves(u, v);
+        // Darker towards the crown's edge, where the leaves shade each other.
+        let inner = 0.6 + 0.4 * c.max(0.0).sqrt();
+        let foliage = green.map(|g| g * light * inner * (0.85 + 0.6 * leaf * leaf));
+        let stone = fbm(seed ^ 0x5701, u, v, 32, 2);
+        let soil = mix3(
+            [0.11, 0.095, 0.075],
+            [0.17, 0.16, 0.14],
+            smoothstep(0.55, 0.7, stone),
+        );
+        // In the shrubs' shade near their crowns.
+        let shade = 0.5 + 0.5 * smoothstep(0.0, 0.35, -c);
+        mix3(soil.map(|s| s * shade), foliage, smoothstep(-0.03, 0.05, c))
+    });
+    [
+        albedo_texture("scrub albedo", size, colours),
+        normal_texture("scrub normal", size, &heights, size as f32 / 40.0),
+    ]
+}
+
 /// A test texture for the mip check (`--mip-check`): level `k` is filled with `k / 16`, so a
 /// trilinear sample returns the level of detail the sampler chose, over 16.
 pub fn mip_ramp(size: u32) -> TextureData {
@@ -347,6 +514,9 @@ mod tests {
         let near_edge = fbm(3, 0.999_99, 0.4, 4, 5);
         let wrapped = fbm(3, -0.000_01, 0.4, 4, 5);
         assert!((near_edge - wrapped).abs() < 1e-4);
+        // So do the cells of the stones, the fragments and the shrubs.
+        let (a, b) = (worley(3, 0.999_99, 0.4, 14), worley(3, -0.000_01, 0.4, 14));
+        assert!((a.0 - b.0).abs() < 1e-3 && a.2 == b.2);
     }
 
     #[test]
@@ -356,6 +526,9 @@ mod tests {
             .chain(concrete(1, 64))
             .chain(brick(1, 64))
             .chain(grass(1, 64))
+            .chain(gravel(1, 64))
+            .chain(scree(1, 64))
+            .chain(scrub(1, 64))
             .chain([mip_ramp(64)])
         {
             assert_eq!(texture.levels.len(), 7, "{}", texture.name);

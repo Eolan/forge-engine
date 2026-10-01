@@ -27,7 +27,7 @@ use forge_task::TaskPool;
 use crate::field::Field2;
 use crate::hydrology::Lakes;
 use crate::noise::fbm;
-use crate::river::{Ribbon, offset, segment_distance, smooth_height, smoothstep};
+use crate::river::{Ribbon, RibbonPoint, offset, segment_distance, smooth_height, smoothstep};
 
 /// How the valleys are carved.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -200,22 +200,11 @@ pub fn carve_valleys(
             let (a, b) = (at(k - 1), at(k));
             arc[k] = arc[k - 1] + (b[0] - a[0]).hypot(b[1] - a[1]);
         }
-        let (mut lo, mut hi) = (0, 0);
+        let slopes = reach_slopes(p, params.slope_run);
         let mut half = [vec![0.0f64; n], vec![0.0f64; n]];
         let mut room = vec![0.0f64; n];
         for k in 0..n {
-            while arc[k] - arc[lo] > params.slope_run {
-                lo += 1;
-            }
-            while hi + 1 < n && arc[hi + 1] - arc[k] <= params.slope_run {
-                hi += 1;
-            }
-            let run = arc[hi] - arc[lo];
-            let slope = if run > 0.0 {
-                ((f(p[lo].level) - f(p[hi].level)) / run).max(0.0)
-            } else {
-                0.0
-            };
+            let slope = slopes[k];
             let (r0, r1) = params.reaches;
             let plain = 1.0 - smoothstep(r0 - 0.005, r0 + 0.005, slope);
             let bench = 1.0 - smoothstep(r1 - 0.005, r1 + 0.005, slope);
@@ -443,6 +432,213 @@ pub fn carve_valleys(
     stats
 }
 
+/// The water's fall at each point of `points`, m/m: over `run` metres of the course either way
+/// (fewer at its ends).
+fn reach_slopes(points: &[RibbonPoint], run: f64) -> Vec<f64> {
+    let n = points.len();
+    let f = |v: f32| f64::from(v);
+    let mut arc = vec![0.0; n];
+    for k in 1..n {
+        let (a, b) = (points[k - 1].position, points[k].position);
+        arc[k] = arc[k - 1] + f(b[0] - a[0]).hypot(f(b[1] - a[1]));
+    }
+    let (mut lo, mut hi) = (0, 0);
+    (0..n)
+        .map(|k| {
+            while arc[k] - arc[lo] > run {
+                lo += 1;
+            }
+            while hi + 1 < n && arc[hi + 1] - arc[k] <= run {
+                hi += 1;
+            }
+            let length = arc[hi] - arc[lo];
+            if length > 0.0 {
+                ((f(points[lo].level) - f(points[hi].level)) / length).max(0.0)
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+/// How the steeper rivers' valleys are painted (#118): their beds of gravel, scree at the foot of
+/// their walls, and scrub on the walls above it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValleyGround {
+    /// The layer of the beds.
+    pub gravel: u8,
+    /// The layer at the walls' foot.
+    pub scree: u8,
+    /// The layer of the plants on the walls.
+    pub scrub: u8,
+    /// The layer the scrub takes: the bare rock.
+    pub rock: u8,
+    /// The water's slopes, m/m, over which a reach is painted, from none of it to all of it (the
+    /// threshold wanders with noise in between).
+    pub steep: (f64, f64),
+    /// Over how many metres of the course, either way, a point's slope is measured.
+    pub slope_run: f64,
+    /// The gravel's metres past the water's edge, `a + b ×` noise.
+    pub bed: (f64, f64),
+    /// The scree's metres over the water, `a + b ×` noise.
+    pub scree_rise: (f64, f64),
+    /// The ground's slope, m/m, over which it takes scree (gentler ground keeps its own).
+    pub scree_slope: f32,
+    /// The scrub's metres over the water, `a + b ×` noise.
+    pub scrub_rise: (f64, f64),
+    /// The ground's slope, m/m, under which the rock takes scrub (cliffs stay bare).
+    pub scrub_slope: f32,
+    /// The noise (about −1 to 1) under which the walls stay bare between the scrub's patches.
+    pub scrub_gaps: f64,
+    /// The most metres past the water's edge the valley's ground reaches.
+    pub reach: f64,
+    /// Metres over which the noise wanders.
+    pub patch: f64,
+    /// The noise's seed.
+    pub seed: u64,
+}
+
+impl Default for ValleyGround {
+    /// Painted from a 2.5 % fall, all of it from 4 % (D-041's steps and pools), the slope over
+    /// 40 m either way; gravel 2.5 m ± 1.5 m past the water; scree to 5 m ± 3 m over it where the
+    /// ground is steeper than 0.55 (29°); scrub on the rock under 1.4 (54°) to 30 m ± 12 m over
+    /// it, bare where the noise is under −0.25; 80 m out at most; the noise over 24 m.
+    fn default() -> Self {
+        Self {
+            gravel: 0,
+            scree: 0,
+            scrub: 0,
+            rock: 0,
+            steep: (0.025, 0.04),
+            slope_run: 40.0,
+            bed: (2.5, 1.5),
+            scree_rise: (5.0, 3.0),
+            scree_slope: 0.55,
+            scrub_rise: (30.0, 12.0),
+            scrub_slope: 1.4,
+            scrub_gaps: -0.25,
+            reach: 80.0,
+            patch: 24.0,
+            seed: 0x5c2e_e118,
+        }
+    }
+}
+
+/// What [`paint_valley_ground`] painted: texels of gravel, scree and scrub.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ValleyPainted {
+    /// Gravel.
+    pub gravel: usize,
+    /// Scree.
+    pub scree: usize,
+    /// Scrub.
+    pub scrub: usize,
+}
+
+/// Paints the steeper reaches' valleys into `layers` (over `height`'s square). Each texel within
+/// `reach` of a steep river's water is painted from its nearest one: the texels of the layers
+/// of `from` within the gravel's reach of the water become its bed, those on the walls' steep
+/// foot up to the scree's rise over the water scree, and the rock above them, up to the scrub's
+/// rise and under its slope, scrub in patches.
+pub fn paint_valley_ground(
+    layers: &mut Field2<u8>,
+    height: &Field2<f32>,
+    ribbons: &[Ribbon],
+    from: &[u8],
+    ground: &ValleyGround,
+) -> ValleyPainted {
+    let cell = layers.spacing;
+    let last = i64::from(layers.size) - 1;
+    // Per texel within reach: how far out of the nearest steep river's water it is, that
+    // water's level there, and how steep its reach is.
+    let mut near: std::collections::HashMap<u32, [f64; 3]> = std::collections::HashMap::new();
+    for ribbon in ribbons {
+        let p = &ribbon.points;
+        let slopes = reach_slopes(p, ground.slope_run);
+        for k in 0..p.len().saturating_sub(1) {
+            let steep = smoothstep(ground.steep.0, ground.steep.1, slopes[k].max(slopes[k + 1]));
+            if steep == 0.0 {
+                continue;
+            }
+            let f = |v: f32| f64::from(v);
+            let (a, b) = (
+                [f(p[k].position[0]), f(p[k].position[1])],
+                [f(p[k + 1].position[0]), f(p[k + 1].position[1])],
+            );
+            let grow = f(p[k].half_width.max(p[k + 1].half_width)) + ground.reach;
+            let lo = |v: f64| (((v - grow) / cell).floor() as i64).clamp(0, last);
+            let hi = |v: f64| (((v + grow) / cell).ceil() as i64).clamp(0, last);
+            for ty in lo(a[1].min(b[1]))..=hi(a[1].max(b[1])) {
+                for tx in lo(a[0].min(b[0]))..=hi(a[0].max(b[0])) {
+                    let q = [(tx as f64 + 0.5) * cell, (ty as f64 + 0.5) * cell];
+                    let (r, t) = segment_distance(q, a, b);
+                    let mix = |u: f32, v: f32| f(u) + f(v - u) * t;
+                    let out = r - mix(p[k].half_width, p[k + 1].half_width);
+                    if out > ground.reach {
+                        continue;
+                    }
+                    let index = ty as u32 * layers.size + tx as u32;
+                    let entry = near.entry(index).or_insert([f64::MAX, 0.0, 0.0]);
+                    if out < entry[0] {
+                        *entry = [out, mix(p[k].level, p[k + 1].level), steep];
+                    }
+                }
+            }
+        }
+    }
+    let noise = |q: [f64; 2], salt: u64| {
+        fbm(
+            ground.seed ^ salt,
+            q[0] / ground.patch,
+            q[1] / ground.patch,
+            2,
+            2.0,
+            0.5,
+        )
+    };
+    // The ground's slope at a point, from the field's nearest sample.
+    let top = f64::from(height.size - 1);
+    let slope_at = |q: [f64; 2]| {
+        let (x, y) = (
+            (q[0] / height.spacing).round().clamp(0.0, top) as u32,
+            (q[1] / height.spacing).round().clamp(0.0, top) as u32,
+        );
+        let (gx, gy) = height.gradient(x, y);
+        (gx * gx + gy * gy).sqrt()
+    };
+    let mut painted = ValleyPainted::default();
+    for (&index, &[out, level, steep]) in &near {
+        let texel = layers.data[index as usize];
+        let (tx, ty) = (index % layers.size, index / layers.size);
+        let q = [(f64::from(tx) + 0.5) * cell, (f64::from(ty) + 0.5) * cell];
+        // Where the reach is only partly steep, its share of the texels.
+        let wobble = noise(q, 0);
+        if steep < 0.5 + 0.5 * wobble {
+            continue;
+        }
+        let above = f64::from(height.sample(q[0], q[1])) - level;
+        let slope = slope_at(q);
+        if from.contains(&texel) && out <= ground.bed.0 + ground.bed.1 * wobble {
+            layers.data[index as usize] = ground.gravel;
+            painted.gravel += 1;
+        } else if from.contains(&texel)
+            && above < ground.scree_rise.0 + ground.scree_rise.1 * wobble
+            && slope > ground.scree_slope
+        {
+            layers.data[index as usize] = ground.scree;
+            painted.scree += 1;
+        } else if texel == ground.rock
+            && slope < ground.scrub_slope
+            && above < ground.scrub_rise.0 + ground.scrub_rise.1 * noise(q, 0x5c2b)
+            && noise(q, 0xc0e2) > ground.scrub_gaps
+        {
+            layers.data[index as usize] = ground.scrub;
+            painted.scrub += 1;
+        }
+    }
+    painted
+}
+
 /// Each value of the `size × size` grid `values` replaced by the largest within `radius`
 /// samples along the rows and the columns (a square), by a running maximum.
 fn dilate(values: &mut [f32], size: usize, radius: usize) {
@@ -489,23 +685,29 @@ mod tests {
     /// the east from 20 m, on a field of 4 m samples; and a river down it, 10 m wide, 0.2 m
     /// under the floor and 0.6 m deep.
     fn valley(wall: f64) -> (Field2<f32>, Ribbon) {
+        falling(wall, 0.01)
+    }
+
+    /// [`valley`] falling `fall` m/m instead, to the same height at its east end.
+    fn falling(wall: f64, fall: f64) -> (Field2<f32>, Ribbon) {
+        let top = 20.0 + 320.0 * (fall - 0.01);
         let height = Field2::from_fn(81, 4.0, |x, y| {
             let (x, y) = (f64::from(x) * 4.0, f64::from(y) * 4.0);
-            (20.0 - 0.01 * x + wall * (y - 160.0).abs()) as f32
+            (top - fall * x + wall * (y - 160.0).abs()) as f32
         });
         let points = (0..=80)
             .map(|k| {
                 let x = f64::from(k) * 4.0;
                 RibbonPoint {
                     position: [x as f32, 160.0],
-                    level: (20.0 - 0.01 * x - 0.2) as f32,
+                    level: (top - fall * x - 0.2) as f32,
                     direction: [1.0, 0.0],
                     half_width: 5.0,
                     reach: 6.0,
                     depth: 0.6,
                     bank: 0.0,
                     speed: 1.0,
-                    slope: 0.01,
+                    slope: fall as f32,
                     fade: 1.0,
                     ground: [0.0; ACROSS + 1],
                 }
@@ -611,5 +813,62 @@ mod tests {
         let lakes = no_lakes(&field);
         let stats = carve_valleys(&mut field, &[ribbon], &lakes, &steady(), &pool);
         assert_eq!(stats.lowered, 0, "{stats:?}");
+    }
+
+    #[test]
+    fn a_steep_valley_gets_gravel_scree_and_scrub_and_a_gentle_one_none() {
+        const GRASS: u8 = 0;
+        const ROCK: u8 = 1;
+        let ground = ValleyGround {
+            gravel: 2,
+            scree: 3,
+            scrub: 4,
+            rock: ROCK,
+            ..ValleyGround::default()
+        };
+        // Texels of 4 m over the field: rock where the walls rise (all of them at 0.8), grass on
+        // the floor under 5 m out.
+        let layers = || {
+            Field2::from_fn(80, 4.0, |_, y| {
+                let out = ((f64::from(y) + 0.5) * 4.0 - 160.0).abs();
+                if out < 5.0 { GRASS } else { ROCK }
+            })
+        };
+        // A river falling 6 % on a floor 7 m out and 0.6 m over the course (as `carve_valleys`
+        // leaves a steep reach): its bed is gravel, the walls' foot scree, the rock above scrub.
+        let (_, ribbon) = falling(0.8, 0.06);
+        let over = |out: f64| 0.8 + 0.8 * (out - 2.0).max(0.0);
+        let field = Field2::from_fn(81, 4.0, |x, y| {
+            let out = (f64::from(y) * 4.0 - 160.0).abs() - 5.0;
+            (36.0 - 0.06 * f64::from(x) * 4.0 - 0.2 + over(out)) as f32
+        });
+        let mut steep = layers();
+        let before = steep.clone();
+        let painted = paint_valley_ground(&mut steep, &field, &[ribbon], &[GRASS, ROCK], &ground);
+        assert!(
+            painted.gravel > 0 && painted.scree > 0 && painted.scrub > 0,
+            "{painted:?}"
+        );
+        for (i, (&now, &was)) in steep.data.iter().zip(&before.data).enumerate() {
+            let y = (i / 80) as f64;
+            let out = ((y + 0.5) * 4.0 - 160.0).abs() - 5.0;
+            let above = over(out);
+            match now {
+                2 => assert!(out <= 4.0, "gravel {out} m out"),
+                3 => assert!(above < 8.0 + 0.5, "scree {above} m over the water"),
+                4 => assert!(
+                    was == ROCK && above < 42.0 + 0.5,
+                    "scrub {above} m over the water"
+                ),
+                _ => assert_eq!(now, was),
+            }
+        }
+        // A river falling 1 %: nothing.
+        let (field, ribbon) = valley(0.8);
+        let mut gentle = layers();
+        let before = gentle.clone();
+        let painted = paint_valley_ground(&mut gentle, &field, &[ribbon], &[GRASS, ROCK], &ground);
+        assert_eq!(painted, ValleyPainted::default());
+        assert_eq!(gentle, before);
     }
 }

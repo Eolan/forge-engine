@@ -600,6 +600,24 @@ default; three rounds of every view without then with (a cook per switch), 1600 
   floor's ground; in the slot, the walls' foot.
 - At start the carve takes 0.57 s, and the island's cook 30.3 → 30.9 s.
 
+**The steep valleys' look** (#118, 2026-10-01): d6699a7 (the baseline worktree) against the
+gravel, scree and scrub layers with the bank stones and the rubble; three runs each,
+alternating, 1600 × 900.
+
+| View | frame | `shading/layered` | `water/reflections` |
+|---|---|---|---|
+| coast (the first view) | 1.658 → 1.664 ms | 0.332 → 0.334 | 0.130 → 0.130 |
+| the island from 2.5 km | 2.171 → 2.178 ms | 0.324 → 0.325 | 0.084 → 0.084 |
+| a river on the plain from 40 m | 1.693 → 1.695 ms | 0.631 → 0.636 | 0.030 → 0.030 |
+| up a steep river from 2 m | 1.960 → 2.057 ms | 0.599 → 0.681 | 0.223 → 0.228 |
+| the logged slot from 3 m | 1.955 → 2.016 ms | 0.565 → 0.617 | 0.263 → 0.267 |
+| the slot from 40 m (`-3083,88.3,-376,123.7,-45`) | 1.881 → 1.936 ms | 0.689 → 0.739 | 0.049 → 0.050 |
+| the hills from 250 m (`-3083,250,-376,123.7,-25`) | 1.609 → 1.635 ms | 0.452 → 0.472 | 0.039 → 0.047 |
+
+- The valleys' views pay in `shading/layered`: their pixels now meet three layers more often
+  (gravel, scree, scrub and rock), the third layer's cost (#111).
+- At start the three texture sets take 210 ms and the painting 0.14 s.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the
