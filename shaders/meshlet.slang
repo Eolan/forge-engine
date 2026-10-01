@@ -3741,6 +3741,9 @@ void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float
 // Where `Placement::rock_rule` puts the rocks.
 static const uint ROCKS_IN_HILLS = 0; // the four bands of hills around the city
 static const uint ROCKS_ON_LAND = 1;  // the island's land (#96)
+// ROCKS_ON_LAND on low ground (#117): under x metres the rocks keep z of their chance, the
+// whole of it from y metres up.
+static const float3 ROCKS_LOWLAND = float3(5.0, 40.0, 0.1);
 
 // ROCKS_ON_LAND: candidates over the whole square until one stands on land above `rock_above`
 // metres and is kept, with a chance that rises with the slope (more rocks on the steep ground,
@@ -3758,7 +3761,11 @@ float2 rock_on_land(Placement* p, uint slot, out bool found)
         float gx = (ground(p, at.x + d, at.y) - ground(p, at.x - d, at.y)) / (2.0 * d);
         float gz = (ground(p, at.x, at.y + d) - ground(p, at.x, at.y - d)) / (2.0 * d);
         float keep = lerp(0.15, 1.0, saturate(length(float2(gx, gz)) / 0.6));
-        found = ground(p, at.x, at.y) > p[0].rock_above && c.z < keep;
+        // The coastal plain (#117): low ground keeps a tenth of them, so the plain is not a
+        // field of boulders; the hills take the rest.
+        float height = ground(p, at.x, at.y);
+        keep *= lerp(ROCKS_LOWLAND.z, 1.0, smoothstep(ROCKS_LOWLAND.x, ROCKS_LOWLAND.y, height));
+        found = height > p[0].rock_above && c.z < keep;
     }
     return at;
 }

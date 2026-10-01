@@ -393,7 +393,10 @@ range. The layer below 0 m is a wet sand (`island_layer::SEABED`), out of sight 
 **Rocks** (`placement::RockRule::Land`): the GPU placement puts 300 000 of the city's boulders and
 rubble (`--instances`) on the island's land above 3 m. Each slot tries up to 32 candidates over
 the square, keeping one on land with a chance that rises with the slope: 15 % on the flat, all
-of them from a slope of 0.6. They are shaded in the island's dark rock. A slot that finds no land
+of them from a slope of 0.6. Since the coastal plain (#117, 2026-10-01) low ground keeps a tenth
+of that chance under 5 m, the whole of it from 40 m (`ROCKS_LOWLAND` in `meshlet.slang`): the
+plain had become a field of boulders, the first view's foreground among them; the hills take the
+rest (`reports/2026-10-01-117/boulders.png`). They are shaded in the island's dark rock. A slot that finds no land
 lies 50 m under the ground. The city's placement is unchanged: its checksum is still
 `4e10743a3499dc0e`, and the batch is 0 px. (A first version wrote the city's rocks' height as
 `ground − (0.15 r + 0)`, which the compiler no longer fused into one FMA, and 21 pixels of the
