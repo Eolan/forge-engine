@@ -1750,6 +1750,7 @@ fn island_lakes(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_procg
 }
 
 /// The island's water on the land (#105, D-038's rivers and lakes).
+#[derive(Clone)]
 struct IslandWater {
     /// Each river smoothed into a ribbon of points 4 m apart with its width, depth, speed and
     /// level, the tributaries first.
@@ -1761,8 +1762,24 @@ struct IslandWater {
     lakes: Vec<forge_procgen::LakeWater>,
 }
 
-/// The island's rivers and lakes as water and beds.
+/// The island's rivers and lakes as water and beds, made once a process for the field it was
+/// made from: the ground's layers and the water both ask for it at start (0.75 s each).
 fn island_water(height: &Field2<f32>) -> IslandWater {
+    static MADE: std::sync::Mutex<Option<(u64, IslandWater)>> = std::sync::Mutex::new(None);
+    let key = height.digest() ^ height.spacing.to_bits() ^ u64::from(height.size);
+    let mut made = MADE.lock().expect("the island's water");
+    if let Some((made_for, water)) = made.as_ref()
+        && *made_for == key
+    {
+        return water.clone();
+    }
+    let water = make_island_water(height);
+    *made = Some((key, water.clone()));
+    water
+}
+
+/// [`island_water`], made.
+fn make_island_water(height: &Field2<f32>) -> IslandWater {
     let flow = forge_procgen::drain(height, 0.0, &TaskPool::client());
     let rivers = island_rivers(height, &flow);
     let filled = forge_procgen::priority_flood(height, 0.0);
