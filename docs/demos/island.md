@@ -984,3 +984,38 @@ cells of a metre, so the layered pass now applies that rule under each pixel
 - **Cost:** 0.010 to 0.023 ms of `shading/layered` over six views. **Stability** as before. **Checks:** only the island's images change (ꟻLIP mean
   0.0045, 0.0053 with the water); the city's layered ground, the A/B harness and mesh against
   fallback at 0 px; validation clean (`reports/2026-10-01-106/sand.md`).
+
+**The water up a valley from low** (#113, 2026-10-01). The owner looked up a steep valley from
+just over its stream: the water showed only near the camera, and appeared further up as the
+camera rose. Not the streaming nor the levels of detail (the same with every page resident):
+the fresh water's contact fade measured its depth along the view ray under a *level* surface,
+`path × v.y`. Looking up a river that falls 10–20 %, the water 50 m ahead stands metres over the
+camera, so `v.y` was negative there, the depth zero and the water discarded, though its surface
+tilts down towards the camera and is plainly in view. The depth is now taken under the surface
+as it lies, tilted by the river's fall as drawn (`FreshWater::tilt`, uncapped where the shading's
+`fall` stops at 30 %). From the logged view `up a steep river from low` the water runs up the
+valley (ꟻLIP mean 0.015 on that view); elsewhere only the water's edge moves, by a thin line
+(0.0004 down a lowland river, 0.008 at the largest mouth, under 0.00002 on the lake and the
+first view). Sheet: `reports/2026-10-01-113/up-valley.png`.
+
+**The rivers' banks, beds and lake entries** (#114, 2026-10-01). From the owner's view of a river
+entering a lake: the channel read as a trench, the bed's colour ran wider than the channel and
+fanned into the lake, and the channel stopped in a step at the lake's edge.
+- **The bed, per pixel.** A pixel of the layered ground blends the four texels around it and the
+  lookup wanders by one, so a bed painted on the 4 m map showed up to 8 m onto the banks, wider
+  than most of the rivers. With the water the map now paints no river bed, and the lakes' mud
+  only under a metre of water or more; the fresh water turns the ground it covers into its bed
+  instead, at the ground's own brightness (grey-brown gravel for a river at 85 %, brown silt for
+  a lake at 90 %, blended through the river's plume), exactly within its own coverage.
+- **The banks by the bend.** In a straight reach the bank rises `0.3x + 0.06x²` from the water's
+  edge (was `0.5x + 0.1x²`); in a bend the inner bank's slope falls to a fifth, a point bar, and
+  the outer grows by three fifths, a cut bank (`ChannelParams::bend`: the curvature times the
+  half width plus 4 m, times 2, is the bend's share).
+- **Into and out of a lake** the channel shoals over 8 m plus three of its widths, to a fifth of
+  its depth at the lake's edge (`ChannelParams::shoal`), so its bed meets the lake's shallows
+  without a step.
+- From 40 m (`reports/2026-10-01-114/`): a river across the plain is a clean band where it was a
+  blurred, jagged strip of bed texels (`beds-plain.png`, ꟻLIP mean 0.020); the lake entry has a
+  crisp shore and silty water where it had a brown smear and a jagged grass edge
+  (`beds-lake.png`, 0.14); the largest mouth's channel reads as shallow water over sand
+  (`beds-mouth.png`, 0.054).

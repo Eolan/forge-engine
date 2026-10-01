@@ -1715,10 +1715,11 @@ mod island_layer {
     pub const DRY_GRASS: u8 = 5;
     /// Grass on the wettest ground: the valley bottoms.
     pub const LUSH_GRASS: u8 = 6;
-    /// A river's bed of gravel and silt, in its channel under the water (unless `--no-water`,
-    /// `forge_procgen::paint_beds`).
+    /// A river's bed of gravel and silt (unpainted since #114: the water draws its bed per
+    /// pixel from the ground under it; the row stays, so the layers after it keep their ids).
+    #[allow(dead_code)]
     pub const RIVERBED: u8 = 7;
-    /// A lake's bed of dark mud, under its water (unless `--no-water`,
+    /// A lake's bed of dark mud, under a metre or more of its water (unless `--no-water`,
     /// `forge_procgen::paint_lake_beds`).
     pub const LAKEBED: u8 = 8;
     /// How many layers there are.
@@ -2212,6 +2213,11 @@ const SHORE_SMOOTHING: (f32, u32) = (3.5, 4);
 /// and the ground's contour under each pixel).
 const SAND_BELOW: f32 = 2.5;
 
+/// Metres of a lake's water over the ground from which the map paints its bed of mud (#114):
+/// the lookup's blend and wander carry a texel's layer up to 8 m, so a bed painted to the
+/// water's edge showed on the shore; nearer the edge the water draws its bed itself.
+const LAKEBED_UNDER: f64 = 1.0;
+
 /// Metres the sand's top wanders up and down along the coast (`LayerContour::wander`, #106).
 const SAND_WANDER: f32 = 0.3;
 
@@ -2435,27 +2441,31 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         (island_layer::DRY_GRASS, 0.25),
         (island_layer::LUSH_GRASS, 0.25),
     );
-    // The rivers run in the channels carved for them, which the island's mesh draws (#105):
-    // with the water, their beds of gravel under the ribbons (`WaterShore::rivers`); without
-    // it, their stand-in painted at the water's width.
+    // The rivers run in the channels carved for them, which the island's mesh draws (#105).
+    // With the water the map paints no bed: a pixel blends the four texels around it and the
+    // lookup wanders by one, so a bed's 4 m texels showed up to 8 m onto the banks, wider than
+    // most of the rivers (#114); the water turns the ground it covers into its bed itself, per
+    // pixel (`fresh_water` in `water.slang`). Without it, their stand-in painted at the
+    // water's width.
     let IslandWater {
         ribbons,
         channels,
         lakes: lake_waters,
     } = island_water(&height);
     let painted = if args.water() {
-        forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::RIVERBED, 0.0)
+        0
     } else {
         forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::STREAM, 0.5)
     };
     // And its lakes of a hectare or more: with the water, their beds of silt wherever the
-    // lakes' planes stand over the ground; without it, on the stream's layer.
+    // lakes' planes stand a metre or more over the ground (their shallows, like the rivers,
+    // the ground under the water's own bed); without it, on the stream's layer.
     let lakes = island_lakes(&height, &flow);
     let lake_texels = if args.water() {
         forge_procgen::paint_lake_beds(
             &mut layers,
             &height,
-            &|x, y| channels.height_at(&height, x, y),
+            &|x, y| channels.height_at(&height, x, y) + LAKEBED_UNDER,
             &lake_waters,
             island_layer::LAKEBED,
         )

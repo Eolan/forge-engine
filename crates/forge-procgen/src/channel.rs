@@ -29,8 +29,16 @@ use crate::river::{Ribbon, drawn_height, offset, segment_distance, smooth_height
 pub struct ChannelParams {
     /// Metres past the water's edge the carve and the smoothed ground reach.
     pub margin: f64,
-    /// The bank's rise past the water's edge: `a x + b x²` metres at `x` metres out.
+    /// The bank's rise past the water's edge in a straight reach: `a x + b x²` metres at `x`
+    /// metres out. In a bend `a` falls to a fifth on the inner bank (a point bar) and grows by
+    /// three fifths on the outer (a cut bank).
     pub bank: (f64, f64),
+    /// How readily the banks take a bend's shape: the course's curvature times the half width
+    /// plus 4 m, times this, is the bend's share (1 for a full point bar and cut bank).
+    pub bend: f64,
+    /// Over how many metres, plus how many of its widths, a channel shoals into a lake and out
+    /// of it, to a fifth of its depth at the lake's edge.
+    pub shoal: (f64, f64),
     /// Quads a side of a cell drawn finer.
     pub split: u32,
     /// Metres either side of a lake's level over which its shore's cells are drawn finer.
@@ -43,13 +51,17 @@ pub struct ChannelParams {
 }
 
 impl Default for ChannelParams {
-    /// 8 m past the water, a bank rising by half a metre a metre and more, cells of 8 m drawn
-    /// in quads of 1 m, a lake's shore within a metre of its level, the coast's cells crossing the
-    /// sea's level and the sand's top (2.5 m, the island's layer rule), no channel through a lake.
+    /// 8 m past the water, a bank rising by 0.3 m a metre and more in a straight reach, the
+    /// bend's share full at a radius of twice the half width plus 4 m, a channel shoaling over
+    /// 8 m and three widths into a lake, cells of 8 m drawn in quads of 1 m, a lake's shore within
+    /// a metre of its level, the coast's cells crossing the sea's level and the sand's top
+    /// (2.5 m, the island's layer rule), no channel through a lake.
     fn default() -> Self {
         Self {
             margin: 8.0,
-            bank: (0.5, 0.1),
+            bank: (0.3, 0.06),
+            bend: 2.0,
+            shoal: (8.0, 3.0),
             split: 8,
             shore: 1.0,
             coast: [0.0, 2.5],
@@ -67,6 +79,9 @@ struct Segment {
     level: [f64; 2],
     depth: [f64; 2],
     half: [f64; 2],
+    /// How sharply the course bends at each end, −1..1, positive to its left (seen
+    /// downstream): the inner bank of a bend is a gentle point bar, the outer a cut bank.
+    bend: [f64; 2],
 }
 
 impl Segment {
@@ -112,23 +127,67 @@ impl Channels {
             );
             lakes.iter().any(|l| l.covers(x, y))
         };
-        let segments: Vec<Segment> = ribbons
-            .iter()
-            .flat_map(|r| r.points.windows(2))
-            .filter(|w| {
-                params.carve_lakes || !(under_lake(w[0].position) && under_lake(w[1].position))
-            })
-            .map(|w| {
-                let f = |v: f32| f64::from(v);
-                Segment {
-                    a: [f(w[0].position[0]), f(w[0].position[1])],
-                    b: [f(w[1].position[0]), f(w[1].position[1])],
-                    level: [f(w[0].level), f(w[1].level)],
-                    depth: [f(w[0].depth), f(w[1].depth)],
-                    half: [f(w[0].half_width), f(w[1].half_width)],
+        let mut segments: Vec<Segment> = Vec::new();
+        for r in ribbons {
+            let p = &r.points;
+            let n = p.len();
+            let f = |v: f32| f64::from(v);
+            let at = |k: usize| [f(p[k].position[0]), f(p[k].position[1])];
+            let mut arc = vec![0.0; n];
+            for k in 1..n {
+                let (a, b) = (at(k - 1), at(k));
+                arc[k] = arc[k - 1] + (b[0] - a[0]).hypot(b[1] - a[1]);
+            }
+            // The bend at each point: the signed curvature over the points either side, times
+            // the river's half width and a few metres (a stream turns sharply in a tight bend).
+            let bend: Vec<f64> = (0..n)
+                .map(|k| {
+                    let (a, b, c) = (at(k.saturating_sub(2)), at(k), at((k + 2).min(n - 1)));
+                    let cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                    let sides = (b[0] - a[0]).hypot(b[1] - a[1])
+                        * (c[0] - b[0]).hypot(c[1] - b[1])
+                        * (c[0] - a[0]).hypot(c[1] - a[1]);
+                    let curvature = if sides > 0.0 {
+                        2.0 * cross / sides
+                    } else {
+                        0.0
+                    };
+                    (curvature * (f(p[k].half_width) + 4.0) * params.bend).clamp(-1.0, 1.0)
+                })
+                .collect();
+            // Into and out of a lake the channel shoals over `shoal` of its widths, so its bed
+            // meets the lake's shallows without a step: the metres to the nearest point under
+            // a lake, each way along the course.
+            let under: Vec<bool> = (0..n).map(|k| under_lake(p[k].position)).collect();
+            let mut to_lake = vec![f64::MAX; n];
+            for k in 0..n {
+                if under[k] {
+                    to_lake[k] = 0.0;
+                } else if k > 0 {
+                    to_lake[k] = to_lake[k - 1] + (arc[k] - arc[k - 1]);
                 }
-            })
-            .collect();
+            }
+            for k in (0..n.saturating_sub(1)).rev() {
+                to_lake[k] = to_lake[k].min(to_lake[k + 1] + (arc[k + 1] - arc[k]));
+            }
+            let depth = |k: usize| {
+                let reach = params.shoal.1 * 2.0 * f(p[k].half_width) + params.shoal.0;
+                f(p[k].depth) * (0.2 + 0.8 * smoothstep(0.0, reach, to_lake[k]))
+            };
+            for k in 0..n.saturating_sub(1) {
+                if !params.carve_lakes && under[k] && under[k + 1] {
+                    continue;
+                }
+                segments.push(Segment {
+                    a: at(k),
+                    b: at(k + 1),
+                    level: [f(p[k].level), f(p[k + 1].level)],
+                    depth: [depth(k), depth(k + 1)],
+                    half: [f(p[k].half_width), f(p[k + 1].half_width)],
+                    bend: [bend[k], bend[k + 1]],
+                });
+            }
+        }
         // The cells each segment reaches: its box grown by its widest half width, the margin
         // and a cell, so a point on a cell's edge finds it from either side.
         let cells_of = |s: &Segment| {
@@ -332,6 +391,15 @@ impl Channels {
                 let u = r / half.max(1e-6);
                 level - Segment::at(s.depth, t) * (1.0 - u * u)
             } else {
+                // Which side of the course the point is on (positive to its left, seen
+                // downstream), against the way the course bends there.
+                let side = (s.b[0] - s.a[0]) * (y - s.a[1]) - (s.b[1] - s.a[1]) * (x - s.a[0]);
+                let bend = Segment::at(s.bend, t) * side.signum();
+                let a = if bend > 0.0 {
+                    a * (1.0 - 0.8 * bend)
+                } else {
+                    a * (1.0 - 0.6 * bend)
+                };
                 level + a * out + b * out * out
             };
             let weight = 1.0 - smoothstep(margin - 3.0, margin, out);

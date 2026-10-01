@@ -873,6 +873,9 @@ static const float RIVER_RIPPLE_TILE = 0.5;
 static const float RIVER_RIPPLE_STRENGTH = 0.35;
 // Fresh water with a little tannin and silt (m⁻¹): the bed shows through a metre of it.
 static const float3 RIVER_ABSORPTION = float3(0.9, 0.35, 0.45);
+// A river's bed of grey-brown gravel: the ground under the water takes this tint at its own
+// brightness, for this share (#114).
+static const float4 RIVER_BED = float4(1.12, 1.0, 0.8, 0.85);
 static const float3 RIVER_SCATTER = float3(0.02, 0.026, 0.018);
 // Metres of the banks' soft edge far away, at least (and two pixels).
 static const float RIVER_BANK = 0.5;
@@ -1189,7 +1192,8 @@ struct FreshWater
     float3 relative; // camera-relative metres
     float2 flat;     // camera-relative world x, z
     float2 velocity; // the flow, world x, z; m/s (0: still water)
-    float2 fall;     // the surface's own slope (a river's fall downstream)
+    float2 fall;     // the surface's own slope (a river's fall downstream), for its shading
+    float2 tilt;     // the surface's slope as drawn, uncapped: the water's depth is under it
     float rough;     // added to the ripples' slopes' variance (a stone's wake)
     float coverage;  // how much of the pixel it covers, before the contact's fade
     float drape;     // how far it lies on the ground far away (0: at its level)
@@ -1199,6 +1203,7 @@ struct FreshWater
     float speed;     // a river's own speed down it (m/s), which carries its white water
     float3 absorption; // its water's, m⁻¹
     float3 scatter;  // the light its water scatters back, per unit of irradiance
+    float4 bed;      // its bed's tint at the ground's own brightness, and how much of the ground it takes
     float deepest;   // the deepest it can be under its surface, metres
     float ripples;   // how strongly its ripples stand, 1 as the rivers' (a lake's calm patches less)
 };
@@ -1223,6 +1228,12 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     uint2 pixel = uint2(s.position.xy);
     float2 uv = (float2(pixel) + 0.5) / float2(w[0].width, w[0].height);
     float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
+    // The bed: the ground under the water turned to gravel and silt at its own brightness,
+    // exactly where the water is. The ground's 4 m layer map paints no river bed: a pixel
+    // blends its four texels and the lookup wanders by one, so a bed's texels showed metres onto
+    // the banks (#114).
+    float bright = dot(under, float3(0.2126, 0.7152, 0.0722));
+    under = lerp(under, bright * s.bed.rgb, s.bed.a);
     float floor_depth = g_sampled_images_r[NonUniformResourceIndex(w[0].scene_depth)].Load(int3(pixel, 0));
     float surface_distance = length(s.relative);
     float path = 1e3;
@@ -1231,7 +1242,11 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
         float4 behind = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, floor_depth, 1.0));
         path = max(length(behind.xyz / behind.w) - surface_distance, 0.0);
     }
-    float thickness = path * max(v.y, 0.0);
+    // The water's depth along the view ray, under the surface as it lies: tilted down the
+    // river by its fall. Under a level surface's plane a low view up a steep river found no
+    // depth at all, and the water up the valley vanished until the camera rose (#113).
+    float3 lying = normalize(float3(-s.tilt.x, 1.0, -s.tilt.y));
+    float thickness = path * max(dot(v, lying), 0.0);
     float contact = smoothstep(0.0, max(RIVER_CONTACT.x, RIVER_CONTACT.y * footprint), thickness);
     // Where the view ray finds nothing within the deepest the water can be under the surface,
     // the ground is not drawn there yet (its pages still streaming in): no water over nothing.
@@ -1314,6 +1329,7 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.flat = input.flat;
     s.velocity = stones.velocity;
     s.fall = -down * min(input.flow.z, 0.3);
+    s.tilt = -down * input.flow.z;
     s.rough = RIVER_WAKE_ROUGHNESS * stones.rough;
     s.coverage = input.river.y * lerp(near_cover, far_cover, drape);
     s.drape = drape;
@@ -1323,6 +1339,7 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.speed = input.river.w;
     s.absorption = RIVER_ABSORPTION;
     s.scatter = RIVER_SCATTER;
+    s.bed = RIVER_BED;
     s.deepest = input.river.z + RIVER_DEEPEST;
     s.ripples = 1.0;
     return fresh_water(w, s);
@@ -1340,6 +1357,8 @@ SurfaceTargets river_frag_main(RiverOut input)
 // Lake water (D-038's lake type): darker than the rivers', its dissolved matter taking the blue,
 // clearer of silt (m⁻¹, and the light it scatters back).
 static const float3 LAKE_ABSORPTION = float3(1.0, 0.6, 1.2);
+// A lake's shallows of brown silt, as the river's bed (its deeper bed is the map's mud).
+static const float4 LAKE_BED = float4(1.08, 1.0, 0.82, 0.9);
 static const float3 LAKE_SCATTER = float3(0.008, 0.012, 0.008);
 // The wind's patches over a lake: metres across, their drift (world x, z; m/s) and how calm the
 // calm ones are (a share of the ripples' slopes).
@@ -1405,6 +1424,7 @@ SurfaceTargets lake_frag_main(LakeOut input)
     Estuary estuary = estuary_at(w, world);
     s.velocity = estuary.velocity;
     s.fall = 0.0;
+    s.tilt = 0.0;
     s.rough = 0.0;
     s.coverage = smoothstep(0.25, 0.75, mask);
     s.drape = 0.0;
@@ -1414,6 +1434,7 @@ SurfaceTargets lake_frag_main(LakeOut input)
     s.speed = 0.0;
     s.absorption = lerp(LAKE_ABSORPTION, RIVER_ABSORPTION, estuary.fresh);
     s.scatter = lerp(LAKE_SCATTER, RIVER_SCATTER, estuary.fresh);
+    s.bed = lerp(LAKE_BED, RIVER_BED, estuary.fresh);
     s.deepest = asfloat(lake.b.w) + RIVER_DEEPEST;
     // Patches of calm and of wind ripples drifting over the lake (cat's paws), the river's own
     // ripples where it runs in.

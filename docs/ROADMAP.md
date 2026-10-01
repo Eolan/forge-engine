@@ -302,9 +302,10 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    natural or integrated. The research (`docs/research/rivers.md`) and D-040/D-041 (accepted
    the same day: the engines' way, features carve and paint the ground around them) set the
    work. Done: a coastal plain in the uplift (the rivers reach the sea at 1–5 % where they fell
-   at 9–24 %, 19 mouths for 25, rivers up to 17 m). Next: #113 (the water vanishing up a
-   valley from low), #114 (the channels read as trenches, the bed's layer smeared, the lake
-   entries), #110 (the mouths' seam), the floodplains and the riparian strip.
+   at 9–24 %, 19 mouths for 25, rivers up to 17 m); the water up a steep valley seen from low
+   (#113); the beds drawn by the water per pixel, banks by the bend and channels shoaling into
+   lakes (#114). Next: #110 (the mouths' seam), the floodplains, the far water in the terrain's
+   material and the riparian strip.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of
