@@ -488,6 +488,21 @@ the beach from 8 m 1.864 → 1.887 ms, over the south beach from 60 m 1.799 → 
 from 2.5 km 2.132 → 2.152 ms. The wandering lookup costs up to 0.02 ms of `shading/layered` (two
 noise lookups a pixel of the island's ground); the rest is the refined cells.
 
+**The island's water at 2560 × 1440** (2026-10-01, after the rivers' beds, the lakes, the coast,
+the ground's smoothing, the rivers' culling; `--water`, three runs each, the waves held at 12 s):
+
+| View | frame | water/surface | water/reflections | shading/layered |
+|---|---|---|---|---|
+| coast (the first view) | 3.05 ms | 0.242 | 0.411 | 0.890 |
+| the stream from 16 m | 2.64 ms | 0.089 | 0.090 | 0.909 |
+| down a river from 3 m | 2.97 ms | 0.136 | 0.394 | 0.924 |
+| the stone in the fastest water, at the largest mouth | 3.41 ms | 0.295 | 0.514 | 1.153 |
+| a lake from 3 m over its water | 2.90 ms | 0.176 | 0.457 | 0.865 |
+| the island from 2.5 km | 3.50 ms | 0.350 | 0.195 | 0.723 |
+
+The water's rays are the larger share wherever water fills the view (a mirror and a shadow ray a
+pixel); the surface pass stays under 0.35 ms.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the
