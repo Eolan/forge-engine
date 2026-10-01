@@ -2186,6 +2186,36 @@ fn island_ribbons(
         ms = start.elapsed().as_millis(),
         "island rivers"
     );
+    // The confluences' rounded corners (#119), and the four largest tributaries' junctions from
+    // 40 m over their corners.
+    let corners: Vec<&forge_procgen::Corner> = ribbons.iter().flat_map(|r| &r.corners).collect();
+    let radii = corners.iter().map(|c| c.radius);
+    let mean_radius = radii.clone().sum::<f64>() / corners.len().max(1) as f64;
+    let views: Vec<String> = ribbons
+        .iter()
+        .rev()
+        .filter(|r| !r.corners.is_empty())
+        .take(4)
+        .map(|r| {
+            let n = r.corners.len() as f64;
+            let mean = |i: usize| r.corners.iter().map(|c| c.tip[i]).sum::<f64>() / n;
+            let level = r.corners.iter().map(|c| c.level[1]).sum::<f64>() / n;
+            format!(
+                "{:.0},{:.0},{:.0},0,-89",
+                mean(0) - f64::from(half),
+                level + 40.0,
+                mean(1) - f64::from(half)
+            )
+        })
+        .collect();
+    tracing::info!(
+        junctions = ribbons.iter().filter(|r| !r.corners.is_empty()).count(),
+        corners = corners.len(),
+        mean_radius_m = %format_args!("{mean_radius:.1}"),
+        largest_radius_m = %format_args!("{:.1}", radii.fold(0.0, f64::max)),
+        views = %views.join("  "),
+        "the confluences' corners rounded (--view)"
+    );
     // Where the rivers meet the sea, and where they run into a lake or out of one: from there the
     // sea's or the lake's water carries their flow on, or draws it in.
     let mouth = |p: &forge_procgen::RibbonPoint| WaterMouth {
@@ -2339,6 +2369,7 @@ fn island_ribbons(
                     level: p.level,
                     direction: p.direction,
                     half_width: p.half_width,
+                    cover: p.cover,
                     reach: p.reach,
                     depth: p.depth,
                     bank: p.bank,

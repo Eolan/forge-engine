@@ -4,6 +4,9 @@
 //!   depth in the middle; past the edge the bank rises `a x + b x²` until it meets the ground,
 //!   which it only ever lowers. The level, the depth and the half width run linearly along each
 //!   segment of the ribbon, and where two rivers' channels meet the lower one wins.
+//! - Where a tributary meets its river, the corners the two channels' banks make either side are
+//!   rounded ([`crate::Corner`], [`corner_ground`], #119): a bank rising from a circle's arc, a
+//!   shallow bed between the arc and the old corner, which blends into the rivers' beds.
 //! - Into and out of a lake ([`crate::Ribbon::lake_runs`]: where the lake's water stands over
 //!   the ground) the channel shoals and its banks flatten into the shore, a mouth; in the lake
 //!   it runs on as far and fades out, so it ends in no hollow wherever the lake's edge lies
@@ -24,9 +27,14 @@
 use forge_core::hash::{hash_cell3, unit_f32};
 use forge_task::TaskPool;
 
+use std::ops::RangeInclusive;
+
 use crate::field::Field2;
 use crate::lake::LakeWater;
-use crate::river::{Ribbon, drawn_height, offset, segment_distance, smooth_height, smoothstep};
+use crate::river::{
+    Corner, Ribbon, corner_samples, cross, drawn_height, offset, segment_distance, smooth_height,
+    smoothstep, sub,
+};
 
 /// How the channels are carved.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -99,9 +107,32 @@ struct Segment {
     keep: [f64; 2],
 }
 
+/// A confluence's rounded corner as the channels carve it ([`corner_ground`]): the corner, and
+/// the rise a metre out of the banks it touches, the tributary's and the river's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fillet {
+    corner: Corner,
+    rise: [f64; 2],
+}
+
 impl Segment {
     fn at(v: [f64; 2], t: f64) -> f64 {
         v[0] + (v[1] - v[0]) * t
+    }
+
+    /// The bank's rise a metre out at `q` beside the segment, `t` along it, from `a` in a
+    /// straight reach: less on a bend's inner bank (a point bar), more on its outer (a cut bank).
+    fn rise(&self, q: [f64; 2], t: f64, a: f64) -> f64 {
+        // Which side of the course the point is on (positive to its left, seen downstream),
+        // against the way the course bends there.
+        let side = (self.b[0] - self.a[0]) * (q[1] - self.a[1])
+            - (self.b[1] - self.a[1]) * (q[0] - self.a[0]);
+        let bend = Segment::at(self.bend, t) * side.signum();
+        if bend > 0.0 {
+            a * (1.0 - 0.8 * bend)
+        } else {
+            a * (1.0 - 0.6 * bend)
+        }
     }
 }
 
@@ -116,6 +147,11 @@ pub struct Channels {
     /// Per cell, where its segments start in `list` (one more entry than cells).
     start: Vec<u32>,
     list: Vec<u32>,
+    /// The confluences' rounded corners ([`Corner`]), and per cell where its corners start in
+    /// `corner_list`.
+    corners: Vec<Fillet>,
+    corner_start: Vec<u32>,
+    corner_list: Vec<u32>,
     refined: Vec<u32>,
     /// Per sample, whether every cell around it is refined: the smoothed ground's weight there
     /// (bilinear between the samples, so it is 0 all along the refined region's outline).
@@ -222,30 +258,65 @@ impl Channels {
             )
         };
         let count = (side as usize) * (side as usize);
-        let mut start = vec![0u32; count + 1];
-        for s in &segments {
-            let (xs, ys) = cells_of(s);
-            for y in ys {
-                for x in xs.clone() {
-                    start[(y * side + x) as usize + 1] += 1;
+        let (start, list) = bucket(side, &segments.iter().map(cells_of).collect::<Vec<_>>());
+        // The corners' cells: around their water and their arc, as far as the margin past it
+        // and their bed's blend past the old edges.
+        let corners: Vec<Corner> = ribbons
+            .iter()
+            .flat_map(|r| r.corners.iter().copied())
+            .collect();
+        let corner_cells = |c: &Corner, grow: f64| {
+            let samples = corner_samples(c);
+            let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+            for p in &samples {
+                for i in 0..2 {
+                    lo[i] = lo[i].min(p[i]);
+                    hi[i] = hi[i].max(p[i]);
                 }
             }
-        }
-        for c in 0..count {
-            start[c + 1] += start[c];
-        }
-        let mut fill = start.clone();
-        let mut list = vec![0u32; start[count] as usize];
-        for (index, s) in segments.iter().enumerate() {
-            let (xs, ys) = cells_of(s);
-            for y in ys {
-                for x in xs.clone() {
-                    let c = (y * side + x) as usize;
-                    list[fill[c] as usize] = index as u32;
-                    fill[c] += 1;
-                }
-            }
-        }
+            let grow = grow + params.margin.max(c.blend);
+            let last = i64::from(side) - 1;
+            let cell = |v: f64| ((v / spacing).floor() as i64).clamp(0, last) as u32;
+            (
+                cell(lo[0] - grow)..=cell(hi[0] + grow),
+                cell(lo[1] - grow)..=cell(hi[1] + grow),
+            )
+        };
+        let (corner_start, corner_list) = bucket(
+            side,
+            &corners
+                .iter()
+                .map(|c| corner_cells(c, spacing))
+                .collect::<Vec<_>>(),
+        );
+        // Each corner's bank rises as the rivers' banks it touches do, half a metre out of
+        // their water there: no step where it meets them, and no steeper.
+        let corners: Vec<Fillet> = corners
+            .into_iter()
+            .map(|corner| {
+                let rise = corner.touches.map(|touch| {
+                    let toward = sub(corner.centre, touch);
+                    let length = (toward[0] * toward[0] + toward[1] * toward[1]).sqrt();
+                    let q = [
+                        touch[0] + toward[0] * 0.5 / length,
+                        touch[1] + toward[1] * 0.5 / length,
+                    ];
+                    let last = f64::from(side - 1);
+                    let c = (q[1] / spacing).floor().clamp(0.0, last) as usize * side as usize
+                        + (q[0] / spacing).floor().clamp(0.0, last) as usize;
+                    list[start[c] as usize..start[c + 1] as usize]
+                        .iter()
+                        .map(|&s| {
+                            let s = &segments[s as usize];
+                            let (r, t) = segment_distance(q, s.a, s.b);
+                            (r - Segment::at(s.half, t), s.rise(q, t, params.bank.0))
+                        })
+                        .min_by(|a, b| a.0.total_cmp(&b.0))
+                        .map_or(params.bank.0, |(_, rise)| rise)
+                });
+                Fillet { corner, rise }
+            })
+            .collect();
         // A cell is drawn finer when a point of it may be within the margin of a river's water:
         // its centre within that plus half its diagonal.
         let half_diagonal = 0.5 * spacing * std::f64::consts::SQRT_2;
@@ -265,6 +336,14 @@ impl Channels {
                     })
             })
             .collect();
+        for c in &corners {
+            let (xs, ys) = corner_cells(&c.corner, 0.0);
+            for y in ys {
+                for x in xs.clone() {
+                    is_refined[(y * side + x) as usize] = true;
+                }
+            }
+        }
         // The lakes' shores: the cells of a lake's mask whose ground spans its level within
         // `shore`, and a cell more all round, where the smoothed ground takes over.
         let side_us = side as usize;
@@ -337,6 +416,9 @@ impl Channels {
             segments,
             start,
             list,
+            corners,
+            corner_start,
+            corner_list,
             refined,
             inner,
         }
@@ -429,15 +511,7 @@ impl Channels {
                 let u = r / half.max(1e-6);
                 level - Segment::at(s.depth, t) * (1.0 - u * u)
             } else {
-                // Which side of the course the point is on (positive to its left, seen
-                // downstream), against the way the course bends there.
-                let side = (s.b[0] - s.a[0]) * (y - s.a[1]) - (s.b[1] - s.a[1]) * (x - s.a[0]);
-                let bend = Segment::at(s.bend, t) * side.signum();
-                let a = if bend > 0.0 {
-                    a * (1.0 - 0.8 * bend)
-                } else {
-                    a * (1.0 - 0.6 * bend)
-                };
+                let a = s.rise([x, y], t, a);
                 // Towards the sea the banks flatten into the beach, and into a lake's shore.
                 let beach = (0.3 + 0.7 * smoothstep(0.0, self.params.beach, level))
                     .min(Segment::at(s.mouth, t));
@@ -445,6 +519,15 @@ impl Channels {
             };
             let weight = (1.0 - smoothstep(margin - 3.0, margin, out)) * Segment::at(s.keep, t);
             carved = carved.min(base + (channel.min(base) - base) * weight);
+        }
+        let corners =
+            &self.corner_list[self.corner_start[c] as usize..self.corner_start[c + 1] as usize];
+        for &k in corners {
+            if let Some((ground, weight)) =
+                corner_ground(&self.corners[k as usize], [x, y], &self.params)
+            {
+                carved = carved.min(base + (ground.min(base) - base) * weight);
+            }
         }
         carved
     }
@@ -531,6 +614,88 @@ impl Channels {
             heights,
         }
     }
+}
+
+/// Per cell of a `side × side` grid, the boxes (their cells, inclusive) covering it: where its
+/// run starts in the list (one more entry than cells), and the list of the boxes' indices.
+fn bucket(side: u32, boxes: &[(RangeInclusive<u32>, RangeInclusive<u32>)]) -> (Vec<u32>, Vec<u32>) {
+    let count = (side as usize) * (side as usize);
+    let mut start = vec![0u32; count + 1];
+    for (xs, ys) in boxes {
+        for y in ys.clone() {
+            for x in xs.clone() {
+                start[(y * side + x) as usize + 1] += 1;
+            }
+        }
+    }
+    for c in 0..count {
+        start[c + 1] += start[c];
+    }
+    let mut fill = start.clone();
+    let mut list = vec![0u32; start[count] as usize];
+    for (index, (xs, ys)) in boxes.iter().enumerate() {
+        for y in ys.clone() {
+            for x in xs.clone() {
+                let c = (y * side + x) as usize;
+                list[fill[c] as usize] = index as u32;
+                fill[c] += 1;
+            }
+        }
+    }
+    (start, list)
+}
+
+/// The ground a confluence's rounded corner ([`Corner`], #119) carves at `q`, and the share of it
+/// kept, or none away from it. In the cone from the circle's centre through where it touches
+/// the two edges:
+/// - inside the circle the bank rises from the arc as the banks it touches do there, so it meets
+///   them along the cone's sides and lies under them between;
+/// - past the arc the water's bed falls at [`Corner::slope`] to [`Corner::deepest`], and over
+///   [`Corner::blend`] past the old edges (the lines from the tip through where the arc touches
+///   them) it rises back to the level, under the rivers' beds by then: their corner is gone
+///   under the water, with no step at the cone's sides or past the blend.
+///
+/// The level and the bank's rise run from the tributary's where the arc touches its edge to the
+/// river's where it touches that.
+fn corner_ground(f: &Fillet, q: [f64; 2], params: &ChannelParams) -> Option<(f64, f64)> {
+    let c = &f.corner;
+    let (a, b, v) = (
+        sub(c.touches[0], c.centre),
+        sub(c.touches[1], c.centre),
+        sub(q, c.centre),
+    );
+    let turn = cross(a, b).signum();
+    let (wa, wb) = (cross(a, v) * turn, cross(v, b) * turn);
+    if wa < 0.0 || wb < 0.0 {
+        return None;
+    }
+    let w = if wa + wb > 0.0 { wa / (wa + wb) } else { 0.5 };
+    let level = c.level[0] + (c.level[1] - c.level[0]) * w;
+    let out = c.radius - (v[0] * v[0] + v[1] * v[1]).sqrt();
+    let margin = params.margin;
+    if out >= margin {
+        return None;
+    }
+    let beach = 0.3 + 0.7 * smoothstep(0.0, params.beach, level);
+    if out >= 0.0 {
+        let (a, b) = (f.rise[0] + (f.rise[1] - f.rise[0]) * w, params.bank.1);
+        let weight = 1.0 - smoothstep(margin - 3.0, margin, out);
+        return Some((level + beach * (a * out + b * out * out), weight));
+    }
+    // How far past each old edge `q` is, away from the centre.
+    let past = |touch: [f64; 2]| {
+        let edge = sub(touch, c.tip);
+        let length = (edge[0] * edge[0] + edge[1] * edge[1]).sqrt().max(1e-9);
+        let away = -cross(edge, sub(c.centre, c.tip)).signum();
+        cross(edge, sub(q, c.tip)) * away / length
+    };
+    let (pa, pb) = (past(c.touches[0]), past(c.touches[1]));
+    if pa >= c.blend || pb >= c.blend {
+        return None;
+    }
+    let keep = (1.0 - smoothstep(0.0, c.blend, pa)) * (1.0 - smoothstep(0.0, c.blend, pb));
+    let depth = (c.slope * -out).min(c.deepest) * keep;
+    Some((level - depth, 1.0))
 }
 
 /// The ground drawn finer than its field (#106, [`Channels::fine`]): the fine samples, and its
@@ -943,5 +1108,76 @@ mod tests {
             channels.cubic_height_at(&valley, x, y),
             smooth_height(&valley, x, y)
         );
+    }
+
+    #[test]
+    fn a_confluence_s_corners_are_rounded_under_water_without_a_step() {
+        // Two valleys meeting in a Y (as `river`'s test), its rivers the island's width.
+        let fork = Field2::from_fn(41, 10.0, |x, y| {
+            let (fx, fy) = (x as f32, y as f32);
+            let spread = (fy - 20.0).max(0.0) * 0.5;
+            let branch = (fx - (20.0 - spread))
+                .abs()
+                .min((fx - (20.0 + spread)).abs());
+            2.0 * branch + fy + 1.0
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&fork, 0.0, &pool);
+        let rivers = trace_rivers(&fork, &flow, 30);
+        let ribbons = ribbons(&fork, &rivers, &[], &RibbonParams::island());
+        let channels = Channels::new(&fork, &ribbons, &[], &ChannelParams::default());
+        let corners: Vec<&Corner> = ribbons.iter().flat_map(|r| &r.corners).collect();
+        assert!(corners.len() >= 2, "{}", corners.len());
+        let height = |p: [f64; 2]| channels.height_at(&fork, p[0], p[1]);
+        for c in corners {
+            // The corner the edges made is under its water, at the level between theirs (a
+            // steep tributary stands over its river there), and the arc is the water's edge: half
+            // way along it the ground is at that level or under it, and it rises into the bank.
+            let (a, b) = (sub(c.touches[0], c.centre), sub(c.touches[1], c.centre));
+            let (la, lb) = (
+                (a[0] * a[0] + a[1] * a[1]).sqrt(),
+                (b[0] * b[0] + b[1] * b[1]).sqrt(),
+            );
+            let mid = [a[0] / la + b[0] / lb, a[1] / la + b[1] / lb];
+            let length = (mid[0] * mid[0] + mid[1] * mid[1]).sqrt();
+            let towards = |r: f64| {
+                [
+                    c.centre[0] + mid[0] / length * r,
+                    c.centre[1] + mid[1] / length * r,
+                ]
+            };
+            let level = 0.5 * (c.level[0] + c.level[1]);
+            let (edge, bank) = (height(towards(c.radius)), height(towards(c.radius - 1.0)));
+            assert!(height(c.tip) < level - 0.02, "{c:?}");
+            assert!(
+                edge <= level + 0.01 && bank > edge + 0.15,
+                "{edge} {bank} {c:?}"
+            );
+            // The rivers' water covers its tip and its arc.
+            for q in corner_samples(c) {
+                let covered = ribbons.iter().any(|r| {
+                    r.points.windows(2).any(|w| {
+                        let f = |p: [f32; 2]| [f64::from(p[0]), f64::from(p[1])];
+                        let (d, t) = segment_distance(q, f(w[0].position), f(w[1].position));
+                        d <= f64::from(w[0].cover + (w[1].cover - w[0].cover) * t as f32)
+                    })
+                });
+                assert!(covered, "{q:?} of {c:?}");
+            }
+            // No step anywhere around it: never steeper than 2 between points 2 cm apart.
+            let (centre, reach) = (c.tip, c.radius.max(8.0) + 8.0);
+            for j in 0..=(2.0 * reach / 0.25) as u32 {
+                for i in 0..=(2.0 * reach / 0.25) as u32 {
+                    let p = [
+                        centre[0] - reach + f64::from(i) * 0.25,
+                        centre[1] - reach + f64::from(j) * 0.25,
+                    ];
+                    let h = height(p);
+                    for q in [[p[0] + 0.02, p[1]], [p[0], p[1] + 0.02]] {
+                        assert!((height(q) - h).abs() <= 0.04, "{p:?} {q:?} near {c:?}");
+                    }
+                }
+            }
+        }
     }
 }

@@ -14,9 +14,11 @@
 //!   over the ground it is the lake's level, never under it upstream, and it never goes below
 //!   the sea's.
 //! - A tributary's water ends at its river's level, and it gives way to that river's water
-//!   where it enters its channel; a river gives way to the sea where its level reaches the
-//!   sea's, and to a lake inside its water: a river running in fades out over the lake's water,
-//!   one running out fades in over it, so the two meet wherever the lake's edge lies (#120).
+//!   where it enters its channel. The corners either side are rounded ([`Corner`], #119), their
+//!   water drawn by the nearer river ([`RibbonPoint::cover`]).
+//! - A river gives way to the sea where its level reaches the sea's, and to a lake inside its
+//!   water: a river running in fades out over the lake's water, one running out fades in over
+//!   it, so the two meet wherever the lake's edge lies (#120).
 //! - In a bend the ribbon's half width stays under a share of the bend's radius, so its inner
 //!   edge never folds over itself.
 //!
@@ -96,6 +98,9 @@ pub struct RibbonParams {
     /// metres wide and `k_d · 0.3 (A/km²)^0.21` deep, the width growing downstream at nature's
     /// rate; `None` keeps [`hydrology::width`] and [`depth`].
     pub regional: Option<(f64, f64)>,
+    /// How far along each edge the corners where a tributary meets its river are rounded
+    /// ([`Corner`], #119): `a + b ×` the tributary's width, metres.
+    pub confluence: (f64, f64),
 }
 
 impl Default for RibbonParams {
@@ -104,7 +109,8 @@ impl Default for RibbonParams {
     /// (C = 15), 0.3 to 3 m/s, the drawn half width under 0.8 of a bend's radius, 0.5 m + 10 %
     /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
     /// of 60 % at most, rising to its banks over 8 m and three widths into a lake, the lakes of a
-    /// hectare, twice as wide at the sea from 1.5 m over it.
+    /// hectare, twice as wide at the sea from 1.5 m over it, a confluence's corners rounded over
+    /// 2 m and a tributary's width along each edge.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -124,6 +130,7 @@ impl Default for RibbonParams {
             lake_area: 10_000.0,
             estuary: (1.5, 1.0),
             regional: None,
+            confluence: (2.0, 1.0),
         }
     }
 }
@@ -165,6 +172,9 @@ pub struct RibbonPoint {
     pub direction: [f32; 2],
     /// Half the river's width at its level, metres: where the water meets the banks.
     pub half_width: f32,
+    /// Half the width over which its water is drawn whole, metres: the half width, more where it
+    /// fills a confluence's rounded corner ([`Corner`]).
+    pub cover: f32,
     /// Half the ribbon's width, metres: past the water's edge, under the banks.
     pub reach: f32,
     /// The water's depth in the middle, metres.
@@ -198,6 +208,34 @@ pub struct Ribbon {
     /// stands over the ground half as deep as the river or more and takes the river on (the
     /// first is where it runs in, the point past the last where it runs out).
     pub lake_runs: Vec<[u32; 2]>,
+    /// The rounded corners where it joins its river, either side of it: none for a river that
+    /// ends in the sea or a lake, or meets its river along it.
+    pub corners: Vec<Corner>,
+}
+
+/// A rounded corner where a tributary's water meets its river's (#119): the circle touching both
+/// edges of the land between them, whose arc the water's edge follows instead of the corner the
+/// two edges made. Between the arc and that corner the water stands shallow over a bed that
+/// blends into the rivers', and past the arc the bank rises.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Corner {
+    /// The circle's centre, metres in the field's frame.
+    pub centre: [f64; 2],
+    /// Its radius, metres.
+    pub radius: f64,
+    /// Where it touches the tributary's water's edge, and the river's.
+    pub touches: [[f64; 2]; 2],
+    /// The corner the two edges made.
+    pub tip: [f64; 2],
+    /// The water's level where it touches each, metres.
+    pub level: [f64; 2],
+    /// How the bed falls from the arc, m/m: a little less steeply than the gentler of the rivers'
+    /// beds from their edges, so it is never under theirs where it blends into them.
+    pub slope: f64,
+    /// The bed's deepest, metres: half the shallower river's depth.
+    pub deepest: f64,
+    /// Metres past the old edges into the rivers' water over which its bed blends into theirs.
+    pub blend: f64,
 }
 
 impl Ribbon {
@@ -281,6 +319,7 @@ pub fn ribbons(
                 mouth_area,
                 points: ribbon_points(&samples, params),
                 lake_runs: Vec::new(),
+                corners: Vec::new(),
             })
         })
         .collect();
@@ -340,6 +379,53 @@ pub fn ribbons(
                 p.depth = (f64::from(p.depth) * (1.0 - 0.4 * e)) as f32;
             }
         }
+    }
+    // The confluences' rounded corners, on the final widths, and the water drawn over them: each
+    // part of a corner by the river whose edge is nearer, and by the river joined too where the
+    // tributary's water is fading into it.
+    for p in ribbons.iter_mut().flat_map(|r| r.points.iter_mut()) {
+        p.cover = p.half_width;
+    }
+    for r in 0..ribbons.len() {
+        let Mouth::Junction { river: into, .. } = rivers.rivers[ribbons[r].river as usize].mouth
+        else {
+            continue;
+        };
+        let Some(m) = done[into as usize] else {
+            continue;
+        };
+        let corners = confluence(&ribbons[r], &ribbons[m], params);
+        let mut covers: Vec<(usize, usize, f64)> = Vec::new();
+        for corner in &corners {
+            for q in corner_samples(corner) {
+                let (tributary, main) = (&ribbons[r].points, &ribbons[m].points);
+                let t = edge_distance(
+                    tributary,
+                    tributary.len().saturating_sub(64)..tributary.len(),
+                    q,
+                );
+                let n = nearest(main, q);
+                let j = edge_distance(main, n.saturating_sub(48)..(n + 49).min(main.len()), q);
+                let fading = tributary[t.segment].fade.min(tributary[t.segment + 1].fade) < 0.9;
+                for (ribbon, e, near) in [
+                    (r, t, t.out <= j.out + 1.0),
+                    (m, j, j.out <= t.out + 1.0 || fading),
+                ] {
+                    if near {
+                        let across = e.out + e.half + 0.5;
+                        covers.push((ribbon, e.segment, across));
+                        covers.push((ribbon, e.segment + 1, across));
+                    }
+                }
+            }
+        }
+        for (ribbon, k, across) in covers {
+            let p = &mut ribbons[ribbon].points[k];
+            let cover = f64::from(p.cover).max(across);
+            p.cover = cover as f32;
+            p.reach = p.reach.max((cover + affine(params.tuck, cover)) as f32);
+        }
+        ribbons[r].corners = corners;
     }
     ribbons.sort_by(|a, b| {
         a.mouth_area
@@ -510,6 +596,7 @@ fn ribbon_points(samples: &[[f64; 4]], params: &RibbonParams) -> Vec<RibbonPoint
                 level: 0.0,
                 direction: [(dx / length) as f32, (dy / length) as f32],
                 half_width: half[k] as f32,
+                cover: half[k] as f32,
                 reach: (half[k] + affine(params.tuck, half[k])) as f32,
                 depth: (size(s[3], params).1 * spring(params.spring.1, arc[k], params)) as f32,
                 bank: 0.0,
@@ -836,6 +923,254 @@ fn nearest(points: &[RibbonPoint], at: [f64; 2]) -> usize {
         }
     }
     best.1
+}
+
+/// A point's position, metres.
+fn position(p: &RibbonPoint) -> [f64; 2] {
+    [f64::from(p.position[0]), f64::from(p.position[1])]
+}
+
+/// `a × b`, the z of the cross product.
+pub(crate) fn cross(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+
+/// `a · b`.
+fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+/// `a + b s`.
+fn along(a: [f64; 2], b: [f64; 2], s: f64) -> [f64; 2] {
+    [a[0] + b[0] * s, a[1] + b[1] * s]
+}
+
+/// `a − b`.
+pub(crate) fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+/// `a` over its length (`a` itself when it has none).
+fn unit(a: [f64; 2]) -> [f64; 2] {
+    let length = dot(a, a).sqrt();
+    if length > 0.0 {
+        [a[0] / length, a[1] / length]
+    } else {
+        a
+    }
+}
+
+/// How far a point is out of a ribbon's water ([`edge_distance`]).
+#[derive(Clone, Copy, Debug)]
+struct Edge {
+    /// Metres out of the water, negative in it.
+    out: f64,
+    /// The half width at the nearest point of the course.
+    half: f64,
+    /// The nearest segment's first point, and how far along it the nearest point is (0..1).
+    segment: usize,
+    t: f64,
+    /// The nearest point of the course.
+    on: [f64; 2],
+}
+
+impl Edge {
+    /// A value of the points, at the nearest point of the course.
+    fn at(&self, points: &[RibbonPoint], value: impl Fn(&RibbonPoint) -> f32) -> f64 {
+        let (a, b) = (
+            f64::from(value(&points[self.segment])),
+            f64::from(value(&points[self.segment + 1])),
+        );
+        a + (b - a) * self.t
+    }
+}
+
+/// How far `q` is out of the water of the segments between `points[range]` (two or more), its
+/// edge at their half widths.
+fn edge_distance(points: &[RibbonPoint], range: std::ops::Range<usize>, q: [f64; 2]) -> Edge {
+    let mut best = Edge {
+        out: f64::MAX,
+        half: 0.0,
+        segment: range.start,
+        t: 0.0,
+        on: q,
+    };
+    for k in range.start..range.end.saturating_sub(1) {
+        let (a, b) = (position(&points[k]), position(&points[k + 1]));
+        let (d, t) = segment_distance(q, a, b);
+        let half = f64::from(points[k].half_width)
+            + f64::from(points[k + 1].half_width - points[k].half_width) * t;
+        if d - half < best.out {
+            best = Edge {
+                out: d - half,
+                half,
+                segment: k,
+                t,
+                on: along(a, sub(b, a), t),
+            };
+        }
+    }
+    best
+}
+
+/// The rounded corners either side of where `tributary` meets `main` (#119): on each side the
+/// circle touching both rivers' water's edges, their own curves near the junction, whose tangent
+/// points are [`RibbonParams::confluence`] from the corner the edges make (were they straight).
+/// None where it meets its river in a lake or at the sea, or on a side where the edges meet
+/// nearly straight on or along each other.
+fn confluence(tributary: &Ribbon, main: &Ribbon, params: &RibbonParams) -> Vec<Corner> {
+    let (tp, mp) = (&tributary.points, &main.points);
+    let n = tp.len();
+    let j = nearest(mp, position(&tp[n - 1]));
+    if tributary.in_lake(n - 1) || main.in_lake(j) || mp[j].level <= 0.05 {
+        return Vec::new();
+    }
+    let near = j.saturating_sub(48)..(j + 49).min(mp.len());
+    let out_main = |q: [f64; 2]| edge_distance(mp, near.clone(), q);
+    let out_tributary = |q: [f64; 2]| edge_distance(tp, n.saturating_sub(64)..n, q);
+    // The tributary's last point out of the main's water, where its edges run into the main's.
+    let Some(k) = (0..n).rev().find(|&k| out_main(position(&tp[k])).out > 0.0) else {
+        return Vec::new();
+    };
+    let f = |v: [f32; 2]| [f64::from(v[0]), f64::from(v[1])];
+    let (t, m) = (f(tp[k].direction), f(mp[j].direction));
+    // The main's near edge, facing up the tributary.
+    let mut facing = [-m[1], m[0]];
+    if dot(facing, t) > 0.0 {
+        facing = [-facing[0], -facing[1]];
+    }
+    if dot(facing, t).abs() < 0.2 {
+        return Vec::new();
+    }
+    let (half, main_half) = (f64::from(tp[k].half_width), f64::from(mp[j].half_width));
+    let tangent = params.confluence.0 + params.confluence.1 * 2.0 * half;
+    let mut corners = Vec::new();
+    for side in [1.0, -1.0] {
+        let normal = [-t[1] * side, t[0] * side];
+        // The land between the tributary's edge back up it and the main's edge away from it.
+        let away = dot(m, normal);
+        if away.abs() < 0.1 {
+            continue;
+        }
+        let (up, edge) = ([-t[0], -t[1]], [m[0] * away.signum(), m[1] * away.signum()]);
+        let (cos, sin) = (dot(up, edge), cross(up, edge).abs());
+        if !(-0.87..=0.97).contains(&cos) {
+            continue;
+        }
+        let sin_half = ((1.0 - cos) / 2.0).sqrt();
+        // The corner the straight edges make, and the circle touching them, from which the
+        // circle touching the curved edges is found (Newton's method, the edges' distances'
+        // gradients the unit vectors from their nearest points). Its radius is then scaled
+        // until it touches them the tangent's length from their corner: curving, they may meet
+        // more or less sharply than straight.
+        let from = along(position(&tp[k]), normal, half);
+        let to = along(position(&mp[j]), facing, main_half);
+        let x = cross(sub(to, from), m) / cross(t, m);
+        let straight = along(from, t, x);
+        let mut radius = tangent * sin / (1.0 + cos);
+        let mut centre = along(
+            straight,
+            unit([up[0] + edge[0], up[1] + edge[1]]),
+            radius / sin_half,
+        );
+        let mut best = None;
+        for _ in 0..6 {
+            let mut found = None;
+            for _ in 0..16 {
+                let (et, em) = (out_tributary(centre), out_main(centre));
+                let (gt, gm) = (unit(sub(centre, et.on)), unit(sub(centre, em.on)));
+                let (ft, fm) = (et.out - radius, em.out - radius);
+                if ft.abs().max(fm.abs()) < 1e-4 {
+                    found = Some((et, em, gt, gm));
+                    break;
+                }
+                let det = cross(gt, gm);
+                if det.abs() < 0.05 {
+                    break;
+                }
+                let step = [
+                    (fm * gt[1] - ft * gm[1]) / det,
+                    (ft * gm[0] - fm * gt[0]) / det,
+                ];
+                let length = dot(step, step).sqrt();
+                centre = along(centre, step, (0.5 * radius / length.max(1e-12)).min(1.0));
+            }
+            let Some((et, em, gt, gm)) = found else {
+                break;
+            };
+            let touches = [along(centre, gt, -radius), along(centre, gm, -radius)];
+            // On this side, each touching the other's water's edge or out of it.
+            if dot(sub(centre, position(&tp[k])), normal) <= 0.0
+                || out_main(touches[0]).out < -0.05
+                || out_tributary(touches[1]).out < -0.05
+            {
+                break;
+            }
+            // The corner: from the centre towards both waters to where the first one starts.
+            let toward = unit([-(gt[0] + gm[0]), -(gt[1] + gm[1])]);
+            let dry = |s: f64| {
+                let q = along(centre, toward, s);
+                out_tributary(q).out.min(out_main(q).out) > 0.0
+            };
+            let Some(wet) = (1..=(4.0 * radius / sin_half) as u32).find(|&s| !dry(f64::from(s)))
+            else {
+                break;
+            };
+            let (mut lo, mut hi) = (f64::from(wet - 1), f64::from(wet));
+            for _ in 0..40 {
+                let mid = 0.5 * (lo + hi);
+                if dry(mid) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let tip = along(centre, toward, lo);
+            let length = touches
+                .iter()
+                .map(|&p| dot(sub(p, tip), sub(p, tip)).sqrt())
+                .sum::<f64>()
+                / 2.0;
+            best = Some((radius, centre, et, em, touches, tip));
+            if (length - tangent).abs() < 0.05 * tangent || length <= 0.0 {
+                break;
+            }
+            radius = (radius * (tangent / length).clamp(0.5, 2.0)).min(8.0 * tangent);
+        }
+        let Some((radius, centre, et, em, touches, tip)) = best else {
+            continue;
+        };
+        let (depth, main_depth) = (et.at(tp, |p| p.depth), em.at(mp, |p| p.depth));
+        corners.push(Corner {
+            centre,
+            radius,
+            touches,
+            tip,
+            level: [et.at(tp, |p| p.level), em.at(mp, |p| p.level)],
+            slope: 0.95 * (2.0 * depth / et.half).min(2.0 * main_depth / em.half),
+            deepest: 0.5 * depth.min(main_depth),
+            blend: 0.7 * et.half.min(em.half),
+        });
+    }
+    corners
+}
+
+/// Points over a corner's water ([`Corner`]), which the rivers' water must cover: its tip, its
+/// arc and half way between them.
+pub(crate) fn corner_samples(corner: &Corner) -> Vec<[f64; 2]> {
+    let (a, b) = (
+        unit(sub(corner.touches[0], corner.centre)),
+        unit(sub(corner.touches[1], corner.centre)),
+    );
+    let mut samples = vec![corner.tip];
+    for i in 0..=8 {
+        let w = f64::from(i) / 8.0;
+        let d = unit([a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w]);
+        let p = along(corner.centre, d, corner.radius);
+        samples.push(p);
+        samples.push([0.5 * (p[0] + corner.tip[0]), 0.5 * (p[1] + corner.tip[1])]);
+    }
+    samples
 }
 
 /// The height of `height` at (x, y) metres in its frame, as the island's mesh draws its coarse

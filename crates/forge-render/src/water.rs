@@ -678,8 +678,8 @@ struct GpuRiverPoint {
     a: [f32; 4],
     /// Downstream (x, z), the speed, the water surface's slope.
     b: [f32; 4],
-    /// The fade, 1 where a segment starts (0 at a river's last point), the ground under the
-    /// last vertex across, the water's level.
+    /// The fade, the half width drawn whole where a segment starts (0 at a river's last point:
+    /// none starts), the ground under the last vertex across, the water's level.
     c: [f32; 4],
     /// The ground under the first four vertices across.
     d: [f32; 4],
@@ -701,6 +701,9 @@ pub struct WaterRiverPoint {
     pub direction: [f32; 2],
     /// Half the river's width at its level, metres: where the water meets its banks.
     pub half_width: f32,
+    /// Half the width over which its water is drawn whole, metres: the half width, more where it
+    /// fills a confluence's rounded corner (`forge_procgen::Corner`, #119).
+    pub cover: f32,
     /// Half the ribbon's width, metres: past the water's edge, under the banks.
     pub reach: f32,
     /// The water's depth in the middle, metres.
@@ -1180,7 +1183,11 @@ impl WaterSurface {
                             b: [p.direction[0], p.direction[1], p.speed, p.slope],
                             c: [
                                 p.fade,
-                                f32::from(u8::from(k + 1 < river.len())),
+                                if k + 1 < river.len() {
+                                    p.cover.max(1e-3)
+                                } else {
+                                    0.0
+                                },
                                 p.ground[4],
                                 p.level,
                             ],

@@ -262,7 +262,7 @@ struct RiverPoint
 {
     float4 a; // world x, z (the sea's frame), the half width at the water's edge (m), the depth in the middle (m)
     float4 b; // downstream (world x, z; unit), the speed (m/s), the water surface's slope
-    float4 c; // how much of the river is drawn (0..1), 1 where a segment starts (0 at a river's last point), the ground under the last vertex across, the water's level (m)
+    float4 c; // how much of the river is drawn (0..1), the half width drawn whole where a segment starts (m; 0 at a river's last point: none starts), the ground under the last vertex across, the water's level (m)
     float4 d; // the ground under the first four vertices across: the highest the drawn ground stands under the quads around each (m)
     float4 e; // the ribbon's half width (m, under the banks), the lowest bank before the channel was carved (m), the first stone past the point, the metres along the river from its head
 };
@@ -897,10 +897,11 @@ struct RiverOut
     float4 position : SV_Position;
     float3 relative : POSITION;   // camera-relative metres
     float2 flat : TEXCOORD0;      // camera-relative world x, z
-    float4 river : TEXCOORD1;     // across (−1..1), the fade, the depth in the middle (m), the speed (m/s)
+    float4 river : TEXCOORD1;     // metres from the middle, positive to the left (as metres: a share of the half width times it, interpolated per triangle, drew teeth where the width changes fast, #119), the fade, the depth in the middle (m), the speed (m/s)
     float4 flow : TEXCOORD2;      // downstream (world x, z), the water surface's slope, the half width drawn (m)
     float4 edge : TEXCOORD3;      // the half width at the water's edge (m), the ribbon's (m), how far it has risen onto the ground (0..1), the metres along the river
     nointerpolation uint segment : TEXCOORD4; // the segment's first point
+    float cover : TEXCOORD5;      // the half width drawn whole (m): the water's edge's, more in a confluence's rounded corner (#119)
 };
 
 // The ground's height at `world` (x, z) as the island's mesh draws its coarse cells: the field's
@@ -941,6 +942,7 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
         o.flow = 0.0;
         o.edge = 0.0;
         o.segment = 0u;
+        o.cover = 0.0;
         return o;
     }
     RiverPoint p = w[0].rivers[segment + uint(corner.y)];
@@ -963,10 +965,12 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
     o.position = mul(w[0].view_proj, float4(relative, 1.0));
     o.relative = relative;
     o.flat = relative.xz;
-    o.river = float4(across, p.c.x, p.a.w, p.b.z);
+    o.river = float4(across * half_width, p.c.x, p.a.w, p.b.z);
     o.flow = float4(p.b.xy, p.b.w, half_width);
     o.edge = float4(p.a.z, p.e.x, drape, p.e.w);
     o.segment = segment;
+    // At a river's last point (its `c.y` 0: no segment starts there), its half width.
+    o.cover = max(p.c.y, p.a.z);
     return o;
 }
 
@@ -1299,18 +1303,19 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
 SurfaceTargets river_frag_main(RiverOut input)
 {
     WaterSurface* w = surface_push.surface;
-    float across = input.river.x;
+    float across = input.river.x; // metres
     float2 world = input.flat + w[0].camera.xz;
     float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
     float half_drawn = input.flow.w;
     float half_water = input.edge.x;
     float drape = input.edge.z;
-    float out_from_middle = abs(across) * half_drawn;
+    float out_from_middle = abs(across);
     // How much of the pixel the river covers. Near, the ribbon fades out past the water's edge
-    // under the banks, where the ground hides it anyway; far away, where it lies on the ground,
+    // under the banks, where the ground hides it anyway (past a confluence's rounded corner,
+    // whose water it covers, #119); far away, where it lies on the ground,
     // its edges are soft over half a metre or two pixels but never more than half the half
     // width drawn, and its coverage is the river's share of the width drawn. And its fade.
-    float near_cover = 1.0 - smoothstep(half_water, input.edge.y, out_from_middle);
+    float near_cover = 1.0 - smoothstep(input.cover, input.edge.y, out_from_middle);
     float soft = min(max(RIVER_BANK, 2.0 * footprint), 0.5 * half_drawn);
     float far_cover = min(half_water / half_drawn, 1.0) * smoothstep(0.0, soft, half_drawn - out_from_middle);
     // The flow: faster in the middle than by the banks, around the stones.
@@ -1335,7 +1340,7 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.drape = drape;
     s.depth = input.river.z * (1.0 - u * u);
     s.white = max(rapids, stones.white);
-    s.streak = float2(input.edge.w, across * half_drawn);
+    s.streak = float2(input.edge.w, across);
     s.speed = input.river.w;
     s.absorption = RIVER_ABSORPTION;
     s.scatter = RIVER_SCATTER;

@@ -1059,7 +1059,7 @@ depth, so the main's water never covered it.
   its thinning blends over the main's water.
 
 The tributary opens into the main river (`reports/2026-10-01-115/`; ꟻLIP mean 0.0073 on the
-logged `confluence` view).
+logged `confluence` view). Its corners are rounded since #119 (below).
 
 **The rivers' size** (D-041's regional curves, `RibbonParams::island`, `city-blocks --river-k
 K`; `k` = 3 by default since 2026-10-01, 0 for the catchment's square root). D-041 sizes a river
@@ -1255,6 +1255,63 @@ A/B harness, the streamed island against resident and mesh against fallback stay
   bank lower than it at the mask's soft edge (a similar patch was there before, by the old cap).
 - D-041's lake entry also widens the channel and paints a fan on the lake's floor; neither is
   done.
+
+**The confluences' corners** (#119, 2026-10-01; `forge_procgen::river::Corner`, `channel`). The
+owner, at the logged confluence: "the junction on the left could not be that sharp with flowing
+water, same on the right". Each river's channel was carved on its own and the lowest kept, so
+where a tributary met its river the two banks met in a corner on either side, the ground's and
+the water's edge alike.
+
+**What changed.**
+- **A circle rounds each corner** (`Ribbon::corners`): it touches both rivers' water's edges,
+  their own curves near the junction (Newton's method on the two edges' distances), its radius
+  scaled until it touches them 2 m and the tributary's width from where they met
+  (`RibbonParams::confluence`). An acute corner gets a tight circle, an obtuse one a wide one:
+  8.6 m and 45 m at the logged confluence. None where a tributary meets its river in a lake or at
+  the sea.
+- **The ground** (`Channels`): inside the circle the bank rises from its arc as the banks it
+  touches rise there. Between the arc and the old corner the water stands over a shallow bed,
+  falling as steeply as the rivers' beds at their edges to half the shallower river's depth.
+  Past the old edges that bed blends into the rivers' beds over seven tenths of the narrower
+  half width, under them by then, so the old corner is gone under the water with no step.
+- **The water** (`RibbonPoint::cover`): each part of a corner is drawn whole by the river whose
+  edge is nearer. Where the tributary's water is fading into its river, the river covers it
+  too. Each ribbon's water reaches past its half width there, and the ground draws the edge.
+- **The water's edge across a ribbon** (`water.slang`) is measured in metres interpolated per
+  vertex. It used to be a share of the half width times the half width, interpolated per
+  triangle, which drew teeth where the width changes fast, as it does at a corner.
+
+The corner's bank first rose as steeply as an outer bend's, from a bed falling at a twelfth.
+The metre triangles across that kink stood centimetres over the water's plane, and the edge
+followed them in steps a metre apart. Rising as the rivers' banks do over a bed as steep as
+theirs, the edge is a smooth curve.
+
+Before (left, a333254) and now (right), frame 60 (`reports/2026-10-01-119/`):
+- `confluence.png`, `confluence-zoom.png`: the logged confluence (`--view
+  3038,19.1,1409,-87.2,-20`), ꟻLIP mean 0.024, and from its other side (`--view
+  3090,19.1,1405,92.8,-20`), 0.013. Both corners are now rounded and the water follows them.
+- `from-above.png`: the same from 60 m (0.018), a junction at right angles on the plain (0.018)
+  and one near the coast (0.018). The logged `the confluences' corners rounded` views are the
+  four largest tributaries' junctions from 40 m.
+- `junctions.png`: the right angle (0.015) and the coast's junction (0.014) from low, and a hill
+  junction (0.022). Near the coast the tributary's clear water now fans out beside the river's
+  pale, sea-mixed water.
+
+**Numbers:** 51 corners at 26 junctions (the others meet their river in a lake or at the sea),
+radii 17 m on average and 109 m at most (the obtuse corners'); 86 922 cells of 8 m refined
+(86 875), 1 390 752 at 2 m (1 390 000). From 300 m the junction does not change; the rivers'
+ripples shift a little with the metres across (ꟻLIP mean 0.008). The batch changes the island's
+images only (`island60` ꟻLIP mean 0.0023, `water60` 0.0030, `island8-60` 0.0026); the A/B
+harness, the streamed island against resident and mesh against fallback stay at 0 px;
+`validate.sh` is clean; a test rounds a Y's corners: the old corner under the water, the arc its
+edge, the water covering it, and no step on a 2 cm grid around it.
+
+**Left for later:**
+- The corner's water is a shallow shelf, not yet the bar and the scour hole real confluences
+  have: no sediment of its own, and the river's bed is not deepened where the two flows
+  meet.
+- At a steep confluence the corner's water runs from the tributary's level to the river's,
+  which can stand a metre apart. It follows the two ribbons' levels, not a surface of its own.
 
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 

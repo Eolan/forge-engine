@@ -703,6 +703,7 @@ mod tests {
                     level: (top - fall * x - 0.2) as f32,
                     direction: [1.0, 0.0],
                     half_width: 5.0,
+                    cover: 5.0,
                     reach: 6.0,
                     depth: 0.6,
                     bank: 0.0,
@@ -718,6 +719,7 @@ mod tests {
             mouth_area: 1e6,
             points,
             lake_runs: Vec::new(),
+            corners: Vec::new(),
         };
         (height, ribbon)
     }
