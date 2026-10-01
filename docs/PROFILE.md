@@ -523,6 +523,27 @@ the ground's smoothing, the rivers' culling; `--water`, three runs each, the wav
 The water's rays are the larger share wherever water fills the view (a mirror and a shadow ray a
 pixel); the surface pass stays under 0.35 ms.
 
+The same views after the swash's line, the sand's contour, the indexed surface and the refracted
+path (2d3973a; three runs each, the waves held at 12 s):
+
+| View | frame | water/surface | water/reflections | shading/layered |
+|---|---|---|---|---|
+| coast (the first view) | 3.03 ms | 0.186 | 0.409 | 0.932 |
+| the stream from 16 m | 2.61 ms | 0.054 | 0.089 | 0.926 |
+| down a river from 3 m | 2.94 ms | 0.100 | 0.394 | 0.930 |
+| the stone in the fastest water, at the largest mouth | 3.50 ms | 0.258 | 0.511 | 1.284 |
+| a lake from 3 m over its water | 2.88 ms | 0.141 | 0.458 | 0.876 |
+| the island from 2.5 km | 3.51 ms | 0.305 | 0.195 | 0.785 |
+
+- The indexed surface takes 0.035 to 0.056 ms off `water/surface`.
+- The sand's contour adds 0.011 to 0.131 ms to `shading/layered`: more at 1440p than the 1600 ×
+  900 runs showed (0.010 to 0.023), and most where the beach fills the view (the stone's view at
+  a mouth). Most of it is the contour's code in the pass, not its work: without the third
+  layer's block the compiler drops much of the bookkeeping, and `shading/layered` falls by 0.03
+  to 0.065 ms even in the island's view, where three layers meet in few pixels. Shading that
+  third layer as a flat colour saved nothing. Restructuring the block (fewer live arrays) is the
+  lever.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the
