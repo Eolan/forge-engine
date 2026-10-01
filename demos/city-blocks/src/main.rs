@@ -1858,8 +1858,8 @@ fn make_island_heights(args: &Args) -> Field2<f32> {
         let carve = Instant::now();
         let flow = forge_procgen::drain(&height, 0.0, &pool);
         let rivers = island_rivers(&height, &flow);
-        let lakes = island_lakes(&height, &flow);
-        let ribbons = forge_procgen::ribbons(&height, &rivers, &lakes, &ribbon_params());
+        let (lakes, waters) = island_lake_waters(&height, &flow);
+        let ribbons = forge_procgen::ribbons(&height, &rivers, &waters, &ribbon_params());
         let s = forge_procgen::carve_valleys(&mut height, &ribbons, &lakes, &valleys, &pool);
         tracing::info!(
             points = %format_args!("{} floodplain, {} bench, {} room, {} in lakes", s.floodplain, s.bench, s.room, s.in_lake),
@@ -1896,6 +1896,18 @@ fn island_rivers(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_proc
 fn island_lakes(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_procgen::Lakes {
     let filled = forge_procgen::priority_flood(height, 0.0);
     forge_procgen::trace_lakes(height, &filled, flow, 0.5)
+}
+
+/// [`island_lakes`] and their water: the lakes of the rivers' `lake_area` or more as level
+/// planes over the samples they stand over, which the rivers run into.
+fn island_lake_waters(
+    height: &Field2<f32>,
+    flow: &forge_procgen::Flow,
+) -> (forge_procgen::Lakes, Vec<forge_procgen::LakeWater>) {
+    let filled = forge_procgen::priority_flood(height, 0.0);
+    let lakes = forge_procgen::trace_lakes(height, &filled, flow, 0.5);
+    let waters = forge_procgen::lake_waters(height, &filled, &lakes, ribbon_params().lake_area);
+    (lakes, waters)
 }
 
 /// The island's rivers' parameters, set once at start from the arguments (`--river-k`).
@@ -1942,11 +1954,8 @@ fn island_water(height: &Field2<f32>) -> IslandWater {
 fn make_island_water(height: &Field2<f32>) -> IslandWater {
     let flow = forge_procgen::drain(height, 0.0, &TaskPool::client());
     let rivers = island_rivers(height, &flow);
-    let filled = forge_procgen::priority_flood(height, 0.0);
-    let lakes = forge_procgen::trace_lakes(height, &filled, &flow, 0.5);
-    let params = ribbon_params();
-    let mut ribbons = forge_procgen::ribbons(height, &rivers, &lakes, &params);
-    let lakes = forge_procgen::lake_waters(height, &filled, &lakes, params.lake_area);
+    let (_, lakes) = island_lake_waters(height, &flow);
+    let mut ribbons = forge_procgen::ribbons(height, &rivers, &lakes, &ribbon_params());
     let channels = forge_procgen::Channels::new(
         height,
         &ribbons,
@@ -2050,7 +2059,7 @@ fn island_ribbons(
         .rev()
         .find(|r| {
             let end = r.points[r.points.len() - 1];
-            end.level > 0.05 && r.lake_entries.is_empty()
+            end.level > 0.05 && r.lake_runs.is_empty()
         })
         .map_or_else(String::new, |r| {
             view_from(&r.points[r.points.len().saturating_sub(4)], 15.0, 8.0)
@@ -2064,7 +2073,7 @@ fn island_ribbons(
     let into_lake = ribbons
         .iter()
         .rev()
-        .find_map(|r| Some((r, *r.lake_entries.first()? as usize)))
+        .find_map(|r| Some((r, r.lake_runs.first()?[0] as usize)))
         .map_or_else(String::new, |(r, k)| view_from(&r.points[k], 30.0, 4.0));
     let into_sea = ribbons
         .last()
@@ -2177,8 +2186,8 @@ fn island_ribbons(
         ms = start.elapsed().as_millis(),
         "island rivers"
     );
-    // Where the rivers meet the sea, and where they run into a lake: from there the sea's or the
-    // lake's water carries their flow on.
+    // Where the rivers meet the sea, and where they run into a lake or out of one: from there the
+    // sea's or the lake's water carries their flow on, or draws it in.
     let mouth = |p: &forge_procgen::RibbonPoint| WaterMouth {
         position: [p.position[0] - half, p.position[1] - half],
         direction: p.direction,
@@ -2210,13 +2219,22 @@ fn island_ribbons(
         .collect();
     let sea_mouths = mouths.len();
     for r in &ribbons {
-        for &k in &r.lake_entries {
+        for &[k, last] in &r.lake_runs {
             // The speed the river comes in at: the point before the lake's.
             let before = r.points[(k as usize).saturating_sub(1)];
             mouths.push(WaterMouth {
                 speed: before.speed,
                 ..mouth(&r.points[k as usize])
             });
+            // And where it runs out (#120): the lake's water drawn into the river, the river's
+            // own in a cone back into the lake, so the two meet as one water past the lip.
+            if let Some(out) = r.points.get(last as usize + 1) {
+                mouths.push(WaterMouth {
+                    direction: [-out.direction[0], -out.direction[1]],
+                    speed: -out.speed,
+                    ..mouth(out)
+                });
+            }
         }
     }
     let spacing = height.spacing as f32;
@@ -2236,6 +2254,48 @@ fn island_ribbons(
         })
         .collect();
     tracing::info!(views = %outlets.join("  "), "the largest lakes' outlets (--view)");
+    // Where the two largest rivers through a lake run into it and out of it (#120): the first
+    // point of a run in a lake, and the lip past it, where the water falls from the lake's
+    // level; from 40 m up the river (into it) or down it (out of it), 12 m over the water,
+    // looking at the junction.
+    let junction = |p: &forge_procgen::RibbonPoint, downstream: bool| {
+        let (dx, dz) = (p.direction[0], p.direction[1]);
+        let back = if downstream { -40.0 } else { 40.0 };
+        let at = [p.position[0] - back * dx, p.position[1] - back * dz];
+        let yaw = if downstream {
+            dx.atan2(dz)
+        } else {
+            (-dx).atan2(-dz)
+        };
+        format!(
+            "{:.0},{:.1},{:.0},{:.1},-20",
+            at[0] - half,
+            p.level + 12.0,
+            at[1] - half,
+            yaw.to_degrees()
+        )
+    };
+    let (mut into, mut out_of) = (Vec::new(), Vec::new());
+    for r in ribbons.iter().rev() {
+        for &[first, last] in &r.lake_runs {
+            if first > 0 && into.len() < 2 {
+                into.push(junction(&r.points[first as usize], false));
+            }
+            let lake = r.points[last as usize].level;
+            if let Some(p) = r.points[last as usize..]
+                .iter()
+                .find(|p| p.level < lake - 0.05)
+                && out_of.len() < 2
+            {
+                out_of.push(junction(p, true));
+            }
+        }
+    }
+    tracing::info!(
+        into = %into.join("  "),
+        out_of = %out_of.join("  "),
+        "rivers into and out of the lakes (--view)"
+    );
     let lakes: Vec<WaterLake> = lakes
         .iter()
         .map(|l| WaterLake {

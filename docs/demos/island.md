@@ -860,9 +860,10 @@ through it take its level:
 - **The plane and its mask** (`forge_procgen::lake_waters`): the priority flood's depression at
   the lake's level (from the lake's samples, every neighbour where the flood stands at that level:
   its shallow margins too, which the lakes' 0.5 m threshold leaves out) and a sample more all
-  round. The plane covers the mask's box at the level; the mask, a bit a sample and softened over
-  half of one, clips it to the lake, and within it the ground rising through the plane draws the
-  shore.
+  round where the ground rises through the level (not past an outlet, where it falls away under
+  it, since #120). The plane covers the mask's box at the level; the mask, a bit a sample and
+  softened over half of one, clips it to the lake, and within it the ground rising through the
+  plane draws the shore.
 - **The shore on cells of a metre.** The 8 m cells of a mask whose ground spans the level within
   a metre, and a cell more all round, are drawn finer like the rivers' channels (51 958 cells
   refined in all, 4.2 M fine vertices), on the smoothed ground, not carved: the cubic's weight is
@@ -872,13 +873,15 @@ through it take its level:
   the flow, the sky, the sun, the rays, the bed through the true depth), still but where a river
   runs in: the 20 points where a river enters a lake join the mouths' list, and the river's jet
   carries its ripples out into the lake as at the sea. The lakes are drawn before the rivers, and
-  a river's ribbon fades out over its last three points into the lake at the lake's own level, so
-  the handover is between two surfaces with the same ripples, level and water. Patches of calm
+  a river's ribbon fades out over its first three points in the lake at the lake's own level, so
+  the handover is between two surfaces with the same ripples, level and water (where the lake
+  takes the river on: #120, below). Patches of calm
   and of wind ripples drift over a lake (the ripples' slopes from 0.15 to 1 over a noise 60 m
   across, at 1.3 m/s), the river's own ripples where it runs in.
-- **No channel through a lake:** a river's channel stops where its course is under the lake's
-  water at both ends of a segment (`ChannelParams::carve_lakes`): carved on, it showed as a dark
-  trench under the water (`reports/2026-10-01-105/lake-outlets.png`).
+- **No channel through a lake:** a river's channel fades out in the lake
+  (`ChannelParams::carve_lakes`): carved on, it showed as a dark trench under the water
+  (`reports/2026-10-01-105/lake-outlets.png`). Until #120 it stopped where its course was under
+  the lake's mask at both ends of a segment, in a round cap short of the water.
 - **The bed** under a lake is dark mud (`island: lake bed`) wherever the plane stands over the
   ground (the ground as drawn, refined cells included), and the lake's water its own, darker
   than the rivers' (absorption 1.0, 0.6, 1.2 m⁻¹: the dissolved matter taking the blue), mixing
@@ -1019,7 +1022,7 @@ fanned into the lake, and the channel stopped in a step at the lake's edge.
   half width plus 4 m, times 2, is the bend's share).
 - **Into and out of a lake** the channel shoals over 8 m plus three of its widths, to a fifth of
   its depth at the lake's edge (`ChannelParams::shoal`), so its bed meets the lake's shallows
-  without a step.
+  without a step (the lake's edge measured where its water stands since #120).
 - From 40 m (`reports/2026-10-01-114/`): a river across the plain is a clean band where it was a
   blurred, jagged strip of bed texels (`beds-plain.png`, ꟻLIP mean 0.020); the lake entry has a
   crisp shore and silty water where it had a brown smear and a jagged grass edge
@@ -1190,6 +1193,68 @@ With #111's layered pass, which takes fewer registers, three rounds each at 1600
 
 The scrub is a texture, read as shrubs from a few metres up. Close to the walls, shrubs as props
 wait for Phase 8's vegetation (D-013).
+
+**Where rivers meet lakes** (#120, 2026-10-01; `forge_procgen::river`, `channel`, `lake`). From
+the owner's screenshot, a lake and the river leaving it: the river's channel ended in a round
+hollow short of the water, 20 to 40 m of dry grass between them, and the lake's water hung past
+its lip over the river's. Every junction was measured by the lake's 8 m samples, not by its
+water:
+- the channel stopped at the first segment with both ends under the lake's mask, the mask
+  reaching a sample past the depression, so it ended in a round cap on the shore;
+- the river's water faded out three points before the lake's deeper cells (over 0.5 m), and its
+  level went under the lake's on the shallow margin, where its banks stood a freeboard over it;
+- out of a lake, the lowest ground beside the river was the lake's own bed, so the river fell
+  0.3 to 0.8 m at once, and the mask carried the lake's plane a sample past the lip, over it.
+
+**What changed.**
+- **The lake's edge is where its water stands:** a point is the lake's where the lake's water
+  stands over its nearest sample. There the river is at the lake's level (a centimetre over it,
+  so it draws over the lake's water as it fades), never under it upstream, its freeboard gone
+  over 8 m and three widths towards it, and beside a lake its level, not its bed, holds the
+  water up.
+- **The lake takes the river on where it is half as deep as the river** (`lake_runs`): in a
+  shallower flat at the lake's level the river runs on in its channel, its water at the lake's
+  level. Its water is whole up to there and fades over its first three points in the lake; out
+  of it, the reverse. Two runs a few points apart are one: a flat shore crosses the level back and
+  forth.
+- **Out of a lake** the river keeps the lake's level a sample past the lip, as far as the lake's
+  mask fades, then falls 5 % a metre at most until it meets its own level, never over the lowest
+  ground across it.
+- **An outlet is a mouth too:** the lake's water within a cone back from the river's first point
+  past the lake is the river's (its colour, its bed, its ripples drawn towards the outlet), as
+  an inflow's jet is, so the two meet as one water. 20 lake mouths, 12 of them inflows (11
+  before).
+- **The channel** shoals and flattens its banks to three tenths into the lake's edge (a mouth),
+  runs on into the lake over the same reach and fades out there, so it ends in no hollow.
+- **The lake's mask** grows by a sample only where the ground rises through the level, the
+  shore, not past the outlet.
+
+Before (left, 191a295) and now (right), frame 60, from the logged `rivers into and out of the
+lakes` views and from 70 m straight down (`reports/2026-10-01-120/`):
+- **Into a lake** (`into-lakes.png`): on the plain, the river runs on in its channel across the
+  lake's shallow margin into its water (ꟻLIP mean 0.034, from above 0.040); in the hills, where
+  the river ended in a round pool on the shore, it runs straight into the lake (0.119, from
+  above 0.051).
+- **Out of a lake** (`out-of-lakes.png`): the hills' outlets open from the lake into the river
+  where a cap and a grass band stood between them (0.044 and 0.067 from above, 0.018 for the
+  second); on the plain's flat lake the river's channel runs on through the margin to the lip
+  (0.128, from above 0.065).
+
+**Numbers:** 12 runs in lakes (11 entries before), 20 lake mouths with the outlets; 86 875 cells
+of 8 m refined (86 662), 1 390 000 at 2 m (1 386 592); the valleys' carve keeps 1 084 samples by
+the lakes' guard (2 449), the rivers' levels by the lakes standing higher. The batch changes the
+island's images only (`island60` ꟻLIP mean 0.0025, `water60` 0.0033, `island8-60` 0.0026); the
+A/B harness, the streamed island against resident and mesh against fallback stay at 0 px;
+`validate.sh` is clean; a test hands a river through a bowl's lake.
+
+**Left for later:**
+- On the plain's flat lake (centimetres deep over a kilometre) the lake's mask still ends across
+  the outlet's channel in a straight soft edge, its 8 m samples' line; the outlet's mouth turns
+  the lake's water there to the river's, which softens it.
+- Past a hill lake's lip a pale patch of thin water lies on one bank: the river's water over a
+  bank lower than it at the mask's soft edge (a similar patch was there before, by the old cap).
+- D-041's lake entry also widens the channel and paints a fan on the lake's floor; neither is
+  done.
 
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 

@@ -312,7 +312,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    owner's `k` = 3 (the widest 40 m, `--river-k`); the valleys carved into the 8 m field, a
    floor for the water, benches and floodplains on the gentler reaches (#116, `--no-valleys`);
    the steep valleys' look, rocky beds, scree and scrub on the walls with stones on the banks
-   (#118). Next: the far water in the terrain's material.
+   (#118); rivers meeting lakes where the lakes' water stands, mouths without a hollow (#120).
+   Next: the far water in the terrain's material.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

@@ -659,7 +659,8 @@ pub struct WaterMouth {
     pub direction: [f32; 2],
     /// Half the river's width there, metres.
     pub half_width: f32,
-    /// Its speed there, m/s.
+    /// Its speed there, m/s; negative where the water is drawn into the river rather than
+    /// carried out (a lake's outlet, its direction pointing into the lake).
     pub speed: f32,
     /// How much of it runs white there, 0..1: the sea carries the white water on and out along
     /// the plume, fading.

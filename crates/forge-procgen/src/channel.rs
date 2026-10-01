@@ -4,6 +4,10 @@
 //!   depth in the middle; past the edge the bank rises `a x + b x²` until it meets the ground,
 //!   which it only ever lowers. The level, the depth and the half width run linearly along each
 //!   segment of the ribbon, and where two rivers' channels meet the lower one wins.
+//! - Into and out of a lake ([`crate::Ribbon::lake_runs`]: where the lake's water stands over
+//!   the ground) the channel shoals and its banks flatten into the shore, a mouth; in the lake
+//!   it runs on as far and fades out, so it ends in no hollow wherever the lake's edge lies
+//!   (#120).
 //! - Around them, within [`ChannelParams::margin`] of the water's edge, the ground is the
 //!   field's samples through a cubic ([`crate::river::smooth_height`]) rather than the 8 m
 //!   cells' planes, blended back to those planes by the margin's end, so the valleys the
@@ -37,7 +41,8 @@ pub struct ChannelParams {
     /// plus 4 m, times this, is the bend's share (1 for a full point bar and cut bank).
     pub bend: f64,
     /// Over how many metres, plus how many of its widths, a channel shoals into a lake and out
-    /// of it, to a fifth of its depth at the lake's edge.
+    /// of it, to a fifth of its depth at the lake's edge, its banks flattening to three tenths
+    /// of their rise; and over as many it runs on into the lake, fading out.
     pub shoal: (f64, f64),
     /// The metres over the sea under which the banks flatten towards a river's mouth, to
     /// three tenths of their rise at the sea's level: a beach, not a cut (D-041's estuary).
@@ -49,7 +54,8 @@ pub struct ChannelParams {
     /// Heights whose contours, where the ground crosses them, are drawn on finer cells: the
     /// coast's (the sea's level, the top of the sand).
     pub coast: [f64; 2],
-    /// Whether a river's channel runs on through the lakes it crosses (no: their beds silt up).
+    /// Whether a river's channel runs on through the lakes it crosses (no: their beds silt up,
+    /// and it fades out past the lake's edge).
     pub carve_lakes: bool,
 }
 
@@ -87,6 +93,10 @@ struct Segment {
     /// How sharply the course bends at each end, −1..1, positive to its left (seen
     /// downstream): the inner bank of a bend is a gentle point bar, the outer a cut bank.
     bend: [f64; 2],
+    /// The share of their rise the banks keep at each end: less at a lake's mouth.
+    mouth: [f64; 2],
+    /// How much of the carve is kept at each end: 1 but in a lake, where it fades out.
+    keep: [f64; 2],
 }
 
 impl Segment {
@@ -123,15 +133,6 @@ impl Channels {
     ) -> Self {
         let spacing = height.spacing;
         let side = height.size - 1;
-        // No channel through a lake: its bed is the lake's (a river's channel silts up there).
-        let last = f64::from(height.size - 1);
-        let under_lake = |p: [f32; 2]| {
-            let (x, y) = (
-                (f64::from(p[0]) / spacing).round().clamp(0.0, last) as u32,
-                (f64::from(p[1]) / spacing).round().clamp(0.0, last) as u32,
-            );
-            lakes.iter().any(|l| l.covers(x, y))
-        };
         let mut segments: Vec<Segment> = Vec::new();
         for r in ribbons {
             let p = &r.points;
@@ -161,26 +162,39 @@ impl Channels {
                 })
                 .collect();
             // Into and out of a lake the channel shoals over `shoal` of its widths, so its bed
-            // meets the lake's shallows without a step: the metres to the nearest point under
-            // a lake, each way along the course.
-            let under: Vec<bool> = (0..n).map(|k| under_lake(p[k].position)).collect();
-            let mut to_lake = vec![f64::MAX; n];
+            // meets the lake's shallows without a step, and its banks flatten into the shore;
+            // in the lake it runs on as far and fades out (its bed is the lake's: a river's
+            // channel silts up there). The metres along the course to the nearest point in a
+            // lake, and in a lake to the nearest point out of it, each way.
+            let under: Vec<bool> = (0..n).map(|k| r.in_lake(k)).collect();
+            let (mut to_lake, mut to_shore) = (vec![f64::MAX; n], vec![f64::MAX; n]);
             for k in 0..n {
-                if under[k] {
-                    to_lake[k] = 0.0;
-                } else if k > 0 {
-                    to_lake[k] = to_lake[k - 1] + (arc[k] - arc[k - 1]);
-                }
+                let step = if k > 0 { arc[k] - arc[k - 1] } else { 0.0 };
+                (to_lake[k], to_shore[k]) = match (under[k], k) {
+                    (true, 0) => (0.0, f64::MAX),
+                    (true, _) => (0.0, to_shore[k - 1] + step),
+                    (false, 0) => (f64::MAX, 0.0),
+                    (false, _) => (to_lake[k - 1] + step, 0.0),
+                };
             }
             for k in (0..n.saturating_sub(1)).rev() {
-                to_lake[k] = to_lake[k].min(to_lake[k + 1] + (arc[k + 1] - arc[k]));
+                let step = arc[k + 1] - arc[k];
+                to_lake[k] = to_lake[k].min(to_lake[k + 1] + step);
+                to_shore[k] = to_shore[k].min(to_shore[k + 1] + step);
             }
-            let depth = |k: usize| {
-                let reach = params.shoal.1 * 2.0 * f(p[k].half_width) + params.shoal.0;
-                f(p[k].depth) * (0.2 + 0.8 * smoothstep(0.0, reach, to_lake[k]))
+            let reach = |k: usize| params.shoal.1 * 2.0 * f(p[k].half_width) + params.shoal.0;
+            let near = |k: usize| smoothstep(0.0, reach(k), to_lake[k]);
+            let depth = |k: usize| f(p[k].depth) * (0.2 + 0.8 * near(k));
+            let mouth = |k: usize| 0.3 + 0.7 * near(k);
+            let keep = |k: usize| {
+                if params.carve_lakes {
+                    1.0
+                } else {
+                    1.0 - smoothstep(0.0, reach(k), to_shore[k])
+                }
             };
             for k in 0..n.saturating_sub(1) {
-                if !params.carve_lakes && under[k] && under[k + 1] {
+                if keep(k) == 0.0 && keep(k + 1) == 0.0 {
                     continue;
                 }
                 segments.push(Segment {
@@ -190,6 +204,8 @@ impl Channels {
                     depth: [depth(k), depth(k + 1)],
                     half: [f(p[k].half_width), f(p[k + 1].half_width)],
                     bend: [bend[k], bend[k + 1]],
+                    mouth: [mouth(k), mouth(k + 1)],
+                    keep: [keep(k), keep(k + 1)],
                 });
             }
         }
@@ -422,11 +438,12 @@ impl Channels {
                 } else {
                     a * (1.0 - 0.6 * bend)
                 };
-                // Towards the sea the banks flatten into the beach.
-                let beach = 0.3 + 0.7 * smoothstep(0.0, self.params.beach, level);
+                // Towards the sea the banks flatten into the beach, and into a lake's shore.
+                let beach = (0.3 + 0.7 * smoothstep(0.0, self.params.beach, level))
+                    .min(Segment::at(s.mouth, t));
                 level + beach * (a * out + b * out * out)
             };
-            let weight = 1.0 - smoothstep(margin - 3.0, margin, out);
+            let weight = (1.0 - smoothstep(margin - 3.0, margin, out)) * Segment::at(s.keep, t);
             carved = carved.min(base + (channel.min(base) - base) * weight);
         }
         carved
@@ -746,7 +763,7 @@ pub fn paint_banks(
 mod tests {
     use super::*;
     use crate::flow::drain;
-    use crate::hydrology::{Lakes, trace_rivers};
+    use crate::hydrology::trace_rivers;
     use crate::river::{RibbonParams, ribbons};
     use forge_task::PoolConfig;
 
@@ -759,12 +776,7 @@ mod tests {
         let pool = TaskPool::new(PoolConfig::with_workers(0));
         let flow = drain(&valley, 0.0, &pool);
         let rivers = trace_rivers(&valley, &flow, 15);
-        let ribbons = ribbons(
-            &valley,
-            &rivers,
-            &Lakes::default(),
-            &RibbonParams::default(),
-        );
+        let ribbons = ribbons(&valley, &rivers, &[], &RibbonParams::default());
         let channels = Channels::new(&valley, &ribbons, &[], &ChannelParams::default());
         // The cells along the valley's floor are refined, those on its far sides are not.
         assert!(!channels.refined().is_empty());
@@ -862,5 +874,74 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_river_hands_over_to_a_lake_where_its_water_stands_and_takes_it_back_past_the_lip() {
+        // The valley again, 40 samples long, with a bowl 8 m deep at its middle: a lake whose
+        // level is the floor's lip downstream (15 m at y = 140 m), the river running through it.
+        let valley = Field2::from_fn(41, 10.0, |x, y| {
+            let (dx, dy) = (x as f32 - 20.0, y as f32 - 20.0);
+            let bowl = 8.0 * (1.0 - (dx * dx + dy * dy).sqrt() / 6.0).max(0.0);
+            2.0 * dx.abs() + y as f32 + 1.0 - bowl
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&valley, 0.0, &pool);
+        let filled = crate::flow::priority_flood(&valley, 0.0);
+        let lakes = crate::hydrology::trace_lakes(&valley, &filled, &flow, 0.5);
+        let waters = crate::lake::lake_waters(&valley, &filled, &lakes, 0.0);
+        assert_eq!(waters.len(), 1);
+        let level = waters[0].level;
+        let rivers = trace_rivers(&valley, &flow, 15);
+        let ribbons = ribbons(&valley, &rivers, &waters, &RibbonParams::default());
+        let ribbon = ribbons.last().expect("the valley's river");
+        let p = &ribbon.points;
+        // Wherever the lake's water stands over the ground the river's level is the lake's (a
+        // centimetre over it), never under it upstream, and past the lip it falls, never over
+        // the ground across it. One run in the lake, where its water stands half as deep as the
+        // river.
+        let lake_level = level + 0.01;
+        let mut wet = Vec::new();
+        for (k, point) in p.iter().enumerate() {
+            let x = f64::from(point.position[0]) / 10.0;
+            let y = f64::from(point.position[1]) / 10.0;
+            let (i, j) = (x.round() as u32, y.round() as u32);
+            if waters[0].stands_at(&valley, i, j) {
+                wet.push(k);
+                assert!((point.level - lake_level).abs() < 1e-4, "{k}");
+            }
+            if ribbon.in_lake(k) {
+                assert!(level - valley.get(i, j) >= 0.5 * point.depth, "{k}");
+            }
+        }
+        assert_eq!(ribbon.lake_runs.len(), 1, "{:?}", ribbon.lake_runs);
+        let [first, last] = ribbon.lake_runs[0].map(|k| k as usize);
+        assert!(first > 10 && last > first + 6 && last + 10 < p.len());
+        let lip = wet[wet.len() - 1];
+        assert!(p[..first].iter().all(|q| q.level >= lake_level - 1e-4));
+        assert!(p[last..=lip].iter().all(|q| q.level >= lake_level - 1e-4));
+        for q in &p[lip + 1..lip + 6] {
+            let [x, y] = [q.position[0], q.position[1]].map(f64::from);
+            assert!(f64::from(q.level) <= smooth_height(&valley, x, y).max(f64::from(level)));
+        }
+        assert!(p[lip + 4].level < level);
+        // Its water whole up to the lake and fading over it, gone three points in; coming out,
+        // whole again past the run.
+        assert_eq!(p[first - 1].fade, 1.0);
+        assert!(p[first].fade > 0.5 && p[first].fade < 1.0);
+        assert_eq!(p[first + 3].fade, 0.0);
+        assert!(p[last].fade > 0.5 && p[last].fade < 1.0);
+        assert_eq!(p[last + 1].fade, 1.0);
+        // Its channel holds its water up to the lake, and runs on into it fading out: deep in
+        // the lake the ground is the field's, uncarved.
+        let channels = Channels::new(&valley, &ribbons, &waters, &ChannelParams::default());
+        let at = |k: usize| [p[k].position[0], p[k].position[1]].map(f64::from);
+        let [x, y] = at(first - 1);
+        assert!(channels.cubic_height_at(&valley, x, y) < f64::from(p[first - 1].level));
+        let [x, y] = at((first + last) / 2);
+        assert_eq!(
+            channels.cubic_height_at(&valley, x, y),
+            smooth_height(&valley, x, y)
+        );
     }
 }

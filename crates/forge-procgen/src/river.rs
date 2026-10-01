@@ -10,11 +10,13 @@
 //! - The water is level across. Its level at a point is the lowest the ground stands there, in
 //!   the middle and on either bank ([`smooth_height`]: the field's samples through a cubic),
 //!   less a freeboard; then the running minimum from the head, so it only falls, and a fall
-//!   steeper than [`RibbonParams::max_fall`] is spread upstream. Through a lake it is the
-//!   lake's level, and it never goes below the sea's.
+//!   steeper than [`RibbonParams::max_fall`] is spread upstream. Where a lake's water stands
+//!   over the ground it is the lake's level, never under it upstream, and it never goes below
+//!   the sea's.
 //! - A tributary's water ends at its river's level, and it gives way to that river's water
-//!   where it enters its channel; a river gives way to a lake inside it and to the sea where
-//!   its level reaches the sea's.
+//!   where it enters its channel; a river gives way to the sea where its level reaches the
+//!   sea's, and to a lake inside its water: a river running in fades out over the lake's water,
+//!   one running out fades in over it, so the two meet wherever the lake's edge lies (#120).
 //! - In a bend the ribbon's half width stays under a share of the bend's radius, so its inner
 //!   edge never folds over itself.
 //!
@@ -23,10 +25,26 @@
 use forge_task::TaskPool;
 
 use crate::field::Field2;
-use crate::hydrology::{self, Lakes, Mouth, Rivers};
+use crate::hydrology::{self, Mouth, Rivers};
+use crate::lake::LakeWater;
 
 /// Quads across a ribbon (`RIVER_ACROSS` in `water.slang`).
 pub const ACROSS: usize = 4;
+
+/// Metres a river's water stands over a lake's level where it runs in it, so it draws over the
+/// lake's water as it fades (the same depth would fight).
+const LAKE_LIFT: f64 = 0.01;
+
+/// Points over which a river's water fades into a lake's.
+const LAKE_FADE: f64 = 3.0;
+
+/// How steeply a river's water may fall out of a lake past its lip, m/m: a short ramp, not a
+/// step under the lake's water.
+const LAKE_OUTFALL: f64 = 0.05;
+
+/// The share of a river's depth a lake's water must stand over the ground to take the river on:
+/// in shallower water, a flooded flat, the river runs on in its channel at the lake's level.
+const LAKE_TAKES: f64 = 0.5;
 
 /// Metres between the samples of the ground under a quad of a ribbon.
 const GROUND_SAMPLES: f64 = 0.5;
@@ -63,7 +81,12 @@ pub struct RibbonParams {
     pub freeboard: (f64, f64),
     /// The water surface's steepest fall, m/m: a steeper step lowers the water upstream.
     pub max_fall: f64,
-    /// The smallest lake, m², whose level a river takes through it (and where it is not drawn).
+    /// Over how many metres, plus how many of its widths, a river's water rises to its banks
+    /// into a lake and out of it, where the lake's shore holds it (its freeboard gone at the
+    /// lake's edge), as its channel shoals there (`ChannelParams::shoal`).
+    pub shoal: (f64, f64),
+    /// The smallest lake, m², a river runs into (the least area of the lakes' water,
+    /// [`crate::lake_waters`], whose level the rivers take).
     pub lake_area: f64,
     /// The estuary (D-041): the metres over the sea under which a river widens towards its
     /// mouth, and by how many of its widths at the sea's level (1: twice as wide), shallowing by
@@ -80,7 +103,8 @@ impl Default for RibbonParams {
     /// passes looking 8 m either side, 40 m of growth from the spring, a stream's roughness
     /// (C = 15), 0.3 to 3 m/s, the drawn half width under 0.8 of a bend's radius, 0.5 m + 10 %
     /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
-    /// of 60 % at most, the lakes of a hectare, twice as wide at the sea from 1.5 m over it.
+    /// of 60 % at most, rising to its banks over 8 m and three widths into a lake, the lakes of a
+    /// hectare, twice as wide at the sea from 1.5 m over it.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -96,6 +120,7 @@ impl Default for RibbonParams {
             tuck: (0.5, 0.1),
             freeboard: (0.05, 0.04),
             max_fall: 0.6,
+            shoal: (8.0, 3.0),
             lake_area: 10_000.0,
             estuary: (1.5, 1.0),
             regional: None,
@@ -169,9 +194,19 @@ pub struct Ribbon {
     /// The points, [`RibbonParams::step`] metres apart along the smoothed course (the last one
     /// may be closer).
     pub points: Vec<RibbonPoint>,
-    /// The points where it enters a lake of [`RibbonParams::lake_area`] or more: the first of
-    /// each run of points under a lake, where the lake's water takes the river on.
-    pub lake_entries: Vec<u32>,
+    /// The runs of its points in a lake, the first and the last of each: where the lake's water
+    /// stands over the ground half as deep as the river or more and takes the river on (the
+    /// first is where it runs in, the point past the last where it runs out).
+    pub lake_runs: Vec<[u32; 2]>,
+}
+
+impl Ribbon {
+    /// Whether point `k` is in a lake (one of [`Ribbon::lake_runs`]).
+    pub fn in_lake(&self, k: usize) -> bool {
+        self.lake_runs
+            .iter()
+            .any(|r| (r[0] as usize..=r[1] as usize).contains(&k))
+    }
 }
 
 /// The depth of a river with `area_m2` of catchment, metres: 0.4 m at a square kilometre, 0.95 m
@@ -181,14 +216,14 @@ pub fn depth(area_m2: f64) -> f64 {
     0.4 * (x * x * x).sqrt().sqrt().sqrt()
 }
 
-/// The ribbons of `rivers` (traced over `height`, whose `lakes` they cross), ordered by the
-/// catchment at their mouths, the smallest first: a tributary comes before the river it joins.
-/// Each runs from its head to where it ends: the junction's point on the larger river, or the
-/// outlet's sample. Their `ground` is left at the levels; [`rest_on`] sets it.
+/// The ribbons of `rivers` (traced over `height`, whose lakes' `lakes` water they cross),
+/// ordered by the catchment at their mouths, the smallest first: a tributary comes before the
+/// river it joins. Each runs from its head to where it ends: the junction's point on the larger
+/// river, or the outlet's sample. Their `ground` is left at the levels; [`rest_on`] sets it.
 pub fn ribbons(
     height: &Field2<f32>,
     rivers: &Rivers,
-    lakes: &Lakes,
+    lakes: &[LakeWater],
     params: &RibbonParams,
 ) -> Vec<Ribbon> {
     let spacing = height.spacing;
@@ -245,7 +280,7 @@ pub fn ribbons(
                 river: index as u32,
                 mouth_area,
                 points: ribbon_points(&samples, params),
-                lake_entries: Vec::new(),
+                lake_runs: Vec::new(),
             })
         })
         .collect();
@@ -255,15 +290,20 @@ pub fn ribbons(
             .total_cmp(&a.mouth_area)
             .then(a.river.cmp(&b.river))
     });
-    let lake_level = |x: f64, y: f64| -> Option<f64> {
+    // The level of the lake whose water stands over the nearest sample, and how deep it is
+    // there.
+    let lake_level = |x: f64, y: f64| -> Option<(f64, f64)> {
         let last = f64::from(height.size - 1);
         let (i, j) = (
             (x / spacing).round().clamp(0.0, last) as u32,
             (y / spacing).round().clamp(0.0, last) as u32,
         );
-        let id = *lakes.lake_of.get(height.index(i, j))?;
-        let lake = lakes.lakes.get(id as usize)?;
-        (lake.area(spacing) >= params.lake_area).then_some(f64::from(lake.level))
+        lakes.iter().find(|l| l.stands_at(height, i, j)).map(|l| {
+            (
+                f64::from(l.level),
+                f64::from(l.level) - f64::from(height.get(i, j)),
+            )
+        })
     };
     let mut done: Vec<Option<usize>> = vec![None; rivers.rivers.len()];
     for r in 0..ribbons.len() {
@@ -275,14 +315,15 @@ pub fn ribbons(
             Mouth::Outlet(_) => None,
         };
         let main = joins.map(|(m, at)| (&ribbons[m].points, at));
-        let points = levels(&ribbons[r].points, height, &lake_level, main, params);
-        let under = |p: &RibbonPoint| {
-            lake_level(f64::from(p.position[0]), f64::from(p.position[1])).is_some()
-        };
-        ribbons[r].lake_entries = (0..points.len())
-            .filter(|&k| under(&points[k]) && (k == 0 || !under(&points[k - 1])))
-            .map(|k| k as u32)
-            .collect();
+        let (points, in_lake) = levels(&ribbons[r].points, height, &lake_level, main, params);
+        let mut runs: Vec<[u32; 2]> = Vec::new();
+        for (k, _) in in_lake.iter().enumerate().filter(|(_, l)| **l) {
+            match runs.last_mut() {
+                Some(run) if run[1] + 1 == k as u32 => run[1] = k as u32,
+                _ => runs.push([k as u32; 2]),
+            }
+        }
+        ribbons[r].lake_runs = runs;
         ribbons[r].points = points;
         done[ribbons[r].river as usize] = Some(r);
     }
@@ -509,15 +550,15 @@ pub(crate) fn segment_distance(q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f
     ((dx * dx + dy * dy).sqrt(), t)
 }
 
-/// The points with their levels, banks, speeds, slopes and fades; `main` is the river this one
-/// joins (its points, with their levels, and the junction).
+/// The points with their levels, banks, speeds, slopes and fades, and whether each is in a lake;
+/// `main` is the river this one joins (its points, with their levels, and the junction).
 fn levels(
     points: &[RibbonPoint],
     height: &Field2<f32>,
-    lake_level: &dyn Fn(f64, f64) -> Option<f64>,
+    lake_level: &dyn Fn(f64, f64) -> Option<(f64, f64)>,
     main: Option<(&Vec<RibbonPoint>, [f64; 2])>,
     params: &RibbonParams,
-) -> Vec<RibbonPoint> {
+) -> (Vec<RibbonPoint>, Vec<bool>) {
     let n = points.len();
     // A tributary ends on its river's smoothed course (the junction's D8 point may be off it).
     let mut points = points.to_vec();
@@ -545,30 +586,72 @@ fn levels(
         let (dx, dy) = (f64::from(b[0] - a[0]), f64::from(b[1] - a[1]));
         arc[k] = arc[k - 1] + (dx * dx + dy * dy).sqrt();
     }
+    // Where a lake's water stands over a point's nearest sample the water is at the lake's
+    // level (`wet`); where it stands there [`LAKE_TAKES`] of the river's depth or more the lake
+    // takes the river on (`deep`: in its shallows the river runs on in its channel). A few
+    // points between two of the same lake's are its too: a flat shore at its level crosses it
+    // back and forth.
+    let found: Vec<Option<(f64, f64)>> = points
+        .iter()
+        .map(|p| lake_level(f64::from(p.position[0]), f64::from(p.position[1])))
+        .collect();
+    let mut wet: Vec<Option<f64>> = found.iter().map(|f| f.map(|(level, _)| level)).collect();
+    let mut deep: Vec<Option<f64>> = (0..n)
+        .map(|k| {
+            found[k]
+                .filter(|&(_, d)| d >= LAKE_TAKES * f64::from(points[k].depth))
+                .map(|(level, _)| level)
+        })
+        .collect();
+    fill_gaps(&mut wet, LAKE_FADE as usize);
+    fill_gaps(&mut deep, LAKE_FADE as usize);
+    for k in 0..n {
+        wet[k] = wet[k].or(deep[k]);
+    }
+    let in_lake: Vec<bool> = deep.iter().map(Option::is_some).collect();
+    // The metres along the course to the nearest point where a lake's water stands: the water
+    // rises to its banks into a lake and out of it, where the lake's shore holds it at the
+    // lake's level.
+    let mut to_lake = vec![f64::MAX; n];
+    for k in 0..n {
+        if wet[k].is_some() {
+            to_lake[k] = 0.0;
+        } else if k > 0 {
+            to_lake[k] = to_lake[k - 1] + (arc[k] - arc[k - 1]);
+        }
+    }
+    for k in (0..n.saturating_sub(1)).rev() {
+        to_lake[k] = to_lake[k].min(to_lake[k + 1] + (arc[k + 1] - arc[k]));
+    }
     // Per point: what the water may reach (the lowest ground in the middle and on the banks,
     // a little up and down the course, less the freeboard), the lowest bank, and a lake.
     let mut target = vec![0.0; n];
     let mut bank = vec![0.0; n];
-    let mut in_lake = vec![false; n];
+    let mut ground = vec![0.0; n];
     for (k, p) in points.iter().enumerate() {
         let (half, reach) = (f64::from(p.half_width), f64::from(p.reach));
-        let lake = lake_level(f64::from(p.position[0]), f64::from(p.position[1]));
         let mut lowest_bank = f64::MAX;
         let mut lowest = f64::MAX;
         for along in [-2.0, 0.0, 2.0] {
             for across in [-reach, -half, 0.0, half, reach] {
                 let q = offset(p, along, across);
-                let h = smooth_height(height, q[0], q[1]);
+                // Beside a lake, its level holds the water up, not its bed.
+                let h = match lake_level(q[0], q[1]) {
+                    Some((lake, _)) => smooth_height(height, q[0], q[1]).max(lake),
+                    None => smooth_height(height, q[0], q[1]),
+                };
                 lowest = lowest.min(h);
                 if across != 0.0 {
                     lowest_bank = lowest_bank.min(h);
                 }
             }
         }
-        let freeboard = affine(params.freeboard, 2.0 * half);
-        (target[k], bank[k], in_lake[k]) = match lake {
-            Some(level) => (level, level, true),
-            None => (lowest - freeboard, lowest_bank, false),
+        ground[k] = lowest;
+        let shore = smoothstep(0.0, affine(params.shoal, 2.0 * half), to_lake[k]);
+        let freeboard = affine(params.freeboard, 2.0 * half) * shore;
+        (target[k], bank[k]) = match wet[k] {
+            Some(level) => (level + LAKE_LIFT, level),
+            None => (lowest - freeboard, lowest_bank),
         };
     }
     // The level: under its target, falling only, the steep steps spread upstream; twice, with
@@ -600,6 +683,38 @@ fn levels(
         *l = l.max(0.0);
         if let Some((_, _, floor)) = joined {
             *l = l.max(floor);
+        }
+    }
+    // Nor, up from a lake, under the lake's level: where the ground by the shore dips under it
+    // short of the lake's water, the river stands at the level the lake holds it to (#120).
+    let mut lake_floor = f64::MIN;
+    for k in (0..n).rev() {
+        if wet[k].is_some() {
+            lake_floor = target[k];
+        }
+        level[k] = level[k].max(lake_floor);
+    }
+    // Out of a lake it keeps the lake's level a sample's spacing past the last point where the
+    // lake's water stands, as far as that water may reach (its mask fades out over a sample), so
+    // the two meet; then it falls [`LAKE_OUTFALL`] a metre at most until it meets its own level.
+    // Never over the lowest ground across it, though: past the lip the water spread over the
+    // banks falling away beside it.
+    let mut held: Option<(f64, f64)> = None;
+    for k in 0..n {
+        if wet[k].is_some() {
+            held = Some((target[k], arc[k] + height.spacing));
+        } else if let Some((lake_level, until)) = held {
+            let past = (arc[k] - until).max(0.0);
+            let floor = (lake_level - LAKE_OUTFALL * past).min(ground[k]);
+            if floor <= level[k] {
+                held = None;
+            } else {
+                level[k] = if k > 0 {
+                    floor.min(level[k - 1])
+                } else {
+                    floor
+                };
+            }
         }
     }
     // How far each point is from the water of the river it joins: from its edge (its half
@@ -635,19 +750,25 @@ fn levels(
             .collect(),
         None => vec![f64::MAX; n],
     };
-    // The lakes' points, and how many points away the nearest one is.
-    let mut from_lake = vec![u32::MAX; n];
+    // How many points into a lake each point is, from the nearest point out of it (0 out of
+    // it): the river's water is whole up to the lake's and fades over it, a little over its
+    // level, so the two meet wherever the lake's edge lies between the points.
+    let mut into_lake = vec![0u32; n];
     for k in 0..n {
         if in_lake[k] {
-            from_lake[k] = 0;
-        } else if k > 0 {
-            from_lake[k] = from_lake[k - 1].saturating_add(1);
+            into_lake[k] = if k > 0 {
+                into_lake[k - 1].saturating_add(1)
+            } else {
+                u32::MAX
+            };
         }
     }
     for k in (0..n.saturating_sub(1)).rev() {
-        from_lake[k] = from_lake[k].min(from_lake[k + 1].saturating_add(1));
+        if in_lake[k] {
+            into_lake[k] = into_lake[k].min(into_lake[k + 1].saturating_add(1));
+        }
     }
-    (0..n)
+    let points = (0..n)
         .map(|k| {
             let p = points[k];
             // The water surface's slope over three points either way.
@@ -662,7 +783,7 @@ fn levels(
             let speed =
                 (params.chezy * (depth * slope).sqrt()).clamp(params.speed.0, params.speed.1);
             let fade = f64::from(p.fade)
-                * smoothstep(0.0, 3.0, f64::from(from_lake[k].min(3)))
+                * (1.0 - smoothstep(0.0, LAKE_FADE, f64::from(into_lake[k])))
                 * smoothstep(-1.0, 0.5, into_main[k])
                 * smoothstep(0.0, 0.3, level[k]);
             RibbonPoint {
@@ -675,7 +796,24 @@ fn levels(
                 ..p
             }
         })
-        .collect()
+        .collect();
+    (points, in_lake)
+}
+
+/// Fills the runs of at most `most` `None`s between two equal values of `v` with that value.
+fn fill_gaps(v: &mut [Option<f64>], most: usize) {
+    let mut last: Option<usize> = None;
+    for k in 0..v.len() {
+        let Some(value) = v[k] else { continue };
+        if let Some(j) = last
+            && k - j > 1
+            && k - j - 1 <= most
+            && v[j] == Some(value)
+        {
+            v[j + 1..k].fill(Some(value));
+        }
+        last = Some(k);
+    }
 }
 
 /// Where a ribbon meets the sea: its first point whose level has come down to the sea's (within
@@ -847,7 +985,7 @@ mod tests {
             estuary: (1.5, 0.0),
             ..RibbonParams::default()
         };
-        let ribbons = ribbons(&valley, &rivers, &Lakes::default(), &params);
+        let ribbons = ribbons(&valley, &rivers, &[], &params);
         assert_eq!(ribbons.len(), 1);
         let ribbon = &ribbons[0];
         let points = &ribbon.points;
@@ -901,12 +1039,7 @@ mod tests {
         assert!((smooth_height(&valley, 30.0, 70.0) - f64::from(valley.get(3, 7))).abs() < 1e-9);
         // With the estuary, under 1.5 m over the sea the river widens towards its mouth and
         // shallows: twice as wide and three fifths as deep at the sea's level, unchanged above.
-        let estuary = super::ribbons(
-            &valley,
-            &rivers,
-            &Lakes::default(),
-            &RibbonParams::default(),
-        );
+        let estuary = super::ribbons(&valley, &rivers, &[], &RibbonParams::default());
         let wide = &estuary[0].points;
         let (outlet, mouth) = (wide[wide.len() - 1], points[points.len() - 1]);
         let e = (1.0 - smoothstep(0.0, 1.5, f64::from(outlet.level))) as f32;
@@ -931,7 +1064,7 @@ mod tests {
         let flow = drain(&fork, 0.0, &pool);
         let rivers = trace_rivers(&fork, &flow, 30);
         let params = RibbonParams::default();
-        let ribbons = ribbons(&fork, &rivers, &Lakes::default(), &params);
+        let ribbons = ribbons(&fork, &rivers, &[], &params);
         assert_eq!(ribbons.len(), rivers.rivers.len());
         // The smallest mouth first; the trunk, to the outlet, last.
         for pair in ribbons.windows(2) {
@@ -981,9 +1114,6 @@ mod tests {
             }
         }
         // Deterministic.
-        assert_eq!(
-            super::ribbons(&fork, &rivers, &Lakes::default(), &params),
-            ribbons
-        );
+        assert_eq!(super::ribbons(&fork, &rivers, &[], &params), ribbons);
     }
 }

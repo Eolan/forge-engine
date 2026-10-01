@@ -717,7 +717,7 @@ mod tests {
             river: 0,
             mouth_area: 1e6,
             points,
-            lake_entries: Vec::new(),
+            lake_runs: Vec::new(),
         };
         (height, ribbon)
     }

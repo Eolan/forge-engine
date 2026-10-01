@@ -1,9 +1,10 @@
 //! The lakes' water (issue #105, D-038's lakes; `docs/research/water.md` §4 and its
 //! recommendation's step 4): each lake of stage 4 ([`crate::hydrology::trace_lakes`]) as a
 //! level plane the GPU draws (`water.slang`), clipped by a mask of the samples its water may
-//! stand over: the priority flood's depression at the lake's level, grown by a sample so the
-//! ground rising through the plane draws the shore between the samples. The rivers through a
-//! lake take its level ([`crate::river`]).
+//! stand over: the priority flood's depression at the lake's level, grown by a sample where the
+//! ground rises through the level, so it draws the shore between the samples. Past the outlet,
+//! where the ground falls away under the level, the mask stops and the river takes the water on
+//! (#120). The rivers through a lake take its level ([`crate::river`]).
 //!
 //! Everything is a pure function of the fields, in index order (D-016).
 
@@ -41,12 +42,19 @@ impl LakeWater {
         let (i, j) = (x.wrapping_sub(self.first[0]), y.wrapping_sub(self.first[1]));
         i < self.size[0] && j < self.size[1] && self.mask[(j * self.size[0] + i) as usize]
     }
+
+    /// Whether the water stands over sample `(x, y)` of `height`, the field it was traced over:
+    /// the mask covers it and the ground there is under the level.
+    pub fn stands_at(&self, height: &Field2<f32>, x: u32, y: u32) -> bool {
+        self.covers(x, y) && height.get(x, y) < self.level
+    }
 }
 
 /// The water of every lake of `lakes` with `min_area` m² or more, traced over `height` from its
 /// priority flood `filled`: from the lake's samples, every 4-neighbour where the flood stands
 /// at the lake's level (its shallow margins, which the lakes' depth threshold leaves out, and
-/// the rim), then a sample more all round.
+/// the rim), then a sample more all round where the ground stands at the level or over it (the
+/// shore), not past the outlet, where it falls away under it.
 pub fn lake_waters(
     height: &Field2<f32>,
     filled: &Field2<f32>,
@@ -95,7 +103,11 @@ pub fn lake_waters(
                 for dy in 0..3 {
                     for dx in 0..3 {
                         let (mx, my) = ((x + dx).wrapping_sub(1), (y + dy).wrapping_sub(1));
-                        if (lo[0]..=hi[0]).contains(&mx) && (lo[1]..=hi[1]).contains(&my) {
+                        if !(lo[0]..=hi[0]).contains(&mx) || !(lo[1]..=hi[1]).contains(&my) {
+                            continue;
+                        }
+                        let m = my * n + mx;
+                        if region.contains(&m) || height.data[m] >= level {
                             mask[(my - lo[1]) * size[0] + (mx - lo[0])] = true;
                         }
                     }
@@ -160,7 +172,7 @@ mod tests {
     use forge_task::{PoolConfig, TaskPool};
 
     #[test]
-    fn a_basin_s_water_covers_its_depression_and_a_sample_more() {
+    fn a_basin_s_water_covers_its_depression_and_its_shore_but_not_past_its_outlet() {
         // A bowl 2 m deep in a plane falling towards x = 0 (the outlet): its lip at x = 13.
         let bowl = Field2::from_fn(24, 10.0, |x, y| {
             let (dx, dy) = (x as f32 - 12.0, y as f32 - 12.0);
@@ -176,13 +188,17 @@ mod tests {
         assert!(!waters.is_empty());
         let water = &waters[0];
         let lake = &lakes.lakes[water.lake as usize];
-        // Every sample of the lake is covered, the bowl's centre too; the plane's far side and
-        // the outlet's slope beyond the rim are not.
+        // Every sample of the lake is covered, the bowl's centre too, and the shore a sample past
+        // the water, where the ground rises through the level. The plane's far side and the
+        // outlet's slope are not, not even the sample past the lip (#120): the lip at (8, 12)
+        // stands at the level, (7, 12) under it.
         for &c in &lake.cells {
             let (x, y) = bowl.coords(c as usize);
-            assert!(water.covers(x, y));
+            assert!(water.covers(x, y) && water.stands_at(&bowl, x, y));
         }
         assert!(water.covers(12, 12));
+        assert!(water.covers(12, 16) && !water.stands_at(&bowl, 12, 16));
+        assert!(water.covers(8, 12) && !water.covers(7, 12));
         assert!(!water.covers(23, 12) && !water.covers(0, 12));
         // Every covered sample is within a sample of one where the flood stands at the level.
         for y in 0..24 {
