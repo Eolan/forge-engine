@@ -816,22 +816,34 @@ const RIVER_CHUNK_MARGIN: f32 = 25.0;
 /// A run of the rivers' segments and the box it can be drawn in (the sea's frame).
 #[derive(Clone, Copy, Debug)]
 struct RiverChunk {
+    /// The river it is part of (a chunk never spans two).
+    river: u32,
     first: u32,
     count: u32,
     lo: Vec3,
     hi: Vec3,
 }
 
-/// The runs of [`RIVER_CHUNK`] segments of `rivers` (one after the other as uploaded), each
-/// with its box: the points' positions out to their reach, their level and the ground they rest
-/// on far away, and [`RIVER_CHUNK_MARGIN`] more.
+/// The runs of at most [`RIVER_CHUNK`] segments of each of `rivers` (one after the other as
+/// uploaded, the tributaries first), each with its box: the points' positions out to their
+/// reach, their level and the ground they rest on far away, and [`RIVER_CHUNK_MARGIN`] more.
 fn river_chunks(rivers: &[Vec<WaterRiverPoint>]) -> Vec<RiverChunk> {
     let points: Vec<&WaterRiverPoint> = rivers.iter().flatten().collect();
-    let segments = points.len().saturating_sub(1) as u32;
-    (0..segments.div_ceil(RIVER_CHUNK))
-        .map(|c| {
-            let first = c * RIVER_CHUNK;
-            let count = RIVER_CHUNK.min(segments - first);
+    let mut runs = Vec::new();
+    let mut start = 0_u32;
+    for (river, r) in rivers.iter().enumerate() {
+        // A river's segments: from each of its points but the last.
+        let segments = (r.len() as u32).saturating_sub(1);
+        let mut first = start;
+        while first < start + segments {
+            let count = RIVER_CHUNK.min(start + segments - first);
+            runs.push((river as u32, first, count));
+            first += count;
+        }
+        start += r.len() as u32;
+    }
+    runs.into_iter()
+        .map(|(river, first, count)| {
             let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
             for p in &points[first as usize..=(first + count) as usize] {
                 let ground = p.ground.iter().copied();
@@ -849,6 +861,7 @@ fn river_chunks(rivers: &[Vec<WaterRiverPoint>]) -> Vec<RiverChunk> {
                 ));
             }
             RiverChunk {
+                river,
                 first,
                 count,
                 lo: lo - RIVER_CHUNK_MARGIN,
@@ -1499,19 +1512,28 @@ impl WaterSurface {
         let rivers = shore.and_then(|s| s.rivers.as_ref());
         let lake_count = shore.map_or(0, |s| s.lake_count);
         let river_points = shore.map_or(0, |s| s.river_points);
-        // The runs of the rivers' segments in view (first segment, segments), the neighbours
-        // merged into one draw.
+        // The runs of the rivers' segments in view (first segment, segments), a river's
+        // neighbouring chunks merged into one draw. The largest river first (the last uploaded):
+        // a tributary's water, which fades out inside the river it joins, then blends over that
+        // river's water, not over the ground (#115; the same depth passes).
         let mut river_runs: Vec<(u32, u32)> = Vec::new();
         if let Some(s) = shore {
             let camera = params.camera.as_vec3();
-            for chunk in &s.river_chunks {
+            let mut run_river = u32::MAX;
+            for chunk in s.river_chunks.iter().rev() {
                 if !box_in_view(&params.view_proj, chunk.lo - camera, chunk.hi - camera) {
                     continue;
                 }
                 match river_runs.last_mut() {
-                    Some((first, count)) if *first + *count == chunk.first => *count += chunk.count,
+                    Some((first, count))
+                        if run_river == chunk.river && chunk.first + chunk.count == *first =>
+                    {
+                        *first = chunk.first;
+                        *count += chunk.count;
+                    }
                     _ => river_runs.push((chunk.first, chunk.count)),
                 }
+                run_river = chunk.river;
             }
         }
         let shore_image = shore.map(|s| graph.import(&s.image));

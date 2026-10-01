@@ -571,7 +571,12 @@ fn levels(
             *l = l.max(floor);
         }
     }
-    // How far each point is from the water of the river it joins, less that water's reach.
+    // How far each point is from the water of the river it joins: from its edge (its half
+    // width), in units of how far inside it the tributary's water is gone, 3 m or six tenths of
+    // the half width. The water is whole from half that outside the edge, and thins over the
+    // main river's water, which is drawn before it (the larger river first). Measured from the
+    // main's reach under its banks and drawn first itself, it stopped metres short and its
+    // thinning water blended with the dry bed: a band across the junction (#115).
     let into_main: Vec<f64> = match joined {
         Some((main, m, _)) => points
             .iter()
@@ -586,9 +591,13 @@ fn levels(
                             [f64::from(a[0]), f64::from(a[1])],
                             [f64::from(b[0]), f64::from(b[1])],
                         );
-                        let reach = f64::from(main[j].reach)
-                            + (f64::from(main[j + 1].reach) - f64::from(main[j].reach)) * t;
-                        d - reach
+                        let half = f64::from(main[j].half_width)
+                            + (f64::from(main[j + 1].half_width) - f64::from(main[j].half_width))
+                                * t;
+                        // Gone 3 m inside, or at six tenths of a narrower river's half width,
+                        // so never on its middle, where the tributary's ribbon ends.
+                        let inside = (0.6 * half).min(3.0).max(0.05);
+                        (d - half) / inside
                     })
                     .fold(f64::MAX, f64::min)
             })
@@ -623,7 +632,7 @@ fn levels(
                 (params.chezy * (depth * slope).sqrt()).clamp(params.speed.0, params.speed.1);
             let fade = f64::from(p.fade)
                 * smoothstep(0.0, 3.0, f64::from(from_lake[k].min(3)))
-                * smoothstep(0.0, 4.0, into_main[k])
+                * smoothstep(-1.0, 0.5, into_main[k])
                 * smoothstep(0.0, 0.3, level[k]);
             RibbonPoint {
                 level: level[k] as f32,

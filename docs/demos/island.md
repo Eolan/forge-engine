@@ -1040,3 +1040,17 @@ at the sea's level, and shallows by two fifths; its banks flatten there to three
 their rise. The widest water at a mouth is 34 m (17 m before). From 40 m the mouths flare into
 the surf (`reports/2026-10-01-110/estuary.png`: the gentlest and the largest mouth, from 4 m and
 from 40 m; ꟻLIP means 0.11, 0.055 and 0.066).
+
+**The confluences** (#115, 2026-10-01). A tributary's water ended in a straight edge a few
+metres short of the river it joins, with a band across the junction. The channel was carved
+through; the band was the tributary's own water thinning over the dry bed. Its ribbon faded out
+from 4 m outside the main river's reach, and drawn first and standing a hair higher it kept the
+depth, so the main's water never covered it.
+- The rivers are now drawn per river, the largest first. The chunks of 64 segments never span
+  two rivers, and only a river's neighbouring chunks merge into one draw.
+- A tributary's water is whole from 1.5 m outside the main's water edge and gone 3 m inside it (six
+  tenths of the half width in a narrower river, never on its middle), so
+  its thinning blends over the main's water.
+
+The tributary opens into the main river (`reports/2026-10-01-115/`; ꟻLIP mean 0.0073 on the
+logged `confluence` view).
