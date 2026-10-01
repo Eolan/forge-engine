@@ -596,7 +596,7 @@ fn levels(
                                 * t;
                         // Gone 3 m inside, or at six tenths of a narrower river's half width,
                         // so never on its middle, where the tributary's ribbon ends.
-                        let inside = (0.6 * half).min(3.0).max(0.05);
+                        let inside = (0.6 * half).clamp(0.05, 3.0);
                         (d - half) / inside
                     })
                     .fold(f64::MAX, f64::min)
