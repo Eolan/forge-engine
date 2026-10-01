@@ -639,6 +639,18 @@ float smith_visibility(float nv, float nl, float a2)
     return 0.5 / max(v + l, 1e-6);
 }
 
+// Water's index of refraction.
+static const float WATER_IOR = 1.333;
+
+// How steeply the view ray falls once it crosses a water surface of normal `n` seen from `v`
+// (Snell's law): the refracted ray's downward share, at least 0.1. Straight down it is 1; at a
+// grazing angle about 0.66, where the straight ray's is near 0.
+float refracted_down(float3 n, float3 v)
+{
+    float3 t = refract(-v, n, 1.0 / WATER_IOR);
+    return max(-t.y, 0.1);
+}
+
 // The light on a water surface of normal `n` and GGX roughness² `a2`, seen from `v`, besides
 // what lies under it.
 struct WaterLight
@@ -759,8 +771,12 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     float blur = light.blur;
     float3 reflected = light.reflected;
     float3 sun = light.sun;
-    // What lies under the water: the scene behind this pixel, dimmed along the path the view
-    // ray takes through the water to it, and the light the water scatters back on the way.
+    // What lies under the water: the scene behind this pixel, dimmed along the path the light
+    // takes through the water to it, and the light the water scatters back on the way. The view
+    // ray meets the floor `thickness` under the surface; the light bends down into the water
+    // (`refracted_down`), so its path there is that depth over the refracted ray's fall, not
+    // the straight ray's: a little longer than the depth, where the straight ray at a grazing
+    // angle went ten times as far and every wave changed it by metres.
     uint2 pixel = uint2(input.position.xy);
     float2 uv = (float2(pixel) + 0.5) / float2(w[0].width, w[0].height);
     float floor_depth = g_sampled_images_r[NonUniformResourceIndex(w[0].scene_depth)].Load(int3(pixel, 0));
@@ -771,7 +787,10 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
         float4 behind = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, floor_depth, 1.0));
         path = max(length(behind.xyz / behind.w) - surface_distance, 0.0);
     }
-    float layer_path = min(path, layer / max(v.y, 0.05));
+    float thickness = path * max(v.y, 0.0);
+    float fall = refracted_down(n, v);
+    path = thickness / fall;
+    float layer_path = min(path, layer / fall);
     float3 layer_through = exp(-RIVER_ABSORPTION * layer_path);
     float3 sea_through = exp(-w[0].absorption.rgb * (path - layer_path));
     float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
@@ -786,7 +805,6 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
     // to the floor), a line the pattern only frays: cut into the pattern's blobs, a band that
     // narrow reads as a dashed line.
     float foam = saturate((0.45 - jacobian) * 2.0);
-    float thickness = path * max(v.y, 0.0);
     float edge = waves.swash > 0.02 ? 1.0 - smoothstep(0.0, SWASH_EDGE, thickness) : 0.0;
     float breaking = saturate(1.5 * waves.foam);
     if (breaking > 0.0 || edge > 0.0)
@@ -1207,7 +1225,10 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     // the ground is not drawn there yet (its pages still streaming in): no water over nothing.
     float there = 1.0 - smoothstep(s.deepest, 1.5 * s.deepest, thickness);
     float coverage = s.coverage * lerp(contact * there, 1.0, s.drape);
-    path = lerp(path, s.depth / max(v.y, 0.2), s.drape);
+    // The light's path through the water to what is under it, along the refracted ray (as the
+    // sea's); far away, where the ribbon lies on the ground, through the channel's depth.
+    float fall = refracted_down(n, v);
+    path = lerp(thickness, s.depth, s.drape) / fall;
     float3 transmittance = exp(-s.absorption * path);
     float3 inside = under * transmittance + s.scatter * light.lit * (1.0 - transmittance);
     float3 color = light.reflected * light.fresnel + inside * (1.0 - light.fresnel) + light.sun;

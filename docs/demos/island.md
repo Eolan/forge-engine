@@ -441,9 +441,12 @@ them ("The surface" below); without it, the stand-in.
     the sea turns rough instead of shimmering.
   - Schlick's Fresnel (F0 0.02) with the sky in the mirror direction, and the sun's GGX
     highlight.
-  - Under the water, the copied scene is dimmed along the view ray's path to it (absorption
+  - Under the water, the copied scene is dimmed along the light's path to it (absorption
     0.35, 0.07, 0.05 m⁻¹), with the light the water scatters back. The shallows show the sand,
-    and the deep sea turns blue.
+    and the deep sea turns blue. The path is the depth under the surface over the refracted
+    ray's fall (Snell's law, n = 1.333; since 2026-10-01, `reports/2026-10-01-105/refraction.md`):
+    at a grazing angle about 1.5 times the depth, where the straight view ray's was ten times,
+    and every wave changed it by metres and speckled the shallows.
   - Foam where the Jacobian drops under 0.45, then the aerial perspective.
 - **The graph:** the surface writes depth, so TAA's motion vectors and the culling harness see
   it as a surface. `--sea-time T` holds the waves still.
