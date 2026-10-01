@@ -158,6 +158,11 @@ struct Args {
     /// How far the coastal plain's width wanders along the coast.
     #[arg(long)]
     island_plain_wander: Option<f64>,
+    /// The island's rivers sized by D-041's regional curves with this exaggeration `k`: a river
+    /// `k · 2.7 (A/km²)^0.37` m wide, `1.5 · 0.3 (A/km²)^0.21` m deep. Without it, the
+    /// catchment's square root (5 m at a square kilometre).
+    #[arg(long)]
+    river_k: Option<f64>,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1795,6 +1800,17 @@ fn island_lakes(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_procg
     forge_procgen::trace_lakes(height, &filled, flow, 0.5)
 }
 
+/// The island's rivers' parameters, set once at start from the arguments (`--river-k`).
+static RIBBON_PARAMS: std::sync::OnceLock<forge_procgen::RibbonParams> = std::sync::OnceLock::new();
+
+/// The island's rivers' parameters: the defaults, or what `--river-k` set.
+fn ribbon_params() -> forge_procgen::RibbonParams {
+    RIBBON_PARAMS.get().copied().unwrap_or_default()
+}
+
+/// D-041's depth exaggeration on the regional curve, with `--river-k`.
+const RIVER_DEPTH_K: f64 = 1.5;
+
 /// The island's water on the land (#105, D-038's rivers and lakes).
 #[derive(Clone)]
 struct IslandWater {
@@ -1830,7 +1846,7 @@ fn make_island_water(height: &Field2<f32>) -> IslandWater {
     let rivers = island_rivers(height, &flow);
     let filled = forge_procgen::priority_flood(height, 0.0);
     let lakes = forge_procgen::trace_lakes(height, &filled, &flow, 0.5);
-    let params = forge_procgen::RibbonParams::default();
+    let params = ribbon_params();
     let mut ribbons = forge_procgen::ribbons(height, &rivers, &lakes, &params);
     let lakes = forge_procgen::lake_waters(height, &filled, &lakes, params.lake_area);
     let channels = forge_procgen::Channels::new(
@@ -2286,7 +2302,7 @@ fn island_prop(args: &Args) -> PropSpec {
                 SEA_FLOOR.0,
                 SEA_FLOOR.1,
                 SHORE_SMOOTHING,
-                forge_procgen::RibbonParams::default(),
+                ribbon_params(),
                 forge_procgen::ChannelParams::default(),
             ),
             samples: params.size,
@@ -2836,6 +2852,14 @@ fn build_gallery(
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(k) = args.river_k {
+        RIBBON_PARAMS
+            .set(forge_procgen::RibbonParams {
+                regional: Some((k, RIVER_DEPTH_K)),
+                ..forge_procgen::RibbonParams::default()
+            })
+            .expect("the rivers' parameters, set once");
+    }
     let config = AppConfig {
         title: "forge city-blocks".into(),
         vsync: args.vsync,

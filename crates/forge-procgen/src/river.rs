@@ -69,6 +69,10 @@ pub struct RibbonParams {
     /// mouth, and by how many of its widths at the sea's level (1: twice as wide), shallowing by
     /// two fifths, so it crosses the beach as a river mouth rather than a canal.
     pub estuary: (f64, f64),
+    /// D-041's regional curves with their exaggeration `(k, k_d)`: a river `k · 2.7 (A/km²)^0.37`
+    /// metres wide and `k_d · 0.3 (A/km²)^0.21` deep, the width growing downstream at nature's
+    /// rate; `None` keeps [`hydrology::width`] and [`depth`].
+    pub regional: Option<(f64, f64)>,
 }
 
 impl Default for RibbonParams {
@@ -94,7 +98,23 @@ impl Default for RibbonParams {
             max_fall: 0.6,
             lake_area: 10_000.0,
             estuary: (1.5, 1.0),
+            regional: None,
         }
+    }
+}
+
+/// A river's width and depth with `area_m2` of catchment under `params` (D-041's regional
+/// curves, or [`hydrology::width`] and [`depth`]), metres.
+fn size(area_m2: f64, params: &RibbonParams) -> (f64, f64) {
+    match params.regional {
+        Some((k, k_d)) => {
+            let km2 = (area_m2 * 1e-6).max(1e-6);
+            (
+                k * 2.7 * forge_core::dmath::powf(km2, 0.37),
+                k_d * 0.3 * forge_core::dmath::powf(km2, 0.21),
+            )
+        }
+        None => (hydrology::width(area_m2), depth(area_m2)),
     }
 }
 
@@ -409,7 +429,7 @@ fn ribbon_points(samples: &[[f64; 4]], params: &RibbonParams) -> Vec<RibbonPoint
     let mut half: Vec<f64> = samples
         .iter()
         .zip(&arc)
-        .map(|(s, &a)| 0.5 * hydrology::width(s[3]) * spring(params.spring.0, a, params))
+        .map(|(s, &a)| 0.5 * size(s[3], params).0 * spring(params.spring.0, a, params))
         .collect();
     // In a bend, the ribbon (the water and its tuck under the banks) under `bend` of its
     // radius; and into and out of it gradually, a quarter of a metre a metre at most.
@@ -439,7 +459,7 @@ fn ribbon_points(samples: &[[f64; 4]], params: &RibbonParams) -> Vec<RibbonPoint
                 direction: [(dx / length) as f32, (dy / length) as f32],
                 half_width: half[k] as f32,
                 reach: (half[k] + affine(params.tuck, half[k])) as f32,
-                depth: (depth(s[3]) * spring(params.spring.1, arc[k], params)) as f32,
+                depth: (size(s[3], params).1 * spring(params.spring.1, arc[k], params)) as f32,
                 bank: 0.0,
                 speed: 0.0,
                 slope: 0.0,

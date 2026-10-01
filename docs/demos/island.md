@@ -1054,3 +1054,15 @@ depth, so the main's water never covered it.
 
 The tributary opens into the main river (`reports/2026-10-01-115/`; ꟻLIP mean 0.0073 on the
 logged `confluence` view).
+
+**The rivers' size** (D-041's regional curves, `RibbonParams::regional`, `city-blocks --river-k
+K`; off by default, 2026-10-01). D-041 sizes a river by the regional curves with an explicit
+exaggeration: `k · 2.7 (A/km²)^0.37` m wide, `1.5 · 0.3 (A/km²)^0.21` deep, so the width grows
+downstream at nature's rate. With `k = 2` as proposed, the largest rivers would narrow (the
+widest water 34 → 27 m with the estuaries) while the small ones widen (3.5 → 4.2 m at 0.5 km²),
+against the owner's "small streams rather than proper rivers". So it is an option until the
+owner picks `k`. `reports/2026-10-01-112/river-size.png` shows today, `k` 2, 2.5 and 3, from 3 m
+down a lowland river and from 40 m over the plain:
+- `k` 2.5 keeps the widest at 33 m and widens the rest by about half;
+- `k` 3 reads as a river from the bank, the widest 40 m;
+- the deepest is 0.75 m with the curve (1.0 m today).
