@@ -1946,7 +1946,7 @@ fn island_ribbons(
         views = %views.join("  "),
         "the island's lakes (--view)"
     );
-    let rivers = ribbons
+    let rivers: Vec<Vec<WaterRiverPoint>> = ribbons
         .iter()
         .map(|r| {
             r.points
@@ -1983,10 +1983,33 @@ fn island_ribbons(
             point: first[s.ribbon as usize] + s.point,
         })
         .collect();
+    // A view of the stone in the fastest water that breaks it: 10 m upstream, 2.5 m over the
+    // water, looking down the river at it.
+    let points: Vec<&WaterRiverPoint> = rivers.iter().flatten().collect();
+    let stone_view = stones
+        .iter()
+        .filter(|s| s.waterline > 0.4)
+        .max_by(|a, b| {
+            points[a.point as usize]
+                .speed
+                .total_cmp(&points[b.point as usize].speed)
+        })
+        .map_or_else(String::new, |s| {
+            let p = points[s.point as usize];
+            let (dx, dz) = (p.direction[0], p.direction[1]);
+            let yaw = (-dx).atan2(-dz).to_degrees();
+            format!(
+                "{:.0},{:.1},{:.0},{yaw:.1},-14",
+                s.position[0] - 10.0 * dx,
+                p.level + 2.5,
+                s.position[1] - 10.0 * dz
+            )
+        });
     tracing::info!(
         stones = stones.len(),
         breaking_the_water = stones.iter().filter(|s| s.waterline > 0.0).count(),
         mouths = mouths.len(),
+        stone_view = %stone_view,
         "the rivers' stones and mouths"
     );
     (rivers, mouths, stones, lakes)

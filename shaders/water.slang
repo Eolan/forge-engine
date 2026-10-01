@@ -1143,6 +1143,18 @@ StoneFlow stones_at(WaterSurface* w, uint segment, float2 world, float2 velocity
     return o;
 }
 
+// White water's pattern: metres a cell of its coarser octave of noise (the finer is 2.5 times
+// finer).
+static const float RIVER_FOAM_CELL = 0.45;
+
+// White water's pattern at `p` (world x, z): two octaves of value noise, broken white water
+// rather than one soft blob a metre across.
+float foam_clumps(float2 p)
+{
+    float2 q = p / RIVER_FOAM_CELL;
+    return 0.6 * value_noise(q) + 0.4 * value_noise(q * 2.5 + 7.1);
+}
+
 // Fresh water's surface at a pixel, a river's or a lake's: what the shading needs besides the
 // frame.
 struct FreshWater
@@ -1204,11 +1216,12 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     float foam = 0.0;
     if (s.white > 0.0)
     {
-        float n0 = value_noise((world - f.offset0) / 0.8);
-        float n1 = value_noise((world - f.offset1) / 0.8 + 13.7);
+        // Finer than two pixels the pattern gives way to its mean.
+        float n0 = foam_clumps(world - f.offset0);
+        float n1 = foam_clumps(world - f.offset1 + 13.7);
         float pattern = 0.5 + ((n0 - 0.5) * f.weight0 + (n1 - 0.5) * f.weight1) * ripples.norm;
-        float resolved = saturate(0.8 / (2.0 * footprint) - 1.0);
-        foam = s.white * lerp(RIVER_FOAM_MEAN, smoothstep(0.45, 0.8, pattern), resolved);
+        float resolved = saturate(RIVER_FOAM_CELL / (2.0 * footprint) - 1.0);
+        foam = s.white * lerp(RIVER_FOAM_MEAN, smoothstep(0.5, 0.72, pattern), resolved);
     }
     color = lerp(color, 0.8 * light.lit / PI, foam * 0.8);
     float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);

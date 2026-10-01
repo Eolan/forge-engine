@@ -106,3 +106,12 @@ Rivers and lakes now fade where the view ray finds nothing within the deepest th
 own depth, a lake's deepest point, and 5 m more) under their surface (right); once the ground is
 in, nothing changes (the batch, captured with the pages resident, at 0 px everywhere; validation
 clean).
+
+## Later the same night: finer white water
+
+Close up, the white water in fast reaches was soft blobs a metre across (one octave of value
+noise at 0.8 m). It is now two octaves (0.45 and 0.18 m) with a sharper threshold, carried on
+the flow, whose shear draws it into lines along the fast water. `white-water.png`: the stone in
+the fastest water, by the largest river's mouth (`--view=-5091,4.6,-1395,40.6,-14`, the log's
+`stone_view`), before (left) and now (right). The batch at 0 px; validation clean; frame to frame
+1.016 → 1.020 % in that view.
