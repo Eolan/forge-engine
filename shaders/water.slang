@@ -718,6 +718,10 @@ struct SurfaceTargets
 static const float REQUEST_MIN_WEIGHT = 0.001;
 // Below this share of the pixel's brightest channel, the sun's light is not worth a shadow ray.
 static const float SUN_REQUEST_MIN_SHARE = 0.01;
+// The swash's leading edge: the sheet's thickness (m) under which its foam line shows, and how
+// much the foam's pattern breaks the line up (a share of its cover).
+static const float SWASH_EDGE = 0.03;
+static const float SWASH_EDGE_BREAKUP = 0.4;
 
 [shader("fragment")]
 SurfaceTargets surface_frag_main(SurfaceOut input)
@@ -791,15 +795,20 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
         + RIVER_SCATTER * lit * (1.0 - layer_through);
     float3 color = reflected * fresnel + inside * (1.0 - fresnel) + sun;
     // Foam, lit like a white diffuse surface: where the waves fold (the Jacobian under ~0.45),
-    // where the shore's trains break, and along the swash's thin leading edge (the water's
-    // depth under the pixel from the view ray's path to the floor), the shore's broken up by a
-    // pattern that drifts shorewards.
+    // where the shore's trains break, broken up by a pattern that drifts shorewards, and along
+    // the swash's thin leading edge (the water's depth under the pixel from the view ray's path
+    // to the floor), a line the pattern only frays: cut into the pattern's blobs, a band that
+    // narrow reads as a dashed line.
     float foam = saturate((0.45 - jacobian) * 2.0);
     float thickness = path * max(v.y, 0.0);
-    float edge = waves.swash > 0.02 ? 1.0 - smoothstep(0.0, 0.08, thickness) : 0.0;
-    float white = saturate(1.5 * waves.foam + 0.7 * edge);
-    if (white > 0.0)
-        foam = max(foam, white * foam_pattern(w, input.flat + w[0].camera.xz, waves.inland, footprint));
+    float edge = waves.swash > 0.02 ? 1.0 - smoothstep(0.0, SWASH_EDGE, thickness) : 0.0;
+    float breaking = saturate(1.5 * waves.foam);
+    if (breaking > 0.0 || edge > 0.0)
+    {
+        float pattern = foam_pattern(w, input.flat + w[0].camera.xz, waves.inland, footprint);
+        foam = max(foam, breaking * pattern);
+        foam = max(foam, 0.7 * edge * (1.0 - SWASH_EDGE_BREAKUP * (1.0 - pattern)));
+    }
     color = lerp(color, 0.8 * lit / PI, foam * 0.8);
     // The air between the camera and the water, as the compose hazes everything else.
     float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);

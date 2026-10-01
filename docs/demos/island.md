@@ -554,9 +554,11 @@ Its second part: the shore's own waves (Uncharted 3's recipe, Gonzalez-Ochoa & H
     out there), and out where they are shorter than four of the mesh's spacings or the
     pixel's footprints.
 - **The foam:** the broken water on the front of each crest in the surf zone, left behind as
-  the crest moves on. Also the thinnest water at the swash's edge, from the view ray's path to
-  the floor. Both are broken up by two octaves of value noise that drift shorewards and fade to
-  their mean below two pixels.
+  the crest moves on. Also the swash's leading edge, where its sheet is under 3 cm thick (from
+  the view ray's path to the floor). Two octaves of value noise that drift shorewards and fade
+  to their mean below two pixels break up the broken water. They only fray the edge's line
+  (40 % of its cover at most): cut into the noise's blobs, a band that narrow read as a dashed
+  line.
 - **The swash:** at the shoreline each wave runs up the beach as a thin sheet: a quick
   uprush, then a slow backwash, 0.3 of the trains' deep-water height at most.
 
@@ -869,3 +871,16 @@ metres across, as they were.
 - **Cost:** none to draw; the frame within 0.04 ms of the lakes' commit over six views. Over 32
   frames as stable or more. **Checks:** only the island's images change; the A/B harness and mesh
   against fallback at 0 px; validation clean (`reports/2026-10-01-106/ground.md`).
+
+**The swash's line** (#106, 2026-10-01). From above, a grey band with light dashes ran along the
+beach where the waves run up, like a road's centre line. It was the foam at the swash's edge: the
+sheet was whitened where under 8 cm (2 m wide on this beach), then cut up by the foam's 2.5 m
+pattern.
+The edge is now a line where the sheet is under 3 cm, which the pattern only frays (40 % of its
+cover at most); the surf's broken water keeps its pattern.
+
+![18 m over the south beach at 12 s (top) and 14 s: the dashes before (left), the line now (right)](../../reports/2026-10-01-106/swash-close.png)
+
+- **Cost** and **stability:** `reports/2026-10-01-106/swash.md`. **Checks:** only the island's
+  water images change (ꟻLIP mean 0.0008); the A/B harness and mesh against fallback at 0 px;
+  validation clean.
