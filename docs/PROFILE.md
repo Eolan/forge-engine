@@ -565,6 +565,24 @@ the riparian strip); the waves held at 12 s, alternating runs.
   within 0.01 % on every view but up the steep river, 0.26 → 0.36 % from one frame to the next
   (the ripples of the water now drawn there); after 32 frames under 0.002 % everywhere.
 
+**The rivers sized by D-041's regional curves, `k` = 3** (#112, 2026-10-01): the same build
+with `--river-k 0` (the catchment's square root) against the default; the same views, three
+runs each, alternating, 1600 × 900.
+
+| View | frame | `water/reflections` | `water/surface` | `shading/layered` |
+|---|---|---|---|---|
+| coast (the first view) | 1.653 → 1.668 ms | 0.127 → 0.138 | 0.119 → 0.120 | 0.334 → 0.334 |
+| the island from 2.5 km | 2.164 → 2.178 ms | 0.083 → 0.081 | 0.161 → 0.163 | 0.322 → 0.325 |
+| a river on the plain from 40 m | 1.688 → 1.690 ms | 0.026 → 0.029 | 0.028 → 0.030 | 0.634 → 0.635 |
+| down a lowland river from 3 m | 1.451 → 1.447 ms | 0.059 → 0.075 | 0.043 → 0.049 | 0.319 → 0.320 |
+| up a steep river from 2 m | 1.879 → 1.973 ms | 0.216 → 0.284 | 0.061 → 0.072 | 0.550 → 0.540 |
+| a lake entry from 50 m | 1.769 → 1.758 ms | 0.212 → 0.211 | 0.108 → 0.109 | 0.456 → 0.448 |
+
+- The cost follows the water on screen: up the steep river the wider water fills more of the
+  valley's floor.
+- **Stability** (still camera, TAA on): the same on every view but up the steep river, 0.41 →
+  0.66 % from one frame to the next (more rippling water); after 32 frames under 0.001 %.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

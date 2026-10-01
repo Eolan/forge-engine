@@ -1055,14 +1055,27 @@ depth, so the main's water never covered it.
 The tributary opens into the main river (`reports/2026-10-01-115/`; ꟻLIP mean 0.0073 on the
 logged `confluence` view).
 
-**The rivers' size** (D-041's regional curves, `RibbonParams::regional`, `city-blocks --river-k
-K`; off by default, 2026-10-01). D-041 sizes a river by the regional curves with an explicit
-exaggeration: `k · 2.7 (A/km²)^0.37` m wide, `1.5 · 0.3 (A/km²)^0.21` deep, so the width grows
-downstream at nature's rate. With `k = 2` as proposed, the largest rivers would narrow (the
-widest water 34 → 27 m with the estuaries) while the small ones widen (3.5 → 4.2 m at 0.5 km²),
-against the owner's "small streams rather than proper rivers". So it is an option until the
-owner picks `k`. `reports/2026-10-01-112/river-size.png` shows today, `k` 2, 2.5 and 3, from 3 m
-down a lowland river and from 40 m over the plain:
+**The rivers' size** (D-041's regional curves, `RibbonParams::island`, `city-blocks --river-k
+K`; `k` = 3 by default since 2026-10-01, 0 for the catchment's square root). D-041 sizes a river
+by the regional curves with an explicit exaggeration: `k · 2.7 (A/km²)^0.37` m wide,
+`1.5 · 0.3 (A/km²)^0.21` deep, so the width grows downstream at nature's rate. With `k = 2` as
+proposed, the largest rivers would narrow (the widest water 34 → 27 m with the estuaries) while
+the small ones widen (3.5 → 4.2 m at 0.5 km²), against the owner's "small streams rather than
+proper rivers". `reports/2026-10-01-112/river-size.png` shows the square root, `k` 2, 2.5 and
+3, from 3 m down a lowland river and from 40 m over the plain:
 - `k` 2.5 keeps the widest at 33 m and widens the rest by about half;
 - `k` 3 reads as a river from the bank, the widest 40 m;
-- the deepest is 0.75 m with the curve (1.0 m today).
+- the deepest is 0.75 m with the curve (1.0 m with the square root).
+
+The owner picked `k` = 3 ("use k = 3 and keep the plain as default"). Against the square root
+(seed 7, the same 50 rivers, 19 mouths and 11 lakes; `reports/2026-10-01-112/k3-views.png`, the
+profile's four river views at frame 300, and `k3-mouth.png`, the batch's island at the mouth):
+- the mouths 12–40 m wide (7–34 m), all but one under 5 % over their last 160 m;
+- the deepest 0.75 m (1.0 m); stones breaking the water 1 148 (1 496);
+- the banks' strip 239 k texels (183 k);
+- the water deeper under its banks in the hills' V valleys: 602 points more than 2 m under
+  the lower bank (125), the most 4.6 m (3.5). A wider channel climbs higher up the valley's
+  walls; #116's benches are the cure.
+
+The batch changes the island's two views only (ꟻLIP mean 0.0045 `island60`, 0.0057 `water60`).
+The cost is in `docs/PROFILE.md`: +0.09 ms up the steep river, under 0.02 ms elsewhere.

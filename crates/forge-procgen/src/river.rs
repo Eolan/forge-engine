@@ -103,6 +103,17 @@ impl Default for RibbonParams {
     }
 }
 
+impl RibbonParams {
+    /// The island's rivers (D-041): the defaults, sized by the regional curves three times as
+    /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01).
+    pub fn island() -> Self {
+        Self {
+            regional: Some((3.0, 1.5)),
+            ..Self::default()
+        }
+    }
+}
+
 /// A river's width and depth with `area_m2` of catchment under `params` (D-041's regional
 /// curves, or [`hydrology::width`] and [`depth`]), metres.
 fn size(area_m2: f64, params: &RibbonParams) -> (f64, f64) {

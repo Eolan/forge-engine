@@ -1553,4 +1553,7 @@ D-016, D-038, D-040; issues #109, #110, #112, #113, #114)* Proposed 2026-10-01; 
 owner the same day as proposed ("Go with recommendations for D-040 and D-041"; "the goal is
 beautiful and playable, not overly realistic", and many more biomes to come). It is the
 engines' way (a feature carves and paints the ground around it, the terrain conforms) applied
-to the generated island; each part is an issue of its own.
+to the generated island; each part is an issue of its own. The width's `k` is 3, not 2: with
+the coastal plain, `k = 2` narrowed the largest rivers (34 → 27 m), and the owner picked 3
+from the comparison (`reports/2026-10-01-112/river-size.png`; "use k = 3 and keep the plain as
+default", 2026-10-01).

@@ -159,10 +159,10 @@ struct Args {
     #[arg(long)]
     island_plain_wander: Option<f64>,
     /// The island's rivers sized by D-041's regional curves with this exaggeration `k`: a river
-    /// `k · 2.7 (A/km²)^0.37` m wide, `1.5 · 0.3 (A/km²)^0.21` m deep. Without it, the
-    /// catchment's square root (5 m at a square kilometre).
-    #[arg(long)]
-    river_k: Option<f64>,
+    /// `k · 2.7 (A/km²)^0.37` m wide, `1.5 · 0.3 (A/km²)^0.21` m deep. 0 sizes them by the
+    /// catchment's square root (5 m at a square kilometre), as before D-041.
+    #[arg(long, default_value_t = forge_procgen::RibbonParams::island().regional.map_or(0.0, |(k, _)| k))]
+    river_k: f64,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1803,13 +1803,13 @@ fn island_lakes(height: &Field2<f32>, flow: &forge_procgen::Flow) -> forge_procg
 /// The island's rivers' parameters, set once at start from the arguments (`--river-k`).
 static RIBBON_PARAMS: std::sync::OnceLock<forge_procgen::RibbonParams> = std::sync::OnceLock::new();
 
-/// The island's rivers' parameters: the defaults, or what `--river-k` set.
+/// The island's rivers' parameters: the island's, with `--river-k`'s size.
 fn ribbon_params() -> forge_procgen::RibbonParams {
-    RIBBON_PARAMS.get().copied().unwrap_or_default()
+    RIBBON_PARAMS
+        .get()
+        .copied()
+        .unwrap_or_else(forge_procgen::RibbonParams::island)
 }
-
-/// D-041's depth exaggeration on the regional curve, with `--river-k`.
-const RIVER_DEPTH_K: f64 = 1.5;
 
 /// The island's water on the land (#105, D-038's rivers and lakes).
 #[derive(Clone)]
@@ -2852,14 +2852,16 @@ fn build_gallery(
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if let Some(k) = args.river_k {
-        RIBBON_PARAMS
-            .set(forge_procgen::RibbonParams {
-                regional: Some((k, RIVER_DEPTH_K)),
-                ..forge_procgen::RibbonParams::default()
-            })
-            .expect("the rivers' parameters, set once");
-    }
+    let island = forge_procgen::RibbonParams::island();
+    RIBBON_PARAMS
+        .set(forge_procgen::RibbonParams {
+            regional: island
+                .regional
+                .filter(|_| args.river_k > 0.0)
+                .map(|(_, depth)| (args.river_k, depth)),
+            ..island
+        })
+        .expect("the rivers' parameters, set once");
     let config = AppConfig {
         title: "forge city-blocks".into(),
         vsync: args.vsync,
