@@ -83,7 +83,9 @@ under `captures/`, which git ignores.
        against the plain frame, where red shows as a difference. It runs on the meshlets
        bench, the ballad, the resident city and the island. The island's runs pin
        `--sw-raster on`: the automatic switch follows how many dense triangles the culls let
-       through, so occlusion off would move it (#101);
+       through, so occlusion off would move it (#101). They also pin its ground at 8 m
+       (`--island-drawn 8`): the default 2 m ground's pages exceed a resident pool, and a
+       streamed frame depends on how far the loads got (#106; `validate.sh` runs it streamed);
      - the mesh path against the fallback.
    - Every line must read `0 px`, unless the change is meant to alter the image. In that case,
      the report names the images, says why they changed, and gives their ꟻLIP numbers (see

@@ -138,9 +138,9 @@ struct Args {
     island_spacing: f64,
     /// Metres between the island's drawn samples (#106): with less than the field's spacing,
     /// the ground is drawn on the field's cubic carved by the rivers' channels (2: 8 193²
-    /// samples, 134 M triangles) rather than on the field's cells; the channels' and shores'
-    /// cells stay at a metre.
-    #[arg(long, default_value_t = 8.0)]
+    /// samples, 143 M triangles with the amplification's detail) rather than on the field's
+    /// cells (8); the channels' and shores' cells stay at a metre.
+    #[arg(long, default_value_t = 2.0)]
     island_drawn: f64,
     /// How much of the amplification's detail the ground drawn finer than the field takes
     /// (#106, `forge_procgen::amplify` at each halving of the spacing): 1 all of it away from

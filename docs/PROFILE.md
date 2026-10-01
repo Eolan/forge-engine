@@ -300,7 +300,8 @@ target; 2.6 ms without the probes. It was 3.81 ms after #68.
 ## `city-blocks --island 7` — the island (#96, 2026-09-26)
 
 The scene has three parts:
-- the island: 8.4 M triangles at 8 m, streamed;
+- the island: 8.4 M triangles at 8 m, streamed (drawn at 2 m since #106: 143 M triangles in 64
+  tiles, "The ground in tiles" below);
 - 300 000 rocks on its land;
 - a flat sea plane with traced mirror rays.
 
@@ -673,8 +674,9 @@ each at 2560 × 1440, three at 1600 × 900, the previous commit and this one alt
   0.04 ms more (0.726 → 0.762 ms at 1440p).
 - The rays' cut: 600 000 triangles over the tiles at one error, 0.349 m where the one mesh's
   was 0.312 m; `gi/probe rays` within ±0.05 ms.
-- **Drawn at 2 m** (`--island-drawn 2`, 143 M triangles with the amplification's detail): the
-  frame within 0.05 ms of the 8 m tiles' at 1440p (two rounds each, one build after the
+- **Drawn at 2 m** (143 M triangles with the amplification's detail; the default since the
+  owner's look on 2026-10-01, `--island-drawn 8` for the 8 m tiles): the frame within 0.05 ms
+  of the 8 m tiles' at 1440p (two rounds each, one build after the
   other): coast 2.98 → 3.00, stream 2.79 → 2.79, down a river 2.70 → 2.70, the stone 2.85 →
   2.85, the lake 2.60 → 2.65, the island from 2.5 km 3.62 → 3.67 ms. The cluster cull takes
   0.02–0.04 ms more, the probes' rays up to 0.03 (their cut's error 0.73 m); the rest is the

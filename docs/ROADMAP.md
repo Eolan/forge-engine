@@ -278,8 +278,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    Since (2026-10-01, #106): the field smoothed by a binomial pass against the 8 m erosion's
    steps, its coast by four within 3.5 m of the sea's level, and the coast's contours, the
    rivers' channels and the lakes' shores drawn on cells of a metre; the ground cooked in 2 km
-   tiles with locked borders, and drawn at 2 m with the amplification's detail behind
-   `--island-drawn 2` (the owner to judge whether it becomes the default).
+   tiles with locked borders, and drawn at 2 m with the amplification's detail
+   (`--island-drawn 8` for the field's cells).
    Next: the owner's judgement of the look, then the `island` demo of its own (#96 step 3) and
    more of stage 6's materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25

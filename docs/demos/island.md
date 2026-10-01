@@ -13,7 +13,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets, the depressions under 5 ha filled (stage 4, the lake rule of #97) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the GPU's three cascades (#105, `forge_render::water`) agree with it within 3 × 10⁻⁶ ("The sea on the GPU" below); the surface drawn from them with `--water`, reflecting the island through traced mirror rays |
-| Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); the ground drawn in tiles (#106), and at 2 m with the amplification's detail behind `--island-drawn 2` ("The ground in tiles, towards 2 m" below) |
+| Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); the ground drawn in tiles (#106), at 2 m with the amplification's detail (`--island-drawn 8` for the field's cells; "The ground in tiles, towards 2 m" below) |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
@@ -39,8 +39,9 @@ Strahler order and the lakes over the hillshade), `coast.png`, `sea-height.png`,
 first seen on the 5070 Ti on 2026-09-26: "In the engine" below): the heightfield (`--island-spacing`, 8 m by default: 2049²,
 8.4 M triangles like the city's ground; 4 m for the 4097² target, 33.5 M) is generated once
 into `mesh-cache/island-<key>.f32`, cooked into a cluster DAG through the same path as the
-city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached.
-It is drawn on its own layered ground: sand on the shore, rock where the ground is steeper than
+city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached
+(since #106 drawn at 2 m in 64 tiles, `--island-drawn`: "The ground in tiles, towards 2 m"
+below). It is drawn on its own layered ground: sand on the shore, rock where the ground is steeper than
 0.45, grass elsewhere, and a sea floor falling away from the coast (`forge_procgen::slope_layers`
 with a texel every 4 m, and `forge_procgen::sea_floor`). Around it:
 - 300 000 rocks, placed by the GPU on its land;
@@ -1233,8 +1234,8 @@ the amplification's detail on it (stage 5, `forge_procgen::amplify`), faded out 
   The A/B harness and mesh against fallback stay at 0 px; validation is clean
   (`reports/2026-10-01-106/tiles.md`, with the blot before and after).
 
-**At 2 m** (`city-blocks --island 7 --island-drawn 2`; the default stays 8 m, for the owner to
-judge). The ground drawn at 2 m, 8 193² samples:
+**At 2 m** (the default since the owner's look on 2026-10-01; `--island-drawn 8` draws the 8 m
+tiles). The ground drawn at 2 m, 8 193² samples:
 - **On the field's cubic, carved by the channels** (`Channels::cubic_height_at`,
   `Channels::fine`), so no 8 m facet is left; the channels', lakes' shores' and coast's cells stay
   at a metre (1.39 M fine cells in quads of a metre).

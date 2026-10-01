@@ -87,11 +87,15 @@ for path in mesh fb; do
   # heightfield, rocks and the stand-in sea.
   # The software rasteriser pinned on: its automatic switch follows how much the culls let
   # through, so it would differ between the A/B runs (#101).
-  capture "$path-island60" 60 "$city" --island 7 --no-water --stream-pool 0 --sw-raster on "${flag[@]}"
-  capture "$path-island60-noocc" 60 "$city" --island 7 --no-water --stream-pool 0 --sw-raster on --no-occlusion "${flag[@]}"
+  # Its ground drawn at 8 m (`--island-drawn 8`): the default 2 m ground's 4.2 GB of pages must
+  # stream (the shaders address a resident pool in 32-bit bytes), and a streamed frame depends on
+  # how far the loads got. tools/validate.sh runs the 2 m ground streamed.
+  island=(--island 7 --island-drawn 8 --stream-pool 0 --sw-raster on)
+  capture "$path-island60" 60 "$city" "${island[@]}" --no-water "${flag[@]}"
+  capture "$path-island60-noocc" 60 "$city" "${island[@]}" --no-water --no-occlusion "${flag[@]}"
   # The island with its water (#105, the default): at a fixed step, so the waves are the same.
-  capture "$path-water60" 60 "$city" --island 7 --fixed-step --stream-pool 0 --sw-raster on "${flag[@]}"
-  capture "$path-water60-noocc" 60 "$city" --island 7 --fixed-step --stream-pool 0 --sw-raster on --no-occlusion "${flag[@]}"
+  capture "$path-water60" 60 "$city" "${island[@]}" --fixed-step "${flag[@]}"
+  capture "$path-water60-noocc" 60 "$city" "${island[@]}" --fixed-step --no-occlusion "${flag[@]}"
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"
 [ "$keep" != 0 ] && closing="$closing; logs in $out/logs, summary in $summary" && echo "$closing" >> "$summary"

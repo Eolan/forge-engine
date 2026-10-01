@@ -59,8 +59,11 @@ for path in "" --force-fallback; do
   validate "city$tag" "$bin/city-blocks$exe" --frames 90 $path
   validate "city-resident$tag" "$bin/city-blocks$exe" --stream-pool 0 --frames 60 $path
   validate "gallery$tag" "$bin/city-blocks$exe" --gallery --frames 60 $path
-  validate "island$tag" "$bin/city-blocks$exe" --island 7 --no-water --stream-pool 0 --frames 60 $path
-  validate "water$tag" "$bin/city-blocks$exe" --island 7 --stream-pool 0 --frames 60 $path
+  # The island resident on its 8 m ground (the 2 m ground's pages exceed a resident pool, #106),
+  # then as it starts by default: at 2 m, streamed.
+  validate "island$tag" "$bin/city-blocks$exe" --island 7 --island-drawn 8 --no-water --stream-pool 0 --frames 60 $path
+  validate "water$tag" "$bin/city-blocks$exe" --island 7 --island-drawn 8 --stream-pool 0 --frames 60 $path
+  validate "island-2m$tag" "$bin/city-blocks$exe" --island 7 --frames 60 $path
 done
 [ "$keep" != 0 ] && say "logs in $out/logs, summary in $summary"
 exit 0

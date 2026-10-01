@@ -27,5 +27,5 @@ The ground at 2 m on the field's cubic, carved by the channels, with the amplifi
 faded out near the water (0.26 m root mean square where it is whole). 143 M triangles, cooked in
 45 s on the first start, 4.2 GB of pages; the frame within 0.05 ms of the 8 m tiles' at 1440p.
 `drawn-2m.png`, 8 m left and 2 m right: a hillside at a river's head, a steep valley's wall from
-its water, the largest valley from 200 m. The look hardly changes; the default stays 8 m until
-the owner judges.
+its water, the largest valley from 200 m. The look hardly changes. The default since the owner's
+look the same day (`--island-drawn 8` for the 8 m tiles).
