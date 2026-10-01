@@ -42,9 +42,9 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StartView, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterLake, WaterMouth,
-    WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams,
-    exposure_from_ev100, sh_irradiance,
+    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics,
+    WaterLake, WaterMouth, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone, WaterSurface,
+    WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -255,6 +255,9 @@ struct Args {
     /// The island's water, drawn by default since 2026-10-01: kept so older commands run.
     #[arg(long = "water", hide = true, conflicts_with = "no_water")]
     legacy_water: bool,
+    /// Light the sea floor without the waves' caustics (#108).
+    #[arg(long)]
+    no_caustics: bool,
     /// Holds the waves still at this many seconds (the shimmer's measure: what changes
     /// between frames of a still camera is then the aliasing alone).
     #[arg(long)]
@@ -922,9 +925,23 @@ impl Demo for Gallery {
         } else {
             None
         };
-        // The sand the swash ran up is wet (#105): the resolve's layered ground reads the shore.
-        let wet_ground = self.water.as_ref().and_then(|(_, surface, _)| {
-            surface.wet_ground(&mut frame.graph, frame.slot, self.sea_time_submitted)
+        // The sand the swash ran up is wet (#105) and the floor under the sea takes the waves'
+        // caustics (#108): the resolve's layered ground reads the shore and the waves.
+        let wet_ground = self.water.as_ref().and_then(|(cascades, surface, _)| {
+            let caustics = waves
+                .as_ref()
+                .filter(|_| !self.args.no_caustics)
+                .map(|waves| WaterCaustics {
+                    cascades,
+                    waves,
+                    sun_dir: self.renderer.sun_dir,
+                });
+            surface.wet_ground(
+                &mut frame.graph,
+                frame.slot,
+                self.sea_time_submitted,
+                caustics,
+            )
         });
         // The probes' light in place of the open sky's (issue #53): after the sky's tables,
         // which light their rays' misses, before the resolve.

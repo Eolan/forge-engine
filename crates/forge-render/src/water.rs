@@ -751,6 +751,16 @@ const MAX_TRAINS: usize = 4;
 /// River mouths the sea's surface mixes in at most.
 const MAX_MOUTHS: usize = 64;
 
+/// Mirrors `CausticCascade` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuCausticCascade {
+    /// 1 / the patch's side, metres a texel, ω, the TMA factor at the spectrum's depth.
+    a: [f32; 4],
+    /// The slopes' sampled index, 0, 0, 0.
+    b: [u32; 4],
+}
+
 /// Mirrors `ShoreGround` in `meshlet.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -761,19 +771,62 @@ struct GpuShoreGround {
     train_count: u32,
     time: f32,
     pad: f32,
+    sun_water: [f32; 4],
+    cascades: [GpuCausticCascade; SURFACE_CASCADES],
+    cascade_count: u32,
+    pad_caustics: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuShoreGround>() == 96);
+const _: () = assert!(std::mem::size_of::<GpuShoreGround>() == 224);
 
 /// What the ground's shading reads of the shore in a frame ([`WaterSurface::wet_ground`]): the
-/// sand is wet where the swash ran up (issue #105).
+/// sand is wet where the swash ran up (issue #105), and the floor under the sea takes the
+/// waves' caustics (#108).
 #[derive(Clone, Copy, Debug)]
 pub struct WetGround {
     /// The shore's fields (the floor's height, the coast distance), which the shading samples.
     pub image: ImageHandle,
+    /// The cascades' slopes of this frame, which the caustics sample (none without them).
+    pub slopes: [Option<ImageHandle>; SURFACE_CASCADES],
     /// The frame's `ShoreGround` block (`meshlet.slang`): the fields' frame, the trains, the
-    /// sea's time.
+    /// sea's time, the cascades and the sun under the water.
     pub address: u64,
+}
+
+impl WetGround {
+    /// The images the ground's shading samples: the shore's fields, and the cascades' slopes
+    /// for the caustics.
+    pub fn images(&self) -> impl Iterator<Item = ImageHandle> {
+        std::iter::once(self.image).chain(self.slopes.into_iter().flatten())
+    }
+}
+
+/// What the floor's caustics need of a frame ([`WaterSurface::wet_ground`], #108).
+#[derive(Clone, Copy)]
+pub struct WaterCaustics<'a> {
+    /// The sea's cascades.
+    pub cascades: &'a WaterCascades,
+    /// Their images of this frame ([`WaterCascades::update`]).
+    pub waves: &'a WaterFrame,
+    /// Towards the sun.
+    pub sun_dir: Vec3,
+}
+
+/// Metres of the largest patch whose waves throw caustics (#108). The swell's patch (1 km of
+/// waves 80 m long) curves the surface too gently: under 1 % of the light moves at 3 m.
+const CAUSTICS_MAX_PATCH: f32 = 256.0;
+
+/// The way the sun's light runs under a level water surface (unit, downwards): its ray from
+/// `towards_sun` bent into the water (Snell's law), or straight down with the sun under the
+/// horizon.
+fn sun_under_water(towards_sun: Vec3) -> Vec3 {
+    let l = towards_sun.normalize_or(Vec3::Y);
+    if l.y <= 0.0 {
+        return Vec3::NEG_Y;
+    }
+    let eta = 1.0 / 1.333;
+    let k = 1.0 - eta * eta * (1.0 - l.y * l.y);
+    (-l * eta + Vec3::Y * (eta * l.y - k.sqrt())).normalize()
 }
 
 /// One of the shore's wave trains (`forge_procgen::ShoreTrain`), as the surface draws it.
@@ -1444,16 +1497,46 @@ impl WaterSurface {
     }
 
     /// The shore as the ground's shading reads it in this frame, at the sea's `time` (the
-    /// surface's time): the sand is wet where the swash ran up (issue #105). `None` without a
+    /// surface's time): the sand is wet where the swash ran up (issue #105), and with
+    /// `caustics` the floor under the sea takes the waves' caustics (#108). `None` without a
     /// shore. Pass it to the resolve ([`crate::AmbientLight::wet_ground`]).
     pub fn wet_ground<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
         slot: FrameSlot,
         time: f32,
+        caustics: Option<WaterCaustics<'_>>,
     ) -> Option<WetGround> {
         let shore = self.shore.as_ref()?;
         let block = &shore.ground[slot.index];
+        // The caustics' cascades: those whose waves curve the surface enough to focus the light
+        // (the swell's do not), first in the block.
+        let mut cascades = [GpuCausticCascade::zeroed(); SURFACE_CASCADES];
+        let mut slopes = [None; SURFACE_CASCADES];
+        let mut cascade_count = 0;
+        if let Some(c) = caustics {
+            assert_eq!(
+                c.cascades.len(),
+                SURFACE_CASCADES,
+                "the caustics read three cascades"
+            );
+            for (cascade, &(_, image)) in c.cascades.cascades.iter().zip(&c.waves.cascades) {
+                if cascade.patch > CAUSTICS_MAX_PATCH {
+                    continue;
+                }
+                cascades[cascade_count] = GpuCausticCascade {
+                    a: [
+                        1.0 / cascade.patch,
+                        cascade.patch / WATER_SIZE as f32,
+                        cascade.omega,
+                        cascade.shelf,
+                    ],
+                    b: [cascade.slopes.sampled().0, 0, 0, 0],
+                };
+                slopes[cascade_count] = Some(image);
+                cascade_count += 1;
+            }
+        }
         block.write(
             0,
             &[GpuShoreGround {
@@ -1468,10 +1551,18 @@ impl WaterSurface {
                 train_count: shore.train_count,
                 time,
                 pad: 0.0,
+                sun_water: caustics
+                    .map_or(Vec3::NEG_Y, |c| sun_under_water(c.sun_dir))
+                    .extend(0.0)
+                    .to_array(),
+                cascades,
+                cascade_count: cascade_count as u32,
+                pad_caustics: [0; 3],
             }],
         );
         Some(WetGround {
             image: graph.import(&shore.image),
+            slopes,
             address: block.address(),
         })
     }

@@ -60,3 +60,16 @@ public float shore_reach(float distance)
 {
     return 1.0 - smoothstep(0.5 * SHORE_SWASH_REACH, SHORE_SWASH_REACH, distance);
 }
+
+// Kitaigorodskii's factor at angular frequency `omega` in `depth` metres of water
+// (`forge_procgen::tma`): the waves feel the floor, the water's surface and the caustics it
+// throws on the floor (#108) alike.
+public float tma(float omega, float depth)
+{
+    float wh = omega * sqrt(max(depth, 0.0) / 9.81);
+    if (wh <= 1.0)
+        return 0.5 * wh * wh;
+    if (wh < 2.0)
+        return 1.0 - 0.5 * (2.0 - wh) * (2.0 - wh);
+    return 1.0;
+}

@@ -3278,7 +3278,9 @@ impl MeshletRenderer {
             builder = builder.image(ao, ImageAccess::Sampled(compute));
         }
         if let Some(g) = ambient.wet_ground {
-            builder = builder.image(g.image, ImageAccess::Sampled(compute));
+            builder = g.images().fold(builder, |b, image| {
+                b.image(image, ImageAccess::Sampled(compute))
+            });
         }
         if let Some(p) = ambient.sky.and(ambient.probes) {
             builder = builder
@@ -3320,7 +3322,9 @@ impl MeshletRenderer {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
             }
             if let Some(g) = ambient.wet_ground {
-                builder = builder.image(g.image, ImageAccess::Sampled(compute));
+                builder = g.images().fold(builder, |b, image| {
+                    b.image(image, ImageAccess::Sampled(compute))
+                });
             }
             if let Some(p) = ambient.sky.and(ambient.probes) {
                 builder = builder
@@ -3353,7 +3357,9 @@ impl MeshletRenderer {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
             }
             if let Some(g) = ambient.wet_ground {
-                builder = builder.image(g.image, ImageAccess::Sampled(compute));
+                builder = g.images().fold(builder, |b, image| {
+                    b.image(image, ImageAccess::Sampled(compute))
+                });
             }
             if let Some(p) = ambient.sky.and(ambient.probes) {
                 builder = builder

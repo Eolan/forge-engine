@@ -301,8 +301,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    done and the water is the island's default; next, the afterwards of `docs/research/water.md`:
    the underwater view (#108), started with the sea's (the water at the camera, the surface
    from below with Snell's window, the water's light along the view ray, the waterline across
-   the lens), then caustics and the lakes' and rivers' water from below; objects in the water
-   and their wakes (#107). The
+   the lens) and the caustics on the floor under the sea, then the lakes' and rivers' water
+   from below; objects in the water and their wakes (#107). The
    owner's judgement of the rivers (2026-10-01, #112): streams rather than rivers, not yet
    natural or integrated. The research (`docs/research/rivers.md`) and D-040/D-041 (accepted
    the same day: the engines' way, features carve and paint the ground around them) set the

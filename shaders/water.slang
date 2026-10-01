@@ -384,20 +384,8 @@ float2 shore_at(WaterSurface* w, float2 flat)
     return sample_image_level(w[0].shore, SAMPLER_LINEAR_CLAMP, uv, 0.0).xy;
 }
 
-// Kitaigorodskii's factor at angular frequency `omega` in `depth` metres of water
-// (`forge_procgen::tma`).
-float tma(float omega, float depth)
-{
-    float wh = omega * sqrt(max(depth, 0.0) / GRAVITY);
-    if (wh <= 1.0)
-        return 0.5 * wh * wh;
-    if (wh < 2.0)
-        return 1.0 - 0.5 * (2.0 - wh) * (2.0 - wh);
-    return 1.0;
-}
-
 // How much of cascade `v`'s waves stand in `depth` metres of water: 1 at the spectrum's own
-// depth and deeper, 0 on land.
+// depth and deeper, 0 on land (`tma` in shore.slang).
 float shore_damping(WaterCascadeView v, float depth)
 {
     if (depth <= 0.0 || v.shelf <= 0.0)

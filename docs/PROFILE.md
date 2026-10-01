@@ -685,6 +685,23 @@ the water.
 - `water/at-camera` is one group of four threads, the waves stepped back four times to the
   point they carry over the camera, then a corner of the mesh's quad each.
 
+**The caustics** (#108, 2026-10-02): `--no-caustics` against the default, the same build, two
+rounds of each view, 1 500 frames each, 2560 × 1440. The floor under the sea samples the slopes
+of two cascades four times each, in the layered pass.
+
+| View | `shading/layered` | frame |
+|---|---|---|
+| coast (the first view, 25 m up) | 1.084 → 1.146 | 3.419 → 3.485 ms |
+| the island from 2.5 km | 0.639 → 0.632 | unchanged |
+| 3 m under the sea, across the floor | 0.818 → 0.903 | 2.970 → 2.969 ms |
+| 6 m under, the floor filling the view | 1.019 → 1.136 | 2.911 → 3.049 ms |
+
+- From 2.5 km the floor's pixels span metres, where the caustics fade out and are skipped.
+- `FORGE_SHADER_STATS=resolve_layered`: 96 registers before and after, the binary 2 KB
+  larger.
+- These rounds ran about 0.25 ms faster in every view than those of the table above (the GPU's
+  clocks); compare within a table.
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

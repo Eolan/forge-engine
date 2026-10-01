@@ -1534,8 +1534,8 @@ differ, so each view is the one its own island's log picks for the same thing:
 
 **Under the sea** (#108, 2026-10-01; `shaders/water.slang`, "under the water";
 `reports/2026-10-01-108/`). The owner asked for the underwater environment to come
-(on #105). This is its first part, the sea's; caustics and the lakes' and rivers' water seen from
-below come next.
+(on #105). This is its first part, the sea's; the caustics follow below, and the lakes' and
+rivers' water seen from below comes next.
 
 **What changed.**
 - **The water at the camera** (`water/at-camera`).
@@ -1594,7 +1594,6 @@ below come next.
   mouth from 4 m, whose `water/under` dispatches no groups, is clean too.
 
 **Left for later:**
-- The floor lacks the caustics that bring shallow water to life: next.
 - The lakes and the rivers are not yet seen from below (their water draws from above only).
 - The look is the sea's coefficients as tuned from above, so the water is a dark teal. Clearer
   or bluer water, an exposure that adapts under the water (`--day` already meters the frame),
@@ -1602,6 +1601,61 @@ below come next.
 - Over the water, a camera within a metre of the waves sees the island mirrored in the faces
   of the nearest waves, in patches. That predates this work: four views compared to the pixel
   with the previous commit.
+
+**Caustics** (#108, 2026-10-02; `shore_caustics` in `shaders/meshlet.slang`, `--no-caustics`).
+The waves bend the sun's light into the water and focus it under their crests. The floor under
+the sea now takes that light, seen from above through the water as from under it.
+
+**What changed.**
+- **Where:** in the resolve's layered ground, which already read the shore for the wet sand.
+  Under the sea's level, the sun's share of a pixel's light (its shadow term) is multiplied by
+  the caustics.
+- **How:**
+  - The light that reaches the floor `d` metres down crossed the surface up the sun's
+    refracted ray.
+  - A tilt of the surface turns that ray by a quarter of the tilt (1 − 1/1.333), so the surface
+    maps onto the floor with the Jacobian I + d·k·H. H is the waves' Hessian there, taken from
+    the cascades' slopes.
+  - The floor's light is the surface's over that Jacobian's determinant: the area the light
+    crossed over the area it lands on. It is brighter under the crests and darker between,
+    the mean about kept (61–65 % of the changed pixels of the sheets' views brighten, on
+    fewer dark ones). It is capped at 6×.
+- **The cascades:** the 16 m and 128 m ones. The 1 km swell curves the surface too gently
+  (under 1 % at 3 m), and is left out.
+- **Their filtering:** the Hessian is taken over the wider of the pixel's footprint and the
+  blur of the sun's disc at that depth (0.0093 rad), at the slopes' mip whose texels match.
+  Deep and far caustics soften rather than alias.
+- **The waves feel the floor:** each cascade is damped by the floor's depth under the surface
+  point, as the surface's own waves are (Kitaigorodskii's factor, now in `shaders/shore.slang`
+  for both).
+- **Three limits:**
+  - Past 3 m of depth the focusing grows no stronger. Deeper the map folds over, and the light
+    of the other surface points that land on a point of the floor, which one point's Jacobian
+    does not see, fills the dark cells in. Without the cap, the floor 8 m down was a network of
+    black cells.
+  - The contrast fades with depth (1 / e at 25 m).
+  - It fades out where a pixel spans 0.5–1.5 m, and the work is skipped where nothing is left.
+
+**Sheets** (`reports/2026-10-01-108/`, frame 60, seed 7):
+- `caustics.png`: the floor from 3 m and from 6 m under the sea, without (left) and with
+  caustics (right).
+- `shallows.png`: the shallows off the first view's beach from 25 m, without and with, at full
+  resolution.
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440, `shading/layered`): 0.06 ms from the coast's first
+view, nothing from 2.5 km, 0.09 ms across the floor 3 m under the sea, 0.12 ms with the floor
+filling the view. The pass keeps its 96 registers.
+
+**Checks:**
+- The capture batch changes the four water images only, the coast's shallows (143 576 pixels,
+  ꟻLIP mean 0.018).
+- With `--no-caustics` those match the previous commit to the pixel.
+- The A/B harness, streamed against resident and mesh against fallback are at 0 px.
+- `validate.sh` is clean, the view under the sea included.
+
+**Left for later:**
+- The water itself carries no light shafts: the caustics' light is on the floor only.
+- The river stones and the rocks don't take caustics: none stand under the sea yet.
 
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 

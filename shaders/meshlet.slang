@@ -2451,8 +2451,17 @@ void hex_triplanar(Material mat, float3 n, float3 w, float3 p, float3 dpdx, floa
 }
 
 // What the resolve knows of the surface behind a pixel.
+// A cascade of the sea's waves as the floor's caustics read it (#108; `GpuCausticCascade` in
+// water.rs).
+struct CausticCascade
+{
+    float4 a; // 1 / its patch's side (m⁻¹), metres a texel, the angular frequency its energy centres on (rad/s), the TMA factor at its spectrum's depth
+    uint4 b;  // its slopes' sampled index (every mip), 0, 0, 0
+};
+
 // The shore as the ground reads it (issue #105; `GpuShoreGround` in water.rs): the water's
-// shore fields and its trains, whose swash wets the sand (`shore_wetness`).
+// shore fields and its trains, whose swash wets the sand (`shore_wetness`), and the waves whose
+// caustics light the floor under the sea (`shore_caustics`, #108).
 struct ShoreGround
 {
     float4 frame;     // the fields' first sample (world x, z), 1 / their spacing, their samples a side
@@ -2461,6 +2470,10 @@ struct ShoreGround
     uint train_count;
     float time;       // the sea's clock, the water surface's
     float pad;
+    float4 sun_water; // xyz: the way the sun's light runs under the water (unit, downwards)
+    CausticCascade cascades[3];
+    uint cascade_count; // 0: no caustics
+    uint3 pad_caustics;
 };
 
 struct Surface
@@ -2605,6 +2618,65 @@ float shore_wetness(ShoreGround* g, float3 world)
         wet = max(wet, reached * exp(-ago / WET_DRYING));
     }
     return wet;
+}
+
+// The caustics under the sea (#108): the waves bend the sun's light into the water and focus it
+// under their crests. The light reaching the floor `depth` metres down came through the point
+// of the surface up the sun's ray; a tilt of the surface turns the ray by `CAUSTICS_REFRACTION`
+// of the tilt, so the surface maps onto the floor with the Jacobian I + depth · k · H (H the
+// waves' Hessian there, from the cascades' slopes), and the floor's sunlight is the surface's
+// over its determinant (the area the light crossed over the area it lands on): brighter where
+// the crests focus it, darker between, the mean about kept. The Hessian is
+// taken over a step as wide as the sun's disc blurs a caustic at that depth or the pixel spans,
+// at the mip of the slopes whose texels match it, so far and deep caustics soften rather than
+// alias.
+static const float CAUSTICS_REFRACTION = 1.0 - 1.0 / 1.333;
+// Metres past which the focusing grows no stronger. Deeper, the map folds over (the crests
+// focus the light before it reaches the floor), and the light of the other points that land
+// on a point of the floor, which one point's Jacobian does not see, fills the dark cells in.
+static const float CAUSTICS_FOCUS = 3.0;
+// The sun's disc, radians across: its light spreads over the depth times this.
+static const float CAUSTICS_SUN_SPREAD = 0.0093;
+// The brightest a caustic is drawn, times the surface's light.
+static const float CAUSTICS_MAX = 6.0;
+// The caustics fade with the depth, the light scattered on its way down (metres to 1 / e of
+// their contrast), and far away, where a pixel spans metres of a pattern the finest waves
+// draw a metre across (metres a pixel spans over which they fade out).
+static const float CAUSTICS_FADE_DEPTH = 25.0;
+static const float2 CAUSTICS_FADE_FOOTPRINT = float2(0.5, 1.5);
+
+float shore_caustics(ShoreGround* g, float3 world, float footprint)
+{
+    float depth = -world.y;
+    float3 t = g[0].sun_water.xyz;
+    float fade = exp(-depth / CAUSTICS_FADE_DEPTH) * (1.0 - smoothstep(CAUSTICS_FADE_FOOTPRINT.x, CAUSTICS_FADE_FOOTPRINT.y, footprint));
+    if (depth <= 0.0 || fade < 0.02 || g[0].cascade_count == 0u || t.y >= -1e-3)
+        return 1.0;
+    // Up the sun's ray to the surface, and the floor's depth there, which the waves feel.
+    float2 at = world.xz + t.xz * (depth / t.y);
+    float2 uv_shore = ((at - g[0].frame.xy) * g[0].frame.z + 0.5) / g[0].frame.w;
+    float floor_depth = -sample_image_level(g[0].shore, SAMPLER_LINEAR_CLAMP, uv_shore, 0.0).x;
+    float step = max(footprint, depth * CAUSTICS_SUN_SPREAD);
+    float3 h = 0.0; // ∂²h/∂x², ∂²h/∂z², ∂²h/∂x∂z
+    for (uint c = 0; c < min(g[0].cascade_count, 3u); c++)
+    {
+        CausticCascade cc = g[0].cascades[c];
+        float a = floor_depth > 0.0 && cc.a.w > 0.0 ? min(sqrt(tma(cc.a.z, floor_depth) / cc.a.w), 1.0) : 0.0;
+        if (a <= 0.0)
+            continue;
+        float e = max(step, cc.a.y);
+        float mip = log2(e / cc.a.y);
+        float2 uv = at * cc.a.x;
+        float du = e * cc.a.x;
+        float2 xp = sample_image_level(cc.b.x, SAMPLER_LINEAR_REPEAT, uv + float2(du, 0.0), mip).xy;
+        float2 xm = sample_image_level(cc.b.x, SAMPLER_LINEAR_REPEAT, uv - float2(du, 0.0), mip).xy;
+        float2 zp = sample_image_level(cc.b.x, SAMPLER_LINEAR_REPEAT, uv + float2(0.0, du), mip).xy;
+        float2 zm = sample_image_level(cc.b.x, SAMPLER_LINEAR_REPEAT, uv - float2(0.0, du), mip).xy;
+        h += a * float3(xp.x - xm.x, zp.y - zm.y, zp.x - zm.x) / (2.0 * e);
+    }
+    float3 k = min(depth, CAUSTICS_FOCUS) * CAUSTICS_REFRACTION * h;
+    float det = (1.0 + k.x) * (1.0 + k.y) - k.z * k.z;
+    return lerp(1.0, min(1.0 / max(abs(det), 1e-4), CAUSTICS_MAX), fade);
 }
 
 // A layered row's contour (`RenderLayer::contour`, the island's sand, #106): the rule that made
@@ -2821,6 +2893,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             emissive = lerp(a.emissive, b.emissive, blend);
         }
     }
+    float shadow = s.shadow;
     if (s.shore != nullptr)
     {
         float wet = shore_wetness(s.shore, s.world);
@@ -2828,9 +2901,12 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         specular_power = lerp(specular_power, WET_POWER, wet);
         specular = lerp(specular, WET_SPECULAR, wet);
         reflectance = lerp(reflectance, WATER_F0, wet);
+        // Under the sea, the waves' caustics (#108).
+        if (s.world.y < 0.0 && s.shore[0].cascade_count > 0u)
+            shadow *= shore_caustics(s.shore, s.world, max(length(s.dpdx), length(s.dpdy)));
     }
     float ndl;
-    return sun_light(f, albedo, n, specular_power, specular, s.shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+    return sun_light(f, albedo, n, specular_power, specular, shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
 // How much of the light crossing the ice leaves towards the camera rather than elsewhere
