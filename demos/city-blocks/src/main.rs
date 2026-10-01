@@ -144,6 +144,10 @@ struct Args {
     /// How far the island's orographic rain departs from flat (0 flat, 1 the model).
     #[arg(long, default_value_t = 1.0)]
     island_rain_contrast: f64,
+    /// The catchment, hectares, from which a channel of the island's erosion carries away all
+    /// the hillslopes shed into it (#109); 0 lets the diffusion raise every cell.
+    #[arg(long, default_value_t = ErosionParams::island().channel_area / 10_000.0)]
+    island_channel_ha: f64,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1724,6 +1728,7 @@ fn island_settings(args: &Args) -> (IslandParams, ErosionParams) {
     }
     let erosion = ErosionParams {
         steps: args.island_steps,
+        channel_area: args.island_channel_ha * 10_000.0,
         ..ErosionParams::island()
     };
     (params, erosion)
@@ -1952,6 +1957,37 @@ fn island_ribbons(
         .map(|p| p.bank - p.level)
         .fold(0.0_f32, f32::max);
     let cut_over_2_m = points.clone().filter(|p| p.bank - p.level > 2.0).count();
+    // How steeply each river reaches the sea (#109): its water's fall over its last 160 m before
+    // its mouth, the widest first, and how many fall over 5 % and over 10 % (a rapid's share).
+    let mut falls: Vec<(f32, f32)> = ribbons
+        .iter()
+        .filter_map(|r| {
+            let k = forge_procgen::sea_mouth(&r.points)?;
+            let (mut back, mut run) = (k, 0.0_f32);
+            while back > 0 && run < 160.0 {
+                let (a, b) = (r.points[back - 1].position, r.points[back].position);
+                run += (a[0] - b[0]).hypot(a[1] - b[1]);
+                back -= 1;
+            }
+            (run > 0.0).then_some((
+                2.0 * r.points[k].half_width,
+                (r.points[back].level - r.points[k].level) / run,
+            ))
+        })
+        .collect();
+    falls.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let fall_list = falls
+        .iter()
+        .map(|(w, f)| format!("{w:.0}m {:.0}%", 100.0 * f))
+        .collect::<Vec<_>>()
+        .join(" ");
+    tracing::info!(
+        mouths = falls.len(),
+        over_5_pct = falls.iter().filter(|f| f.1 > 0.05).count(),
+        over_10_pct = falls.iter().filter(|f| f.1 > 0.1).count(),
+        width_and_fall = %fall_list,
+        "the rivers' last 160 m to the sea"
+    );
     tracing::info!(
         rivers = ribbons.len(),
         largest_mouth = %format_args!("{:.0},{:.0}", mouth[0], mouth[1]),

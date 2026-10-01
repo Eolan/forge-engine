@@ -66,6 +66,11 @@ struct Args {
     /// fill to their spill level; 0 keeps every one.
     #[arg(long, default_value_t = IslandParams::island_16km(Seed::new(0), 16.0).lake_min_area_m2 / 10_000.0)]
     lake_min_ha: f64,
+    /// The catchment, hectares, from which a channel carries away all the hillslopes shed into
+    /// it (issue #109: the diffusion never raises such a cell); 0 lets the diffusion raise every
+    /// cell.
+    #[arg(long, default_value_t = ErosionParams::island().channel_area / 10_000.0)]
+    channel_ha: f64,
 }
 
 /// The wind that blows from `from` (a compass point, north up in the previews).
@@ -89,6 +94,7 @@ fn main() -> Result<()> {
         k: args.k,
         diffusion: args.diffusion,
         steps: args.steps,
+        channel_area: args.channel_ha * 10_000.0,
         ..ErosionParams::island()
     };
     let pool = match args.threads {

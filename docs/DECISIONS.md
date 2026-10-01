@@ -1442,3 +1442,46 @@ that cannot be retrofitted.
 *(research: city-generation.md §3–§6; procedural.md §2, §4; vegetation-materials.md §4; issues
 #84, #85, #86, #88, #89, #91)* Proposed 2026-09-26; accepted by the owner 2026-09-30 as
 proposed ("go with recommendations").
+
+## D-040 — The rivers' grading: the channels carry the hillslopes' material away, and the valley floors widen into floodplains 🟡 (2026-10-01)
+
+Proposed from #109 (the island's rivers reach the sea at 9–24 % over their last 160 m, every
+one of its 25 mouths over 5 %) and the owner's judgement on #112 (streams rather than rivers,
+not integrated into the terrain). Measured in `docs/demos/island.md`, "The rivers' grading".
+
+- **What was found.** The fall is the same for a 14 m river and a 4 m one, so it is not the
+  stream power's profile. On 8 m cells the hillslope diffusion pours a valley's two walls into
+  its one-cell floor every step (about a metre, sixteen times the fill at the 32 m spacing the
+  parameters were tuned at), and the river re-cuts it: the slope settles at about the fill per
+  cell, whatever the river's size. The island's 14 lakes are dams of that fill at the valleys'
+  narrows.
+- **The rule.** `ErosionParams::channel_area`: the sweep never raises a cell draining that much,
+  and raises a smaller channel's by the share of its catchment short of it (in the code, off by
+  default). At 25 ha every mouth falls 2–5 %. *Not chosen:* grading only the last reach by
+  hand after the erosion (the inland rapids stay, and the terrain no longer explains its
+  rivers); a larger threshold (100 or 400 ha keep 3 or 5 lakes but the small rivers at
+  7–20 %).
+- **Why it cannot be the default as it is.** The fill is, in effect, the island's alluvium:
+  150 steps of it lift the valley floors by up to 150 m over the stream power's profile
+  (`reports/2026-10-01-109/grading-cross.png`: the same camera 3 m over a river on a plain,
+  and 150 m over a canyon). Without it a floor is a slot a cell wide, which the rivers'
+  smoothed courses leave at the D8 corners (the water up to 12.4 m under its banks at a third
+  of the points), and the carve cuts the walls.
+- **The proposal: transport the sediment instead of removing it.** What the walls shed into a
+  channel travels down the D8 receivers and deposits where the flux exceeds the channel's
+  transport capacity `k_t · A · S` (the transport-limited family of landscape evolution models;
+  the source to verify first is Davy & Lague 2009, "Fluvial erosion/transport equation of
+  landscape evolution models revisited"): at equilibrium the floor's slope is `q_s / (k_t A)`, and since the
+  shed material grows slower than the catchment, a large river's floor is gentler than a
+  stream's, a graded, concave profile, with the alluvium kept in the valleys, floodplains
+  where the slope flattens, and fans where a river enters a lake or the sea. Deterministic
+  (sums in the stack's order, D-016), one more pass per step. *Not chosen:* a floodplain
+  pass that lowers the ground along the channels after the erosion (it keeps the slot's
+  profile and only widens it); grading the last reach by hand (the inland rapids stay).
+- **The lakes** are then a design choice, not an artefact: either none on this island, or
+  basins placed in the uplift field (bowls the erosion fills slowly), or dams kept on purpose.
+  The owner decides.
+
+*(research: terrain-genesis.md §1, water.md §3 and the rivers pass to come,
+`docs/research/rivers.md`; D-016, D-038; issues #109, #112, #114)* Proposed 2026-10-01; waits
+for the owner's yes on the transport term and on the lakes.

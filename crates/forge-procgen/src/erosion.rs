@@ -4,7 +4,8 @@
 //! routed with the depressions carved through their passes ([`crate::flow::drain`]), every
 //! cell lowers towards its receiver by `Δt · K · A^m / Δx` of the difference (the implicit
 //! update with `n = 1`, unconditionally stable), then an explicit diffusion sweep smooths the
-//! slopes. The height keeps its depressions: a cell below its receiver rises towards it by the
+//! slopes, the channels carrying away what the hillslopes shed into them
+//! ([`ErosionParams::channel_area`]). The height keeps its depressions: a cell below its receiver rises towards it by the
 //! same rule, which is sediment settling in a lake, so lakes exist, then fill. A hundred and
 //! fifty steps from a flat island give ridges, valleys and a drainage network.
 //!
@@ -30,6 +31,12 @@ pub struct ErosionParams {
     pub m: f64,
     /// Hillslope diffusion, m² per step (an explicit sweep is stable below `spacing² / 4`).
     pub diffusion: f64,
+    /// The catchment, m², from which a cell's channel carries away all that the hillslopes shed
+    /// into it: the diffusion never raises such a cell, and raises a smaller channel's by the
+    /// share of its catchment short of this. 0 lets the diffusion raise every cell (the
+    /// default): on fine cells a valley floor a cell wide then rises by its walls' flux each
+    /// step, and the river re-cutting it runs as steep as that, whatever its size (#109).
+    pub channel_area: f64,
     /// Steps to run.
     pub steps: u32,
     /// The sea, metres: cells at or below it are outlets and never rise.
@@ -40,12 +47,17 @@ impl ErosionParams {
     /// Values that carve a 16 km island in 150 steps: a river with a square kilometre of
     /// catchment lowers by half its drop to the next cell per step (`f = K √A / Δx ≈ 0.5` at
     /// 32 m), a ridge cell by a fiftieth; mountains of several hundred metres with valleys
-    /// cut to the coast.
+    /// cut to the coast. The channels carry nothing away yet: with `channel_area` at a quarter
+    /// of a square kilometre every river grades itself to the sea (2–5 % over its last 160 m
+    /// where it was 9–24 %), but the valley floors become slots a cell wide and deep, which
+    /// the rivers' smoothed courses leave at the bends, and the island's lakes, dams of the
+    /// same fill at the valleys' narrows, go; the floors want widening first (#109).
     pub fn island() -> Self {
         Self {
             k: 0.02,
             m: 0.5,
             diffusion: 15.0,
+            channel_area: 0.0,
             steps: 150,
             sea_level: 0.0,
         }
@@ -155,7 +167,16 @@ pub fn step_timed(
     t.incise = start.elapsed();
     let start = Instant::now();
     if p.diffusion > 0.0 {
-        diffuse(height, p.diffusion, p.sea_level, pool, &mut erosion.before);
+        let channel_cells = p.channel_area / (height.spacing * height.spacing);
+        diffuse(
+            height,
+            p.diffusion,
+            p.sea_level,
+            &flow.area,
+            channel_cells,
+            pool,
+            &mut erosion.before,
+        );
     }
     t.diffuse = start.elapsed();
     t
@@ -227,11 +248,16 @@ fn incise(
     });
 }
 
-/// One explicit diffusion sweep: `h += D · ∇²h`, on land, the border left as it is.
+/// One explicit diffusion sweep: `h += D · ∇²h`, on land, the border left as it is. A cell's
+/// channel carries away what the hillslopes shed into it: with `area` (cells of catchment) at
+/// `channel_cells` or more the sweep never raises a cell, and below it raises the cell by the
+/// share of its catchment short of that; 0 carries nothing away.
 fn diffuse(
     height: &mut Field2<f32>,
     diffusion: f64,
     sea_level: f32,
+    area: &[u32],
+    channel_cells: f64,
     pool: &TaskPool,
     before: &mut Vec<f32>,
 ) {
@@ -253,7 +279,12 @@ fn diffuse(
                 continue;
             }
             let laplacian = before[i - 1] + before[i + 1] + before[i - n] + before[i + n] - 4.0 * h;
-            *out = (h + factor * laplacian).max(sea_level);
+            let carried = if channel_cells > 0.0 && laplacian > 0.0 {
+                (f64::from(area[i]) / channel_cells).min(1.0) as f32
+            } else {
+                0.0
+            };
+            *out = (h + factor * laplacian * (1.0 - carried)).max(sea_level);
         }
     });
 }
@@ -341,5 +372,38 @@ mod tests {
             &parallel,
         );
         assert_eq!(again, height);
+    }
+
+    #[test]
+    fn a_channel_carries_away_what_the_hillslopes_shed_into_it() {
+        // A V valley across x on 8 m cells, its floor a cell wide at x = 4, walls at 45°.
+        let valley = Field2::from_fn(9, 8.0, |x, _| 10.0 + 8.0 * (x as f32 - 4.0).abs());
+        let serial = TaskPool::new(PoolConfig::with_workers(0));
+        // The floor's cells drain 1 000 cells, the walls' one each.
+        let area: Vec<u32> = (0..81).map(|i| if i % 9 == 4 { 1000 } else { 1 }).collect();
+        let sweep = |channel_cells: f64| {
+            let mut h = valley.clone();
+            let mut scratch = Vec::new();
+            diffuse(
+                &mut h,
+                15.0,
+                0.0,
+                &area,
+                channel_cells,
+                &serial,
+                &mut scratch,
+            );
+            h
+        };
+        let (none, half, full) = (sweep(0.0), sweep(2000.0), sweep(500.0));
+        // Without a channel the floor rises by `15 (8 + 8) / 8²` m; a channel of half the size
+        // carries half of that away, one of the size or more all of it.
+        assert!((none.get(4, 4) - 13.75).abs() < 1e-4, "{}", none.get(4, 4));
+        assert!((half.get(4, 4) - 11.875).abs() < 1e-4, "{}", half.get(4, 4));
+        assert_eq!(full.get(4, 4), 10.0);
+        // The walls shed the same either way: a flat wall cell keeps its height, the one by
+        // the floor loses nothing more.
+        assert_eq!(none.get(2, 4), full.get(2, 4));
+        assert_eq!(none.get(3, 4), full.get(3, 4));
     }
 }

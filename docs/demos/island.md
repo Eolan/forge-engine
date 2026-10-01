@@ -24,7 +24,9 @@ cargo run --release -p city-blocks -- --island 7
 ```
 
 `genesis`: `--seed N`, `--spacing M` (16: 1025² samples; 4: the 4097² target), `--steps N`,
-`--k` (erodibility), `--diffusion`, `--uplift` (metres per step at the heart), `--every N` (a
+`--k` (erodibility), `--diffusion`, `--channel-ha H` (the catchment from which a channel
+carries the hillslopes' material away; 0, the default, lets the diffusion raise every cell,
+#109), `--uplift` (metres per step at the heart), `--every N` (a
 hillshade every N steps), `--threads N` (workers besides the main thread; the default is one
 per hardware thread, `0` is serial, the result is the same), `--wind-from W` (a compass point,
 north up: orographic rain, see below) with `--rain-contrast C` (1). It prints each stage's
@@ -78,7 +80,11 @@ is `f32` and `f64` with `sqrt` only.
    integer areas); each land cell then lowers towards its receiver by `f / (1 + f)` of the
    difference with `f = K · √(A · rain) / Δx` (the implicit stream-power update with `n = 1`,
    `m = 0.5`, unconditionally stable), the receiver already at its new height; an explicit
-   diffusion sweep smooths the hillslopes. The height keeps its depressions: a cell below its
+   diffusion sweep smooths the hillslopes. The channels can carry away what the hillslopes
+   shed into them (`ErosionParams::channel_area`, `genesis --channel-ha`, `city-blocks
+   --island-channel-ha`; 0 and off for now, see "The rivers' grading" below): the sweep then
+   never raises a cell draining that much, and raises a smaller channel's by the share of its
+   catchment short of it. The height keeps its depressions: a cell below its
    receiver rises towards it by the same rule, which is sediment settling in a lake, so lakes
    appear in the uplifted basins and slowly fill, from the carved outlet path outwards.
 4. **Hydrology**: rivers where more than 0.5 km² drains through a sample, traced as
@@ -166,6 +172,35 @@ crosses the filled floor.
   against 31 and 153 040 before.
 
 ![The 4 m island without the lake rule, and the 8 m and 4 m islands with it: the same lakes at both spacings](images/island-lake-rule.png)
+
+**The rivers' grading** (#109, 2026-10-01; `ErosionParams::channel_area`, `genesis
+--channel-ha`, `city-blocks --island-channel-ha`). Every river of the 8 m island reaches the
+sea steeply: of its 25 mouths, all fall over 5 % across their last 160 m and 21 over 10 %, a
+14 m river at 15 % and the 4 m ones at 15–24 % (the demo's line `the rivers' last 160 m to
+the sea`). The fall hardly depends on the river's size, so it is not the stream power's
+profile, whose slope falls with the catchment. It is the hillslope diffusion: on 8 m cells a
+valley floor is one cell wide between walls at 40° or more, and the sweep pours both walls
+into that cell each step, about a metre, sixteen times what it poured at the 32 m spacing the
+parameters were tuned at; the river re-cuts it, and the balance is a slope of about the fill
+per cell whatever the river. Real channels carry that material away, and `channel_area` lets
+them: the sweep never raises a cell draining that much, and raises a smaller channel's by the
+share of its catchment short of it (a 3 × 3 unit test in `erosion`). At 25 ha (half the
+drawn rivers' catchment) every mouth falls 2–5 %, one over 5 %, none over 10 %. But two things
+go with the fill:
+- **The lakes.** The island's 14 lakes were dams of the same fill at the valleys' narrows:
+  at 25 ha there are none, at 100 ha 3 (and the 4 m rivers are back at 7–12 %), at 400 ha 5
+  (14 mouths over 10 %).
+- **The valley floors.** The fill is, in effect, the island's alluvium: 150 steps of it lift
+  the valley floors by up to 150 m over the stream power's profile (the same camera stands 3 m
+  over a river on a plain before, and 150 m over a canyon after). Without it a floor is a slot
+  a cell wide. The rivers' smoothed courses leave it at the D8 corners and land on the walls:
+  the water stands up to 12.4 m under its banks (3.9 before) at a third of the points (6 314
+  over 2 m, 621 before), which the carve cuts as gorges.
+So the rule stays off (`channel_area` 0, the island unchanged). The proposal (D-040) is to
+transport the sediment down the channels and deposit it where the flux exceeds the channel's
+capacity, so the alluvium stays in the valleys with a graded profile; the owner then decides
+whether the island keeps lakes by design. `city-blocks --island 7 --island-channel-ha 25`
+shows the island with the rule, and `reports/2026-10-01-109/grading.md` the sheets.
 
 **The wind** (`--wind-from w`, seed 7 at 16 m): at contrast 1 the windward half of the land
 gets a rain of 1.70 and the lee 0.21 (cells from 0.05 to the clamp at 10); the west coast is

@@ -297,7 +297,14 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    on the GPU"); and the lakes, a level plane each over its flooded depression, its shore on cells
    of a metre, its water the rivers' (still but where a river runs in). D-038's build order is
    done and the water is the island's default; next, the afterwards of `docs/research/water.md`
-   (the underwater view, #108; caustics; objects in the water and their wakes, #107).
+   (the underwater view, #108; caustics; objects in the water and their wakes, #107). The
+   owner's judgement of the rivers (2026-10-01, #112): streams rather than rivers, not yet
+   natural or integrated; the parts are #109 (the rivers' grading to the sea: the erosion's
+   diffusion filled the valley floors, the channels can now carry it away but the floors want
+   widening first, D-040), #110 (the mouths' seam), #113 (the water vanishing up a valley from
+   low), #114 (the channels read as trenches), and a research pass (`docs/research/rivers.md`)
+   on how others integrate rivers and whether a shallow-water window near the camera is worth
+   it.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of
