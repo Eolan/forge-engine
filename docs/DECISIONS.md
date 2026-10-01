@@ -687,6 +687,28 @@ is uploaded only when it is needed more than the page it replaces. The upload is
 - **Pools too small for the cut** (16 and 24 MiB) draw coarser surfaces, never holes: no
   pixel inside a surface of the resident image shows the sky.
 
+**The start view** (#121, 2026-10-01). A scene given the camera it starts from
+(`MeshletSceneBuilder::set_start_view`) loads that view's pages before its first frame,
+after the roots' (`MeshletScene::load_start_view`):
+- **Worked out on the CPU** with the culls' metric in `f64`: the pages of every cluster whose
+  parent would show more than 0.9 of the threshold (a margin over the culls' `f32`), and the
+  pages above them. The instances are read back after the GPU placement. A mesh's 1 024
+  nearest instances are worked out cluster by cluster, skipping the LOD levels that cannot
+  show at their distance; the rest take the bound of the nearest of them.
+- **Loaded unpinned,** neediest first and parents before children, as many as the pool holds.
+  They leave like any page once the view moves on.
+- **Why:** a fixed view then reads nothing more, so its frames depend on no read's timing.
+  The capture batch can draw the island's 2 m ground, whose 4.2 GB of pages exceed a
+  resident pool (#106), and a start no longer refines over its first second.
+- **Checked:** the island at 8 m streamed this way draws its resident frame to the pixel (a
+  pair in `tools/compare.sh`). Neither the island nor the city reads a page past the start
+  view in 300 frames.
+- **Cost:** the city loads 473 pages (59 MiB; its settled view keeps 395) after 63 ms of work
+  over its million instances, then 44 ms of reads and copies. The island at 2 m loads 290
+  pages (36 MiB) in 11 + 21 ms. The frames do not change, except that a start that is sharp
+  switches the auto software raster on in the city's first view, as with every page resident:
+  1.82 → 1.85 ms there (`docs/PROFILE.md`).
+
 Left for later: compressed vertices (quantised to a per-mesh grid) and D-018's container
 (BLAKE3 chunks, zstd), IOCP reads, and a transfer-queue upload. *(research:
 memory-streaming.md §4, gpu-geometry.md; demo: city-blocks)*

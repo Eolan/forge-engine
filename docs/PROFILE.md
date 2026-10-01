@@ -178,6 +178,16 @@ posts, 180 plaza props and 988 k rocks placed by a compute pass), streamed throu
 | shading | standard | 0.10 | 8 % | Textured since #20 (D-026): brick, concrete, plaster, glass, grass and rock rows, two triplanar textures and an anti-tiling noise per pixel (0.05 untextured). No ice in the city, so the ice pass dispatches nothing. |
 | streaming | upload | 0.00 | 0 % | Nothing to upload once the view has settled (39 frames). The flight at 300 m/s uploads 0–1.6 pages a frame. |
 
+**The start view** (#121, 2026-10-01). The scene loads its first view's pages before the first
+frame (473 pages, 59 MiB; 63 ms to work out over the placed instances, 44 ms to read and copy),
+so the view is sharp from frame 0 and never uploads. A sharp start switches the auto software
+raster on, as with every page resident, where the coarse start had kept it off: the south edge
+1.823 → 1.850 ms in today's build (three rounds each against the previous commit; meshlet
+pass 1 0.253 → 0.205, the software raster 0.067 and its merge 0.04 more). The orbit, the flight
+and the resident city are unchanged. The island's views are unchanged (1.588 ms both ways at
+its first view; with water its cluster cull 1 reads 0.008 ms more under the water's async
+compute, without it 0.004 less).
+
 **At 1440p with TAA** (#13) the flight at 300 m/s takes 1.64 ms of GPU, its worst frame
 2.58 ms against the 8.33 of the 120 fps target; the south edge 1.58 ms, the orbit 2.19.
 With the textured materials of #20 the flight takes 1.79 ms (shading 0.09 → 0.22), and

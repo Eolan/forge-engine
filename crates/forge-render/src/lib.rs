@@ -51,7 +51,7 @@ pub use meshlet::{
 pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
 pub use starfield::Starfield;
-pub use streaming::{Residency, StreamingConfig, StreamingStats};
+pub use streaming::{Residency, StartView, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
 pub use water::{

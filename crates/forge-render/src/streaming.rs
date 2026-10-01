@@ -22,6 +22,12 @@
 //! roots' pages are loaded at start and never leave. The LOD cut refines a cluster only
 //! when its children's page is resident, so whatever is missing, the image loses detail,
 //! never a piece.
+//!
+//! A scene given a start view ([`StartView`], #121) also loads, before its first frame, the
+//! pages that view's cut wants, worked out on the CPU with the culls' metric and a margin
+//! ([`crate::MeshletScene::load_start_view`]). Its first frames then draw what a resident scene
+//! draws instead of refining over the first second, and a fixed view streams nothing: its
+//! frames depend on no read's timing.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -30,6 +36,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
+use crate::cells::CellPos;
 use forge_geom::{GpuMeshlet, PAGE_NONE, PAGE_SIZE};
 use forge_gpu::{
     Buffer, BufferDesc, Device, FRAMES_IN_FLIGHT, GraphBuffer, MemoryCategory, MemoryLocation,
@@ -66,6 +73,67 @@ impl StreamingConfig {
             reads_in_flight: pages(upload_mib) * 4,
         }
     }
+}
+
+/// A camera whose cut a streamed scene loads before its first frame
+/// ([`crate::MeshletSceneBuilder::set_start_view`], #121; see the module notes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StartView {
+    /// Where the camera stands.
+    pub position: CellPos,
+    /// The projection's vertical scale ([`crate::CullCamera::p11`]).
+    pub p11: f32,
+    /// The near plane, metres.
+    pub near: f32,
+    /// The drawn image's height in pixels.
+    pub viewport_height: u32,
+    /// The projected error a drawn cluster may have, in pixels
+    /// ([`crate::DrawParams::lod_threshold_px`]).
+    pub lod_threshold_px: f32,
+}
+
+/// The share of the threshold a start view's cut goes down to: a page loads when its
+/// clusters' parents would show more than this share of it, a margin over the difference
+/// between the CPU's `f64` and the culls' camera-relative `f32`.
+pub(crate) const START_MARGIN: f32 = 0.9;
+
+/// Per page, the longest chain of pages above it (0 for a page that needs none).
+fn page_depths(parents: &[Vec<u32>]) -> Vec<u32> {
+    const UNSET: u32 = u32::MAX;
+    const VISITING: u32 = u32::MAX - 1;
+    let mut depth = vec![UNSET; parents.len()];
+    let mut stack = Vec::new();
+    for start in 0..parents.len() {
+        if depth[start] != UNSET {
+            continue;
+        }
+        stack.push(start);
+        while let Some(&page) = stack.last() {
+            if depth[page] != UNSET && depth[page] != VISITING {
+                stack.pop();
+                continue;
+            }
+            depth[page] = VISITING;
+            let mut ready = true;
+            let mut d = 0;
+            for &parent in &parents[page] {
+                match depth[parent as usize] {
+                    UNSET => {
+                        stack.push(parent as usize);
+                        ready = false;
+                    }
+                    // A cycle, which the residency rules would never load: ignored here.
+                    VISITING => {}
+                    value => d = d.max(value + 1),
+                }
+            }
+            if ready {
+                depth[page] = d;
+                stack.pop();
+            }
+        }
+    }
+    depth
 }
 
 /// Where a page's bytes are.
@@ -411,6 +479,76 @@ impl ResidentSet {
         self.pending[page as usize] = false;
     }
 
+    /// The pages a start view loads (#121), given each page's need from the view (0 for
+    /// none): the absent wanted pages and every page holding a parent of their clusters, the
+    /// neediest first and a parent before its children, as many as the free slots hold.
+    /// Returns them and how many wanted pages did not fit.
+    pub fn start_pages(&self, needs: &[f32]) -> (Vec<u32>, usize) {
+        // Each wanted page lends its need to its ancestors (as `set_needs`), so a parent never
+        // comes after its children; among equal needs the shallower comes first.
+        let mut need = needs.to_vec();
+        let mut lend: Vec<u32> = (0..need.len() as u32)
+            .filter(|&p| need[p as usize] > 0.0)
+            .collect();
+        while let Some(page) = lend.pop() {
+            let value = need[page as usize];
+            for &parent in &self.parents[page as usize] {
+                if need[parent as usize] < value {
+                    need[parent as usize] = value;
+                    lend.push(parent);
+                }
+            }
+        }
+        let depth = page_depths(&self.parents);
+        let mut taken: Vec<bool> = (0..need.len() as u32).map(|p| self.resident(p)).collect();
+        let mut wanted: Vec<u32> = (0..need.len() as u32)
+            .filter(|&p| need[p as usize] > 0.0 && !taken[p as usize])
+            .collect();
+        wanted.sort_by(|&a, &b| {
+            let (a, b) = (a as usize, b as usize);
+            need[b]
+                .total_cmp(&need[a])
+                .then(depth[a].cmp(&depth[b]))
+                .then(a.cmp(&b))
+        });
+        let mut pages = Vec::new();
+        for &page in &wanted {
+            if pages.len() == self.free_slots.len() {
+                break;
+            }
+            if self.parents[page as usize]
+                .iter()
+                .all(|&p| taken[p as usize])
+            {
+                taken[page as usize] = true;
+                pages.push(page);
+            }
+        }
+        let missed = wanted.len() - pages.len();
+        (pages, missed)
+    }
+
+    /// Makes `pages` resident in free slots, in order ([`Self::start_pages`] chose them): the
+    /// slots, one per page.
+    pub fn preload(&mut self, pages: &[u32]) -> Vec<u32> {
+        pages
+            .iter()
+            .map(|&page| {
+                let slot = self
+                    .free_slots
+                    .pop()
+                    .expect("start_pages fits the free slots");
+                self.occupy(page, slot);
+                slot
+            })
+            .collect()
+    }
+
+    /// Per page, its slot or `PAGE_NONE`: the page table.
+    pub fn table(&self) -> &[u32] {
+        &self.slot_of
+    }
+
     /// Panics unless the resident set is consistent and closed upwards.
     #[cfg(test)]
     fn check(&self) {
@@ -456,6 +594,11 @@ pub(crate) struct PageStreamer {
     /// The needs the culls write (a float's bits per page).
     pub need_buffer: GraphBuffer,
     stats: StreamingStats,
+    /// The pages, also read by the I/O thread.
+    store: Arc<PageStore>,
+    /// The pages a start view loaded (#121), and whether a read past them was logged.
+    preloaded: u32,
+    read_logged: bool,
 }
 
 impl PageStreamer {
@@ -496,13 +639,14 @@ impl PageStreamer {
         }
         let (reads, requests) = mpsc::channel::<u32>();
         let (done, loaded) = mpsc::channel::<Loaded>();
+        let io_store = Arc::clone(&store);
         let io_thread = thread::Builder::new()
             .name("forge page reads".into())
             .spawn(move || {
                 let mut open = HashMap::new();
                 for page in requests {
                     let mut bytes = vec![0; PAGE_SIZE];
-                    let result = store.read(page, &mut open, &mut bytes).map(|()| bytes);
+                    let result = io_store.read(page, &mut open, &mut bytes).map(|()| bytes);
                     if done.send((page, result)).is_err() {
                         break;
                     }
@@ -535,7 +679,58 @@ impl PageStreamer {
                 pool_pages: config.pool_pages,
                 ..StreamingStats::default()
             },
+            store,
+            preloaded: 0,
+            read_logged: false,
         })
+    }
+
+    /// Loads the pages a start view's cut wants, given each page's need from it
+    /// ([`ResidentSet::start_pages`]; `MeshletScene::load_start_view`, #121), into the free
+    /// slots of `pool` and their entries of `table`, directly: before the first frame.
+    pub fn preload(
+        &mut self,
+        device: &Arc<Device>,
+        pool: &Buffer,
+        table: &Buffer,
+        needs: &[f32],
+    ) -> Result<()> {
+        let start = std::time::Instant::now();
+        let (pages, missed) = self.residency.start_pages(needs);
+        let slots = self.residency.preload(&pages);
+        let bytes = self.store.read_pages(pages.iter().copied())?;
+        // One copy per run of consecutive slots: a single one before the first frame, when
+        // the free slots follow the roots'.
+        let mut at = 0;
+        while at < slots.len() {
+            let mut end = at + 1;
+            while end < slots.len() && slots[end] == slots[end - 1] + 1 {
+                end += 1;
+            }
+            device.write_buffer_staged(
+                pool,
+                u64::from(slots[at]) * PAGE_SIZE as u64,
+                &bytes[at * PAGE_SIZE..end * PAGE_SIZE],
+            )?;
+            at = end;
+        }
+        device.write_buffer_staged(table, 0, bytemuck::cast_slice(self.residency.table()))?;
+        self.preloaded = pages.len() as u32;
+        tracing::info!(
+            pages = pages.len(),
+            mib = (pages.len() * PAGE_SIZE) >> 20,
+            ms = %format_args!("{:.0}", start.elapsed().as_secs_f64() * 1e3),
+            "the start view's cluster pages loaded"
+        );
+        if missed > 0 {
+            tracing::warn!(
+                missed,
+                pool_pages = self.config.pool_pages,
+                "the start view wants more cluster pages than the pool holds: they stream in \
+                 over its first frames"
+            );
+        }
+        Ok(())
     }
 
     /// The staging buffer of frame slot `slot`.
@@ -615,6 +810,17 @@ impl PageStreamer {
         }
         stats.reading = self.in_flight;
         stats.resident = self.residency.resident_count();
+        // A fixed start view should read nothing past its pages: the first read says when
+        // the view moved, or what its cut missed.
+        if stats.requested > 0 && self.preloaded > 0 && !self.read_logged {
+            self.read_logged = true;
+            tracing::info!(
+                frame = frame_number,
+                requested = stats.requested,
+                preloaded = self.preloaded,
+                "the first cluster pages read past the start view's"
+            );
+        }
         self.stats = stats;
     }
 }
@@ -661,8 +867,44 @@ mod tests {
 
     /// Pages 0 (the root, pinned) → 1, 2 → 3 (needs 1 and 2) → 4; and 5 under 2.
     fn small(pool: u32) -> ResidentSet {
-        let parents = vec![vec![], vec![0], vec![0], vec![1, 2], vec![3], vec![2]];
-        ResidentSet::new(6, pool, parents, &[0])
+        ResidentSet::new(6, pool, small_parents(), &[0])
+    }
+
+    fn small_parents() -> Vec<Vec<u32>> {
+        vec![vec![], vec![0], vec![0], vec![1, 2], vec![3], vec![2]]
+    }
+
+    #[test]
+    fn a_start_view_loads_its_pages_with_their_parents_first() {
+        assert_eq!(page_depths(&small_parents()), vec![0, 1, 1, 2, 3, 2]);
+        // Page 4 wanted lends its need to 3, 1 and 2; page 5 needs less.
+        let mut needs = vec![0.0; 6];
+        needs[4] = 5.0;
+        needs[5] = 2.0;
+        assert_eq!(small(8).start_pages(&needs), (vec![1, 2, 3, 4, 5], 0));
+        // Short of slots, the neediest and their parents: never a page without them.
+        assert_eq!(small(4).start_pages(&needs), (vec![1, 2, 3], 2));
+        assert_eq!(small(8).start_pages(&[0.0; 6]), (vec![], 0));
+    }
+
+    #[test]
+    fn preloaded_pages_stay_until_given_up_like_any_other() {
+        // The pool full with the root and three preloaded pages.
+        let mut r = small(4);
+        assert_eq!(
+            r.preload(&[1, 2, 3]),
+            vec![1, 2, 3],
+            "the slots after the root's"
+        );
+        r.check();
+        assert_eq!(r.resident_count(), 4);
+        assert_eq!(r.table(), &[0, 1, 2, 3, PAGE_NONE, PAGE_NONE]);
+        // Page 5 wanted, 3 not: 3, the only leaf, leaves for it; 1 and 2 hold its parents.
+        r.set_needs(1, needs(&[(5, 1.0)]));
+        let (placement, _) = r.place(vec![(5, ())], 8);
+        assert_eq!(placement.evicted, vec![3]);
+        assert_eq!(placement.placed.len(), 1);
+        r.check();
     }
 
     fn needs(values: &[(usize, f32)]) -> impl Iterator<Item = f32> {

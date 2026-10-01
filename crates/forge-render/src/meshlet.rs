@@ -22,7 +22,9 @@ use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::probes::ProbeLight;
 use crate::raytrace::{self, SceneRays};
 use crate::sky::SkyLight;
-use crate::streaming::{PageSource, PageStore, PageStreamer, Residency, StreamingStats};
+use crate::streaming::{
+    self, PageSource, PageStore, PageStreamer, Residency, StartView, StreamingStats,
+};
 use crate::water::WetGround;
 use forge_core::material::{MaterialId, MaterialTable, ShadingClass};
 use forge_gpu::{
@@ -31,7 +33,7 @@ use forge_gpu::{
     ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, QueueKind, Result,
     ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc, vk,
 };
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{DQuat, DVec3, Mat4, Vec2, Vec3, Vec4};
 
 /// Culling flags, mirrored in `meshlet.slang`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -737,7 +739,14 @@ pub struct MeshletSceneBuilder {
     /// Meshes cut for the rays as one surface, and their triangles over all of them
     /// ([`MeshletSceneBuilder::set_ray_group`]).
     ray_groups: Vec<(Vec<u32>, u32)>,
+    /// The view whose pages a streamed scene loads first
+    /// ([`MeshletSceneBuilder::set_start_view`]).
+    start_view: Option<StartView>,
 }
+
+/// How many of a mesh's instances, the nearest, have their start view's needs worked out
+/// cluster by cluster (`start_needs`); the others take the bound of the nearest of them.
+const START_EXACT_INSTANCES: usize = 1024;
 
 impl MeshletSceneBuilder {
     /// An empty builder.
@@ -878,6 +887,14 @@ impl MeshletSceneBuilder {
     pub fn set_ray_group(&mut self, meshes: &[MeshId], budget: u32) {
         self.ray_groups
             .push((meshes.iter().map(|m| m.0).collect(), budget));
+    }
+
+    /// Has a streamed scene ([`Residency::Streamed`]) load, before its first frame, the pages
+    /// the cut from `view` wants (#121, `crate::streaming`'s notes), as many as its pool
+    /// holds: [`MeshletScene::load_start_view`] once its instances are written. Ignored by a
+    /// resident scene.
+    pub fn set_start_view(&mut self, view: StartView) {
+        self.start_view = Some(view);
     }
 
     /// Adds an instance of `mesh` with a uniform-scale transform, in its mesh's material.
@@ -1092,6 +1109,7 @@ impl MeshletSceneBuilder {
                 (pool, page_table, Some(streamer))
             }
         };
+        let streamed = streamer.is_some();
         if self.materials.is_empty() {
             self.materials = gpu_rows(&MaterialTable::new(), None);
         }
@@ -1241,8 +1259,117 @@ impl MeshletSceneBuilder {
             meshlet_count: self.meshlets.len() as u32,
             total_triangles: self.total_triangles,
             finest_clusters: self.finest_clusters,
+            // Last: the tables move out once every field above has read them.
+            start: match self.start_view {
+                Some(view) if streamed => Some(Box::new(StartPrep {
+                    view,
+                    meshes: std::mem::take(&mut self.meshes),
+                    meshlets: std::mem::take(&mut self.meshlets),
+                })),
+                _ => None,
+            },
         })
     }
+}
+
+/// What [`MeshletScene::load_start_view`] works the start view's needs out from, kept from
+/// the build (#121).
+struct StartPrep {
+    view: StartView,
+    meshes: Vec<GpuMesh>,
+    meshlets: Vec<GpuMeshlet>,
+}
+
+/// Per scene page, the pixels of error its clusters' parents would show from the start view
+/// past [`streaming::START_MARGIN`] of the threshold (0 when none would): the cull's metric
+/// (`lod_error_pixels` in `meshlet.slang`) in `f64`. Each mesh's [`START_EXACT_INSTANCES`]
+/// nearest instances are worked out cluster by cluster; the others at the bound of the
+/// nearest of them, no cluster nearer than its instance's centre less the reach of its
+/// clusters' parents' spheres (`parent_reach_max`).
+fn start_needs(prep: &StartPrep, instances: &[GpuInstance], page_count: usize) -> Vec<f32> {
+    let view = &prep.view;
+    let mut need = vec![0.0_f32; page_count];
+    let k = f64::from(view.p11) * 0.5 * f64::from(view.viewport_height);
+    let near = f64::from(view.near);
+    let threshold = f64::from(view.lod_threshold_px * streaming::START_MARGIN);
+    // A position relative to the camera: the cells' difference first, as the shaders do.
+    let relative = |cell: [i32; 3], local: [f32; 3]| {
+        (glam::IVec3::from(cell) - view.position.cell).as_dvec3() * f64::from(crate::CELL_SIZE)
+            + (Vec3::from(local) - view.position.local).as_dvec3()
+    };
+    let mut of_mesh: Vec<Vec<usize>> = vec![Vec::new(); prep.meshes.len()];
+    for (i, instance) in instances.iter().enumerate() {
+        of_mesh[instance.mesh as usize].push(i);
+    }
+    for (mesh, list) in prep.meshes.iter().zip(&mut of_mesh) {
+        if list.is_empty() {
+            continue;
+        }
+        let first = mesh.meshlet_offset as usize;
+        let clusters = &prep.meshlets[first..first + mesh.meshlet_count as usize];
+        let reach = f64::from(
+            mesh.parent_reach_max
+                .iter()
+                .copied()
+                .filter(|r| r.is_finite())
+                .fold(0.0_f32, f32::max),
+        );
+        // How near an instance may bring a cluster: its scale over its least distance.
+        let bound = |i: usize| {
+            let instance = &instances[i];
+            let scale = f64::from(instance.scale);
+            let centre = relative(instance.cell, instance.center);
+            scale / (centre.length() - reach * scale).max(near)
+        };
+        let mut bounds: Vec<(f64, usize)> = list.iter().map(|&i| (bound(i), i)).collect();
+        let exact = bounds.len().min(START_EXACT_INSTANCES);
+        if bounds.len() > exact {
+            bounds.select_nth_unstable_by(exact, |a, b| b.0.total_cmp(&a.0));
+        }
+        let levels = (mesh.level_count as usize).max(1);
+        for &(nearest, i) in &bounds[..exact] {
+            let instance = &instances[i];
+            let rotation = DQuat::from_array(instance.rotation.map(f64::from));
+            let scale = f64::from(instance.scale);
+            let origin = relative(instance.cell, instance.local);
+            for level in 0..levels {
+                // A level whose largest parent error cannot show at the instance's least
+                // distance is skipped whole: a far instance costs its coarse levels only.
+                let largest = f64::from(mesh.parent_error_max[level]);
+                if largest.is_finite() && largest * k * nearest <= threshold {
+                    continue;
+                }
+                let begin = mesh.level_offset[level] as usize;
+                let end = if level + 1 == levels {
+                    clusters.len()
+                } else {
+                    mesh.level_offset[level + 1] as usize
+                };
+                for c in clusters[begin..end]
+                    .iter()
+                    .filter(|c| c.parent_error.is_finite())
+                {
+                    let centre =
+                        rotation * (DVec3::from(c.parent_center.map(f64::from)) * scale) + origin;
+                    let d = (centre.length() - f64::from(c.parent_radius) * scale).max(near);
+                    let px = f64::from(c.parent_error) * scale * k / d;
+                    if px > threshold {
+                        need[c.page as usize] = need[c.page as usize].max(px as f32);
+                    }
+                }
+            }
+        }
+        // The rest: the nearest of them, `select_nth` having put it at `exact`.
+        if let Some(&(nearest, _)) = bounds.get(exact) {
+            for c in clusters.iter().filter(|c| c.parent_error.is_finite()) {
+                let px = f64::from(c.parent_error) * k * nearest;
+                if px > threshold {
+                    need[c.page as usize] = need[c.page as usize].max(px as f32);
+                }
+            }
+        }
+    }
+    need
 }
 
 /// The uploaded scene tables.
@@ -1255,6 +1382,9 @@ pub struct MeshletScene {
     page_table: GraphBuffer,
     /// A streamed scene's residency.
     streamer: Option<PageStreamer>,
+    /// The start view and the tables its needs are worked out from, until
+    /// [`MeshletScene::load_start_view`] loads its pages (#121).
+    start: Option<Box<StartPrep>>,
     /// Pages over all meshes.
     pub page_count: u32,
     meshes: Buffer,
@@ -1400,6 +1530,34 @@ impl MeshletScene {
     /// What the streamer did last frame, for a streamed scene ([`Residency::Streamed`]).
     pub fn streaming(&self) -> Option<StreamingStats> {
         self.streamer.as_ref().map(PageStreamer::stats)
+    }
+
+    /// Loads the pages the start view's cut wants ([`MeshletSceneBuilder::set_start_view`],
+    /// #121), its needs worked out from the instances as the GPU holds them: after every pass
+    /// that writes them (the GPU placement), before the first frame. Nothing for a scene
+    /// without a start view, resident, or whose start view is loaded.
+    pub fn load_start_view(&mut self, device: &Arc<Device>) -> Result<()> {
+        let (Some(prep), Some(streamer)) = (self.start.take(), self.streamer.as_mut()) else {
+            return Ok(());
+        };
+        let start = std::time::Instant::now();
+        let size = std::mem::size_of::<GpuInstance>();
+        let bytes = device.read_back(
+            &self.instances,
+            0,
+            u64::from(self.instance_count) * size as u64,
+        )?;
+        let instances: Vec<GpuInstance> = bytes[..self.instance_count as usize * size]
+            .chunks_exact(size)
+            .map(bytemuck::pod_read_unaligned)
+            .collect();
+        let needs = start_needs(&prep, &instances, self.page_count as usize);
+        tracing::info!(
+            ms = %format_args!("{:.0}", start.elapsed().as_secs_f64() * 1e3),
+            wanted = needs.iter().filter(|&&n| n > 0.0).count(),
+            "the start view's cut worked out"
+        );
+        streamer.preload(device, &self.pool, &self.page_table, &needs)
     }
 }
 

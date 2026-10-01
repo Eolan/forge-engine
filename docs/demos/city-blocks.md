@@ -935,6 +935,13 @@ is resident. How it works is in [D-025](../DECISIONS.md) and `forge_render::stre
 The overlay (F1) has the group `streaming` (the upload pass) and a counter line: pages
 resident, wanted, requested, reading, uploaded and evicted this frame.
 
+**The start view** (#121, D-025). Since 2026-10-01 the scene loads the pages of its first
+view's cut before the first frame: 473 pages (59 MiB), worked out in 63 ms over the placed
+instances and read in 44 ms. The view no longer settles over 39 frames from the roots: it is
+sharp from the first frame and reads nothing more while the camera stays. The auto software
+raster then switches on from the start, as in the resident scene ("Auto software raster"
+below).
+
 | streamed (1600×900, LOD 1 px) | pool | resident | GPU per frame | geometry |
 |---|---|---|---|---|
 | every page resident (`--stream-pool 0`) | — | 7 868 pages | 1.05 ms | 1 160 MiB |
@@ -961,9 +968,13 @@ resident, wanted, requested, reading, uploaded and evicted this frame.
   pixels as the paged format did before streaming. A streamed capture can differ by a few
   hundred pixels (the orbit at frame 120: 466), all one LOD level coarser where a page
   arrived a frame late. The golden captures of the city therefore use `--stream-pool 0`.
-- **Auto software raster.** A streamed start is coarse, so the dense-triangle count stays
-  under the auto mode's switch-on threshold and the static view stays in hardware
-  (0.20 ms against 0.16 + 0.03).
+  The island's capture views stream from their start view (#121), which a fixed view
+  never reads past.
+- **Auto software raster.** A streamed start was coarse, so the dense-triangle count stayed
+  under the auto mode's switch-on threshold and the static view stayed in hardware
+  (0.20 ms against 0.16 + 0.03). Since the start view (#121) it starts sharp and switches on,
+  as the resident scene does: the frame 1.82 → 1.85 ms in today's build (meshlet pass 1
+  0.253 → 0.205, the software raster 0.067 and its merge 0.04 more).
 
 ## The props (issue #34, 2026-09-24)
 

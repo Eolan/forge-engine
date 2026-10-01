@@ -41,7 +41,7 @@ use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StreamingConfig,
+    MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StartView, StreamingConfig,
     StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterLake, WaterMouth,
     WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams,
     exposure_from_ev100, sh_irradiance,
@@ -394,12 +394,14 @@ impl Gallery {
         }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
+        // Known before the scene, whose streamed pages it loads first (#121).
+        let mut camera = start_camera(&args)?;
         let (scene, placed) = if args.gallery {
             build_gallery(ctx, &args, cooked)?
         } else if args.island.is_some() {
-            (build_island(ctx, &args, cooked)?, Vec::new())
+            (build_island(ctx, &args, cooked, &camera)?, Vec::new())
         } else {
-            (build_city(ctx, &args, cooked)?, Vec::new())
+            (build_city(ctx, &args, cooked, &camera)?, Vec::new())
         };
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM);
         // The city's views list 0.44–1.03 M clusters on their first frame, the island's 0.45 M:
@@ -432,30 +434,6 @@ impl Gallery {
         }
         if args.show_culled {
             flags.0 |= CullFlags::SHOW_CULLED;
-        }
-        let mut camera = if args.island.is_some() {
-            island_camera(&args)
-        } else if args.gallery {
-            FlyCamera {
-                position: Vec3::new(0.0, 70.0, 230.0),
-                pitch: -0.3,
-                speed: 40.0,
-                ..FlyCamera::default()
-            }
-        } else {
-            // Over the city's south edge, looking north along a street.
-            FlyCamera {
-                position: Vec3::new(10.0, 45.0, 1260.0),
-                pitch: -0.12,
-                speed: 80.0,
-                ..FlyCamera::default()
-            }
-        };
-        if let Some(v) = &args.view {
-            anyhow::ensure!(v.len() == 5, "--view takes x,y,z,yaw,pitch");
-            camera.position = Vec3::new(v[0], v[1], v[2]);
-            camera.yaw = v[3].to_radians();
-            camera.pitch = v[4].to_radians();
         }
         // The probes trace the scene's TLAS (issue #53).
         let probes_on = !args.no_probes;
@@ -2711,6 +2689,57 @@ fn water_check(
     Ok(())
 }
 
+/// Where the camera starts: the island's first view, the gallery's or the city's, or
+/// `--view`.
+fn start_camera(args: &Args) -> Result<FlyCamera> {
+    let mut camera = if args.island.is_some() {
+        island_camera(args)
+    } else if args.gallery {
+        FlyCamera {
+            position: Vec3::new(0.0, 70.0, 230.0),
+            pitch: -0.3,
+            speed: 40.0,
+            ..FlyCamera::default()
+        }
+    } else {
+        // Over the city's south edge, looking north along a street.
+        FlyCamera {
+            position: Vec3::new(10.0, 45.0, 1260.0),
+            pitch: -0.12,
+            speed: 80.0,
+            ..FlyCamera::default()
+        }
+    };
+    if let Some(v) = &args.view {
+        anyhow::ensure!(v.len() == 5, "--view takes x,y,z,yaw,pitch");
+        camera.position = Vec3::new(v[0], v[1], v[2]);
+        camera.yaw = v[3].to_radians();
+        camera.pitch = v[4].to_radians();
+    }
+    Ok(camera)
+}
+
+/// The streamed scene loads the cut from where the camera starts before its first frame (#121):
+/// a fixed view then streams nothing, and the capture batch can draw the island's 2 m ground.
+fn set_start_view(
+    builder: &mut MeshletSceneBuilder,
+    ctx: &Context,
+    args: &Args,
+    origin: forge_render::CellPos,
+    camera: &FlyCamera,
+) {
+    if args.no_lod {
+        return; // without the LOD cut nothing is wanted past the roots
+    }
+    builder.set_start_view(StartView {
+        position: origin.offset(camera.position),
+        p11: camera.projection(ctx.aspect()).y_axis.y,
+        near: camera.near,
+        viewport_height: ctx.extent().height,
+        lod_threshold_px: args.lod_error,
+    });
+}
+
 /// The island's first view (#96): on its south coast looking inland, 25 m over the water
 /// 150 m off the beach due south of the centre, found in the field (the first sample above
 /// 1 m walking north from the domain's south edge), so it holds for any seed. From farther out,
@@ -2771,7 +2800,12 @@ fn sea_prop() -> PropSpec {
 /// The island (`docs/demos/island.md`): its heightfield cooked (or loaded) as the one
 /// instance of the scene, on the ground's layered material with rock where the ground is
 /// steep or high and grass elsewhere.
-fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene> {
+fn build_island(
+    ctx: &Context,
+    args: &Args,
+    cooked: Cooked,
+    camera: &FlyCamera,
+) -> Result<MeshletScene> {
     let start = Instant::now();
     let props = island_props(args);
     let streamed = args.stream_pool > 0;
@@ -2932,6 +2966,9 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     let mut layout = CityLayout::island(args.instances.unwrap_or(300_000));
     layout.origin = scene_origin(args);
     builder.set_origin(layout.origin);
+    if streamed {
+        set_start_view(&mut builder, ctx, args, layout.origin, camera);
+    }
     // The ground first: should the cull's work list overflow (`--no-lod`), the instances last in
     // the table are the ones dropped.
     for &tile in tile_ids {
@@ -3121,6 +3158,8 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     scene.build_cells(&ctx.device, &ctx.shaders)?;
     // The sun's shadows and the probes trace against the island and its rocks (#45, #53).
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
+    // The start view's pages, now the rocks are placed (#121).
+    scene.load_start_view(&ctx.device)?;
     log_rays(&scene);
     tracing::info!(
         origin_m = args.origin,
@@ -3139,7 +3178,12 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
 
 /// The city: the terrain and the twenty props cooked (or loaded), the terrain placed once
 /// at the origin and `args.instances` props placed over it by the GPU.
-fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene> {
+fn build_city(
+    ctx: &Context,
+    args: &Args,
+    cooked: Cooked,
+    camera: &FlyCamera,
+) -> Result<MeshletScene> {
     let start = Instant::now();
     let terrain = Terrain::city();
     let mut props = city_props();
@@ -3157,6 +3201,9 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     // around its own centre.
     layout.origin = scene_origin(args);
     builder.set_origin(layout.origin);
+    if streamed {
+        set_start_view(&mut builder, ctx, args, layout.origin, camera);
+    }
     // The heightfield the terrain mesh was sampled from.
     let heights_start = std::time::Instant::now();
     let heights = parallel_heights(&terrain);
@@ -3254,6 +3301,8 @@ fn build_city(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletScene
     scene.build_cells(&ctx.device, &ctx.shaders)?;
     // The sun's shadows trace against every placed instance (issue #45).
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
+    // The start view's pages, now the instances are placed (#121).
+    scene.load_start_view(&ctx.device)?;
     log_rays(&scene);
     tracing::info!(
         instances = scene.instance_count,

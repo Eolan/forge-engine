@@ -1259,3 +1259,7 @@ tiles). The ground drawn at 2 m, 8 193² samples:
   (`--island-detail 3`) changes little more. `reports/2026-10-01-106/drawn-2m.png`: a hillside
   at a river's head, a steep valley's wall from its water, the largest valley from 200 m; 8 m
   left, 2 m right.
+- **Streamed only:** its 4.2 GB of pages exceed a resident pool, which the shaders address in
+  32-bit bytes. The scene loads the pages of its first view's cut before the first frame
+  (#121, D-025's start view): 290 pages (36 MiB) from the coast, so the first frame is already
+  sharp, and the capture batch draws it at a fixed view that reads nothing more.

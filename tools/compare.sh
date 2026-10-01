@@ -7,7 +7,8 @@
 # default tolerance) and the largest channel error; for a difference, also its LDR-FLIP mean and
 # largest value (issue #75: how visible it is). Then the pairs within NEW that must match:
 # the A/B harness (occlusion and cone culling off against on, `--show-culled` against the plain
-# frame: no red) and the mesh path against the fallback. Exit code 1 when any image of either
+# frame: no red), the island streamed from its start view against resident (#121) and the mesh
+# path against the fallback. Exit code 1 when any image of either
 # list differs, so a script can stop on it. "0 px" on every line is the pass. With
 # FORGE_KEEP_LOGS=1 the same lines go to NEW/compare.txt, for a cloud session to read
 # (tools/report.sh gathers it).
@@ -67,6 +68,7 @@ main() {
     pair "$new/$path-city60.png" "$new/$path-city60-culled.png" "$path city, show-culled"
     pair "$new/$path-island60.png" "$new/$path-island60-noocc.png" "$path island, occlusion off"
     pair "$new/$path-water60.png" "$new/$path-water60-noocc.png" "$path island with water, occlusion off"
+    pair "$new/$path-island8-60.png" "$new/$path-island8-60-resident.png" "$path island at 8 m, streamed against resident"
   done
   for name in static60 orbit120 nolod120 ast240 ast-notaa600 city60 cityorbit120 gallery60 island60 water60; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
