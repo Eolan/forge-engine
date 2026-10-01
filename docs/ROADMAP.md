@@ -296,7 +296,7 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    on the GPU"); and the lakes, a level plane each over its flooded depression, its shore on cells
    of a metre, its water the rivers' (still but where a river runs in). D-038's build order is
    done; next, the owner's judgement of `--water`, then the afterwards of `docs/research/water.md`
-   (the underwater view, caustics, wakes).
+   (the underwater view, #108; caustics; objects in the water and their wakes, #107).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of
