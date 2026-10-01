@@ -61,3 +61,10 @@ Listed in the commit; the batch changes the island's images only.
 (`--view -929,15.2,-4399,83,-10`). The grasses within 6 m plus two of the river's widths of its
 water become a deeper, bluer green of reeds and shrubs (`island_layer::RIVERBANK`); from 300 m a
 darker corridor follows each river.
+
+## The morning in one sheet
+
+`morning.png`: the island from 2.5 km and the first view, this morning (left, abc95bc) and now
+(right, b2930e0); then, now: a river across the plain with its banks' growth from 40 m, the
+largest mouth's estuary from 45 m, a lake entry from 50 m, and the water up a steep valley from
+2 m.
