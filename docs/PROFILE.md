@@ -711,6 +711,18 @@ of two cascades four times each, in the layered pass.
   camera stands in or over one of them or within 2 m of the sea: the views of the table above
   are unchanged.
 
+**Moving geometry** (#79, 2026-10-02): `--movers` 0, 1 000 and 10 000 barrels on the rivers, the
+same build, two rounds, 1 500 frames each, 2560 × 1440.
+
+| View | frame: 0 → 1 000 → 10 000 | `movers/motion` | `movers/upload` | `geometry/instance cull` |
+|---|---|---|---|---|
+| the first barrel from 4 m (`-238.2,318.14,-1843.9,135.2,-18.1`) | 3.62 → 3.64 → 3.71 ms | 0.032 | 0.002 → 0.006 | 0.048 → 0.055 → 0.059 |
+| the largest mouth from 4 m (`4384,4.0,-2840,-88.9,-20`) | 3.05 → 3.15 → 3.13 ms | 0.032 | 0.002 → 0.006 | 0.031 → 0.036 → 0.039 |
+
+- `movers/cell bounds` 0.003 ms whatever the count; `movers/motion` is a pass over the screen,
+  its cost the pixels', not the movers'.
+- The rounds' frame times vary by up to 0.09 ms with 10 000 movers (3.759 and 3.666 ms).
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

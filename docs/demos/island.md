@@ -1700,6 +1700,65 @@ which water the camera is in.
   owner.
 - The ripples on the lakes' and the rivers' surfaces seen from below.
 
+## Moving geometry (#79, 2026-10-02)
+
+The first thing Forge draws that moves: `--movers N` sets N barrels drifting down the island's
+four largest rivers at 1.5 m/s, half under the water's level, rolling and bobbing, each river's
+barrels spread along its course and starting over at its head (`reports/2026-10-02-79/`). It
+follows `docs/research/dynamic-scenes.md` ("Recommendation for Forge"); this is its first step.
+The movers' own acceleration structure (their shadows and reflections) and the probes woken
+around them (#69) come next.
+
+**What changed.**
+- **The movers' range** (`MeshletSceneBuilder::reserve_movers`): the instance table's last
+  records. Nothing is added after them, and the static acceleration structure leaves them out.
+- **Their transforms every frame** (`MeshletScene::set_movers`):
+  - The CPU writes the movers' whole records (cell, offset, rotation, scale, bounding sphere)
+    into a ring of three host-visible slots: this frame's, the frame before's, and one a frame
+    in flight may still read.
+  - `movers/upload` copies this frame's slot into the table.
+  - `movers/cell bounds` takes the bounds of the movers' cells of 64 again (`cell_bounds_main`
+    from a first cell).
+  - No change to the culls: the two-pass occlusion tests again, against this frame's pyramid,
+    whatever the previous one hides, wherever it stood before.
+- **The graph sees it.** The table and its cells are graph buffers. When a scene has movers,
+  every pass that reads them declares them: the cell and instance culls, the cluster culls,
+  the mesh passes and the fallback's, the software raster, the shading passes and the
+  reflections (`PassBuilder::buffer_if`). Scenes without movers declare nothing new.
+- **Their motion** (`movers/motion`, `mover_motion_main`): for the pixels a mover shows, the
+  point is taken back onto the mover through this frame's transform, placed by the frame
+  before's, and seen by the camera of the frame before. It is written over the camera's
+  motion vectors, so TAA reprojects the mover instead of smearing it (`taa.png`).
+  `--no-mover-motion` is the A/B.
+
+**Sheets** (frame 60, seed 7, 1 000 barrels):
+- `barrels.png`: barrels on the largest river by its mouth (`4384,4.0,-2840,-88.9,-20`), and
+  the first barrel from 4 m, floating in the lake at that river's head (the log's
+  `barrels on the rivers` view, `-238.2,318.14,-1843.9,135.2,-18.1`).
+- `taa.png`: that barrel without TAA, with TAA and its motion, and with TAA and the camera's
+  motion alone. The last blurs its hoops and ghosts its rim: 2 394 pixels differ from the
+  second, ꟻLIP max 0.27.
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440):
+- From the barrel's view: +0.02 ms with 1 000 movers, +0.05–0.13 with 10 000.
+- `movers/upload` 0.002–0.006 ms, `movers/cell bounds` 0.003, `movers/motion` 0.032 (a pass
+  over the screen).
+
+**Checks:**
+- Without movers the capture batch is unchanged (0 px), and so are the A/B harness, streamed
+  against resident and mesh against fallback.
+- `validate.sh` is clean, and now also runs 1 000 movers on both paths, synchronisation
+  validation included.
+
+**Left for later:**
+- The movers cast no ray-traced shadow and show in no reflection: they are not in the
+  acceleration structure (the research's mover TLAS, next).
+- The probes don't wake where they pass (#69).
+- Where the water is drawn over a mover, its motion comes from the water's depth, not the
+  mover's.
+- The barrels drift at one speed and jump back to their river's head past its end; the
+  water parting around them, and their wakes, are #107.
+
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 
 The ground left on #106 is the 8 m field's own: its slopes keep 8 m facets and their shadows'

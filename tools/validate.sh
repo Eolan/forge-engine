@@ -69,6 +69,8 @@ for path in "" --force-fallback; do
   validate "under-sea$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=4770,-3.0,-2847,91.1,-10 $path
   # And under the largest lake (the log's `under` view of the island's lakes).
   validate "under-lake$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=2248,20.2,-1184,0,25 $path
+  # Moving geometry (#79): a thousand barrels on the rivers, the first one in view.
+  validate "movers$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --movers 1000 --view=-238.2,318.14,-1843.9,135.2,-18.1 $path
 done
 [ "$keep" != 0 ] && say "logs in $out/logs, summary in $summary"
 exit 0

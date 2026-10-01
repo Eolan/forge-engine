@@ -70,7 +70,12 @@ run, which can also retry #95's double buffer).
 
 **Proposed next, for the owner to pick:**
 - #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes
-  #69 and is the first step of the space battle (#80).
+  #69 and is the first step of the space battle (#80). Started on 2026-10-02, the owner having
+  asked for the plan's recommendations: the movers' range of the instance table written every
+  frame, their cells, their motion vectors, with barrels drifting down the island's rivers
+  (`city-blocks --island 7 --movers N`, `docs/demos/island.md`, "Moving geometry"). Next for
+  it: the movers' acceleration structure (shadows and reflections), then the probes' wake
+  (#69). It also opens #107, the water around what moves in it.
 - Phase 2, with its `island` demo as the first step of rebuilding tropical-island (#81): a
   concrete game target for the world systems. It starts with #93, large-world coordinates on
   the GPU ✅ (2026-09-26, D-004's amendment accepted): the instances in integer cells of 1 km,

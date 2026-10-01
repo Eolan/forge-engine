@@ -353,7 +353,10 @@ impl Taa {
             width: extent.width,
             height: extent.height,
             format: MOTION_FORMAT,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            // Storage: the movers' motion is written over the camera's (#79).
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::STORAGE,
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });

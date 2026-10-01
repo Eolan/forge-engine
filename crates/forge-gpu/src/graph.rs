@@ -722,6 +722,15 @@ impl<'f> PassBuilder<'_, 'f> {
         self
     }
 
+    /// The pass uses `buffer` as `access`, when the frame declares it: a buffer only some
+    /// frames write, which the passes reading it declare then (the movers' instances, #79).
+    pub fn buffer_if(self, buffer: Option<BufferHandle>, access: BufferAccess) -> Self {
+        match buffer {
+            Some(buffer) => self.buffer(buffer, access),
+            None => self,
+        }
+    }
+
     /// Finishes the pass with the commands it records. The body runs at
     /// [`RenderGraph::execute`], after the graph's barriers, with the resolved resources.
     pub fn run(self, body: impl FnOnce(&Resources<'_>, &Commands<'_>) -> Result<()> + 'f) {

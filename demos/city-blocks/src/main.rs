@@ -29,7 +29,7 @@ use forge_core::material::{
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{
-    CellWindow, Heightfield, HeightfieldDetail, PropKind, PropSpec, Terrain, city_props,
+    CellWindow, Heightfield, HeightfieldDetail, Lathe, PropKind, PropSpec, Terrain, city_props,
 };
 use forge_procgen::{
     ErosionParams, Field2, IslandParams, Ocean, OceanParams, ShoreProfile, ShoreTrain,
@@ -41,13 +41,13 @@ use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, StartView, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics,
-    WaterLake, WaterMouth, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone, WaterSurface,
-    WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
+    MeshletSceneBuilder, MoverTransform, ProbeParams, Probes, Residency, SkyParams, StartView,
+    StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades,
+    WaterCaustics, WaterLake, WaterMouth, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone,
+    WaterSurface, WaterSurfaceParams, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
@@ -258,6 +258,15 @@ struct Args {
     /// Light the sea floor without the waves' caustics (#108).
     #[arg(long)]
     no_caustics: bool,
+    /// Moving geometry (#79): this many barrels drifting down the island's largest rivers,
+    /// their transforms written every frame. None by default, so the reference captures stay
+    /// put.
+    #[arg(long, default_value_t = 0)]
+    movers: u32,
+    /// Draw the movers with the camera's motion vectors alone, not their own (#79's A/B: TAA
+    /// then smears them).
+    #[arg(long)]
+    no_mover_motion: bool,
     /// Holds the waves still at this many seconds (the shimmer's measure: what changes
     /// between frames of a still camera is then the aliasing alone).
     #[arg(long)]
@@ -342,6 +351,8 @@ struct Gallery {
     water: Option<(WaterCascades, WaterSurface, Vec<Ocean>)>,
     sea_time: f64,
     sea_time_submitted: f32,
+    /// `--movers` (#79): the barrels drifting down the island's rivers, on the sea's clock.
+    barrels: Option<Barrels>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     meter: LuminanceMeter,
@@ -592,7 +603,36 @@ impl Gallery {
             camera.pitch = -(0.35_f32).atan();
             camera.speed = prop.radius.max(2.0);
         }
+        // The movers (#79): barrels on the island's largest rivers.
+        let barrels = (args.movers > 0 && args.island.is_some()).then(|| {
+            let (rivers, ..) = island_ribbons(&island_heights(&args));
+            let barrels = Barrels::new(&rivers, args.movers);
+            // A view of the first barrel at frame 60 of the fixed step (a second in), from 4 m
+            // to its side and 1.5 m over it.
+            let t = barrels.transforms(1.0)[0];
+            let centre = t.position + t.rotation * Vec3::new(0.0, 0.5 * BARREL_LENGTH, 0.0);
+            let side = (t.rotation * Vec3::Y).normalize();
+            let eye = centre + 4.0 * side + Vec3::new(0.0, 1.5, 0.0);
+            let look = (centre - eye).normalize();
+            let view = format!(
+                "{:.1},{:.2},{:.1},{:.1},{:.1}",
+                eye.x,
+                eye.y,
+                eye.z,
+                (-look.x).atan2(-look.z).to_degrees(),
+                look.y.asin().to_degrees()
+            );
+            tracing::info!(
+                movers = args.movers,
+                rivers = barrels.rivers.len(),
+                drift_m_s = BARREL_DRIFT,
+                %view,
+                "barrels on the rivers (--movers)"
+            );
+            barrels
+        });
         Ok(Self {
+            barrels,
             tonemap: args.tonemap,
             args,
             renderer,
@@ -867,6 +907,10 @@ impl Demo for Gallery {
         );
         // The camera in the scene frame, where the probes and the rays live (issue #93).
         let camera_in_scene = camera.position.relative_to(self.scene.origin());
+        // The movers where they stand at the sea's time (#79).
+        if let Some(barrels) = &self.barrels {
+            self.scene.set_movers(&barrels.transforms(self.sea_time));
+        }
         let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
@@ -1056,6 +1100,19 @@ impl Demo for Gallery {
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        // The movers' own motion over the camera's (#79).
+        if !self.args.no_mover_motion {
+            self.renderer.mover_motion(
+                &mut frame.graph,
+                frame.slot,
+                &self.scene,
+                &targets,
+                motion,
+                camera.view_proj,
+                taa_frame.previous_from_current,
+                taa_frame.jitter,
+            );
+        }
         let bloom = self
             .bloom_on
             .then(|| self.bloom.draw(&mut frame.graph, taa_frame.color, extent));
@@ -1439,6 +1496,7 @@ impl CityMaterials {
             ("column", marble),
             ("fountain", stone),
             ("lamp-post", metal),
+            ("barrel", metal),
         ]);
         Ok(Self {
             table,
@@ -3009,7 +3067,119 @@ fn island_props(args: &Args) -> Vec<PropSpec> {
             .into_iter()
             .filter(|p| matches!(p.kind, PropKind::Boulder { .. } | PropKind::Rubble { .. })),
     );
+    // The movers' barrel last (#79), after the rocks.
+    if args.movers > 0 {
+        props.push(barrel_prop());
+    }
     props
+}
+
+/// A metal drum, 0.6 m across and 0.88 m long with two rolling hoops: the movers of `--movers`
+/// (#79). Its axis is the lathe's, +y from its bottom's centre.
+fn barrel_prop() -> PropSpec {
+    let r = BARREL_RADIUS;
+    PropSpec {
+        name: "barrel".to_owned(),
+        kind: PropKind::Lathe(Lathe {
+            profile: vec![
+                (0.0, 0.0),
+                (r - 0.02, 0.0),
+                (r, 0.02),
+                (r, 0.28),
+                (r + 0.012, 0.3),
+                (r, 0.32),
+                (r, 0.56),
+                (r + 0.012, 0.58),
+                (r, 0.6),
+                (r, BARREL_LENGTH - 0.02),
+                (r - 0.02, BARREL_LENGTH),
+                (0.0, BARREL_LENGTH),
+            ],
+            around: 96,
+            along: 64,
+            flutes: 0,
+            flute_depth: 0.0,
+            flute_span: (0.0, 0.0),
+        }),
+    }
+}
+
+/// The barrel's radius and length, metres.
+const BARREL_RADIUS: f32 = 0.3;
+const BARREL_LENGTH: f32 = 0.88;
+/// Metres a second the barrels drift down their rivers.
+const BARREL_DRIFT: f32 = 1.5;
+/// The rivers that carry barrels: the largest.
+const BARREL_RIVERS: usize = 4;
+
+/// The movers of `--movers` (#79): barrels drifting down the island's largest rivers, spread
+/// along each river's course and starting over at its head once past its mouth. They float
+/// with their axis across the flow, half under the water's level, rolling as they go.
+struct Barrels {
+    rivers: Vec<BarrelCourse>,
+    count: u32,
+}
+
+/// A river's course as the barrels follow it: its points (world x and z in the sea's frame, the
+/// water's level) and the metres along it to each.
+type BarrelCourse = (Vec<(Vec2, f32)>, Vec<f32>);
+
+impl Barrels {
+    fn new(rivers: &[Vec<WaterRiverPoint>], count: u32) -> Self {
+        // The largest rivers are uploaded last.
+        let rivers = rivers
+            .iter()
+            .rev()
+            .take(BARREL_RIVERS)
+            .map(|r| {
+                let points: Vec<(Vec2, f32)> = r
+                    .iter()
+                    .map(|p| (Vec2::from(p.position), p.level))
+                    .collect();
+                let mut along = vec![0.0_f32];
+                for pair in points.windows(2) {
+                    along.push(along.last().unwrap() + pair[0].0.distance(pair[1].0));
+                }
+                (points, along)
+            })
+            .collect();
+        Self { rivers, count }
+    }
+
+    /// Their transforms `time` seconds in, relative to the scene's origin (the sea's frame).
+    fn transforms(&self, time: f64) -> Vec<MoverTransform> {
+        let per_river = self.count.div_ceil(self.rivers.len() as u32).max(1);
+        (0..self.count)
+            .map(|k| {
+                let (points, along) = &self.rivers[k as usize % self.rivers.len()];
+                let length = *along.last().unwrap();
+                let start = (k / self.rivers.len() as u32) as f32 / per_river as f32 * length;
+                let s = (f64::from(start) + f64::from(BARREL_DRIFT) * time)
+                    .rem_euclid(f64::from(length)) as f32;
+                let i = along
+                    .partition_point(|&a| a <= s)
+                    .clamp(1, points.len() - 1)
+                    - 1;
+                let t = ((s - along[i]) / (along[i + 1] - along[i]).max(1e-3)).clamp(0.0, 1.0);
+                let (a, b) = (points[i], points[i + 1]);
+                let flat = a.0.lerp(b.0, t);
+                let level = a.1 + (b.1 - a.1) * t;
+                let down = (b.0 - a.0).normalize_or(Vec2::X);
+                let across = Vec3::new(-down.y, 0.0, down.x);
+                // Bobbing a little, out of step with one another, and rolling as they drift.
+                let phase = time as f32 * 1.3 + k as f32 * 2.1;
+                let rotation = Quat::from_rotation_arc(Vec3::Y, across)
+                    * Quat::from_rotation_y(s / (2.0 * BARREL_RADIUS))
+                    * Quat::from_rotation_x(0.05 * phase.sin());
+                let centre = Vec3::new(flat.x, level - 0.05 + 0.03 * (1.7 * phase).sin(), flat.y);
+                MoverTransform {
+                    position: centre - rotation * Vec3::new(0.0, 0.5 * BARREL_LENGTH, 0.0),
+                    rotation,
+                    scale: 1.0,
+                }
+            })
+            .collect()
+    }
 }
 
 /// The sea's stand-in until the water pass (D-038, #96): one opaque plane at 0 m, 262 km
@@ -3302,7 +3472,8 @@ fn build_island(
         );
     }
     // The rocks: the GPU placement over the island's own heights (`placement::RockRule::Land`).
-    let rocks: Vec<MeshId> = ids[tiles + 1..].to_vec();
+    // After them, the movers' barrel (#79).
+    let rocks: Vec<MeshId> = ids[tiles + 1..ids.len() - usize::from(args.movers > 0)].to_vec();
     let meshes = CityMeshes {
         buildings: Vec::new(),
         rocks: rocks.clone(),
@@ -3312,6 +3483,11 @@ fn build_island(
         column: rocks[0],
     };
     let first = builder.reserve_instances(&placement::mesh_counts(&layout, &meshes));
+    // The movers (#79), the table's last instances: their transforms come every frame.
+    if args.movers > 0 {
+        let barrel = *ids.last().expect("the barrel");
+        builder.reserve_movers(&[(barrel, args.movers)]);
+    }
     // No rock on the cells the channels are carved in or the lakes' shores smoothed (the
     // placement reads the 8 m samples, which those cells no longer follow), nor under a lake:
     // their samples are set far under the rocks' 3 m.

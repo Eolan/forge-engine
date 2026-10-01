@@ -33,7 +33,7 @@ use forge_gpu::{
     ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, QueueKind, Result,
     ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc, vk,
 };
-use glam::{DQuat, DVec3, Mat4, Vec2, Vec3, Vec4};
+use glam::{DQuat, DVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 /// Culling flags, mirrored in `meshlet.slang`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -438,8 +438,30 @@ struct CellBoundsPush {
     instances: u64,
     cells: u64,
     count: u32,
-    pad: u32,
+    /// The first cell of the dispatch: 0, or the movers' first (#79).
+    first_cell: u32,
 }
+
+/// Mirrors `MoverMotion` in `meshlet.slang` (#79).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuMoverMotion {
+    relative_from_clip: [f32; 16],
+    previous_from_relative: [f32; 16],
+    frame: u64,
+    previous: u64,
+    visibility: u32,
+    depth: u32,
+    motion: u32,
+    first: u32,
+    count: u32,
+    width: u32,
+    height: u32,
+    jitter: [f32; 2],
+    pad: [u32; 3],
+}
+
+const _: () = assert!(std::mem::size_of::<GpuMoverMotion>() == 192);
 
 /// Mirrors `ResolvePush` in `meshlet.slang`.
 #[repr(C)]
@@ -681,6 +703,9 @@ pub struct DrawTargets {
     pub pages: forge_gpu::BufferHandle,
     /// See `pages`.
     pub page_table: forge_gpu::BufferHandle,
+    /// With movers (#79): the instance table, which this frame wrote; the passes after the
+    /// draw that read it declare it.
+    pub instances: Option<forge_gpu::BufferHandle>,
 }
 
 /// Mirrors `Push` in `hzb.slang`.
@@ -742,6 +767,9 @@ pub struct MeshletSceneBuilder {
     /// The view whose pages a streamed scene loads first
     /// ([`MeshletSceneBuilder::set_start_view`]).
     start_view: Option<StartView>,
+    /// The first of the movers' instances, the table's last ones
+    /// ([`MeshletSceneBuilder::reserve_movers`], #79).
+    movers: Option<u32>,
 }
 
 /// How many of a mesh's instances, the nearest, have their start view's needs worked out
@@ -914,6 +942,10 @@ impl MeshletSceneBuilder {
     /// Adds an instance of `mesh` with a uniform-scale transform relative to the scene's
     /// origin ([`Self::set_origin`]), in `material`.
     pub fn add_instance_with_material(&mut self, mesh: MeshId, model: Mat4, material: MaterialId) {
+        assert!(
+            self.movers.is_none(),
+            "the movers are the table's last instances"
+        );
         let info = self.meshes[mesh.0 as usize];
         let (scale, rotation, translation) = model.to_scale_rotation_translation();
         let scale = scale.x;
@@ -946,6 +978,10 @@ impl MeshletSceneBuilder {
     /// (`crate::placement`): `per_mesh` says how many of them show each mesh, which the
     /// scene's counts (triangles, work bound, finest clusters) need. Returns the first slot.
     pub fn reserve_instances(&mut self, per_mesh: &[(MeshId, u32)]) -> u32 {
+        assert!(
+            self.movers.is_none(),
+            "the movers are the table's last instances"
+        );
         let first = self.instances.len() as u32;
         for &(mesh, count) in per_mesh {
             let info = self.meshes[mesh.0 as usize];
@@ -971,6 +1007,19 @@ impl MeshletSceneBuilder {
                 count as usize,
             ));
         }
+        first
+    }
+
+    /// Reserves the movers (#79): instances whose transforms the CPU writes every frame
+    /// ([`MeshletScene::set_movers`]), `per_mesh` saying how many show each mesh, in that
+    /// order. They are the table's last instances: nothing is added after them. They stay out
+    /// of the static acceleration structure. Returns the first one's index.
+    pub fn reserve_movers(&mut self, per_mesh: &[(MeshId, u32)]) -> u32 {
+        let first = self.reserve_instances(per_mesh);
+        for (k, instance) in self.instances[first as usize..].iter_mut().enumerate() {
+            instance.id = first + k as u32;
+        }
+        self.movers = Some(first);
         first
     }
 
@@ -1151,12 +1200,23 @@ impl MeshletSceneBuilder {
                 "meshes",
             )?,
             // Written by GPU placement (`crate::placement`) and read back once for its checksum.
-            instances: device.create_buffer_with_data(
+            instances: GraphBuffer::new(device.create_buffer_with_data(
                 &self.instances,
-                usage | vk::BufferUsageFlags::TRANSFER_SRC,
+                usage | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
                 MemoryCategory::Geometry,
                 "instances",
-            )?,
+            )?),
+            movers: self
+                .movers
+                .map(|first| {
+                    SceneMovers::new(
+                        device,
+                        first,
+                        &self.instances[first as usize..],
+                        &self.meshes,
+                    )
+                })
+                .transpose()?,
             indirect: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     device
@@ -1218,13 +1278,13 @@ impl MeshletSceneBuilder {
                 })
                 .collect::<Result<Vec<_>>>()?,
             // `CellBounds` in the shader: 32 bytes a cell (issue #93).
-            cells: device.create_buffer(BufferDesc {
+            cells: GraphBuffer::new(device.create_buffer(BufferDesc {
                 size: 32 * cell_count.max(1),
                 usage,
                 location: MemoryLocation::GpuOnly,
                 category: MemoryCategory::Geometry,
                 name: "instance cells",
-            })?,
+            })?),
             cells_built: false,
             cell_lists: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
@@ -1388,7 +1448,10 @@ pub struct MeshletScene {
     /// Pages over all meshes.
     pub page_count: u32,
     meshes: Buffer,
-    instances: Buffer,
+    /// Written once (and by GPU placement), and its movers' range every frame (#79).
+    instances: GraphBuffer,
+    /// The movers (#79), when the scene has them.
+    movers: Option<SceneMovers>,
     /// The scene's origin: the frame of the acceleration structure, the probes and the dust
     /// (issue #93).
     origin: CellPos,
@@ -1409,8 +1472,9 @@ pub struct MeshletScene {
     /// instances instance cull 1 deferred to it (issue #38).
     deferred: Vec<GraphBuffer>,
     /// Per cell of 64 instances (in table order), the bounding sphere of theirs: xyz centre,
-    /// w radius (issue #38). Written by [`MeshletScene::build_cells`].
-    cells: Buffer,
+    /// w radius (issue #38). Written by [`MeshletScene::build_cells`], and the movers' every
+    /// frame (#79).
+    cells: GraphBuffer,
     /// `cells` holds the instances as they are now.
     cells_built: bool,
     /// Per frame slot: the cell culls' grids and tickets, then the cells cell cull 1 listed
@@ -1443,19 +1507,134 @@ pub struct MeshletScene {
     pub finest_clusters: u64,
 }
 
+/// Ring slots of the movers' records: this frame's, the frame before's (which the motion vectors
+/// read) and one more, so the CPU never writes a slot a frame in flight still reads.
+const MOVER_SLOTS: usize = FRAMES_IN_FLIGHT + 1;
+
+/// A mover's transform for a frame ([`MeshletScene::set_movers`], #79).
+#[derive(Clone, Copy, Debug)]
+pub struct MoverTransform {
+    /// Its origin relative to the scene's ([`MeshletSceneBuilder::set_origin`]), metres.
+    pub position: Vec3,
+    /// Its rotation.
+    pub rotation: Quat,
+    /// Its uniform scale.
+    pub scale: f32,
+}
+
+/// A scene's movers (#79): a ring of host-visible slots the CPU writes their records into every
+/// frame, which `movers/upload` copies into the table's last instances.
+struct SceneMovers {
+    /// The first mover's instance.
+    first: u32,
+    /// As reserved: the mesh, the material and the id each mover keeps.
+    templates: Vec<GpuInstance>,
+    /// Per mover, its mesh's bounding sphere in object space (centre, radius).
+    bounds: Vec<Vec4>,
+    ring: Vec<Buffer>,
+    /// The slot written last, and the one written before it (the same on the first frame).
+    current: Cell<usize>,
+    previous: Cell<usize>,
+    /// Frames written.
+    written: Cell<u64>,
+}
+
+impl SceneMovers {
+    fn new(
+        device: &Arc<Device>,
+        first: u32,
+        templates: &[GpuInstance],
+        meshes: &[GpuMesh],
+    ) -> Result<Self> {
+        let ring = (0..MOVER_SLOTS)
+            .map(|i| {
+                device.create_buffer(BufferDesc {
+                    size: (templates.len().max(1) * std::mem::size_of::<GpuInstance>()) as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                        | vk::BufferUsageFlags::TRANSFER_SRC,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("movers {i}"),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            first,
+            templates: templates.to_vec(),
+            bounds: templates
+                .iter()
+                .map(|t| {
+                    let mesh = &meshes[t.mesh as usize];
+                    Vec3::from(mesh.center).extend(mesh.radius)
+                })
+                .collect(),
+            ring,
+            current: Cell::new(0),
+            previous: Cell::new(0),
+            written: Cell::new(0),
+        })
+    }
+}
+
 impl MeshletScene {
+    /// The movers' transforms for the frame about to be drawn (#79), one per reserved mover
+    /// ([`MeshletSceneBuilder::reserve_movers`]) in that order: written into the next slot of
+    /// their ring, which the frame copies into the instance table before its culls. Call it
+    /// every frame the scene has movers, before drawing.
+    pub fn set_movers(&self, transforms: &[MoverTransform]) {
+        let Some(movers) = &self.movers else {
+            return;
+        };
+        assert_eq!(
+            transforms.len(),
+            movers.templates.len(),
+            "a transform per mover"
+        );
+        let slot = (movers.written.get() % MOVER_SLOTS as u64) as usize;
+        let records: Vec<GpuInstance> = movers
+            .templates
+            .iter()
+            .zip(&movers.bounds)
+            .zip(transforms)
+            .map(|((template, bounds), t)| {
+                let position = self.origin.offset(t.position);
+                let center = t.rotation * (bounds.truncate() * t.scale) + position.local;
+                GpuInstance {
+                    cell: position.cell.to_array(),
+                    local: position.local.to_array(),
+                    scale: t.scale,
+                    rotation: t.rotation.to_array(),
+                    center: center.to_array(),
+                    radius: bounds.w * t.scale,
+                    ..*template
+                }
+            })
+            .collect();
+        movers.ring[slot].write(0, &records);
+        let first_frame = movers.written.get() == 0;
+        movers.previous.set(if first_frame {
+            slot
+        } else {
+            movers.current.get()
+        });
+        movers.current.set(slot);
+        movers.written.set(movers.written.get() + 1);
+    }
+
+    /// The instances before the movers': those the static acceleration structure holds.
+    fn static_count(&self) -> u32 {
+        self.movers
+            .as_ref()
+            .map_or(self.instance_count, |m| m.first)
+    }
+
     /// Builds the top-level acceleration structure over the instances (issue #45), once they
     /// are written (after GPU placement). Nothing without [`MeshletSceneBuilder::set_ray_traced`]
     /// or ray queries.
     pub fn build_tlas(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
+        let count = self.static_count();
         if let Some(rays) = &mut self.rays {
-            rays.build_tlas(
-                device,
-                shaders,
-                &self.instances,
-                self.instance_count,
-                self.origin,
-            )?;
+            rays.build_tlas(device, shaders, &self.instances, count, self.origin)?;
         }
         Ok(())
     }
@@ -1484,7 +1663,7 @@ impl MeshletScene {
             instances: self.instances.address(),
             cells: self.cells.address(),
             count: self.instance_count,
-            pad: 0,
+            first_cell: 0,
         };
         device.execute_compute_once(|commands| {
             commands.bind_pipeline(&pipeline);
@@ -1941,6 +2120,11 @@ pub struct MeshletRenderer {
     /// The cell culls ahead of the instance culls (issue #38): cells of 64 instances against
     /// the frustum and the previous pyramid, then the deferred cells against this frame's.
     pipeline_cell_cull: Pipeline,
+    /// The movers' cells' bounds, every frame (`cell_bounds_main`, #79).
+    pipeline_cell_bounds: Pipeline,
+    /// The movers' motion vectors, and their per-slot block (`GpuMoverMotion`).
+    pipeline_mover_motion: Pipeline,
+    mover_motion_blocks: Vec<Buffer>,
     pipeline_cell_cull_deferred: Pipeline,
     pipeline_cluster_cull: Pipeline,
     /// The same for a streamed scene (the LOD cut follows the resident pages).
@@ -2064,6 +2248,10 @@ struct MeshPassIo {
     /// A streamed scene's page needs and this slot's readback of them.
     need: Option<forge_gpu::BufferHandle>,
     need_readback: Option<forge_gpu::BufferHandle>,
+    /// With movers (#79): the instance table and its cells, which `movers/upload` and
+    /// `movers/cell bounds` write this frame and the passes that read them declare.
+    instances: Option<forge_gpu::BufferHandle>,
+    cells: Option<forge_gpu::BufferHandle>,
     indirect: forge_gpu::BufferHandle,
     /// Each pass's draw grid and cluster count, and the cluster culls' tickets.
     clusters: forge_gpu::BufferHandle,
@@ -2306,6 +2494,41 @@ impl MeshletRenderer {
         ] {
             device.destroy_shader_module(module);
         }
+        // The movers (#79): their cells' bounds every frame, and their motion vectors.
+        let compute_pipeline = |entry: &str, push: usize, name: &str| -> Result<Pipeline> {
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                name,
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: push as u32,
+                name,
+            });
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let pipeline_cell_bounds = compute_pipeline(
+            "cell_bounds_main",
+            std::mem::size_of::<CellBoundsPush>(),
+            "mover cell bounds",
+        )?;
+        let pipeline_mover_motion = compute_pipeline(
+            "mover_motion_main",
+            std::mem::size_of::<u64>(),
+            "mover motion",
+        )?;
+        let mover_motion_blocks = (0..FRAMES_IN_FLIGHT)
+            .map(|i| {
+                device.create_buffer(BufferDesc {
+                    size: std::mem::size_of::<GpuMoverMotion>() as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("mover motion {i}"),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let hzb = create_pyramids(device, extent)?;
         let work_lists = (0..FRAMES_IN_FLIGHT)
             .map(|i| WorkList::new(device, WORK_INITIAL_CAPACITY, i))
@@ -2379,6 +2602,9 @@ impl MeshletRenderer {
             pipeline_hzb,
             pipeline_cull,
             pipeline_cull_deferred,
+            pipeline_cell_bounds,
+            pipeline_mover_motion,
+            mover_motion_blocks,
             pipeline_cell_cull,
             pipeline_cell_cull_deferred,
             pipeline_cluster_cull,
@@ -2922,8 +3148,59 @@ impl MeshletRenderer {
                 .streamer
                 .as_ref()
                 .map(|s| graph.import_buffer(&s.readback[slot.index])),
+            instances: scene
+                .movers
+                .as_ref()
+                .map(|_| graph.import_buffer(&scene.instances)),
+            cells: scene
+                .movers
+                .as_ref()
+                .map(|_| graph.import_buffer(&scene.cells)),
         };
         let frame_address = self.frame_buffers[slot.index].address();
+
+        // The movers (#79): this frame's records into the table's last instances, then their
+        // cells' bounds, before anything reads them.
+        if let (Some(movers), Some(instances), Some(cells)) =
+            (&scene.movers, io.instances, io.cells)
+        {
+            let ring: &'f Buffer = &movers.ring[movers.current.get()];
+            let table: &'f GraphBuffer = &scene.instances;
+            let size = std::mem::size_of::<GpuInstance>() as u64;
+            let count = movers.templates.len() as u64;
+            let at = u64::from(movers.first) * size;
+            graph
+                .pass("movers/upload")
+                .buffer(instances, BufferAccess::TransferDst)
+                .run(move |_, commands| {
+                    commands.copy_buffer_regions(ring, table, &[(0, at, count * size)]);
+                    Ok(())
+                });
+            let pipeline = &self.pipeline_cell_bounds;
+            let push = CellBoundsPush {
+                instances: scene.instances.address(),
+                cells: scene.cells.address(),
+                count: scene.instance_count,
+                first_cell: movers.first / 64,
+            };
+            let cell_groups = scene.instance_count.div_ceil(64) - movers.first / 64;
+            graph
+                .pass("movers/cell bounds")
+                .buffer(
+                    instances,
+                    BufferAccess::ShaderRead(vk::PipelineStageFlags2::COMPUTE_SHADER),
+                )
+                .buffer(
+                    cells,
+                    BufferAccess::ShaderWrite(vk::PipelineStageFlags2::COMPUTE_SHADER),
+                )
+                .run(move |_, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &push);
+                    commands.dispatch(cell_groups, 1, 1);
+                    Ok(())
+                });
+        }
 
         // Streaming: this frame's pages and page-table entries, before anything reads them, on
         // the copy engines (issue #77). Frames with nothing to copy declare nothing.
@@ -3008,7 +3285,9 @@ impl MeshletRenderer {
                 .pass("geometry/cell cull")
                 .buffer(io.cell_list, BufferAccess::ShaderReadWrite(compute))
                 .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
-                .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
+                .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+                .buffer_if(io.cells, BufferAccess::ShaderRead(compute))
+                .buffer_if(io.instances, BufferAccess::ShaderRead(compute));
             if let Some(prev) = io.hzb_prev {
                 builder = builder.image(prev, ImageAccess::Sampled(compute));
             }
@@ -3026,7 +3305,8 @@ impl MeshletRenderer {
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.deferred, BufferAccess::ShaderWrite(compute))
-            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute));
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+            .buffer_if(io.instances, BufferAccess::ShaderRead(compute));
         if cells {
             builder = builder.buffer(
                 io.cell_list,
@@ -3145,6 +3425,7 @@ impl MeshletRenderer {
             visible_list: io.visible,
             pages: io.pool,
             page_table: io.page_table,
+            instances: io.instances,
         })
     }
 
@@ -3177,6 +3458,68 @@ impl MeshletRenderer {
             .pass(label)
             .buffer(readback, BufferAccess::HostRead)
             .run(|_, _| Ok(()));
+    }
+
+    /// Writes the movers' motion over the camera's into `motion` (#79, `mover_motion_main`):
+    /// for the pixels a mover shows, where its transform of the frame before held the point.
+    /// `view_proj` is this frame's unjittered camera-relative view-projection,
+    /// `previous_from_current` the previous unjittered clip from this frame's and `jitter` this
+    /// frame's, in pixels (`crate::TaaFrame`). Nothing without movers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mover_motion<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        scene: &'f MeshletScene,
+        targets: &DrawTargets,
+        motion: ImageHandle,
+        view_proj: Mat4,
+        previous_from_current: Mat4,
+        jitter: Vec2,
+    ) {
+        let (Some(movers), Some(instances)) = (&scene.movers, targets.instances) else {
+            return;
+        };
+        let block: &'f Buffer = &self.mover_motion_blocks[slot.index];
+        let address = block.address();
+        let frame = self.frame_address(slot);
+        let previous = movers.ring[movers.previous.get()].address();
+        let (first, count) = (movers.first, movers.templates.len() as u32);
+        let extent = self.extent;
+        let pipeline = &self.pipeline_mover_motion;
+        let (visibility, depth) = (targets.visibility, targets.depth);
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        graph
+            .pass("movers/motion")
+            .image(visibility, ImageAccess::Sampled(compute))
+            .image(depth, ImageAccess::Sampled(compute))
+            .image(motion, ImageAccess::StorageReadWrite(compute))
+            .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+            .buffer(instances, BufferAccess::ShaderRead(compute))
+            .run(move |resources, commands| {
+                block.write(
+                    0,
+                    &[GpuMoverMotion {
+                        relative_from_clip: view_proj.inverse().to_cols_array(),
+                        previous_from_relative: (previous_from_current * view_proj).to_cols_array(),
+                        frame,
+                        previous,
+                        visibility: resources.sampled(visibility).0,
+                        depth: resources.sampled(depth).0,
+                        motion: resources.storage(motion, 0).0,
+                        first,
+                        count,
+                        width: extent.width,
+                        height: extent.height,
+                        jitter: jitter.to_array(),
+                        pad: [0; 3],
+                    }],
+                );
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &address);
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
     }
 
     /// Declares the passes that shade the visibility buffer once per pixel into `color` (a
@@ -3264,6 +3607,7 @@ impl MeshletRenderer {
             .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
             .buffer(targets.pages, BufferAccess::ShaderRead(compute))
             .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+            .buffer_if(targets.instances, BufferAccess::ShaderRead(compute))
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
             .buffer(args, BufferAccess::ShaderReadWrite(compute));
         if let Some(sky) = ambient.sky {
@@ -3308,6 +3652,7 @@ impl MeshletRenderer {
                 .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
                 .buffer(targets.pages, BufferAccess::ShaderRead(compute))
                 .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+                .buffer_if(targets.instances, BufferAccess::ShaderRead(compute))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
             if let Some(sky) = ambient.sky {
@@ -3349,6 +3694,7 @@ impl MeshletRenderer {
                 .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
                 .buffer(targets.pages, BufferAccess::ShaderRead(compute))
                 .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+                .buffer_if(targets.instances, BufferAccess::ShaderRead(compute))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute))
                 .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
@@ -3482,7 +3828,8 @@ impl MeshletRenderer {
             .buffer(io.visible, BufferAccess::ShaderWrite(compute))
             .buffer(io.raster, BufferAccess::ShaderWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
-            .buffer(io.page_table, BufferAccess::ShaderRead(compute));
+            .buffer(io.page_table, BufferAccess::ShaderRead(compute))
+            .buffer_if(io.instances, BufferAccess::ShaderRead(compute));
         if let Some(draws) = io.draws {
             builder = builder.buffer(draws, BufferAccess::ShaderWrite(compute));
         }
@@ -3541,6 +3888,8 @@ impl MeshletRenderer {
                 )
                 .buffer(io.deferred, BufferAccess::ShaderReadWrite(compute))
                 .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+                .buffer_if(io.cells, BufferAccess::ShaderRead(compute))
+                .buffer_if(io.instances, BufferAccess::ShaderRead(compute))
                 .image(io.hzb, ImageAccess::Sampled(compute))
                 .run(move |_, commands| {
                     commands.bind_pipeline(pipeline);
@@ -3560,6 +3909,7 @@ impl MeshletRenderer {
             .buffer(io.roots, BufferAccess::ShaderWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+            .buffer_if(io.instances, BufferAccess::ShaderRead(compute))
             .image(io.hzb, ImageAccess::Sampled(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(pipeline);
@@ -3634,13 +3984,15 @@ impl MeshletRenderer {
                 .buffer(io.raster, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
                 .buffer(io.visible, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
                 .buffer(io.pool, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
-                .buffer(io.page_table, BufferAccess::ShaderRead(S::MESH_SHADER_EXT)),
+                .buffer(io.page_table, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
+                .buffer_if(io.instances, BufferAccess::ShaderRead(S::MESH_SHADER_EXT)),
             // The fallback's draws carry the pool offsets: no page-table read.
             Some(draws) => builder
                 .buffer(io.clusters, BufferAccess::IndirectArgs)
                 .buffer(draws, BufferAccess::IndirectArgs)
                 .buffer(io.visible, BufferAccess::ShaderRead(S::VERTEX_SHADER))
-                .buffer(io.pool, BufferAccess::IndexAndShaderRead(S::VERTEX_SHADER)),
+                .buffer(io.pool, BufferAccess::IndexAndShaderRead(S::VERTEX_SHADER))
+                .buffer_if(io.instances, BufferAccess::ShaderRead(S::VERTEX_SHADER)),
         };
         builder
             .image(io.visibility, ImageAccess::ColorAttachment)
@@ -3740,6 +4092,7 @@ impl MeshletRenderer {
             .buffer(io.visible, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
             .buffer(io.pool, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
             .buffer(io.page_table, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
+            .buffer_if(io.instances, BufferAccess::ShaderRead(S::COMPUTE_SHADER))
             .image(io.depth, ImageAccess::Sampled(S::COMPUTE_SHADER))
             .image(io.visibility, ImageAccess::Sampled(S::COMPUTE_SHADER))
             .buffer(vis64, BufferAccess::ShaderReadWrite(S::COMPUTE_SHADER))

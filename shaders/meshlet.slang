@@ -1734,7 +1734,7 @@ struct CellBoundsPush
     Instance* instances;
     CellBounds* cells;
     uint count;
-    uint pad;
+    uint first_cell; // the first cell of the dispatch: 0, or the movers' first (#79)
 };
 
 [[vk::push_constant]]
@@ -1744,17 +1744,19 @@ groupshared float3 s_bounds_min[64];
 groupshared float3 s_bounds_max[64];
 groupshared float s_bounds_reach[64];
 
-// Once, after the instances are written: a workgroup per cell of 64 instances, the sphere
-// around their spheres (centred on the box around them; a tree reduction, so the same table
-// gives the same bits), from the corner of the first instance's cell (issue #93).
+// Once, after the instances are written, and every frame for the movers' cells (#79): a
+// workgroup per cell of 64 instances, the sphere around their spheres (centred on the box
+// around them; a tree reduction, so the same table gives the same bits), from the corner of the
+// first instance's cell (issue #93).
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cell_bounds_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
 {
     CellBoundsPush p = cell_bounds_push;
-    uint index = group.x * 64 + thread;
+    uint cell = p.first_cell + group.x;
+    uint index = cell * 64 + thread;
     bool valid = index < p.count;
-    int3 reference = p.instances[group.x * 64].cell;
+    int3 reference = p.instances[cell * 64].cell;
     float3 c = 0.0;
     float r = 0.0;
     if (valid)
@@ -1792,7 +1794,7 @@ void cell_bounds_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         bounds.radius = s_bounds_reach[0];
         bounds.center = centre;
         bounds.pad = 0.0;
-        p.cells[group.x] = bounds;
+        p.cells[cell] = bounds;
     }
 }
 
@@ -3933,4 +3935,76 @@ void place_main(uint3 id : SV_DispatchThreadID)
     if (!on_land)
         y -= 50.0;
     place(p, slot, mesh, float3(at.x, y, at.y), r.w * 6.2831853, (q.y - 0.5) * 0.4, scale);
+}
+
+// ------------------------------------------------------------------- movers ---
+//
+// Moving geometry (#79; `docs/research/dynamic-scenes.md`, "Recommendation for Forge"): the
+// movers are a trailing range of the instance table the CPU writes every frame, their records
+// copied in before the culls (`movers/upload`) and their cells' bounds taken again
+// (`cell_bounds_main`, `movers/cell bounds`). The two-pass occlusion then needs nothing more: an
+// instance the previous pyramid hides is tested again against this frame's in pass 2, wherever
+// it stood before. What the camera alone does not explain is their motion: `mover_motion_main`
+// writes it over the camera's for the pixels a mover shows.
+
+// Mirrors `GpuMoverMotion` in meshlet.rs.
+struct MoverMotion
+{
+    float4x4 relative_from_clip;     // this frame's unjittered clip → camera-relative
+    float4x4 previous_from_relative; // camera-relative → the frame before's unjittered clip
+    Frame* frame;                    // the frame block: the camera's cell, the instances, the visible list
+    Instance* previous;              // the movers' records of the frame before (their slot of the ring)
+    uint visibility;                 // sampled (r32ui): the visibility buffer
+    uint depth;                      // sampled (r32f): the depth
+    uint motion;                     // storage (rg16f): the motion vectors, which the camera's pass wrote
+    uint first;                      // the first mover's instance
+    uint count;
+    uint width;
+    uint height;
+    float jitter_x;                  // this frame's jitter in pixels
+    float jitter_y;
+    uint3 pad;
+};
+
+struct MoverMotionPush
+{
+    MoverMotion* motion;
+};
+
+[[vk::push_constant]]
+MoverMotionPush mover_motion_push;
+
+// A mover's pixel moves with the mover: its point, taken back onto the mover through this
+// frame's transform, is placed where the transform of the frame before held it, then seen by
+// the camera of the frame before. Where the water was drawn over a mover the depth is the
+// water's, and the point not quite the mover's.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void mover_motion_main(uint3 id : SV_DispatchThreadID)
+{
+    MoverMotion* p = mover_motion_push.motion;
+    if (id.x >= p[0].width || id.y >= p[0].height)
+        return;
+    uint vis = g_sampled_images_u32[p[0].visibility].Load(int3(id.xy, 0));
+    if (vis == 0xFFFFFFFFu)
+        return;
+    Frame* f = p[0].frame;
+    uint instance = f[0].visible[vis >> VISIBILITY_TRIANGLE_BITS].x & ~INSTANCE_HIDDEN_BIT;
+    if (instance < p[0].first || instance - p[0].first >= p[0].count)
+        return;
+    Instance now = f[0].instances[instance];
+    Instance before = p[0].previous[instance - p[0].first];
+    float depth = g_sampled_images_r[p[0].depth].Load(int3(id.xy, 0));
+    float2 size = float2(float(p[0].width), float(p[0].height));
+    float2 uv = (float2(id.xy) + 0.5 - float2(p[0].jitter_x, p[0].jitter_y)) / size;
+    float4 h = mul(p[0].relative_from_clip, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
+    float3 point = h.xyz / h.w;
+    float3 object = mul(transpose(quat_matrix(now.rotation)), point - instance_relative(f, now)) / now.scale;
+    float3 point_before = mul(quat_matrix(before.rotation), object * before.scale) + instance_relative(f, before);
+    float4 clip = mul(p[0].previous_from_relative, float4(point_before, 1.0));
+    if (clip.w <= 1e-9)
+        return;
+    float2 ndc = clip.xy / clip.w;
+    float2 previous_uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    g_storage_images_rg16f[p[0].motion][id.xy] = previous_uv - uv;
 }
