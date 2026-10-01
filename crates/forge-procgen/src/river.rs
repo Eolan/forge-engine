@@ -802,7 +802,11 @@ mod tests {
         let pool = TaskPool::new(PoolConfig::with_workers(0));
         let flow = drain(&valley, 0.0, &pool);
         let rivers = trace_rivers(&valley, &flow, 15);
-        let params = RibbonParams::default();
+        // Without the estuary first: the river reaches the sea, whose last metres it widens.
+        let params = RibbonParams {
+            estuary: (1.5, 0.0),
+            ..RibbonParams::default()
+        };
         let ribbons = ribbons(&valley, &rivers, &Lakes::default(), &params);
         assert_eq!(ribbons.len(), 1);
         let ribbon = &ribbons[0];
@@ -855,6 +859,21 @@ mod tests {
             f64::from(valley.get(3, 7))
         );
         assert!((smooth_height(&valley, 30.0, 70.0) - f64::from(valley.get(3, 7))).abs() < 1e-9);
+        // With the estuary, under 1.5 m over the sea the river widens towards its mouth and
+        // shallows: twice as wide and three fifths as deep at the sea's level, unchanged above.
+        let estuary = super::ribbons(
+            &valley,
+            &rivers,
+            &Lakes::default(),
+            &RibbonParams::default(),
+        );
+        let wide = &estuary[0].points;
+        let (outlet, mouth) = (wide[wide.len() - 1], points[points.len() - 1]);
+        let e = (1.0 - smoothstep(0.0, 1.5, f64::from(outlet.level))) as f32;
+        assert!(outlet.level < 1.5 && e > 0.2, "{} {e}", outlet.level);
+        assert!((outlet.half_width - (1.0 + e) * mouth.half_width).abs() < 1e-4);
+        assert!((outlet.depth - (1.0 - 0.4 * e) * mouth.depth).abs() < 1e-4);
+        assert_eq!(wide[points.len() / 2], points[points.len() / 2]);
     }
 
     #[test]
