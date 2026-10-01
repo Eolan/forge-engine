@@ -1948,10 +1948,29 @@ fn island_ribbons(
         direction: p.direction,
         half_width: p.half_width,
         speed: p.speed,
+        white: 0.0,
+    };
+    // How much of a river runs white over its last 16 m before the sea: the rapids' share of
+    // `river_frag_main` (`water.slang`), by its fall and its speed.
+    let smoothstep = |a: f32, b: f32, x: f32| {
+        let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let white = |points: &[forge_procgen::RibbonPoint], k: usize| {
+        points[k.saturating_sub(4)..=k]
+            .iter()
+            .map(|p| smoothstep(0.06, 0.2, p.slope) * smoothstep(1.5, 3.0, p.speed))
+            .fold(0.0, f32::max)
     };
     let mut mouths: Vec<WaterMouth> = ribbons
         .iter()
-        .filter_map(|r| Some(mouth(&r.points[forge_procgen::sea_mouth(&r.points)?])))
+        .filter_map(|r| {
+            let k = forge_procgen::sea_mouth(&r.points)?;
+            Some(WaterMouth {
+                white: white(&r.points, k),
+                ..mouth(&r.points[k])
+            })
+        })
         .collect();
     let sea_mouths = mouths.len();
     for r in &ribbons {

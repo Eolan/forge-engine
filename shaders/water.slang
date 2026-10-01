@@ -271,7 +271,7 @@ struct RiverPoint
 struct RiverMouth
 {
     float4 a; // world x, z (the sea's frame), downstream (world x, z; unit)
-    float4 b; // the half width (m), the speed (m/s), 0, 0
+    float4 b; // the half width (m), the speed (m/s), the white water's share (0..1), 0
 };
 
 // A lake (`GpuLake` in water.rs).
@@ -813,6 +813,13 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
         foam = max(foam, breaking * pattern);
         foam = max(foam, 0.7 * edge * (1.0 - SWASH_EDGE_BREAKUP * (1.0 - pattern)));
     }
+    // A river's white water, spilling out of its mouth: the pattern drifts out with its flow.
+    if (estuary.white > 0.0)
+    {
+        float speed = length(estuary.velocity);
+        float2 out_to_sea = speed > 1e-4 ? estuary.velocity / speed : float2(0.0);
+        foam = max(foam, estuary.white * foam_pattern(w, input.flat + w[0].camera.xz, out_to_sea, footprint));
+    }
     color = lerp(color, 0.8 * lit / PI, foam * 0.8);
     // The air between the camera and the water, as the compose hazes everything else.
     float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);
@@ -1017,6 +1024,7 @@ struct Estuary
 {
     float fresh;
     float2 velocity; // world x, z; m/s
+    float white;     // the white water a river brings, before the sea's foam pattern
 };
 
 // How far a river's plume reaches, in its half widths, and how fast it spreads (metres of half
@@ -1027,6 +1035,8 @@ static const float RIVER_PLUME_SPREAD = 0.2;
 // lying over the sea's where the plume leaves the mouth.
 static const float RIVER_PLUME_WANDER = 0.25;
 static const float RIVER_PLUME_LAYER = 1.5;
+// Half widths out to sea over which the white water a river brings fades.
+static const float RIVER_SPILL = 6.0;
 
 // The rivers' water at `world` (x, z). Up a river's channel from where its level reaches the
 // sea's, where the sea fills it, the water is the river's and moves at its speed. Out from there it is a jet that widens and slows (a plane
@@ -1038,6 +1048,7 @@ Estuary estuary_at(WaterSurface* w, float2 world)
     Estuary e;
     e.fresh = 0.0;
     e.velocity = 0.0;
+    e.white = 0.0;
     if (w[0].mouth_count == 0u)
         return e;
     int2 cell = int2(floor((world - w[0].shore_frame.xy) / w[0].mouth_cell));
@@ -1072,6 +1083,9 @@ Estuary estuary_at(WaterSurface* w, float2 world)
         }
         e.fresh = max(e.fresh, fresh);
         e.velocity += down * (mouth.b.y * fresh);
+        // The white water a river brings, carried on out of its channel and fading.
+        float spill = 1.0 - smoothstep(0.0, RIVER_SPILL * half_width, along);
+        e.white = max(e.white, mouth.b.z * spill * (1.0 - smoothstep(0.5 * spread, spread + 3.0, across)));
     }
     e.fresh = saturate(e.fresh);
     return e;

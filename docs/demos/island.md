@@ -735,7 +735,11 @@ water in a carved channel:
   the sea's over 60 half widths, the plume's edge broken up by noise. The same ripple function
   draws the river, the sea at a mouth and later the lakes (still water is the same ripples
   unmoved), so no two animated layers ever fade over each other. A grid of 128 m cells lists
-  the mouths whose plume reaches each cell.
+  the mouths whose plume reaches each cell. A river that reaches the sea in white water brings
+  it along (since 2026-10-01, `reports/2026-10-01-105/spill.md`): its share at the mouth (the
+  rapids' rule over its last 16 m) whitens the sea up the channel and out along the plume,
+  fading over six half widths, in the sea's foam pattern drifting out with the flow. Before, the
+  white water stopped where the ribbon faded.
 - **The stones.** Past each point of a river drawn in full, a boulder with a chance of 3 %,
   rising to a third where the water falls 15 %: across the middle 70 % of the water, 0.25 to
   0.85 m and at least 0.8 of the depth there, so most break the surface (2 525 stones, 2 051
