@@ -1363,11 +1363,14 @@ A water layer in the terrain would change nothing visible, so it is left out (D-
   - The fall's segments carve as the water bows, its query moved upstream by the bow, so the
     bed holds the water exactly where the GPU draws it.
 - **The lips' boulders** (`stones`):
-  - Each lip carries a row of boulders about as tall as the step, covering about 55 % of the
-    width. One slot, drawn, stays open, so the fall pours through a gap rather than over a
-    straight line.
+  - Three lips in five carry one or two boulders about as tall as the step, somewhere across
+    the middle of the water (none on the others).
   - Searches quote Zimmermann and Church: steps form on immobile keystones. The boulders' size
     is Forge's choice.
+  - At first each lip carried a row of them over 55 % of the width, with a gap for the fall:
+    25 740 stones, "way too many rocks in the water" at the owner's first look. Now 5 640
+    (`rocks.png`: that row against now, from the head, from 40 m over the steep river and at the
+    logged step).
 - **The water** (`water.slang`):
   - A step's points carry its foam: white from the lip down, then a boil fading across a third
     of the pool (`RiverPoint::f`).
@@ -1386,29 +1389,32 @@ A water layer in the terrain would change nothing visible, so it is left out (D-
 
 The first try was a staircase of full-width falls a few widths apart. From the head it read as
 a ladder, the narrow streams' steps all at the least spacing; up close, as terraces. Smaller,
-jittered steps, chutes, bowed lines and the rows of boulders turned it into a rocky stream.
+jittered steps, chutes, bowed lines and the boulders on the lips turned it into a rocky stream.
 
 Before (left, `--no-steps`) and now (right), frame 60 (`reports/2026-10-01-122/`):
-- `steep.png`: up the steep river from low (`--view 1956,111.4,1965,88.7,4`), ꟻLIP mean 0.41,
-  a lip's boulders now standing in front of that camera; the highest step on a river 5 m wide or
-  more from 15 m down its pool (`--view -915,131.0,-3049,-118.5,-5`, logged as `the steep
-  rivers' steps and pools`), 0.089: a slide before, falls between boulders now.
+- `steep.png`: up the steep river from low (`--view 1956,111.4,1965,88.7,4`), ꟻLIP mean 0.37,
+  a lip's two boulders now standing in front of that camera; the highest step on a river 5 m
+  wide or more from 15 m down its pool (`--view -915,131.0,-3049,-118.5,-5`, logged as `the
+  steep rivers' steps and pools`), 0.087: a slide before, falls between pools now.
 - `head.png`, `head-zoom.png`: a stream near the largest river's head from low (`--view
-  -939,325.0,-177,126.5,-6`), 0.035.
-- `from-above.png`: that stream from above (0.034), the steep river from 40 m (0.12) and the
-  logged step from 30 m (0.057): rows of boulders across the water with white between.
+  -939,325.0,-177,126.5,-6`), 0.034.
+- `from-above.png`: that stream from above (0.034), the steep river from 40 m (0.11) and the
+  logged step from 30 m (0.057): bands of white water across the river, a boulder here and
+  there.
 - `far.png`: the island from 2.5 km (0.0089) and the plain from 200 m (0.0074).
+- `rocks.png`: the row of boulders on every lip (35b78ce) against one or two on three lips in
+  five.
 - `far-light.png`, `far-mirror.png`: the far water as it was, its light taken apart (above).
 
 **Numbers:**
 - 5 805 steps on 27 rivers, 0.54 widths apart on average, 0.70 m high on average and 2.00 m at
   most.
 - The deepest water 2.18 m, in a plunge pool (0.75 m before).
-- 38 534 river points (17 652) and 25 740 stones (1 843).
+- 38 534 river points (17 652) and 5 640 stones (1 843).
 - 86 919 cells refined (86 922).
 
-**Cost** (`docs/PROFILE.md`): the head stream 2.82 ms either way; the island from 2.5 km 3.50 →
-3.59 ms.
+**Cost** (`docs/PROFILE.md`): the head stream 2.82 ms either way; the island from 2.5 km 3.62 →
+3.68 ms, `water/surface` 0.03 ms more for the steps' segments.
 
 **Checks:**
 - The capture batch changes the island's images only (`island60` ꟻLIP mean 0.0035, `water60`
@@ -1428,8 +1434,8 @@ Before (left, `--no-steps`) and now (right), frame 60 (`reports/2026-10-01-122/`
 - Standing waves on the 2–4 % rapids as displacement, which need a finer ribbon near the camera.
 - The falls follow each step's bowed line between the boulders, not each boulder's shape.
 - Deep pools could darken further than the river's water over its gravel.
-- If the steep reaches look too busy, the knobs are `StepParams` (spacing, jitter, bow) and the
-  boulders' coverage of the width (55 %).
+- If the steep reaches still look too busy, the knobs are `StepParams` (spacing, jitter, bow)
+  and the share of lips with boulders (`lip_stones`).
 
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 

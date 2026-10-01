@@ -314,7 +314,7 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    the steep valleys' look, rocky beds, scree and scrub on the walls with stones on the banks
    (#118); rivers meeting lakes where the lakes' water stands, mouths without a hollow (#120); the
    confluences' corners rounded, in the ground and the water (#119); the steep reaches in steps
-   and pools, each lip a row of boulders the fall pours between (#122, `--no-steps`). D-041's far
+   and pools, a boulder or two on most lips, the falls white (#122, `--no-steps`). D-041's far
    water in the terrain's material was checked first and left out: the ribbons already draw the
    water at every distance, never under a coarser level of the ground, for little cost (#122).
    Next: the owner's judgement of the rivers; D-041's fewer, larger rivers if still wanted.

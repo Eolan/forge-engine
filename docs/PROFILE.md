@@ -638,11 +638,15 @@ frames each, 2560 × 1440.
 | a stream near the head from low (`-939,325.0,-177,126.5,-6`) | 2.822 → 2.823 ms | 0.049 → 0.069 | 0.109 → 0.069 | 0.952 → 0.935 | 0.060 → 0.061 |
 | up a steep river from 2 m | 4.946 → 4.196 ms | 0.240 → 0.185 | 1.278 → 0.954 | 1.809 → 1.174 | 0.044 → 0.045 |
 | the island from 2.5 km | 3.497 → 3.588 ms | 0.343 → 0.373 | 0.188 → 0.189 | 0.704 → 0.703 | 0.103 → 0.113 |
+| the island from 2.5 km, fewer stones | 3.620 → 3.675 ms | 0.361 → 0.389 | 0.194 → 0.194 | 0.734 → 0.737 | 0.113 → 0.115 |
 
+- Those three rows had a row of boulders on every lip (25 740 stones); the last has one or
+  two on three lips in five (5 640 stones, after the owner's look), timed later in the session
+  (both columns a little slower than the rows above).
 - Up the steep river a lip's boulders now stand in front of the camera and hide much of the
   water and the valley's floor: the view is not the same scene.
-- The river points are 38 534 (17 652) and the stones 25 740 (1 843): from 2.5 km
-  `water/surface` takes 0.03 ms more for the steps' segments, the stones' cull 0.01 ms.
+- The river points are 38 534 (17 652): from 2.5 km `water/surface` takes 0.03 ms more for the
+  steps' segments. The stones' cull took 0.01 ms more with the rows, nothing measurable now.
 - At start the steps take no measurable time; the island's tiles cook again when the flag
   changes (their key holds the rivers' parameters).
 

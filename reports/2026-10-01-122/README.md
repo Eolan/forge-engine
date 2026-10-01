@@ -12,6 +12,9 @@ with the fixed step, `--island 7` drawn at 2 m:
   -915,161,-3049,0,-89`).
 - `far.png`: the island from 2.5 km (`--view -6500,2500,-1416,-90,-35`) and the plain from 200 m
   (`--view 0,200,5400,0,-8`).
+- `rocks.png`: the first version (35b78ce, left), a row of boulders on every lip, against now
+  (right), from the head, over the steep river from 40 m and at the logged step. The owner's
+  first look: "way too many rocks in the water".
 
 The far water, checked first (before any change):
 - `far-light.png`, a crop of the island from 2.5 km:
@@ -36,8 +39,8 @@ Their water fell evenly, a slide with white streaks painted on it.
   1995: one to two).
 - **The bed:** the banks rise from the level before the steps. Each segment below a lip carves
   nothing upstream of its own start, and the fall's carve bows as its water does.
-- **Each lip** carries a row of boulders about the step's height over about 55 % of the width,
-  with a gap the fall pours through.
+- **The lips:** three in five carry one or two boulders about the step's height. A row over 55 %
+  of every lip made 25 740 stones, far too many; now 5 640.
 - **The water:** white down the fall and boiling across a third of the pool, in chutes across
   the river.
 - **Unchanged:** the 8 m field, the stones off the steps, and every river without steps
@@ -45,11 +48,11 @@ Their water fell evenly, a slide with white streaks painted on it.
 
 | View | ꟻLIP mean |
 |---|---|
-| up the steep river from low | 0.41 (a lip's boulders now stand where the camera looks) |
-| the logged step from 15 m | 0.089 |
-| the head stream from low | 0.035 |
+| up the steep river from low | 0.37 (a lip's two boulders now stand where the camera looks) |
+| the logged step from 15 m | 0.087 |
+| the head stream from low | 0.034 |
 | the head stream from above | 0.034 |
-| the steep river from 40 m | 0.12 |
+| the steep river from 40 m | 0.11 |
 | the logged step from 30 m | 0.057 |
 | the island from 2.5 km | 0.0089 |
 | the plain from 200 m | 0.0074 |
@@ -58,15 +61,17 @@ Their water fell evenly, a slide with white streaks painted on it.
 - 5 805 steps on 27 rivers, 0.54 widths apart on average, 0.70 m high on average and 2.00 m at
   most.
 - The deepest water 2.18 m, in a plunge pool (0.75 m).
-- 38 534 river points (17 652) and 25 740 stones (1 843).
+- 38 534 river points (17 652) and 5 640 stones (1 843).
 - 86 919 cells refined (86 922).
 
 **Cost**, at 2560 × 1440 (the same build with and without `--no-steps`, two runs each, 1 500
 frames):
 - the head stream: 2.82 ms both ways;
-- the island from 2.5 km: 3.50 → 3.59 ms (`water/surface` 0.343 → 0.373, the stones' instance
-  cull 0.10 → 0.11);
-- up the steep river: 4.95 → 4.20 ms, because a lip's boulders hide much of the water there.
+- the island from 2.5 km: 3.62 → 3.68 ms with the fewer stones (`water/surface` 0.361 → 0.389,
+  the stones' cull the same); with a row on every lip it was 3.50 → 3.59 ms, the cull 0.10 →
+  0.11;
+- up the steep river: 4.95 → 4.20 ms (with the rows), because a lip's boulders hide much of the
+  water there.
 
 **Left for later:**
 - **Standing waves** on the 2–4 % rapids as displacement. They need a finer ribbon near the

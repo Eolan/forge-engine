@@ -582,7 +582,7 @@ basins." *GSA Bulletin* 109(5), 1997, 596–611.** [paper] (record and numbers f
   widths apart, closer as the slope steepens.
 - *Bearing:* the steps start at D-041's 4 %, within the step-pool range. Above 6.5 % the water
   tumbles over boulders rather than stepping, which the island draws as steps a little under a
-  natural width apart with a row of boulders on each lip.
+  natural width apart, a boulder or two on most lips.
 
 **Athol D. Abrahams, Gang Li, Joseph F. Atkinson. "Step-pool streams: adjustment to maximum flow
 resistance." *Water Resources Research* 31, 1995, 2593–2602.** [paper] (record fetched;
@@ -607,9 +607,10 @@ numbers from search results) <https://doi.org/10.1029/95WR01957>
 
 - Search results quote Zimmermann and Church finding no evidence of regular step spacing, and
   proposing that it is set by where large immobile keystone grains lodge.
-- *Bearing:* each lip carries a row of boulders with a gap the water pours through
-  (`forge_procgen::stones`); their size, about the step's height, is Forge's choice, not a number
-  from the paper. The spacing is jittered half again or half as long.
+- *Bearing:* three lips in five carry one or two boulders (`forge_procgen::stones`); their size,
+  about the step's height, is Forge's choice, not a number from the paper. A row of them on
+  every lip was far too many rocks in the water (the owner's look, #122). The spacing is
+  jittered half again or half as long.
 
 **Jens M. Turowski, Aaron Bufe, Stefanie Tofelde. "A Physics-based Model for Fluvial Valley Width."
 *Earth Surface Dynamics* 12(2), 2024, 493–514.** [paper] [recent]

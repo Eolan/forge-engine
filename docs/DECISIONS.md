@@ -1585,5 +1585,5 @@ The far water in the terrain's material was not built (#122, for the owner to ov
 ribbons already reach every distance, resting on the ground a pixel wide past a footprint so no
 coarser level covers them (#113), for about 0.3 ms of the whole water surface from 2.5 km, mostly
 the sea's. In the far views they mirror the hills behind them from low and the sun's glitter from
-high, as the sea does. The type A reaches' steps and pools are #122: pools between steps, each
-lip a row of boulders, the falls white (`forge_procgen::StepParams`).
+high, as the sea does. The type A reaches' steps and pools are #122: pools between steps, a
+boulder or two on most lips, the falls white (`forge_procgen::StepParams`).

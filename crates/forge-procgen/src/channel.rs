@@ -822,10 +822,10 @@ impl Stone {
 /// a stone with a chance of 3 %, rising to a third where the water falls 15 % (the rapids), at a
 /// random place across the middle 70 % of the water and along to the next point. Its radius is
 /// 0.25 to 0.85 m, at least 0.8 of the water's depth there, so most break the surface, and at
-/// most 0.45 of the half width, so the river flows past them. On each step's lip (#122), a row of
-/// boulders about as tall as the step with a gap the fall pours through ([`lip_stones`]). Every
-/// draw is a hash of `seed`, the ribbon and the point (the point's index before the steps; a
-/// lip's index, negated, for its stones) (D-016).
+/// most 0.45 of the half width, so the river flows past them. On three steps' lips in five
+/// (#122), one or two boulders about as tall as the step ([`lip_stones`]). Every draw is a hash
+/// of `seed`, the ribbon and the point (the point's index before the steps; a lip's index,
+/// negated, for its stones) (D-016).
 pub fn stones(
     ribbons: &[Ribbon],
     channels: &Channels,
@@ -877,12 +877,11 @@ pub fn stones(
     out
 }
 
-/// The stones on a step's lip ([`stones`], #122): a row of boulders, as steps form on keystones
-/// (Zimmermann & Church), each 0.8 to 1.1 of the step's height across (its drop and its pool's
-/// scour; Forge's choice), half a metre at least and 0.9 of the half width at most, as many as
-/// cover about 55 % of the water's width, in slots across it along the bowed lip. One slot,
-/// drawn, stays open, so the fall pours through a gap between rocks rather than over a straight
-/// line.
+/// The stones on a step's lip ([`stones`], #122), as steps form on keystones (Zimmermann &
+/// Church): none on two lips in five, one on nearly half, two on the rest (a full row of them
+/// was far too many rocks in the water, the owner's look). Each is 0.8 to 1.1 of the step's
+/// height across (its drop and its pool's scour; Forge's choice), half a metre at least and 0.9
+/// of the half width at most, somewhere across the middle 80 % of the water on the bowed lip.
 fn lip_stones(
     r: usize,
     k: usize,
@@ -898,13 +897,16 @@ fn lip_stones(
     let (half, reach) = (f64::from(p.half_width), f64::from(p.reach));
     let tall = step.drop + f64::from(foot.depth - p.depth).max(0.0);
     let across_each = (tall * (0.8 + 0.3 * draw(0))).max(0.5).min(0.9 * half);
-    let slots = ((0.55 * 2.0 * half / across_each).round() as i32).clamp(1, 6) + 1;
-    let open = (draw(1) * f64::from(slots)).floor() as i32;
-    (0..slots)
-        .filter(|&i| i != open)
+    let count = match draw(1) {
+        d if d < 0.4 => 0,
+        d if d < 0.85 => 1,
+        _ => 2,
+    };
+    (0..count)
         .map(|i| {
-            let slot = (f64::from(i) + 0.25 + 0.5 * draw(10 + i)) / f64::from(slots);
-            let across = (slot - 0.5) * 1.9 * half;
+            // Two take a half of the water each.
+            let slot = (f64::from(i) + 0.1 + 0.8 * draw(10 + i)) / f64::from(count);
+            let across = (slot - 0.5) * 1.6 * half;
             let bow = lip_shift(p.lip, across / reach);
             let q = offset(&p, bow + (draw(20 + i) - 0.5) * 0.3, across);
             let radius = (0.5 * across_each * (0.8 + 0.4 * draw(30 + i)))
