@@ -32,8 +32,8 @@ use std::ops::RangeInclusive;
 use crate::field::Field2;
 use crate::lake::LakeWater;
 use crate::river::{
-    Corner, Ribbon, corner_samples, cross, drawn_height, offset, segment_distance, smooth_height,
-    smoothstep, sub,
+    Corner, Ribbon, Step, corner_samples, cross, drawn_height, lip_shift, offset, segment_distance,
+    smooth_height, smoothstep, sub,
 };
 
 /// How the channels are carved.
@@ -105,6 +105,29 @@ struct Segment {
     mouth: [f64; 2],
     /// How much of the carve is kept at each end: 1 but in a lake, where it fades out.
     keep: [f64; 2],
+    /// The level the banks rise from at each end: the water's before the steps (#122), over a
+    /// pool's.
+    banks: [f64; 2],
+    /// Below a step's lip (#122), the river's direction at the segment's start: it carves
+    /// nothing upstream of its start's line, where its lower water would cut the step and the
+    /// banks beside the water above away.
+    below: Option<[f64; 2]>,
+    /// From a step's lip to its pool's first segment (#122), the step's line's bow: the segment
+    /// carves as if each point lay that far upstream, as the water bows over it.
+    bowed: Option<Bowed>,
+}
+
+/// A step's bowed line, as the segments of its fall see it ([`crate::river::lip_shift`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Bowed {
+    /// The step's lip.
+    at: [f64; 2],
+    /// The river's direction there.
+    down: [f64; 2],
+    /// The ribbon's half width there, which `lip_shift` measures across in.
+    reach: f64,
+    /// Its bow (`RibbonPoint::lip`).
+    lip: [f32; 2],
 }
 
 /// A confluence's rounded corner as the channels carve it ([`corner_ground`]): the corner, and
@@ -229,6 +252,32 @@ impl Channels {
                     1.0 - smoothstep(0.0, reach(k), to_shore[k])
                 }
             };
+            // Below each step, each segment from just past the lip to the half width and the
+            // margin past the foot carves nothing upstream of its own start: the fall is steep,
+            // and a lower segment's reach back cut the step away and the banks beside the water
+            // above it. Where two segments meet they carve alike, so nothing jumps there.
+            let mut below: Vec<Option<[f64; 2]>> = vec![None; n];
+            for step in &r.steps {
+                let (lip, foot) = (step.lip as usize, step.foot as usize);
+                for k in lip + 1..n {
+                    if k > foot && arc[k] - arc[foot] > f(p[k].reach) + params.margin + spacing {
+                        break;
+                    }
+                    below[k] = Some([f(p[k].direction[0]), f(p[k].direction[1])]);
+                }
+            }
+            // The step's bow, over its fall and its pool's first segment, whose start it bows.
+            let mut bowed: Vec<Option<Bowed>> = vec![None; n];
+            for step in &r.steps {
+                let lip = step.lip as usize;
+                let line = Bowed {
+                    at: at(lip),
+                    down: [f(p[lip].direction[0]), f(p[lip].direction[1])],
+                    reach: f(p[lip].reach),
+                    lip: p[lip].lip,
+                };
+                bowed[lip..=(step.foot as usize).min(n - 1)].fill(Some(line));
+            }
             for k in 0..n.saturating_sub(1) {
                 if keep(k) == 0.0 && keep(k + 1) == 0.0 {
                     continue;
@@ -242,6 +291,9 @@ impl Channels {
                     bend: [bend[k], bend[k + 1]],
                     mouth: [mouth(k), mouth(k + 1)],
                     keep: [keep(k), keep(k + 1)],
+                    banks: [f(p[k].unstepped), f(p[k + 1].unstepped)],
+                    below: below[k],
+                    bowed: bowed[k],
                 });
             }
         }
@@ -500,10 +552,22 @@ impl Channels {
         let mut carved = base;
         for &s in segments {
             let s = &self.segments[s as usize];
+            // Over a step's fall, the point as far upstream as the step's line bows there.
+            let [x, y] = s.bowed.map_or([x, y], |b| {
+                let side = [-b.down[1], b.down[0]];
+                let across = ((x - b.at[0]) * side[0] + (y - b.at[1]) * side[1]) / b.reach;
+                let shift = lip_shift(b.lip, across);
+                [x - b.down[0] * shift, y - b.down[1] * shift]
+            });
             let (r, t) = segment_distance([x, y], s.a, s.b);
             let half = Segment::at(s.half, t);
             let out = r - half;
             if out >= margin {
+                continue;
+            }
+            if let Some(down) = s.below
+                && (x - s.a[0]) * down[0] + (y - s.a[1]) * down[1] < 0.0
+            {
                 continue;
             }
             let level = Segment::at(s.level, t);
@@ -515,7 +579,13 @@ impl Channels {
                 // Towards the sea the banks flatten into the beach, and into a lake's shore.
                 let beach = (0.3 + 0.7 * smoothstep(0.0, self.params.beach, level))
                     .min(Segment::at(s.mouth, t));
-                level + beach * (a * out + b * out * out)
+                // Over a pool lower than the water was (#122) the bank climbs back to the level
+                // it rose from, over a metre and as many as it climbs: the banks run on down the
+                // valley evenly past the steps.
+                let lift = (Segment::at(s.banks, t) - level).max(0.0);
+                level
+                    + lift * smoothstep(0.0, lift.max(1.0), out)
+                    + beach * (a * out + b * out * out)
             };
             let weight = (1.0 - smoothstep(margin - 3.0, margin, out)) * Segment::at(s.keep, t);
             carved = carved.min(base + (channel.min(base) - base) * weight);
@@ -752,8 +822,10 @@ impl Stone {
 /// a stone with a chance of 3 %, rising to a third where the water falls 15 % (the rapids), at a
 /// random place across the middle 70 % of the water and along to the next point. Its radius is
 /// 0.25 to 0.85 m, at least 0.8 of the water's depth there, so most break the surface, and at
-/// most 0.45 of the half width, so the river flows past them. Every draw is a hash of `seed`,
-/// the ribbon and the point (D-016).
+/// most 0.45 of the half width, so the river flows past them. On each step's lip (#122), a row of
+/// boulders about as tall as the step with a gap the fall pours through ([`lip_stones`]). Every
+/// draw is a hash of `seed`, the ribbon and the point (the point's index before the steps; a
+/// lip's index, negated, for its stones) (D-016).
 pub fn stones(
     ribbons: &[Ribbon],
     channels: &Channels,
@@ -762,13 +834,20 @@ pub fn stones(
 ) -> Vec<Stone> {
     let mut out = Vec::new();
     for (r, ribbon) in ribbons.iter().enumerate() {
+        let mut steps = ribbon.steps.iter().peekable();
         for (k, pair) in ribbon.points.windows(2).enumerate() {
             let (p, next) = (pair[0], pair[1]);
-            if p.fade < 0.9 || next.fade < 0.9 {
+            while let Some(step) = steps.next_if(|s| s.lip as usize <= k) {
+                if step.lip as usize == k {
+                    out.extend(lip_stones(r, k, step, ribbon, channels, height, seed));
+                }
+            }
+            if p.fade < 0.9 || next.fade < 0.9 || p.key == u32::MAX {
                 continue;
             }
-            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, k as i32, salt)));
-            let fall = f64::from(p.slope);
+            let key = p.key as i32;
+            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, key, salt)));
+            let fall = f64::from(p.grade);
             if draw(0) >= 0.03 + 0.3 * smoothstep(0.03, 0.15, fall) {
                 continue;
             }
@@ -798,6 +877,53 @@ pub fn stones(
     out
 }
 
+/// The stones on a step's lip ([`stones`], #122): a row of boulders, as steps form on keystones
+/// (Zimmermann & Church), each 0.8 to 1.1 of the step's height across (its drop and its pool's
+/// scour; Forge's choice), half a metre at least and 0.9 of the half width at most, as many as
+/// cover about 55 % of the water's width, in slots across it along the bowed lip. One slot,
+/// drawn, stays open, so the fall pours through a gap between rocks rather than over a straight
+/// line.
+fn lip_stones(
+    r: usize,
+    k: usize,
+    step: &Step,
+    ribbon: &Ribbon,
+    channels: &Channels,
+    height: &Field2<f32>,
+    seed: u64,
+) -> Vec<Stone> {
+    let p = ribbon.points[k];
+    let foot = ribbon.points[step.foot as usize];
+    let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, -1 - k as i32, salt)));
+    let (half, reach) = (f64::from(p.half_width), f64::from(p.reach));
+    let tall = step.drop + f64::from(foot.depth - p.depth).max(0.0);
+    let across_each = (tall * (0.8 + 0.3 * draw(0))).max(0.5).min(0.9 * half);
+    let slots = ((0.55 * 2.0 * half / across_each).round() as i32).clamp(1, 6) + 1;
+    let open = (draw(1) * f64::from(slots)).floor() as i32;
+    (0..slots)
+        .filter(|&i| i != open)
+        .map(|i| {
+            let slot = (f64::from(i) + 0.25 + 0.5 * draw(10 + i)) / f64::from(slots);
+            let across = (slot - 0.5) * 1.9 * half;
+            let bow = lip_shift(p.lip, across / reach);
+            let q = offset(&p, bow + (draw(20 + i) - 0.5) * 0.3, across);
+            let radius = (0.5 * across_each * (0.8 + 0.4 * draw(30 + i)))
+                .max(0.6 * f64::from(p.depth))
+                .min(0.45 * half);
+            Stone {
+                position: q,
+                bed: channels.height_at(height, q[0], q[1]),
+                radius,
+                level: f64::from(p.level),
+                turn: draw(40 + i),
+                pick: (draw(50 + i) * 65536.0) as u32,
+                ribbon: r as u32,
+                point: k as u32,
+            }
+        })
+        .collect()
+}
+
 /// The stones beside the steeper rivers' water (#118): on the gravel of their floors, past each
 /// point drawn in full a stone with a chance of up to two fifths where the water falls 6 % or
 /// more (none under 2.5 %), on either side, half a metre to three metres past the water's edge,
@@ -813,11 +939,12 @@ pub fn bank_stones(
     for (r, ribbon) in ribbons.iter().enumerate() {
         for (k, pair) in ribbon.points.windows(2).enumerate() {
             let (p, next) = (pair[0], pair[1]);
-            if p.fade < 0.9 || next.fade < 0.9 {
+            if p.fade < 0.9 || next.fade < 0.9 || p.key == u32::MAX {
                 continue;
             }
-            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, k as i32, salt)));
-            if draw(0) >= 0.4 * smoothstep(0.025, 0.06, f64::from(p.slope)) {
+            let key = p.key as i32;
+            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, key, salt)));
+            if draw(0) >= 0.4 * smoothstep(0.025, 0.06, f64::from(p.grade)) {
                 continue;
             }
             let side = if draw(1) < 0.5 { -1.0 } else { 1.0 };
@@ -1124,7 +1251,12 @@ mod tests {
         let pool = TaskPool::new(PoolConfig::with_workers(0));
         let flow = drain(&fork, 0.0, &pool);
         let rivers = trace_rivers(&fork, &flow, 30);
-        let ribbons = ribbons(&fork, &rivers, &[], &RibbonParams::island());
+        // Without the steps (#122): the fork falls 10 %, and a step's lip is a step.
+        let params = RibbonParams {
+            steps: None,
+            ..RibbonParams::island()
+        };
+        let ribbons = ribbons(&fork, &rivers, &[], &params);
         let channels = Channels::new(&fork, &ribbons, &[], &ChannelParams::default());
         let corners: Vec<&Corner> = ribbons.iter().flat_map(|r| &r.corners).collect();
         assert!(corners.len() >= 2, "{}", corners.len());
@@ -1176,6 +1308,122 @@ mod tests {
                     for q in [[p[0] + 0.02, p[1]], [p[0], p[1] + 0.02]] {
                         assert!((height(q) - h).abs() <= 0.04, "{p:?} {q:?} near {c:?}");
                     }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+    use crate::flow::drain;
+    use crate::hydrology::trace_rivers;
+    use crate::river::{RibbonParams, ribbons};
+    use forge_task::PoolConfig;
+
+    #[test]
+    fn a_steep_river_stands_in_pools_between_steps_its_bed_holding_them() {
+        // A V along x = 200 m falling 10 % towards y = 0, the island's rivers in it.
+        let valley = Field2::from_fn(41, 10.0, |x, y| {
+            2.0 * (x as f32 - 20.0).abs() + y as f32 + 1.0
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&valley, 0.0, &pool);
+        let rivers = trace_rivers(&valley, &flow, 30);
+        let params = RibbonParams::island();
+        let steps = params.steps.expect("the island's rivers have steps");
+        let ribbons = ribbons(&valley, &rivers, &[], &params);
+        let r = ribbons.last().expect("the valley's river");
+        assert!(r.steps.len() >= 10, "{} steps", r.steps.len());
+        assert!(
+            r.steps
+                .iter()
+                .any(|s| r.points[s.lip as usize].lip[0] > 0.1)
+        );
+        let p = &r.points;
+        for (i, s) in r.steps.iter().enumerate() {
+            let (lip, foot) = (p[s.lip as usize], p[s.foot as usize]);
+            // Each drops the valley's fall over its spacing, a few widths apart, and the pool
+            // below stands level from the foot to the next lip.
+            assert!(((lip.level - foot.level) as f64 - s.drop).abs() < 1e-4);
+            // (The last flattens into the valley's foot, where the field ends.)
+            let fall = s.drop / s.spacing;
+            assert!(fall <= 0.11, "{s:?}");
+            if i + 1 < r.steps.len() {
+                assert!((fall - 0.1).abs() < 0.01, "{s:?}");
+            }
+            assert!(
+                s.spacing >= 0.5 * steps.least - 1e-9
+                    && s.spacing <= 1.5 * (steps.spacing.0 * s.width).max(steps.least),
+                "{s:?}"
+            );
+            let next = r.steps.get(i + 1).map_or(p.len(), |n| n.lip as usize + 1);
+            for q in &p[s.foot as usize..next] {
+                if q.unstepped >= foot.level {
+                    assert_eq!(q.level, foot.level);
+                }
+            }
+            // Its line bows downstream, and the pool below starts past the bow, so its first quads
+            // never fold.
+            let bow = f64::from(lip.lip[0] + lip.lip[1].abs());
+            assert_eq!(lip.lip, foot.lip);
+            let after = p[s.foot as usize + 1].position;
+            let gap = f64::from(
+                ((after[0] - foot.position[0]).powi(2) + (after[1] - foot.position[1]).powi(2))
+                    .sqrt(),
+            );
+            assert!(gap > bow, "{gap} {bow}");
+            // White at the foot, gone by the next lip.
+            assert_eq!(foot.foam, 1.0);
+            if let Some(n) = r.steps.get(i + 1) {
+                assert_eq!(p[n.lip as usize].foam, 0.0);
+            }
+        }
+        // The bed holds the water: past its edge the ground is never under it, in the middle
+        // well under it, along every segment of the stepped reach.
+        let channels = Channels::new(&valley, &ribbons, &[], &ChannelParams::default());
+        let height = |q: [f64; 2]| channels.height_at(&valley, q[0], q[1]);
+        let (first, last) = (
+            r.steps[0].lip as usize,
+            r.steps[r.steps.len() - 1].foot as usize,
+        );
+        // Where the water is, as the GPU draws it: each point's vertex across moved downstream by
+        // its step's bow, the quads between straight.
+        let water = |k: usize, t: f64, across: f64| {
+            let at = |q: &crate::RibbonPoint| {
+                let bow = lip_shift(q.lip, across / f64::from(q.reach));
+                crate::river::offset(q, bow, across)
+            };
+            let (a, b) = (at(&p[k]), at(&p[k + 1]));
+            let level = f64::from(p[k].level) + f64::from(p[k + 1].level - p[k].level) * t;
+            ([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], level)
+        };
+        for k in first..last {
+            for t in [0.0, 0.25, 0.5, 0.75] {
+                let mix = |x: f32, y: f32| f64::from(x) + f64::from(y - x) * t;
+                let half = mix(p[k].half_width, p[k + 1].half_width);
+                let depth = mix(p[k].depth, p[k + 1].depth);
+                let (q, level) = water(k, t, 0.0);
+                let middle = height(q);
+                assert!(middle <= level - 0.5 * depth, "{k} {t}: {middle} {level}");
+                for side in [-1.0, 1.0] {
+                    let (q, level) = water(k, t, side * (half + 0.3));
+                    let edge = height(q);
+                    assert!(edge >= level - 0.02, "{k} {t}: {edge} under {level}");
+                }
+            }
+        }
+        // Out on the floor the banks run on down the valley past the lips, without a cliff.
+        for s in &r.steps {
+            let lip = p[s.lip as usize];
+            for side in [-1.0, 1.0] {
+                let out = side * (f64::from(lip.half_width) + 4.0);
+                let line: Vec<f64> = (-8..=8)
+                    .map(|i| height(crate::river::offset(&lip, f64::from(i) * 0.25, out)))
+                    .collect();
+                for pair in line.windows(2) {
+                    assert!((pair[1] - pair[0]).abs() <= 0.1, "{line:?}");
                 }
             }
         }

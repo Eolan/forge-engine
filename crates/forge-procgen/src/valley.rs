@@ -194,7 +194,7 @@ pub fn carve_valleys(
             let q = offset(&p[k], 0.0, across);
             smooth_height(height, q[0], q[1])
         };
-        let floor_at = |k: usize| f(p[k].level) + params.rise.0 + params.rise.1 * f(p[k].depth);
+        let floor_at = |k: usize| f(p[k].unstepped) + params.rise.0 + params.rise.1 * f(p[k].depth);
         let mut arc = vec![0.0; n];
         for k in 1..n {
             let (a, b) = (at(k - 1), at(k));
@@ -285,7 +285,7 @@ pub fn carve_valleys(
                 strength: if lake {
                     0.0
                 } else {
-                    smoothstep(params.sea.0, params.sea.1, f(p[k].level))
+                    smoothstep(params.sea.0, params.sea.1, f(p[k].unstepped))
                 },
             });
         }
@@ -453,7 +453,7 @@ fn reach_slopes(points: &[RibbonPoint], run: f64) -> Vec<f64> {
             }
             let length = arc[hi] - arc[lo];
             if length > 0.0 {
-                ((f(points[lo].level) - f(points[hi].level)) / length).max(0.0)
+                ((f(points[lo].unstepped) - f(points[hi].unstepped)) / length).max(0.0)
             } else {
                 0.0
             }
@@ -580,7 +580,7 @@ pub fn paint_valley_ground(
                     let index = ty as u32 * layers.size + tx as u32;
                     let entry = near.entry(index).or_insert([f64::MAX, 0.0, 0.0]);
                     if out < entry[0] {
-                        *entry = [out, mix(p[k].level, p[k + 1].level), steep];
+                        *entry = [out, mix(p[k].unstepped, p[k + 1].unstepped), steep];
                     }
                 }
             }
@@ -709,6 +709,11 @@ mod tests {
                     bank: 0.0,
                     speed: 1.0,
                     slope: fall as f32,
+                    grade: fall as f32,
+                    unstepped: (top - fall * x - 0.2) as f32,
+                    foam: 0.0,
+                    key: k,
+                    lip: [0.0; 2],
                     fade: 1.0,
                     ground: [0.0; ACROSS + 1],
                 }
@@ -720,6 +725,7 @@ mod tests {
             points,
             lake_runs: Vec::new(),
             corners: Vec::new(),
+            steps: Vec::new(),
         };
         (height, ribbon)
     }
@@ -811,6 +817,7 @@ mod tests {
         let (mut field, mut ribbon) = valley(0.1);
         for p in &mut ribbon.points {
             p.level -= 18.5;
+            p.unstepped -= 18.5;
         }
         let lakes = no_lakes(&field);
         let stats = carve_valleys(&mut field, &[ribbon], &lakes, &steady(), &pool);

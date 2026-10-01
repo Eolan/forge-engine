@@ -313,8 +313,11 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    floor for the water, benches and floodplains on the gentler reaches (#116, `--no-valleys`);
    the steep valleys' look, rocky beds, scree and scrub on the walls with stones on the banks
    (#118); rivers meeting lakes where the lakes' water stands, mouths without a hollow (#120); the
-   confluences' corners rounded, in the ground and the water (#119).
-   Next: the far water in the terrain's material.
+   confluences' corners rounded, in the ground and the water (#119); the steep reaches in steps
+   and pools, each lip a row of boulders the fall pours between (#122, `--no-steps`). D-041's far
+   water in the terrain's material was checked first and left out: the ribbons already draw the
+   water at every distance, never under a coarser level of the ground, for little cost (#122).
+   Next: the owner's judgement of the rivers; D-041's fewer, larger rivers if still wanted.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

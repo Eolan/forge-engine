@@ -1581,3 +1581,9 @@ from the comparison (`reports/2026-10-01-112/river-size.png`; "use k = 3 and kee
 default", 2026-10-01). The floors (#116, `forge_procgen::carve_valleys`) stop where the ground
 stands 6 m over them, so a deep V keeps its walls with room for its water, and the walls rise
 no steeper than a little more than the ground beyond them, in place of a shape per setting.
+The far water in the terrain's material was not built (#122, for the owner to overrule): the
+ribbons already reach every distance, resting on the ground a pixel wide past a footprint so no
+coarser level covers them (#113), for about 0.3 ms of the whole water surface from 2.5 km, mostly
+the sea's. In the far views they mirror the hills behind them from low and the sun's glitter from
+high, as the sea does. The type A reaches' steps and pools are #122: pools between steps, each
+lip a row of boulders, the falls white (`forge_procgen::StepParams`).

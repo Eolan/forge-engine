@@ -569,6 +569,48 @@ Spacing in Forest Channels." *Water Resources Research* 31(4), 1995.** [paper] (
 <https://doi.org/10.1029/94WR03285> — the field test of the five-to-seven-widths rule in wooded
 channels; cited for the rule's provenance.
 
+*Added for #122 (2026-10-01), the steep reaches' steps and pools.* The papers are paywalled and
+refused automated fetches; each record (title, authors, venue, volume, pages) was checked through
+Crossref and Semantic Scholar, and the numbers come from search results quoting them.
+
+**David R. Montgomery, John M. Buffington. "Channel-reach morphology in mountain drainage
+basins." *GSA Bulletin* 109(5), 1997, 596–611.** [paper] (record and numbers from search results)
+<https://doi.org/10.1130/0016-7606(1997)109%3C0596:CRMIMD%3E2.3.CO;2>
+
+- Five alluvial reach types by falling slope: cascade (over 0.065), step-pool (0.03–0.065),
+  plane-bed (0.015–0.03), pool-riffle (under 0.015), dune-ripple. Pools half a width to four
+  widths apart, closer as the slope steepens.
+- *Bearing:* the steps start at D-041's 4 %, within the step-pool range. Above 6.5 % the water
+  tumbles over boulders rather than stepping, which the island draws as steps a little under a
+  natural width apart with a row of boulders on each lip.
+
+**Athol D. Abrahams, Gang Li, Joseph F. Atkinson. "Step-pool streams: adjustment to maximum flow
+resistance." *Water Resources Research* 31, 1995, 2593–2602.** [paper] (record fetched;
+numbers from search results) <https://doi.org/10.1029/95WR01957>
+
+- From 12 flume runs and 18 field reaches: a step's height over its spacing, divided by the
+  slope (H/L/S), lies between 1 and 2, where the steps resist the flow most. The height runs from
+  a step's crest to the pool under it, so the share over 1 is the pool's scour.
+- *Bearing:* `StepParams::scour`, 1.8 at 4 % and 1.3 from 15 %.
+
+**Anne Chin. "The morphologic structure of step–pools in mountain streams." *Geomorphology* 27,
+1999, 191–204.** [paper] (record fetched; numbers from search results)
+<https://doi.org/10.1016/S0169-555X(98)00083-X>
+
+- Search results for Chin's step–pool studies quote two thirds of the step wavelengths at
+  0.5–1.5 channel widths (1.3 on average), and the steps 0.06–0.20 of their spacing high (about
+  0.1). Which of her papers each number comes from was not confirmed.
+
+**Michael Church, André Zimmermann. "Form and stability of step-pool channels: Research progress."
+*Water Resources Research* 43, 2007.** [paper] (record fetched; numbers from search results)
+<https://doi.org/10.1029/2006WR005037>
+
+- Search results quote Zimmermann and Church finding no evidence of regular step spacing, and
+  proposing that it is set by where large immobile keystone grains lodge.
+- *Bearing:* each lip carries a row of boulders with a gap the water pours through
+  (`forge_procgen::stones`); their size, about the step's height, is Forge's choice, not a number
+  from the paper. The spacing is jittered half again or half as long.
+
 **Jens M. Turowski, Aaron Bufe, Stefanie Tofelde. "A Physics-based Model for Fluvial Valley Width."
 *Earth Surface Dynamics* 12(2), 2024, 493–514.** [paper] [recent]
 <https://esurf.copernicus.org/articles/12/493/2024/>
@@ -883,6 +925,11 @@ ribbon builder and the terrain LOD; (d) is a decision to defer.
   (physicsbasedanimation.com).
 - Verified by search record only (title, authors, venue from the engine's result text; the page
   itself refused or was not fetched): Guérin et al. 2017, Feng 2023, Valencia-Rosado et al. 2022.
+- Added for #122: Abrahams et al. 1995, Chin 1999 and Church & Zimmermann 2007 verified by their
+  Crossref and Semantic Scholar records (title, authors, venue, volume, pages; the abstracts are
+  elided there), Montgomery & Buffington 1997 by search records; the publishers and the USDA
+  and CSUS copies refused or returned binary PDFs, so their numbers are the search results'
+  quotes of them, not read in the papers.
 - Re-used from `water.md` and `terrain-genesis.md` without re-fetching: Far Cry 5 (GDC 2018),
   Uncharted 4 (SIGGRAPH 2016), Paris 2023, Emilien 2015, Cordonnier 2016, Schott 2024, Whipple &
   Tucker 1999.
@@ -953,6 +1000,10 @@ Geomorphology
 - D. L. Rosgen, "A Classification of Natural Rivers", Catena 22(3), 1994, 169–199 — <https://en.wikipedia.org/wiki/Rosgen_Stream_Classification> (citation); thresholds from NC DEQ, "River Course Fact Sheet 2: Application of the Rosgen Stream Classification System to North Carolina" — <https://www.deq.nc.gov/environmental-assistance-and-customer-service/rbac/grants/river-course-fact-sheet-2-application-rosgen-stream/download>
 - Vermont DEC, "Stream Geomorphic Assessment — Appendix H: Meander Geometry" (quoting Leopold, Wolman & Miller 1964; Williams 1986) — <https://dec.vermont.gov/sites/dec/files/wsm/rivers/docs/assessment-protocol-appendices/H-Appendix-H-04-Meander-Geometry.pdf>
 - D. R. Montgomery, J. M. Buffington, R. D. Smith, K. M. Schmidt, G. Pess, "Pool Spacing in Forest Channels", Water Resources Research 31(4), 1995 — <https://doi.org/10.1029/94WR03285>
+- D. R. Montgomery, J. M. Buffington, "Channel-reach morphology in mountain drainage basins", GSA Bulletin 109(5), 1997, 596–611 — <https://doi.org/10.1130/0016-7606(1997)109%3C0596:CRMIMD%3E2.3.CO;2> (#122)
+- A. D. Abrahams, G. Li, J. F. Atkinson, "Step-pool streams: adjustment to maximum flow resistance", Water Resources Research 31, 1995, 2593–2602 — <https://doi.org/10.1029/95WR01957> (#122)
+- A. Chin, "The morphologic structure of step–pools in mountain streams", Geomorphology 27, 1999, 191–204 — <https://doi.org/10.1016/S0169-555X(98)00083-X> (#122)
+- M. Church, A. Zimmermann, "Form and stability of step-pool channels: Research progress", Water Resources Research 43, 2007 — <https://doi.org/10.1029/2006WR005037> (#122)
 - J. M. Turowski, A. Bufe, S. Tofelde, "A Physics-based Model for Fluvial Valley Width", Earth Surface Dynamics 12(2), 2024 — <https://esurf.copernicus.org/articles/12/493/2024/>
 - R. P. M. Frasson et al., "Global Relationships Between River Width, Slope, Catchment Area, Meander Wavelength, Sinuosity, and Discharge", Geophysical Research Letters 46, 2019 — <https://doi.org/10.1029/2019GL082027>
 - K. X. Whipple, G. E. Tucker, "Dynamics of the Stream-Power River Incision Model", JGR Solid Earth 104(B8), 1999 — <https://agupubs.onlinelibrary.wiley.com/doi/10.1029/1999JB900120> (verified in `terrain-genesis.md`)

@@ -686,9 +686,12 @@ struct GpuRiverPoint {
     /// The ribbon's half width (under the banks), the lowest bank before the carve, the first
     /// stone past the point, the metres along the river from its head.
     e: [f32; 4],
+    /// The white water a step's fall leaves, and how far its line bows downstream in the middle
+    /// and towards the left bank (#122); one unused.
+    f: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuRiverPoint>() == 80);
+const _: () = assert!(std::mem::size_of::<GpuRiverPoint>() == 96);
 
 /// A point of a river's ribbon (`forge_procgen::RibbonPoint`), as the surface draws it.
 #[derive(Clone, Copy, Debug)]
@@ -714,6 +717,11 @@ pub struct WaterRiverPoint {
     pub speed: f32,
     /// The water surface's slope downstream.
     pub slope: f32,
+    /// The white water a step's fall leaves, 0..1 (`forge_procgen::RibbonPoint::foam`, #122).
+    pub foam: f32,
+    /// At a step's points, how far its line bows downstream: in the middle, and towards the left
+    /// bank (negative: the right), metres (`forge_procgen::RibbonPoint::lip`, #122).
+    pub lip: [f32; 2],
     /// How much of the river is drawn there, 0..1 (it fades in from its head, and out into a
     /// lake, the river it joins or the sea).
     pub fade: f32,
@@ -1193,6 +1201,7 @@ impl WaterSurface {
                             ],
                             d: [p.ground[0], p.ground[1], p.ground[2], p.ground[3]],
                             e: [p.reach, p.bank, first[points.len()] as f32, along],
+                            f: [p.foam, p.lip[0], p.lip[1], 0.0],
                         });
                     }
                 }

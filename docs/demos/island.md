@@ -1313,6 +1313,124 @@ edge, the water covering it, and no step on a 2 cm grid around it.
 - At a steep confluence the corner's water runs from the tributary's level to the river's,
   which can stand a metre apart. It follows the two ribbons' levels, not a surface of its own.
 
+**The steep rivers' steps and pools** (#122, D-041, 2026-10-01; `forge_procgen::StepParams`,
+`Step`, `channel`, `water.slang`). A third of the island's river points fall more than 4 %
+(6 459 of 17 652, up to 54 %), D-041's type A, where a mountain stream runs in steps and pools.
+Their water fell evenly from point to point. Seen up a steep river from low it was a slide, a
+flat sheet with white streaks painted on it.
+
+**Why not the far water first.** The roadmap had D-041's far water in the terrain's material
+next. The far views (the island from 2.5 km, the plain from 60 m and 200 m, views down the
+rivers) show the ribbons already doing what that layer was for:
+- they are drawn at every distance, resting on the ground a pixel wide past a footprint, so no
+  coarser level covers them (#113);
+- the whole water surface from 2.5 km costs about 0.3 ms, mostly the sea.
+
+Their light holds together too:
+- Toward the sun the far rivers and a lake turn white with the sun's glitter; without the
+  highlight they are dark blue-grey lines. The lake's glint stands at 212 against the sea's 169
+  in the same glare, nearer the peak.
+- From low the far rivers mirror the hills behind them, which their mirror rays meet rising at
+  about 4° (started 2 m higher, they still do: it is not the traced ground's error).
+
+A water layer in the terrain would change nothing visible, so it is left out (D-041's note).
+
+**What changed.**
+- **The profile** (`river::step_pools`, after each river's levels, so a tributary joining in a
+  pool ends at the pool's level):
+  - Where the reach's slope (`RibbonPoint::grade`) passes 4 %, and on while it stays over 3 %,
+    clear of a lake, the head, the river it joins and the estuary, the water stands in pools.
+    Each pool is at the level the water had at the next step's lip, so it is never higher than
+    it was.
+  - The steps are a width apart at 4 % and 0.4 of one from 15 % (the island's widths are three
+    times nature's, so 0.6 to 4.5 natural widths with the jitter; Montgomery & Buffington 1997:
+    half a width to four), 3 m at least before a jitter of half again or half as long, and no
+    more than 2 m high.
+  - Each fall is four points (the lip, just past it, just short of the foot, the foot): level
+    up to the lip, steep between, 0.4 m long a metre it drops.
+  - Over a lip the water is two fifths of its depth. Under the fall the pool is scoured by
+    H/L/S (Abrahams et al. 1995, one to two): 1.8 at 4 %, 1.3 from 15 %. Its bed rises to the
+    next lip.
+  - Each step's line bows downstream, an arch in the middle and a slant toward a bank, drawn up
+    to two fifths and three fifths of the half width (`RibbonPoint::lip`, `lip_shift`).
+- **The bed** (`Channels`):
+  - The banks rise from the level the water had before the steps (`RibbonPoint::unstepped`).
+    Over a pool lower than that they climb back to it within a metre or so of the water, so
+    the banks run on down the valley evenly past the steps.
+  - Each segment from just past a lip to the margin past its foot carves nothing upstream of
+    its own start. A lower segment's reach back cut the step away, and the banks beside the
+    falling water.
+  - The fall's segments carve as the water bows, its query moved upstream by the bow, so the
+    bed holds the water exactly where the GPU draws it.
+- **The lips' boulders** (`stones`):
+  - Each lip carries a row of boulders about as tall as the step, covering about 55 % of the
+    width. One slot, drawn, stays open, so the fall pours through a gap rather than over a
+    straight line.
+  - Searches quote Zimmermann and Church: steps form on immobile keystones. The boulders' size
+    is Forge's choice.
+- **The water** (`water.slang`):
+  - A step's points carry its foam: white from the lip down, then a boil fading across a third
+    of the pool (`RiverPoint::f`).
+  - The white widens the streaks' coverage (`froth`). It breaks into chutes across the river,
+    glassy and white by turns, so a lip is no straight white line.
+  - The step's vertices are bowed as its line is.
+- **Kept the same:**
+  - The 8 m field: the valleys are carved from the rivers without their steps.
+  - The steep valleys' look reads the level before the steps.
+  - The stones off the steps: each point keeps its index from before the steps for the draws.
+  - The views down the rivers are picked among those points.
+  - `--no-steps` gives the rivers as before: the same pixels as a2d7cca on four views.
+  - What changes in the log: the view up the steep river is 1.7 m higher (it stands on the carved
+    ground), and the points standing 2 m under their banks (by the level before the steps) are
+    100 for 124, the points cleared below the feet no longer counted.
+
+The first try was a staircase of full-width falls a few widths apart. From the head it read as
+a ladder, the narrow streams' steps all at the least spacing; up close, as terraces. Smaller,
+jittered steps, chutes, bowed lines and the rows of boulders turned it into a rocky stream.
+
+Before (left, `--no-steps`) and now (right), frame 60 (`reports/2026-10-01-122/`):
+- `steep.png`: up the steep river from low (`--view 1956,111.4,1965,88.7,4`), ꟻLIP mean 0.41,
+  a lip's boulders now standing in front of that camera; the highest step on a river 5 m wide or
+  more from 15 m down its pool (`--view -915,131.0,-3049,-118.5,-5`, logged as `the steep
+  rivers' steps and pools`), 0.089: a slide before, falls between boulders now.
+- `head.png`, `head-zoom.png`: a stream near the largest river's head from low (`--view
+  -939,325.0,-177,126.5,-6`), 0.035.
+- `from-above.png`: that stream from above (0.034), the steep river from 40 m (0.12) and the
+  logged step from 30 m (0.057): rows of boulders across the water with white between.
+- `far.png`: the island from 2.5 km (0.0089) and the plain from 200 m (0.0074).
+- `far-light.png`, `far-mirror.png`: the far water as it was, its light taken apart (above).
+
+**Numbers:**
+- 5 805 steps on 27 rivers, 0.54 widths apart on average, 0.70 m high on average and 2.00 m at
+  most.
+- The deepest water 2.18 m, in a plunge pool (0.75 m before).
+- 38 534 river points (17 652) and 25 740 stones (1 843).
+- 86 919 cells refined (86 922).
+
+**Cost** (`docs/PROFILE.md`): the head stream 2.82 ms either way; the island from 2.5 km 3.50 →
+3.59 ms.
+
+**Checks:**
+- The capture batch changes the island's images only (`island60` ꟻLIP mean 0.0035, `water60`
+  0.0046, `island8-60` 0.0033: the hills' streams in the distance). The A/B harness, streamed
+  against resident and mesh against fallback stay at 0 px.
+- `validate.sh` is clean. 215 tests pass, clippy and fmt are clean.
+- A new test runs a 10 % valley's river in steps and pools:
+  - each step drops the valley's fall over its spacing, and its pool stands level to the next
+    lip;
+  - its line bows, and the pool below starts past the bow;
+  - the foam is white at the foot and gone by the next lip;
+  - along every segment of the stepped reach, sampled where the GPU draws the water, the bed is
+    under the water in the middle, and past the edge the ground never is;
+  - the floor 4 m out runs on past every lip without a cliff.
+
+**Left for later:**
+- Standing waves on the 2–4 % rapids as displacement, which need a finer ribbon near the camera.
+- The falls follow each step's bowed line between the boulders, not each boulder's shape.
+- Deep pools could darken further than the river's water over its gravel.
+- If the steep reaches look too busy, the knobs are `StepParams` (spacing, jitter, bow) and the
+  boulders' coverage of the width (55 %).
+
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 
 The ground left on #106 is the 8 m field's own: its slopes keep 8 m facets and their shadows'

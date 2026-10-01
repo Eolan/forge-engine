@@ -21,9 +21,13 @@
 //!   it, so the two meet wherever the lake's edge lies (#120).
 //! - In a bend the ribbon's half width stays under a share of the bend's radius, so its inner
 //!   edge never folds over itself.
+//! - On the steep reaches ([`StepParams`], #122) the water stands in pools and falls from one
+//!   to the next over a step, at the level it had at each step's lip; its banks keep rising
+//!   from that level as it was ([`RibbonPoint::unstepped`]).
 //!
 //! Everything is `f64` arithmetic with `sqrt` only, in the rivers' order (D-016).
 
+use forge_core::hash::{hash_cell3, unit_f32};
 use forge_task::TaskPool;
 
 use crate::field::Field2;
@@ -50,6 +54,73 @@ const LAKE_TAKES: f64 = 0.5;
 
 /// Metres between the samples of the ground under a quad of a ribbon.
 const GROUND_SAMPLES: f64 = 0.5;
+
+/// The seed of the steps' spacings (#122).
+const STEP_SEED: u64 = 0x5745_5053_504f_4f4c;
+
+/// Steps and pools on a river's steep reaches (#122, D-041's type A): where its water falls
+/// faster than `from`, it stands in pools and drops from each into the next over a step, as a
+/// mountain stream does. Montgomery & Buffington (1997) find step-pools from 3 % and cascades
+/// over 6.5 %, their pools half a width to four widths apart, closer as the slope steepens;
+/// Abrahams, Li & Atkinson (1995) a step's height over its spacing one to two times the slope
+/// (H/L/S), the pools' scour making up the difference (`docs/research/rivers.md` §4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StepParams {
+    /// The water surface's slope over which a reach runs in steps and pools, m/m; it runs on in
+    /// them down to three quarters of it.
+    pub from: f64,
+    /// The steps' spacing in the river's widths: `.0` at `from`, `.1` at `steep` and over.
+    pub spacing: (f64, f64),
+    /// The slope at which the steps are closest, m/m.
+    pub steep: f64,
+    /// The least spacing before its jitter, metres.
+    pub least: f64,
+    /// The highest a step drops, metres: on the steepest reaches the steps come closer.
+    pub highest: f64,
+    /// How much a spacing varies either way, a share of it.
+    pub jitter: f64,
+    /// H/L/S: `.0` at `from`, `.1` at `steep` and over (1 would be a plain staircase, no scour).
+    pub scour: (f64, f64),
+    /// The share of its depth the water keeps over a lip.
+    pub lip: f64,
+    /// A fall's length along the river: `.0` metres a metre it drops, `.1` metres at least.
+    pub fall: (f64, f64),
+    /// How far a step's line bows downstream at most, shares of the river's half width: in its
+    /// middle (`.0`, an arch) and towards one bank (`.1`, a slant); never upstream, nor over
+    /// 1.5 m or three fifths of the pool below.
+    pub bow: (f64, f64),
+    /// The share of a pool's length its foam reaches down from the fall.
+    pub foam: f64,
+    /// The pools' speed, a share of the speed the reach's slope gives.
+    pub pool_speed: f64,
+}
+
+impl Default for StepParams {
+    /// From 4 % (D-041's type A), steps a width apart there and 0.4 of one from 15 %, 3 m at
+    /// least, half again or half as long (the island's widths are three times nature's: 0.6 to
+    /// 4.5 natural widths), 2 m high at most, their lines bowing downstream by up to two fifths
+    /// of the half width in the middle and slanting by three fifths; H/L/S 1.8 at 4 %, 1.3 from
+    /// 15 % (Abrahams et al.'s one to two);
+    /// the water over a lip two fifths of its depth; a fall 0.4 m long a metre it drops and
+    /// 0.3 m at least; its foam over a third of the pool, whose water runs at half the reach's
+    /// speed.
+    fn default() -> Self {
+        Self {
+            from: 0.04,
+            spacing: (1.0, 0.4),
+            steep: 0.15,
+            least: 3.0,
+            highest: 2.0,
+            jitter: 0.5,
+            scour: (1.8, 1.3),
+            lip: 0.4,
+            fall: (0.4, 0.3),
+            bow: (0.4, 0.6),
+            foam: 0.35,
+            pool_speed: 0.5,
+        }
+    }
+}
 
 /// How the ribbons are made.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,6 +172,8 @@ pub struct RibbonParams {
     /// How far along each edge the corners where a tributary meets its river are rounded
     /// ([`Corner`], #119): `a + b ×` the tributary's width, metres.
     pub confluence: (f64, f64),
+    /// Steps and pools on the steep reaches (#122); `None` lets the water fall evenly.
+    pub steps: Option<StepParams>,
 }
 
 impl Default for RibbonParams {
@@ -110,7 +183,7 @@ impl Default for RibbonParams {
     /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
     /// of 60 % at most, rising to its banks over 8 m and three widths into a lake, the lakes of a
     /// hectare, twice as wide at the sea from 1.5 m over it, a confluence's corners rounded over
-    /// 2 m and a tributary's width along each edge.
+    /// 2 m and a tributary's width along each edge, no steps.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -131,16 +204,19 @@ impl Default for RibbonParams {
             estuary: (1.5, 1.0),
             regional: None,
             confluence: (2.0, 1.0),
+            steps: None,
         }
     }
 }
 
 impl RibbonParams {
     /// The island's rivers (D-041): the defaults, sized by the regional curves three times as
-    /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01).
+    /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01),
+    /// in steps and pools on their steep reaches.
     pub fn island() -> Self {
         Self {
             regional: Some((3.0, 1.5)),
+            steps: Some(StepParams::default()),
             ..Self::default()
         }
     }
@@ -183,8 +259,21 @@ pub struct RibbonPoint {
     pub bank: f32,
     /// The water's speed, m/s.
     pub speed: f32,
-    /// The water surface's slope downstream.
+    /// The water surface's slope downstream: none in a pool, steep over a step's fall.
     pub slope: f32,
+    /// The slope of the reach, before its steps (#122): the valley's, which its stones follow.
+    pub grade: f32,
+    /// The water's level before the steps, metres (its level off them): its banks rise from it.
+    pub unstepped: f32,
+    /// The white water a step's fall leaves, 0..1: from its lip down, fading across the pool.
+    pub foam: f32,
+    /// The point's index before the steps, which the draws along the river hash (`u32::MAX` for
+    /// a point a step put in), so the rest of the river keeps its stones.
+    pub key: u32,
+    /// At a step's four points (#122), how far its line bows downstream: in the river's middle,
+    /// and towards its left bank (seen downstream; negative, its right), metres ([`lip_shift`]);
+    /// none elsewhere.
+    pub lip: [f32; 2],
     /// How much of the river is drawn here, 0..1: it fades in from its head, and out into a
     /// lake, into the river it joins, and into the sea.
     pub fade: f32,
@@ -211,6 +300,23 @@ pub struct Ribbon {
     /// The rounded corners where it joins its river, either side of it: none for a river that
     /// ends in the sea or a lake, or meets its river along it.
     pub corners: Vec<Corner>,
+    /// The steps of its steep reaches, head first (#122).
+    pub steps: Vec<Step>,
+}
+
+/// A step of a steep reach (#122): where the water falls from one pool into the next.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    /// The point at its lip, where the pool above ends.
+    pub lip: u32,
+    /// The point at the foot of its fall, where the pool below starts.
+    pub foot: u32,
+    /// Metres it drops.
+    pub drop: f64,
+    /// Metres along the river to the next step's lip, or to the end of the reach.
+    pub spacing: f64,
+    /// The river's width at its lip, metres.
+    pub width: f64,
 }
 
 /// A rounded corner where a tributary's water meets its river's (#119): the circle touching both
@@ -320,6 +426,7 @@ pub fn ribbons(
                 points: ribbon_points(&samples, params),
                 lake_runs: Vec::new(),
                 corners: Vec::new(),
+                steps: Vec::new(),
             })
         })
         .collect();
@@ -364,6 +471,22 @@ pub fn ribbons(
         }
         ribbons[r].lake_runs = runs;
         ribbons[r].points = points;
+        // The steep reaches' steps and pools, before the tributaries take their levels: one
+        // joining in a pool ends at the pool's.
+        if let Some(steps) = &params.steps {
+            let (points, made, index) = step_pools(
+                &ribbons[r].points,
+                &ribbons[r].lake_runs,
+                ribbons[r].river,
+                steps,
+                params,
+            );
+            for run in &mut ribbons[r].lake_runs {
+                *run = run.map(|k| index[k as usize]);
+            }
+            ribbons[r].points = points;
+            ribbons[r].steps = made;
+        }
         done[ribbons[r].river as usize] = Some(r);
     }
     // The estuaries: under `estuary.0` metres over the sea the rivers widen and shallow
@@ -602,6 +725,11 @@ fn ribbon_points(samples: &[[f64; 4]], params: &RibbonParams) -> Vec<RibbonPoint
                 bank: 0.0,
                 speed: 0.0,
                 slope: 0.0,
+                grade: 0.0,
+                unstepped: 0.0,
+                foam: 0.0,
+                key: k as u32,
+                lip: [0.0; 2],
                 fade: smoothstep(0.0, 0.2 * params.head_fade, arc[k]) as f32,
                 ground: [0.0; ACROSS + 1],
             }
@@ -878,6 +1006,8 @@ fn levels(
                 bank: bank[k] as f32,
                 speed: speed as f32,
                 slope: slope as f32,
+                grade: slope as f32,
+                unstepped: level[k] as f32,
                 fade: fade as f32,
                 ground: [level[k] as f32; ACROSS + 1],
                 ..p
@@ -901,6 +1031,338 @@ fn fill_gaps(v: &mut [Option<f64>], most: usize) {
         }
         last = Some(k);
     }
+}
+
+/// How far a step's line (#122) lies downstream of its point at `u` of the way across its
+/// ribbon (−1 at its right edge seen downstream, 1 at its left: `across / reach`, clamped), for
+/// its [`RibbonPoint::lip`]: the arch `a (1 − u²)` and the slant `|s| (1 ± u) / 2` at the
+/// ribbon's vertices across, and straight between them, as the GPU draws its quads (`water.slang`
+/// bends the step's vertices by it), so the carve under the water bends exactly as the water.
+pub fn lip_shift(lip: [f32; 2], u: f64) -> f64 {
+    let at = |v: f64| {
+        let slant = if lip[1] >= 0.0 { 1.0 + v } else { 1.0 - v };
+        f64::from(lip[0]) * (1.0 - v * v) + f64::from(lip[1].abs()) * 0.5 * slant
+    };
+    let x = (u.clamp(-1.0, 1.0) + 1.0) * 0.5 * ACROSS as f64;
+    let i = (x.floor() as usize).min(ACROSS - 1);
+    let (v0, v1) = (
+        2.0 * i as f64 / ACROSS as f64 - 1.0,
+        2.0 * (i + 1) as f64 / ACROSS as f64 - 1.0,
+    );
+    let (y0, y1) = (at(v0), at(v1));
+    y0 + (y1 - y0) * (x - i as f64)
+}
+
+/// The point `t` of the way from `a` to `b`, every field between theirs (its direction
+/// normalised again), put in by a step: no key.
+fn point_between(a: &RibbonPoint, b: &RibbonPoint, t: f64) -> RibbonPoint {
+    let t = t as f32;
+    let mix = |x: f32, y: f32| x + (y - x) * t;
+    let direction = [
+        mix(a.direction[0], b.direction[0]),
+        mix(a.direction[1], b.direction[1]),
+    ];
+    let length = (direction[0] * direction[0] + direction[1] * direction[1])
+        .sqrt()
+        .max(1e-9);
+    RibbonPoint {
+        position: [
+            mix(a.position[0], b.position[0]),
+            mix(a.position[1], b.position[1]),
+        ],
+        level: mix(a.level, b.level),
+        direction: [direction[0] / length, direction[1] / length],
+        half_width: mix(a.half_width, b.half_width),
+        cover: mix(a.cover, b.cover),
+        reach: mix(a.reach, b.reach),
+        depth: mix(a.depth, b.depth),
+        bank: mix(a.bank, b.bank),
+        speed: mix(a.speed, b.speed),
+        slope: mix(a.slope, b.slope),
+        grade: mix(a.grade, b.grade),
+        unstepped: mix(a.unstepped, b.unstepped),
+        foam: mix(a.foam, b.foam),
+        key: u32::MAX,
+        lip: [0.0; 2],
+        fade: mix(a.fade, b.fade),
+        ground: std::array::from_fn(|i| mix(a.ground[i], b.ground[i])),
+    }
+}
+
+/// Steps and pools on the steep reaches of a ribbon's levelled `points` (#122): where the reach
+/// falls `steps.from` or more (and on while it falls three quarters of that), clear of its head,
+/// its lakes and its end, the water stands in pools between steps a few of its widths apart,
+/// each pool at the level the water had at the next step's lip, so it is never higher than it
+/// was. At each lip it falls into the pool below over a short fall, four points (the lip, just
+/// past it, just short of the foot, the foot), so the pools are level up to it and the fall
+/// steep between. Over a lip the water is shallow, and under the fall the pool is scoured by
+/// what H/L/S gives beyond the step's drop, its bed rising to the next lip. White water foams
+/// down the fall and across the pool below. Returns the points, the steps, and for each point
+/// before, its index now.
+fn step_pools(
+    points: &[RibbonPoint],
+    lake_runs: &[[u32; 2]],
+    river: u32,
+    steps: &StepParams,
+    params: &RibbonParams,
+) -> (Vec<RibbonPoint>, Vec<Step>, Vec<u32>) {
+    let n = points.len();
+    let unchanged = (points.to_vec(), Vec::new(), (0..n as u32).collect());
+    if n < 3 {
+        return unchanged;
+    }
+    let mut arc = vec![0.0; n];
+    for k in 1..n {
+        let (a, b) = (position(&points[k - 1]), position(&points[k]));
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        arc[k] = arc[k - 1] + (dx * dx + dy * dy).sqrt();
+    }
+    let at = |s: f64| {
+        let j = arc.partition_point(|&a| a <= s).clamp(1, n - 1);
+        let t = (s - arc[j - 1]) / (arc[j] - arc[j - 1]).max(1e-9);
+        point_between(&points[j - 1], &points[j], t.clamp(0.0, 1.0))
+    };
+    // The reaches: clear of a lake by two points, wholly drawn (past the head's fade, short of
+    // the river it joins, a lake or the sea), and a metre over the estuary, which widens the
+    // river by its level.
+    let clear = |k: usize| {
+        points[k].fade >= 0.999
+            && f64::from(points[k].level) >= params.estuary.0 + 1.0
+            && !lake_runs
+                .iter()
+                .any(|r| k + 2 >= r[0] as usize && k <= r[1] as usize + 2)
+    };
+    let mut reaches: Vec<(usize, usize)> = Vec::new();
+    let mut k = 0;
+    while k < n {
+        if clear(k) && f64::from(points[k].grade) >= steps.from {
+            let first = k;
+            while k + 1 < n && clear(k + 1) && f64::from(points[k + 1].grade) >= 0.75 * steps.from {
+                k += 1;
+            }
+            reaches.push((first, k));
+        }
+        k += 1;
+    }
+    // Each reach's lips, a spacing apart, the last pool at least half of its spacing long.
+    struct Plan {
+        lip: f64,
+        next: f64,
+        fall: f64,
+        drop: f64,
+        pool: f64,
+        scour: f64,
+        width: f64,
+        bow: [f32; 2],
+    }
+    let mut plans: Vec<Plan> = Vec::new();
+    for &(first, last) in &reaches {
+        let end = arc[last];
+        let mut lips: Vec<(f64, f64)> = Vec::new();
+        let mut s = arc[first];
+        let mut i = 0;
+        while s < end {
+            let p = at(s);
+            let slope = f64::from(p.grade);
+            let widths = steps.spacing.0
+                + (steps.spacing.1 - steps.spacing.0) * smoothstep(steps.from, steps.steep, slope);
+            let draw = unit_f32(hash_cell3(STEP_SEED, river as i32, first as i32, i));
+            let jitter = 1.0 + steps.jitter * (2.0 * f64::from(draw) - 1.0);
+            let mut spacing = (widths * 2.0 * f64::from(p.half_width)).max(steps.least) * jitter;
+            // No higher than `highest`, where the water falls faster than the reach's slope: the
+            // spacing whose drop it is (the level only falls, so its drop grows with the spacing).
+            let level = f64::from(p.level);
+            if level - f64::from(at(s + spacing).level) > steps.highest {
+                let (mut lo, mut hi) = ((0.5 * steps.least).min(spacing), spacing);
+                if level - f64::from(at(s + lo).level) > steps.highest {
+                    hi = lo;
+                }
+                for _ in 0..24 {
+                    let mid = 0.5 * (lo + hi);
+                    if level - f64::from(at(s + mid).level) > steps.highest {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                spacing = hi;
+            }
+            lips.push((s, spacing));
+            s += spacing;
+            i += 1;
+        }
+        if let Some(&(lip, spacing)) = lips.last()
+            && end - lip < 0.5 * spacing
+        {
+            lips.pop();
+        }
+        let level = |s: f64| f64::from(at(s).level);
+        for (j, &(lip, _)) in lips.iter().enumerate() {
+            let next = lips.get(j + 1).map_or(end, |l| l.0);
+            let (top, pool) = (level(lip), level(next));
+            let drop = (top - pool).max(0.0);
+            let p = at(lip);
+            let slope = f64::from(p.grade);
+            let hls = steps.scour.0
+                + (steps.scour.1 - steps.scour.0) * smoothstep(steps.from, steps.steep, slope);
+            let fall = (steps.fall.0 * drop)
+                .max(steps.fall.1)
+                .min(0.4 * (next - lip));
+            // Its line's bow: an arch and a slant towards a bank, drawn, within 1.5 m and three
+            // fifths of the pool below.
+            let draw = |salt: i32| {
+                f64::from(unit_f32(hash_cell3(
+                    STEP_SEED,
+                    river as i32,
+                    plans.len() as i32,
+                    salt,
+                )))
+            };
+            let half = f64::from(p.half_width);
+            let (arch, slant) = (
+                steps.bow.0 * half * draw(1),
+                steps.bow.1 * half * (2.0 * draw(2) - 1.0),
+            );
+            let most = (0.6 * (next - lip - fall)).min(1.5);
+            let fit = (most / (arch + slant.abs()).max(1e-9)).min(1.0);
+            plans.push(Plan {
+                lip,
+                next,
+                fall,
+                drop,
+                pool,
+                scour: (hls - 1.0).max(0.0) * drop,
+                width: 2.0 * f64::from(p.half_width),
+                bow: [(arch * fit) as f32, (slant * fit) as f32],
+            });
+        }
+    }
+    if plans.is_empty() {
+        return unchanged;
+    }
+    // The points put in, by their place along the river: per step, its lip, just past it, just
+    // short of its foot and its foot, each bowed as its line is. A point of the river within a
+    // centimetre of one gives way to it, and so does one past the foot by less than the bow and
+    // a quarter of a metre, so the pool's first quads, from the bowed foot, never fold.
+    let mut made: Vec<(f64, usize)> = Vec::new();
+    for (j, plan) in plans.iter().enumerate() {
+        let edge = (0.25 * plan.fall).min(0.1);
+        for s in [
+            plan.lip,
+            plan.lip + edge,
+            plan.lip + plan.fall - edge,
+            plan.lip + plan.fall,
+        ] {
+            made.push((s, j));
+        }
+    }
+    let mut out: Vec<(f64, RibbonPoint)> = Vec::with_capacity(n + made.len());
+    let mut index = vec![0u32; n];
+    let mut m = 0;
+    let mut clear = f64::MIN;
+    for k in 0..n {
+        while m < made.len() && made[m].0 <= arc[k] + 0.01 {
+            let (s, j) = made[m];
+            let mut p = at(s);
+            p.lip = plans[j].bow;
+            out.push((s, p));
+            if m % 4 == 3 {
+                let bow = plans[j].bow;
+                clear = s + f64::from(bow[0] + bow[1].abs()) + 0.25;
+            }
+            m += 1;
+        }
+        if arc[k] <= clear && out.last().is_some_and(|(s, _)| *s < arc[k]) {
+            index[k] = (out.len() - 1) as u32;
+            continue;
+        }
+        let replaced = out
+            .last()
+            .is_some_and(|(s, p)| p.key == u32::MAX && (arc[k] - s).abs() <= 0.01);
+        if replaced {
+            // It keeps the river's draws there.
+            index[k] = (out.len() - 1) as u32;
+            if let Some((_, p)) = out.last_mut() {
+                p.key = points[k].key;
+            }
+        } else {
+            index[k] = out.len() as u32;
+            out.push((arc[k], points[k]));
+        }
+    }
+    // Each point's water over its reach's steps: falling at a lip, level in a pool.
+    let (mut lips, mut feet) = (vec![None; plans.len()], vec![None; plans.len()]);
+    let mut j = 0;
+    for (q, (s, p)) in out.iter_mut().enumerate() {
+        while j + 1 < plans.len() && plans[j + 1].lip <= *s + 1e-9 {
+            j += 1;
+        }
+        let plan = &plans[j];
+        let local = *s - plan.lip;
+        if local < -1e-9 || *s > plan.next + 1e-9 {
+            continue;
+        }
+        let edge = (0.25 * plan.fall).min(0.1);
+        let depth = f64::from(p.depth);
+        let (lip, foot) = (steps.lip * depth, depth + plan.scour);
+        let fall_speed = (2.0 * 9.81 * plan.drop).sqrt().min(params.speed.1);
+        let pool_speed = (f64::from(p.speed) * steps.pool_speed).max(params.speed.0);
+        let (level, slope, water, foam, speed);
+        if local <= 0.5 * edge {
+            // The lip: the pool above ends here, shallow.
+            (level, slope, water, foam, speed) = (plan.pool + plan.drop, 0.0, lip, 0.0, pool_speed);
+            lips[j] = lips[j].or(Some(q as u32));
+        } else if local < plan.fall - 0.5 * edge {
+            // The fall.
+            let t = local / plan.fall;
+            (level, slope, water, foam, speed) = (
+                plan.pool + plan.drop * (1.0 - t),
+                plan.drop / plan.fall,
+                lip + (foot - lip) * t,
+                0.3 + 0.7 * t,
+                fall_speed,
+            );
+        } else {
+            // The pool: deepest under the fall, its bed rising to the next lip, its foam fading
+            // across it.
+            let length = (plan.next - plan.lip - plan.fall).max(1e-6);
+            let t = ((local - plan.fall) / length).clamp(0.0, 1.0);
+            let rise = smoothstep(0.0, 1.0, t);
+            (level, slope, water, foam, speed) = (
+                plan.pool,
+                0.0,
+                foot + (lip - foot) * rise,
+                1.0 - smoothstep(0.0, steps.foam, t),
+                pool_speed,
+            );
+            if local <= plan.fall + 0.5 * edge {
+                feet[j] = feet[j].or(Some(q as u32));
+            }
+        }
+        p.level = level as f32;
+        p.slope = slope as f32;
+        p.depth = water as f32;
+        p.foam = foam as f32;
+        p.speed = speed as f32;
+        // Every point from the lip to the foot bows with the step's line, as the carve does.
+        if local <= plan.fall + 0.5 * edge {
+            p.lip = plan.bow;
+        }
+    }
+    let made_steps = plans
+        .iter()
+        .zip(lips.iter().zip(&feet))
+        .filter_map(|(plan, (lip, foot))| {
+            Some(Step {
+                lip: (*lip)?,
+                foot: (*foot)?,
+                drop: plan.drop,
+                spacing: plan.next - plan.lip,
+                width: plan.width,
+            })
+        })
+        .collect();
+    (out.into_iter().map(|(_, p)| p).collect(), made_steps, index)
 }
 
 /// Where a ribbon meets the sea: its first point whose level has come down to the sea's (within

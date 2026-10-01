@@ -180,6 +180,9 @@ struct Args {
     /// bench or floodplain (#116, D-041).
     #[arg(long)]
     no_valleys: bool,
+    /// Let the island's steep rivers fall evenly, without their steps and pools (#122, D-041).
+    #[arg(long)]
+    no_steps: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1859,7 +1862,13 @@ fn make_island_heights(args: &Args) -> Field2<f32> {
         let flow = forge_procgen::drain(&height, 0.0, &pool);
         let rivers = island_rivers(&height, &flow);
         let (lakes, waters) = island_lake_waters(&height, &flow);
-        let ribbons = forge_procgen::ribbons(&height, &rivers, &waters, &ribbon_params());
+        // Without their steps (#122): the floors follow the rivers' fall, not their pools, so
+        // the 8 m field is the same with them or without.
+        let stepless = forge_procgen::RibbonParams {
+            steps: None,
+            ..ribbon_params()
+        };
+        let ribbons = forge_procgen::ribbons(&height, &rivers, &waters, &stepless);
         let s = forge_procgen::carve_valleys(&mut height, &ribbons, &lakes, &valleys, &pool);
         tracing::info!(
             points = %format_args!("{} floodplain, {} bench, {} room, {} in lakes", s.floodplain, s.bench, s.room, s.in_lake),
@@ -2011,7 +2020,7 @@ fn island_ribbons(
     let widest = points
         .clone()
         .fold(0.0_f32, |m, p| m.max(2.0 * p.half_width));
-    let steepest = points.clone().fold(0.0_f32, |m, p| m.max(p.slope));
+    let steepest = points.clone().fold(0.0_f32, |m, p| m.max(p.grade));
     let deepest = points.clone().fold(0.0_f32, |m, p| m.max(p.depth));
     let fast = points.clone().filter(|p| p.speed >= 2.5).count();
     // Where the largest river (the last drawn) meets the sea, for placing a view.
@@ -2026,11 +2035,16 @@ fn island_ribbons(
         .filter_map(|&k| ribbons.len().checked_sub(k))
         .map(|r| {
             let points = &ribbons[r].points;
-            let p = points[points.len() / 2];
+            // Among the points the river had before its steps (#122), which they don't move.
+            let unstepped = points.iter().filter(|p| p.key != u32::MAX);
+            let p = *unstepped
+                .clone()
+                .nth(unstepped.count() / 2)
+                .expect("a point");
             let (dx, dz) = (p.direction[0], p.direction[1]);
             let at = [p.position[0] - 20.0 * dx, p.position[1] - 20.0 * dz];
             let ground = channels.height_at(height, f64::from(at[0]), f64::from(at[1])) as f32;
-            let y = p.level.max(ground) + 3.0;
+            let y = p.unstepped.max(ground) + 3.0;
             let yaw = (-dx).atan2(-dz).to_degrees();
             format!(
                 "{:.0},{y:.1},{:.0},{yaw:.1},-10",
@@ -2050,7 +2064,7 @@ fn island_ribbons(
         format!(
             "{:.0},{:.1},{:.0},{yaw:.1},-20",
             at[0] - half,
-            p.level.max(ground) + up,
+            p.unstepped.max(ground) + up,
             at[1] - half
         )
     };
@@ -2099,7 +2113,7 @@ fn island_ribbons(
         .iter()
         .flat_map(|r| r.points.iter())
         .filter(|p| p.half_width >= 2.5 && p.fade > 0.99)
-        .max_by(|a, b| a.slope.total_cmp(&b.slope))
+        .max_by(|a, b| a.grade.total_cmp(&b.grade))
         .map_or_else(String::new, |p| {
             let (dx, dz) = (p.direction[0], p.direction[1]);
             let at = [p.position[0] + 40.0 * dx, p.position[1] + 40.0 * dz];
@@ -2113,12 +2127,16 @@ fn island_ribbons(
             )
         });
     tracing::info!(%up_valley, "up a steep river from low (--view)");
-    // How far the water stands under its banks: the channel's depth less the water's.
+    // How far the water stands under its banks: the channel's depth less the water's (as it
+    // was before the steps, #122, whose pools stand lower by design).
     let freeboard = points
         .clone()
-        .map(|p| p.bank - p.level)
+        .map(|p| p.bank - p.unstepped)
         .fold(0.0_f32, f32::max);
-    let cut_over_2_m = points.clone().filter(|p| p.bank - p.level > 2.0).count();
+    let cut_over_2_m = points
+        .clone()
+        .filter(|p| p.key != u32::MAX && p.bank - p.unstepped > 2.0)
+        .count();
     // How steeply each river reaches the sea (#109): its water's fall over its last 160 m before
     // its mouth, the widest first, and how many fall over 5 % and over 10 % (a rapid's share).
     let mut falls: Vec<(f32, f32)> = ribbons
@@ -2158,9 +2176,9 @@ fn island_ribbons(
         for p in ribbons
             .iter()
             .flat_map(|r| &r.points)
-            .filter(|p| p.fade > 0.5 && (p.level > 20.0) == hills)
+            .filter(|p| p.fade > 0.5 && p.key != u32::MAX && (p.unstepped > 20.0) == hills)
         {
-            count[usize::from(p.slope <= 0.04) + usize::from(p.slope < 0.02)] += 1;
+            count[usize::from(p.grade <= 0.04) + usize::from(p.grade < 0.02)] += 1;
         }
         format!(
             "{} V, {} bench, {} floodplain",
@@ -2172,6 +2190,44 @@ fn island_ribbons(
         plain = %reaches(false),
         "the rivers' reaches (points over 4 %, 2-4 %, under 2 %)"
     );
+    // The steep reaches' steps and pools (#122): how many, how far apart in the river's widths,
+    // how high; and the highest on a river 5 m wide or more, from 15 m down its pool and 3 m
+    // over its water, looking up at the fall.
+    let steps: Vec<(&forge_procgen::Ribbon, &forge_procgen::Step)> = ribbons
+        .iter()
+        .flat_map(|r| r.steps.iter().map(move |s| (r, s)))
+        .collect();
+    if !steps.is_empty() {
+        let count = steps.len() as f64;
+        let widths = steps.iter().map(|(_, s)| s.spacing / s.width).sum::<f64>() / count;
+        let drop = steps.iter().map(|(_, s)| s.drop).sum::<f64>() / count;
+        let highest = steps.iter().map(|(_, s)| s.drop).fold(0.0, f64::max);
+        let view = steps
+            .iter()
+            .filter(|(_, s)| s.width >= 5.0)
+            .max_by(|a, b| a.1.drop.total_cmp(&b.1.drop))
+            .map_or_else(String::new, |(r, s)| {
+                let p = r.points[s.foot as usize];
+                let (dx, dz) = (p.direction[0], p.direction[1]);
+                let at = [p.position[0] + 15.0 * dx, p.position[1] + 15.0 * dz];
+                let yaw = dx.atan2(dz).to_degrees();
+                format!(
+                    "{:.0},{:.1},{:.0},{yaw:.1},-5",
+                    at[0] - half,
+                    p.level + 3.0,
+                    at[1] - half
+                )
+            });
+        tracing::info!(
+            steps = steps.len(),
+            rivers = ribbons.iter().filter(|r| !r.steps.is_empty()).count(),
+            spacing_widths = %format_args!("{widths:.2}"),
+            drop_m = %format_args!("{drop:.2}"),
+            highest_m = %format_args!("{highest:.2}"),
+            %view,
+            "the steep rivers' steps and pools (--view)"
+        );
+    }
     tracing::info!(
         rivers = ribbons.len(),
         largest_mouth = %format_args!("{:.0},{:.0}", mouth[0], mouth[1]),
@@ -2375,6 +2431,8 @@ fn island_ribbons(
                     bank: p.bank,
                     speed: p.speed,
                     slope: p.slope,
+                    foam: p.foam,
+                    lip: p.lip,
                     fade: p.fade,
                     ground: p.ground,
                 })
@@ -3459,6 +3517,7 @@ fn main() -> Result<()> {
                 .regional
                 .filter(|_| args.river_k > 0.0)
                 .map(|(_, depth)| (args.river_k, depth)),
+            steps: island.steps.filter(|_| !args.no_steps),
             ..island
         })
         .expect("the rivers' parameters, set once");

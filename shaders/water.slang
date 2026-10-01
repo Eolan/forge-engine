@@ -265,6 +265,7 @@ struct RiverPoint
     float4 c; // how much of the river is drawn (0..1), the half width drawn whole where a segment starts (m; 0 at a river's last point: none starts), the ground under the last vertex across, the water's level (m)
     float4 d; // the ground under the first four vertices across: the highest the drawn ground stands under the quads around each (m)
     float4 e; // the ribbon's half width (m, under the banks), the lowest bank before the channel was carved (m), the first stone past the point, the metres along the river from its head
+    float4 f; // the white water a step's fall leaves (0..1, #122), how far its line bows downstream in the middle and towards the left bank (m; negative: the right), one unused
 };
 
 // Where a river's water meets the sea's (`GpuRiverMouth` in water.rs).
@@ -902,6 +903,7 @@ struct RiverOut
     float4 edge : TEXCOORD3;      // the half width at the water's edge (m), the ribbon's (m), how far it has risen onto the ground (0..1), the metres along the river
     nointerpolation uint segment : TEXCOORD4; // the segment's first point
     float cover : TEXCOORD5;      // the half width drawn whole (m): the water's edge's, more in a confluence's rounded corner (#119)
+    float foam : TEXCOORD6;       // the white water a step's fall leaves (0..1, #122)
 };
 
 // The ground's height at `world` (x, z) as the island's mesh draws its coarse cells: the field's
@@ -943,6 +945,7 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
         o.edge = 0.0;
         o.segment = 0u;
         o.cover = 0.0;
+        o.foam = 0.0;
         return o;
     }
     RiverPoint p = w[0].rivers[segment + uint(corner.y)];
@@ -957,6 +960,10 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
     float half_width = max(p.e.x, footprint);
     float across = float(corner.x) / float(RIVER_ACROSS) * 2.0 - 1.0;
     float2 world = centre + float2(-p.b.y, p.b.x) * (across * half_width);
+    // A step's line bowed downstream (#122): an arch and a slant towards a bank, at the vertices
+    // across (`forge_procgen::lip_shift`, which the carve under it follows).
+    float slant = p.f.z >= 0.0 ? 1.0 + across : 1.0 - across;
+    world += p.b.xy * (p.f.y * (1.0 - across * across) + abs(p.f.z) * 0.5 * slant);
     // Far away, on the ground under the ribbon's quads (and, widened, under the vertex).
     float resting = corner.x < 4 ? p.d[corner.x] : p.c.z;
     float draped = max(resting, ground_height(w, world)) + RIVER_LIFT_PIXELS * footprint;
@@ -971,6 +978,7 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
     o.segment = segment;
     // At a river's last point (its `c.y` 0: no segment starts there), its half width.
     o.cover = max(p.c.y, p.a.z);
+    o.foam = p.f.x;
     return o;
 }
 
@@ -1179,6 +1187,10 @@ StoneFlow stones_at(WaterSurface* w, uint segment, float2 world, float2 velocity
 // many times longer the cells are down it (the finer octave is 2.5 times finer both ways).
 static const float RIVER_FOAM_CELL = 0.35;
 static const float RIVER_FOAM_STREAK = 4.0;
+// A step's fall breaks into chutes across the river (#122): metres across a chute, and the share
+// of its white the glassiest keeps.
+static const float RIVER_CHUTE = 1.3;
+static const float RIVER_CHUTE_GLASS = 0.25;
 
 // White water's pattern at `p` (metres along the river and across it): two octaves of value
 // noise drawn out down the river, streaks of broken white water rather than round blobs.
@@ -1203,6 +1215,7 @@ struct FreshWater
     float drape;     // how far it lies on the ground far away (0: at its level)
     float depth;     // its own depth there, which the view sees through where it lies on the ground
     float white;     // the white water's share, before its pattern
+    float froth;     // how much of its pattern the white water covers, 0..1: a step's fall and the boil under it (#122)
     float2 streak;   // a river's: metres along it from its head and across it, where its white water streaks
     float speed;     // a river's own speed down it (m/s), which carries its white water
     float3 absorption; // its water's, m⁻¹
@@ -1276,7 +1289,8 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
         float norm = rsqrt(g.weight0 * g.weight0 + g.weight1 * g.weight1);
         float pattern = 0.5 + ((n0 - 0.5) * g.weight0 + (n1 - 0.5) * g.weight1) * norm;
         float resolved = saturate(RIVER_FOAM_CELL / (2.0 * footprint) - 1.0);
-        foam = s.white * lerp(RIVER_FOAM_MEAN, smoothstep(0.5, 0.72, pattern), resolved);
+        float cover = smoothstep(0.5 - 0.45 * s.froth, 0.72 - 0.3 * s.froth, pattern);
+        foam = s.white * lerp(lerp(RIVER_FOAM_MEAN, 0.9, s.froth), cover, resolved);
     }
     color = lerp(color, 0.8 * light.lit / PI, foam * 0.8);
     float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);
@@ -1339,7 +1353,13 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.coverage = input.river.y * lerp(near_cover, far_cover, drape);
     s.drape = drape;
     s.depth = input.river.z * (1.0 - u * u);
-    s.white = max(rapids, stones.white);
+    // A step's fall white through, and its boil across the pool below, thinning out (#122);
+    // across the river it pours in chutes, some glassy, some white, so the lip is no straight
+    // white line.
+    float chutes = smoothstep(0.2, 0.8, value_noise(world / RIVER_CHUTE + 17.3));
+    float fall_white = input.foam * lerp(RIVER_CHUTE_GLASS, 1.0, chutes);
+    s.white = max(max(rapids, stones.white), fall_white);
+    s.froth = fall_white * fall_white;
     s.streak = float2(input.edge.w, across);
     s.speed = input.river.w;
     s.absorption = RIVER_ABSORPTION;
@@ -1435,6 +1455,7 @@ SurfaceTargets lake_frag_main(LakeOut input)
     s.drape = 0.0;
     s.depth = 0.0;
     s.white = 0.0;
+    s.froth = 0.0;
     s.streak = 0.0;
     s.speed = 0.0;
     s.absorption = lerp(LAKE_ABSORPTION, RIVER_ABSORPTION, estuary.fresh);

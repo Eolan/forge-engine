@@ -629,6 +629,23 @@ alternating, 1600 × 900.
   (gravel, scree, scrub and rock). A third layer comes only from the sand's contour (#111).
 - At start the three texture sets take 210 ms and the painting 0.14 s.
 
+**The steep rivers' steps and pools** (#122, 2026-10-01): the same build with `--no-steps`
+against the default; two rounds of every view without then with (a cook per switch), 1 500
+frames each, 2560 × 1440.
+
+| View | frame | `water/surface` | `water/reflections` | `shading/layered` | `geometry/instance cull` |
+|---|---|---|---|---|---|
+| a stream near the head from low (`-939,325.0,-177,126.5,-6`) | 2.822 → 2.823 ms | 0.049 → 0.069 | 0.109 → 0.069 | 0.952 → 0.935 | 0.060 → 0.061 |
+| up a steep river from 2 m | 4.946 → 4.196 ms | 0.240 → 0.185 | 1.278 → 0.954 | 1.809 → 1.174 | 0.044 → 0.045 |
+| the island from 2.5 km | 3.497 → 3.588 ms | 0.343 → 0.373 | 0.188 → 0.189 | 0.704 → 0.703 | 0.103 → 0.113 |
+
+- Up the steep river a lip's boulders now stand in front of the camera and hide much of the
+  water and the valley's floor: the view is not the same scene.
+- The river points are 38 534 (17 652) and the stones 25 740 (1 843): from 2.5 km
+  `water/surface` takes 0.03 ms more for the steps' segments, the stones' cull 0.01 ms.
+- At start the steps take no measurable time; the island's tiles cook again when the flag
+  changes (their key holds the rivers' parameters).
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.
