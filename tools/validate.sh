@@ -67,6 +67,8 @@ for path in "" --force-fallback; do
   # Under the sea (#108, the log's `under the sea` view): the water at the camera, the surface
   # from below and the water between.
   validate "under-sea$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=4770,-3.0,-2847,91.1,-10 $path
+  # And under the largest lake (the log's `under` view of the island's lakes).
+  validate "under-lake$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=2248,20.2,-1184,0,25 $path
 done
 [ "$keep" != 0 ] && say "logs in $out/logs, summary in $summary"
 exit 0

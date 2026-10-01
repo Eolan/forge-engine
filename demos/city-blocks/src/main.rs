@@ -2465,11 +2465,38 @@ fn island_ribbons(
             format!("{x:.0},{:.1},{z:.0},0,-15", l.level + 30.0)
         })
         .collect();
+    // And under the largest (#108): at its deepest sample, halfway down its depth, looking up
+    // at its surface and across its floor.
+    let under = largest
+        .first()
+        .and_then(|l| {
+            let at = |k: usize| {
+                let (i, j) = (k % l.size[0] as usize, k / l.size[0] as usize);
+                [
+                    l.origin[0] + i as f32 * spacing,
+                    l.origin[1] + j as f32 * spacing,
+                ]
+            };
+            let ground = |p: [f32; 2]| {
+                channels.height_at(height, f64::from(p[0] + half), f64::from(p[1] + half)) as f32
+            };
+            let deepest = (0..l.mask.len())
+                .filter(|&k| l.mask[k])
+                .map(at)
+                .min_by(|a, b| ground(*a).total_cmp(&ground(*b)))?;
+            let y = 0.5 * (l.level + ground(deepest));
+            Some(format!(
+                "{:.0},{y:.1},{:.0},0,25  {:.0},{y:.1},{:.0},0,-20",
+                deepest[0], deepest[1], deepest[0], deepest[1]
+            ))
+        })
+        .unwrap_or_default();
     tracing::info!(
         lakes = lakes.len(),
         sea_mouths,
         lake_mouths = mouths.len() - sea_mouths,
         views = %views.join("  "),
+        %under,
         "the island's lakes (--view)"
     );
     let rivers: Vec<Vec<WaterRiverPoint>> = ribbons

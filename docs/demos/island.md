@@ -1657,6 +1657,49 @@ filling the view. The pass keeps its 96 registers.
 - The water itself carries no light shafts: the caustics' light is on the floor only.
 - The river stones and the rocks don't take caustics: none stand under the sea yet.
 
+**Under the lakes and the rivers** (#108, 2026-10-02). The last part of the issue: knowing
+which water the camera is in.
+
+**What changed.**
+- **The camera's water.**
+  - The CPU keeps the lakes' masks and levels and the rivers' points (`ShoreFields::fresh_at`).
+  - A lake holds the camera when its mask covers the sample nearest it, and the camera stands
+    between half a metre over the level and a metre under its deepest water.
+  - A river holds it within half the water's width of its course, between the same bounds of
+    its level and depth there.
+  - `water/at-camera` then takes that water's level as the plane, and its absorption and
+    scattering, the lakes' dark water or the rivers' silty one, in place of the sea's.
+- **Their surfaces from below.** The rivers and the lakes get a second pipeline each, as the
+  sea did, used when the camera can be under their water: in or over a lake or a river, or
+  within 2 m of the sea's level, where a river's mouth holds the sea's water.
+  - There a pixel looking out from under the water sees Snell's window and the mirror of the
+    water. The surface is tilted by the river's fall, without its ripples, and blended by its
+    coverage as from above.
+  - Within 20 m of the sea, but higher than 2 m, they keep the shader seen from above alone:
+    the one that can also see them from below shades the white water seen from above a few
+    levels differently, the compiler's choice (47 pixels at the largest mouth from 4 m).
+- **A view under the largest lake** in the log (`the island's lakes`, `under=`): at its
+  deepest sample, halfway down its 18 m, looking up and across.
+- **The light scattered towards the sun is capped** at 30 times what is scattered back up
+  (`WATER_PHASE_MAX`). The lakes' water scatters much for what it absorbs, and a metre under
+  a lake the glow towards the sun filled the view with white. Under the sea the sun now shows
+  through the waves in the glow, rather than melting into it.
+
+**What it looks like** (`reports/2026-10-01-108/fresh.png`):
+- The lakes' water is the dark lake water tuned from above (absorption 1.0, 0.6, 1.2 m⁻¹):
+  under it one sees a metre or two in a murky green, black by 9 m down, bright towards the sun
+  near the surface.
+- The rivers' water is silty and brown-green, and their beds show through a metre of it.
+
+**Checks:**
+- The capture batch is unchanged, as are the four views within 20 m of the sea.
+- `validate.sh` now also runs under the largest lake on both paths, and is clean.
+
+**Left for later:**
+- Clearer lake water for diving, a choice of look (`LAKE_ABSORPTION`, `LAKE_SCATTER`), for the
+  owner.
+- The ripples on the lakes' and the rivers' surfaces seen from below.
+
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 
 The ground left on #106 is the 8 m field's own: its slopes keep 8 m facets and their shadows'

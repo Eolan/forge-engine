@@ -702,6 +702,15 @@ of two cascades four times each, in the layered pass.
 - These rounds ran about 0.25 ms faster in every view than those of the table above (the GPU's
   clocks); compare within a table.
 
+**Under the lakes and the rivers** (#108, 2026-10-02), two rounds, 2560 × 1440:
+- 9 m under the largest lake looking up (`2248,20.2,-1184,0,25`): 1.99 ms, `water/under`
+  0.080, `water/at-camera` 0.007.
+- 1.5 m under it looking across (`2248,27.5,-1184,0,0`): 2.43 ms, `water/under` 0.082.
+- In the largest river by its mouth (`4384,-0.2,-2840,-88.9,5`): 2.08 ms, `water/under` 0.084.
+- Over the water the rivers and the lakes keep the shader seen from above alone, unless the
+  camera stands in or over one of them or within 2 m of the sea: the views of the table above
+  are unchanged.
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

@@ -24,7 +24,7 @@ use forge_gpu::{
     MemoryLocation, Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, TransientDesc,
     VertexPipelineDesc, vk,
 };
-use glam::{DVec3, Mat4, Vec3};
+use glam::{DVec3, Mat4, Vec2, Vec3};
 
 use crate::aces2::f32_to_f16;
 use crate::meshlet::RayRequests;
@@ -529,9 +529,10 @@ struct GpuWaterSurface {
     pad: u32,
     at_camera: u64,
     pad_at_camera: [u32; 2],
+    fresh: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 752);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 768);
 
 /// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
 /// its absorption and its scattering, then `water/under`'s dispatch.
@@ -1040,6 +1041,10 @@ pub struct WaterSurface {
     surface_under: Pipeline,
     rivers: Pipeline,
     lakes: Pipeline,
+    /// The rivers and the lakes within reach of the camera: seen from below where a pixel
+    /// looks out from under them.
+    rivers_under: Pipeline,
+    lakes_under: Pipeline,
     at_camera_pass: Pipeline,
     under: Pipeline,
     /// The water at the camera (`WaterAtCamera`), which `water/at-camera` writes.
@@ -1087,6 +1092,90 @@ struct ShoreFields {
     /// The lakes and their masks' bits (none without).
     lakes: Option<(Buffer, Buffer)>,
     lake_count: u32,
+    /// The lakes, and the rivers' points one river after the other as uploaded, as the CPU
+    /// finds the camera in their water ([`ShoreFields::fresh_at`], #108).
+    fresh_lakes: Vec<FreshLake>,
+    fresh_points: Vec<FreshPoint>,
+}
+
+/// Which fresh water the camera stands in (`fresh` in `water.slang`'s block).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FreshKind {
+    Lake = 1,
+    River = 2,
+}
+
+/// A lake as the CPU finds the camera in it ([`WaterLake`]).
+struct FreshLake {
+    origin: [f32; 2],
+    size: [u32; 2],
+    level: f32,
+    depth: f32,
+    mask: Vec<bool>,
+}
+
+/// A river's point as the CPU finds the camera in its water.
+#[derive(Clone, Copy)]
+struct FreshPoint {
+    position: Vec2,
+    level: f32,
+    half_width: f32,
+    depth: f32,
+}
+
+/// Metres over a lake's or a river's level within which the camera's near plane may reach its
+/// water.
+const FRESH_ABOVE: f32 = 0.5;
+/// Metres under a lake's or a river's deepest water the camera still counts as in it.
+const FRESH_BELOW: f32 = 1.0;
+/// Metres over the sea's mean level under which the camera may be under the sea's water in a
+/// river's mouth, its crests included: the rivers then draw as seen from below too.
+const FRESH_SEA_REACH: f64 = 2.0;
+
+impl ShoreFields {
+    /// The lake's or the river's water the camera at `camera` (the sea's frame) stands in or
+    /// just over: its level and which (#108). A lake's mask holds the sample nearest the camera;
+    /// a river's water spans half its width either side of its course, at its level there.
+    fn fresh_at(&self, camera: DVec3) -> Option<(f32, FreshKind)> {
+        let p = camera.as_vec3();
+        let within = |level: f32, depth: f32| {
+            p.y <= level + FRESH_ABOVE && p.y >= level - depth - FRESH_BELOW
+        };
+        let spacing = 1.0 / self.frame[2];
+        for lake in &self.fresh_lakes {
+            if !within(lake.level, lake.depth) {
+                continue;
+            }
+            let i = ((p.x - lake.origin[0]) / spacing).round();
+            let j = ((p.z - lake.origin[1]) / spacing).round();
+            if i < 0.0 || j < 0.0 || i >= lake.size[0] as f32 || j >= lake.size[1] as f32 {
+                continue;
+            }
+            if lake.mask[j as usize * lake.size[0] as usize + i as usize] {
+                return Some((lake.level, FreshKind::Lake));
+            }
+        }
+        let flat = Vec2::new(p.x, p.z);
+        for chunk in &self.river_chunks {
+            if p.cmplt(chunk.lo).any() || p.cmpgt(chunk.hi).any() {
+                continue;
+            }
+            for k in chunk.first as usize..(chunk.first + chunk.count) as usize {
+                let (a, b) = (self.fresh_points[k], self.fresh_points[k + 1]);
+                let ab = b.position - a.position;
+                let t =
+                    ((flat - a.position).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+                let lerp = |u: f32, v: f32| u + (v - u) * t;
+                let level = lerp(a.level, b.level);
+                if flat.distance(a.position + ab * t) <= lerp(a.half_width, b.half_width)
+                    && within(level, lerp(a.depth, b.depth))
+                {
+                    return Some((level, FreshKind::River));
+                }
+            }
+        }
+        None
+    }
 }
 
 impl WaterSurface {
@@ -1176,54 +1265,50 @@ impl WaterSurface {
         device.destroy_shader_module(vertex);
         device.destroy_shader_module(fragment);
         device.destroy_shader_module(under_fragment);
-        // The rivers blend over what is under them by how much of the pixel they cover: their
-        // soft edges, their thinning far away.
-        let river_vertex = device.create_shader_module(
-            &shaders.compile("water.slang", "river_vert_main", ShaderStage::Vertex)?,
-            "water river vertices",
-        )?;
-        let river_fragment = device.create_shader_module(
-            &shaders.compile("water.slang", "river_frag_main", ShaderStage::Fragment)?,
-            "water rivers",
-        )?;
-        let rivers = device.create_vertex_pipeline(&VertexPipelineDesc {
-            vertex: (river_vertex, "river_vert_main"),
-            fragment: (river_fragment, "river_frag_main"),
-            color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
-            depth_format: Some(vk::Format::D32_SFLOAT),
-            push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
-            cull_mode: vk::CullModeFlags::NONE,
-            wireframe: false,
-            depth_test: true,
-            alpha_blend: true,
-            name: "water rivers",
-        });
-        device.destroy_shader_module(river_vertex);
-        device.destroy_shader_module(river_fragment);
+        // The rivers and the lakes blend over what is under them by how much of the pixel they
+        // cover: the rivers' soft edges and their thinning far away, the lakes' masks. Each with
+        // a second pipeline for a camera low enough to be under the water (#108).
+        let fresh_pipelines =
+            |entry: &str, name: &str| -> Result<(Result<Pipeline>, Result<Pipeline>)> {
+                let vertex_entry = format!("{entry}_vert_main");
+                let vertex = device.create_shader_module(
+                    &shaders.compile("water.slang", &vertex_entry, ShaderStage::Vertex)?,
+                    &format!("{name} vertices"),
+                )?;
+                let mut pipelines = Vec::new();
+                for (fragment_entry, pipeline_name) in [
+                    (format!("{entry}_frag_main"), name.to_string()),
+                    (
+                        format!("{entry}_under_frag_main"),
+                        format!("{name} from below"),
+                    ),
+                ] {
+                    let fragment = device.create_shader_module(
+                        &shaders.compile("water.slang", &fragment_entry, ShaderStage::Fragment)?,
+                        &pipeline_name,
+                    )?;
+                    pipelines.push(device.create_vertex_pipeline(&VertexPipelineDesc {
+                        vertex: (vertex, &vertex_entry),
+                        fragment: (fragment, &fragment_entry),
+                        color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
+                        depth_format: Some(vk::Format::D32_SFLOAT),
+                        push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
+                        cull_mode: vk::CullModeFlags::NONE,
+                        wireframe: false,
+                        depth_test: true,
+                        alpha_blend: true,
+                        name: &pipeline_name,
+                    }));
+                    device.destroy_shader_module(fragment);
+                }
+                device.destroy_shader_module(vertex);
+                let under = pipelines.pop().expect("two pipelines");
+                Ok((pipelines.pop().expect("two pipelines"), under))
+            };
+        let (rivers, rivers_under) = fresh_pipelines("river", "water rivers")?;
         // The lakes, drawn before the rivers so a river blends over a lake it runs into: a plane
         // each, clipped to its mask, its edge where the ground rises through it.
-        let lake_vertex = device.create_shader_module(
-            &shaders.compile("water.slang", "lake_vert_main", ShaderStage::Vertex)?,
-            "water lake vertices",
-        )?;
-        let lake_fragment = device.create_shader_module(
-            &shaders.compile("water.slang", "lake_frag_main", ShaderStage::Fragment)?,
-            "water lakes",
-        )?;
-        let lakes = device.create_vertex_pipeline(&VertexPipelineDesc {
-            vertex: (lake_vertex, "lake_vert_main"),
-            fragment: (lake_fragment, "lake_frag_main"),
-            color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
-            depth_format: Some(vk::Format::D32_SFLOAT),
-            push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
-            cull_mode: vk::CullModeFlags::NONE,
-            wireframe: false,
-            depth_test: true,
-            alpha_blend: true,
-            name: "water lakes",
-        });
-        device.destroy_shader_module(lake_vertex);
-        device.destroy_shader_module(lake_fragment);
+        let (lakes, lakes_under) = fresh_pipelines("lake", "water lakes")?;
         let blocks = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -1469,6 +1554,28 @@ impl WaterSurface {
                     stone_count: stones.len() as u32,
                     lakes: lake_buffers,
                     lake_count: lakes.len() as u32,
+                    fresh_lakes: s
+                        .lakes
+                        .iter()
+                        .map(|lake| FreshLake {
+                            origin: lake.origin,
+                            size: lake.size,
+                            level: lake.level,
+                            depth: lake.depth,
+                            mask: lake.mask.clone(),
+                        })
+                        .collect(),
+                    fresh_points: s
+                        .rivers
+                        .iter()
+                        .flatten()
+                        .map(|p| FreshPoint {
+                            position: Vec2::from(p.position),
+                            level: p.level,
+                            half_width: p.half_width,
+                            depth: p.depth,
+                        })
+                        .collect(),
                 })
             })
             .transpose()?;
@@ -1476,6 +1583,8 @@ impl WaterSurface {
             copy: copy?,
             surface: surface?,
             surface_under: surface_under?,
+            rivers_under: rivers_under?,
+            lakes_under: lakes_under?,
             rivers: rivers?,
             lakes: lakes?,
             at_camera_pass: at_camera_pass?,
@@ -1706,16 +1815,29 @@ impl WaterSurface {
         let address = block.address();
         let sky_address = sky.address();
         let sky_light = sky.light.address;
-        // Whether the camera stands low enough to be under the water (#108).
-        let in_reach = params.camera.y < UNDER_REACH;
+        // Whether the camera stands low enough to be under the water (#108): the sea's, or a
+        // lake's or a river's it stands in or over.
+        let fresh_water = self.shore.as_ref().and_then(|s| s.fresh_at(params.camera));
+        let fresh = fresh_water.map_or([0.0; 4], |(level, kind)| {
+            [level, kind as u32 as f32, 0.0, 0.0]
+        });
+        let in_reach = params.camera.y < UNDER_REACH || fresh_water.is_some();
         let surface = if in_reach {
             &self.surface_under
         } else {
             &self.surface
         };
+        // The rivers and the lakes as seen from below only where the camera can be under their
+        // water: in or over a lake or a river, or at the sea's level, where a river's mouth
+        // holds the sea's water. (Their shader that can see them from below shades the white
+        // water seen from above a few levels differently, the compiler's choice.)
+        let (river_pipeline, lake_pipeline) =
+            if fresh_water.is_some() || params.camera.y < FRESH_SEA_REACH {
+                (&self.rivers_under, &self.lakes_under)
+            } else {
+                (&self.rivers, &self.lakes)
+            };
         let surface_indices = &self.surface_indices;
-        let river_pipeline = &self.rivers;
-        let lake_pipeline = &self.lakes;
         let shore: Option<&'f ShoreFields> = self.shore.as_ref();
         let rivers = shore.and_then(|s| s.rivers.as_ref());
         let lake_count = shore.map_or(0, |s| s.lake_count);
@@ -1853,6 +1975,7 @@ impl WaterSurface {
                     pad: 0,
                     at_camera: at_camera_address,
                     pad_at_camera: [0; 2],
+                    fresh,
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.
