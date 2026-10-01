@@ -488,6 +488,12 @@ the beach from 8 m 1.864 → 1.887 ms, over the south beach from 60 m 1.799 → 
 from 2.5 km 2.132 → 2.152 ms. The wandering lookup costs up to 0.02 ms of `shading/layered` (two
 noise lookups a pixel of the island's ground); the rest is the refined cells.
 
+**The sand's top by height** (#106, 2026-10-01): the layered pass draws the sand under 2.5 m from
+the ground's height under each pixel (`RenderLayer::contour`). Three runs each, alternating,
+against 3c651fd: `shading/layered` +0.010 to +0.023 ms over six views (the first view 0.356 →
+0.374 ms, the island from 2.5 km 0.309 → 0.332). The noise runs only within the contour's wander
+and band (the first version paid for it on every pixel, up to +0.033 ms).
+
 **The island's water at 2560 × 1440** (2026-10-01, after the rivers' beds, the lakes, the coast,
 the ground's smoothing, the rivers' culling; `--water`, three runs each, the waves held at 12 s):
 

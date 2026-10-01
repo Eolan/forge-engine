@@ -24,7 +24,7 @@ use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, Input};
 use forge_core::material::{
-    Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
+    LayerContour, Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
 };
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
@@ -1481,8 +1481,20 @@ impl CityMaterials {
                 albedo_texture: Some(map),
                 texture_scale: size,
                 // The layers' edges wander by a texel (4 m) instead of stepping along the map's
-                // grid: the sand's top along the coast followed it in teeth (#106).
+                // grid (#106).
                 cavity: 1.0,
+                // The sand's top follows the drawn ground's height, not the map's texels: they
+                // drew it in teeth along the coast (#106).
+                contour: Some(LayerContour::new(
+                    island_layer::SAND,
+                    &[
+                        island_layer::GRASS,
+                        island_layer::DRY_GRASS,
+                        island_layer::LUSH_GRASS,
+                    ],
+                    SAND_BELOW,
+                    SAND_WANDER,
+                )),
                 ..RenderLayer::default()
             },
         ));
@@ -2083,6 +2095,13 @@ const GROUND_SMOOTHING: u32 = 1;
 /// sea's level (the sand's top at 2.5 m among them), four passes of the binomial filter.
 const SHORE_SMOOTHING: (f32, u32) = (3.5, 4);
 
+/// Metres above the sea under which the island's gentle ground is sand (the layer map's rule,
+/// and the ground's contour under each pixel).
+const SAND_BELOW: f32 = 2.5;
+
+/// Metres the sand's top wanders up and down along the coast (`LayerContour::wander`, #106).
+const SAND_WANDER: f32 = 0.3;
+
 /// The shore's wave trains (#105): the breeze's swell as three periods around its peak (the
 /// swell cascade centres on 7.3 s), heights in deep water.
 const SHORE_TRAINS: [ShoreTrain; 3] = [
@@ -2280,7 +2299,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             shore: Some(forge_procgen::Shore {
                 sea: island_layer::SEABED,
                 sand: island_layer::SAND,
-                sand_below: 2.5,
+                sand_below: SAND_BELOW,
             }),
         },
         texels,

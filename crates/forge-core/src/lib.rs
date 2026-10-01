@@ -14,5 +14,7 @@ pub mod material;
 pub mod seed;
 
 pub use id::Handle;
-pub use material::{Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId};
+pub use material::{
+    LayerContour, Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
+};
 pub use seed::{Seed, SplitMix64};

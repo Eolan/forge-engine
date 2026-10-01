@@ -204,7 +204,9 @@ The resolve is three kinds of pass:
   light; beyond them the sky's irradiance takes over, and GTAO still marks the contacts.
 - **Ground in layers** (issue #42, D-028): a `layered` row names a layer map, a byte a texel,
   and each layer is the standard row after it; the layered pass blends the two heaviest
-  layers around each pixel.
+  layers around each pixel. A row's contour (`RenderLayer::contour`, #106) draws one layer by
+  the ground's height under the pixel instead of the map's texels: the island's sand under
+  2.5 m.
 
 **Dense clusters go to a software rasteriser** (issue #3). The cluster cull marks a cluster
 dense when it is in front of the near plane, under 64 pixels across and has fewer than two

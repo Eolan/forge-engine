@@ -114,6 +114,10 @@ public struct Material
     public float reflectance;       // Fresnel's F0: the share reflected at normal incidence (issue #56)
     public float scattering;        // ice: light scattered per metre by its bubbles (issue #61)
     public uint flags;              // MATERIAL_FLAG_*
+    public uint contour;            // layered: the contour's layer under its height plus one, 0 for none
+    public uint contour_above;      // its layers over the height, one bit each
+    public float contour_height;    // its height, object space, and how far it wanders (metres)
+    public float contour_wander;
     public uint pad2;
 };
 
@@ -2603,10 +2607,72 @@ float shore_wetness(ShoreGround* g, float3 world)
     return wet;
 }
 
+// A layered row's contour (`RenderLayer::contour`, the island's sand, #106): the rule that made
+// the layer map, at the drawn mesh's resolution. Where the map shows one of the contour's layers
+// (its layer under the height and those over it), the ground's height under the pixel picks
+// between the layer under and one over: the map's own, or where the map shows the layer under,
+// the heaviest layer over among the four texels (none: it stays). Its edge then follows the
+// mesh, not the map's texels. The height wanders over two octaves of noise 7 m and 2.3 m wide,
+// and the layers blend over CONTOUR_BAND metres of it, or the height a pixel spans.
+static const float CONTOUR_BAND = 0.08;
+static const uint NO_LAYER = 0xFFFFFFFFu;
+
+bool contour_own(Material mat, uint id)
+{
+    return id == mat.contour - 1u || (id < 32u && ((mat.contour_above >> id) & 1u) != 0u);
+}
+
+// The height over the contour's beyond which a pixel is wholly over it (or, negated, under it),
+// whatever the wander: `span` is the height the pixel spans (0 for a ray's hit).
+float contour_reach(Material mat, float span)
+{
+    return mat.contour_wander + max(CONTOUR_BAND, span);
+}
+
+// How much of the pixel lies under the contour's height, 0..1. The noise only within reach.
+float contour_under(Material mat, float3 object_position, float span)
+{
+    float over = object_position.y - mat.contour_height;
+    float reach = contour_reach(mat, span);
+    if (abs(over) >= reach)
+        return over > 0.0 ? 0.0 : 1.0;
+    float2 q = object_position.xz;
+    float wander = (0.7 * value_noise(q / 7.0) + 0.3 * value_noise(q / 2.3 + 17.0) - 0.5) * 2.0 * mat.contour_wander;
+    float band = max(CONTOUR_BAND, span);
+    return 1.0 - smoothstep(-band, band, over - wander);
+}
+
+// Adds `weight` of layer `id` to the up to three layers `layer` holds (NO_LAYER where free).
+void add_layer(inout uint layer[3], inout float weight[3], uint id, float w)
+{
+    if (w <= 0.0)
+        return;
+    [unroll]
+    for (uint k = 0; k < 3; k++)
+    {
+        if (layer[k] == id)
+        {
+            weight[k] += w;
+            return;
+        }
+    }
+    [unroll]
+    for (uint k = 0; k < 3; k++)
+    {
+        if (layer[k] == NO_LAYER)
+        {
+            layer[k] = id;
+            weight[k] = w;
+            return;
+        }
+    }
+}
+
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
 // over `1 / inv_texture_scale` metres of the object's x and z, centred on its origin); layer k
 // is the standard row `row + 1 + k`. The two layers weighing most among the four texels
-// around the pixel are shaded and blended by their bilinear weights.
+// around the pixel are shaded and blended by their bilinear weights (three where the row's
+// contour splits one of them).
 float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
 {
     float3 albedo;
@@ -2664,6 +2730,68 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
                 w_second = total[k];
             }
         }
+        // The contour splits the pair's layers that are its own by the height: up to three
+        // layers, the heaviest first. Over its reach, a pair without its layer under it stays.
+        uint third = first;
+        float w_third = 0.0;
+        float span = abs(s.dpdx.y) + abs(s.dpdy.y);
+        if (mat.contour != 0u && (s.object_position.y - mat.contour_height < contour_reach(mat, span)
+            || first == mat.contour - 1u || second == mat.contour - 1u))
+        {
+            uint low = mat.contour - 1u;
+            uint over = NO_LAYER;
+            float w_over = 0.0;
+            [unroll]
+            for (uint k = 0; k < 4; k++)
+            {
+                if (ids[k] != low && contour_own(mat, ids[k]) && total[k] > w_over)
+                {
+                    over = ids[k];
+                    w_over = total[k];
+                }
+            }
+            float under = contour_under(mat, s.object_position, span);
+            uint layer[3] = { NO_LAYER, NO_LAYER, NO_LAYER };
+            float weight[3] = { 0.0, 0.0, 0.0 };
+            uint pair[2] = { first, second };
+            float pair_weight[2] = { w_first, second != first ? w_second : 0.0 };
+            [unroll]
+            for (uint k = 0; k < 2; k++)
+            {
+                uint id = pair[k];
+                uint up = id != low ? id : over;
+                if (!contour_own(mat, id) || up == NO_LAYER)
+                    add_layer(layer, weight, id, pair_weight[k]);
+                else
+                {
+                    add_layer(layer, weight, low, pair_weight[k] * under);
+                    add_layer(layer, weight, up, pair_weight[k] * (1.0 - under));
+                }
+            }
+            [unroll]
+            for (uint i = 0; i < 2; i++)
+            {
+                [unroll]
+                for (uint j = 0; j + 1 < 3 - i; j++)
+                {
+                    if (weight[j + 1] > weight[j])
+                    {
+                        uint id = layer[j];
+                        layer[j] = layer[j + 1];
+                        layer[j + 1] = id;
+                        float w = weight[j];
+                        weight[j] = weight[j + 1];
+                        weight[j + 1] = w;
+                    }
+                }
+            }
+            first = layer[0];
+            w_first = weight[0];
+            second = layer[1] != NO_LAYER ? layer[1] : first;
+            w_second = layer[1] != NO_LAYER ? weight[1] : 0.0;
+            third = layer[2] != NO_LAYER ? layer[2] : first;
+            w_third = layer[2] != NO_LAYER ? weight[2] : 0.0;
+        }
         Material a = f[0].materials[row + 1 + first];
         float3 albedo_a, n_a;
         standard_surface(a, s, albedo_a, n_a);
@@ -2684,6 +2812,18 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             specular = lerp(a.specular, b.specular, blend);
             reflectance = lerp(a.reflectance, b.reflectance, blend);
             emissive = lerp(a.emissive, b.emissive, blend);
+        }
+        if (w_third > 0.0)
+        {
+            Material c = f[0].materials[row + 1 + third];
+            float3 albedo_c, n_c;
+            standard_surface(c, s, albedo_c, n_c);
+            float blend = w_third / (w_first + w_second + w_third);
+            albedo = lerp(albedo, albedo_c, blend);
+            n = normalize(lerp(n, n_c, blend));
+            specular = lerp(specular, c.specular, blend);
+            reflectance = lerp(reflectance, c.reflectance, blend);
+            emissive = lerp(emissive, c.emissive, blend);
         }
     }
     if (s.shore != nullptr)
@@ -2890,13 +3030,17 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
     Material mat = f[0].materials[row];
     if (mat.class_index == MATERIAL_CLASS_LAYERED)
     {
-        // The layer under the hit, nearest texel (`shade_layered` blends two).
+        // The layer under the hit, nearest texel (`shade_layered` blends two), and the contour's
+        // layer under its height in place of one over it.
         Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.albedo_texture)];
         uint2 size;
         map.GetDimensions(size.x, size.y);
         float2 texel = (object_position.xz * mat.inv_texture_scale + 0.5) * float2(size);
         int2 at = clamp(int2(texel), int2(0, 0), int2(size) - 1);
-        mat = f[0].materials[row + 1 + map.Load(int3(at, 0))];
+        uint id = map.Load(int3(at, 0));
+        if (mat.contour != 0u && contour_own(mat, id) && contour_under(mat, object_position, 0.0) > 0.5)
+            id = mat.contour - 1u;
+        mat = f[0].materials[row + 1 + id];
     }
     hit.albedo = lerp(mat.color_a, mat.color_b, hash_color(inst.id).x);
     if (mat.albedo_texture != TEXTURE_NONE)

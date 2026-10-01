@@ -109,6 +109,43 @@ pub struct RenderLayer {
     /// and which lets the light through only at its thin edges. Bubbly ice is lighter too:
     /// its density is `917 (1 − bubbles)` kg/m³.
     pub bubbles: f32,
+    /// Layered: a layer whose edge follows a height of the drawn ground instead of the map's
+    /// texels (the island's sand, #106).
+    pub contour: Option<LayerContour>,
+}
+
+/// A layer of a [`ShadingClass::Layered`] row drawn by the ground's height under each pixel: the
+/// rule that made the layer map, at the drawn mesh's resolution. Where the map shows the layer or
+/// one of `above`, the pixel takes `below` under `height` and its `above` layer over it (the map's
+/// own when it shows one, `below` where it shows none); the other layers keep the map's edges.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerContour {
+    /// The layer under the height.
+    pub below: u8,
+    /// The layers over the height, one bit each (bit `k` for layer `k`).
+    pub above: u32,
+    /// Metres of object space.
+    pub height: f32,
+    /// How far the height wanders over a noise a few metres wide, metres, so the edge does not
+    /// run as clean as a contour line.
+    pub wander: f32,
+}
+
+impl LayerContour {
+    /// `below` under `height` and the layers of `above` over it (layers 0 to 31), the height
+    /// wandering by `wander` metres.
+    pub fn new(below: u8, above: &[u8], height: f32, wander: f32) -> Self {
+        assert!(
+            above.iter().all(|&layer| layer < 32),
+            "layers 0 to 31 over a contour"
+        );
+        Self {
+            below,
+            above: above.iter().fold(0, |mask, &layer| mask | 1 << layer),
+            height,
+            wander,
+        }
+    }
 }
 
 impl Default for RenderLayer {
@@ -129,6 +166,7 @@ impl Default for RenderLayer {
             hex_tiling: false,
             reflectance: 0.04,
             bubbles: 0.0,
+            contour: None,
         }
     }
 }
@@ -321,6 +359,14 @@ mod tests {
         assert!(power(0.2) > power(0.5));
         assert!(power(0.5) > power(0.9));
         assert!(power(1.0) >= 0.0);
+    }
+
+    #[test]
+    fn a_contour_names_its_layers_over_the_height_one_bit_each() {
+        let contour = LayerContour::new(1, &[0, 5, 6], 2.5, 0.3);
+        assert_eq!(contour.below, 1);
+        assert_eq!(contour.above, 0b110_0001);
+        assert_eq!(LayerContour::new(1, &[], 2.5, 0.0).above, 0);
     }
 
     #[test]

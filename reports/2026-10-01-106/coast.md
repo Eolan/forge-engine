@@ -31,7 +31,8 @@ traced through them steps with the samples, and a cubic through them scallops.
 
 ## For the owner's eye
 
-- The sand's top still shows the 4 m layer map's texels, softly and irregularly now.
+- The sand's top still shows the 4 m layer map's texels, softly and irregularly now. (Drawn by
+  the ground's height since, `sand.md`.)
 - A faint dashed line at the swash's edge. (Not the coast distance, as first thought: the foam at
   the swash's edge, cut up by the foam's pattern; fixed since, `swash.md`.)
 - Inland the slopes keep their 8 m facets and the ground is as rough as the 8 m erosion left it

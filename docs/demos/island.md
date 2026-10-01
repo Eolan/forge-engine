@@ -839,7 +839,8 @@ steps with them (a cubic through them scallops instead).
 - **The layers' edges wander:** the layer map's lookup is offset by a texel (4 m) over a noise
   three texels wide (`RenderLayer::cavity` for the layered class; 0 for the city's streets), so
   the sand's top and every other layer's edge stop stepping along the map's 4 m grid.
-- **What remains:** the sand's top still shows the 4 m map's texels softly; the slopes inland keep
+- **What remains:** the sand's top still shows the 4 m map's texels softly (drawn by the ground's
+  height since, below: "The sand's top"); the slopes inland keep
   their 8 m facets and their shadows' steps, and the ground there is as rough as the 8 m erosion
   made it, which the 2 m amplification is for.
 
@@ -884,3 +885,24 @@ cover at most); the surf's broken water keeps its pattern.
 - **Cost** and **stability:** `reports/2026-10-01-106/swash.md`. **Checks:** only the island's
   water images change (ꟻLIP mean 0.0008); the A/B harness and mesh against fallback at 0 px;
   validation clean.
+
+**The sand's top** (#106, 2026-10-01). The sand and the grass met in teeth along the coast, a few
+metres deep and about ten apart: the layer map's 4 m texels, through the lookup's wander. The
+map's rule for the sand is a height (gentle ground under 2.5 m), and the drawn ground there is on
+cells of a metre, so the layered pass now applies that rule under each pixel
+(`RenderLayer::contour`):
+- Where the map shows the sand or one of the grasses (grass, dry, lush), the pixel takes the sand
+  under 2.5 m and a grass over it: the map's own grass, or where the map shows sand, the heaviest
+  grass among the four texels around the pixel (none: the sand stays).
+- The height wanders by 0.3 m over two octaves of noise 7 m and 2.3 m wide, so the edge bends
+  along the beach instead of running as a contour line. The layers blend over 8 cm of height, or
+  the height a pixel spans far away.
+- The other layers keep the map's edges: rock, the sea floor, the rivers' and lakes' beds. Where
+  one of them meets the sand and the grass, three layers are shaded.
+- The traced rays' hits take the sand under the height too.
+
+![The coast east of the first view from 70 m: the sand's top in teeth before (left), along the ground now (right)](../../reports/2026-10-01-106/sand-side.png)
+
+- **Cost:** 0.010 to 0.023 ms of `shading/layered` over six views. **Stability** as before. **Checks:** only the island's images change (ꟻLIP mean
+  0.0045, 0.0053 with the water); the city's layered ground, the A/B harness and mesh against
+  fallback at 0 px; validation clean (`reports/2026-10-01-106/sand.md`).

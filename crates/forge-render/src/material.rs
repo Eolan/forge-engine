@@ -17,7 +17,7 @@ use crate::textures::TextureData;
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
 pub const TEXTURE_NONE: u32 = u32::MAX;
 
-/// Mirrors `Material` in `meshlet.slang` (96 bytes).
+/// Mirrors `Material` in `meshlet.slang` (112 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMaterial {
@@ -38,10 +38,18 @@ pub struct GpuMaterial {
     scattering: f32,
     /// `MATERIAL_*` flags.
     flags: u32,
+    /// Layered: the contour's layer under its height plus one, 0 for none
+    /// ([`forge_core::material::RenderLayer::contour`]).
+    contour: u32,
+    /// Its layers over the height, one bit each.
+    contour_above: u32,
+    /// Its height, object space, and how far it wanders (metres).
+    contour_height: f32,
+    contour_wander: f32,
     pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 96);
+const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 112);
 
 /// [`GpuMaterial`] flag: the textures are hex-tiled and offset per instance
 /// ([`forge_core::material::RenderLayer::hex_tiling`]).
@@ -193,6 +201,10 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 reflectance: r.reflectance,
                 scattering: bubble_scattering(r.bubbles),
                 flags: if r.hex_tiling { MATERIAL_HEX_TILING } else { 0 },
+                contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
+                contour_above: r.contour.map_or(0, |c| c.above),
+                contour_height: r.contour.map_or(0.0, |c| c.height),
+                contour_wander: r.contour.map_or(0.0, |c| c.wander),
                 pad: 0,
             }
         })
