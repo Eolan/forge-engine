@@ -1485,3 +1485,67 @@ not integrated into the terrain). Measured in `docs/demos/island.md`, "The river
 *(research: terrain-genesis.md §1, water.md §3 and the rivers pass to come,
 `docs/research/rivers.md`; D-016, D-038; issues #109, #112, #114)* Proposed 2026-10-01; waits
 for the owner's yes on the transport term and on the lakes.
+
+## D-041 — The island's rivers as valleys: reach types, channels from the regional curves, floodplains in the 8 m field, fewer and larger rivers, the far water in the terrain 🟡 (2026-10-01)
+
+Proposed from `docs/research/rivers.md` ("Recommendation for Forge") for #112: the owner's
+judgement that the island's rivers read as small streams and don't feel natural or integrated.
+Its first finding is that nobody who shipped a river made it read as one with the water alone:
+the engines and tools (Unreal's Water plugin, World Machine, Houdini, R.A.M) carve a valley into
+the heightfield, paint bed and banks from the same hydraulic fields, and only then lay a thin
+flow-mapped surface in it. The second is that Forge's channels are already 1.9–2.5× wider and
+1.3–1.9× deeper than their catchments warrant by the regional curves: a 16 km island has
+brooks (its largest basin is about 8 km²), and what is missing is the valley, the floodplain,
+the bars, the sinuosity and the far-field drawing.
+
+- **Reach types** from the slope and the catchment (Rosgen's classes as the research reads
+  them): over 4 % steps and pools in a V valley with no floodplain; 2–4 % rapids with a bench
+  one to two widths wide; under 2 % riffles and pools with a floodplain; under 0.5 % near the
+  coast or on a plain, braids and bars; a lake or sea entry with enough catchment, a delta.
+- **The channel from the regional curve, with an explicit exaggeration:** bankfull width
+  `W = k · 2.7 A^0.37` m and depth `D = k_d · 0.3 A^0.21` m (`A` in km²), `k = 2`, `k_d = 1.5`,
+  so the width grows downstream at nature's rate and `W / D` stays over 12. Today's
+  `w = 0.005 √A` is an unintended `k ≈ 2` with the discharge exponent. The depth coefficient
+  does not grow further: a river's apparent size is its width, its turbidity and its valley.
+- **A cross-section per type:** a parabola of depth `D` whose deepest line moves to the outer
+  bank in bends, a point bar on the inner bend, a cut bank one bankfull depth high on the
+  outer, the low-flow water 0.3–0.5 `D` below the bank top so the bank shows. *Not kept:* the
+  present banks `0.5x + 0.1x²`, which rise indefinitely into a trench (#114).
+- **Floodplain and valley, carved into the 8 m field:** on the gentle reaches a flat
+  floodplain `max(6 W, three samples)` wide at the bank top plus 0.3–0.5 m, the channel
+  wandering inside it; a bench of one to two widths on the steeper ones; none in the
+  mountains; beyond, the valley wall with a shape per setting, blended into the ground with
+  low-amplitude noise. In the base field so that every LOD carries it and no coarser mesh
+  rises over the water (#113); the metre refinement adds the channel's detail only.
+- **The last reach graded** (`S ≤ S_max(A)` downstream, the trunk's last kilometre under 0.5 %
+  and its last 200 m under 0.2 %, the bed and the floodplain lowered to meet it), or by
+  D-040's transport term in the erosion itself; a small river meeting a cliff may keep a
+  waterfall on purpose, never the trunk (#109).
+- **Mouths and lake entries:** over the last ten widths the channel widens 1.5–2×, the bed
+  drops below the sea's level, the water is the sea's, distributaries split around bars where
+  the catchment is large, the sea's displacement fades in over two widths while the river's
+  flow fades out (#110); at a lake the slope goes to zero over five to ten widths, the channel
+  widens, a fan is painted on the lake floor, no bank step (#114).
+- **Materials from the hydraulics, inside the bankfull width:** gravel on riffles and over 1 %,
+  sand on bars and in pools, mud in backwaters and deltas, bedrock in the mountains; a wet
+  band between the low-flow surface and the bank top; the riverbed layer never wider than
+  `W`. **A riparian strip** as a placement rule from two fields, the distance to the channel
+  and the height over the water: reeds within a width, shrubs to two or three, trees kept off
+  the channel and the bars.
+- **Scale: fewer, larger rivers.** The carved-channel threshold from 0.5 to 3–5 km² (about a
+  dozen rivers instead of 43; the rest brooks: a wet gully in the layer map, a riparian strip,
+  a narrow ribbon near the camera), and the uplift shaped so that two to four basins of
+  20–50 km² exist (a 40 km² basin gives a 10 m channel by the curve, 20 m with `k = 2`).
+- **The far water is part of the terrain:** beyond one or two kilometres a water layer in the
+  terrain material over the water mask (flat normals, the coarse flow map), the ribbon fading
+  in as the tiles refine; transitions as material blends over an overlap, no end caps;
+  vertical motion on rapids (standing waves, plunge pools) as displacement, not only normals.
+- **No simulation now.** Nothing in the owner's list needs a solver. Later, a shallow-water
+  pass baked offline per river tile into the flow textures the ribbons read; in Phase 3 a
+  runtime window of 512²–1024² cells at 0.5–1 m (0.3–0.8 ms on the compute queue, about
+  25 MB) for boats and characters, visual-only under D-016.
+
+*(research: rivers.md §1–§6 and its recommendation; water.md §3; terrain-genesis.md §1–§2;
+D-016, D-038, D-040; issues #109, #110, #112, #113, #114)* Proposed 2026-10-01; waits for the
+owner's yes on the valley carve, the scale and the far-field drawing. Taken, each part becomes
+an issue of its own.
