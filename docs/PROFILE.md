@@ -494,6 +494,20 @@ against 3c651fd: `shading/layered` +0.010 to +0.023 ms over six views (the first
 0.374 ms, the island from 2.5 km 0.309 → 0.332). The noise runs only within the contour's wander
 and band (the first version paid for it on every pixel, up to +0.033 ms).
 
+**The sea's surface indexed** (#105, 2026-10-01): each clipmap level's lattice points are its
+vertices, indexed by its quads, in blocks of 32 × 32 quads drawn only when their box can show
+(the vertex shader ran 1.28 M times a frame, six a quad, the quads under the finer level
+included). The same images to the bit. Three runs each, alternating, against 2ccd23c:
+
+| View | frame | water/surface |
+|---|---|---|
+| coast (the first view) | 1.712 → 1.668 ms | 0.149 → 0.101 |
+| the island from 2.5 km | 2.168 → 2.123 ms | 0.190 → 0.144 |
+| along the beach from 8 m | 1.849 → 1.804 ms | 0.148 → 0.105 |
+| the coast east from 70 m | 1.661 → 1.617 ms | 0.111 → 0.065 |
+| over the south beach from 60 m | 1.768 → 1.724 ms | 0.191 → 0.145 |
+| the round lake | 1.582 → 1.549 ms | 0.086 → 0.051 |
+
 **The island's water at 2560 × 1440** (2026-10-01, after the rivers' beds, the lakes, the coast,
 the ground's smoothing, the rivers' culling; `--water`, three runs each, the waves held at 12 s):
 

@@ -143,6 +143,26 @@ impl<'a> Commands<'a> {
         };
     }
 
+    /// Draws `index_count` indices of the bound index buffer from `first_index`, each vertex's
+    /// index offset by `vertex_offset`, without vertex buffers (the shader reads its data by
+    /// the vertex index). Slang's `SV_VertexID` leaves the offset out (D3D's meaning), as the
+    /// sea's surface found: a shader that needs it takes it from its push block.
+    pub fn draw_indexed(&self, index_count: u32, first_index: u32, vertex_offset: i32) {
+        // SAFETY: a graphics pipeline without vertex input and an index buffer holding
+        // `first_index + index_count` indices are bound inside a rendering instance (the
+        // caller's responsibility).
+        unsafe {
+            self.device.raw().cmd_draw_indexed(
+                self.cb,
+                index_count,
+                1,
+                first_index,
+                vertex_offset,
+                0,
+            )
+        };
+    }
+
     /// Dispatches compute workgroups.
     pub fn dispatch(&self, x: u32, y: u32, z: u32) {
         self.paranoid_barrier();

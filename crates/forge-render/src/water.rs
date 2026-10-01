@@ -391,6 +391,81 @@ const GRID: u32 = 128;
 const FINEST_SPACING: f64 = 0.5;
 /// Levels: the finest 64 m across, the coarsest 262 km (the stand-in sea's extent).
 const LEVELS: u32 = 13;
+/// Quads a side of a level's blocks, which a frame draws or skips by whether they can show.
+const SURFACE_BLOCK: u32 = 32;
+/// Blocks a level holds.
+const SURFACE_BLOCKS: usize = ((GRID / SURFACE_BLOCK) * (GRID / SURFACE_BLOCK)) as usize;
+/// Metres a block's box grows by every way: the waves' reach (the cascades' displacement, the
+/// shore's trains and the swash stay well under it).
+const SURFACE_BLOCK_MARGIN: f32 = 40.0;
+
+/// Per block of a set of the surface's quads, its first index and its count.
+type SurfaceRanges = [(u32, u32); SURFACE_BLOCKS];
+
+/// The surface's quads as indices into a level's `(GRID + 1)²` vertices (row-major from the
+/// level's corner), two triangles each as `surface_vert_main` reads them. Five sets: the whole
+/// level (the finest), then a level less the quads its finer level covers, for each way the
+/// finer level sits on its lattice: the finer level is centred on the camera snapped to this
+/// level's spacing and this one to twice it, so its hole starts a quarter of the way in, or a
+/// quad further, along each axis (set `1 + x + 2 z`). Each set is laid out block after block,
+/// so neighbouring blocks are a run of indices. Returns the indices and each set's ranges.
+fn surface_indices() -> (Vec<u16>, Vec<SurfaceRanges>) {
+    let side = GRID + 1;
+    let blocks = GRID / SURFACE_BLOCK;
+    let mut indices: Vec<u16> = Vec::new();
+    let mut sets = Vec::new();
+    for set in 0..5u32 {
+        let hole = (set > 0).then(|| {
+            let (kx, kz) = ((set - 1) & 1, (set - 1) >> 1);
+            (
+                GRID / 4 + kx..3 * GRID / 4 + kx,
+                GRID / 4 + kz..3 * GRID / 4 + kz,
+            )
+        });
+        let mut ranges = [(0, 0); SURFACE_BLOCKS];
+        for (b, range) in ranges.iter_mut().enumerate() {
+            let (bx, bz) = (b as u32 % blocks, b as u32 / blocks);
+            let first = indices.len() as u32;
+            for j in bz * SURFACE_BLOCK..(bz + 1) * SURFACE_BLOCK {
+                for i in bx * SURFACE_BLOCK..(bx + 1) * SURFACE_BLOCK {
+                    if hole
+                        .as_ref()
+                        .is_some_and(|(x, z)| x.contains(&i) && z.contains(&j))
+                    {
+                        continue;
+                    }
+                    let at = |di: u32, dj: u32| ((j + dj) * side + i + di) as u16;
+                    // `QUAD_CORNERS` in `water.slang`: (0, 0), (0, 1), (1, 0), (1, 0), (0, 1),
+                    // (1, 1), as (x, z).
+                    indices.extend([at(0, 0), at(0, 1), at(1, 0), at(1, 0), at(0, 1), at(1, 1)]);
+                }
+            }
+            *range = (first, indices.len() as u32 - first);
+        }
+        sets.push(ranges);
+    }
+    (indices, sets)
+}
+
+/// Level `l`'s centre relative to the camera at (`x`, `z`): the camera snapped to twice the
+/// level's spacing, in f64.
+fn surface_centre(x: f64, z: f64, l: usize) -> [f64; 2] {
+    let spacing = FINEST_SPACING * f64::from(1u32 << l);
+    let snap = |c: f64| (c / (2.0 * spacing)).floor() * 2.0 * spacing - c;
+    [snap(x), snap(z)]
+}
+
+/// The set of [`surface_indices`] level `l` draws, from the levels' `centres`: the whole level
+/// for the finest, else the one whose hole sits where the finer level does (its centre less
+/// this one's is 0 or 1 of this level's spacings along each axis).
+fn surface_set(centres: &[[f64; 2]], l: usize) -> usize {
+    if l == 0 {
+        return 0;
+    }
+    let spacing = FINEST_SPACING * f64::from(1u32 << l);
+    let k = |a: usize| ((centres[l - 1][a] - centres[l][a]) / spacing).round() as usize;
+    1 + k(0) + 2 * k(1)
+}
 /// The surface's second and third targets: per pixel, the mirror ray it asks for (direction,
 /// weight) and the shadow ray (the sun's share of the colour, 1).
 const REQUEST_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -721,7 +796,8 @@ pub struct WaterShore<'a> {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SurfacePush {
     surface: u64,
-    /// The rivers: the first vertex of the run of segments drawn (the vertex index's offset).
+    /// The sea: the clipmap level drawn. The rivers: the first vertex of the run of segments
+    /// drawn (the vertex index's offset).
     first: u32,
     pad: u32,
 }
@@ -845,6 +921,10 @@ pub struct WaterSurface {
     rivers: Pipeline,
     lakes: Pipeline,
     blocks: Vec<Buffer>,
+    /// The surface's quads as indices into a level's vertices ([`surface_indices`]), and each
+    /// set's ranges per block.
+    surface_indices: Buffer,
+    surface_ranges: Vec<SurfaceRanges>,
     /// Without it the sea is deep everywhere.
     shore: Option<ShoreFields>,
 }
@@ -983,6 +1063,13 @@ impl WaterSurface {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let (indices, surface_ranges) = surface_indices();
+        let surface_indices = device.create_buffer_with_data(
+            &indices,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            MemoryCategory::Geometry,
+            "water surface indices",
+        )?;
         let shore = shore
             .map(|s| -> Result<_> {
                 let count = (s.texels as usize) * (s.texels as usize);
@@ -1209,6 +1296,8 @@ impl WaterSurface {
             rivers: rivers?,
             lakes: lakes?,
             blocks,
+            surface_indices,
+            surface_ranges,
             shore,
         })
     }
@@ -1327,15 +1416,50 @@ impl WaterSurface {
         // The clipmap: each level centred on the camera snapped to twice its spacing, in f64,
         // then relative to the camera.
         let mut levels = [[0.0_f32; 4]; MAX_LEVELS];
+        let mut centres = [[0.0_f64; 2]; LEVELS as usize];
         for (l, level) in levels.iter_mut().enumerate().take(LEVELS as usize) {
-            let spacing = FINEST_SPACING * f64::from(1u32 << l);
-            let snap = |c: f64| (c / (2.0 * spacing)).floor() * 2.0 * spacing - c;
+            centres[l] = surface_centre(params.camera.x, params.camera.z, l);
             *level = [
-                snap(params.camera.x) as f32,
-                snap(params.camera.z) as f32,
-                spacing as f32,
+                centres[l][0] as f32,
+                centres[l][1] as f32,
+                (FINEST_SPACING * f64::from(1u32 << l)) as f32,
                 0.0,
             ];
+        }
+        // The surface's blocks that can show, each level's from the set of quads its finer
+        // level leaves (first index, indices, the level), the neighbours merged into one draw.
+        let mut surface_runs: Vec<(u32, u32, u32)> = Vec::new();
+        let half = (GRID / 2) as f32;
+        for (l, &[x, z, spacing, _]) in levels.iter().enumerate().take(LEVELS as usize) {
+            let set = surface_set(&centres, l);
+            let level = l as u32;
+            let blocks = GRID / SURFACE_BLOCK;
+            for (b, &(first, count)) in self.surface_ranges[set].iter().enumerate() {
+                if count == 0 {
+                    continue;
+                }
+                let (bx, bz) = ((b as u32 % blocks) as f32, (b as u32 / blocks) as f32);
+                let block = SURFACE_BLOCK as f32;
+                // The lattice the block spans, a spacing more towards the coarser lattice
+                // (the vertices sliding onto it), and the waves' reach.
+                let lo = Vec3::new(
+                    x + (bx * block - half - 1.0) * spacing,
+                    -params.camera.y as f32,
+                    z + (bz * block - half - 1.0) * spacing,
+                ) - SURFACE_BLOCK_MARGIN;
+                let hi = Vec3::new(
+                    x + ((bx + 1.0) * block - half) * spacing,
+                    -params.camera.y as f32,
+                    z + ((bz + 1.0) * block - half) * spacing,
+                ) + SURFACE_BLOCK_MARGIN;
+                if !box_in_view(&params.view_proj, lo, hi) {
+                    continue;
+                }
+                match surface_runs.last_mut() {
+                    Some((f, c, o)) if *o == level && *f + *c == first => *c += count,
+                    _ => surface_runs.push((first, count, level)),
+                }
+            }
         }
         let views: Vec<GpuWaterCascadeView> = cascades
             .cascades
@@ -1359,6 +1483,7 @@ impl WaterSurface {
         let sky_address = sky.address();
         let sky_light = sky.light.address;
         let surface = &self.surface;
+        let surface_indices = &self.surface_indices;
         let river_pipeline = &self.rivers;
         let lake_pipeline = &self.lakes;
         let shore: Option<&'f ShoreFields> = self.shore.as_ref();
@@ -1499,15 +1624,18 @@ impl WaterSurface {
             commands.begin_rendering(&info);
             commands.bind_pipeline(surface);
             commands.set_viewport_full(extent);
-            commands.push_constants(
-                surface,
-                &SurfacePush {
-                    surface: address,
-                    first: 0,
-                    pad: 0,
-                },
-            );
-            commands.draw(LEVELS * GRID * GRID * 6, 1);
+            commands.bind_index_buffer(surface_indices, 0, vk::IndexType::UINT16);
+            for &(first, count, level) in &surface_runs {
+                commands.push_constants(
+                    surface,
+                    &SurfacePush {
+                        surface: address,
+                        first: level,
+                        pad: 0,
+                    },
+                );
+                commands.draw_indexed(count, first, 0);
+            }
             // The lakes, then the rivers over the land (a segment between each pair of a river's
             // points), which blend over the lakes they run into.
             if lake_count > 0 {
@@ -1544,6 +1672,65 @@ impl WaterSurface {
             sun: sun_requests,
             depth,
             view_proj: params.view_proj,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn each_level_draws_once_every_quad_its_finer_level_leaves() {
+        let (indices, sets) = surface_indices();
+        let side = GRID + 1;
+        // A set's quads by their first corner, each once.
+        let quads = |set: usize| {
+            let mut seen = HashSet::new();
+            for &(first, count) in &sets[set] {
+                for quad in indices[first as usize..(first + count) as usize].chunks(6) {
+                    let at = u32::from(quad[0]);
+                    assert!(seen.insert((at % side, at / side)), "a quad drawn twice");
+                }
+            }
+            seen
+        };
+        assert_eq!(quads(0).len(), (GRID * GRID) as usize);
+        // The quads the shader dropped before the indices (`surface_vert_main`, in f32): those
+        // whose middle lies within the finer level's extent.
+        let half = (GRID / 2) as f32;
+        for camera in [
+            [0.0, 0.0],
+            [0.3, -0.7],
+            [1234.567, -9876.5],
+            [-5083.2, -1393.9],
+            [77.75, 3.25],
+            [-0.25, 1.0e5 + 0.75],
+        ] {
+            let centres: Vec<[f64; 2]> = (0..LEVELS as usize)
+                .map(|l| surface_centre(camera[0], camera[1], l))
+                .collect();
+            for l in 1..LEVELS as usize {
+                let drawn = quads(surface_set(&centres, l));
+                let s = (FINEST_SPACING * f64::from(1u32 << l)) as f32;
+                let centre = centres[l].map(|c| c as f32);
+                let fine = centres[l - 1].map(|c| c as f32);
+                for j in 0..GRID {
+                    for i in 0..GRID {
+                        let middle = [
+                            centre[0] + (i as f32 + 0.5 - half) * s,
+                            centre[1] + (j as f32 + 0.5 - half) * s,
+                        ];
+                        let covered = (0..2).all(|a| (middle[a] - fine[a]).abs() < half * s * 0.5);
+                        assert_eq!(
+                            drawn.contains(&(i, j)),
+                            !covered,
+                            "level {l}, quad ({i}, {j})"
+                        );
+                    }
+                }
+            }
         }
     }
 }

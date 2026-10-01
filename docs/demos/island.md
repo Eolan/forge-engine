@@ -426,6 +426,11 @@ them ("The surface" below); without it, the stand-in.
   across, the coarsest 262 km across (Losasso & Hoppe 2004).
   - Each level is centred on the camera snapped to twice its spacing, and leaves out what the
     finer level covers.
+  - Each level's lattice points are its vertices, indexed by its quads (since 2026-10-01): five
+    sets of indices, the whole level for the finest, and a level less its finer level's hole
+    in each of the two places it can sit along each axis. The quads go in blocks of 32 × 32,
+    and a frame draws only the blocks whose box (40 m more every way, for the waves) can
+    show.
   - Near its edge a level's odd vertices slide onto the coarser lattice, all the way by the
     edge, so the levels meet without cracks and nothing pops.
   - The cascades displace the vertices, each read at the mip that matches the spacing
@@ -570,8 +575,8 @@ Its second part: the shore's own waves (Uncharted 3's recipe, Gonzalez-Ochoa & H
   steadier than at step 4 (1.62 % and 0.98 %).
 - **Cost:** `water/surface` 0.082 → 0.136 ms at the coast, 0.101 → 0.164 ms from the sea (the
   whole coast's shallows in view), 0.095 (before the damping) → 0.204 ms above the beach. The
-  frame: 1.65 → 1.72, 1.45 → 1.52 and 1.64 → 1.76 ms against step 4. The surface is drawn
-  without indices, each vertex six times: an index buffer is the lever.
+  frame: 1.65 → 1.72, 1.45 → 1.52 and 1.64 → 1.76 ms against step 4. The surface was drawn
+  without indices, each vertex six times: indexed and culled by blocks since (`docs/PROFILE.md`).
 - **From low down** the surf is seen edge on and reads as a light band along the beach. The
   crest that curls over is D-038's later step for the golden shots (a baked mesh along the
   wavefront, as Horizon's).

@@ -335,7 +335,7 @@ struct WaterSurface
 struct SurfacePush
 {
     WaterSurface* surface;
-    uint first;  // the rivers: the first vertex of the run of segments drawn
+    uint first;  // the sea: the clipmap level drawn; the rivers: the first vertex of the run of segments drawn
     uint pad;
 };
 
@@ -587,36 +587,22 @@ float foam_pattern(WaterSurface* w, float2 world, float2 inland, float footprint
 // Two triangles a quad, counter-clockwise seen from above.
 static const int2 QUAD_CORNERS[6] = { int2(0, 0), int2(0, 1), int2(1, 0), int2(1, 0), int2(0, 1), int2(1, 1) };
 
+// A vertex per point of a level's lattice, `(grid + 1)²` of them, the level in the push block's
+// `first`: the draws index them by the quads in view, less those the finer level covers
+// (`surface_indices` in water.rs).
 [shader("vertex")]
 SurfaceOut surface_vert_main(uint id : SV_VertexID)
 {
     WaterSurface* w = surface_push.surface;
     uint g = w[0].grid;
-    uint quad = id / 6u;
-    uint corner = id % 6u;
-    uint level = quad / (g * g);
-    uint q = quad % (g * g);
-    int2 cell = int2(int(q % g), int(q / g));
+    uint side = g + 1u;
+    uint level = surface_push.first;
     int half_grid = int(g / 2u);
-    int2 lattice = cell + QUAD_CORNERS[corner] - half_grid; // from the level's centre, in spacings
+    int2 lattice = int2(int(id % side), int(id / side)) - half_grid; // from the level's centre, in spacings
     float4 l = w[0].levels[level];
     float s = l.z;
     float2 centre = l.xy;
     SurfaceOut o;
-    // The quads the finer level covers: its extent, half as wide around its own centre.
-    if (level > 0u)
-    {
-        float2 fine = w[0].levels[level - 1u].xy;
-        float2 middle = centre + (float2(cell) + 0.5 - float(half_grid)) * s;
-        float half_fine = float(half_grid) * s * 0.5;
-        if (all(abs(middle - fine) < half_fine))
-        {
-            o.position = float4(0.0, 0.0, 0.0, 0.0); // degenerate: nothing drawn
-            o.relative = 0.0;
-            o.flat = 0.0;
-            return o;
-        }
-    }
     float2 flat = centre + float2(lattice) * s;
     // The slide onto the coarser lattice: complete by where the level's edge can come
     // nearest the camera (its half width less the two spacings the snapping moves it).
