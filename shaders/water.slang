@@ -264,7 +264,7 @@ struct RiverPoint
     float4 b; // downstream (world x, z; unit), the speed (m/s), the water surface's slope
     float4 c; // how much of the river is drawn (0..1), 1 where a segment starts (0 at a river's last point), the ground under the last vertex across, the water's level (m)
     float4 d; // the ground under the first four vertices across: the highest the drawn ground stands under the quads around each (m)
-    float4 e; // the ribbon's half width (m, under the banks), the lowest bank before the channel was carved (m), 0, 0
+    float4 e; // the ribbon's half width (m, under the banks), the lowest bank before the channel was carved (m), the first stone past the point, the metres along the river from its head
 };
 
 // Where a river's water meets the sea's (`GpuRiverMouth` in water.rs).
@@ -889,7 +889,7 @@ struct RiverOut
     float2 flat : TEXCOORD0;      // camera-relative world x, z
     float4 river : TEXCOORD1;     // across (−1..1), the fade, the depth in the middle (m), the speed (m/s)
     float4 flow : TEXCOORD2;      // downstream (world x, z), the water surface's slope, the half width drawn (m)
-    float4 edge : TEXCOORD3;      // the half width at the water's edge (m), the ribbon's (m), how far it has risen onto the ground (0..1), 0
+    float4 edge : TEXCOORD3;      // the half width at the water's edge (m), the ribbon's (m), how far it has risen onto the ground (0..1), the metres along the river
     nointerpolation uint segment : TEXCOORD4; // the segment's first point
 };
 
@@ -955,7 +955,7 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
     o.flat = relative.xz;
     o.river = float4(across, p.c.x, p.a.w, p.b.z);
     o.flow = float4(p.b.xy, p.b.w, half_width);
-    o.edge = float4(p.a.z, p.e.x, drape, 0.0);
+    o.edge = float4(p.a.z, p.e.x, drape, p.e.w);
     o.segment = segment;
     return o;
 }
@@ -992,8 +992,6 @@ struct RiverRipples
 {
     float2 slope;
     float variance;   // of the slopes the mips average away
-    FlowPhases phases;
-    float norm;       // the cross-fade's contrast back
 };
 
 RiverRipples river_ripples(WaterSurface* w, float2 flat, float2 velocity)
@@ -1010,8 +1008,6 @@ RiverRipples river_ripples(WaterSurface* w, float2 flat, float2 velocity)
     o.slope = (s0.xy * f.weight0 + s1.xy * f.weight1) * (norm * strength);
     o.variance = (f.weight0 * max(s0.w - dot(s0.xy, s0.xy), 0.0) + f.weight1 * max(s1.w - dot(s1.xy, s1.xy), 0.0))
         * (strength * strength);
-    o.phases = f;
-    o.norm = norm;
     return o;
 }
 
@@ -1158,15 +1154,16 @@ StoneFlow stones_at(WaterSurface* w, uint segment, float2 world, float2 velocity
     return o;
 }
 
-// White water's pattern: metres a cell of its coarser octave of noise (the finer is 2.5 times
-// finer).
-static const float RIVER_FOAM_CELL = 0.45;
+// White water's pattern: metres a cell of its coarser octave of noise across the river, and how
+// many times longer the cells are down it (the finer octave is 2.5 times finer both ways).
+static const float RIVER_FOAM_CELL = 0.35;
+static const float RIVER_FOAM_STREAK = 4.0;
 
-// White water's pattern at `p` (world x, z): two octaves of value noise, broken white water
-// rather than one soft blob a metre across.
-float foam_clumps(float2 p)
+// White water's pattern at `p` (metres along the river and across it): two octaves of value
+// noise drawn out down the river, streaks of broken white water rather than round blobs.
+float foam_streaks(float2 p)
 {
-    float2 q = p / RIVER_FOAM_CELL;
+    float2 q = p / (RIVER_FOAM_CELL * float2(RIVER_FOAM_STREAK, 1.0));
     return 0.6 * value_noise(q) + 0.4 * value_noise(q * 2.5 + 7.1);
 }
 
@@ -1184,6 +1181,8 @@ struct FreshWater
     float drape;     // how far it lies on the ground far away (0: at its level)
     float depth;     // its own depth there, which the view sees through where it lies on the ground
     float white;     // the white water's share, before its pattern
+    float2 streak;   // a river's: metres along it from its head and across it, where its white water streaks
+    float speed;     // a river's own speed down it (m/s), which carries its white water
     float3 absorption; // its water's, m⁻¹
     float3 scatter;  // the light its water scatters back, per unit of irradiance
     float deepest;   // the deepest it can be under its surface, metres
@@ -1201,7 +1200,6 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     float2 world = s.flat + w[0].camera.xz;
     float footprint = max(max(length(ddx(s.flat)), length(ddy(s.flat))), 1e-3);
     RiverRipples ripples = river_ripples(w, s.flat, s.velocity);
-    FlowPhases f = ripples.phases;
     float variance = ripples.variance * (s.ripples * s.ripples) + s.rough;
     float2 slope = ripples.slope * s.ripples + s.fall;
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
@@ -1235,10 +1233,15 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     float foam = 0.0;
     if (s.white > 0.0)
     {
-        // Finer than two pixels the pattern gives way to its mean.
-        float n0 = foam_clumps(world - f.offset0);
-        float n1 = foam_clumps(world - f.offset1 + 13.7);
-        float pattern = 0.5 + ((n0 - 0.5) * f.weight0 + (n1 - 0.5) * f.weight1) * ripples.norm;
+        // Streaks down the river, carried at its own speed in two phases (the flow map's way,
+        // along the ribbon): the flow around a stone, which the ripples follow, would draw them
+        // out into smooth bands metres long over a period. Finer than two pixels the pattern
+        // gives way to its mean.
+        FlowPhases g = flow_phases(world, float2(s.speed, 0.0), w[0].time);
+        float n0 = foam_streaks(s.streak - g.offset0);
+        float n1 = foam_streaks(s.streak - g.offset1 + 13.7);
+        float norm = rsqrt(g.weight0 * g.weight0 + g.weight1 * g.weight1);
+        float pattern = 0.5 + ((n0 - 0.5) * g.weight0 + (n1 - 0.5) * g.weight1) * norm;
         float resolved = saturate(RIVER_FOAM_CELL / (2.0 * footprint) - 1.0);
         foam = s.white * lerp(RIVER_FOAM_MEAN, smoothstep(0.5, 0.72, pattern), resolved);
     }
@@ -1302,6 +1305,8 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.drape = drape;
     s.depth = input.river.z * (1.0 - u * u);
     s.white = max(rapids, stones.white);
+    s.streak = float2(input.edge.w, across * half_drawn);
+    s.speed = input.river.w;
     s.absorption = RIVER_ABSORPTION;
     s.scatter = RIVER_SCATTER;
     s.deepest = input.river.z + RIVER_DEEPEST;
@@ -1391,6 +1396,8 @@ SurfaceTargets lake_frag_main(LakeOut input)
     s.drape = 0.0;
     s.depth = 0.0;
     s.white = 0.0;
+    s.streak = 0.0;
+    s.speed = 0.0;
     s.absorption = lerp(LAKE_ABSORPTION, RIVER_ABSORPTION, estuary.fresh);
     s.scatter = lerp(LAKE_SCATTER, RIVER_SCATTER, estuary.fresh);
     s.deepest = asfloat(lake.b.w) + RIVER_DEEPEST;

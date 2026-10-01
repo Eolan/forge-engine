@@ -679,7 +679,8 @@ struct GpuRiverPoint {
     c: [f32; 4],
     /// The ground under the first four vertices across.
     d: [f32; 4],
-    /// The ribbon's half width (under the banks), the lowest bank before the carve, 0, 0.
+    /// The ribbon's half width (under the banks), the lowest bank before the carve, the first
+    /// stone past the point, the metres along the river from its head.
     e: [f32; 4],
 }
 
@@ -1151,7 +1152,12 @@ impl WaterSurface {
                 }
                 let mut points: Vec<GpuRiverPoint> = Vec::with_capacity(total);
                 for river in s.rivers {
+                    let mut along = 0.0_f32;
                     for (k, p) in river.iter().enumerate() {
+                        if k > 0 {
+                            let q = river[k - 1].position;
+                            along += (p.position[0] - q[0]).hypot(p.position[1] - q[1]);
+                        }
                         points.push(GpuRiverPoint {
                             a: [p.position[0], p.position[1], p.half_width, p.depth],
                             b: [p.direction[0], p.direction[1], p.speed, p.slope],
@@ -1162,7 +1168,7 @@ impl WaterSurface {
                                 p.level,
                             ],
                             d: [p.ground[0], p.ground[1], p.ground[2], p.ground[3]],
-                            e: [p.reach, p.bank, first[points.len()] as f32, 0.0],
+                            e: [p.reach, p.bank, first[points.len()] as f32, along],
                         });
                     }
                 }

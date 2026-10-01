@@ -748,11 +748,16 @@ water in a carved channel:
   thins against it; the stones' list is the place for a game's objects to join the flow. (A
   line of foam wherever fast water thinned against anything drew the banks' metre triangles and
   was left out.)
-- **White water** (the riffles', the stones') is broken by two octaves of noise, cells of 0.45 and
-  0.18 m carried on the flow, where one soft octave of 0.8 m drew blobs a metre across; the flow's
-  shear draws them out into lines along the fast water. (Noise stretched along the flow showed as
-  harsh lines across it from low down, and was left out.) `stone_view` in the log is a view of the
-  stone in the fastest water.
+- **White water** (the riffles', the stones') is broken by two octaves of noise in streaks down
+  the river (since 2026-10-01, `reports/2026-10-01-105/streaks.md`):
+  - The cells are 0.35 m across and four times that long, laid out in the ribbon's own
+    coordinates: metres along the river from its head, metres across it.
+  - The pattern is carried down at the river's speed in the flow map's two phases.
+  - Before, the pattern rode the ripples' flow, whose shear around a stone drew it into smooth
+    bands metres long and a swirl. Where the flow ran straight, it stayed round blotches.
+  - Streaking along the local flow in world space showed as harsh lines across it from low down
+    (rotating coordinates thousands of metres from the origin).
+  - `stone_view` in the log is a view of the stone in the fastest water.
 
 ![Down a river from 3 m over its water: a sheet of water over the valley's floor before (left), the river in its channel now (right)](../../reports/2026-10-01-105/beds-down.png)
 
