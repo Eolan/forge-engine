@@ -665,6 +665,26 @@ two rounds of each view without then with, 1 500 frames each, 2560 × 1440.
   shape, not a cost of the rivers: 32 259 river points (38 534), 4 226 stones (5 640).
 - At start the island's heightfield is generated once in 7.1 s, then read from the cache.
 
+**Under the water** (#108, 2026-10-01): the previous commit against this one, two rounds of
+each view, 1 500 frames each, 2560 × 1440. Within 20 m of the sea's level the frame finds the
+water at the camera (`water/at-camera`), draws the sea with the shader that can see it from
+below, and runs `water/under` indirectly: none of its groups while the near plane stands over
+the water.
+
+| View | frame | `water/surface` | `water/at-camera` | `water/under` |
+|---|---|---|---|---|
+| the island from 2.5 km (`-6500,2500,-1416,-90,-35`) | 3.508 → 3.505 ms | 0.355 → 0.353 | — | — |
+| the plain from 200 m (`0,200,5400,0,-8`) | 2.629 → 2.608 ms | 0.158 → 0.156 | — | — |
+| the largest mouth from 4 m (`4384,4.0,-2840,-88.9,-20`) | 3.239 → 3.263 ms | 0.434 → 0.455 | 0.008 | 0.005 |
+| 3 m under the sea, across the floor (`4770,-3.0,-2847,91.1,-10`) | 3.152 ms | 0.442 | 0.018 | 0.095 |
+
+- Over the water within reach, the surface's shader holds the view from below beside the one
+  from above: 0.02 ms more at the mouth.
+- Under the water, the surface shades from above first in every pixel (a quad's derivatives),
+  then from below, and asks for no rays (`water/reflections` 0.04 ms there).
+- `water/at-camera` is one group of four threads, the waves stepped back four times to the
+  point they carry over the camera, then a corner of the mesh's quad each.
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

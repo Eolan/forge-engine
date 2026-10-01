@@ -288,6 +288,16 @@ struct RiverStone
     float4 a; // world x, z (the sea's frame), the radius of its outline at the water's level (m; 0 under it), its mean radius (m)
 };
 
+// The water at the camera (`water/at-camera`, #108): its surface there as a plane, and its
+// water's colour.
+struct WaterAtCamera
+{
+    float4 plane;      // the surface's height over the camera (m), its slopes ∂h/∂x and ∂h/∂z, 0
+    float4 absorption; // rgb: its water's absorption, m⁻¹
+    float4 scatter;    // rgb: the light its water scatters back, per unit of irradiance
+    uint4 under_groups; // `water/under`'s dispatch: its groups along x and y (none while the near plane stands over the water), 1, 0
+};
+
 // Mirrors `GpuWaterSurface` in water.rs.
 struct WaterSurface
 {
@@ -331,6 +341,8 @@ struct WaterSurface
     uint* lake_masks;     // their masks, a bit a sample
     uint lake_count;
     uint pad_lakes;
+    WaterAtCamera* at_camera; // the water at the camera, or null: the camera stands too high to be under it
+    uint2 pad_at_camera;
 };
 
 struct SurfacePush
@@ -722,28 +734,64 @@ static const float SUN_REQUEST_MIN_SHARE = 0.01;
 static const float SWASH_EDGE = 0.03;
 static const float SWASH_EDGE_BREAKUP = 0.4;
 
-[shader("fragment")]
-SurfaceTargets surface_frag_main(SurfaceOut input)
+// The cascades' slopes at a point of the sea.
+struct SeaSlopes
 {
-    WaterSurface* w = surface_push.surface;
-    // The slopes: their mean from every cascade's mips, and the variance of those the mips
-    // average away (Bruneton, Neyret & Holzschuch 2010), each cascade damped by the depth as
-    // its displacement is (the slopes scale with the amplitude, their variance with its square,
-    // the Jacobian's departure from 1 to first order).
-    ShorePoint shore = shore_point(w, input.flat);
-    float2 slope = 0.0;
-    float variance = 0.0;
-    float jacobian = 1.0;
+    float2 slope;    // ∂h/∂x, ∂h/∂z
+    float variance;  // the slopes' the mips average away
+    float jacobian;  // under ~0.45, the waves fold: foam
+};
+
+// The slopes: their mean from every cascade's mips, and the variance of those the mips average
+// away (Bruneton, Neyret & Holzschuch 2010), each cascade damped by the depth as its
+// displacement is (the slopes scale with the amplitude, their variance with its square, the
+// Jacobian's departure from 1 to first order).
+SeaSlopes sea_slopes(WaterSurface* w, float2 flat, ShorePoint shore)
+{
+    SeaSlopes o;
+    o.slope = 0.0;
+    o.variance = 0.0;
+    o.jacobian = 1.0;
     for (uint c = 0; c < WATER_CASCADES; c++)
     {
         WaterCascadeView cv = w[0].cascades[c];
-        float2 uv = input.flat * cv.inv_patch + cv.offset;
+        float2 uv = flat * cv.inv_patch + cv.offset;
         float4 s = sample_image(cv.slopes, SAMPLER_ANISOTROPIC_REPEAT, uv);
         float a = shore_damping(cv, shore.depth);
-        slope += a * s.xy;
-        variance += a * a * max(s.w - dot(s.xy, s.xy), 0.0);
-        jacobian += a * (s.z - 1.0);
+        o.slope += a * s.xy;
+        o.variance += a * a * max(s.w - dot(s.xy, s.xy), 0.0);
+        o.jacobian += a * (s.z - 1.0);
     }
+    return o;
+}
+
+[shader("fragment")]
+SurfaceTargets surface_frag_main(SurfaceOut input)
+{
+    return sea_from_above(surface_push.surface, input);
+}
+
+// The sea when the camera stands low enough to be under it (#108, "under the water" below):
+// every pixel is shaded as seen from above first, so the derivatives that shading takes see
+// the whole quad, then from below where the pixel looks out from under the water.
+[shader("fragment")]
+SurfaceTargets surface_under_frag_main(SurfaceOut input)
+{
+    WaterSurface* w = surface_push.surface;
+    SurfaceTargets o = sea_from_above(w, input);
+    WaterAtCamera at = w[0].at_camera[0];
+    if (under_by(at, near_point(w, input.position.xy)) > 0.0)
+        o = sea_from_below(w, input, at);
+    return o;
+}
+
+SurfaceTargets sea_from_above(WaterSurface* w, SurfaceOut input)
+{
+    ShorePoint shore = shore_point(w, input.flat);
+    SeaSlopes cascades = sea_slopes(w, input.flat, shore);
+    float2 slope = cascades.slope;
+    float variance = cascades.variance;
+    float jacobian = cascades.jacobian;
     // The shore's trains, resolved to the pixel.
     float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
     ShoreWaves waves = shore_waves(w, input.flat, shore, footprint);
@@ -1497,4 +1545,281 @@ void copy_main(uint3 id : SV_DispatchThreadID)
     int3 at = int3(id.xy, 0);
     g_storage_images_rgba16f[p.color_out][id.xy] = g_sampled_images[p.color].Load(at);
     g_storage_images_r32f[p.depth_out][id.xy] = g_sampled_images_r[p.depth].Load(at);
+}
+
+// ---------------------------------------------------------- under the water ---
+//
+// The view from under the water (#108; `docs/research/water.md`, "Afterwards"). `water/at-camera`
+// finds the water's surface at the camera: the sea's, the cascades' displacement and the shore's
+// trains stepped back to the point they carry over the camera. Each pixel then tests the point it
+// looks through on the near plane against that surface as a plane, so a camera at the waterline
+// sees the line cross its lens. From under it the sea's surface shows Snell's window: within
+// 48.6° of its normal, the sky and the scene over the water, the window's edge holding the
+// horizon, and the sun through the waves; beyond, it mirrors the water under it (total internal
+// reflection). `water/under` then dims what each such pixel meets along the view ray, by the same
+// absorption as seen from above (Beer–Lambert), and adds the light the water scatters towards the
+// camera, both lit by what reaches their depth through the water over them.
+
+// The point a pixel looks through on the near plane (camera-relative metres; reversed-Z: depth 1).
+float3 near_point(WaterSurface* w, float2 pixel)
+{
+    float2 uv = pixel / float2(w[0].width, w[0].height);
+    float4 p = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0));
+    return p.xyz / p.w;
+}
+
+// How far the water's surface at the camera stands over a camera-relative point near it,
+// metres: above zero the point is under the water.
+float under_by(WaterAtCamera at, float3 p)
+{
+    return at.plane.x + dot(at.plane.yz, p.xz) - p.y;
+}
+
+// The light just under the water's surface: the sky's, from all round, and the sun's, which runs
+// down the sun's ray bent into the water. Both are the light on a level surface
+// (`WaterLight::lit`).
+struct LightBelow
+{
+    float3 sky;
+    float3 sun;
+    float3 sun_dir; // the way the sun's light runs under the water (unit, downwards)
+};
+
+LightBelow light_below(WaterSurface* w)
+{
+    float3 l = normalize(w[0].sun.xyz);
+    LightBelow o;
+    o.sky = sh_irradiance(w[0].sky_light, float3(0.0, 1.0, 0.0)) * w[0].sun_radiance.w;
+    o.sun = w[0].sun_radiance.rgb * saturate(l.y);
+    o.sun_dir = l.y > 0.0 ? refract(-l, float3(0.0, 1.0, 0.0), 1.0 / WATER_IOR) : float3(0.0, -1.0, 0.0);
+    return o;
+}
+
+// Henyey and Greenstein's asymmetry for the water's scattering of the sun's light: mostly
+// onwards, so the water glows towards the sun and is darkest looking away from it.
+static const float WATER_PHASE_G = 0.8;
+
+// Henyey and Greenstein's phase function at the scattering angle's cosine `c`, against its
+// value at `reference`.
+float phase_against(float c, float reference)
+{
+    float a = 1.0 + WATER_PHASE_G * WATER_PHASE_G;
+    return pow((a - 2.0 * WATER_PHASE_G * reference) / (a - 2.0 * WATER_PHASE_G * c), 1.5);
+}
+
+// What reaches the camera, `depth` metres under the water, from what a ray through the water
+// meets `distance` metres away along `dir` (unit, camera-relative): `seen`, lit by what reaches
+// its own depth `seen_depth` through the water over it and dimmed along the ray, and the light
+// the water scatters towards the camera on the way, lit by what reaches each depth (`light`,
+// falling off as e^{-σ (depth - dir.y s)} at `s` along the ray). The scattering is scaled so
+// that the water seen straight down from its surface is the colour it shows from above
+// (`scatter` times the light on the surface); away from that view it follows the phase
+// function, the sky's light running straight down and the sun's down its ray.
+float3 through_water(WaterAtCamera at, LightBelow light, float3 seen, float seen_depth, float depth, float3 dir, float distance)
+{
+    float3 sigma = at.absorption.rgb;
+    float rise = max(1.0 - dir.y, 1e-3);
+    float3 x = sigma * rise * distance;
+    float3 g = select(x > 1e-3, (1.0 - exp(-x)) / max(x, 1e-6), 1.0 - 0.5 * x);
+    float3 source = light.sky * phase_against(dir.y, -1.0)
+        + light.sun * phase_against(dot(light.sun_dir, -dir), light.sun_dir.y);
+    float3 scattered = 2.0 * at.scatter.rgb * source * exp(-sigma * depth) * sigma * distance * g;
+    return seen * exp(-sigma * (seen_depth + distance)) + scattered;
+}
+
+// The share of the light a water surface reflects back into the water, at `cos_i` from its
+// normal on the water's side (Fresnel's equations, unpolarised): 1 past the critical angle,
+// asin(1 / 1.333) = 48.6°.
+float fresnel_from_water(float cos_i)
+{
+    float sin2_t = WATER_IOR * WATER_IOR * (1.0 - cos_i * cos_i);
+    if (sin2_t >= 1.0)
+        return 1.0;
+    float cos_t = sqrt(1.0 - sin2_t);
+    float rs = (WATER_IOR * cos_i - cos_t) / (WATER_IOR * cos_i + cos_t);
+    float rp = (WATER_IOR * cos_t - cos_i) / (WATER_IOR * cos_t + cos_i);
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+// The sea's surface seen from under it, as the light leaves it towards the camera: Snell's
+// window, and the mirror of the water beyond it. `water/under` adds the water between.
+SurfaceTargets sea_from_below(WaterSurface* w, SurfaceOut input, WaterAtCamera at)
+{
+    ShorePoint shore = shore_point(w, input.flat);
+    SeaSlopes cascades = sea_slopes(w, input.flat, shore);
+    // The shore's trains, resolved to the pixel's footprint at this distance (no derivatives:
+    // the quad's other pixels may have been shaded from above).
+    float distance = length(input.relative);
+    ShoreWaves waves = shore_waves(w, input.flat, shore, max(distance * w[0].pixel, 1e-3));
+    float2 slope = cascades.slope + waves.slope;
+    float3 n = normalize(float3(slope.x, -1.0, slope.y)); // facing down, into the water
+    float3 v = -input.relative / distance;
+    float a2 = clamp(0.0004 + 2.0 * cascades.variance, 0.0004, 1.0);
+    float reflectance = fresnel_from_water(max(dot(n, v), 1e-4));
+    LightBelow light = light_below(w);
+    float3 lit = light.sky + light.sun;
+    // The mirror: the light the water under the surface scatters back up along the reflected
+    // ray, out of an endless depth (a wave's underside that turns the ray up mirrors the same).
+    float3 r = reflect(-v, n);
+    r.y = min(r.y, -1e-3);
+    float3 color = reflectance * through_water(at, light, 0.0, 0.0, 0.0, normalize(r), 1e9);
+    if (reflectance < 1.0)
+    {
+        // The window: the ray bent out of the water towards what the copy of the scene holds
+        // behind the pixel (the island over the water), or the sky it meets.
+        float3 t = refract(-v, n, WATER_IOR);
+        int3 pixel = int3(int2(input.position.xy), 0);
+        float3 above;
+        if (g_sampled_images_r[NonUniformResourceIndex(w[0].scene_depth)].Load(pixel) > 0.0)
+            above = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(pixel).rgb;
+        else
+        {
+            float4 up_table = w[0].sky_light[SH_COEFFICIENTS];
+            float3 forward = w[0].sky_light[SH_COEFFICIENTS + 1].xyz;
+            above = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, t) * w[0].sun_radiance.w;
+        }
+        // The sun through the waves: GGX's lobe about its direction, a third as wide as the
+        // normals' (a tilt of the surface turns the ray out by a third of the tilt).
+        float tl = dot(t, normalize(w[0].sun.xyz));
+        float3 sun = tl > 0.0 ? w[0].sun_radiance.rgb * ggx(tl, max(a2 / 9.0, 1e-4)) : 0.0;
+        // Into the water, the light of the sky's half crowds into the window: its radiance grows
+        // by the index squared.
+        color += (1.0 - reflectance) * WATER_IOR * WATER_IOR * (above + sun);
+    }
+    // Foam where the waves fold and where the shore's trains break, at its pattern's mean.
+    float foam = max(saturate((0.45 - cascades.jacobian) * 2.0), 0.5 * saturate(1.5 * waves.foam));
+    color = lerp(color, 0.8 * lit / PI, foam * 0.8);
+    SurfaceTargets o;
+    o.color = float4(min(color, 32768.0), 1.0);
+    o.request = 0.0;
+    o.sun = 0.0;
+    return o;
+}
+
+// The sea's displacement at `flat` (camera-relative world x, z) as its vertices there take it,
+// `spacing` metres apart.
+float3 sea_displacement(WaterSurface* w, float2 flat, float spacing)
+{
+    ShorePoint shore = shore_point(w, flat);
+    ShoreWaves waves = shore_waves(w, flat, shore, spacing);
+    return displacement_at(w, flat, spacing, shore.depth) + float3(waves.offset.x, waves.height, waves.offset.y);
+}
+
+struct AtCameraPush
+{
+    WaterSurface* surface;
+};
+
+[[vk::push_constant]]
+AtCameraPush at_camera_push;
+
+// The water at the camera: the sea's surface there as the finest level of its mesh draws it,
+// the plane of the triangle over the camera. The waves carry each point of the level surface
+// sideways, so the one they carry over the camera is found by stepping back by its
+// displacement; the triangle is that of the lattice's quad around it, displaced as its vertices
+// are (`surface_vert_main`), which holds the camera. The exact surface stands centimetres off the
+// drawn one, and a camera between the two looked through no surface at all. A thread per corner.
+groupshared float3 g_corners[4];
+
+[shader("compute")]
+[numthreads(4, 1, 1)]
+void at_camera_main(uint k : SV_GroupIndex)
+{
+    WaterSurface* w = at_camera_push.surface;
+    float s = w[0].levels[0].z;
+    float2 flat = 0.0;
+    for (uint i = 0; i < 4u; i++)
+        flat = -sea_displacement(w, flat, s).xz;
+    float2 corner = w[0].levels[0].xy + floor((flat - w[0].levels[0].xy) / s) * s;
+    float2 q = corner + float2(QUAD_CORNERS[k == 3u ? 5u : k]) * s;
+    float3 d = sea_displacement(w, q, s);
+    g_corners[k] = float3(q.x + d.x, d.y, q.y + d.z);
+    GroupMemoryBarrierWithGroupSync();
+    if (k != 0u)
+        return;
+    float3 p[4] = { g_corners[0], g_corners[1], g_corners[2], g_corners[3] };
+    // The quad's two triangles, (0, 0), (0, 1), (1, 0) and (1, 0), (0, 1), (1, 1) as (x, z): the
+    // first if the camera lies on its side of their shared edge.
+    float2 e = p[1].xz - p[2].xz;
+    bool first = (e.x * -p[2].z - e.y * -p[2].x) * (e.x * (p[0].z - p[2].z) - e.y * (p[0].x - p[2].x)) >= 0.0;
+    float3 a = first ? p[0] : p[3];
+    float3 n = cross(p[1] - a, p[2] - a);
+    n *= n.y < 0.0 ? -1.0 : 1.0;
+    float2 slope = -n.xz / max(n.y, 1e-6);
+    float h = a.y - dot(slope, a.xz);
+    WaterAtCamera at;
+    at.plane = float4(h - w[0].camera.y, slope, 0.0);
+    at.absorption = w[0].absorption;
+    at.scatter = w[0].scatter;
+    // `water/under` runs only where the near plane reaches the water, or its waterline: the
+    // plane's test is linear across it, so its corners tell.
+    float under = -1e9;
+    for (uint c = 0; c < 4u; c++)
+    {
+        float2 pixel = float2((c & 1u) != 0u ? w[0].width : 0u, (c & 2u) != 0u ? w[0].height : 0u);
+        under = max(under, under_by(at, near_point(w, pixel)));
+    }
+    uint2 groups = (uint2(w[0].width, w[0].height) + 7u) / 8u;
+    at.under_groups = uint4(under > -WATERLINE_MARGIN ? groups : uint2(0u), 1u, 0u);
+    w[0].at_camera[0] = at;
+}
+
+struct UnderPush
+{
+    WaterSurface* surface;
+    uint color;  // storage: the HDR image
+    uint depth;  // sampled: the depth as drawn, the water's included
+    uint width;
+    uint height;
+};
+
+[[vk::push_constant]]
+UnderPush under_push;
+
+// The waterline across the lens: pixels wide, and how much it darkens; and the metres the near
+// plane may stand over the water with the line still on it (its pixels are hundredths of a
+// millimetre there).
+static const float WATERLINE_PIXELS = 1.5;
+static const float WATERLINE_DARK = 0.6;
+static const float WATERLINE_MARGIN = 1e-3;
+
+// The water between the camera and what each pixel under the water meets, and the waterline
+// where the near plane crosses the surface.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void under_main(uint3 id : SV_DispatchThreadID)
+{
+    UnderPush p = under_push;
+    if (id.x >= p.width || id.y >= p.height)
+        return;
+    WaterSurface* w = p.surface;
+    WaterAtCamera at = w[0].at_camera[0];
+    float2 pixel = float2(id.xy) + 0.5;
+    float3 near = near_point(w, pixel);
+    float under = under_by(at, near);
+    float across = max(abs(under_by(at, near_point(w, pixel + float2(1.0, 0.0))) - under),
+                       abs(under_by(at, near_point(w, pixel + float2(0.0, 1.0))) - under));
+    float line = 1.0 - smoothstep(0.5 * WATERLINE_PIXELS, WATERLINE_PIXELS, abs(under) / max(across, 1e-9));
+    if (under <= 0.0 && line <= 0.0)
+        return;
+    float4 color = g_storage_images_rgba16f[p.color][id.xy];
+    if (under > 0.0)
+    {
+        float depth = g_sampled_images_r[p.depth].Load(int3(id.xy, 0));
+        float3 dir = normalize(near);
+        float distance = 1e9;
+        if (depth > 0.0)
+        {
+            float2 uv = pixel / float2(p.width, p.height);
+            float4 hit = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
+            distance = length(hit.xyz / hit.w);
+        }
+        // The water's surface, where it was drawn, is lit at the surface; the scene under the
+        // water at its own depth.
+        float scene = g_sampled_images_r[w[0].scene_depth].Load(int3(id.xy, 0));
+        float seen_depth = depth != scene ? 0.0 : max(under - dir.y * distance, 0.0);
+        color.rgb = through_water(at, light_below(w), color.rgb, seen_depth, under, dir, distance);
+    }
+    color.rgb *= 1.0 - WATERLINE_DARK * line;
+    g_storage_images_rgba16f[p.color][id.xy] = color;
 }

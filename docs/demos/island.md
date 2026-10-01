@@ -1532,6 +1532,77 @@ differ, so each view is the one its own island's log picks for the same thing:
   - `grade`;
   - `RibbonParams::brooks`.
 
+**Under the sea** (#108, 2026-10-01; `shaders/water.slang`, "under the water";
+`reports/2026-10-01-108/`). The owner asked for the underwater environment to come
+(on #105). This is its first part, the sea's; caustics and the lakes' and rivers' water seen from
+below come next.
+
+**What changed.**
+- **The water at the camera** (`water/at-camera`).
+  - It runs only when the camera stands within 20 m of the sea's level.
+  - The waves carry each point of the level surface sideways, so it steps back by their
+    displacement to the point they carry over the camera.
+  - Its result is the plane of the mesh's triangle over the camera, displaced as the vertices
+    are. The exact surface stood centimetres off the drawn one, and a camera between the two
+    looked through no surface at all.
+- **Under or over, per pixel.** Each pixel tests the point it looks through on the near plane
+  against that plane. With the camera at the waterline, the line crosses the lens, tilted with
+  the wave, and is drawn a pixel and a half wide and dark.
+- **The surface from below** (`sea_from_below`): the sea's pixels that look out from under it.
+  - Within 48.6° of the normal is Snell's window. The ray is bent out of the water to the sky,
+    or to the island where the copy of the scene holds it, and the window's edge holds the
+    horizon.
+  - The sun shows through the waves as a GGX lobe a third as wide as the normals'. The light
+    crowds into the window, its radiance up by the index squared.
+  - Beyond that angle the surface mirrors the water under it (total internal reflection).
+  - The waves break the window's edge into patches.
+  - No mirror or shadow ray is asked for there.
+- **The water between** (`water/under`):
+  - What each pixel under the water meets is dimmed along the view ray by the sea's own
+    absorption, the one the surface applies seen from above.
+  - It is also lit only by what reaches its depth: red is gone a few metres down.
+  - The light the water scatters towards the camera is added, falling off with the depth along
+    the ray.
+  - That scattering is scaled so the water seen straight down from its surface is the colour
+    it shows from above. Elsewhere it follows a Henyey–Greenstein phase (g = 0.8): the sun's
+    light along its refracted ray, the sky's straight down. The water glows towards the sun
+    and the surface, and is darkest looking down and away from it.
+  - The pass is dispatched indirectly, with no groups while the near plane stands over the
+    water.
+- **A view under the sea** in the log (`under the sea (--view)`). From the largest river's
+  mouth it goes out along the river's course to where the floor lies 8 m deep, 3 m under the
+  sea's level, and looks back to the shore across the floor, then up at the surface.
+
+**Sheets** (`reports/2026-10-01-108/views.png`, seed 7, frame 60, 1600 × 900; by rows):
+- across the floor towards the shore, and up at Snell's window, both from 3 m under
+  (`4770,-3.0,-2847,91.1,-10` and `…,40`);
+- towards the sun (`4770,-3.0,-2847,-60,35`), and the floor from 6 m (`4770,-6.0,-2847,91.1,-30`);
+- the waterline across the lens from 0.48 m (`4770,0.48,-2847,91.1,0`), and from 0.45 m, where
+  the camera's lower half looks at the wave in front of it from inside.
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440):
+- From 2.5 km and over the plain, unchanged.
+- From 4 m over the largest mouth, 3.24 → 3.26 ms.
+- 3 m under the sea, 3.15 ms: `water/under` 0.095, `water/at-camera` 0.018.
+
+**Checks:**
+- The capture batch is unchanged (42 images at 0 px), as are the A/B harness, streamed against
+  resident and mesh against fallback.
+- Four logged views within 20 m of the sea, which the batch does not hold, are unchanged to the
+  pixel: the largest mouth, a wave from 0.5 m, a river from 9 m and a confluence.
+- `tools/validate.sh` is clean and now also runs the view under the sea on both paths. The
+  mouth from 4 m, whose `water/under` dispatches no groups, is clean too.
+
+**Left for later:**
+- The floor lacks the caustics that bring shallow water to life: next.
+- The lakes and the rivers are not yet seen from below (their water draws from above only).
+- The look is the sea's coefficients as tuned from above, so the water is a dark teal. Clearer
+  or bluer water, an exposure that adapts under the water (`--day` already meters the frame),
+  or light shafts are for the owner's look.
+- Over the water, a camera within a metre of the waves sees the island mirrored in the faces
+  of the nearest waves, in patches. That predates this work: four views compared to the pixel
+  with the previous commit.
+
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 
 The ground left on #106 is the 8 m field's own: its slopes keep 8 m facets and their shadows'

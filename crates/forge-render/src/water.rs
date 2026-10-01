@@ -527,9 +527,22 @@ struct GpuWaterSurface {
     lake_masks: u64,
     lake_count: u32,
     pad: u32,
+    at_camera: u64,
+    pad_at_camera: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 736);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 752);
+
+/// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
+/// its absorption and its scattering, then `water/under`'s dispatch.
+const AT_CAMERA_BYTES: u64 = 64;
+/// Where `water/under`'s dispatch starts in `WaterAtCamera`.
+const AT_CAMERA_DISPATCH: u64 = 48;
+
+/// Metres over the sea's mean level under which the camera may be under its water (the waves'
+/// crests and the shore's trains stand well under it): the frame then finds the water at the
+/// camera and draws the view from under it (#108).
+const UNDER_REACH: f64 = 20.0;
 
 /// Mirrors `Lake` in `water.slang`.
 #[repr(C)]
@@ -917,6 +930,24 @@ struct CopyPush {
     pad: [u32; 2],
 }
 
+/// Mirrors `AtCameraPush` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct AtCameraPush {
+    surface: u64,
+}
+
+/// Mirrors `UnderPush` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct UnderPush {
+    surface: u64,
+    color: u32,
+    depth: u32,
+    width: u32,
+    height: u32,
+}
+
 /// What a frame's sea surface needs besides the cascades and the sky.
 #[derive(Clone, Copy, Debug)]
 pub struct WaterSurfaceParams {
@@ -944,11 +975,22 @@ pub struct WaterSurfaceParams {
 /// and asks for the rays that bring the scene in ([`RayRequests`]): the mirror rays that put it
 /// in the reflection (step 3), and the shadow rays that take the sun away where it shades the
 /// water (step 4). With the shore come the rivers, ribbons drawn in the same pass over the land.
+/// When the camera comes down near the sea it can look out from under it (#108): the water at
+/// the camera is found first (`water/at-camera`), the surface shades as seen from below where a
+/// pixel looks out from under it, and the water between the camera and what it meets is added
+/// after (`water/under`).
 pub struct WaterSurface {
     copy: Pipeline,
     surface: Pipeline,
+    /// The surface within reach of the camera: seen from below where a pixel looks out from
+    /// under it.
+    surface_under: Pipeline,
     rivers: Pipeline,
     lakes: Pipeline,
+    at_camera_pass: Pipeline,
+    under: Pipeline,
+    /// The water at the camera (`WaterAtCamera`), which `water/at-camera` writes.
+    at_camera: GraphBuffer,
     blocks: Vec<Buffer>,
     /// The surface's quads as indices into a level's vertices ([`surface_indices`]), and each
     /// set's ranges per block.
@@ -1011,6 +1053,33 @@ impl WaterSurface {
             name: "water scene copy",
         });
         device.destroy_shader_module(copy_module);
+        let at_camera_module = device.create_shader_module(
+            &shaders.compile("water.slang", "at_camera_main", ShaderStage::Compute)?,
+            "water at the camera",
+        )?;
+        let at_camera_pass = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (at_camera_module, "at_camera_main"),
+            push_constant_bytes: std::mem::size_of::<AtCameraPush>() as u32,
+            name: "water at the camera",
+        });
+        device.destroy_shader_module(at_camera_module);
+        let under_module = device.create_shader_module(
+            &shaders.compile("water.slang", "under_main", ShaderStage::Compute)?,
+            "water under",
+        )?;
+        let under = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (under_module, "under_main"),
+            push_constant_bytes: std::mem::size_of::<UnderPush>() as u32,
+            name: "water under",
+        });
+        device.destroy_shader_module(under_module);
+        let at_camera = GraphBuffer::new(device.create_buffer(BufferDesc {
+            size: AT_CAMERA_BYTES,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: "water at the camera",
+        })?);
         let vertex = device.create_shader_module(
             &shaders.compile("water.slang", "surface_vert_main", ShaderStage::Vertex)?,
             "water surface vertices",
@@ -1019,9 +1088,9 @@ impl WaterSurface {
             &shaders.compile("water.slang", "surface_frag_main", ShaderStage::Fragment)?,
             "water surface",
         )?;
-        let surface = device.create_vertex_pipeline(&VertexPipelineDesc {
+        let surface_desc = |fragment, entry, name| VertexPipelineDesc {
             vertex: (vertex, "surface_vert_main"),
-            fragment: (fragment, "surface_frag_main"),
+            fragment: (fragment, entry),
             color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
             depth_format: Some(vk::Format::D32_SFLOAT),
             push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
@@ -1029,10 +1098,31 @@ impl WaterSurface {
             wireframe: false,
             depth_test: true,
             alpha_blend: false,
-            name: "water surface",
-        });
+            name,
+        };
+        let surface = device.create_vertex_pipeline(&surface_desc(
+            fragment,
+            "surface_frag_main",
+            "water surface",
+        ));
+        // Within reach of the camera, the surface shades as seen from below where a pixel
+        // looks out from under the water (#108).
+        let under_fragment = device.create_shader_module(
+            &shaders.compile(
+                "water.slang",
+                "surface_under_frag_main",
+                ShaderStage::Fragment,
+            )?,
+            "water surface from below",
+        )?;
+        let surface_under = device.create_vertex_pipeline(&surface_desc(
+            under_fragment,
+            "surface_under_frag_main",
+            "water surface from below",
+        ));
         device.destroy_shader_module(vertex);
         device.destroy_shader_module(fragment);
+        device.destroy_shader_module(under_fragment);
         // The rivers blend over what is under them by how much of the pixel they cover: their
         // soft edges, their thinning far away.
         let river_vertex = device.create_shader_module(
@@ -1332,8 +1422,12 @@ impl WaterSurface {
         Ok(Self {
             copy: copy?,
             surface: surface?,
+            surface_under: surface_under?,
             rivers: rivers?,
             lakes: lakes?,
+            at_camera_pass: at_camera_pass?,
+            under: under?,
+            at_camera,
             blocks,
             surface_indices,
             surface_ranges,
@@ -1521,7 +1615,13 @@ impl WaterSurface {
         let address = block.address();
         let sky_address = sky.address();
         let sky_light = sky.light.address;
-        let surface = &self.surface;
+        // Whether the camera stands low enough to be under the water (#108).
+        let in_reach = params.camera.y < UNDER_REACH;
+        let surface = if in_reach {
+            &self.surface_under
+        } else {
+            &self.surface
+        };
         let surface_indices = &self.surface_indices;
         let river_pipeline = &self.rivers;
         let lake_pipeline = &self.lakes;
@@ -1554,6 +1654,27 @@ impl WaterSurface {
             }
         }
         let shore_image = shore.map(|s| graph.import(&s.image));
+        // The water at the camera.
+        let at_camera = in_reach.then(|| graph.import_buffer(&self.at_camera));
+        let at_camera_address = at_camera.map_or(0, |_| self.at_camera.address());
+        if let Some(at_camera) = at_camera {
+            let pipeline = &self.at_camera_pass;
+            let mut pass = graph
+                .pass("water/at-camera")
+                .buffer(at_camera, BufferAccess::ShaderWrite(compute));
+            for &(displacement, _) in &waves.cascades {
+                pass = pass.image(displacement, ImageAccess::Sampled(compute));
+            }
+            if let Some(image) = shore_image {
+                pass = pass.image(image, ImageAccess::Sampled(compute));
+            }
+            pass.run(move |_, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &AtCameraPush { surface: address });
+                commands.dispatch(1, 1, 1);
+                Ok(())
+            });
+        }
         let mut pass = graph
             .pass("water/surface")
             .image(color, ImageAccess::ColorAttachment)
@@ -1572,6 +1693,9 @@ impl WaterSurface {
         }
         if let Some(image) = shore_image {
             pass = pass.image(image, ImageAccess::Sampled(vertex | fragment));
+        }
+        if let Some(at_camera) = at_camera {
+            pass = pass.buffer(at_camera, BufferAccess::ShaderRead(fragment));
         }
         pass.run(move |resources, commands| {
             let mut cascade_views = [GpuWaterCascadeView::zeroed(); SURFACE_CASCADES];
@@ -1636,6 +1760,8 @@ impl WaterSurface {
                         .map_or(0, |(_, m)| m.address()),
                     lake_count,
                     pad: 0,
+                    at_camera: at_camera_address,
+                    pad_at_camera: [0; 2],
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.
@@ -1715,6 +1841,34 @@ impl WaterSurface {
             commands.end_rendering();
             Ok(())
         });
+        // The water between the camera and what each pixel under it meets (#108): none of its
+        // groups while the near plane stands over the water (`water/at-camera` sets them).
+        if let Some(at_camera) = at_camera {
+            let under = &self.under;
+            let args: &'f GraphBuffer = &self.at_camera;
+            graph
+                .pass("water/under")
+                .image(color, ImageAccess::StorageReadWrite(compute))
+                .image(depth, ImageAccess::Sampled(compute))
+                .image(scene_depth, ImageAccess::Sampled(compute))
+                .buffer(at_camera, BufferAccess::IndirectArgsAndShaderRead(compute))
+                .buffer(sky.light.buffer, BufferAccess::ShaderRead(compute))
+                .run(move |resources, commands| {
+                    commands.bind_pipeline(under);
+                    commands.push_constants(
+                        under,
+                        &UnderPush {
+                            surface: address,
+                            color: resources.storage(color, 0).0,
+                            depth: resources.sampled(depth).0,
+                            width: extent.width,
+                            height: extent.height,
+                        },
+                    );
+                    commands.dispatch_indirect(args, AT_CAMERA_DISPATCH);
+                    Ok(())
+                });
+        }
         RayRequests {
             mirror: mirror_requests,
             sun: sun_requests,

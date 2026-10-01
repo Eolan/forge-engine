@@ -2123,6 +2123,30 @@ fn island_ribbons(
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map_or_else(String::new, |(_, r, k)| view_from(&r.points[k], 30.0, 4.0));
     tracing::info!(%into_lake, %into_sea, %gentle_sea, "where the rivers hand over (--view)");
+    // Under the sea (#108): out from the largest river's mouth along its course to where the
+    // floor lies 8 m deep, 3 m under the sea's level, looking back to the shore across the floor
+    // and up at the surface.
+    let under_sea = ribbons
+        .last()
+        .and_then(|r| Some(r.points[forge_procgen::sea_mouth(&r.points)?]))
+        .and_then(|p| {
+            let (dx, dz) = (p.direction[0], p.direction[1]);
+            let at = (0..250)
+                .map(|i| {
+                    let s = 4.0 * i as f32;
+                    [p.position[0] + s * dx, p.position[1] + s * dz]
+                })
+                .find(|at| {
+                    channels.height_at(height, f64::from(at[0]), f64::from(at[1])) <= -8.0
+                })?;
+            let yaw = dx.atan2(dz).to_degrees();
+            let (x, z) = (at[0] - half, at[1] - half);
+            Some(format!(
+                "{x:.0},-3.0,{z:.0},{yaw:.1},-10  {x:.0},-3.0,{z:.0},{yaw:.1},40"
+            ))
+        })
+        .unwrap_or_default();
+    tracing::info!(%under_sea, "under the sea (--view)");
     // Up a steep river from 2 m over its water, 40 m downstream of the steepest point of a river
     // 5 m wide or more (#113: from low, the water far up a valley).
     let up_valley = ribbons
