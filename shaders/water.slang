@@ -278,7 +278,7 @@ struct RiverMouth
 struct Lake
 {
     float4 a; // the mask's first sample (world x, z), the level (m), metres between samples
-    uint4 b;  // the mask's samples along x and z, its first word in `lake_masks`, 0
+    uint4 b;  // the mask's samples along x and z, its first word in `lake_masks`, its depth (m, as float bits)
 };
 
 // A stone in a river (`GpuRiverStone` in water.rs).
@@ -858,6 +858,9 @@ static const float RIVER_BANK = 0.5;
 // The water's depth over which its edge fades where it meets the ground or anything in it:
 // metres, and pixels' footprints.
 static const float2 RIVER_CONTACT = float2(0.02, 0.25);
+// Metres more than its own depth that a river or a lake can stand over what the view ray meets
+// under it: past that the ground is not drawn there yet.
+static const float RIVER_DEEPEST = 5.0;
 // How much rougher a stone's wake is (added to the slopes' variance).
 static const float RIVER_WAKE_ROUGHNESS = 0.02;
 // Metres between the riffles' white water, and the foam's cover where its pattern is too fine
@@ -1156,6 +1159,7 @@ struct FreshWater
     float white;     // the white water's share, before its pattern
     float3 absorption; // its water's, m⁻¹
     float3 scatter;  // the light its water scatters back, per unit of irradiance
+    float deepest;   // the deepest it can be under its surface, metres
 };
 
 // The shading of fresh water: the ripples carried on its flow, the sky, the sun, the mirror and
@@ -1189,7 +1193,10 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     }
     float thickness = path * max(v.y, 0.0);
     float contact = smoothstep(0.0, max(RIVER_CONTACT.x, RIVER_CONTACT.y * footprint), thickness);
-    float coverage = s.coverage * lerp(contact, 1.0, s.drape);
+    // Where the view ray finds nothing within the deepest the water can be under the surface,
+    // the ground is not drawn there yet (its pages still streaming in): no water over nothing.
+    float there = 1.0 - smoothstep(s.deepest, 1.5 * s.deepest, thickness);
+    float coverage = s.coverage * lerp(contact * there, 1.0, s.drape);
     path = lerp(path, s.depth / max(v.y, 0.2), s.drape);
     float3 transmittance = exp(-s.absorption * path);
     float3 inside = under * transmittance + s.scatter * light.lit * (1.0 - transmittance);
@@ -1265,6 +1272,7 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.white = max(rapids, stones.white);
     s.absorption = RIVER_ABSORPTION;
     s.scatter = RIVER_SCATTER;
+    s.deepest = input.river.z + RIVER_DEEPEST;
     return fresh_water(w, s);
 }
 
@@ -1347,6 +1355,7 @@ SurfaceTargets lake_frag_main(LakeOut input)
     s.white = 0.0;
     s.absorption = lerp(LAKE_ABSORPTION, RIVER_ABSORPTION, estuary.fresh);
     s.scatter = lerp(LAKE_SCATTER, RIVER_SCATTER, estuary.fresh);
+    s.deepest = asfloat(lake.b.w) + RIVER_DEEPEST;
     return fresh_water(w, s);
 }
 

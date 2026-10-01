@@ -462,7 +462,7 @@ const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 736);
 struct GpuLake {
     /// The mask's first sample (world x, z), the level, metres between samples.
     a: [f32; 4],
-    /// The mask's samples along x and z, its first word in the masks' bits, 0.
+    /// The mask's samples along x and z, its first word in the masks' bits, its depth (f32 bits).
     b: [u32; 4],
 }
 
@@ -472,6 +472,9 @@ struct GpuLake {
 pub struct WaterLake {
     /// The water's level, metres.
     pub level: f32,
+    /// Its deepest point under the level, metres: deeper than that (and a margin), the view ray
+    /// finds nothing under it because the ground is not drawn there yet.
+    pub depth: f32,
     /// World x and z (the sea's frame) of the mask's first sample, metres.
     pub origin: [f32; 2],
     /// The mask's samples along x and z, the shore's spacing apart.
@@ -1076,7 +1079,7 @@ impl WaterSurface {
                         }
                         GpuLake {
                             a: [lake.origin[0], lake.origin[1], lake.level, s.spacing],
-                            b: [lake.size[0], lake.size[1], first, 0],
+                            b: [lake.size[0], lake.size[1], first, lake.depth.to_bits()],
                         }
                     })
                     .collect();

@@ -1899,6 +1899,7 @@ fn island_ribbons(
         .iter()
         .map(|l| WaterLake {
             level: l.level,
+            depth: l.depth,
             origin: [
                 l.first[0] as f32 * spacing - half,
                 l.first[1] as f32 * spacing - half,

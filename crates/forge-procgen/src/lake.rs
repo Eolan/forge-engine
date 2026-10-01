@@ -23,6 +23,8 @@ pub struct LakeWater {
     pub lake: u32,
     /// The water's level, metres.
     pub level: f32,
+    /// Its deepest point under the level, metres.
+    pub depth: f32,
     /// The mask's first sample, column and row of the field.
     pub first: [u32; 2],
     /// The mask's samples along the columns and the rows.
@@ -100,6 +102,7 @@ pub fn lake_waters(
             LakeWater {
                 lake: index as u32,
                 level,
+                depth: lake.depth,
                 first: [lo[0] as u32, lo[1] as u32],
                 size: [size[0] as u32, size[1] as u32],
                 mask,

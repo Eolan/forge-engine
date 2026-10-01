@@ -709,6 +709,9 @@ water in a carved channel:
   0.45 m⁻¹, a little tannin and silt). The faked sediment tint is gone. The edge fades over the
   last 2 cm of depth, or a quarter of a pixel's footprint, wherever the water thins against
   something.
+- **Not over nothing:** a river or a lake fades where the view ray finds nothing within the deepest
+  it can be under its surface (its own depth and 5 m more): the ground not drawn yet, its pages
+  still streaming in, where the owner saw ribbons floating.
 - **Far away** the channel can be under a pixel and the DAG fills it: past a footprint of a fifth
   of the channel's depth under its banks the ribbon rises onto the ground as before (resting on
   the carved ground now), and past four fifths it lies there in full, a pixel wide either side.

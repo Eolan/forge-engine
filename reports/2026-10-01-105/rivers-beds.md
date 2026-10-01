@@ -96,3 +96,13 @@ fine heights once (1.5 s) when the island's mesh is not in the cache.
   river at its level; the channel holds the level at the water's edge, the depth in the middle,
   leaves the ground far away, and its fine heights meet the coarse cells; the stones stand on the
   bed within the water, the same every time (`forge_procgen`); clippy, fmt.
+
+## Later the same night: no water over ground not drawn yet
+
+The owner saw ribbons floating "maybe because terrain is not ready". With the island's pages
+streamed (the default), the first frames draw the water before the ground under it: frame 3 of
+the view down a river showed the river hanging over the sea far below (`streaming.png`, left).
+Rivers and lakes now fade where the view ray finds nothing within the deepest they can be (their
+own depth, a lake's deepest point, and 5 m more) under their surface (right); once the ground is
+in, nothing changes (the batch, captured with the pages resident, at 0 px everywhere; validation
+clean).
