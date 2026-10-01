@@ -2671,8 +2671,8 @@ void add_layer(inout uint layer[3], inout float weight[3], uint id, float w)
 // Ground in layers (issue #42): the row at `row` names a layer map (one layer id per texel,
 // over `1 / inv_texture_scale` metres of the object's x and z, centred on its origin); layer k
 // is the standard row `row + 1 + k`. The two layers weighing most among the four texels
-// around the pixel are shaded and blended by their bilinear weights (three where the row's
-// contour splits one of them).
+// around the pixel are shaded and blended by their bilinear weights (where the row's contour
+// splits them into three, the two heaviest).
 float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
 {
     float3 albedo;
@@ -2731,11 +2731,16 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             }
         }
         // The contour splits the pair's layers that are its own by the height: up to three
-        // layers, the heaviest first. Over its reach, a pair without its layer under it stays.
-        uint third = first;
-        float w_third = 0.0;
+        // layers, the heaviest first. Over its reach, a pair without its layer under it stays,
+        // and a pair without any of its layers (the sea floor, the rock) stays everywhere.
+        // Two are shaded: the lightest of three fades out, its weight taken off the other two,
+        // so the blend stays continuous where the two lightest change places (#111). A third
+        // layer shaded, even flat, made NVIDIA's driver give the whole pass 128 registers
+        // instead of 96 with a spill to shared memory (`FORGE_SHADER_STATS`), and cost up to
+        // 0.06 ms at 1440p on every pixel of ground.
         float span = abs(s.dpdx.y) + abs(s.dpdy.y);
-        if (mat.contour != 0u && (s.object_position.y - mat.contour_height < contour_reach(mat, span)
+        if (mat.contour != 0u && (contour_own(mat, first) || contour_own(mat, second))
+            && (s.object_position.y - mat.contour_height < contour_reach(mat, span)
             || first == mat.contour - 1u || second == mat.contour - 1u))
         {
             uint low = mat.contour - 1u;
@@ -2785,12 +2790,11 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
                     }
                 }
             }
+            float w_off = layer[2] != NO_LAYER ? weight[2] : 0.0;
             first = layer[0];
-            w_first = weight[0];
+            w_first = weight[0] - w_off;
             second = layer[1] != NO_LAYER ? layer[1] : first;
-            w_second = layer[1] != NO_LAYER ? weight[1] : 0.0;
-            third = layer[2] != NO_LAYER ? layer[2] : first;
-            w_third = layer[2] != NO_LAYER ? weight[2] : 0.0;
+            w_second = layer[1] != NO_LAYER ? weight[1] - w_off : 0.0;
         }
         Material a = f[0].materials[row + 1 + first];
         float3 albedo_a, n_a;
@@ -2812,18 +2816,6 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             specular = lerp(a.specular, b.specular, blend);
             reflectance = lerp(a.reflectance, b.reflectance, blend);
             emissive = lerp(a.emissive, b.emissive, blend);
-        }
-        if (w_third > 0.0)
-        {
-            Material c = f[0].materials[row + 1 + third];
-            float3 albedo_c, n_c;
-            standard_surface(c, s, albedo_c, n_c);
-            float blend = w_third / (w_first + w_second + w_third);
-            albedo = lerp(albedo, albedo_c, blend);
-            n = normalize(lerp(n, n_c, blend));
-            specular = lerp(specular, c.specular, blend);
-            reflectance = lerp(reflectance, c.reflectance, blend);
-            emissive = lerp(emissive, c.emissive, blend);
         }
     }
     if (s.shore != nullptr)

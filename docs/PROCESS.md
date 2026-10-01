@@ -189,6 +189,13 @@ how positions reach the GPU, and put its lines in the report.
   #77). Captures must match in both modes.
 - `FORGE_FRAME_BARRIER=1` puts a full barrier at the start of each queue's first batch,
   which serialises frames on the GPU.
+- `FORGE_SHADER_STATS=<text>` logs what the driver compiled for each compute pipeline whose
+  entry point holds the text (`1` for all): on NVIDIA the registers, the local and shared
+  memory and the binary's size (`VK_KHR_pipeline_executable_properties`, #111; the local
+  memory's low 32 bits are its bytes). A pass's registers set how many of its warps an SM
+  holds. NVIDIA's driver may also spill registers to shared memory, which shows as shared
+  memory the shader never declared; it did not for a shader using groupshared memory or wave
+  operations.
 
 ## Sessions handed over: a fresh local session or a cloud session
 

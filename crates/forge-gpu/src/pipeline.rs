@@ -159,9 +159,15 @@ impl Device {
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(desc.shader.0)
             .name(&name);
+        let stats = self.wants_shader_stats(desc.shader.1);
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
-            .layout(layout);
+            .layout(layout)
+            .flags(if stats {
+                vk::PipelineCreateFlags::CAPTURE_STATISTICS_KHR
+            } else {
+                vk::PipelineCreateFlags::empty()
+            });
         // SAFETY: valid create info; the module outlives the call.
         let created = unsafe {
             self.raw()
@@ -176,6 +182,9 @@ impl Device {
             }
         };
         self.set_name(raw, desc.name);
+        if stats {
+            self.log_shader_stats(raw, desc.shader.1);
+        }
         Ok(Pipeline {
             device: Arc::clone(self),
             raw,

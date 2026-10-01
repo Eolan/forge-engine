@@ -542,7 +542,7 @@ path (2d3973a; three runs each, the waves held at 12 s):
   layer's block the compiler drops much of the bookkeeping, and `shading/layered` falls by 0.03
   to 0.065 ms even in the island's view, where three layers meet in few pixels. Shading that
   third layer as a flat colour saved nothing. Restructuring the block (fewer live arrays) is the
-  lever.
+  lever. (Not the arrays but the third layer itself: "The contour's third layer" below, #111.)
 
 **The coastal plain's rivers** (#112, #113, #114, 2026-10-01): da572f7 (the plain) against
 78f46a0 (the water seen up a steep valley from low, the beds per pixel, the banks by the bend,
@@ -614,9 +614,45 @@ alternating, 1600 × 900.
 | the slot from 40 m (`-3083,88.3,-376,123.7,-45`) | 1.881 → 1.936 ms | 0.689 → 0.739 | 0.049 → 0.050 |
 | the hills from 250 m (`-3083,250,-376,123.7,-25`) | 1.609 → 1.635 ms | 0.452 → 0.472 | 0.039 → 0.047 |
 
-- The valleys' views pay in `shading/layered`: their pixels now meet three layers more often
-  (gravel, scree, scrub and rock), the third layer's cost (#111).
+- The valleys' views pay in `shading/layered`: more of their pixels now shade two layers
+  (gravel, scree, scrub and rock). A third layer comes only from the sand's contour (#111).
 - At start the three texture sets take 210 ms and the painting 0.14 s.
+
+**The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
+(`docs/PROCESS.md`) gives the layered pass's registers:
+- With the sand's contour: 127 registers, no spill.
+- Without the contour: 96, with about 19 a thread spilled to shared memory (4 864 bytes a
+  group).
+- The third layer the contour splits off decides between the two. With it shaded, even as a
+  flat colour, the driver takes 127–128 registers and no spill, so an SM holds 16 of the pass's
+  warps instead of 21.
+- Moving no other part of the code changed that: the noise, the sort, packing the layers' ids,
+  the scalars kept after the textures, `[branch]`, or a loop over the layers (128 even without
+  the contour).
+
+The pass now shades two layers at most. The lightest of three fades out, its weight taken off
+the other two, so the blend stays continuous; and pairs with none of the contour's layers
+(the sea floor, the rock) skip its block. Two rounds each (2560 × 1440) and three (1600 ×
+900), alternating the committed shader, this one and the one without the contour block:
+
+| View | `shading/layered` 1440p: before → now (none) | 900p: before → now (none) | frame 1440p: before → now |
+|---|---|---|---|
+| coast (the first view) | 0.884 → 0.845 (0.847) | 0.337 → 0.323 (0.320) | 3.14 → 3.11 ms |
+| the stream from 16 m | 0.937 → 0.927 (0.923) | 0.356 → 0.349 (0.346) | 2.93 → 2.90 ms |
+| down a river from 3 m | 0.908 → 0.898 (0.899) | 0.348 → 0.341 (0.338) | 2.83 → 2.82 ms |
+| the stone at the largest mouth | 1.199 → 1.141 (1.180) | 0.448 → 0.427 (0.445) | 2.97 → 2.92 ms |
+| a lake from 3 m over its water | 0.841 → 0.832 (0.823) | 0.322 → 0.320 (0.318) | 2.73 → 2.72 ms |
+| the island from 2.5 km | 0.837 → 0.778 (0.766) | 0.330 → 0.309 (0.306) | 3.82 → 3.78 ms |
+
+- Within 0.012 ms of the pass without the contour everywhere, and 0.04 ms under it at the
+  stone, where the contour now leaves one layer where the map's pair had two.
+- Images: 47 pixels of the capture batch's island view and 26 of its water view change
+  (ꟻLIP mean 0.00001), and at most 34 of a contour view's (ꟻLIP max 0.086).
+- The valleys of #118 (1600 × 900, three rounds): the slot from 3 m 0.627 → 0.608 ms, up the
+  steep river 0.696 → 0.671 ms (frame 2.086 → 2.048), the slot from 40 m unchanged.
+- Tried and dropped: the contour's pixels in a pass of their own over the tiles that hold
+  them. It kept the layered pass at 96, but the band can fill the view (0.30 ms for the second
+  pass from the stone's view), and the pixels it hands over pay twice.
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

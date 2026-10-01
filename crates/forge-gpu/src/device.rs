@@ -132,6 +132,9 @@ pub struct Device {
     budget_cap: Option<u64>,
     /// DLSS, when the instance came through Streamline and this GPU runs it.
     dlss: Option<crate::dlss::Dlss>,
+    /// `FORGE_SHADER_STATS`: the compiled statistics of the pipelines whose entry point holds
+    /// this text (every one for `1`), logged as they are created (issue #111).
+    shader_stats: Option<(khr::pipeline_executable_properties::Device, String)>,
 }
 
 struct Candidate {
@@ -144,6 +147,8 @@ struct Candidate {
     name: String,
     /// PCI vendor id ([`VENDOR_NVIDIA`], AMD 0x1002, …).
     vendor_id: u32,
+    /// `VK_KHR_pipeline_executable_properties` with `pipelineExecutableInfo`.
+    executable_info: bool,
 }
 
 /// NVIDIA's PCI vendor id: the only vendor NVIDIA Streamline (DLSS) is loaded for (issue #67).
@@ -199,6 +204,16 @@ impl Device {
             extensions.push(khr::ray_query::NAME.as_ptr());
             extensions.push(khr::deferred_host_operations::NAME.as_ptr());
             extensions.push(khr::ray_tracing_pipeline::NAME.as_ptr());
+        }
+        let stats_filter = std::env::var("FORGE_SHADER_STATS")
+            .ok()
+            .filter(|v| !v.is_empty() && v != "0");
+        if stats_filter.is_some() && !best.executable_info {
+            tracing::warn!("FORGE_SHADER_STATS: this GPU gives no pipeline statistics");
+        }
+        let stats_filter = stats_filter.filter(|_| best.executable_info);
+        if stats_filter.is_some() {
+            extensions.push(khr::pipeline_executable_properties::NAME.as_ptr());
         }
 
         let base = vk::PhysicalDeviceFeatures::default()
@@ -271,6 +286,11 @@ impl Device {
                 .push_next(&mut acceleration)
                 .push_next(&mut ray_query)
                 .push_next(&mut ray_tracing);
+        }
+        let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default()
+            .pipeline_executable_info(true);
+        if stats_filter.is_some() {
+            features2 = features2.push_next(&mut executable);
         }
         // Async compute and copies (issue #77): a compute-only family and a transfer-only one,
         // never the video or optical-flow engines. `FORGE_ASYNC=0` keeps the single queue.
@@ -387,6 +407,10 @@ impl Device {
         let debug_utils = instance
             .validation_enabled()
             .then(|| ext::debug_utils::Device::new(raw_instance, &raw));
+        let shader_stats = stats_filter.map(|filter| {
+            let loader = khr::pipeline_executable_properties::Device::new(raw_instance, &raw);
+            (loader, filter)
+        });
         let bindless = Bindless::new(&raw, max_anisotropy, best.features.sampler_minmax)?;
         let bindless_layout = bindless.layout();
         let bindless_set = bindless.set();
@@ -430,6 +454,7 @@ impl Device {
             bindless_layout,
             bindless_set,
             dlss,
+            shader_stats,
             memory_counters: Default::default(),
             budget_cap: std::env::var("FORGE_VRAM_BUDGET_MB")
                 .ok()
@@ -541,6 +566,11 @@ impl Device {
         let mut uint8 = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default();
         if uint8_ext.is_some() {
             features2 = features2.push_next(&mut uint8);
+        }
+        let executable_ext = has(khr::pipeline_executable_properties::NAME);
+        let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default();
+        if executable_ext {
+            features2 = features2.push_next(&mut executable);
         }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
@@ -686,6 +716,7 @@ impl Device {
             score,
             name,
             vendor_id: props.vendor_id,
+            executable_info: executable_ext && executable.pipeline_executable_info == vk::TRUE,
         }))
     }
 
@@ -870,6 +901,67 @@ impl Device {
                 .object_name(&name);
             // SAFETY: the handle belongs to this device.
             let _ = unsafe { debug.set_debug_utils_object_name(&info) };
+        }
+    }
+
+    /// Whether `FORGE_SHADER_STATS` asks for the statistics of the pipeline of `entry`: create
+    /// it with `CAPTURE_STATISTICS`, then [`Device::log_shader_stats`].
+    pub(crate) fn wants_shader_stats(&self, entry: &str) -> bool {
+        self.shader_stats
+            .as_ref()
+            .is_some_and(|(_, filter)| filter == "1" || entry.contains(filter.as_str()))
+    }
+
+    /// Logs what the driver compiled for `pipeline`, one line per executable. The statistics
+    /// are the vendor's: on NVIDIA the registers, the binary's size, the stack, the local
+    /// memory (its low 32 bits; the driver sets bit 36) and the shared memory.
+    pub(crate) fn log_shader_stats(&self, pipeline: vk::Pipeline, entry: &str) {
+        let Some((loader, _)) = &self.shader_stats else {
+            return;
+        };
+        let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
+        // SAFETY: the pipeline was created on this device with CAPTURE_STATISTICS.
+        let Ok(executables) = (unsafe { loader.get_pipeline_executable_properties(&info) }) else {
+            return;
+        };
+        for (index, executable) in executables.iter().enumerate() {
+            let at = vk::PipelineExecutableInfoKHR::default()
+                .pipeline(pipeline)
+                .executable_index(index as u32);
+            // SAFETY: as above, `index` within the executables just listed.
+            let Ok(stats) = (unsafe { loader.get_pipeline_executable_statistics(&at) }) else {
+                continue;
+            };
+            let text: Vec<String> = stats
+                .iter()
+                .map(|s| {
+                    let name = s
+                        .name_as_c_str()
+                        .map(CStr::to_string_lossy)
+                        .unwrap_or_default();
+                    // SAFETY: the union's member is the one `format` names.
+                    let value = unsafe {
+                        match s.format {
+                            vk::PipelineExecutableStatisticFormatKHR::BOOL32 => {
+                                (s.value.b32 == vk::TRUE).to_string()
+                            }
+                            vk::PipelineExecutableStatisticFormatKHR::INT64 => {
+                                s.value.i64.to_string()
+                            }
+                            vk::PipelineExecutableStatisticFormatKHR::UINT64 => {
+                                s.value.u64.to_string()
+                            }
+                            _ => format!("{:.3}", s.value.f64),
+                        }
+                    };
+                    format!("{name} = {value}")
+                })
+                .collect();
+            let stage = executable
+                .name_as_c_str()
+                .map(CStr::to_string_lossy)
+                .unwrap_or_default();
+            tracing::info!(entry, %stage, subgroup = executable.subgroup_size, "shader statistics: {}", text.join(", "));
         }
     }
 

@@ -979,7 +979,9 @@ cells of a metre, so the layered pass now applies that rule under each pixel
   along the beach instead of running as a contour line. The layers blend over 8 cm of height, or
   the height a pixel spans far away.
 - The other layers keep the map's edges: rock, the sea floor, the rivers' and lakes' beds. Where
-  one of them meets the sand and the grass, three layers are shaded.
+  one of them meets the sand and the grass, the two heaviest of the three are shaded. The
+  lightest fades out, its weight taken off the other two (#111): a third layer cost the whole
+  pass a quarter of its warps.
 - The traced rays' hits take the sand under the height too.
 
 ![The coast east of the first view from 70 m: the sand's top in teeth before (left), along the ground now (right)](../../reports/2026-10-01-106/sand-side.png)
@@ -1175,11 +1177,15 @@ wall from 40 m). ꟻLIP means: slot 0.076, slot from 40 m 0.136, up the steep ri
 hills 0.037, the bench 0.053, the island 0.0041, the first view 0.0073. The batch changes the
 island's two views only (`island60` 0.0062, `water60` 0.0073).
 
-**The cost.** More layers meet in the valleys' pixels, which is the layered shading's third
-layer (#111):
+**The cost.** More of the valleys' pixels shade two layers:
 - in the slot: `shading/layered` 0.565 → 0.617 ms;
 - up the steep river: 0.599 → 0.681 ms, and the frame 1.960 → 2.057 ms;
 - elsewhere, under 0.03 ms.
+
+With #111's layered pass, which takes fewer registers, three rounds each at 1600 × 900:
+- in the slot: 0.627 → 0.608 ms;
+- up the steep river: 0.696 → 0.671 ms, and the frame 2.086 → 2.048 ms;
+- in the slot from 40 m: unchanged (0.745 → 0.744 ms).
 
 The scrub is a texture, read as shrubs from a few metres up. Close to the walls, shrubs as props
 wait for Phase 8's vegetation (D-013).
