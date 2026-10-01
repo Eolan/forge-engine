@@ -1174,6 +1174,7 @@ struct FreshWater
     float3 absorption; // its water's, m⁻¹
     float3 scatter;  // the light its water scatters back, per unit of irradiance
     float deepest;   // the deepest it can be under its surface, metres
+    float ripples;   // how strongly its ripples stand, 1 as the rivers' (a lake's calm patches less)
 };
 
 // The shading of fresh water: the ripples carried on its flow, the sky, the sun, the mirror and
@@ -1188,8 +1189,8 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     float footprint = max(max(length(ddx(s.flat)), length(ddy(s.flat))), 1e-3);
     RiverRipples ripples = river_ripples(w, s.flat, s.velocity);
     FlowPhases f = ripples.phases;
-    float variance = ripples.variance + s.rough;
-    float2 slope = ripples.slope + s.fall;
+    float variance = ripples.variance * (s.ripples * s.ripples) + s.rough;
+    float2 slope = ripples.slope * s.ripples + s.fall;
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
     float3 v = normalize(-s.relative);
     float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
@@ -1288,6 +1289,7 @@ SurfaceTargets river_frag_main(RiverOut input)
     s.absorption = RIVER_ABSORPTION;
     s.scatter = RIVER_SCATTER;
     s.deepest = input.river.z + RIVER_DEEPEST;
+    s.ripples = 1.0;
     return fresh_water(w, s);
 }
 
@@ -1304,6 +1306,11 @@ SurfaceTargets river_frag_main(RiverOut input)
 // clearer of silt (m⁻¹, and the light it scatters back).
 static const float3 LAKE_ABSORPTION = float3(1.0, 0.6, 1.2);
 static const float3 LAKE_SCATTER = float3(0.008, 0.012, 0.008);
+// The wind's patches over a lake: metres across, their drift (world x, z; m/s) and how calm the
+// calm ones are (a share of the ripples' slopes).
+static const float LAKE_GUST_SIZE = 60.0;
+static const float2 LAKE_GUST_DRIFT = float2(1.2, 0.5);
+static const float LAKE_CALM = 0.15;
 
 struct LakeOut
 {
@@ -1371,6 +1378,11 @@ SurfaceTargets lake_frag_main(LakeOut input)
     s.absorption = lerp(LAKE_ABSORPTION, RIVER_ABSORPTION, estuary.fresh);
     s.scatter = lerp(LAKE_SCATTER, RIVER_SCATTER, estuary.fresh);
     s.deepest = asfloat(lake.b.w) + RIVER_DEEPEST;
+    // Patches of calm and of wind ripples drifting over the lake (cat's paws), the river's own
+    // ripples where it runs in.
+    float2 gusts = (world + LAKE_GUST_DRIFT * w[0].time) / LAKE_GUST_SIZE;
+    float wind = lerp(LAKE_CALM, 1.0, smoothstep(0.35, 0.7, value_noise(gusts)));
+    s.ripples = lerp(wind, 1.0, estuary.fresh);
     return fresh_water(w, s);
 }
 

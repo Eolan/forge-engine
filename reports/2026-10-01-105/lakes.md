@@ -91,3 +91,12 @@ beds as dark trenches under the water (`lake-outlets.png`, top: the three larges
 25 m over their outlets; the logged `the largest lakes' outlets` views). A river's channel now
 stops where its course is under a lake's water at both ends of a segment
 (`ChannelParams::carve_lakes`, false): the lake's bed is its own (bottom).
+
+## Later the same night: the wind's patches on the lakes
+
+A lake's ripples stood the same everywhere. Patches of calm and of wind ripples (cat's paws) now
+drift over it: the ripples' slopes scaled from 0.15 to 1 by a noise 60 m across drifting at
+1.3 m/s, the river's own ripples where it runs in. `lake-gusts.png`: the round lake from 3 m over
+its water (`--view 2972,258.2,0,0,-6`), before (left) and now (right): the calm patches mirror the
+far bank. Frame to frame there 2.62 → 2.07 %, over 32 frames 0.0010 % either way; the batch at
+0 px; validation clean.

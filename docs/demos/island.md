@@ -789,7 +789,9 @@ through it take its level:
   runs in: the 20 points where a river enters a lake join the mouths' list, and the river's jet
   carries its ripples out into the lake as at the sea. The lakes are drawn before the rivers, and
   a river's ribbon fades out over its last three points into the lake at the lake's own level, so
-  the handover is between two surfaces with the same ripples, level and water.
+  the handover is between two surfaces with the same ripples, level and water. Patches of calm
+  and of wind ripples drift over a lake (the ripples' slopes from 0.15 to 1 over a noise 60 m
+  across, at 1.3 m/s), the river's own ripples where it runs in.
 - **No channel through a lake:** a river's channel stops where its course is under the lake's
   water at both ends of a segment (`ChannelParams::carve_lakes`): carved on, it showed as a dark
   trench under the water (`reports/2026-10-01-105/lake-outlets.png`).
