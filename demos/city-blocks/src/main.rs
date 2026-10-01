@@ -874,10 +874,16 @@ impl Demo for Gallery {
                         (on.len(), moved)
                     })
                     .unzip();
+                // Probes still settling (age at most 8: new, or woken by a mover, #79).
+                let young: Vec<usize> = states
+                    .chunks(per)
+                    .map(|c| c.iter().filter(|s| (s[3] / 4.0).floor() <= 8.0).count())
+                    .collect();
                 tracing::info!(
                     per_cascade = per,
                     ?active,
                     ?moved,
+                    ?young,
                     "probes lighting something"
                 );
             }

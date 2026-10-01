@@ -31,3 +31,9 @@ one; `docs/demos/island.md`, "Their acceleration structure"):
 - Cost at 2560 × 1440: about 0.3 ms with 1 000 movers (the build 0.14 ms, a second traversal for
   every ray); 10 000 add little more.
 - Without movers the batch is unchanged; `validate.sh` is clean with them on both paths.
+
+**The third step: the probes woken** (#69; `docs/demos/island.md`, "The probes woken"): the
+settled probes whose cells a mover entered or left start their settling over. Young probes
+per cascade at frame 120 from the largest mouth: none without movers, 4–10 with 1 000
+barrels, 37–65 with 10 000. `gi/probe wake` takes 0.008–0.010 ms at 1440p; the batch is
+unchanged without movers and `validate.sh` is clean with them.

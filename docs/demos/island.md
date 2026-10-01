@@ -1705,9 +1705,9 @@ which water the camera is in.
 The first thing Forge draws that moves: `--movers N` sets N barrels drifting down the island's
 four largest rivers at 1.5 m/s, half under the water's level, rolling and bobbing, each river's
 barrels spread along its course and starting over at its head (`reports/2026-10-02-79/`). It
-follows `docs/research/dynamic-scenes.md` ("Recommendation for Forge"), in two steps so far:
-the movers drawn with their motion vectors, then their own acceleration structure (their
-shadows and reflections). The probes woken around them (#69) come next.
+follows `docs/research/dynamic-scenes.md` ("Recommendation for Forge"), in three steps: the
+movers drawn with their motion vectors, their own acceleration structure (their shadows and
+reflections), and the probes woken where they pass (#69).
 
 **What changed.**
 - **The movers' range** (`MeshletSceneBuilder::reserve_movers`): the instance table's last
@@ -1773,9 +1773,23 @@ not to trace):
 - The batch is unchanged without movers. `validate.sh` is clean with them, the build's and the
   rays' synchronisation included.
 
+**The probes woken** (the third step, 2026-10-02; #69; `probe_wake_main`, `gi/probe wake`):
+- A probe settles after 8 updates and then keeps its place and state; the movers may change
+  what those were made from.
+- Every frame, before the probes' rays, a thread per mover and cascade looks at the probe
+  cells within a cell of the mover's bounding sphere of this frame and of the frame before.
+  The settled probes whose cell the mover entered or left start their settling over: their
+  age back to 0, so their relocation and classification run again, and as young probes they
+  update every frame.
+- A mover that stays over a probe leaves it alone, so a parked one does not wake it every
+  frame.
+- The demo's frame-120 log counts the young probes per cascade at the largest mouth from 4 m:
+  none without movers, 4–10 with 1 000 barrels, 37–65 with 10 000.
+- The pass takes 0.008–0.010 ms at 1440p, and `validate.sh` is clean with it.
+
 **Left for later:**
-- The probes don't wake where the movers pass (#69): their light follows the probes' own
-  update, through the movers' structure.
+- The woken probes blend at the probes' usual 97 %, not the research's 90 % for a faster
+  change: the barrels are small beside a 4 m probe.
 - Where the water is drawn over a mover, its motion comes from the water's depth, not the
   mover's.
 - The barrels drift at one speed and jump back to their river's head past its end; the

@@ -97,6 +97,19 @@ struct TracePush {
     pad: u32,
 }
 
+/// Mirrors `WakePush` in `probe_update.slang` (#79).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct WakePush {
+    field: u64,
+    now: u64,
+    before: u64,
+    count: u32,
+    cascades: u32,
+    origin_cell: [i32; 4],
+    origin_local: [f32; 4],
+}
+
 /// Mirrors `Push` in `probe_update.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -209,6 +222,8 @@ pub struct Probes {
     trace: Pipeline,
     state: Pipeline,
     blend: Pipeline,
+    /// The settled probes woken where the movers pass (#79, #69).
+    wake: Pipeline,
     irradiance: GraphImage,
     distance: GraphImage,
     rays: GraphBuffer,
@@ -316,6 +331,12 @@ impl Probes {
                 "probe_blend_main",
                 std::mem::size_of::<UpdatePush>(),
                 "probe blend",
+            )?,
+            wake: compute(
+                "probe_update.slang",
+                "probe_wake_main",
+                std::mem::size_of::<WakePush>(),
+                "probe wake",
             )?,
             irradiance: atlas(
                 IRRADIANCE_TILE,
@@ -452,6 +473,31 @@ impl Probes {
         let distance = graph.import(&this.distance);
         let count = p.probe_count();
         let spread = [count.min(MAX_GROUPS), count.div_ceil(MAX_GROUPS)];
+        // The settled probes whose cells the movers entered or left settle again (#79, #69),
+        // before this frame's rays: as young probes, they take them.
+        if let Some(m) = movers.filter(|m| m.count > 0) {
+            let wake = &this.wake;
+            let push = WakePush {
+                field: address,
+                now: m.records,
+                before: m.previous,
+                count: m.count,
+                cascades: p.cascades,
+                origin_cell: m.origin.cell.extend(0).to_array(),
+                origin_local: m.origin.local.extend(0.0).to_array(),
+            };
+            graph
+                .pass("gi/probe wake")
+                .queue(QueueKind::Compute)
+                .buffer(m.instances, BufferAccess::ShaderRead(compute))
+                .buffer(data, BufferAccess::ShaderReadWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(wake);
+                    commands.push_constants(wake, &push);
+                    commands.dispatch((m.count * p.cascades).div_ceil(64), 1, 1);
+                    Ok(())
+                });
+        }
         let trace = &this.trace;
         graph
             .pass("gi/probe rays")

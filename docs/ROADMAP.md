@@ -75,8 +75,9 @@ run, which can also retry #95's double buffer).
   frame, their cells, their motion vectors, with barrels drifting down the island's rivers
   (`city-blocks --island 7 --movers N`, `docs/demos/island.md`, "Moving geometry"), and their
   own acceleration structure, rebuilt every frame and traced after the static one (their
-  shadows and reflections). Next for it: the probes' wake (#69). It also opens #107, the water
-  around what moves in it.
+  shadows and reflections), and the settled probes woken where they pass (#69). What its
+  issue still asks: a demo of ships in the belt or cars in the city (the barrels are the
+  island's). It also opens #107, the water around what moves in it.
 - Phase 2, with its `island` demo as the first step of rebuilding tropical-island (#81): a
   concrete game target for the world systems. It starts with #93, large-world coordinates on
   the GPU ✅ (2026-09-26, D-004's amendment accepted): the instances in integer cells of 1 km,
@@ -98,7 +99,7 @@ run, which can also retry #95's double buffer).
 - #67 and #28 wait for an AMD card.
 - #71 waits for the owner: close it, or report it upstream.
 - #70 is parked.
-- #69 goes with #79.
+- #69 is done with #79 (2026-10-02).
 
 **Ideas for later** (the owner's inbox, `docs/TODO.md`, filed 2026-09-25 under the milestone
 "Later"):
@@ -361,8 +362,9 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    probes around the camera, updated by ray queries every frame, in place of the open sky's
    light: sky occlusion at street scale and bounce light that follow the sun through `--day`,
    1.05 ms at 1440p. The sky's reflection dims with them ✅ (#68: the probes' light towards
-   the mirror direction over the open sky's, 0.11 ms at 1440p). Next for them: probes woken
-   for moving geometry (#69), a cheaper lookup (#70: a pass of its own saved only 0.09 ms).
+   the mirror direction over the open sky's, 0.11 ms at 1440p). Woken where movers pass ✅ (#69,
+   2026-10-02, with #79). Next for them: a cheaper lookup (#70: a pass of its own saved only
+   0.09 ms).
 2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's

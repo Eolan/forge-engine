@@ -720,6 +720,14 @@ pub struct MoversFrame {
     pub instances: forge_gpu::BufferHandle,
     /// The movers' acceleration structure's storage.
     pub tlas: Option<forge_gpu::BufferHandle>,
+    /// The address of the movers' records of this frame, in the table.
+    pub records: u64,
+    /// The address of their records of the frame before, their ring's slot.
+    pub previous: u64,
+    /// How many movers.
+    pub count: u32,
+    /// The scene's origin: the frame the probes and the rays work in.
+    pub origin: CellPos,
 }
 
 impl MoversFrame {
@@ -3477,10 +3485,18 @@ impl MeshletRenderer {
             visible_list: io.visible,
             pages: io.pool,
             page_table: io.page_table,
-            movers: io.instances.map(|instances| MoversFrame {
-                instances,
-                tlas: movers_tlas,
-            }),
+            movers: io
+                .instances
+                .zip(scene.movers.as_ref())
+                .map(|(instances, movers)| MoversFrame {
+                    instances,
+                    tlas: movers_tlas,
+                    records: scene.instances.address()
+                        + u64::from(movers.first) * std::mem::size_of::<GpuInstance>() as u64,
+                    previous: movers.ring[movers.previous.get()].address(),
+                    count: movers.templates.len() as u32,
+                    origin: scene.origin,
+                }),
         })
     }
 

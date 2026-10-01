@@ -198,3 +198,96 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
         irradiance[irradiance_tile + u] = float4(s_irradiance[e.y * IRRADIANCE_TEXELS + e.x], 1.0);
     }
 }
+
+// ------------------------------------------------------------- probe wake ---
+//
+// Moving geometry (#79, issue #69): a settled probe keeps its place and its state, which the
+// movers may have changed. A probe whose cell a mover entered or left this frame starts its
+// settling over (its age back to 0: relocation and classification again for
+// PROBE_SETTLE_UPDATES updates). A probe's cell counts as reached by a mover within a cell of
+// it, where the points it lights are. A mover standing over a probe leaves it alone, so a
+// parked one does not wake it every frame.
+
+// Mirrors `Instance` in meshlet.slang (80 bytes): the fields the wake reads.
+struct MoverRecord
+{
+    int3 cell;
+    uint mesh;
+    float3 local;
+    float scale;
+    float4 rotation;
+    float3 center;
+    float radius;
+    uint id;
+    uint material;
+    uint2 pad;
+};
+
+struct WakePush
+{
+    ProbeField* field;
+    MoverRecord* now;    // the movers' records of this frame
+    MoverRecord* before; // of the frame before
+    uint count;
+    uint cascades;
+    int4 origin_cell;    // the scene frame's origin, which the probes work in
+    float4 origin_local;
+};
+
+[[vk::push_constant]]
+WakePush wake_push;
+
+// `CELL_SIZE` in meshlet.slang: metres of an instance's cell.
+static const float MOVER_CELL_SIZE = 1024.0;
+// Cells a mover's reach covers along each axis at most: the rest of a large mover waits.
+static const int WAKE_REACH = 4;
+
+// A mover's bounding sphere in the scene frame: its centre, its radius.
+float4 mover_sphere(MoverRecord r)
+{
+    float3 c = float3(r.cell - wake_push.origin_cell.xyz) * MOVER_CELL_SIZE + (r.center - wake_push.origin_local.xyz);
+    return float4(c, r.radius);
+}
+
+// Whether a sphere comes within `reach` of the box `lo..hi`.
+bool sphere_reaches(float4 s, float3 lo, float3 hi, float reach)
+{
+    float3 d = max(max(lo - s.xyz, s.xyz - hi), 0.0);
+    return dot(d, d) <= (s.w + reach) * (s.w + reach);
+}
+
+// A thread per mover and cascade.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void probe_wake_main(uint3 id : SV_DispatchThreadID)
+{
+    WakePush p = wake_push;
+    if (id.x >= p.count * p.cascades)
+        return;
+    uint mover = id.x / p.cascades;
+    uint c = id.x % p.cascades;
+    ProbeField* field = p.field;
+    float4 now = mover_sphere(p.now[mover]);
+    float4 before = mover_sphere(p.before[mover]);
+    ProbeCascade cascade = field[0].cascades[c];
+    float s = cascade.spacing;
+    int3 n = int3(field[0].counts);
+    float3 lo = min(now.xyz - now.w, before.xyz - before.w) - s;
+    float3 hi = max(now.xyz + now.w, before.xyz + before.w) + s;
+    int3 first = max(int3(floor(lo / s)), cascade.origin);
+    int3 last = min(min(int3(floor(hi / s)), cascade.origin + n - 1), first + WAKE_REACH - 1);
+    for (int z = first.z; z <= last.z; z++)
+        for (int y = first.y; y <= last.y; y++)
+            for (int x = first.x; x <= last.x; x++)
+            {
+                int3 cell = int3(x, y, z);
+                float3 box_lo = float3(cell) * s;
+                float3 box_hi = box_lo + s;
+                if (sphere_reaches(now, box_lo, box_hi, s) == sphere_reaches(before, box_lo, box_hi, s))
+                    continue;
+                uint probe = probe_index(field, c, cell);
+                float w = field[0].probe_data[probe].w;
+                if (probe_age(w) > PROBE_SETTLE_UPDATES)
+                    field[0].probe_data[probe].w = probe_state(w);
+            }
+}

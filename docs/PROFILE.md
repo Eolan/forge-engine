@@ -736,6 +736,8 @@ With the movers' acceleration structure (the second step), the same views and ro
 - Going from 1 000 movers to 10 000 adds little: the traversal is the cost, not the movers.
 - The build on the async compute queue gained nothing (3.89–3.98 ms against 3.91–3.93), as
   for the probes on this GPU (#95); it stays on the graphics queue.
+- The probes' wake (#69, the third step), `gi/probe wake` on the compute queue: 0.010 ms with
+  1 000 movers and 0.008 with 10 000 (600 frames from the largest mouth).
 
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
