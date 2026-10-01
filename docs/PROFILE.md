@@ -544,6 +544,27 @@ path (2d3973a; three runs each, the waves held at 12 s):
   third layer as a flat colour saved nothing. Restructuring the block (fewer live arrays) is the
   lever.
 
+**The coastal plain's rivers** (#112, #113, #114, 2026-10-01): da572f7 (the plain) against
+78f46a0 (the water seen up a steep valley from low, the beds per pixel, the banks by the bend,
+the riparian strip); the waves held at 12 s, alternating runs.
+
+| View | 1600 × 900, frame (3 runs) | `shading/layered` | 2560 × 1440, frame (2 runs) | `shading/layered` |
+|---|---|---|---|---|
+| coast (the first view) | 1.668 → 1.668 ms | 0.325 → 0.326 | 3.118 → 3.119 ms | 0.851 → 0.850 |
+| the island from 2.5 km | 2.232 → 2.220 ms | 0.338 → 0.333 | | |
+| a river on the plain from 40 m (`-929,45,-4399,83,-40`) | 1.753 → 1.764 ms | 0.620 → 0.625 | 3.557 → 3.580 ms | 1.629 → 1.649 |
+| down a lowland river from 3 m (`-929,15.2,-4399,83,-10`) | 1.481 → 1.472 ms | 0.327 → 0.313 | | |
+| up a steep river from 2 m (`-1112,80.1,-3083,-97,4`) | 2.007 → 1.963 ms | 0.658 → 0.582 | 4.091 → 3.906 ms | 1.683 → 1.423 |
+| a lake entry from 50 m (`-1700,50,-3072,89.9,-62`) | 1.785 → 1.809 ms | 0.445 → 0.475 | 3.725 → 3.790 ms | 1.199 → 1.295 |
+
+- Up the steep river the water now covers the valley's floor: less ground shaded, more water
+  (`water/reflections` 0.207 → 0.230 ms, `water/surface` 0.064 → 0.067).
+- Over the lake entry the riparian strip's edges add layer pairs: `shading/layered` +0.03 ms,
+  +0.1 ms at 1440p (the third layer's cost, #111).
+- **Stability** (pixels changing by more than two levels, still camera, TAA on): the same
+  within 0.01 % on every view but up the steep river, 0.26 → 0.36 % from one frame to the next
+  (the ripples of the water now drawn there); after 32 frames under 0.002 % everywhere.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

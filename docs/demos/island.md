@@ -1029,3 +1029,11 @@ per pixel). Near the coast the sand's contour still takes it under 2.5 m, per pi
 texels at 4 m. From 300 m a darker corridor follows each river; from 3 m the banks are green to
 the water (`reports/2026-10-01-112/riparian.png`, against da572f7, which also had the bed's
 smear: ꟻLIP mean 0.014 from 300 m, 0.14 from 3 m).
+
+**The estuaries** (D-041, 2026-10-01; `RibbonParams::estuary`, `ChannelParams::beach`). With the
+coastal plain the mouths were calm, but each crossed the beach as a narrow channel with steep
+walls, a canal. Under 1.5 m over the sea a river now widens towards its mouth, to twice its width
+at the sea's level, and shallows by two fifths; its banks flatten there to three tenths of
+their rise. The widest water at a mouth is 34 m (17 m before). From 40 m the mouths flare into
+the surf (`reports/2026-10-01-110/estuary.png`: the gentlest and the largest mouth, from 4 m and
+from 40 m; ꟻLIP means 0.11, 0.055 and 0.066).

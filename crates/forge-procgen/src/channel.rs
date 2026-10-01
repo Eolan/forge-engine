@@ -39,6 +39,9 @@ pub struct ChannelParams {
     /// Over how many metres, plus how many of its widths, a channel shoals into a lake and out
     /// of it, to a fifth of its depth at the lake's edge.
     pub shoal: (f64, f64),
+    /// The metres over the sea under which the banks flatten towards a river's mouth, to
+    /// three tenths of their rise at the sea's level: a beach, not a cut (D-041's estuary).
+    pub beach: f64,
     /// Quads a side of a cell drawn finer.
     pub split: u32,
     /// Metres either side of a lake's level over which its shore's cells are drawn finer.
@@ -53,7 +56,8 @@ pub struct ChannelParams {
 impl Default for ChannelParams {
     /// 8 m past the water, a bank rising by 0.3 m a metre and more in a straight reach, the
     /// bend's share full at a radius of twice the half width plus 4 m, a channel shoaling over
-    /// 8 m and three widths into a lake, cells of 8 m drawn in quads of 1 m, a lake's shore within
+    /// 8 m and three widths into a lake, the banks flattening under 1.5 m over the sea, cells of
+    /// 8 m drawn in quads of 1 m, a lake's shore within
     /// a metre of its level, the coast's cells crossing the sea's level and the sand's top
     /// (2.5 m, the island's layer rule), no channel through a lake.
     fn default() -> Self {
@@ -62,6 +66,7 @@ impl Default for ChannelParams {
             bank: (0.3, 0.06),
             bend: 2.0,
             shoal: (8.0, 3.0),
+            beach: 1.5,
             split: 8,
             shore: 1.0,
             coast: [0.0, 2.5],
@@ -400,7 +405,9 @@ impl Channels {
                 } else {
                     a * (1.0 - 0.6 * bend)
                 };
-                level + a * out + b * out * out
+                // Towards the sea the banks flatten into the beach.
+                let beach = 0.3 + 0.7 * smoothstep(0.0, self.params.beach, level);
+                level + beach * (a * out + b * out * out)
             };
             let weight = 1.0 - smoothstep(margin - 3.0, margin, out);
             carved = carved.min(base + (channel.min(base) - base) * weight);

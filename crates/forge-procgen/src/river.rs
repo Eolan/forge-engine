@@ -65,6 +65,10 @@ pub struct RibbonParams {
     pub max_fall: f64,
     /// The smallest lake, m², whose level a river takes through it (and where it is not drawn).
     pub lake_area: f64,
+    /// The estuary (D-041): the metres over the sea under which a river widens towards its
+    /// mouth, and by how many of its widths at the sea's level (1: twice as wide), shallowing by
+    /// two fifths, so it crosses the beach as a river mouth rather than a canal.
+    pub estuary: (f64, f64),
 }
 
 impl Default for RibbonParams {
@@ -72,7 +76,7 @@ impl Default for RibbonParams {
     /// passes looking 8 m either side, 40 m of growth from the spring, a stream's roughness
     /// (C = 15), 0.3 to 3 m/s, the drawn half width under 0.8 of a bend's radius, 0.5 m + 10 %
     /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
-    /// of 60 % at most, the lakes of a hectare.
+    /// of 60 % at most, the lakes of a hectare, twice as wide at the sea from 1.5 m over it.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -89,6 +93,7 @@ impl Default for RibbonParams {
             freeboard: (0.05, 0.04),
             max_fall: 0.6,
             lake_area: 10_000.0,
+            estuary: (1.5, 1.0),
         }
     }
 }
@@ -249,6 +254,20 @@ pub fn ribbons(
             .collect();
         ribbons[r].points = points;
         done[ribbons[r].river as usize] = Some(r);
+    }
+    // The estuaries: under `estuary.0` metres over the sea the rivers widen and shallow
+    // towards their mouths (after the levels, which the narrower course set).
+    let (over, widen) = params.estuary;
+    if widen > 0.0 {
+        for p in ribbons.iter_mut().flat_map(|r| r.points.iter_mut()) {
+            let e = 1.0 - smoothstep(0.0, over, f64::from(p.level));
+            if e > 0.0 {
+                let half = f64::from(p.half_width) * (1.0 + widen * e);
+                p.half_width = half as f32;
+                p.reach = (half + affine(params.tuck, half)) as f32;
+                p.depth = (f64::from(p.depth) * (1.0 - 0.4 * e)) as f32;
+            }
+        }
     }
     ribbons.sort_by(|a, b| {
         a.mouth_area
