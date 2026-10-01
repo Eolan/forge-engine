@@ -758,3 +758,45 @@ water in a carved channel:
   fallback at 0 px; validation clean; tests (the refined mesh without a crack, the level under
   the banks, the tributary at its river's level, the channel's profile and seams, the stones on
   the bed), clippy, fmt.
+
+**The lakes** (step 7, D-038's lakes, 2026-10-01). The 15 lakes of a hectare or more were painted
+into the layer map; with `--water` each is now water of its own, a level plane, and the rivers
+through it take its level:
+- **The plane and its mask** (`forge_procgen::lake_waters`): the priority flood's depression at
+  the lake's level (from the lake's samples, every neighbour where the flood stands at that level:
+  its shallow margins too, which the lakes' 0.5 m threshold leaves out) and a sample more all
+  round. The plane covers the mask's box at the level; the mask, a bit a sample and softened over
+  half of one, clips it to the lake, and within it the ground rising through the plane draws the
+  shore.
+- **The shore on cells of a metre.** The 8 m cells of a mask whose ground spans the level within
+  a metre, and a cell more all round, are drawn finer like the rivers' channels (51 958 cells
+  refined in all, 4.2 M fine vertices), on the smoothed ground, not carved: the cubic's weight is
+  1 wherever every cell around a sample is refined and 0 on the refined region's outline, so the
+  shore is a smooth curve where the 8 m triangles drew a polygon.
+- **Its water is the rivers'**: the same shading (`fresh_water` in `water.slang`: the ripples on
+  the flow, the sky, the sun, the rays, the bed through the true depth), still but where a river
+  runs in: the 20 points where a river enters a lake join the mouths' list, and the river's jet
+  carries its ripples out into the lake as at the sea. The lakes are drawn before the rivers, and
+  a river's ribbon fades out over its last three points into the lake at the lake's own level, so
+  the handover is between two surfaces with the same ripples, level and water.
+- **The bed** under a lake is the sea floor's silt wherever the plane stands over the ground (the
+  ground as drawn, refined cells included); the GPU's rocks keep off the lakes.
+
+![The largest lake from 30 m over its south shore: painted before (left), water now (right)](../../reports/2026-10-01-105/lakes-west.png)
+
+![A long lake on the eastern plain: the sky in it, its shore drawn by the ground](../../reports/2026-10-01-105/lakes-east.png)
+
+![A round lake: its shore a smooth curve on cells of a metre where the 8 m triangles drew a polygon](../../reports/2026-10-01-105/lakes-round.png)
+
+- **What to look at:** the depression at a lake's level reaches up the inflowing valleys, where
+  the water is centimetres deep over silt; the far shores still show the stepped 8 m slopes
+  beyond the refined band (#106); where the ground stands under the level at the edge of a mask
+  (an outlet's channel), the plane ends there, softened over half a sample.
+- **Cost** (`docs/PROFILE.md`): +0.04 to 0.09 ms in the lake views, most of it their mirror and
+  shadow rays (`water/reflections` +0.02 to 0.05 ms) and the silt's layer; the other views
+  unchanged within 0.01 ms.
+- **Stability:** frame to frame the west lake 0.36 → 0.50 % (its ripples' reflections move with
+  the jitter), the round lake 0.33 → 0.24 %; over 32 frames at most 0.0035 %.
+- **Checks:** the batch changes only the island's images (26 633 px, ꟻLIP mean 0.0061; with the
+  water 31 296 px, 0.0070); the A/B harness and mesh against fallback at 0 px; validation clean;
+  tests (a basin's water covers its depression and a sample more), clippy, fmt.

@@ -128,6 +128,9 @@ pub struct Ribbon {
     /// The points, [`RibbonParams::step`] metres apart along the smoothed course (the last one
     /// may be closer).
     pub points: Vec<RibbonPoint>,
+    /// The points where it enters a lake of [`RibbonParams::lake_area`] or more: the first of
+    /// each run of points under a lake, where the lake's water takes the river on.
+    pub lake_entries: Vec<u32>,
 }
 
 /// The depth of a river with `area_m2` of catchment, metres: 0.4 m at a square kilometre, 0.95 m
@@ -201,6 +204,7 @@ pub fn ribbons(
                 river: index as u32,
                 mouth_area,
                 points: ribbon_points(&samples, params),
+                lake_entries: Vec::new(),
             })
         })
         .collect();
@@ -231,6 +235,13 @@ pub fn ribbons(
         };
         let main = joins.map(|(m, at)| (&ribbons[m].points, at));
         let points = levels(&ribbons[r].points, height, &lake_level, main, params);
+        let under = |p: &RibbonPoint| {
+            lake_level(f64::from(p.position[0]), f64::from(p.position[1])).is_some()
+        };
+        ribbons[r].lake_entries = (0..points.len())
+            .filter(|&k| under(&points[k]) && (k == 0 || !under(&points[k - 1])))
+            .map(|k| k as u32)
+            .collect();
         ribbons[r].points = points;
         done[ribbons[r].river as usize] = Some(r);
     }

@@ -448,9 +448,37 @@ struct GpuWaterSurface {
     mouth_grid: u64,
     mouth_cells: u32,
     mouth_cell: f32,
+    lakes: u64,
+    lake_masks: u64,
+    lake_count: u32,
+    pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 712);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 736);
+
+/// Mirrors `Lake` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuLake {
+    /// The mask's first sample (world x, z), the level, metres between samples.
+    a: [f32; 4],
+    /// The mask's samples along x and z, its first word in the masks' bits, 0.
+    b: [u32; 4],
+}
+
+/// A lake's water ([`WaterShore::lakes`], `forge_procgen::LakeWater`): a level plane over the
+/// samples of its mask, where the ground rising through it draws the shore.
+#[derive(Clone, Debug)]
+pub struct WaterLake {
+    /// The water's level, metres.
+    pub level: f32,
+    /// World x and z (the sea's frame) of the mask's first sample, metres.
+    pub origin: [f32; 2],
+    /// The mask's samples along x and z, the shore's spacing apart.
+    pub size: [u32; 2],
+    /// Per sample, row-major along +z: whether the water may stand there.
+    pub mask: Vec<bool>,
+}
 
 /// How far a river's plume reaches in its half widths, and how fast it spreads
 /// (`RIVER_PLUME_LENGTH` and `RIVER_PLUME_SPREAD` in `water.slang`).
@@ -681,6 +709,8 @@ pub struct WaterShore<'a> {
     pub mouths: &'a [WaterMouth],
     /// The stones in the rivers, in the order of the points they stand past.
     pub stones: &'a [WaterStone],
+    /// The lakes.
+    pub lakes: &'a [WaterLake],
 }
 
 /// Mirrors `SurfacePush` and `CopyPush` in `water.slang`.
@@ -734,6 +764,7 @@ pub struct WaterSurface {
     copy: Pipeline,
     surface: Pipeline,
     rivers: Pipeline,
+    lakes: Pipeline,
     blocks: Vec<Buffer>,
     /// Without it the sea is deep everywhere.
     shore: Option<ShoreFields>,
@@ -767,6 +798,9 @@ struct ShoreFields {
     /// The stones in the rivers (none without).
     stones: Option<Buffer>,
     stone_count: u32,
+    /// The lakes and their masks' bits (none without).
+    lakes: Option<(Buffer, Buffer)>,
+    lake_count: u32,
 }
 
 impl WaterSurface {
@@ -832,6 +866,30 @@ impl WaterSurface {
         });
         device.destroy_shader_module(river_vertex);
         device.destroy_shader_module(river_fragment);
+        // The lakes, drawn before the rivers so a river blends over a lake it runs into: a plane
+        // each, clipped to its mask, its edge where the ground rises through it.
+        let lake_vertex = device.create_shader_module(
+            &shaders.compile("water.slang", "lake_vert_main", ShaderStage::Vertex)?,
+            "water lake vertices",
+        )?;
+        let lake_fragment = device.create_shader_module(
+            &shaders.compile("water.slang", "lake_frag_main", ShaderStage::Fragment)?,
+            "water lakes",
+        )?;
+        let lakes = device.create_vertex_pipeline(&VertexPipelineDesc {
+            vertex: (lake_vertex, "lake_vert_main"),
+            fragment: (lake_fragment, "lake_frag_main"),
+            color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
+            depth_format: Some(vk::Format::D32_SFLOAT),
+            push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
+            cull_mode: vk::CullModeFlags::NONE,
+            wireframe: false,
+            depth_test: true,
+            alpha_blend: true,
+            name: "water lakes",
+        });
+        device.destroy_shader_module(lake_vertex);
+        device.destroy_shader_module(lake_fragment);
         let blocks = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -1003,6 +1061,43 @@ impl WaterSurface {
                         )
                     })
                     .transpose()?;
+                // The lakes and their masks, a bit a sample, each mask from a word of its own.
+                let mut bits: Vec<u32> = Vec::new();
+                let lakes: Vec<GpuLake> = s
+                    .lakes
+                    .iter()
+                    .map(|lake| {
+                        let first = bits.len() as u32;
+                        bits.resize(bits.len() + lake.mask.len().div_ceil(32), 0);
+                        for (k, &on) in lake.mask.iter().enumerate() {
+                            if on {
+                                bits[first as usize + k / 32] |= 1 << (k % 32);
+                            }
+                        }
+                        GpuLake {
+                            a: [lake.origin[0], lake.origin[1], lake.level, s.spacing],
+                            b: [lake.size[0], lake.size[1], first, 0],
+                        }
+                    })
+                    .collect();
+                let lake_buffers = (!lakes.is_empty())
+                    .then(|| -> Result<_> {
+                        Ok((
+                            device.create_buffer_with_data(
+                                &lakes,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                                MemoryCategory::Work,
+                                "water lakes",
+                            )?,
+                            device.create_buffer_with_data(
+                                &bits,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                                MemoryCategory::Work,
+                                "water lake masks",
+                            )?,
+                        ))
+                    })
+                    .transpose()?;
                 Ok(ShoreFields {
                     image,
                     frame: [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
@@ -1020,6 +1115,8 @@ impl WaterSurface {
                     mouth_count: mouths.len() as u32,
                     stones: stone_buffer,
                     stone_count: stones.len() as u32,
+                    lakes: lake_buffers,
+                    lake_count: lakes.len() as u32,
                 })
             })
             .transpose()?;
@@ -1027,6 +1124,7 @@ impl WaterSurface {
             copy: copy?,
             surface: surface?,
             rivers: rivers?,
+            lakes: lakes?,
             blocks,
             shore,
         })
@@ -1179,8 +1277,10 @@ impl WaterSurface {
         let sky_light = sky.light.address;
         let surface = &self.surface;
         let river_pipeline = &self.rivers;
+        let lake_pipeline = &self.lakes;
         let shore: Option<&'f ShoreFields> = self.shore.as_ref();
         let rivers = shore.and_then(|s| s.rivers.as_ref());
+        let lake_count = shore.map_or(0, |s| s.lake_count);
         let river_points = shore.map_or(0, |s| s.river_points);
         let shore_image = shore.map(|s| graph.import(&s.image));
         let mut pass = graph
@@ -1257,6 +1357,14 @@ impl WaterSurface {
                     stones: shore
                         .and_then(|s| s.stones.as_ref())
                         .map_or(0, |b| b.address()),
+                    lakes: shore
+                        .and_then(|s| s.lakes.as_ref())
+                        .map_or(0, |(l, _)| l.address()),
+                    lake_masks: shore
+                        .and_then(|s| s.lakes.as_ref())
+                        .map_or(0, |(_, m)| m.address()),
+                    lake_count,
+                    pad: 0,
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.
@@ -1301,7 +1409,19 @@ impl WaterSurface {
                 },
             );
             commands.draw(LEVELS * GRID * GRID * 6, 1);
-            // The rivers over the land, a segment between each pair of a river's points.
+            // The lakes, then the rivers over the land (a segment between each pair of a river's
+            // points), which blend over the lakes they run into.
+            if lake_count > 0 {
+                commands.bind_pipeline(lake_pipeline);
+                commands.push_constants(
+                    lake_pipeline,
+                    &SurfacePush {
+                        surface: address,
+                        pad: [0; 2],
+                    },
+                );
+                commands.draw(lake_count * 6, 1);
+            }
             if river_points > 1 {
                 commands.bind_pipeline(river_pipeline);
                 commands.push_constants(

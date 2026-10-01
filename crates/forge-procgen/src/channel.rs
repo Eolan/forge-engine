@@ -17,6 +17,7 @@ use forge_core::hash::{hash_cell3, unit_f32};
 use forge_task::TaskPool;
 
 use crate::field::Field2;
+use crate::lake::LakeWater;
 use crate::river::{Ribbon, drawn_height, offset, segment_distance, smooth_height, smoothstep};
 
 /// How the channels are carved.
@@ -28,16 +29,19 @@ pub struct ChannelParams {
     pub bank: (f64, f64),
     /// Quads a side of a cell drawn finer.
     pub split: u32,
+    /// Metres either side of a lake's level over which its shore's cells are drawn finer.
+    pub shore: f64,
 }
 
 impl Default for ChannelParams {
     /// 8 m past the water, a bank rising by half a metre a metre and more, cells of 8 m drawn
-    /// in quads of 1 m.
+    /// in quads of 1 m, a lake's shore within a metre of its level.
     fn default() -> Self {
         Self {
             margin: 8.0,
             bank: (0.5, 0.1),
             split: 8,
+            shore: 1.0,
         }
     }
 }
@@ -71,11 +75,20 @@ pub struct Channels {
     start: Vec<u32>,
     list: Vec<u32>,
     refined: Vec<u32>,
+    /// Per sample, whether every cell around it is refined: the smoothed ground's weight there
+    /// (bilinear between the samples, so it is 0 all along the refined region's outline).
+    inner: Vec<bool>,
 }
 
 impl Channels {
-    /// The channels of `ribbons` (made over `height`, with their levels).
-    pub fn new(height: &Field2<f32>, ribbons: &[Ribbon], params: &ChannelParams) -> Self {
+    /// The channels of `ribbons` (made over `height`, with their levels), and the shores of
+    /// `lakes`, whose cells are refined and smoothed but not carved.
+    pub fn new(
+        height: &Field2<f32>,
+        ribbons: &[Ribbon],
+        lakes: &[LakeWater],
+        params: &ChannelParams,
+    ) -> Self {
         let spacing = height.spacing;
         let side = height.size - 1;
         let segments: Vec<Segment> = ribbons
@@ -132,8 +145,8 @@ impl Channels {
         // A cell is drawn finer when a point of it may be within the margin of a river's water:
         // its centre within that plus half its diagonal.
         let half_diagonal = 0.5 * spacing * std::f64::consts::SQRT_2;
-        let refined = (0..count as u32)
-            .filter(|&c| {
+        let mut is_refined: Vec<bool> = (0..count as u32)
+            .map(|c| {
                 let (x, y) = (c % side, c / side);
                 let centre = [
                     (f64::from(x) + 0.5) * spacing,
@@ -148,6 +161,58 @@ impl Channels {
                     })
             })
             .collect();
+        // The lakes' shores: the cells of a lake's mask whose ground spans its level within
+        // `shore`, and a cell more all round, where the smoothed ground takes over.
+        let side_us = side as usize;
+        let mut shore = vec![false; count];
+        for lake in lakes {
+            let level = f64::from(lake.level);
+            for j in lake.first[1]..(lake.first[1] + lake.size[1]).min(side) {
+                for i in lake.first[0]..(lake.first[0] + lake.size[0]).min(side) {
+                    let corners = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)];
+                    if !corners.iter().any(|&(x, y)| lake.covers(x, y)) {
+                        continue;
+                    }
+                    let h = corners.map(|(x, y)| f64::from(height.get(x, y)));
+                    let (lo, hi) = (
+                        h.iter().copied().fold(f64::MAX, f64::min),
+                        h.iter().copied().fold(f64::MIN, f64::max),
+                    );
+                    if lo <= level + params.shore && hi >= level - params.shore {
+                        shore[j as usize * side_us + i as usize] = true;
+                    }
+                }
+            }
+        }
+        for c in (0..count).filter(|&c| shore[c]) {
+            let (x, y) = (c % side_us, c / side_us);
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    let (nx, ny) = ((x + dx).wrapping_sub(1), (y + dy).wrapping_sub(1));
+                    if nx < side_us && ny < side_us {
+                        is_refined[ny * side_us + nx] = true;
+                    }
+                }
+            }
+        }
+        let refined = (0..count as u32)
+            .filter(|&c| is_refined[c as usize])
+            .collect();
+        let n = side_us + 1;
+        let inner = (0..n * n)
+            .map(|s| {
+                let (x, y) = (s % n, s / n);
+                let cell = |cx: usize, cy: usize| {
+                    cx < side_us && cy < side_us && is_refined[cy * side_us + cx]
+                };
+                x > 0
+                    && y > 0
+                    && cell(x - 1, y - 1)
+                    && cell(x, y - 1)
+                    && cell(x - 1, y)
+                    && cell(x, y)
+            })
+            .collect();
         Self {
             params: *params,
             spacing,
@@ -156,7 +221,23 @@ impl Channels {
             start,
             list,
             refined,
+            inner,
         }
+    }
+
+    /// The smoothed ground's weight from the refined cells at (x, y): the samples' `inner`,
+    /// bilinearly.
+    fn inner_weight(&self, x: f64, y: f64) -> f64 {
+        let last = f64::from(self.side - 1);
+        let (gx, gy) = (x / self.spacing, y / self.spacing);
+        let (cx, cy) = (gx.floor().clamp(0.0, last), gy.floor().clamp(0.0, last));
+        let (tx, ty) = ((gx - cx).clamp(0.0, 1.0), (gy - cy).clamp(0.0, 1.0));
+        let n = self.side as usize + 1;
+        let at = |i: usize, j: usize| f64::from(u8::from(self.inner[j * n + i]));
+        let (i, j) = (cx as usize, cy as usize);
+        let top = at(i, j) + (at(i + 1, j) - at(i, j)) * tx;
+        let bottom = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * tx;
+        top + (bottom - top) * ty
     }
 
     /// The cells drawn finer, `j × (size − 1) + i` for the cell whose first corner is sample
@@ -184,9 +265,9 @@ impl Channels {
         let drawn = drawn_height(height, x, y);
         let margin = self.params.margin;
         // How far out of each segment's water the point is, and its weights: the cubic's, full
-        // within a metre of the water and gone by the margin, and the carve's, gone over the
-        // margin's last 3 m.
-        let mut smooth = 0.0f64;
+        // within a metre of the water and gone by the margin (and full inside the refined
+        // cells, gone at their outline), and the carve's, gone over the margin's last 3 m.
+        let mut smooth = self.inner_weight(x, y);
         for &s in segments {
             let s = &self.segments[s as usize];
             let (r, t) = segment_distance([x, y], s.a, s.b);
@@ -392,7 +473,7 @@ mod tests {
             &Lakes::default(),
             &RibbonParams::default(),
         );
-        let channels = Channels::new(&valley, &ribbons, &ChannelParams::default());
+        let channels = Channels::new(&valley, &ribbons, &[], &ChannelParams::default());
         // The cells along the valley's floor are refined, those on its far sides are not.
         assert!(!channels.refined().is_empty());
         for &c in channels.refined() {

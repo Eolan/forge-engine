@@ -26,6 +26,7 @@
 //! - [`river`]: the rivers' water: each river's course smoothed into a ribbon of points with
 //!   its width, depth, speed and a level that only falls, for the GPU.
 //! - [`channel`]: the rivers' channels carved under that water, on cells drawn finer.
+//! - [`lake`]: the lakes' water, a level plane each and the mask of the samples it covers.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
 //!   sea, rivers and lakes), which is how the pipeline is looked at before a GPU draws it.
@@ -43,6 +44,7 @@ pub mod field;
 pub mod flow;
 pub mod hydrology;
 pub mod island;
+pub mod lake;
 pub mod layers;
 pub mod noise;
 pub mod ocean;
@@ -64,6 +66,7 @@ pub use island::{
     IslandFields, IslandParams, Wind, cached_island, generate_island, island_fields,
     orographic_rain, refresh_rain,
 };
+pub use lake::{LakeWater, lake_waters, paint_lake_beds};
 pub use layers::{
     LayerRule, Shore, paint_lakes, paint_moisture, paint_rivers, slope_layers, wetness,
 };

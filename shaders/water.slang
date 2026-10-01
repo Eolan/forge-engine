@@ -274,6 +274,13 @@ struct RiverMouth
     float4 b; // the half width (m), the speed (m/s), 0, 0
 };
 
+// A lake (`GpuLake` in water.rs).
+struct Lake
+{
+    float4 a; // the mask's first sample (world x, z), the level (m), metres between samples
+    uint4 b;  // the mask's samples along x and z, its first word in `lake_masks`, 0
+};
+
 // A stone in a river (`GpuRiverStone` in water.rs).
 struct RiverStone
 {
@@ -319,6 +326,10 @@ struct WaterSurface
     uint* mouth_grid;     // per cell of the shore's square, up to four mouths whose plume reaches it (a byte each, 0xFF: none)
     uint mouth_cells;     // the grid's cells a side
     float mouth_cell;     // metres a cell
+    Lake* lakes;          // the lakes, `lake_count` of them
+    uint* lake_masks;     // their masks, a bit a sample
+    uint lake_count;
+    uint pad_lakes;
 };
 
 struct SurfacePush
@@ -1129,6 +1140,88 @@ StoneFlow stones_at(WaterSurface* w, uint segment, float2 world, float2 velocity
     return o;
 }
 
+// Fresh water's surface at a pixel, a river's or a lake's: what the shading needs besides the
+// frame.
+struct FreshWater
+{
+    float4 position; // SV_Position
+    float3 relative; // camera-relative metres
+    float2 flat;     // camera-relative world x, z
+    float2 velocity; // the flow, world x, z; m/s (0: still water)
+    float2 fall;     // the surface's own slope (a river's fall downstream)
+    float rough;     // added to the ripples' slopes' variance (a stone's wake)
+    float coverage;  // how much of the pixel it covers, before the contact's fade
+    float drape;     // how far it lies on the ground far away (0: at its level)
+    float depth;     // its own depth there, which the view sees through where it lies on the ground
+    float white;     // the white water's share, before its pattern
+};
+
+// The shading of fresh water: the ripples carried on its flow, the sky, the sun, the mirror and
+// shadow rays asked for, the bed seen along the view ray through the water to it (its own depth
+// where it lies on the ground far away), the light it scatters back, white water broken up by a
+// pattern carried down with the flow (finer than two pixels, its mean), and the air; blended by
+// its coverage, the edge fading where the water thins to nothing against the ground, a stone or
+// anything in it.
+SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
+{
+    float2 world = s.flat + w[0].camera.xz;
+    float footprint = max(max(length(ddx(s.flat)), length(ddy(s.flat))), 1e-3);
+    RiverRipples ripples = river_ripples(w, s.flat, s.velocity);
+    FlowPhases f = ripples.phases;
+    float variance = ripples.variance + s.rough;
+    float2 slope = ripples.slope + s.fall;
+    float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
+    float3 v = normalize(-s.relative);
+    float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
+    WaterLight light = water_light(w, n, v, a2);
+    uint2 pixel = uint2(s.position.xy);
+    float2 uv = (float2(pixel) + 0.5) / float2(w[0].width, w[0].height);
+    float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
+    float floor_depth = g_sampled_images_r[NonUniformResourceIndex(w[0].scene_depth)].Load(int3(pixel, 0));
+    float surface_distance = length(s.relative);
+    float path = 1e3;
+    if (floor_depth > 0.0)
+    {
+        float4 behind = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, floor_depth, 1.0));
+        path = max(length(behind.xyz / behind.w) - surface_distance, 0.0);
+    }
+    float thickness = path * max(v.y, 0.0);
+    float contact = smoothstep(0.0, max(RIVER_CONTACT.x, RIVER_CONTACT.y * footprint), thickness);
+    float coverage = s.coverage * lerp(contact, 1.0, s.drape);
+    path = lerp(path, s.depth / max(v.y, 0.2), s.drape);
+    float3 transmittance = exp(-RIVER_ABSORPTION * path);
+    float3 inside = under * transmittance + RIVER_SCATTER * light.lit * (1.0 - transmittance);
+    float3 color = light.reflected * light.fresnel + inside * (1.0 - light.fresnel) + light.sun;
+    float foam = 0.0;
+    if (s.white > 0.0)
+    {
+        float n0 = value_noise((world - f.offset0) / 0.8);
+        float n1 = value_noise((world - f.offset1) / 0.8 + 13.7);
+        float pattern = 0.5 + ((n0 - 0.5) * f.weight0 + (n1 - 0.5) * f.weight1) * ripples.norm;
+        float resolved = saturate(0.8 / (2.0 * footprint) - 1.0);
+        foam = s.white * lerp(RIVER_FOAM_MEAN, smoothstep(0.45, 0.8, pattern), resolved);
+    }
+    color = lerp(color, 0.8 * light.lit / PI, foam * 0.8);
+    float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);
+    color = color * air.a + air.rgb * light.scale;
+    // Blended by the coverage, as are the rays asked for (`trace_requested` normalises the
+    // direction): what the mirror ray meets and what the sun lights of the water's share.
+    SurfaceTargets o;
+    o.color = float4(min(color, 32768.0), coverage);
+    float weight = light.fresnel * (1.0 - light.blur) * (1.0 - foam * 0.8) * air.a * coverage;
+    o.request = weight >= REQUEST_MIN_WEIGHT ? float4(light.mirror, weight) : float4(0.0);
+    float3 sun_share = light.sun + RIVER_SCATTER * light.sun_light * (1.0 - transmittance) * (1.0 - light.fresnel);
+    sun_share = lerp(sun_share, 0.8 * light.sun_light / PI, foam * 0.8) * air.a;
+    sun_share = min(sun_share, o.color.rgb) * coverage;
+    float brightest = max(o.color.r, max(o.color.g, o.color.b)) * coverage;
+    bool shade = max(sun_share.r, max(sun_share.g, sun_share.b)) > SUN_REQUEST_MIN_SHARE * brightest;
+    o.sun = shade ? float4(sun_share, 1.0) : float4(0.0);
+    // Nothing of the water here: leave the pixel, its depth and its rays to what is under.
+    if (coverage < 1.0 / 255.0)
+        discard;
+    return o;
+}
+
 [shader("fragment")]
 SurfaceTargets river_frag_main(RiverOut input)
 {
@@ -1147,81 +1240,100 @@ SurfaceTargets river_frag_main(RiverOut input)
     float near_cover = 1.0 - smoothstep(half_water, input.edge.y, out_from_middle);
     float soft = min(max(RIVER_BANK, 2.0 * footprint), 0.5 * half_drawn);
     float far_cover = min(half_water / half_drawn, 1.0) * smoothstep(0.0, soft, half_drawn - out_from_middle);
-    float coverage = input.river.y * lerp(near_cover, far_cover, drape);
-    // The flow: faster in the middle than by the banks.
+    // The flow: faster in the middle than by the banks, around the stones.
     float2 down = input.flow.xy / max(length(input.flow.xy), 1e-4);
     float u = saturate(out_from_middle / max(half_water, 1e-3));
     float2 velocity = down * (input.river.w * (1.0 - 0.4 * u * u));
-    // Around the stones, and rougher in their wakes.
     StoneFlow stones = stones_at(w, input.segment, world, velocity);
-    RiverRipples ripples = river_ripples(w, input.flat, stones.velocity);
-    FlowPhases f = ripples.phases;
-    float norm = ripples.norm;
-    float variance = ripples.variance + RIVER_WAKE_ROUGHNESS * stones.rough;
-    // The surface falls downstream.
-    float2 slope = ripples.slope - down * min(input.flow.z, 0.3);
-    float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
-    float3 v = normalize(-input.relative);
-    float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
-    WaterLight light = water_light(w, n, v, a2);
-    // What lies under: the bed, seen along the view ray through the water to it (the ribbon's
-    // own profile far away, where it lies on the ground), and the light the water scatters
-    // back on the way. Where the water thins to nothing against the ground, a stone or
-    // anything in it, its edge fades.
-    uint2 pixel = uint2(input.position.xy);
-    float2 uv = (float2(pixel) + 0.5) / float2(w[0].width, w[0].height);
-    float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;
-    float floor_depth = g_sampled_images_r[NonUniformResourceIndex(w[0].scene_depth)].Load(int3(pixel, 0));
-    float surface_distance = length(input.relative);
-    float path = 1e3;
-    if (floor_depth > 0.0)
-    {
-        float4 behind = mul(w[0].sky[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, floor_depth, 1.0));
-        path = max(length(behind.xyz / behind.w) - surface_distance, 0.0);
-    }
-    float thickness = path * max(v.y, 0.0);
-    float contact = smoothstep(0.0, max(RIVER_CONTACT.x, RIVER_CONTACT.y * footprint), thickness);
-    coverage *= lerp(contact, 1.0, drape);
-    float profile = input.river.z * (1.0 - u * u) / max(v.y, 0.2);
-    path = lerp(path, profile, drape);
-    float3 transmittance = exp(-RIVER_ABSORPTION * path);
-    float3 inside = under * transmittance + RIVER_SCATTER * light.lit * (1.0 - transmittance);
-    float3 color = light.reflected * light.fresnel + inside * (1.0 - light.fresnel) + light.sun;
-    // White water: in riffles where the water falls steeply and fast, and on and behind the
-    // stones; broken up by a pattern carried down with the flow, which finer than two pixels
-    // gives way to its mean. (Not along the banks: the water's edge there follows the carved
-    // ground's metre triangles, and a line of foam drew them.)
+    // White water in riffles where the water falls steeply and fast, and on and behind the
+    // stones. (Not along the banks: the water's edge there follows the carved ground's metre
+    // triangles, and a line of foam drew them.)
     float riffles = smoothstep(0.45, 0.75, value_noise(world / RIVER_RIFFLES));
     float rapids = smoothstep(0.06, 0.2, input.flow.z) * smoothstep(1.5, 3.0, input.river.w) * riffles;
-    float white = max(rapids, stones.white);
-    float foam = 0.0;
-    if (white > 0.0)
-    {
-        float n0 = value_noise((world - f.offset0) / 0.8);
-        float n1 = value_noise((world - f.offset1) / 0.8 + 13.7);
-        float pattern = 0.5 + ((n0 - 0.5) * f.weight0 + (n1 - 0.5) * f.weight1) * norm;
-        float resolved = saturate(0.8 / (2.0 * footprint) - 1.0);
-        foam = white * lerp(RIVER_FOAM_MEAN, smoothstep(0.45, 0.8, pattern), resolved);
-    }
-    color = lerp(color, 0.8 * light.lit / PI, foam * 0.8);
-    float4 air = aerial_at(w[0].sky, uv, surface_distance * 0.001);
-    color = color * air.a + air.rgb * light.scale;
-    // Blended by the coverage, as are the rays asked for (`trace_requested` normalises the
-    // direction): what the mirror ray meets and what the sun lights of the river's share.
-    SurfaceTargets o;
-    o.color = float4(min(color, 32768.0), coverage);
-    float weight = light.fresnel * (1.0 - light.blur) * (1.0 - foam * 0.8) * air.a * coverage;
-    o.request = weight >= REQUEST_MIN_WEIGHT ? float4(light.mirror, weight) : float4(0.0);
-    float3 sun_share = light.sun + RIVER_SCATTER * light.sun_light * (1.0 - transmittance) * (1.0 - light.fresnel);
-    sun_share = lerp(sun_share, 0.8 * light.sun_light / PI, foam * 0.8) * air.a;
-    sun_share = min(sun_share, o.color.rgb) * coverage;
-    float brightest = max(o.color.r, max(o.color.g, o.color.b)) * coverage;
-    bool shade = max(sun_share.r, max(sun_share.g, sun_share.b)) > SUN_REQUEST_MIN_SHARE * brightest;
-    o.sun = shade ? float4(sun_share, 1.0) : float4(0.0);
-    // Nothing of the river here: leave the pixel, its depth and its rays to what is under.
-    if (coverage < 1.0 / 255.0)
-        discard;
+    FreshWater s;
+    s.position = input.position;
+    s.relative = input.relative;
+    s.flat = input.flat;
+    s.velocity = stones.velocity;
+    s.fall = -down * min(input.flow.z, 0.3);
+    s.rough = RIVER_WAKE_ROUGHNESS * stones.rough;
+    s.coverage = input.river.y * lerp(near_cover, far_cover, drape);
+    s.drape = drape;
+    s.depth = input.river.z * (1.0 - u * u);
+    s.white = max(rapids, stones.white);
+    return fresh_water(w, s);
+}
+
+// ----------------------------------------------------------------- the lakes ---
+//
+// D-038's lakes: a level plane each at the lake's level (`forge_procgen::lake_waters`: the
+// priority flood's depression and a sample more), drawn after the sea and before the rivers,
+// which blend over the lakes they run into. The mask clips the plane to the lake (softened over
+// a sample), and within it the ground rising through the plane draws the shore. Its water is the
+// rivers' (`fresh_water`), still but where a river runs in (its jet, as at the sea's mouths).
+
+struct LakeOut
+{
+    float4 position : SV_Position;
+    float3 relative : POSITION; // camera-relative metres
+    float2 flat : TEXCOORD0;    // camera-relative world x, z
+    nointerpolation uint lake : TEXCOORD1;
+};
+
+[shader("vertex")]
+LakeOut lake_vert_main(uint id : SV_VertexID)
+{
+    WaterSurface* w = surface_push.surface;
+    uint index = id / 6u;
+    Lake lake = w[0].lakes[index];
+    // The mask's box: its first sample to its last, half a sample more all round.
+    float2 lo = lake.a.xy - 0.5 * lake.a.w;
+    float2 hi = lake.a.xy + (float2(lake.b.xy) - 0.5) * lake.a.w;
+    float2 world = lerp(lo, hi, float2(QUAD_CORNERS[id % 6u]));
+    float3 relative = float3(world.x, lake.a.z, world.y) - w[0].camera.xyz;
+    LakeOut o;
+    o.position = mul(w[0].view_proj, float4(relative, 1.0));
+    o.relative = relative;
+    o.flat = relative.xz;
+    o.lake = index;
     return o;
+}
+
+// Whether lake `lake`'s mask covers its sample `s`.
+float lake_mask(WaterSurface* w, Lake lake, int2 s)
+{
+    if (any(s < 0) || any(s >= int2(lake.b.xy)))
+        return 0.0;
+    uint k = uint(s.y) * lake.b.x + uint(s.x);
+    return float((w[0].lake_masks[lake.b.z + k / 32u] >> (k % 32u)) & 1u);
+}
+
+[shader("fragment")]
+SurfaceTargets lake_frag_main(LakeOut input)
+{
+    WaterSurface* w = surface_push.surface;
+    Lake lake = w[0].lakes[input.lake];
+    float2 world = input.flat + w[0].camera.xz;
+    // The mask between its samples, softened over half of one.
+    float2 g = (world - lake.a.xy) / lake.a.w;
+    int2 i0 = int2(floor(g));
+    float2 t = g - float2(i0);
+    float mask = lerp(
+        lerp(lake_mask(w, lake, i0), lake_mask(w, lake, i0 + int2(1, 0)), t.x),
+        lerp(lake_mask(w, lake, i0 + int2(0, 1)), lake_mask(w, lake, i0 + int2(1, 1)), t.x),
+        t.y);
+    FreshWater s;
+    s.position = input.position;
+    s.relative = input.relative;
+    s.flat = input.flat;
+    s.velocity = estuary_at(w, world).velocity;
+    s.fall = 0.0;
+    s.rough = 0.0;
+    s.coverage = smoothstep(0.25, 0.75, mask);
+    s.drape = 0.0;
+    s.depth = 0.0;
+    s.white = 0.0;
+    return fresh_water(w, s);
 }
 
 // ------------------------------------------------------------- scene copy ---

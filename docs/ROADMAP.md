@@ -290,7 +290,10 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    courses with flow-mapped ripples, since the owner's look (2026-10-01) level water in channels
    carved into the island's mesh on cells of a metre, over beds of gravel, out into the sea in a
    plume at their mouths, around stones that break the water (`docs/demos/island.md`, "The sea
-   on the GPU"). Next, D-038's order: the lakes, on the same surface as the rivers' still water.
+   on the GPU"); and the lakes, a level plane each over its flooded depression, its shore on cells
+   of a metre, its water the rivers' (still but where a river runs in). D-038's build order is
+   done; next, the owner's judgement of `--water`, then the afterwards of `docs/research/water.md`
+   (the underwater view, caustics, wakes).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

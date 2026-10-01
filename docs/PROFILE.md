@@ -461,6 +461,23 @@ and in the ribbons' flow. Three runs each, alternating, against step 6's commit:
   loop over all 25 mouths cost 0.04 ms).
 - **The rest** is geometry: the refined cells, and the stones drawn and traced.
 
+**The lakes** (#105 step 7, 2026-10-01). 15 planes at their levels, clipped to their masks and
+drawn in `water/surface` between the sea and the rivers, shaded as the rivers' water; their
+shores refined to a metre (51 958 refined cells in all). Three runs each, alternating, against
+the rivers' commit:
+
+| View | frame | water/surface | water/reflections | shading/layered |
+|---|---|---|---|---|
+| the west lake from 30 m | 1.559 → 1.611 ms | 0.071 → 0.088 | 0.033 → 0.067 | 0.362 → 0.377 |
+| the east lake | 1.411 → 1.454 ms | 0.070 → 0.080 | 0.024 → 0.047 | 0.302 → 0.324 |
+| the round lake | 1.490 → 1.577 ms | 0.071 → 0.094 | 0.024 → 0.075 | 0.320 → 0.375 |
+| coast | 1.684 → 1.676 ms | 0.155 → 0.155 | 0.198 → 0.186 | 0.341 → 0.337 |
+| the island from 2.5 km | 2.125 → 2.135 ms | 0.194 → 0.195 | 0.081 → 0.082 | 0.295 → 0.293 |
+
+- **The rays** are most of a lake's cost: a mirror and a shadow ray per pixel of water.
+- **The silt** under the shallows blends with the grass's layer: up to +0.055 ms of
+  `shading/layered` where a shore fills the view.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the
