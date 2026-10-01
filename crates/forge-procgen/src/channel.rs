@@ -38,12 +38,14 @@ pub struct ChannelParams {
     /// Heights whose contours, where the ground crosses them, are drawn on finer cells: the
     /// coast's (the sea's level, the top of the sand).
     pub coast: [f64; 2],
+    /// Whether a river's channel runs on through the lakes it crosses (no: their beds silt up).
+    pub carve_lakes: bool,
 }
 
 impl Default for ChannelParams {
     /// 8 m past the water, a bank rising by half a metre a metre and more, cells of 8 m drawn
     /// in quads of 1 m, a lake's shore within a metre of its level, the coast's cells crossing the
-    /// sea's level and the sand's top (2.5 m, the island's layer rule).
+    /// sea's level and the sand's top (2.5 m, the island's layer rule), no channel through a lake.
     fn default() -> Self {
         Self {
             margin: 8.0,
@@ -51,6 +53,7 @@ impl Default for ChannelParams {
             split: 8,
             shore: 1.0,
             coast: [0.0, 2.5],
+            carve_lakes: false,
         }
     }
 }
@@ -100,9 +103,21 @@ impl Channels {
     ) -> Self {
         let spacing = height.spacing;
         let side = height.size - 1;
+        // No channel through a lake: its bed is the lake's (a river's channel silts up there).
+        let last = f64::from(height.size - 1);
+        let under_lake = |p: [f32; 2]| {
+            let (x, y) = (
+                (f64::from(p[0]) / spacing).round().clamp(0.0, last) as u32,
+                (f64::from(p[1]) / spacing).round().clamp(0.0, last) as u32,
+            );
+            lakes.iter().any(|l| l.covers(x, y))
+        };
         let segments: Vec<Segment> = ribbons
             .iter()
             .flat_map(|r| r.points.windows(2))
+            .filter(|w| {
+                params.carve_lakes || !(under_lake(w[0].position) && under_lake(w[1].position))
+            })
             .map(|w| {
                 let f = |v: f32| f64::from(v);
                 Segment {

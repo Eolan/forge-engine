@@ -25,6 +25,8 @@ pub struct LakeWater {
     pub level: f32,
     /// Its deepest point under the level, metres.
     pub depth: f32,
+    /// The sample the water leaves by, column and row of the field ([`crate::Lake::outlet`]).
+    pub outlet: [u32; 2],
     /// The mask's first sample, column and row of the field.
     pub first: [u32; 2],
     /// The mask's samples along the columns and the rows.
@@ -103,6 +105,10 @@ pub fn lake_waters(
                 lake: index as u32,
                 level,
                 depth: lake.depth,
+                outlet: {
+                    let (x, y) = height.coords(lake.outlet as usize);
+                    [x, y]
+                },
                 first: [lo[0] as u32, lo[1] as u32],
                 size: [size[0] as u32, size[1] as u32],
                 mask,

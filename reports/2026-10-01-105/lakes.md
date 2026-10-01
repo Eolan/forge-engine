@@ -83,3 +83,11 @@ have a bed of dark mud (`island: lake bed`) and water of their own, darker than 
 (absorption 1.0, 0.6, 1.2 m⁻¹), mixing to the rivers' along an inflow's jet.
 `lakes-dark.png`: the island from 2.5 km and the round lake, before (left) and now (right). The
 batch is unchanged (0 px: no lake in its views); validation clean.
+
+## Later the same night: no river channel through a lake
+
+From over the lakes' outlets and inlets, the rivers' carved channels ran on through the lakes'
+beds as dark trenches under the water (`lake-outlets.png`, top: the three largest lakes, from
+25 m over their outlets; the logged `the largest lakes' outlets` views). A river's channel now
+stops where its course is under a lake's water at both ends of a segment
+(`ChannelParams::carve_lakes`, false): the lake's bed is its own (bottom).

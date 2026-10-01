@@ -1913,6 +1913,22 @@ fn island_ribbons(
         }
     }
     let spacing = height.spacing as f32;
+    // Views of the three largest lakes' outlets, from 25 m over the water 20 m south of them,
+    // looking down at where the river leaves.
+    let mut by_size: Vec<&forge_procgen::LakeWater> = lakes.iter().collect();
+    by_size.sort_by_key(|l| std::cmp::Reverse(l.mask.iter().filter(|&&m| m).count()));
+    let outlets: Vec<String> = by_size
+        .iter()
+        .take(3)
+        .map(|l| {
+            let (x, z) = (
+                l.outlet[0] as f32 * spacing - half,
+                l.outlet[1] as f32 * spacing - half,
+            );
+            format!("{x:.0},{:.1},{:.0},0,-45", l.level + 25.0, z + 20.0)
+        })
+        .collect();
+    tracing::info!(views = %outlets.join("  "), "the largest lakes' outlets (--view)");
     let lakes: Vec<WaterLake> = lakes
         .iter()
         .map(|l| WaterLake {
