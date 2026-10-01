@@ -1897,6 +1897,18 @@ fn island_ribbons(
         .last()
         .map_or_else(String::new, |r| view_from(&r.points[8], 25.0, 6.0));
     tracing::info!(%confluence, %head, "a confluence and a head (--view)");
+    // Where the water hands over: the largest river running into a lake, and the largest river
+    // running into the sea, from 30 m back up it and 4 m over its water.
+    let into_lake = ribbons
+        .iter()
+        .rev()
+        .find_map(|r| Some((r, *r.lake_entries.first()? as usize)))
+        .map_or_else(String::new, |(r, k)| view_from(&r.points[k], 30.0, 4.0));
+    let into_sea = ribbons
+        .last()
+        .and_then(|r| Some((r, forge_procgen::sea_mouth(&r.points)?)))
+        .map_or_else(String::new, |(r, k)| view_from(&r.points[k], 30.0, 4.0));
+    tracing::info!(%into_lake, %into_sea, "where the rivers hand over (--view)");
     // How far the water stands under its banks: the channel's depth less the water's.
     let freeboard = points
         .clone()
