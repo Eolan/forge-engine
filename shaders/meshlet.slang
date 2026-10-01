@@ -2621,6 +2621,13 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         uint2 size;
         map.GetDimensions(size.x, size.y);
         float2 texel = (s.object_position.xz * mat.inv_texture_scale + 0.5) * float2(size) - 0.5;
+        // The lookup wanders by `cavity` texels over a noise three texels wide, so the layers'
+        // edges do not follow the map's grid in steps (the island's coast, #106).
+        if (mat.cavity > 0.0)
+        {
+            float2 q = texel / 3.0;
+            texel += (float2(value_noise(q), value_noise(q + 31.7)) - 0.5) * (2.0 * mat.cavity);
+        }
         int2 i0 = int2(floor(texel));
         float2 t = texel - float2(i0);
         uint ids[4];

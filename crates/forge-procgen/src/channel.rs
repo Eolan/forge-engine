@@ -10,6 +10,10 @@
 //!   rivers run in are smooth and the cells around them unchanged.
 //! - The cells that reach that far ([`Channels::refined`]) are drawn in `split × split` quads
 //!   (`forge_geom::city::refined_heightfield_mesh`), at the heights of [`Channels::height_at`].
+//! - So are the lakes' shores (the cells of a lake's mask that span its level, #105) and the
+//!   coast's contours (the cells the sea's level or the sand's top cross, #106), and a cell more
+//!   around them, on the cubic but not carved: its weight is 1 at a sample whose cells are all
+//!   refined and 0 at the others, so it is 0 all along the refined region's outline.
 //!
 //! Everything is a pure function of the point, `f64` with no transcendental function (D-016).
 
@@ -31,17 +35,22 @@ pub struct ChannelParams {
     pub split: u32,
     /// Metres either side of a lake's level over which its shore's cells are drawn finer.
     pub shore: f64,
+    /// Heights whose contours, where the ground crosses them, are drawn on finer cells: the
+    /// coast's (the sea's level, the top of the sand).
+    pub coast: [f64; 2],
 }
 
 impl Default for ChannelParams {
     /// 8 m past the water, a bank rising by half a metre a metre and more, cells of 8 m drawn
-    /// in quads of 1 m, a lake's shore within a metre of its level.
+    /// in quads of 1 m, a lake's shore within a metre of its level, the coast's cells crossing the
+    /// sea's level and the sand's top (2.5 m, the island's layer rule).
     fn default() -> Self {
         Self {
             margin: 8.0,
             bank: (0.5, 0.1),
             split: 8,
             shore: 1.0,
+            coast: [0.0, 2.5],
         }
     }
 }
@@ -182,6 +191,19 @@ impl Channels {
                         shore[j as usize * side_us + i as usize] = true;
                     }
                 }
+            }
+        }
+        // The coast's contours: the cells whose ground crosses one of them.
+        for (c, cell) in shore.iter_mut().enumerate() {
+            let (i, j) = ((c % side_us) as u32, (c / side_us) as u32);
+            let h = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
+                .map(|(x, y)| f64::from(height.get(x, y)));
+            let (lo, hi) = (
+                h.iter().copied().fold(f64::MAX, f64::min),
+                h.iter().copied().fold(f64::MIN, f64::max),
+            );
+            if params.coast.iter().any(|&level| lo <= level && hi >= level) {
+                *cell = true;
             }
         }
         for c in (0..count).filter(|&c| shore[c]) {

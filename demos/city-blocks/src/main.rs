@@ -1480,6 +1480,9 @@ impl CityMaterials {
                 class: ShadingClass::Layered,
                 albedo_texture: Some(map),
                 texture_scale: size,
+                // The layers' edges wander by a texel (4 m) instead of stepping along the map's
+                // grid: the sand's top along the coast followed it in teeth (#106).
+                cavity: 1.0,
                 ..RenderLayer::default()
             },
         ));
@@ -1702,6 +1705,9 @@ fn island_heights(args: &Args) -> Field2<f32> {
     let mut height = height;
     let coast = forge_procgen::coast_distance(&height, 0.0, &pool);
     forge_procgen::sea_floor(&mut height, &coast, 0.0, SEA_FLOOR.0, SEA_FLOOR.1);
+    // The ground within a few metres of the sea's level smoothed, so the coast runs smooth
+    // instead of stepping with the samples (#106).
+    forge_procgen::smooth_shore(&mut height, 0.0, SHORE_SMOOTHING.0, SHORE_SMOOTHING.1);
     let (lo, hi) = height.min_max();
     tracing::info!(
         seed = args.island.unwrap_or(7),
@@ -1957,6 +1963,10 @@ fn island_ribbons(
 /// the metres from the coast that set its slope (60 over 1 500: 4 % at the shore).
 const SEA_FLOOR: (f32, f32) = (60.0, 1500.0);
 
+/// The shore's smoothing (`forge_procgen::smooth_shore`, #106): the samples within 3.5 m of the
+/// sea's level (the sand's top at 2.5 m among them), four passes of the binomial filter.
+const SHORE_SMOOTHING: (f32, u32) = (3.5, 4);
+
 /// The shore's wave trains (#105): the breeze's swell as three periods around its peak (the
 /// swell cascade centres on 7.3 s), heights in deep water.
 const SHORE_TRAINS: [ShoreTrain; 3] = [
@@ -1988,10 +1998,11 @@ fn island_prop(args: &Args) -> PropSpec {
         name: "island".to_owned(),
         kind: PropKind::Heightfield(Heightfield {
             key: format!(
-                "{}, sea floor {} m over {} m, rivers {:?} carved {:?}",
+                "{}, sea floor {} m over {} m, shore smoothed {:?}, rivers {:?} carved {:?}",
                 forge_procgen::island::island_key(&params, &erosion),
                 SEA_FLOOR.0,
                 SEA_FLOOR.1,
+                SHORE_SMOOTHING,
                 forge_procgen::RibbonParams::default(),
                 forge_procgen::ChannelParams::default(),
             ),

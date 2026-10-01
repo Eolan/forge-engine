@@ -478,6 +478,13 @@ the rivers' commit:
 - **The silt** under the shallows blends with the grass's layer: up to +0.055 ms of
   `shading/layered` where a shore fills the view.
 
+**The coast's definition** (#106, 2026-10-01). The shore smoothed in the field, its contours'
+cells refined (76 856 refined cells in all), and the island's layer lookup wandering by a texel.
+Three runs each, alternating, against the lakes' commit: the first view 1.691 → 1.709 ms, along
+the beach from 8 m 1.864 → 1.887 ms, over the south beach from 60 m 1.799 → 1.826 ms, the island
+from 2.5 km 2.132 → 2.152 ms. The wandering lookup costs up to 0.02 ms of `shading/layered` (two
+noise lookups a pixel of the island's ground); the rest is the refined cells.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

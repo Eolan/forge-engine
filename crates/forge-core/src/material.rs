@@ -72,7 +72,9 @@ pub struct RenderLayer {
     /// See `color_a`.
     pub color_b: [f32; 3],
     /// Standard: how much darker the surface gets where it faces its object's centre (0 for
-    /// none; meant for rounded objects such as rocks).
+    /// none; meant for rounded objects such as rocks). Layered: how far its layer map's lookup
+    /// wanders, in texels, over a noise three texels wide, so the layers' edges do not follow the
+    /// map's grid in steps (0: they do, as streets should).
     pub cavity: f32,
     /// Perceptual roughness in [0, 1]: the size of the highlight.
     pub roughness: f32,

@@ -590,6 +590,7 @@ Its third part: the wet sand.
 - **What shows the island's grid:** the swash's edge and the wet band follow the beach's
   height contours, which step along the 8 m field's cells near sea level (the sand and grass
   boundary above them steps the same way). The 2 m amplification is what smooths them (#106).
+  (Smoothed since, below: "The coast's definition".)
 
 ![The beach from above before the wet sand (left) and with it (right), at 14 s](../../reports/2026-09-30-105/shore-wet.png)
 
@@ -800,3 +801,30 @@ through it take its level:
 - **Checks:** the batch changes only the island's images (26 633 px, ꟻLIP mean 0.0061; with the
   water 31 296 px, 0.0070); the A/B harness and mesh against fallback at 0 px; validation clean;
   tests (a basin's water covers its depression and a sample more), clippy, fmt.
+
+**The coast's definition** (#106, 2026-10-01). The coast's contours ran in straight segments with
+corners every 8 m: the water's edge, the wet sand's, the sand's top. The field itself terraced
+there, not only its triangles: `sea_floor` sets the samples at sea from the coast distance and
+leaves the eroded land at the sea's level, so along a coast that runs across the grid the samples
+alternate between land at 0 m and floor at −0.3 m, and the sea's level traced through them
+steps with them (a cubic through them scallops instead).
+- **The shore smoothed** (`forge_procgen::smooth_shore`): four passes of a 3 × 3 binomial filter
+  over the samples within 3.5 m of the sea's level (the sand's top at 2.5 m among them), the rest
+  kept. The coast's contours then run smooth through the samples.
+- **Drawn finer:** the cells the sea's level or the sand's top cross, and a cell more, join the
+  refined cells (76 856 in all with the rivers' and the lakes', 6.2 M fine vertices), on the
+  smoothed ground, so the water's edge and the wet sand's follow a curve and not the 8 m
+  triangles.
+- **The layers' edges wander:** the layer map's lookup is offset by a texel (4 m) over a noise
+  three texels wide (`RenderLayer::cavity` for the layered class; 0 for the city's streets), so
+  the sand's top and every other layer's edge stop stepping along the map's 4 m grid.
+- **What remains:** the sand's top still shows the 4 m map's texels softly; the slopes inland keep
+  their 8 m facets and their shadows' steps, and the ground there is as rough as the 8 m erosion
+  made it, which the 2 m amplification is for.
+
+![#106's view over the south beach: the coast's contours in 8 m segments before (left), smooth now (right)](../../reports/2026-10-01-106/coast-above.png)
+
+- **Cost:** up to +0.03 ms a frame (the wandering lookup up to 0.02 ms of `shading/layered`, the
+  rest the refined cells). **Stability:** along the beach 0.44 → 0.26 % frame to frame, the same
+  or better everywhere. **Checks:** only the island's images change; the A/B harness and mesh
+  against fallback at 0 px; validation clean (`reports/2026-10-01-106/coast.md`).
