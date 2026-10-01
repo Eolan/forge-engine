@@ -75,6 +75,33 @@ fn ordered(h: f32) -> u32 {
     }
 }
 
+/// The alluvium's grade (#123): every land cell of `height` raised to at least `grade` times
+/// its distance down `flow` to the sea, over `sea_level`, as a river's deposits keep its lower
+/// course falling to its mouth where the erosion, which only cuts, lays a large river with
+/// little uplift flat at the sea's level. Cells already higher (the hills, every steeper
+/// stream) keep their height; outside the lakes a cell stays over its receiver. Returns how
+/// many were raised.
+pub fn grade_to_the_sea(
+    height: &mut Field2<f32>,
+    flow: &Flow,
+    sea_level: f32,
+    grade: f64,
+) -> usize {
+    let mut along = vec![0.0_f64; height.len()];
+    let mut raised = 0;
+    for &c in &flow.stack {
+        let c = c as usize;
+        let r = flow.receiver[c] as usize;
+        along[c] = along[r] + f64::from(flow.distance[c]);
+        let least = sea_level + (grade * along[c]) as f32;
+        if height.data[c] < least {
+            height.data[c] = least;
+            raised += 1;
+        }
+    }
+    raised
+}
+
 /// Priority flood: the field with every depression filled to its spill level plus an ε rise
 /// per cell towards the outlet. Outlets are the cells at or below `sea_level` and the border
 /// cells; they keep their height.
@@ -626,6 +653,31 @@ impl Flow {
     /// Whether cell `i` is an outlet (drains nowhere: the sea or the border).
     pub fn is_outlet(&self, i: usize) -> bool {
         self.receiver[i] as usize == i
+    }
+
+    /// Per cell, the outlet it drains to (an outlet's own index for an outlet).
+    pub fn outlets(&self) -> Vec<u32> {
+        let mut outlet: Vec<u32> = (0..self.receiver.len() as u32).collect();
+        for &c in &self.stack {
+            outlet[c as usize] = outlet[self.receiver[c as usize] as usize];
+        }
+        outlet
+    }
+
+    /// The basins: `(outlet, land cells draining to it)` for every outlet with land behind it,
+    /// largest first (ties by outlet).
+    pub fn basins(&self) -> Vec<(u32, u32)> {
+        let outlet = self.outlets();
+        let mut size = vec![0_u32; outlet.len()];
+        for &c in &self.stack {
+            size[outlet[c as usize] as usize] += 1;
+        }
+        let mut basins: Vec<(u32, u32)> = (0..size.len() as u32)
+            .filter(|&o| size[o as usize] > 0)
+            .map(|o| (o, size[o as usize]))
+            .collect();
+        basins.sort_by_key(|&(o, n)| (std::cmp::Reverse(n), o));
+        basins
     }
 
     /// Runs `f(segment, first, slice)` over the segments of the stack in parallel, with

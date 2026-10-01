@@ -1,6 +1,7 @@
 //! PNG previews of the pipeline's stages: the height in 16 bits, a hillshade, the drainage on
-//! a log scale, and an overview with the sea, hypsometric tints, rivers and lakes. How a stage
-//! is looked at before the GPU draws it (and how a cloud session looks at it at all).
+//! a log scale, the basins in colours, and an overview with the sea, hypsometric tints, rivers
+//! and lakes. How a stage is looked at before the GPU draws it (and how a cloud session looks
+//! at it at all).
 
 use std::path::Path;
 
@@ -85,6 +86,58 @@ pub fn write_network(
             3 => Rgb([30, 90, 200]),
             _ => Rgb([10, 50, 160]),
         }
+    });
+    image.save(path)
+}
+
+/// The basins: the land hillshaded in the colour of the outlet it drains to, the eight largest
+/// basins each in a hue of their own (largest first: red, orange, yellow, green, cyan, blue,
+/// violet, pink) and the rest grey, rivers where more than `river_cells` cells drain through
+/// a sample darker.
+pub fn write_basins(
+    height: &Field2<f32>,
+    flow: &Flow,
+    sea_level: f32,
+    river_cells: u32,
+    path: &Path,
+) -> image::ImageResult<()> {
+    const HUES: [[f32; 3]; 8] = [
+        [230.0, 70.0, 60.0],
+        [240.0, 150.0, 50.0],
+        [230.0, 210.0, 60.0],
+        [90.0, 190.0, 80.0],
+        [70.0, 200.0, 200.0],
+        [80.0, 120.0, 230.0],
+        [160.0, 100.0, 220.0],
+        [230.0, 120.0, 190.0],
+    ];
+    let outlet = flow.outlets();
+    let basins = flow.basins();
+    let mut hue = vec![u8::MAX; outlet.len()];
+    for (k, &(o, _)) in basins.iter().take(HUES.len()).enumerate() {
+        hue[o as usize] = k as u8;
+    }
+    let sun = sun_direction(315.0, 45.0);
+    let image = ImageBuffer::from_fn(height.size, height.size, |x, y| {
+        let i = height.index(x, y);
+        if height.get(x, y) <= sea_level {
+            return Rgb([26, 62, 118]);
+        }
+        let tint = match hue[outlet[i] as usize] {
+            u8::MAX => [150.0, 150.0, 150.0],
+            k => HUES[usize::from(k)],
+        };
+        let light = (0.4 + 0.6 * shade(height, x, y, sun))
+            * if flow.area[i] > river_cells {
+                0.35
+            } else {
+                1.0
+            };
+        Rgb([
+            (tint[0] * light) as u8,
+            (tint[1] * light) as u8,
+            (tint[2] * light) as u8,
+        ])
     });
     image.save(path)
 }

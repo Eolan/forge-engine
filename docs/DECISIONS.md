@@ -1586,4 +1586,11 @@ ribbons already reach every distance, resting on the ground a pixel wide past a 
 coarser level covers them (#113), for about 0.3 ms of the whole water surface from 2.5 km, mostly
 the sea's. In the far views they mirror the hills behind them from low and the sun's glitter from
 high, as the sea does. The type A reaches' steps and pools are #122: pools between steps, a
-boulder or two on most lips, the falls white (`forge_procgen::StepParams`).
+boulder or two on most lips, the falls white (`forge_procgen::StepParams`). The scale is #123:
+the hills' uplift lowered along three trunk valleys (`IslandParams::basins`), the plain by 70 %
+of it, gathers seed 7 into basins of 23, 18 and 12 km² at the sea (the dome's largest were 11,
+11 and 9), short of the 20–50 asked on a 16 km island whose land is about 80 km². The lakes
+the trunks drained come back as a bowl on each trunk (D-040's lakes placed on purpose). The
+lower courses keep a grade of 0.3 % to the sea, the erosion having laid the trunks flat at its
+level, and under 3 km² of catchment the rivers ease to nature's size, brooks (the
+carved-channel threshold kept at 0.5 km²).

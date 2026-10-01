@@ -650,6 +650,21 @@ frames each, 2560 × 1440.
 - At start the steps take no measurable time; the island's tiles cook again when the flag
   changes (their key holds the rivers' parameters).
 
+**Fewer, larger rivers** (#123, 2026-10-01): the same build with `--island-basins 0
+--island-grade 0 --no-brooks` (the island before) against the default, a different island;
+two rounds of each view without then with, 1 500 frames each, 2560 × 1440.
+
+| View | frame | `water/surface` | `water/reflections` | `shading/layered` | software raster 1 |
+|---|---|---|---|---|---|
+| the island from 2.5 km (`-6500,2500,-1416,-90,-35`) | 3.539 → 3.555 ms | 0.368 → 0.356 | 0.186 → 0.187 | 0.705 → 0.698 | 0.748 → 0.788 |
+| the plain from 200 m (`0,200,5400,0,-8`) | 2.581 → 2.627 ms | 0.153 → 0.155 | 0.124 → 0.120 | 0.699 → 0.693 | 0.129 → 0.214 |
+
+- From 2.5 km the second round; in the first the GPU ran slower both ways (3.620 → 4.083 ms,
+  every zone higher).
+- Over the plain the software raster draws more of the new ground in view, the island's
+  shape, not a cost of the rivers: 32 259 river points (38 534), 4 226 stones (5 640).
+- At start the island's heightfield is generated once in 7.1 s, then read from the cache.
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

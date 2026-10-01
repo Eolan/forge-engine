@@ -1437,6 +1437,101 @@ Before (left, `--no-steps`) and now (right), frame 60 (`reports/2026-10-01-122/`
 - If the steep reaches still look too busy, the knobs are `StepParams` (spacing, jitter, bow)
   and the share of lips with boulders (`lip_stones`).
 
+**Fewer, larger rivers** (#123, D-041's scale, 2026-10-01; `IslandParams::{basins, basin_depth,
+basin_turn, basin_lakes, basin_lake_radius, grade}`, `forge_procgen::flow::grade_to_the_sea`,
+`RibbonParams::brooks`; `city-blocks --island-basins`, `--island-grade`, `--no-brooks`). The
+uplift was a dome, so the rivers ran out on every side, each in a basin of its own: seven of
+5–11 km² at the sea, and 50 rivers that all read alike. D-041 asked for two to four basins of
+20–50 km² and the small rivers as brooks.
+
+**What changed.**
+- **Trunk valleys in the uplift** (`island_fields`):
+  - Three trunks, spread evenly round the island from a seeded start, each moved by up to a
+    fifth of the spacing.
+  - Across each sector the hills' uplift is lowered towards the trunk's line by up to 85 %, a
+    cosine from the line to the ridge halfway to the next trunk, whole on the ridges.
+  - The lines turn by up to 0.3 rad over a noise at the coast's scale. The lowering fades out
+    within 2 km of the heart, so the trunks' heads share one massif.
+  - Along the trunks the ridges' noise is calmed by half: its crests split one of seed 42's
+    sectors into five basins.
+  - The coastal plain loses 70 % of what the hills lose. With none of it the basins fell back to
+    the dome's (13, 11 and 8 km²): the trunks gather their flanks across the plain. With all of
+    it their last kilometres lay at the sea's level (6.6 km² of land under 2.5 m against 0.6).
+- **Lakes placed on purpose** (D-040):
+  - The trunks drained most of the dams: the lake rule kept 4 lakes for 15.
+  - A bowl on each trunk's line, 2.3–3.3 km from the heart, loses 85 % of the uplift at its
+    centre. It is half again as long down the valley as its 550 m radius and two thirds as
+    wide, its edge ragged by a quarter.
+  - On seed 7 two hold lakes, in the north-east's and the south's valleys; the west's holds
+    none.
+- **The alluvium's grade** (`grade_to_the_sea`, after the lake rule): every land sample at least
+  0.3 % of its way down to the sea over it.
+  - The erosion only cuts, so the west trunk lay flat at the sea's level over its last 1.5 km.
+  - The shore's rule (under 2.5 m) painted it a beach, and the river widened as an estuary all
+    along it.
+  - 145 372 samples are raised (16 768 on the dome).
+- **Brooks** (`RibbonParams::brooks`): under 3 km² of catchment the regional curves'
+  exaggeration eases down to nature's, smoothly in the area's logarithm. The `k = k_d = 1` at
+  0.5 km² gives 2.1 m wide; from 3 km² the island's 3 and 1.5 are as before (12 m there).
+- **A preview of the basins** (`preview::write_basins`): `genesis` writes `basins.png`, each of
+  the eight largest in a hue of its own, and prints the largest at the sea.
+- `--island-basins 0 --island-grade 0 --no-brooks` gives the island before: the same pixels as
+  8525e6b from 2.5 km.
+
+Before (left, those flags) and now (right), frame 60 (`reports/2026-10-01-123/`); the islands
+differ, so each view is the one its own island's log picks for the same thing:
+- `basins.png`: the basins at 8 m (`genesis`) and the overviews.
+- `far.png`: the island from 2.5 km (`--view -6500,2500,-1416,-90,-35`). The west trunk gathers
+  its tributaries across the plain.
+- `above.png`: from 9.5 km (`--view 0,9500,0,0,-89`): the three trunks' mouths, two lakes in
+  their valleys.
+- `views.png`, by rows:
+  - the largest river's mouth from low (`where the rivers hand over`, `into_sea`);
+  - a river across the plain (the second of `views down the rivers`);
+  - up a steep river from low (`up_valley`), a brook in steps now;
+  - the largest lake (`the island's lakes`, the first).
+
+**Numbers** (seed 7):
+- The basins at the sea at 8 m: 23.1, 17.8, 11.7 and 7.9 km² (the dome's 11.4, 10.6, 8.5, 7.5,
+  6.7, 6.3, 5.4).
+- At 16 m on other seeds:
+  - seeds 3 and 11: three of 15–24 km²;
+  - seed 99: 19.5, 14.7 and 10.7;
+  - seed 42: 15.7, 12.9 and 9.4, the weakest.
+- In the demo:
+  - 52 rivers (50) and 17 mouths (19);
+  - the trunks 52, 47 and 40 m wide at the sea, every mouth falling under 5 % over its last
+    160 m;
+  - 4 lakes of a hectare or more (11);
+  - 32 259 river points (38 534), 4 457 steps on 23 rivers (5 805 on 27), 4 226 stones (5 640).
+
+**Cost** (`docs/PROFILE.md`, the same build with and without the flags):
+- The island from 2.5 km: 3.54 → 3.56 ms.
+- The plain from 200 m: 2.58 → 2.63 ms, the software raster drawing more of the new ground.
+- Its heightfield is generated once in 7.1 s, then read from the cache as before.
+
+**Checks:**
+- The capture batch changes the island's images only, a different island (`island60` ꟻLIP mean
+  0.060, `island8-60` 0.060, `water60` 0.10). The A/B harness, streamed against resident and
+  mesh against fallback stay at 0 px.
+- `validate.sh` is clean. 217 tests pass, clippy and fmt are clean.
+- Two new tests:
+  - Three trunks gather seed 7 at 16 m into three basins over 10 km², the largest over 20, half
+    again the dome's three together, and two bowls or more hold water.
+  - The brooks are nature's size at 0.5 km², the island's from 3 km², and widen downstream in
+    between.
+
+**Left for later:**
+- Some logged views now fall on lakes: the first of `views down the rivers` and `a head`.
+- The hills read smoother: the trunks' sectors lose the dome's ring of escarpments around the
+  plain.
+- On the narrowest brooks the steps keep their 3 m least spacing, 1.1 widths apart on average.
+- The knobs, for the owner's look:
+  - `IslandParams::basins` (3), `basin_depth` and `basin_turn`;
+  - the lakes' bowls (`basin_lakes`, `basin_lake_radius`);
+  - `grade`;
+  - `RibbonParams::brooks`.
+
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 
 The ground left on #106 is the 8 m field's own: its slopes keep 8 m facets and their shadows'

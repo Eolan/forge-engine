@@ -2,11 +2,13 @@
 //! mask and the fields the erosion runs on, an uplift rate, a hardness and a rainfall; and the
 //! whole island as one call, [`generate_island`], cached on disk by [`cached_island`].
 
+use std::f64::consts::{PI, TAU};
 use std::io;
 use std::path::Path;
 
 use forge_core::Seed;
-use forge_core::dmath::exp;
+use forge_core::dmath::{atan2, cos, exp, sin_cos};
+use forge_core::hash::{hash_cell2, unit_f32};
 use forge_task::TaskPool;
 
 use crate::erosion::{Erosion, ErosionParams, step};
@@ -87,19 +89,40 @@ pub struct IslandParams {
     /// How far the plain's width wanders along the coast, as a share of it (0 the same all
     /// round; 1 from none to twice as wide), over the coast's own scale.
     pub plain_wander: f64,
+    /// The large basins (D-041, #123): how many trunk valleys the uplift is lowered along,
+    /// each draining a sector of the island; 0 lifts a dome, rivers running out on every side.
+    pub basins: u32,
+    /// How much of the hills' uplift the trunks' lines lose, a share of it: their sectors'
+    /// ridges keep it all.
+    pub basin_depth: f64,
+    /// How far the trunks' lines turn as they run inland, radians at most.
+    pub basin_turn: f64,
+    /// The lakes placed on purpose (D-040): a bowl on each trunk's line, partway inland, that
+    /// loses this share of the uplift at its centre; 0 places none.
+    pub basin_lakes: f64,
+    /// The bowls' radius, metres.
+    pub basin_lake_radius: f64,
     /// The prevailing wind; `None` rains the same everywhere.
     pub wind: Option<Wind>,
     /// After the erosion, the depressions smaller than this (m²) fill to their spill level
     /// and the larger ones stay as lakes (the lake rule, issue #97,
     /// [`crate::fill_small_depressions`]); 0 keeps every one.
     pub lake_min_area_m2: f64,
+    /// After the lake rule, the alluvium's grade (#123, [`crate::flow::grade_to_the_sea`]):
+    /// every land sample at least this many metres over the sea per metre of its way down to
+    /// it, so a large river's lower course falls to its mouth instead of lying at the sea's
+    /// level; 0 leaves the erosion's field.
+    pub grade: f64,
 }
 
 impl IslandParams {
     /// A 16 km island at `spacing` metres: `size` samples a side to cover it. A coastal plain
     /// over a quarter of the radius, from none to wide along the coast, at 3 % of the hills'
     /// uplift (D-041): its rivers reach the sea at 1–5 % where they fell at 9–24 % from hills
-    /// rising straight out of the sea.
+    /// rising straight out of the sea. Three trunk valleys losing 85 % of the hills' uplift
+    /// along lines that turn by up to 0.3 rad, a lake's bowl on each, and the lower courses
+    /// graded at 0.3 % to the sea (D-041's scale, #123): basins of 23, 18 and 12 km² on seed 7
+    /// where the dome's largest were 11, 11 and 9.
     pub fn island_16km(seed: Seed, spacing: f64) -> Self {
         Self {
             seed,
@@ -113,8 +136,14 @@ impl IslandParams {
             plain: 0.25,
             plain_uplift: 0.03,
             plain_wander: 3.0,
+            basins: 3,
+            basin_depth: 0.85,
+            basin_turn: 0.3,
+            basin_lakes: 0.85,
+            basin_lake_radius: 550.0,
             wind: None,
             lake_min_area_m2: 50_000.0,
+            grade: 0.003,
         }
     }
 
@@ -260,6 +289,12 @@ pub fn generate_island(
     } else {
         run.take_flow()
     };
+    if p.grade > 0.0
+        && crate::flow::grade_to_the_sea(&mut height, &flow, erosion.sea_level, p.grade) > 0
+    {
+        let flow = drain(&height, erosion.sea_level, pool);
+        return (height, flow);
+    }
     (height, flow)
 }
 
@@ -324,6 +359,82 @@ pub fn cached_island(
     Ok((height, false))
 }
 
+/// The angles of the large basins' trunks (D-041, #123), radians in `[0, τ)`, ascending:
+/// [`IslandParams::basins`] of them spread evenly from a seeded start, each moved by up to a
+/// fifth of the spacing so the basins differ in size.
+fn trunk_angles(p: &IslandParams, seed: u64) -> Vec<f64> {
+    if p.basins == 0 {
+        return Vec::new();
+    }
+    let draw = |i: i32| f64::from(unit_f32(hash_cell2(seed, i, 0)));
+    let gap = TAU / f64::from(p.basins);
+    let start = TAU * draw(-1);
+    let mut angles: Vec<f64> = (0..p.basins as i32)
+        .map(|i| (start + gap * (f64::from(i) + 0.4 * (draw(i) - 0.5))).rem_euclid(TAU))
+        .collect();
+    angles.sort_by(f64::total_cmp);
+    angles
+}
+
+/// How far the trunks' lines have turned at `(mx, my)` (metres in the field's frame), radians.
+fn trunk_turn(p: &IslandParams, seed: u64, mx: f64, my: f64) -> f64 {
+    let period = p.coast_scale_km * 1000.0;
+    p.basin_turn * fbm(seed, mx / period, my / period, 3, 2.0, 0.5)
+}
+
+/// The lakes' bowls (D-040), `(x, y)` metres in the field's frame and the unit direction out
+/// from the heart there, along the valley: none without [`IslandParams::basin_lakes`], else
+/// one on each trunk's turned line, a seeded 2.3–3.3 km from the heart (inside the hills,
+/// below the trunks' heads).
+fn lake_bowls(p: &IslandParams, trunks: &[f64], seed: u64) -> Vec<[f64; 4]> {
+    if p.basin_lakes <= 0.0 {
+        return Vec::new();
+    }
+    let half = 0.5 * p.extent();
+    trunks
+        .iter()
+        .enumerate()
+        .map(|(i, &angle)| {
+            let draw = f64::from(unit_f32(hash_cell2(seed, i as i32, 1)));
+            let r = half * (0.28 + 0.12 * draw);
+            // The line's angle at that radius: a few fixed-point steps, the turn changing
+            // slowly along the circle.
+            let mut at = angle;
+            let mut point = [0.0; 4];
+            for _ in 0..8 {
+                let (sin, cos) = sin_cos(at);
+                point = [half + r * cos, half + r * sin, cos, sin];
+                at = angle - trunk_turn(p, seed, point[0], point[1]);
+            }
+            point
+        })
+        .collect()
+}
+
+/// Where `angle` stands across its basin: 0 on the nearest trunk's line, 1 on the ridge
+/// halfway to the next trunk, linear in the angle in between.
+fn across_sector(trunks: &[f64], angle: f64) -> f64 {
+    let a = angle.rem_euclid(TAU);
+    let n = trunks.len();
+    let next = trunks.iter().position(|&t| t > a).unwrap_or(n);
+    let before = if next == 0 {
+        trunks[n - 1] - TAU
+    } else {
+        trunks[next - 1]
+    };
+    let after = if next == n {
+        trunks[0] + TAU
+    } else {
+        trunks[next]
+    };
+    let ridge = 0.5 * (before + after);
+    if a < ridge {
+        (a - before) / (ridge - before)
+    } else {
+        (after - a) / (after - ridge)
+    }
+}
+
 /// Stages 1 and 2: the mask, then the uplift, hardness and rain fields.
 pub fn island_fields(p: &IslandParams) -> IslandFields {
     let half = 0.5 * p.extent();
@@ -331,6 +442,10 @@ pub fn island_fields(p: &IslandParams) -> IslandFields {
     let ridge_seed = lattice(p.seed, 2);
     let hardness_seed = lattice(p.seed, 3);
     let plain_seed = lattice(p.seed, 4);
+    let basin_seed = lattice(p.seed, 5);
+    let trunks = trunk_angles(p, basin_seed);
+    let lakes = lake_bowls(p, &trunks, basin_seed);
+    let lake_seed = lattice(p.seed, 6);
     let coast_period = p.coast_scale_km * 1000.0;
     let ridge_period = p.ridge_scale_km * 1000.0;
     // Stage 1: a distance-to-centre shape warped by low-frequency noise (Patel 2015).
@@ -366,6 +481,30 @@ pub fn island_fields(p: &IslandParams) -> IslandFields {
             2.1,
             0.55,
         );
+        // The large basins: the hills' uplift lowered towards each trunk's line, whole on the
+        // ridges between them, fading out near the heart so the trunks' heads share one massif
+        // (the coastal plain loses part of it, below).
+        let (basins, mute) = if trunks.is_empty() {
+            (1.0, 0.0)
+        } else {
+            let (cx, cy) = (mx - half, my - half);
+            let d = (cx * cx + cy * cy).sqrt() / half;
+            let turn = trunk_turn(p, basin_seed, mx, my);
+            let s = across_sector(&trunks, atan2(cy, cx) + turn);
+            let valley = 0.5 * (1.0 + cos(PI * s));
+            // Each bowl half again as long down its valley as its radius and two thirds as
+            // wide, its edge ragged by a quarter.
+            let bowls = lakes.iter().fold(1.0, |b, l| {
+                let (dx, dy) = (mx - l[0], my - l[1]);
+                let along = (dx * l[2] + dy * l[3]) / 1.5;
+                let across = (dy * l[2] - dx * l[3]) / 0.67;
+                let ragged = 1.0 + 0.25 * fbm(lake_seed, mx / 400.0, my / 400.0, 2, 2.0, 0.5);
+                let r = (along * along + across * across).sqrt() / (p.basin_lake_radius * ragged);
+                b * (1.0 - p.basin_lakes * (1.0 - crate::river::smoothstep(0.3, 1.0, r)))
+            });
+            let lowered = 1.0 - p.basin_depth * crate::river::smoothstep(0.08, 0.25, d) * valley;
+            (lowered * bowls, 0.5 * valley)
+        };
         // Inland the shape reaches about `radius`; a square root lifts the coast's foothills,
         // from the coast or from the inner edge of the coastal plain.
         let t = (s / p.radius).min(1.0);
@@ -383,10 +522,17 @@ pub fn island_fields(p: &IslandParams) -> IslandFields {
             // the hills leave the plain on a slope rather than a wall.
             let x = ((t - plain) / (1.0 - plain)).max(0.0);
             let hills = x.sqrt() * crate::river::smoothstep(0.0, 0.125, x);
-            p.plain_uplift + (1.0 - p.plain_uplift) * hills
+            // The plain loses seven tenths of what the hills lose: enough for the trunks to
+            // gather their flanks across it, not so much that their last kilometres sink to
+            // the sea's level (the whole of it left 6.6 km² of land under 2.5 m, 0.6 before).
+            let share = 0.7;
+            p.plain_uplift * (1.0 - share * (1.0 - basins))
+                + (1.0 - p.plain_uplift) * hills * basins
         } else {
-            t.sqrt()
+            t.sqrt() * basins
         };
+        // The ridges calmed by half along the trunks, so their crests do not split a basin.
+        let ridges = ridges + mute * (0.5 - ridges);
         (p.uplift * inland * (0.35 + 0.65 * ridges)) as f32
     });
     let hardness = Field2::from_fn(p.size, p.spacing, |x, y| {
@@ -443,6 +589,60 @@ mod tests {
             ..p
         };
         assert_ne!(island_fields(&other).shape, f.shape);
+    }
+
+    #[test]
+    fn three_trunks_gather_the_island_into_three_large_basins_with_lakes_in_their_valleys() {
+        let pool = TaskPool::new(forge_task::PoolConfig::with_workers(4));
+        let erosion = ErosionParams::island();
+        const SPACING: f64 = 16.0;
+        let trunks = IslandParams::island_16km(Seed::new(7), SPACING);
+        let dome = IslandParams {
+            basins: 0,
+            ..trunks
+        };
+        let km2 = |n: u32| f64::from(n) * SPACING * SPACING * 1e-6;
+        let largest = |p: &IslandParams| {
+            let (height, flow) = generate_island(p, &erosion, &pool);
+            let basins: Vec<f64> = flow.basins().iter().take(3).map(|&(_, n)| km2(n)).collect();
+            (height, basins)
+        };
+        let (_, before) = largest(&dome);
+        let (height, after) = largest(&trunks);
+        // The dome's three largest basins are 8–12 km²; the trunks' 12–23.
+        assert!(
+            after.iter().all(|&a| a > 10.0) && after[0] > 20.0,
+            "{after:?} km² (the dome's {before:?})"
+        );
+        let sum = |b: &[f64]| b.iter().sum::<f64>();
+        assert!(
+            sum(&after) > 1.5 * sum(&before),
+            "{after:?} against {before:?} km²"
+        );
+        // At least two of the three bowls hold water a metre deep or more.
+        let filled = crate::priority_flood(&height, erosion.sea_level);
+        let bowls = lake_bowls(
+            &trunks,
+            &trunk_angles(&trunks, lattice(trunks.seed, 5)),
+            lattice(trunks.seed, 5),
+        );
+        assert_eq!(bowls.len(), 3);
+        let wet = bowls
+            .iter()
+            .filter(|b| {
+                let reach = (trunks.basin_lake_radius / SPACING) as i32;
+                let (bx, by) = ((b[0] / SPACING) as i32, (b[1] / SPACING) as i32);
+                (-reach..=reach).any(|dy| {
+                    (-reach..=reach).any(|dx| {
+                        let (x, y) = ((bx + dx) as u32, (by + dy) as u32);
+                        filled.get(x, y) - height.get(x, y) > 1.0
+                    })
+                })
+            })
+            .count();
+        assert!(wet >= 2, "{wet} bowls hold a lake");
+        // No trunks, no change: the dome is the island of before.
+        assert!(trunk_angles(&dome, 0).is_empty());
     }
 
     #[test]

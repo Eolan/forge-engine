@@ -171,6 +171,16 @@ struct Args {
     /// How far the coastal plain's width wanders along the coast.
     #[arg(long)]
     island_plain_wander: Option<f64>,
+    /// The island's large basins (D-041's scale, #123): how many trunk valleys its uplift is
+    /// lowered along, a lake's bowl on each; 0 lifts the dome of before, rivers running out on
+    /// every side.
+    #[arg(long)]
+    island_basins: Option<u32>,
+    /// The alluvium's grade on the island (#123): every sample at least this many metres over
+    /// the sea per metre of its way down to it, so a large river's lower course falls to its
+    /// mouth; 0 leaves the erosion's field (with `--island-basins 0`, the island of before).
+    #[arg(long)]
+    island_grade: Option<f64>,
     /// The island's rivers sized by D-041's regional curves with this exaggeration `k`: a river
     /// `k · 2.7 (A/km²)^0.37` m wide, `1.5 · 0.3 (A/km²)^0.21` m deep. 0 sizes them by the
     /// catchment's square root (5 m at a square kilometre), as before D-041.
@@ -183,6 +193,10 @@ struct Args {
     /// Let the island's steep rivers fall evenly, without their steps and pools (#122, D-041).
     #[arg(long)]
     no_steps: bool,
+    /// Size the island's small rivers as its large ones (`--river-k` from the smallest),
+    /// instead of brooks of nature's size easing to it by 3 km² of catchment (#123, D-041).
+    #[arg(long)]
+    no_brooks: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1795,6 +1809,8 @@ fn island_settings(args: &Args) -> (IslandParams, ErosionParams) {
     params.plain = args.island_plain.unwrap_or(params.plain);
     params.plain_uplift = args.island_plain_uplift.unwrap_or(params.plain_uplift);
     params.plain_wander = args.island_plain_wander.unwrap_or(params.plain_wander);
+    params.basins = args.island_basins.unwrap_or(params.basins);
+    params.grade = args.island_grade.unwrap_or(params.grade);
     if let Some(from) = &args.island_wind {
         params.wind = forge_procgen::Wind::from_compass(from, args.island_rain_contrast);
         if params.wind.is_none() {
@@ -3518,6 +3534,7 @@ fn main() -> Result<()> {
                 .filter(|_| args.river_k > 0.0)
                 .map(|(_, depth)| (args.river_k, depth)),
             steps: island.steps.filter(|_| !args.no_steps),
+            brooks: island.brooks.filter(|_| !args.no_brooks),
             ..island
         })
         .expect("the rivers' parameters, set once");

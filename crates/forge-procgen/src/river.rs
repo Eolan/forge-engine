@@ -7,6 +7,8 @@
 //! - The width is [`hydrology::width`] of the catchment; the depth `0.4 (A / km²)^⅜` m (the
 //!   downstream hydraulic geometry of Leopold & Maddock 1953, `w ∝ Q^0.5` and `d ∝ Q^0.4`, the
 //!   exponent taken as ⅜); the speed Chézy's `C √(d S)` over the water surface's slope `S`.
+//!   The island sizes them by D-041's regional curves instead ([`RibbonParams::regional`]),
+//!   the small ones brooks of nature's size ([`RibbonParams::brooks`], #123).
 //! - The water is level across. Its level at a point is the lowest the ground stands there, in
 //!   the middle and on either bank ([`smooth_height`]: the field's samples through a cubic),
 //!   less a freeboard; then the running minimum from the head, so it only falls, and a fall
@@ -169,6 +171,11 @@ pub struct RibbonParams {
     /// metres wide and `k_d · 0.3 (A/km²)^0.21` deep, the width growing downstream at nature's
     /// rate; `None` keeps [`hydrology::width`] and [`depth`].
     pub regional: Option<(f64, f64)>,
+    /// The brooks (D-041's scale, #123): under `to` m² of catchment the regional curves'
+    /// exaggeration eases down to nature's (`k = k_d = 1` at `from` m² and under), smoothly in
+    /// the area's logarithm, so the few large rivers read as rivers and the many small ones as
+    /// brooks; `None` exaggerates every river alike.
+    pub brooks: Option<(f64, f64)>,
     /// How far along each edge the corners where a tributary meets its river are rounded
     /// ([`Corner`], #119): `a + b ×` the tributary's width, metres.
     pub confluence: (f64, f64),
@@ -203,6 +210,7 @@ impl Default for RibbonParams {
             lake_area: 10_000.0,
             estuary: (1.5, 1.0),
             regional: None,
+            brooks: None,
             confluence: (2.0, 1.0),
             steps: None,
         }
@@ -211,11 +219,13 @@ impl Default for RibbonParams {
 
 impl RibbonParams {
     /// The island's rivers (D-041): the defaults, sized by the regional curves three times as
-    /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01),
-    /// in steps and pools on their steep reaches.
+    /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01)
+    /// from 3 km² of catchment, brooks of nature's size at 0.5 km² (#123), in steps and pools
+    /// on their steep reaches.
     pub fn island() -> Self {
         Self {
             regional: Some((3.0, 1.5)),
+            brooks: Some((500_000.0, 3_000_000.0)),
             steps: Some(StepParams::default()),
             ..Self::default()
         }
@@ -228,6 +238,14 @@ fn size(area_m2: f64, params: &RibbonParams) -> (f64, f64) {
     match params.regional {
         Some((k, k_d)) => {
             let km2 = (area_m2 * 1e-6).max(1e-6);
+            let (k, k_d) = match params.brooks {
+                Some((from, to)) => {
+                    let ln = forge_core::dmath::ln::<f64>;
+                    let full = smoothstep(ln(from), ln(to), ln(area_m2.max(1.0)));
+                    (1.0 + (k - 1.0) * full, 1.0 + (k_d - 1.0) * full)
+                }
+                None => (k, k_d),
+            };
             (
                 k * 2.7 * forge_core::dmath::powf(km2, 0.37),
                 k_d * 0.3 * forge_core::dmath::powf(km2, 0.21),
@@ -1754,6 +1772,34 @@ mod tests {
     use crate::flow::drain;
     use crate::hydrology::trace_rivers;
     use forge_task::{PoolConfig, TaskPool};
+
+    #[test]
+    fn the_small_rivers_are_brooks_of_natures_size_easing_to_the_islands_by_three_km2() {
+        use forge_core::dmath::powf;
+        let island = RibbonParams::island();
+        let alike = RibbonParams {
+            brooks: None,
+            ..island
+        };
+        // At half a square kilometre, nature's regional curves.
+        let (w, d) = size(500_000.0, &island);
+        assert!((w - 2.7 * powf(0.5, 0.37)).abs() < 1e-9, "{w} m wide");
+        assert!((d - 0.3 * powf(0.5, 0.21)).abs() < 1e-9, "{d} m deep");
+        // From three, the island's exaggeration whole.
+        assert_eq!(size(3e6, &island), size(3e6, &alike));
+        assert_eq!(size(2e7, &island), size(2e7, &alike));
+        // In between, wider downstream and never wider than the island's rivers.
+        let mut last = 0.0;
+        for i in 0..=20 {
+            let area = 5e5 * powf(6.0, f64::from(i) / 20.0);
+            let (w, _) = size(area, &island);
+            assert!(
+                w > last && w <= size(area, &alike).0 + 1e-9,
+                "{w} m at {area} m²"
+            );
+            last = w;
+        }
+    }
 
     fn length(points: &[RibbonPoint]) -> f32 {
         points

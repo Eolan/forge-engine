@@ -317,7 +317,11 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    and pools, a boulder or two on most lips, the falls white (#122, `--no-steps`). D-041's far
    water in the terrain's material was checked first and left out: the ribbons already draw the
    water at every distance, never under a coarser level of the ground, for little cost (#122).
-   Next: the owner's judgement of the rivers; D-041's fewer, larger rivers if still wanted.
+   D-041's scale: the uplift lowered along three trunk valleys, so the island drains through
+   basins of 23, 18 and 12 km² where the dome's largest were 11, 11 and 9, with a lake's bowl on
+   each trunk, the lower courses graded to the sea, and the rivers under 3 km² brooks of
+   nature's size (#123, `--island-basins 0 --island-grade 0 --no-brooks` for the island before).
+   Next: the owner's judgement of the rivers and of the new island.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

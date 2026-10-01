@@ -81,6 +81,27 @@ struct Args {
     /// How far the plain's width wanders along the coast (0 the same all round).
     #[arg(long)]
     plain_wander: Option<f64>,
+    /// The large basins (D-041, #123): how many trunk valleys the uplift is lowered along; 0
+    /// lifts a dome.
+    #[arg(long)]
+    basins: Option<u32>,
+    /// How much of the uplift the trunks' lines lose.
+    #[arg(long)]
+    basin_depth: Option<f64>,
+    /// How far the trunks' lines turn, radians at most.
+    #[arg(long)]
+    basin_turn: Option<f64>,
+    /// The lakes placed on purpose: the share of the uplift a bowl on each trunk loses at its
+    /// centre (0 places none).
+    #[arg(long)]
+    basin_lakes: Option<f64>,
+    /// The bowls' radius, metres.
+    #[arg(long)]
+    basin_lake_radius: Option<f64>,
+    /// The alluvium's grade (#123): every land sample at least this many metres over the sea
+    /// per metre of its way down to it (0: none).
+    #[arg(long)]
+    grade: Option<f64>,
 }
 
 /// The wind that blows from `from` (a compass point, north up in the previews).
@@ -99,6 +120,12 @@ fn main() -> Result<()> {
     params.plain = args.plain.unwrap_or(params.plain);
     params.plain_uplift = args.plain_uplift.unwrap_or(params.plain_uplift);
     params.plain_wander = args.plain_wander.unwrap_or(params.plain_wander);
+    params.basins = args.basins.unwrap_or(params.basins);
+    params.basin_depth = args.basin_depth.unwrap_or(params.basin_depth);
+    params.basin_turn = args.basin_turn.unwrap_or(params.basin_turn);
+    params.basin_lakes = args.basin_lakes.unwrap_or(params.basin_lakes);
+    params.basin_lake_radius = args.basin_lake_radius.unwrap_or(params.basin_lake_radius);
+    params.grade = args.grade.unwrap_or(params.grade);
     if let Some(from) = &args.wind_from {
         params.wind = Some(wind_from(from, args.rain_contrast)?);
     }
@@ -221,6 +248,26 @@ fn main() -> Result<()> {
     } else {
         flow
     };
+    // The alluvium's grade (#123), as `generate_island` applies it.
+    let flow = if params.grade > 0.0 {
+        let raised = forge_procgen::flow::grade_to_the_sea(
+            &mut height,
+            &flow,
+            erosion_params.sea_level,
+            params.grade,
+        );
+        println!(
+            "the alluvium's grade: {raised} samples raised to {} % of their way to the sea",
+            100.0 * params.grade
+        );
+        if raised > 0 {
+            forge_procgen::drain(&height, erosion_params.sea_level, &pool)
+        } else {
+            flow
+        }
+    } else {
+        flow
+    };
     if let Some(wind) = params.wind {
         // Windward and lee halves of the land, split across the wind through the centre.
         let (dx, dy) = forge_procgen::island::WIND_STEPS[usize::from(wind.towards) % 8];
@@ -300,6 +347,43 @@ fn main() -> Result<()> {
         ponds.largest_area(params.spacing) / 10_000.0,
         ponds.deepest()
     );
+    // The basins at the sea, largest first (D-041's scale: a few of 20–50 km²).
+    let cell_km2 = params.spacing * params.spacing * 1e-6;
+    let mut basins: Vec<f64> = network
+        .rivers
+        .iter()
+        .filter(|r| matches!(r.mouth, forge_procgen::Mouth::Outlet(_)))
+        .filter_map(|r| r.area.last().map(|&a| f64::from(a) * cell_km2))
+        .collect();
+    basins.sort_by(|a, b| b.total_cmp(a));
+    let over = |km2: f64| {
+        network
+            .rivers
+            .iter()
+            .filter(|r| {
+                r.area
+                    .last()
+                    .is_some_and(|&a| f64::from(a) * cell_km2 > km2)
+            })
+            .count()
+    };
+    let low = height
+        .data
+        .iter()
+        .filter(|&&h| h > erosion_params.sea_level && h < erosion_params.sea_level + 2.5)
+        .count();
+    println!("  the land under 2.5 m: {:.1} km²", low as f64 * cell_km2);
+    println!(
+        "  the basins at the sea, largest first: {} km²; rivers over 3 km² at their mouths: {}, over 5 km²: {}",
+        basins
+            .iter()
+            .take(8)
+            .map(|a| format!("{a:.1}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        over(3.0),
+        over(5.0)
+    );
 
     // Stage 5 for the water: the coast distance, and the sea's spectrum as a tile.
     let start = Instant::now();
@@ -343,6 +427,13 @@ fn main() -> Result<()> {
         river_cells,
         Some(&lake_depth),
         &args.out.join("overview.png"),
+    )?;
+    preview::write_basins(
+        &height,
+        &flow,
+        erosion_params.sea_level,
+        river_cells,
+        &args.out.join("basins.png"),
     )?;
     let (lo, hi) = height.min_max();
     println!(
