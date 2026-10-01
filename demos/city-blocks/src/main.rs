@@ -195,10 +195,13 @@ struct Args {
     /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
     #[arg(long, default_value_t = ProbeParams::default().cascades)]
     probe_cascades: u32,
-    /// The island's sea on the GPU (issue #105, in progress): its FFT cascades. Off until
-    /// the surface drawn from them replaces the stand-in sea.
+    /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
+    /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
-    water: bool,
+    no_water: bool,
+    /// The island's water, drawn by default since 2026-10-01: kept so older commands run.
+    #[arg(long = "water", hide = true, conflicts_with = "no_water")]
+    legacy_water: bool,
     /// Holds the waves still at this many seconds (the shimmer's measure: what changes
     /// between frames of a still camera is then the aliasing alone).
     #[arg(long)]
@@ -239,6 +242,14 @@ struct Args {
     /// Window height in pixels.
     #[arg(long, default_value_t = 900)]
     height: u32,
+}
+
+impl Args {
+    /// Whether the island draws its water: its sea, rivers and lakes (unless `--no-water`;
+    /// `--water`, the old opt-in, asks for the default).
+    fn water(&self) -> bool {
+        self.legacy_water || !self.no_water
+    }
 }
 
 /// Where a prop stands in the gallery: its name, the centre and radius of its bounds.
@@ -449,7 +460,7 @@ impl Gallery {
         };
         // The island's sea (issue #105): three cascades of FFT waves on the async compute
         // queue, their spectra from the CPU's.
-        let water = if args.island.is_some() && args.water {
+        let water = if args.island.is_some() && args.water() {
             let seed = forge_core::Seed::new(args.island.unwrap_or(7)).derive(0x5EA);
             let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
             let descs: Vec<WaterCascadeDesc> = oceans
@@ -1690,10 +1701,11 @@ mod island_layer {
     pub const DRY_GRASS: u8 = 5;
     /// Grass on the wettest ground: the valley bottoms.
     pub const LUSH_GRASS: u8 = 6;
-    /// A river's bed of gravel and silt, in its channel under the water (`--water`,
+    /// A river's bed of gravel and silt, in its channel under the water (unless `--no-water`,
     /// `forge_procgen::paint_beds`).
     pub const RIVERBED: u8 = 7;
-    /// A lake's bed of dark mud, under its water (`--water`, `forge_procgen::paint_lake_beds`).
+    /// A lake's bed of dark mud, under its water (unless `--no-water`,
+    /// `forge_procgen::paint_lake_beds`).
     pub const LAKEBED: u8 = 8;
     /// How many layers there are.
     pub const COUNT: u8 = 9;
@@ -2362,7 +2374,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         channels,
         lakes: lake_waters,
     } = island_water(&height);
-    let painted = if args.water {
+    let painted = if args.water() {
         forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::RIVERBED, 0.0)
     } else {
         forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::STREAM, 0.5)
@@ -2370,7 +2382,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     // And its lakes of a hectare or more: with the water, their beds of silt wherever the
     // lakes' planes stand over the ground; without it, on the stream's layer.
     let lakes = island_lakes(&height, &flow);
-    let lake_texels = if args.water {
+    let lake_texels = if args.water() {
         forge_procgen::paint_lake_beds(
             &mut layers,
             &height,
@@ -2411,7 +2423,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     builder.set_origin(layout.origin);
     builder.add_instance(ids[0], Mat4::IDENTITY);
     // The stand-in sea, unless the water surface draws the sea (issue #105).
-    if !args.water {
+    if !args.water() {
         builder.add_instance(ids[1], Mat4::IDENTITY);
     }
     // The stones in the rivers (#105): the boulders, scaled to each stone, standing on the bed.

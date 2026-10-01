@@ -391,8 +391,10 @@ default frames show no line.
 ## The sea on the GPU (issue #105, 2026-09-30)
 
 D-038 was accepted on 2026-09-30. Its first step puts the sea's waves on the GPU:
-`forge_render::water` and `shaders/water.slang`. With `--water` the island draws its sea from
-them ("The surface" below); without it, the stand-in.
+`forge_render::water` and `shaders/water.slang`. The island draws its sea from them ("The
+surface" below), its rivers and its lakes: by default since 2026-10-01, the owner's call after
+the night's review (`--water` was the opt-in before; it is still accepted). `--no-water` draws
+the stand-in sea, and the rivers and lakes painted into the ground's layers.
 
 - **Three cascades** of 256² samples (`OceanParams::cascades`): patches of 1 024, 128 and 16 m.
   - Each holds the waves the one before is too coarse for. The bands meet at 32 m and 4 m
@@ -415,7 +417,7 @@ them ("The surface" below); without it, the stand-in.
   difference is under 10⁻³ of its largest value, the half floats' precision. On the 5070 Ti the
   largest is 2.9 × 10⁻⁶ (the 1 024 m cascade's height: 1.8 µm of 2.94 m).
 - **The cost:** 0.07 ms of the frame at 1600 × 900 and 0.15 ms at 1440p (`docs/PROFILE.md`),
-  and 13 MiB with the mips. They run with `--water` only.
+  and 13 MiB with the mips. They run with the water only (not with `--no-water`).
 - **Checks:** the batch is unchanged, and `tools/validate.sh` is clean, synchronization
   included.
 
@@ -454,8 +456,8 @@ them ("The surface" below); without it, the stand-in.
 ![The coast view and the view from the sea: the stand-in on the left, the water on the right](../../reports/2026-09-30-105/sheet.png)
 
 - **What it lacked:** the island's reflection (step 3, below), the sun's shadow on the water
-  (step 4, below), and the shore's waves and foam line. That is why `--water` stays opt-in
-  until the owner has judged it (`reports/2026-09-30-105/`).
+  (step 4, below), and the shore's waves and foam line. That is why `--water` stayed opt-in
+  until the owner had judged it (`reports/2026-09-30-105/`; the default since 2026-10-01).
 - **Stability** (still camera, waves still, TAA on): pixels changing from one frame to the
   next, 0.43 % at the coast (the stand-in 0.37 %) and 0.57 % from the sea (0.34 %). Over 32
   frames at the same jitter phase, 0.0016 % and 0.0003 %: nothing crawls.
@@ -655,8 +657,8 @@ Its third part: the wet sand.
     ribbon's depth (absorption 1.4, 0.4, 0.5 m⁻¹: fresh water with a little tannin and silt);
   - white water in riffles about 30 m apart, where the bed falls more than 6 % and the stream
     runs fast.
-- **The ground:** with `--water` the rivers are no longer painted into the layer map. The lakes
-  still are, until the lakes' step.
+- **The ground:** with the water the rivers are no longer painted into the layer map (they are
+  with `--no-water`). The lakes still were, until the lakes' step.
 
 ![A stream on the eastern plain from 16 m up: painted into the ground's layers before (left), a ribbon of water now (right)](../../reports/2026-09-30-105/rivers-stream.png)
 
@@ -792,7 +794,7 @@ water in a carved channel:
   the bed), clippy, fmt.
 
 **The lakes** (step 7, D-038's lakes, 2026-10-01). The 15 lakes of a hectare or more were painted
-into the layer map; with `--water` each is now water of its own, a level plane, and the rivers
+into the layer map; with the water each is now water of its own, a level plane, and the rivers
 through it take its level:
 - **The plane and its mask** (`forge_procgen::lake_waters`): the priority flood's depression at
   the lake's level (from the lake's samples, every neighbour where the flood stands at that level:

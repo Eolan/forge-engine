@@ -285,17 +285,18 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    queue and a forward surface pass first, then the shore from the coast distance, the rivers
    from stage 4's polylines, the lakes at their level). Started on the CPU the same night: the
    coast distance and the sea's spectrum with its inverse FFT (`forge_procgen::ocean`). On the
-   GPU since D-038's acceptance (#105, `city-blocks --island 7 --water`, opt-in until the owner
-   has judged it): the three FFT cascades on the async compute queue, the clipmap surface, the
-   island in the water through traced mirror rays, and its shadow on the water through traced
-   shadow rays, and the shore: the waves damped by the floor's depth, trains that shoal, break
+   GPU since D-038's acceptance (#105, `city-blocks --island 7`, the default since the owner
+   judged it on 2026-10-01; `--no-water` for the stand-in): the three FFT cascades on the async
+   compute queue, the clipmap surface, the island in the water through traced mirror rays, and
+   its shadow on the water through traced shadow rays, and the shore: the waves damped by the
+   floor's depth, trains that shoal, break
    and run up the beach, their foam, and the wet sand; then the rivers, ribbons from stage 4's
    courses with flow-mapped ripples, since the owner's look (2026-10-01) level water in channels
    carved into the island's mesh on cells of a metre, over beds of gravel, out into the sea in a
    plume at their mouths, around stones that break the water (`docs/demos/island.md`, "The sea
    on the GPU"); and the lakes, a level plane each over its flooded depression, its shore on cells
    of a metre, its water the rivers' (still but where a river runs in). D-038's build order is
-   done; next, the owner's judgement of `--water`, then the afterwards of `docs/research/water.md`
+   done and the water is the island's default; next, the afterwards of `docs/research/water.md`
    (the underwater view, #108; caustics; objects in the water and their wakes, #107).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
