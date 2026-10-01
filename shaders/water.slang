@@ -335,7 +335,8 @@ struct WaterSurface
 struct SurfacePush
 {
     WaterSurface* surface;
-    uint2 pad;
+    uint first;  // the rivers: the first vertex of the run of segments drawn
+    uint pad;
 };
 
 [[vk::push_constant]]
@@ -899,9 +900,10 @@ float ground_height(WaterSurface* w, float2 world)
 }
 
 [shader("vertex")]
-RiverOut river_vert_main(uint id : SV_VertexID)
+RiverOut river_vert_main(uint vertex : SV_VertexID)
 {
     WaterSurface* w = surface_push.surface;
+    uint id = vertex + surface_push.first;
     uint segment = id / (RIVER_ACROSS * 6u);
     uint rest = id % (RIVER_ACROSS * 6u);
     // x across the ribbon, y along it.

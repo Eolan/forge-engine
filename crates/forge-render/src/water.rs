@@ -721,7 +721,83 @@ pub struct WaterShore<'a> {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SurfacePush {
     surface: u64,
-    pad: [u32; 2],
+    /// The rivers: the first vertex of the run of segments drawn (the vertex index's offset).
+    first: u32,
+    pad: u32,
+}
+
+/// Segments of the rivers in a run the frame draws or skips together.
+const RIVER_CHUNK: u32 = 64;
+
+/// Metres the box of a run of segments grows by: far away a ribbon widens to a pixel's footprint
+/// either side and rises by one and a half of it, which over the island's 16 km stays under this.
+const RIVER_CHUNK_MARGIN: f32 = 25.0;
+
+/// A run of the rivers' segments and the box it can be drawn in (the sea's frame).
+#[derive(Clone, Copy, Debug)]
+struct RiverChunk {
+    first: u32,
+    count: u32,
+    lo: Vec3,
+    hi: Vec3,
+}
+
+/// The runs of [`RIVER_CHUNK`] segments of `rivers` (one after the other as uploaded), each
+/// with its box: the points' positions out to their reach, their level and the ground they rest
+/// on far away, and [`RIVER_CHUNK_MARGIN`] more.
+fn river_chunks(rivers: &[Vec<WaterRiverPoint>]) -> Vec<RiverChunk> {
+    let points: Vec<&WaterRiverPoint> = rivers.iter().flatten().collect();
+    let segments = points.len().saturating_sub(1) as u32;
+    (0..segments.div_ceil(RIVER_CHUNK))
+        .map(|c| {
+            let first = c * RIVER_CHUNK;
+            let count = RIVER_CHUNK.min(segments - first);
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for p in &points[first as usize..=(first + count) as usize] {
+                let ground = p.ground.iter().copied();
+                let low = ground.clone().fold(p.level, f32::min);
+                let high = ground.fold(p.level, f32::max);
+                lo = lo.min(Vec3::new(
+                    p.position[0] - p.reach,
+                    low,
+                    p.position[1] - p.reach,
+                ));
+                hi = hi.max(Vec3::new(
+                    p.position[0] + p.reach,
+                    high,
+                    p.position[1] + p.reach,
+                ));
+            }
+            RiverChunk {
+                first,
+                count,
+                lo: lo - RIVER_CHUNK_MARGIN,
+                hi: hi + RIVER_CHUNK_MARGIN,
+            }
+        })
+        .collect()
+}
+
+/// Whether a box (camera-relative) can show through `view_proj` (reversed Z, an infinite far
+/// plane): it is not wholly outside one of the left, right, bottom, top and near planes.
+fn box_in_view(view_proj: &Mat4, lo: Vec3, hi: Vec3) -> bool {
+    let rows = [0, 1, 2, 3].map(|i| view_proj.row(i));
+    let planes = [
+        rows[3] + rows[0],
+        rows[3] - rows[0],
+        rows[3] + rows[1],
+        rows[3] - rows[1],
+        rows[3] - rows[2],
+    ];
+    planes.iter().all(|p| {
+        // The box's corner furthest along the plane's normal.
+        let far = Vec3::new(
+            if p.x > 0.0 { hi.x } else { lo.x },
+            if p.y > 0.0 { hi.y } else { lo.y },
+            if p.z > 0.0 { hi.z } else { lo.z },
+        );
+        p.x * far.x + p.y * far.y + p.z * far.z + p.w >= 0.0
+    })
 }
 
 #[repr(C)]
@@ -793,6 +869,9 @@ struct ShoreFields {
     /// precision, which the ribbons lie on (none without rivers).
     rivers: Option<(Buffer, Buffer)>,
     river_points: u32,
+    /// The rivers' segments in runs of [`RIVER_CHUNK`], each with the box it can be drawn in, so
+    /// a frame draws only those in view.
+    river_chunks: Vec<RiverChunk>,
     /// The rivers' mouths at the sea, and the grid of those reaching each cell (none without).
     mouths: Option<(Buffer, Buffer)>,
     mouth_count: u32,
@@ -1113,6 +1192,7 @@ impl WaterSurface {
                     ground,
                     rivers,
                     river_points: points.len() as u32,
+                    river_chunks: river_chunks(s.rivers),
                     mouths: mouth_buffers,
                     mouth_cell: extent / MOUTH_CELLS as f32,
                     mouth_count: mouths.len() as u32,
@@ -1285,6 +1365,21 @@ impl WaterSurface {
         let rivers = shore.and_then(|s| s.rivers.as_ref());
         let lake_count = shore.map_or(0, |s| s.lake_count);
         let river_points = shore.map_or(0, |s| s.river_points);
+        // The runs of the rivers' segments in view (first segment, segments), the neighbours
+        // merged into one draw.
+        let mut river_runs: Vec<(u32, u32)> = Vec::new();
+        if let Some(s) = shore {
+            let camera = params.camera.as_vec3();
+            for chunk in &s.river_chunks {
+                if !box_in_view(&params.view_proj, chunk.lo - camera, chunk.hi - camera) {
+                    continue;
+                }
+                match river_runs.last_mut() {
+                    Some((first, count)) if *first + *count == chunk.first => *count += chunk.count,
+                    _ => river_runs.push((chunk.first, chunk.count)),
+                }
+            }
+        }
         let shore_image = shore.map(|s| graph.import(&s.image));
         let mut pass = graph
             .pass("water/surface")
@@ -1408,7 +1503,8 @@ impl WaterSurface {
                 surface,
                 &SurfacePush {
                     surface: address,
-                    pad: [0; 2],
+                    first: 0,
+                    pad: 0,
                 },
             );
             commands.draw(LEVELS * GRID * GRID * 6, 1);
@@ -1420,21 +1516,25 @@ impl WaterSurface {
                     lake_pipeline,
                     &SurfacePush {
                         surface: address,
-                        pad: [0; 2],
+                        first: 0,
+                        pad: 0,
                     },
                 );
                 commands.draw(lake_count * 6, 1);
             }
-            if river_points > 1 {
+            if !river_runs.is_empty() {
                 commands.bind_pipeline(river_pipeline);
-                commands.push_constants(
-                    river_pipeline,
-                    &SurfacePush {
-                        surface: address,
-                        pad: [0; 2],
-                    },
-                );
-                commands.draw((river_points - 1) * RIVER_ACROSS * 6, 1);
+                for &(first, count) in &river_runs {
+                    commands.push_constants(
+                        river_pipeline,
+                        &SurfacePush {
+                            surface: address,
+                            first: first * RIVER_ACROSS * 6,
+                            pad: 0,
+                        },
+                    );
+                    commands.draw(count * RIVER_ACROSS * 6, 1);
+                }
             }
             commands.end_rendering();
             Ok(())

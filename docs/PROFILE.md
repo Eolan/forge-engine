@@ -435,7 +435,10 @@ alternating, against the wet sand's commit (the waves held at 12 s):
 
 - **The vertices** cost about 0.017 ms wherever the camera is: every ribbon is drawn every
   frame, and the clipper throws away what is off screen. The lever: a draw per river, or per
-  stretch of 64 points, culled by its bounds.
+  stretch of 64 points, culled by its bounds. (Done 2026-10-01: runs of 64 segments culled
+  against the frustum on the CPU, neighbours merged into one draw: `water/surface` 0.080 →
+  0.070 ms for the stream from 16 m, 0.099 → 0.090 down a river, 0.094 → 0.086 over a lake;
+  unchanged where the whole island is in view; the images the same to the pixel.)
 - **The rays** grow with the river's pixels, as the sea's do: 0.03 ms for the stream seen from
   16 m.
 
