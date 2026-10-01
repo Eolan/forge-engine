@@ -583,6 +583,23 @@ runs each, alternating, 1600 × 900.
 - **Stability** (still camera, TAA on): the same on every view but up the steep river, 0.41 →
   0.66 % from one frame to the next (more rippling water); after 32 frames under 0.001 %.
 
+**The rivers' valleys** (#116, 2026-10-01): the same build with `--no-valleys` against the
+default; three rounds of every view without then with (a cook per switch), 1600 × 900.
+
+| View | frame | `water/reflections` | `water/surface` | `shading/layered` |
+|---|---|---|---|---|
+| coast (the first view) | 1.668 → 1.657 ms | 0.138 → 0.131 | 0.118 → 0.120 | 0.334 → 0.333 |
+| the island from 2.5 km | 2.176 → 2.174 ms | 0.082 → 0.084 | 0.162 → 0.160 | 0.326 → 0.326 |
+| a river on the plain from 40 m | 1.694 → 1.693 ms | 0.029 → 0.030 | 0.030 → 0.031 | 0.635 → 0.633 |
+| down a lowland river from 3 m | 1.468 → 1.438 ms | 0.077 → 0.061 | 0.049 → 0.044 | 0.324 → 0.319 |
+| up a steep river from 2 m | 2.022 → 1.971 ms | 0.296 → 0.224 | 0.072 → 0.061 | 0.568 → 0.604 |
+| a lake entry from 50 m | 1.803 → 1.790 ms | 0.224 → 0.215 | 0.110 → 0.109 | 0.469 → 0.469 |
+| the logged slot from 3 m (`-3083,48.3,-376,123.7,-10`) | 1.916 → 1.959 ms | 0.252 → 0.262 | 0.060 → 0.060 | 0.538 → 0.570 |
+
+- The views move with what is on screen: up the steep river, less water and more of its
+  floor's ground; in the slot, the walls' foot.
+- At start the carve takes 0.57 s, and the island's cook 30.3 → 30.9 s.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

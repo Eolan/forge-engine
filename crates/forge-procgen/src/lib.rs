@@ -26,6 +26,8 @@
 //! - [`river`]: the rivers' water: each river's course smoothed into a ribbon of points with
 //!   its width, depth, speed and a level that only falls, for the GPU.
 //! - [`channel`]: the rivers' channels carved under that water, on cells drawn finer.
+//! - [`valley`]: the rivers' valleys carved into the field: a floor for the water, a bench or a
+//!   floodplain on the gentler reaches, the walls' foot lowered to meet it.
 //! - [`lake`]: the lakes' water, a level plane each and the mask of the samples it covers.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
@@ -51,6 +53,7 @@ pub mod ocean;
 pub mod preview;
 pub mod river;
 pub mod shore;
+pub mod valley;
 
 pub use amplify::{AmplifyParams, amplify};
 pub use channel::{ChannelParams, Channels, Stone, paint_banks, paint_beds, stones};
@@ -75,3 +78,4 @@ pub use river::{
     Ribbon, RibbonParams, RibbonPoint, drawn_height, rest_on, ribbons, sea_mouth, smooth_height,
 };
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};
+pub use valley::{ValleyParams, ValleyStats, carve_valleys};

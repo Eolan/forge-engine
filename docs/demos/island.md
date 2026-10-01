@@ -1079,3 +1079,63 @@ profile's four river views at frame 300, and `k3-mouth.png`, the batch's island 
 
 The batch changes the island's two views only (ꟻLIP mean 0.0045 `island60`, 0.0057 `water60`).
 The cost is in `docs/PROFILE.md`: +0.09 ms up the steep river, under 0.02 ms elsewhere.
+
+**The rivers' valleys** (#116, D-041, 2026-10-01; `forge_procgen::carve_valleys`, `ValleyParams`,
+`city-blocks --no-valleys` for the field as eroded). The erosion leaves the hill rivers in V
+valleys whose floor is one 8 m cell. With the wider rivers of `k` = 3, the channels' carve cut
+trenches into those walls: 602 points of water more than 2 m under its lower bank. Now the
+valleys are carved into the 8 m field itself, before the rivers are traced for their water, so
+every level of detail draws them:
+- **Reach types.** Each point is typed by the water's fall over 40 m either way:
+  - over 4 %, room for the water only (its half width plus 2 m);
+  - 2–4 %, a bench one and a half widths past the water;
+  - under 2 %, a floodplain three widths either side (12–64 m);
+  - smoothly between them.
+- **Deep valleys keep their walls.** Each side's floor stops where the ground stands 6 m over it.
+  The floor's width changes by half a metre a metre at most along the course, and its edge
+  wanders by a third over 96 m.
+- **The floor** stands 0.3 m plus half the depth over the water, falling 2 % towards it.
+- **The walls.** Past the floor a wall rises, steepening over 6 m to 0.15 plus 1.3 times the
+  ground's slope beyond it, until it meets the ground (a smooth minimum over a metre). The wall's
+  foot moves out and down rather than being cut, and the wall is never steeper than that.
+- **Protections.** Nothing is raised, and nothing under a lake is carved. Within reach of a lake
+  nothing goes under its level plus 0.5 m (the lakes are dams in narrow valleys). The carve fades
+  out from 4 m of water level down to 1.5 m, so the mouths keep their beaches.
+
+The rivers, the lakes and the ribbons are then traced again over the carved field (the field is
+now made once a process, the sea, the camera, the layers and the cook all asking for it).
+
+Seed 7:
+- **Points by type:** 9 600 points get a floodplain (most of them on the coastal plain), 1 470 a
+  bench and 6 578 room only; 967 are in lakes.
+- **Earthworks:** 63 574 samples are lowered, by 7.9 m at most, and the lakes' guard keeps 2 449
+  higher.
+- **The gentler hill reaches** (water over 20 m) ask for a floor 22.4 m out on average and get
+  21.4 m. Their valleys were already open: the ground at the floor's edge stood 4.4 m over it at
+  most.
+- **The steep hill reaches** (5 979 points over 4 %) keep D-041's V valleys with room for their
+  water. So does the logged slot: its reach falls 14 % (5–23 %), and what darkens it is the
+  sun's shadow in a narrow valley.
+- **Lakes and mouths:** 11 lakes, 19 mouths and their falls are unchanged.
+- **The water under its banks:** 602 → 125 points more than 2 m under the lower bank, the most
+  4.6 → 4.3 m.
+- **Start-up:** the carve takes 0.57 s at start (the island's cook 30.3 → 30.9 s).
+
+`reports/2026-10-01-116/` holds before (left, `--no-valleys`) and now (right) at frame 60:
+- `valleys-hills.png`: the logged slot from 3 m and 40 m, and a bench in the highlands at 284 m
+  (`--view -613,287,2510,144,-10`, and from 40 m);
+- `valleys-lowland.png`: down the lowland river from 3 m and 40 m, and up the steep river.
+
+ꟻLIP means:
+
+| View | ꟻLIP mean |
+|---|---|
+| slot, 3 m | 0.088 |
+| slot, 40 m | 0.071 |
+| bench, 3 m | 0.122 |
+| bench, 40 m | 0.118 |
+| lowland, 3 m | 0.096 |
+| lowland, 40 m | 0.043 |
+| up the steep river | 0.102 |
+
+The batch changes the island's two views only (`island60` 0.0040, `water60` 0.0052).

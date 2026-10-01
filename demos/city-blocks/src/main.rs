@@ -163,6 +163,10 @@ struct Args {
     /// catchment's square root (5 m at a square kilometre), as before D-041.
     #[arg(long, default_value_t = forge_procgen::RibbonParams::island().regional.map_or(0.0, |(k, _)| k))]
     river_k: f64,
+    /// Leave the island's rivers in the valleys the erosion cut: no floor for their water, no
+    /// bench or floodplain (#116, D-041).
+    #[arg(long)]
+    no_valleys: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1755,9 +1759,36 @@ fn island_settings(args: &Args) -> (IslandParams, ErosionParams) {
     (params, erosion)
 }
 
+/// How the island's rivers' valleys are carved (`--no-valleys`: not at all).
+fn valley_params(args: &Args) -> Option<forge_procgen::ValleyParams> {
+    (!args.no_valleys).then(forge_procgen::ValleyParams::default)
+}
+
 /// The island's heightfield, generated once and kept in `mesh-cache/` beside the cooked
-/// meshes (`forge_procgen::cached_island`).
+/// meshes (`forge_procgen::cached_island`), then shaped for the sea and the rivers; made once a
+/// process (the sea, the camera, the layers and the cook all ask for it).
 fn island_heights(args: &Args) -> Field2<f32> {
+    static MADE: std::sync::Mutex<Option<(String, Field2<f32>)>> = std::sync::Mutex::new(None);
+    let (params, erosion) = island_settings(args);
+    let key = format!(
+        "{} {:?} {:?}",
+        forge_procgen::island::island_key(&params, &erosion),
+        valley_params(args),
+        ribbon_params()
+    );
+    let mut made = MADE.lock().expect("the island's heights");
+    if let Some((made_for, height)) = made.as_ref()
+        && *made_for == key
+    {
+        return height.clone();
+    }
+    let height = make_island_heights(args);
+    *made = Some((key, height.clone()));
+    height
+}
+
+/// [`island_heights`], made.
+fn make_island_heights(args: &Args) -> Field2<f32> {
     let (params, erosion) = island_settings(args);
     let dir = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("mesh-cache");
     let start = Instant::now();
@@ -1773,6 +1804,26 @@ fn island_heights(args: &Args) -> Field2<f32> {
     // The ground within a few metres of the sea's level smoothed, so the coast runs smooth
     // instead of stepping with the samples (#106).
     forge_procgen::smooth_shore(&mut height, 0.0, SHORE_SMOOTHING.0, SHORE_SMOOTHING.1);
+    // The rivers' valleys (#116, D-041): a floor for each river's water and, on its gentler
+    // reaches, a bench or a floodplain, from the rivers traced over the field so far. The
+    // rivers are traced again over the carved field (`island_water`).
+    if let Some(valleys) = valley_params(args) {
+        let carve = Instant::now();
+        let flow = forge_procgen::drain(&height, 0.0, &pool);
+        let rivers = island_rivers(&height, &flow);
+        let lakes = island_lakes(&height, &flow);
+        let ribbons = forge_procgen::ribbons(&height, &rivers, &lakes, &ribbon_params());
+        let s = forge_procgen::carve_valleys(&mut height, &ribbons, &lakes, &valleys, &pool);
+        tracing::info!(
+            points = %format_args!("{} floodplain, {} bench, {} room, {} in lakes", s.floodplain, s.bench, s.room, s.in_lake),
+            floor_m = %format_args!("{:.1} of {:.1} asked", s.mean_floor.0, s.mean_floor.1),
+            lowered = s.lowered,
+            deepest_cut_m = %format_args!("{:.1}", s.deepest_cut),
+            guarded = s.guarded,
+            ms = carve.elapsed().as_millis(),
+            "the rivers' valleys carved"
+        );
+    }
     let (lo, hi) = height.min_max();
     tracing::info!(
         seed = args.island.unwrap_or(7),
@@ -2296,7 +2347,7 @@ fn island_prop(args: &Args) -> PropSpec {
         name: "island".to_owned(),
         kind: PropKind::Heightfield(Heightfield {
             key: format!(
-                "{}, smoothed {} passes, sea floor {} m over {} m, shore smoothed {:?}, rivers {:?} carved {:?}",
+                "{}, smoothed {} passes, sea floor {} m over {} m, shore smoothed {:?}, rivers {:?} carved {:?} in valleys {:?}",
                 forge_procgen::island::island_key(&params, &erosion),
                 GROUND_SMOOTHING,
                 SEA_FLOOR.0,
@@ -2304,6 +2355,7 @@ fn island_prop(args: &Args) -> PropSpec {
                 SHORE_SMOOTHING,
                 ribbon_params(),
                 forge_procgen::ChannelParams::default(),
+                valley_params(args),
             ),
             samples: params.size,
             spacing: params.spacing as f32,

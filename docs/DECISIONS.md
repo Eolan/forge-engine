@@ -1556,4 +1556,6 @@ engines' way (a feature carves and paints the ground around it, the terrain conf
 to the generated island; each part is an issue of its own. The width's `k` is 3, not 2: with
 the coastal plain, `k = 2` narrowed the largest rivers (34 → 27 m), and the owner picked 3
 from the comparison (`reports/2026-10-01-112/river-size.png`; "use k = 3 and keep the plain as
-default", 2026-10-01).
+default", 2026-10-01). The floors (#116, `forge_procgen::carve_valleys`) stop where the ground
+stands 6 m over them, so a deep V keeps its walls with room for its water, and the walls rise
+no steeper than a little more than the ground beyond them, in place of a shape per setting.
