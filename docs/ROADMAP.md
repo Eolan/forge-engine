@@ -304,8 +304,10 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    work. Done: a coastal plain in the uplift (the rivers reach the sea at 1–5 % where they fell
    at 9–24 %, 19 mouths for 25, rivers up to 17 m); the water up a steep valley seen from low
    (#113); the beds drawn by the water per pixel, banks by the bend and channels shoaling into
-   lakes (#114); a riparian strip of reeds and shrubs along the banks. Next: #110 (the mouths'
-   seam), the floodplains, and the far water in the terrain's material.
+   lakes (#114); a riparian strip of reeds and shrubs along the banks; estuaries at the mouths,
+   with which #110's seam is gone; the boulders kept off the plain (#117). Next: #115 (a
+   tributary's edge at a confluence), #116 (benches and floodplains in the hills' gentler
+   reaches), and the far water in the terrain's material.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

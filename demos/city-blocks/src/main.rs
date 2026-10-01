@@ -2024,6 +2024,28 @@ fn island_ribbons(
         width_and_fall = %fall_list,
         "the rivers' last 160 m to the sea"
     );
+    // The rivers' reaches by D-041's types (their water's slope): steps and pools in a V valley
+    // over 4 %, rapids on a bench from 2 to 4 %, a floodplain under 2 %; in the hills (over
+    // 20 m) and on the plain.
+    let reaches = |hills: bool| {
+        let mut count = [0_usize; 3];
+        for p in ribbons
+            .iter()
+            .flat_map(|r| &r.points)
+            .filter(|p| p.fade > 0.5 && (p.level > 20.0) == hills)
+        {
+            count[usize::from(p.slope <= 0.04) + usize::from(p.slope < 0.02)] += 1;
+        }
+        format!(
+            "{} V, {} bench, {} floodplain",
+            count[0], count[1], count[2]
+        )
+    };
+    tracing::info!(
+        hills = %reaches(true),
+        plain = %reaches(false),
+        "the rivers' reaches (points over 4 %, 2-4 %, under 2 %)"
+    );
     tracing::info!(
         rivers = ribbons.len(),
         largest_mouth = %format_args!("{:.0},{:.0}", mouth[0], mouth[1]),
