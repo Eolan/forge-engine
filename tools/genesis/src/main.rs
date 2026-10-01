@@ -71,6 +71,16 @@ struct Args {
     /// cell.
     #[arg(long, default_value_t = ErosionParams::island().channel_area / 10_000.0)]
     channel_ha: f64,
+    /// The coastal plain (D-041): the share of the island's radius inland over which the
+    /// uplift stays low; 0 has none.
+    #[arg(long)]
+    plain: Option<f64>,
+    /// The uplift on the plain, a share of the rate the hills start from.
+    #[arg(long)]
+    plain_uplift: Option<f64>,
+    /// How far the plain's width wanders along the coast (0 the same all round).
+    #[arg(long)]
+    plain_wander: Option<f64>,
 }
 
 /// The wind that blows from `from` (a compass point, north up in the previews).
@@ -86,6 +96,9 @@ fn main() -> Result<()> {
     if let Some(uplift) = args.uplift {
         params.uplift = uplift;
     }
+    params.plain = args.plain.unwrap_or(params.plain);
+    params.plain_uplift = args.plain_uplift.unwrap_or(params.plain_uplift);
+    params.plain_wander = args.plain_wander.unwrap_or(params.plain_wander);
     if let Some(from) = &args.wind_from {
         params.wind = Some(wind_from(from, args.rain_contrast)?);
     }

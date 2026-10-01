@@ -1443,7 +1443,7 @@ that cannot be retrofitted.
 #84, #85, #86, #88, #89, #91)* Proposed 2026-09-26; accepted by the owner 2026-09-30 as
 proposed ("go with recommendations").
 
-## D-040 — The rivers' grading: the channels carry the hillslopes' material away, and the valley floors widen into floodplains 🟡 (2026-10-01)
+## D-040 — The rivers' grading: the channels carry the hillslopes' material away, and the valley floors widen into floodplains ✅ (2026-10-01)
 
 Proposed from #109 (the island's rivers reach the sea at 9–24 % over their last 160 m, every
 one of its 25 mouths over 5 %) and the owner's judgement on #112 (streams rather than rivers,
@@ -1480,13 +1480,16 @@ not integrated into the terrain). Measured in `docs/demos/island.md`, "The river
   profile and only widens it); grading the last reach by hand (the inland rapids stay).
 - **The lakes** are then a design choice, not an artefact: either none on this island, or
   basins placed in the uplift field (bowls the erosion fills slowly), or dams kept on purpose.
-  The owner decides.
+  Taken with the recommendations: the island keeps its lakes as a feature, placed on purpose
+  where the transport removes the dams.
 
-*(research: terrain-genesis.md §1, water.md §3 and the rivers pass to come,
-`docs/research/rivers.md`; D-016, D-038; issues #109, #112, #114)* Proposed 2026-10-01; waits
-for the owner's yes on the transport term and on the lakes.
+*(research: terrain-genesis.md §1, water.md §3, rivers.md; D-016, D-038; issues #109, #112,
+#114)* Proposed 2026-10-01; accepted by the owner the same day ("Go with recommendations for
+D-040 and D-041"), with the goal restated: "beautiful and playable, not overly realistic". The
+order of building puts D-041's valley carve first (it grades the rivers by construction and
+gives the look control); the transport term follows on #109.
 
-## D-041 — The island's rivers as valleys: reach types, channels from the regional curves, floodplains in the 8 m field, fewer and larger rivers, the far water in the terrain 🟡 (2026-10-01)
+## D-041 — The island's rivers as valleys: reach types, channels from the regional curves, floodplains in the 8 m field, fewer and larger rivers, the far water in the terrain ✅ (2026-10-01)
 
 Proposed from `docs/research/rivers.md` ("Recommendation for Forge") for #112: the owner's
 judgement that the island's rivers read as small streams and don't feel natural or integrated.
@@ -1546,6 +1549,8 @@ the bars, the sinuosity and the far-field drawing.
   25 MB) for boats and characters, visual-only under D-016.
 
 *(research: rivers.md §1–§6 and its recommendation; water.md §3; terrain-genesis.md §1–§2;
-D-016, D-038, D-040; issues #109, #110, #112, #113, #114)* Proposed 2026-10-01; waits for the
-owner's yes on the valley carve, the scale and the far-field drawing. Taken, each part becomes
-an issue of its own.
+D-016, D-038, D-040; issues #109, #110, #112, #113, #114)* Proposed 2026-10-01; accepted by the
+owner the same day as proposed ("Go with recommendations for D-040 and D-041"; "the goal is
+beautiful and playable, not overly realistic", and many more biomes to come). It is the
+engines' way (a feature carves and paints the ground around it, the terrain conforms) applied
+to the generated island; each part is an issue of its own.

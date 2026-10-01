@@ -53,9 +53,16 @@ D8 corner of a floor that is now a slot one cell wide.
 
 ## Checks
 
-- The batch against 27b53ec: every island and water image at 0 px (the default island is
-  unchanged: `channel_area` 0 is the old arithmetic exactly); the A/B harness and mesh against
-  fallback at 0 px. Only the asteroids' ballad at frame 600 differs (361 and 390 px, ꟻLIP mean
+- The batch against abc95bc's build (the images of 27b53ec, whose change was only the flags):
+  every island and water image at 0 px (the default island is unchanged: `channel_area` 0 is
+  the old arithmetic exactly); the A/B harness and mesh against fallback at 0 px.
+
+## Later the same morning: the coastal plain
+
+The steep mouths went with a coastal plain in the uplift (D-041, `IslandParams::plain`), not
+with this rule: the diffusion's fill is as large as the valley walls are steep, and the hills
+rose straight out of the sea. With the plain every mouth falls 1–5 % and the island keeps 11
+lakes; `docs/demos/island.md`, "The coastal plain", and `reports/2026-10-01-112/`. Only the asteroids' ballad at frame 600 differs (361 and 390 px, ꟻLIP mean
   0.0014), and the new build captured twice differs from itself by as much (0.0015): #71's
   flake.
 - Validation is not re-run: no shader, pass or resource changes.

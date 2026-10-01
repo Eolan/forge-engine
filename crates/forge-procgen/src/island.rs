@@ -78,6 +78,15 @@ pub struct IslandParams {
     pub uplift: f64,
     /// Kilometres per period of the ridges' largest wander.
     pub ridge_scale_km: f64,
+    /// The coastal plain (D-041, #112): the share of the radius inland over which the uplift
+    /// stays at `plain_uplift` of its full rate before the hills rise; 0 has no plain, the
+    /// hills rising from the coast. Rivers cross the plain at a gentle slope to the sea.
+    pub plain: f64,
+    /// The uplift on the plain, as a share of the rate the hills start from.
+    pub plain_uplift: f64,
+    /// How far the plain's width wanders along the coast, as a share of it (0 the same all
+    /// round; 1 from none to twice as wide), over the coast's own scale.
+    pub plain_wander: f64,
     /// The prevailing wind; `None` rains the same everywhere.
     pub wind: Option<Wind>,
     /// After the erosion, the depressions smaller than this (m²) fill to their spill level
@@ -87,7 +96,10 @@ pub struct IslandParams {
 }
 
 impl IslandParams {
-    /// A 16 km island at `spacing` metres: `size` samples a side to cover it.
+    /// A 16 km island at `spacing` metres: `size` samples a side to cover it. A coastal plain
+    /// over a quarter of the radius, from none to wide along the coast, at 3 % of the hills'
+    /// uplift (D-041): its rivers reach the sea at 1–5 % where they fell at 9–24 % from hills
+    /// rising straight out of the sea.
     pub fn island_16km(seed: Seed, spacing: f64) -> Self {
         Self {
             seed,
@@ -98,6 +110,9 @@ impl IslandParams {
             coast_scale_km: 5.0,
             uplift: 4.0,
             ridge_scale_km: 3.0,
+            plain: 0.25,
+            plain_uplift: 0.03,
+            plain_wander: 3.0,
             wind: None,
             lake_min_area_m2: 50_000.0,
         }
@@ -315,6 +330,7 @@ pub fn island_fields(p: &IslandParams) -> IslandFields {
     let coast_seed = lattice(p.seed, 1);
     let ridge_seed = lattice(p.seed, 2);
     let hardness_seed = lattice(p.seed, 3);
+    let plain_seed = lattice(p.seed, 4);
     let coast_period = p.coast_scale_km * 1000.0;
     let ridge_period = p.ridge_scale_km * 1000.0;
     // Stage 1: a distance-to-centre shape warped by low-frequency noise (Patel 2015).
@@ -350,8 +366,27 @@ pub fn island_fields(p: &IslandParams) -> IslandFields {
             2.1,
             0.55,
         );
-        // Inland the shape reaches about `radius`; a square root lifts the coast's foothills.
-        let inland = (s / p.radius).min(1.0).sqrt();
+        // Inland the shape reaches about `radius`; a square root lifts the coast's foothills,
+        // from the coast or from the inner edge of the coastal plain.
+        let t = (s / p.radius).min(1.0);
+        let inland = if p.plain > 0.0 {
+            let wander = fbm(
+                plain_seed,
+                mx / coast_period,
+                my / coast_period,
+                3,
+                2.0,
+                0.5,
+            );
+            let plain = (p.plain * (1.0 + p.plain_wander * wander)).clamp(0.0, 0.9);
+            // The foothills: the square root eased in over the first eighth of the rise, so
+            // the hills leave the plain on a slope rather than a wall.
+            let x = ((t - plain) / (1.0 - plain)).max(0.0);
+            let hills = x.sqrt() * crate::river::smoothstep(0.0, 0.125, x);
+            p.plain_uplift + (1.0 - p.plain_uplift) * hills
+        } else {
+            t.sqrt()
+        };
         (p.uplift * inland * (0.35 + 0.65 * ridges)) as f32
     });
     let hardness = Field2::from_fn(p.size, p.spacing, |x, y| {

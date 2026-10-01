@@ -148,6 +148,16 @@ struct Args {
     /// the hillslopes shed into it (#109); 0 lets the diffusion raise every cell.
     #[arg(long, default_value_t = ErosionParams::island().channel_area / 10_000.0)]
     island_channel_ha: f64,
+    /// The island's coastal plain (D-041): the share of its radius inland over which the
+    /// uplift stays low (0: the hills rise from the coast).
+    #[arg(long)]
+    island_plain: Option<f64>,
+    /// The uplift on the island's coastal plain, a share of the hills' starting rate.
+    #[arg(long)]
+    island_plain_uplift: Option<f64>,
+    /// How far the coastal plain's width wanders along the coast.
+    #[arg(long)]
+    island_plain_wander: Option<f64>,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1720,6 +1730,9 @@ mod island_layer {
 fn island_settings(args: &Args) -> (IslandParams, ErosionParams) {
     let seed = forge_core::Seed::new(args.island.unwrap_or(7));
     let mut params = IslandParams::island_16km(seed, args.island_spacing);
+    params.plain = args.island_plain.unwrap_or(params.plain);
+    params.plain_uplift = args.island_plain_uplift.unwrap_or(params.plain_uplift);
+    params.plain_wander = args.island_plain_wander.unwrap_or(params.plain_wander);
     if let Some(from) = &args.island_wind {
         params.wind = forge_procgen::Wind::from_compass(from, args.island_rain_contrast);
         if params.wind.is_none() {
@@ -1951,6 +1964,26 @@ fn island_ribbons(
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map_or_else(String::new, |(_, r, k)| view_from(&r.points[k], 30.0, 4.0));
     tracing::info!(%into_lake, %into_sea, %gentle_sea, "where the rivers hand over (--view)");
+    // Up a steep river from 2 m over its water, 40 m downstream of the steepest point of a river
+    // 5 m wide or more (#113: from low, the water far up a valley).
+    let up_valley = ribbons
+        .iter()
+        .flat_map(|r| r.points.iter())
+        .filter(|p| p.half_width >= 2.5 && p.fade > 0.99)
+        .max_by(|a, b| a.slope.total_cmp(&b.slope))
+        .map_or_else(String::new, |p| {
+            let (dx, dz) = (p.direction[0], p.direction[1]);
+            let at = [p.position[0] + 40.0 * dx, p.position[1] + 40.0 * dz];
+            let ground = channels.height_at(height, f64::from(at[0]), f64::from(at[1])) as f32;
+            let yaw = dx.atan2(dz).to_degrees();
+            format!(
+                "{:.0},{:.1},{:.0},{yaw:.1},4",
+                at[0] - half,
+                ground + 2.0,
+                at[1] - half
+            )
+        });
+    tracing::info!(%up_valley, "up a steep river from low (--view)");
     // How far the water stands under its banks: the channel's depth less the water's.
     let freeboard = points
         .clone()

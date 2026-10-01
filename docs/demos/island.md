@@ -196,11 +196,32 @@ go with the fill:
   a cell wide. The rivers' smoothed courses leave it at the D8 corners and land on the walls:
   the water stands up to 12.4 m under its banks (3.9 before) at a third of the points (6 314
   over 2 m, 621 before), which the carve cuts as gorges.
-So the rule stays off (`channel_area` 0, the island unchanged). The proposal (D-040) is to
-transport the sediment down the channels and deposit it where the flux exceeds the channel's
-capacity, so the alluvium stays in the valleys with a graded profile; the owner then decides
-whether the island keeps lakes by design. `city-blocks --island 7 --island-channel-ha 25`
-shows the island with the rule, and `reports/2026-10-01-109/grading.md` the sheets.
+So the rule stays off (`channel_area` 0). D-040 proposed transporting the sediment down the
+channels instead; `city-blocks --island 7 --island-channel-ha 25` shows the island with the
+rule, and `reports/2026-10-01-109/grading.md` the sheets. The coastal plain below grades the
+mouths without either: the fill is as large as the valley walls are steep, and the hills rose
+straight out of the sea.
+
+**The coastal plain** (D-041, 2026-10-01; `IslandParams::plain`, `plain_uplift`,
+`plain_wander`; `genesis --plain`, `city-blocks --island-plain`, 0 for the island before).
+The uplift's square root lifted the coast's foothills from the shoreline, so the steepest
+valley walls, and the most fill, were at the mouths: the largest river's floor stood at
+24.7 m only 160 m inland. Now the uplift stays at 3 % of the hills' starting rate over the
+first quarter of the radius inland, that width wandering along the coast over its 5 km
+scale (`plain_wander` 3: from none, where the hills still meet the sea as cliffs, to about
+twice as wide), and the hills rise from the plain's inner edge on the square root eased in
+over its first eighth, so they leave the plain on a slope rather than a wall.
+- **At 8 m** (the engine's island): 19 mouths, every one falling 1–5 % over its last 160 m
+  (25 mouths, all over 5 %, before); 50 rivers up to 17 m wide (43 up to 14); 11 lakes (14);
+  the water at most 3.5 m under its banks, 125 points over 2 m (3.9 m and 621); the heights
+  −60 to 525 m. The first view now finds its beach at z = 5 072 m.
+- **At 16 m** (`genesis`): 46 rivers, 18 to the sea (27 before), up to 17 m wide, 3 lakes
+  (7). `--plain 0` gives the island before, the same digest (2d17199dba8598bf).
+- The rivers cross the plain winding to the sea, more of them join before the coast, and the
+  mouths are calm; the massif keeps its torrents in V valleys. The sand rule (gentle ground
+  under 2.5 m) now reaches further inland around the mouths.
+
+![Seed 7 at 16 m without the plain (left) and with it (right): the plain wanders from cliffs to a wide lowland, and the rivers join across it](images/island-coastal-plain.png)
 
 **The wind** (`--wind-from w`, seed 7 at 16 m): at contrast 1 the windward half of the land
 gets a rain of 1.70 and the lee 0.21 (cells from 0.05 to the clamp at 10); the west coast is
@@ -349,9 +370,10 @@ What the first look shows, for #96 to fix before the props:
   the first view from 1.34 to 1.39 ms.
 
 To place a view on the island, the log's line `island first view` gives the first view's
-position and the beach it found (for seed 7: the beach at z = 5 080 m, the camera at
-0,25,5 230). `--view` takes x, y and z in metres, then the yaw and the pitch in degrees; the
-height is absolute, so a view inland must clear the ground (up to 534 m).
+position and the beach it found (for seed 7 with the coastal plain: the beach at z = 5 072 m,
+the camera at 0,25,5 222; 5 080 and 5 230 before). `--view` takes x, y and z in metres, then
+the yaw and the pitch in degrees; the height is absolute, so a view inland must clear the
+ground (up to 525 m).
 
 ![From 1 500 m: the rivers wind down the valleys to the coast, past the highland lakes](images/island-engine-rivers.png)
 
