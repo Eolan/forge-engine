@@ -1920,7 +1920,20 @@ fn island_ribbons(
         .last()
         .and_then(|r| Some((r, forge_procgen::sea_mouth(&r.points)?)))
         .map_or_else(String::new, |(r, k)| view_from(&r.points[k], 30.0, 4.0));
-    tracing::info!(%into_lake, %into_sea, "where the rivers hand over (--view)");
+    // And the gentlest mouth of a river 6 m wide or more (its water's fall over its last 100 m),
+    // where no white water hides the handover to the sea and the plume (the largest river's
+    // reaches it in a cascade).
+    let gentle_sea = ribbons
+        .iter()
+        .filter_map(|r| {
+            let k = forge_procgen::sea_mouth(&r.points)?;
+            let last = &r.points[k.saturating_sub(25)..=k];
+            let fall = last.iter().map(|p| p.slope).sum::<f32>() / last.len() as f32;
+            (r.points[k].half_width >= 3.0).then_some((fall, r, k))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or_else(String::new, |(_, r, k)| view_from(&r.points[k], 30.0, 4.0));
+    tracing::info!(%into_lake, %into_sea, %gentle_sea, "where the rivers hand over (--view)");
     // How far the water stands under its banks: the channel's depth less the water's.
     let freeboard = points
         .clone()
