@@ -1516,6 +1516,7 @@ impl CityMaterials {
                         island_layer::GRASS,
                         island_layer::DRY_GRASS,
                         island_layer::LUSH_GRASS,
+                        island_layer::RIVERBANK,
                     ],
                     SAND_BELOW,
                     SAND_WANDER,
@@ -1582,9 +1583,10 @@ impl CityMaterials {
                 textured(grass, [0.55, 0.8, 0.45], [0.62, 0.88, 0.5], 12.0, 6.0, 0.02),
             ),
             (
-                // Grey-brown gravel under a film of silt, the rock's texture at pebbles' scale.
-                "island: river bed",
-                textured(rock, [0.4, 0.36, 0.29], [0.5, 0.45, 0.36], 0.7, 12.0, 0.04),
+                // The rivers' banks (D-041's riparian strip): reeds, sedges and shrubs, a deeper
+                // and bluer green than the lush grass, the grass's texture at a coarser scale.
+                "island: riverbanks",
+                textured(grass, [0.36, 0.55, 0.3], [0.42, 0.63, 0.33], 7.0, 6.0, 0.02),
             ),
             (
                 // Dark wet mud under the lakes: fine silt and what the plants left.
@@ -1715,10 +1717,10 @@ mod island_layer {
     pub const DRY_GRASS: u8 = 5;
     /// Grass on the wettest ground: the valley bottoms.
     pub const LUSH_GRASS: u8 = 6;
-    /// A river's bed of gravel and silt (unpainted since #114: the water draws its bed per
-    /// pixel from the ground under it; the row stays, so the layers after it keep their ids).
-    #[allow(dead_code)]
-    pub const RIVERBED: u8 = 7;
+    /// The rivers' banks: reeds, sedges and shrubs on the grass within a few of a river's
+    /// widths (D-041's riparian strip, `forge_procgen::paint_banks`). Its id was the rivers'
+    /// bed's, which the water draws per pixel since #114.
+    pub const RIVERBANK: u8 = 7;
     /// A lake's bed of dark mud, under a metre or more of its water (unless `--no-water`,
     /// `forge_procgen::paint_lake_beds`).
     pub const LAKEBED: u8 = 8;
@@ -2213,6 +2215,10 @@ const SHORE_SMOOTHING: (f32, u32) = (3.5, 4);
 /// and the ground's contour under each pixel).
 const SAND_BELOW: f32 = 2.5;
 
+/// The rivers' riparian strip (D-041, `island_layer::RIVERBANK`): metres past the water, plus
+/// this many of the river's widths.
+const RIPARIAN_STRIP: (f64, f64) = (6.0, 2.0);
+
 /// Metres of a lake's water over the ground from which the map paints its bed of mud (#114):
 /// the lookup's blend and wander carry a texel's layer up to 8 m, so a bed painted to the
 /// water's edge showed on the shore; nearer the edge the water draws its bed itself.
@@ -2457,6 +2463,20 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     } else {
         forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::STREAM, 0.5)
     };
+    // Along them the banks' reeds and shrubs (D-041's riparian strip): the grasses within 6 m
+    // plus two of the river's widths of its water (and under 2.5 m the sand's contour still
+    // takes them, per pixel).
+    let banks = forge_procgen::paint_banks(
+        &mut layers,
+        &ribbons,
+        &[
+            island_layer::GRASS,
+            island_layer::DRY_GRASS,
+            island_layer::LUSH_GRASS,
+        ],
+        island_layer::RIVERBANK,
+        RIPARIAN_STRIP,
+    );
     // And its lakes of a hectare or more: with the water, their beds of silt wherever the
     // lakes' planes stand a metre or more over the ground (their shallows, like the rivers,
     // the ground under the water's own bed); without it, on the stream's layer.
@@ -2482,6 +2502,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     tracing::info!(
         rivers = ribbons.len(),
         texels = painted,
+        bank_texels = banks,
         lakes = lakes
             .lakes
             .iter()

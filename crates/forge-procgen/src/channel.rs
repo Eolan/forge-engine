@@ -555,6 +555,51 @@ pub fn paint_beds(layers: &mut Field2<u8>, ribbons: &[Ribbon], layer: u8, beyond
     painted
 }
 
+/// Paints the rivers' banks into `layers` (over the field's square): every texel of one of the
+/// layers of `from` whose centre is within `reach.0 + reach.1 × width` metres of a river's
+/// water becomes `to` (D-041's riparian strip: the lush grass along the banks, wider along a
+/// wider river). Returns the texels painted.
+pub fn paint_banks(
+    layers: &mut Field2<u8>,
+    ribbons: &[Ribbon],
+    from: &[u8],
+    to: u8,
+    reach: (f64, f64),
+) -> usize {
+    let cell = layers.spacing;
+    let last = i64::from(layers.size) - 1;
+    let mut painted = 0;
+    for ribbon in ribbons {
+        for w in ribbon.points.windows(2) {
+            let f = |v: f32| f64::from(v);
+            let (a, b) = (
+                [f(w[0].position[0]), f(w[0].position[1])],
+                [f(w[1].position[0]), f(w[1].position[1])],
+            );
+            let half = |t: f64| f(w[0].half_width) + f(w[1].half_width - w[0].half_width) * t;
+            let strip = |t: f64| half(t) + reach.0 + reach.1 * 2.0 * half(t);
+            let grow = strip(0.0).max(strip(1.0));
+            let lo = |v: f64| (((v - grow) / cell).floor() as i64).clamp(0, last);
+            let hi = |v: f64| (((v + grow) / cell).ceil() as i64).clamp(0, last);
+            for ty in lo(a[1].min(b[1]))..=hi(a[1].max(b[1])) {
+                for tx in lo(a[0].min(b[0]))..=hi(a[0].max(b[0])) {
+                    let p = [(tx as f64 + 0.5) * cell, (ty as f64 + 0.5) * cell];
+                    let (r, t) = segment_distance(p, a, b);
+                    if r <= strip(t) {
+                        let texel =
+                            &mut layers.data[(ty as u32 * layers.size + tx as u32) as usize];
+                        if *texel != to && from.contains(texel) {
+                            *texel = to;
+                            painted += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    painted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

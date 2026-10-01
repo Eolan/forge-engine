@@ -53,3 +53,11 @@ every river fell 9–24 % over its last 160 m (#109). Now:
 ## Checks
 
 Listed in the commit; the batch changes the island's images only.
+
+## Later: the riparian strip
+
+`riparian.png`: before (left, da572f7) and with the banks' growth and #114's beds (right), from
+300 m over the plain (`--view -1100,300,-4600,60,-35`) and 3 m over a lowland river
+(`--view -929,15.2,-4399,83,-10`). The grasses within 6 m plus two of the river's widths of its
+water become a deeper, bluer green of reeds and shrubs (`island_layer::RIVERBANK`); from 300 m a
+darker corridor follows each river.

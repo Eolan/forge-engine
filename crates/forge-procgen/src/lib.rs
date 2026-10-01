@@ -53,7 +53,7 @@ pub mod river;
 pub mod shore;
 
 pub use amplify::{AmplifyParams, amplify};
-pub use channel::{ChannelParams, Channels, Stone, paint_beds, stones};
+pub use channel::{ChannelParams, Channels, Stone, paint_banks, paint_beds, stones};
 pub use coast::{coast_distance, sea_floor, smooth_shore};
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;

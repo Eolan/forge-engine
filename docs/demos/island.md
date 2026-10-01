@@ -1019,3 +1019,13 @@ fanned into the lake, and the channel stopped in a step at the lake's edge.
   crisp shore and silty water where it had a brown smear and a jagged grass edge
   (`beds-lake.png`, 0.14); the largest mouth's channel reads as shallow water over sand
   (`beds-mouth.png`, 0.054).
+
+**The riparian strip** (D-041, 2026-10-01; `forge_procgen::paint_banks`, `RIPARIAN_STRIP`). A
+river across the plain was a clean band in a uniform field of grass. The grasses within 6 m plus
+two of a river's widths of its water now become the banks' growth, reeds, sedges and shrubs: a
+deeper, bluer green than the lush grass, the grass's texture at a coarser scale
+(`island_layer::RIVERBANK`, the row and id the river bed's layer had until the water drew its bed
+per pixel). Near the coast the sand's contour still takes it under 2.5 m, per pixel. 88 202
+texels at 4 m. From 300 m a darker corridor follows each river; from 3 m the banks are green to
+the water (`reports/2026-10-01-112/riparian.png`, against da572f7, which also had the bed's
+smear: ꟻLIP mean 0.014 from 300 m, 0.14 from 3 m).
