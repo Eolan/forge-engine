@@ -142,6 +142,11 @@ struct Args {
     /// cells stay at a metre.
     #[arg(long, default_value_t = 8.0)]
     island_drawn: f64,
+    /// How much of the amplification's detail the ground drawn finer than the field takes
+    /// (#106, `forge_procgen::amplify` at each halving of the spacing): 1 all of it away from
+    /// the water, 0 none (the field's cubic).
+    #[arg(long, default_value_t = 1.0)]
+    island_detail: f32,
     /// Erosion steps of the island.
     #[arg(long, default_value_t = 150)]
     island_steps: u32,
@@ -2409,8 +2414,8 @@ const ISLAND_TILES: u32 = 8;
 /// The island's ground as props (on its layered ground, `CityMaterials::island_ground`), its
 /// samples generated only when a tile's cooked mesh is not in the cache. In tiles (#106), each
 /// cooked and cached on its own, their borders locked in every level so they meet without a
-/// crack; named `island@x-z` (the cache keeps one file per name, and the material is the
-/// name's before the `@`).
+/// crack; named `island@x-z`, drawn finer `island@x-z-2m` (the cache keeps one file per name,
+/// so the two stay side by side; the material is the name's before the `@`).
 fn island_tiles(args: &Args) -> Vec<PropSpec> {
     let (params, erosion) = island_settings(args);
     let factor = island_factor(args);
@@ -2429,6 +2434,14 @@ fn island_tiles(args: &Args) -> Vec<PropSpec> {
     );
     if factor > 1 {
         key += &format!(", drawn on the cubic at {spacing} m");
+        if args.island_detail > 0.0 {
+            key += &format!(
+                ", amplified {:?} x {} faded over {:?} m",
+                forge_procgen::AmplifyParams::island(forge_core::Seed::new(0)),
+                args.island_detail,
+                DETAIL_FADE
+            );
+        }
     }
     let for_source = args.clone();
     let source: Arc<dyn Fn() -> Arc<[f32]> + Send + Sync> =
@@ -2445,7 +2458,11 @@ fn island_tiles(args: &Args) -> Vec<PropSpec> {
     for tz in 0..ISLAND_TILES as usize {
         for tx in 0..ISLAND_TILES as usize {
             tiles.push(PropSpec {
-                name: format!("island@{tx}-{tz}"),
+                name: if factor > 1 {
+                    format!("island@{tx}-{tz}-{spacing}m")
+                } else {
+                    format!("island@{tx}-{tz}")
+                },
                 kind: PropKind::Heightfield(Heightfield {
                     key: key.clone(),
                     samples: size,
@@ -2475,17 +2492,60 @@ fn island_factor(args: &Args) -> u32 {
     factor
 }
 
+/// Metres past the water's reach (the refined cells, the lakes, the ground under the shore's
+/// 3.5 m) over which the amplification's detail fades in (#106): the channels, the lakes'
+/// shores and the beaches keep the ground the water was made for.
+const DETAIL_FADE: (f32, f32) = (4.0, 32.0);
+
 /// The island's ground as its tiles draw it (#106): the samples, and the cells drawn finer
 /// (the rivers' channels, the lakes' shores and the coast's contours in quads of a metre).
 struct DrawnGround {
+    /// Samples a side.
+    size: u32,
+    /// Metres between them.
+    spacing: f64,
     heights: Arc<[f32]>,
     detail: Arc<HeightfieldDetail>,
+}
+
+impl DrawnGround {
+    /// The ground at (x, y) metres in the field's frame as its coarse cells draw it: split along
+    /// their (i + 1, j) – (i, j + 1) diagonal (`forge_procgen::drawn_height`).
+    fn height_at(&self, x: f64, y: f64) -> f64 {
+        let n = self.size as usize;
+        let last = f64::from(self.size - 2);
+        let (gx, gy) = (x / self.spacing, y / self.spacing);
+        let (cx, cy) = (gx.floor().clamp(0.0, last), gy.floor().clamp(0.0, last));
+        let (tx, ty) = ((gx - cx).clamp(0.0, 1.0), (gy - cy).clamp(0.0, 1.0));
+        let at = |i: usize, j: usize| f64::from(self.heights[j * n + i]);
+        let (i, j) = (cx as usize, cy as usize);
+        let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+        if tx + ty <= 1.0 {
+            a + tx * (b - a) + ty * (c - a)
+        } else {
+            d + (1.0 - tx) * (c - d) + (1.0 - ty) * (b - d)
+        }
+    }
+}
+
+/// The island's field amplified `factor` times finer (stage 5): `forge_procgen::amplify` at
+/// each halving of the spacing, over the drainage traced at that spacing.
+fn island_amplified(height: &Field2<f32>, factor: u32, seed: u64, pool: &TaskPool) -> Field2<f32> {
+    let mut field = height.clone();
+    for level in 0..factor.trailing_zeros() {
+        let flow = forge_procgen::drain(&field, 0.0, pool);
+        let params = forge_procgen::AmplifyParams::island(forge_core::Seed::new(
+            seed ^ (0xa3f1_0000 + u64::from(level)),
+        ));
+        field = forge_procgen::amplify(&field, &flow.area, 0.0, &params, pool);
+    }
+    field
 }
 
 /// [`DrawnGround`], made once a process for the field and the factor: every tile asks for it.
 /// At the field's spacing, the field's samples and its refined cells on the cells' planes; finer,
 /// the field's cubic with the channels carved, its samples and its refined cells
-/// (`Channels::fine`).
+/// (`Channels::fine`), and away from the water the amplification's detail (`--island-detail`).
 fn island_drawn(args: &Args) -> Arc<DrawnGround> {
     static MADE: std::sync::Mutex<Option<(u64, Arc<DrawnGround>)>> = std::sync::Mutex::new(None);
     let height = island_heights(args);
@@ -2493,7 +2553,8 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
     let key = height.digest()
         ^ height.spacing.to_bits()
         ^ u64::from(height.size)
-        ^ u64::from(factor).rotate_left(48);
+        ^ u64::from(factor).rotate_left(48)
+        ^ u64::from(args.island_detail.to_bits()).rotate_left(16);
     let mut made = MADE.lock().expect("the island's drawn ground");
     if let Some((made_for, drawn)) = made.as_ref()
         && *made_for == key
@@ -2501,11 +2562,17 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
         return drawn.clone();
     }
     let start = Instant::now();
-    let channels = island_water(&height).channels;
+    let IslandWater {
+        channels, lakes, ..
+    } = island_water(&height);
     let pool = TaskPool::client();
+    let (size, spacing) = (height.size, height.spacing);
+    let mut detail_ms = 0;
     let drawn = if factor == 1 {
         let heights = channels.detail(&height, &pool);
         DrawnGround {
+            size,
+            spacing,
             heights: Arc::from(height.data),
             detail: Arc::new(HeightfieldDetail {
                 split: channels.params().split,
@@ -2515,8 +2582,68 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
         }
     } else {
         let fine = channels.fine(&height, factor, &pool);
+        let mut ground = fine.height;
+        if args.island_detail > 0.0 {
+            let detail_start = Instant::now();
+            let amplified = island_amplified(&height, factor, args.island.unwrap_or(7), &pool);
+            // How far each sample stands from the water's reach: the samples of the refined
+            // cells, the lakes', and those under the shore's band.
+            let n = size as usize;
+            let side = n - 1;
+            let mut near: Vec<bool> = height.data.iter().map(|&h| h < SHORE_SMOOTHING.0).collect();
+            for &c in channels.refined() {
+                let (i, j) = (c as usize % side, c as usize / side);
+                for (di, dj) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    near[(j + dj) * n + i + di] = true;
+                }
+            }
+            for lake in &lakes {
+                for j in lake.first[1]..lake.first[1] + lake.size[1] {
+                    for i in lake.first[0]..lake.first[0] + lake.size[0] {
+                        if lake.covers(i, j) {
+                            near[j as usize * n + i as usize] = true;
+                        }
+                    }
+                }
+            }
+            let distance = forge_procgen::site_distance(size, spacing, |i| near[i], &pool);
+            let (fine_size, fine_spacing) = (ground.size as usize, ground.spacing);
+            let strength = args.island_detail;
+            // What the detail adds where it is whole: its root mean square and its largest.
+            let (mut sum, mut count, mut largest) = (0.0f64, 0u64, 0.0f32);
+            for j in 0..fine_size {
+                for i in 0..fine_size {
+                    let d = distance.sample(i as f64 * fine_spacing, j as f64 * fine_spacing);
+                    if d >= DETAIL_FADE.1 {
+                        let s = j * fine_size + i;
+                        let r = amplified.data[s] - ground.data[s];
+                        sum += f64::from(r * r);
+                        count += 1;
+                        largest = largest.max(r.abs());
+                    }
+                }
+            }
+            tracing::info!(
+                rms_m = %format_args!("{:.3}", (sum / count.max(1) as f64).sqrt()),
+                largest_m = %format_args!("{largest:.2}"),
+                samples = count,
+                "the amplification's detail over the cubic, away from the water"
+            );
+            pool.par_chunks_mut(&mut ground.data, fine_size, |j, row| {
+                let y = j as f64 * fine_spacing;
+                for (i, h) in row.iter_mut().enumerate() {
+                    let d = distance.sample(i as f64 * fine_spacing, y);
+                    let t = ((d - DETAIL_FADE.0) / (DETAIL_FADE.1 - DETAIL_FADE.0)).clamp(0.0, 1.0);
+                    let w = strength * t * t * (3.0 - 2.0 * t);
+                    *h += w * (amplified.data[j * fine_size + i] - *h);
+                }
+            });
+            detail_ms = detail_start.elapsed().as_millis();
+        }
         DrawnGround {
-            heights: Arc::from(fine.height.data),
+            size: ground.size,
+            spacing: ground.spacing,
+            heights: Arc::from(ground.data),
             detail: Arc::new(HeightfieldDetail {
                 split: fine.split,
                 cells: fine.cells,
@@ -2525,10 +2652,12 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
         }
     };
     tracing::info!(
-        drawn_m = height.spacing / f64::from(factor),
-        samples = (height.size - 1) * factor + 1,
+        drawn_m = drawn.spacing,
+        samples = drawn.size,
+        detail = args.island_detail,
         refined_cells = drawn.detail.cells.len(),
         fine_vertices = drawn.detail.heights.len(),
+        detail_ms,
         ms = start.elapsed().as_millis(),
         "island ground drawn, the river channels carved"
     );
@@ -2828,9 +2957,11 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     // On the scree at the foot of their walls, the rubble piles scaled down to broken rock: a
     // pile on a third of its texels, 0.2 to 0.4 of its size, sunk a little.
     // The ground as the tiles draw it (#106): finer than the field, its cubic.
+    let drawn = island_drawn(args);
+    let factor = island_factor(args);
     let drawn_at = |x: f64, y: f64| {
-        if island_factor(args) > 1 {
-            channels.cubic_height_at(&height, x, y)
+        if factor > 1 {
+            drawn.height_at(x, y)
         } else {
             channels.height_at(&height, x, y)
         }
@@ -2931,10 +3062,29 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
             }
         }
     }
+    // Drawn finer, the rocks stand on the drawn samples, those nearest a sample set aside above
+    // set aside too (#106).
+    let (rock_ground, rock_samples, rock_spacing) = if factor > 1 {
+        let (n, coarse, f) = (drawn.size, height.size, factor);
+        let fine: Vec<f32> = (0..n * n)
+            .map(|s| {
+                let (i, j) = (s % n, s / n);
+                let nearest = ((j + f / 2) / f) * coarse + (i + f / 2) / f;
+                if rock_ground[nearest as usize] < -1.0e5 {
+                    -1.0e6
+                } else {
+                    drawn.heights[s as usize]
+                }
+            })
+            .collect();
+        (fine, n, drawn.spacing)
+    } else {
+        (rock_ground, height.size, height.spacing)
+    };
     let ground = Ground {
         heights: &rock_ground,
-        samples: height.size,
-        spacing: height.spacing as f32,
+        samples: rock_samples,
+        spacing: rock_spacing as f32,
     };
     let residency = if streamed {
         Residency::Streamed(StreamingConfig::from_mib(

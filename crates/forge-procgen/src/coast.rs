@@ -80,6 +80,25 @@ fn squared_distance(size: usize, site: impl Fn(usize) -> bool + Sync, pool: &Tas
     rows
 }
 
+/// The distance, metres, from every sample of a `size × size` field `spacing` apart to the
+/// nearest sample where `site` holds (#106: how far the ground stands from the water).
+pub fn site_distance(
+    size: u32,
+    spacing: f64,
+    site: impl Fn(usize) -> bool + Sync,
+    pool: &TaskPool,
+) -> Field2<f32> {
+    let n = size as usize;
+    let squared = squared_distance(n, site, pool);
+    let mut distance = Field2::new(size, spacing);
+    pool.par_chunks_mut(&mut distance.data, n, |y, row| {
+        for (x, d) in row.iter_mut().enumerate() {
+            *d = (squared[y * n + x].sqrt() * spacing) as f32;
+        }
+    });
+    distance
+}
+
 /// The signed distance to the coast, metres: for a land cell (above `sea_level`) the distance
 /// to the nearest sea cell, for a sea cell minus the distance to the nearest land cell, both
 /// less half a cell so the coast line itself is at zero. A field without sea is all `+∞`-like

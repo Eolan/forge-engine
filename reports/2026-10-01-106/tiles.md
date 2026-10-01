@@ -20,3 +20,12 @@ drawing it at 2 m (`docs/demos/island.md`, "The ground in tiles, towards 2 m").
   instance ids that moved by 63, the levels at the borders, the rays' cut; ꟻLIP mean 0.024 with
   the stand-in sea, 0.0055 with the water) and 71 pixels of the city's orbit (0.0003, the shadow
   rays' start); the A/B harness and mesh against fallback at 0 px; validation clean.
+
+## Drawn at 2 m (`--island-drawn 2`)
+
+The ground at 2 m on the field's cubic, carved by the channels, with the amplification's detail
+faded out near the water (0.26 m root mean square where it is whole). 143 M triangles, cooked in
+45 s on the first start, 4.2 GB of pages; the frame within 0.05 ms of the 8 m tiles' at 1440p.
+`drawn-2m.png`, 8 m left and 2 m right: a hillside at a river's head, a steep valley's wall from
+its water, the largest valley from 200 m. The look hardly changes; the default stays 8 m until
+the owner judges.

@@ -13,7 +13,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets, the depressions under 5 ha filled (stage 4, the lake rule of #97) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the GPU's three cascades (#105, `forge_render::water`) agree with it within 3 × 10⁻⁶ ("The sea on the GPU" below); the surface drawn from them with `--water`, reflecting the island through traced mirror rays |
-| Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); the ground drawn in tiles (#106) and at 2 m on the field's cubic behind `--island-drawn 2` ("The ground in tiles, towards 2 m" below); the amplification's detail drawn next |
+| Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); the ground drawn in tiles (#106), and at 2 m with the amplification's detail behind `--island-drawn 2` ("The ground in tiles, towards 2 m" below) |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
@@ -1233,11 +1233,28 @@ the amplification's detail on it (stage 5, `forge_procgen::amplify`), faded out 
   The A/B harness and mesh against fallback stay at 0 px; validation is clean
   (`reports/2026-10-01-106/tiles.md`, with the blot before and after).
 
-**At 2 m** (`city-blocks --island 7 --island-drawn 2`, not the default yet). The ground drawn on
-the field's cubic, carved by the channels (`Channels::cubic_height_at`, `Channels::fine`): 8 193²
-samples, the channels', lakes' shores' and coast's cells still at a metre (1.39 M fine cells in
-quads of a metre). 143 M triangles in 3.3 M clusters, cooked in 35 s (278 s of work), 4.2 GB of
-pages on disk; the GPU's memory 1.8 GB in all with the 512 MiB pool. From the first view the
-frame is 1.60 ms at 900p. At the batch's distances it looks as the 8 m ground does: the coast
-and the channels were already on cells of a metre, and the smoothed field has little between its
-samples. The detail comes with the amplification, the next step.
+**At 2 m** (`city-blocks --island 7 --island-drawn 2`; the default stays 8 m, for the owner to
+judge). The ground drawn at 2 m, 8 193² samples:
+- **On the field's cubic, carved by the channels** (`Channels::cubic_height_at`,
+  `Channels::fine`), so no 8 m facet is left; the channels', lakes' shores' and coast's cells stay
+  at a metre (1.39 M fine cells in quads of a metre).
+- **With the amplification's detail** away from the water (`--island-detail`, 1 by default):
+  the field amplified to 4 m, then to 2 m, each over its own drainage (`forge_procgen::amplify`,
+  "Amplification" above), blended over the carved cubic by a weight that is 0 within 4 m of the
+  water's reach (the refined cells, the lakes, the ground under the shore's 3.5 m) and 1 from
+  32 m (`DETAIL_FADE`, `forge_procgen::site_distance`). Where it is whole it adds 0.26 m root
+  mean square, 4.8 m at most.
+- **The rocks** stand on the drawn samples, and so does the rubble on the scree; the rocks'
+  choice follows the finer ground's slopes, so they are placed anew.
+- **The cost:** 143 M triangles in 3.3 M clusters, cooked in 45 s on the first start (278 s of
+  work), 4.2 GB of pages on disk beside the 8 m tiles' (`island@x-z-2m`), 4 s at each start for
+  the drawn ground, 0.3 GB more geometry on the GPU (1.8 GB in all with the 512 MiB pool). The
+  frame is within 0.05 ms of the 8 m tiles' on PROFILE.md's six views at 1440p (the cluster cull
+  0.02–0.04 ms more, the probes' rays up to 0.03): the cluster DAG keeps what is drawn to what
+  the pixels need.
+- **The look** hardly changes, from 3 m to 2.5 km: the slopes' 8 m steps were the field's and
+  the smoothing took them out, the coast and the channels were already on cells of a metre, and
+  the detail is a few decimetres under the grass texture. Three times the detail
+  (`--island-detail 3`) changes little more. `reports/2026-10-01-106/drawn-2m.png`: a hillside
+  at a river's head, a steep valley's wall from its water, the largest valley from 200 m; 8 m
+  left, 2 m right.

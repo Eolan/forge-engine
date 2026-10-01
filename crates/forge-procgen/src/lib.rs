@@ -60,7 +60,7 @@ pub use amplify::{AmplifyParams, amplify};
 pub use channel::{
     ChannelParams, Channels, FineGround, Stone, bank_stones, paint_banks, paint_beds, stones,
 };
-pub use coast::{coast_distance, sea_floor, smooth_shore};
+pub use coast::{coast_distance, sea_floor, site_distance, smooth_shore};
 pub use erosion::{Erosion, ErosionParams, erode};
 pub use field::Field2;
 pub use flow::{Drainage, Flow, drain, priority_flood, route};
