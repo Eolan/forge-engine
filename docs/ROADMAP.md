@@ -277,9 +277,10 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    - the island in the batch, the validation and the timings (1.34 ms from the coast).
    Since (2026-10-01, #106): the field smoothed by a binomial pass against the 8 m erosion's
    steps, its coast by four within 3.5 m of the sea's level, and the coast's contours, the
-   rivers' channels and the lakes' shores drawn on cells of a metre.
+   rivers' channels and the lakes' shores drawn on cells of a metre; the ground cooked in 2 km
+   tiles with locked borders, and drawn at 2 m on the field's cubic behind `--island-drawn 2`.
    Next: the owner's judgement of the look, then the `island` demo of its own (#96 step 3), the
-   amplification to 2 m (stage 5, tiles with locked borders) and more of stage 6's materials.
+   amplification's detail at 2 m (stage 5) and more of stage 6's materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute
    queue and a forward surface pass first, then the shore from the coast distance, the rivers

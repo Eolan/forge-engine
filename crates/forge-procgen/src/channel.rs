@@ -356,6 +356,18 @@ impl Channels {
     /// cells' planes away from the rivers; near them the cubic, under which the channels are
     /// cut.
     pub fn height_at(&self, height: &Field2<f32>, x: f64, y: f64) -> f64 {
+        self.carved(height, x, y, false)
+    }
+
+    /// [`Channels::height_at`] on the field's cubic everywhere, not only near the rivers: the
+    /// ground drawn finer than the field's cells (#106), which has no cell's plane to meet.
+    pub fn cubic_height_at(&self, height: &Field2<f32>, x: f64, y: f64) -> f64 {
+        self.carved(height, x, y, true)
+    }
+
+    /// The ground at (x, y) with the channels carved, on the cubic everywhere (`cubic`) or
+    /// only near the rivers and in the refined cells.
+    fn carved(&self, height: &Field2<f32>, x: f64, y: f64, cubic: bool) -> f64 {
         let last = f64::from(self.side - 1);
         let (cx, cy) = (
             (x / self.spacing).floor().clamp(0.0, last) as usize,
@@ -363,24 +375,29 @@ impl Channels {
         );
         let c = cy * self.side as usize + cx;
         let segments = &self.list[self.start[c] as usize..self.start[c + 1] as usize];
-        let drawn = drawn_height(height, x, y);
         let margin = self.params.margin;
-        // How far out of each segment's water the point is, and its weights: the cubic's, full
-        // within a metre of the water and gone by the margin (and full inside the refined
-        // cells, gone at their outline), and the carve's, gone over the margin's last 3 m.
-        let mut smooth = self.inner_weight(x, y);
-        for &s in segments {
-            let s = &self.segments[s as usize];
-            let (r, t) = segment_distance([x, y], s.a, s.b);
-            let out = r - Segment::at(s.half, t);
-            if out < margin {
-                smooth = smooth.max(1.0 - smoothstep(1.0, margin, out));
+        let base = if cubic {
+            smooth_height(height, x, y)
+        } else {
+            let drawn = drawn_height(height, x, y);
+            // How far out of each segment's water the point is, and its weights: the cubic's,
+            // full within a metre of the water and gone by the margin (and full inside the
+            // refined cells, gone at their outline), and the carve's, gone over the margin's
+            // last 3 m.
+            let mut smooth = self.inner_weight(x, y);
+            for &s in segments {
+                let s = &self.segments[s as usize];
+                let (r, t) = segment_distance([x, y], s.a, s.b);
+                let out = r - Segment::at(s.half, t);
+                if out < margin {
+                    smooth = smooth.max(1.0 - smoothstep(1.0, margin, out));
+                }
             }
-        }
-        if smooth == 0.0 {
-            return drawn;
-        }
-        let base = drawn + (smooth_height(height, x, y) - drawn) * smooth;
+            if smooth == 0.0 {
+                return drawn;
+            }
+            drawn + (smooth_height(height, x, y) - drawn) * smooth
+        };
         let (a, b) = self.params.bank;
         let mut carved = base;
         for &s in segments {
@@ -438,6 +455,79 @@ impl Channels {
         });
         out
     }
+
+    /// The ground drawn `factor` times finer than `height` (#106): its samples at
+    /// [`Channels::cubic_height_at`], and the refined cells as the fine cells inside them,
+    /// each drawn in `split / factor` quads a side (none when `factor` is the split). `factor`
+    /// divides the split.
+    pub fn fine(&self, height: &Field2<f32>, factor: u32, pool: &TaskPool) -> FineGround {
+        assert!(
+            factor >= 1 && self.params.split.is_multiple_of(factor),
+            "a factor of the split {}",
+            self.params.split
+        );
+        let size = (height.size - 1) * factor + 1;
+        let spacing = height.spacing / f64::from(factor);
+        let mut fine = Field2::new(size, spacing);
+        pool.par_chunks_mut(&mut fine.data, size as usize, |j, row| {
+            let y = j as f64 * spacing;
+            for (i, h) in row.iter_mut().enumerate() {
+                *h = self.cubic_height_at(height, i as f64 * spacing, y) as f32;
+            }
+        });
+        let split = self.params.split / factor;
+        let f = factor as usize;
+        let (side, fine_side) = (self.side as usize, (size - 1) as usize);
+        let mut cells: Vec<u32> = if split > 1 {
+            self.refined
+                .iter()
+                .flat_map(|&c| {
+                    let (i, j) = (c as usize % side, c as usize / side);
+                    (0..f * f).map(move |s| ((j * f + s / f) * fine_side + i * f + s % f) as u32)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        cells.sort_unstable();
+        let k = split.max(1) as usize;
+        let per = (k + 1) * (k + 1);
+        let step = spacing / k as f64;
+        let mut heights = vec![0.0f32; cells.len() * per];
+        pool.par_chunks_mut(&mut heights, per * 256, |chunk_index, chunk| {
+            for (n, cell) in chunk.chunks_exact_mut(per).enumerate() {
+                let c = cells[chunk_index * 256 + n] as usize;
+                let (i, j) = (c % fine_side, c / fine_side);
+                for v in 0..=k {
+                    for u in 0..=k {
+                        let x = (i * k + u) as f64 * step;
+                        let y = (j * k + v) as f64 * step;
+                        cell[v * (k + 1) + u] = self.cubic_height_at(height, x, y) as f32;
+                    }
+                }
+            }
+        });
+        FineGround {
+            height: fine,
+            split,
+            cells,
+            heights,
+        }
+    }
+}
+
+/// The ground drawn finer than its field (#106, [`Channels::fine`]): the fine samples, and its
+/// refined cells in the layout `forge_geom::city::HeightfieldDetail` takes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FineGround {
+    /// The fine samples.
+    pub height: Field2<f32>,
+    /// Quads a side of a refined fine cell (1: none is refined).
+    pub split: u32,
+    /// The refined fine cells, `j × (size − 1) + i`, ascending.
+    pub cells: Vec<u32>,
+    /// Per refined cell in that order, `(split + 1)²` heights row-major along +y.
+    pub heights: Vec<f32>,
 }
 
 /// A stone in a river's channel (#105): a boulder standing on the bed, most of them breaking the

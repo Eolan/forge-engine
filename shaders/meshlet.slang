@@ -2675,6 +2675,9 @@ void add_layer(inout uint layer[3], inout float weight[3], uint id, float w)
 // splits them into three, the two heaviest).
 float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
 {
+    // A layered ground is one surface, however many meshes draw it (the island's tiles, #106):
+    // its layers take the first instance's tint and place in their textures, not each tile's.
+    s.instance_id = 0u;
     float3 albedo;
     float3 n = s.n;
     float specular_power = mat.specular_power;
@@ -2894,6 +2897,9 @@ static const uint TILE_GROUPS_X = 64;
 // meshes' DAGs (crates/forge-render/src/raytrace.rs) and may stand a little in front of the drawn
 // ones; the start also moves along the normal so grazing surfaces do not shadow themselves.
 static const float SHADOW_BIAS = 0.15;
+// A terrain's ray starts this many times its errors off its drawn surface (raytrace.rs has the
+// same constant for its cut's error).
+static const float TERRAIN_SHADOW_START = 2.0;
 
 // Where on the sun's disc a pixel's shadow ray aims in frame `frame` of TAA's cycle (issue
 // #54), as `sun_shadow`'s (radius², turn): the eight points of a Vogel disc (the golden-angle
@@ -2913,13 +2919,19 @@ float2 sun_disc_point(uint2 pixel, uint frame)
 // `shadow_start` scaled with the instance where that is further. Only a terrain sets one
 // (twice its cut's error, `TERRAIN_SHADOW_START` in raytrace.rs): the island's 8.4 M triangles
 // of relief cut to 600 000 stand up to a metre off the drawn slopes, which shadowed themselves
-// from 0.15 m (#96); the city's flat ground stays at SHADOW_BIAS.
-float shadow_bias(Frame* f, Instance inst)
+// from 0.15 m (#96); the city's flat ground stays at SHADOW_BIAS. Far away a terrain draws a
+// coarser level of its DAG than the cut, up to its cluster's `self_error` further off it, so
+// its ray starts twice that further too (#106: a far valley drawn under the cut shadowed
+// itself in a dark blot); the levels near the camera, at no error, keep the cut's start.
+float shadow_bias(Frame* f, Instance inst, Meshlet m)
 {
     RtScene* rs = f[0].rt_scene;
     if (rs == nullptr)
         return SHADOW_BIAS;
-    return max(SHADOW_BIAS, rs[0].meshes[inst.mesh].shadow_start * inst.scale);
+    float start = rs[0].meshes[inst.mesh].shadow_start;
+    if (start > 0.0)
+        start += TERRAIN_SHADOW_START * m.self_error;
+    return max(SHADOW_BIAS, start * inst.scale);
 }
 
 // 0 when something lies between `world` and the sun, else 1: one ray, the first hit ends it.
@@ -3020,8 +3032,11 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
     hit.position = origin + direction * t;
     uint row = inst.material + rs[0].sections[tri];
     Material mat = f[0].materials[row];
+    uint tint = inst.id;
     if (mat.class_index == MATERIAL_CLASS_LAYERED)
     {
+        // One surface over its tiles, as `shade_layered` shades it (#106).
+        tint = 0u;
         // The layer under the hit, nearest texel (`shade_layered` blends two), and the contour's
         // layer under its height in place of one over it.
         Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.albedo_texture)];
@@ -3034,7 +3049,7 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
             id = mat.contour - 1u;
         mat = f[0].materials[row + 1 + id];
     }
-    hit.albedo = lerp(mat.color_a, mat.color_b, hash_color(inst.id).x);
+    hit.albedo = lerp(mat.color_a, mat.color_b, hash_color(tint).x);
     if (mat.albedo_texture != TEXTURE_NONE)
         hit.albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
     hit.emissive = mat.emissive;
@@ -3218,7 +3233,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
-        s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst));
+        s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
     s.transmitted = float3(0.0);
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
         s.transmitted = ice_transmission(f, record.x, surface_scene, mat.scattering);

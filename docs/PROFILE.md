@@ -654,6 +654,26 @@ the other two, so the blend stays continuous; and pairs with none of the contour
   them. It kept the layered pass at 96, but the band can fill the view (0.30 ms for the second
   pass from the stone's view), and the pixels it hands over pay twice.
 
+**The ground in tiles** (#106, 2026-10-01). The island's ground cooked as 8 × 8 tiles of 2 km
+instead of one mesh of 19.6 M triangles (the same triangles, `docs/demos/island.md`). Two rounds
+each at 2560 × 1440, three at 1600 × 900, the previous commit and this one alternating:
+
+| View | frame 1440p: before → now | 900p: before → now | `geometry/cluster cull 1` 1440p |
+|---|---|---|---|
+| coast (the first view) | 3.11 → 2.95 ms | 1.65 → 1.54 ms | 0.160 → 0.038 |
+| the stream from 16 m | 2.90 → 2.78 ms | 1.49 → 1.38 ms | 0.177 → 0.044 |
+| down a river from 3 m | 2.82 → 2.68 ms | 1.48 → 1.39 ms | 0.186 → 0.060 |
+| the stone at the largest mouth | 2.92 → 2.83 ms | 1.51 → 1.40 ms | 0.168 → 0.038 |
+| a lake from 3 m over its water | 2.73 → 2.60 ms | 1.44 → 1.35 ms | 0.173 → 0.070 |
+| the island from 2.5 km | 3.79 → 3.61 ms | 2.18 → 2.05 ms | 0.253 → 0.124 |
+
+- The cluster cull walks each instance's DAG from its roots: one mesh of 452 000 clusters was a
+  long walk for few threads, 64 tiles spread it.
+- The tiles' borders keep their vertices at every level: from 2.5 km the software raster takes
+  0.04 ms more (0.726 → 0.762 ms at 1440p).
+- The rays' cut: 600 000 triangles over the tiles at one error, 0.349 m where the one mesh's
+  was 0.312 m; `gi/probe rays` within ±0.05 ms.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

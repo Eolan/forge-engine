@@ -31,7 +31,9 @@ pub const TERRAIN_BUDGET: u32 = 600_000;
 /// error (issue #96): the error is the simplifier's estimate, not a bound. On the island's
 /// slopes (8.4 M triangles cut to 600 000, an error of 1 m) rays started at the error still met
 /// the cut in places; at twice the error none did. Props and rocks keep the shader's
-/// `SHADOW_BIAS`: their creases hold the contact shadows a larger start would skip.
+/// `SHADOW_BIAS`: their creases hold the contact shadows a larger start would skip. The shader
+/// adds twice the drawn cluster's own error (its `TERRAIN_SHADOW_START`, #106): far away a
+/// coarser level than the cut is drawn, and stood under it.
 pub const TERRAIN_SHADOW_START: f32 = 2.0;
 
 /// A mesh's DAG cut: the positions and triangle list of its clusters.
@@ -56,15 +58,34 @@ fn cut_triangles(meshlets: &[GpuMeshlet], e: f32) -> u64 {
         .sum()
 }
 
-/// The finest cut of `meshlets` with at most `budget` triangles, read from `store`.
-pub(crate) fn mesh_cut(meshlets: &[GpuMeshlet], store: &PageStore, budget: u32) -> Result<Cut> {
-    let mut errors: Vec<f32> = meshlets.iter().map(|m| m.self_error).collect();
+/// The error of the finest cut of `meshes` (each one mesh's clusters, cut at the same error)
+/// with at most `budget` triangles over all of them.
+pub(crate) fn cut_error(meshes: &[&[GpuMeshlet]], budget: u32) -> f32 {
+    let mut errors: Vec<f32> = meshes
+        .iter()
+        .flat_map(|m| m.iter().map(|m| m.self_error))
+        .collect();
     errors.push(0.0);
     errors.sort_by(f32::total_cmp);
     errors.dedup();
+    let triangles = |e: f32| meshes.iter().map(|m| cut_triangles(m, e)).sum::<u64>();
     // Coarser cuts have fewer triangles: the first error whose cut fits (the roots at worst).
-    let fit = errors.partition_point(|&e| cut_triangles(meshlets, e) > u64::from(budget));
-    let error = errors[fit.min(errors.len() - 1)];
+    let fit = errors.partition_point(|&e| triangles(e) > u64::from(budget));
+    errors[fit.min(errors.len() - 1)]
+}
+
+/// The finest cut of `meshlets` with at most `budget` triangles, read from `store`.
+pub(crate) fn mesh_cut(meshlets: &[GpuMeshlet], store: &PageStore, budget: u32) -> Result<Cut> {
+    mesh_cut_at(meshlets, store, cut_error(&[meshlets], budget), budget)
+}
+
+/// The cut of `meshlets` at `error`, read from `store` (`budget` only for the log).
+pub(crate) fn mesh_cut_at(
+    meshlets: &[GpuMeshlet],
+    store: &PageStore,
+    error: f32,
+    budget: u32,
+) -> Result<Cut> {
     let clusters: Vec<&GpuMeshlet> = meshlets
         .iter()
         .filter(|m| m.self_error <= error && error < m.parent_error)

@@ -13,7 +13,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | PNG previews: height, hillshade, flow, the overview with sea, rivers and lakes, the network by Strahler order | ✅ `forge_procgen::preview`, `tools/genesis` |
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets, the depressions under 5 ha filled (stage 4, the lake rule of #97) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the GPU's three cascades (#105, `forge_render::water`) agree with it within 3 × 10⁻⁶ ("The sea on the GPU" below); the surface drawn from them with `--water`, reflecting the island through traced mirror rays |
-| Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); drawing at 2 m in tiles planned |
+| Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); the ground drawn in tiles (#106) and at 2 m on the field's cubic behind `--island-drawn 2` ("The ground in tiles, towards 2 m" below); the amplification's detail drawn next |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
@@ -1189,3 +1189,55 @@ With #111's layered pass, which takes fewer registers, three rounds each at 1600
 
 The scrub is a texture, read as shrubs from a few metres up. Close to the walls, shrubs as props
 wait for Phase 8's vegetation (D-013).
+
+## The ground in tiles, towards 2 m (#106, 2026-10-01)
+
+The ground left on #106 is the 8 m field's own: its slopes keep 8 m facets and their shadows'
+steps. The plan (#106): the ground cooked in tiles; then drawn at 2 m on the field's cubic; then
+the amplification's detail on it (stage 5, `forge_procgen::amplify`), faded out near the water.
+
+**The tiles** (`forge_geom::city::heightfield_window_mesh`, `CellWindow`,
+`MeshletSceneBuilder::set_ray_group`). The ground is cooked as 8 × 8 tiles of 2 km
+(`island@x-z` in the mesh cache), each on its own and in parallel, rather than as one mesh:
+- **The same mesh, cut up.** A tile is a window of the whole field's cells, built with a cell
+  around it so the vertices on its outline get the normals of every triangle they touch, then
+  those cells dropped. Its vertices are the whole mesh's to the bit, normals included (a test):
+  the tiles meet without a crack and shade alike across their borders. One tile over the whole
+  field draws the batch's island to the pixel.
+- **Their borders locked.** The cook locks a mesh's open edges at every level, so two tiles meet
+  at any pair of levels. The cost: the borders keep their vertices at every level (1 525 roots
+  instead of 175, 70 root pages instead of 8).
+- **One surface for the rays.** The tiles are cut for the shadow and probe rays at one error,
+  the finest whose triangles over all of them fit the terrain's 600 000, as the one mesh was:
+  0.349 m against 0.312 m, the borders keeping their triangles.
+- **One surface for the shading.** The layered ground's layers took each instance's tint and
+  place in their textures (`standard_surface` hashes the instance), so every tile's border
+  showed as a seam. A layered ground now shades as the first instance, so the island's ground
+  and the city's look as before.
+- **A far valley's blot.** With the tiles a far valley, drawn at a coarser level than the rays'
+  cut and under it, shadowed itself in a dark blot. A terrain's shadow rays now start twice the
+  drawn cluster's error further off as well. Near the camera, at no error, nothing changes; the
+  one mesh could do the same wherever its levels fell that way.
+- **The cook** takes 5 s on the 9800X3D where the one mesh took 16 s (45 s of work over 16
+  workers). Pages: 661 MiB (652).
+- **The frame** is 0.09–0.18 ms shorter at 1440p, 0.09–0.13 ms at 900p, over PROFILE.md's six
+  views: the cluster cull walks each instance's DAG, and 64 tiles spread the walk that one mesh
+  of 452 000 clusters kept on few threads (0.16–0.25 → 0.04–0.12 ms). From 2.5 km the software
+  raster takes 0.04 ms more, for the borders' vertices (`docs/PROFILE.md`, "The ground in
+  tiles").
+- **Images:** the ground is the same, but the sea's, stones' and rocks' instance ids moved by
+  63 (the tiles come first, so that an overflowing cull drops them last), and their tints hash
+  the id; with the levels at the tiles' borders and the rays' cut, the batch's island view
+  changes by ꟻLIP mean 0.024 (most of it the stand-in sea's tint) and its water view by 0.0055.
+  The city's orbit view changes in 71 pixels (ꟻLIP mean 0.0003), from the shadow rays' start.
+  The A/B harness and mesh against fallback stay at 0 px; validation is clean
+  (`reports/2026-10-01-106/tiles.md`, with the blot before and after).
+
+**At 2 m** (`city-blocks --island 7 --island-drawn 2`, not the default yet). The ground drawn on
+the field's cubic, carved by the channels (`Channels::cubic_height_at`, `Channels::fine`): 8 193²
+samples, the channels', lakes' shores' and coast's cells still at a metre (1.39 M fine cells in
+quads of a metre). 143 M triangles in 3.3 M clusters, cooked in 35 s (278 s of work), 4.2 GB of
+pages on disk; the GPU's memory 1.8 GB in all with the 512 MiB pool. From the first view the
+frame is 1.60 ms at 900p. At the batch's distances it looks as the 8 m ground does: the coast
+and the channels were already on cells of a metre, and the smoothed field has little between its
+samples. The detail comes with the amplification, the next step.

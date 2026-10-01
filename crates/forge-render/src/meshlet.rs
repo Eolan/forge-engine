@@ -11,6 +11,7 @@
 //! hardware's pixel; a merge pass writes them into the visibility buffer and the depth.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
@@ -733,6 +734,9 @@ pub struct MeshletSceneBuilder {
     textures: Option<TextureSet>,
     /// Build acceleration structures for shadow rays (issue #45), when the device has ray queries.
     ray_traced: bool,
+    /// Meshes cut for the rays as one surface, and their triangles over all of them
+    /// ([`MeshletSceneBuilder::set_ray_group`]).
+    ray_groups: Vec<(Vec<u32>, u32)>,
 }
 
 impl MeshletSceneBuilder {
@@ -868,6 +872,14 @@ impl MeshletSceneBuilder {
         self.ray_traced = on;
     }
 
+    /// Cuts `meshes` for the rays as one surface (#106: a ground in tiles): at one error, the
+    /// finest whose triangles over all of them fit `budget`, as one mesh of them all would be
+    /// cut. Each mesh's own budget no longer applies.
+    pub fn set_ray_group(&mut self, meshes: &[MeshId], budget: u32) {
+        self.ray_groups
+            .push((meshes.iter().map(|m| m.0).collect(), budget));
+    }
+
     /// Adds an instance of `mesh` with a uniform-scale transform, in its mesh's material.
     pub fn add_instance(&mut self, mesh: MeshId, model: Mat4) {
         let material = MaterialId(self.meshes[mesh.0 as usize].material);
@@ -963,19 +975,38 @@ impl MeshletSceneBuilder {
         // The meshes' cuts for the shadow rays, read while the page store is still here.
         let rays = if self.ray_traced && device.features().ray_query {
             let start = std::time::Instant::now();
+            let clusters = |mesh: &GpuMesh| {
+                let first = mesh.meshlet_offset as usize;
+                &self.meshlets[first..first + mesh.meshlet_count as usize]
+            };
+            // A group's meshes are cut at the error of the group's budget.
+            let mut grouped: HashMap<usize, (f32, u32)> = HashMap::new();
+            for (members, budget) in &self.ray_groups {
+                let meshes: Vec<&[GpuMeshlet]> = members
+                    .iter()
+                    .map(|&m| clusters(&self.meshes[m as usize]))
+                    .collect();
+                let error = raytrace::cut_error(&meshes, *budget);
+                grouped.extend(members.iter().map(|&m| (m as usize, (error, *budget))));
+            }
             let cuts = self
                 .meshes
                 .iter()
-                .map(|mesh| {
-                    let first = mesh.meshlet_offset as usize;
-                    let meshlets = &self.meshlets[first..first + mesh.meshlet_count as usize];
+                .enumerate()
+                .map(|(m, mesh)| {
+                    let meshlets = clusters(mesh);
                     let terrain = mesh.radius > 1000.0;
                     let budget = if terrain {
                         raytrace::TERRAIN_BUDGET
                     } else {
                         raytrace::TRIANGLE_BUDGET
                     };
-                    let mut cut = raytrace::mesh_cut(meshlets, &self.store, budget)?;
+                    let mut cut = match grouped.get(&m) {
+                        Some(&(error, budget)) => {
+                            raytrace::mesh_cut_at(meshlets, &self.store, error, budget)?
+                        }
+                        None => raytrace::mesh_cut(meshlets, &self.store, budget)?,
+                    };
                     if terrain {
                         cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
                     }

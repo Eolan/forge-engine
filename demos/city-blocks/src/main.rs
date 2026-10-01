@@ -28,7 +28,9 @@ use forge_core::material::{
 };
 use forge_geom::MeshletMesh;
 use forge_geom::cache::cook_cached;
-use forge_geom::city::{Heightfield, HeightfieldDetail, PropKind, PropSpec, Terrain, city_props};
+use forge_geom::city::{
+    CellWindow, Heightfield, HeightfieldDetail, PropKind, PropSpec, Terrain, city_props,
+};
 use forge_procgen::{
     ErosionParams, Field2, IslandParams, Ocean, OceanParams, ShoreProfile, ShoreTrain,
 };
@@ -134,6 +136,12 @@ struct Args {
     /// Metres between the island's samples (8: 2049², 8.4 M triangles; 4: the 4097² target).
     #[arg(long, default_value_t = 8.0)]
     island_spacing: f64,
+    /// Metres between the island's drawn samples (#106): with less than the field's spacing,
+    /// the ground is drawn on the field's cubic carved by the rivers' channels (2: 8 193²
+    /// samples, 134 M triangles) rather than on the field's cells; the channels' and shores'
+    /// cells stay at a metre.
+    #[arg(long, default_value_t = 8.0)]
+    island_drawn: f64,
     /// Erosion steps of the island.
     #[arg(long, default_value_t = 150)]
     island_steps: u32,
@@ -1710,8 +1718,10 @@ impl CityMaterials {
         Ok(ground)
     }
 
-    /// The row `prop` is made of (the default grey for a prop the table does not know).
+    /// The row `prop` is made of (the default grey for a prop the table does not know). A part
+    /// of a prop, `name@part` (the island's tiles), is made of the prop's.
     fn of(&self, prop: &str) -> MaterialId {
+        let prop = prop.split_once('@').map_or(prop, |(whole, _)| whole);
         self.by_prop
             .get(prop)
             .copied()
@@ -2393,54 +2403,138 @@ const SHORE_TRAINS: [ShoreTrain; 3] = [
 const SHORE_BIN: f64 = 4.0;
 const SHORE_BINS: usize = 1024;
 
-/// The island as a prop (on its layered ground, `CityMaterials::island_ground`), its samples
-/// generated only when the cooked mesh is not in the cache. Named `island`, not `terrain`:
-/// the cache keeps one file per name, and the city's ground and the island evicted each other.
-fn island_prop(args: &Args) -> PropSpec {
+/// Tiles a side of the island's ground (#106): 2 km each over the 16 km.
+const ISLAND_TILES: u32 = 8;
+
+/// The island's ground as props (on its layered ground, `CityMaterials::island_ground`), its
+/// samples generated only when a tile's cooked mesh is not in the cache. In tiles (#106), each
+/// cooked and cached on its own, their borders locked in every level so they meet without a
+/// crack; named `island@x-z` (the cache keeps one file per name, and the material is the
+/// name's before the `@`).
+fn island_tiles(args: &Args) -> Vec<PropSpec> {
     let (params, erosion) = island_settings(args);
-    let for_source = args.clone();
-    let (size, spacing) = (params.size, params.spacing);
-    PropSpec {
-        name: "island".to_owned(),
-        kind: PropKind::Heightfield(Heightfield {
-            key: format!(
-                "{}, smoothed {} passes, sea floor {} m over {} m, shore smoothed {:?}, rivers {:?} carved {:?} in valleys {:?}",
-                forge_procgen::island::island_key(&params, &erosion),
-                GROUND_SMOOTHING,
-                SEA_FLOOR.0,
-                SEA_FLOOR.1,
-                SHORE_SMOOTHING,
-                ribbon_params(),
-                forge_procgen::ChannelParams::default(),
-                valley_params(args),
-            ),
-            samples: params.size,
-            spacing: params.spacing as f32,
-            source: std::sync::Arc::new(move || island_heights(&for_source).data),
-            // The rivers' channels, carved into cells drawn in quads of a metre (#105).
-            detail: Some(std::sync::Arc::new(move |heights: &[f32]| {
-                let start = Instant::now();
-                let height = Field2 {
-                    size,
-                    spacing,
-                    data: heights.to_vec(),
-                };
-                let channels = island_water(&height).channels;
-                let detail = HeightfieldDetail {
-                    split: channels.params().split,
-                    cells: channels.refined().to_vec(),
-                    heights: channels.detail(&height, &TaskPool::client()),
-                };
-                tracing::info!(
-                    cells = detail.cells.len(),
-                    fine_vertices = detail.heights.len(),
-                    ms = start.elapsed().as_millis(),
-                    "island river channels carved"
-                );
-                detail
-            })),
-        }),
+    let factor = island_factor(args);
+    let size = (params.size - 1) * factor + 1;
+    let spacing = params.spacing / f64::from(factor);
+    let mut key = format!(
+        "{}, smoothed {} passes, sea floor {} m over {} m, shore smoothed {:?}, rivers {:?} carved {:?} in valleys {:?}",
+        forge_procgen::island::island_key(&params, &erosion),
+        GROUND_SMOOTHING,
+        SEA_FLOOR.0,
+        SEA_FLOOR.1,
+        SHORE_SMOOTHING,
+        ribbon_params(),
+        forge_procgen::ChannelParams::default(),
+        valley_params(args),
+    );
+    if factor > 1 {
+        key += &format!(", drawn on the cubic at {spacing} m");
     }
+    let for_source = args.clone();
+    let source: Arc<dyn Fn() -> Arc<[f32]> + Send + Sync> =
+        Arc::new(move || island_drawn(&for_source).heights.clone());
+    // The rivers' channels, carved into cells drawn in quads of a metre (#105).
+    let for_detail = args.clone();
+    let detail: Arc<forge_geom::city::DetailSource> =
+        Arc::new(move |_: &[f32]| island_drawn(&for_detail).detail.clone());
+    let cells = size - 1;
+    let edges: Vec<u32> = (0..=ISLAND_TILES)
+        .map(|t| t * cells / ISLAND_TILES)
+        .collect();
+    let mut tiles = Vec::new();
+    for tz in 0..ISLAND_TILES as usize {
+        for tx in 0..ISLAND_TILES as usize {
+            tiles.push(PropSpec {
+                name: format!("island@{tx}-{tz}"),
+                kind: PropKind::Heightfield(Heightfield {
+                    key: key.clone(),
+                    samples: size,
+                    spacing: spacing as f32,
+                    source: source.clone(),
+                    detail: Some(detail.clone()),
+                    window: Some(CellWindow {
+                        first: [edges[tx], edges[tz]],
+                        cells: [edges[tx + 1] - edges[tx], edges[tz + 1] - edges[tz]],
+                    }),
+                }),
+            });
+        }
+    }
+    tiles
+}
+
+/// How many times finer than the field the island's ground is drawn (`--island-drawn`, #106).
+fn island_factor(args: &Args) -> u32 {
+    let factor = (args.island_spacing / args.island_drawn).round().max(1.0) as u32;
+    let split = forge_procgen::ChannelParams::default().split;
+    assert!(
+        split.is_multiple_of(factor),
+        "--island-drawn divides the field's {} m spacing by 1, 2, 4 or 8",
+        args.island_spacing
+    );
+    factor
+}
+
+/// The island's ground as its tiles draw it (#106): the samples, and the cells drawn finer
+/// (the rivers' channels, the lakes' shores and the coast's contours in quads of a metre).
+struct DrawnGround {
+    heights: Arc<[f32]>,
+    detail: Arc<HeightfieldDetail>,
+}
+
+/// [`DrawnGround`], made once a process for the field and the factor: every tile asks for it.
+/// At the field's spacing, the field's samples and its refined cells on the cells' planes; finer,
+/// the field's cubic with the channels carved, its samples and its refined cells
+/// (`Channels::fine`).
+fn island_drawn(args: &Args) -> Arc<DrawnGround> {
+    static MADE: std::sync::Mutex<Option<(u64, Arc<DrawnGround>)>> = std::sync::Mutex::new(None);
+    let height = island_heights(args);
+    let factor = island_factor(args);
+    let key = height.digest()
+        ^ height.spacing.to_bits()
+        ^ u64::from(height.size)
+        ^ u64::from(factor).rotate_left(48);
+    let mut made = MADE.lock().expect("the island's drawn ground");
+    if let Some((made_for, drawn)) = made.as_ref()
+        && *made_for == key
+    {
+        return drawn.clone();
+    }
+    let start = Instant::now();
+    let channels = island_water(&height).channels;
+    let pool = TaskPool::client();
+    let drawn = if factor == 1 {
+        let heights = channels.detail(&height, &pool);
+        DrawnGround {
+            heights: Arc::from(height.data),
+            detail: Arc::new(HeightfieldDetail {
+                split: channels.params().split,
+                cells: channels.refined().to_vec(),
+                heights,
+            }),
+        }
+    } else {
+        let fine = channels.fine(&height, factor, &pool);
+        DrawnGround {
+            heights: Arc::from(fine.height.data),
+            detail: Arc::new(HeightfieldDetail {
+                split: fine.split,
+                cells: fine.cells,
+                heights: fine.heights,
+            }),
+        }
+    };
+    tracing::info!(
+        drawn_m = height.spacing / f64::from(factor),
+        samples = (height.size - 1) * factor + 1,
+        refined_cells = drawn.detail.cells.len(),
+        fine_vertices = drawn.detail.heights.len(),
+        ms = start.elapsed().as_millis(),
+        "island ground drawn, the river channels carved"
+    );
+    let drawn = Arc::new(drawn);
+    *made = Some((key, drawn.clone()));
+    drawn
 }
 
 /// One field of a GPU cascade's sample.
@@ -2514,10 +2608,11 @@ fn island_camera(args: &Args) -> FlyCamera {
     camera
 }
 
-/// The island's props, in the order `build_island` reads them: the island, the sea around it,
-/// and the city's boulders and rubble for its rocks (the same cache files as the city's).
+/// The island's props, in the order `build_island` reads them: the island's tiles, the sea around
+/// it, and the city's boulders and rubble for its rocks (the same cache files as the city's).
 fn island_props(args: &Args) -> Vec<PropSpec> {
-    let mut props = vec![island_prop(args), sea_prop()];
+    let mut props = island_tiles(args);
+    props.push(sea_prop());
     props.extend(
         city_props()
             .into_iter()
@@ -2537,8 +2632,9 @@ fn sea_prop() -> PropSpec {
             key: "a flat sea at 0 m".to_owned(),
             samples: SAMPLES,
             spacing: 8192.0,
-            source: Arc::new(|| vec![0.0; (SAMPLES * SAMPLES) as usize]),
+            source: Arc::new(|| Arc::from(vec![0.0; (SAMPLES * SAMPLES) as usize])),
             detail: None,
+            window: None,
         }),
     }
 }
@@ -2696,16 +2792,25 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         "island moisture, rivers and lakes"
     );
     builder.set_ray_traced(!args.no_shadows);
+    // The ground's tiles, then the sea, then the rocks (`island_props`).
+    let tiles = (ISLAND_TILES * ISLAND_TILES) as usize;
+    let (tile_ids, sea) = (&ids[..tiles], ids[tiles]);
+    // The tiles cut for the rays as the one mesh they were (#106).
+    builder.set_ray_group(tile_ids, forge_render::raytrace::TERRAIN_BUDGET);
     let mut materials = CityMaterials::new(&ctx.device)?;
     materials.island_ground(&layers.data, texels, extent)?;
     materials.apply(&mut builder, &props, &ids);
     let mut layout = CityLayout::island(args.instances.unwrap_or(300_000));
     layout.origin = scene_origin(args);
     builder.set_origin(layout.origin);
-    builder.add_instance(ids[0], Mat4::IDENTITY);
+    // The ground first: should the cull's work list overflow (`--no-lod`), the instances last in
+    // the table are the ones dropped.
+    for &tile in tile_ids {
+        builder.add_instance(tile, Mat4::IDENTITY);
+    }
     // The stand-in sea, unless the water surface draws the sea (issue #105).
     if !args.water() {
-        builder.add_instance(ids[1], Mat4::IDENTITY);
+        builder.add_instance(sea, Mat4::IDENTITY);
     }
     // The stones in the rivers (#105): the boulders, scaled to each stone, standing on the bed.
     let boulders: Vec<(MeshId, f32)> = props
@@ -2722,6 +2827,14 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
     stones.extend_from_slice(&banked);
     // On the scree at the foot of their walls, the rubble piles scaled down to broken rock: a
     // pile on a third of its texels, 0.2 to 0.4 of its size, sunk a little.
+    // The ground as the tiles draw it (#106): finer than the field, its cubic.
+    let drawn_at = |x: f64, y: f64| {
+        if island_factor(args) > 1 {
+            channels.cubic_height_at(&height, x, y)
+        } else {
+            channels.height_at(&height, x, y)
+        }
+    };
     let rubble: Vec<(MeshId, Mat4)> = {
         let piles: Vec<MeshId> = props
             .iter()
@@ -2749,7 +2862,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
                         (f64::from(x) + draw(1) as f64) * cell,
                         (f64::from(y) + draw(2) as f64) * cell,
                     ];
-                    let ground = channels.height_at(&height, at[0], at[1]) as f32;
+                    let ground = drawn_at(at[0], at[1]) as f32;
                     let mesh = piles[(draw(3) * piles.len() as f32) as usize % piles.len()];
                     (
                         mesh,
@@ -2788,7 +2901,7 @@ fn build_island(ctx: &Context, args: &Args, cooked: Cooked) -> Result<MeshletSce
         );
     }
     // The rocks: the GPU placement over the island's own heights (`placement::RockRule::Land`).
-    let rocks: Vec<MeshId> = ids[2..].to_vec();
+    let rocks: Vec<MeshId> = ids[tiles + 1..].to_vec();
     let meshes = CityMeshes {
         buildings: Vec::new(),
         rocks: rocks.clone(),

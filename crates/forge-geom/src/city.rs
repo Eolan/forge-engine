@@ -72,14 +72,35 @@ pub struct Heightfield {
     pub spacing: f32,
     /// The samples, row-major, `samples × samples` of them, as [`Terrain::heights`] lays them
     /// out.
-    pub source: Arc<dyn Fn() -> Vec<f32> + Send + Sync>,
+    pub source: Arc<dyn Fn() -> Arc<[f32]> + Send + Sync>,
     /// The cells drawn finer, from the samples (the island's river channels, #105), or none:
     /// every cell two triangles. Part of the field, so `key` names its parameters too.
     pub detail: Option<Arc<DetailSource>>,
+    /// The cells this mesh draws, a tile of the field (#106), or none: all of them. A tile
+    /// is drawn in the whole field's frame, its vertices those of the whole field's mesh (see
+    /// [`heightfield_window_mesh`]).
+    pub window: Option<CellWindow>,
+}
+
+/// A rectangle of a heightfield's cells: a tile of it (#106).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellWindow {
+    /// The first cell's `(i, j)`: the cell whose first corner is sample `(i, j)`.
+    pub first: [u32; 2],
+    /// Cells along x and along z.
+    pub cells: [u32; 2],
+}
+
+impl CellWindow {
+    /// Whether cell `(i, j)` is inside.
+    pub fn contains(&self, i: u32, j: u32) -> bool {
+        (self.first[0]..self.first[0] + self.cells[0]).contains(&i)
+            && (self.first[1]..self.first[1] + self.cells[1]).contains(&j)
+    }
 }
 
 /// What makes a heightfield's [`HeightfieldDetail`] from its samples.
-pub type DetailSource = dyn Fn(&[f32]) -> HeightfieldDetail + Send + Sync;
+pub type DetailSource = dyn Fn(&[f32]) -> Arc<HeightfieldDetail> + Send + Sync;
 
 /// Cells of a heightfield drawn finer than its samples (the island's river channels, #105):
 /// each split into `split × split` quads whose heights are given, the cells around them
@@ -99,12 +120,17 @@ pub struct HeightfieldDetail {
 
 impl fmt::Debug for Heightfield {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Heightfield")
-            .field("key", &self.key)
+        let mut s = f.debug_struct("Heightfield");
+        s.field("key", &self.key)
             .field("samples", &self.samples)
             .field("spacing", &self.spacing)
-            .field("detail", &self.detail.is_some())
-            .finish()
+            .field("detail", &self.detail.is_some());
+        // Only a tile names its window: the whole field's text, and its cache key, stay as
+        // they were.
+        if let Some(window) = &self.window {
+            s.field("window", window);
+        }
+        s.finish()
     }
 }
 
@@ -114,6 +140,7 @@ impl PartialEq for Heightfield {
             && self.samples == other.samples
             && self.spacing == other.spacing
             && self.detail.is_some() == other.detail.is_some()
+            && self.window == other.window
     }
 }
 
@@ -136,11 +163,15 @@ impl PropSpec {
             PropKind::Terrain(t) => terrain_mesh(t),
             PropKind::Heightfield(h) => {
                 let heights = (h.source)();
-                match &h.detail {
-                    Some(detail) => {
+                match (&h.detail, h.window) {
+                    (Some(detail), None) => {
                         refined_heightfield_mesh(h.samples, h.spacing, &heights, &detail(&heights))
                     }
-                    None => heightfield_mesh(h.samples, h.spacing, &heights),
+                    (None, None) => heightfield_mesh(h.samples, h.spacing, &heights),
+                    (detail, Some(window)) => {
+                        let detail = detail.as_ref().map(|d| d(&heights)).unwrap_or_default();
+                        heightfield_window_mesh(h.samples, h.spacing, &heights, &detail, window)
+                    }
                 }
             }
         }
@@ -339,6 +370,26 @@ pub fn refined_heightfield_mesh(
     heights: &[f32],
     detail: &HeightfieldDetail,
 ) -> TriMesh {
+    let side = samples.saturating_sub(1);
+    let window = CellWindow {
+        first: [0, 0],
+        cells: [side, side],
+    };
+    heightfield_window_mesh(samples, spacing, heights, detail, window)
+}
+
+/// The cells of `window` of [`refined_heightfield_mesh`]'s mesh: a tile of it (#106), in the
+/// whole field's frame. Its vertices are the whole mesh's to the bit, normals included: the
+/// cells around the window are built too, so that the vertices on its outline get the normals
+/// of every triangle around them, then dropped. Tiles side by side share their outline's
+/// vertices and shade alike across it.
+pub fn heightfield_window_mesh(
+    samples: u32,
+    spacing: f32,
+    heights: &[f32],
+    detail: &HeightfieldDetail,
+    window: CellWindow,
+) -> TriMesh {
     let n = samples as usize;
     assert_eq!(heights.len(), n * n, "a heightfield of {n} × {n} samples");
     let side = n - 1;
@@ -349,138 +400,228 @@ pub fn refined_heightfield_mesh(
         detail.cells.len() * per,
         "{per} heights per refined cell"
     );
+    let [x0, z0] = window.first.map(|c| c as usize);
+    let (x1, z1) = (x0 + window.cells[0] as usize, z0 + window.cells[1] as usize);
+    assert!(x1 <= side && z1 <= side, "the window inside the field");
     let half = side as f32 * spacing * 0.5;
     let fine = spacing / k as f32;
-    let mut slot = vec![u32::MAX; side * side];
-    for (s, &c) in detail.cells.iter().enumerate() {
-        slot[c as usize] = s as u32;
+    // The cells built: the window and a cell around it, within the field.
+    let (hx0, hz0, hx1, hz1) = (
+        x0.saturating_sub(1),
+        z0.saturating_sub(1),
+        (x1 + 1).min(side),
+        (z1 + 1).min(side),
+    );
+    // The refined cells looked up: those and a cell more around them (their neighbours).
+    let (lx0, lz0, lx1, lz1) = (
+        hx0.saturating_sub(1),
+        hz0.saturating_sub(1),
+        (hx1 + 1).min(side),
+        (hz1 + 1).min(side),
+    );
+    let lw = lx1 - lx0;
+    let mut slot = vec![u32::MAX; lw * (lz1 - lz0)];
+    let rows = detail.cells.partition_point(|&c| (c as usize) < lz0 * side)
+        ..detail.cells.partition_point(|&c| (c as usize) < lz1 * side);
+    for s in rows.clone() {
+        let c = detail.cells[s] as usize;
+        let (i, j) = (c % side, c / side);
+        if (lx0..lx1).contains(&i) {
+            slot[(j - lz0) * lw + i - lx0] = s as u32;
+        }
     }
-    let refined = |i: usize, j: usize| i < side && j < side && slot[j * side + i] != u32::MAX;
+    let slot_of = |i: usize, j: usize| {
+        let s = if (lx0..lx1).contains(&i) && (lz0..lz1).contains(&j) {
+            slot[(j - lz0) * lw + i - lx0]
+        } else {
+            u32::MAX
+        };
+        (s != u32::MAX).then_some(s as usize)
+    };
+    let refined = |i: usize, j: usize| slot_of(i, j).is_some();
+    let width = hx1 - hx0 + 1;
+    let vertex = |i: usize, j: usize| ((j - hz0) * width + i - hx0) as u32;
     let mut mesh = TriMesh::default();
-    mesh.positions.reserve(n * n + detail.cells.len() * k * k);
-    for j in 0..n {
-        for i in 0..n {
+    mesh.positions.reserve(width * (hz1 - hz0 + 1));
+    for j in hz0..=hz1 {
+        for i in hx0..=hx1 {
             let (x, z) = (-half + i as f32 * spacing, -half + j as f32 * spacing);
             mesh.positions.push([x, heights[j * n + i], z]);
         }
     }
     // The refined cells' corners at the detail's heights (the samples' where they meet a
-    // coarse cell).
-    for (s, &c) in detail.cells.iter().enumerate() {
-        let (i, j) = (c as usize % side, c as usize / side);
+    // coarse cell), in the cells' order.
+    for s in rows {
+        let c = detail.cells[s] as usize;
+        let (i, j) = (c % side, c / side);
         for (u, v) in [(0, 0), (k, 0), (0, k), (k, k)] {
-            let at = (j + v / k) * n + i + u / k;
-            mesh.positions[at][1] = detail.heights[s * per + v * (k + 1) + u];
+            let (si, sj) = (i + u / k, j + v / k);
+            if (hx0..=hx1).contains(&si) && (hz0..=hz1).contains(&sj) {
+                mesh.positions[vertex(si, sj) as usize][1] =
+                    detail.heights[s * per + v * (k + 1) + u];
+            }
         }
     }
-    // An edge's `k − 1` inner vertices, made by the first refined cell that meets it: edge
-    // `2 (j n + i)` from sample (i, j) along +x, `2 (j n + i) + 1` along +z.
+    // An edge's `k − 1` inner vertices, made from the first refined cell that meets it (the
+    // one below or to its left before the one above or to its right, as the cells' order
+    // meets them): edge `2 (j n + i)` from sample (i, j) along +x, `2 (j n + i) + 1` along +z.
     let mut edges: HashMap<usize, u32> = HashMap::new();
-    let mut local = vec![0u32; per];
-    mesh.indices
-        .reserve(6 * (side * side + detail.cells.len() * (k * k - 1)));
-    for (s, &c) in detail.cells.iter().enumerate() {
-        let (i, j) = (c as usize % side, c as usize / side);
-        let cell_heights = &detail.heights[s * per..(s + 1) * per];
-        let x0 = -half + i as f32 * spacing;
-        let z0 = -half + j as f32 * spacing;
-        let position = |u: usize, v: usize| {
-            [
-                x0 + u as f32 * fine,
-                cell_heights[v * (k + 1) + u],
-                z0 + v as f32 * fine,
-            ]
+    let make_edge = |mesh: &mut TriMesh, key: usize| -> u32 {
+        let (s, along_z) = (key / 2, key % 2 == 1);
+        let (i, j) = (s % n, s / n);
+        let candidates: [(usize, usize, [usize; 2]); 2] = if along_z {
+            [(i.wrapping_sub(1), j, [k, 0]), (i, j, [0, 0])]
+        } else {
+            [(i, j.wrapping_sub(1), [0, k]), (i, j, [0, 0])]
         };
-        // Bottom, top, left, right: the edge's key and the fine vertex of its t-th inner point.
-        let sides: [(usize, [usize; 2], [usize; 2]); 4] = [
-            (2 * (j * n + i), [1, 0], [0, 0]),
-            (2 * ((j + 1) * n + i), [1, 0], [0, k]),
-            (2 * (j * n + i) + 1, [0, 1], [0, 0]),
-            (2 * (j * n + i + 1) + 1, [0, 1], [k, 0]),
-        ];
-        let mut starts = [0u32; 4];
-        for (e, &(key, step, from)) in sides.iter().enumerate() {
-            starts[e] = *edges.entry(key).or_insert_with(|| {
-                let start = mesh.positions.len() as u32;
-                for t in 1..k {
-                    mesh.positions
-                        .push(position(from[0] + t * step[0], from[1] + t * step[1]));
-                }
-                start
-            });
+        let step = if along_z { [0, 1] } else { [1, 0] };
+        let (ci, cj, from, s) = candidates
+            .into_iter()
+            .find_map(|(ci, cj, from)| slot_of(ci, cj).map(|s| (ci, cj, from, s)))
+            .expect("an edge made for a refined cell");
+        let cell_heights = &detail.heights[s * per..(s + 1) * per];
+        let (cx0, cz0) = (-half + ci as f32 * spacing, -half + cj as f32 * spacing);
+        let start = mesh.positions.len() as u32;
+        for t in 1..k {
+            let (u, v) = (from[0] + t * step[0], from[1] + t * step[1]);
+            mesh.positions.push([
+                cx0 + u as f32 * fine,
+                cell_heights[v * (k + 1) + u],
+                cz0 + v as f32 * fine,
+            ]);
         }
-        let inner = mesh.positions.len() as u32;
-        for v in 1..k {
-            for u in 1..k {
-                mesh.positions.push(position(u, v));
-            }
-        }
-        for v in 0..=k {
-            for u in 0..=k {
-                let corner = (u == 0 || u == k) && (v == 0 || v == k);
-                local[v * (k + 1) + u] = if corner {
-                    ((j + v / k) * n + i + u / k) as u32
-                } else if v == 0 {
-                    starts[0] + (u - 1) as u32
-                } else if v == k {
-                    starts[1] + (u - 1) as u32
-                } else if u == 0 {
-                    starts[2] + (v - 1) as u32
-                } else if u == k {
-                    starts[3] + (v - 1) as u32
-                } else {
-                    inner + ((v - 1) * (k - 1) + (u - 1)) as u32
+        start
+    };
+    // Per triangle, whether it is the window's (the cells around it only lend their normals).
+    let mut keep: Vec<bool> = Vec::new();
+    let mut local = vec![0u32; per];
+    mesh.indices.reserve(6 * (hx1 - hx0) * (hz1 - hz0));
+    for j in hz0..hz1 {
+        for i in hx0..hx1 {
+            let Some(s) = slot_of(i, j) else {
+                continue;
+            };
+            let cell_heights = &detail.heights[s * per..(s + 1) * per];
+            let cx0 = -half + i as f32 * spacing;
+            let cz0 = -half + j as f32 * spacing;
+            // Bottom, top, left, right.
+            let keys = [
+                2 * (j * n + i),
+                2 * ((j + 1) * n + i),
+                2 * (j * n + i) + 1,
+                2 * (j * n + i + 1) + 1,
+            ];
+            let mut starts = [0u32; 4];
+            for (e, &key) in keys.iter().enumerate() {
+                starts[e] = match edges.get(&key) {
+                    Some(&start) => start,
+                    None => {
+                        let start = make_edge(&mut mesh, key);
+                        edges.insert(key, start);
+                        start
+                    }
                 };
             }
-        }
-        for v in 0..k {
-            for u in 0..k {
-                let a = local[v * (k + 1) + u];
-                let (b, c, d) = (
-                    local[v * (k + 1) + u + 1],
-                    local[(v + 1) * (k + 1) + u],
-                    local[(v + 1) * (k + 1) + u + 1],
-                );
-                mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+            let inner = mesh.positions.len() as u32;
+            for v in 1..k {
+                for u in 1..k {
+                    mesh.positions.push([
+                        cx0 + u as f32 * fine,
+                        cell_heights[v * (k + 1) + u],
+                        cz0 + v as f32 * fine,
+                    ]);
+                }
+            }
+            for v in 0..=k {
+                for u in 0..=k {
+                    let corner = (u == 0 || u == k) && (v == 0 || v == k);
+                    local[v * (k + 1) + u] = if corner {
+                        vertex(i + u / k, j + v / k)
+                    } else if v == 0 {
+                        starts[0] + (u - 1) as u32
+                    } else if v == k {
+                        starts[1] + (u - 1) as u32
+                    } else if u == 0 {
+                        starts[2] + (v - 1) as u32
+                    } else if u == k {
+                        starts[3] + (v - 1) as u32
+                    } else {
+                        inner + ((v - 1) * (k - 1) + (u - 1)) as u32
+                    };
+                }
+            }
+            let mine = window.contains(i as u32, j as u32);
+            for v in 0..k {
+                for u in 0..k {
+                    let a = local[v * (k + 1) + u];
+                    let (b, c, d) = (
+                        local[v * (k + 1) + u + 1],
+                        local[(v + 1) * (k + 1) + u],
+                        local[(v + 1) * (k + 1) + u + 1],
+                    );
+                    mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+                    keep.extend([mine, mine]);
+                }
             }
         }
     }
     // The coarse cells: two triangles, or a fan where a neighbour across an edge is refined.
     let mut ring: Vec<u32> = Vec::with_capacity(4 * k);
-    for j in 0..side {
-        for i in 0..side {
+    for j in hz0..hz1 {
+        for i in hx0..hx1 {
             if refined(i, j) {
                 continue;
             }
-            let a = (j * n + i) as u32;
-            let (b, c, d) = (a + 1, a + n as u32, a + n as u32 + 1);
+            let mine = window.contains(i as u32, j as u32);
+            let a = vertex(i, j);
+            let (b, c, d) = (vertex(i + 1, j), vertex(i, j + 1), vertex(i + 1, j + 1));
             let below = j > 0 && refined(i, j - 1);
             let above = refined(i, j + 1);
             let left = i > 0 && refined(i - 1, j);
             let right = refined(i + 1, j);
             if !(below || above || left || right) {
                 mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
+                keep.extend([mine, mine]);
                 continue;
             }
-            let inner = |key: usize, t: usize| edges[&key] + (t - 1) as u32;
+            // An edge a refined cell outside the cells built meets is made here.
+            let mut inner = |mesh: &mut TriMesh, key: usize, t: usize| {
+                let start = match edges.get(&key) {
+                    Some(&start) => start,
+                    None => {
+                        let start = make_edge(mesh, key);
+                        edges.insert(key, start);
+                        start
+                    }
+                };
+                start + (t - 1) as u32
+            };
             // Round the cell counter-clockwise seen from above: up the left edge, along the
             // top, down the right edge, back along the bottom.
             ring.clear();
             ring.push(a);
             if left {
-                ring.extend((1..k).map(|t| inner(2 * (j * n + i) + 1, t)));
+                for t in 1..k {
+                    ring.push(inner(&mut mesh, 2 * (j * n + i) + 1, t));
+                }
             }
             ring.push(c);
             if above {
-                ring.extend((1..k).map(|t| inner(2 * ((j + 1) * n + i), t)));
+                for t in 1..k {
+                    ring.push(inner(&mut mesh, 2 * ((j + 1) * n + i), t));
+                }
             }
             ring.push(d);
             if right {
-                ring.extend((1..k).rev().map(|t| inner(2 * (j * n + i + 1) + 1, t)));
+                for t in (1..k).rev() {
+                    ring.push(inner(&mut mesh, 2 * (j * n + i + 1) + 1, t));
+                }
             }
             ring.push(b);
             if below {
-                ring.extend((1..k).rev().map(|t| inner(2 * (j * n + i), t)));
+                for t in (1..k).rev() {
+                    ring.push(inner(&mut mesh, 2 * (j * n + i), t));
+                }
             }
             let (pb, pc) = (mesh.positions[b as usize], mesh.positions[c as usize]);
             let centre = mesh.positions.len() as u32;
@@ -492,11 +633,34 @@ pub fn refined_heightfield_mesh(
             for m in 0..ring.len() {
                 let next = ring[(m + 1) % ring.len()];
                 mesh.indices.extend_from_slice(&[centre, ring[m], next]);
+                keep.push(mine);
             }
         }
     }
     mesh.recompute_normals();
-    mesh
+    if keep.iter().all(|&mine| mine) {
+        return mesh;
+    }
+    // The window's triangles and the vertices they use, in their order.
+    let mut used = vec![false; mesh.positions.len()];
+    let mut indices = Vec::with_capacity(mesh.indices.len());
+    for (tri, &mine) in mesh.indices.as_chunks::<3>().0.iter().zip(&keep) {
+        if mine {
+            indices.extend_from_slice(tri);
+            for &v in tri {
+                used[v as usize] = true;
+            }
+        }
+    }
+    let mut remap = vec![u32::MAX; used.len()];
+    let mut out = TriMesh::default();
+    for (v, _) in used.iter().enumerate().filter(|&(_, &u)| u) {
+        remap[v] = out.positions.len() as u32;
+        out.positions.push(mesh.positions[v]);
+        out.normals.push(mesh.normals[v]);
+    }
+    out.indices = indices.into_iter().map(|v| remap[v as usize]).collect();
+    out
 }
 
 /// Six faces of a box as (normal, up, right), with `up × right = normal` so that the grid's
@@ -1013,6 +1177,91 @@ mod tests {
             .filter(|&(fx, fz)| inside(fx, fz))
             .count();
         assert_eq!(channel, inner);
+    }
+
+    #[test]
+    fn tiles_of_a_refined_heightfield_are_the_whole_mesh_to_the_bit() {
+        // A field of 10 × 10 cells with a band of refined cells crossing the tiles' borders,
+        // and tiles of uneven sizes: their triangles together are the whole mesh's, and every
+        // vertex of a tile has the whole mesh's position and normal, bit for bit (#106).
+        let (n, spacing, k) = (11usize, 8.0f32, 4usize);
+        let fine = |fx: usize, fz: usize| {
+            let (x, z) = (fx as f32 / k as f32, fz as f32 / k as f32);
+            (0.7 * x).sin() * 3.0 + 0.4 * z * z - 0.9 * (x * z * 0.3).cos()
+        };
+        let heights: Vec<f32> = (0..n * n).map(|s| fine(s % n * k, s / n * k)).collect();
+        let mut cells: Vec<u32> = [
+            (1, 2),
+            (2, 2),
+            (2, 3),
+            (3, 3),
+            (4, 3),
+            (4, 4),
+            (5, 4),
+            (6, 5),
+            (6, 6),
+            (7, 6),
+            (9, 9),
+            (0, 9),
+        ]
+        .iter()
+        .map(|&(i, j)| (j * (n - 1) + i) as u32)
+        .collect();
+        cells.sort_unstable();
+        let mut detail = HeightfieldDetail {
+            split: k as u32,
+            cells: cells.clone(),
+            heights: Vec::new(),
+        };
+        for &c in &cells {
+            let (i, j) = (c as usize % (n - 1), c as usize / (n - 1));
+            for v in 0..=k {
+                for u in 0..=k {
+                    detail.heights.push(fine(i * k + u, j * k + v) - 0.5);
+                }
+            }
+        }
+        let whole = refined_heightfield_mesh(n as u32, spacing, &heights, &detail);
+        let bits = |p: [f32; 3]| p.map(f32::to_bits);
+        // A triangle as its positions' bits, from its smallest corner (keeping its winding).
+        let triangles = |mesh: &TriMesh| {
+            let mut out: Vec<[[u32; 3]; 3]> = mesh
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|t| {
+                    let p = t.map(|v| bits(mesh.positions[v as usize]));
+                    let m = (0..3).min_by_key(|&r| p[r]).expect("three corners");
+                    [p[m], p[(m + 1) % 3], p[(m + 2) % 3]]
+                })
+                .collect();
+            out.sort_unstable();
+            out
+        };
+        let normal_of: HashMap<[u32; 3], [u32; 3]> = whole
+            .positions
+            .iter()
+            .zip(&whole.normals)
+            .map(|(&p, &q)| (bits(p), bits(q)))
+            .collect();
+        let mut together = TriMesh::default();
+        for (tx, tz) in [(0, 0), (3, 0), (0, 4), (3, 4)] {
+            let window = CellWindow {
+                first: [tx, tz],
+                cells: [if tx == 0 { 3 } else { 7 }, if tz == 0 { 4 } else { 6 }],
+            };
+            let tile = heightfield_window_mesh(n as u32, spacing, &heights, &detail, window);
+            for (&p, &q) in tile.positions.iter().zip(&tile.normals) {
+                assert_eq!(normal_of.get(&bits(p)), Some(&bits(q)), "at {p:?}");
+            }
+            let base = together.positions.len() as u32;
+            together.positions.extend_from_slice(&tile.positions);
+            together
+                .indices
+                .extend(tile.indices.iter().map(|v| v + base));
+        }
+        assert_eq!(triangles(&together), triangles(&whole));
     }
 
     #[test]
