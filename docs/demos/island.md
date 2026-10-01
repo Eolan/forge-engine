@@ -835,3 +835,25 @@ steps with them (a cubic through them scallops instead).
   rest the refined cells). **Stability:** along the beach 0.44 → 0.26 % frame to frame, the same
   or better everywhere. **Checks:** only the island's images change; the A/B harness and mesh
   against fallback at 0 px; validation clean (`reports/2026-10-01-106/coast.md`).
+
+**The ground's steps** (#106, 2026-10-01). The owner found the ground to the right of the first
+view very uneven, and the valleys' sides step every 8 m; with the sun's shadows off the steps
+still show, so they are the field's, not the shadows': the 8 m erosion leaves steps two samples
+apart on the slopes (one sample a ridge, the next a gully). One pass of the 3 × 3 binomial filter
+over the whole field (`GROUND_SMOOTHING` in the demo, before the sea floor) takes out what
+alternates every sample and halves what repeats every four, and leaves the valleys, hundreds of
+metres across, as they were.
+- The valleys' walls lose their stripes, and the sand's top its teeth (they were the same
+  gullies crossing 2.5 m).
+- The rivers stand under their banks by 3.9 m at most where it was 14.5 m: the gorges the level
+  water cut were mostly through those steps (621 points more than 2 m under their banks, from
+  about 4 000). 14 lakes of a hectare or more where there were 15: the smoothing changes the
+  depressions too.
+- The rocks follow the new slopes.
+
+![The largest river's valley from 200 m, the lakes' commit (left) and with the coast and the ground smoothed (right)](../../reports/2026-10-01-106/ground-valley.png)
+
+![The ground east of the first view: before (left), smoothed (right)](../../reports/2026-10-01-106/ground-right.png)
+- **Cost:** none to draw; the frame within 0.04 ms of the lakes' commit over six views. Over 32
+  frames as stable or more. **Checks:** only the island's images change; the A/B harness and mesh
+  against fallback at 0 px; validation clean (`reports/2026-10-01-106/ground.md`).

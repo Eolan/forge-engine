@@ -1717,6 +1717,7 @@ fn island_heights(args: &Args) -> Field2<f32> {
     // The sea floor under the flat sea (#96): the sea's plane then meets the ground along the
     // coast, between the samples.
     let mut height = height;
+    forge_procgen::smooth_shore(&mut height, 0.0, f32::INFINITY, GROUND_SMOOTHING);
     let coast = forge_procgen::coast_distance(&height, 0.0, &pool);
     forge_procgen::sea_floor(&mut height, &coast, 0.0, SEA_FLOOR.0, SEA_FLOOR.1);
     // The ground within a few metres of the sea's level smoothed, so the coast runs smooth
@@ -1995,6 +1996,10 @@ fn island_ribbons(
 /// the metres from the coast that set its slope (60 over 1 500: 4 % at the shore).
 const SEA_FLOOR: (f32, f32) = (60.0, 1500.0);
 
+/// Passes of the binomial filter over the whole field (#106): the 8 m erosion leaves steps two
+/// samples apart on the slopes, which one pass takes out.
+const GROUND_SMOOTHING: u32 = 1;
+
 /// The shore's smoothing (`forge_procgen::smooth_shore`, #106): the samples within 3.5 m of the
 /// sea's level (the sand's top at 2.5 m among them), four passes of the binomial filter.
 const SHORE_SMOOTHING: (f32, u32) = (3.5, 4);
@@ -2030,8 +2035,9 @@ fn island_prop(args: &Args) -> PropSpec {
         name: "island".to_owned(),
         kind: PropKind::Heightfield(Heightfield {
             key: format!(
-                "{}, sea floor {} m over {} m, shore smoothed {:?}, rivers {:?} carved {:?}",
+                "{}, smoothed {} passes, sea floor {} m over {} m, shore smoothed {:?}, rivers {:?} carved {:?}",
                 forge_procgen::island::island_key(&params, &erosion),
+                GROUND_SMOOTHING,
                 SEA_FLOOR.0,
                 SEA_FLOOR.1,
                 SHORE_SMOOTHING,
