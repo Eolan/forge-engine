@@ -29,6 +29,15 @@ held at 12 s:
   under the foam. Handing the river over by the floor's height per pixel removed it, but showed
   where the river's white water stopped in a dark oval (#105's thread). This change is the
   other half of that handover.
+- Tried after this commit, and not kept:
+  - The spill drawn in the river's own streaks (laid out from the mouth, carried at its speed)
+    together with that handover removed the line from 2 m: the streaks run on from the river
+    into the sea.
+  - But from the logged mouth view and from above, the river's end then read as a calmer, paler
+    pool rather than white water spilling into the surf. The river's streaks cover less than
+    the sea's pattern does, and the mouth's share (the last 16 or 40 m) is under the river's
+    own white water just upstream.
+  - The next step: match the share to the river's foam at the handover.
 
 ## Numbers
 
