@@ -15,8 +15,9 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, PAGE_SIZE};
 use forge_gpu::{
-    AccelerationStructure, BlasTriangles, Buffer, BufferDesc, ComputePipelineDesc, Device,
-    MemoryCategory, MemoryLocation, Result, ShaderCompiler, ShaderStage, vk,
+    AccelerationStructure, BlasTriangles, Buffer, BufferAccess, BufferDesc, BufferHandle,
+    ComputePipelineDesc, Device, DynamicTlas, FrameGraph, MemoryCategory, MemoryLocation, Pipeline,
+    Result, ShaderCompiler, ShaderStage, vk,
 };
 
 use crate::cells::CellPos;
@@ -147,7 +148,8 @@ struct TlasPush {
     blas: u64,
     records: u64,
     count: u32,
-    pad: u32,
+    /// The first instance of the table the records cover: 0, or the movers' (#79).
+    first: u32,
     /// The scene frame's origin (issue #93): the structure is built in that frame.
     origin_cell: [i32; 4],
     origin_local: [f32; 4],
@@ -196,6 +198,9 @@ pub struct SceneRays {
     pub blas_ms: f64,
     /// Milliseconds the top-level build took (with its instance pass), once built.
     pub tlas_ms: f64,
+    /// The movers' structure (#79), rebuilt every frame ([`SceneRays::declare_movers`]), and
+    /// the instance pass that writes its records.
+    movers: Option<(DynamicTlas, Pipeline)>,
 }
 
 impl SceneRays {
@@ -282,7 +287,85 @@ impl SceneRays {
             tlas: None,
             blas_ms: ms + start.elapsed().as_secs_f64() * 1e3,
             tlas_ms: 0.0,
+            movers: None,
         })
+    }
+
+    /// Makes the movers' structure (#79) for `count` of them: a top-level structure of its own
+    /// that every frame rebuilds over their records ([`SceneRays::declare_movers`]), which the
+    /// rays trace after the static one.
+    pub(crate) fn add_movers(
+        &mut self,
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        count: u32,
+    ) -> Result<()> {
+        let module = device.create_shader_module(
+            &shaders.compile("meshlet.slang", "tlas_instances_main", ShaderStage::Compute)?,
+            "mover TLAS instances",
+        )?;
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (module, "tlas_instances_main"),
+            push_constant_bytes: std::mem::size_of::<TlasPush>() as u32,
+            name: "mover TLAS instances",
+        });
+        device.destroy_shader_module(module);
+        let tlas = device.create_dynamic_tlas(count, "movers TLAS")?;
+        self.movers = Some((tlas, pipeline?));
+        Ok(())
+    }
+
+    /// The movers' structure's address (0 without movers).
+    pub(crate) fn movers_address(&self) -> u64 {
+        self.movers.as_ref().map_or(0, |(t, _)| t.address())
+    }
+
+    /// Declares this frame's movers' structure (#79): their records from the instance table
+    /// (`instances`, which this frame wrote; the movers `first..first + count`), then its
+    /// build. Returns its storage, which the passes tracing rays declare; `None` without movers.
+    pub(crate) fn declare_movers<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        instances: BufferHandle,
+        instances_address: u64,
+        first: u32,
+        count: u32,
+        origin: CellPos,
+    ) -> Option<BufferHandle> {
+        let (tlas, pipeline) = self.movers.as_ref()?;
+        let records = graph.import_buffer(tlas.records());
+        let storage = graph.import_buffer(tlas.storage());
+        let scratch = graph.import_buffer(tlas.scratch());
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let push = TlasPush {
+            instances: instances_address,
+            blas: self.blas_addresses.address(),
+            records: tlas.records().address(),
+            count,
+            first,
+            origin_cell: origin.cell.extend(0).to_array(),
+            origin_local: origin.local.extend(0.0).to_array(),
+        };
+        graph
+            .pass("movers/tlas instances")
+            .buffer(instances, BufferAccess::ShaderRead(compute))
+            .buffer(records, BufferAccess::ShaderWrite(compute))
+            .run(move |_, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &push);
+                commands.dispatch(count.div_ceil(64), 1, 1);
+                Ok(())
+            });
+        graph
+            .pass("movers/tlas")
+            .buffer(records, BufferAccess::BuildInput)
+            .buffer(storage, BufferAccess::BuildWrite)
+            .buffer(scratch, BufferAccess::BuildWrite)
+            .run(move |_, commands| {
+                commands.build_dynamic_tlas(tlas, count);
+                Ok(())
+            });
+        Some(storage)
     }
 
     /// Builds the top-level structure over the `count` instances of `instances` (the
@@ -322,7 +405,7 @@ impl SceneRays {
             blas: self.blas_addresses.address(),
             records: records.address(),
             count,
-            pad: 0,
+            first: 0,
             origin_cell: origin.cell.extend(0).to_array(),
             origin_local: origin.local.extend(0.0).to_array(),
         };

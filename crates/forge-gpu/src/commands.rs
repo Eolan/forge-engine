@@ -354,6 +354,39 @@ impl<'a> Commands<'a> {
         }
     }
 
+    /// Records the build of `tlas` over its first `count` instance records (at most its
+    /// capacity), which an earlier pass wrote. The pass declares the records
+    /// ([`crate::BufferAccess::BuildInput`]), the storage and the scratch
+    /// ([`crate::BufferAccess::BuildWrite`]); the passes tracing it come after.
+    pub fn build_dynamic_tlas(&self, tlas: &crate::DynamicTlas, count: u32) {
+        let Some(loader) = self.device.acceleration_loader() else {
+            return;
+        };
+        let (geometry, scratch, range) = crate::accel::dynamic_tlas_build(self.device, tlas, count);
+        let geometries = [geometry];
+        let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+            .flags(crate::accel::DYNAMIC_TLAS_FLAGS)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .dst_acceleration_structure(tlas.raw)
+            .geometries(&geometries)
+            .scratch_data(vk::DeviceOrHostAddressKHR {
+                device_address: scratch,
+            });
+        let ranges = [range];
+        self.paranoid_barrier();
+        // SAFETY: recording state; the structure was sized for its capacity with these flags,
+        // the count is clamped to it, and the records, storage and scratch outlive the frame
+        // (the caller's `DynamicTlas`).
+        unsafe {
+            loader.cmd_build_acceleration_structures(
+                self.cb,
+                std::slice::from_ref(&info),
+                &[ranges.as_slice()],
+            )
+        };
+    }
+
     /// Copies `size` bytes from the start of `src` to the start of `dst`
     /// (`TRANSFER_SRC` / `TRANSFER_DST` usage).
     pub fn copy_buffer(&self, src: &crate::Buffer, dst: &crate::Buffer, size: u64) {

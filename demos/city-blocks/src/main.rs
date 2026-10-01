@@ -1004,6 +1004,7 @@ impl Demo for Gallery {
                     sky.light,
                     camera_in_scene,
                     self.taa.frame_index() % cycle,
+                    targets.movers,
                 ))
             }
             _ => {
@@ -1036,6 +1037,7 @@ impl Demo for Gallery {
                 occlusion,
                 probes,
                 wet_ground,
+                movers: targets.movers,
             },
         );
         self.sky.compose(
@@ -1083,6 +1085,7 @@ impl Demo for Gallery {
                         occlusion: None,
                         probes,
                         wet_ground: None,
+                        movers: targets.movers,
                     },
                 );
             }

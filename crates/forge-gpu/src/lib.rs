@@ -30,7 +30,7 @@ mod streamline;
 mod swapchain;
 mod timers;
 
-pub use accel::{AccelerationStructure, BlasTriangles};
+pub use accel::{AccelerationStructure, BlasTriangles, DynamicTlas};
 pub use ash;
 pub use ash::vk;
 pub use bindless::{
@@ -47,7 +47,8 @@ pub use frame::{FRAMES_IN_FLIGHT, FrameSlot, Frames};
 pub use gpu_allocator::MemoryLocation;
 pub use graph::{
     BufferAccess, BufferHandle, FrameGraph, GraphBuffer, GraphImage, GraphStats, ImageAccess,
-    ImageHandle, RawImage, RenderGraph, ResolvedImage, ResourceState, Resources, TransientDesc,
+    ImageHandle, PassBuilder, RawImage, RenderGraph, ResolvedImage, ResourceState, Resources,
+    TransientDesc,
 };
 pub use instance::{Instance, Surface};
 pub use memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};

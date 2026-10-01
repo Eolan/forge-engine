@@ -166,6 +166,12 @@ pub enum BufferAccess {
     /// Read by the CPU once the frame has completed (readbacks): makes the device's writes
     /// visible to the host, which a fence or semaphore wait alone does not.
     HostRead,
+    /// Read by an acceleration structure build: its instance records or geometry.
+    BuildInput,
+    /// Written by an acceleration structure build: the structure's storage, or its scratch.
+    BuildWrite,
+    /// Traced against as an acceleration structure by ray queries in these stages.
+    AccelerationStructureRead(vk::PipelineStageFlags2),
 }
 
 /// Access bits that write.
@@ -286,6 +292,19 @@ impl BufferAccess {
             Self::TransferSrc => (S::TRANSFER, A::TRANSFER_READ, false),
             Self::TransferDst => (S::TRANSFER, A::TRANSFER_WRITE, true),
             Self::HostRead => (S::HOST, A::HOST_READ, false),
+            Self::BuildInput => (
+                S::ACCELERATION_STRUCTURE_BUILD_KHR,
+                A::SHADER_READ | A::ACCELERATION_STRUCTURE_READ_KHR,
+                false,
+            ),
+            Self::BuildWrite => (
+                S::ACCELERATION_STRUCTURE_BUILD_KHR,
+                A::ACCELERATION_STRUCTURE_READ_KHR | A::ACCELERATION_STRUCTURE_WRITE_KHR,
+                true,
+            ),
+            Self::AccelerationStructureRead(stages) => {
+                (stages, A::ACCELERATION_STRUCTURE_READ_KHR, false)
+            }
         };
         ResourceState {
             layout: vk::ImageLayout::UNDEFINED,
@@ -720,6 +739,12 @@ impl<'f> PassBuilder<'_, 'f> {
             access,
         });
         self
+    }
+
+    /// The pass declares what `declare` adds: several uses a caller keeps together (the
+    /// movers' instances and acceleration structure, #79).
+    pub fn with(self, declare: impl FnOnce(Self) -> Self) -> Self {
+        declare(self)
     }
 
     /// The pass uses `buffer` as `access`, when the frame declares it: a buffer only some

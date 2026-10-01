@@ -321,6 +321,7 @@ public struct Frame
     public uint2* rejects;          // with occlusion: (instance, meshlet | CULLED_BIT) per cluster pass 1 selected in view but the previous pyramid hid, in cull order: pass 2's to test (issue #92)
     public uint rejects_capacity;   // slots in `rejects`
     public uint rejects_pad;
+    public uint64_t tlas_movers;    // the movers' top-level structure, rebuilt every frame (0: none; issue #79)
 };
 
 // The second half of `Frame::indirect` (issue #38): the pass 2 cluster cull's grid over both
@@ -3040,10 +3041,77 @@ float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter, float bias)
     ray.Direction = direction;
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
+    return ray_blocked(f, ray) ? 0.0 : 1.0;
+}
+
+// The rays trace the static structure, then the movers' (#79), rebuilt every frame.
+
+// Whether an opaque ray meets anything (a shadow ray: the first hit ends it).
+bool ray_blocked(Frame* f, RayDesc ray)
+{
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
     q.Proceed();
-    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        return true;
+    if (f[0].tlas_movers == 0)
+        return false;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> m;
+    m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), RAY_FLAG_NONE, 0xFF, ray);
+    m.Proceed();
+    return m.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
+// The nearest triangle an opaque ray meets in either structure.
+struct ClosestHit
+{
+    bool hit;
+    uint instance;   // its instance in the table
+    uint primitive;  // its triangle in the instance's cut
+    float2 barycentrics;
+    float t;
+};
+
+ClosestHit trace_closest(Frame* f, RayDesc ray)
+{
+    ClosestHit o;
+    o.hit = false;
+    o.instance = 0;
+    o.primitive = 0;
+    o.barycentrics = 0.0;
+    o.t = ray.TMax;
+    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed())
+    {
+    }
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        o.hit = true;
+        o.instance = q.CommittedInstanceID();
+        o.primitive = q.CommittedPrimitiveIndex();
+        o.barycentrics = q.CommittedTriangleBarycentrics();
+        o.t = q.CommittedRayT();
+    }
+    if (f[0].tlas_movers != 0)
+    {
+        // Only what stands nearer than the static hit.
+        ray.TMax = o.t;
+        RayQuery<RAY_FLAG_FORCE_OPAQUE> m;
+        m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), RAY_FLAG_NONE, 0xFF, ray);
+        while (m.Proceed())
+        {
+        }
+        if (m.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        {
+            o.hit = true;
+            o.instance = m.CommittedInstanceID();
+            o.primitive = m.CommittedPrimitiveIndex();
+            o.barycentrics = m.CommittedTriangleBarycentrics();
+            o.t = m.CommittedRayT();
+        }
+    }
+    return o;
 }
 
 // Rows at least this smooth (Blinn-Phong exponent; roughness 0.42 and below) trace their
@@ -3158,14 +3226,10 @@ float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin
     ray.Direction = direction;
     ray.TMin = REFLECTION_START;
     ray.TMax = 50000.0;
-    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
-    while (q.Proceed())
-    {
-    }
-    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+    ClosestHit c = trace_closest(f, ray);
+    if (!c.hit)
         return float4(0.0);
-    RayHit hit = ray_hit(f, q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, direction, q.CommittedRayT());
+    RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
     return float4(hit_radiance(f, sky, probes, hit, direction), 1.0);
 }
 
@@ -3213,10 +3277,7 @@ float3 ice_transmission(Frame* f, uint instance, float3 world, float scattering)
     shadow.Direction = sun;
     shadow.TMin = 0.0;
     shadow.TMax = 50000.0;
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> s;
-    s.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, shadow);
-    s.Proceed();
-    if (s.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    if (ray_blocked(f, shadow))
         return float3(0.0);
     float3 to_camera = normalize(f[0].camera_in_scene.xyz - world);
     float g = 0.5;
@@ -3587,23 +3648,19 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     desc.Direction = direction;
     desc.TMin = 0.0;
     desc.TMax = fixed ? PROBE_FIXED_REACH * slot.spacing : PROBE_MISS_DISTANCE;
-    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, desc);
-    while (q.Proceed())
-    {
-    }
+    ClosestHit c = trace_closest(f, desc);
     float3 radiance = float3(0.0);
     float distance = PROBE_MISS_DISTANCE;
-    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    if (c.hit)
     {
-        float t = q.CommittedRayT();
+        float t = c.t;
         if (fixed)
         {
-            distance = ray_back_face(f, q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), direction) ? -t : t;
+            distance = ray_back_face(f, c.instance, c.primitive, direction) ? -t : t;
         }
         else
         {
-            RayHit hit = ray_hit(f, q.CommittedInstanceID(), q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, direction, t);
+            RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, t);
             distance = hit.back ? -t : t;
             if (!hit.back)
                 radiance = hit_radiance(f, sky, field, hit, direction);
@@ -3675,7 +3732,7 @@ struct TlasPush
     uint64_t* blas;   // per mesh
     uint* records;    // 16 words per instance
     uint count;
-    uint pad;
+    uint first;       // the first instance of the table it covers: 0, or the movers' (#79)
     int4 origin_cell;    // the scene frame's origin (issue #93): its cell...
     float4 origin_local; // ...and the offset inside it; the structure is built in that frame
 };
@@ -3689,7 +3746,8 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= tlas_push.count)
         return;
-    Instance inst = tlas_push.instances[id.x];
+    uint index = tlas_push.first + id.x;
+    Instance inst = tlas_push.instances[index];
     uint* r = tlas_push.records + id.x * 16;
     // The transform in the scene frame: the cells in integers first, then the offsets.
     float3x3 m = instance_frame(inst);
@@ -3702,7 +3760,7 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
             r[row * 4 + column] = asuint(m[row][column]);
         r[row * 4 + 3] = asuint(t[row]);
     }
-    r[12] = (id.x & 0xFFFFFFu) | (0xFFu << 24);
+    r[12] = (index & 0xFFFFFFu) | (0xFFu << 24);
     r[13] = 0x1u << 24; // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
     uint64_t blas = tlas_push.blas[inst.mesh];
     r[14] = uint(blas);

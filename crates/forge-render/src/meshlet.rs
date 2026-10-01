@@ -411,6 +411,8 @@ struct GpuFrame {
     /// Slots in `rejects`.
     rejects_capacity: u32,
     rejects_pad: u32,
+    /// The movers' top-level acceleration structure, rebuilt every frame (0: none; #79).
+    tlas_movers: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -541,6 +543,8 @@ pub struct AmbientLight {
     /// The shore (issue #105, [`crate::WaterSurface::wet_ground`]): the layered ground is wet
     /// where the swash ran up.
     pub wet_ground: Option<WetGround>,
+    /// This frame's movers (#79, [`DrawTargets::movers`]), which the rays may meet.
+    pub movers: Option<MoversFrame>,
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -703,9 +707,40 @@ pub struct DrawTargets {
     pub pages: forge_gpu::BufferHandle,
     /// See `pages`.
     pub page_table: forge_gpu::BufferHandle,
-    /// With movers (#79): the instance table, which this frame wrote; the passes after the
-    /// draw that read it declare it.
-    pub instances: Option<forge_gpu::BufferHandle>,
+    /// With movers (#79): what this frame wrote of them, which the passes after the draw
+    /// declare.
+    pub movers: Option<MoversFrame>,
+}
+
+/// A frame's movers as the passes after the draw read them (#79): the instance table this frame
+/// wrote, and the movers' acceleration structure it built (none without ray queries).
+#[derive(Clone, Copy, Debug)]
+pub struct MoversFrame {
+    /// The instance table.
+    pub instances: forge_gpu::BufferHandle,
+    /// The movers' acceleration structure's storage.
+    pub tlas: Option<forge_gpu::BufferHandle>,
+}
+
+impl MoversFrame {
+    /// Declares what a pass running `stages` reads of them: the table, and with `traces` the
+    /// movers' structure.
+    pub fn declare<'b, 'f>(
+        movers: Option<Self>,
+        builder: forge_gpu::PassBuilder<'b, 'f>,
+        stages: vk::PipelineStageFlags2,
+        traces: bool,
+    ) -> forge_gpu::PassBuilder<'b, 'f> {
+        let Some(m) = movers else {
+            return builder;
+        };
+        builder
+            .buffer(m.instances, BufferAccess::ShaderRead(stages))
+            .buffer_if(
+                m.tlas.filter(|_| traces),
+                BufferAccess::AccelerationStructureRead(stages),
+            )
+    }
 }
 
 /// Mirrors `Push` in `hzb.slang`.
@@ -1635,6 +1670,10 @@ impl MeshletScene {
         let count = self.static_count();
         if let Some(rays) = &mut self.rays {
             rays.build_tlas(device, shaders, &self.instances, count, self.origin)?;
+            // The movers' own, rebuilt every frame (#79).
+            if let Some(movers) = &self.movers {
+                rays.add_movers(device, shaders, movers.templates.len() as u32)?;
+            }
         }
         Ok(())
     }
@@ -3040,6 +3079,7 @@ impl MeshletRenderer {
             rejects: self.rejects[slot.index].list.address(),
             rejects_capacity: self.rejects[slot.index].capacity,
             rejects_pad: 0,
+            tlas_movers: scene.rays.as_ref().map_or(0, SceneRays::movers_address),
         }
     }
 
@@ -3160,7 +3200,8 @@ impl MeshletRenderer {
         let frame_address = self.frame_buffers[slot.index].address();
 
         // The movers (#79): this frame's records into the table's last instances, then their
-        // cells' bounds, before anything reads them.
+        // cells' bounds and their acceleration structure, before anything reads them.
+        let mut movers_tlas = None;
         if let (Some(movers), Some(instances), Some(cells)) =
             (&scene.movers, io.instances, io.cells)
         {
@@ -3200,6 +3241,17 @@ impl MeshletRenderer {
                     commands.dispatch(cell_groups, 1, 1);
                     Ok(())
                 });
+            // Their structure, which the rays trace after the static one.
+            movers_tlas = scene.rays.as_ref().and_then(|rays| {
+                rays.declare_movers(
+                    graph,
+                    instances,
+                    scene.instances.address(),
+                    movers.first,
+                    movers.templates.len() as u32,
+                    scene.origin,
+                )
+            });
         }
 
         // Streaming: this frame's pages and page-table entries, before anything reads them, on
@@ -3425,7 +3477,10 @@ impl MeshletRenderer {
             visible_list: io.visible,
             pages: io.pool,
             page_table: io.page_table,
-            instances: io.instances,
+            movers: io.instances.map(|instances| MoversFrame {
+                instances,
+                tlas: movers_tlas,
+            }),
         })
     }
 
@@ -3477,7 +3532,8 @@ impl MeshletRenderer {
         previous_from_current: Mat4,
         jitter: Vec2,
     ) {
-        let (Some(movers), Some(instances)) = (&scene.movers, targets.instances) else {
+        let (Some(movers), Some(instances)) = (&scene.movers, targets.movers.map(|m| m.instances))
+        else {
             return;
         };
         let block: &'f Buffer = &self.mover_motion_blocks[slot.index];
@@ -3607,7 +3663,7 @@ impl MeshletRenderer {
             .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
             .buffer(targets.pages, BufferAccess::ShaderRead(compute))
             .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
-            .buffer_if(targets.instances, BufferAccess::ShaderRead(compute))
+            .with(|b| MoversFrame::declare(targets.movers, b, compute, true))
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
             .buffer(args, BufferAccess::ShaderReadWrite(compute));
         if let Some(sky) = ambient.sky {
@@ -3652,7 +3708,7 @@ impl MeshletRenderer {
                 .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
                 .buffer(targets.pages, BufferAccess::ShaderRead(compute))
                 .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
-                .buffer_if(targets.instances, BufferAccess::ShaderRead(compute))
+                .with(|b| MoversFrame::declare(targets.movers, b, compute, true))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
             if let Some(sky) = ambient.sky {
@@ -3694,7 +3750,7 @@ impl MeshletRenderer {
                 .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
                 .buffer(targets.pages, BufferAccess::ShaderRead(compute))
                 .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
-                .buffer_if(targets.instances, BufferAccess::ShaderRead(compute))
+                .with(|b| MoversFrame::declare(targets.movers, b, compute, true))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute))
                 .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
@@ -3757,7 +3813,8 @@ impl MeshletRenderer {
             .image(requests.depth, ImageAccess::Sampled(compute))
             .image(color, ImageAccess::StorageReadWrite(compute))
             .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
-            .image(sky.table, ImageAccess::Sampled(compute));
+            .image(sky.table, ImageAccess::Sampled(compute))
+            .with(|b| MoversFrame::declare(ambient.movers, b, compute, true));
         if let Some(p) = probes {
             builder = builder
                 .buffer(p.data, BufferAccess::ShaderRead(compute))

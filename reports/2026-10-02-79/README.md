@@ -22,3 +22,12 @@ barrels.
   against resident and mesh against fallback.
 - `validate.sh` is clean, with 1 000 movers on both paths, synchronisation validation included.
 - The tests pass (217); clippy and fmt are clean.
+
+**The second step: their acceleration structure** (rebuilt every frame, traced after the static
+one; `docs/demos/island.md`, "Their acceleration structure"):
+- `rays.png`: the nearest barrel at the mouth from 2.5 m (`4404,2.5,-2840.4,-88.9,-25`, cropped
+  and enlarged), without the rays (`--no-shadows`), with them, and the pixels that changed: the
+  water now mirrors the barrel.
+- Cost at 2560 × 1440: about 0.3 ms with 1 000 movers (the build 0.14 ms, a second traversal for
+  every ray); 10 000 add little more.
+- Without movers the batch is unchanged; `validate.sh` is clean with them on both paths.

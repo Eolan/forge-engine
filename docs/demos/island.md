@@ -1705,9 +1705,9 @@ which water the camera is in.
 The first thing Forge draws that moves: `--movers N` sets N barrels drifting down the island's
 four largest rivers at 1.5 m/s, half under the water's level, rolling and bobbing, each river's
 barrels spread along its course and starting over at its head (`reports/2026-10-02-79/`). It
-follows `docs/research/dynamic-scenes.md` ("Recommendation for Forge"); this is its first step.
-The movers' own acceleration structure (their shadows and reflections) and the probes woken
-around them (#69) come next.
+follows `docs/research/dynamic-scenes.md` ("Recommendation for Forge"), in two steps so far:
+the movers drawn with their motion vectors, then their own acceleration structure (their
+shadows and reflections). The probes woken around them (#69) come next.
 
 **What changed.**
 - **The movers' range** (`MeshletSceneBuilder::reserve_movers`): the instance table's last
@@ -1750,10 +1750,32 @@ around them (#69) come next.
 - `validate.sh` is clean, and now also runs 1 000 movers on both paths, synchronisation
   validation included.
 
+**Their acceleration structure** (the second step, 2026-10-02; `SceneRays::declare_movers`,
+`forge_gpu::DynamicTlas`). As the research recommends, the static structure stays as it was,
+built once. The movers get one of their own, rebuilt every frame from nothing (fast to build,
+not to trace):
+- `movers/tlas instances` writes its records from this frame's table (`tlas_instances_main`
+  from a first instance, so a hit names the mover's instance).
+- `movers/tlas` builds it (`Commands::build_dynamic_tlas`). The graph knows the build's accesses
+  now: its input, its output and the ray queries that read it (`BufferAccess::BuildInput`,
+  `BuildWrite`, `AccelerationStructureRead`).
+- Every ray traces both structures (`ray_blocked`, `trace_closest` in `meshlet.slang`):
+  - the shadow rays the movers' after the static one, when that one let the ray through;
+  - the mirror and probe rays both, keeping the nearer hit.
+- The passes tracing rays declare it: the shading passes, the reflections, the water's
+  requested rays and the probes on the compute queue (`MoversFrame`).
+- So the barrels shadow the water and the bed, and the water mirrors them (`rays.png`: the
+  nearest barrel at the mouth without the rays, with them, and the pixels that changed).
+- Its cost (`docs/PROFILE.md`, 1440p): about 0.3 ms with 1 000 movers. The build takes
+  0.14 ms, and the second traversal adds 6–30 % to the ray passes, as the research estimated.
+  10 000 movers cost little more. Built on the async compute queue it gained nothing, so it
+  stays on the graphics queue.
+- The batch is unchanged without movers. `validate.sh` is clean with them, the build's and the
+  rays' synchronisation included.
+
 **Left for later:**
-- The movers cast no ray-traced shadow and show in no reflection: they are not in the
-  acceleration structure (the research's mover TLAS, next).
-- The probes don't wake where they pass (#69).
+- The probes don't wake where the movers pass (#69): their light follows the probes' own
+  update, through the movers' structure.
 - Where the water is drawn over a mover, its motion comes from the water's depth, not the
   mover's.
 - The barrels drift at one speed and jump back to their river's head past its end; the

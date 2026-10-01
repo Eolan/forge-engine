@@ -11,6 +11,7 @@ use gpu_allocator::MemoryLocation;
 
 use crate::device::Device;
 use crate::error::{GpuError, Result};
+use crate::graph::GraphBuffer;
 use crate::memory::{Buffer, BufferDesc};
 use crate::memory_report::MemoryCategory;
 
@@ -273,4 +274,164 @@ impl Device {
         self.run_builds(std::slice::from_ref(&build))?;
         Ok(build.structure)
     }
+}
+
+/// A top-level structure rebuilt every frame over instance records a pass writes (the movers',
+/// issue #79): its records, its storage and its scratch, sized for `capacity` instances, each
+/// a buffer the render graph tracks. Its build ([`crate::Commands::build_dynamic_tlas`]) is
+/// fast to build rather than fast to trace, the structure being small and new every frame.
+pub struct DynamicTlas {
+    device: Arc<Device>,
+    pub(crate) raw: vk::AccelerationStructureKHR,
+    address: u64,
+    records: GraphBuffer,
+    storage: GraphBuffer,
+    pub(crate) scratch: GraphBuffer,
+    capacity: u32,
+}
+
+impl DynamicTlas {
+    /// The device address shaders trace against.
+    pub fn address(&self) -> u64 {
+        self.address
+    }
+
+    /// The instance records (`VkAccelerationStructureInstanceKHR`, 64 bytes each), which a pass
+    /// writes before the build ([`crate::BufferAccess::BuildInput`] to the build).
+    pub fn records(&self) -> &GraphBuffer {
+        &self.records
+    }
+
+    /// The structure's storage: [`crate::BufferAccess::BuildWrite`] to the build,
+    /// [`crate::BufferAccess::AccelerationStructureRead`] to the passes tracing it.
+    pub fn storage(&self) -> &GraphBuffer {
+        &self.storage
+    }
+
+    /// The build's scratch ([`crate::BufferAccess::BuildWrite`]).
+    pub fn scratch(&self) -> &GraphBuffer {
+        &self.scratch
+    }
+
+    /// The most instances a build takes.
+    pub fn capacity(&self) -> u32 {
+        self.capacity
+    }
+}
+
+impl Drop for DynamicTlas {
+    fn drop(&mut self) {
+        if let Some(loader) = self.device.acceleration_loader() {
+            // SAFETY: the structure was created by this loader and the device is done with
+            // it (resources are dropped after the device idles).
+            unsafe { loader.destroy_acceleration_structure(self.raw, None) };
+        }
+    }
+}
+
+/// How a dynamic top-level structure is built and sized.
+pub(crate) const DYNAMIC_TLAS_FLAGS: vk::BuildAccelerationStructureFlagsKHR =
+    vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_BUILD;
+
+/// The geometry of a top-level build over the instance records at `records`.
+fn instance_geometry(records: u64) -> vk::AccelerationStructureGeometryKHR<'static> {
+    let data = vk::AccelerationStructureGeometryInstancesDataKHR::default()
+        .array_of_pointers(false)
+        .data(vk::DeviceOrHostAddressConstKHR {
+            device_address: records,
+        });
+    vk::AccelerationStructureGeometryKHR::default()
+        .geometry_type(vk::GeometryTypeKHR::INSTANCES)
+        .geometry(vk::AccelerationStructureGeometryDataKHR { instances: data })
+        .flags(vk::GeometryFlagsKHR::OPAQUE)
+}
+
+impl Device {
+    /// Creates a top-level structure for builds every frame over at most `capacity` instance
+    /// records ([`DynamicTlas`]).
+    pub fn create_dynamic_tlas(self: &Arc<Self>, capacity: u32, name: &str) -> Result<DynamicTlas> {
+        let loader = self.acceleration()?;
+        let capacity = capacity.max(1);
+        let records = self.create_buffer(BufferDesc {
+            size: u64::from(capacity) * 64,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: &format!("{name} records"),
+        })?;
+        let geometries = [instance_geometry(records.address())];
+        let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+            .flags(DYNAMIC_TLAS_FLAGS)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(&geometries);
+        let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        // SAFETY: a size query on valid build info.
+        unsafe {
+            loader.get_acceleration_structure_build_sizes(
+                vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                &info,
+                &[capacity],
+                &mut sizes,
+            )
+        };
+        let storage = self.create_buffer(BufferDesc {
+            size: sizes.acceleration_structure_size,
+            usage: vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name,
+        })?;
+        let create = vk::AccelerationStructureCreateInfoKHR::default()
+            .buffer(storage.raw())
+            .size(sizes.acceleration_structure_size)
+            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL);
+        // SAFETY: the buffer is live, large enough and has the storage usage.
+        let raw = unsafe { loader.create_acceleration_structure(&create, None)? };
+        let address_info =
+            vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(raw);
+        // SAFETY: `raw` is a live structure.
+        let address = unsafe { loader.get_acceleration_structure_device_address(&address_info) };
+        self.set_name(raw, name);
+        let scratch = self.create_buffer(BufferDesc {
+            size: sizes.build_scratch_size + self.scratch_alignment(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: &format!("{name} scratch"),
+        })?;
+        Ok(DynamicTlas {
+            device: Arc::clone(self),
+            raw,
+            address,
+            records: GraphBuffer::new(records),
+            storage: GraphBuffer::new(storage),
+            scratch: GraphBuffer::new(scratch),
+            capacity,
+        })
+    }
+}
+
+/// The build of a [`DynamicTlas`] over its first `count` records, as
+/// [`crate::Commands::build_dynamic_tlas`] records it.
+pub(crate) fn dynamic_tlas_build(
+    device: &Device,
+    tlas: &DynamicTlas,
+    count: u32,
+) -> (
+    vk::AccelerationStructureGeometryKHR<'static>,
+    u64,
+    vk::AccelerationStructureBuildRangeInfoKHR,
+) {
+    let scratch = tlas
+        .scratch
+        .address()
+        .next_multiple_of(device.scratch_alignment());
+    (
+        instance_geometry(tlas.records.address()),
+        scratch,
+        vk::AccelerationStructureBuildRangeInfoKHR::default()
+            .primitive_count(count.min(tlas.capacity)),
+    )
 }

@@ -31,6 +31,7 @@ use forge_gpu::{
 };
 use glam::{IVec3, Mat3, Quat, Vec3};
 
+use crate::meshlet::MoversFrame;
 use crate::sky::SkyLight;
 
 /// Most cascades (`PROBE_MAX_CASCADES` in `probes.slang`).
@@ -376,6 +377,10 @@ impl Probes {
     /// wandering (measured: the static view's slow change 0.27 % of pixels, 0.09 % without
     /// probes). A rotation lasts one round of turns (`cadence` frames), so every probe meets
     /// each of the cycle's rotations.
+    ///
+    /// `movers` are the frame's movers ([`crate::DrawTargets::movers`], #79): the rays meet
+    /// them in their own acceleration structure.
+    #[allow(clippy::too_many_arguments)]
     pub fn update<'f>(
         &'f mut self,
         graph: &mut FrameGraph<'f>,
@@ -384,6 +389,7 @@ impl Probes {
         sky: SkyLight,
         camera: Vec3,
         noise_frame: u64,
+        movers: Option<MoversFrame>,
     ) -> ProbeLight {
         let p = self.params;
         let mut cascades = [GpuCascade::zeroed(); MAX_CASCADES];
@@ -456,6 +462,7 @@ impl Probes {
             .image(distance, ImageAccess::Sampled(compute))
             .buffer(data, BufferAccess::ShaderRead(compute))
             .buffer(rays, BufferAccess::ShaderWrite(compute))
+            .with(|b| MoversFrame::declare(movers, b, compute, true))
             .run(move |_, commands| {
                 commands.bind_pipeline(trace);
                 commands.push_constants(

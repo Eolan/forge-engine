@@ -723,6 +723,20 @@ same build, two rounds, 1 500 frames each, 2560 × 1440.
   its cost the pixels', not the movers'.
 - The rounds' frame times vary by up to 0.09 ms with 10 000 movers (3.759 and 3.666 ms).
 
+With the movers' acceleration structure (the second step), the same views and rounds:
+
+| View | frame: 0 → 1 000 → 10 000 | `movers/tlas` | `water/reflections` | `gi/probe rays` | `shading/layered` |
+|---|---|---|---|---|---|
+| the first barrel from 4 m | 3.61 → 3.92 → 4.00 ms | 0.139 → 0.178 | 0.581 → 0.683 → 0.682 | 0.532 → 0.596 → 0.556 | 1.096 → 1.168 → 1.151 |
+| the largest mouth from 4 m | 3.06 → 3.35 → 3.41 ms | 0.140 → 0.179 | 0.343 → 0.454 → 0.481 | 0.406 → 0.519 → 0.472 | 1.009 → 1.069 → 1.051 |
+
+- About 0.3 ms with 1 000 movers: the build, 0.14 ms, then a second traversal for every ray,
+  which the research put at 10–30 % of the ray passes (the reflections +17–32 %, the probes'
+  rays +13–28 %, the shading's shadow rays +6 %).
+- Going from 1 000 movers to 10 000 adds little: the traversal is the cost, not the movers.
+- The build on the async compute queue gained nothing (3.89–3.98 ms against 3.91–3.93), as
+  for the probes on this GPU (#95); it stays on the graphics queue.
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.
