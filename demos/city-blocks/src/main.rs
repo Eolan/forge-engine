@@ -1869,6 +1869,34 @@ fn island_ribbons(
         })
         .collect();
     tracing::info!(views = %views.join("  "), "views down the rivers (--view)");
+    // The largest confluence (the largest tributary, which ends over the sea's level and not in
+    // a lake), from 25 m back up it and 8 m over its water; and the largest river's head.
+    let view_from = |p: &forge_procgen::RibbonPoint, back: f32, up: f32| {
+        let (dx, dz) = (p.direction[0], p.direction[1]);
+        let at = [p.position[0] - back * dx, p.position[1] - back * dz];
+        let ground = channels.height_at(height, f64::from(at[0]), f64::from(at[1])) as f32;
+        let yaw = (-dx).atan2(-dz).to_degrees();
+        format!(
+            "{:.0},{:.1},{:.0},{yaw:.1},-20",
+            at[0] - half,
+            p.level.max(ground) + up,
+            at[1] - half
+        )
+    };
+    let confluence = ribbons
+        .iter()
+        .rev()
+        .find(|r| {
+            let end = r.points[r.points.len() - 1];
+            end.level > 0.05 && r.lake_entries.is_empty()
+        })
+        .map_or_else(String::new, |r| {
+            view_from(&r.points[r.points.len().saturating_sub(4)], 15.0, 8.0)
+        });
+    let head = ribbons
+        .last()
+        .map_or_else(String::new, |r| view_from(&r.points[8], 25.0, 6.0));
+    tracing::info!(%confluence, %head, "a confluence and a head (--view)");
     // How far the water stands under its banks: the channel's depth less the water's.
     let freeboard = points
         .clone()

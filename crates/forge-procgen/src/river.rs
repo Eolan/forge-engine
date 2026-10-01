@@ -45,8 +45,11 @@ pub struct RibbonParams {
     pub settling: u32,
     /// How far across the course a settling pass looks for the valley's floor, metres.
     pub settle_reach: f64,
-    /// Metres over which a river fades in from its head.
+    /// Metres over which a river grows from its spring (from `spring` of its width and depth),
+    /// its water fading in over the first fifth of them.
     pub head_fade: f64,
+    /// The shares of its width and its depth a river has at its spring.
+    pub spring: (f64, f64),
     /// Chézy's coefficient, m^½/s: the speed is `C √(d S)`.
     pub chezy: f64,
     /// The speed's range, m/s: from a pool's to a steep stream's.
@@ -66,9 +69,10 @@ pub struct RibbonParams {
 
 impl Default for RibbonParams {
     /// Points 4 m apart, four passes of the filter and three of corner cutting, four settling
-    /// passes looking 8 m either side, 40 m of fade at the head, a stream's roughness (C = 15), 0.3 to 3 m/s, the drawn half width under 0.8 of
-    /// a bend's radius, 0.5 m + 10 % of the half width under the banks, the water 0.05 m + 4 %
-    /// of the width under them, a fall of 60 % at most, the lakes of a hectare.
+    /// passes looking 8 m either side, 40 m of growth from the spring, a stream's roughness
+    /// (C = 15), 0.3 to 3 m/s, the drawn half width under 0.8 of a bend's radius, 0.5 m + 10 %
+    /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
+    /// of 60 % at most, the lakes of a hectare.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -77,6 +81,7 @@ impl Default for RibbonParams {
             settling: 4,
             settle_reach: 8.0,
             head_fade: 40.0,
+            spring: (1.0 / 6.0, 1.0 / 3.0),
             chezy: 15.0,
             speed: (0.3, 3.0),
             bend: 0.8,
@@ -366,8 +371,16 @@ fn affine(p: (f64, f64), x: f64) -> f64 {
     p.0 + p.1 * x
 }
 
+/// The share of its full size a river has `arc` metres from its spring, growing from `at_spring`
+/// over [`RibbonParams::head_fade`], smoothly.
+fn spring(at_spring: f64, arc: f64, params: &RibbonParams) -> f64 {
+    at_spring + (1.0 - at_spring) * smoothstep(0.0, params.head_fade, arc)
+}
+
 /// The ribbon's points from the resampled course: position, direction, widths, depth and the
-/// head's fade (the levels come after, [`levels`]).
+/// head's fade (the levels come after, [`levels`]). From its spring a river grows over
+/// `head_fade` metres from `spring` of its width and depth, and its water fades
+/// in over the first fifth of that.
 fn ribbon_points(samples: &[[f64; 4]], params: &RibbonParams) -> Vec<RibbonPoint> {
     let n = samples.len();
     let mut arc = vec![0.0; n];
@@ -376,7 +389,8 @@ fn ribbon_points(samples: &[[f64; 4]], params: &RibbonParams) -> Vec<RibbonPoint
     }
     let mut half: Vec<f64> = samples
         .iter()
-        .map(|s| 0.5 * hydrology::width(s[3]))
+        .zip(&arc)
+        .map(|(s, &a)| 0.5 * hydrology::width(s[3]) * spring(params.spring.0, a, params))
         .collect();
     // In a bend, the ribbon (the water and its tuck under the banks) under `bend` of its
     // radius; and into and out of it gradually, a quarter of a metre a metre at most.
@@ -400,18 +414,17 @@ fn ribbon_points(samples: &[[f64; 4]], params: &RibbonParams) -> Vec<RibbonPoint
             let (before, after) = (samples[k.saturating_sub(1)], samples[(k + 1).min(n - 1)]);
             let (dx, dy) = (after[0] - before[0], after[1] - before[1]);
             let length = (dx * dx + dy * dy).sqrt().max(1e-9);
-            let t = (arc[k] / params.head_fade).clamp(0.0, 1.0);
             RibbonPoint {
                 position: [s[0] as f32, s[1] as f32],
                 level: 0.0,
                 direction: [(dx / length) as f32, (dy / length) as f32],
                 half_width: half[k] as f32,
                 reach: (half[k] + affine(params.tuck, half[k])) as f32,
-                depth: depth(s[3]) as f32,
+                depth: (depth(s[3]) * spring(params.spring.1, arc[k], params)) as f32,
                 bank: 0.0,
                 speed: 0.0,
                 slope: 0.0,
-                fade: (t * t * (3.0 - 2.0 * t)) as f32,
+                fade: smoothstep(0.0, 0.2 * params.head_fade, arc[k]) as f32,
                 ground: [0.0; ACROSS + 1],
             }
         })
@@ -808,9 +821,12 @@ mod tests {
             floor - freeboard
         );
         assert!(mid.bank > mid.level);
-        // It fades in over its first 40 m, and out where its level reaches the sea's.
+        // It grows from its spring over its first 40 m, its water fading in over the first 8 m.
         assert_eq!(points[0].fade, 0.0);
-        assert!(points[5].fade > 0.0 && points[5].fade < 1.0);
+        assert!(points[1].fade > 0.0 && points[1].fade < 1.0);
+        assert_eq!(points[2].fade, 1.0);
+        assert!(points[0].half_width < 0.2 * points[10].half_width);
+        assert!(points[0].depth < 0.4 * points[10].depth);
         assert!(points[points.len() / 2].fade == 1.0);
         assert!((depth(1.0e6) - 0.4).abs() < 1e-12);
         assert!((depth(1.0e7) / depth(1.0e6) - 10f64.powf(0.375)).abs() < 1e-9);

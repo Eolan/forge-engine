@@ -115,3 +115,11 @@ the flow, whose shear draws it into lines along the fast water. `white-water.png
 the fastest water, by the largest river's mouth (`--view=-5091,4.6,-1395,40.6,-14`, the log's
 `stone_view`), before (left) and now (right). The batch at 0 px; validation clean; frame to frame
 1.016 → 1.020 % in that view.
+
+## Later the same night: rivers grow from their springs
+
+At its head a river's channel was carved to its full width while its water faded in over 40 m,
+so the head read as a dry, pale path up the hill (`spring.png`, left: the largest river's head,
+the log's `head` view). A river now grows from its spring over those 40 m, from a sixth of its
+width and a third of its depth (`RibbonParams::spring`), and its water fades in over the first
+8 m (right).

@@ -614,7 +614,9 @@ Its third part: the wet sand.
     exponent, 0.23 to 0.65 m here); the speed by Chézy's formula, `15 √(d S)` over the smoothed
     bed's slope, from 0.3 to 3 m/s; the direction downstream.
   - In a bend the half width stays under 0.8 of the bend's radius, so the inner bank never
-    folds over itself. A river fades in over its first 40 m.
+    folds over itself. A river fades in over its first 40 m (since 2026-10-01 it grows from its
+    spring instead: from a sixth of its width and a third of its depth over those 40 m, its water
+    in from the first 8 m).
 - **On the ground:** the 8 m field cannot hold a bed a few metres wide. A channel carved into it
   would be a trench of 8 m triangles, and the water's outline would follow them. So the ribbon
   lies on the ground as the island's mesh draws it, and its outline is its own. Each vertex
