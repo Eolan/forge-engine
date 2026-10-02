@@ -1,6 +1,6 @@
-# #107: objects in the water, the rivers' part (2026-10-02)
+# #107: objects in the water (2026-10-02)
 
-The rivers part around what floats in them, the flow taken relative to each thing
+The first part: the rivers part around what floats in them, the flow taken relative to each thing
 (`city-blocks --island 7 --movers N`, `docs/demos/island.md`, "Objects in the water"). Frame 60
 with the fixed step, 1600 × 900, 1 000 barrels: carried at the water's speed, one in ten moored.
 
@@ -22,3 +22,25 @@ the camera, every river pixel looping over all 64 floaters, it was 0.10 and 0.34
   fallback.
 - `validate.sh` is clean, with 1 000 movers on both paths.
 - The tests pass; clippy and fmt are clean.
+
+## The second part: wakes in still water (wave particles)
+
+What moves through the lakes and the sea leaves waves (`docs/demos/island.md`, "The wakes"):
+wave particles carrying packets of waves 0.5 m long, on the async compute queue, splatted into a
+field around the camera whose slopes the water adds. Frame 300 with the fixed step, 1600 × 900,
+1 000 barrels, the last one towed round a 20 m circle on the largest lake at 2.5 m/s.
+
+- `towed.png`: the towed barrel from the log's `towed` view
+  (`2168.0,36.90,-1234.0,-102.9,-36.2`): without the wakes (`--no-wakes`), with them, the pixels
+  that changed. Crests ring its bow and trail 15 m behind it along its curve; 35 138 pixels,
+  ꟻLIP mean 0.0070, max 0.99 where a crest catches the sun.
+- `towed-low.png`: the same from 2 m over the water and 16 m away
+  (`2163.1,30.9,-1235.1,-102.9,-7`): fine lines of ripples in its wake; 9 987 pixels, ꟻLIP mean
+  0.0012.
+
+**Cost** (2560 × 1440, two rounds): the frame 0.08 ms more (3.60–3.62 → 3.68–3.70 ms from the
+towed barrel); on the compute queue `wakes/advance` 0.08–0.11 ms, `wakes/emit` 0.014–0.018,
+`wakes/slopes` 0.010, `wakes/clear` 0.004.
+
+**Checks:** the same capture twice is the same to the pixel; without movers the batch is at
+0 px; `validate.sh` is clean with the wakes; tests, clippy and fmt pass.

@@ -33,6 +33,7 @@ pub mod textures;
 pub mod tonecheck;
 pub mod upscale;
 pub mod visibility;
+pub mod wakes;
 pub mod water;
 
 pub use atmosphere::{Atmosphere, AtmosphereFrame, AtmosphereParams};
@@ -55,6 +56,7 @@ pub use starfield::Starfield;
 pub use streaming::{Residency, StartView, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
+pub use wakes::{MAX_WAKES, WakeFrame, WaterWake, WaterWakes};
 pub use water::{
     MAX_FLOATERS, WATER_MIPS, WATER_SIZE, WaterCascadeDesc, WaterCascades, WaterCaustics,
     WaterFloater, WaterFrame, WaterLake, WaterMouth, WaterRiverPoint, WaterSample, WaterShore,

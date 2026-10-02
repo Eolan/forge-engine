@@ -1852,12 +1852,67 @@ rounds' spread from the largest mouth (0.446–0.479 against 0.451).
   against fallback.
 - `validate.sh` is clean, its 1 000 movers included.
 
+**The wakes** (the second part, 2026-10-02; `forge_render::wakes`, `shaders/wakes.slang`). In
+still water and the sea a wake is waves, which the stones' flow does not draw. A first try on
+the lakes, the stones' flow around a barrel crossing still water, gave a smooth pale crescent
+rather than a wake: the lakes' white water has no streak pattern, and their ripples barely
+follow a flow. So the lakes and the sea get the wave particles of `docs/research/water.md`
+(D-038's afterwards; Yuksel, House & Keyser 2007):
+- **What makes waves** (`WaterWakes::update`, `WaterWake`): the caller's list of things moving
+  through still water this frame, the nearest 32, each with its outline's radius, its velocity
+  and its speed upwards. The demo gives its barrels where their river has faded into a lake.
+- **The particles**, on the async compute queue:
+  - 30 times a second each thing adds 16 around its outline: a crest where it pushes the water
+    out, a trough where it leaves it, rings where it rises or sinks (`wakes/emit`).
+  - A particle moves out from where it set out at its waves' speed. When the gap to its
+    neighbours on the spreading front passes half its radius it splits in three, a third of the
+    height and of the angle each. It fades by e every 3 s and is dropped under 0.2 mm
+    (`wakes/advance`, two buffers of 131 072 in turn).
+  - Each carries a packet rather than a bump (after Jeschke & Wojtan 2017): a cosine envelope
+    1 m across its radius over waves 0.5 m long running along its heading. Their speed,
+    0.88 m/s, is deep water's for that length, so something faster leaves a V of half-angle
+    asin(c / v), about Kelvin's 19.5° at 2.5 m/s. Their phase is the world's (where and when),
+    so the packets of one front add up instead of cancelling. A single bump per particle drew a
+    smooth glossy ridge; the packets draw crests.
+  - As it is written, each adds its packet to a field of heights 128 m across around the camera
+    (cells of 12.5 cm, whole micrometres added atomically, so a frame's field is the same
+    whatever order the particles come in). `wakes/slopes` turns it into slopes.
+- **The water's shading** adds those slopes to the sea's and the lakes' (`wake_slope` in
+  `water.slang`), fading out over the field's last tenth and where a pixel spans more than
+  10–40 cm (the field has no mips; there its waves would only shimmer).
+- **The towed barrel**: the last of the `--movers` barrels goes round a circle of 20 m on the
+  largest lake at 2.5 m/s (its middle found as the mask's sample farthest from the shore). The
+  log gives a view of it at frame 300, its wake grown (`2168.0,36.90,-1234.0,-102.9,-36.2`).
+  `--no-wakes` is the A/B.
+
+**Sheets** (frame 300, seed 7, 1 000 barrels, without the wakes, with them, and the pixels that
+changed):
+- `towed.png`: the towed barrel from its logged view. Crests ring its bow and trail 15 m behind
+  it along its curve, the sun's glint broken on them; 35 138 pixels differ, ꟻLIP mean 0.0070,
+  max 0.99 where a crest catches the sun.
+- `towed-low.png`: the same 2 m over the water from 16 m: fine lines of ripples in its wake;
+  9 987 pixels, ꟻLIP mean 0.0012.
+- The barrels carried slowly through the lakes leave faint rings.
+
+![The towed barrel's wake from above: without the wakes, with them, and the pixels that changed](../../reports/2026-10-02-107/towed.png)
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440, 1 000 barrels, two rounds):
+- The frame grows by about 0.08 ms: from the towed barrel's view 3.60–3.62 → 3.68–3.70 ms, from
+  the first barrel's 4.09–4.10 → 4.17–4.18 ms.
+- On the compute queue, `wakes/advance` 0.08–0.11 ms, `wakes/emit` 0.014–0.018, `wakes/slopes`
+  0.010, `wakes/clear` 0.004; `water/surface` 0.01 ms more for the slopes it reads.
+- By the heights and the splits, a thing at 2.5 m/s keeps about 7 000 particles alive and one at
+  0.2 m/s about 700: the buffers hold 131 072.
+
+**Checks:**
+- The same capture twice is the same to the pixel (the field's sums are whole numbers).
+- Without movers there are no wakes and the batch is unchanged (0 px); `validate.sh` is clean
+  with them (its movers runs make wakes).
+
 **Left for later:**
-- In still water and the sea a wake is waves, which the stones' flow does not draw. A first try
-  on the lakes, the stones' flow around a barrel crossing still water, gave a smooth pale
-  crescent rather than a wake: the lakes' white water has no streak pattern, and their ripples
-  barely follow a flow. That is the wave particles of `docs/research/water.md` (D-038's
-  afterwards).
+- The wakes' particles cross the shore: they do not reflect, they fade where the water is not
+  drawn.
+- The rivers draw no wave particles: there the stones' flow stands for the wake.
 - Splashes, when something falls in.
 - There are no game objects yet (`forge-sim`, Phase 3): the barrels stand in for them.
 

@@ -533,9 +533,12 @@ struct GpuWaterSurface {
     floaters: u64,
     floater_cells: u64,
     floater_grid: [f32; 4],
+    wake_window: [f32; 4],
+    wake_slopes: u32,
+    pad_wake: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 800);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 832);
 
 /// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
 /// its absorption and its scattering, then `water/under`'s dispatch.
@@ -1101,6 +1104,8 @@ pub struct WaterSurfaceParams {
     /// Metres a pixel spans a metre away (the vertical field of view over the image's height):
     /// far away, the rivers stay a pixel wide either side.
     pub pixel: f32,
+    /// The wakes on the lakes and the sea this frame (#107, [`crate::WaterWakes`]).
+    pub wakes: Option<crate::WakeFrame>,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -2026,6 +2031,9 @@ impl WaterSurface {
         if let Some(at_camera) = at_camera {
             pass = pass.buffer(at_camera, BufferAccess::ShaderRead(fragment));
         }
+        if let Some(wakes) = params.wakes {
+            pass = pass.image(wakes.slopes, ImageAccess::Sampled(fragment));
+        }
         pass.run(move |resources, commands| {
             let mut cascade_views = [GpuWaterCascadeView::zeroed(); SURFACE_CASCADES];
             cascade_views.copy_from_slice(&views);
@@ -2095,6 +2103,11 @@ impl WaterSurface {
                     floaters,
                     floater_cells,
                     floater_grid,
+                    wake_window: params
+                        .wakes
+                        .map_or([0.0; 4], |w| [w.window[0], w.window[1], w.window[2], 0.0]),
+                    wake_slopes: params.wakes.map_or(0, |w| resources.sampled(w.slopes).0),
+                    pad_wake: [0; 3],
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.

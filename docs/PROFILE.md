@@ -750,6 +750,17 @@ barrels with and without `--no-floaters`, two rounds, 1 500 frames each, 2560 ×
 - A pixel looks at the floaters its cell of a 16 m grid lists. Looping over all 64 in every
   river pixel cost 0.10 ms from the moored barrel and 0.34 ms from the mouth.
 
+**Wakes in still water** (#107's second part, 2026-10-02): wave particles on the compute
+queue, 1 000 barrels with and without `--no-wakes`, two rounds, 1 500 frames each, 2560 × 1440.
+
+| View | frame: without → with | `wakes/advance` | `wakes/emit` | `wakes/slopes` | `water/surface` |
+|---|---|---|---|---|---|
+| the towed barrel (`2168.0,36.90,-1234.0,-102.9,-36.2`) | 3.60–3.62 → 3.68–3.70 ms | 0.101–0.105 | 0.014–0.017 | 0.010–0.011 | 0.267–0.269 → 0.277–0.278 |
+| the first barrel (`-237.2,318.39,-1842.9,132.1,-21.2`) | 4.09–4.10 → 4.17–4.18 ms | 0.080–0.083 | 0.018 | 0.010 | 0.361–0.363 → 0.373–0.381 |
+
+- `wakes/clear` 0.004 ms. The compute passes take 0.13 ms and the frame 0.08 ms more: the
+  async queue hides some of it.
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

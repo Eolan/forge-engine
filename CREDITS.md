@@ -263,3 +263,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   root of the distance (Stephen B. Pope, *Turbulent Flows*, Cambridge University Press, 2000,
   chapter 5); the water around a stone as the potential flow past a cylinder (G. K. Batchelor,
   *An Introduction to Fluid Dynamics*, Cambridge University Press, 1967).
+- **Wakes** (`shaders/wakes.slang`, `forge_render::wakes`, issue #107). Cem Yuksel, Donald H.
+  House and John Keyser, "Wave Particles", *ACM Transactions on Graphics* 26(3), SIGGRAPH 2007
+  (DOI 10.1145/1276377.1276501): particles that carry a piece of a wave front out from what
+  moves through the water, split as the front spreads and are splatted into a height field.
+  Each particle here carries a short packet of waves rather than one bump, as the packets of
+  Stefan Jeschke and Chris Wojtan, "Water Wave Packets", *ACM Transactions on Graphics* 36(4),
+  SIGGRAPH 2017 (<https://visualcomputing.ist.ac.at/publications/2017/WWP/>) carry a group of
+  wave trains.

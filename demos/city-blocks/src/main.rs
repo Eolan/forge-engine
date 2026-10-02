@@ -40,12 +40,12 @@ use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
-    FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MAX_FLOATERS, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, MoverTransform, ProbeParams, Probes, Residency, SkyParams,
-    StartView, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc,
-    WaterCascades, WaterCaustics, WaterFloater, WaterLake, WaterMouth, WaterRiverPoint, WaterShore,
-    WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams, exposure_from_ev100,
-    sh_irradiance,
+    FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MAX_FLOATERS, MAX_WAKES,
+    MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, ProbeParams, Probes,
+    Residency, SkyParams, StartView, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap,
+    WaterCascadeDesc, WaterCascades, WaterCaustics, WaterFloater, WaterLake, WaterMouth,
+    WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams,
+    WaterWake, WaterWakes, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec2, Vec3};
@@ -268,9 +268,12 @@ struct Args {
     /// then smears them).
     #[arg(long)]
     no_mover_motion: bool,
-    /// Leave the water undisturbed by the movers (#107's A/B: no bow waves, no wakes).
+    /// Leave the rivers' flow undisturbed by the movers (#107's A/B).
     #[arg(long)]
     no_floaters: bool,
+    /// No waves from the movers in the lakes and the sea (#107's A/B for the wakes).
+    #[arg(long)]
+    no_wakes: bool,
     /// Holds the waves still at this many seconds (the shimmer's measure: what changes
     /// between frames of a still camera is then the aliasing alone).
     #[arg(long)]
@@ -357,6 +360,8 @@ struct Gallery {
     sea_time_submitted: f32,
     /// `--movers` (#79): the barrels drifting down the island's rivers, on the sea's clock.
     barrels: Option<Barrels>,
+    /// Their waves in the lakes and the sea (#107), with the water and the movers.
+    wakes: Option<WaterWakes>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     meter: LuminanceMeter,
@@ -609,14 +614,16 @@ impl Gallery {
         }
         // The movers (#79): barrels on the island's largest rivers.
         let barrels = (args.movers > 0 && args.island.is_some()).then(|| {
-            let (rivers, ..) = island_ribbons(&island_heights(&args));
-            let barrels = Barrels::new(&rivers, args.movers);
-            // Views at frame 60 of the fixed step (a second in): of the first barrel from 4 m to
-            // its side and 1.5 m over it, and of the first moored barrel the water runs past at
-            // 1.2 m/s or more from 6 m to its side and 7 m over it, looking a little downstream
-            // (#107).
-            let view_of = |k: u32, side_m: f32, up_m: f32, ahead_m: f32| {
-                let (t, centre, _) = barrels.pose(k, 1.0);
+            let heights = island_heights(&args);
+            let (rivers, _, _, lakes) = island_ribbons(&heights);
+            let barrels = Barrels::new(&rivers, &lakes, heights.spacing as f32, args.movers);
+            // Views with the fixed step: of the first barrel at frame 60 (a second in) from 4 m to
+            // its side and 1.5 m over it; of the first moored barrel the water runs past at
+            // 1.2 m/s or more, at frame 60 from 6 m to its side and 7 m over it, looking a little
+            // downstream; and of the towed barrel at frame 300, its wake grown, from 10 m inside
+            // its circle and 8 m over it, looking back along its wake (#107).
+            let view_of = |k: u32, time: f64, side_m: f32, up_m: f32, ahead_m: f32| {
+                let (t, centre, ..) = barrels.pose(k, time);
                 let side = (t.rotation * Vec3::Y).normalize();
                 let down = Vec3::Y.cross(side).normalize_or_zero();
                 let eye = centre + side_m * side + Vec3::new(0.0, up_m, 0.0);
@@ -630,21 +637,30 @@ impl Gallery {
                     look.y.asin().to_degrees()
                 )
             };
-            let view = view_of(0, 4.0, 1.5, 0.0);
+            let view = view_of(0, 1.0, 4.0, 1.5, 0.0);
             let moored = (0..barrels.count)
                 .find(|&k| barrels.moored(k) && barrels.place(k, 1.0).2 >= 1.2)
-                .map_or(String::from("none"), |k| view_of(k, 6.0, 7.0, 1.5));
+                .map_or(String::from("none"), |k| view_of(k, 1.0, 6.0, 7.0, 1.5));
+            let towed = barrels.towed.map_or(String::from("none"), |_| {
+                view_of(barrels.count - 1, 5.0, 10.0, 8.0, -4.0)
+            });
             tracing::info!(
                 movers = args.movers,
                 rivers = barrels.rivers.len(),
                 %view,
                 %moored,
+                %towed,
+                tow_radius_m = barrels.towed.map_or(0.0, |t| t.1),
                 "barrels on the rivers (--movers)"
             );
             barrels
         });
+        let wakes = (barrels.is_some() && water.is_some() && !args.no_wakes)
+            .then(|| WaterWakes::new(&ctx.device, &ctx.shaders))
+            .transpose()?;
         Ok(Self {
             barrels,
+            wakes,
             tonemap: args.tonemap,
             args,
             renderer,
@@ -1066,11 +1082,25 @@ impl Demo for Gallery {
             extent,
         );
         if let (Some((cascades, surface, _)), Some(waves)) = (&self.water, &waves) {
-            // The barrels nearest the camera part the rivers' flow (#107).
+            // The barrels nearest the camera part the rivers' flow, and make waves in still
+            // water (#107).
+            let camera = Vec2::new(camera_in_scene.x, camera_in_scene.z);
             if let Some(barrels) = self.barrels.as_ref().filter(|_| !self.args.no_floaters) {
-                let camera = Vec2::new(camera_in_scene.x, camera_in_scene.z);
                 surface.set_floaters(&barrels.floaters(self.sea_time, camera));
             }
+            let wakes = self
+                .wakes
+                .as_ref()
+                .zip(self.barrels.as_ref())
+                .map(|(wakes, barrels)| {
+                    wakes.update(
+                        &mut frame.graph,
+                        frame.slot,
+                        &barrels.wakes(self.sea_time, camera),
+                        camera_in_scene.as_dvec3(),
+                        self.sea_time_submitted,
+                    )
+                });
             let requests = surface.draw(
                 &mut frame.graph,
                 frame.slot,
@@ -1086,6 +1116,7 @@ impl Demo for Gallery {
                     sky_scale: self.renderer.sun_illuminance * exposure,
                     time: self.sea_time_submitted,
                     pixel: 2.0 / (taa_frame.jittered_projection.y_axis.y * extent.height as f32),
+                    wakes,
                 },
                 taa_frame.color,
                 targets.depth,
@@ -3139,14 +3170,21 @@ const BARREL_SLOWEST: f32 = 0.2;
 const BARREL_MOORED: u32 = 10;
 /// The rivers that carry barrels: the largest.
 const BARREL_RIVERS: usize = 4;
+/// The towed barrel (#107): metres a second round its circle on the largest lake, and the
+/// circle's radius at most, metres.
+const TOW_SPEED: f32 = 2.5;
+const TOW_RADIUS: f32 = 20.0;
 
 /// The movers of `--movers` (#79): barrels carried down the island's largest rivers at the
 /// water's speed, spread along each river's course and starting over at its head once past its
-/// mouth; one in ten moored where it is, bobbing as the stream runs past (#107). They float
-/// with their axis across the flow, half under the water's level, rolling as they go.
+/// mouth; one in ten moored where it is, bobbing as the stream runs past (#107). The last one is
+/// towed round a circle on the largest lake, faster than its waves (#107's wakes). They float
+/// with their axis across their way, half under the water's level, rolling as they go.
 struct Barrels {
     rivers: Vec<BarrelCourse>,
     count: u32,
+    /// The towed barrel's circle: its centre (world x, z), radius and the lake's level.
+    towed: Option<(Vec2, f32, f32)>,
 }
 
 /// A river's course as the barrels follow it.
@@ -3157,10 +3195,12 @@ struct BarrelCourse {
     along: Vec<f32>,
     /// Seconds a barrel carried at the water's speed takes to reach each point.
     times: Vec<f32>,
+    /// How much of the river is drawn at each point: under a half, a lake's still water.
+    fades: Vec<f32>,
 }
 
 impl Barrels {
-    fn new(rivers: &[Vec<WaterRiverPoint>], count: u32) -> Self {
+    fn new(rivers: &[Vec<WaterRiverPoint>], lakes: &[WaterLake], spacing: f32, count: u32) -> Self {
         // The largest rivers are uploaded last.
         let rivers = rivers
             .iter()
@@ -3182,22 +3222,48 @@ impl Barrels {
                     points,
                     along,
                     times,
+                    fades: r.iter().map(|p| p.fade).collect(),
                 }
             })
             .collect();
-        Self { rivers, count }
+        let towed = (count > 1)
+            .then(|| {
+                lakes
+                    .iter()
+                    .max_by_key(|l| l.mask.iter().filter(|&&m| m).count())
+            })
+            .flatten()
+            .map(|lake| {
+                let (centre, room) = lake_middle(lake, spacing);
+                (centre, (0.6 * room).min(TOW_RADIUS), lake.level)
+            });
+        Self {
+            rivers,
+            count,
+            towed,
+        }
+    }
+
+    /// The barrels on the rivers: all but the towed one.
+    fn on_rivers(&self) -> u32 {
+        self.count - u32::from(self.towed.is_some())
+    }
+
+    /// Whether barrel `k` is the towed one.
+    fn is_towed(&self, k: u32) -> bool {
+        self.towed.is_some() && k == self.count - 1
     }
 
     /// Whether barrel `k` is moored.
     fn moored(&self, k: u32) -> bool {
-        (k / self.rivers.len() as u32) % BARREL_MOORED == BARREL_MOORED / 2
+        !self.is_towed(k) && (k / self.rivers.len() as u32) % BARREL_MOORED == BARREL_MOORED / 2
     }
 
-    /// Where barrel `k` is `time` seconds in: its course's segment, how far along it (0..1) and
-    /// the water's speed there. A moored barrel stays where its share of the course's length
-    /// puts it, a carried one goes where its share of the course's time does.
+    /// Where river barrel `k` is `time` seconds in: its course's segment, how far along it
+    /// (0..1) and the water's speed there. A moored barrel stays where its share of the course's
+    /// length puts it, a carried one goes where its share of the course's time does.
     fn place(&self, k: u32, time: f64) -> (usize, f32, f32) {
-        let per_river = self.count.div_ceil(self.rivers.len() as u32).max(1);
+        let per_river = self.on_rivers().div_ceil(self.rivers.len() as u32).max(1);
         let course = &self.rivers[k as usize % self.rivers.len()];
         let start = (k / self.rivers.len() as u32) as f32 / per_river as f32;
         let last = course.points.len() - 1;
@@ -3216,30 +3282,54 @@ impl Barrels {
         (i, t.clamp(0.0, 1.0), metres / seconds)
     }
 
-    /// Barrel `k` `time` seconds in: its transform (relative to the scene's origin, the sea's
-    /// frame), its centre and its velocity (world x and z).
-    fn pose(&self, k: u32, time: f64) -> (MoverTransform, Vec3, Vec2) {
+    /// Whether barrel `k` floats in still water `time` seconds in: towed on its lake, or where
+    /// its river has faded into one.
+    fn still(&self, k: u32, time: f64) -> bool {
+        if self.is_towed(k) {
+            return true;
+        }
         let course = &self.rivers[k as usize % self.rivers.len()];
-        let (i, t, stream) = self.place(k, time);
-        let speed = if self.moored(k) { 0.0 } else { stream };
-        let s = course.along[i] + t * (course.along[i + 1] - course.along[i]);
-        let (a, b) = (course.points[i], course.points[i + 1]);
-        let flat = a.0.lerp(b.0, t);
-        let level = a.1 + (b.1 - a.1) * t;
-        let down = (b.0 - a.0).normalize_or(Vec2::X);
+        let (i, t, _) = self.place(k, time);
+        course.fades[i] + t * (course.fades[i + 1] - course.fades[i]) < 0.5
+    }
+
+    /// Barrel `k` `time` seconds in: its transform (relative to the scene's origin, the sea's
+    /// frame), its centre, its velocity (world x and z) and its speed upwards.
+    fn pose(&self, k: u32, time: f64) -> (MoverTransform, Vec3, Vec2, f32) {
+        // Its place on its way, its way's level and heading, its speed and how far it has rolled.
+        let (flat, level, down, speed, rolled) = match self.towed {
+            Some((centre, radius, level)) if self.is_towed(k) => {
+                let angle =
+                    (f64::from(TOW_SPEED / radius) * time).rem_euclid(std::f64::consts::TAU) as f32;
+                let out = Vec2::new(angle.cos(), angle.sin());
+                let down = Vec2::new(-out.y, out.x);
+                let rolled = (f64::from(TOW_SPEED) * time).rem_euclid(1e4) as f32;
+                (centre + radius * out, level, down, TOW_SPEED, rolled)
+            }
+            _ => {
+                let course = &self.rivers[k as usize % self.rivers.len()];
+                let (i, t, stream) = self.place(k, time);
+                let speed = if self.moored(k) { 0.0 } else { stream };
+                let s = course.along[i] + t * (course.along[i + 1] - course.along[i]);
+                let (a, b) = (course.points[i], course.points[i + 1]);
+                let down = (b.0 - a.0).normalize_or(Vec2::X);
+                (a.0.lerp(b.0, t), a.1 + (b.1 - a.1) * t, down, speed, s)
+            }
+        };
         let across = Vec3::new(-down.y, 0.0, down.x);
         // Bobbing a little, out of step with one another, and rolling as they drift.
         let phase = time as f32 * 1.3 + k as f32 * 2.1;
         let rotation = Quat::from_rotation_arc(Vec3::Y, across)
-            * Quat::from_rotation_y(s / (2.0 * BARREL_RADIUS))
+            * Quat::from_rotation_y(rolled / (2.0 * BARREL_RADIUS))
             * Quat::from_rotation_x(0.05 * phase.sin());
         let centre = Vec3::new(flat.x, level - 0.05 + 0.03 * (1.7 * phase).sin(), flat.y);
+        let rise = 0.03 * 1.7 * 1.3 * (1.7 * phase).cos();
         let transform = MoverTransform {
             position: centre - rotation * Vec3::new(0.0, 0.5 * BARREL_LENGTH, 0.0),
             rotation,
             scale: 1.0,
         };
-        (transform, centre, down * speed)
+        (transform, centre, down * speed, rise)
     }
 
     /// Their transforms `time` seconds in, relative to the scene's origin (the sea's frame).
@@ -3247,12 +3337,13 @@ impl Barrels {
         (0..self.count).map(|k| self.pose(k, time).0).collect()
     }
 
-    /// The barrels nearest `camera` (world x and z) as the water sees them (#107): their
-    /// outline at the water's level, about a circle half their length across, and their velocity.
+    /// The barrels nearest `camera` (world x and z) as the rivers' water sees them (#107):
+    /// their outline at the water's level, about a circle half their length across, and their
+    /// velocity.
     fn floaters(&self, time: f64, camera: Vec2) -> Vec<WaterFloater> {
         let mut near: Vec<(f32, WaterFloater)> = (0..self.count)
             .map(|k| {
-                let (_, centre, velocity) = self.pose(k, time);
+                let (_, centre, velocity, _) = self.pose(k, time);
                 let flat = Vec2::new(centre.x, centre.z);
                 let floater = WaterFloater {
                     position: flat.to_array(),
@@ -3268,6 +3359,68 @@ impl Barrels {
             .map(|(_, f)| f)
             .collect()
     }
+
+    /// The barrels in still water nearest `camera` (world x and z), making waves (#107).
+    fn wakes(&self, time: f64, camera: Vec2) -> Vec<WaterWake> {
+        let mut near: Vec<(f32, WaterWake)> = (0..self.count)
+            .filter(|&k| self.still(k, time))
+            .map(|k| {
+                let (_, centre, velocity, rise) = self.pose(k, time);
+                let flat = Vec2::new(centre.x, centre.z);
+                let wake = WaterWake {
+                    position: flat.to_array(),
+                    waterline: 0.5 * BARREL_LENGTH,
+                    velocity: velocity.to_array(),
+                    rise,
+                };
+                (flat.distance_squared(camera), wake)
+            })
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        near.into_iter().take(MAX_WAKES).map(|(_, w)| w).collect()
+    }
+}
+
+/// The point of `lake` farthest from its shore (world x and z) and how far that is, metres: the
+/// mask's samples (`spacing` apart) by their distance in samples to the nearest dry one, eight
+/// neighbours a step.
+fn lake_middle(lake: &WaterLake, spacing: f32) -> (Vec2, f32) {
+    let [w, h] = lake.size.map(|s| s as usize);
+    let mut steps = vec![u32::MAX; w * h];
+    let mut queue = std::collections::VecDeque::new();
+    for (i, &wet) in lake.mask.iter().enumerate() {
+        let (x, y) = (i % w, i / w);
+        if !wet || x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+            steps[i] = 0;
+            queue.push_back(i);
+        }
+    }
+    while let Some(i) = queue.pop_front() {
+        let (x, y) = ((i % w) as i64, (i / w) as i64);
+        for (dx, dy) in [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ] {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                continue;
+            }
+            let n = ny as usize * w + nx as usize;
+            if steps[n] == u32::MAX {
+                steps[n] = steps[i] + 1;
+                queue.push_back(n);
+            }
+        }
+    }
+    let (best, &most) = steps.iter().enumerate().max_by_key(|&(_, s)| *s).unwrap();
+    let at = Vec2::new((best % w) as f32, (best / w) as f32) * spacing + Vec2::from(lake.origin);
+    (at, most as f32 * spacing)
 }
 
 /// The sea's stand-in until the water pass (D-038, #96): one opaque plane at 0 m, 262 km

@@ -354,6 +354,9 @@ struct WaterSurface
     Floater* floaters;    // what floats in the water this frame (#107)
     uint* floater_cells;  // their grid around the camera: per cell its list's first entry and count (16 bits each), then the lists (indices into `floaters`)
     float4 floater_grid;  // the grid's origin (world x, z), 1 / metres a cell, cells a side (0: no floaters)
+    float4 wake_window;   // the wakes' field (#107, `wakes.slang`): its corner (world x, z), 1 / its size in metres (0: no wakes), 0
+    uint wake_slopes;     // sampled index (rg16f): the field's slopes
+    uint3 pad_wake;
 };
 
 struct SurfacePush
@@ -741,6 +744,22 @@ struct SeaSlopes
     float jacobian;  // under ~0.45, the waves fold: foam
 };
 
+// The wakes' slopes at `world` (#107, `wakes.slang`): what moves through the lakes and the sea
+// makes waves of half a metre, fading out over the field's last tenth and where a pixel spans
+// more than a fifth of their radius (the field holds no mips: they would only shimmer there).
+float2 wake_slope(WaterSurface* w, float2 world, float footprint)
+{
+    float4 window = w[0].wake_window;
+    if (window.z <= 0.0)
+        return 0.0;
+    float2 uv = (world - window.xy) * window.z;
+    float edge = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+    float fade = smoothstep(0.0, 0.1, edge) * (1.0 - smoothstep(0.1, 0.4, footprint));
+    if (fade <= 0.0)
+        return 0.0;
+    return sample_image_level(w[0].wake_slopes, SAMPLER_LINEAR_CLAMP, uv, 0.0).xy * fade;
+}
+
 // The slopes: their mean from every cascade's mips, and the variance of those the mips average
 // away (Bruneton, Neyret & Holzschuch 2010), each cascade damped by the depth as its
 // displacement is (the slopes scale with the amplitude, their variance with its square, the
@@ -795,6 +814,8 @@ SurfaceTargets sea_from_above(WaterSurface* w, SurfaceOut input)
     float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
     ShoreWaves waves = shore_waves(w, input.flat, shore, footprint);
     slope += waves.slope;
+    // What moves through it (#107).
+    slope += wake_slope(w, input.flat + w[0].camera.xz, footprint);
     // Where a river comes in: its water, and its ripples carried on its flow, as the river's
     // ribbon draws them where it hands over to the sea (in its channel, where the sea's own waves
     // are still), mixing out into the sea's in a plume.
@@ -1602,6 +1623,9 @@ FreshWater lake_water(WaterSurface* w, LakeOut input)
     float2 gusts = (world + LAKE_GUST_DRIFT * w[0].time) / LAKE_GUST_SIZE;
     float wind = lerp(LAKE_CALM, 1.0, smoothstep(0.35, 0.7, value_noise(gusts)));
     s.ripples = lerp(wind, 1.0, estuary.fresh);
+    // The waves of what moves through it (#107), carried as a lake has no fall of its own.
+    float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
+    s.fall = wake_slope(w, world, footprint);
     return s;
 }
 
