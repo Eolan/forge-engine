@@ -182,15 +182,17 @@ impl PropSpec {
     }
 
     /// How to cook it: hard-surface props weigh their normals in the simplification error
-    /// (their windows and flutes are shallow in depth but not in shading), rocks do not.
+    /// (their windows and flutes are shallow in depth but not in shading), and so do the
+    /// island's smooth stones by their own weight (#131); the city's lumpy rocks and the grounds
+    /// do not.
     pub fn cook_options(&self) -> CookOptions {
         CookOptions {
             normal_weight: match self.kind {
                 PropKind::Building(_) => 1.0,
                 PropKind::Lathe(_) => 0.5,
+                PropKind::Stone(ref s) => s.normal_weight,
                 PropKind::Boulder { .. }
                 | PropKind::Rubble { .. }
-                | PropKind::Stone(_)
                 | PropKind::Terrain(_)
                 | PropKind::Heightfield(_) => 0.0,
             },

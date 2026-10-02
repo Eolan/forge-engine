@@ -968,6 +968,10 @@ The boulders where rocks gather (#130): 60 000 stones of the island's own rocks 
 `shading/layered` is the same (0.309 → 0.318 on the coast, within its spread). The rock sites'
 map takes about 570 ms at start, the placement 60 ms as before.
 
+The stones' normals weighed when they are cooked (#131, `--stone-normals 2`) and the rivers'
+cobbles (#132) cost about 0.01 ms: the island 1.501–1.503 ms against 1.491–1.493, the tour
+1.324–1.337 against 1.318–1.325.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

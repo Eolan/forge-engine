@@ -72,6 +72,16 @@ struct Args {
     /// Which frame to capture.
     #[arg(long, default_value_t = 60)]
     capture_frame: u64,
+    /// Also capture every N-th frame (`<capture stem>-NNNNN.png`), for a sequence (LOD pops,
+    /// `imgdiff --then`).
+    #[arg(long)]
+    capture_every: Option<u64>,
+    /// The island's stones' weight of their normals when they are cooked (#131), per metre of
+    /// their size: metres of error per unit of normal change and metre (`CookOptions`; the
+    /// asteroids' `--lod-normals`). 0 cooks them by their geometry alone, as before; 2 halves
+    /// the pops of 0 along a glide past the granite's stones.
+    #[arg(long, default_value_t = 2.0)]
+    stone_normals: f32,
     /// Scripted camera: circle the gallery (for headless comparisons).
     #[arg(long)]
     orbit: bool,
@@ -364,6 +374,10 @@ struct Args {
     /// and out to sea, resting at each shot (`island --tour`).
     #[arg(long, conflicts_with_all = ["fly", "orbit"])]
     tour: bool,
+    /// Glide straight ahead from the start view at this many metres per second (a frame at a
+    /// time with `--fixed-step`): a steady approach for measuring LOD pops (#131).
+    #[arg(long, conflicts_with_all = ["fly", "orbit", "tour"])]
+    dolly: Option<f32>,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -959,6 +973,9 @@ impl Demo for Gallery {
             self.camera.position = Vec3::new(angle.sin() * RADIUS, 140.0, angle.cos() * RADIUS);
             self.camera.yaw = angle - std::f32::consts::FRAC_PI_2;
             self.camera.pitch = -0.15;
+        } else if let Some(speed) = self.args.dolly {
+            let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            self.camera.position += self.camera.forward() * speed * step;
         } else if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.
             let angle = self.frame as f32 * 0.004;
@@ -2163,8 +2180,13 @@ impl CityMaterials {
                 };
                 self.by_prop.insert(name, rock);
             }
-            for prop in ["boulder-1", "boulder-2", "boulder-3"] {
-                self.by_prop.insert(prop, granite);
+            for (i, (name, _)) in ISLAND_COBBLES.iter().enumerate() {
+                let rock = if i < GRANITE_COBBLES {
+                    granite
+                } else {
+                    limestone
+                };
+                self.by_prop.insert(name, rock);
             }
         }
         Ok(ground)
@@ -3592,12 +3614,13 @@ fn island_props(args: &Args) -> Vec<PropSpec> {
     let mut props = island_tiles(args);
     props.push(sea_prop());
     props.extend(city_props().into_iter().filter(|p| match p.kind {
-        PropKind::Boulder { .. } => true,
+        PropKind::Boulder { .. } => args.no_rock_sites,
         PropKind::Rubble { .. } => args.no_rock_sites,
         _ => false,
     }));
     if !args.no_rock_sites {
-        props.extend(island_stone_props());
+        props.extend(island_stone_props(args.stone_normals));
+        props.extend(island_cobble_props(args.stone_normals));
     }
     // The movers' barrel last (#79), after the rocks.
     if args.movers > 0 {
@@ -3652,11 +3675,43 @@ const ISLAND_STONES: [(&str, StoneShape, [f32; 3]); 16] = [
 /// How many of [`ISLAND_STONES`] are granite (the first ones).
 const GRANITE_STONES: usize = 8;
 
+/// The cobbles in the island's rivers (#132), granite's then limestone's: the name and the half-width
+/// across (their length is a metre, their height 0.75 m, the water's model of a river's stone).
+const ISLAND_COBBLES: [(&str, f32); 6] = [
+    ("granite-cobble-1", 1.0),
+    ("granite-cobble-2", 0.85),
+    ("granite-cobble-3", 0.7),
+    ("granite-cobble-4", 0.9),
+    ("limestone-cobble-1", 0.95),
+    ("limestone-cobble-2", 0.8),
+];
+
+/// How many of [`ISLAND_COBBLES`] are granite (the first ones).
+const GRANITE_COBBLES: usize = 4;
+
+/// The props of [`ISLAND_COBBLES`], a metre in radius.
+fn island_cobble_props(normals: f32) -> Vec<PropSpec> {
+    ISLAND_COBBLES
+        .iter()
+        .enumerate()
+        .map(|(i, &(name, across))| PropSpec {
+            name: name.to_owned(),
+            kind: PropKind::Stone(Stone {
+                seed: 150 + i as u64,
+                shape: StoneShape::Cobble,
+                size: [1.0, 0.75, across],
+                segments: 64,
+                normal_weight: normals,
+            }),
+        })
+        .collect()
+}
+
 /// The island's rocks from its rock sites (#130), unless `--instances` says otherwise.
 const ISLAND_ROCKS: u32 = 60_000;
 
 /// The props of [`ISLAND_STONES`].
-fn island_stone_props() -> Vec<PropSpec> {
+fn island_stone_props(normals: f32) -> Vec<PropSpec> {
     ISLAND_STONES
         .iter()
         .enumerate()
@@ -3667,6 +3722,7 @@ fn island_stone_props() -> Vec<PropSpec> {
                 shape,
                 size,
                 segments: if shape == StoneShape::Block { 96 } else { 80 },
+                normal_weight: normals * size.iter().copied().fold(0.0, f32::max),
             }),
         })
         .collect()
@@ -4523,7 +4579,8 @@ fn build_island(
     if !args.water() {
         builder.add_instance(sea, Mat4::IDENTITY);
     }
-    // The stones in the rivers (#105): the boulders, scaled to each stone, standing on the bed.
+    // The stones in the rivers (#105), scaled to each stone, standing on the bed: the island's
+    // cobbles (#132), or with `--no-rock-sites` the city's boulders.
     let boulders: Vec<(MeshId, f32)> = props
         .iter()
         .zip(&ids)
@@ -4532,6 +4589,19 @@ fn build_island(
             _ => None,
         })
         .collect();
+    let cobble = |names: &[(&str, f32)]| -> Vec<MeshId> {
+        names
+            .iter()
+            .map(|(name, _)| ids[props.iter().position(|p| p.name == *name).expect("cobble")])
+            .collect()
+    };
+    let cobbles = (!args.no_rock_sites).then(|| {
+        (
+            cobble(&ISLAND_COBBLES[..GRANITE_COBBLES]),
+            cobble(&ISLAND_COBBLES[GRANITE_COBBLES..]),
+        )
+    });
+    let geology = forge_procgen::GeologyRule::default();
     let mut stones = island_stones(&height, &ribbons, &channels);
     // And beside the steeper rivers' water, on their gravel (#118), clear of the water.
     let banked = forge_procgen::bank_stones(&ribbons, &channels, &height, RIVER_STONES ^ 0xba);
@@ -4600,7 +4670,21 @@ fn build_island(
     );
     let half = 0.5 * extent;
     for stone in &stones {
-        let (mesh, radius) = boulders[stone.pick as usize % boulders.len()];
+        // A cobble of the rock it lies on; on the limestone, half of them the granite the river
+        // carried down from the hills.
+        let (mesh, radius) = match &cobbles {
+            Some((granite, limestone)) => {
+                let [x, y] = stone.position;
+                let on_limestone = geology.is_limestone(x, y, height.sample(x, y));
+                let rock = if on_limestone && (stone.pick >> 16) & 1 == 1 {
+                    limestone
+                } else {
+                    granite
+                };
+                (rock[stone.pick as usize % rock.len()], 1.0)
+            }
+            None => boulders[stone.pick as usize % boulders.len()],
+        };
         builder.add_instance(
             mesh,
             Mat4::from_scale_rotation_translation(
@@ -5018,7 +5102,7 @@ fn run(args: Args, title: &'static str) -> Result<()> {
         validate: args.validate,
         frame_limit: args.frames,
         capture: args.capture.clone().map(|p| (p, args.capture_frame)),
-        capture_every: None,
+        capture_every: args.capture_every,
         overlay: if args.overlay { Some(true) } else { None },
         force_fallback: args.force_fallback,
         hdr: args.hdr,

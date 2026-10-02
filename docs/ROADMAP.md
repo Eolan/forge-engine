@@ -100,8 +100,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's
   call). The rock types ✅ (#129, D-042, the owner's pick): a granite core, a limestone coast
   with karst on its dry slopes. The boulders by the rocks ✅ (#130): fewer, of the island's own
-  granite and limestone in shapes of their own, where rocks gather (talus, crests, karst). Next
-  for them: the granite's grus on its gentle slopes.
+  granite and limestone in shapes of their own, where rocks gather (talus, crests, karst); their
+  LOD keeping their shading (#131) and rounded cobbles in the rivers (#132). Next for them: the
+  granite's grus on its gentle slopes.
 - **Phase 3's start:** `forge-sim` and the physics engine (D-009). Its first visible use is the
   island's water: buoyancy for what floats (#107's barrels are carried at the water's speed,
   without physics), boats and swimming from the owner's inbox. Its demo is `materials-yard`.

@@ -5,7 +5,8 @@
 //! Each piece is a cube-sphere of `segments × segments` quads per face, welded at the seams like
 //! [`crate::procedural::asteroid`], pushed out to a superellipsoid (rounder or squarer) and
 //! roughened by noise; a block is then cut by planes. A stone stands on the ground at the
-//! origin: its lowest point a tenth of its height under `y = 0`.
+//! origin: its lowest point a tenth of its height under `y = 0` (a river's cobble, #132, as the
+//! city's boulders stand, for the water's outline of it).
 
 use std::collections::HashMap;
 
@@ -27,6 +28,10 @@ pub enum StoneShape {
     /// A limestone block: flat bedding faces top and bottom (dipping a little), broken faces
     /// round it meeting at sharp edges, pitted by solution. Thin, it is a flag.
     Block,
+    /// A cobble in a river (#132): worn smooth and round by the water, no lumps or pits. It is
+    /// `size[0]` across its length, and stands as `crate::city::boulder` does, the water's
+    /// model of a river's stone: its centre 0.65 of that up, so the water's outline of it holds.
+    Cobble,
 }
 
 /// A stone (see [`stone`]).
@@ -40,6 +45,9 @@ pub struct Stone {
     pub size: [f32; 3],
     /// Quads per cube-face side of each piece (12 × segments² triangles a piece).
     pub segments: u32,
+    /// Weight of its normals in its simplification error when it is cooked (#131; metres of
+    /// error per unit of normal change, `crate::meshlet::CookOptions::normal_weight`).
+    pub normal_weight: f32,
 }
 
 /// The stone `s`, standing on the ground at the origin.
@@ -48,18 +56,35 @@ pub fn stone(s: &Stone) -> TriMesh {
     let size = Vec3::from_array(s.size);
     let mut mesh = TriMesh::default();
     match s.shape {
-        StoneShape::Corestone => {
-            append(&mut mesh, rounded(root, size, 3.0, s.segments), Vec3::ZERO)
-        }
-        StoneShape::Slab => append(&mut mesh, rounded(root, size, 2.4, s.segments), Vec3::ZERO),
+        StoneShape::Corestone => append(
+            &mut mesh,
+            rounded(root, size, 3.0, ROUGH, s.segments),
+            Vec3::ZERO,
+        ),
+        StoneShape::Slab => append(
+            &mut mesh,
+            rounded(root, size, 2.4, ROUGH, s.segments),
+            Vec3::ZERO,
+        ),
         StoneShape::Block => append(&mut mesh, block(root, size, s.segments), Vec3::ZERO),
+        StoneShape::Cobble => append(
+            &mut mesh,
+            rounded(root, size, 2.2, (0.03, 0.004), s.segments),
+            Vec3::ZERO,
+        ),
         StoneShape::Tor => {
             let mut rng = root.derive_str("tor").rng();
             let pieces = 2 + u32::from(rng.next_f32() < 0.5);
             let mut piece_size = size;
             let mut top = 0.0;
             for k in 0..pieces {
-                let piece = rounded(root.derive(u64::from(k)), piece_size, 2.8, s.segments);
+                let piece = rounded(
+                    root.derive(u64::from(k)),
+                    piece_size,
+                    2.8,
+                    ROUGH,
+                    s.segments,
+                );
                 let (low, high) = height_range(&piece);
                 // Each stone sinks a little into the one under it.
                 let sink = if k == 0 { 0.0 } else { 0.15 * (high - low) };
@@ -78,9 +103,14 @@ pub fn stone(s: &Stone) -> TriMesh {
             }
         }
     }
-    // On the ground: the lowest point a tenth of the height under it.
+    // On the ground: the lowest point a tenth of the height under it (a cobble: its centre 0.65 of
+    // its radius up).
     let (low, high) = height_range(&mesh);
-    let lift = -low - 0.1 * (high - low);
+    let lift = if s.shape == StoneShape::Cobble {
+        0.65 * size.x
+    } else {
+        -low - 0.1 * (high - low)
+    };
     for p in &mut mesh.positions {
         p[1] += lift;
     }
@@ -168,15 +198,18 @@ fn superellipsoid(dir: Vec3, half: Vec3, e: f32) -> f32 {
     (q.x.powf(e) + q.y.powf(e) + q.z.powf(e)).powf(-1.0 / e)
 }
 
+/// The broad and fine noise of a weathered stone, in its least half-size.
+const ROUGH: (f32, f32) = (0.12, 0.025);
+
 /// A rounded stone: the superellipsoid of `half` and exponent `e`, swelling and hollowed by
-/// broad noise and grained by fine noise.
-fn rounded(seed: Seed, half: Vec3, e: f32, segments: u32) -> TriMesh {
+/// broad noise and grained by fine noise, `rough` of its least half-size each.
+fn rounded(seed: Seed, half: Vec3, e: f32, rough: (f32, f32), segments: u32) -> TriMesh {
     let broad = seed.derive_str("broad").value();
     let fine = seed.derive_str("fine").value();
     let least = half.min_element();
     cube_sphere(segments, |dir| {
         let r = superellipsoid(dir, half, e);
-        let bump = least * (0.12 * fbm(broad, dir * 2.2, 4) + 0.025 * fbm(fine, dir * 9.0, 3));
+        let bump = least * (rough.0 * fbm(broad, dir * 2.2, 4) + rough.1 * fbm(fine, dir * 9.0, 3));
         dir * (r + bump)
     })
 }
@@ -240,12 +273,18 @@ mod tests {
             StoneShape::Tor,
             StoneShape::Slab,
             StoneShape::Block,
+            StoneShape::Cobble,
         ] {
             let s = Stone {
                 seed: 5,
                 shape,
-                size: [1.5, 1.0, 1.2],
+                size: if shape == StoneShape::Cobble {
+                    [1.5, 1.125, 1.2]
+                } else {
+                    [1.5, 1.0, 1.2]
+                },
                 segments: 12,
+                normal_weight: 0.0,
             };
             let mesh = stone(&s);
             assert_eq!(
@@ -258,12 +297,18 @@ mod tests {
             let f = mesh.triangle_count() as i64;
             let v = mesh.positions.len() as i64;
             assert_eq!(v - 3 * f / 2 + f, 2 * pieces, "{shape:?}: closed");
-            // Its lowest point a tenth of its height under the ground.
+            // Its lowest point a tenth of its height under the ground; a cobble's centre 0.65 of its
+            // radius up, its lowest point a tenth of it under the ground, give or take its noise.
             let (low, high) = height_range(&mesh);
-            assert!(
-                (low + 0.1 * (high - low)).abs() < 1e-4,
-                "{shape:?}: {low} {high}"
-            );
+            if shape == StoneShape::Cobble {
+                assert!((low + 0.15).abs() < 0.06, "{shape:?}: {low}");
+                assert!((high - (0.975 + 1.125)).abs() < 0.06, "{shape:?}: {high}");
+            } else {
+                assert!(
+                    (low + 0.1 * (high - low)).abs() < 1e-4,
+                    "{shape:?}: {low} {high}"
+                );
+            }
             // Within 1.25 of its size across, and of three stacked for a tor.
             let reach = mesh
                 .positions
@@ -286,6 +331,7 @@ mod tests {
                 shape,
                 size: [1.0, 0.6, 1.0],
                 segments: 24,
+                normal_weight: 0.0,
             });
             let mut facing = HashMap::<[i32; 3], u32>::new();
             for n in &mesh.normals {

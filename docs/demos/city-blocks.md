@@ -50,7 +50,13 @@ Options:
   300 000 with `--no-rock-sites`).
 - `--recook` cooks every prop and the terrain again.
 - `--orbit` gives a scripted camera; `--fly` flies a loop at 300 m/s, 140 m up, over the
-  city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead).
+  city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead);
+  `--dolly M` glides straight ahead from the start view at M m/s, a steady approach for
+  measuring LOD pops (#131).
+- `--capture-every N` also writes every N-th frame beside `--capture`'s path
+  (`<stem>-NNNNN.png`): a sequence for `imgdiff --then`.
+- `--stone-normals K` weighs the island's stones' normals when they are cooked, per metre of
+  their size (2; 0 by their geometry alone, #131).
 - `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
   page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
 - `--no-shadows` draws without the sun's ray-traced shadows (**J** toggles them).

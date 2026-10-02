@@ -2587,5 +2587,50 @@ Before (`--no-rock-sites`) and now, frame 60 (`reports/2026-10-02-130/`):
 - **Timings** (`docs/PROFILE.md`): the island takes 1.493–1.507 ms against 1.583–1.620 and the
   tour 1.315–1.327 against 1.409–1.437, from fewer, lighter rocks.
 
-**Later:** the grus on the granite's gentle slopes; the rivers' stones in the shapes of their
-rocks (their outline in the water is the city's boulder's today).
+**Later:** the grus on the granite's gentle slopes. The rivers' stones in the shapes of their rocks
+followed (#132, below).
+
+## The stones' LOD and the rivers' cobbles (#131, #132, 2026-10-02)
+
+Two notes from the owner on #130.
+
+**"LOD seems wrong for the rocks, I see the texture and maybe geometry changing even from close
+distances"** (#131). The stones were cooked like the city's rocks, by their geometry alone
+(`CookOptions::normal_weight` 0). Their coarse levels kept vertices whose normals no longer
+matched the surface, so the shading and the props' triplanar texture, whose blend follows the
+normal, changed at every switch of level. The chunks of the ballad met the same thing (#65);
+the fix is theirs, the normals weighed per metre of the stone's size (`--stone-normals K`, 2;
+`Stone::normal_weight`).
+
+Measured as #65 did: a glide at 5 m/s past the granite's stones (`--view
+-1184,140,-3178,-59.4,-15 --dolly 5`, fixed step, TAA off), each cooking at 1 px against its
+own run at 0.125 px, 80 frame pairs (`--capture-every 1`, `imgdiff --then`, pixels whose change
+to the next frame differs by more than 16 levels):
+
+| Weight per metre | Pops per frame pair | GPU (one run) |
+|---|---|---|
+| 0 (before) | 6 415 px | 1.689 ms |
+| 0.5 | 5 824 | 1.715 |
+| 1 | 4 371 | 1.723 |
+| **2 (the default)** | **3 142** | **1.769** |
+
+At 0 whole stones speckle as they switch; at 2 what is left sits on their outlines and their
+shadows' edges, the silhouettes' sub-pixel aliasing that TAA resolves (#65's floor).
+
+**"Stones in a river should be more rounded because water erodes them"** (#132). They were the
+city's lumpy, pitted boulders. They are now cobbles (`StoneShape::Cobble`): a superellipsoid of
+exponent 2.2 with a faint noise, worn smooth, a metre long, 0.75 m high and 0.7 to 1 m wide,
+standing as the boulders stood (the centre 0.65 of the radius up), so the water's outline of
+each (`channel::Stone::waterline`) holds. Four are granite and two limestone. On granite ground
+a river's stones are granite; on the limestone half of them are, the granite the river carried
+down from the hills, and half are limestone. Holes and vesicles belong to young volcanic rock
+(scoria, pumice); the island has none (D-042). `--no-rock-sites` keeps the boulders.
+
+Checks (both together):
+- **The batch:** against #130's, it changes the island's images only. The `valley` shot changes
+  most, by 82 259 px (ꟻLIP mean 0.023), its cobbles; the island's views by about 1 850 px. The
+  exception is `mesh-ast-taa600` at 302 px, #71's flake: no shader changed.
+- **The A/B harness, mesh against fallback:** 0 px.
+- **Validation:** clean; 261 tests pass, the stone test with a cobble.
+- **Timings:** the island takes 1.501–1.503 ms against 1.491–1.493, the tour 1.324–1.337
+  against 1.318–1.325: the stones' finer levels cost about 0.01 ms.
