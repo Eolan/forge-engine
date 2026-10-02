@@ -1722,3 +1722,24 @@ bar of sand in its widened mouth, 40 m or more two, teardrops whose crests stand
 water, the river widened by their breadth, so its water runs round them to the sea in two or
 three channels. They stand inside the mouth's reach only; distributaries leaving the river apart
 were not built.
+
+## D-042 — The island's geology: a granite core, a limestone coast ✅ (2026-10-02)
+
+The owner's pick of 2026-10-02, when the rock types came up ("it has to make sense for the
+island"). The island's rock had no geology: one dark grey on every slope over 0.45, which the
+notes of #96 called volcanic. Then the black sand of #128 read the hardness field as basalt, and
+the owner judged that it makes no sense on this island. The options were all granite
+(Seychelles), all limestone (Mallorca, Dalmatia), a granite core under a limestone coast, or a
+plain grey. The owner took the core and the coast:
+- **The hills are granite:** grey to pink, coarse-grained, weathering to smooth slabs and domes
+  and to rounded boulders (the Seychelles, Corsica).
+- **The coast is limestone:** the low ground round the island, the coastal plain and the sea
+  cliffs, is pale limestone, the old reefs raised with the island. Where the rain etches its
+  bare ground into pavements, karst.
+- **The beaches stay pale sand,** quartz from the granite and coral from the reefs. Shingle lies
+  on the headlands (#128), and no black sand.
+
+Built as stage 6's rule (D-041's materials as rules): the limestone below a height that wanders
+round the island, the granite above it, each with its own texture, and karst on the limestone's
+bare, gentler and drier ground. The boulders' colour following the rock under them, and the
+grus (the granite's coarse sandy soil) on gentle slopes, are later steps.

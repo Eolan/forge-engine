@@ -230,6 +230,10 @@ struct Args {
     /// land (#128).
     #[arg(long)]
     no_beach_types: bool,
+    /// Leave the island's rock one dark grey: no granite in the hills, no limestone on the low
+    /// ground and the sea cliffs, no karst (#129, D-042).
+    #[arg(long)]
+    no_rock_types: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1833,17 +1837,24 @@ impl CityMaterials {
 
     /// The island's ground (`docs/demos/island.md`, #96): its layer map (`island_layer`) and a
     /// row per layer after the layered row, for a tropical island rather than the city's
-    /// hills: a deeper green, sand on the beaches, wet sand under the sea, dark volcanic rock
-    /// on the steep ground. Then the sea's row, calm water, smooth and dark, for the plane that
+    /// hills: a deeper green, sand on the beaches, wet sand under the sea, and on the steep ground
+    /// granite in the hills and limestone on the low land (D-042, #129; one dark rock with
+    /// `--no-rock-types`). Then the sea's row, calm water, smooth and dark, for the plane that
     /// stands in for the sea until the water is drawn (D-038, `sea_prop`).
-    fn island_ground(&mut self, layers: &[u8], texels: u32, size: f32) -> Result<MaterialId> {
+    fn island_ground(
+        &mut self,
+        layers: &[u8],
+        texels: u32,
+        size: f32,
+        rock_types: bool,
+    ) -> Result<MaterialId> {
         let map = self
             .textures
             .add_layer_map("island layers", texels, texels, layers)?;
         let [rock, concrete, _, grass] = self.sets;
         // The valleys' own sets (#118), the island's only: generated here, in parallel.
         let start = Instant::now();
-        let mut valley_sets: [Option<[TextureData; 2]>; 4] = Default::default();
+        let mut valley_sets: [Option<[TextureData; 2]>; 7] = Default::default();
         TaskPool::client().scope(|s| {
             for (i, slot) in valley_sets.iter_mut().enumerate() {
                 s.spawn(move |_| {
@@ -1851,7 +1862,10 @@ impl CityMaterials {
                         0 => textures::gravel(15, 512),
                         1 => textures::scree(16, 512),
                         2 => textures::scrub(17, 512),
-                        _ => textures::shingle(18, 512),
+                        3 => textures::shingle(18, 512),
+                        4 => textures::granite(19, 512),
+                        5 => textures::limestone(20, 512),
+                        _ => textures::karst(21, 512),
                     });
                 });
             }
@@ -1860,10 +1874,11 @@ impl CityMaterials {
         for set in valley_sets.iter().flatten() {
             ids.push((self.textures.add(&set[0])?, self.textures.add(&set[1])?));
         }
-        let [gravel, scree, scrub, shingle] = [ids[0], ids[1], ids[2], ids[3]];
+        let [gravel, scree, scrub, shingle, granite, limestone, karst] =
+            [ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]];
         tracing::info!(
             ms = start.elapsed().as_millis(),
-            "island textures: gravel, scree, scrub and shingle"
+            "island textures: gravel, scree, scrub, shingle, granite, limestone and karst"
         );
         let ground = self.table.add(Material::new(
             "island ground",
@@ -1930,7 +1945,19 @@ impl CityMaterials {
             ),
             (
                 "island: rock",
-                textured(rock, [0.3, 0.3, 0.29], [0.38, 0.37, 0.35], 6.0, 14.0, 0.05),
+                if rock_types {
+                    // The hills' granite (D-042, #129): grey to pink, specked, smooth slabs.
+                    textured(
+                        granite,
+                        [0.52, 0.48, 0.44],
+                        [0.6, 0.55, 0.5],
+                        7.0,
+                        16.0,
+                        0.05,
+                    )
+                } else {
+                    textured(rock, [0.3, 0.3, 0.29], [0.38, 0.37, 0.35], 6.0, 14.0, 0.05)
+                },
             ),
             (
                 // Water over a dark bed, as the sea's row: the rivers' stand-in (D-038).
@@ -2017,6 +2044,32 @@ impl CityMaterials {
                     1.0,
                     20.0,
                     0.07,
+                ),
+            ),
+            (
+                // Limestone on the low ground's steep faces and the sea cliffs (D-042, #129):
+                // pale cream-grey, pitted.
+                "island: limestone",
+                textured(
+                    limestone,
+                    [0.58, 0.58, 0.57],
+                    [0.66, 0.65, 0.62],
+                    6.0,
+                    10.0,
+                    0.04,
+                ),
+            ),
+            (
+                // Karst pavement on the limestone's driest gentler ground (#129): pale blocks a
+                // metre or two across, moss in the fissures between them.
+                "island: karst",
+                textured(
+                    karst,
+                    [0.36, 0.36, 0.35],
+                    [0.42, 0.42, 0.4],
+                    9.0,
+                    10.0,
+                    0.04,
                 ),
             ),
         ];
@@ -2160,8 +2213,15 @@ mod island_layer {
     /// Shingle: the pebbles of the beaches on the headlands and under steep land (#128,
     /// `forge_procgen::paint_beaches`).
     pub const SHINGLE: u8 = 13;
+    /// Limestone: the rock of the low ground and the sea cliffs, the old reefs raised with the
+    /// island (D-042, #129, `forge_procgen::paint_geology`). The rock over it, `ROCK`, is the
+    /// hills' granite.
+    pub const LIMESTONE: u8 = 14;
+    /// Karst: the limestone's bare pavements of blocks and fissures, on its driest gentler
+    /// ground (#129).
+    pub const KARST: u8 = 15;
     /// How many layers there are.
-    pub const COUNT: u8 = 14;
+    pub const COUNT: u8 = 16;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -4207,6 +4267,84 @@ fn build_island(
         ms = rivers_start.elapsed().as_millis(),
         "island moisture, rivers and lakes"
     );
+    // The rock by the island's geology (D-042, #129), after the rules that read the rock: the
+    // hills' granite, the low ground's limestone, and karst on the limestone's dry ground.
+    if !args.no_rock_types {
+        let geology_start = Instant::now();
+        let rocks = forge_procgen::paint_geology(
+            &mut layers,
+            &height,
+            forge_procgen::GeologyLayers {
+                rock: island_layer::ROCK,
+                limestone: island_layer::LIMESTONE,
+                dry_grass: island_layer::DRY_GRASS,
+                karst: island_layer::KARST,
+            },
+            &forge_procgen::GeologyRule::default(),
+        );
+        // A view of each: the block of 256 m with the most of it, from 150 m down the ground's
+        // slope from its nearest texel to the block's middle and 50 m over it, looking back.
+        let half_m = height.extent() * 0.5;
+        let view = |layer: u8| -> Option<String> {
+            let (block, cell) = (64, layers.spacing);
+            let blocks = layers.size / block;
+            let mut count = vec![0_u32; (blocks * blocks) as usize];
+            for (t, &l) in layers.data.iter().enumerate() {
+                if l == layer {
+                    let (x, y) = (t as u32 % layers.size, t as u32 / layers.size);
+                    count[((y / block) * blocks + x / block) as usize] += 1;
+                }
+            }
+            let b = (0..count.len()).max_by_key(|&b| count[b])?;
+            let (bx, by) = (b as u32 % blocks, b as u32 / blocks);
+            let middle = (
+                (bx * block + block / 2) as f64,
+                (by * block + block / 2) as f64,
+            );
+            let (tx, ty) = (0..block * block)
+                .map(|t| (bx * block + t % block, by * block + t / block))
+                .filter(|&(x, y)| layers.get(x, y) == layer)
+                .min_by(|a, b| {
+                    let d = |p: (u32, u32)| {
+                        (f64::from(p.0) - middle.0).hypot(f64::from(p.1) - middle.1)
+                    };
+                    d(*a).total_cmp(&d(*b))
+                })?;
+            let at = ((f64::from(tx) + 0.5) * cell, (f64::from(ty) + 0.5) * cell);
+            let ground = f64::from(height.sample(at.0, at.1));
+            let step = 8.0;
+            let down = (
+                f64::from(height.sample(at.0 - step, at.1) - height.sample(at.0 + step, at.1)),
+                f64::from(height.sample(at.0, at.1 - step) - height.sample(at.0, at.1 + step)),
+            );
+            let len = down.0.hypot(down.1).max(1e-6);
+            let out = (down.0 / len, down.1 / len);
+            let yaw = out.0.atan2(out.1).to_degrees();
+            let pitch = (-(50.0_f64).atan2(150.0)).to_degrees();
+            Some(format!(
+                "{:.0},{:.0},{:.0},{yaw:.1},{pitch:.1}",
+                at.0 + 150.0 * out.0 - half_m,
+                ground + 50.0,
+                at.1 + 150.0 * out.1 - half_m
+            ))
+        };
+        let views: Vec<String> = [
+            island_layer::ROCK,
+            island_layer::LIMESTONE,
+            island_layer::KARST,
+        ]
+        .iter()
+        .filter_map(|&l| view(l))
+        .collect();
+        tracing::info!(
+            granite_texels = rocks.granite,
+            limestone_texels = rocks.limestone,
+            karst_texels = rocks.karst,
+            ms = geology_start.elapsed().as_millis(),
+            views = %views.join("  "),
+            "the island's rocks: granite, limestone, karst (D-042, #129, --view)"
+        );
+    }
     builder.set_ray_traced(!args.no_shadows);
     // The ground's tiles, then the sea, then the rocks (`island_props`).
     let tiles = (ISLAND_TILES * ISLAND_TILES) as usize;
@@ -4214,7 +4352,7 @@ fn build_island(
     // The tiles cut for the rays as the one mesh they were (#106).
     builder.set_ray_group(tile_ids, forge_render::raytrace::TERRAIN_BUDGET);
     let mut materials = CityMaterials::new(&ctx.device)?;
-    materials.island_ground(&layers.data, texels, extent)?;
+    materials.island_ground(&layers.data, texels, extent, !args.no_rock_types)?;
     materials.apply(&mut builder, &props, &ids);
     let mut layout = CityLayout::island(args.instances.unwrap_or(300_000));
     layout.origin = scene_origin(args);

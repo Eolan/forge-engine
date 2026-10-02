@@ -80,8 +80,8 @@ pub use island::{
 };
 pub use lake::{LakeWater, lake_waters, paint_lake_beds, trim_outlets};
 pub use layers::{
-    LayerRule, ScrubRule, Shore, paint_lakes, paint_moisture, paint_rivers, paint_scrub,
-    slope_layers, wetness,
+    GeologyLayers, GeologyRule, GeologyStats, LayerRule, ScrubRule, Shore, paint_geology,
+    paint_lakes, paint_moisture, paint_rivers, paint_scrub, slope_layers, wetness,
 };
 pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
 pub use river::{

@@ -2440,3 +2440,54 @@ Before (`--no-beach-types`) and with the black sand still in, frame 60:
   and at its mouth, the dark types three texels out under the sea) and the contour's set.
 - **Timings:** `timings.sh` is within noise. The island's layered shading takes 0.318–0.334 ms
   against 0.329–0.331, its frame 1.618–1.640 ms against 1.637–1.709.
+
+## The rocks: a granite core, a limestone coast (#129, D-042, 2026-10-02)
+
+The owner asked for rock types that make sense for the island. With the black sand gone (the
+island's hard rock is no basalt), the owner picked its geology: a granite core under a limestone
+coast (D-042). `forge_procgen::paint_geology` splits the bare rock the slope rule paints, last of
+the rules that read it (`--no-rock-types` for the island before, `reports/2026-10-02-129/`):
+- **Granite in the hills:** the rock above a height that wanders round the island between about
+  20 and 70 m. It has a texture of its own (`textures::granite`): grey to pink, specked with pink
+  feldspar, white quartz and black mica, weathered smooth into slabs, crossed by the odd sheet
+  joint and stained by lichen. The old rock was one dark grey.
+- **Limestone below it:** the low hills, the coastal plain and the sea cliffs, the old reefs
+  raised with the island. Pale cream-grey, fine-grained and pitted (`textures::limestone`). The
+  contact runs along a height, ragged by 4 m over a few tens of metres. It dips into each valley
+  in a V, as level beds do.
+- **Karst on the limestone:** pavements of pale grey blocks a metre or two across, moss in the
+  fissures between them (`textures::karst`). They cover a fifth of the limestone's dry grass on
+  slopes of 0.12 to 0.35, in patches 25 m across. A first try put them on the lush plain in
+  white blobs that read as snow; karst lies on bare, drier slopes, and weathered limestone is
+  grey.
+
+Seed 7: 64 070 texels of granite (1.0 km²), 1 510 of limestone rock (the low land is gentle,
+mostly grass over its limestone) and 17 948 of karst (0.29 km²). The rule takes about 130 ms at
+start. The log gives a view of each: `the island's rocks: granite, limestone, karst (D-042,
+#129, --view)`.
+
+Before (`--no-rock-types`) and now, frame 60:
+- `rocks.png`:
+  - the granite from 150 m down its slope (ꟻLIP mean 0.076);
+  - the limestone hill and its V of granite (0.075);
+  - the karst's pavements (0.020);
+  - the `valley` shot (0.0055).
+- `island.png`:
+  - the `island` shot (0.0079): the hills' granite pale against the green;
+  - the stretch that was black sand (#128), pale sand again.
+
+**Checks:**
+- **The batch:** it changes the island's images only. `island60` changes by 4 767 px (ꟻLIP mean
+  0.0016), `water60` by 5 234, the `island` shot by 6 922 and the `valley` shot by 12 738.
+  The odd one out is `fb-ast-taa600`, 52 px with an ꟻLIP of at most 0.058: the ballad's frame
+  600 flake (#71), which this change does not touch.
+- **The A/B harness and the paths:** 0 px.
+- **Validation and tests:** `validate.sh` is clean; 257 tests pass, one new. It covers the rule
+  on a cone: limestone and karst only low, granite only high, karst only on the dry grass.
+- **Timings:** `timings.sh` is within noise. The island takes 1.609–1.619 ms against 1.608–1.611,
+  its layered shading 0.312 ms against 0.313.
+
+**Later:**
+- the boulders' colour following the rock under them, granite's pink in the hills and
+  limestone's grey on the low ground;
+- the grus, the granite's coarse sandy soil, on its gentle slopes.

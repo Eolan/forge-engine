@@ -362,6 +362,145 @@ fn horn(height: &Field2<f32>, x: u32, y: u32, reach: i32) -> (f32, f32) {
     (dx * scale, dy * scale)
 }
 
+/// Where the island's rocks are (D-042, #129): a granite core under a limestone coast.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeologyRule {
+    /// Metres over the sea under which the ground is limestone, on average, and how far that
+    /// wanders either way round the island.
+    pub limestone_below: (f64, f64),
+    /// Metres across the wander's patches.
+    pub wander: f64,
+    /// Metres the contact between the rocks wanders by over a few tens of metres, so it does not
+    /// run along a contour line.
+    pub ragged: f64,
+    /// Rise over run between which the limestone's dry grass may be bare karst pavement, over
+    /// `slope_over` metres.
+    pub karst_slope: (f32, f32),
+    /// Metres over which the slope is measured (as [`LayerRule::slope_over`]).
+    pub slope_over: f64,
+    /// The share of that dry grass the karst takes, in patches `karst_patch` metres across.
+    pub karst_share: f64,
+    /// Metres across the karst's patches.
+    pub karst_patch: f64,
+    /// The seed of the wander and the patches.
+    pub seed: u64,
+}
+
+impl Default for GeologyRule {
+    /// Limestone under 45 m, give or take 25 m over patches 1.5 km across, its contact ragged by
+    /// 4 m; karst on a fifth of the limestone's dry grass between slopes of 0.12 and 0.35
+    /// (over 8 m), in patches 25 m across.
+    fn default() -> Self {
+        Self {
+            limestone_below: (45.0, 25.0),
+            wander: 1500.0,
+            ragged: 4.0,
+            karst_slope: (0.12, 0.35),
+            slope_over: 8.0,
+            karst_share: 0.2,
+            karst_patch: 25.0,
+            seed: 0x6765_6f6c_6f67_7921,
+        }
+    }
+}
+
+/// The layers [`paint_geology`] reads and paints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeologyLayers {
+    /// The bare rock the slope rule painted, which stays granite in the hills.
+    pub rock: u8,
+    /// The limestone the rock turns to on the low ground.
+    pub limestone: u8,
+    /// The dry grass ([`paint_moisture`]) the karst takes.
+    pub dry_grass: u8,
+    /// The karst's pavements.
+    pub karst: u8,
+}
+
+/// What [`paint_geology`] painted: texels of rock left granite, of rock turned to limestone,
+/// and of karst.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GeologyStats {
+    /// Texels of the hills' rock, granite.
+    pub granite: usize,
+    /// Texels of the low ground's rock, limestone.
+    pub limestone: usize,
+    /// Texels of karst.
+    pub karst: usize,
+}
+
+/// Splits the island's rock by `rule` (D-042): over `height` (the sea at 0 m), the rock of
+/// `layers` (a layer map over the field's extent, rows along +y) under the limestone's height
+/// turns to `ids.limestone`, and on that limestone ground some of its gentler dry grass turns
+/// to karst. The rest of the rock stays `ids.rock`, the granite of the hills. Run it after the
+/// rules that read the rock.
+pub fn paint_geology(
+    layers: &mut Field2<u8>,
+    height: &Field2<f32>,
+    ids: GeologyLayers,
+    rule: &GeologyRule,
+) -> GeologyStats {
+    let reach = (rule.slope_over / height.spacing).round().max(1.0) as i32;
+    let slopes = Field2::from_fn(height.size, height.spacing, |x, y| {
+        let (gx, gy) = horn(height, x, y, reach);
+        (gx * gx + gy * gy).sqrt()
+    });
+    let cell = layers.spacing;
+    let n = layers.size;
+    let mut stats = GeologyStats::default();
+    let mut candidates: Vec<(usize, f64)> = Vec::new();
+    for t in 0..layers.data.len() {
+        let layer = layers.data[t];
+        if layer != ids.rock && layer != ids.dry_grass {
+            continue;
+        }
+        let (x, y) = (
+            (f64::from(t as u32 % n) + 0.5) * cell,
+            (f64::from(t as u32 / n) + 0.5) * cell,
+        );
+        let (mean, swing) = rule.limestone_below;
+        let below = mean
+            + swing * noise::fbm(rule.seed, x / rule.wander, y / rule.wander, 2, 2.0, 0.5)
+            + rule.ragged * noise::fbm(rule.seed ^ 1, x / 30.0, y / 30.0, 2, 2.0, 0.5);
+        let limestone = f64::from(height.sample(x, y)) < below;
+        if layer == ids.rock {
+            if limestone {
+                layers.data[t] = ids.limestone;
+                stats.limestone += 1;
+            } else {
+                stats.granite += 1;
+            }
+        } else if limestone {
+            let slope = slopes.sample(x, y);
+            if slope >= rule.karst_slope.0 && slope <= rule.karst_slope.1 {
+                let patch = noise::fbm(
+                    rule.seed ^ 2,
+                    x / rule.karst_patch,
+                    y / rule.karst_patch,
+                    2,
+                    2.0,
+                    0.5,
+                );
+                candidates.push((t, patch));
+            }
+        }
+    }
+    // The karst: the patchiest share of the candidates, by the noise's quantile.
+    if !candidates.is_empty() && rule.karst_share > 0.0 {
+        let mut patches: Vec<f64> = candidates.iter().map(|c| c.1).collect();
+        patches.sort_by(f64::total_cmp);
+        let k = ((patches.len() - 1) as f64 * (1.0 - rule.karst_share).clamp(0.0, 1.0)) as usize;
+        let at = patches[k];
+        for &(t, patch) in &candidates {
+            if patch > at {
+                layers.data[t] = ids.karst;
+                stats.karst += 1;
+            }
+        }
+    }
+    stats
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,5 +713,49 @@ mod tests {
         assert!(count(4..36, 4..36) > 32 * 32 / 2, "{painted}");
         assert_eq!(count(4..36, 44..76), 0);
         assert_eq!(count(44..76, 0..80), 0);
+    }
+
+    #[test]
+    fn the_low_ground_is_limestone_with_karst_and_the_hills_granite() {
+        // A cone 200 m high and 1 km in radius, rising 0.2 m a metre: rock over its west half,
+        // dry grass over its east.
+        let height = Field2::from_fn(513, 8.0, |i, j| {
+            let (x, y) = (f64::from(i) * 8.0 - 2048.0, f64::from(j) * 8.0 - 2048.0);
+            (200.0 - 0.2 * x.hypot(y)) as f32
+        });
+        let ids = GeologyLayers {
+            rock: 3,
+            limestone: 14,
+            dry_grass: 5,
+            karst: 15,
+        };
+        let mut layers = Field2::from_fn(1024, 4.0, |i, _| if i < 512 { 3 } else { 5 });
+        let rule = GeologyRule::default();
+        let stats = paint_geology(&mut layers, &height, ids, &rule);
+        assert!(
+            stats.granite > 0 && stats.limestone > 0 && stats.karst > 0,
+            "{stats:?}"
+        );
+        let (mean, swing) = rule.limestone_below;
+        let reach = swing + rule.ragged + 1.0;
+        for i in 0..1024 {
+            for j in 0..1024 {
+                let h = f64::from(
+                    height.sample((f64::from(i) + 0.5) * 4.0, (f64::from(j) + 0.5) * 4.0),
+                );
+                let l = layers.get(i, j);
+                // Limestone and karst only low, granite only high, the contact between.
+                if l == 14 || l == 15 {
+                    assert!(h < mean + reach, "{i} {j}: {h}");
+                }
+                if l == 3 {
+                    assert!(h > mean - reach, "{i} {j}: {h}");
+                }
+                // Karst only where the dry grass was.
+                if l == 15 {
+                    assert!(i >= 512);
+                }
+            }
+        }
     }
 }

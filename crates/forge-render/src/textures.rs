@@ -436,6 +436,99 @@ pub fn shingle(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// Granite (#129, D-042): the island's hills, coarse-grained, grey to pink, specked with pink
+/// feldspar, white quartz and black mica; weathered smooth into slabs, crossed by the odd
+/// curved sheet joint, stained by lichen.
+pub fn granite(seed: u64, size: u32) -> [TextureData; 2] {
+    // The sheet joints: a few curved cracks, where a slow noise crosses its middle.
+    let joint = |u: f32, v: f32| {
+        let s = fbm(seed ^ 0x6A7, u, v, 2, 3);
+        1.0 - smoothstep(0.0, 0.012, (s - 0.5).abs())
+    };
+    let heights = grid(size, |u, v| {
+        let slab = fbm(seed, u, v, 3, 4);
+        let grain = fbm(seed ^ 0x61A, u, v, 128, 1);
+        0.7 * slab + 0.06 * grain - 0.25 * joint(u, v)
+    });
+    let colours = grid(size, |u, v| {
+        let (_, _, cell, _) = worley(seed ^ 0x6C2, u, v, 160);
+        let h = hash_cell2(seed ^ 0x6C2, cell.0, cell.1);
+        let kind = unit_f32(h);
+        // The grains: feldspar, quartz, mica, in a grey-pink groundmass.
+        let grain = if kind < 0.3 {
+            [0.62, 0.46, 0.42]
+        } else if kind < 0.5 {
+            [0.72, 0.71, 0.69]
+        } else if kind < 0.58 {
+            [0.1, 0.1, 0.1]
+        } else {
+            [0.5, 0.47, 0.45]
+        };
+        let lichen = smoothstep(0.55, 0.75, fbm(seed ^ 0x11C, u, v, 6, 4));
+        let weather = 0.85 + 0.3 * fbm(seed ^ 0x3EA, u, v, 4, 4);
+        let stained = mix3(grain, [0.36, 0.37, 0.33], 0.6 * lichen);
+        stained.map(|c| c * weather * (1.0 - 0.5 * joint(u, v)))
+    });
+    [
+        albedo_texture("granite albedo", size, colours),
+        normal_texture("granite normal", size, &heights, size as f32 / 32.0),
+    ]
+}
+
+/// Limestone (#129, D-042): the island's low ground and sea cliffs, the old reefs raised with
+/// it. Pale cream-grey, fine-grained, pitted where the rain dissolves it, blotched grey and
+/// darker where it weathers.
+pub fn limestone(seed: u64, size: u32) -> [TextureData; 2] {
+    let pits = |u: f32, v: f32| smoothstep(0.68, 0.78, fbm(seed ^ 0x917, u, v, 48, 2));
+    let heights = grid(size, |u, v| {
+        0.6 * fbm(seed, u, v, 4, 5) + 0.1 * fbm(seed ^ 0xF17, u, v, 64, 2) - 0.3 * pits(u, v)
+    });
+    let colours = grid(size, |u, v| {
+        let blotch = fbm(seed ^ 0xB10, u, v, 5, 4);
+        let grain = fbm(seed ^ 0x6A1, u, v, 128, 1);
+        let cream = [0.74, 0.71, 0.63];
+        let grey = [0.56, 0.56, 0.54];
+        let c = mix3(cream, grey, smoothstep(0.45, 0.75, blotch));
+        let shade = (0.92 + 0.12 * (grain - 0.5)) * (1.0 - 0.45 * pits(u, v));
+        c.map(|c| c * shade)
+    });
+    [
+        albedo_texture("limestone albedo", size, colours),
+        normal_texture("limestone normal", size, &heights, size as f32 / 48.0),
+    ]
+}
+
+/// Karst pavement (#129, D-042): the limestone's bare ground etched by the rain into blocks
+/// (clints) a metre or two across, split by deep fissures (grikes) where moss and grass grow.
+pub fn karst(seed: u64, size: u32) -> [TextureData; 2] {
+    // A block: its distance to the nearest fissure, the cells' edges, and its cell.
+    let block = |u: f32, v: f32| {
+        let (f1, f2, cell, _) = worley(seed ^ 0xC71, u, v, 6);
+        (f2 - f1, cell)
+    };
+    let heights = grid(size, |u, v| {
+        let (edge, _) = block(u, v);
+        let top = smoothstep(0.0, 0.12, edge).sqrt();
+        top + 0.08 * fbm(seed ^ 0x917, u, v, 48, 2)
+    });
+    let colours = grid(size, |u, v| {
+        let (edge, cell) = block(u, v);
+        let light = 0.85 + 0.25 * unit_f32(hash_cell2(seed ^ 0xC72, cell.0, cell.1));
+        let pits = smoothstep(0.7, 0.8, fbm(seed ^ 0x917, u, v, 48, 2));
+        let top = [0.72, 0.7, 0.63].map(|c| c * light * (1.0 - 0.4 * pits));
+        let moss = mix3(
+            [0.05, 0.07, 0.03],
+            [0.16, 0.24, 0.08],
+            fbm(seed ^ 0x305, u, v, 32, 2),
+        );
+        mix3(moss, top, smoothstep(0.03, 0.09, edge))
+    });
+    [
+        albedo_texture("karst albedo", size, colours),
+        normal_texture("karst normal", size, &heights, size as f32 / 24.0),
+    ]
+}
+
 /// Scree (#118): broken rock fallen from the walls above, angular fragments of pale grey stone,
 /// each a flat face tilted its own way, dark in the cracks between them.
 pub fn scree(seed: u64, size: u32) -> [TextureData; 2] {
