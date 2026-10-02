@@ -56,6 +56,10 @@ const LAKE_OUTFALL: f64 = 0.05;
 /// in shallower water, a flooded flat, the river runs on in its channel at the lake's level.
 const LAKE_TAKES: f64 = 0.5;
 
+/// A river's outlet from a lake as the levels see it: the point, the river's direction there
+/// (unit) and its half width, metres.
+type FromLake = ([f64; 2], [f64; 2], f64);
+
 /// Metres between the samples of the ground under a quad of a ribbon.
 const GROUND_SAMPLES: f64 = 0.5;
 
@@ -622,6 +626,42 @@ pub fn ribbons(
         })
     };
     let lake_level = |x: f64, y: f64| lake_at(x, y).map(|(level, depth, _)| (level, depth));
+    let last = f64::from(height.size - 1);
+    // Whether a lake's water is drawn at all at a point: its mask covers a corner of the cell of
+    // samples round it (`water.slang` softens the mask over a sample), whatever the ground. Past
+    // `from`, a river's outlet from it (the point, the river's direction there and its half
+    // width), not where the outlet's shallow arm is trimmed off ([`crate::trim_outlets`]).
+    let lake_drawn = |x: f64, y: f64, from: Option<FromLake>| -> bool {
+        let outlet = from.and_then(|(at, down, half_width)| {
+            let (i, j) = (
+                (at[0] / spacing).round().clamp(0.0, last) as u32,
+                (at[1] / spacing).round().clamp(0.0, last) as u32,
+            );
+            let lake = lakes.iter().position(|l| l.stands_at(height, i, j))?;
+            Some(Outlet {
+                lake: lake as u32,
+                at,
+                down,
+                level: f64::from(lakes[lake].level),
+                half_width,
+            })
+        });
+        let (i, j) = ((x / spacing).floor(), (y / spacing).floor());
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+            .iter()
+            .any(|&(di, dj)| {
+                let (x, y) = (i + di, j + dj);
+                x >= 0.0
+                    && y >= 0.0
+                    && lakes.iter().enumerate().any(|(index, l)| {
+                        let (x, y) = (x as u32, y as u32);
+                        l.covers(x, y)
+                            && !outlet.is_some_and(|o| {
+                                o.lake as usize == index && l.in_arm(height, &o, x, y)
+                            })
+                    })
+            })
+    };
     let mut done: Vec<Option<usize>> = vec![None; rivers.rivers.len()];
     for r in 0..ribbons.len() {
         let joins = match rivers.rivers[ribbons[r].river as usize].mouth {
@@ -632,8 +672,14 @@ pub fn ribbons(
             Mouth::Outlet(_) => None,
         };
         let main = joins.map(|(m, at)| (&ribbons[m].points, at));
-        let (points, in_lake, mut mouths) =
-            levels(&ribbons[r].points, height, &lake_level, main, params);
+        let (points, in_lake, mut mouths) = levels(
+            &ribbons[r].points,
+            height,
+            &lake_level,
+            &lake_drawn,
+            main,
+            params,
+        );
         let mut runs: Vec<[u32; 2]> = Vec::new();
         for (k, _) in in_lake.iter().enumerate().filter(|(_, l)| **l) {
             match runs.last_mut() {
@@ -983,11 +1029,12 @@ pub(crate) fn segment_distance(q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f
 /// The points with their levels, banks, speeds, slopes and fades, whether each is in a lake, and
 /// with [`RibbonParams::delta`], the points where it runs into one (the first where the lake's
 /// water stands, before a run in it); `main` is the river this one joins (its points, with their
-/// levels, and the junction).
+/// levels, and the junction). `lake_drawn` tells where a lake's water is drawn at all.
 fn levels(
     points: &[RibbonPoint],
     height: &Field2<f32>,
     lake_level: &dyn Fn(f64, f64) -> Option<(f64, f64)>,
+    lake_drawn: &dyn Fn(f64, f64, Option<FromLake>) -> bool,
     main: Option<(&Vec<RibbonPoint>, [f64; 2])>,
     params: &RibbonParams,
 ) -> (Vec<RibbonPoint>, Vec<bool>, Vec<usize>) {
@@ -1129,17 +1176,40 @@ fn levels(
     // Out of a lake it keeps the lake's level a sample's spacing past the last point where the
     // lake's water stands, as far as that water may reach (its mask fades out over a sample), so
     // the two meet; then it falls [`LAKE_OUTFALL`] a metre at most until it meets its own level.
-    // Never over the lowest ground across it, though: past the lip the water spread over the
-    // banks falling away beside it.
+    // It keeps it to the point past the last where the lake's water is drawn at all, too (its
+    // outlet's arm trimmed off): past the shore the mask still reaches over the channel carved
+    // under the level, and a river under the lake's plane there was hidden by it, a dark band
+    // across the channel (#120). Never over the lowest ground across it, though, out of the
+    // lake's water: past the lip the water spread over the banks falling away beside it.
     let mut held: Option<(f64, f64)> = None;
+    let mut from: Option<FromLake> = None;
+    let mut drawn_before = false;
     for k in 0..n {
+        let p = &points[k];
+        if in_lake[k] {
+            let down = [f64::from(p.direction[0]), f64::from(p.direction[1])];
+            from = Some((position(p), down, f64::from(p.half_width)));
+        }
         if wet[k].is_some() {
             held = Some((target[k], arc[k] + height.spacing));
+            drawn_before = true;
         } else if let Some((lake_level, until)) = held {
+            let half = f64::from(p.half_width);
+            let drawn = [-half, 0.0, half].iter().any(|&across| {
+                let q = offset(p, 0.0, across);
+                lake_drawn(q[0], q[1], from)
+            });
+            let reached = drawn || drawn_before;
+            drawn_before = drawn;
+            let until = if reached { until.max(arc[k]) } else { until };
+            held = Some((lake_level, until));
             let past = (arc[k] - until).max(0.0);
-            let floor = (lake_level - LAKE_OUTFALL * past).min(ground[k]);
+            let floor = lake_level - LAKE_OUTFALL * past;
+            let floor = if reached { floor } else { floor.min(ground[k]) };
             if floor <= level[k] {
-                held = None;
+                if !reached {
+                    held = None;
+                }
             } else {
                 level[k] = if k > 0 {
                     floor.min(level[k - 1])

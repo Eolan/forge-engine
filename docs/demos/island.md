@@ -1833,11 +1833,35 @@ every view. A new test floods a flat past a bowl's lake: its arm is the flat's s
 the bowl's; with the sill the ground beside the river's water there stands over the lake's
 level and the channel under it, without it the flat is under the level; the trim clears the arm.
 
-**Left for later:** at the hill lake's outlet (`-183,328.8,-2109,78.3,-20`) a dark band still
-lies across the channel where the river's water fades in over the lake's, its upstream edge
-straight. It is not the water's depth: keeping three fifths of the river's depth over the lip
-(9–16 cm of water there before) changed nothing seen. The two waters' handover in the water's
-shading is next to look at.
+**The outlets' handover** (#120, 2026-10-02). At the hill lake's outlet
+(`-183,328.8,-2109,78.3,-20`) a dark band lay across the channel past the lip, its upstream edge
+straight. It was not the water's depth: keeping three fifths of the river's depth over the lip
+changed nothing seen.
+- **The cause** (debug colours in `water.slang`): the lake's plane is drawn wherever its mask
+  reaches, softened over a sample whatever the ground, and past the shore that is over the
+  channel carved under the lake's level. The river kept the lake's level only a sample past the
+  last point where the lake's water stands over the uncarved ground, then fell to the ground
+  across it, 28 cm lower 4 m on. Under the lake's plane the river failed the depth test, and the
+  lake's water, fading out, showed the channel's bed through it: the band, and the straight edge
+  where the lake's quad ends.
+- **The fix** (`forge_procgen::ribbons`): out of a lake the river keeps the lake's level, a
+  centimetre over it, to the point past the last where the lake's water is drawn at all (a corner
+  of the point's cell covered, across its water's width), the outlet's arm left out as
+  `trim_outlets` trims it (`LakeWater::in_arm`). Past that it falls as before.
+
+Before (9f4f039) and now, frame 60 (`reports/2026-10-02-120/handover.png`):
+- the hill outlet from 40 m (ꟻLIP mean 0.0026), lower down the river (0.0061) and from 70 m
+  straight down (0.0029): the river runs out of the lake in one channel;
+- the north-east outlet from 40 m (0.0008) and 4 m (0.0034): its river is held at the lake's
+  level a few metres further, over its sill.
+
+**Checks:**
+- The capture batch changes the island's images in a few pixels (`island60` 4, `island8-60` 11,
+  `water60` 8; ꟻLIP means 0.000001 to 0.000003).
+- The A/B harness, the streamed island against resident and mesh against fallback are at 0 px.
+- `validate.sh` is clean, and `timings.sh` within noise on every view.
+- The test of a river through a bowl's lake now checks that the river keeps the lake's level as
+  far past the lip as the lake's water is drawn, and a point more, and falls past that.
 
 ## Moving geometry (#79, 2026-10-02)
 

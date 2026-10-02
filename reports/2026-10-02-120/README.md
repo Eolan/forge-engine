@@ -82,6 +82,22 @@ in a wavy line across the channel. Now, past each outlet:
 173 samples trimmed. The batch changes the island's images only (ꟻLIP means 0.00025–0.00033);
 the A/B pairs stay at 0 px; `validate.sh` is clean; 253 tests; timings within noise.
 
-**Left for later:** at the hill lake's outlet (`--view -183,328.8,-2109,78.3,-20`) a dark band lies
-across the channel where the river's water fades in over the lake's. It is not the water's depth
-over the lip: keeping more of it changed nothing seen.
+## The outlets' handover
+
+At the hill lake's outlet a dark band lay across the channel past the lip. The lake's plane is
+drawn wherever its mask reaches, softened over a sample, and past the shore that is over the
+channel carved under its level. The river fell under that plane a few metres before the lake's
+water faded out, failed the depth test there, and the fading lake showed the bed through it. Now
+out of a lake the river keeps the lake's level to the point past the last where the lake's water
+is drawn at all (the outlet's trimmed arm left out), then falls as before.
+
+`handover.png`: before (left, 9f4f039) and now (right), frame 60:
+- the hill outlet from 40 m (`--view -183,328.8,-2109,78.3,-20`), ꟻLIP mean 0.0026;
+- lower down the river (`--view -196,323.5,-2101,78.3,-10`), 0.0061;
+- from 70 m straight down (`--view -200,345,-2105,0,-89`), 0.0029;
+- the north-east outlet from 40 m and from 4 m (the views above), 0.0008 and 0.0034: its river
+  is held at the lake's level a few metres further.
+
+The batch changes the island's images in 4 to 11 pixels (ꟻLIP means 0.000001 to 0.000003). The
+A/B pairs stay at 0 px; an asteroids frame 600 on the fallback path differed in 87 px once and
+matched on two recaptures. `validate.sh` is clean; 253 tests; timings within noise.

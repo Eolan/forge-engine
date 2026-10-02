@@ -56,23 +56,27 @@ impl LakeWater {
     /// metres deep over them. A flat valley floor at the lake's level past its outlet floods into
     /// such an arm, centimetres of water round the river.
     pub fn arm(&self, height: &Field2<f32>, outlet: &Outlet) -> Vec<bool> {
-        let spacing = height.spacing;
         (0..self.mask.len())
             .map(|k| {
                 let (i, j) = (k as u32 % self.size[0], k as u32 / self.size[0]);
-                let (x, y) = (self.first[0] + i, self.first[1] + j);
-                let (dx, dy) = (
-                    f64::from(x) * spacing - outlet.at[0],
-                    f64::from(y) * spacing - outlet.at[1],
-                );
-                let along = dx * outlet.down[0] + dy * outlet.down[1];
-                let across = (dx * outlet.down[1] - dy * outlet.down[0]).abs();
-                self.mask[k]
-                    && along > ARM_KEEP
-                    && across <= outlet.half_width + ARM_SIDE
-                    && f64::from(self.level - height.get(x, y)) < ARM_DEEP
+                self.mask[k] && self.in_arm(height, outlet, self.first[0] + i, self.first[1] + j)
             })
             .collect()
+    }
+
+    /// Whether sample `(x, y)` of `height` lies where `outlet`'s shallow arm would be
+    /// ([`LakeWater::arm`]), whether the mask covers it or not.
+    pub fn in_arm(&self, height: &Field2<f32>, outlet: &Outlet, x: u32, y: u32) -> bool {
+        let spacing = height.spacing;
+        let (dx, dy) = (
+            f64::from(x) * spacing - outlet.at[0],
+            f64::from(y) * spacing - outlet.at[1],
+        );
+        let along = dx * outlet.down[0] + dy * outlet.down[1];
+        let across = (dx * outlet.down[1] - dy * outlet.down[0]).abs();
+        along > ARM_KEEP
+            && across <= outlet.half_width + ARM_SIDE
+            && f64::from(self.level - height.get(x, y)) < ARM_DEEP
     }
 }
 

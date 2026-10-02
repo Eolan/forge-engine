@@ -1434,11 +1434,32 @@ mod tests {
         let lip = wet[wet.len() - 1];
         assert!(p[..first].iter().all(|q| q.level >= lake_level - 1e-4));
         assert!(p[last..=lip].iter().all(|q| q.level >= lake_level - 1e-4));
-        for q in &p[lip + 1..lip + 6] {
+        // Past the lip it keeps the lake's level as far as the lake's water is drawn at all (the
+        // mask, softened over a sample, covers a corner of the point's cell, the outlet's arm
+        // trimmed off) and a point more: under it, the lake's plane hid the river (#120).
+        assert_eq!(ribbon.outlets.len(), 1);
+        let outlet = &ribbon.outlets[0];
+        let drawn = |q: &crate::RibbonPoint| {
+            let [x, y] = [q.position[0], q.position[1]].map(|v| (f64::from(v) / 10.0).floor());
+            [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+                .iter()
+                .any(|&(di, dj)| {
+                    let (i, j) = ((x + di) as u32, (y + dj) as u32);
+                    waters[0].covers(i, j) && !waters[0].in_arm(&valley, outlet, i, j)
+                })
+        };
+        let reached = lip + 1 + p[lip + 1..].iter().take_while(|q| drawn(q)).count();
+        assert!(reached > lip + 1);
+        assert!(
+            p[lip..=reached]
+                .iter()
+                .all(|q| q.level >= lake_level - 1e-4)
+        );
+        for q in &p[reached + 1..reached + 6] {
             let [x, y] = [q.position[0], q.position[1]].map(f64::from);
             assert!(f64::from(q.level) <= smooth_height(&valley, x, y).max(f64::from(level)));
         }
-        assert!(p[lip + 4].level < level);
+        assert!(p[reached + 4].level < level);
         // Its water whole up to the lake and fading over it, gone three points in; coming out,
         // whole again past the run.
         assert_eq!(p[first - 1].fade, 1.0);
