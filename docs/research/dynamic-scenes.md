@@ -4,10 +4,7 @@
 > (the probes and the ray-tracing tiers) and `large-worlds.md` §1 (the integer cells the instance
 > table now uses). Written 2026-09-25 for issue #79, moving geometry, with #69 (probes woken when
 > something moves), #95 (more async overlap) and #80 (the space battle whose first step is ships on
-> paths) read alongside. Every citation was checked that day against a reachable page or, where the
-> network proxy refused the host, against the search engine's record of it; the distinction is kept
-> per entry under [Verification notes](#verification-notes), and what could not be found is under
-> [Checked and left out](#checked-and-left-out).
+> paths) read alongside.
 
 Everything Forge draws today is static: the belt, the city's million instances, a TLAS built once,
 probes that settle for good. The owner wants instances whose transforms change every frame — ships
@@ -37,12 +34,13 @@ the previous frame's tail.
 > count, that bottom-level refits are for limited deformation, and, since 2025, NVIDIA offers a
 > partitioned TLAS whose global partition holds the movers so that a scene of a million statics
 > rebuilds only what moved. Probe GI absorbs movers through its rays with a hysteresis of about
-> 97 % (100 ms to converge), lowers the hysteresis near a fast or large change, re-classifies probes
-> from fixed rays, and, in the production SDK, measures its own variability to stop tracing when
-> settled; Lumen instead throttles a surface cache fed by Nanite captures. Async compute pays when
-> the overlapped passes stress different units (rays and texture reads beside a raster-bound draw),
-> loses when both are bandwidth- or export-bound, and was worth 5–10 % on a shipped AMD title and
-> nothing on NVIDIA's of the time, which is why every overlap is measured pass by pass.
+> 97 % (100 ms to converge), lowers the hysteresis near a fast or large change, wakes the sleeping
+> probes inside a mover's grown box (or, in the production SDK, re-classifies every probe from fixed
+> rays), and, in that SDK, measures its own variability to stop tracing when settled; Lumen instead
+> throttles a surface cache fed by Nanite captures. Async compute pays when the overlapped passes
+> stress different units (rays and texture reads beside a raster-bound draw), loses when both are
+> bandwidth- or export-bound, and was worth 5–10 % on a shipped AMD title and nothing on NVIDIA's of
+> the time, which is why every overlap is measured pass by pass.
 
 **Contents**
 
@@ -65,50 +63,60 @@ The pipelines below keep the scene on the GPU and let the CPU touch only what ch
 is how much state per instance they keep across frames and how the two occlusion passes treat an
 instance whose position last frame is not its position now.
 
-**Ulrich Haar (Ubisoft Montréal), Sebastian Aaltonen (RedLynx). "GPU-Driven Rendering Pipelines."
-SIGGRAPH 2015, *Advances in Real-Time Rendering in Games*; with Aaltonen's note on the algorithm,
-X, June 2021.** [talk] [web] [foundational] [still-current]
+**Ulrich Haar, Sebastian Aaltonen (Ubisoft; Aaltonen at its RedLynx studio). "GPU-Driven Rendering
+Pipelines." SIGGRAPH 2015, *Advances in Real-Time Rendering in Games*; with Aaltonen's note on the
+algorithm, X, 10 June 2021.** [talk] [web] [foundational] [still-current]
 <https://advances.realtimerendering.com/s2015/> ·
 <https://x.com/SebAaltonen/status/1402954450281578501>
 
-The course page lists the talk's parts — motivation, mesh cluster rendering, the pipeline overview,
-occlusion depth generation — for Assassin's Creed Unity's per-material instance batching and
-RedLynx's clean-slate compute pipeline (`gpu-geometry.md` §1). Aaltonen's 2021 note states the
-occlusion scheme in one sentence: "Use previous frame data as a starting point for the first pass
-and then fill missing clusters in the second pass. RenderDoc captures show that Nanite is using the
-same algorithm."
+The course page's abstract gives the two halves: Assassin's Creed Unity's pipeline, "which supports
+per-material instance batching instead of the more traditional per-mesh batching", combined "with
+mesh clustering to obtain more effective GPU culling", and RedLynx's "'clean slate' design that
+builds on the latest hardware features, such as asynchronous compute, indirect dispatch and
+multidraw" (`gpu-geometry.md` §1). Aaltonen's 2021 note calls the scheme "our two-phase occlusion
+culling solution" and states it in one sentence: "Use previous frame data as a starting point for
+the first pass and then fill missing clusters in the second pass. RenderDoc captures show that
+Nanite is using the same algorithm."
 *Bearing:* Forge's two passes are this scheme (`shaders/meshlet.slang`, #33). Its correctness with
 movers rests on one property: the second pass tests against a pyramid built *this* frame, so an
 object the previous depth hid wrongly (a mover, or something a mover has uncovered) is drawn this
 frame, one pass later, never a frame later. A mover can cost wasted work, never a wrong pixel; the
 design question is which pass it takes.
 
-**Graham Wihlidal (Frostbite). "Optimizing the Graphics Pipeline with Compute." GDC 2016.** [talk]
-[foundational] [still-current]
-<https://www.gdcvault.com/play/1023109/Optimizing-the-Graphics-Pipeline-With>
+**Graham Wihlidal (Frostbite, Electronic Arts). "Optimizing the Graphics Pipeline with Compute."
+GDC 2016; slides on SlideShare.** [talk] [foundational] [still-current]
+<https://www.gdcvault.com/play/1023109/Optimizing-the-Graphics-Pipeline-With> ·
+<https://www.slideshare.net/gwihlidal/optimizing-the-graphics-pipeline-with-compute-gdc-2016>
 
-Frostbite's compute triangle filtering, "how the compute power of the console and PC GPUs can be
-used to improve the triangle throughput beyond the limits of the fixed function hardware", built
-with AMD (GeometryFX, open source); write-ups of the talk record that async compute lets the culling
-shaders "run almost for free by overlapping compute and rasterization workloads".
+Frostbite's compute triangle filtering: the talk presents "how the compute power of the console and
+PC GPUs can be used to improve the triangle throughput beyond the limits of the fixed function
+hardware". The slides are "AMD GCN-centric" and point to AMD's open-source GeometryFX for the same
+filtering; for the queue they say "Asynchronous compute to the rescue! We can launch the dispatch
+work alongside other GPU work in the frame", which "can slow down 'Other GPU Stuff' a bit, but
+overall frame is faster!"
 *Bearing:* the first shipped statement that the culls belong beside the raster on the other queue;
 §6 takes it up.
 
 **Brian Karis, Rune Stubbe, Graham Wihlidal (Epic Games). "A Deep Dive into Nanite Virtualized
 Geometry." SIGGRAPH 2021, *Advances in Real-Time Rendering in Games*; with Epic Games, "Nanite
-Virtualized Geometry", Unreal Engine 5.8 documentation.** [talk] [docs] [foundational]
-[still-current]
+Virtualized Geometry", Unreal Engine 5.8 documentation; summarised in Luther Tychonievich's CS 418
+notes (Illinois) and Rob Wyatt's "Nanite Deep Dive - Part 1" (Tricky Bits, 2024).** [talk] [docs]
+[foundational] [still-current]
 <https://advances.realtimerendering.com/s2021/Karis_Nanite_SIGGRAPH_Advances_2021_final.pdf> ·
 <https://dev.epicgames.com/documentation/en-us/unreal-engine/nanite-virtualized-geometry-in-unreal-engine>
+· <https://cs418.cs.illinois.edu/website/text/nanite.html> ·
+<https://trickybitsblog.github.io/2024/04/20/nanite.html>
 
-Nanite culls instances, then the clusters of visible instances, in two passes: the first tests
-against the HZB of the previous frame using the previous frame's transforms; this frame's HZB is
-then built, used for the second pass, and updated after it (the previous-transform detail is from a
-course summary of the talk, §10). The documentation states the dynamic-object contract: Nanite
-"supports dynamic translation, rotation, and non-uniform scaling of meshes, whether it is dynamic or
-static", limited "to transformations that can be expressed in a single 4x3 matrix multiply,
-uniformly applied to the entire mesh". Write-ups record that pixel velocity "is written for
-transform-based movement (either the object moving or the camera moving)" in the material pass.
+Nanite culls instances, then the clusters of visible instances, in two passes. The course summary
+gives the order (§10): "Transform instance bounding boxes with last-frame's transforms and occlude
+with last-frame's HZB"; "this frame's HZB is then initialized, used in the second pass, and then
+updated". The documentation states the dynamic-object contract under "Mesh Deformation": "Nanite
+has limited support for the deformation of rigid meshes. Nanite supports dynamic translation,
+rotation, and non-uniform scaling of these meshes, whether it is dynamic or static", deformation
+being to move a position "in a way that is more complex than can be expressed in a single 4x3
+matrix multiply, uniformly applied to the entire mesh". Wyatt's write-up records that the shader
+resolving the visibility buffer "writes pixel velocity but only for transform based movement -
+either the object moving or the camera moving".
 *Bearing:* the production answer to this file's first two questions. Rigid movers need a transform
 and its previous value, nothing more; pass 1 may test a mover where it *was*, which keeps big movers
 as occluders at the price of reading the previous transform in the cull. Forge can start with the
@@ -119,26 +127,32 @@ documentation; with the `FPrimitiveSceneData` layout as documented by third-part
 [docs] [web] [still-current]
 <https://dev.epicgames.com/documentation/en-us/unreal-engine/mesh-drawing-pipeline-in-unreal-engine>
 
-"Supporting platforms use GPUScene to upload primitive data to a scene-wide buffer (UpdateGPUScene)
-and index into it with a PrimitiveId." The per-primitive record holds `LocalToWorld`,
-`WorldToLocal`, `PreviousLocalToWorld` and `PreviousWorldToLocal`, and the update gathers the
-primitives marked dirty during the frame (transform, material, mesh or visibility changes) into an
-upload buffer that a pass scatters into the scene buffer (secondary write-ups, §10).
+"In order to have different primitives in the same instanced draw with primitive-specific
+parameters, supporting platforms (`UseGPUScene`) upload them to a scene-wide buffer
+(`UpdateGPUScene`) and index into it with a `PrimitiveId`." The per-primitive record holds
+`LocalToWorld`, `WorldToLocal`, `PreviousLocalToWorld` and `PreviousWorldToLocal`, and the update
+gathers the primitives marked dirty during the frame (transform, material, mesh or visibility
+changes) into an upload buffer that a pass scatters into the scene buffer (secondary write-ups,
+§10).
 *Bearing:* the model for Forge's mover update: a list of changed records, one compute pass to apply
 it, the previous transform kept beside the current one on the GPU. Unreal keeps two full matrices
 per primitive; Forge's 80-byte cell record cannot, hence §7's small table for the movers only.
 
-**Jalal Eddine El Mansouri (Ubisoft Montréal). "Rendering 'Rainbow Six | Siege'." GDC 2016.**
-[talk] [still-current]
-<https://www.gdcvault.com/play/1023287/Rendering-Rainbow-Six-Siege>
+**Jalal Eddine El Mansouri (Ubisoft Montréal). "Rendering 'Rainbow Six | Siege'." GDC 2016; with
+the slides' text on archive.org and the Vulkan Guide's "GPU Driven Rendering Overview".** [talk]
+[web] [still-current]
+<https://www.gdcvault.com/play/1023287/Rendering-Rainbow-Six-Siege> ·
+<https://archive.org/details/GDC2016Mansouri> ·
+<https://vkguide.dev/docs/gpudriven/gpu_driven_engines/>
 
-A GPU-driven pipeline built for "massively and procedurally destructible levels": material-based
-draw calls, culling at several levels, checkerboard rendering, 60 fps across platforms. The culling
-table gives 10 537 unbatched draws against 412 batched (visibility, G-buffer, decals) and 64 for
-shadows, a "culling efficiency" of 73 %; the trade write-up's summary is that GPU-driven rendering
-"is the reason Rainbow Six Siege can have thousands of dynamic rubble objects created from its
-destruction systems", and the slides note the culling's cost is hidden "on consoles using async
-jobs".
+A GPU-driven pipeline for "massively and procedurally destructible levels" on "Xbox One, PS4 and up
+to 5 year old PCs": a material-based draw-call system, three levels of culling (submesh instances,
+submesh chunks, triangles), checkerboard rendering and a 60 fps target. The culling table gives
+10 537 unbatched draws against 412 batched (visibility, G-buffer, decals) and 64 for shadows, a
+"culling efficiency" of 73 %; the slides' future work notes "Pushing empty draw calls has a cost"
+and "We try to hide it on consoles using async jobs". The Vulkan Guide's overview of GPU-driven
+engines sums up the result: "These techniques are also the reason Rainbow Six Siege can have
+thousands of dynamic rubble objects created from its destruction systems."
 *Bearing:* the shipped proof that a GPU-driven instance table absorbs thousands of movers without a
 CPU draw per object; Forge's ten thousand ships or cars are the same order. (id Software's Doom
 Eternal talk, SIGGRAPH 2020, lists "geometry caches" among its dynamic-world systems: the same
@@ -152,13 +166,15 @@ Forge's motion vectors come from the depth and the two cameras: right for everyt
 move, wrong for everything that does, which TAA and DLSS then smear. The fix has one source of truth
 — where the shaded point was last frame — and the visibility buffer makes it cheap.
 
-**Brian Karis (Epic Games). "High Quality Temporal Supersampling." SIGGRAPH 2014, *Advances in
+**Brian Karis (Epic Games). "High-Quality Temporal Supersampling." SIGGRAPH 2014, *Advances in
 Real-Time Rendering in Games*.** [talk] [foundational]
 <https://advances.realtimerendering.com/s2014/>
 
 The talk that made TAA the industry's default: jittered samples accumulated into a history
 reprojected by motion vectors, the history clamped to the neighbourhood of the current frame so that
-stale colour cannot survive. Its slides were not re-read here (§10); its role is the origin.
+stale colour cannot survive. Its slides (PowerPoint) were not read (§10); the course page says only
+that it covers "how Unreal Engine 4's temporal anti-aliasing algorithm works". Its role is the
+origin.
 *Bearing:* Forge's `Taa` is this design. Movers add no new filter, only correct input: the vector of
 a moving pixel must be the object's motion, or the clamp is all that stands between the viewer and a
 ghost.
@@ -172,7 +188,10 @@ ghost.
 The complete recipe in the open: the frustum jittered with "the first 16 samples of Halton(2,3)", "a
 velocity buffer from camera motion and dynamics", "reprojection using velocity based on the closest
 depth fragment" (the 3 × 3 depth dilation that keeps a thin mover's edge attached to its motion),
-"neighbourhood clipping to the RGB min-max of a 3x3 region, and a motion blur fallback".
+"neighbourhood clipping to the RGB min-max of a 3x3 region, and a motion blur fallback". Playdead's
+code matches each item: `FrustumJitter` defaults to `Halton_2_3_X16`, and
+`TemporalReprojection.shader` reads the velocity at `find_closest_fragment_3x3`, clips the history
+with `clip_aabb` to the neighbourhood's minimum and maximum, and has a `USE_MOTION_BLUR` option.
 *Bearing:* the two details Forge's motion pass needs once objects move: the velocity buffer covers
 "dynamics", not just the camera, and the reprojection reads the velocity of the *nearest* pixel in a
 3 × 3 window, so a ship's silhouette drags its own vector rather than the background's.
@@ -198,10 +217,11 @@ to Deferred Shading." *Journal of Computer Graphics Techniques* 2(2), 2013, 55�
 <https://jcgt.org/published/0002/02/04/> ·
 <https://filmicworlds.com/blog/visibility-buffer-rendering-with-material-graphs/>
 
-The G-buffer "replaced with a simple visibility buffer that only stores a triangle index and
-instance ID per sample, encoded in as few as four bytes"; every attribute is reconstructed from the
-triangle afterwards. Hable's frame breakdown lists the motion-vector pass among those that follow
-the visibility resolve, next to the shadow pass, TAA and tonemapping.
+The authors "propose to replace the g-buffer with a simple visibility buffer that only stores a
+triangle index and instance ID per sample, encoded in as few as four bytes"; every attribute is
+reconstructed from the triangle afterwards. Hable's frame breakdown puts motion vectors in its
+"Other" group ("The main passes here are the shadow pass, TAA, motion vectors, tonemapping, GUI"),
+kept apart because the choice of forward, deferred or visibility rendering barely changes its cost.
 *Bearing:* the reason per-object motion is cheap in Forge: the resolve already fetches the pixel's
 three vertices and its barycentrics (`ARCHITECTURE.md` §4). The previous clip position of the same
 surface point is those object-space vertices through the instance's previous transform and the
@@ -250,55 +270,67 @@ so a mover that crosses the scene degrades it; a rebuild is a new tree at full c
 per-ray filter, not a way to skip the rebuild. Adding or removing a mover is a rebuild by rule,
 which is what a small dedicated structure makes cheap; the refit flags are the owner's A/B (#79).
 
-**NVIDIA. "Tips and Tricks: Ray Tracing Best Practices", NVIDIA Technical Blog, 2019 (from the GDC
-2019 presentation); Juha Sjöholm, "Best Practices for Using NVIDIA RTX Ray Tracing (Updated)",
-NVIDIA Technical Blog, 2020, since revised; with "RTX Memory Utility" (RTXMU), GitHub (MIT).**
-[web] [code] [still-current]
+**Alex Dunn (NVIDIA). "Tips and Tricks: Ray Tracing Best Practices", NVIDIA Technical Blog,
+20 March 2019 (from a GDC 2019 presentation by NVIDIA engineers); Juha Sjöholm, "Best Practices for
+Using NVIDIA RTX Ray Tracing (Updated)", NVIDIA Technical Blog, 25 July 2022 (an update of his 2020
+post); with "RTX Memory Utility" (RTXMU), GitHub (MIT).** [web] [code] [still-current]
 <https://developer.nvidia.com/blog/rtx-best-practices/> ·
 <https://developer.nvidia.com/blog/best-practices-for-using-nvidia-rtx-ray-tracing-updated/> ·
 <https://github.com/NVIDIAGameWorks/RTXMU>
 
 The 2019 post: "Build the Top-Level Acceleration Structure (TLAS) rather than Update. It's just
 easier to manage in most circumstances, and the cost savings to refit likely aren't worth
-sacrificing quality of TLAS." The updated post on the bottom level: "BLAS updates are a good choice
-after limited deformations as they are significantly cheaper than rebuilds, however large
-deformations after the previous rebuild can lead to non-optimal ray-trace performance"; compaction
-pays "for updateable geometry with long lifetime", but "for fully dynamic geometry rebuilt every
-frame, there's generally no benefit". RTXMU packages compaction and suballocation: "compaction is
-proven to reduce the total memory footprint by more than a half".
+sacrificing quality of TLAS." On compaction: "For updateable geometry, it makes sense to compact
+those BLASs that have a long lifetime", but "For fully dynamic geometry that's rebuilt every frame
+(as opposed to updated), there's generally no benefit from using compaction." The 2022 post on the
+bottom level: "BLAS updates are a good choice after limited deformations, as they are significantly
+cheaper than rebuilds. However, large deformations after the previous rebuild can lead to
+non-optimal ray-trace performance"; on the top: "For TLAS, consider the PREFER_FAST_TRACE flag and
+perform only rebuilds"; and compaction's saving "depends on the geometries but can be up to about
+50%". RTXMU packages compaction and suballocation: "Compaction is proven to reduce the total memory
+footprint by more than a half."
 *Bearing:* the policy as written: the TLAS that holds movers is *built* every frame, never refitted;
 BLASes stay static (a ship or a car is rigid, so its BLAS is a cut like any prop's; refits are for
 Phase 3's tumbling rocks); compaction is a later memory pass over the static BLASes (278 MiB in the
 city), separate from this issue.
 
-**AMD. "RDNA Performance Guide" (ray tracing section), GPUOpen, maintained; with "Improving
-raytracing performance with the Radeon Raytracing Analyzer (RRA)", GPUOpen.** [docs] [web]
-[still-current]
+**AMD. "RDNA Performance Guide" (ray tracing section), GPUOpen, maintained; with David DiGioia,
+"Improving raytracing performance with the Radeon Raytracing Analyzer (RRA)", GPUOpen,
+15 September 2022.** [docs] [web] [still-current]
 <https://gpuopen.com/learn/rdna-performance-guide/> ·
 <https://gpuopen.com/learn/improving-rt-perf-with-rra/>
 
-"Using fewer instances positively impacts TLAS build time"; "there is a trade-off between tighter
-fit BLASes and longer TLAS build time due to more instances", so "always measure the impact";
-"minimizing instance overlap and empty space gives the driver opportunity to make more optimal
-acceleration structures", and "instance transforms that significantly stretch or skew the underlying
-BLAS are often not optimal since BLASes are built relative to the non-deformed mesh".
+The guide's own bullets: "Don't rebuild dynamic geometry every frame and only rebuild or refit the
+LODs you need", and "Rebuild your TLAS every frame on the compute queue if possible." The RRA
+article, splitting a terrain into instances: "more instances means a longer TLAS build time", and
+conversely "using fewer instances positively impacts TLAS build time"; "Instances whose bounding
+boxes occupy lots of empty space, or have significant overlap with other instances' bounding boxes
+can hurt traversal performance"; "By reducing instance overlap this gives the driver opportunity to
+make more optimal acceleration structures"; and "Instance transforms that significantly stretch or
+skew the underlying BLAS are often not optimal since BLASes are built relative to the non-deformed
+mesh."
 *Bearing:* the cross-vendor half of the policy (#67). A mover TLAS of ten thousand tight, uniformly
 scaled instances is the good case on both vendors; a million-instance structure rebuilt per frame is
-the bad case on both.
+the bad case on both. AMD's guide also puts the per-frame TLAS build on the compute queue, as §7
+does.
 
-**Epic Games. "Ray Tracing Performance Guide in Unreal Engine" and "Lumen Technical Details" (far
-field), Unreal Engine 5.8 documentation.** [docs] [still-current]
+**Epic Games. "Ray Tracing Performance Guide", "Lumen Performance Guide" and "Lumen Technical
+Details" (far field), Unreal Engine 5.8 documentation.** [docs] [still-current]
 <https://dev.epicgames.com/documentation/unreal-engine/ray-tracing-performance-guide-in-unreal-engine>
+· <https://dev.epicgames.com/documentation/unreal-engine/lumen-performance-guide-for-unreal-engine>
 · <https://dev.epicgames.com/documentation/unreal-engine/lumen-technical-details-in-unreal-engine>
 
-"Hardware Ray Tracing requires rebuilding the Top Level Acceleration Structure (TLAS) every frame.
-This cost is proportional to the number of instances you need to include in this acceleration
-structure." "Dynamically deforming meshes, like skinned meshes, also incur a large cost to update
-the Ray Tracing acceleration structures each frame, proportional to the number of skinned
-triangles." Lumen's far field is a second set of instances with its own range: enabled by
-`r.LumenScene.FarField=1`, built from World Partition's HLOD1 meshes, marked per component with "Ray
-Tracing Far Field", "traced beginning at the Max Trace Distance (default is 200m)" to a default of
-one kilometre.
+The Lumen performance guide: "Hardware Ray Tracing requires rebuilding the Top Level Acceleration
+Structure (TLAS) every frame. This cost is proportional to the number of instances you need to
+include in this acceleration structure." The ray-tracing guide says the same of its own TLAS: "The
+Top Level Acceleration Structure is rebuilt every frame", its costs "mostly proportional to how many
+mesh instances go into the acceleration structure". Lumen's technical details add: "Dynamically
+deforming meshes, like skinned meshes, also incur a large cost to update the Ray Tracing
+acceleration structures each frame, proportional to the number of skinned triangles." The far field
+is a second set of instances with its own range: enabled by `r.LumenScene.FarField=1`, built from
+World Partition's HLOD1 meshes, chosen per primitive component with "Ray Tracing Far Field" in its
+Details panel (the ray-tracing guide), "traced beginning at the Max Trace Distance (default is
+200m)" to a default of one kilometre.
 *Bearing:* Epic pays the per-frame rebuild because its scenes hold thousands of instances, not a
 million; the far field is the split it uses to keep the near structure small. Whether it is a
 separate TLAS in the engine could not be confirmed from the pages read (§10).
@@ -330,27 +362,28 @@ Rates." In *Ray Tracing Gems* (Haines, Akenine-Möller, eds.), Apress, 2019, ch.
 <https://link.springer.com/chapter/10.1007/978-1-4842-4427-2_13> (author copy
 <https://boksajak.github.io/files/RTG1_RayTracedShadows.pdf>)
 
-Ray-traced shadows made "a viable alternative to rasterization for real-time applications" by
-spending rays where they matter: "the computation focuses on image regions where shadows actually
-appear, in particular on the shadow boundaries", with an adaptive sample count and a temporal
-filter.
+Hardware ray tracing makes "ray traced shadows a viable alternative to rasterization", but tracing
+every shadow ray independently becomes a bottleneck as the ray count rises, so "the computation
+should focus on image regions where shadows actually appear, in particular on the shadow
+boundaries": an adaptive sampling of the shadow rays combined with an adaptive shadow filter.
 *Bearing:* Forge's soft shadows are TAA averaging eight Vogel points over eight frames (D-029, #54);
 a mover breaks that cycle at its penumbra, which is why the ballad already keeps hard shadows in
 motion. Movers get hard shadows (one ray) unless the city's captures show the smear is acceptable; a
 denoiser is Phase 4's.
 
-**Ubisoft Montréal. "Ray tracing the world of Assassin's Creed Shadows." SIGGRAPH 2025, *Advances
-in Real-Time Rendering in Games*; with Ubisoft, "Assassin's Creed Shadows Tech Q&A", 2025.** [talk]
-[web] [recent]
+**Luc Leblanc, Melino Conte (Ubisoft Montréal). "Ray Tracing the World of Assassin's Creed
+Shadows." SIGGRAPH 2025, *Advances in Real-Time Rendering in Games*; with Ubisoft, "Assassin's Creed
+Shadows Tech Q&A", 12 February 2025.** [talk] [web] [recent]
 <https://advances.realtimerendering.com/s2025/content/Advances%202025%20-%20Raytracing%20the%20world%20of%20Assassin's%20Creed%20Shadows.pdf>
 · <https://www.ubisoft.com/en-us/game/assassins-creed/news/4XbPPtFyQEtIMWrA9xVDmZ/assassins-creed-shadows-tech-qa>
 
 The most recent shipped case of ray tracing in a GPU-driven open world where almost everything
-moves: "all vegetation in AC Shadows is physically animated on the GPU based on a dynamic wind
-system driven by a fluid simulation", and the GI "uses a per-pixel raytracing pass using probe
-volumes as a cache for secondary hit GI"; the Q&A's argument for ray-traced GI is that it "adapts to
-changes in the scene", which "is particularly beneficial for a game with destructible objects and a
-changing environment". The talk's structure-build numbers were not readable here (§10).
+moves: "all the vegetation in AC Shadows is physically animated on the GPU based on a dynamic wind
+system driven by a fluid simulation", and the GI, by the search engine's record of the slides,
+"uses a per-pixel raytracing pass using probe volumes as a cache for secondary hit GI" (§10). The
+Q&A's first argument for ray-traced GI: "First and most importantly is that it adapts to change in
+the scene", in a game "with destructible objects and a changing environment". The talk's
+structure-build numbers were not readable here (§10).
 *Bearing:* a scene whose geometry deforms every frame still ships on the same two-level structures;
 the design that tolerates it puts the movers' *direct* effect in per-pixel rays and keeps the probes
 for the second bounce, the division Forge's resolve and probes already have.
@@ -393,13 +426,23 @@ Global Illumination for Production." *Journal of Computer Graphics Techniques* 1
 [paper] [still-current]
 <https://jcgt.org/published/0010/02/01/> (preprint arXiv:2009.10796)
 
-The production extensions: probe relocation out of geometry, classification of probes that cannot
-contribute so that their rays are skipped, the view bias in the lookup, and infinitely scrolling
-volumes for open worlds. Forge's cascades, relocation, eight-update settling and bias are from this
-paper (D-036).
-*Bearing:* classification is the piece #69 is about. In the paper it runs continuously; Forge froze
-it after eight updates because probes between two surfaces flipped every frame. The wake is
-therefore Forge-specific: re-open the window for the probes a mover touched, not for everything.
+The production extensions, in the abstract's words: "a single, intuitive tuning parameter (the
+'self-shadow' bias)", "heuristics to speed transitions in the global illumination", "a probe state
+machine to prune work that will not affect the final image" and "multiresolution cascaded volumes
+for large worlds"; the body adds the adjustment of probe positions out of static geometry and
+tracking windows that scroll with the camera. Forge's cascades, relocation, eight-update settling
+and bias are from this paper (D-036). The paper's classification settles too: it runs on probes not
+yet initialised, against static geometry only ("for the majority of frames the first step will not
+run because no probes will be uninitialized"), and movers are handled by waking: "Extend AABBs for
+all dynamic objects by a probe grid cell + the self-shadow bias for a conservative estimate", then
+"Set all 'Sleeping' probes inside the extended AABB of a dynamic object to 'Newly Awake'". For a
+large change ("ceiling caves in") the heuristics cut the irradiance hysteresis by 50 % for 10
+frames.
+*Bearing:* classification is the piece #69 is about, and the paper already has the fix's shape:
+settle once against the static scene, then wake the probes inside each mover's box grown by a cell.
+Forge froze its classification after eight updates because probes between two surfaces flipped
+every frame; the wake of §7 is the paper's dynamic-object rule applied to re-open that window for
+the probes a mover touched, not for everything.
 
 **NVIDIA. RTXGI-DDGI SDK 1.3.x, `docs/DDGIVolume.md` and `ChangeLog.md`. GitHub (NVIDIA RTX SDKs
 licence).** [docs] [code] [still-current]
@@ -458,9 +501,12 @@ Graphics* 21(4) (SIGGRAPH '87), 25–34; and "Steering Behaviors for Autonomous 
 
 Boids: "an elaboration of a particle system, with the simulated birds being the particles", each "an
 independent actor that navigates according to its local perception", the flock's motion emerging
-from separation, alignment and cohesion. The 1999 paper catalogues the individual behaviours — "seek
-and flee; pursue and evade; wander; arrival; obstacle avoidance; containment; wall following; path
-following; and flow field following" — as steering forces on a simple vehicle.
+from separation, alignment and cohesion. The 1999 paper's "steering behaviors" are "largely
+independent of the particulars of the character's means of locomotion": forces on a simple vehicle
+model, from seek, flee, pursuit and arrival through obstacle avoidance, path following and wall
+following to separation, cohesion, alignment, offset pursuit and leader following (the paper's
+closing list; the site's index groups them into behaviours for individuals and pairs and for
+groups).
 *Bearing:* the belt's ships are Reynolds' vehicles: path following along a spline with a lookahead,
 separation from neighbours and asteroids, a formation as offset pursuit of a leader; forces on a
 point mass integrated at the fixed tick, deterministic if the neighbour queries are ordered.
@@ -470,9 +516,9 @@ point mass integrated at the fixed tick, deterministic if the neighbour queries 
 <https://dl.acm.org/doi/10.1145/1330511.1330513> (DOI 10.1145/1330511.1330513; author copy via
 Microsoft Research)
 
-"The double reflection method, which uses two reflections to compute each frame from its preceding
-one to yield a sequence of frames to approximate an exact RMF", the frame used for "sweep or
-blending surface modeling, motion design and control in computer animation and robotics".
+The "double reflection method" "uses two reflections to compute each frame from its preceding one
+to yield a sequence of frames to approximate an exact RMF", the frame used for "sweep or blending
+surface modeling, motion design and control in computer animation and robotics".
 *Bearing:* a ship's orientation along a spline. The Frenet frame flips at inflections and spins
 where the curvature vanishes; the rotation-minimising frame does not, so the hull's up vector is
 stable and banking is a roll proportional to the lateral acceleration on top of it.
@@ -499,10 +545,10 @@ Engine 5.8 documentation.** [docs] [still-current]
 <https://dev.epicgames.com/documentation/unreal-engine/city-sample-project-unreal-engine-demonstration>
 
 The City Sample "uses multiple spawners, one each for crowds, intersections, traffic, and parked
-vehicles"; the ZoneGraph is "a lightweight design-driven flow for AI that follows a point-by-point
-corridor structure and can store meaningful tags (static and dynamic)", with driving vehicles,
-parked vehicles and crowds on separate lanes; entities are defined by traits "such as visuals, level
-of detail, behaviors and more".
+vehicles"; "The ZoneGraph is a lightweight design-driven flow for AI that follows a point-by-point
+corridor structure. It can store meaningful tags (static and dynamic) that can be leveraged for AI
+behaviors"; a data asset sets the traits of the entities spawned, "such as their behavior, visuals,
+level of detail, and more".
 *Bearing:* the shape of the city demo's data: a lane graph derived from the street grid (D-028's
 layer map already knows where the streets are), spawners at its edges, a per-entity LOD trait. How
 the sample despawns vehicles was not confirmed from the page (§10); §7 states Forge's own rule.
@@ -514,9 +560,11 @@ Determinism" (2010). gafferongames.com.** [web] [foundational] [still-current]
 <https://gafferongames.com/post/floating_point_determinism/>
 
 The simulation advances by a fixed `dt` from an accumulator, and rendering interpolates between the
-last two states with an alpha equal to the remainder over `dt`. Lockstep sends "only the inputs that
-control that system rather than the state", which works only if the simulation is deterministic, and
-"floating point determinism across platforms is hard".
+last two states with "a blending factor between the previous and current physics state" obtained by
+dividing the remainder by `dt`. Lockstep means "sending only the inputs that control that system,
+rather than the state of that system", which works only if the simulation is deterministic, "Exact
+down to the bit-level"; and it is "incredibly naive" to expect floating-point code "to give exactly
+the same result across different compilers or architectures".
 *Bearing:* D-016 already pins the arithmetic. The movers add the tick: 60 Hz fixed, the same seed on
 client and server, transforms interpolated on the CPU when the frame's mover array is written.
 
@@ -531,25 +579,32 @@ listed benefits include "simplified async compute"; `task-system.md`). #95 asks 
 through double-buffering. The published guidance says what overlaps and what does not.
 
 **Jonas Meyer (IO Interactive). "Rendering 'Hitman' with DirectX 12." GDC 2016 (Advanced Graphics
-Techniques Tutorial Day).** [talk] [still-current]
-<https://www.gdcvault.com/play/1023129/Advanced-Graphics-Techniques-Tutorial-Day>
+Techniques Tutorial Day); with Alessio Palumbo's coverage of it, Wccftech, 26 March 2016.** [talk]
+[web] [still-current]
+<https://www.gdcvault.com/play/1023129/Advanced-Graphics-Techniques-Tutorial-Day> ·
+<https://wccftech.com/async-compute-boosted-hitmans-performance-510-amd-cards-devs-super-hard-tune/>
 
-Async compute "was used for screen space anti aliasing, screen space ambient occlusion and the
-calculations for the light tiles"; press coverage of the talk records the gain as 5–10 % on AMD GPUs
-and none on NVIDIA's of the time, and the developers' verdict that it was hard to tune.
+The Vault page describes a DirectX 12 deep dive ("Pipeline State Objects, Root Signatures,
+Resources, Command Queues and Multithreading"); the async-compute figures are the press's report of
+the talk: async compute "has been used for SSAA (Screen Space Anti Aliasing), SSAO (Screen Space
+Ambient Occlusion) and the calculation of light tiles", "even AMD cards merely got a 5-10%
+performance boost", "NVIDIA cards gained no benefit from Async Compute", and it "was also 'super
+hard' to tune".
 *Bearing:* the sober number. Forge's 0.11 ms on a 2.3 ms frame is 5 %, in the same range; #95's
 double-buffering may add a similar amount, not a multiple of it.
 
-**NVIDIA. "Advanced API Performance: Async Compute and Overlap." NVIDIA Technical Blog, 2021.**
-[web] [still-current]
+**Vladimir Bondarev, Sriharsha Niverty (NVIDIA). "Advanced API Performance: Async Compute and
+Overlap." NVIDIA Technical Blog, 22 October 2021.** [web] [still-current]
 <https://developer.nvidia.com/blog/advanced-api-performance-async-compute-and-overlap/>
 
 "The general principle behind async compute is to increase the overall unit throughput by reducing
 the number of unused warp slots and to facilitate the simultaneous use of nonconflicting datapaths."
-"If a barrier or WFI is unavoidable and causes a throughput hole, filling the hole with async
-compute is an effective solution"; "SM Idle % without conflicting high throughput units is almost
-always a guaranteed improvement"; "be conscious of which asynchronous compute and graphics workloads
-can be scheduled together. Use fences to pair up the right workloads."
+"If WFI is unavoidable and causes a large throughput gap, filling that gap with async compute could
+be a good solution"; "SM Idle % without conflicting high throughput units is almost always a
+guaranteed improvement". The recommendations include "Try overlapping different datapaths" and
+"Consider running async work between frames"; the warnings, "Don't overlap RTCore workloads. Both
+share the same throughput units and due to interference will degrade performance", and "Don't
+overlap workloads with high L1/L2 usage and VRAM throughput".
 *Bearing:* the target GPU's own rule: pair a pass that leaves warp slots empty (the pyramid chain,
 the draws, the culls' serial appends) with one that fills them without competing for the same unit.
 The probe rays beside the geometry passes is a good pair; beside the resolve's own rays it is not.
@@ -558,11 +613,11 @@ The probe rays beside the geometry passes is a good pair; beside the resolve's o
 [still-current]
 <https://gpuopen.com/learn/rdna-performance-guide/>
 
-"Async compute fills compute units as graphics waves drain, and should be used to overlap frontend
-heavy graphics work. Common overlapping opportunities include Z pre-pass, shadow rendering, and
-post-process"; "smaller workgroups (64 threads) usually perform better than larger workgroups when
-run async"; and the warning: "async compute performs poorly when executed in parallel with export
-bound shaders".
+"Async compute fills compute units as graphics waves drain." "Use async compute work to overlap
+frontend heavy graphics work. Common overlapping opportunities include Z pre-pass, shadow
+rendering, and post-process"; "Smaller workgroups (64 threads) usually perform better than larger
+workgroups when run async"; and the warning: "Async compute performs poorly when executed in
+parallel with export bound shaders."
 *Bearing:* the other vendor agrees on the pairing and adds two rules Forge can apply blind: 64-wide
 workgroups for the passes on the compute queue, and no overlap with export-bound work (the software
 rasteriser's merge, the full-screen compose).
@@ -572,10 +627,11 @@ rasteriser's merge, the full-screen compose).
 <https://interplayoflight.wordpress.com/2025/05/27/async-compute-all-the-things/>
 
 A practitioner's survey of what to overlap and why: the compute queue "only has access to units that
-involve shader execution (SM/caches) and not geometry processing"; "screen space lighting techniques
-like GTAO stress cache and ALU (SM) more, while shadow passes and g-buffer passes put more pressure
-on geometry processing and VRAM", so the pairs that work put a screen-space pass on the compute pipe
-beside a geometry-bound pass on graphics.
+involve shader execution (SM/caches) and not geometry processing, rasterisation and backend to write
+to rendertargets"; "screen space lighting techniques like GTAO stress cache and ALU (SM) more",
+while the "shadow pass and the g-buffer pass put more pressure on the World Pipe (geometry
+processing) and VRAM", so the pairs that work put a screen-space pass on the compute pipe beside a
+geometry-bound pass on graphics.
 *Bearing:* the pairing table Forge should reproduce in `docs/PROFILE.md` once #95 lands: which pass
 ran beside which, and the span. The mover work of §7 adds candidates to the compute side (the mover
 TLAS build, the probe wake) that touch neither the geometry units nor the render targets.
@@ -720,19 +776,22 @@ D-029), the city's instance culls take 0.14 ms for a million records and cluster
 after #92, the probes cost 0.77 ms at 1600 × 900 (0.58–0.62 of passes) with 128 rays per probe and a
 97 % blend, #77's async move saved 0.11 ms of a 2.36 ms frame while the probe zones stretched 0.60 →
 1.35 ms, and the renderer uploads 1.2 KiB a frame against a 64 MB streaming budget, so 480 KB of
-mover transforms is noise. The vendors: build the TLAS rather than update it (NVIDIA 2019), its
-per-frame rebuild costs in proportion to the instance count (Epic), fewer instances build faster and
-tight, unskewed instances trace faster (AMD), BLAS updates are for limited deformation and
-compaction saves more than half the memory (NVIDIA, RTXMU), and NVIDIA's partitioned TLAS sample
+mover transforms is noise. The vendors: build the TLAS rather than update it (NVIDIA 2019 and 2022;
+AMD, every frame on the compute queue), its per-frame rebuild costs in proportion to the instance
+count (Epic), fewer instances build faster and tight, unskewed instances trace faster (AMD), BLAS
+updates are for limited deformation (NVIDIA), compaction saves up to about half the memory (NVIDIA
+2022; RTXMU says more than half), and NVIDIA's partitioned TLAS sample
 moves 170 000 objects among 1.2 million statics by rebuilding only the partitions touched. The
 temporal side: DLSS wants depth, motion vectors at render resolution, jitter-free matrices and
 pixel-space jitter; INSIDE's recipe is 16 Halton samples, nearest-depth velocity and a 3 × 3 clip.
 The probes: hysteresis 90–99.5 % viable, 97 % recommended, 95 % with 192–256 rays converges in about
 100 ms at 60 Hz, drop it near an object that crosses a cell in a frame; relocation moves a probe at
-most 45 % of a cell; RTXGI's variability pauses tracing when settled. Async compute: 5–10 % on AMD
-and nothing on NVIDIA for Hitman in 2016; pair passes that stress different units and avoid
-export-bound overlap. GPU-driven movers at scale: Siege's thousands of rubble objects at 73 %
-culling efficiency.
+most 45 % of a cell; a dynamic object wakes the sleeping probes in its box grown by a cell, and a
+large change halves the irradiance hysteresis for 10 frames (Majercik et al. 2021); RTXGI's
+variability pauses tracing when settled. Async compute: 5–10 % on AMD and nothing on NVIDIA for
+Hitman in 2016 (press reports); pair passes that stress different units, never two ray-tracing
+workloads, and avoid export-bound overlap. GPU-driven movers at scale: Siege's thousands of rubble
+objects at 73 % culling efficiency.
 
 ---
 
@@ -747,16 +806,18 @@ Kept so the bibliography is auditable: things looked for and not above, with the
 - **Tiago Sousa, Jean Geffroy, "The Devil is in the Details: idTech 666", SIGGRAPH 2016** — the talk
   and its PDF are listed on the Advances 2016 index, but the only readable statement of its async
   compute use is a wiki's engine summary; not citation grade, so Doom 2016 is not an entry.
-- **Geffroy, Wang, Gneiting, "Rendering the Hellscape of Doom Eternal", SIGGRAPH 2020** — confirmed
-  from the Advances 2020 index and a course summary (geometry caches, gore, decals, 60 fps); folded
-  into the Siege entry as a one-line note, since only its topic list was readable.
+- **Geffroy, Gneiting, Wang, "Rendering the Hellscape of Doom Eternal", SIGGRAPH 2020** — confirmed
+  from the Advances 2020 index, whose abstract names "geometry caches, our updated gore system,
+  decaling, material compositing, and water rendering" and the 60 FPS goal; folded into the Siege
+  entry as a one-line note, since only its topic list was readable.
 - **Johannes Deligiannis, Jan Schmid (DICE), "It Just Works: Ray-Traced Reflections in Battlefield
   V", GDC / GTC 2019** — the talk exists (GTC S91023, 48 minutes, shader generation to denoising),
   but its statements on BVH budgets and dynamic objects could not be read.
 - **Thomas & Dunn, "Practical DirectX 12", GDC 2016, and O'Donnell, "FrameGraph", GDC 2017** — both
   confirmed (GDC Vault 1023507 and 1024612; the GPUOpen, NVIDIA and Slideshare listings); the
   first's async-compute slides were not readable and the vendors' current guides replace it, the
-  second is named in §6's introduction and carried by `task-system.md`.
+  second is named in §6's introduction ("Simplified async compute" is among the benefits its
+  slides list, read on SlideShare on 2026-10-02) and carried by `task-system.md`.
 - **The DirectX Raytracing specification** (`DirectX-Specs/d3d/Raytracing.md`) — GitHub's page for
   the file is too large to render and the API fetch returned nothing usable, so its wording on
   update degradation is not quoted; the Vulkan chapter carries the rules.
@@ -765,9 +826,10 @@ Kept so the bibliography is auditable: things looked for and not above, with the
   engine was not confirmable from the pages read, and the entry says so.
 - **Metro Exodus Enhanced Edition's probe updates; FSR's motion-vector requirements** — not searched
   within the budget; DDGI's authors and RTXGI cover the first, and Forge's upscaler is DLSS.
-- **Nanite's previous-transform test and velocity write as primary quotes** — the deep-dive PDF is
-  on a blocked host; both details come from a university course summary and a rendering blog and are
-  marked so in §10.
+- **Nanite's previous-transform test and velocity write as primary quotes** — the deep-dive PDF was
+  not read (WebFetch could not extract the text of the slide PDF tried, §10); both details come
+  from a university course summary (Tychonievich, CS 418) and a rendering blog (Wyatt, Tricky
+  Bits), both read on 2026-10-02, and are marked so in §10.
 - **Two-pass occlusion write-ups** (Kruskonja's Medium post, the Bevy meshlet pull request), **Media
   Molecule's Dreams** (named in Aaltonen's post), and **a Ray Tracing Gems II chapter on dynamic
   scenes** — blogs and pull requests are not cited, Evans's 2015 talk (`large-worlds.md`) says
@@ -776,70 +838,187 @@ Kept so the bibliography is auditable: things looked for and not above, with the
   are what a demo of cars needs, and #90 is the larger issue.
 - **Epic's Mass Traffic despawn rules** — the City Sample page describes spawners and the ZoneGraph
   but not how vehicles leave; §7 states Forge's own rule.
+- **Claims removed on 2026-10-02 because the cited page does not contain them** — kept here so they
+  are not re-added from memory:
+  - Haar & Aaltonen's part titles ("motivation, mesh cluster rendering, the pipeline overview,
+    occlusion depth generation"): the course page gives only the abstract, bios and the slide files,
+    whose text could not be extracted.
+  - Wihlidal's culling running "almost for free by overlapping compute and rasterization workloads",
+    and the filtering "built with AMD": on neither the Vault page, Wihlidal's own page nor the
+    slides' transcript; the slides say "AMD GCN-centric" and point to GeometryFX.
+  - Nanite's velocity written "in the material pass": the write-up places it in the shader that
+    resolves the visibility buffer (the step that emits scene depth and velocity).
+  - Siege's culling cost hidden "on consoles using async jobs": the slides say it of the cost of
+    pushing empty draw calls; and the rubble sentence is the Vulkan Guide's, not
+    gamedeveloper.com's.
+  - Hable's motion-vector pass "following the visibility resolve": the post groups it under "Other"
+    without an order.
+  - AMD's "there is a trade-off between tighter fit BLASes and longer TLAS build time due to more
+    instances" and "always measure the impact": on neither the RDNA guide nor the RRA article.
+  - Majercik et al. 2021's classification running continuously, and "infinitely scrolling volumes":
+    the paper classifies only probes not yet initialised and calls its volumes tracking windows and
+    cascades.
+  - The City Sample's "driving vehicles, parked vehicles and crowds on separate lanes": the page
+    never mentions lanes.
+  - Fiedler's "floating point determinism across platforms is hard": not in the post.
+  - Hitman's async compute "was used for screen space anti aliasing, screen space ambient occlusion
+    and the calculations for the light tiles": on neither the Vault page nor any page the search
+    engine returns; Wccftech's wording replaces it.
+  - NVIDIA's "be conscious of which asynchronous compute and graphics workloads can be scheduled
+    together. Use fences to pair up the right workloads": not in the post, which mentions fences
+    only to order the queues.
 
 ---
 
 ## Verification notes
 
-Checked on 2026-09-25 with WebSearch and WebFetch only; no browser pane and no YouTube pages. The
-session's egress proxy allowed WebFetch to reach `github.com` and refused every other host tried
-(advances.realtimerendering.com, jcgt.org, arxiv.org, dev.epicgames.com, developer.nvidia.com,
-gpuopen.com, gdcvault.com, red3d.com, gafferongames.com, interplayoflight.wordpress.com,
-filmicworlds.com, onlinelibrary.wiley.com, link.aps.org, journals.sagepub.com, dl.acm.org,
-docs.vulkan.org, ubisoft.com). A `gh api` call for the DXR specification returned nothing usable.
-Verification therefore has two grades.
+First written on 2026-09-25 from a cloud session whose proxy reached only `github.com`, so every
+other source was then confirmed only through the search engine's record of it. Re-verified on
+2026-10-02 for issue #99 from the owner's machine, with WebFetch and WebSearch only (no browser
+pane, no YouTube pages), against the primary page wherever it could be reached.
 
-- **Fetched and read (GitHub):** the Streamline DLSS programming guide (both the NVIDIAGameWorks and
-  the NVIDIA-RTX organisations); RTXGI-DDGI's README, `docs/DDGIVolume.md` and `ChangeLog.md`
-  (version 1.3 in the README; the changelog carries no dates; variability appears at 1.3.5); RTXMU's
-  README; the Vulkan specification's `chapters/accelstructures.adoc` and the
+- **Access on 2026-10-02.** Reached: advances.realtimerendering.com (the 2014, 2015, 2016, 2020,
+  2021, 2022 and 2025 indexes), gdcvault.com, dev.epicgames.com, developer.nvidia.com, gpuopen.com,
+  archive.org (the OCR text of El Mansouri's slides), slideshare.net (slide transcripts),
+  wihlidal.com, vkguide.dev, filmicworlds.com, trickybitsblog.github.io, cs418.cs.illinois.edu,
+  ubisoft.com, cg.tuwien.ac.at, red3d.com, gafferongames.com, interplayoflight.wordpress.com,
+  wccftech.com, gamedeveloper.com, arXiv and its ar5iv rendering, raw.githubusercontent.com, the
+  Crossref and OpenAlex APIs (publisher-deposited metadata and abstracts), and api.fxtwitter.com (a
+  read-only mirror of X). Refused or empty: x.com (HTTP 402), jcgt.org (an empty page for every
+  article, as on 2026-09-26), link.springer.com (a login redirect), semanticscholar.org,
+  tweaktown.com and unrealengine.com's SIGGRAPH 2022 events page (403), behindthepixels.io (its
+  certificate is GitHub's). Slide decks and papers served as PDF or PowerPoint were not read:
+  WebFetch could not extract the text of the one tried (Haar & Aaltonen's slides), so the others
+  were not fetched.
+- **Fetched and read (GitHub), 2026-09-25, not re-checked:** the Streamline DLSS programming guide
+  (both the NVIDIAGameWorks and the NVIDIA-RTX organisations); RTXGI-DDGI's README,
+  `docs/DDGIVolume.md` and `ChangeLog.md` (version 1.3 in the README; the changelog carries no
+  dates; variability appears at 1.3.5); RTXMU's README (its compaction sentence re-read on
+  2026-10-02); the Vulkan specification's `chapters/accelstructures.adoc` and the
   `VK_NV_partitioned_acceleration_structure` proposal in KhronosGroup/Vulkan-Docs; the
   `vk_partitioned_tlas` README and the `ray_tracing_animation` chapter of
   `vk_raytracing_tutorial_KHR` (nvpro-samples); McGuire, Majercik and Marrs's DDGI articles (parts 3
   and 6, morgan3d/articles; part 6 marks its probe-sleeping section as unwritten); Playdead's
-  `temporal` repository listing. Quotes from these are verbatim.
-- **Confirmed through the search engine's record of the primary page** (title, authors, venue,
-  dates, and the sentences quoted, which are the search engine's extracts of the page named): Haar &
-  Aaltonen 2015 and Aaltonen's post; Wihlidal 2016 (GDC Vault 1023109, the archive.org transcript);
-  Karis, Stubbe, Wihlidal 2021 and Epic's Nanite page; Epic's Mesh Drawing Pipeline page; El
-  Mansouri 2016 (GDC Vault 1023287, the archive.org transcript with the culling table, the
-  gamedeveloper.com write-up); Karis 2014 (the Advances 2014 index); Pedersen 2016 (GDC Vault
-  1022970, an LTH report's summary of the recipe); Yang, Liu, Salvi 2020 (Wiley, the Eurographics
-  library); Burns & Hunt 2013 (Semantic Scholar: JCGT 2(2), 55–69) and Hable 2021; NVIDIA's 2019 and
-  2020 best-practice posts; AMD's RDNA Performance Guide and RRA article; Epic's Ray Tracing
-  Performance Guide and Lumen pages (with forum threads quoting the far-field settings); NVIDIA's
-  Mega Geometry announcement (with the Khronos and Vulkan news mirrors); Boksanský, Wimmer, Bittner
-  2019 (TU Wien, SpringerLink: pages 159–182); the AC Shadows talk (the Advances 2025 content
-  listing) and Ubisoft's Q&A; Majercik et al. 2019 (NVIDIA Research, the JCGT listing: 8(2), 5 June
-  2019) and 2021 (JCGT 10(2), 3 May 2021; authors Majercik, Marrs, Spjut, McGuire — the first search
-  wrongly named the resampling paper's authors, corrected here); Wright, Narkowicz, Kelly 2022
-  (Epic's SIGGRAPH 2022 page, the Advances 2022 index); Reynolds 1987 (red3d.com, the SIGGRAPH
-  history page) and 1999 (red3d.com, with the list of behaviours); Wang et al. 2008 (ACM DL, JKU,
-  Microsoft Research); Treiber, Hennecke, Helbing 2000 (APS, arXiv) and Kesting, Treiber, Helbing
-  2007 (SAGE, the author copy's listing); Epic's City Sample page; Fiedler's three posts (with the
-  GitHub mirror of the site's sources); Meyer 2016 (GDC Vault 1023129, the GDC PDF listing);
-  NVIDIA's async-compute post (with its forum mirror); Anagnostou 2025 (with the daily.dev mirror's
-  extracts).
+  `temporal` repository listing. Quotes from these are verbatim. On 2026-10-02 also read: Playdead's
+  `FrustumJitter.cs` and `TemporalReprojection.shader`, and GeometryFX's README.
+- **Verified on 2026-10-02 against the primary page and held as written:** Yang, Liu, Salvi 2020
+  (Crossref abstract; 39(2), 607–621); Reynolds 1987 (red3d.com abstract, Crossref: 21(4), 25–34);
+  Treiber, Hennecke, Helbing 2000 (arXiv abstract; Crossref: 62(2), 1805–1824) and Kesting,
+  Treiber, Helbing 2007 (Crossref abstract; TRR 1999(1), 86–94); NVIDIA's Mega Geometry
+  announcement (6 February 2025; its sample has "more than 100K physics objects"); the Lumen pages
+  of §4 (the surface-cache sentence and the 200 m / 800 m range in Lumen Technical Details);
+  O'Donnell 2017 (GDC Vault 1024612, the benefits slide on SlideShare); Sousa & Geffroy 2016 and
+  Thomas & Dunn 2016 under "Checked and left out" (the Advances 2016 index, GDC Vault 1023507).
+- **Metadata verified on 2026-10-02, quotes still from the search record** (the primary text was
+  not reachable): Pedersen 2016 (the Vault overview is read and names the jitter, the history
+  acceptance, disocclusion and trailing; the recipe's quoted phrases are the search engine's record
+  of the slides, a PDF, and Playdead's code, read, matches every item); Wright, Narkowicz, Kelly
+  2022 (title and speakers on the Advances 2022 index, which has no abstract; the quoted topic list
+  is the search record of Epic's SIGGRAPH 2022 page, which refused the fetch); the AC Shadows
+  talk's probe-cache sentence (search record of the slides; the title, speakers and abstract are
+  read on the Advances 2025 index); Burns & Hunt's volume and pages, JCGT 2(2), 55–69 (the abstract
+  is read through OpenAlex; jcgt.org serves an empty page).
+- **Not reachable on 2026-10-02 either, graded as before (search record only):** Majercik,
+  Guertin, Nowrouzezahrai, McGuire 2019's JCGT page (empty; 8(2), 5 June 2019 remain the search
+  record's; the entry's quotes are the authors' GitHub articles, read); the slide files of Haar &
+  Aaltonen 2015 (its PDF's text could not be extracted), Karis 2014 (PowerPoint), Karis et al.
+  2021, Pedersen 2016 and the AC Shadows talk (PDFs, not fetched for that reason).
+- **Verified on 2026-10-02 and corrected** (what was wrong → the fix):
+  - Haar & Aaltonen 2015: affiliations (the course page gives both as Ubisoft Entertainment;
+    Aaltonen's bio places him at RedLynx) and a list of the talk's parts that is not on the course
+    page → the abstract's own words. Aaltonen's post: x.com refuses, its text was read through the
+    fxtwitter mirror (10 June 2021) and matches; it calls the scheme "our two-phase occlusion
+    culling solution".
+  - Wihlidal 2016: "almost for free" and "built with AMD" are on none of the talk's pages → the
+    slides' own sentences (SlideShare transcript): GCN-centric, GeometryFX, async compute "to the
+    rescue".
+  - Nanite 2021: the course summary (Tychonievich, CS 418) is now read and quoted; the
+    documentation's two sentences were reworded ("of meshes", "limited to transformations that can
+    be expressed") → exact text under "Mesh Deformation"; the velocity sentence was reworded and
+    placed in "the material pass" → Wyatt's exact sentence (Tricky Bits, 20 April 2024), which puts
+    it in the visibility-buffer resolve.
+  - Mesh Drawing Pipeline: the GPUScene sentence was paraphrased → exact.
+  - El Mansouri 2016: the rubble sentence is the Vulkan Guide's, not the trade write-up's
+    (gamedeveloper.com's 2018 piece has neither it nor "GPU-driven"); the slides hide the cost of
+    pushing empty draw calls with async jobs, not the culling's; 60 fps is the slides' target and
+    the platforms the Vault's → fixed, with the slides' OCR text (archive.org) cited for the three
+    culling levels and the table, whose figures are as the slides give them.
+  - Karis 2014: the course page titles the talk "High-Quality Temporal Supersampling" → title
+    fixed, the abstract's one sentence quoted.
+  - Burns & Hunt 2013: the quote began with words not in the abstract → exact (OpenAlex). Hable
+    2021 (5 July 2021): motion vectors sit in the post's "Other" group, not after the resolve →
+    exact sentence.
+  - NVIDIA 2019 / Sjöholm: the compaction quotes are the 2019 post's (Alex Dunn, 20 March 2019) and
+    were reworded; the "updated" post is dated 25 July 2022 (an update of the 10 August 2020 post)
+    and its BLAS sentence was spliced → exact sentences, plus its TLAS advice and "up to about 50%".
+  - AMD: none of the ray-tracing quotes are in the RDNA guide; they are DiGioia's RRA article (15
+    September 2022), two reworded and two not found → exact sentences from the article, and the
+    guide's own bullets (rebuild the TLAS every frame on the compute queue) added; the
+    async-compute quote spliced two bullets → split.
+  - Epic ray-tracing pages: the TLAS sentences are the Lumen Performance Guide's, the skinned-mesh
+    sentence is Lumen Technical Details', and the per-component "Ray Tracing Far Field" setting the
+    ray-tracing guide's → each attributed, the Lumen Performance Guide added to the citation and the
+    ray-tracing guide's own TLAS sentences quoted. The far-field sentences are now read on Epic's
+    pages, not taken from forum posts.
+  - Boksanský et al. 2019: two quotes altered ("for real-time applications" added, "focuses" for
+    "should focus") and a "temporal filter" the abstract does not name → TU Wien's abstract;
+    Crossref confirms Apress, 159–182.
+  - AC Shadows: the speakers (Luc Leblanc, Melino Conte) were missing and two Q&A quotes were
+    reworded → fixed, the Q&A dated 12 February 2025; the probe-cache sentence is in neither the Q&A
+    nor the abstract and is marked as the search record of the slides.
+  - Majercik et al. 2021 (arXiv, ar5iv): the extensions were paraphrased → the abstract's words;
+    the bearing's "In the paper it runs continuously" is wrong — the paper classifies only probes
+    not yet initialised and wakes the sleeping probes inside each dynamic object's grown box →
+    section rewritten, the hysteresis heuristic for large changes added.
+  - Reynolds 1999: the quoted list of behaviours is the bulleted index of red3d.com/cwr/steer/, not
+    a sentence of the paper → the abstract's sentence and the paper's closing list; the citation
+    (Miller Freeman Game Group, 763–782) is confirmed on red3d.com's paper page.
+  - Wang et al. 2008: the quote's start was altered → exact (Crossref abstract; TOG 27(1), 1–18).
+  - City Sample: the ZoneGraph and traits quotes were reworded and the separate-lanes clause is not
+    on the page → exact sentences; the clause moved to "Checked and left out".
+  - Fiedler: the three posts' quotes were reworded or absent → exact sentences (10 June 2004,
+    29 November 2014, 24 February 2010).
+  - Meyer 2016: the async-compute quote is on no page found → Wccftech's report of the talk
+    (Alessio Palumbo, 26 March 2016), quoted and cited.
+  - NVIDIA's async post: authors now known (Vladimir Bondarev, Sriharsha Niverty, 22 October 2021);
+    one quote reworded, one not on the page → exact sentences, plus its warning against overlapping
+    two RT-core workloads, which the §6 bearing already followed.
+  - Anagnostou 2025: a quote spliced from two paragraphs → split into the exact phrases.
+  - "Checked and left out": Doom Eternal's speakers are Geffroy, Gneiting, Wang in that order.
+- **The recommendation.** No sentence of it rested on a source that failed, so it is unchanged. The
+  probe wake (#69) gains a published precedent: Majercik et al. 2021 wake the sleeping probes inside
+  each dynamic object's box grown by a grid cell plus the bias, which is §7's swept-sphere rule
+  grown by one spacing; the §4 bearing that called the wake Forge-specific is corrected. NVIDIA's
+  2022 post advises `PREFER_FAST_TRACE` for a TLAS rebuilt every frame where §7 chose
+  `PREFER_FAST_BUILD` for the mover TLAS: that choice is Forge's, not a source's, and is one more
+  flag for the measured A/B. AMD's guide independently says to rebuild the TLAS every frame on the
+  compute queue, as §7 does.
 - **Weaker confirmations, stated plainly.** Nanite's use of the previous frame's transforms in pass
   1 comes from a University of Illinois course page summarising the talk, and the velocity sentence
-  from a rendering blog's write-up; neither is Epic. Unreal's `FPrimitiveSceneData` fields and the
-  dirty-primitive gathering come from third-party write-ups and the 4.26 API reference's listing,
-  not from the 5.8 page quoted. Wihlidal's "almost for free" is the trade press's paraphrase.
-  Hitman's 5–10 % is press coverage of the talk, not the slides. The Haar & Aaltonen talk's content
-  beyond its part titles is not re-quoted; `gpu-geometry.md` already marks its cluster and
-  reprojection details as from memory. The DLSS guide does not, in the sentences read, distinguish
-  object motion from camera motion; the entry says so. The NVIDIA async-compute post's author was
-  not confirmed; it is cited as NVIDIA's. Boksanský's chapter is described from the publisher's and
-  TU Wien's abstracts. The Lumen far-field sentences are from forum posts quoting the documentation
-  and from the documentation's search extract.
+  from a rendering blog's write-up; both are now read, neither is Epic. Unreal's
+  `FPrimitiveSceneData` fields and the dirty-primitive gathering come from third-party write-ups and
+  the 4.26 API reference's listing, not from the 5.8 pages (re-checked on 2026-10-02: the Mesh
+  Drawing Pipeline and Large World Coordinates pages name `FPrimitiveSceneData` but not its fields).
+  Hitman's 5–10 % is press coverage of the talk, not the slides, and Siege's "thousands of dynamic
+  rubble objects" a tutorial site's summary. `gpu-geometry.md` already marks Haar & Aaltonen's
+  cluster and reprojection details as from memory. The DLSS guide does not, in the sentences read,
+  distinguish object motion from camera motion; the entry says so. Boksanský's chapter is described
+  from TU Wien's abstract.
 - **Forge's own numbers** (the TLAS's 12 ms and 1 ms, the culls' and probes' costs, the #77 and #92
   tables, the uploads per frame, the 80-byte record, the cell size of 1 km) are from
   `docs/DECISIONS.md` (D-004, D-020, D-029, D-036), `docs/PROFILE.md`, `docs/demos/city-blocks.md`,
   `shaders/meshlet.slang` and `crates/forge-world/src/cells.rs` (re-exported by
   `forge_render::cells`) as of 2026-09-25.
-- **Numbers to re-check before they enter a spec:** every estimate in the recommendation (the mover
-  TLAS's 0.1–0.5 ms, the 10–30 % on the ray passes, the wake counts, the gain from double-buffering)
-  is an estimate, marked as such, to be replaced by the demo's timings; the 3000-instance 1 ms
-  includes a one-shot submission's overhead; the PTLAS sample's counts are the sample's, with no
-  timings published; the DDGI convergence figure (100 ms) is for 192–256 rays at 95 %, not Forge's
-  128 at 97 %; Hitman's percentages are 2016 hardware.
+- **Numbers re-checked on 2026-10-02:** Siege's 10 537, 412 and 64 draws and its 73 % are the
+  slides' (OCR text); Hitman's 5–10 % on AMD and nothing on NVIDIA are Wccftech's report of the
+  talk, on 2016 hardware; compaction saves "up to about 50%" by NVIDIA's 2022 post and "more than a
+  half" by RTXMU, and the numbers section now gives both; the 2021 paper's large-change rule (the
+  irradiance hysteresis cut by 50 % for 10 frames) is added; Epic's 200 m, 800 m and 1 km ranges
+  and the far field's 200 m start are the 5.8 pages'; the PTLAS sample's counts (170 000 dominoes on
+  1.2 million statics) are its README's, the announcement says "more than 100K physics objects", and
+  neither publishes timings. The 45 % relocation limit and DDGI's hysteresis and convergence figures
+  are from the GitHub pages read on 2026-09-25, unchanged. Still to replace before they enter a
+  spec: every estimate in the recommendation (the mover TLAS's 0.1–0.5 ms, the 10–30 % on the ray
+  passes, the wake counts, the gain from double-buffering), marked as such, by the demo's timings;
+  the 3000-instance 1 ms includes a one-shot submission's overhead; the DDGI convergence figure
+  (100 ms) is for 192–256 rays at 95 %, not Forge's 128 at 97 %.
