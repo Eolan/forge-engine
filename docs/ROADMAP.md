@@ -78,43 +78,51 @@ ACES 2.0's 500–4000-nit presets as tables, F2/F3/F4 (`docs/demos/asteroids.md`
 output"; 0.01 ms in the resolve at 1440p). The present waits for "Use HDR" on the owner's
 monitor. The calibration pages and MaxCLL and MaxFALL from the frame ✅ (#125: F5, peak, black
 and paper white, saved per monitor). HDR-ꟻLIP for the HDR captures ✅ (#126: it matches
-NVIDIA's tool; class 2's HDR thresholds proposed in D-017's second amendment 🟡). Then #39
-(the RTX 3080 run, which can also retry #95's double buffer).
+NVIDIA's tool; class 2's HDR thresholds in D-017's second amendment, accepted 2026-10-02).
+Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
 
-**Proposed next, for the owner to pick:**
-- #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes
-  #69 and is the first step of the space battle (#80). Started on 2026-10-02, the owner having
-  asked for the plan's recommendations: the movers' range of the instance table written every
-  frame, their cells, their motion vectors, with barrels drifting down the island's rivers
-  (`city-blocks --island 7 --movers N`, `docs/demos/island.md`, "Moving geometry"), and their
-  own acceleration structure, rebuilt every frame and traced after the static one (their
-  shadows and reflections), and the settled probes woken where they pass (#69). Its demo:
-  ships through the ballad's belt ✅ (`asteroids --ships N --chase K`, the first step of #80);
-  a refit of the movers' structure measured against the rebuild ✅ (a seventh of the build,
-  but the refitted tree slows the rays: the rebuild stays). It also opens #107, the water
-  around what moves in it.
-- Phase 2, with its `island` demo as the first step of rebuilding tropical-island (#81): a
-  concrete game target for the world systems. It starts with #93, large-world coordinates on
-  the GPU ✅ (2026-09-26, D-004's amendment accepted): the instances in integer cells of 1 km,
-  every offset of whole cells drawn to the pixel, the far offsets within a rounding the eye
-  does not see, where the record before broke down at 1 000 km; no view slower
-  (`docs/demos/city-blocks.md`, "Far from the origin"). The cloud branch of that night
-  (`docs/HANDOVER.md`) is merged: `forge-world`, the island's genesis in `forge-procgen`, and
-  the island drawn by `city-blocks --island`. The island now has its ground, rivers, lakes,
-  rocks and a stand-in sea (#96, `docs/demos/island.md`, "In the engine").
-  - D-037, D-038 and D-039 were accepted on 2026-09-30. That opens the real water (D-038)
-    and, later, the buildings (D-039).
-  - #97's lake rule (2026-09-30): the depressions under 5 ha fill, and the 8 m and 4 m
-    islands keep the same 14–15 lakes (`docs/demos/island.md`, "The lake rule").
-  - Still waiting for the owner: the island's look (`city-blocks --island 7`), before the
-    `island` demo of its own, and the 4 m flanks.
+**Done since Checkpoint 2:**
+- #79, moving geometry (2026-10-02, closing #69): the movers' instances, cells and motion
+  vectors, their own acceleration structure, and ships through the ballad's belt.
+- Phase 2's island in `city-blocks --island 7`: the ground at 2 m, the sea, the rivers, the
+  lakes, the underwater view, objects in the water and splashes. The owner judged its look and
+  its rivers on 2026-10-02 (#112 closed), with the 4 m flanks as they are.
+
+**Proposed next, for the owner to pick** (recommended first):
+- **The `island` demo of its own** (#96's step 3, waiting on the look, which is now judged).
+  Phase 2's demo and the first step of rebuilding tropical-island (#81):
+  - its own crate;
+  - the island's settings as its defaults;
+  - camera paths and golden shots at four times of day (`--day` exists);
+  - the island's views in the batch.
+
+  It moves the island out of `city-blocks`, which keeps the city. The planet variant
+  (orbit-to-ground, researched in `docs/research/planet-terrain.md`) comes after, as its
+  second step.
+- **More of stage 6's materials,** biomes as rules (D-041): the beach types from the owner's
+  inbox (sand, rock, volcanic, cliffs) and the rock types. They are small and seen at once on
+  the island.
+- **Phase 3's start:** `forge-sim` and the physics engine (D-009). Its first visible use is the
+  island's water: buoyancy for what floats (#107's barrels are carried at the water's speed,
+  without physics), boats and swimming from the owner's inbox. Its demo is `materials-yard`.
+- **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
+  clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
+  already settles the clouds' rendering from a camera-centred weather map.
+- **The rivers' and the water's polish, from their issues' "left for later":**
+  - standing waves on the 2–4 % rapids (#122);
+  - a bar and a scour hole at confluences (#119);
+  - true distributaries and bars on the lake fans (#127);
+  - splashes landing as foam and rings (#107);
+  - a clearer or bluer underwater look (#108).
+
+  Each is small; none blocks anything.
 
 **Waiting:**
 - #39 waits for the RTX 3080.
 - #67 and #28 wait for an AMD card.
 - #71 waits for the owner: close it, or report it upstream.
 - #70 is parked.
-- #69 is done with #79 (2026-10-02).
+- #124 stays unbuilt below its gate (recording 0.12 ms against 0.5).
 
 **Ideas for later** (the owner's inbox, `docs/TODO.md`, filed 2026-09-25 under the milestone
 "Later"):
@@ -303,8 +311,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    rivers' channels and the lakes' shores drawn on cells of a metre; the ground cooked in 2 km
    tiles with locked borders, and drawn at 2 m with the amplification's detail
    (`--island-drawn 8` for the field's cells).
-   Next: the owner's judgement of the look, then the `island` demo of its own (#96 step 3) and
-   more of stage 6's materials.
+   The owner judged the look on 2026-10-02, the 4 m flanks as they are. Next: the `island` demo
+   of its own (#96 step 3) and more of stage 6's materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute
    queue and a forward surface pass first, then the shore from the coast distance, the rivers
@@ -355,8 +363,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    each trunk, the lower courses graded to the sea, and the rivers under 3 km² brooks of
    nature's size (#123, `--island-basins 0 --island-grade 0 --no-brooks` for the island before).
    The large mouths at the sea split round one or two bars of sand standing over the water
-   (#127, `--no-bars`), and they keep their sand from afar. Next: the owner's judgement of the
-   rivers and of the new island.
+   (#127, `--no-bars`), and they keep their sand from afar. The owner judged the rivers and the
+   new island natural enough to move on (2026-10-02, #112 and its parts closed).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

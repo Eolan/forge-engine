@@ -434,8 +434,9 @@ keeps one file per prop, so switching between 8 and 4 m re-cooks.
 Much of the 4 m island's lower flanks is rock, where at 8 m it was grass. This is the field,
 not the rule: the erosion at 4 m cuts the flanks above 0.45 over 8 m. The rule now measures the
 slope over 8 m at any spacing (`LayerRule::slope_over`), which changed 0.3 % of the 4 m frame's
-pixels and nothing at 8 m. Whether the 4 m flanks should be that steep is a question for the
-erosion's parameters at 4 m (#97), and a look to judge.
+pixels and nothing at 8 m. Whether the 4 m flanks should be that steep was a question for the
+erosion's parameters at 4 m (#97), and a look to judge: the owner took them as they are
+(2026-10-02), so the erosion's parameters stay.
 
 ![The first view, on the south coast: rocks on the grass and on the steep ground, the beach, the island mirrored in the sea's stand-in](images/island-engine-coast.png)
 

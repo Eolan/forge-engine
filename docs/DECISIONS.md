@@ -331,7 +331,8 @@ largest value above 0.15 sends the reviewer to the error map and the crops
 (`imgdiff --crop --crops`), and isolated pixels pass, while a cluster of them (a speck, a line,
 a patch) fails.
 
-**Second amendment 🟡 (proposed 2026-10-02, #126): HDR-ꟻLIP for the HDR captures.** For two
+**Second amendment ✅ (proposed 2026-10-02, #126; accepted the same day as proposed):
+HDR-ꟻLIP for the HDR captures.** For two
 PQ captures (#94), `imgdiff` prints HDR-ꟻLIP (Andersson et al. 2021) instead of LDR-ꟻLIP:
 LDR-ꟻLIP of both images tone-mapped at one exposure per stop over the reference's range, the
 largest error of each pixel kept. It matches NVIDIA's tool to six decimals. The classes stay

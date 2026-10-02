@@ -205,7 +205,7 @@ moved, invisible on the display and glaring seven stops up. The synthetic pairs 
 did not show). The error maps of the GTAO pair, SDR above and HDR below, are in
 `reports/2026-10-02-126/`.
 
-What HDR differences are acceptable (proposed, D-017's second amendment 🟡): the same classes
+What HDR differences are acceptable (D-017's second amendment, accepted 2026-10-02): the same classes
 as LDR-ꟻLIP. For class 2 the largest value stays at 0.15, with the same rule for isolated
 pixels: the 20-code line (0.24) and 3 × 3 block (0.31) fail, one pixel passes. The mean
 becomes 0.05: the HDR table (0.021–0.025) and one code over the whole frame (0.037) pass, two
