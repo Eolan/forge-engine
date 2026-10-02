@@ -215,7 +215,9 @@ balls. Space throws a ball from the camera, Enter starts the scene over. `--reco
 server and this player's client over a 100 ms link that loses 2 % of its packets, with a bot
 throwing too (`forge-sim`). `--lab sea`: crates, barrels, logs and balls afloat on the sea's
 waves, rocks sinking to the floor, a jetty, and a boat modelled in Blender and read through
-glTF; the arrow keys drive the boat, C follows it. It shares `city-blocks`' renderer, keys and options
+glTF; the arrow keys drive the boat, C follows it. `--lab walk`: a character in a playground of
+stairs, ramps, a moving platform and crates; WASD walk, Shift runs, Space jumps, the right mouse
+button turns the view. It shares `city-blocks`' renderer, keys and options
 (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 

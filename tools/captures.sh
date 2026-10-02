@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Writes the capture batch every rendering change is checked with (issue #74; docs/PROCESS.md):
-# 72 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
+# 78 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
 # island, the island demo's golden shots (#96) and the physics lab (#136), on the mesh path and
 # on the fallback (`--force-fallback`). Compare two batches with tools/compare.sh.
 #
@@ -227,6 +227,11 @@ for path in $paths; do
     capture "$path-lab-sea300" 300 "$lab" --lab sea --fixed-step "${flag[@]}"
     capture "$path-lab-sea300-noocc" 300 "$lab" --lab sea --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-lab-sea-steer600" 600 "$lab" --lab sea --fixed-step --steer 1,0.6 "${flag[@]}"
+    # The playground (#139): the player halfway up the stairs at tick 150 and its A/B twin, and
+    # through the light crates at tick 240.
+    capture "$path-lab-walk150" 150 "$lab" --lab walk --fixed-step --walk 2,0 "${flag[@]}"
+    capture "$path-lab-walk150-noocc" 150 "$lab" --lab walk --fixed-step --walk 2,0 --no-occlusion "${flag[@]}"
+    capture "$path-lab-walk-crates240" 240 "$lab" --lab walk --fixed-step --walk 0,2 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

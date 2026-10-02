@@ -988,6 +988,9 @@ the phases, the band's rows, then the columns, each spread over the job system);
 pushes for the floaters, also in parallel, and Jolt's step take the rest. The ripples' cascade is
 left out (0.7 ms more for centimetres).
 
+`--lab walk` (#139), 72 bodies and the character, walking through the crates: **0.08 ms a
+tick** (p99 0.22): most bodies sleep, and the character's sweep and stair test are a few casts.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

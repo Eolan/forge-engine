@@ -60,11 +60,43 @@ typedef struct FjRayHit {
     float normal[3];
 } FjRayHit;
 
+// A walking character (Jolt's CharacterVirtual): a capsule standing on its feet, swept through
+// the world by its velocity, stepping up stairs and down slopes, pushing what it walks into.
+typedef struct FjCharacterDesc {
+    // Its feet, metres.
+    double position[3];
+    float radius;
+    // Feet to the top of its head, metres.
+    float height;
+    // The steepest ground it walks up, radians.
+    float max_slope;
+    // kg: how hard it presses what it stands on.
+    float mass;
+    // N: how hard it pushes what it walks into.
+    float max_strength;
+    // How high a step it walks up, and how far down it keeps to the ground, metres.
+    float step_up;
+    float stick_down;
+} FjCharacterDesc;
+
+// Where a character is and what it stands on.
+typedef struct FjCharacterState {
+    double position[3];
+    float velocity[3];
+    float ground_normal[3];
+    float ground_velocity[3];
+    uint32_t ground_body;
+    // 0 on the ground, 1 on ground too steep, 2 touching but not held, 3 in the air.
+    uint32_t ground_state;
+} FjCharacterState;
+
 // The sizes of the structs above, for the layout test.
 typedef struct FjLayout {
     uint32_t world_desc;
     uint32_t body_desc;
     uint32_t ray_hit;
+    uint32_t character_desc;
+    uint32_t character_state;
 } FjLayout;
 
 FjLayout fj_layout(void);
@@ -130,6 +162,13 @@ void fj_body_set_transform(FjWorld *world, uint32_t body, const double position[
 // The nearest hit along `direction` (its length is the ray's) from `origin`; 0 when none.
 int32_t fj_world_cast_ray(const FjWorld *world, const double origin[3], const float direction[3],
                           FjRayHit *hit);
+
+// Adds a character; its index. The world's characters are numbered from 1 in the order added
+// (Jolt's own numbering runs across every world of the process), and saved and restored with it.
+uint32_t fj_character_add(FjWorld *world, const FjCharacterDesc *desc);
+// Moves it through a step of `dt` at `velocity` (the world's gravity presses it down).
+void fj_character_move(FjWorld *world, uint32_t character, float dt, const float velocity[3]);
+void fj_character_state(const FjWorld *world, uint32_t character, FjCharacterState *state);
 
 // The whole simulation state (bodies, contacts, constraints) into a buffer the world owns,
 // valid until the next call; `size` receives its length.

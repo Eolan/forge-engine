@@ -11,6 +11,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -153,6 +154,10 @@ struct FjWorld {
     JPH::JobSystemThreadPool jobs;
     JPH::PhysicsSystem system;
     Bytes saved;
+    // After the system, so they go first: each holds the system.
+    JPH::CharacterVsCharacterCollisionSimple character_pairs;
+    std::vector<JPH::Ref<JPH::CharacterVirtual>> characters;
+    std::vector<JPH::CharacterVirtual::ExtendedUpdateSettings> character_steps;
 
     explicit FjWorld(const FjWorldDesc &desc)
         : temp(64 * 1024 * 1024),
@@ -168,7 +173,9 @@ extern "C" {
 FjLayout fj_layout(void) {
     return FjLayout{static_cast<uint32_t>(sizeof(FjWorldDesc)),
                     static_cast<uint32_t>(sizeof(FjBodyDesc)),
-                    static_cast<uint32_t>(sizeof(FjRayHit))};
+                    static_cast<uint32_t>(sizeof(FjRayHit)),
+                    static_cast<uint32_t>(sizeof(FjCharacterDesc)),
+                    static_cast<uint32_t>(sizeof(FjCharacterState))};
 }
 
 void fj_init(void) {
@@ -403,11 +410,65 @@ int32_t fj_world_cast_ray(const FjWorld *world, const double origin[3], const fl
     return 1;
 }
 
+uint32_t fj_character_add(FjWorld *world, const FjCharacterDesc *desc) {
+    const float half = std::max(0.5f * desc->height - desc->radius, 0.01f);
+    JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
+    // The capsule over its feet: the character's position is where it stands.
+    settings->mShape = JPH::RotatedTranslatedShapeSettings(
+                           JPH::Vec3(0.0f, half + desc->radius, 0.0f), JPH::Quat::sIdentity(),
+                           new JPH::CapsuleShape(half, desc->radius))
+                           .Create()
+                           .Get();
+    settings->mMaxSlopeAngle = desc->max_slope;
+    settings->mMass = desc->mass;
+    settings->mMaxStrength = desc->max_strength;
+    // Only contacts under its lower half-sphere's centre hold it up.
+    settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -desc->radius);
+    const uint32_t index = static_cast<uint32_t>(world->characters.size());
+    settings->mID = JPH::CharacterID(index + 1);
+    JPH::Ref<JPH::CharacterVirtual> character = new JPH::CharacterVirtual(
+        settings, rvec3(desc->position), JPH::Quat::sIdentity(), 0, &world->system);
+    character->SetCharacterVsCharacterCollision(&world->character_pairs);
+    world->character_pairs.Add(character);
+    JPH::CharacterVirtual::ExtendedUpdateSettings steps;
+    steps.mStickToFloorStepDown = JPH::Vec3(0.0f, -desc->stick_down, 0.0f);
+    steps.mWalkStairsStepUp = JPH::Vec3(0.0f, desc->step_up, 0.0f);
+    world->characters.push_back(character);
+    world->character_steps.push_back(steps);
+    return index;
+}
+
+void fj_character_move(FjWorld *world, uint32_t character, float dt, const float velocity[3]) {
+    JPH::CharacterVirtual &c = *world->characters[character];
+    c.SetLinearVelocity(vec3(velocity));
+    c.ExtendedUpdate(dt, world->system.GetGravity(), world->character_steps[character],
+                     world->system.GetDefaultBroadPhaseLayerFilter(kMoving),
+                     world->system.GetDefaultLayerFilter(kMoving), JPH::BodyFilter(),
+                     JPH::ShapeFilter(), world->temp);
+}
+
+void fj_character_state(const FjWorld *world, uint32_t character, FjCharacterState *state) {
+    const JPH::CharacterVirtual &c = *world->characters[character];
+    const JPH::RVec3 p = c.GetPosition();
+    state->position[0] = p.GetX();
+    state->position[1] = p.GetY();
+    state->position[2] = p.GetZ();
+    c.GetLinearVelocity().StoreFloat3(reinterpret_cast<JPH::Float3 *>(state->velocity));
+    c.GetGroundNormal().StoreFloat3(reinterpret_cast<JPH::Float3 *>(state->ground_normal));
+    c.GetGroundVelocity().StoreFloat3(reinterpret_cast<JPH::Float3 *>(state->ground_velocity));
+    state->ground_body = c.GetGroundBodyID().GetIndexAndSequenceNumber();
+    state->ground_state = static_cast<uint32_t>(c.GetGroundState());
+}
+
 const uint8_t *fj_world_save_state(FjWorld *world, size_t *size) {
     world->saved.data.clear();
     world->saved.cursor = 0;
     world->saved.failed = false;
     world->system.SaveState(world->saved);
+    // The characters after the bodies, in the order added (the system does not hold them).
+    for (const JPH::Ref<JPH::CharacterVirtual> &c : world->characters) {
+        c->SaveState(world->saved);
+    }
     *size = world->saved.data.size();
     return world->saved.data.data();
 }
@@ -415,7 +476,13 @@ const uint8_t *fj_world_save_state(FjWorld *world, size_t *size) {
 int32_t fj_world_restore_state(FjWorld *world, const uint8_t *data, size_t size) {
     Bytes state;
     state.data.assign(data, data + size);
-    return world->system.RestoreState(state) && !state.failed ? 1 : 0;
+    if (!world->system.RestoreState(state)) {
+        return 0;
+    }
+    for (const JPH::Ref<JPH::CharacterVirtual> &c : world->characters) {
+        c->RestoreState(state);
+    }
+    return state.failed ? 0 : 1;
 }
 
 } // extern "C"

@@ -51,6 +51,30 @@ pub struct FjRayHit {
     pub normal: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FjCharacterDesc {
+    pub position: [f64; 3],
+    pub radius: f32,
+    pub height: f32,
+    pub max_slope: f32,
+    pub mass: f32,
+    pub max_strength: f32,
+    pub step_up: f32,
+    pub stick_down: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FjCharacterState {
+    pub position: [f64; 3],
+    pub velocity: [f32; 3],
+    pub ground_normal: [f32; 3],
+    pub ground_velocity: [f32; 3],
+    pub ground_body: u32,
+    pub ground_state: u32,
+}
+
 #[cfg(test)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +82,8 @@ pub struct FjLayout {
     pub world_desc: u32,
     pub body_desc: u32,
     pub ray_hit: u32,
+    pub character_desc: u32,
+    pub character_state: u32,
 }
 
 unsafe extern "C" {
@@ -163,6 +189,10 @@ unsafe extern "C" {
         direction: *const f32,
         hit: *mut FjRayHit,
     ) -> i32;
+
+    pub fn fj_character_add(world: *mut FjWorld, desc: *const FjCharacterDesc) -> u32;
+    pub fn fj_character_move(world: *mut FjWorld, character: u32, dt: f32, velocity: *const f32);
+    pub fn fj_character_state(world: *const FjWorld, character: u32, state: *mut FjCharacterState);
 
     pub fn fj_world_save_state(world: *mut FjWorld, size: *mut usize) -> *const u8;
     pub fn fj_world_restore_state(world: *mut FjWorld, data: *const u8, size: usize) -> i32;

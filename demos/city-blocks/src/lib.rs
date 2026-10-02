@@ -276,6 +276,10 @@ struct Args {
     /// in place of the arrow keys (#138).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     steer: Option<Vec<f32>>,
+    /// With `--lab walk`, the player's walk from the first frame, `X,Z` in m/s along the
+    /// ground, in place of the keys (#139).
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    walk: Option<Vec<f32>>,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -463,6 +467,8 @@ struct Gallery {
     /// The camera follows the lab's boat (C), and the throttle and rudder last sent (#138).
     chase: bool,
     steering: (f32, f32),
+    /// The player's walk last sent (#139).
+    walking: [f32; 2],
     lab: Option<lab::Lab>,
     /// Their waves in the lakes and the sea (#107), with the water and the movers.
     wakes: Option<WaterWakes>,
@@ -845,6 +851,7 @@ impl Gallery {
             lab,
             chase: false,
             steering: (0.0, 0.0),
+            walking: [0.0; 2],
             wakes,
             splashes,
             falls,
@@ -979,7 +986,17 @@ impl Demo for Gallery {
                 self.taa.enabled = !self.taa.enabled;
                 self.taa.reset_history();
             }
+            // Space: the player jumps in the playground (#139); elsewhere it throws, as X does.
             KeyCode::Space => {
+                if let Some(lab) = &mut self.lab {
+                    if lab.has_player() {
+                        lab.jump();
+                    } else {
+                        lab.throw(self.camera.position, self.camera.forward());
+                    }
+                }
+            }
+            KeyCode::KeyX => {
                 if let Some(lab) = &mut self.lab {
                     lab.throw(self.camera.position, self.camera.forward());
                 }
@@ -1030,6 +1047,28 @@ impl Demo for Gallery {
                 self.steering = steering;
                 lab.steer(steering.0, steering.1);
             }
+            // The playground's player (#139): WASD along the view, Shift to run, or `--walk`;
+            // a command when the walk changes.
+            if lab.has_player() {
+                let (sin, cos) = self.camera.yaw.sin_cos();
+                let (forward, right) = (Vec2::new(-sin, -cos), Vec2::new(cos, -sin));
+                let keys = |k: KeyCode| f32::from(u8::from(input.is_down(k)));
+                let wish = forward * (keys(KeyCode::KeyW) - keys(KeyCode::KeyS))
+                    + right * (keys(KeyCode::KeyD) - keys(KeyCode::KeyA));
+                let speed = if input.is_down(KeyCode::ShiftLeft) {
+                    lab::RUN_SPEED
+                } else {
+                    lab::WALK_SPEED
+                };
+                let mut walk = (wish.normalize_or_zero() * speed).to_array();
+                if let Some(w) = &self.args.walk {
+                    walk = [w[0], w.get(1).copied().unwrap_or(0.0)];
+                }
+                if walk != self.walking {
+                    self.walking = walk;
+                    lab.walk(walk);
+                }
+            }
             lab.advance(dt, self.args.fixed_step);
             if let Some(time) = lab.sea_time() {
                 self.sea_time = time;
@@ -1065,6 +1104,16 @@ impl Demo for Gallery {
             self.camera.position = Vec3::new(angle.sin() * radius, height, angle.cos() * radius);
             self.camera.yaw = angle;
             self.camera.pitch = pitch;
+        } else if let Some(player) = self.lab.as_mut().and_then(lab::Lab::player) {
+            // The playground (#139): the right mouse button turns the view round the player,
+            // the camera 5 m behind its head along the view.
+            if input.looking {
+                let s = self.camera.sensitivity;
+                self.camera.yaw -= input.mouse_delta.0 * s;
+                self.camera.pitch = (self.camera.pitch - input.mouse_delta.1 * s).clamp(-1.2, 0.5);
+            }
+            let head = player.position + Vec3::new(0.0, 1.6, 0.0);
+            self.camera.position = head - self.camera.forward() * 5.0;
         } else {
             self.camera.update(input, dt);
         }
@@ -1920,6 +1969,27 @@ impl CityMaterials {
                 0.03,
             ),
         );
+        // The playground's player (#139): a blue body, a dark glossy visor.
+        let player_paint = add(
+            "painted (blue)",
+            RenderLayer {
+                color_a: [0.05, 0.16, 0.42],
+                color_b: [0.05, 0.16, 0.42],
+                roughness: RenderLayer::roughness_for_power(40.0),
+                specular: 0.2,
+                ..RenderLayer::default()
+            },
+        );
+        let visor = add(
+            "visor",
+            RenderLayer {
+                color_a: [0.02, 0.02, 0.025],
+                color_b: [0.02, 0.02, 0.025],
+                roughness: RenderLayer::roughness_for_power(300.0),
+                specular: 0.6,
+                ..RenderLayer::default()
+            },
+        );
         let by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -1932,6 +2002,11 @@ impl CityMaterials {
             ("lab-log", bark),
             ("lab-pillar", concrete_grey),
             ("lab-deck", deck_wood),
+            ("lab-slab", concrete_grey),
+            ("lab-ramp", deck_wood),
+            ("lab-platform", red_paint),
+            ("lab-player", player_paint),
+            ("lab-visor", visor),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -3754,7 +3829,17 @@ fn water_check(
 /// Where the camera starts: the island's first view, the gallery's or the city's, or
 /// `--view`.
 fn start_camera(args: &Args) -> Result<FlyCamera> {
-    let mut camera = if args.lab == Some(lab::LabScene::Sea) {
+    let mut camera = if args.lab == Some(lab::LabScene::Walk) {
+        // Behind the player, looking along −z at the ramps, a little down; it follows the
+        // player from the first frame.
+        FlyCamera {
+            position: Vec3::new(0.0, 3.0, 6.0),
+            yaw: 0.0,
+            pitch: -0.25,
+            speed: 8.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Sea) {
         // Over the jetty, looking out past its end at the water where things fell, the boat on
         // the left.
         FlyCamera {

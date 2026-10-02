@@ -29,11 +29,14 @@ use forge_sim::{
     Snapshot, Stamped, TICK, TICK_RATE,
 };
 use forge_task::TaskPool;
-use glam::{DVec3, Mat4, Quat, Vec3};
+use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 
 use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
 mod sea;
+mod walk;
+
+pub(crate) use walk::{RUN_SPEED, WALK_SPEED};
 
 /// The lab's scenes (`--lab`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -43,6 +46,8 @@ pub(crate) enum LabScene {
     /// The sea: crates, barrels, logs and balls afloat, rocks that sink, a jetty, a boat
     /// (#138).
     Sea,
+    /// A playground to walk in: stairs, ramps, a moving platform, crates, blocks (#139).
+    Walk,
 }
 
 /// The floor's half side, metres.
@@ -74,12 +79,19 @@ const LOG: usize = 8;
 const PILLAR: usize = 9;
 const DECK: usize = 10;
 const BOAT: usize = 11;
+const SLAB: usize = 12;
+const RAMP: usize = 13;
+const PLATFORM: usize = 14;
+const PLAYER: usize = 15;
+const VISOR: usize = 16;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
 const SEA_LOGS: u32 = 16;
 const SEA_BALLS: u32 = 20;
 const SEA_ROCKS: u32 = 18;
+/// Numbers of the players' controls in a saved state ([`LabWorld::words`]).
+const WORDS: usize = 7;
 /// Ticks between the digests a recording keeps.
 const RECORD_EVERY: u64 = 60;
 /// `--net`: ticks between the server's snapshots, the share of packets lost, ticks between the
@@ -89,10 +101,12 @@ const NET_LOSS: f64 = 0.02;
 const BOT_EVERY: u64 = 150;
 
 /// The props the lab draws, in this order: the floor, the block, the barrel, the rocks, the
-/// ball, then the sea's: the crate, the log, the pillar, the deck, the boat.
+/// ball, then the sea's: the crate, the log, the pillar, the deck, the boat; then the
+/// playground's: the stairs' slab, the ramp, the platform, the player and its visor.
 pub(crate) fn props() -> Vec<PropSpec> {
     let mut props = drop_props();
     props.extend(sea::props());
+    props.extend(walk::props());
     props
 }
 
@@ -186,6 +200,13 @@ pub(crate) enum LabCommand {
         /// −1 to 1.
         rudder: f32,
     },
+    /// The player's walk: m/s along the ground (world x and z), held until the next.
+    Walk {
+        /// x and z, m/s.
+        velocity: [f32; 2],
+    },
+    /// The player jumps, if on firm ground.
+    Jump,
 }
 
 impl Codec for LabCommand {
@@ -203,6 +224,13 @@ impl Codec for LabCommand {
                 out.extend_from_slice(&throttle.to_bits().to_le_bytes());
                 out.extend_from_slice(&rudder.to_bits().to_le_bytes());
             }
+            Self::Walk { velocity } => {
+                out.push(3);
+                for v in velocity {
+                    out.extend_from_slice(&v.to_bits().to_le_bytes());
+                }
+            }
+            Self::Jump => out.push(4),
         }
     }
 
@@ -235,6 +263,16 @@ impl Codec for LabCommand {
                     rudder: v[1],
                 })
             }
+            3 => {
+                let mut v = [0.0_f32; 2];
+                for x in &mut v {
+                    let (word, rest) = bytes.split_first_chunk::<4>()?;
+                    *x = f32::from_bits(u32::from_le_bytes(*word));
+                    *bytes = rest;
+                }
+                Some(Self::Walk { velocity: v })
+            }
+            4 => Some(Self::Jump),
             _ => None,
         }
     }
@@ -264,6 +302,9 @@ pub(crate) struct LabWorld {
     floaters: Vec<sea::Floater>,
     hulls: Vec<Hull>,
     boat: Option<sea::Boat>,
+    /// The playground's: the player's input and character, and the shuttling platform.
+    player: walk::Player,
+    platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
     pool: Arc<TaskPool>,
 }
@@ -290,6 +331,7 @@ impl LabWorld {
         let floor_y = match kind {
             LabScene::Drop => 0.0,
             LabScene::Sea => sea::FLOOR_Y,
+            LabScene::Walk => 0.0,
         };
         let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
         let floor_shape = Shape::cuboid(Vec3::new(FLOOR_HALF, 0.5, FLOOR_HALF), 0.05, 0.0)?;
@@ -356,6 +398,8 @@ impl LabWorld {
         let mut floaters = Vec::new();
         let mut hulls = Vec::new();
         let mut boat = None;
+        let mut player = walk::Player::default();
+        let mut platform = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -549,6 +593,17 @@ impl LabWorld {
                     })?);
                 }
             }
+            LabScene::Walk => {
+                let ground = walk::build(&mut world, SLAB, RAMP, &block_shape, BLOCK_HALF)?;
+                statics.extend(ground.statics);
+                group(BLOCK, ground.blocks, &mut bodies);
+                let mut crates = ground.light;
+                crates.extend(ground.heavy);
+                group(CRATE, crates, &mut bodies);
+                group(PLATFORM, vec![ground.platform], &mut bodies);
+                platform = Some(ground.platform);
+                player.character = Some(ground.player);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -586,6 +641,17 @@ impl LabWorld {
             group(BOAT, vec![body], &mut bodies);
             boat = Some(sea::boat_still(body));
         }
+        // The player, drawn by two movers after the bodies': its capsule and its visor.
+        if player.character.is_some() {
+            groups.push(Group {
+                prop: PLAYER,
+                count: 1,
+            });
+            groups.push(Group {
+                prop: VISOR,
+                count: 1,
+            });
+        }
         world.optimize_broad_phase();
         let start = world.save_state();
         Ok((
@@ -600,6 +666,8 @@ impl LabWorld {
                 floaters,
                 hulls,
                 boat,
+                player,
+                platform,
                 pool,
             },
             Layout { groups, statics },
@@ -609,6 +677,23 @@ impl LabWorld {
     /// Its bodies' transforms, in the movers' order, into `out`.
     pub(crate) fn transforms(&self, out: &mut Vec<Transform>) {
         self.world.transforms(&self.bodies, out);
+        // The player's capsule and visor after the bodies, turned where it last walked.
+        if let Some(c) = self.player.character {
+            let at = Transform {
+                position: self.world.character(c).position,
+                rotation: self.player.rotation(),
+            };
+            out.extend([at, at]);
+        }
+    }
+
+    /// The player as drawn, when the scene has one: its feet and its facing.
+    pub(crate) fn player(&self) -> Option<Transform> {
+        let c = self.player.character?;
+        Some(Transform {
+            position: self.world.character(c).position,
+            rotation: self.player.rotation(),
+        })
     }
 
     /// Bodies, and those awake.
@@ -620,9 +705,20 @@ impl LabWorld {
         self.world.active_bodies()
     }
 
-    /// The boat's throttle and rudder (both 0 without a boat).
-    fn controls(&self) -> (f32, f32) {
-        self.boat.map_or((0.0, 0.0), |b| (b.throttle, b.rudder))
+    /// The players' controls as the state carries them, [`WORDS`] numbers: the boat's
+    /// throttle and rudder, the walk, a jump waiting, the player's facing (0 where there is none).
+    fn words(&self) -> [f32; WORDS] {
+        let (throttle, rudder) = self.boat.map_or((0.0, 0.0), |b| (b.throttle, b.rudder));
+        let p = &self.player;
+        [
+            throttle,
+            rudder,
+            p.walk[0],
+            p.walk[1],
+            f32::from(u8::from(p.jump)),
+            p.facing[0],
+            p.facing[1],
+        ]
     }
 
     /// The boat's transform, when the scene has one.
@@ -686,6 +782,12 @@ impl Simulation for LabWorld {
                         boat.rudder = rudder.clamp(-1.0, 1.0);
                     }
                 }
+                LabCommand::Walk { velocity } => {
+                    let v = Vec2::from(velocity);
+                    // No faster than a run, whatever a command says.
+                    self.player.walk = v.clamp_length_max(walk::RUN_SPEED).to_array();
+                }
+                LabCommand::Jump => self.player.jump = true,
             }
         }
         // The sea at this tick's start: what floats pushed by it, the boat's motor too.
@@ -702,6 +804,9 @@ impl Simulation for LabWorld {
                 boat.drive(&mut self.world, &heights);
             }
         }
+        // The playground's platform and player, before the bodies move.
+        self.player
+            .tick(&mut self.world, self.platform, self.tick, TICK);
         if let Err(e) = self.world.step(TICK, 1) {
             tracing::warn!("physics tick {}: {e}", self.tick);
         }
@@ -715,9 +820,9 @@ impl Simulation for LabWorld {
     fn save(&mut self) -> Vec<u8> {
         let mut out = self.tick.to_le_bytes().to_vec();
         out.extend_from_slice(&self.next_throw.to_le_bytes());
-        let (throttle, rudder) = self.controls();
-        out.extend_from_slice(&throttle.to_bits().to_le_bytes());
-        out.extend_from_slice(&rudder.to_bits().to_le_bytes());
+        for word in self.words() {
+            out.extend_from_slice(&word.to_bits().to_le_bytes());
+        }
         out.extend(self.world.save_state());
         out
     }
@@ -725,28 +830,44 @@ impl Simulation for LabWorld {
     fn restore(&mut self, state: &[u8]) {
         let (tick, rest) = state.split_at(8);
         let (next, rest) = rest.split_at(4);
-        let (controls, world) = rest.split_at(8);
+        let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
+        let w: Vec<f32> = words
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&b| f32::from_bits(u32::from_le_bytes(b)))
+            .collect();
         if let Some(boat) = &mut self.boat {
-            let word = |k: usize| {
-                f32::from_bits(u32::from_le_bytes(
-                    controls[k..k + 4].try_into().expect("4 bytes"),
-                ))
-            };
-            (boat.throttle, boat.rudder) = (word(0), word(4));
+            (boat.throttle, boat.rudder) = (w[0], w[1]);
         }
+        self.player.walk = [w[2], w[3]];
+        self.player.jump = w[4] != 0.0;
+        self.player.facing = [w[5], w[6]];
         if let Err(e) = self.world.restore_state(world) {
             tracing::warn!("a lab state: {e}");
         }
     }
 
     fn digest(&mut self) -> u64 {
-        let (throttle, rudder) = self.controls();
-        self.world.digest(&self.bodies)
+        let mut d = self.world.digest(&self.bodies)
             ^ self.tick.rotate_left(17)
-            ^ u64::from(self.next_throw)
-            ^ (u64::from(throttle.to_bits()) << 32 | u64::from(rudder.to_bits())).rotate_left(29)
+            ^ u64::from(self.next_throw);
+        for (k, word) in self.words().into_iter().enumerate() {
+            d ^= u64::from(word.to_bits()).rotate_left(7 * k as u32 + 3);
+        }
+        // The player's character, where it stands and how it moves, to the bit.
+        if let Some(c) = self.player.character {
+            let s = self.world.character(c);
+            for (k, p) in s.position.to_array().into_iter().enumerate() {
+                d ^= p.to_bits().rotate_left(11 * k as u32 + 5);
+            }
+            for (k, v) in s.velocity.to_array().into_iter().enumerate() {
+                d ^= u64::from(v.to_bits()).rotate_left(13 * k as u32 + 1);
+            }
+        }
+        d
     }
 }
 
@@ -1082,6 +1203,10 @@ impl Lab {
             if self.logged.contains(&now) {
                 let digest = self.shown().digest();
                 // The boat, when there is one: where it is (x, y, z) and how fast it goes.
+                let player = self.shown().player().map_or(String::from("none"), |p| {
+                    let p = p.position;
+                    format!("{:.2},{:.2},{:.2}", p.x, p.y, p.z)
+                });
                 let boat = self.shown().boat().map_or(String::from("none"), |b| {
                     let p = b.position;
                     format!("{:.1},{:.2},{:.1}", p.x, p.y, p.z)
@@ -1100,6 +1225,7 @@ impl Lab {
                     awake,
                     boat,
                     boat_speed = format!("{boat_speed:.2}"),
+                    player,
                     "physics lab state"
                 );
             }
@@ -1215,6 +1341,28 @@ impl Lab {
         shown
             .has_sea()
             .then(|| (shown.now() as f64 - 1.0 + t).max(0.0) * f64::from(TICK))
+    }
+
+    /// The player's walk from the next tick: m/s along the ground, world x and z.
+    pub(crate) fn walk(&mut self, velocity: [f32; 2]) {
+        self.queued.push(LabCommand::Walk { velocity });
+    }
+
+    /// The player jumps at the next tick, if on firm ground.
+    pub(crate) fn jump(&mut self) {
+        self.queued.push(LabCommand::Jump);
+    }
+
+    /// Whether the scene has a player to walk.
+    pub(crate) fn has_player(&mut self) -> bool {
+        self.shown().player().is_some()
+    }
+
+    /// The player as drawn, when the scene has one: its capsule's mover (the last but one).
+    pub(crate) fn player(&mut self) -> Option<MoverTransform> {
+        self.shown().player()?;
+        let movers = self.movers();
+        movers.get(movers.len().checked_sub(2)?).copied()
     }
 
     /// The boat as drawn, when the scene has one: the movers' last.
@@ -1345,7 +1493,16 @@ mod tests {
             throttle: -0.4,
             rudder: 1.0,
         };
-        for c in [throws(1, 1)[0].command, LabCommand::Reset, steer] {
+        let walk = LabCommand::Walk {
+            velocity: [-1.5, 2.25],
+        };
+        for c in [
+            throws(1, 1)[0].command,
+            LabCommand::Reset,
+            steer,
+            walk,
+            LabCommand::Jump,
+        ] {
             let mut bytes = Vec::new();
             c.encode(&mut bytes);
             let mut read = bytes.as_slice();
@@ -1393,6 +1550,40 @@ mod tests {
         let moved = first.boat().unwrap().position.distance(start.position);
         assert!(moved > 3.0, "the boat moved {moved} m");
         let (mut second, _) = LabWorld::new(LabScene::Sea, test_pool()).unwrap();
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_playground_replays_a_walk_up_the_stairs_and_a_jump() {
+        let command = |tick: u64, seq: u32, command: LabCommand| Stamped {
+            tick,
+            player: 0,
+            seq,
+            command,
+        };
+        let commands = vec![
+            command(
+                20,
+                0,
+                LabCommand::Walk {
+                    velocity: [2.0, 0.0],
+                },
+            ),
+            command(150, 1, LabCommand::Jump),
+            command(
+                200,
+                2,
+                LabCommand::Walk {
+                    velocity: [0.0, 2.0],
+                },
+            ),
+        ];
+        let (mut first, _) = LabWorld::new(LabScene::Walk, test_pool()).unwrap();
+        let recording = Recording::record(&mut first, commands, 300, 60);
+        // Up the stairs and over them, then along +z.
+        let end = first.player().unwrap().position;
+        assert!(end.x > 4.0 && end.z > 2.0, "the player ended at {end}");
+        let (mut second, _) = LabWorld::new(LabScene::Walk, test_pool()).unwrap();
         recording.replay(&mut second).expect("the same digests");
     }
 

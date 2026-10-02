@@ -112,6 +112,8 @@ fn the_c_structs_and_their_rust_twins_agree() {
             world_desc: size_of::<ffi::FjWorldDesc>() as u32,
             body_desc: size_of::<ffi::FjBodyDesc>() as u32,
             ray_hit: size_of::<ffi::FjRayHit>() as u32,
+            character_desc: size_of::<ffi::FjCharacterDesc>() as u32,
+            character_state: size_of::<ffi::FjCharacterState>() as u32,
         }
     );
 }
@@ -261,4 +263,106 @@ fn a_raft_dropped_in_still_water_floats_at_its_draft() {
         "{}",
         transforms[0].position.y
     );
+}
+
+/// A floor, a flight of five steps of 20 cm rising along +x from x = 2, a ramp of 50° rising
+/// along −x from x = −3, and a platform 2 m to +z moving along +z at 1 m/s.
+fn playground() -> (World, BodyId) {
+    let mut world = World::new(&WorldDesc::default());
+    let floor = Shape::cuboid(Vec3::new(50.0, 0.5, 50.0), 0.05, 0.0).unwrap();
+    world
+        .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
+        .unwrap();
+    for k in 0..5 {
+        let rise = 0.2 * (k + 1) as f32;
+        let step = Shape::cuboid(Vec3::new(0.2, 0.5 * rise, 1.0), 0.01, 0.0).unwrap();
+        let at = DVec3::new(2.2 + 0.4 * f64::from(k), 0.5 * f64::from(rise), 0.0);
+        world.add_body(&BodyDesc::fixed(&step, at)).unwrap();
+    }
+    // sin and cos of 25°, as numbers: the half angle of the ramp's 50°.
+    let ramp = Shape::cuboid(Vec3::new(3.0, 0.1, 1.0), 0.01, 0.0).unwrap();
+    let turn = Quat::from_xyzw(0.0, 0.0, -0.422_618_26, 0.906_307_8);
+    world
+        .add_body(&BodyDesc {
+            rotation: turn,
+            ..BodyDesc::fixed(&ramp, DVec3::new(-5.0, 2.0, 0.0))
+        })
+        .unwrap();
+    let deck = Shape::cuboid(Vec3::new(1.0, 0.1, 1.0), 0.01, 0.0).unwrap();
+    let platform = world
+        .add_body(&BodyDesc {
+            motion: Motion::Kinematic,
+            linear_velocity: Vec3::new(0.0, 0.0, 1.0),
+            ..BodyDesc::fixed(&deck, DVec3::new(0.0, 0.1, 4.0))
+        })
+        .unwrap();
+    (world, platform)
+}
+
+/// Walks `c` at `wish` (m/s, along the ground) for `ticks`, as a game would: on firm ground
+/// it takes the ground's velocity, in the air it keeps its fall; gravity each tick.
+fn walk(world: &mut World, c: CharacterId, wish: Vec3, ticks: u32) {
+    let dt = 1.0 / 60.0;
+    for _ in 0..ticks {
+        let s = world.character(c);
+        let mut v = wish;
+        if s.ground == Ground::Firm {
+            v += s.ground_velocity;
+        } else {
+            v.y = s.velocity.y;
+        }
+        v.y -= 9.81 * dt;
+        world.move_character(c, dt, v);
+        world.step(dt, 1).unwrap();
+    }
+}
+
+#[test]
+fn a_character_climbs_the_stairs_and_not_a_steep_ramp() {
+    let (mut world, _) = playground();
+    let up = world.add_character(&CharacterDesc::default());
+    walk(&mut world, up, Vec3::ZERO, 30);
+    assert_eq!(world.character(up).ground, Ground::Firm);
+    // 3.8 m of walking: onto the top step (x from 3.6 to 4), each step up costing a little.
+    walk(&mut world, up, Vec3::new(2.0, 0.0, 0.0), 114);
+    let top = world.character(up);
+    assert!(
+        (top.position.y - 1.0).abs() < 0.05,
+        "on the top step: {}",
+        top.position
+    );
+    // Its capsule's edge on the step: the feet a little short of it.
+    assert!((3.3..4.0).contains(&top.position.x), "{}", top.position);
+    // The ramp of 50° stops a second one walking at it.
+    let blocked = world.add_character(&CharacterDesc {
+        position: DVec3::new(-1.0, 0.0, 0.0),
+        ..CharacterDesc::default()
+    });
+    walk(&mut world, blocked, Vec3::new(-2.0, 0.0, 0.0), 150);
+    let s = world.character(blocked);
+    assert!(s.position.y < 0.6, "it climbed to {}", s.position);
+}
+
+#[test]
+fn a_platform_carries_a_character_and_a_saved_world_replays_it() {
+    let (mut world, _) = playground();
+    let rider = world.add_character(&CharacterDesc {
+        position: DVec3::new(0.0, 0.3, 4.0),
+        ..CharacterDesc::default()
+    });
+    walk(&mut world, rider, Vec3::ZERO, 30);
+    let start = world.character(rider).position;
+    let saved = world.save_state();
+    walk(&mut world, rider, Vec3::ZERO, 60);
+    let after = world.character(rider);
+    assert!(after.ground_body.is_some());
+    assert!(
+        (after.position.z - start.z - 1.0).abs() < 0.05,
+        "carried {} m",
+        after.position.z - start.z
+    );
+    // Back to the saved world, the same second again: the same place to the bit.
+    world.restore_state(&saved).unwrap();
+    walk(&mut world, rider, Vec3::ZERO, 60);
+    assert_eq!(world.character(rider).position, after.position);
 }

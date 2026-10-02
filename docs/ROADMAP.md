@@ -112,7 +112,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   bit. Things float on the sea we render ✅ (#138, `--lab sea`): the GPU's waves on the CPU each
   tick, buoyancy by submerged triangles, a boat modelled in Blender read through glTF and driven
   by its outboard. Next, the island's rivers and lakes for what floats (its barrels, #107,
-  still drift at the water's speed, without physics), then walking (step 4).
+  still drift at the water's speed, without physics). Walking ✅ (#139, `--lab walk`): a
+  character up stairs, stopped by steep ramps, carried by a platform, shoving crates. Next,
+  vehicles and flight (step 5).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map.
@@ -405,8 +407,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    then a boat with a propeller and a rudder; then the
    island's rivers and sea. The same pool tests caustics, light shafts under the water and the
    surface seen from below.
-4. **Walking:** a character controller (Jolt's `CharacterVirtual`): pushing crates, stairs, a
-   moving deck.
+4. **Walking** ✅ (#139, `physics-lab --lab walk`): a character controller (Jolt's
+   `CharacterVirtual`): pushing crates, stairs, ramps, a moving platform; a moving deck with the
+   island's boats.
 5. **Vehicles and flight:** a car, a boat, a glider or a plane (lift and drag), a rocket or a
    spaceship in zero g.
 6. **Destruction:** a brick wall of bonded bricks with breakable joints, rocks and asteroids

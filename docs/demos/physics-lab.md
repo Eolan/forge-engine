@@ -20,7 +20,8 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `drop` | the binding: boxes, cylinders, spheres and convex hulls falling, stacking, rolling and going to sleep; the determinism hash | ✅ #136 |
 | `drop --record`, `--replay`, `--net MS` | inputs as commands, recordings replayed to the same digests, a server and predicting clients over a lossy link | ✅ #137 |
 | `sea` | buoyancy on the sea we render: crates, barrels, logs, balls and a Blender boat afloat, rocks that sink, a jetty | ✅ #138 |
-| walking, vehicles, flight, destruction, creatures, fluids | the later steps of the plan | planned |
+| `walk` | a walking character: stairs, ramps, a moving platform, crates to push, blocks to jump onto | ✅ #139 |
+| vehicles, flight, destruction, creatures, fluids | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
 
@@ -189,6 +190,37 @@ yet thrown): **1.8 ms a tick** (p99 2.3), of it about 1.1 ms the two cascades of
 the rest the pushes. A test replays 4 s of the scene (a throw, the boat ahead and turning) to the
 same digests: the waves, the buoyancy and the motor are as deterministic as the rest.
 
+## `walk`: a character in a playground (issue #139)
+
+```
+cargo run --release -p physics-lab -- --lab walk
+```
+
+A character walks the lab's floor: Jolt's `CharacterVirtual` through `forge-physics`, a capsule
+1.8 m tall standing on its feet, swept through the world by its velocity. It slides along what it
+meets, walks up steps of up to 40 cm, keeps to the ground going down, stops at slopes steeper
+than 45°, stands on what moves and moves with it, and pushes what it walks into with up to
+400 N. Its state is saved and restored with the world's (the C layer saves the characters after
+the bodies, each world numbering its own: Jolt's numbers run across the process, and a server
+and a client in one process must agree).
+
+The playground: six stairs of 20 cm, ramps of 20°, 35° and 50° (their angles from
+`forge_core::dmath`, so the ground is the same bits on every platform), a red platform
+shuttling along x at 2 m/s, six light crates (100 kg/m³: it shoves them) and three heavy ones
+(900 kg/m³: they stay), and a pyramid of four layers of blocks to jump onto. **WASD** walk
+along the view, **Shift** runs (6.5 m/s against 3), **Space** jumps (5 m/s up, about 1.3 m),
+**the right mouse button** turns the view round the player, **X** throws a ball; the camera
+stays 5 m behind its head. The walk and the jumps are commands (`Walk`, held until it changes,
+and `Jump`), so a session records, replays and goes through `--net`; `--walk X,Z` holds a walk
+from the first frame (the captures).
+
+![Halfway up the stairs at tick 150, and through the light crates at tick 240](images/physics-lab-walk.png)
+
+The tests: up the stairs to the top step (0.996 m) and not up the 50° ramp; carried 1 m by a
+platform moving at 1 m/s for a second, and the same second again from a saved world to the bit;
+and the playground replays a walk up the stairs, a jump and a turn to the same digests. A tick
+of the playground (72 bodies, the character, the platform): **0.08 ms** on average, p99 0.22 ms.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -196,4 +228,6 @@ twin with the occlusion off (`lab-drop90-noocc`, 0 px apart: the movers are cull
 everything else), `lab-drop600` (the pile at rest) and `lab-net300` (the client's view through
 `--net 100 --throw-every 45`: thrown balls in flight, the bot's corrections behind it), on both
 geometry paths; and from the sea (#138) `lab-sea300` (what floats and the rocks on the floor) with
-its occlusion-off twin, and `lab-sea-steer600` (the boat under way with the rudder over).
+its occlusion-off twin, and `lab-sea-steer600` (the boat under way with the rudder over); and from
+the playground (#139) `lab-walk150` (halfway up the stairs) with its twin, and
+`lab-walk-crates240` (through the light crates).

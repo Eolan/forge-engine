@@ -221,6 +221,9 @@ cores less two); bridging it to `forge-task` waits for `forge-sim`.
 damping near the surface), on the CPU twin of the GPU's cascades: `Ocean::displacement` per tick
 for the long ones, sampled as the GPU's filter reads them. No transcendental function, so it
 replays to the same digests; `physics-lab --lab sea`.
+*Characters* (#139): `CharacterVirtual` with stair stepping and sticking to the floor, saved
+and restored after the bodies, its ids numbered per world (Jolt's run across the process, and a
+server and a client in one process must agree); `physics-lab --lab walk`.
 
 ## D-010 — Netcode: QUIC transport, our own replication ✅ (2026-09-24)
 

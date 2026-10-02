@@ -268,6 +268,79 @@ pub struct Velocity {
     pub angular: Vec3,
 }
 
+/// A walking character to add (Jolt's `CharacterVirtual`, D-009): a capsule standing on its
+/// feet.
+#[derive(Clone, Copy, Debug)]
+pub struct CharacterDesc {
+    /// Its feet, metres.
+    pub position: DVec3,
+    /// The capsule's radius, metres.
+    pub radius: f32,
+    /// Feet to the top of its head, metres.
+    pub height: f32,
+    /// The steepest ground it walks up, radians.
+    pub max_slope: f32,
+    /// kg: how hard it presses what it stands on.
+    pub mass: f32,
+    /// N: how hard it pushes what it walks into.
+    pub max_strength: f32,
+    /// How high a step it walks up, metres.
+    pub step_up: f32,
+    /// How far down it keeps to the ground walking down a slope or a step, metres.
+    pub stick_down: f32,
+}
+
+impl Default for CharacterDesc {
+    /// A person: 1.8 m tall, 0.3 m round, 70 kg, up slopes of 45° and steps of 40 cm.
+    fn default() -> Self {
+        Self {
+            position: DVec3::ZERO,
+            radius: 0.3,
+            height: 1.8,
+            // A quarter turn's half, as a constant: no trigonometry here.
+            max_slope: std::f32::consts::FRAC_PI_4,
+            mass: 70.0,
+            max_strength: 400.0,
+            step_up: 0.4,
+            stick_down: 0.5,
+        }
+    }
+}
+
+/// A character of a [`World`]: its index, in the order added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CharacterId(u32);
+
+/// What a character stands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ground {
+    /// Ground it can walk on.
+    Firm,
+    /// Ground too steep to climb: it slides.
+    Steep,
+    /// Something it touches that does not hold it up.
+    NotSupported,
+    /// Nothing.
+    InAir,
+}
+
+/// Where a character is and what it stands on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CharacterState {
+    /// Its feet, metres.
+    pub position: DVec3,
+    /// m/s.
+    pub velocity: Vec3,
+    /// What it stands on.
+    pub ground: Ground,
+    /// The ground's normal there.
+    pub ground_normal: Vec3,
+    /// How fast the ground moves (a platform, a deck), m/s.
+    pub ground_velocity: Vec3,
+    /// The body it stands on, if any.
+    pub ground_body: Option<BodyId>,
+}
+
 /// The nearest hit of a ray.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayHit {
@@ -578,6 +651,53 @@ impl World {
             fraction: hit.fraction,
             normal: Vec3::from_array(hit.normal),
         })
+    }
+
+    /// Adds a walking character; it is saved and restored with the world.
+    pub fn add_character(&mut self, desc: &CharacterDesc) -> CharacterId {
+        let raw = ffi::FjCharacterDesc {
+            position: desc.position.to_array(),
+            radius: desc.radius,
+            height: desc.height,
+            max_slope: desc.max_slope,
+            mass: desc.mass,
+            max_strength: desc.max_strength,
+            step_up: desc.step_up,
+            stick_down: desc.stick_down,
+        };
+        // SAFETY: the world is live and `raw` is read during the call; the character lives
+        // as long as the world.
+        CharacterId(unsafe { ffi::fj_character_add(self.raw.as_ptr(), &raw) })
+    }
+
+    /// Moves a character through a step of `dt` seconds at `velocity`: it slides along what it
+    /// meets, walks up steps, keeps to the ground going down, and pushes what it walks into.
+    /// The world's gravity presses it on what it stands on; its fall is the caller's, in the
+    /// velocity.
+    pub fn move_character(&mut self, character: CharacterId, dt: f32, velocity: Vec3) {
+        let v = velocity.to_array();
+        // SAFETY: the world is live, the index one it gave, `v` read during the call.
+        unsafe { ffi::fj_character_move(self.raw.as_ptr(), character.0, dt, v.as_ptr()) };
+    }
+
+    /// Where a character is and what it stands on.
+    pub fn character(&self, character: CharacterId) -> CharacterState {
+        let mut s = ffi::FjCharacterState::default();
+        // SAFETY: the world is live, the index one it gave, `s` written during the call.
+        unsafe { ffi::fj_character_state(self.raw.as_ptr(), character.0, &mut s) };
+        CharacterState {
+            position: DVec3::from_array(s.position),
+            velocity: Vec3::from_array(s.velocity),
+            ground: match s.ground_state {
+                0 => Ground::Firm,
+                1 => Ground::Steep,
+                2 => Ground::NotSupported,
+                _ => Ground::InAir,
+            },
+            ground_normal: Vec3::from_array(s.ground_normal),
+            ground_velocity: Vec3::from_array(s.ground_velocity),
+            ground_body: (s.ground_body != u32::MAX).then_some(BodyId(s.ground_body)),
+        }
     }
 
     /// The whole simulation's state (bodies, contacts, constraints): what
