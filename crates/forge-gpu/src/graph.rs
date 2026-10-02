@@ -36,15 +36,21 @@
 //! (every buffer, and every image but a render target: [`Device::image_concurrent`]); an
 //! async pass may not use a transient (its memory could be aliased while it runs).
 //!
-//! Transients (`depth`, the HDR colour target, motion vectors) live in one heap laid out from
-//! their lifetimes: two images whose pass ranges never overlap share memory. The first use of
-//! a transient in a frame starts from `UNDEFINED` (its contents never survive a frame) and
-//! waits for the last use of every image overlapping its memory, in this frame or the
-//! previous one, which is what makes aliasing safe across frames in flight.
+//! Transients (`depth`, the HDR colour target, motion vectors; and buffers that live within a
+//! frame, [`FrameGraph::transient_buffer`], #78) live in one heap laid out from their
+//! lifetimes: two transients whose pass ranges never overlap share memory, a buffer padded to
+//! the buffer-image granularity so it never shares a page with an image. The first use of a
+//! transient in a frame starts from `UNDEFINED` (its contents never survive a frame) and waits
+//! for the last use of every transient overlapping its memory, in this frame or the previous
+//! one, which is what makes aliasing safe across frames in flight. A transient buffer's
+//! address is valid from its first declared pass to its last: a body takes it from
+//! [`Resources::buffer`], never before [`RenderGraph::execute`].
 //!
 //! Debugging: `FORGE_GRAPH_LOG=1` logs the compiled plan (passes, barriers, transient
 //! placement) whenever it changes; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
-//! memory, to tell an aliasing bug from anything else.
+//! memory, to tell an aliasing bug from anything else; `FORGE_GRAPH_POISON=1` fills each
+//! transient buffer with `0xDEADBEEF` after its last pass, so a stale address read shows in
+//! the captures (the validation layers cannot see one).
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -59,7 +65,8 @@ use crate::commands::Commands;
 use crate::device::{Device, QueueKind};
 use crate::error::{GpuError, Result};
 use crate::frame::{Batch, FrameSlot, Frames};
-use crate::memory::{Buffer, Image, ImageDesc, TransientHeap};
+use crate::memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};
+use crate::memory_report::MemoryCategory;
 
 /// Which queue last touched a resource, and the batches of other queues a new access may
 /// have to wait for (issue #77). Carried from frame to frame like [`ResourceState`].
@@ -582,6 +589,42 @@ impl TransientDesc {
     }
 }
 
+/// A per-frame buffer (#78): created by the graph in the transients' heap, aliased with the
+/// transient images and buffers whose lifetimes do not overlap its own. Its contents never
+/// survive the frame, and its first use must write it. Device-local, with
+/// `SHADER_DEVICE_ADDRESS` and `TRANSFER_DST` always added to `usage`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TransientBufferDesc {
+    /// Debug name.
+    pub name: &'static str,
+    /// Size in bytes.
+    pub size: u64,
+    /// Usage flags.
+    pub usage: vk::BufferUsageFlags,
+}
+
+impl TransientBufferDesc {
+    fn usage(&self) -> vk::BufferUsageFlags {
+        self.usage | vk::BufferUsageFlags::TRANSFER_DST
+    }
+}
+
+/// What a transient is: an image or a buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum TransientKind {
+    Image(TransientDesc),
+    Buffer(TransientBufferDesc),
+}
+
+impl TransientKind {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Image(desc) => desc.name,
+            Self::Buffer(desc) => desc.name,
+        }
+    }
+}
+
 /// Handle of an image declared in a [`FrameGraph`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageHandle(u32);
@@ -594,6 +637,11 @@ enum ImageEntry<'f> {
     Imported(&'f GraphImage),
     Raw(RawImage),
     Transient(TransientDesc),
+}
+
+enum BufferEntry<'f> {
+    Imported(&'f GraphBuffer),
+    Transient(TransientBufferDesc),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -631,7 +679,7 @@ struct Pass<'f> {
 pub struct FrameGraph<'f> {
     extent: vk::Extent2D,
     images: Vec<ImageEntry<'f>>,
-    buffers: Vec<&'f GraphBuffer>,
+    buffers: Vec<BufferEntry<'f>>,
     passes: Vec<Pass<'f>>,
 }
 
@@ -668,7 +716,16 @@ impl<'f> FrameGraph<'f> {
 
     /// Declares a persistent buffer; its state continues from the previous frame.
     pub fn import_buffer(&mut self, buffer: &'f GraphBuffer) -> BufferHandle {
-        self.buffers.push(buffer);
+        self.buffers.push(BufferEntry::Imported(buffer));
+        BufferHandle(self.buffers.len() as u32 - 1)
+    }
+
+    /// Declares a per-frame buffer (#78). Its first use must write it. A pass body reaches it
+    /// through [`Resources::buffer`]: its address is valid from its first declared pass to its
+    /// last in this frame and nowhere else, since other transients reuse its memory around
+    /// them (`FORGE_GRAPH_POISON=1` fills it after its last pass, to show a stale read).
+    pub fn transient_buffer(&mut self, desc: TransientBufferDesc) -> BufferHandle {
+        self.buffers.push(BufferEntry::Transient(desc));
         BufferHandle(self.buffers.len() as u32 - 1)
     }
 
@@ -798,11 +855,21 @@ impl ResolvedImage {
 /// The resolved resources of a frame, handed to pass bodies.
 pub struct Resources<'r> {
     images: &'r [ResolvedImage],
+    buffers: &'r [Option<&'r Buffer>],
     names: &'r [String],
     extent: vk::Extent2D,
 }
 
 impl Resources<'_> {
+    /// The buffer behind `handle`: an imported one, or a transient (#78), whose address is
+    /// valid only from its first declared pass to its last of this frame.
+    ///
+    /// # Panics
+    /// If `handle` is a transient buffer no pass uses.
+    pub fn buffer(&self, handle: BufferHandle) -> &Buffer {
+        self.buffers[handle.0 as usize].expect("a transient buffer no pass uses has no memory")
+    }
+
     /// The image behind `handle`.
     pub fn image(&self, handle: ImageHandle) -> &ResolvedImage {
         &self.images[handle.0 as usize]
@@ -849,6 +916,48 @@ impl Resources<'_> {
     }
 }
 
+/// What the compiler needs to know about a buffer.
+#[derive(Clone, Debug, Default)]
+struct BufferMeta {
+    /// For transients: the memory range in the heap (`None` when not aliased).
+    transient: Option<Option<(u64, u64)>>,
+    name: String,
+}
+
+/// What last used the heap's range `range` before a transient takes it over: the stages and
+/// accesses of every transient image and buffer overlapping it, this frame's earlier
+/// occupants or last frame's (their states persist in the cache).
+fn heap_src(
+    range: (u64, u64),
+    images: &[ImageMeta],
+    image_states: &[Vec<ResourceState>],
+    buffers: &[BufferMeta],
+    buffer_states: &[ResourceState],
+) -> ResourceState {
+    let meets = |other: Option<Option<(u64, u64)>>| {
+        let (a, la) = range;
+        matches!(other, Some(Some((b, lb))) if a < b + lb && b < a + la)
+    };
+    let mut src = ResourceState::UNDEFINED;
+    let states = images
+        .iter()
+        .zip(image_states)
+        .filter(|(meta, _)| meets(meta.transient))
+        .flat_map(|(_, states)| states.iter())
+        .chain(
+            buffers
+                .iter()
+                .zip(buffer_states)
+                .filter(|(meta, _)| meets(meta.transient))
+                .map(|(_, state)| state),
+        );
+    for s in states {
+        src.stage |= s.stage;
+        src.access |= s.access;
+    }
+    src
+}
+
 /// What the compiler needs to know about an image.
 #[derive(Clone, Debug)]
 struct ImageMeta {
@@ -871,6 +980,10 @@ struct CompiledPass {
     /// Closes the profiler zone after the pass (the next pass has another label, or runs in
     /// another batch).
     mark: Option<&'static str>,
+    /// `FORGE_GRAPH_POISON=1` (#78): the transient buffers this pass uses last, filled with a
+    /// sentinel after it, and the barrier before the fills.
+    poison: Vec<u32>,
+    poison_barrier: Option<vk::MemoryBarrier2<'static>>,
     /// Index into the batches.
     batch: usize,
 }
@@ -897,14 +1010,17 @@ fn compile(
 ) -> Result<Vec<CompiledPass>> {
     let mut image_sync = vec![QueueSync::default(); images.len()];
     let mut buffer_sync = vec![QueueSync::default(); buffer_states.len()];
+    let buffers = vec![BufferMeta::default(); buffer_states.len()];
     let mut next = [0_u64; 3];
     let (compiled, _) = compile_queued(
         passes,
         images,
+        &buffers,
         image_states,
         buffer_states,
         &mut image_sync,
         &mut buffer_sync,
+        false,
         &mut |kind| {
             next[kind.index()] += 1;
             next[kind.index()]
@@ -984,20 +1100,35 @@ fn record_access(sync: &mut QueueSync, queue: QueueKind, write: bool, signal: u6
 /// and advances the states and the queue records of every resource to the end of the frame.
 /// `passes` are in execution order ([`schedule`]) with their queues resolved; `reserve`
 /// hands out each queue's next timeline value. The last batch is graphics and waits for the
-/// last batch of every other queue. Pure: tests run it on null handles.
+/// last batch of every other queue. With `poison`, each transient buffer is filled with a
+/// sentinel after its last pass (`FORGE_GRAPH_POISON=1`, #78). Pure: tests run it on null
+/// handles.
+#[allow(clippy::too_many_arguments)]
 fn compile_queued(
     passes: &[PassDecl],
     images: &[ImageMeta],
+    buffers: &[BufferMeta],
     image_states: &mut [Vec<ResourceState>],
     buffer_states: &mut [ResourceState],
     image_sync: &mut [QueueSync],
     buffer_sync: &mut [QueueSync],
+    poison: bool,
     reserve: &mut dyn FnMut(QueueKind) -> u64,
 ) -> Result<(Vec<CompiledPass>, Vec<CompiledBatch>)> {
     let mut first_use = vec![true; images.len()];
+    let mut first_buffer_use = vec![true; buffers.len()];
+    // The pass each transient buffer is last used by, for the poison.
+    let mut last_buffer_use = vec![usize::MAX; buffers.len()];
+    for (index, pass) in passes.iter().enumerate() {
+        for use_ in &pass.buffers {
+            if let Some(last) = last_buffer_use.get_mut(use_.handle.0 as usize) {
+                *last = index;
+            }
+        }
+    }
     let mut compiled = Vec::with_capacity(passes.len());
     let mut batches: Vec<CompiledBatch> = Vec::new();
-    for pass in passes {
+    for (index, pass) in passes.iter().enumerate() {
         let queue = pass.queue;
         // What the pass waits for on the other queues, and whether its resources may cross.
         let mut waits = [(0_u64, vk::PipelineStageFlags2::NONE); 3];
@@ -1027,9 +1158,20 @@ fn compile_queued(
         }
         for use_ in &pass.buffers {
             let i = use_.handle.0 as usize;
-            let sync = buffer_sync.get(i).ok_or_else(|| {
-                GpuError::Graph(format!("pass '{}' uses an unknown buffer", pass.label))
-            })?;
+            let (Some(sync), Some(meta)) = (buffer_sync.get(i), buffers.get(i)) else {
+                return Err(GpuError::Graph(format!(
+                    "pass '{}' uses an unknown buffer",
+                    pass.label
+                )));
+            };
+            if queue != QueueKind::Graphics && meta.transient.is_some() {
+                return Err(GpuError::Graph(format!(
+                    "pass '{}' on the {} queue uses transient buffer '{}': its memory may be aliased while it runs",
+                    pass.label,
+                    queue.name(),
+                    meta.name
+                )));
+            }
             let dst = use_.access.state();
             access_waits(&mut waits, sync, queue, dst.write, dst.stage);
         }
@@ -1084,20 +1226,18 @@ fn compile_queued(
                     )));
                 }
                 // The memory may still be in use by whatever aliased it: this frame's
-                // earlier occupants, or last frame's (their states persist in the cache).
-                let mut src = ResourceState::UNDEFINED;
-                for (j, other) in images.iter().enumerate() {
-                    let overlaps = match (range, other.transient) {
-                        (Some((a, la)), Some(Some((b, lb)))) => a < b + lb && b < a + la,
-                        _ => j == i,
-                    };
-                    if overlaps {
-                        for s in &image_states[j] {
+                // earlier occupants, or last frame's (their states persist in the cache),
+                // images and buffers alike.
+                let src = match range {
+                    Some(range) => heap_src(range, images, image_states, buffers, buffer_states),
+                    None => image_states[i]
+                        .iter()
+                        .fold(ResourceState::UNDEFINED, |mut src, s| {
                             src.stage |= s.stage;
                             src.access |= s.access;
-                        }
-                    }
-                }
+                            src
+                        }),
+                };
                 image_states[i].fill(ResourceState {
                     layout: vk::ImageLayout::UNDEFINED,
                     write: true,
@@ -1176,8 +1316,29 @@ fn compile_queued(
                 )));
             }
             seen_buffers.push(use_.handle.0);
-            let state = &mut buffer_states[i];
             let dst = use_.access.state();
+            if let Some(range) = buffers[i].transient
+                && first_buffer_use[i]
+            {
+                if !dst.write {
+                    return Err(GpuError::Graph(format!(
+                        "pass '{}' reads transient buffer '{}' before anything wrote it",
+                        pass.label, buffers[i].name
+                    )));
+                }
+                // As for an image: whatever last used its memory, this frame or the last.
+                let src = match range {
+                    Some(range) => heap_src(range, images, image_states, buffers, buffer_states),
+                    None => buffer_states[i],
+                };
+                buffer_states[i] = ResourceState {
+                    layout: vk::ImageLayout::UNDEFINED,
+                    write: true,
+                    ..src
+                };
+            }
+            first_buffer_use[i] = false;
+            let state = &mut buffer_states[i];
             let step = if buffer_sync[i].last != queue {
                 cross_queue(state, dst)
             } else {
@@ -1195,6 +1356,28 @@ fn compile_queued(
             record_access(&mut buffer_sync[i], queue, dst.write, signal);
         }
         out.memory_barrier = memory;
+        // The poison: each transient buffer this pass uses last, filled after it, so a read of
+        // its stale address elsewhere shows.
+        if poison {
+            for use_ in &pass.buffers {
+                let i = use_.handle.0 as usize;
+                if buffers[i].transient.is_none() || last_buffer_use[i] != index {
+                    continue;
+                }
+                let fill = BufferAccess::TransferDst.state();
+                if let Some((src, dst)) = transition(&mut buffer_states[i], fill) {
+                    let barrier = out
+                        .poison_barrier
+                        .get_or_insert_with(vk::MemoryBarrier2::default);
+                    barrier.src_stage_mask |= src.stage;
+                    barrier.src_access_mask |= src.access;
+                    barrier.dst_stage_mask |= dst.stage;
+                    barrier.dst_access_mask |= dst.access;
+                }
+                record_access(&mut buffer_sync[i], queue, true, signal);
+                out.poison.push(use_.handle.0);
+            }
+        }
         compiled.push(out);
     }
     // The frame ends on the graphics queue, after every other queue's last batch.
@@ -1301,7 +1484,7 @@ fn image_barrier(
 /// A transient to place: its memory needs and the passes it lives through.
 #[derive(Clone, Copy, Debug)]
 struct Request {
-    desc: TransientDesc,
+    desc: TransientKind,
     size: u64,
     alignment: u64,
     memory_type_bits: u32,
@@ -1312,8 +1495,8 @@ struct Request {
 /// Where a transient lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Placed {
-    desc: TransientDesc,
-    /// Offset in the heap (0 when not aliased: the image then has its own memory).
+    desc: TransientKind,
+    /// Offset in the heap (0 when not aliased: it then has its own memory).
     offset: u64,
     size: u64,
 }
@@ -1407,7 +1590,30 @@ fn plan(requests: &[Request], allow_alias: bool) -> Placement {
 struct TransientCache {
     placement: Placement,
     _heap: Option<Arc<TransientHeap>>,
-    images: Vec<GraphImage>,
+    /// Per placed entry, in the placement's order.
+    transients: Vec<CachedTransient>,
+}
+
+/// A transient the cache holds: an image or a buffer, with the state it was left in.
+enum CachedTransient {
+    Image(GraphImage),
+    Buffer(GraphBuffer),
+}
+
+impl CachedTransient {
+    fn image(&self) -> &GraphImage {
+        match self {
+            Self::Image(image) => image,
+            Self::Buffer(_) => unreachable!("an image's request holds an image"),
+        }
+    }
+
+    fn buffer(&self) -> &GraphBuffer {
+        match self {
+            Self::Buffer(buffer) => buffer,
+            Self::Image(_) => unreachable!("a buffer's request holds a buffer"),
+        }
+    }
 }
 
 /// Counters of the last executed frame (the F1 overlay shows them).
@@ -1421,10 +1627,15 @@ pub struct GraphStats {
     pub memory_barriers: u32,
     /// Transient images in use.
     pub transient_images: u32,
+    /// Transient buffers in use (#78).
+    pub transient_buffers: u32,
     /// Bytes the transients would need with their own memory each.
     pub transient_bytes: u64,
     /// Bytes of the shared heap (equal to `transient_bytes` when not aliased).
     pub heap_bytes: u64,
+    /// The most bytes of transients alive at once, over the passes: the least any heap could
+    /// be, so `heap_bytes` against it is the placement's slack (#78).
+    pub load_bytes: u64,
     /// Whether the transients share one heap.
     pub aliased: bool,
     /// Times the heap was rebuilt since start (a resize, a changed pass list).
@@ -1442,9 +1653,13 @@ pub struct RenderGraph {
     device: Arc<Device>,
     cache: Option<TransientCache>,
     requirements: HashMap<TransientDesc, vk::MemoryRequirements>,
+    buffer_requirements: HashMap<TransientBufferDesc, vk::MemoryRequirements>,
     stats: GraphStats,
     log: bool,
     allow_alias: bool,
+    /// `FORGE_GRAPH_POISON=1` (#78): every transient buffer filled with a sentinel after its
+    /// last pass, so a stale read shows in the captures.
+    poison: bool,
     /// `FORGE_FRAME_BARRIER=1`: a full barrier at the start of each queue's first batch, which
     /// serialises frames on the GPU (a debugging aid).
     frame_barrier: bool,
@@ -1459,9 +1674,11 @@ impl RenderGraph {
             device: Arc::clone(device),
             cache: None,
             requirements: HashMap::new(),
+            buffer_requirements: HashMap::new(),
             stats: GraphStats::default(),
             log: flag("FORGE_GRAPH_LOG"),
             allow_alias: !flag("FORGE_GRAPH_NO_ALIAS"),
+            poison: flag("FORGE_GRAPH_POISON"),
             frame_barrier: flag("FORGE_FRAME_BARRIER"),
             last_plan: 0,
         }
@@ -1527,9 +1744,40 @@ impl RenderGraph {
                 .or_insert_with(|| self.device.image_memory_requirements(&desc.image_desc()));
             request_of_image[i] = Some(requests.len());
             requests.push(Request {
-                desc: *desc,
+                desc: TransientKind::Image(*desc),
                 size: req.size,
                 alignment: req.alignment,
+                memory_type_bits: req.memory_type_bits,
+                first,
+                last,
+            });
+        }
+        // The transient buffers (#78), padded to the buffer-image granularity at both ends so
+        // a buffer never shares a page with an image beside it.
+        let granularity = self.device.limits().buffer_image_granularity.max(1);
+        let mut request_of_buffer: Vec<Option<usize>> = vec![None; buffers.len()];
+        for (i, entry) in buffers.iter().enumerate() {
+            let BufferEntry::Transient(desc) = entry else {
+                continue;
+            };
+            let uses: Vec<usize> = decls
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.buffers.iter().any(|u| u.handle.0 as usize == i))
+                .map(|(index, _)| index)
+                .collect();
+            let (Some(&first), Some(&last)) = (uses.first(), uses.last()) else {
+                continue;
+            };
+            let req = *self.buffer_requirements.entry(*desc).or_insert_with(|| {
+                self.device
+                    .buffer_memory_requirements(desc.size, desc.usage())
+            });
+            request_of_buffer[i] = Some(requests.len());
+            requests.push(Request {
+                desc: TransientKind::Buffer(*desc),
+                size: align_up(req.size, granularity),
+                alignment: req.alignment.max(granularity),
                 memory_type_bits: req.memory_type_bits,
                 first,
                 last,
@@ -1577,7 +1825,7 @@ impl RenderGraph {
                 }
                 ImageEntry::Transient(desc) => match request_of_image[i] {
                     Some(r) => {
-                        let image = &cache.images[r];
+                        let image = cache.transients[r].image();
                         let placed = cache.placement.entries[r];
                         let mut meta = image.meta();
                         meta.transient = Some(
@@ -1627,26 +1875,80 @@ impl RenderGraph {
                 },
             }
         }
-        let mut buffer_states: Vec<ResourceState> = buffers.iter().map(|b| b.state.get()).collect();
+        // The buffers: imported ones as they were left; a transient as what last used its
+        // memory left it (its contents never survive a frame).
+        let transient_buffer =
+            |i: usize| request_of_buffer[i].map(|r| cache.transients[r].buffer());
+        let buffer_metas: Vec<BufferMeta> = buffers
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| match entry {
+                BufferEntry::Imported(_) => BufferMeta {
+                    transient: None,
+                    name: format!("imported buffer {i}"),
+                },
+                BufferEntry::Transient(desc) => BufferMeta {
+                    transient: request_of_buffer[i].map(|r| {
+                        let placed = cache.placement.entries[r];
+                        cache
+                            .placement
+                            .aliased
+                            .then_some((placed.offset, placed.size))
+                    }),
+                    name: desc.name.to_owned(),
+                },
+            })
+            .collect();
+        let resolved_buffers: Vec<Option<&Buffer>> = buffers
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| match entry {
+                BufferEntry::Imported(buffer) => Some(&buffer.buffer),
+                BufferEntry::Transient(_) => transient_buffer(i).map(|b| &b.buffer),
+            })
+            .collect();
+        let mut buffer_states: Vec<ResourceState> = buffers
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| match entry {
+                BufferEntry::Imported(buffer) => buffer.state.get(),
+                BufferEntry::Transient(_) => {
+                    transient_buffer(i).map_or(ResourceState::UNDEFINED, |b| b.state.get())
+                }
+            })
+            .collect();
         let mut image_sync: Vec<QueueSync> = images
             .iter()
             .enumerate()
             .map(|(i, entry)| match entry {
                 ImageEntry::Imported(image) => image.sync.get(),
                 ImageEntry::Transient(_) => request_of_image[i]
-                    .map_or_else(QueueSync::default, |r| cache.images[r].sync.get()),
+                    .map_or_else(QueueSync::default, |r| {
+                        cache.transients[r].image().sync.get()
+                    }),
                 ImageEntry::Raw(_) => QueueSync::default(),
             })
             .collect();
-        let mut buffer_sync: Vec<QueueSync> = buffers.iter().map(|b| b.sync.get()).collect();
+        let mut buffer_sync: Vec<QueueSync> = buffers
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| match entry {
+                BufferEntry::Imported(buffer) => buffer.sync.get(),
+                BufferEntry::Transient(_) => {
+                    transient_buffer(i).map_or_else(QueueSync::default, |b| b.sync.get())
+                }
+            })
+            .collect();
 
         let (compiled, batches) = compile_queued(
             &decls,
             &metas,
+            &buffer_metas,
             &mut image_states,
             &mut buffer_states,
             &mut image_sync,
             &mut buffer_sync,
+            self.poison,
             &mut |kind| frames.reserve_value(kind),
         )?;
 
@@ -1654,12 +1956,27 @@ impl RenderGraph {
         let names: Vec<String> = metas.iter().map(|m| m.name.clone()).collect();
         let resources = Resources {
             images: &resolved,
+            buffers: &resolved_buffers,
             names: &names,
             extent,
         };
+        let is_buffer = |r: &&Request| matches!(r.desc, TransientKind::Buffer(_));
+        // The most bytes alive at once: at each pass, the transients whose lifetime spans it.
+        let load_bytes = (0..decls.len())
+            .map(|p| {
+                requests
+                    .iter()
+                    .filter(|r| r.first <= p && p <= r.last)
+                    .map(|r| r.size)
+                    .sum::<u64>()
+            })
+            .max()
+            .unwrap_or(0);
         let mut stats = GraphStats {
             passes: passes.len() as u32,
-            transient_images: requests.len() as u32,
+            transient_images: requests.iter().filter(|r| !is_buffer(r)).count() as u32,
+            transient_buffers: requests.iter().filter(is_buffer).count() as u32,
+            load_bytes,
             transient_bytes: requests.iter().map(|r| r.size).sum(),
             heap_bytes: if cache.placement.aliased {
                 cache.placement.heap_size
@@ -1698,6 +2015,13 @@ impl RenderGraph {
                 stats.queue_passes[batch.queue.index()] += 1;
                 commands.set_pass(pass.decl.label);
                 (pass.run)(&resources, &commands)?;
+                if !plan.poison.is_empty() {
+                    commands.barriers(plan.poison_barrier.as_slice(), &[]);
+                    for &handle in &plan.poison {
+                        let buffer = resources.buffer(BufferHandle(handle));
+                        commands.fill_buffer(buffer, 0, buffer.size() & !3, 0xDEAD_BEEF);
+                    }
+                }
                 if let Some(label) = plan.mark {
                     commands.mark(label);
                 }
@@ -1722,18 +2046,24 @@ impl RenderGraph {
                 }
                 ImageEntry::Transient(_) => {
                     if let Some(r) = request_of_image[i] {
-                        for (cell, state) in cache.images[r].states.iter().zip(states) {
+                        for (cell, state) in cache.transients[r].image().states.iter().zip(states) {
                             cell.set(*state);
                         }
-                        cache.images[r].sync.set(image_sync[i]);
+                        cache.transients[r].image().sync.set(image_sync[i]);
                     }
                 }
                 ImageEntry::Raw(_) => {}
             }
         }
-        for ((buffer, state), sync) in buffers.iter().zip(&buffer_states).zip(&buffer_sync) {
-            buffer.state.set(*state);
-            buffer.sync.set(*sync);
+        for (i, entry) in buffers.iter().enumerate() {
+            let buffer = match entry {
+                BufferEntry::Imported(buffer) => Some(*buffer),
+                BufferEntry::Transient(_) => transient_buffer(i),
+            };
+            if let Some(buffer) = buffer {
+                buffer.state.set(buffer_states[i]);
+                buffer.sync.set(buffer_sync[i]);
+            }
         }
         self.stats = stats;
 
@@ -1776,21 +2106,40 @@ impl RenderGraph {
         } else {
             None
         };
-        let mut images = Vec::with_capacity(placement.entries.len());
+        let mut transients = Vec::with_capacity(placement.entries.len());
         for placed in &placement.entries {
-            let desc = placed.desc.image_desc();
-            let image = match &heap {
-                Some(heap) => self.device.create_image_in(desc, heap, placed.offset)?,
-                None => self
-                    .device
-                    .allocate_image(&desc, crate::memory_report::MemoryCategory::Transient)?,
+            let transient = match placed.desc {
+                TransientKind::Image(desc) => {
+                    let desc = desc.image_desc();
+                    let image = match &heap {
+                        Some(heap) => self.device.create_image_in(desc, heap, placed.offset)?,
+                        None => self
+                            .device
+                            .allocate_image(&desc, MemoryCategory::Transient)?,
+                    };
+                    CachedTransient::Image(GraphImage::wrap(
+                        &self.device,
+                        image,
+                        &desc,
+                        ResourceState::UNDEFINED,
+                    ))
+                }
+                TransientKind::Buffer(desc) => {
+                    let desc = BufferDesc {
+                        size: desc.size,
+                        usage: desc.usage(),
+                        location: gpu_allocator::MemoryLocation::GpuOnly,
+                        category: MemoryCategory::Transient,
+                        name: desc.name,
+                    };
+                    let buffer = match &heap {
+                        Some(heap) => self.device.create_buffer_in(desc, heap, placed.offset)?,
+                        None => self.device.create_buffer(desc)?,
+                    };
+                    CachedTransient::Buffer(GraphBuffer::new(buffer))
+                }
             };
-            images.push(GraphImage::wrap(
-                &self.device,
-                image,
-                &desc,
-                ResourceState::UNDEFINED,
-            ));
+            transients.push(transient);
         }
         if let Some(old) = self.cache.take() {
             frames.destroy_later(old);
@@ -1806,7 +2155,7 @@ impl RenderGraph {
         self.cache = Some(TransientCache {
             placement,
             _heap: heap,
-            images,
+            transients,
         });
         Ok(())
     }
@@ -1824,20 +2173,22 @@ fn describe(
     let mut text = String::new();
     let _ = writeln!(
         text,
-        "  {} passes, {} image barriers, {} memory barriers; transients {} images, {} KB requested, {} KB heap{}",
+        "  {} passes, {} image barriers, {} memory barriers; transients {} images + {} buffers, {} KB requested, {} KB heap, {} KB alive at most{}",
         stats.passes,
         stats.image_barriers,
         stats.memory_barriers,
         stats.transient_images,
+        stats.transient_buffers,
         stats.transient_bytes / 1024,
         stats.heap_bytes / 1024,
+        stats.load_bytes / 1024,
         if stats.aliased { " (aliased)" } else { "" }
     );
     for placed in &placement.entries {
         let _ = writeln!(
             text,
             "  transient '{}' at {} KB, {} KB",
-            placed.desc.name,
+            placed.desc.name(),
             placed.offset / 1024,
             placed.size / 1024
         );
@@ -2263,9 +2614,169 @@ mod tests {
         assert!(b.dst_access_mask.contains(A::INDIRECT_COMMAND_READ));
     }
 
+    /// A pass using images and buffers, on the graphics queue.
+    fn mixed(
+        label: &'static str,
+        images: &[(u32, ImageAccess)],
+        buffers: &[(u32, BufferAccess)],
+    ) -> PassDecl {
+        PassDecl {
+            label,
+            images: images
+                .iter()
+                .map(|&(h, access)| ImageUse {
+                    handle: ImageHandle(h),
+                    mip: None,
+                    access,
+                })
+                .collect(),
+            buffers: buffers
+                .iter()
+                .map(|&(h, access)| BufferUse {
+                    handle: BufferHandle(h),
+                    access,
+                })
+                .collect(),
+            queue: QueueKind::Graphics,
+        }
+    }
+
+    fn transient_buffer(range: Option<(u64, u64)>) -> BufferMeta {
+        BufferMeta {
+            transient: Some(range),
+            name: "list".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_transient_buffer_must_be_written_first_and_not_on_another_queue() {
+        let compute = S::COMPUTE_SHADER;
+        let buffers = [transient_buffer(Some((0, 64)))];
+        let run = |passes: &[PassDecl]| {
+            compile_queued(
+                passes,
+                &[],
+                &buffers,
+                &mut [],
+                &mut [ResourceState::UNDEFINED],
+                &mut [],
+                &mut [QueueSync::default()],
+                false,
+                &mut |_| 1,
+            )
+        };
+        let read = [mixed(
+            "a/read",
+            &[],
+            &[(0, BufferAccess::ShaderRead(compute))],
+        )];
+        assert!(run(&read).is_err(), "read before anything wrote it");
+        let mut on_compute = mixed("a/write", &[], &[(0, BufferAccess::ShaderWrite(compute))]);
+        on_compute.queue = QueueKind::Compute;
+        assert!(
+            run(&[on_compute]).is_err(),
+            "its memory may be aliased while it runs"
+        );
+        let fill = [
+            mixed("a/clear", &[], &[(0, BufferAccess::TransferDst)]),
+            mixed("a/read", &[], &[(0, BufferAccess::ShaderRead(compute))]),
+        ];
+        assert!(run(&fill).is_ok());
+    }
+
+    #[test]
+    fn a_transient_buffer_waits_for_the_image_whose_memory_it_takes_over() {
+        // The image lives in [0, 128), the buffer in [64, 96) after it: the buffer's first
+        // write waits for the image's last read, and the next frame's image for the buffer.
+        let compute = S::COMPUTE_SHADER;
+        let images = [meta("target", 1, Some(Some((0, 128))))];
+        let buffers = [transient_buffer(Some((64, 32)))];
+        let passes = [
+            mixed("a/draw", &[(0, ImageAccess::ColorAttachment)], &[]),
+            mixed(
+                "b/read",
+                &[(0, ImageAccess::Sampled(S::FRAGMENT_SHADER))],
+                &[],
+            ),
+            mixed("c/list", &[], &[(0, BufferAccess::ShaderWrite(compute))]),
+            mixed("d/use", &[], &[(0, BufferAccess::ShaderRead(compute))]),
+        ];
+        let mut image_states = vec![vec![ResourceState::UNDEFINED]];
+        let mut buffer_states = [ResourceState::UNDEFINED];
+        let frame = |image_states: &mut [Vec<ResourceState>],
+                     buffer_states: &mut [ResourceState]| {
+            compile_queued(
+                &passes,
+                &images,
+                &buffers,
+                image_states,
+                buffer_states,
+                &mut [QueueSync::default()],
+                &mut [QueueSync::default()],
+                false,
+                &mut |_| 1,
+            )
+            .unwrap()
+            .0
+        };
+        let plan = frame(&mut image_states, &mut buffer_states);
+        let b = plan[2]
+            .memory_barrier
+            .expect("the buffer waits for the image");
+        assert!(b.src_stage_mask.contains(S::FRAGMENT_SHADER));
+        assert!(b.src_access_mask.contains(A::SHADER_SAMPLED_READ));
+        assert_eq!(b.dst_stage_mask, compute);
+        // The next frame: the image's first use waits for the buffer's last read.
+        let plan = frame(&mut image_states, &mut buffer_states);
+        let b = plan[0].image_barriers[0];
+        assert!(b.src_stage_mask.contains(compute));
+        assert!(b.src_access_mask.contains(A::SHADER_STORAGE_READ));
+    }
+
+    #[test]
+    fn the_poison_fills_a_transient_buffer_after_its_last_pass() {
+        let compute = S::COMPUTE_SHADER;
+        let buffers = [transient_buffer(None), BufferMeta::default()];
+        let passes = [
+            mixed("a/write", &[], &[(0, BufferAccess::ShaderWrite(compute))]),
+            mixed(
+                "b/read",
+                &[],
+                &[
+                    (0, BufferAccess::ShaderRead(compute)),
+                    (1, BufferAccess::ShaderWrite(compute)),
+                ],
+            ),
+            mixed("c/other", &[], &[(1, BufferAccess::ShaderRead(compute))]),
+        ];
+        let mut buffer_states = [ResourceState::UNDEFINED; 2];
+        let (plan, _) = compile_queued(
+            &passes,
+            &[],
+            &buffers,
+            &mut [],
+            &mut buffer_states,
+            &mut [],
+            &mut [QueueSync::default(); 2],
+            true,
+            &mut |_| 1,
+        )
+        .unwrap();
+        assert!(plan[0].poison.is_empty());
+        assert_eq!(
+            plan[1].poison,
+            vec![0],
+            "the transient alone, after its last read"
+        );
+        let b = plan[1].poison_barrier.expect("the fill waits for the read");
+        assert_eq!((b.src_stage_mask, b.dst_stage_mask), (compute, S::TRANSFER));
+        assert!(plan[2].poison.is_empty());
+        assert_eq!(buffer_states[0], BufferAccess::TransferDst.state());
+    }
+
     fn request(name: &'static str, size: u64, first: usize, last: usize) -> Request {
         Request {
-            desc: TransientDesc {
+            desc: TransientKind::Image(TransientDesc {
                 name,
                 width: 1,
                 height: 1,
@@ -2273,7 +2784,7 @@ mod tests {
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
                 aspect: vk::ImageAspectFlags::COLOR,
                 mip_levels: 1,
-            },
+            }),
             size,
             alignment: 256,
             memory_type_bits: 0b11,
@@ -2296,7 +2807,7 @@ mod tests {
             placement
                 .entries
                 .iter()
-                .find(|p| p.desc.name == name)
+                .find(|p| p.desc.name() == name)
                 .unwrap()
                 .offset
         };
@@ -2317,24 +2828,24 @@ mod tests {
         // Every pair that overlaps in time is disjoint in memory.
         for a in &placement.entries {
             for b in &placement.entries {
-                if a.desc.name == b.desc.name {
+                if a.desc.name() == b.desc.name() {
                     continue;
                 }
                 let ra = requests
                     .iter()
-                    .find(|r| r.desc.name == a.desc.name)
+                    .find(|r| r.desc.name() == a.desc.name())
                     .unwrap();
                 let rb = requests
                     .iter()
-                    .find(|r| r.desc.name == b.desc.name)
+                    .find(|r| r.desc.name() == b.desc.name())
                     .unwrap();
                 let in_time = ra.first <= rb.last && rb.first <= ra.last;
                 let in_memory = a.offset < b.offset + b.size && b.offset < a.offset + a.size;
                 assert!(
                     !(in_time && in_memory),
                     "{} and {} collide",
-                    a.desc.name,
-                    b.desc.name
+                    a.desc.name(),
+                    b.desc.name()
                 );
             }
         }
@@ -2367,10 +2878,12 @@ mod tests {
         let (compiled, batches) = compile_queued(
             &ordered,
             images,
+            &[],
             states,
             &mut [],
             sync,
             &mut [],
+            false,
             &mut |kind| {
                 next[kind.index()] += 1;
                 next[kind.index()]

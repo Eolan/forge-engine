@@ -31,7 +31,7 @@ use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, FullscreenPipelineDesc, GpuError, GraphBuffer, GraphImage, ImageAccess, ImageDesc,
     ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, QueueKind, Result,
-    ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc, vk,
+    ShaderCompiler, ShaderStage, TransientBufferDesc, TransientDesc, VertexPipelineDesc, vk,
 };
 use glam::{DQuat, DVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
@@ -1290,20 +1290,6 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
-            lookback: (0..FRAMES_IN_FLIGHT)
-                .map(|i| {
-                    let instance_groups = (self.instances.len() as u64).div_ceil(64).max(1);
-                    device
-                        .create_buffer(BufferDesc {
-                            size: LOOKBACK_RUNS * instance_groups * 8,
-                            usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
-                            location: MemoryLocation::GpuOnly,
-                            category: MemoryCategory::Work,
-                            name: &format!("instance cull look-back {i}"),
-                        })
-                        .map(GraphBuffer::new)
-                })
-                .collect::<Result<Vec<_>>>()?,
             deferred: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     device
@@ -1506,11 +1492,6 @@ pub struct MeshletScene {
     /// Per frame slot: per pass (pass 1 or the single pass, then pass 2) the draw grid
     /// (x, y, 1) and the count of listed clusters, then the two cluster culls' tickets.
     clusters: Vec<GraphBuffer>,
-    /// Per frame slot: the status words that keep the instance culls' appends in a fixed
-    /// order, one per instance-cull workgroup in each of three runs: instance cull 1's work,
-    /// the instances it deferred, instance cull 2's work (the cluster culls' are the
-    /// renderer's).
-    lookback: Vec<GraphBuffer>,
     /// Per frame slot, with occlusion: instance cull 2's grid (x, y, 1, count), then the
     /// instances instance cull 1 deferred to it (issue #38).
     deferred: Vec<GraphBuffer>,
@@ -2003,63 +1984,21 @@ const WORK_RESERVE_MAX: u32 = 1 << 20;
 /// Most slots the work list grows to (128 MiB of work items).
 const WORK_MAX_CAPACITY: u32 = 1 << 24;
 
-/// One frame slot's work lists for the cluster culls, appended by the instance cull: an
-/// instance's group of 32 clusters per work item, and the root list, (instance, local
-/// cluster) per root of the instances whose roots are the whole cut, read 32 roots to a work
-/// item after the others; `capacity` of each. Then the cluster culls' status words, one per
-/// workgroup of `CULL_ITEMS` items and pass, and one more run for pass 1's list of what it
-/// leaves to pass 2 (issue #92), cleared before the instance cull.
-struct WorkList {
-    work: GraphBuffer,
-    roots: GraphBuffer,
-    lookback: GraphBuffer,
-    capacity: u32,
+/// The cluster culls' work lists, appended by the instance cull, transients of the frame's
+/// graph (#78): an instance's group of 32 clusters per work item, and the root list,
+/// (instance, local cluster) per root of the instances whose roots are the whole cut, read 32
+/// roots to a work item after the others; `capacity` of each, 8 bytes an entry. Cluster-cull
+/// workgroups the most work the lists can hold needs: `capacity` work items, then the root
+/// list's `capacity` roots at 32 to an item.
+fn cull_groups(capacity: u32) -> u32 {
+    (capacity + capacity.div_ceil(TASK_GROUP_SIZE)).div_ceil(CULL_ITEMS)
 }
 
-impl WorkList {
-    fn new(device: &Arc<Device>, capacity: u32, slot: usize) -> Result<Self> {
-        let groups = u64::from(Self::groups_for(capacity));
-        let buffer = |size: u64, usage: vk::BufferUsageFlags, name: String| {
-            device
-                .create_buffer(BufferDesc {
-                    size,
-                    usage: vk::BufferUsageFlags::STORAGE_BUFFER | usage,
-                    location: MemoryLocation::GpuOnly,
-                    category: MemoryCategory::Work,
-                    name: &name,
-                })
-                .map(GraphBuffer::new)
-        };
-        let none = vk::BufferUsageFlags::empty();
-        Ok(Self {
-            work: buffer(
-                u64::from(capacity) * 8,
-                none,
-                format!("cull work list {slot}"),
-            )?,
-            roots: buffer(
-                u64::from(capacity) * 8,
-                none,
-                format!("cull root list {slot}"),
-            )?,
-            lookback: buffer(
-                3 * groups * 8,
-                vk::BufferUsageFlags::TRANSFER_DST,
-                format!("cluster cull look-back {slot}"),
-            )?,
-            capacity,
-        })
-    }
-
-    /// Cluster-cull workgroups the most work the lists can hold needs: `capacity` work items,
-    /// then the root list's `capacity` roots at 32 to an item.
-    fn groups_for(capacity: u32) -> u32 {
-        (capacity + capacity.div_ceil(TASK_GROUP_SIZE)).div_ceil(CULL_ITEMS)
-    }
-
-    fn groups(&self) -> u32 {
-        Self::groups_for(self.capacity)
-    }
+/// Bytes of the cluster culls' status words (a transient, #78): one per workgroup of
+/// `CULL_ITEMS` items and pass, and one more run for pass 1's list of what it leaves to pass 2
+/// (issue #92), cleared before the instance cull.
+fn cull_lookback_bytes(capacity: u32) -> u64 {
+    3 * u64::from(cull_groups(capacity)) * 8
 }
 
 /// One frame slot's visible-cluster list: `(instance, meshlet | flags)` per listed cluster,
@@ -2194,9 +2133,8 @@ pub struct MeshletRenderer {
     /// The previous frame's culling view and pyramid, when pass 1 can test against them (not
     /// after a resize, nor with occlusion off). A `Cell`: set while declaring a frame.
     prev: Cell<Option<PrevCull>>,
-    /// Per frame slot: the cluster culls' work list.
-    work_lists: Vec<WorkList>,
-    /// Slots every frame slot's work list grows to.
+    /// Entries each of the cluster culls' work lists holds (transients of the frame's graph,
+    /// #78: [`cull_groups`]).
     work_target: u32,
     /// The software rasteriser's samples (see [`create_vis64`]), with it.
     vis64: Option<GraphBuffer>,
@@ -2577,9 +2515,6 @@ impl MeshletRenderer {
             })
             .collect::<Result<Vec<_>>>()?;
         let hzb = create_pyramids(device, extent)?;
-        let work_lists = (0..FRAMES_IN_FLIGHT)
-            .map(|i| WorkList::new(device, WORK_INITIAL_CAPACITY, i))
-            .collect::<Result<Vec<_>>>()?;
         let vis64 = pipeline_sw_raster
             .is_some()
             .then(|| create_vis64(device, extent))
@@ -2664,7 +2599,6 @@ impl MeshletRenderer {
             shading_tiles: create_shading_tiles(device, extent)?,
             hzb,
             prev: Cell::new(None),
-            work_lists,
             work_target: WORK_INITIAL_CAPACITY,
             vis64,
             sw_auto_on: false,
@@ -2890,10 +2824,6 @@ impl MeshletRenderer {
                 self.work_target = target;
             }
         }
-        let work = &mut self.work_lists[slot.index];
-        if work.capacity < self.work_target {
-            *work = WorkList::new(&self.device, self.work_target, slot.index)?;
-        }
         if let Some(s) = stats {
             let on = software_worth_it(self.sw_auto_on, s.dense_triangles);
             if on != self.sw_auto_on {
@@ -2975,7 +2905,6 @@ impl MeshletRenderer {
     ) -> GpuFrame {
         let scene = params.scene;
         let hzb = self.hzb[pyramid].extent();
-        let work = &self.work_lists[slot.index];
         // Both passes rasterise their dense clusters in software: a cluster is drawn the same
         // way whichever pass draws it, so occlusion changes no pixel (issue #30).
         let mut flags = params.flags;
@@ -3030,7 +2959,7 @@ impl MeshletRenderer {
                 .to_array(),
             camera_local: params.cull.position.local.to_array(),
             instance_count: scene.instance_count,
-            work_capacity: work.capacity,
+            work_capacity: self.work_target,
             flags: flags.0,
             pass,
             hzb_image: self.hzb[pyramid].sampled().0,
@@ -3048,10 +2977,12 @@ impl MeshletRenderer {
             meshes: scene.meshes.address(),
             instances: scene.instances.address(),
             stats: self.stats.address(),
-            cluster_lookback: work.lookback.address(),
-            cluster_groups: work.groups(),
+            // The work lists and the status words are transients (#78): their addresses are
+            // written at record time ("geometry/cull clears").
+            cluster_lookback: 0,
+            cluster_groups: cull_groups(self.work_target),
             prev_hzb_image: self.hzb[prev.pyramid].sampled().0,
-            work: work.work.address(),
+            work: 0,
             indirect: scene.indirect[slot.index].address(),
             visible: self.lists[slot.index].visible.address(),
             visible_capacity: self.lists[slot.index].capacity,
@@ -3063,7 +2994,7 @@ impl MeshletRenderer {
                 .draws
                 .as_ref()
                 .map_or(0, |b| b.address()),
-            lookback: scene.lookback[slot.index].address(),
+            lookback: 0,
             raster: self.lists[slot.index].raster.address(),
             target_width: self.extent.width,
             target_height: self.extent.height,
@@ -3072,7 +3003,7 @@ impl MeshletRenderer {
             prev_draw_jitter: prev.jitter.to_array(),
             prev_p00: prev.p00,
             prev_p11: prev.p11,
-            roots: work.roots.address(),
+            roots: 0,
             page_need: scene
                 .streamer
                 .as_ref()
@@ -3121,10 +3052,10 @@ impl MeshletRenderer {
             Some(p) => p.pyramid,
             None => 0,
         };
+        // The two passes' blocks, written by the first pass's body ("geometry/cull clears")
+        // once the transients have their addresses.
         let block1 = self.frame_block(slot, &params, first_pass, pyramid, prev);
         let block2 = self.frame_block(slot, &params, PASS_REMAINDER, pyramid, prev);
-        self.frame_buffers[slot.index].write(0, &[block1]);
-        self.frame_buffers[slot.index].write(FRAME_BLOCK_STRIDE, &[block2]);
         let scene = params.scene;
 
         let extent = params.extent;
@@ -3164,13 +3095,29 @@ impl MeshletRenderer {
             depth,
             hzb,
             hzb_prev,
-            work: graph.import_buffer(&self.work_lists[slot.index].work),
-            roots: graph.import_buffer(&self.work_lists[slot.index].roots),
-            cluster_lookback: graph.import_buffer(&self.work_lists[slot.index].lookback),
+            work: graph.transient_buffer(TransientBufferDesc {
+                name: "cull work list",
+                size: u64::from(self.work_target) * 8,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            }),
+            roots: graph.transient_buffer(TransientBufferDesc {
+                name: "cull root list",
+                size: u64::from(self.work_target) * 8,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            }),
+            cluster_lookback: graph.transient_buffer(TransientBufferDesc {
+                name: "cluster cull status words",
+                size: cull_lookback_bytes(self.work_target),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            }),
             indirect: graph.import_buffer(&scene.indirect[slot.index]),
             cell_list: graph.import_buffer(&scene.cell_lists[slot.index]),
             clusters: graph.import_buffer(&scene.clusters[slot.index]),
-            lookback: graph.import_buffer(&scene.lookback[slot.index]),
+            lookback: graph.transient_buffer(TransientBufferDesc {
+                name: "instance cull status words",
+                size: LOOKBACK_RUNS * u64::from(scene.instance_count.div_ceil(64).max(1)) * 8,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            }),
             deferred: graph.import_buffer(&scene.deferred[slot.index]),
             draws: self.lists[slot.index]
                 .draws
@@ -3286,10 +3233,9 @@ impl MeshletRenderer {
         // cull's grid. Every cull's status words start cleared.
         let cull_pipeline = &self.pipeline_cull;
         let instance_groups = scene.instance_count.div_ceil(64).max(1);
-        let lookback: &'f GraphBuffer = &scene.lookback[slot.index];
-        let work_list = &self.work_lists[slot.index];
-        let cluster_lookback: &'f GraphBuffer = &work_list.lookback;
-        let cluster_lookback_bytes = 3 * u64::from(work_list.groups()) * 8;
+        let (lookback, cluster_lookback) = (io.lookback, io.cluster_lookback);
+        let (work_handle, roots_handle) = (io.work, io.roots);
+        let frame_buffer: &'f Buffer = &self.frame_buffers[slot.index];
         let stats: &'f GraphBuffer = &self.stats;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let need: Option<&'f GraphBuffer> = scene.streamer.as_ref().map(|s| &s.need_buffer);
@@ -3317,20 +3263,28 @@ impl MeshletRenderer {
         if let Some(handle) = io.need {
             clears = clears.buffer(handle, BufferAccess::TransferDst);
         }
-        clears.run(move |_, commands| {
+        clears.run(move |resources, commands| {
+            // The frame's blocks, with the transients' addresses now that they have one (#78:
+            // a transient's address holds from its first pass to its last, this frame).
+            let (lookback, cluster_lookback) = (
+                resources.buffer(lookback),
+                resources.buffer(cluster_lookback),
+            );
+            for (offset, mut block) in [(0, block1), (FRAME_BLOCK_STRIDE, block2)] {
+                block.lookback = lookback.address();
+                block.cluster_lookback = cluster_lookback.address();
+                block.work = resources.buffer(work_handle).address();
+                block.roots = resources.buffer(roots_handle).address();
+                frame_buffer.write(offset, &[block]);
+            }
             commands.update_buffer(indirect, 0, &INDIRECT_START);
             commands.update_buffer(clusters, 0, &CLUSTER_ARGS_START);
             commands.update_buffer(deferred, 0, &DEFERRED_GRID_START);
             if cells {
                 commands.update_buffer(cell_list, 0, &CELL_LIST_START);
             }
-            commands.fill_buffer(
-                lookback,
-                0,
-                LOOKBACK_RUNS * u64::from(instance_groups) * 8,
-                0,
-            );
-            commands.fill_buffer(cluster_lookback, 0, cluster_lookback_bytes, 0);
+            commands.fill_buffer(lookback, 0, lookback.size() & !3, 0);
+            commands.fill_buffer(cluster_lookback, 0, cluster_lookback.size() & !3, 0);
             commands.fill_buffer(stats, 0, STATS_BYTES, 0);
             if let Some(need) = need {
                 commands.fill_buffer(need, 0, need_bytes, 0);

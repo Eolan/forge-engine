@@ -913,6 +913,19 @@ clusters to pass 2 and grow its list to the 8 MiB cap per slot. **Verdicts:**
    budget: the VRAM heap line and its bar turn red (capture in
    [asteroids.md](demos/asteroids.md)).
 
+**Transient buffers** (#78, 2026-10-02; `FrameGraph::transient_buffer`,
+`docs/research/render-graph-next.md`). Buffers that live within one frame now go in the
+graph's transient heap, aliased with the transient images whose lifetimes they miss, instead
+of one copy per frame slot. The first ones are the culls' work and root lists and their
+status words: 8 192 + 8 192 + 3 168 + 611 KiB per slot in the city. City, frame 60 (the exit
+log):
+- GPU work buffers: 145.9 → 106.5 MiB.
+- The transient heap: 43.75 MiB, unchanged. The lists take the memory the TAA colour and the
+  AO images use later in the frame, and the heap equals the frame's peak of live transients
+  (`load_bytes`, 44 800 KiB): the placement has no slack.
+- `FORGE_GRAPH_POISON=1` fills each transient buffer with `0xDEADBEEF` after its last pass.
+  The capture batch is at 0 px in the default, poison and no-alias modes.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

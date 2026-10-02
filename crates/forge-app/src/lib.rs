@@ -547,13 +547,15 @@ impl<D: Demo> State<D> {
         self.ctx.profile.frame_time(frame_ms);
         let g = self.graph_stats;
         self.ctx.profile.counter(format!(
-            "graph: {} passes, {} image + {} memory barriers; transients {} images, {:.1} MB in a {:.1} MB heap{}; {} rebuilds, {} retired",
+            "graph: {} passes, {} image + {} memory barriers; transients {} images + {} buffers, {:.1} MB in a {:.1} MB heap (load {:.1} MB){}; {} rebuilds, {} retired",
             g.passes,
             g.image_barriers,
             g.memory_barriers,
             g.transient_images,
+            g.transient_buffers,
             g.transient_bytes as f64 / 1e6,
             g.heap_bytes as f64 / 1e6,
+            g.load_bytes as f64 / 1e6,
             if g.aliased { " (aliased)" } else { "" },
             g.heap_rebuilds,
             g.pending_destructions

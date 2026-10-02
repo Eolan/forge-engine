@@ -48,7 +48,7 @@ pub use gpu_allocator::MemoryLocation;
 pub use graph::{
     BufferAccess, BufferHandle, FrameGraph, GraphBuffer, GraphImage, GraphStats, ImageAccess,
     ImageHandle, PassBuilder, RawImage, RenderGraph, ResolvedImage, ResourceState, Resources,
-    TransientDesc,
+    TransientBufferDesc, TransientDesc,
 };
 pub use instance::{Instance, Surface};
 pub use memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};

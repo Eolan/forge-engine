@@ -31,7 +31,10 @@ pub struct BufferDesc<'a> {
 pub struct Buffer {
     device: Arc<Device>,
     raw: vk::Buffer,
+    /// Own memory, or `None` when the buffer is placed in a [`TransientHeap`].
     allocation: Option<Allocation>,
+    /// The heap a placed buffer lives in (kept alive by the buffer).
+    _heap: Option<Arc<TransientHeap>>,
     category: MemoryCategory,
     size: u64,
     address: vk::DeviceAddress,
@@ -161,9 +164,9 @@ pub struct Image {
     extent: vk::Extent2D,
 }
 
-/// One block of device memory that several images share by living at different offsets
-/// (the render graph's transient images, whose lifetimes never overlap when they alias).
-/// The heap outlives every image placed in it: images hold an `Arc` to it.
+/// One block of device memory that several images and buffers share by living at different
+/// offsets (the render graph's transients, whose lifetimes never overlap when they alias).
+/// The heap outlives everything placed in it: each holds an `Arc` to it.
 pub struct TransientHeap {
     device: Arc<Device>,
     allocation: Option<Allocation>,
@@ -256,21 +259,31 @@ impl Drop for Image {
 }
 
 impl Device {
-    /// Creates a buffer. Host-visible locations are persistently mapped.
-    pub fn create_buffer(self: &Arc<Self>, desc: BufferDesc<'_>) -> Result<Buffer> {
-        let size = desc.size.max(4);
+    /// The create info of a buffer of `size` bytes and `usage` (with `SHADER_DEVICE_ADDRESS`),
+    /// shared by every queue family.
+    fn buffer_create_info(
+        &self,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+    ) -> vk::BufferCreateInfo<'_> {
         let info = vk::BufferCreateInfo::default()
             .size(size)
-            .usage(desc.usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+            .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
         // Every buffer may be read on any queue (issue #77): concurrent costs nothing for
         // buffers.
         let families = self.queue_families();
-        let info = if families.len() > 1 {
+        if families.len() > 1 {
             info.sharing_mode(vk::SharingMode::CONCURRENT)
                 .queue_family_indices(families)
         } else {
             info.sharing_mode(vk::SharingMode::EXCLUSIVE)
-        };
+        }
+    }
+
+    /// Creates a buffer. Host-visible locations are persistently mapped.
+    pub fn create_buffer(self: &Arc<Self>, desc: BufferDesc<'_>) -> Result<Buffer> {
+        let size = desc.size.max(4);
+        let info = self.buffer_create_info(size, desc.usage);
         // SAFETY: valid create info on a live device.
         let raw = unsafe { self.raw().create_buffer(&info, None)? };
         // SAFETY: `raw` is a live buffer.
@@ -307,10 +320,90 @@ impl Device {
             device: Arc::clone(self),
             raw,
             allocation: Some(allocation),
+            _heap: None,
             category: desc.category,
             size,
             address,
             mapped,
+        })
+    }
+
+    /// The memory a device-local buffer of `size` bytes and `usage` needs (size, alignment,
+    /// compatible memory types), without creating it (`vkGetDeviceBufferMemoryRequirements`,
+    /// Vulkan 1.3).
+    pub fn buffer_memory_requirements(
+        &self,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+    ) -> vk::MemoryRequirements {
+        let info = self.buffer_create_info(size.max(4), usage);
+        let query = vk::DeviceBufferMemoryRequirements::default().create_info(&info);
+        let mut requirements = vk::MemoryRequirements2::default();
+        // SAFETY: valid create info; the out structure is a plain default.
+        unsafe {
+            self.raw()
+                .get_device_buffer_memory_requirements(&query, &mut requirements)
+        };
+        requirements.memory_requirements
+    }
+
+    /// Creates a device-local buffer whose memory is `heap` at `offset` (the render graph's
+    /// transient buffers, #78). The caller laid the heap out from
+    /// [`Device::buffer_memory_requirements`]: the range must fit, `offset` must honour the
+    /// buffer's alignment and the heap's memory type must be one the buffer accepts. Its
+    /// address is valid while the heap lives, whatever else is placed over the same range.
+    pub fn create_buffer_in(
+        self: &Arc<Self>,
+        desc: BufferDesc<'_>,
+        heap: &Arc<TransientHeap>,
+        offset: u64,
+    ) -> Result<Buffer> {
+        let size = desc.size.max(4);
+        let info = self.buffer_create_info(size, desc.usage);
+        // SAFETY: valid create info on a live device.
+        let raw = unsafe { self.raw().create_buffer(&info, None)? };
+        // SAFETY: `raw` is a live buffer.
+        let requirements = unsafe { self.raw().get_buffer_memory_requirements(raw) };
+        let fits = offset.is_multiple_of(requirements.alignment.max(1))
+            && offset + requirements.size <= heap.size
+            && requirements.memory_type_bits & heap.memory_type_bits != 0;
+        let Some(allocation) = heap.allocation.as_ref().filter(|_| fits) else {
+            // SAFETY: nothing references the buffer.
+            unsafe { self.raw().destroy_buffer(raw, None) };
+            return Err(crate::error::GpuError::Unsupported(format!(
+                "buffer '{}' does not fit its transient heap (offset {offset}, size {}, alignment {}, heap {} bytes, types {:#x} vs {:#x})",
+                desc.name,
+                requirements.size,
+                requirements.alignment,
+                heap.size,
+                requirements.memory_type_bits,
+                heap.memory_type_bits
+            )));
+        };
+        // SAFETY: the range was checked against the requirements above; the heap's memory is
+        // one the buffer accepts and outlives the buffer (it holds an `Arc` to the heap).
+        if let Err(e) = unsafe {
+            self.raw()
+                .bind_buffer_memory(raw, allocation.memory(), allocation.offset() + offset)
+        } {
+            // SAFETY: binding failed, so nothing references the buffer.
+            unsafe { self.raw().destroy_buffer(raw, None) };
+            return Err(e.into());
+        }
+        let address_info = vk::BufferDeviceAddressInfo::default().buffer(raw);
+        // SAFETY: the buffer was created with `SHADER_DEVICE_ADDRESS` usage and is bound to
+        // memory allocated with the device-address flag (the allocator's setting).
+        let address = unsafe { self.raw().get_buffer_device_address(&address_info) };
+        self.set_name(raw, desc.name);
+        Ok(Buffer {
+            device: Arc::clone(self),
+            raw,
+            allocation: None,
+            _heap: Some(Arc::clone(heap)),
+            category: MemoryCategory::Transient,
+            size,
+            address,
+            mapped: None,
         })
     }
 
