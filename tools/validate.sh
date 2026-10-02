@@ -71,6 +71,8 @@ for path in "" --force-fallback; do
   validate "under-lake$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=2248,20.2,-1184,0,25 $path
   # Moving geometry (#79): a thousand barrels on the rivers, the first one in view.
   validate "movers$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --movers 1000 --view=-238.2,318.14,-1843.9,135.2,-18.1 $path
+  # And ships through the belt, the camera chasing the first (#79's demo).
+  validate "ships$tag" "$bin/asteroids$exe" --frames 60 --ships 24 --chase 0 $path
 done
 [ "$keep" != 0 ] && say "logs in $out/logs, summary in $summary"
 exit 0

@@ -20,7 +20,7 @@ use anyhow::Result;
 use clap::Parser;
 use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, Input, vk};
 use forge_core::hash::hash_cell3;
-use forge_core::material::Material;
+use forge_core::material::{Material, RenderLayer};
 use forge_core::{MaterialTable, Seed, SplitMix64};
 use forge_geom::{CookOptions, MeshletMesh, procedural};
 use forge_render::SwRaster;
@@ -29,8 +29,8 @@ use forge_render::meshlet::DrawParams;
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     Display, DlssMode, DlssUpscaler, DustParams, DustVolume, FrameStats, Gtao, GtaoParams,
-    HDR_FORMAT, LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, Starfield, Taa,
-    Tonemap, UpscaleCamera,
+    HDR_FORMAT, LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform,
+    Starfield, Taa, Tonemap, UpscaleCamera,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -122,6 +122,19 @@ struct Args {
     /// Advance the path by a fixed step per frame instead of wall time (deterministic captures).
     #[arg(long)]
     fixed_step: bool,
+    /// Ships flying through the belt along the camera's corridor (#79's demo, the first step of
+    /// the space battle, #80): this many, their transforms written every frame. None by default,
+    /// so the reference captures stay put.
+    #[arg(long, default_value_t = 0)]
+    ships: u32,
+    /// Draw the ships with the camera's motion vectors alone, not their own (#79's A/B: TAA then
+    /// smears them).
+    #[arg(long)]
+    no_mover_motion: bool,
+    /// Follow ship K from 30 m behind and 8 m over it instead of flying the path (with
+    /// `--ships`).
+    #[arg(long, value_name = "K")]
+    chase: Option<u32>,
     /// Direction to the sun, "x,y,z".
     #[arg(long, default_value = "0.75,0.30,-0.35", value_parser = parse_vec3)]
     sun_dir: Vec3,
@@ -255,6 +268,7 @@ fn parse_vec3(text: &str) -> std::result::Result<Vec3, String> {
 }
 
 /// A closed Catmull-Rom spline through control points.
+#[derive(Clone)]
 struct Path {
     points: Vec<Vec3>,
 }
@@ -271,6 +285,126 @@ impl Path {
             + (-p0 + p2) * f
             + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * f * f
             + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * f * f * f)
+    }
+}
+
+/// The ship's length along +Y from its tail, metres (its hull's profile is in [`ship_mesh`]).
+const SHIP_LENGTH: f32 = 14.0;
+
+/// A ship (#79's demo): a hull of revolution along +Y from its tail, nose at
+/// [`SHIP_LENGTH`], panel lines around it; wings across it (+X) and a fin on top (+Z), the
+/// second material section.
+fn ship_mesh() -> procedural::TriMesh {
+    let mut mesh = forge_geom::city::lathe(&forge_geom::city::Lathe {
+        profile: vec![
+            (0.0, 0.0),
+            (0.9, 0.0),
+            (1.1, 0.4),
+            (1.5, 1.5),
+            (1.6, 3.0),
+            (1.6, 8.5),
+            (1.35, 10.5),
+            (0.9, 12.3),
+            (0.35, 13.6),
+            (0.0, SHIP_LENGTH),
+        ],
+        around: 48,
+        along: 72,
+        flutes: 12,
+        flute_depth: 0.015,
+        flute_span: (2.0, 9.0),
+    });
+    mesh.sections = vec![0; mesh.triangle_count()];
+    // The wings, through the hull, and the fin: flat-shaded boxes, `(min, max)` corners.
+    for (min, max) in [
+        (Vec3::new(-6.5, 2.0, -0.12), Vec3::new(6.5, 5.5, 0.12)),
+        (Vec3::new(-0.1, 1.0, 0.0), Vec3::new(0.1, 4.0, 3.2)),
+    ] {
+        append_box(&mut mesh, min, max, 1);
+    }
+    mesh
+}
+
+/// Appends an axis-aligned box from `min` to `max`, flat-shaded, in material section `section`.
+fn append_box(mesh: &mut procedural::TriMesh, min: Vec3, max: Vec3, section: u8) {
+    let corner = |x: bool, y: bool, z: bool| {
+        Vec3::new(
+            if x { max.x } else { min.x },
+            if y { max.y } else { min.y },
+            if z { max.z } else { min.z },
+        )
+    };
+    // Each face: its normal and its corners counter-clockwise seen from outside.
+    let faces = [
+        (Vec3::X, [(1, 0, 0), (1, 1, 0), (1, 1, 1), (1, 0, 1)]),
+        (Vec3::NEG_X, [(0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)]),
+        (Vec3::Y, [(0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)]),
+        (Vec3::NEG_Y, [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)]),
+        (Vec3::Z, [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]),
+        (Vec3::NEG_Z, [(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)]),
+    ];
+    for (normal, corners) in faces {
+        let base = mesh.positions.len() as u32;
+        for (x, y, z) in corners {
+            mesh.positions
+                .push(corner(x == 1, y == 1, z == 1).to_array());
+            mesh.normals.push(normal.to_array());
+        }
+        mesh.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        mesh.sections.extend([section, section]);
+    }
+}
+
+/// The movers of `--ships` (#79's demo, the first step of #80): ships flying the camera's
+/// corridor through the belt, kept clear of rock. Each has its own speed (a loop in 0.7–1.4
+/// times the camera's), its own start along the loop and its own offset from the path, 3–9 m,
+/// turning slowly around it; nose along the way, banking into the turns.
+struct Ships {
+    path: Path,
+    count: u32,
+    /// Seconds for the camera's pass along the path.
+    duration: f32,
+}
+
+impl Ships {
+    /// Ship `k` `time` seconds in: its transform (relative to the scene's origin), its centre
+    /// and its axes (right, forward, up).
+    fn pose(&self, k: u32, time: f64) -> (MoverTransform, Vec3, [Vec3; 3]) {
+        let share =
+            |salt: u64| (hash_cell3(0x5EED_5410 ^ salt, k as i32, 0, 0) % 10_000) as f32 / 10_000.0;
+        let speed = (0.7 + 0.7 * share(1)) / self.duration;
+        let t = (f64::from(share(2)) + time * f64::from(speed)).rem_euclid(1.0) as f32;
+        let dt = 0.002;
+        let (p0, p, p1) = (
+            self.path.sample(t - dt),
+            self.path.sample(t),
+            self.path.sample(t + dt),
+        );
+        let forward = (p1 - p0).normalize_or(Vec3::Z);
+        let right = forward.cross(Vec3::Y).normalize_or(Vec3::X);
+        let up = right.cross(forward);
+        // The bank of a coordinated turn: the path's acceleration across it, in m/s², over
+        // 10 m/s² (the second difference is in the path's parameter, `speed` per second).
+        let across = (p1 - 2.0 * p + p0).dot(right) / (dt * dt) * speed * speed;
+        let bank = (across / 10.0).atan().clamp(-1.0, 1.0);
+        let roll = Quat::from_axis_angle(forward, bank);
+        let (right, up) = (roll * right, roll * up);
+        let angle = share(3) * std::f32::consts::TAU + time as f32 * (0.1 + 0.2 * share(4));
+        let offset = 3.0 + 6.0 * share(5);
+        let centre = p + (right * angle.cos() + up * angle.sin()) * offset;
+        let rotation = Quat::from_mat3(&glam::Mat3::from_cols(right, forward, up));
+        let transform = MoverTransform {
+            position: centre - forward * (0.5 * SHIP_LENGTH),
+            rotation,
+            scale: 1.0,
+        };
+        (transform, centre, [right, forward, up])
+    }
+
+    /// Their transforms `time` seconds in.
+    fn transforms(&self, time: f64) -> Vec<MoverTransform> {
+        (0..self.count).map(|k| self.pose(k, time).0).collect()
     }
 }
 
@@ -310,6 +444,9 @@ struct Ballad {
     scene: MeshletScene,
     path: Path,
     path_t: f32,
+    /// `--ships` (#79): the ships flying the corridor, and the seconds they have flown.
+    ships: Option<Ships>,
+    ship_time: f64,
     paused: bool,
     camera: FlyCamera,
     flags: CullFlags,
@@ -395,6 +532,18 @@ impl Ballad {
         }
         let dlss_on = requested.is_some() && dlss.is_some();
         let (scene, path) = build_field(ctx, &args, field)?;
+        let ships = (args.ships > 0).then(|| Ships {
+            path: path.clone(),
+            count: args.ships,
+            duration: args.duration,
+        });
+        if ships.is_some() {
+            tracing::info!(
+                ships = args.ships,
+                length_m = SHIP_LENGTH,
+                "ships through the belt (--ships, --chase K to follow one)"
+            );
+        }
         let camera = FlyCamera {
             speed: 40.0,
             ..FlyCamera::default()
@@ -481,6 +630,8 @@ impl Ballad {
             scene,
             path,
             path_t: 0.0,
+            ships,
+            ship_time: 0.0,
             paused: false,
             camera,
             flags,
@@ -633,17 +784,25 @@ impl Demo for Ballad {
             dt
         };
         self.step = step;
+        // The ships fly on while the camera's path is paused (#79).
+        self.ship_time += f64::from(step);
         if self.paused {
             self.camera.update(input, dt);
             return;
         }
         self.path_t += step / self.args.duration;
-        let position = self.path.sample(self.path_t);
+        let mut position = self.path.sample(self.path_t);
         let ahead = self.path.sample(self.path_t + 0.004);
-        let forward = match self.args.look {
+        let mut forward = match self.args.look {
             Some(look) => look.normalize_or(Vec3::NEG_Z),
             None => (ahead - position).normalize_or_zero(),
         };
+        // `--chase K`: 30 m behind ship K and 8 m over it, looking at it.
+        if let (Some(k), Some(ships)) = (self.args.chase, &self.ships) {
+            let (_, centre, [_, ahead, up]) = ships.pose(k % ships.count, self.ship_time);
+            position = centre - ahead * 30.0 + up * 8.0;
+            forward = (centre - position).normalize_or(ahead);
+        }
         // Look along the tangent with a gentle roll into the turns. The path is laid out around
         // the field's own centre; the field's origin (`--origin`) is added where the camera is
         // handed to the renderer (issue #93).
@@ -800,6 +959,10 @@ impl Demo for Ballad {
         if let Some(h) = hasher {
             h.begin(&mut frame.graph, frame.slot);
         }
+        // The ships where they fly now (#79).
+        if let Some(ships) = &self.ships {
+            self.scene.set_movers(&ships.transforms(self.ship_time));
+        }
         let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
@@ -912,6 +1075,19 @@ impl Demo for Ballad {
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        // The ships' own motion over the camera's (#79).
+        if self.ships.is_some() && !self.args.no_mover_motion {
+            self.renderer.mover_motion(
+                &mut frame.graph,
+                frame.slot,
+                &self.scene,
+                &targets,
+                motion,
+                cull.view_proj,
+                taa_frame.previous_from_current,
+                taa_frame.jitter,
+            );
+        }
         let (history, bloom_image) = match self.dlss.as_mut() {
             Some(dlss) if self.dlss_on => {
                 let upscaled = dlss.upscale(
@@ -1086,6 +1262,8 @@ fn ice_shapes(args: &Args) -> usize {
 /// behind the loading screen (issue #25).
 struct FieldMeshes {
     meshes: Vec<MeshletMesh>,
+    /// With `--ships`, the ship's (#79).
+    ship: Option<MeshletMesh>,
     build_ms: u128,
 }
 
@@ -1144,11 +1322,20 @@ fn build_meshes(args: &Args) -> FieldMeshes {
             });
         }
     });
+    let ship = (args.ships > 0).then(|| {
+        MeshletMesh::build_with(
+            &ship_mesh(),
+            CookOptions {
+                normal_weight: lod_normals * SHIP_LENGTH * 0.5,
+            },
+        )
+    });
     FieldMeshes {
         meshes: meshes
             .into_iter()
             .map(|mesh| mesh.expect("mesh built"))
             .collect(),
+        ship,
         build_ms: start.elapsed().as_millis(),
     }
 }
@@ -1162,6 +1349,7 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
     let variants = rock_variants(args);
     let ice_shapes = ice_shapes(args);
     let meshes = field.meshes;
+    let ship = field.ship;
     let mut builder = MeshletSceneBuilder::new();
     // Rock and ice: a fifth of the asteroids are ice (the rule since Phase 0). The rock takes the
     // procedural rock texture and its relief (issue #46); the ice stays smooth.
@@ -1211,6 +1399,20 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
             )
         })
     };
+    // The ships' hull, and after it their wings' and fin's paint (#79).
+    let hull = ship.as_ref().map(|_| {
+        let layer = |color: [f32; 3], power: f32, specular: f32| RenderLayer {
+            color_a: color,
+            color_b: color.map(|c| c * 1.08),
+            roughness: RenderLayer::roughness_for_power(power),
+            specular,
+            ..RenderLayer::default()
+        };
+        add_with_faces(
+            Material::new("hull", layer([0.55, 0.56, 0.58], 80.0, 0.3)),
+            Material::new("ship paint", layer([0.42, 0.09, 0.06], 40.0, 0.2)),
+        )
+    });
     builder.set_materials(&materials, Some(textures));
     // The field stays still until Phase 3: its structures are built once (issue #45).
     builder.set_ray_traced(!args.no_shadows);
@@ -1350,6 +1552,12 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
             if ice { ice_rows[ice_kind(id)] } else { rock },
         );
         placed += 1;
+    }
+    // The ships (#79), the table's last instances: their transforms come every frame.
+    if let (Some(ship), Some(hull)) = (&ship, hull) {
+        let id = builder.add_mesh(ship);
+        builder.set_mesh_material(id, hull);
+        builder.reserve_movers(&[(id, args.ships)]);
     }
     let mut scene = builder.build(&ctx.device)?;
     scene.build_tlas(&ctx.device, &ctx.shaders)?;

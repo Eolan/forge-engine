@@ -1790,9 +1790,20 @@ not to trace):
   none without movers, 4–10 with 1 000 barrels, 37–65 with 10 000.
 - The pass takes 0.008–0.010 ms at 1440p, and `validate.sh` is clean with it.
 
+**The demo the issue asks for, and a refit** (2026-10-02):
+- Ships fly through the ballad's belt (`asteroids --ships N`, `--chase K`;
+  `docs/demos/asteroids.md`, "Ships through the belt"): the same movers, a ship's hull with
+  wings, banking into the turns, sharp under TAA by their own motion vectors.
+- The issue asked to measure a refit against a rebuild (`FORGE_TLAS_REFIT=1`,
+  `docs/PROFILE.md`): the update costs a seventh of the build (0.146 → 0.019 ms with 1 000
+  movers), but the tree it keeps updating degrades as the movers travel (the reflections
+  0.03–0.05 ms slower after 25 s with 10 000). The frame gains 0.03–0.10 ms with 1 000 and
+  nothing clear with 10 000, so the rebuild stays.
+
 **Left for later:**
 - The woken probes blend at the probes' usual 97 %, not the research's 90 % for a faster
-  change: the barrels are small beside a 4 m probe.
+  change: the barrels are small beside a 4 m probe. (Majercik et al. 2021, re-read for #99,
+  halve the hysteresis for 10 frames after a large change.)
 - Where the water is drawn over a mover, its motion comes from the water's depth, not the
   mover's.
 - The barrels jump back to their river's head past its end. The water parting around them is

@@ -739,6 +739,37 @@ With the movers' acceleration structure (the second step), the same views and ro
 - The probes' wake (#69, the third step), `gi/probe wake` on the compute queue: 0.010 ms with
   1 000 movers and 0.008 with 10 000 (600 frames from the largest mouth).
 
+**A refit of the movers' structure against its rebuild** (#79's measure, 2026-10-02;
+`FORGE_TLAS_REFIT=1`: built once with `ALLOW_UPDATE`, then updated in place). The same views,
+two rounds of 1 500 frames, 2560 × 1440:
+
+| View, movers | frame: rebuild → refit | `movers/tlas` | `water/reflections` | `gi/probe rays` |
+|---|---|---|---|---|
+| barrel, 1 000 | 4.07–4.15 → 4.01–4.07 ms | 0.146 → 0.019 | 0.69 → 0.69 | 0.64–0.67 → 0.50–0.51 |
+| barrel, 10 000 | 4.18–4.28 → 4.13–4.21 ms | 0.199 → 0.028–0.030 | 0.71–0.72 → 0.76–0.77 | 0.65–0.67 → 0.54–0.55 |
+| mouth, 1 000 | 3.54–3.60 → 3.50 ms | 0.146 → 0.019 | 0.47 → 0.47 | 0.47 → 0.35 |
+| mouth, 10 000 | 3.66–3.69 → 3.64–3.73 ms | 0.198 → 0.030–0.033 | 0.49 → 0.52 | 0.50 → 0.39–0.40 |
+
+- The update costs a seventh of the build.
+- The tree it keeps updating degrades as the movers travel. With 10 000 the reflections cost
+  0.03–0.05 ms more after 25 s, and would cost more the longer the run.
+- The probes' rays on the compute queue take 0.1 ms less, likely because they trace the
+  movers' structure and wait less for an update than for a build.
+- The frame gains 0.03–0.10 ms with 1 000 movers and nothing beyond the rounds' spread with
+  10 000. So the rebuild stays, as the research and the vendors advise for a TLAS. A refit with
+  a rebuild every few hundred frames is the option if the frame ever needs that 0.1 ms.
+
+**Ships in the ballad** (#79's demo, `asteroids --ships N`; `docs/demos/asteroids.md`), the
+ballad's flight, two rounds:
+
+| Ships | frame | `movers/tlas` | `movers/motion` |
+|---|---|---|---|
+| 0 | 2.456–2.463 ms | — | — |
+| 24 | 2.564–2.567 ms | 0.053–0.054 | 0.040 |
+| 1 000 | 2.318–2.329 ms | 0.118 | 0.087–0.088 |
+
+With 1 000 the ships crowd the corridor and hide rocks, so the frame is cheaper than without.
+
 **Objects in the rivers** (#107, 2026-10-02): the water parting around the floaters, 1 000
 barrels with and without `--no-floaters`, two rounds, 1 500 frames each, 2560 × 1440.
 

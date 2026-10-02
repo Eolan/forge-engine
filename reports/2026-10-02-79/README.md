@@ -37,3 +37,17 @@ settled probes whose cells a mover entered or left start their settling over. Yo
 per cascade at frame 120 from the largest mouth: none without movers, 4–10 with 1 000
 barrels, 37–65 with 10 000. `gi/probe wake` takes 0.008–0.010 ms at 1440p; the batch is
 unchanged without movers and `validate.sh` is clean with them.
+
+**The demo the issue asks for: ships through the belt** (`asteroids --ships N --chase K`;
+`docs/demos/asteroids.md`, "Ships through the belt"). Frame 240 with the fixed step, 24 ships,
+the camera chasing ship 0:
+- `ships.png`: the chase.
+- `ships-taa.png`, cropped and enlarged twice: with the ships' motion vectors, with the
+  camera's alone (`--no-mover-motion`), the pixels that changed: 5 347; ꟻLIP max 0.53, the
+  hull's and the wings' edges ghosted.
+- Cost at 2560 × 1440: 2.456–2.463 ms without ships, 2.564–2.567 with 24.
+
+**A refit against a rebuild** (`FORGE_TLAS_REFIT=1`, `docs/PROFILE.md`): `movers/tlas` 0.146 →
+0.019 ms with 1 000 movers and 0.198 → 0.030 with 10 000, but the refitted tree slows the
+reflections by 0.03–0.05 ms after 25 s with 10 000; the frame gains 0.03–0.10 ms with 1 000 and
+nothing clear with 10 000. The rebuild stays.

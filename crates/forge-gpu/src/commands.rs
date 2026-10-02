@@ -364,10 +364,26 @@ impl<'a> Commands<'a> {
         };
         let (geometry, scratch, range) = crate::accel::dynamic_tlas_build(self.device, tlas, count);
         let geometries = [geometry];
+        // `FORGE_TLAS_REFIT=1` (#79's measure): an update in place of the last build while the
+        // count holds, which an update must keep.
+        let count = range.primitive_count;
+        let update = tlas.refit && tlas.built.get() == Some(count);
+        if !update {
+            tlas.built.set(Some(count));
+        }
+        let (mode, source) = if update {
+            (vk::BuildAccelerationStructureModeKHR::UPDATE, tlas.raw)
+        } else {
+            (
+                vk::BuildAccelerationStructureModeKHR::BUILD,
+                vk::AccelerationStructureKHR::null(),
+            )
+        };
         let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(crate::accel::DYNAMIC_TLAS_FLAGS)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .flags(crate::accel::dynamic_tlas_flags(tlas.refit))
+            .mode(mode)
+            .src_acceleration_structure(source)
             .dst_acceleration_structure(tlas.raw)
             .geometries(&geometries)
             .scratch_data(vk::DeviceOrHostAddressKHR {

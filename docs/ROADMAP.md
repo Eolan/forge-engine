@@ -79,9 +79,11 @@ run, which can also retry #95's double buffer).
   frame, their cells, their motion vectors, with barrels drifting down the island's rivers
   (`city-blocks --island 7 --movers N`, `docs/demos/island.md`, "Moving geometry"), and their
   own acceleration structure, rebuilt every frame and traced after the static one (their
-  shadows and reflections), and the settled probes woken where they pass (#69). What its
-  issue still asks: a demo of ships in the belt or cars in the city (the barrels are the
-  island's). It also opens #107, the water around what moves in it.
+  shadows and reflections), and the settled probes woken where they pass (#69). Its demo:
+  ships through the ballad's belt ✅ (`asteroids --ships N --chase K`, the first step of #80);
+  a refit of the movers' structure measured against the rebuild ✅ (a seventh of the build,
+  but the refitted tree slows the rays: the rebuild stays). It also opens #107, the water
+  around what moves in it.
 - Phase 2, with its `island` demo as the first step of rebuilding tropical-island (#81): a
   concrete game target for the world systems. It starts with #93, large-world coordinates on
   the GPU ✅ (2026-09-26, D-004's amendment accepted): the instances in integer cells of 1 km,

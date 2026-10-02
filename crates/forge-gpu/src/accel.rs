@@ -288,6 +288,10 @@ pub struct DynamicTlas {
     storage: GraphBuffer,
     pub(crate) scratch: GraphBuffer,
     capacity: u32,
+    /// `FORGE_TLAS_REFIT=1` (#79's measure): built once, then updated in place.
+    pub(crate) refit: bool,
+    /// The instance count of the last full build, which an update must keep.
+    pub(crate) built: std::cell::Cell<Option<u32>>,
 }
 
 impl DynamicTlas {
@@ -329,9 +333,16 @@ impl Drop for DynamicTlas {
     }
 }
 
-/// How a dynamic top-level structure is built and sized.
-pub(crate) const DYNAMIC_TLAS_FLAGS: vk::BuildAccelerationStructureFlagsKHR =
-    vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_BUILD;
+/// How a dynamic top-level structure is built and sized: fast to build, and with `refit`
+/// updatable in place (#79's measure of a refit against a rebuild, `FORGE_TLAS_REFIT=1`).
+pub(crate) fn dynamic_tlas_flags(refit: bool) -> vk::BuildAccelerationStructureFlagsKHR {
+    let update = if refit {
+        vk::BuildAccelerationStructureFlagsKHR::ALLOW_UPDATE
+    } else {
+        vk::BuildAccelerationStructureFlagsKHR::empty()
+    };
+    vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_BUILD | update
+}
 
 /// The geometry of a top-level build over the instance records at `records`.
 fn instance_geometry(records: u64) -> vk::AccelerationStructureGeometryKHR<'static> {
@@ -360,10 +371,11 @@ impl Device {
             category: MemoryCategory::Work,
             name: &format!("{name} records"),
         })?;
+        let refit = std::env::var_os("FORGE_TLAS_REFIT").is_some_and(|v| v != "0");
         let geometries = [instance_geometry(records.address())];
         let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(DYNAMIC_TLAS_FLAGS)
+            .flags(dynamic_tlas_flags(refit))
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
             .geometries(&geometries);
         let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
@@ -395,7 +407,8 @@ impl Device {
         let address = unsafe { loader.get_acceleration_structure_device_address(&address_info) };
         self.set_name(raw, name);
         let scratch = self.create_buffer(BufferDesc {
-            size: sizes.build_scratch_size + self.scratch_alignment(),
+            size: sizes.build_scratch_size.max(sizes.update_scratch_size)
+                + self.scratch_alignment(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             location: MemoryLocation::GpuOnly,
             category: MemoryCategory::Work,
@@ -409,6 +422,8 @@ impl Device {
             storage: GraphBuffer::new(storage),
             scratch: GraphBuffer::new(scratch),
             capacity,
+            refit,
+            built: std::cell::Cell::new(None),
         })
     }
 }

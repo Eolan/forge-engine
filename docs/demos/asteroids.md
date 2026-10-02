@@ -278,6 +278,45 @@ Material classification and the material table came with #20 (below). The softwa
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
 
+## Ships through the belt (2026-10-02, issue #79)
+
+The demo #79 asks for, and the first step of the space battle (#80): `--ships N` sets N ships
+flying the camera's corridor through the belt, its path kept clear of rock. None by default,
+so the reference captures stay put. The ships are the engine's movers (the island's barrels'
+machinery, `docs/demos/island.md`, "Moving geometry"): the instance table's last records,
+written every frame, with their own motion vectors and acceleration structure.
+- **The ship** (`ship_mesh`): a 14 m hull of revolution with panel lines, wings across it and
+  a fin on top, the wings and fin in the material row after the hull's (red paint on light
+  grey metal).
+- **Their flight** (`Ships::pose`):
+  - each has its own speed, a loop in 0.7–1.4 times the camera's, its own start along the
+    loop and its own offset from the path, 3–9 m, turning slowly around it;
+  - nose along the way, banking into the turns as a coordinated turn would: the path's
+    acceleration across it over 10 m/s².
+- **`--chase K`** follows ship K from 30 m behind and 8 m over it. `--no-mover-motion` draws
+  the ships with the camera's motion vectors alone, the A/B.
+
+**Sheets** (`reports/2026-10-02-79/`, frame 240 with the fixed step, 24 ships, `--chase 0`):
+- `ships.png`: the chase. Ship 0 in front, another ahead in the corridor.
+- `ships-taa.png`, cropped and enlarged twice: with the ships' motion vectors, with the
+  camera's alone, and the pixels that changed. The second ghosts the hull's and the wings'
+  edges: the camera follows the ship, so the camera's vectors say its pixels move like the
+  belt behind it. 5 347 pixels differ, ꟻLIP max 0.53.
+
+![Chasing a ship through the belt](../../reports/2026-10-02-79/ships.png)
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440, the ballad's flight, two rounds of 1 500 frames):
+2.456–2.463 ms without ships, 2.564–2.567 with 24. The movers' passes: `movers/tlas` 0.053,
+`movers/motion` 0.040, the upload, cell bounds and TLAS records 0.007 together. With 1 000 ships
+the frame is cheaper, 2.318–2.329 ms: they crowd the corridor and hide rocks (`shading/ice`
+0.130 → 0.067), for `movers/tlas` 0.118 and `movers/motion` 0.088.
+
+**Checks:** without ships the capture batch is unchanged (0 px); `validate.sh` is clean and now
+also runs 24 ships chased on both paths.
+
+**Left for later:** the dust's shadow rays trace the static structure only, so the ships cast
+no shafts in it; physics, weapons and the rest of #80.
+
 ## Far from the origin (2026-09-25, issue #93)
 
 `--origin M` moves the field M metres from the world's origin along every axis: the rocks'
