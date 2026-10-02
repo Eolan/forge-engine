@@ -393,6 +393,50 @@ impl Bar {
     }
 }
 
+/// Metres between the samples across a ribbon point that [`bar_spans`] looks for the bars at.
+const BAR_SPAN_STEP: f64 = 0.25;
+
+/// Where the first two of a ribbon's [`Bar`]s stand over its water across each of its points:
+/// from and to, metres from the middle along `(−direction.y, direction.x)` (positive to the
+/// left seen downstream), the span inside each bar's outline over the ribbon's width. Where a
+/// bar does not cross a point, both ends lie where its widest point projects onto the line
+/// across, clamped to the ribbon, so a span grows from nothing between points. Far away the
+/// water lies on the ground over the ribbon's whole width, and these keep it off the bars' sand.
+pub fn bar_spans(ribbon: &Ribbon) -> Vec<[f32; 4]> {
+    ribbon
+        .points
+        .iter()
+        .map(|p| {
+            let at = position(p);
+            let side = [-f64::from(p.direction[1]), f64::from(p.direction[0])];
+            let reach = f64::from(p.reach);
+            let mut out = [0.0f32; 4];
+            for (slot, bar) in ribbon.bars.iter().take(2).enumerate() {
+                let (dx, dy) = (bar.centre[0] - at[0], bar.centre[1] - at[1]);
+                let middle = (dx * side[0] + dy * side[1]).clamp(-reach, reach);
+                let mut span = [middle; 2];
+                if dx.hypot(dy) < bar.reach(0.0) + reach {
+                    let steps = (2.0 * reach / BAR_SPAN_STEP).ceil() as i32;
+                    let mut inside: Option<[f64; 2]> = None;
+                    for s in 0..=steps {
+                        let across = -reach + f64::from(s) * BAR_SPAN_STEP;
+                        let q = [at[0] + side[0] * across, at[1] + side[1] * across];
+                        if bar.outside(q) < 0.0 {
+                            inside = Some(inside.map_or([across; 2], |i| [i[0], across]));
+                        }
+                    }
+                    if let Some(i) = inside {
+                        span = i;
+                    }
+                }
+                out[2 * slot] = span[0] as f32;
+                out[2 * slot + 1] = span[1] as f32;
+            }
+            out
+        })
+        .collect()
+}
+
 /// How the ribbons are made.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RibbonParams {

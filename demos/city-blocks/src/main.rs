@@ -2893,7 +2893,8 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
         .map(|r| {
             r.points
                 .iter()
-                .map(|p| WaterRiverPoint {
+                .zip(forge_procgen::bar_spans(r))
+                .map(|(p, bars)| WaterRiverPoint {
                     position: [p.position[0] - half, p.position[1] - half],
                     level: p.level,
                     direction: p.direction,
@@ -2908,6 +2909,7 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
                     lip: p.lip,
                     fade: p.fade,
                     ground: p.ground,
+                    bars,
                 })
                 .collect()
         })

@@ -1903,11 +1903,23 @@ Before (`--no-bars`) and now, frame 60 (`reports/2026-10-02-127/`):
 - `sea-far.png`: the largest mouth from 4 m over its water, 30 m back (0.028), a bar's head in
   front; and from 500 m up the valley, 80 m up (0.003).
 
-From far away the bars read darker than the beach and fade into the water: the ground's coarser
-levels of detail lower their 0.3 m crests, the sea's surface is drawn wherever the coarser
-ground dips under its level, and the wet sand by the water is darker. Cutting the river's water
-out over the bars on the GPU (their spans across each point) changed the far views by ꟻLIP
-means under 0.00002, so it was left out.
+**From far away** (fixed the same day, `reports/2026-10-02-127/`, "From far away"):
+- **What it was:** the bars faded into the water past a few hundred metres. The cause was
+  neither the ground's coarser levels of detail (`--lod-error 0.05` barely changed it), the
+  sea's surface (shown in false colour, it stands under their crests), nor the wet sand
+  (switched off, little changed).
+- **The river's own water:** far away its ribbon lies on the ground across its whole width (the
+  drape, `RIVER_DRAPE`), lifted a pixel and a half and drawn regardless of the depth under it.
+  It covered the bars at 40 % or more. Without the river's water their pixels are the dry sand's;
+  without the sea's they are unchanged.
+- **The fix:** `forge_procgen::bar_spans` gives each ribbon point the span of each of its first
+  two bars across it, from end to end of the outline at the water. The ribbon's points carry
+  them to the GPU, and the river's water is drawn nowhere inside them, eased over its far soft
+  edge (`on_span` in `water.slang`). Near, the sand hid the water there anyway.
+- **A correction:** the same cut-out was tried while building the bars and judged useless.
+  That judgement read the whole frame's ꟻLIP mean (under 0.00002), which a few hundred pixels
+  cannot move. The bars' own pixels go from 116,120,120 (the water's grey) to 128,121,112, the
+  dry sand's.
 
 **Checks:**
 - The capture batch changes the island's images only: `island60` 9 240 px (ꟻLIP mean 0.0020),

@@ -266,6 +266,7 @@ struct RiverPoint
     float4 d; // the ground under the first four vertices across: the highest the drawn ground stands under the quads around each (m)
     float4 e; // the ribbon's half width (m, under the banks), the lowest bank before the channel was carved (m), the first stone past the point, the metres along the river from its head
     float4 f; // the white water a step's fall leaves (0..1, #122), how far its line bows downstream in the middle and towards the left bank (m; negative: the right), one unused
+    float4 g; // where its mouth's bars stand over the water across it (#127): two spans, each from and to (m from the middle, positive to the left; equal ends where none)
 };
 
 // Where a river's water meets the sea's (`GpuRiverMouth` in water.rs).
@@ -973,6 +974,7 @@ struct RiverOut
     nointerpolation uint segment : TEXCOORD4; // the segment's first point
     float cover : TEXCOORD5;      // the half width drawn whole (m): the water's edge's, more in a confluence's rounded corner (#119)
     float foam : TEXCOORD6;       // the white water a step's fall leaves (0..1, #122)
+    float4 bars : TEXCOORD7;      // where its mouth's bars stand over the water across it: two spans, each from and to (m from the middle, #127)
 };
 
 // The ground's height at `world` (x, z) as the island's mesh draws its coarse cells: the field's
@@ -1015,6 +1017,7 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
         o.segment = 0u;
         o.cover = 0.0;
         o.foam = 0.0;
+        o.bars = 0.0;
         return o;
     }
     RiverPoint p = w[0].rivers[segment + uint(corner.y)];
@@ -1048,6 +1051,7 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
     // At a river's last point (its `c.y` 0: no segment starts there), its half width.
     o.cover = max(p.c.y, p.a.z);
     o.foam = p.f.x;
+    o.bars = p.g;
     return o;
 }
 
@@ -1454,6 +1458,16 @@ SurfaceTargets river_under_frag_main(RiverOut input)
     return fresh_water_seen(w, river_water(w, input));
 }
 
+// How far inside the span from `span.x` to `span.y` the point `across` is: 1 inside, easing to 0
+// at its ends over `soft` (at most half the span); 0 for an empty span.
+float on_span(float2 span, float across, float soft)
+{
+    float edge = min(soft, 0.5 * (span.y - span.x));
+    if (edge <= 0.0)
+        return 0.0;
+    return smoothstep(span.x, span.x + edge, across) * (1.0 - smoothstep(span.y - edge, span.y, across));
+}
+
 // A river's water at a pixel.
 FreshWater river_water(WaterSurface* w, RiverOut input)
 {
@@ -1472,6 +1486,10 @@ FreshWater river_water(WaterSurface* w, RiverOut input)
     float near_cover = 1.0 - smoothstep(input.cover, input.edge.y, out_from_middle);
     float soft = min(max(RIVER_BANK, 2.0 * footprint), 0.5 * half_drawn);
     float far_cover = min(half_water / half_drawn, 1.0) * smoothstep(0.0, soft, half_drawn - out_from_middle);
+    // None over its mouth's bars (#127): their sand stands over the water, which far away lies
+    // on the ground over the ribbon's whole width, and between, half lies there. Near, the sand
+    // hides the water inside their spans anyway.
+    float off_bars = 1.0 - max(on_span(input.bars.xy, across, soft), on_span(input.bars.zw, across, soft));
     // The flow: faster in the middle than by the banks, around the stones.
     float2 down = input.flow.xy / max(length(input.flow.xy), 1e-4);
     float u = saturate(out_from_middle / max(half_water, 1e-3));
@@ -1493,7 +1511,7 @@ FreshWater river_water(WaterSurface* w, RiverOut input)
     s.fall = -down * min(input.flow.z, 0.3);
     s.tilt = -down * input.flow.z;
     s.rough = RIVER_WAKE_ROUGHNESS * stones.rough;
-    s.coverage = input.river.y * lerp(near_cover, far_cover, drape);
+    s.coverage = input.river.y * lerp(near_cover, far_cover, drape) * off_bars;
     s.drape = drape;
     s.depth = input.river.z * (1.0 - u * u);
     // A step's fall white through, and its boil across the pool below, thinning out (#122);

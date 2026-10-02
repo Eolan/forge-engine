@@ -1949,6 +1949,39 @@ mod tests {
                 .fold(f64::MAX, f64::min);
             assert!(inside < 3.0, "{q:?}");
         }
+        // Their spans across the ribbon's points, which keep the water far away off their sand:
+        // each from end to end of the bar's outline over the line across, a point where the bar
+        // does not cross it.
+        let spans = crate::river::bar_spans(ribbon);
+        assert_eq!(spans.len(), ribbon.points.len());
+        let mut crossed = [0; 2];
+        for (p, span) in ribbon.points.iter().zip(&spans) {
+            let at = [f64::from(p.position[0]), f64::from(p.position[1])];
+            let side = [-f64::from(p.direction[1]), f64::from(p.direction[0])];
+            let reach = f64::from(p.reach);
+            for (slot, b) in ribbon.bars.iter().enumerate() {
+                let (from, to) = (f64::from(span[2 * slot]), f64::from(span[2 * slot + 1]));
+                assert!(-reach <= from && from <= to && to <= reach, "{span:?}");
+                let q = |across: f64| [at[0] + side[0] * across, at[1] + side[1] * across];
+                if to > from {
+                    crossed[slot] += 1;
+                    assert!(b.outside(q(from)) < 0.0 && b.outside(q(to)) < 0.0);
+                }
+                for s in 0..=(20.0 * reach) as i32 {
+                    let across = -reach + 0.1 * f64::from(s);
+                    if b.outside(q(across)) < 0.0 {
+                        assert!(from - 0.25 <= across && across <= to + 0.25, "{across}");
+                    }
+                }
+            }
+        }
+        // Along most of each bar's length, at points 4 m apart.
+        for (n, b) in crossed.iter().zip(&ribbon.bars) {
+            assert!(
+                f64::from(*n) * 4.0 > 1.5 * b.half[0],
+                "{n} points over {b:?}"
+            );
+        }
     }
 }
 

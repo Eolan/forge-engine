@@ -786,9 +786,12 @@ struct GpuRiverPoint {
     /// The white water a step's fall leaves, and how far its line bows downstream in the middle
     /// and towards the left bank (#122); one unused.
     f: [f32; 4],
+    /// Where its mouth's bars stand over the water across it (#127): two spans, each from and
+    /// to, metres from the middle.
+    g: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuRiverPoint>() == 96);
+const _: () = assert!(std::mem::size_of::<GpuRiverPoint>() == 112);
 
 /// A point of a river's ribbon (`forge_procgen::RibbonPoint`), as the surface draws it.
 #[derive(Clone, Copy, Debug)]
@@ -827,6 +830,10 @@ pub struct WaterRiverPoint {
     /// around the vertex, metres (`forge_procgen::RibbonPoint::ground`), where the water lies
     /// far away.
     pub ground: [f32; RIVER_ACROSS as usize + 1],
+    /// Where the bars of its mouth stand over the water across it, which the water lying on the
+    /// ground far away leaves dry (`forge_procgen::bar_spans`, #127): two spans, each from and
+    /// to, metres from the middle along `(−direction.z, direction.x)`; equal ends where none.
+    pub bars: [f32; 4],
 }
 
 /// Shore trains the surface draws at most (`WATER_MAX_TRAINS` in `water.slang`).
@@ -1518,6 +1525,7 @@ impl WaterSurface {
                             d: [p.ground[0], p.ground[1], p.ground[2], p.ground[3]],
                             e: [p.reach, p.bank, first[points.len()] as f32, along],
                             f: [p.foam, p.lip[0], p.lip[1], 0.0],
+                            g: p.bars,
                         });
                     }
                 }

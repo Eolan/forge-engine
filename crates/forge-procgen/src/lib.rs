@@ -81,7 +81,7 @@ pub use layers::{
 pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
 pub use river::{
     Bar, BarParams, Corner, Delta, DeltaParams, Outlet, Ribbon, RibbonParams, RibbonPoint, Step,
-    StepParams, drawn_height, lip_shift, rest_on, ribbons, sea_mouth, smooth_height,
+    StepParams, bar_spans, drawn_height, lip_shift, rest_on, ribbons, sea_mouth, smooth_height,
 };
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};
 pub use valley::{

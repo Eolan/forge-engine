@@ -355,7 +355,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    each trunk, the lower courses graded to the sea, and the rivers under 3 km² brooks of
    nature's size (#123, `--island-basins 0 --island-grade 0 --no-brooks` for the island before).
    The large mouths at the sea split round one or two bars of sand standing over the water
-   (#127, `--no-bars`). Next: the owner's judgement of the rivers and of the new island.
+   (#127, `--no-bars`), and they keep their sand from afar. Next: the owner's judgement of the
+   rivers and of the new island.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of
