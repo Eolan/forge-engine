@@ -58,6 +58,14 @@ pub enum RockRule {
         /// Metres above which the ground takes rocks (above the beaches).
         above: f32,
     },
+    /// Drawn from the ground's rock sites ([`Ground::sites`], #130): each rock's cell by the
+    /// sites' weights, none lost. The sites are of two rocks; the first slots stand on the
+    /// first rock in its meshes ([`CityMeshes::rocks`]), the rest on the second in its own
+    /// ([`CityMeshes::second_rocks`]).
+    Sites {
+        /// The share of the rocks on the second rock.
+        second: f32,
+    },
 }
 
 /// Slots per category, in the order the shader lays them out.
@@ -129,6 +137,17 @@ impl CityLayout {
             rocks: self.total.saturating_sub(buildings + lamps + plaza_slots),
         }
     }
+
+    /// The rock slots on the first rock ([`RockRule::Sites`]; all of them otherwise).
+    pub fn first_rocks(&self) -> u32 {
+        let rocks = self.counts().rocks;
+        match self.rocks {
+            RockRule::Sites { second } => {
+                rocks - ((rocks as f32 * second.clamp(0.0, 1.0)).round() as u32).min(rocks)
+            }
+            _ => rocks,
+        }
+    }
 }
 
 /// Which meshes the categories use.
@@ -136,8 +155,11 @@ impl CityLayout {
 pub struct CityMeshes {
     /// Buildings, chosen per lot (at most 16).
     pub buildings: Vec<MeshId>,
-    /// Rocks and rubble, chosen per slot (at most 8).
+    /// Rocks and rubble, chosen per slot (at most 8); with [`RockRule::Sites`], the first
+    /// rock's.
     pub rocks: Vec<MeshId>,
+    /// With [`RockRule::Sites`], the second rock's (at most 8); empty otherwise.
+    pub second_rocks: Vec<MeshId>,
     /// The lamp post.
     pub lamp: MeshId,
     /// The fountain.
@@ -165,13 +187,19 @@ pub fn mesh_counts(layout: &CityLayout, meshes: &CityMeshes) -> Vec<(MeshId, u32
         buildings[building_choice(layout, slot, meshes.buildings.len() as u32)] += 1;
     }
     let mut rocks = vec![0_u32; meshes.rocks.len()];
+    let mut second = vec![0_u32; meshes.second_rocks.len()];
     let first_rock = counts.buildings + counts.lamps + counts.plaza_slots;
-    for slot in first_rock..first_rock + counts.rocks {
+    let split = first_rock + layout.first_rocks();
+    for slot in first_rock..split {
         rocks[rock_choice(layout, slot, meshes.rocks.len() as u32)] += 1;
+    }
+    for slot in split..first_rock + counts.rocks {
+        second[rock_choice(layout, slot, meshes.second_rocks.len() as u32)] += 1;
     }
     let plazas = counts.plaza_slots / 5;
     let mut out: Vec<(MeshId, u32)> = meshes.buildings.iter().copied().zip(buildings).collect();
     out.extend(meshes.rocks.iter().copied().zip(rocks));
+    out.extend(meshes.second_rocks.iter().copied().zip(second));
     out.push((meshes.lamp, counts.lamps));
     out.push((meshes.fountain, plazas));
     out.push((meshes.column, 4 * plazas));
@@ -214,9 +242,18 @@ struct GpuPlacement {
     pad2: i32,
     origin_local: [f32; 3],
     rock_above: f32,
+    /// [`RockRule::Sites`]: per rock, (cumulative weight, cell) of its cells with any.
+    sites: u64,
+    /// Entries of each rock in `sites`, the second's after the first's.
+    site_cells: [u32; 2],
+    first_rocks: u32,
+    second_mesh_count: u32,
+    site_size: u32,
+    site_spacing: f32,
+    second_meshes: [u32; 8],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuPlacement>() == 240);
+const _: () = assert!(std::mem::size_of::<GpuPlacement>() == 304);
 
 /// The ground the instances stand on: `samples × samples` heights, `spacing` metres apart,
 /// rows along +z, centred on the origin (the terrain mesh's vertices in cooking order).
@@ -227,6 +264,42 @@ pub struct Ground<'a> {
     pub samples: u32,
     /// Metres between samples.
     pub spacing: f32,
+    /// Where rocks lie, for [`RockRule::Sites`].
+    pub sites: Option<RockSites<'a>>,
+}
+
+/// Where rocks lie (`forge_procgen::rock_sites`, #130): `size × size` cells `spacing` metres
+/// across over the ground's square, rows along +z, each the weight of a rock in it in its low
+/// seven bits and its rock in its high bit (0: the first, 1: the second).
+#[derive(Clone, Copy)]
+pub struct RockSites<'a> {
+    /// The cells.
+    pub cells: &'a [u8],
+    /// Cells per side.
+    pub size: u32,
+    /// Metres across a cell.
+    pub spacing: f32,
+}
+
+impl RockSites<'_> {
+    /// Per rock, (cumulative weight, cell) of its cells with any: the first rock's entries,
+    /// then the second's, and how many of each.
+    fn tables(&self) -> (Vec<[u32; 2]>, [u32; 2]) {
+        let mut out = Vec::new();
+        let mut counts = [0_u32; 2];
+        for (rock, count) in counts.iter_mut().enumerate() {
+            let mut sum = 0_u32;
+            for (cell, &c) in self.cells.iter().enumerate() {
+                let weight = u32::from(c & 0x7f);
+                if weight > 0 && usize::from(c >> 7) == rock {
+                    sum += weight;
+                    out.push([sum, cell as u32]);
+                    *count += 1;
+                }
+            }
+        }
+        (out, counts)
+    }
 }
 
 /// The ground's layers (issue #42): the ids of [`ground_layers`], in the order of the rows that
@@ -418,7 +491,9 @@ pub fn place(
     meshes: &CityMeshes,
     ground: &Ground<'_>,
 ) -> Result<PlacementReport> {
-    assert!(meshes.buildings.len() <= 16 && meshes.rocks.len() <= 8);
+    assert!(
+        meshes.buildings.len() <= 16 && meshes.rocks.len() <= 8 && meshes.second_rocks.len() <= 8
+    );
     let start = Instant::now();
     let module = device.create_shader_module(
         &shaders.compile("meshlet.slang", "place_main", ShaderStage::Compute)?,
@@ -446,6 +521,32 @@ pub fn place(
     for (slot, mesh) in rock_meshes.iter_mut().zip(&meshes.rocks) {
         *slot = mesh.index();
     }
+    let mut second_meshes = [0_u32; 8];
+    for (slot, mesh) in second_meshes.iter_mut().zip(&meshes.second_rocks) {
+        *slot = mesh.index();
+    }
+    // The rock sites' tables (#130): every rock has a cell to stand in.
+    let sites = match (layout.rocks, ground.sites) {
+        (RockRule::Sites { .. }, Some(sites)) => {
+            let (table, cells) = sites.tables();
+            let first_rocks = layout.first_rocks();
+            assert!(
+                (first_rocks == 0 || (cells[0] > 0 && !meshes.rocks.is_empty()))
+                    && (first_rocks == counts.rocks
+                        || (cells[1] > 0 && !meshes.second_rocks.is_empty())),
+                "a rock without sites or meshes"
+            );
+            let buffer = device.create_buffer_with_data(
+                &table,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                forge_gpu::MemoryCategory::Transfer,
+                "placement rock sites",
+            )?;
+            Some((buffer, cells, sites))
+        }
+        (RockRule::Sites { .. }, None) => panic!("RockRule::Sites without the ground's sites"),
+        _ => None,
+    };
     let params = GpuPlacement {
         instances: scene.instance_buffer().address(),
         meshes: scene.mesh_buffer().address(),
@@ -474,6 +575,7 @@ pub fn place(
         rock_rule: match layout.rocks {
             RockRule::Hills => 0,
             RockRule::Land { .. } => 1,
+            RockRule::Sites { .. } => 2,
         },
         building_meshes,
         rock_meshes,
@@ -483,7 +585,15 @@ pub fn place(
         rock_above: match layout.rocks {
             RockRule::Hills => 0.0,
             RockRule::Land { above } => above,
+            RockRule::Sites { .. } => 0.0,
         },
+        sites: sites.as_ref().map_or(0, |s| s.0.address()),
+        site_cells: sites.as_ref().map_or([0; 2], |s| s.1),
+        first_rocks: layout.first_rocks(),
+        second_mesh_count: meshes.second_rocks.len() as u32,
+        site_size: sites.as_ref().map_or(0, |s| s.2.size),
+        site_spacing: sites.as_ref().map_or(0.0, |s| s.2.spacing),
+        second_meshes,
     };
     let params = device.create_buffer_with_data(
         &[params],
@@ -556,6 +666,7 @@ mod tests {
             heights: &heights,
             samples,
             spacing,
+            sites: None,
         };
         let at = |x: f32, z: f32| ground_layer(&layout, &ground, x, z);
         // The street line at x = -1200 + 100 k: asphalt in the middle, sidewalk at its edges.
@@ -586,6 +697,49 @@ mod tests {
         // Crossings 2, 6, 10, 14, 18 and 22 on each axis.
         assert_eq!(c.plaza_slots, 5 * 6 * 6);
         assert_eq!(c.buildings + c.lamps + c.plaza_slots + c.rocks, 1_000_000);
+    }
+
+    #[test]
+    fn the_sites_split_the_rocks_between_two_rocks_and_their_meshes() {
+        let layout = CityLayout {
+            rocks: RockRule::Sites { second: 0.3 },
+            ..CityLayout::island(10_000)
+        };
+        assert_eq!(layout.counts().rocks, 10_000);
+        assert_eq!(layout.first_rocks(), 7_000);
+        let id = MeshId::from_index;
+        let meshes = CityMeshes {
+            buildings: Vec::new(),
+            rocks: vec![id(0), id(1)],
+            second_rocks: vec![id(2), id(3), id(4)],
+            lamp: id(0),
+            fountain: id(0),
+            column: id(0),
+        };
+        let counts = mesh_counts(&layout, &meshes);
+        let on = |ids: &[u32]| -> u32 {
+            counts
+                .iter()
+                .filter(|(m, _)| ids.contains(&m.index()))
+                .map(|(_, c)| c)
+                .sum()
+        };
+        assert_eq!(on(&[0, 1]), 7_000);
+        assert_eq!(on(&[2, 3, 4]), 3_000);
+        assert!(
+            counts
+                .iter()
+                .filter(|(m, _)| m.index() >= 2)
+                .all(|(_, c)| *c > 900)
+        );
+        // The tables: the first rock's cells (high bit clear) with weight, then the second's.
+        let cells = [0, 5, 0x83, 0x80, 2];
+        let sites = RockSites {
+            cells: &cells,
+            size: 5,
+            spacing: 8.0,
+        };
+        assert_eq!(sites.tables(), (vec![[5, 1], [7, 4], [3, 2]], [2, 1]));
     }
 
     #[test]

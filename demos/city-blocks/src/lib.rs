@@ -31,6 +31,7 @@ use forge_geom::cache::cook_cached;
 use forge_geom::city::{
     CellWindow, Heightfield, HeightfieldDetail, Lathe, PropKind, PropSpec, Terrain, city_props,
 };
+use forge_geom::stone::{Stone, StoneShape};
 use forge_procgen::{
     ErosionParams, Field2, IslandParams, Ocean, OceanParams, ShoreProfile, ShoreTrain,
 };
@@ -234,6 +235,11 @@ struct Args {
     /// ground and the sea cliffs, no karst (#129, D-042).
     #[arg(long)]
     no_rock_types: bool,
+    /// Strew the island's rocks as before (#130): 300 000 of the city's boulders and rubble,
+    /// more on the steeper ground, in one dark grey, instead of fewer stones of the island's own
+    /// granite and limestone where rocks gather.
+    #[arg(long)]
+    no_rock_sites: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1847,6 +1853,7 @@ impl CityMaterials {
         texels: u32,
         size: f32,
         rock_types: bool,
+        rock_sites: bool,
     ) -> Result<MaterialId> {
         let map = self
             .textures
@@ -2123,6 +2130,42 @@ impl CityMaterials {
             "rubble-2",
         ] {
             self.by_prop.insert(prop, boulders);
+        }
+        // The island's own stones (#130), in its granite and its limestone, and the rivers'
+        // boulders in the granite they were carried down from.
+        if rock_sites {
+            let stones = |name, rock, a, b| {
+                Material::new(
+                    name,
+                    RenderLayer {
+                        cavity: 0.2,
+                        ..textured(rock, a, b, 3.0, 16.0, 0.05)
+                    },
+                )
+            };
+            let granite = self.table.add(stones(
+                "island: granite stones",
+                granite,
+                [0.52, 0.48, 0.44],
+                [0.6, 0.55, 0.5],
+            ));
+            let limestone = self.table.add(stones(
+                "island: limestone stones",
+                limestone,
+                [0.5, 0.5, 0.48],
+                [0.58, 0.57, 0.54],
+            ));
+            for (i, (name, _, _)) in ISLAND_STONES.iter().enumerate() {
+                let rock = if i < GRANITE_STONES {
+                    granite
+                } else {
+                    limestone
+                };
+                self.by_prop.insert(name, rock);
+            }
+            for prop in ["boulder-1", "boulder-2", "boulder-3"] {
+                self.by_prop.insert(prop, granite);
+            }
         }
         Ok(ground)
     }
@@ -3542,20 +3585,91 @@ fn island_camera(args: &Args) -> FlyCamera {
 }
 
 /// The island's props, in the order `build_island` reads them: the island's tiles, the sea around
-/// it, and the city's boulders and rubble for its rocks (the same cache files as the city's).
+/// it, the city's boulders (the same cache files as the city's) for the stones in its rivers,
+/// then its own stones (#130), granite then limestone; or with `--no-rock-sites`, the city's
+/// boulders and rubble for all its rocks.
 fn island_props(args: &Args) -> Vec<PropSpec> {
     let mut props = island_tiles(args);
     props.push(sea_prop());
-    props.extend(
-        city_props()
-            .into_iter()
-            .filter(|p| matches!(p.kind, PropKind::Boulder { .. } | PropKind::Rubble { .. })),
-    );
+    props.extend(city_props().into_iter().filter(|p| match p.kind {
+        PropKind::Boulder { .. } => true,
+        PropKind::Rubble { .. } => args.no_rock_sites,
+        _ => false,
+    }));
+    if !args.no_rock_sites {
+        props.extend(island_stone_props());
+    }
     // The movers' barrel last (#79), after the rocks.
     if args.movers > 0 {
         props.push(barrel_prop());
     }
     props
+}
+
+/// The island's stones (#130), granite's then limestone's, eight each (the placement's most
+/// per rock): the name, the shape and the half-size in metres. A rock is any of its rock's
+/// eight alike, so a shape's count among them is its share: the granite mostly corestones,
+/// a slab now and then, a tor in eight; the limestone mostly blocks, and flags.
+const ISLAND_STONES: [(&str, StoneShape, [f32; 3]); 16] = [
+    (
+        "granite-corestone-1",
+        StoneShape::Corestone,
+        [1.4, 1.0, 1.2],
+    ),
+    (
+        "granite-corestone-2",
+        StoneShape::Corestone,
+        [1.8, 0.9, 1.1],
+    ),
+    (
+        "granite-corestone-3",
+        StoneShape::Corestone,
+        [1.0, 0.95, 1.0],
+    ),
+    (
+        "granite-corestone-4",
+        StoneShape::Corestone,
+        [1.5, 1.2, 1.4],
+    ),
+    (
+        "granite-corestone-5",
+        StoneShape::Corestone,
+        [1.2, 0.7, 0.9],
+    ),
+    ("granite-slab-1", StoneShape::Slab, [2.0, 0.45, 1.5]),
+    ("granite-slab-2", StoneShape::Slab, [1.5, 0.35, 1.3]),
+    ("granite-tor", StoneShape::Tor, [2.0, 1.2, 1.7]),
+    ("limestone-block-1", StoneShape::Block, [1.2, 0.8, 1.0]),
+    ("limestone-block-2", StoneShape::Block, [1.6, 0.6, 1.1]),
+    ("limestone-block-3", StoneShape::Block, [0.9, 0.9, 0.8]),
+    ("limestone-block-4", StoneShape::Block, [1.4, 1.1, 1.3]),
+    ("limestone-block-5", StoneShape::Block, [1.0, 0.5, 0.7]),
+    ("limestone-block-6", StoneShape::Block, [1.7, 1.0, 1.2]),
+    ("limestone-flag-1", StoneShape::Block, [1.5, 0.25, 1.2]),
+    ("limestone-flag-2", StoneShape::Block, [1.1, 0.2, 0.9]),
+];
+
+/// How many of [`ISLAND_STONES`] are granite (the first ones).
+const GRANITE_STONES: usize = 8;
+
+/// The island's rocks from its rock sites (#130), unless `--instances` says otherwise.
+const ISLAND_ROCKS: u32 = 60_000;
+
+/// The props of [`ISLAND_STONES`].
+fn island_stone_props() -> Vec<PropSpec> {
+    ISLAND_STONES
+        .iter()
+        .enumerate()
+        .map(|(i, &(name, shape, size))| PropSpec {
+            name: name.to_owned(),
+            kind: PropKind::Stone(Stone {
+                seed: 130 + i as u64,
+                shape,
+                size,
+                segments: if shape == StoneShape::Block { 96 } else { 80 },
+            }),
+        })
+        .collect()
 }
 
 /// A metal drum, 0.6 m across and 0.88 m long with two rolling hoops: the movers of `--movers`
@@ -4345,6 +4459,31 @@ fn build_island(
             "the island's rocks: granite, limestone, karst (D-042, #129, --view)"
         );
     }
+    // Where the loose rocks lie, and which rock they are (#130): the map the placement draws
+    // them from.
+    let sites = (!args.no_rock_sites).then(|| {
+        let sites_start = Instant::now();
+        let (map, stats) = forge_procgen::rock_sites(
+            &height,
+            &layers,
+            &forge_procgen::SiteLayers {
+                scree: island_layer::SCREE,
+                karst: island_layer::KARST,
+                none: vec![
+                    island_layer::SAND,
+                    island_layer::SEABED,
+                    island_layer::STREAM,
+                    island_layer::LAKEBED,
+                    island_layer::GRAVEL,
+                    island_layer::LAKE_SAND,
+                    island_layer::SHINGLE,
+                ],
+            },
+            &forge_procgen::GeologyRule::default(),
+            &forge_procgen::RockSiteRule::default(),
+        );
+        (map, stats, sites_start.elapsed().as_millis())
+    });
     builder.set_ray_traced(!args.no_shadows);
     // The ground's tiles, then the sea, then the rocks (`island_props`).
     let tiles = (ISLAND_TILES * ISLAND_TILES) as usize;
@@ -4352,9 +4491,24 @@ fn build_island(
     // The tiles cut for the rays as the one mesh they were (#106).
     builder.set_ray_group(tile_ids, forge_render::raytrace::TERRAIN_BUDGET);
     let mut materials = CityMaterials::new(&ctx.device)?;
-    materials.island_ground(&layers.data, texels, extent, !args.no_rock_types)?;
+    materials.island_ground(
+        &layers.data,
+        texels,
+        extent,
+        !args.no_rock_types,
+        !args.no_rock_sites,
+    )?;
     materials.apply(&mut builder, &props, &ids);
-    let mut layout = CityLayout::island(args.instances.unwrap_or(300_000));
+    let mut layout = CityLayout::island(args.instances.unwrap_or(if sites.is_some() {
+        ISLAND_ROCKS
+    } else {
+        300_000
+    }));
+    if let Some((_, stats, _)) = &sites {
+        layout.rocks = placement::RockRule::Sites {
+            second: stats.limestone_share() as f32,
+        };
+    }
     layout.origin = scene_origin(args);
     builder.set_origin(layout.origin);
     if streamed {
@@ -4383,7 +4537,8 @@ fn build_island(
     let banked = forge_procgen::bank_stones(&ribbons, &channels, &height, RIVER_STONES ^ 0xba);
     stones.extend_from_slice(&banked);
     // On the scree at the foot of their walls, the rubble piles scaled down to broken rock: a
-    // pile on a third of its texels, 0.2 to 0.4 of its size, sunk a little.
+    // pile on a third of its texels, 0.2 to 0.4 of its size, sunk a little (with `--no-rock-sites`:
+    // the rock sites put the island's own stones there, #130).
     // The ground as the tiles draw it (#106): finer than the field, its cubic.
     let drawn = island_drawn(args);
     let factor = island_factor(args);
@@ -4406,7 +4561,7 @@ fn build_island(
             .data
             .iter()
             .enumerate()
-            .filter(|&(_, &layer)| layer == island_layer::SCREE)
+            .filter(|&(_, &layer)| layer == island_layer::SCREE && !piles.is_empty())
             .filter_map(|(i, _)| {
                 let (x, y) = ((i as u32 % texels) as i32, (i as u32 / texels) as i32);
                 let draw = |salt: u64| {
@@ -4459,12 +4614,31 @@ fn build_island(
             ),
         );
     }
-    // The rocks: the GPU placement over the island's own heights (`placement::RockRule::Land`).
-    // After them, the movers' barrel (#79).
-    let rocks: Vec<MeshId> = ids[tiles + 1..ids.len() - usize::from(args.movers > 0)].to_vec();
+    // The rocks: the GPU placement over the island's own heights, from its rock sites, the
+    // granite's stones and the limestone's (`placement::RockRule::Sites`, #130); or with
+    // `--no-rock-sites`, the city's boulders and rubble over its land (`RockRule::Land`). After
+    // them, the movers' barrel (#79).
+    let named = |names: &[(&str, StoneShape, [f32; 3])]| -> Vec<MeshId> {
+        names
+            .iter()
+            .map(|(name, _, _)| ids[props.iter().position(|p| p.name == *name).expect("stone")])
+            .collect()
+    };
+    let (rocks, second_rocks) = if sites.is_some() {
+        (
+            named(&ISLAND_STONES[..GRANITE_STONES]),
+            named(&ISLAND_STONES[GRANITE_STONES..]),
+        )
+    } else {
+        (
+            ids[tiles + 1..ids.len() - usize::from(args.movers > 0)].to_vec(),
+            Vec::new(),
+        )
+    };
     let meshes = CityMeshes {
         buildings: Vec::new(),
         rocks: rocks.clone(),
+        second_rocks,
         // No city: none of these is placed.
         lamp: rocks[0],
         fountain: rocks[0],
@@ -4496,6 +4670,42 @@ fn build_island(
             }
         }
     }
+    // The rock sites (#130) clear of those samples: a cell with any of them at its corners
+    // takes no rock.
+    let site_cells = sites.as_ref().map(|(map, stats, ms)| {
+        let mut cells = map.data.clone();
+        let per = map.spacing / height.spacing;
+        let last = height.size - 1;
+        for (c, cell) in cells.iter_mut().enumerate() {
+            let (x, y) = (c as u32 % map.size, c as u32 / map.size);
+            let span = |k: u32| {
+                let lo = (f64::from(k) * per).floor() as u32;
+                lo.min(last)..=((f64::from(k + 1) * per).ceil() as u32).min(last)
+            };
+            let clear = span(y)
+                .all(|j| span(x).all(|i| rock_ground[(j * height.size + i) as usize] > -1.0e5));
+            if !clear {
+                *cell = 0;
+            }
+        }
+        let placed = layout.counts().rocks as f64;
+        let total: f64 = stats.by_site.iter().sum();
+        let by_site: Vec<String> = forge_procgen::SITE_NAMES
+            .iter()
+            .zip(stats.by_site)
+            .map(|(name, w)| format!("{name} {:.0}", placed * w / total.max(1.0)))
+            .collect();
+        tracing::info!(
+            rocks = layout.counts().rocks,
+            granite = layout.first_rocks(),
+            limestone = layout.counts().rocks - layout.first_rocks(),
+            by_site = %by_site.join(", "),
+            cells = cells.iter().filter(|&&c| c & 0x7f > 0).count(),
+            ms,
+            "the island's rock sites (#130, --no-rock-sites)"
+        );
+        (cells, map.size, map.spacing as f32)
+    });
     // Drawn finer, the rocks stand on the drawn samples, those nearest a sample set aside above
     // set aside too (#106).
     let (rock_ground, rock_samples, rock_spacing) = if factor > 1 {
@@ -4519,6 +4729,13 @@ fn build_island(
         heights: &rock_ground,
         samples: rock_samples,
         spacing: rock_spacing as f32,
+        sites: site_cells
+            .as_ref()
+            .map(|(cells, size, spacing)| placement::RockSites {
+                cells,
+                size: *size,
+                spacing: *spacing,
+            }),
     };
     let residency = if streamed {
         Residency::Streamed(StreamingConfig::from_mib(
@@ -4613,6 +4830,7 @@ fn build_city(
         heights: &heights,
         samples: terrain.samples(),
         spacing: terrain.spacing,
+        sites: None,
     };
     // The ground's layers, a metre a texel: streets, sidewalks, plazas, lots, rock on the
     // steep hills (issue #42).
@@ -4644,6 +4862,7 @@ fn build_city(
             .filter(|(p, _)| matches!(p.kind, PropKind::Boulder { .. } | PropKind::Rubble { .. }))
             .map(|(_, &id)| id)
             .collect(),
+        second_rocks: Vec::new(),
         lamp: id("lamp-post"),
         fountain: id("fountain"),
         column: id("column"),

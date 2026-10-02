@@ -9,6 +9,7 @@ pub mod lod;
 pub mod meshlet;
 pub mod page;
 pub mod procedural;
+pub mod stone;
 
 pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag};
 pub use meshlet::{

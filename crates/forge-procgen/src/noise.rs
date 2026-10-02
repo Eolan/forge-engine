@@ -64,7 +64,7 @@ pub fn fbm(seed: u64, x: f64, y: f64, octaves: u32, lacunarity: f64, gain: f64) 
     for octave in 0..octaves {
         sum += amplitude
             * gradient2(
-                seed ^ (u64::from(octave) * 0x9E37_79B9_7F4A_7C15),
+                seed ^ u64::from(octave).wrapping_mul(0x9E37_79B9_7F4A_7C15),
                 x * frequency,
                 y * frequency,
             );
@@ -80,7 +80,7 @@ pub fn ridged(seed: u64, x: f64, y: f64, octaves: u32, lacunarity: f64, gain: f6
     let (mut sum, mut amplitude, mut frequency, mut norm) = (0.0, 1.0, 1.0, 0.0);
     for octave in 0..octaves {
         let n = gradient2(
-            seed ^ (u64::from(octave) * 0x9E37_79B9_7F4A_7C15),
+            seed ^ u64::from(octave).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             x * frequency,
             y * frequency,
         );

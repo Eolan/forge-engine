@@ -99,8 +99,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's
   call). The rock types ✅ (#129, D-042, the owner's pick): a granite core, a limestone coast
-  with karst on its dry slopes. Next for them: the boulders' colour following the rock under
-  them, and the granite's grus on its gentle slopes.
+  with karst on its dry slopes. The boulders by the rocks ✅ (#130): fewer, of the island's own
+  granite and limestone in shapes of their own, where rocks gather (talus, crests, karst). Next
+  for them: the granite's grus on its gentle slopes.
 - **Phase 3's start:** `forge-sim` and the physics engine (D-009). Its first visible use is the
   island's water: buoyancy for what floats (#107's barrels are carried at the water's speed,
   without physics), boats and swimming from the owner's inbox. Its demo is `materials-yard`.
@@ -302,7 +303,7 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    - its own ground: sand, rock by the slope over 8 m, and the rivers and lakes of stage 4
      painted in;
    - a sea floor from the coast distance, under a sea plane that stands in for the water;
-   - 300 000 rocks placed by the GPU on the land;
+   - 300 000 rocks placed by the GPU on the land (60 000 where rocks gather since #130);
    - a first view on the coast;
    - the island in the batch, the validation and the timings (1.34 ms from the coast).
    Since (2026-10-01, #106): the field smoothed by a binomial pass against the 8 m erosion's
@@ -312,8 +313,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    (`--island-drawn 8` for the field's cells).
    The owner judged the look on 2026-10-02, the 4 m flanks as they are; the `island` demo of
    its own followed the same day (#96 step 3), then the beaches by type (#128,
-   `--no-beach-types`) and the rocks by the island's geology (#129, D-042, `--no-rock-types`).
-   Next: more of stage 6's materials, the boulders' colour by the rock under them.
+   `--no-beach-types`), the rocks by the island's geology (#129, D-042, `--no-rock-types`) and
+   the boulders by them (#130, `--no-rock-sites`). Next: more of stage 6's materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute
    queue and a forward surface pass first, then the shore from the coast distance, the rivers

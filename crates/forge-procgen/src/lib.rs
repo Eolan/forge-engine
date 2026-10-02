@@ -34,6 +34,8 @@
 //!   valleys' ground painted: gravel beds, scree at the walls' foot, scrub on the walls.
 //! - [`lake`]: the lakes' water, a level plane each and the mask of the samples it covers.
 //! - [`layers`]: stage 6's first rule, the ground's material layers from slope and altitude.
+//! - [`sites`]: where the island's loose rocks lie (talus, crests, karst, scree) and of which rock,
+//!   the map the GPU placement draws them from.
 //! - [`preview`]: PNG previews of any stage (height, hillshade, flow, an overview with the
 //!   sea, rivers and lakes), which is how the pipeline is looked at before a GPU draws it.
 //!
@@ -58,6 +60,7 @@ pub mod ocean;
 pub mod preview;
 pub mod river;
 pub mod shore;
+pub mod sites;
 pub mod valley;
 
 pub use amplify::{AmplifyParams, amplify};
@@ -89,6 +92,7 @@ pub use river::{
     StepParams, bar_spans, drawn_height, lip_shift, rest_on, ribbons, sea_mouth, smooth_height,
 };
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};
+pub use sites::{RockSiteRule, RockSiteStats, SITE_NAMES, SiteLayers, SiteWeights, rock_sites};
 pub use valley::{
     ValleyGround, ValleyPainted, ValleyParams, ValleyStats, carve_valleys, paint_valley_ground,
 };

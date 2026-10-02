@@ -1741,5 +1741,6 @@ plain grey. The owner took the core and the coast:
 
 Built as stage 6's rule (D-041's materials as rules): the limestone below a height that wanders
 round the island, the granite above it, each with its own texture, and karst on the limestone's
-bare, gentler and drier ground. The boulders' colour following the rock under them, and the
-grus (the granite's coarse sandy soil) on gentle slopes, are later steps.
+bare, gentler and drier ground. The boulders follow the rocks since #130: granite's rounded
+corestones, tors and slabs, limestone's blocks and flags, where rocks gather. The grus (the
+granite's coarse sandy soil) on gentle slopes is a later step.

@@ -332,7 +332,7 @@ target; 2.6 ms without the probes. It was 3.81 ms after #68.
 The scene has three parts:
 - the island: 8.4 M triangles at 8 m, streamed (drawn at 2 m since #106: 143 M triangles in 64
   tiles, "The ground in tiles" below);
-- 300 000 rocks on its land;
+- 300 000 rocks on its land (60 000 since #130, below);
 - a flat sea plane with traced mirror rays.
 
 No pass of its own; the city's passes at 1600 × 900, 3 000 frames:
@@ -951,6 +951,22 @@ One frame of the run takes 49 ms; no second's p99 passes 3.93 ms at 1440p.
 The beaches by type (#128): no pass of their own; the contour's set of layers under its height
 leaves `shading/layered` at 96 registers with no spill, 0.318–0.334 ms on the island against
 0.329–0.331 (`timings.sh`, 1600 × 900). Their rule takes 82 ms at start.
+
+The boulders where rocks gather (#130): 60 000 stones of the island's own rocks in place of
+300 000 of the city's boulders, no pass of their own. The placed triangles fall from 196 G to
+8.7 G, and the frame with them (`timings.sh`, 1600 × 900, three runs each):
+
+| | before | after |
+|---|---|---|
+| **island (the coast)** | **1.583–1.620 ms** | **1.493–1.507** |
+| gi/probe rays [compute] | 0.336 | 0.274 |
+| geometry/software raster 1 | 0.164 | 0.024 |
+| gi/probe blend [compute] | 0.140 | 0.100 |
+| geometry/instance cull | 0.081 | 0.051 |
+| **island tour** | **1.409–1.437 ms** | **1.315–1.327** |
+
+`shading/layered` is the same (0.309 → 0.318 on the coast, within its spread). The rock sites'
+map takes about 570 ms at start, the placement 60 ms as before.
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

@@ -311,7 +311,7 @@ pub fn paint_beaches(
 
 /// `values` blurred by a box `reach` cells either way, along the rows then the columns (an
 /// `n × n` grid; the box shrinks at the edges).
-fn blur(values: &[f64], n: usize, reach: usize) -> Vec<f64> {
+pub(crate) fn blur(values: &[f64], n: usize, reach: usize) -> Vec<f64> {
     let pass = |src: &[f64], along_rows: bool| {
         let mut out = vec![0.0; n * n];
         for a in 0..n {

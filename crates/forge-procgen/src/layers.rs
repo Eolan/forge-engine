@@ -404,6 +404,20 @@ impl Default for GeologyRule {
     }
 }
 
+impl GeologyRule {
+    /// Metres over the sea under which the ground at (`x`, `y`) is limestone.
+    pub fn limestone_below_at(&self, x: f64, y: f64) -> f64 {
+        let (mean, swing) = self.limestone_below;
+        mean + swing * noise::fbm(self.seed, x / self.wander, y / self.wander, 2, 2.0, 0.5)
+            + self.ragged * noise::fbm(self.seed ^ 1, x / 30.0, y / 30.0, 2, 2.0, 0.5)
+    }
+
+    /// Whether the ground at (`x`, `y`), `height` metres over the sea, is limestone.
+    pub fn is_limestone(&self, x: f64, y: f64, height: f32) -> bool {
+        f64::from(height) < self.limestone_below_at(x, y)
+    }
+}
+
 /// The layers [`paint_geology`] reads and paints.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeologyLayers {
@@ -458,11 +472,7 @@ pub fn paint_geology(
             (f64::from(t as u32 % n) + 0.5) * cell,
             (f64::from(t as u32 / n) + 0.5) * cell,
         );
-        let (mean, swing) = rule.limestone_below;
-        let below = mean
-            + swing * noise::fbm(rule.seed, x / rule.wander, y / rule.wander, 2, 2.0, 0.5)
-            + rule.ragged * noise::fbm(rule.seed ^ 1, x / 30.0, y / 30.0, 2, 2.0, 0.5);
-        let limestone = f64::from(height.sample(x, y)) < below;
+        let limestone = rule.is_limestone(x, y, height.sample(x, y));
         if layer == ids.rock {
             if limestone {
                 layers.data[t] = ids.limestone;

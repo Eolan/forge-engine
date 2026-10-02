@@ -17,6 +17,7 @@ use glam::Vec3;
 
 use crate::meshlet::CookOptions;
 use crate::procedural::{TriMesh, asteroid, fbm};
+use crate::stone::{Stone, stone};
 
 /// A prop of the city set: its name (unique within the set) and how to generate it.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +51,8 @@ pub enum PropKind {
         /// Quads per cube-face side of each boulder.
         segments: u32,
     },
+    /// A stone of the island (see [`stone`], #130).
+    Stone(Stone),
     /// A surface of revolution (see [`lathe`]).
     Lathe(Lathe),
     /// The ground (see [`terrain_mesh`]).
@@ -159,6 +162,7 @@ impl PropSpec {
                 pieces,
                 segments,
             } => rubble(*seed, *pieces, *segments),
+            PropKind::Stone(s) => stone(s),
             PropKind::Lathe(l) => lathe(l),
             PropKind::Terrain(t) => terrain_mesh(t),
             PropKind::Heightfield(h) => {
@@ -186,6 +190,7 @@ impl PropSpec {
                 PropKind::Lathe(_) => 0.5,
                 PropKind::Boulder { .. }
                 | PropKind::Rubble { .. }
+                | PropKind::Stone(_)
                 | PropKind::Terrain(_)
                 | PropKind::Heightfield(_) => 0.0,
             },

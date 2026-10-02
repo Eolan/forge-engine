@@ -50,7 +50,8 @@ city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) a
 below). It is drawn on its own layered ground: sand on the shore, rock where the ground is steeper than
 0.45, grass elsewhere, and a sea floor falling away from the coast (`forge_procgen::slope_layers`
 with a texel every 4 m, and `forge_procgen::sea_floor`). Around it:
-- 300 000 rocks, placed by the GPU on its land;
+- 60 000 rocks of its granite and limestone, placed by the GPU where rocks gather (#130; 300 000
+  of the city's boulders before it, `--no-rock-sites`);
 - a flat plane at 0 m that stands in for the sea out to the horizon;
 - the city's sky at a 30° sun, with the sun's shadows, the probes, the mirror rays and TAA.
 
@@ -397,7 +398,8 @@ the erosion, so the genesis digests do not change. The coast is where the plane 
 between the samples. With the flat sea it ran along the 8 m grid's edges, a sawtooth at close
 range. The layer below 0 m is a wet sand (`island_layer::SEABED`), out of sight under the plane.
 
-**Rocks** (`placement::RockRule::Land`): the GPU placement puts 300 000 of the city's boulders and
+**Rocks** (`placement::RockRule::Land`): (since #130, `--no-rock-sites` only: "The boulders where rocks
+gather" below) the GPU placement puts 300 000 of the city's boulders and
 rubble (`--instances`) on the island's land above 3 m. Each slot tries up to 32 candidates over
 the square, keeping one on land with a chance that rises with the slope: 15 % on the flat, all
 of them from a slope of 0.6. Since the coastal plain (#117, 2026-10-01) low ground keeps a tenth
@@ -2489,5 +2491,101 @@ Before (`--no-rock-types`) and now, frame 60:
 
 **Later:**
 - the boulders' colour following the rock under them, granite's pink in the hills and
-  limestone's grey on the low ground;
+  limestone's grey on the low ground (done in #130, below);
 - the grus, the granite's coarse sandy soil, on its gentle slopes.
+
+## The boulders where rocks gather (#130, 2026-10-02)
+
+The owner, on #129's result: the boulders should follow the rocks, with "more varied shapes and
+size", "and places that make sense. There's quite a lot, maybe too much". The island had
+300 000 of the city's boulders and rubble: one squashed asteroid shape in one dark grey, kept
+anywhere on its land with a chance that rose with the slope, so every hillside was strewn
+evenly. Now it has 60 000 stones of its own rocks where rocks gather (`--no-rock-sites` for the
+island before, `reports/2026-10-02-130/`).
+
+**Where** (`forge_procgen::rock_sites`): a map of 8 m cells, each the weight of a rock in it
+(0 to 127) and its rock (a bit). The likeliest site of a cell sets its weight:
+- **talus**, 1: below the steep ground (slope over 0.55) within 40 m, lower than its mean
+  height there. Talus is the rock it fell from: the granite's under a granite face, even on
+  limestone ground;
+- **scree**, 1: the scree's texels (#118);
+- **crests**, 0.6: the granite's tops and ridges, 3 to 12 m over the ground 64 m around, where
+  its corestones weather out as tors;
+- **karst**, 0.35: the karst's texels, loose blocks on the pavements;
+- **faces**, 0.06: the steep ground itself, a few blocks;
+- **scatter**, 0.004: elsewhere on the land, none on the flat (deep soil, no stones) and all of
+  it from a slope of 0.25.
+
+Nothing lies on the beaches, the rivers' beds and gravel, the lakes and their beds, under 3 m,
+or on the cells the channels and lakes reshape. Patches of noise 60 m across group the rocks,
+a tenth of them left between the patches. A weight is rounded by a dither, so the scatter's
+small weight keeps its share of the cells. The rock is D-042's contact
+(`GeologyRule::is_limestone`, the line the ground's rock follows).
+
+**Placed** (`placement::RockRule::Sites`): the CPU sums each rock's cells into a table of
+cumulative weights; each slot on the GPU draws its cell from its rock's table (a binary search)
+and a spot in it, so no slot is lost (with the old rule a slot that found no land in 32 tries
+lay out of sight). The first slots are granite and the rest limestone, in the share of the
+map's weights, so the CPU mirror of the meshes stays exact. A rock's size is 0.3 to 2.2 times
+its mesh, the cube of a uniform draw: mostly small, now and then big. It leans two thirds of the
+way with the ground, turns any way, tips a little, and sinks by 0.3 of its radius times the
+slope. The city's placement is unchanged (`4e10743a3499dc0e`).
+
+**Shapes** (`forge_geom::stone`, `PropKind::Stone`): cube-spheres pushed out to
+superellipsoids and roughened by noise, sixteen of them, eight per rock. A rock is any of its
+eight alike, so the shapes' counts are their shares:
+- **granite:** five corestones (rounded blocks, exponent 3, of varied proportions), two
+  exfoliation slabs (thin, exponent 2.4) and a tor (two or three corestones stacked, smaller up
+  the stack);
+- **limestone:** six blocks (exponent 6, cut by their bedding top and bottom, dipping a few
+  degrees, and by two to four near-upright joints, pitted by solution) and two flags (thin
+  blocks).
+
+**Colour:** the granite's stones in the granite's texture and tint, the limestone's in the
+limestone's, a shade greyer than its faces. The rivers' stones, the bank stones and the lips'
+boulders keep their shapes (the water flows round them by their outline), in the granite they
+were carried down from. The rubble on the scree is gone: the scree is a site.
+
+Seed 7: 49 494 granite and 10 506 limestone rocks. By site: 28 511 talus, 9 579 on crests,
+8 217 on the karst, 8 493 scattered, 4 914 on the faces and 286 on the scree, over 152 533
+cells. The map takes about 570 ms at start, the placement 60 ms. The placed triangles fall
+from 196 G to 8.7 G (clusters from 4.7 G to 0.2 G): the city's boulders were half a million
+triangles each, the stones 77 k to 230 k.
+
+**Tuned on the way** (seen in the first captures):
+- **The scatter:** at 0.02 and on any ground it was 38 674 of the 60 000, pale blocks sprinkled
+  evenly over the coastal plain. Now it is 0.004, from slopes of 0.05 up.
+- **The faces:** at 0.25 they took 27 % of the rocks, an even spread over the granite's steep
+  faces. Now 0.06: the rocks gather at the faces' foot.
+- **The talus's rock:** first the ground's, which put pale limestone blocks under the
+  granite's faces. Now the rock above.
+
+Before (`--no-rock-sites`) and now, frame 60 (`reports/2026-10-02-130/`):
+- `rocks.png`:
+  - the granite's hill from 150 m (ꟻLIP mean 0.119);
+  - the foot of a granite face, its talus granite (0.080);
+  - the karst (0.084);
+  - the granite's slope from 40 m, the shapes and sizes (0.174).
+- `shots.png`:
+  - the talus from close (0.103);
+  - the `valley` shot (0.171): the dark rubble gone from its crests, and the whole frame
+    moved by the probes' light and the metered exposure;
+  - the `island` shot (0.0089);
+  - the first view (0.0105).
+
+**Checks:**
+- **The batch:** it changes the island's images only. The exception is `mesh-ast-taa600`, at
+  302 px: #71's flake. Two runs each of the old and the new build give the same frame.
+- **The A/B harness, mesh against fallback:** 0 px.
+- **The placements:** the city's is unchanged; the island's matches its CPU mirror.
+- **Validation and tests:** `validate.sh` is clean. 261 tests pass, four of them new:
+  - the site rule on a synthetic slope: talus under the cliff in the cliff's rock, none on the
+    beach or the flat;
+  - the stones: closed, on the ground and within their size;
+  - a block's flat faces;
+  - the placement's split between two rocks and its tables.
+- **Timings** (`docs/PROFILE.md`): the island takes 1.493–1.507 ms against 1.583–1.620 and the
+  tour 1.315–1.327 against 1.409–1.437, from fewer, lighter rocks.
+
+**Later:** the grus on the granite's gentle slopes; the rivers' stones in the shapes of their
+rocks (their outline in the water is the city's boulder's today).

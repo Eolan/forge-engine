@@ -772,6 +772,12 @@ impl MeshId {
     pub fn index(self) -> u32 {
         self.0
     }
+
+    /// The handle of mesh `index` (for tests of the tables that hold handles).
+    #[cfg(test)]
+    pub(crate) fn from_index(index: u32) -> Self {
+        Self(index)
+    }
 }
 
 /// Concatenates meshes and instances into the GPU tables.

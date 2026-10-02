@@ -187,7 +187,8 @@ cargo run --release -p island -- --shot mouth
 A 16 km island generated from a seed (`--island SEED`, 7 by default) by uplift, stream-power
 erosion and hydrology, its ground cooked into cluster DAGs in 2 km tiles and drawn at 2 m, with
 the sea's FFT waves breaking on its beaches, its rivers in carved channels with steps, pools,
-deltas and bars of sand at their mouths, its lakes, and the view under the water. It shares
+deltas and bars of sand at their mouths, its lakes, granite hills over a limestone coast with
+their own boulders where rocks gather, and the view under the water. It shares
 `city-blocks`' renderer, keys and options (`city-blocks --island SEED` draws the same).
 `--shot NAME` frames one of its golden shots at its time of day: `mouth` (dawn over the
 largest mouth), `lake` (morning), `island` (the afternoon, from the sea) and `valley` (dusk up a

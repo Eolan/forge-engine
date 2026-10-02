@@ -3825,6 +3825,13 @@ public struct Placement
     public int pad2;
     public float3 origin_local; // ...and the offset inside it, metres
     public float rock_above;    // ROCKS_ON_LAND: metres above which the ground takes rocks
+    public uint2* sites;        // ROCKS_AT_SITES (#130): per rock, (cumulative weight, cell) of its cells with any
+    public uint site_cells[2];  // entries of each rock in `sites`, the second's after the first's
+    public uint first_rocks;    // ROCKS_AT_SITES: rock slots on the first rock, the rest on the second
+    public uint second_mesh_count;
+    public uint site_size;      // cells per side, over the ground's square, rows along +z
+    public float site_spacing;  // metres across a cell
+    public uint second_meshes[8];
 };
 
 struct PlacementPush
@@ -3875,14 +3882,21 @@ float ground(Placement* p, float x, float z)
 // `tilt` about the turned X axis, scaled by `scale`, in the mesh's material.
 void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float tilt, float scale)
 {
+    // R = Ry(yaw) × Rx(tilt): the tilt first, then the turn, as a quaternion.
+    float4 q = quat_mul(float4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)), float4(sin(0.5 * tilt), 0.0, 0.0, cos(0.5 * tilt)));
+    place_turned(p, slot, mesh, position, q, scale);
+}
+
+// Writes the instance of `slot`: `mesh` at `position`, turned by the quaternion `q`, scaled by
+// `scale`, in the mesh's material.
+void place_turned(Placement* p, uint slot, uint mesh, float3 position, float4 q, float scale)
+{
     // The instance's cell and offset (issue #93): the scene's origin, a cell and an offset,
     // plus the position in the scene (the ground was sampled there), carried into the cell so
     // the offset stays under CELL_SIZE. Wherever the scene stands, the offset is as fine as at
     // the origin.
     float3 local = p[0].origin_local + position;
     int3 carry = int3(floor(local / CELL_SIZE));
-    // R = Ry(yaw) × Rx(tilt): the tilt first, then the turn, as a quaternion.
-    float4 q = quat_mul(float4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)), float4(sin(0.5 * tilt), 0.0, 0.0, cos(0.5 * tilt)));
     Mesh* m = p[0].meshes + mesh;
     Instance inst;
     inst.cell = p[0].origin_cell + carry;
@@ -3901,6 +3915,7 @@ void place(Placement* p, uint slot, uint mesh, float3 position, float yaw, float
 // Where `Placement::rock_rule` puts the rocks.
 static const uint ROCKS_IN_HILLS = 0; // the four bands of hills around the city
 static const uint ROCKS_ON_LAND = 1;  // the island's land (#96)
+static const uint ROCKS_AT_SITES = 2; // the island's rock sites (#130)
 // ROCKS_ON_LAND on low ground (#117): under x metres the rocks keep z of their chance, the
 // whole of it from y metres up.
 static const float3 ROCKS_LOWLAND = float3(5.0, 40.0, 0.1);
@@ -3928,6 +3943,45 @@ float2 rock_on_land(Placement* p, uint slot, out bool found)
         found = height > p[0].rock_above && c.z < keep;
     }
     return at;
+}
+
+// ROCKS_AT_SITES (#130): rock `s` of the slot `slot`, on the first rock or the second by its
+// slot. Its cell is drawn from that rock's sites by their weights (the first entry whose
+// cumulative weight passes a uniform draw), the spot anywhere in it. Its size is mostly small,
+// now and then big: 0.3 to 2.2 times its mesh. It leans two thirds of the way with the ground,
+// is turned any way and tipped a little, and sinks deeper the steeper the ground.
+void rock_at_site(Placement* p, uint slot, uint s)
+{
+    float4 r = random4(p, slot, 4u);
+    float4 q = random4(p, slot, 5u);
+    uint pick = pcg4d(uint4(slot, p[0].seed, 6u, 0u)).x;
+    bool second = s >= p[0].first_rocks;
+    uint mesh = second ? p[0].second_meshes[pick % p[0].second_mesh_count] : p[0].rock_meshes[pick % p[0].rock_mesh_count];
+    uint lo = second ? p[0].site_cells[0] : 0u;
+    uint hi = lo + p[0].site_cells[second ? 1 : 0];
+    uint draw = pcg4d(uint4(slot, p[0].seed, 7u, 0u)).x % p[0].sites[hi - 1u].x;
+    while (lo < hi)
+    {
+        uint mid = (lo + hi) / 2u;
+        if (p[0].sites[mid].x > draw)
+            hi = mid;
+        else
+            lo = mid + 1u;
+    }
+    uint cell = p[0].sites[lo].y;
+    float2 at = (float2(cell % p[0].site_size, cell / p[0].site_size) + r.xy) * p[0].site_spacing - p[0].half_size;
+    float d = p[0].spacing;
+    float gx = (ground(p, at.x + d, at.y) - ground(p, at.x - d, at.y)) / (2.0 * d);
+    float gz = (ground(p, at.x, at.y + d) - ground(p, at.x, at.y - d)) / (2.0 * d);
+    float3 lean = normalize(lerp(float3(0.0, 1.0, 0.0), normalize(float3(-gx, 1.0, -gz)), 0.67));
+    // From +Y to `lean`: the half-way quaternion (cross, 1 + dot), normalised.
+    float4 align = normalize(float4(lean.z, 0.0, -lean.x, 1.0 + lean.y));
+    float yaw = r.z * 6.2831853, tilt = (q.y - 0.5) * 0.3;
+    float4 turn = quat_mul(float4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)), float4(sin(0.5 * tilt), 0.0, 0.0, cos(0.5 * tilt)));
+    float scale = 0.3 + 1.9 * q.x * q.x * q.x;
+    float radius = p[0].meshes[mesh].radius * scale;
+    float y = ground(p, at.x, at.y) - radius * 0.3 * min(length(float2(gx, gz)), 1.5);
+    place_turned(p, slot, mesh, float3(at.x, y, at.y), quat_mul(align, turn), scale);
 }
 
 [shader("compute")]
@@ -3986,6 +4040,11 @@ void place_main(uint3 id : SV_DispatchThreadID)
         return;
     }
     s -= p[0].plaza_slots;
+    if (p[0].rock_rule == ROCKS_AT_SITES)
+    {
+        rock_at_site(p, slot, s);
+        return;
+    }
     // Rocks: uniform over the four bands of hills around the city (north and south span the
     // whole side, east and west the city's depth), any turn, a slight tilt, sunk a little.
     float4 r = random4(p, slot, 4u);
