@@ -49,37 +49,105 @@ login, safe to re-run):
    branch is `task/<n>-<slug>`.
 2. Read `CLAUDE.md`, the issue, and the docs it points to. Plan in the issue if the plan is
    not obvious (a comment), then build.
-3. Verify: build, tests, clippy, fmt, validation, the A/B harness for anything touching
-   culling or temporal code, the profiler numbers for anything touching performance.
+3. Verify in the tier the change needs (below): `tools/verify.sh` picks it and runs it. Add
+   the profiler numbers for anything touching performance.
 4. Update the docs the change affects (research, decisions, demo pages, `PROFILE.md`,
    README options and keys).
 5. Open the PR with the template, `Closes #<n>`, numbers and captures where relevant.
 6. Answer review comments in the same session (`claude --resume task-<n>`), then stop. The
    session does not merge.
 
+## Checking a change in tiers (issue #134, D-043)
+
+A change is checked in the tier its paths need, not with the whole batch every time. The
+owner approved this on 2026-10-02. `tools/verify.sh` reads the paths changed since the last
+accepted commit (committed, staged, unstaged and untracked), picks the tier, says why, and
+runs it:
+
+| Tier | When | What runs |
+|---|---|---|
+| gate | Every changed path maps to no capture: `docs/`, `reports/`, Markdown, `tools/credits/` | fmt, clippy `-D warnings`, the tests, the credits check |
+| 0 | Every changed path is mapped in `tools/impact.toml` | The gate, the sentinels and the sets the paths select, on the mesh path. `--recook` when `forge-procgen` or `forge-geom` changed. With GPU code or shaders (`forge-render`, `shaders/`), also the fallback and the validation of those sets |
+| 1 | A path is not mapped: `forge-gpu`, `forge-app`, the render graph, a shared pass or shader, `Cargo.lock`, the toolchain, the scripts. Or no accepted set yet | The full batch on both paths, validation, and the timings with `--timings BASE_BIN` |
+| 2 | A milestone: every ~5 commits, before a showcase, when a system closes (`--tier 2`) | Tier 1, the batch again with `FORGE_ASYNC=0` (it must match), `tools/origins.sh`, and the real-time tour for the owner to watch |
+
+- **The sentinels** are ten captures on the mesh path, about a minute: meshlets (`static60`,
+  `orbit120`, `noocc120`), the ballad without TAA (`ast-notaa600`, `ast240`, `ast240-noocc`)
+  and its HDR output (`ast-hdr600`), the resident city (`city60`, `city60-noocc`) and the
+  gallery (`gallery60`). They catch a change that reaches further than its paths say.
+- **The sets** (`FORGE_SETS` of `captures.sh`, `validate.sh` and `timings.sh`): `meshlets`,
+  `ballad`, `city`, `island` (the city's island and the island demo's shots), `sentinels`,
+  `all`. `FORGE_PATHS` picks `mesh`, `fb` or both. The images keep their names.
+- **`tools/impact.toml`** maps path patterns to sets. The first pattern that matches a path
+  wins. A path no pattern matches sends the change to Tier 1: an unknown path counts as
+  shared until someone maps it. Its `[recook]` and `[gpu]` tables add `--recook`, and the
+  fallback with validation.
+- **`--recook`:** the props, the island's tiles and its heightfield are cached in
+  `mesh-cache/` by their parameters' text, not by the code that makes them. After a change to
+  that code, `FORGE_RECOOK=1` removes the heightfield and passes `--recook` to the first run
+  of each scene that cooks (the city, the gallery, the island's 2 m and 8 m grounds).
+- **Accepted sets** replace the "before" batch. A passing run becomes HEAD's accepted set,
+  `captures/accepted/<sha>/`: the base set's images with the run's on top, and
+  `manifest.txt` (the commit, the tier, the build, the driver, each image's SHA-256 and the
+  commit it was captured at). The next run compares with the newest accepted set of HEAD's
+  history. `FORGE_ACCEPTED` points elsewhere, for example to share sets between trees.
+  - A set is accepted only when the working tree adds nothing but gate-only paths to HEAD.
+    Otherwise commit, then run `tools/verify.sh --accept RUN`: it checks that the commit holds
+    what the run built.
+  - The first set of a tree comes from a Tier 1 run. A baseline captured by hand is accepted
+    with `tools/verify.sh --accept DIR COMMIT`.
+- **Images a change is meant to alter:** `--expect 'mesh-island* mesh-shot-*'`. Their lines
+  read "expected" and do not fail. The report names them and gives their ꟻLIP numbers. The
+  pairs within the run (the A/B harness, mesh against fallback) must still read `0 px`.
+- **The flake (#71)** is recognised by its signature and prints `FLAKE #71` (below). The
+  accepted set keeps the base's image.
+- **Options:** `--tier gate|0|1|2` forces a tier. `--base COMMIT` checks the change since
+  COMMIT, and `--committed` leaves the working tree out (to check a commit again).
+  `--no-accept` keeps the run without accepting it, and `--dry-run` only prints the tier.
+- **One GPU, shared:** before any demo runs, the script takes the lock directory
+  `%TEMP%/forge-gpu.lock` (`FORGE_GPU_LOCK`). It retries every 30 s while another job holds
+  it, and removes it when done. Run demos by hand under the same lock.
+- **Order:** build, fmt, then clippy, the tests and the credits check in the background, beside
+  the captures, compare and validation. The timings wait for the tests: never both at once.
+- **What it prints:** the base, the changed paths by pattern, the tier and why, each step with
+  the seconds so far, and the verdict. It ends with what it left for Tier 2, and says when
+  Tier 2 is due (5 commits since the last accepted Tier 2 run). The run and its logs stay in
+  `captures/verify/<time>-<sha>/`.
+
+Measured on 2026-10-02 (RTX 5070 Ti):
+
+| Change | Tier | Time |
+|---|---|---|
+| a docs-only change | gate | 16 s (55 s with clippy's first run in a tree) |
+| #133 (`def84e5`) against its parent | 0: sentinels, island, city; recooked | 233 s in all: 23 captures with the island cooked again (218 s), the gate beside them |
+| #133 by hand, before this tool | 0 | about 4 min of captures |
+| the full batch | 1 | 15–20 min of captures |
+
 ## The verification batch (`tools/`, issue #74)
 
-Every rendering change is checked with the same batch. It runs on the owner's machine: the
-demos need the RTX 5070 Ti and open on the secondary monitor without taking focus. It writes
-under `captures/`, which git ignores.
+Tier 1 runs the whole batch; Tier 0 a part of it. It runs on the owner's machine: the demos
+need the RTX 5070 Ti and open on the secondary monitor without taking focus. It writes under
+`captures/`, which git ignores. `tools/verify.sh` runs these steps; this is what each does.
 
 1. **Build the whole workspace first:** `cargo build --release`. Rebuilding only the demo you
    changed leaves the other demos stale. A stale binary writes an older frame block, and every
    capture then "differs" for the wrong reason.
-2. **Capture the baseline before changing anything:** `tools/captures.sh captures/base`.
-   - This writes 58 captures: meshlets, the ballad at fixed steps (and its HDR output, #94),
-     city-blocks and its island, and the island demo's four golden shots (#96; skipped for a
-     baseline without the `island` binary), each on the mesh path and on the fallback. The
-     HDR runs write the preview and the PQ codes (`-pq.png`, 16 bits), which `compare.sh`
-     compares to the code.
+2. **The batch:** `tools/captures.sh OUT [BIN]`.
+   - The whole batch writes 58 captures: meshlets, the ballad at fixed steps (and its HDR
+     output, #94), city-blocks and its island, and the island demo's four golden shots (#96;
+     skipped for a baseline without the `island` binary), each on the mesh path and on the
+     fallback. The HDR runs write the preview and the PQ codes (`-pq.png`, 16 bits), which
+     `compare.sh` compares to the code. `OUT/batch.txt` records the commit, the sets, the
+     driver and the binaries' hashes.
    - To capture an older commit, build it in a tree of its own:
      `git worktree add --detach ../forge-base <commit>`, then `cargo build --release` in that
      tree, then `tools/captures.sh captures/base ../forge-base/target/release`.
    - Each tree must be built in place, because the shader, shader-cache and mesh-cache roots
      are compiled into the binaries from `CARGO_MANIFEST_DIR`.
    - Remove the tree afterwards with `git worktree remove ../forge-base`.
-3. **After the change, capture again and compare:**
-   - `tools/captures.sh captures/new`, then `tools/compare.sh captures/base captures/new`.
+3. **Compare:**
+   - `tools/compare.sh NEW` compares with the newest accepted set; `tools/compare.sh BASE NEW`
+     with a batch of your own.
    - The script prints the pixels that differ per image, then checks the pairs within the new
      batch:
      - the A/B harness: occlusion off and cone culling off against on, and `--show-culled`
@@ -98,7 +166,8 @@ under `captures/`, which git ignores.
    synchronization validation included. A clean run prints only its header lines and the
    verdicts of the mip check ("mip check passed") and of the ACES 2.0 check ("tone check
    passed").
-5. **Before pushing:** `cargo test --release`, and
+5. **Before pushing** (the gate, in every tier): `cargo fmt --all -- --check`,
+   `cargo test --release`, `cargo run --release -q -p credits -- --check`, and
    `cargo clippy --release --all-features --all-targets -- -D warnings` exactly as CI runs it.
    A plain clippy run hides a lint that CI then fails on.
 6. **Leave a trace a cloud session can read, when one needs it.** With `FORGE_KEEP_LOGS=1`
@@ -123,6 +192,16 @@ depends on the GPU's timing: on 2026-09-25 the mesh path's differed in nearly ev
 (340–392 px), so a rerun proves nothing. Judge it by its signature instead: a few hundred
 single pixels scattered on edges over the whole frame, ꟻLIP mean ≤ 0.0015 and largest
 0.06–0.13 in seventeen flakes. A difference that does not look like that is real.
+`compare.sh` judges it so (#134): a difference of `*-ast-taa600` against its base with at most
+500 pixels, a ꟻLIP mean at most 0.0015 and a largest value at most 0.15 prints `FLAKE #71`
+and does not fail. The largest value tells scattered pixels from a shape: a line of one pixel
+20 levels off reaches 0.169 and a 3 × 3 block 0.261 (the table below). The HDR output's frame
+600 (`*-ast-hdr600`, a sentinel) has TAA on too and flakes the same way: on 2026-10-02 two
+runs in six, from both builds, by 238–299 px (ꟻLIP mean ≤ 0.0015, largest ≤ 0.082). Its PQ
+codes then differ by 91 000–125 000 pixels in the dark (HDR-ꟻLIP mean 0.0034–0.0044, largest
+0.16–0.19). So the preview is judged by the same signature, and the PQ codes are a flake only
+when their preview flaked too, with an HDR-ꟻLIP mean at most 0.005 and largest below 0.2 (a
+line of 20 codes reaches 0.24).
 
 **The perceptual check (issue #75).** For each differing pair, `imgdiff` prints LDR-ꟻLIP:
 the error a person would see when flipping between the two images, from 0 (none) to 1. It is
@@ -216,8 +295,9 @@ codes (0.062) fail. `imgdiff --max-flip 0.15 --max-flip-mean 0.05` judges by it.
 covers the city (still, orbit, flight, every page resident), meshlets (still, orbit,
 `--side 700`) and the ballad at 900p and 1440p. Each view runs three times per build,
 alternating between the two builds. ZONES is a regex that also prints the matching GPU
-zones, for example `cull`. Put the numbers before and after, or the F1 overlay's, in the
-report and in `docs/PROFILE.md`.
+zones, for example `cull`. `FORGE_SETS` times only some views (`city`, `island`, `meshlets`,
+`ballad`; `sentinels` is the city, meshlets and the ballad at 900p). Put the numbers before
+and after, or the F1 overlay's, in the report and in `docs/PROFILE.md`.
 
 **Far from the origin (issue #93):** `tools/origins.sh OUT [BIN] [ORIGINS]` captures the
 city's south view and the ballad's frame 240 with the scene moved 10⁴, 10⁵, 10⁶ and 10⁷ m from

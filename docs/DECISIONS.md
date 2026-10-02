@@ -1744,3 +1744,38 @@ round the island, the granite above it, each with its own texture, and karst on 
 bare, gentler and drier ground. The boulders follow the rocks since #130: granite's rounded
 corestones, tors and slabs, limestone's blocks and flags, where rocks gather. The grus (the
 granite's coarse sandy soil) lies on its gentle ground round the outcrops since #135.
+
+## D-043 — Changes are checked in tiers: an impact map, sentinels, accepted sets ✅ (2026-10-02)
+
+The owner's pick of 2026-10-02, on #131: "Ok with your plan, the 3DMark model would be way less
+often anyway. Go with 1, 2, 3 way of testing." The whole batch on every change had grown to
+15–20 minutes of captures, 35–50 with validation and timings, and most changes touch the island
+alone: the rest of the batch read 0 px every time. #133 was checked in tiers by hand first, in
+about 4 minutes of captures. Built in #134 (`tools/verify.sh`, `docs/PROCESS.md`, "Checking a
+change in tiers"):
+- **Tier 0, every change:** the gate (fmt, clippy, the tests beside the captures, the credits),
+  ten sentinel captures on the mesh path (meshlets, the ballad without TAA and its HDR output,
+  the city, the gallery: about a minute), and the sets the changed paths select in
+  `tools/impact.toml`. `--recook` when the cooking code changed. The fallback and validation
+  only when GPU code or shaders changed, and the timings only when a change claims speed or
+  adds or moves a pass. A change to the docs alone runs the gate only.
+- **Tier 1, a change to shared rendering:** `forge-gpu`, `forge-app`, the render graph, a
+  shared pass or shader, `Cargo.lock`, the toolchain, and any path the map does not know (fail
+  safe). The full batch on both paths, validation and timings, as before.
+- **Tier 2, a milestone** (every ~5 commits, before a showcase, when a system closes): Tier 1,
+  plus the batch with `FORGE_ASYNC=0`, `tools/origins.sh` and the real-time tour.
+- **Accepted sets** (`captures/accepted/<sha>/`, with a manifest of hashes) replace the
+  "before" batch: a run compares with the last accepted commit's images. An image a change is
+  meant to alter is accepted when the report names it (`--expect`).
+- **#71's flake** is told by its signature (at most 500 px, ꟻLIP mean at most 0.0015, largest
+  at most 0.15) and no longer fails a run. It also shows on the HDR output's TAA frame 600, a
+  sentinel (two runs in six on 2026-10-02): its PQ codes count as the flake only when its SDR
+  preview does.
+
+Measured on 2026-10-02: a docs-only change runs the gate in 16 s. #133 against its parent runs
+Tier 0 (the sentinels, the island and the city, recooked) in 233 s, the gate included: the
+sentinels and the city read 0 px, the island its expected changes.
+
+Not chosen: the full batch every time (too slow), and the sentinels alone (an island change
+must see the island). A 3DMark-style benchmark in one process ("forge-mark") is a later step,
+run far less often.

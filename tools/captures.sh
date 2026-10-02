@@ -12,11 +12,41 @@
 # capture prints a line as it lands, and a demo's errors and panics. With FORGE_KEEP_LOGS=1 each
 # run's full log is kept in OUT/logs/ and its key lines in OUT/summary.txt, for a cloud session
 # to read (tools/report.sh gathers them); a local session needs neither.
+#
+# Part of the batch (issue #134; tools/verify.sh picks them from tools/impact.toml):
+#   FORGE_SETS   the sets to capture, separated by spaces or commas (default all): sentinels
+#                (static60 orbit120 noocc120 ast-notaa600 ast240 ast240-noocc ast-hdr600 city60
+#                city60-noocc gallery60), meshlets, ballad, city, island (the city's island and
+#                the island demo's shots), all. The images keep their names.
+#   FORGE_PATHS  the paths, mesh and fb (default both).
+#   FORGE_RECOOK 1: make the cached meshes again. The props and the island's tiles are cached
+#                in BIN's tree (mesh-cache/) by their parameters' text, not the code that makes
+#                them: a change to forge-procgen or forge-geom needs it. The island's cached
+#                heightfield is removed, and the first run of each scene that cooks (the city,
+#                the gallery, the island on its 2 m and 8 m grounds) gets `--recook`.
+# OUT/batch.txt records the commit, the sets, the paths, the driver and the binaries' hashes.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/captures.sh OUT [BIN]}
 bin=${2:-$root/target/release}
 keep=${FORGE_KEEP_LOGS:-0}
+sets=" ${FORGE_SETS:-all} "
+sets=${sets//,/ }
+paths=${FORGE_PATHS:-mesh fb}
+paths=${paths//,/ }
+recook=${FORGE_RECOOK:-0}
+for set in $sets; do
+  case $set in
+    all | sentinels | meshlets | ballad | city | island) ;;
+    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island or all" >&2; exit 1 ;;
+  esac
+done
+for path in $paths; do
+  case $path in
+    mesh | fb) ;;
+    *) echo "unknown path $path: mesh or fb" >&2; exit 1 ;;
+  esac
+done
 mkdir -p "$out"
 summary=$out/summary.txt
 exe=""
@@ -32,21 +62,82 @@ done
 cd "$root"
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
-header="tools/captures.sh $out from $bin, $(date -u +%FT%TZ), commit $(git rev-parse --short HEAD 2>/dev/null)"
+# The commit BIN was built from: the tree holding it (BIN is TREE/target/release).
+built=$(git -C "$bin/../.." rev-parse HEAD 2>/dev/null)
+header="tools/captures.sh $out from $bin, $(date -u +%FT%TZ), commit ${built:0:7}"
+[ "$sets" != " all " ] || [ "$paths" != "mesh fb" ] && header="$header, sets$sets(paths $paths)"
+[ "$recook" != 0 ] && header="$header, recooked"
 echo "$header"
 if [ "$keep" != 0 ]; then
   mkdir -p "$out/logs"
   echo "$header" > "$summary"
 fi
+{
+  echo "$header"
+  echo "commit: $built"
+  echo "sets:$sets"
+  echo "paths: $paths"
+  echo "driver: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -n 1)"
+  for demo in "$meshlets" "$asteroids" "$city" "$island_demo"; do
+    [ -f "$demo" ] && echo "binary: $(sha256sum "$demo" | cut -c1-16) $(basename "$demo") $(date -u -r "$demo" +%FT%TZ)"
+  done
+} > "$out/batch.txt"
+
+# sets_of NAME: the sets a capture belongs to, from its name without the path.
+sets_of() {
+  case $1 in
+    static60 | orbit120 | noocc120) echo meshlets sentinels ;;
+    nolod120) echo meshlets ;;
+    ast-notaa600 | ast240 | ast240-noocc | ast-hdr600) echo ballad sentinels ;;
+    ast*) echo ballad ;;
+    city60 | city60-noocc | gallery60) echo city sentinels ;;
+    city*) echo city ;;
+    island* | water* | shot-*) echo island ;;
+  esac
+}
+# wanted NAME: true when FORGE_SETS asks for the capture NAME.
+wanted() {
+  [[ $sets == *" all "* ]] && return 0
+  local set
+  for set in $(sets_of "${1#*-}"); do
+    [[ $sets == *" $set "* ]] && return 0
+  done
+  return 1
+}
+# The scenes already cooked again with FORGE_RECOOK=1; the island's heightfield (#96), which
+# --recook keeps, made again too.
+recooked=" "
+if [ "$recook" != 0 ]; then
+  rm -f "$bin/../../mesh-cache"/island-*.f32
+fi
+# scene DEMO ARGS...: the cooked scene a run draws (city, gallery, island2, island8), or nothing.
+scene() {
+  local demo=$1
+  shift
+  if [ "$demo" = "$island_demo" ] || [[ " $* " == *" --island "* ]]; then
+    [[ " $* " == *" --island-drawn 8 "* ]] && echo island8 || echo island2
+  elif [ "$demo" = "$city" ]; then
+    [[ " $* " == *" --gallery "* ]] && echo gallery || echo city
+  fi
+}
 
 status=0
 # Lines of a run's log worth keeping in the summary.
 keys="forge_app: gpu:|ERROR|Error|panicked|selected GPU|checksum|world's origin"
 # capture NAME FRAME DEMO ARGS...: the frame FRAME of DEMO to OUT/NAME.png; its errors printed,
-# its log kept with FORGE_KEEP_LOGS=1.
+# its log kept with FORGE_KEEP_LOGS=1. Skipped when FORGE_SETS leaves it out.
 capture() {
   local name=$1 frame=$2 demo=$3
   shift 3
+  wanted "$name" || return 0
+  if [ "$recook" != 0 ]; then
+    local cooked
+    cooked=$(scene "$demo" "$@")
+    if [ -n "$cooked" ] && [[ $recooked != *" $cooked "* ]]; then
+      set -- "$@" --recook
+      recooked="$recooked$cooked "
+    fi
+  fi
   local start=$SECONDS
   "$demo" --frames $((frame + 1)) --capture "$out/$name.png" --capture-frame "$frame" "$@" 2>&1 |
     sed 's/\x1b\[[0-9;]*m//g' > "$log"
@@ -64,7 +155,7 @@ capture() {
   fi
 }
 
-for path in mesh fb; do
+for path in $paths; do
   flag=()
   [ "$path" = fb ] && flag=(--force-fallback)
   # meshlets: the static view, the orbit, and the orbit without LOD or occlusion.

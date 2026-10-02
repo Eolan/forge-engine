@@ -10,11 +10,47 @@
 # BIN: the demo binaries (default target/release). With FORGE_KEEP_LOGS=1 each run's full log
 # is kept in OUT/logs/ (default captures/validate) and what was printed in OUT/summary.txt,
 # for a cloud session to read (tools/report.sh gathers them).
+#
+# FORGE_SETS (issue #134): the runs to make, separated by spaces or commas (default all):
+# ballad (with its ships and HDR output), meshlets, city, island (the city's island, its water
+# and the island demo), sentinels (the ballad, meshlets and the city's first run), all.
+# FORGE_PATHS: mesh and fb (default both).
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 bin=${1:-$root/target/release}
 out=${2:-$root/captures/validate}
 keep=${FORGE_KEEP_LOGS:-0}
+sets=" ${FORGE_SETS:-all} "
+sets=${sets//,/ }
+paths=${FORGE_PATHS:-mesh fb}
+paths=${paths//,/ }
+for set in $sets; do
+  case $set in
+    all | sentinels | meshlets | ballad | city | island) ;;
+    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island or all" >&2; exit 1 ;;
+  esac
+done
+# sets_of NAME: the sets a run belongs to, from its name without the path.
+sets_of() {
+  case $1 in
+    ballad) echo ballad sentinels ;;
+    ships | hdr | hdr-calibration | hdr-switch) echo ballad ;;
+    meshlets) echo meshlets sentinels ;;
+    hdr-display) echo meshlets ;;
+    city) echo city sentinels ;;
+    city-* | gallery) echo city ;;
+    *) echo island ;;
+  esac
+}
+# wanted NAME: true when FORGE_SETS asks for the run NAME.
+wanted() {
+  [[ $sets == *" all "* ]] && return 0
+  local set
+  for set in $(sets_of "${1%-fb}"); do
+    [[ $sets == *" $set "* ]] && return 0
+  done
+  return 1
+}
 summary=$out/summary.txt
 exe=""
 [ -f "$bin/asteroids.exe" ] && exe=.exe
@@ -34,10 +70,12 @@ say() {
   return 0
 }
 
-# validate NAME CMD...: the run under the layer, its messages counted.
+# validate NAME CMD...: the run under the layer, its messages counted; skipped when FORGE_SETS
+# leaves it out.
 validate() {
   local name=$1
   shift
+  wanted "$name" || return 0
   local start=$SECONDS
   say "== $*"
   FORGE_SYNC_VALIDATION=1 "$@" --validate 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$log"
@@ -52,7 +90,8 @@ validate() {
   fi
 }
 
-for path in "" --force-fallback; do
+for path in $paths; do
+  [ "$path" = fb ] && path=--force-fallback || path=""
   tag=${path:+-fb}
   validate "ballad$tag" "$bin/asteroids$exe" --frames 90 $path
   validate "meshlets$tag" "$bin/meshlets$exe" --mip-check --tone-check --frames 60 $path

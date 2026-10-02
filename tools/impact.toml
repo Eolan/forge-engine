@@ -1,0 +1,63 @@
+# Which captures a changed path selects (issue #134; docs/PROCESS.md, "Tiers").
+#
+# tools/verify.sh reads it. A changed path takes the sets of the first pattern of [paths] that
+# matches it, in this file's order. A path no pattern matches sends the change to Tier 1, the
+# full batch: an unknown path is a shared one until it is mapped here.
+#
+# Patterns: `**/` any directories (none too), `**` anything, `*` anything but `/`. Sets: the
+# names tools/captures.sh knows (sentinels, meshlets, ballad, city, island); [] means no
+# capture, the gate only. Tier 0 always adds the sentinels when a set is selected.
+#
+# One entry per line, `"pattern" = [...]` or `"pattern" = true`: verify.sh reads this subset
+# of TOML line by line.
+
+[paths]
+# The gate only: words and numbers, no pixels.
+"docs/**" = []
+"reports/**" = []
+"**/*.md" = []
+"tools/credits/**" = []
+
+# The island: its generator, its demo, its stones and its water. The city-blocks code that
+# serves both the city and its island selects both.
+"crates/forge-procgen/**" = ["island"]
+"demos/island/**" = ["island"]
+"demos/city-blocks/src/island_demo.rs" = ["island"]
+"demos/city-blocks/**" = ["island", "city"]
+"crates/forge-geom/src/stone.rs" = ["island"]
+"crates/forge-render/src/water.rs" = ["island"]
+"crates/forge-render/src/wakes.rs" = ["island"]
+"crates/forge-render/src/splashes.rs" = ["island"]
+"shaders/water.slang" = ["island"]
+# Imported by meshlet.slang, but its code runs only on the island's wet ground (#105); the
+# sentinels draw the other demos through meshlet.slang.
+"shaders/shore.slang" = ["island"]
+"shaders/wakes.slang" = ["island"]
+"shaders/splashes.slang" = ["island"]
+
+# The ballad and the shaders only it draws.
+"demos/asteroids/**" = ["ballad"]
+"shaders/starfield.slang" = ["ballad"]
+"shaders/dust.slang" = ["ballad"]
+
+# The meshlets bench and the checks only it runs (`--mip-check`, `--tone-check`).
+"demos/meshlets/**" = ["meshlets"]
+"crates/forge-render/src/mipcheck.rs" = ["meshlets"]
+"crates/forge-render/src/tonecheck.rs" = ["meshlets"]
+"shaders/mipcheck.slang" = ["meshlets"]
+"shaders/tonecheck.slang" = ["meshlets"]
+
+# Everything else is shared: forge-gpu, forge-app, forge-render's other passes, forge-geom's
+# other modules, forge-core, forge-task, forge-world, the other shaders, Cargo.toml and
+# Cargo.lock, rust-toolchain.toml, .github/ and the other tools. Tier 1.
+
+[recook]
+# The props, the island's tiles and its heightfield are cached by their parameters' text, not
+# the code that makes them: after a change here the captures make them again (FORGE_RECOOK).
+"crates/forge-procgen/**" = true
+"crates/forge-geom/**" = true
+
+[gpu]
+# GPU code and shaders: Tier 0 also runs its sets on the fallback path and under validation.
+"shaders/**" = true
+"crates/forge-render/**" = true

@@ -11,12 +11,32 @@
 # FORGE_KEEP_LOGS=1 every run's log is kept under TIMINGS_OUT/logs/ (default captures/timings)
 # and the printed lines in TIMINGS_OUT/summary.txt, for a cloud session to read
 # (tools/report.sh gathers them).
+#
+# FORGE_SETS (issue #134): the views to time, separated by spaces or commas (default all):
+# city, island, meshlets, ballad, sentinels (the city, meshlets and the ballad at 900p), all.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 base=${1:?usage: tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]}
 new=${2:-$root/target/release}
 zones=${3:-}
 keep=${FORGE_KEEP_LOGS:-0}
+sets=" ${FORGE_SETS:-all} "
+sets=${sets//,/ }
+for set in $sets; do
+  case $set in
+    all | sentinels | meshlets | ballad | city | island) ;;
+    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island or all" >&2; exit 1 ;;
+  esac
+done
+# in_sets SET...: true when FORGE_SETS asks for one of SET... (or all).
+in_sets() {
+  [[ $sets == *" all "* ]] && return 0
+  local set
+  for set; do
+    [[ $sets == *" $set "* ]] && return 0
+  done
+  return 1
+}
 out=${TIMINGS_OUT:-$root/captures/timings}
 summary=$out/summary.txt
 exe=""
@@ -69,19 +89,19 @@ view() {
   return 0
 }
 
-view "city" city-blocks --frames 3000
-view "city orbit" city-blocks --orbit --frames 3000
-view "city fly" city-blocks --fly --frames 6000
-view "city resident" city-blocks --stream-pool 0 --frames 3000
-view "island" city-blocks --island 7 --frames 3000
+in_sets city sentinels && view "city" city-blocks --frames 3000
+in_sets city && view "city orbit" city-blocks --orbit --frames 3000
+in_sets city && view "city fly" city-blocks --fly --frames 6000
+in_sets city && view "city resident" city-blocks --stream-pool 0 --frames 3000
+in_sets island && view "island" city-blocks --island 7 --frames 3000
 # The island demo's tour (#96), once both builds have it: its 70 s at a fixed step.
-if [ -f "$base/island$exe" ] && [ -f "$new/island$exe" ]; then
+if in_sets island && [ -f "$base/island$exe" ] && [ -f "$new/island$exe" ]; then
   view "island tour" island --tour --fixed-step --frames 4200
 fi
-view "meshlets" meshlets --frames 3000
-view "meshlets orbit" meshlets --orbit --frames 3000
-view "meshlets side 700" meshlets --side 700 --frames 600
-view "ballad 900p" asteroids --fixed-step --frames 3000
-view "ballad 1440p" asteroids --fixed-step --frames 3000 --width 2560 --height 1440
+in_sets meshlets sentinels && view "meshlets" meshlets --frames 3000
+in_sets meshlets && view "meshlets orbit" meshlets --orbit --frames 3000
+in_sets meshlets && view "meshlets side 700" meshlets --side 700 --frames 600
+in_sets ballad sentinels && view "ballad 900p" asteroids --fixed-step --frames 3000
+in_sets ballad && view "ballad 1440p" asteroids --fixed-step --frames 3000 --width 2560 --height 1440
 [ "$keep" != 0 ] && say "logs in $out/logs, summary in $summary"
 exit 0

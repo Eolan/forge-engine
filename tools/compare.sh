@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Compares two capture batches written by tools/captures.sh (issue #74; docs/PROCESS.md).
 #
-#   tools/compare.sh BASE NEW
+#   tools/compare.sh [BASE] NEW
+#
+# Without BASE, NEW is compared with the latest accepted set (issue #134): the newest commit of
+# HEAD's history with a set in captures/accepted/<sha>/ (FORGE_ACCEPTED, see tools/verify.sh).
 #
 # Prints, per image both batches hold, the pixels that differ by more than 2 levels (imgdiff's
 # default tolerance) and the largest channel error; for a difference, also its FLIP mean and
@@ -15,21 +18,88 @@
 #
 # Known flake (#71): the ballad's TAA frame 600 on either path (fb-ast-taa600, mesh-ast-taa600)
 # can differ by a few hundred scattered edge pixels from the same build, FLIP mean <= 0.0015;
-# some days on nearly every run (docs/PROCESS.md, "Known flake").
+# some days on nearly every run (docs/PROCESS.md, "Known flake"). A difference of those images
+# with its signature (at most 500 px, FLIP mean at most 0.0015 and largest at most 0.15: no line,
+# speck or patch, which reach 0.17 and more) prints "FLAKE #71" and does not fail. The HDR
+# output's frame 600 has TAA on too and flakes the same way (#134): its SDR preview
+# (*-ast-hdr600) by the same signature, and its PQ codes (*-ast-hdr600-pq, ~100 000 codes apart
+# in the dark) only when the preview flaked too, with HDR-FLIP mean at most 0.005 and largest
+# below 0.2 (three flakes: 0.0034-0.0044 and 0.16-0.19; a line of 20 codes reaches 0.24).
+#
+# FORGE_EXPECT: the images a change is meant to alter, as patterns separated by spaces or commas
+# (for example 'mesh-island* mesh-shot-*'): their differences print "expected" and do not fail.
+# The pairs within NEW must match whatever it says.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-base=${1:?usage: tools/compare.sh BASE NEW}
-new=${2:?usage: tools/compare.sh BASE NEW}
+usage="usage: tools/compare.sh [BASE] NEW"
+if [ $# -ge 2 ]; then
+  base=$1
+  new=$2
+else
+  new=${1:?$usage}
+  accepted=${FORGE_ACCEPTED:-$root/captures/accepted}
+  base=""
+  for sha in $(git -C "$root" rev-list -n 500 HEAD); do
+    [ -f "$accepted/$sha/manifest.txt" ] && base=$accepted/$sha && break
+  done
+  [ -n "$base" ] || { echo "no accepted set in $accepted for HEAD's history: give BASE" >&2; exit 1; }
+fi
+expect=${FORGE_EXPECT:-}
+expect=${expect//,/ }
 imgdiff=$root/target/release/imgdiff
 [ -f "$imgdiff.exe" ] && imgdiff=$imgdiff.exe
 [ -f "$imgdiff" ] || { echo "missing $imgdiff: build with cargo build --release" >&2; exit 1; }
 
 status=0
-# pair A B LABEL: one line with the count of differing pixels and the largest error, and for a
-# difference its perceptual error, FLIP's mean and largest value (issue #75). The HDR10
+flakes=0
+expected=0
+missing=0
+# flake NAME COUNT MEAN PEAK: true when a difference of NAME against its base has #71's
+# signature.
+flake() {
+  case $1 in
+    *-ast-taa600 | *-ast-hdr600)
+      awk -v n="$2" -v mean="$3" -v peak="$4" \
+        'BEGIN { exit !(n != "" && mean != "" && peak != "" && n <= 500 && mean <= 0.0015 && peak <= 0.15) }'
+      ;;
+    *-ast-hdr600-pq)
+      awk -v mean="$3" -v peak="$4" \
+        'BEGIN { exit !(mean != "" && peak != "" && mean <= 0.005 && peak < 0.2) }' || return 1
+      preview_flaked "${1%-pq}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+# preview_flaked NAME: true when the SDR image NAME differs from its base with #71's signature.
+preview_flaked() {
+  local out count mean peak
+  [ -f "$base/$1.png" ] && [ -f "$new/$1.png" ] || return 1
+  out=$("$imgdiff" "$base/$1.png" "$new/$1.png" 2>&1)
+  count=$(sed -n 's/.*: \([0-9]*\) \/ [0-9]* pixels differ.*/\1/p' <<< "$out")
+  mean=$(sed -n 's/^LDR-FLIP.*: mean \([0-9.]*\),.*/\1/p' <<< "$out")
+  peak=$(sed -n 's/^LDR-FLIP.* max \([0-9.]*\) at .*/\1/p' <<< "$out")
+  [ "$count" != 0 ] && flake "$1" "$count" "$mean" "$peak"
+}
+# is_expected NAME: true when NAME matches a pattern of FORGE_EXPECT.
+is_expected() {
+  local pattern
+  for pattern in $expect; do
+    # shellcheck disable=SC2053 # the pattern is a glob on purpose
+    [[ $1 == $pattern ]] && return 0
+  done
+  return 1
+}
+# pair A B LABEL [same]: one line with the count of differing pixels and the largest error, and
+# for a difference its perceptual error, FLIP's mean and largest value (issue #75). The HDR10
 # captures' PQ codes (16 bits, #94) must match to the code; their largest error is in 10-bit
-# codes, and their FLIP is HDR-FLIP on their light (#126).
+# codes, and their FLIP is HDR-FLIP on their light (#126). With "same" (an image against its
+# base), the flake (#71) and FORGE_EXPECT's images are told apart and do not fail.
 pair() {
+  if [ "${4:-}" = same ] && [ ! -f "$1" ] && [ -f "$2" ]; then
+    echo "$3: not in $base"
+    missing=$((missing + 1))
+    return 0
+  fi
   [ -f "$1" ] && [ -f "$2" ] || return 0
   local out line flip count max mean peak label=FLIP tolerance=()
   [[ "$2" == *-pq.png ]] && tolerance=(--tolerance 0)
@@ -46,8 +116,17 @@ pair() {
     echo "$3: imgdiff failed"
     status=1
   elif [ "$count" != 0 ]; then
-    echo "$3: $count px differ (max $max), $label mean $mean, max $peak"
-    status=1
+    line="$3: $count px differ (max $max), $label mean $mean, max $peak"
+    if [ "${4:-}" = same ] && flake "$3" "$count" "$mean" "$peak"; then
+      echo "$line: FLAKE #71"
+      flakes=$((flakes + 1))
+    elif [ "${4:-}" = same ] && is_expected "$3"; then
+      echo "$line: expected"
+      expected=$((expected + 1))
+    else
+      echo "$line"
+      status=1
+    fi
   else
     echo "$3: 0 px"
   fi
@@ -61,7 +140,7 @@ main() {
   for image in "${images[@]}"; do
     [ -f "$image" ] || continue
     name=$(basename "$image" .png)
-    pair "$base/$name.png" "$image" "$name"
+    pair "$base/$name.png" "$image" "$name" same
   done
   echo "== within $new: the A/B harness and mesh against fallback"
   for path in mesh fb; do
@@ -79,8 +158,14 @@ main() {
     shot-mouth shot-lake shot-island shot-valley; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
-  if [ $status = 0 ]; then
+  local others=""
+  [ $flakes != 0 ] && others="$others, $flakes the flake (#71)"
+  [ $expected != 0 ] && others="$others, $expected expected (FORGE_EXPECT)"
+  [ $missing != 0 ] && echo "$missing images not in $base: not compared"
+  if [ $status = 0 ] && [ -z "$others" ]; then
     echo "every line is 0 px: the pass"
+  elif [ $status = 0 ]; then
+    echo "every other line is 0 px$others: the pass"
   else
     echo "some lines differ: named above"
   fi
