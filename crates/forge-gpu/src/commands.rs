@@ -381,7 +381,7 @@ impl<'a> Commands<'a> {
         };
         let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(crate::accel::dynamic_tlas_flags(tlas.refit))
+            .flags(tlas.flags)
             .mode(mode)
             .src_acceleration_structure(source)
             .dst_acceleration_structure(tlas.raw)

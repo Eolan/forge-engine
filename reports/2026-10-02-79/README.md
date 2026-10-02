@@ -43,8 +43,8 @@ unchanged without movers and `validate.sh` is clean with them.
 the camera chasing ship 0:
 - `ships.png`: the chase.
 - `ships-taa.png`, cropped and enlarged twice: with the ships' motion vectors, with the
-  camera's alone (`--no-mover-motion`), the pixels that changed: 5 347; ꟻLIP max 0.53, the
-  hull's and the wings' edges ghosted.
+  camera's alone (`--no-mover-motion`), the pixels that changed: 5 787; ꟻLIP max 0.69, the
+  hull's, the wings' and the engine's edges ghosted.
 - Cost at 2560 × 1440: 2.456–2.463 ms without ships, 2.564–2.567 with 24.
 
 **A refit against a rebuild** (`FORGE_TLAS_REFIT=1`, `docs/PROFILE.md`): `movers/tlas` 0.146 →

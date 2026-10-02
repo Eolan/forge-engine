@@ -293,7 +293,7 @@ const SHIP_LENGTH: f32 = 14.0;
 
 /// A ship (#79's demo): a hull of revolution along +Y from its tail, nose at
 /// [`SHIP_LENGTH`], panel lines around it; wings across it (+X) and a fin on top (+Z), the
-/// second material section.
+/// second material section; its tail's disc the engine's glow, the third.
 fn ship_mesh() -> procedural::TriMesh {
     let mut mesh = forge_geom::city::lathe(&forge_geom::city::Lathe {
         profile: vec![
@@ -314,7 +314,18 @@ fn ship_mesh() -> procedural::TriMesh {
         flute_depth: 0.015,
         flute_span: (2.0, 9.0),
     });
-    mesh.sections = vec![0; mesh.triangle_count()];
+    // The hull, but the middle of the disc closing its tail, a dark rim around it: the engine.
+    let in_nozzle = |i: u32| {
+        let [x, y, z] = mesh.positions[i as usize];
+        y < 1e-3 && x * x + z * z < 0.65 * 0.65
+    };
+    mesh.sections = mesh
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| u8::from(t.iter().all(|&i| in_nozzle(i))) * 2)
+        .collect();
     // The wings, through the hull, and the fin: flat-shaded boxes, `(min, max)` corners.
     for (min, max) in [
         (Vec3::new(-6.5, 2.0, -0.12), Vec3::new(6.5, 5.5, 0.12)),
@@ -1401,7 +1412,8 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
             )
         })
     };
-    // The ships' hull, and after it their wings' and fin's paint (#79).
+    // The ships' hull, and after it their wings' and fin's paint and their engine's glow, a
+    // hot blue the bloom takes (#79; pre-exposed light, as the shading adds it).
     let hull = ship.as_ref().map(|_| {
         let layer = |color: [f32; 3], power: f32, specular: f32| RenderLayer {
             color_a: color,
@@ -1410,10 +1422,20 @@ fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(Meshle
             specular,
             ..RenderLayer::default()
         };
-        add_with_faces(
+        let hull = add_with_faces(
             Material::new("hull", layer([0.55, 0.56, 0.58], 80.0, 0.3)),
             Material::new("ship paint", layer([0.42, 0.09, 0.06], 40.0, 0.2)),
-        )
+        );
+        // Section 2, the row after the paint (its own faces' row follows, unused).
+        let engine = Material::new(
+            "engine",
+            RenderLayer {
+                emissive: [0.45, 0.95, 2.2],
+                ..layer([0.05, 0.05, 0.06], 20.0, 0.0)
+            },
+        );
+        add_with_faces(engine.clone(), engine);
+        hull
     });
     builder.set_materials(&materials, Some(textures));
     // The field stays still until Phase 3: its structures are built once (issue #45).

@@ -287,7 +287,9 @@ machinery, `docs/demos/island.md`, "Moving geometry"): the instance table's last
 written every frame, with their own motion vectors and acceleration structure.
 - **The ship** (`ship_mesh`): a 14 m hull of revolution with panel lines, wings across it and
   a fin on top, the wings and fin in the material row after the hull's (red paint on light
-  grey metal).
+  grey metal). The middle of the disc closing its tail is the engine, in the row after that:
+  a pale blue glow (`emissive`, pre-exposed light as the shading adds it) inside a dark rim,
+  which the bloom takes.
 - **Their flight** (`Ships::pose`):
   - each has its own speed, a loop in 0.7–1.4 times the camera's, its own start along the
     loop and its own offset from the path, 3–9 m, turning slowly around it;
@@ -299,9 +301,9 @@ written every frame, with their own motion vectors and acceleration structure.
 **Sheets** (`reports/2026-10-02-79/`, frame 240 with the fixed step, 24 ships, `--chase 0`):
 - `ships.png`: the chase. Ship 0 in front, another ahead in the corridor.
 - `ships-taa.png`, cropped and enlarged twice: with the ships' motion vectors, with the
-  camera's alone, and the pixels that changed. The second ghosts the hull's and the wings'
-  edges: the camera follows the ship, so the camera's vectors say its pixels move like the
-  belt behind it. 5 347 pixels differ, ꟻLIP max 0.53.
+  camera's alone, and the pixels that changed. The second ghosts the hull's, the wings' and
+  the engine's edges: the camera follows the ship, so the camera's vectors say its pixels move
+  like the belt behind it. 5 787 pixels differ, ꟻLIP max 0.69 (at the engine).
 
 ![Chasing a ship through the belt](../../reports/2026-10-02-79/ships.png)
 

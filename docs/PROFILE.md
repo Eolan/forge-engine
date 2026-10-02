@@ -759,6 +759,17 @@ two rounds of 1 500 frames, 2560 × 1440:
   10 000. So the rebuild stays, as the research and the vendors advise for a TLAS. A refit with
   a rebuild every few hundred frames is the option if the frame ever needs that 0.1 ms.
 
+**Built to trace fast** (`FORGE_TLAS_FAST_TRACE=1`: `PREFER_FAST_TRACE` instead of
+`PREFER_FAST_BUILD`, which NVIDIA's 2022 best-practice post advises for a TLAS rebuilt every
+frame, `docs/research/dynamic-scenes.md`). The same views and rounds:
+- `movers/tlas` is the same: 0.144–0.146 against 0.147–0.150 ms with 1 000 movers, and
+  0.203–0.207 against 0.196–0.200 with 10 000.
+- The reflections and the probes' rays stay within the rounds' spread.
+- The frame gains nothing: from the barrel with 10 000 it is slower (4.10–4.16 → 4.19–4.23 ms),
+  from the mouth the same (3.67–3.73 → 3.66).
+- With 10 000 instances or fewer the choice does not show in the traces on this GPU: the fast
+  build stays, the flag remains for the A/B.
+
 **Ships in the ballad** (#79's demo, `asteroids --ships N`; `docs/demos/asteroids.md`), the
 ballad's flight, two rounds:
 

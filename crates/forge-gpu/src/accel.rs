@@ -290,6 +290,8 @@ pub struct DynamicTlas {
     capacity: u32,
     /// `FORGE_TLAS_REFIT=1` (#79's measure): built once, then updated in place.
     pub(crate) refit: bool,
+    /// Its build flags ([`dynamic_tlas_flags`]).
+    pub(crate) flags: vk::BuildAccelerationStructureFlagsKHR,
     /// The instance count of the last full build, which an update must keep.
     pub(crate) built: std::cell::Cell<Option<u32>>,
 }
@@ -333,15 +335,22 @@ impl Drop for DynamicTlas {
     }
 }
 
-/// How a dynamic top-level structure is built and sized: fast to build, and with `refit`
-/// updatable in place (#79's measure of a refit against a rebuild, `FORGE_TLAS_REFIT=1`).
-pub(crate) fn dynamic_tlas_flags(refit: bool) -> vk::BuildAccelerationStructureFlagsKHR {
-    let update = if refit {
-        vk::BuildAccelerationStructureFlagsKHR::ALLOW_UPDATE
+/// How a dynamic top-level structure is built and sized: fast to build, or with `fast_trace`
+/// fast to trace (`FORGE_TLAS_FAST_TRACE=1`, the A/B NVIDIA's advice for a structure rebuilt
+/// every frame asks for); with `refit` updatable in place (#79's measure of a refit against a
+/// rebuild, `FORGE_TLAS_REFIT=1`).
+pub(crate) fn dynamic_tlas_flags(
+    refit: bool,
+    fast_trace: bool,
+) -> vk::BuildAccelerationStructureFlagsKHR {
+    use vk::BuildAccelerationStructureFlagsKHR as F;
+    let update = if refit { F::ALLOW_UPDATE } else { F::empty() };
+    let prefer = if fast_trace {
+        F::PREFER_FAST_TRACE
     } else {
-        vk::BuildAccelerationStructureFlagsKHR::empty()
+        F::PREFER_FAST_BUILD
     };
-    vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_BUILD | update
+    prefer | update
 }
 
 /// The geometry of a top-level build over the instance records at `records`.
@@ -371,11 +380,13 @@ impl Device {
             category: MemoryCategory::Work,
             name: &format!("{name} records"),
         })?;
-        let refit = std::env::var_os("FORGE_TLAS_REFIT").is_some_and(|v| v != "0");
+        let flag = |name: &str| std::env::var_os(name).is_some_and(|v| v != "0");
+        let refit = flag("FORGE_TLAS_REFIT");
+        let flags = dynamic_tlas_flags(refit, flag("FORGE_TLAS_FAST_TRACE"));
         let geometries = [instance_geometry(records.address())];
         let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(dynamic_tlas_flags(refit))
+            .flags(flags)
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
             .geometries(&geometries);
         let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
@@ -423,6 +434,7 @@ impl Device {
             scratch: GraphBuffer::new(scratch),
             capacity,
             refit,
+            flags,
             built: std::cell::Cell::new(None),
         })
     }
