@@ -55,6 +55,8 @@ pub enum PropKind {
     Stone(Stone),
     /// A surface of revolution (see [`lathe`]).
     Lathe(Lathe),
+    /// A mesh made elsewhere (see [`Imported`]): a model through glTF.
+    Imported(Imported),
     /// A box with rounded edges (see [`block`]): crates, blocks, a floor.
     Block(Block),
     /// The ground (see [`terrain_mesh`]).
@@ -123,6 +125,29 @@ pub struct HeightfieldDetail {
     pub heights: Vec<f32>,
 }
 
+/// A mesh made outside this crate (a model from Blender through glTF, #138): its triangles,
+/// and the key that names them for the cache (the model's file and a hash of its bytes, so a
+/// new export cooks again).
+#[derive(Clone)]
+pub struct Imported {
+    /// What names the mesh: unique per model and version.
+    pub key: String,
+    /// The triangles, in the prop's frame.
+    pub mesh: Arc<TriMesh>,
+}
+
+impl fmt::Debug for Imported {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Imported").field("key", &self.key).finish()
+    }
+}
+
+impl PartialEq for Imported {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
 impl fmt::Debug for Heightfield {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = f.debug_struct("Heightfield");
@@ -167,6 +192,7 @@ impl PropSpec {
             PropKind::Stone(s) => stone(s),
             PropKind::Lathe(l) => lathe(l),
             PropKind::Block(b) => block(b),
+            PropKind::Imported(m) => (*m.mesh).clone(),
             PropKind::Terrain(t) => terrain_mesh(t),
             PropKind::Heightfield(h) => {
                 let heights = (h.source)();
@@ -192,7 +218,7 @@ impl PropSpec {
         CookOptions {
             normal_weight: match self.kind {
                 PropKind::Building(_) => 1.0,
-                PropKind::Lathe(_) | PropKind::Block(_) => 0.5,
+                PropKind::Lathe(_) | PropKind::Block(_) | PropKind::Imported(_) => 0.5,
                 PropKind::Stone(ref s) => s.normal_weight,
                 PropKind::Boulder { .. }
                 | PropKind::Rubble { .. }

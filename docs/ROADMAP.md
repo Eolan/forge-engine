@@ -109,8 +109,10 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   and Linux and at any thread count, 496 bodies in 0.56 ms a tick. The fixed tick, recordings
   and a server with predicting clients ✅ (#137, `forge-sim`): a recorded session replays to
   every digest, and over a 100 ms link losing 2 % a client predicts 96 snapshots in 99 to the
-  bit. Next, buoyancy on the water we render (step 3). The island's barrels (#107) still drift
-  at the water's speed, without physics, until step 3.
+  bit. Things float on the sea we render ✅ (#138, `--lab sea`): the GPU's waves on the CPU each
+  tick, buoyancy by submerged triangles, a boat modelled in Blender read through glTF and driven
+  by its outboard. Next, the island's rivers and lakes for what floats (its barrels, #107,
+  still drift at the water's speed, without physics), then walking (step 4).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map.
@@ -397,8 +399,10 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    runs it in-process (its own local server), a multiplayer game on the server with the clients
    predicting (D-010). `physics-lab --record`, `--replay` and `--net MS`: a server, this
    player's client and a bot's over in-process links that delay and lose packets.
-3. **Water:** buoyancy from the submerged part of each hull (Kerner's triangles, D-009) on the
-   water we render: barrels, logs, crates, then a boat with a propeller and a rudder; then the
+3. **Water** (✅ on the sea, #138: `physics-lab --lab sea`, the boat from Blender through glTF,
+   driven with the arrow keys; the island's rivers and lakes next): buoyancy from the submerged
+   part of each hull (Kerner's triangles, D-009) on the water we render: barrels, logs, crates,
+   then a boat with a propeller and a rudder; then the
    island's rivers and sea. The same pool tests caustics, light shafts under the water and the
    surface seen from below.
 4. **Walking:** a character controller (Jolt's `CharacterVirtual`): pushing crates, stairs, a

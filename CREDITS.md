@@ -53,12 +53,15 @@ in. CI checks the crate list.
 | [xxhash-rust](https://github.com/DoumanAsh/xxhash-rust), after [xxHash](https://github.com/Cyan4973/xxHash) | Douman; the XXH3 algorithm by Yann Collet | cache keys for shaders and cooked meshes | BSL-1.0 |
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Jorrit Rouwé and the Jolt contributors | rigid bodies (`forge-physics`, D-009, issue #136): v5.6.0's library sources vendored in `third_party/jolt` with its licence, built with `CROSS_PLATFORM_DETERMINISTIC` and double precision | MIT |
 | [JoltC](https://github.com/SecondHalfGames/JoltC) | Second Half Games (Lucien Greathouse and contributors) | the model for `forge-physics`' C layer: opaque shape handles, the layer set-up | MIT OR Apache-2.0 |
+| [gltf](https://github.com/gltf-rs/gltf) | David Harvey-Macaulay and the gltf-rs contributors | reading glTF 2.0 models (`forge_geom::model`, #138) | MIT OR Apache-2.0 |
+| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py` models the lab's boat in it and exports it as glTF (#138) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets
 
 | Asset | People | Where | Licence |
 |---|---|---|---|
 | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | the JetBrains Mono Project Authors | the profiler overlay's text | SIL OFL 1.1 (`assets/fonts/jetbrains-mono/OFL.txt`) |
+| The lab's boat (`assets/models/boat.glb`) | made for Forge by `assets/blender/boat.py` (#138) | `physics-lab --lab sea` | the project's (MIT OR Apache-2.0) |
 
 ## Techniques
 
@@ -336,3 +339,7 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Networked physics.** Glenn Fiedler, "Introduction to Networked Physics" and the series
   after it, Gaffer On Games, 2014–2015: the link conditioner and the commands sent again until
   acknowledged (#137).
+- **Floating bodies.** Jacques Kerner, "Water interaction model for boats in video games",
+  Game Developer (Gamasutra), 2015: closed hulls cut at the water's surface, each submerged
+  piece pushed by the pressure at its depth and dragged by the water it moves through
+  (`forge_physics::buoyancy`, #138).

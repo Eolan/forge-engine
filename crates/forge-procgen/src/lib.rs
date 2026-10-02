@@ -86,7 +86,7 @@ pub use layers::{
     GeologyLayers, GeologyRule, GeologyStats, LayerRule, ScrubRule, Shore, paint_geology,
     paint_lakes, paint_moisture, paint_rivers, paint_scrub, slope_layers, wetness,
 };
-pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
+pub use ocean::{Ocean, OceanParams, OceanSurface, SeaCascade, SeaHeights, tma};
 pub use river::{
     Bar, BarParams, Corner, Delta, DeltaParams, Outlet, Ribbon, RibbonParams, RibbonPoint, Step,
     StepParams, bar_spans, drawn_height, lip_shift, rest_on, ribbons, sea_mouth, smooth_height,

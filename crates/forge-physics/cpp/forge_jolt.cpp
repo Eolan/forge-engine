@@ -18,6 +18,7 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -240,6 +241,12 @@ FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const fl
     return hand_out(settings.Create());
 }
 
+FjShape *fj_shape_offset_center_of_mass(const FjShape *inner, const float offset[3]) {
+    JPH::OffsetCenterOfMassShapeSettings settings(vec3(offset), shape_of(inner));
+    settings.SetEmbedded();
+    return hand_out(settings.Create());
+}
+
 void fj_shape_release(const FjShape *shape) {
     if (shape != nullptr) {
         shape_of(shape)->Release();
@@ -343,6 +350,26 @@ void fj_body_add_impulse_at(FjWorld *world, uint32_t body, const float impulse[3
 
 void fj_body_add_force(FjWorld *world, uint32_t body, const float force[3]) {
     world->system.GetBodyInterface().AddForce(id_of(body), vec3(force));
+}
+
+void fj_bodies_push(FjWorld *world, const uint32_t *bodies, uint32_t count, const float *forces,
+                    const double *points, const float *torques) {
+    JPH::BodyInterface &all = world->system.GetBodyInterface();
+    for (uint32_t i = 0; i < count; ++i) {
+        all.AddForce(id_of(bodies[i]), vec3(forces + 3 * i), rvec3(points + 3 * i));
+        all.AddTorque(id_of(bodies[i]), vec3(torques + 3 * i));
+    }
+}
+
+void fj_bodies_centers_of_mass(const FjWorld *world, const uint32_t *bodies, uint32_t count,
+                               double *centers) {
+    const JPH::BodyInterface &all = world->system.GetBodyInterfaceNoLock();
+    for (uint32_t i = 0; i < count; ++i) {
+        const JPH::RVec3 c = all.GetCenterOfMassPosition(id_of(bodies[i]));
+        centers[3 * i] = c.GetX();
+        centers[3 * i + 1] = c.GetY();
+        centers[3 * i + 2] = c.GetZ();
+    }
 }
 
 void fj_body_set_velocity(FjWorld *world, uint32_t body, const float linear[3],

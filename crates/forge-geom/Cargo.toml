@@ -15,3 +15,5 @@ bytemuck = { workspace = true }
 forge-core = { workspace = true }
 glam = { workspace = true }
 meshopt = { workspace = true }
+gltf = { workspace = true }
+thiserror = { workspace = true }

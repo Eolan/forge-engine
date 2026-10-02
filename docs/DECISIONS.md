@@ -216,6 +216,11 @@ by hand (JoltC's bindings need bindgen and libclang, and its surface is many tim
 calls). Three of §6's tests pass, and the cross-platform one: one hash on Windows (MSVC) and
 Linux (gcc), checked by CI on both. Jolt's job system runs its own threads for now (the client's
 cores less two); bridging it to `forge-task` waits for `forge-sim`.
+*Boats* (#138): "boats by submerged-triangle hydrostatics" built in
+`forge_physics::buoyancy` (pressure per submerged piece, pressure and skin drag, radiation
+damping near the surface), on the CPU twin of the GPU's cascades: `Ocean::displacement` per tick
+for the long ones, sampled as the GPU's filter reads them. No transcendental function, so it
+replays to the same digests; `physics-lab --lab sea`.
 
 ## D-010 — Netcode: QUIC transport, our own replication ✅ (2026-09-24)
 

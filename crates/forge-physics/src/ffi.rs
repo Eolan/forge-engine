@@ -91,6 +91,10 @@ unsafe extern "C" {
         position: *const f32,
         rotation: *const f32,
     ) -> *mut FjShape;
+    pub fn fj_shape_offset_center_of_mass(
+        inner: *const FjShape,
+        offset: *const f32,
+    ) -> *mut FjShape;
     pub fn fj_shape_release(shape: *const FjShape);
 
     pub fn fj_world_new(desc: *const FjWorldDesc) -> *mut FjWorld;
@@ -126,6 +130,20 @@ unsafe extern "C" {
         point: *const f64,
     );
     pub fn fj_body_add_force(world: *mut FjWorld, body: u32, force: *const f32);
+    pub fn fj_bodies_push(
+        world: *mut FjWorld,
+        bodies: *const u32,
+        count: u32,
+        forces: *const f32,
+        points: *const f64,
+        torques: *const f32,
+    );
+    pub fn fj_bodies_centers_of_mass(
+        world: *const FjWorld,
+        bodies: *const u32,
+        count: u32,
+        centers: *mut f64,
+    );
     pub fn fj_body_set_velocity(
         world: *mut FjWorld,
         body: u32,

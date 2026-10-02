@@ -213,7 +213,9 @@ hash. `--lab drop` (the default): a pyramid of 204 blocks under a rain of 260 ba
 balls. Space throws a ball from the camera, Enter starts the scene over. `--record FILE` and
 `--replay FILE` play a session again and check its digests; `--net 100` runs it through a
 server and this player's client over a 100 ms link that loses 2 % of its packets, with a bot
-throwing too (`forge-sim`). It shares `city-blocks`' renderer, keys and options
+throwing too (`forge-sim`). `--lab sea`: crates, barrels, logs and balls afloat on the sea's
+waves, rocks sinking to the floor, a jetty, and a boat modelled in Blender and read through
+glTF; the arrow keys drive the boat, C follows it. It shares `city-blocks`' renderer, keys and options
 (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 

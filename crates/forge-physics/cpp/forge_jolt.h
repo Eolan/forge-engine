@@ -85,6 +85,8 @@ FjShape *fj_shape_mesh(const float *vertices, uint32_t vertex_count, const uint3
                        uint32_t triangle_count);
 // `inner` moved by `position` and turned by `rotation` (x, y, z, w) in its body's frame.
 FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const float rotation[4]);
+// `inner` with its centre of mass moved by `offset` (a boat's weight low in its hull).
+FjShape *fj_shape_offset_center_of_mass(const FjShape *inner, const float offset[3]);
 void fj_shape_release(const FjShape *shape);
 
 FjWorld *fj_world_new(const FjWorldDesc *desc);
@@ -113,6 +115,13 @@ void fj_body_add_impulse(FjWorld *world, uint32_t body, const float impulse[3]);
 void fj_body_add_impulse_at(FjWorld *world, uint32_t body, const float impulse[3],
                             const double point[3]);
 void fj_body_add_force(FjWorld *world, uint32_t body, const float force[3]);
+// For the next step, per body: a force (three floats) through a point of the world (three
+// doubles) and a torque (three floats), waking the body.
+void fj_bodies_push(FjWorld *world, const uint32_t *bodies, uint32_t count, const float *forces,
+                    const double *points, const float *torques);
+// The centres of mass (three doubles each) of `count` bodies.
+void fj_bodies_centers_of_mass(const FjWorld *world, const uint32_t *bodies, uint32_t count,
+                               double *centers);
 void fj_body_set_velocity(FjWorld *world, uint32_t body, const float linear[3],
                           const float angular[3]);
 void fj_body_set_transform(FjWorld *world, uint32_t body, const double position[3],

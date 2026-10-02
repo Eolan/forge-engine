@@ -19,7 +19,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 |---|---|---|
 | `drop` | the binding: boxes, cylinders, spheres and convex hulls falling, stacking, rolling and going to sleep; the determinism hash | ✅ #136 |
 | `drop --record`, `--replay`, `--net MS` | inputs as commands, recordings replayed to the same digests, a server and predicting clients over a lossy link | ✅ #137 |
-| `pool` | buoyancy: barrels, logs, crates and a boat on the water we render | step 3 |
+| `sea` | buoyancy on the sea we render: crates, barrels, logs, balls and a Blender boat afloat, rocks that sink, a jetty | ✅ #138 |
 | walking, vehicles, flight, destruction, creatures, fluids | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
@@ -128,10 +128,72 @@ on a toy world (a lone client is never corrected over 205 snapshots; two clients
 other and end where the server is; late commands) and on this one (a session over the lossy
 link ends where the server is, to the bit).
 
+## `sea`: what floats (issue #138)
+
+```
+cargo run --release -p physics-lab -- --lab sea
+```
+
+The open sea the island is drawn with (the same three FFT cascades from the same seed, D-038),
+a floor 12 m down, a jetty of planks on twelve concrete pillars, and dropped from 1 to 6 m over
+the water beyond its end: 30 wooden crates (600 kg/m³), 30 barrels (60 kg), 16 logs
+(700 kg/m³, 3 m), 20 balls, 18 rocks that sink to the floor, and a boat. **The arrow keys**
+drive the boat: up and down its throttle, left and right its rudder; **C** puts the camera
+behind it. Space throws balls into the water as in `drop`.
+
+![What floats at tick 600, and the boat come about under its motor](images/physics-lab-sea.png)
+
+**The waves on the CPU.** What floats must sit on the waves the GPU draws. `forge_procgen::Ocean`
+already synthesises the cascades' spectrum on the CPU (the GPU's agree with it within 3 × 10⁻⁶,
+the water check at frame 120); `Ocean::displacement` now gives the height and the horizontal
+displacement at a tick for less than its full surface: the phases only where the spectrum has
+energy (3 208 samples of 65 536), two real fields in each complex transform, the rows outside
+the cascade's band left out, and the rows and the columns spread over the job system with the
+same bytes on any number of workers. A cascade takes 0.53 ms; the physics takes the two whose
+waves move a hull (the swell and the waves down to 4 m), not the ripples. `SeaHeights` samples
+them as the GPU's linear filter reads its images (texel centres half a texel off the transform's
+samples) and finds the point under (x, z) by going back by the displacement there, twice: a
+point of the surface is found again within 2 cm.
+
+**Buoyancy** (`forge_physics::buoyancy`, after Jacques Kerner's model for boats, 2015). Each
+floating body has a closed hull in its frame: a box cut into squares, a cylinder, a ball, or a
+model's own shell. Every tick each triangle is cut where the surface crosses it, and each
+submerged piece is pushed by the water's pressure at its depth along its normal; the pieces
+moving into the water are dragged by it (pressure drag), all of them along it (skin friction),
+and near the surface their motion makes waves that carry energy away (radiation damping, which
+settles a raft in seconds where the drag alone left it bobbing). The pushes are worked out for
+all the floaters in parallel and given to Jolt in one call; a body asleep wholly under the water
+(a rock on the floor) is left asleep. The tests: a box under water is pushed by the weight of
+the water it displaces, a raft half in by half of it and tilted it rights itself (a cube half in
+does not: its metacentre lies under its centre of mass, and the code says so), a moving box is
+slowed as a plate would be, a raft dropped into still water settles at its draft to 5 mm and
+rests, and a stone sinks.
+
+**The boat** was modelled in Blender 5.2 from code (`assets/blender/boat.py`, run headless) and
+exported as glTF (`assets/models/boat.glb`, 280 KB): a 5 m open motorboat with a round-bilged
+hull, a raised bow and a flat transom, a blue rim, three thwarts and an outboard motor, 10 248
+triangles in four materials, and a second mesh, a coarse closed shell of 427 triangles, for its
+buoyancy and its collision. `forge_geom::model::load_glb` (through the `gltf` crate) reads both
+with their nodes' transforms; the drawn one becomes a prop (`PropKind::Imported`, cached by the
+file's bytes) with a material row per glTF material. In the lab it weighs 420 kg with its weight
+30 cm under its hull's centre; its motor pushes 2.6 kN at the propeller along the boat, turned by
+the rudder, only while the propeller is under the surface: about 3.5 m/s ahead, and it comes
+about with the rudder over. The throttle and the rudder are a command (`Steer`) through
+`forge-sim`, so a session with the boat records, replays and goes through `--net` like the
+throws; `--steer T,R` holds them from the first frame (the captures).
+
+![The boat in Blender's renderer: drawn (left) and its buoyancy shell (right)](images/physics-lab-boat-blender.png)
+
+Measured at 1600 × 900, `--fixed-step`, 600 ticks, 147 bodies (115 awake: all but the balls not
+yet thrown): **1.8 ms a tick** (p99 2.3), of it about 1.1 ms the two cascades of waves and most of
+the rest the pushes. A test replays 4 s of the scene (a throw, the boat ahead and turning) to the
+same digests: the waves, the buoyancy and the motor are as deterministic as the rest.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
 twin with the occlusion off (`lab-drop90-noocc`, 0 px apart: the movers are culled like
 everything else), `lab-drop600` (the pile at rest) and `lab-net300` (the client's view through
 `--net 100 --throw-every 45`: thrown balls in flight, the bot's corrections behind it), on both
-geometry paths.
+geometry paths; and from the sea (#138) `lab-sea300` (what floats and the rocks on the floor) with
+its occlusion-off twin, and `lab-sea-steer600` (the boat under way with the rudder over).

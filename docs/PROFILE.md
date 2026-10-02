@@ -982,6 +982,12 @@ rain lands and up to 464 bodies are awake. The window's title shows the tick's m
 since the last title and the bodies awake; the run's are logged at exit. The frame around it:
 p50 1.15 ms, p99 1.77 ms at 1600 × 900.
 
+`--lab sea` (#138), 147 bodies, 115 awake: **1.8 ms a tick** (p99 2.3, 600 ticks). About 1.1 ms
+of it is the waves on the CPU, two cascades of `Ocean::displacement` (0.53 ms each on 6 workers:
+the phases, the band's rows, then the columns, each spread over the job system); the buoyancy's
+pushes for the floaters, also in parallel, and Jolt's step take the rest. The ripples' cascade is
+left out (0.7 ms more for centimetres).
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

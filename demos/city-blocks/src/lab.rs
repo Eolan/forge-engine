@@ -14,11 +14,13 @@
 //! player's client over a link of MS one way, with a second player (a bot) throwing too.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use forge_app::Context;
 use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
+use forge_physics::buoyancy::Hull;
 use forge_physics::{BodyDesc, BodyId, Shape, Transform, Velocity, World, WorldDesc};
 use forge_render::meshlet::MeshId;
 use forge_render::{MeshletScene, MeshletSceneBuilder, MoverTransform};
@@ -26,15 +28,21 @@ use forge_sim::{
     Client, Codec, InputPacket, Link, LinkParams, PlayerId, Recording, Server, Simulation,
     Snapshot, Stamped, TICK, TICK_RATE,
 };
+use forge_task::TaskPool;
 use glam::{DVec3, Mat4, Quat, Vec3};
 
 use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
+
+mod sea;
 
 /// The lab's scenes (`--lab`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum LabScene {
     /// A pyramid of blocks under a rain of barrels, rocks and balls.
     Drop,
+    /// The sea: crates, barrels, logs and balls afloat, rocks that sink, a jetty, a boat
+    /// (#138).
+    Sea,
 }
 
 /// The floor's half side, metres.
@@ -61,6 +69,17 @@ const BLOCK: usize = 1;
 const BARREL: usize = 2;
 const ROCKS: [usize; 3] = [3, 4, 5];
 const BALL: usize = 6;
+const CRATE: usize = 7;
+const LOG: usize = 8;
+const PILLAR: usize = 9;
+const DECK: usize = 10;
+const BOAT: usize = 11;
+/// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
+const SEA_CRATES: u32 = 30;
+const SEA_BARRELS: u32 = 30;
+const SEA_LOGS: u32 = 16;
+const SEA_BALLS: u32 = 20;
+const SEA_ROCKS: u32 = 18;
 /// Ticks between the digests a recording keeps.
 const RECORD_EVERY: u64 = 60;
 /// `--net`: ticks between the server's snapshots, the share of packets lost, ticks between the
@@ -70,8 +89,15 @@ const NET_LOSS: f64 = 0.02;
 const BOT_EVERY: u64 = 150;
 
 /// The props the lab draws, in this order: the floor, the block, the barrel, the rocks, the
-/// ball.
+/// ball, then the sea's: the crate, the log, the pillar, the deck, the boat.
 pub(crate) fn props() -> Vec<PropSpec> {
+    let mut props = drop_props();
+    props.extend(sea::props());
+    props
+}
+
+/// The pyramid's props.
+fn drop_props() -> Vec<PropSpec> {
     let mut props = vec![
         PropSpec {
             name: "lab-floor".to_owned(),
@@ -152,6 +178,14 @@ pub(crate) enum LabCommand {
     },
     /// Everything back where the scene started (the clock runs on).
     Reset,
+    /// The boat's motor: its throttle (−1 astern to 1 ahead) and rudder (−1 to 1), held until
+    /// the next.
+    Steer {
+        /// −1 to 1.
+        throttle: f32,
+        /// −1 to 1.
+        rudder: f32,
+    },
 }
 
 impl Codec for LabCommand {
@@ -164,6 +198,11 @@ impl Codec for LabCommand {
                 }
             }
             Self::Reset => out.push(1),
+            Self::Steer { throttle, rudder } => {
+                out.push(2);
+                out.extend_from_slice(&throttle.to_bits().to_le_bytes());
+                out.extend_from_slice(&rudder.to_bits().to_le_bytes());
+            }
         }
     }
 
@@ -184,6 +223,18 @@ impl Codec for LabCommand {
                 })
             }
             1 => Some(Self::Reset),
+            2 => {
+                let mut v = [0.0_f32; 2];
+                for x in &mut v {
+                    let (word, rest) = bytes.split_first_chunk::<4>()?;
+                    *x = f32::from_bits(u32::from_le_bytes(*word));
+                    *bytes = rest;
+                }
+                Some(Self::Steer {
+                    throttle: v[0],
+                    rudder: v[1],
+                })
+            }
             _ => None,
         }
     }
@@ -199,7 +250,8 @@ pub(crate) struct Group {
 }
 
 /// The lab's world as the clock drives it: Jolt's world, its bodies in the movers' order, the
-/// balls the players throw, and the state the scene started from.
+/// balls the players throw, what the water pushes and the boat, and the state the scene
+/// started from.
 pub(crate) struct LabWorld {
     world: World,
     bodies: Vec<BodyId>,
@@ -207,12 +259,26 @@ pub(crate) struct LabWorld {
     next_throw: u32,
     tick: u64,
     start: Vec<u8>,
+    /// The sea scene's: the waves, the bodies they push and their hulls, the boat.
+    sea: Option<sea::Sea>,
+    floaters: Vec<sea::Floater>,
+    hulls: Vec<Hull>,
+    boat: Option<sea::Boat>,
+    /// The workers the waves and the pushes are worked out on.
+    pool: Arc<TaskPool>,
+}
+
+/// What a scene draws: its bodies' groups (the movers) and its still props with their
+/// transforms.
+pub(crate) struct Layout {
+    pub groups: Vec<Group>,
+    pub statics: Vec<(usize, Mat4)>,
 }
 
 impl LabWorld {
     /// The scene `kind` from scratch: the same calls in the same order every time, so two built
-    /// alike are the same world to the bit. Also the groups the movers draw.
-    pub(crate) fn new(kind: LabScene) -> Result<(Self, Vec<Group>)> {
+    /// alike are the same world to the bit. Also what the scene draws.
+    pub(crate) fn new(kind: LabScene, pool: Arc<TaskPool>) -> Result<(Self, Layout)> {
         let mut world = World::new(&WorldDesc {
             // The client's rule (D-005): the cores less two, the caller one of them.
             threads: (std::thread::available_parallelism().map_or(4, |n| n.get()) / 2)
@@ -220,8 +286,15 @@ impl LabWorld {
                 .max(1) as u32,
             ..WorldDesc::default()
         });
+        // The floor: under the pyramid at 0, under the sea 12 m down.
+        let floor_y = match kind {
+            LabScene::Drop => 0.0,
+            LabScene::Sea => sea::FLOOR_Y,
+        };
+        let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
         let floor_shape = Shape::cuboid(Vec3::new(FLOOR_HALF, 0.5, FLOOR_HALF), 0.05, 0.0)?;
-        world.add_body(&BodyDesc::fixed(&floor_shape, DVec3::new(0.0, -0.5, 0.0)))?;
+        world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
+        let mut statics = vec![(FLOOR, Mat4::from_translation(floor_at))];
         // The shapes, each with its origin where its mesh has its own: the barrel's and the
         // ball's at their bottom, the rocks' hulls from their meshes' vertices.
         let block_shape = Shape::cuboid(Vec3::splat(BLOCK_HALF), 0.03, 2300.0)?;
@@ -246,6 +319,30 @@ impl LabWorld {
                 Shape::convex_hull(&points, 0.02, 2600.0)
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Turned and spinning at random, without trigonometry.
+        let spin = |k: u64| {
+            Vec3::new(
+                (2.0 * unit(k * 7 + 1) - 1.0) as f32,
+                (2.0 * unit(k * 7 + 2) - 1.0) as f32,
+                (2.0 * unit(k * 7 + 3) - 1.0) as f32,
+            ) * 3.0
+        };
+        // A point over a disc of `radius` round (x, z), `low` to `high` up: a point of the
+        // square folded onto the circle by its length (a square root only).
+        let scatter = |k: u64, centre: [f64; 2], radius: f64, low: f64, high: f64| {
+            let (r, h) = (unit(3 * k), unit(3 * k + 2));
+            let (x, z) = (
+                2.0 * unit(3 * k + 1) - 1.0,
+                2.0 * unit(3 * k + 1_000_003) - 1.0,
+            );
+            let len = (x * x + z * z).sqrt().max(1e-6);
+            let reach = radius * r.sqrt();
+            DVec3::new(
+                centre[0] + x / len * reach,
+                low + (high - low) * h,
+                centre[1] + z / len * reach,
+            )
+        };
 
         let mut bodies = Vec::new();
         let mut groups = Vec::new();
@@ -256,6 +353,11 @@ impl LabWorld {
             });
             bodies.extend(ids);
         };
+        let mut floaters = Vec::new();
+        let mut hulls = Vec::new();
+        let mut boat = None;
+        let mut k = 1_000u64;
+        let mut balls = Vec::new();
         match kind {
             LabScene::Drop => {
                 // The pyramid: layer L has (8 − L)² blocks, 2 cm apart, each a hair over the
@@ -281,27 +383,8 @@ impl LabWorld {
                 }
                 group(BLOCK, blocks, &mut bodies);
                 // The rain: barrels, rocks and balls over a disc of 10 m around the pyramid,
-                // from 8 to 45 m up, turned and spinning at random.
-                let rain = |k: u64| {
-                    let (r, h) = (unit(3 * k), unit(3 * k + 2));
-                    // A way without trigonometry: a point of the square folded onto the circle
-                    // by its length (a square root only).
-                    let (x, z) = (
-                        2.0 * unit(3 * k + 1) - 1.0,
-                        2.0 * unit(3 * k + 1_000_003) - 1.0,
-                    );
-                    let len = (x * x + z * z).sqrt().max(1e-6);
-                    let radius = 10.0 * r.sqrt();
-                    DVec3::new(x / len * radius, 8.0 + 37.0 * h, z / len * radius)
-                };
-                let spin = |k: u64| {
-                    Vec3::new(
-                        (2.0 * unit(k * 7 + 1) - 1.0) as f32,
-                        (2.0 * unit(k * 7 + 2) - 1.0) as f32,
-                        (2.0 * unit(k * 7 + 3) - 1.0) as f32,
-                    ) * 3.0
-                };
-                let mut k = 1_000u64;
+                // from 8 to 45 m up.
+                let rain = |k: u64| scatter(k, [0.0, 0.0], 10.0, 8.0, 45.0);
                 let mut barrels = Vec::new();
                 for _ in 0..RAIN_BARRELS {
                     k += 1;
@@ -331,7 +414,6 @@ impl LabWorld {
                 for (size, rocks) in by_size.into_iter().enumerate() {
                     group(ROCKS[size], rocks, &mut bodies);
                 }
-                let mut balls = Vec::new();
                 for _ in 0..RAIN_BALLS {
                     k += 1;
                     balls.push(world.add_body(&BodyDesc {
@@ -342,38 +424,186 @@ impl LabWorld {
                         ..BodyDesc::dynamic(&ball_shape, rain(k))
                     })?);
                 }
-                // The balls to throw, asleep out of sight until thrown, after the rain's.
-                let mut thrown = Vec::new();
-                for n in 0..THROWN {
-                    thrown.push(world.add_body(&BodyDesc {
+            }
+            LabScene::Sea => {
+                // The jetty: a deck on two rows of pillars, running out along −z from the
+                // shore's side.
+                let deck_y = sea::DECK_TOP - sea::DECK_HALF[1];
+                let deck_at = Vec3::new(0.0, deck_y, 0.0);
+                let deck_shape = Shape::cuboid(Vec3::from(sea::DECK_HALF), 0.04, 0.0)?;
+                world.add_body(&BodyDesc::fixed(&deck_shape, deck_at.as_dvec3()))?;
+                statics.push((DECK, Mat4::from_translation(deck_at)));
+                let pillar_half = 0.5 * (sea::DECK_TOP - sea::FLOOR_Y);
+                let pillar_shape = Shape::cuboid(
+                    Vec3::new(sea::PILLAR_HALF, pillar_half, sea::PILLAR_HALF),
+                    0.03,
+                    0.0,
+                )?;
+                for side in [-1.0_f32, 1.0] {
+                    for n in 0..sea::PILLARS {
+                        let z = -sea::DECK_HALF[2]
+                            + 1.0
+                            + (2.0 * sea::DECK_HALF[2] - 2.0) * n as f32
+                                / (sea::PILLARS - 1) as f32;
+                        let at = Vec3::new(
+                            side * (sea::DECK_HALF[0] - 0.4),
+                            sea::FLOOR_Y + pillar_half,
+                            z,
+                        );
+                        world.add_body(&BodyDesc::fixed(&pillar_shape, at.as_dvec3()))?;
+                        statics.push((PILLAR, Mat4::from_translation(at)));
+                    }
+                }
+                // What floats, dropped from 1 to 6 m over 11 m of water beyond the jetty's end,
+                // and the rocks that sink; each with its hull.
+                let around = [9.0, -25.0];
+                let fall = |k: u64| scatter(k, around, 11.0, 1.0, 6.0);
+                let mut afloat = |hull: Hull, ids: &[BodyId], hulls: &mut Vec<Hull>| {
+                    hulls.push(hull);
+                    floaters.extend(ids.iter().map(|&body| sea::Floater {
+                        body,
+                        hull: hulls.len() - 1,
+                    }));
+                };
+                let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 600.0)?;
+                let mut crates = Vec::new();
+                for _ in 0..SEA_CRATES {
+                    k += 1;
+                    crates.push(world.add_body(&BodyDesc {
+                        rotation: rotation(k),
+                        angular_velocity: spin(k),
                         friction: 0.6,
-                        restitution: 0.6,
-                        angular_damping: 0.3,
-                        ccd: true,
-                        asleep: true,
-                        ..BodyDesc::dynamic(
-                            &ball_shape,
-                            DVec3::new(f64::from(n) * 2.0, PARKED_Y, 0.0),
-                        )
+                        ..BodyDesc::dynamic(&crate_shape, fall(k))
                     })?);
                 }
-                balls.extend(&thrown);
-                group(BALL, balls, &mut bodies);
-                world.optimize_broad_phase();
-                let start = world.save_state();
-                Ok((
-                    Self {
-                        world,
-                        bodies,
-                        thrown,
-                        next_throw: 0,
-                        tick: 0,
-                        start,
-                    },
-                    groups,
-                ))
+                afloat(
+                    Hull::cuboid(Vec3::splat(sea::CRATE_HALF), 3),
+                    &crates,
+                    &mut hulls,
+                );
+                group(CRATE, crates, &mut bodies);
+                let mut barrels = Vec::new();
+                for _ in 0..SEA_BARRELS {
+                    k += 1;
+                    barrels.push(world.add_body(&BodyDesc {
+                        rotation: rotation(k),
+                        angular_velocity: spin(k),
+                        friction: 0.5,
+                        restitution: 0.2,
+                        mass: Some(60.0),
+                        ..BodyDesc::dynamic(&barrel_shape, fall(k))
+                    })?);
+                }
+                afloat(
+                    Hull::cylinder(super::BARREL_RADIUS, super::BARREL_LENGTH, 0.0, 16, 3),
+                    &barrels,
+                    &mut hulls,
+                );
+                group(BARREL, barrels, &mut bodies);
+                let log_half = sea::LOG_LENGTH * 0.5;
+                let log_shape = Shape::cylinder(log_half, sea::LOG_RADIUS, 0.03, 700.0)?
+                    .offset(up(log_half), Quat::IDENTITY)?;
+                let mut logs = Vec::new();
+                for _ in 0..SEA_LOGS {
+                    k += 1;
+                    logs.push(world.add_body(&BodyDesc {
+                        rotation: rotation(k),
+                        angular_velocity: spin(k),
+                        friction: 0.7,
+                        ..BodyDesc::dynamic(&log_shape, fall(k))
+                    })?);
+                }
+                afloat(
+                    Hull::cylinder(sea::LOG_RADIUS, sea::LOG_LENGTH, 0.0, 12, 6),
+                    &logs,
+                    &mut hulls,
+                );
+                group(LOG, logs, &mut bodies);
+                let mut by_size: [Vec<BodyId>; 3] = Default::default();
+                for n in 0..SEA_ROCKS {
+                    k += 1;
+                    let size = n as usize % 3;
+                    by_size[size].push(world.add_body(&BodyDesc {
+                        rotation: rotation(k),
+                        friction: 0.8,
+                        ..BodyDesc::dynamic(&rock_shapes[size], fall(k))
+                    })?);
+                }
+                for (size, rocks) in by_size.into_iter().enumerate() {
+                    // A rock's hull: a ball of most of its radius about its middle.
+                    let r = ROCK_RADII[size];
+                    afloat(
+                        Hull::sphere(0.8 * r, Vec3::new(0.0, 0.6 * r, 0.0), 3),
+                        &rocks,
+                        &mut hulls,
+                    );
+                    group(ROCKS[size], rocks, &mut bodies);
+                }
+                for _ in 0..SEA_BALLS {
+                    k += 1;
+                    balls.push(world.add_body(&BodyDesc {
+                        angular_velocity: spin(k),
+                        friction: 0.6,
+                        restitution: 0.6,
+                        ..BodyDesc::dynamic(&ball_shape, fall(k))
+                    })?);
+                }
             }
         }
+        // The balls to throw, asleep out of sight until thrown, after the scene's.
+        let mut thrown = Vec::new();
+        for n in 0..THROWN {
+            thrown.push(world.add_body(&BodyDesc {
+                friction: 0.6,
+                restitution: 0.6,
+                angular_damping: 0.3,
+                ccd: true,
+                asleep: true,
+                ..BodyDesc::dynamic(&ball_shape, DVec3::new(f64::from(n) * 2.0, PARKED_Y, 0.0))
+            })?);
+        }
+        balls.extend(&thrown);
+        if kind == LabScene::Sea {
+            hulls.push(Hull::sphere(BALL_RADIUS, up(BALL_RADIUS), 4));
+            let hull = hulls.len() - 1;
+            floaters.extend(balls.iter().map(|&body| sea::Floater { body, hull }));
+        }
+        group(BALL, balls, &mut bodies);
+        if kind == LabScene::Sea {
+            let (shape, hull) = sea::boat_shapes()?;
+            let at = sea::boat_start();
+            let body = world.add_body(&BodyDesc {
+                rotation: at.rotation,
+                friction: 0.5,
+                mass: Some(sea::boat_mass()),
+                ..BodyDesc::dynamic(&shape, at.position)
+            })?;
+            hulls.push(hull);
+            floaters.push(sea::Floater {
+                body,
+                hull: hulls.len() - 1,
+            });
+            group(BOAT, vec![body], &mut bodies);
+            boat = Some(sea::boat_still(body));
+        }
+        world.optimize_broad_phase();
+        let start = world.save_state();
+        Ok((
+            Self {
+                world,
+                bodies,
+                thrown,
+                next_throw: 0,
+                tick: 0,
+                start,
+                sea: (kind == LabScene::Sea).then(sea::Sea::new),
+                floaters,
+                hulls,
+                boat,
+                pool,
+            },
+            Layout { groups, statics },
+        ))
     }
 
     /// Its bodies' transforms, in the movers' order, into `out`.
@@ -388,6 +618,24 @@ impl LabWorld {
 
     pub(crate) fn awake(&self) -> u32 {
         self.world.active_bodies()
+    }
+
+    /// The boat's throttle and rudder (both 0 without a boat).
+    fn controls(&self) -> (f32, f32) {
+        self.boat.map_or((0.0, 0.0), |b| (b.throttle, b.rudder))
+    }
+
+    /// The boat's transform, when the scene has one.
+    pub(crate) fn boat(&self) -> Option<Transform> {
+        let boat = self.boat?;
+        let mut t = Vec::new();
+        self.world.transforms(&[boat.body], &mut t);
+        t.first().copied()
+    }
+
+    /// Whether the scene has the sea.
+    pub(crate) fn has_sea(&self) -> bool {
+        self.sea.is_some()
     }
 
     fn throw(&mut self, from: Vec3, forward: Vec3) {
@@ -428,7 +676,30 @@ impl Simulation for LabWorld {
                     }
                     self.start = start;
                     self.next_throw = 0;
+                    if let Some(boat) = &mut self.boat {
+                        (boat.throttle, boat.rudder) = (0.0, 0.0);
+                    }
                 }
+                LabCommand::Steer { throttle, rudder } => {
+                    if let Some(boat) = &mut self.boat {
+                        boat.throttle = throttle.clamp(-1.0, 1.0);
+                        boat.rudder = rudder.clamp(-1.0, 1.0);
+                    }
+                }
+            }
+        }
+        // The sea at this tick's start: what floats pushed by it, the boat's motor too.
+        if let Some(sea) = &self.sea {
+            let heights = sea.at(self.tick as f64 * f64::from(TICK), &self.pool);
+            sea::float(
+                &mut self.world,
+                &self.floaters,
+                &self.hulls,
+                &heights,
+                &self.pool,
+            );
+            if let Some(boat) = &self.boat {
+                boat.drive(&mut self.world, &heights);
             }
         }
         if let Err(e) = self.world.step(TICK, 1) {
@@ -444,22 +715,38 @@ impl Simulation for LabWorld {
     fn save(&mut self) -> Vec<u8> {
         let mut out = self.tick.to_le_bytes().to_vec();
         out.extend_from_slice(&self.next_throw.to_le_bytes());
+        let (throttle, rudder) = self.controls();
+        out.extend_from_slice(&throttle.to_bits().to_le_bytes());
+        out.extend_from_slice(&rudder.to_bits().to_le_bytes());
         out.extend(self.world.save_state());
         out
     }
 
     fn restore(&mut self, state: &[u8]) {
         let (tick, rest) = state.split_at(8);
-        let (next, world) = rest.split_at(4);
+        let (next, rest) = rest.split_at(4);
+        let (controls, world) = rest.split_at(8);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
+        if let Some(boat) = &mut self.boat {
+            let word = |k: usize| {
+                f32::from_bits(u32::from_le_bytes(
+                    controls[k..k + 4].try_into().expect("4 bytes"),
+                ))
+            };
+            (boat.throttle, boat.rudder) = (word(0), word(4));
+        }
         if let Err(e) = self.world.restore_state(world) {
             tracing::warn!("a lab state: {e}");
         }
     }
 
     fn digest(&mut self) -> u64 {
-        self.world.digest(&self.bodies) ^ self.tick.rotate_left(17) ^ u64::from(self.next_throw)
+        let (throttle, rudder) = self.controls();
+        self.world.digest(&self.bodies)
+            ^ self.tick.rotate_left(17)
+            ^ u64::from(self.next_throw)
+            ^ (u64::from(throttle.to_bits()) << 32 | u64::from(rudder.to_bits())).rotate_left(29)
     }
 }
 
@@ -480,11 +767,11 @@ struct Net {
 }
 
 impl Net {
-    fn new(kind: LabScene, delay_ms: f64) -> Result<Self> {
+    fn new(kind: LabScene, delay_ms: f64, pool: &Arc<TaskPool>) -> Result<Self> {
         let lead = (delay_ms / 1e3 / f64::from(TICK)).ceil() as u64 + 2;
         // A client runs ahead through its own steps, so it knows the digests of those ticks.
         let ahead = |player: PlayerId| -> Result<Client<LabWorld>> {
-            let mut client = Client::new(LabWorld::new(kind)?.0, player);
+            let mut client = Client::new(LabWorld::new(kind, Arc::clone(pool))?.0, player);
             for _ in 0..lead {
                 client.step();
             }
@@ -492,7 +779,7 @@ impl Net {
         };
         let link = |seed| LinkParams::new(delay_ms, NET_LOSS, seed);
         Ok(Self {
-            server: Server::new(LabWorld::new(kind)?.0),
+            server: Server::new(LabWorld::new(kind, Arc::clone(pool))?.0),
             client: ahead(0)?,
             bot: ahead(1)?,
             up: [Link::new(link(10)), Link::new(link(11))],
@@ -585,7 +872,7 @@ impl Net {
 enum Mode {
     /// The world in this process alone, its commands recorded and maybe replayed.
     Local {
-        world: LabWorld,
+        world: Box<LabWorld>,
         recording: Recording<LabCommand>,
         replay: Option<Box<Replay>>,
     },
@@ -621,6 +908,34 @@ pub(crate) struct Lab {
     record: Option<PathBuf>,
 }
 
+/// The sea scene's water (#138): the island's cascades of FFT waves from the same seed as the
+/// physics' heights, and an open surface with no shore.
+pub(crate) fn water(
+    ctx: &Context,
+) -> Result<(
+    forge_render::WaterCascades,
+    forge_render::WaterSurface,
+    Vec<forge_procgen::Ocean>,
+)> {
+    let oceans = sea::oceans();
+    let descs: Vec<forge_render::WaterCascadeDesc> = oceans
+        .iter()
+        .map(|o| {
+            let omega = o.mean_frequency();
+            forge_render::WaterCascadeDesc {
+                patch: o.params.patch as f32,
+                choppiness: o.params.choppiness as f32,
+                samples: o.gpu_samples(),
+                omega: omega as f32,
+                shelf: forge_procgen::tma(omega, o.params.depth) as f32,
+            }
+        })
+        .collect();
+    let cascades = forge_render::WaterCascades::new(&ctx.device, &ctx.shaders, &descs)?;
+    let surface = forge_render::WaterSurface::new(&ctx.device, &ctx.shaders, None)?;
+    Ok((cascades, surface, oceans))
+}
+
 /// Builds the lab's scene and its world: the floor, the bodies of `kind`, the movers that draw
 /// them.
 pub(crate) fn build(
@@ -633,15 +948,30 @@ pub(crate) fn build(
     let props = props();
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<MeshId> = cooked.meshes.iter().map(|m| builder.add_mesh(m)).collect();
-    CityMaterials::new(&ctx.device)?.apply(&mut builder, &props, &ids);
+    let mut materials = CityMaterials::new(&ctx.device)?;
+    // The boat's rows, one per material of its model in order: its mesh's sections.
+    let (model, _) = sea::boat_model();
+    let boat = model.mesh("boat").context("the model's boat")?;
+    materials.add_rows(
+        "lab-boat",
+        boat.materials
+            .iter()
+            .map(|m| (m.name.clone(), super::model_layer(m)))
+            .collect(),
+    );
+    materials.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
     builder.set_origin(scene_origin(args));
-    builder.add_instance(
-        ids[FLOOR],
-        Mat4::from_translation(Vec3::new(0.0, -0.5, 0.0)),
-    );
-    let (world, groups) = LabWorld::new(kind)?;
-    let per_mesh: Vec<(MeshId, u32)> = groups.iter().map(|g| (ids[g.prop], g.count)).collect();
+    let pool = Arc::new(TaskPool::client());
+    let (world, layout) = LabWorld::new(kind, Arc::clone(&pool))?;
+    for &(prop, at) in &layout.statics {
+        builder.add_instance(ids[prop], at);
+    }
+    let per_mesh: Vec<(MeshId, u32)> = layout
+        .groups
+        .iter()
+        .map(|g| (ids[g.prop], g.count))
+        .collect();
     builder.reserve_movers(&per_mesh);
     let mut scene = builder.build(&ctx.device)?;
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
@@ -667,7 +997,7 @@ pub(crate) fn build(
             snapshot_every = SNAPSHOT_EVERY,
             "the lab through a server and a client, a bot throwing too"
         );
-        Mode::Net(Box::new(Net::new(kind, delay_ms)?))
+        Mode::Net(Box::new(Net::new(kind, delay_ms, &pool)?))
     } else {
         let replay = args
             .replay
@@ -694,7 +1024,7 @@ pub(crate) fn build(
             .transpose()?
             .map(Box::new);
         Mode::Local {
-            world,
+            world: Box::new(world),
             recording: Recording::new(),
             replay,
         }
@@ -751,10 +1081,25 @@ impl Lab {
             self.awake = awake;
             if self.logged.contains(&now) {
                 let digest = self.shown().digest();
+                // The boat, when there is one: where it is (x, y, z) and how fast it goes.
+                let boat = self.shown().boat().map_or(String::from("none"), |b| {
+                    let p = b.position;
+                    format!("{:.1},{:.2},{:.1}", p.x, p.y, p.z)
+                });
+                let boat_speed = {
+                    let shown = self.shown();
+                    shown.boat.map_or(0.0, |b| {
+                        let mut v = Vec::new();
+                        shown.world.velocities(&[b.body], &mut v);
+                        v[0].linear.length()
+                    })
+                };
                 tracing::info!(
                     tick = now,
                     digest = format!("{digest:#018x}"),
                     awake,
+                    boat,
+                    boat_speed = format!("{boat_speed:.2}"),
                     "physics lab state"
                 );
             }
@@ -857,6 +1202,27 @@ impl Lab {
         self.queued.push(LabCommand::Reset);
     }
 
+    /// The boat's motor from the next tick: throttle and rudder, −1 to 1.
+    pub(crate) fn steer(&mut self, throttle: f32, rudder: f32) {
+        self.queued.push(LabCommand::Steer { throttle, rudder });
+    }
+
+    /// The sea's time as drawn (seconds), when the scene has the sea: the time of the state
+    /// between the last two ticks the movers show.
+    pub(crate) fn sea_time(&mut self) -> Option<f64> {
+        let t = f64::from((self.pending / TICK).clamp(0.0, 1.0));
+        let shown = self.shown();
+        shown
+            .has_sea()
+            .then(|| (shown.now() as f64 - 1.0 + t).max(0.0) * f64::from(TICK))
+    }
+
+    /// The boat as drawn, when the scene has one: the movers' last.
+    pub(crate) fn boat(&mut self) -> Option<MoverTransform> {
+        self.shown().boat()?;
+        self.movers().last().copied()
+    }
+
     /// The title's part: the ticks' time since the last title, the bodies awake, the session.
     pub(crate) fn title(&mut self) -> String {
         let n = self.tick_ms.len().max(1) as f64;
@@ -953,6 +1319,12 @@ impl Drop for Lab {
 mod tests {
     use super::*;
 
+    /// The tests' workers: one pool for them all.
+    fn test_pool() -> Arc<TaskPool> {
+        static POOL: std::sync::OnceLock<Arc<TaskPool>> = std::sync::OnceLock::new();
+        Arc::clone(POOL.get_or_init(|| Arc::new(TaskPool::client())))
+    }
+
     fn throws(n: u32, every: u64) -> Vec<Stamped<LabCommand>> {
         (0..n)
             .map(|k| Stamped {
@@ -969,7 +1341,11 @@ mod tests {
 
     #[test]
     fn a_command_survives_its_bytes() {
-        for c in [throws(1, 1)[0].command, LabCommand::Reset] {
+        let steer = LabCommand::Steer {
+            throttle: -0.4,
+            rudder: 1.0,
+        };
+        for c in [throws(1, 1)[0].command, LabCommand::Reset, steer] {
             let mut bytes = Vec::new();
             c.encode(&mut bytes);
             let mut read = bytes.as_slice();
@@ -980,7 +1356,7 @@ mod tests {
 
     #[test]
     fn the_lab_replays_a_recording_to_the_same_digests() {
-        let (mut first, _) = LabWorld::new(LabScene::Drop).unwrap();
+        let (mut first, _) = LabWorld::new(LabScene::Drop, test_pool()).unwrap();
         let mut commands = throws(6, 40);
         commands.push(Stamped {
             tick: 200,
@@ -989,18 +1365,40 @@ mod tests {
             command: LabCommand::Reset,
         });
         let recording = Recording::record(&mut first, commands, 360, 60);
-        let (mut second, _) = LabWorld::new(LabScene::Drop).unwrap();
+        let (mut second, _) = LabWorld::new(LabScene::Drop, test_pool()).unwrap();
         recording.replay(&mut second).expect("the same digests");
         // And a world that saw one throw fewer leaves it.
         let mut fewer = recording.clone();
         fewer.commands.remove(2);
-        let (mut third, _) = LabWorld::new(LabScene::Drop).unwrap();
+        let (mut third, _) = LabWorld::new(LabScene::Drop, test_pool()).unwrap();
         assert!(fewer.replay(&mut third).is_err());
     }
 
     #[test]
+    fn the_sea_replays_a_recording_waves_boat_and_all() {
+        // A throw, the boat ahead and turning, then easing off: 4 s of the sea scene.
+        let steer = |tick: u64, seq: u32, throttle: f32, rudder: f32| Stamped {
+            tick,
+            player: 0,
+            seq,
+            command: LabCommand::Steer { throttle, rudder },
+        };
+        let mut commands = throws(1, 1);
+        commands.push(steer(40, 1, 1.0, 0.5));
+        commands.push(steer(180, 2, 0.3, -1.0));
+        let (mut first, _) = LabWorld::new(LabScene::Sea, test_pool()).unwrap();
+        let start = first.boat().unwrap();
+        let recording = Recording::record(&mut first, commands, 240, 60);
+        // The boat went somewhere under its motor.
+        let moved = first.boat().unwrap().position.distance(start.position);
+        assert!(moved > 3.0, "the boat moved {moved} m");
+        let (mut second, _) = LabWorld::new(LabScene::Sea, test_pool()).unwrap();
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
     fn a_session_over_a_lossy_link_ends_where_the_server_is() {
-        let mut net = Net::new(LabScene::Drop, 100.0).unwrap();
+        let mut net = Net::new(LabScene::Drop, 100.0, &test_pool()).unwrap();
         let mine = throws(5, 50);
         let mut queued = Vec::new();
         // The bot throws three times (its ticks 150, 300, 450), then everyone runs on quiet.
@@ -1020,7 +1418,7 @@ mod tests {
         );
         // The client, a lead ahead, against the server run on to its tick with nothing more.
         let state = net.server.sim.save();
-        let (mut server, _) = LabWorld::new(LabScene::Drop).unwrap();
+        let (mut server, _) = LabWorld::new(LabScene::Drop, test_pool()).unwrap();
         server.restore(&state);
         while server.now() < net.client.sim.now() {
             server.tick(&[]);

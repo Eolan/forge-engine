@@ -199,3 +199,66 @@ fn a_hull_of_one_point_is_refused() {
         Some(PhysicsError::ShapeRefused)
     );
 }
+
+#[test]
+fn a_raft_dropped_in_still_water_floats_at_its_draft() {
+    use crate::buoyancy::{Fluid, Hull, Level, push};
+    let mut world = World::new(&WorldDesc::default());
+    // A raft of 500 kg/m³, 2 m square and 0.2 m thick, dropped from 2 m; in the sea it floats
+    // with 500/1025 of its thickness under.
+    let half = Vec3::new(1.0, 0.1, 1.0);
+    let shape = Shape::cuboid(half, 0.02, 500.0).unwrap();
+    let raft = world
+        .add_body(&BodyDesc::dynamic(&shape, DVec3::new(0.0, 2.0, 0.0)))
+        .unwrap();
+    let hull = Hull::cuboid(half, 4);
+    let (mut transforms, mut velocities, mut centers) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..600 {
+        world.transforms(&[raft], &mut transforms);
+        world.velocities(&[raft], &mut velocities);
+        world.centers_of_mass(&[raft], &mut centers);
+        let p = push(
+            &hull,
+            transforms[0],
+            velocities[0],
+            centers[0],
+            &Level(0.0),
+            &Fluid::SEA,
+        );
+        world.push(&[raft], &[(p.force, transforms[0].position, p.torque)]);
+        world.step(1.0 / 60.0, 1).unwrap();
+    }
+    world.transforms(&[raft], &mut transforms);
+    world.velocities(&[raft], &mut velocities);
+    let expected = 0.1 - 0.2 * 500.0 / 1025.0;
+    let y = transforms[0].position.y;
+    assert!((y - expected).abs() < 0.005, "at {y}, not {expected}");
+    assert!(velocities[0].linear.length() < 0.01, "{:?}", velocities[0]);
+    // And a stone the same size sinks.
+    let stone_shape = Shape::cuboid(half, 0.02, 2600.0).unwrap();
+    let mut world = World::new(&WorldDesc::default());
+    let stone = world
+        .add_body(&BodyDesc::dynamic(&stone_shape, DVec3::new(0.0, 0.0, 0.0)))
+        .unwrap();
+    for _ in 0..60 {
+        world.transforms(&[stone], &mut transforms);
+        world.velocities(&[stone], &mut velocities);
+        world.centers_of_mass(&[stone], &mut centers);
+        let p = push(
+            &hull,
+            transforms[0],
+            velocities[0],
+            centers[0],
+            &Level(0.0),
+            &Fluid::SEA,
+        );
+        world.push(&[stone], &[(p.force, transforms[0].position, p.torque)]);
+        world.step(1.0 / 60.0, 1).unwrap();
+    }
+    world.transforms(&[stone], &mut transforms);
+    assert!(
+        transforms[0].position.y < -1.0,
+        "{}",
+        transforms[0].position.y
+    );
+}

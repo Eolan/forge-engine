@@ -272,6 +272,10 @@ struct Args {
     /// With `--lab`, throw a ball from the camera every this many frames, as Space does.
     #[arg(long)]
     throw_every: Option<u64>,
+    /// With `--lab sea`, the boat's throttle and rudder from the first frame, `T,R` (−1 to 1),
+    /// in place of the arrow keys (#138).
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    steer: Option<Vec<f32>>,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -456,6 +460,9 @@ struct Gallery {
     /// `--movers` (#79): the barrels drifting down the island's rivers, on the sea's clock.
     barrels: Option<Barrels>,
     /// `--lab` (#136): the physics lab's world, whose bodies are the movers.
+    /// The camera follows the lab's boat (C), and the throttle and rudder last sent (#138).
+    chase: bool,
+    steering: (f32, f32),
     lab: Option<lab::Lab>,
     /// Their waves in the lakes and the sea (#107), with the water and the movers.
     wakes: Option<WaterWakes>,
@@ -651,7 +658,10 @@ impl Gallery {
         // the air the spray drifts in: the sea's wind, slowed near the water.
         let mut falls = Vec::new();
         let mut wind = Vec3::ZERO;
-        let water = if args.island.is_some() && args.water() {
+        let water = if args.lab == Some(lab::LabScene::Sea) && args.water() {
+            // The physics lab's sea (#138): the island's waves, open, no shore.
+            Some(lab::water(ctx)?)
+        } else if args.island.is_some() && args.water() {
             let seed = forge_core::Seed::new(args.island.unwrap_or(7)).derive(0x5EA);
             let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
             let sea = &oceans[0].params;
@@ -833,6 +843,8 @@ impl Gallery {
         let mut gallery = Self {
             barrels,
             lab,
+            chase: false,
+            steering: (0.0, 0.0),
             wakes,
             splashes,
             falls,
@@ -977,6 +989,7 @@ impl Demo for Gallery {
                     lab.reset();
                 }
             }
+            KeyCode::KeyC => self.chase = !self.chase,
             _ => {}
         }
     }
@@ -1001,7 +1014,26 @@ impl Demo for Gallery {
             {
                 lab.throw(self.camera.position, self.camera.forward());
             }
+            // The boat's motor (#138): the arrows, or `--steer` from the first frame; a command
+            // when they change.
+            let keys = |a: KeyCode, b: KeyCode| {
+                f32::from(u8::from(input.is_down(a))) - f32::from(u8::from(input.is_down(b)))
+            };
+            let mut steering = (
+                keys(KeyCode::ArrowUp, KeyCode::ArrowDown),
+                keys(KeyCode::ArrowRight, KeyCode::ArrowLeft),
+            );
+            if let Some(s) = &self.args.steer {
+                steering = (s[0], s.get(1).copied().unwrap_or(0.0));
+            }
+            if steering != self.steering {
+                self.steering = steering;
+                lab.steer(steering.0, steering.1);
+            }
             lab.advance(dt, self.args.fixed_step);
+            if let Some(time) = lab.sea_time() {
+                self.sea_time = time;
+            }
         }
         if let Some(length) = self.args.day {
             self.day_time += self.step;
@@ -1035,6 +1067,16 @@ impl Demo for Gallery {
             self.camera.pitch = pitch;
         } else {
             self.camera.update(input, dt);
+        }
+        // C: the camera behind the lab's boat and over it, looking where it goes (#138).
+        if self.chase
+            && let Some(boat) = self.lab.as_mut().and_then(lab::Lab::boat)
+        {
+            let forward = boat.rotation * Vec3::NEG_Z;
+            let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or(Vec3::NEG_Z);
+            self.camera.position = boat.position - flat * 8.0 + Vec3::new(0.0, 2.8, 0.0);
+            self.camera.yaw = (-flat.x).atan2(-flat.z);
+            self.camera.pitch = -0.18;
         }
         self.frame += 1;
     }
@@ -1610,6 +1652,19 @@ struct CityMaterials {
     sets: [(TextureId, TextureId); 4],
 }
 
+/// A row for a model's material (#138): its base colour, its roughness, and a highlight that
+/// grows with its metalness (no textures: the model's colours are flat).
+fn model_layer(m: &forge_geom::model::ModelMaterial) -> RenderLayer {
+    let color = [m.base_color[0], m.base_color[1], m.base_color[2]];
+    RenderLayer {
+        color_a: color,
+        color_b: color,
+        roughness: m.roughness.clamp(0.05, 1.0),
+        specular: 0.05 + 0.35 * m.metallic,
+        ..RenderLayer::default()
+    }
+}
+
 /// A standard row over a texture set: the textures times a tint each instance mixes from `a`
 /// and `b` by its hash, `scale` metres per repeat, a highlight of Blinn-Phong `power`.
 fn textured(
@@ -1826,6 +1881,45 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
+        // The sea scene's (#138): crates of pale wood, logs in their bark, a jetty of grey
+        // weathered planks on concrete pillars.
+        let crate_wood = add(
+            "wood (crate)",
+            textured(
+                concrete,
+                [0.86, 0.62, 0.38],
+                [0.78, 0.56, 0.34],
+                1.5,
+                8.0,
+                0.03,
+            ),
+        );
+        let bark = add(
+            "bark",
+            RenderLayer {
+                cavity: 0.15,
+                // The rock texture (the name `rock` is its row by now).
+                ..textured(
+                    sets[0],
+                    [0.62, 0.45, 0.32],
+                    [0.55, 0.4, 0.3],
+                    1.0,
+                    6.0,
+                    0.02,
+                )
+            },
+        );
+        let deck_wood = add(
+            "wood (weathered)",
+            textured(
+                concrete,
+                [0.78, 0.72, 0.64],
+                [0.72, 0.67, 0.6],
+                2.0,
+                8.0,
+                0.03,
+            ),
+        );
         let by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -1834,6 +1928,10 @@ impl CityMaterials {
             ("lab-rock-2", rock),
             ("lab-rock-3", rock),
             ("lab-ball", rubber),
+            ("lab-crate", crate_wood),
+            ("lab-log", bark),
+            ("lab-pillar", concrete_grey),
+            ("lab-deck", deck_wood),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -2309,6 +2407,19 @@ impl CityMaterials {
     }
 
     /// Gives every mesh its prop's row and hands the table and the textures to the scene.
+    /// Adds `rows` one after the other, the first for `prop`: a mesh with sections draws
+    /// section `s` with the row `s` after its own (a model's materials, #138).
+    fn add_rows(&mut self, prop: &'static str, rows: Vec<(String, RenderLayer)>) {
+        let mut first = None;
+        for (name, layer) in rows {
+            let id = self.table.add(Material::new(&name, layer));
+            first.get_or_insert(id);
+        }
+        if let Some(first) = first {
+            self.by_prop.insert(prop, first);
+        }
+    }
+
     fn apply(self, builder: &mut MeshletSceneBuilder, props: &[PropSpec], ids: &[MeshId]) {
         for (spec, &id) in props.iter().zip(ids) {
             builder.set_mesh_material(id, self.of(&spec.name));
@@ -3643,7 +3754,17 @@ fn water_check(
 /// Where the camera starts: the island's first view, the gallery's or the city's, or
 /// `--view`.
 fn start_camera(args: &Args) -> Result<FlyCamera> {
-    let mut camera = if args.lab.is_some() {
+    let mut camera = if args.lab == Some(lab::LabScene::Sea) {
+        // Over the jetty, looking out past its end at the water where things fell, the boat on
+        // the left.
+        FlyCamera {
+            position: Vec3::new(-2.0, 6.5, -4.0),
+            yaw: -0.42,
+            pitch: -0.2,
+            speed: 8.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab.is_some() {
         // South-east of the pyramid, a little above its top, looking at it.
         FlyCamera {
             position: Vec3::new(13.0, 7.5, 17.0),

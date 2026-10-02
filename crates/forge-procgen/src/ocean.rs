@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use forge_core::Seed;
 use forge_core::dmath::{exp, ln, powf, sin_cos, tanh};
+use forge_task::TaskPool;
 
 use crate::field::Field2;
 
@@ -261,6 +262,9 @@ pub struct Ocean {
     h0: Vec<C>,
     /// `ω(k)` per sample.
     omega: Vec<f64>,
+    /// The samples whose `h(k, t)` is not zero (`ω` set at the sample or at its mirror `−k`),
+    /// in index order: all [`Ocean::displacement`] visits.
+    active: Vec<u32>,
 }
 
 /// The surface at one instant: heights, horizontal displacements, slopes and the Jacobian,
@@ -333,11 +337,19 @@ impl Ocean {
                 omega.push(w);
             }
         }
+        let active = (0..count)
+            .filter(|&i| {
+                let (x, y) = (i % n, i / n);
+                omega[i] != 0.0 || omega[((n - y) % n) * n + (n - x) % n] != 0.0
+            })
+            .map(|i| i as u32)
+            .collect();
         Self {
             params,
             k,
             h0,
             omega,
+            active,
         }
     }
 
@@ -478,6 +490,170 @@ pub struct OceanReport {
     pub seconds: f64,
 }
 
+/// One cascade's displacement at an instant, as the GPU samples it (issue #138): per sample
+/// the horizontal displacement along x, the height and the displacement along y (the world's
+/// z), its spacing and samples a side.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SeaCascade {
+    /// Samples a side.
+    pub size: u32,
+    /// Metres between samples.
+    pub spacing: f64,
+    /// Per sample, column-major (sample (x, y) at `x × size + y`): (dx, height, dy), metres.
+    pub samples: Vec<[f32; 3]>,
+}
+
+impl Ocean {
+    /// The displacement at `time` (issue #138, the physics' sea): [`Ocean::surface`]'s height
+    /// and horizontal displacements, the same numbers, for less: the phases only where the
+    /// spectrum has energy, two real fields in each complex transform (both spectra are
+    /// Hermitian, so one comes out as the real part and the other as the imaginary), and the
+    /// rows of zeros (outside the cascade's band) not transformed; the rows and then the columns
+    /// spread over `pool`'s workers, each line transformed alone, so the bytes are the same with
+    /// any number of workers.
+    pub fn displacement(&self, time: f64, pool: &TaskPool) -> SeaCascade {
+        let n = self.params.size as usize;
+        let count = n * n;
+        let index = |x: usize, y: usize| y * n + x;
+        let lambda = self.params.choppiness;
+        // Height + i dx, and dy alone.
+        let mut first = vec![C::default(); count];
+        let mut second = vec![C::default(); count];
+        let mut rows = vec![false; n];
+        for &i in &self.active {
+            let i = i as usize;
+            let (x, y) = (i % n, i / n);
+            {
+                let j = index((n - x) % n, (n - y) % n);
+                let phase = C::phasor(self.omega[i] * time);
+                let c = self.h0[i]
+                    .mul(phase)
+                    .add(self.h0[j].conj().mul(phase.conj()));
+                let (kx, ky) = self.k[i];
+                let kk = (kx * kx + ky * ky).sqrt();
+                let (ux, uy) = if kk > 0.0 {
+                    (kx / kk, ky / kk)
+                } else {
+                    (0.0, 0.0)
+                };
+                // dx's spectrum −i k̂x h λ, times i, added to the height's.
+                let dx = C(c.1 * ux, -c.0 * ux).scale(lambda);
+                first[i] = c.add(C(-dx.1, dx.0));
+                second[i] = C(c.1 * uy, -c.0 * uy).scale(lambda);
+                rows[y] = true;
+            }
+        }
+        let twiddles: Vec<C> = (0..n / 2)
+            .map(|k| C::phasor(std::f64::consts::TAU * k as f64 / n as f64))
+            .collect();
+        // Lines to a job: a sixteenth of the grid.
+        let per_job = (n / 16).max(1);
+        // The rows of both grids (those in the band), then both grids transposed so that the
+        // columns are lines too, then the columns.
+        pool.scope(|scope| {
+            for grid in [&mut first, &mut second] {
+                for (rows_of_job, busy) in grid.chunks_mut(n * per_job).zip(rows.chunks(per_job)) {
+                    let twiddles = &twiddles;
+                    scope.spawn(move |_| {
+                        for (row, &busy) in rows_of_job.chunks_mut(n).zip(busy) {
+                            if busy {
+                                ifft(row, twiddles);
+                            }
+                        }
+                    });
+                }
+            }
+        });
+        // The columns, each gathered, transformed and written into its own run of the samples
+        // (column-major: sample (x, y) at x × n + y).
+        let mut samples = vec![[0.0_f32; 3]; count];
+        pool.scope(|scope| {
+            for (job, out) in samples.chunks_mut(n * per_job).enumerate() {
+                let (first, second, twiddles) = (&first, &second, &twiddles);
+                scope.spawn(move |_| {
+                    let (mut a, mut b) = (vec![C::default(); n], vec![C::default(); n]);
+                    for (k, column) in out.chunks_mut(n).enumerate() {
+                        let x = job * per_job + k;
+                        for y in 0..n {
+                            a[y] = first[y * n + x];
+                            b[y] = second[y * n + x];
+                        }
+                        ifft(&mut a, twiddles);
+                        ifft(&mut b, twiddles);
+                        for ((s, a), b) in column.iter_mut().zip(&a).zip(&b) {
+                            *s = [a.1 as f32, a.0 as f32, b.0 as f32];
+                        }
+                    }
+                });
+            }
+        });
+        SeaCascade {
+            size: self.params.size,
+            spacing: self.params.patch / n as f64,
+            samples,
+        }
+    }
+}
+
+impl SeaCascade {
+    /// The displacement at world (x, z), as the GPU's linear filter reads its image: sample
+    /// `i` at the centre of texel `i`, `(i + ½) × spacing`, and the patch repeating.
+    pub fn at(&self, x: f64, z: f64) -> [f64; 3] {
+        let n = self.size as i64;
+        let (u, v) = (x / self.spacing - 0.5, z / self.spacing - 0.5);
+        let (i0, j0) = (u.floor(), v.floor());
+        let (fu, fv) = (u - i0, v - j0);
+        let wrap = |k: f64| (k as i64).rem_euclid(n) as usize;
+        let (i0, j0, i1, j1) = (wrap(i0), wrap(j0), wrap(i0 + 1.0), wrap(j0 + 1.0));
+        let s = |i: usize, j: usize| self.samples[i * self.size as usize + j];
+        let (a, b, c, d) = (s(i0, j0), s(i1, j0), s(i0, j1), s(i1, j1));
+        let mut out = [0.0; 3];
+        for (k, o) in out.iter_mut().enumerate() {
+            let low = f64::from(a[k]) + (f64::from(b[k]) - f64::from(a[k])) * fu;
+            let high = f64::from(c[k]) + (f64::from(d[k]) - f64::from(c[k])) * fu;
+            *o = low + (high - low) * fv;
+        }
+        out
+    }
+}
+
+/// The sea's surface at an instant for whatever floats on it (issue #138): the cascades'
+/// displacements summed, a point looked up where the waves moved it from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SeaHeights {
+    /// The cascades taken (the long waves: the physics leaves out the ripples).
+    pub cascades: Vec<SeaCascade>,
+    /// The mean level, metres.
+    pub level: f64,
+}
+
+impl SeaHeights {
+    /// The displacement of every cascade at (x, z), summed.
+    pub fn displacement(&self, x: f64, z: f64) -> [f64; 3] {
+        let mut d = [0.0; 3];
+        for c in &self.cascades {
+            let s = c.at(x, z);
+            for k in 0..3 {
+                d[k] += s[k];
+            }
+        }
+        d
+    }
+
+    /// The surface's height over world (x, z): the waves carry the water at a point of the
+    /// still surface sideways, so the point under (x, z) is found by going back by the
+    /// displacement there, twice.
+    pub fn height(&self, x: f64, z: f64) -> f64 {
+        let (mut px, mut pz) = (x, z);
+        for _ in 0..2 {
+            let d = self.displacement(px, pz);
+            px = x - d[0];
+            pz = z - d[2];
+        }
+        self.level + self.displacement(px, pz)[1]
+    }
+}
+
 /// The surface at `time` and its numbers.
 pub fn report(ocean: &Ocean, time: f64) -> (OceanSurface, OceanReport) {
     let start = Instant::now();
@@ -509,6 +685,62 @@ pub fn report(ocean: &Ocean, time: f64) -> (OceanSurface, OceanReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_physics_displacement_is_the_surface_s() {
+        let seed = Seed::new(0x5EA);
+        for params in OceanParams::cascades(seed) {
+            let ocean = Ocean::new(params);
+            let pool = TaskPool::new(forge_task::PoolConfig::with_workers(3));
+            let (time, cascade) = (12.25, ocean.displacement(12.25, &pool));
+            let surface = ocean.surface(time);
+            let fields = [&surface.dx, &surface.height, &surface.dy];
+            for (k, field) in fields.into_iter().enumerate() {
+                let scale = field.data.iter().fold(1e-6_f32, |m, v| m.max(v.abs()));
+                let n = field.size as usize;
+                let worst = (0..n * n)
+                    .map(|i| (field.data[i] - cascade.samples[(i % n) * n + i / n][k]).abs())
+                    .fold(0.0_f32, f32::max);
+                assert!(worst <= 1e-5 * scale, "field {k}: {worst} of {scale}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_displacement_is_the_same_bytes_with_any_workers() {
+        let ocean = Ocean::new(OceanParams::cascades(Seed::new(0x5EA))[1]);
+        let serial = TaskPool::new(forge_task::PoolConfig::with_workers(0));
+        let parallel = TaskPool::new(forge_task::PoolConfig::with_workers(5));
+        assert_eq!(
+            ocean.displacement(7.5, &serial),
+            ocean.displacement(7.5, &parallel)
+        );
+    }
+
+    #[test]
+    fn a_point_of_the_surface_is_found_where_the_waves_moved_it() {
+        let seed = Seed::new(0x5EA);
+        let oceans: Vec<Ocean> = OceanParams::cascades(seed)[..2]
+            .iter()
+            .map(|&p| Ocean::new(p))
+            .collect();
+        let sea = SeaHeights {
+            cascades: oceans
+                .iter()
+                .map(|o| o.displacement(3.0, &TaskPool::client()))
+                .collect(),
+            level: 0.0,
+        };
+        let mut worst = 0.0_f64;
+        for k in 0..200 {
+            // A point of the still surface, and where the waves take it.
+            let (x0, z0) = (f64::from(k) * 1.37 - 120.0, f64::from(k % 17) * 2.9 - 20.0);
+            let d = sea.displacement(x0, z0);
+            let found = sea.height(x0 + d[0], z0 + d[2]);
+            worst = worst.max((found - d[1]).abs());
+        }
+        assert!(worst < 0.02, "{worst} m off");
+    }
 
     #[test]
     fn the_inverse_transform_turns_one_wave_vector_into_a_cosine() {

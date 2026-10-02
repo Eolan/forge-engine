@@ -14,6 +14,7 @@
 
 #![allow(unsafe_code)]
 
+pub mod buoyancy;
 mod ffi;
 
 use std::ptr::NonNull;
@@ -139,6 +140,17 @@ impl Shape {
         // SAFETY: `self.raw` is a live shape, and `p` and `r` three and four floats, all read
         // during the call; the new shape takes its own reference to this one.
         Self::wrap(unsafe { ffi::fj_shape_offset(self.raw.as_ptr(), p.as_ptr(), r.as_ptr()) })
+    }
+}
+
+impl Shape {
+    /// This shape with its centre of mass moved by `offset` in its body's frame: a boat's
+    /// weight sits low in its hull, which keeps it upright.
+    pub fn with_center_of_mass_offset(&self, offset: Vec3) -> Result<Self, PhysicsError> {
+        let o = offset.to_array();
+        // SAFETY: `self.raw` is a live shape and `o` three floats, read during the call; the
+        // new shape takes its own reference to this one.
+        Self::wrap(unsafe { ffi::fj_shape_offset_center_of_mass(self.raw.as_ptr(), o.as_ptr()) })
     }
 }
 
@@ -501,6 +513,43 @@ impl World {
         let f = force.to_array();
         // SAFETY: the world is live; `f` is read during the call.
         unsafe { ffi::fj_body_add_force(self.raw.as_ptr(), body.0, f.as_ptr()) };
+    }
+
+    /// For the next step, pushes each of `bodies` by its force through its point of the world
+    /// and its torque, waking it (the water's [`buoyancy::Push`]es, one call for them all).
+    pub fn push(&mut self, bodies: &[BodyId], pushes: &[(Vec3, DVec3, Vec3)]) {
+        assert_eq!(bodies.len(), pushes.len(), "a push per body");
+        let forces: Vec<[f32; 3]> = pushes.iter().map(|p| p.0.to_array()).collect();
+        let points: Vec<[f64; 3]> = pushes.iter().map(|p| p.1.to_array()).collect();
+        let torques: Vec<[f32; 3]> = pushes.iter().map(|p| p.2.to_array()).collect();
+        // SAFETY: the world is live; `BodyId` is a transparent `u32`, and each buffer holds
+        // three numbers per body, read during the call.
+        unsafe {
+            ffi::fj_bodies_push(
+                self.raw.as_ptr(),
+                bodies.as_ptr().cast(),
+                bodies.len() as u32,
+                forces.as_ptr().cast(),
+                points.as_ptr().cast(),
+                torques.as_ptr().cast(),
+            );
+        }
+    }
+
+    /// The centres of mass of `bodies`, in their order, into `out` (cleared first).
+    pub fn centers_of_mass(&self, bodies: &[BodyId], out: &mut Vec<DVec3>) {
+        let mut centers = vec![[0.0_f64; 3]; bodies.len()];
+        // SAFETY: three doubles per body, written during the call.
+        unsafe {
+            ffi::fj_bodies_centers_of_mass(
+                self.raw.as_ptr(),
+                bodies.as_ptr().cast(),
+                bodies.len() as u32,
+                centers.as_mut_ptr().cast(),
+            );
+        }
+        out.clear();
+        out.extend(centers.iter().map(|&c| DVec3::from_array(c)));
     }
 
     /// Sets a body's velocity and spin.

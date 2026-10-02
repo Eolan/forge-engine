@@ -20,26 +20,32 @@
 
 # The island: its generator, its demo, its stones and its water. The city-blocks code that
 # serves both the city and its island selects both.
+# The sea's spectrum also floats the physics lab's sea (#138).
+"crates/forge-procgen/src/ocean.rs" = ["island", "lab"]
 "crates/forge-procgen/**" = ["island"]
 "demos/island/**" = ["island"]
 "demos/city-blocks/src/island_demo.rs" = ["island"]
 # The physics lab (#136): its demo and scenes, the physics under them, Jolt's sources.
 "demos/physics-lab/**" = ["lab"]
 "demos/city-blocks/src/lab.rs" = ["lab"]
+"demos/city-blocks/src/lab/**" = ["lab"]
+"crates/forge-geom/src/model.rs" = ["lab"]
+"assets/models/**" = ["lab"]
+"assets/blender/**" = []
 "crates/forge-physics/**" = ["lab"]
 "crates/forge-sim/**" = ["lab"]
 "third_party/jolt/**" = ["lab"]
 "demos/city-blocks/**" = ["island", "city", "lab"]
 "crates/forge-geom/src/stone.rs" = ["island"]
-"crates/forge-render/src/water.rs" = ["island"]
+"crates/forge-render/src/water.rs" = ["island", "lab"]
 "crates/forge-render/src/wakes.rs" = ["island"]
-"crates/forge-render/src/splashes.rs" = ["island"]
-"shaders/water.slang" = ["island"]
+"crates/forge-render/src/splashes.rs" = ["island", "lab"]
+"shaders/water.slang" = ["island", "lab"]
 # Imported by meshlet.slang, but its code runs only on the island's wet ground (#105); the
 # sentinels draw the other demos through meshlet.slang.
 "shaders/shore.slang" = ["island"]
 "shaders/wakes.slang" = ["island"]
-"shaders/splashes.slang" = ["island"]
+"shaders/splashes.slang" = ["island", "lab"]
 
 # The ballad and the shaders only it draws.
 "demos/asteroids/**" = ["ballad"]
