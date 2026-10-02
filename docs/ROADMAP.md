@@ -89,16 +89,12 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   its rivers on 2026-10-02 (#112 closed), with the 4 m flanks as they are.
 
 **Proposed next, for the owner to pick** (recommended first):
-- **The `island` demo of its own** (#96's step 3, waiting on the look, which is now judged).
-  Phase 2's demo and the first step of rebuilding tropical-island (#81):
-  - its own crate;
-  - the island's settings as its defaults;
-  - camera paths and golden shots at four times of day (`--day` exists);
-  - the island's views in the batch.
-
-  It moves the island out of `city-blocks`, which keeps the city. The planet variant
-  (orbit-to-ground, researched in `docs/research/planet-terrain.md`) comes after, as its
-  second step.
+- **The `island` demo of its own** ✅ (#96's step 3, the owner's pick of 2026-10-02):
+  `cargo run -p island`, four golden shots at four times of day (`--shot`, in the batch), a
+  70 s tour (`--tour`), the sun held at a time of day (`--time-of-day`). It shares
+  `city-blocks`' renderer as a library, so `city-blocks --island SEED` draws the same. The
+  planet variant (orbit-to-ground, researched in `docs/research/planet-terrain.md`) is its
+  second step, not started.
 - **More of stage 6's materials,** biomes as rules (D-041): the beach types from the owner's
   inbox (sand, rock, volcanic, cliffs) and the rock types. They are small and seen at once on
   the island.
@@ -118,9 +114,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   Each is small; none blocks anything.
 
 **Waiting:**
-- #39 waits for the RTX 3080.
-- #67 and #28 wait for an AMD card.
-- #71 waits for the owner: close it, or report it upstream.
+- #39 waits for the RTX 3080, #67 and #28 for an AMD card: set aside by the owner for now
+  (2026-10-02).
+- #71 closed by the owner (2026-10-02), not reported upstream.
 - #70 is parked.
 - #124 stays unbuilt below its gate (recording 0.12 ms against 0.5).
 
@@ -311,8 +307,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    rivers' channels and the lakes' shores drawn on cells of a metre; the ground cooked in 2 km
    tiles with locked borders, and drawn at 2 m with the amplification's detail
    (`--island-drawn 8` for the field's cells).
-   The owner judged the look on 2026-10-02, the 4 m flanks as they are. Next: the `island` demo
-   of its own (#96 step 3) and more of stage 6's materials.
+   The owner judged the look on 2026-10-02, the 4 m flanks as they are; the `island` demo of
+   its own followed the same day (#96 step 3). Next: more of stage 6's materials.
 3. Water surface: FFT ocean far, flow-mapped rivers, shore handling. Researched 2026-09-25
    (`docs/research/water.md`, "Recommendation for Forge": the sea's FFT cascades on the compute
    queue and a forward surface pass first, then the shore from the coast distance, the rivers
@@ -366,7 +362,9 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    (#127, `--no-bars`), and they keep their sand from afar. The owner judged the rivers and the
    new island natural enough to move on (2026-10-02, #112 and its parts closed).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
-   golden shots at four times of day. The planet variant is researched
+   golden shots at four times of day. Its first step ✅ (2026-10-02, #96): `cargo run -p
+   island`, the four golden shots in the batch and a tour (`docs/demos/island.md`, "The island
+   demo"). The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of
    D-037's clipmap with skirts and halos, the six level-0 tiles always resident, horizon culling
    by an occlusion point per tile, swaps allowed under a pixel of error and judged by ꟻLIP, the

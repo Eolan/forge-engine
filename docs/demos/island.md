@@ -16,12 +16,18 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); the ground drawn in tiles (#106), at 2 m with the amplification's detail (`--island-drawn 8` for the field's cells; "The ground in tiles, towards 2 m" below) |
 | Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
+| The demo of its own: golden shots at four times of day, a tour (#96's step 3) | ✅ `cargo run -p island` (2026-10-02; "The island demo" below) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
 
 ```
 cargo run --release -p genesis -- --spacing 16 --steps 150 --out captures/island
-cargo run --release -p city-blocks -- --island 7
+cargo run --release -p island
+cargo run --release -p island -- --tour
+cargo run --release -p island -- --shot mouth
 ```
+
+`island` is `city-blocks --island 7` with the island's own window, shots and tour: every
+`city-blocks` command on this page runs the same with `island` in its place.
 
 `genesis`: `--seed N`, `--spacing M` (16: 1025² samples; 4: the 4097² target), `--steps N`,
 `--k` (erodibility), `--diffusion`, `--channel-ha H` (the catchment from which a channel
@@ -2325,3 +2331,48 @@ tiles). The ground drawn at 2 m, 8 193² samples:
   32-bit bytes. The scene loads the pages of its first view's cut before the first frame
   (#121, D-025's start view): 290 pages (36 MiB) from the coast, so the first frame is already
   sharp, and the capture batch draws it at a fixed view that reads nothing more.
+
+## The island demo (#96's step 3, 2026-10-02)
+
+`cargo run --release -p island`: Phase 2's demo with the island as its scene and its own window
+(`reports/2026-10-02-96/`). It runs `city-blocks`' renderer, now a library
+(`city_blocks::main_island`), with `--island 7` unless another seed is given, so every option on
+this page works on both. `city-blocks --island 7` draws the same island to the pixel.
+
+**The golden shots** (`--shot NAME`, `demos/city-blocks/src/island_demo.rs`). Each is found in
+the island's features, so it holds for any seed. The log lists them as `the island's golden
+shots (--shot)`:
+
+| Shot | Time of day | Where |
+|---|---|---|
+| `mouth` | dawn (0.08) | 140 m up the largest mouth with bars from them (#127), 60 m up, looking down the river into the sunrise over the sea |
+| `lake` | morning (0.3) | the highest of the three largest lakes, 30 m over its water past its south edge, looking north across it |
+| `island` | afternoon (0.7) | the whole island from 1.75 km off its southern beach, 300 m up |
+| `valley` | dusk (0.92) | 40 m below the steepest point of a river 5 m wide or more, 2 m over the ground, looking up its steps and pools into the sunset |
+
+A shot sets `--view` and `--time-of-day` unless they are given. `--time-of-day T` holds the sun
+where `--day` has it T through the day (0 sunrise, 0.5 noon, 1 sunset), the exposure metered
+from the scene as `--day`'s. The capture batch takes the four shots on both paths
+(`mesh-shot-mouth` and the rest), and the mesh path and the fallback match to the pixel.
+
+**The tour** (`--tour`): 70 s through the shots.
+- **Its way:** from the valley up to the lake, across the hills and the plain to the mouth, then
+  1.5 km on out over the sea and round to look back at the island from 220 m.
+- **The path:** a Catmull-Rom spline through the shots, eased to rest at each for 2.5 s.
+- **Over the ground:** between the shots it keeps 30 m over the highest ground within 60 m. The
+  lift takes the most over 3 s either way, then its mean over 1.5 s, so the camera rises before
+  a hill.
+- **The view:** along its way, pitched a little down, turning to each shot's view as it comes
+  to rest.
+- **Run to run:** precomputed at 30 samples a second, so a frame depends only on its time
+  (`--fixed-step` captures repeat).
+
+At 1600 × 900 it takes 1.43 ms of GPU a frame (p99 frame 2.10 ms), and at 2560 × 1440 2.72 ms
+(p99 3.67 ms; `docs/PROFILE.md`).
+
+**Seen, left for later:**
+- **The dawn mouth:** a dark line along the right bank, the steep face where a beach's berm meets
+  the carve (#127's leftover), which the low sun's shadow shows.
+- **The tour's plainer moments:** climbing out of the valley, and the sea alone as it turns.
+- **The planet variant** (orbit-to-ground, `docs/research/planet-terrain.md`): the demo's second
+  step.

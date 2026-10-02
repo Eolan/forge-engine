@@ -1,0 +1,15 @@
+[package]
+name = "island"
+description = "The island: a 16 km island from a seed with its sea, rivers and lakes, Phase 2's demo (issue #96)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+city-blocks = { workspace = true }

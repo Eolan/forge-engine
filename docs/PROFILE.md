@@ -931,6 +931,23 @@ each at 2560 × 1440, three at 1600 × 900, the previous commit and this one alt
   0.02–0.04 ms more, the probes' rays up to 0.03 (their cut's error 0.73 m); the rest is the
   same. Pages: 4.2 GB, 0.3 GB more geometry resident.
 
+### `island --tour` — the island demo's flight (#96, 2026-10-02)
+
+No pass of its own: the island's passes over the tour's 70 s (4 200 frames at a fixed step,
+from the steep valley over the hills to the lake and the mouth, out to sea and round), streamed
+as it flies. `tools/timings.sh` runs it as "island tour" when both builds have the binary.
+
+| | 1600 × 900 | 2560 × 1440 |
+|---|---|---|
+| **GPU per frame** | **1.43 ms** | **2.72–2.74 ms** |
+| shading/layered (the ground) | 0.33 | 0.84 |
+| gi/probe rays [compute] | 0.28 | 0.46 |
+| ao/gtao | 0.08 | 0.23 |
+| water/surface | 0.09 | 0.18 |
+| Frame p50 / p99 | 1.43 / 2.10 ms | 2.68 / 3.67 ms |
+
+One frame of the run takes 49 ms; no second's p99 passes 3.93 ms at 1440p.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

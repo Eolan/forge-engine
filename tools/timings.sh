@@ -74,6 +74,10 @@ view "city orbit" city-blocks --orbit --frames 3000
 view "city fly" city-blocks --fly --frames 6000
 view "city resident" city-blocks --stream-pool 0 --frames 3000
 view "island" city-blocks --island 7 --frames 3000
+# The island demo's tour (#96), once both builds have it: its 70 s at a fixed step.
+if [ -f "$base/island$exe" ] && [ -f "$new/island$exe" ]; then
+  view "island tour" island --tour --fixed-step --frames 4200
+fi
 view "meshlets" meshlets --frames 3000
 view "meshlets orbit" meshlets --orbit --frames 3000
 view "meshlets side 700" meshlets --side 700 --frames 600

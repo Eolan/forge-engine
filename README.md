@@ -36,6 +36,7 @@ demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
 demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster pages streamed, the 300 m/s flight
+demos/island          Phase 2's demo: a 16 km island from a seed, its sea, rivers and lakes, golden shots and a tour
 tools/imgdiff         pixel and perceptual (LDR- and HDR-FLIP) comparison of captures (golden images)
 tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
 tools/credits         the Rust crates in the build, their licences and authors (docs/credits-crates.md; CI checks it)
@@ -174,6 +175,26 @@ compass point, orographic rain) with `--island-rain-contrast C`),
 1440p the flight at 300 m/s runs at 3.38 ms of GPU with everything on, its p99 frame 3.8 ms
 (2.6 ms without the probes; 2026-09-25, after #77 and #92). Numbers:
 [docs/demos/city-blocks.md](docs/demos/city-blocks.md).
+
+### `island` — Phase 2's demo
+
+```
+cargo run --release -p island
+cargo run --release -p island -- --tour
+cargo run --release -p island -- --shot mouth
+```
+
+A 16 km island generated from a seed (`--island SEED`, 7 by default) by uplift, stream-power
+erosion and hydrology, its ground cooked into cluster DAGs in 2 km tiles and drawn at 2 m, with
+the sea's FFT waves breaking on its beaches, its rivers in carved channels with steps, pools,
+deltas and bars of sand at their mouths, its lakes, and the view under the water. It shares
+`city-blocks`' renderer, keys and options (`city-blocks --island SEED` draws the same).
+`--shot NAME` frames one of its golden shots at its time of day: `mouth` (dawn over the
+largest mouth), `lake` (morning), `island` (the afternoon, from the sea) and `valley` (dusk up a
+steep valley); the log lists them for any seed. `--tour` flies 70 s from that valley over the
+hills to the lake and the mouth and out to sea, resting at each shot. `--time-of-day T` holds
+the sun where `--day` has it (0 sunrise, 0.5 noon, 1 sunset), the exposure metered. Numbers:
+[docs/demos/island.md](docs/demos/island.md).
 
 ### `task-bench` — job system
 

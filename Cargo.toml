@@ -20,6 +20,8 @@ forge-app = { path = "crates/forge-app" }
 forge-procgen = { path = "crates/forge-procgen" }
 forge-render = { path = "crates/forge-render" }
 forge-world = { path = "crates/forge-world" }
+# The demos the island demo builds on
+city-blocks = { path = "demos/city-blocks" }
 
 # Graphics & windowing
 ash = "0.38"

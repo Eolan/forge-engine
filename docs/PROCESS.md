@@ -67,10 +67,11 @@ under `captures/`, which git ignores.
    changed leaves the other demos stale. A stale binary writes an older frame block, and every
    capture then "differs" for the wrong reason.
 2. **Capture the baseline before changing anything:** `tools/captures.sh captures/base`.
-   - This writes 50 captures: meshlets, the ballad at fixed steps (and its HDR output, #94),
-     city-blocks and its island, each on the mesh path and on the fallback. The HDR runs
-     write the preview and the PQ codes (`-pq.png`, 16 bits), which `compare.sh` compares
-     to the code.
+   - This writes 58 captures: meshlets, the ballad at fixed steps (and its HDR output, #94),
+     city-blocks and its island, and the island demo's four golden shots (#96; skipped for a
+     baseline without the `island` binary), each on the mesh path and on the fallback. The
+     HDR runs write the preview and the PQ codes (`-pq.png`, 16 bits), which `compare.sh`
+     compares to the code.
    - To capture an older commit, build it in a tree of its own:
      `git worktree add --detach ../forge-base <commit>`, then `cargo build --release` in that
      tree, then `tools/captures.sh captures/base ../forge-base/target/release`.

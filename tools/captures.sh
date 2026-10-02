@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Writes the capture batch every rendering change is checked with (issue #74; docs/PROCESS.md):
-# 50 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
-# island (#96), on the mesh path and on the fallback (`--force-fallback`). Compare two batches
-# with tools/compare.sh.
+# 58 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
+# island, and the island demo's golden shots (#96), on the mesh path and on the fallback
+# (`--force-fallback`). Compare two batches with tools/compare.sh.
 #
 #   tools/captures.sh OUT [BIN]
 #
@@ -24,6 +24,8 @@ exe=""
 meshlets=$bin/meshlets$exe
 asteroids=$bin/asteroids$exe
 city=$bin/city-blocks$exe
+# The island demo (#96), which a baseline from before it lacks: its shots are then skipped.
+island_demo=$bin/island$exe
 for demo in "$meshlets" "$asteroids" "$city"; do
   [ -f "$demo" ] || { echo "missing $demo: build with cargo build --release" >&2; exit 1; }
 done
@@ -105,6 +107,14 @@ for path in mesh fb; do
   # missed pages the cut wants.
   capture "$path-island8-60" 60 "$city" "${island[@]}" --island-drawn 8 --no-water "${flag[@]}"
   capture "$path-island8-60-resident" 60 "$city" "${island[@]}" --island-drawn 8 --no-water --stream-pool 0 "${flag[@]}"
+  # The island demo's golden shots (#96), each at its time of day, the exposure metered from the
+  # scene: dawn over the largest mouth, the lake in the morning, the island from the sea in the
+  # afternoon, dusk up a steep valley.
+  if [ -f "$island_demo" ]; then
+    for shot in mouth lake island valley; do
+      capture "$path-shot-$shot" 60 "$island_demo" --shot "$shot" --sw-raster on --fixed-step "${flag[@]}"
+    done
+  fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"
 [ "$keep" != 0 ] && closing="$closing; logs in $out/logs, summary in $summary" && echo "$closing" >> "$summary"
