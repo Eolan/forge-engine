@@ -66,6 +66,11 @@ pub struct ChannelParams {
     /// Whether a river's channel runs on through the lakes it crosses (no: their beds silt up,
     /// and it fades out past the lake's edge).
     pub carve_lakes: bool,
+    /// Metres over a lake's level the ground rises to across the shallow arm an outlet carries
+    /// the lake's water out along ([`crate::LakeWater::arm`], #120): a sill the river's channel
+    /// is cut through, its water then trimmed off the arm (`crate::trim_outlets`). `None` leaves
+    /// the arm flooded.
+    pub sill: Option<f64>,
 }
 
 impl Default for ChannelParams {
@@ -74,7 +79,8 @@ impl Default for ChannelParams {
     /// 8 m and three widths into a lake, the banks flattening under 1.5 m over the sea, cells of
     /// 8 m drawn in quads of 1 m, a lake's shore within
     /// a metre of its level, the coast's cells crossing the sea's level and the sand's top
-    /// (2.5 m, the island's layer rule), no channel through a lake.
+    /// (2.5 m, the island's layer rule), no channel through a lake, the outlets' arms risen 0.2 m
+    /// over their lakes.
     fn default() -> Self {
         Self {
             margin: 8.0,
@@ -86,6 +92,7 @@ impl Default for ChannelParams {
             shore: 1.0,
             coast: [0.0, 2.5],
             carve_lakes: false,
+            sill: Some(0.2),
         }
     }
 }
@@ -129,6 +136,40 @@ struct Bowed {
     reach: f64,
     /// Its bow (`RibbonPoint::lip`).
     lip: [f32; 2],
+}
+
+/// An outlet's sill (#120): the lake's level and the samples of its shallow arm, in the layout of
+/// its mask ([`crate::LakeWater::arm`]).
+#[derive(Clone, Debug, PartialEq)]
+struct Sill {
+    level: f64,
+    first: [u32; 2],
+    size: [u32; 2],
+    arm: Vec<bool>,
+}
+
+impl Sill {
+    /// How much of the arm is at `q`, 0..1: its samples, bilinearly.
+    fn weight(&self, q: [f64; 2], spacing: f64) -> f64 {
+        let (gx, gy) = (
+            q[0] / spacing - f64::from(self.first[0]),
+            q[1] / spacing - f64::from(self.first[1]),
+        );
+        let (i, j) = (gx.floor(), gy.floor());
+        let (tx, ty) = (gx - i, gy - j);
+        let at = |di: f64, dj: f64| {
+            let (x, y) = (i + di, j + dj);
+            if x < 0.0 || y < 0.0 || x >= f64::from(self.size[0]) || y >= f64::from(self.size[1]) {
+                return 0.0;
+            }
+            f64::from(u8::from(
+                self.arm[y as usize * self.size[0] as usize + x as usize],
+            ))
+        };
+        let top = at(0.0, 0.0) + (at(1.0, 0.0) - at(0.0, 0.0)) * tx;
+        let bottom = at(0.0, 1.0) + (at(1.0, 1.0) - at(0.0, 1.0)) * tx;
+        top + (bottom - top) * ty
+    }
 }
 
 /// A confluence's rounded corner as the channels carve it ([`corner_ground`]): the corner, and
@@ -181,6 +222,10 @@ pub struct Channels {
     fans: Vec<Delta>,
     fan_start: Vec<u32>,
     fan_list: Vec<u32>,
+    /// The outlets' sills (#120), and per cell where its sills start in `sill_list`.
+    sills: Vec<Sill>,
+    sill_start: Vec<u32>,
+    sill_list: Vec<u32>,
     refined: Vec<u32>,
     /// Per sample, whether every cell around it is refined: the smoothed ground's weight there
     /// (bilinear between the samples, so it is 0 all along the refined region's outline).
@@ -362,6 +407,31 @@ impl Channels {
             )
         };
         let (fan_start, fan_list) = bucket(side, &fans.iter().map(fan_cells).collect::<Vec<_>>());
+        // The outlets' arms, as their lakes' masks, and the cells a sample of one reaches.
+        let sills: Vec<Sill> = ribbons
+            .iter()
+            .flat_map(|r| r.outlets.iter())
+            .filter_map(|o| {
+                let lake = lakes.get(o.lake as usize)?;
+                let arm = lake.arm(height, o);
+                let any = arm.iter().any(|&a| a);
+                any.then_some(Sill {
+                    level: o.level,
+                    first: lake.first,
+                    size: lake.size,
+                    arm,
+                })
+            })
+            .collect();
+        let sill_cells = |s: &Sill| {
+            let last = side - 1;
+            (
+                s.first[0].saturating_sub(1).min(last)..=(s.first[0] + s.size[0]).min(last),
+                s.first[1].saturating_sub(1).min(last)..=(s.first[1] + s.size[1]).min(last),
+            )
+        };
+        let (sill_start, sill_list) =
+            bucket(side, &sills.iter().map(sill_cells).collect::<Vec<_>>());
         // Each corner's bank rises as the rivers' banks it touches do, half a metre out of
         // their water there: no step where it meets them, and no steeper.
         let corners: Vec<Fillet> = corners
@@ -436,6 +506,25 @@ impl Channels {
                         })
                     });
                     fanned[y as usize * side_us + x as usize] |= raised;
+                }
+            }
+        }
+        // The cells of the outlets' arms, and a cell more all round.
+        for sill in &sills {
+            for (k, _) in sill.arm.iter().enumerate().filter(|(_, a)| **a) {
+                let (i, j) = (
+                    sill.first[0] as usize + k % sill.size[0] as usize,
+                    sill.first[1] as usize + k / sill.size[0] as usize,
+                );
+                for (cx, cy) in [
+                    (i, j),
+                    (i.wrapping_sub(1), j),
+                    (i, j.wrapping_sub(1)),
+                    (i.wrapping_sub(1), j.wrapping_sub(1)),
+                ] {
+                    if cx < side_us && cy < side_us {
+                        fanned[cy * side_us + cx] = true;
+                    }
                 }
             }
         }
@@ -527,9 +616,29 @@ impl Channels {
             fans,
             fan_start,
             fan_list,
+            sills,
+            sill_start,
+            sill_list,
             refined,
             inner,
         }
+    }
+
+    /// `base` at `q` in cell `c`, raised over the outlets' arms to their sills.
+    fn silled(&self, c: usize, q: [f64; 2], base: f64) -> f64 {
+        let Some(rise) = self.params.sill else {
+            return base;
+        };
+        let mut out = base;
+        for &s in &self.sill_list[self.sill_start[c] as usize..self.sill_start[c + 1] as usize] {
+            let sill = &self.sills[s as usize];
+            let top = sill.level + rise;
+            let w = sill.weight(q, self.spacing);
+            if top > base && w > 0.0 {
+                out = out.max(base + (top - base) * w);
+            }
+        }
+        out
     }
 
     /// `base` at `q` in cell `c`, raised by the deltas' fans that reach it.
@@ -613,12 +722,12 @@ impl Channels {
                 }
             }
             if smooth == 0.0 {
-                return self.fanned(c, [x, y], drawn);
+                return self.silled(c, [x, y], self.fanned(c, [x, y], drawn));
             }
             drawn + (smooth_height(height, x, y) - drawn) * smooth
         };
         // The deltas' fans on the lakes' floors, under the channels cut across them.
-        let base = self.fanned(c, [x, y], base);
+        let base = self.silled(c, [x, y], self.fanned(c, [x, y], base));
         let (a, b) = self.params.bank;
         let mut carved = base;
         for &s in segments {
@@ -1488,6 +1597,89 @@ mod tests {
             }
         }
         assert!(on_main > 0);
+    }
+
+    #[test]
+    fn an_outlet_s_flooded_flat_rises_into_a_sill_and_loses_the_lake_s_water() {
+        // The bowl's valley, its floor 40 m wide, with a flat 5 cm under the lake's level past its
+        // lip (y = 90 to 130 m) and a sill at y = 80 m that holds the lake at 15.2 m.
+        let valley = Field2::from_fn(41, 10.0, |x, y| {
+            let (dx, dy) = (x as f32 - 20.0, y as f32 - 20.0);
+            let bowl = 8.0 * (1.0 - (dx * dx + dy * dy).sqrt() / 6.0).max(0.0);
+            let floor = match y {
+                9..=13 => 15.15,
+                8 => 15.2,
+                _ => y as f32 + 1.0,
+            };
+            0.5 * (dx.abs() - 2.0).max(0.0) + floor - bowl
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&valley, 0.0, &pool);
+        let filled = crate::flow::priority_flood(&valley, 0.0);
+        let lakes = crate::hydrology::trace_lakes(&valley, &filled, &flow, 0.5);
+        let mut waters = crate::lake::lake_waters(&valley, &filled, &lakes, 0.0);
+        assert_eq!(waters.len(), 1);
+        let level = f64::from(waters[0].level);
+        assert!((level - 15.2).abs() < 0.06, "{level}");
+        let rivers = trace_rivers(&valley, &flow, 15);
+        let ribbons = ribbons(&valley, &rivers, &waters, &RibbonParams::default());
+        let outlets: Vec<_> = ribbons.iter().flat_map(|r| r.outlets.iter()).collect();
+        assert_eq!(outlets.len(), 1);
+        let outlet = *outlets[0];
+        assert!(outlet.at[1] > 130.0 && outlet.down[1] < -0.9, "{outlet:?}");
+        // The arm: the flat's samples past the outlet, none of the bowl's.
+        let arm = waters[0].arm(&valley, &outlet);
+        let sample = |k: usize| {
+            let (w, first) = (waters[0].size[0] as usize, waters[0].first);
+            (first[0] as usize + k % w, first[1] as usize + k / w)
+        };
+        let armed: Vec<(usize, usize)> = (0..arm.len()).filter(|&k| arm[k]).map(sample).collect();
+        assert!(
+            armed.contains(&(20, 11)) && armed.contains(&(20, 10)),
+            "{armed:?}"
+        );
+        assert!(armed.iter().all(|&(_, y)| y <= 13));
+        // With the sill the flat beside the river's water stands over the lake's level, and the
+        // lake's water is trimmed off it; without, the flat is under it. The flat is five samples wide.
+        let course = |y: f64| {
+            let p = ribbons
+                .iter()
+                .filter(|r| !r.outlets.is_empty())
+                .flat_map(|r| r.points.iter())
+                .min_by(|a, b| {
+                    (f64::from(a.position[1]) - y)
+                        .abs()
+                        .total_cmp(&(f64::from(b.position[1]) - y).abs())
+                })
+                .expect("a point");
+            (f64::from(p.position[0]), f64::from(p.half_width))
+        };
+        let beside = |channels: &Channels, y: f64| {
+            let (x, half) = course(y);
+            [-1.0, 1.0].map(|s| channels.cubic_height_at(&valley, x + s * (half + 1.5), y))
+        };
+        let sill = Channels::new(&valley, &ribbons, &waters, &ChannelParams::default());
+        let flooded = Channels::new(
+            &valley,
+            &ribbons,
+            &waters,
+            &ChannelParams {
+                sill: None,
+                ..ChannelParams::default()
+            },
+        );
+        for y in [100.0, 110.0, 120.0] {
+            assert!(beside(&sill, y).iter().all(|&h| h > level), "{y}");
+            assert!(beside(&flooded, y).iter().any(|&h| h < level), "{y}");
+            let (x, _) = course(y);
+            assert!(
+                sill.cubic_height_at(&valley, x, y) < level,
+                "{y}: the channel"
+            );
+        }
+        let trimmed = crate::lake::trim_outlets(&mut waters, &valley, &ribbons);
+        assert_eq!(trimmed, armed.len());
+        assert!(!waters[0].covers(20, 11) && waters[0].covers(20, 20));
     }
 
     #[test]

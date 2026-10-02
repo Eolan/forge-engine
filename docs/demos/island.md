@@ -1251,9 +1251,12 @@ A/B harness, the streamed island against resident and mesh against fallback stay
 **Left for later:**
 - On the plain's flat lake (centimetres deep over a kilometre) the lake's mask still ends across
   the outlet's channel in a straight soft edge, its 8 m samples' line; the outlet's mouth turns
-  the lake's water there to the river's, which softens it.
+  the lake's water there to the river's, which softens it. That lake went with #123; the same
+  edge past the north-east lake's outlet is gone since its sill (2026-10-02, "The outlets'
+  sills" below).
 - Past a hill lake's lip a pale patch of thin water lies on one bank: the river's water over a
   bank lower than it at the mask's soft edge (a similar patch was there before, by the old cap).
+  That lake went with #123 too.
 - D-041's lake entry also widens the channel and paints a fan on the lake's floor: done since
   (2026-10-02, "The rivers' deltas into the lakes" below).
 
@@ -1788,10 +1791,53 @@ more (`water/reflections` 0.1 ms more, `shading/layered` 0.03), a brook's within
 **Left for later:**
 - One channel runs in. D-041's research lets a large fan split into distributaries.
 - Above the water the delta is the valley's floor: no bars of sand at the mouth.
-- The outlets' leftovers above remain. At the north-east lake's outlet the lake's water still ends
-  in a soft wavy edge across the river's channel, its 8 m mask's.
+- The outlets' leftovers above: since done (below).
 - The knobs, for the owner's look, are `DeltaParams`: the reach, the flare, the fan's length,
   its top's water, its front and its wander.
+
+**The outlets' sills** (#120, 2026-10-02; `forge_procgen::Outlet`, `LakeWater::arm`,
+`trim_outlets`, `ChannelParams::sill`; `city-blocks --no-sills` for the outlets before). Past the
+north-east lake's outlet the valley's floor lies 1 to 60 cm under the lake's level for about
+110 m. The lake's mask covered all of it, a sheet of centimetres of water round the river. It
+ended in a wavy line across the river's channel, its 8 m samples', and the river's water began
+in a straight edge across it a little upstream: from low, two waters meeting along a shaped line.
+The research's outlet is "a sill at the lake level with a riffle below" (`docs/research/rivers.md`,
+its recommendation's step 7).
+
+**What changed.**
+- **Where a river leaves a lake** (`Outlet`): the last point of each run in a lake that the river
+  runs on past, where the lake's water still stands half as deep as the river.
+- **The arm** (`LakeWater::arm`): the lake's samples more than 8 m past it down the river,
+  within 40 m of the river's water either side, the water over them under 0.75 m deep.
+- **Its water** is trimmed off the arm (`trim_outlets`): the river's is whole 4 m past the
+  outlet, the lake's fades out over the sample from 8 m.
+- **Its ground** rises 0.2 m over the lake's level, blended over the arm's samples, and the
+  river's channel is cut through it (`Channels`): a low sill the river runs out over at the lake's
+  level, before it falls past the lip as before. The arm's cells are drawn finer.
+
+Seed 7: 173 samples trimmed off the arms; the refined cells are the same (the arms' were the
+lakes' shores). Before (`--no-sills`) and now, frame 60 (`reports/2026-10-02-120/outlets.png`),
+the north-east lake's outlet:
+- from 40 m down the river and from 4 m over it, looking back at the lake (ꟻLIP means 0.0034 and
+  0.0068): the lake's thin sheet round the river and its wavy edge across the channel are gone,
+  and the river runs out of the lake in one channel;
+- from 70 m straight down (0.0050);
+- from the lake (0.0021): the outlet's banks stand over the water.
+
+The means are small because the change covers few pixels.
+
+**Checks:** the capture batch changes the island's images only (`island60` ꟻLIP mean 0.00025,
+`island8-60` 0.00031, `water60` 0.00033); the A/B harness, the streamed island against resident
+and mesh against fallback are at 0 px; `validate.sh` is clean; `timings.sh` within noise on
+every view. A new test floods a flat past a bowl's lake: its arm is the flat's samples, none of
+the bowl's; with the sill the ground beside the river's water there stands over the lake's
+level and the channel under it, without it the flat is under the level; the trim clears the arm.
+
+**Left for later:** at the hill lake's outlet (`-183,328.8,-2109,78.3,-20`) a dark band still
+lies across the channel where the river's water fades in over the lake's, its upstream edge
+straight. It is not the water's depth: keeping three fifths of the river's depth over the lip
+(9–16 cm of water there before) changed nothing seen. The two waters' handover in the water's
+shading is next to look at.
 
 ## Moving geometry (#79, 2026-10-02)
 

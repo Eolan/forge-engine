@@ -1713,4 +1713,6 @@ carved-channel threshold kept at 0.5 km²). The lake entry is #120's deltas
 (`forge_procgen::DeltaParams`): over 8 m and five widths before the lake's edge the water eases
 flat to the lake's level and the channel widens to twice its width, and in front of the mouth a
 fan raises the lake's floor to a top 0.3–1.1 m under the water, painted with silty sand, whose
-front drops off into the lake.
+front drops off into the lake. The outlet's sill is #120's too: past an outlet, the shallow arm a
+flat valley floor at the lake's level floods into rises 0.2 m over the level, the river's channel
+cut through it, and the lake's water is trimmed off it (`forge_procgen::trim_outlets`).

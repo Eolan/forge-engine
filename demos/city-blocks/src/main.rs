@@ -216,6 +216,10 @@ struct Args {
     /// to the lake's level, no widening, no fan on the lake's floor (#120, D-041).
     #[arg(long)]
     no_deltas: bool,
+    /// Leave the shallow arms past the lakes' outlets flooded: no sill rising over the lake's
+    /// level there, the lake's water not trimmed off them (#120).
+    #[arg(long)]
+    no_sills: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -2205,6 +2209,10 @@ fn island_lake_waters(
     (lakes, waters)
 }
 
+/// Whether the lakes' outlets rise into sills over their shallow arms, set once at start
+/// (`--no-sills`, #120).
+static SILLS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 /// The island's rivers' parameters, set once at start from the arguments (`--river-k`).
 static RIBBON_PARAMS: std::sync::OnceLock<forge_procgen::RibbonParams> = std::sync::OnceLock::new();
 
@@ -2249,14 +2257,25 @@ fn island_water(height: &Field2<f32>) -> IslandWater {
 fn make_island_water(height: &Field2<f32>) -> IslandWater {
     let flow = forge_procgen::drain(height, 0.0, &TaskPool::client());
     let rivers = island_rivers(height, &flow);
-    let (_, lakes) = island_lake_waters(height, &flow);
+    let (_, mut lakes) = island_lake_waters(height, &flow);
     let mut ribbons = forge_procgen::ribbons(height, &rivers, &lakes, &ribbon_params());
+    let sills = SILLS.get().copied().unwrap_or(true);
     let channels = forge_procgen::Channels::new(
         height,
         &ribbons,
         &lakes,
-        &forge_procgen::ChannelParams::default(),
+        &forge_procgen::ChannelParams {
+            sill: forge_procgen::ChannelParams::default()
+                .sill
+                .filter(|_| sills),
+            ..forge_procgen::ChannelParams::default()
+        },
     );
+    // The lakes' water off the shallow arms past their outlets, which rise into sills (#120).
+    if sills {
+        let trimmed = forge_procgen::trim_outlets(&mut lakes, height, &ribbons);
+        tracing::info!(trimmed, "the lakes' outlets' arms trimmed (samples)");
+    }
     forge_procgen::rest_on(
         &mut ribbons,
         &|x, y| channels.height_at(height, x, y),
@@ -4384,6 +4403,7 @@ fn main() -> Result<()> {
             ..island
         })
         .expect("the rivers' parameters, set once");
+    SILLS.set(!args.no_sills).expect("the sills, set once");
     let config = AppConfig {
         title: "forge city-blocks".into(),
         vsync: args.vsync,

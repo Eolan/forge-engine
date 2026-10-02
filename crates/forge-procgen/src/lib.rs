@@ -73,15 +73,15 @@ pub use island::{
     IslandFields, IslandParams, Wind, cached_island, generate_island, island_fields,
     orographic_rain, refresh_rain,
 };
-pub use lake::{LakeWater, lake_waters, paint_lake_beds};
+pub use lake::{LakeWater, lake_waters, paint_lake_beds, trim_outlets};
 pub use layers::{
     LayerRule, ScrubRule, Shore, paint_lakes, paint_moisture, paint_rivers, paint_scrub,
     slope_layers, wetness,
 };
 pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
 pub use river::{
-    Corner, Delta, DeltaParams, Ribbon, RibbonParams, RibbonPoint, Step, StepParams, drawn_height,
-    lip_shift, rest_on, ribbons, sea_mouth, smooth_height,
+    Corner, Delta, DeltaParams, Outlet, Ribbon, RibbonParams, RibbonPoint, Step, StepParams,
+    drawn_height, lip_shift, rest_on, ribbons, sea_mouth, smooth_height,
 };
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};
 pub use valley::{

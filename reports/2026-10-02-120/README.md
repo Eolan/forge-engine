@@ -61,5 +61,27 @@ Their steps, stones and the valley's paint move with them. The batch's far views
 **Left for later:**
 - One channel runs in; D-041's research lets a large fan split into distributaries.
 - Above the water the delta is the valley's floor: no bars of sand at the mouth.
-- The outlets' two leftovers of the first part. At the north-east lake's outlet the lake's water
-  still ends in a soft wavy edge across the river's channel, its 8 m mask's.
+- The outlets' two leftovers of the first part: the north-east lake's is done (below); the other
+  lake went with #123.
+
+## The outlets' sills
+
+Past the north-east lake's outlet the valley's floor lies 1 to 60 cm under the lake's level for
+about 110 m. The lake's mask covered it, a sheet of centimetres of water round the river ending
+in a wavy line across the channel. Now, past each outlet:
+- the lake's shallow arm (samples more than 8 m down the river, within 40 m of its water, under
+  0.75 m of water) loses the lake's water;
+- its ground rises 0.2 m over the lake's level, the river's channel cut through it.
+
+`outlets.png`: before (left, `--no-sills`) and now (right), frame 60:
+- from 40 m down the river (`--view 2702,41.0,-1518,101.9,-20`), ꟻLIP mean 0.0034;
+- from 4 m over it (`--view 2690,33.1,-1515,101.9,-10`), 0.0068;
+- from 70 m straight down (`--view 2663,69,-1510,0,-89`), 0.0050;
+- from the lake (`--view 2500,37,-1500,-90,-12`), 0.0021.
+
+173 samples trimmed. The batch changes the island's images only (ꟻLIP means 0.00025–0.00033);
+the A/B pairs stay at 0 px; `validate.sh` is clean; 253 tests; timings within noise.
+
+**Left for later:** at the hill lake's outlet (`--view -183,328.8,-2109,78.3,-20`) a dark band lies
+across the channel where the river's water fades in over the lake's. It is not the water's depth
+over the lip: keeping more of it changed nothing seen.

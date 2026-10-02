@@ -12,6 +12,7 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::field::Field2;
 use crate::hydrology::Lakes;
+use crate::river::{Outlet, Ribbon};
 
 /// How far the flood may stand from a lake's level and still be the lake's depression, metres
 /// (the priority flood's ε steps across a flat).
@@ -48,6 +49,60 @@ impl LakeWater {
     pub fn stands_at(&self, height: &Field2<f32>, x: u32, y: u32) -> bool {
         self.covers(x, y) && height.get(x, y) < self.level
     }
+
+    /// The samples of the mask, in its layout, that are the shallow arm `outlet` carries the
+    /// lake's water out along (#120): more than [`ARM_KEEP`] metres past it down the river, within
+    /// [`ARM_SIDE`] metres of the river's water either side, the lake's water under [`ARM_DEEP`]
+    /// metres deep over them. A flat valley floor at the lake's level past its outlet floods into
+    /// such an arm, centimetres of water round the river.
+    pub fn arm(&self, height: &Field2<f32>, outlet: &Outlet) -> Vec<bool> {
+        let spacing = height.spacing;
+        (0..self.mask.len())
+            .map(|k| {
+                let (i, j) = (k as u32 % self.size[0], k as u32 / self.size[0]);
+                let (x, y) = (self.first[0] + i, self.first[1] + j);
+                let (dx, dy) = (
+                    f64::from(x) * spacing - outlet.at[0],
+                    f64::from(y) * spacing - outlet.at[1],
+                );
+                let along = dx * outlet.down[0] + dy * outlet.down[1];
+                let across = (dx * outlet.down[1] - dy * outlet.down[0]).abs();
+                self.mask[k]
+                    && along > ARM_KEEP
+                    && across <= outlet.half_width + ARM_SIDE
+                    && f64::from(self.level - height.get(x, y)) < ARM_DEEP
+            })
+            .collect()
+    }
+}
+
+/// Metres past an outlet down the river from which the lake's shallow arm is the river's
+/// ([`LakeWater::arm`]): the river's water is whole from a point past the outlet, and the lake's
+/// fades out over a sample from here.
+pub const ARM_KEEP: f64 = 8.0;
+
+/// Metres either side of the river's water an outlet's arm reaches.
+pub const ARM_SIDE: f64 = 40.0;
+
+/// The deepest an outlet's arm is, metres: deeper water past the outlet is the lake's still.
+pub const ARM_DEEP: f64 = 0.75;
+
+/// Trims each lake's water off the shallow arms its outlets carry it out along
+/// ([`LakeWater::arm`], #120), past the outlets of `ribbons` (made with `lakes`); the ground
+/// there rises over the lake's level ([`crate::Channels`]). Returns the samples trimmed.
+pub fn trim_outlets(lakes: &mut [LakeWater], height: &Field2<f32>, ribbons: &[Ribbon]) -> usize {
+    let mut trimmed = 0;
+    for outlet in ribbons.iter().flat_map(|r| r.outlets.iter()) {
+        let lake = &mut lakes[outlet.lake as usize];
+        let arm = lake.arm(height, outlet);
+        for (m, a) in lake.mask.iter_mut().zip(arm) {
+            if a && *m {
+                *m = false;
+                trimmed += 1;
+            }
+        }
+    }
+    trimmed
 }
 
 /// The water of every lake of `lakes` with `min_area` m² or more, traced over `height` from its

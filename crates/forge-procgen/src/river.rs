@@ -448,6 +448,27 @@ pub struct Ribbon {
     pub steps: Vec<Step>,
     /// Its deltas where it runs into a lake, head first (#120).
     pub deltas: Vec<Delta>,
+    /// Where it leaves a lake, head first (#120).
+    pub outlets: Vec<Outlet>,
+}
+
+/// Where a river leaves a lake (#120): the last point of a run in it, where the lake's water still
+/// stands half as deep as the river, past which the river carries the water on. Past it the lake's
+/// shallow arm along the river is the river's: its water is trimmed off the arm
+/// ([`crate::trim_outlets`]) and the ground there rises over the lake's level, a sill the river's
+/// channel is cut through ([`crate::Channels`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Outlet {
+    /// The lake, its index in the lakes' water the ribbons were made with.
+    pub lake: u32,
+    /// The point, metres in the field's frame.
+    pub at: [f64; 2],
+    /// The river's direction there, unit.
+    pub down: [f64; 2],
+    /// The lake's level, metres.
+    pub level: f64,
+    /// The river's half width there, metres.
+    pub half_width: f64,
 }
 
 /// A step of a steep reach (#122): where the water falls from one pool into the next.
@@ -574,6 +595,7 @@ pub fn ribbons(
                 corners: Vec::new(),
                 steps: Vec::new(),
                 deltas: Vec::new(),
+                outlets: Vec::new(),
             })
         })
         .collect();
@@ -715,6 +737,33 @@ pub fn ribbons(
             p.reach = p.reach.max((cover + affine(params.tuck, cover)) as f32);
         }
         ribbons[r].corners = corners;
+    }
+    // Where each river leaves a lake: the last point of each run in one that the river runs on
+    // past.
+    let last = f64::from(height.size - 1);
+    for ribbon in &mut ribbons {
+        let p = &ribbon.points;
+        ribbon.outlets = ribbon
+            .lake_runs
+            .iter()
+            .filter(|run| (run[1] as usize) + 1 < p.len())
+            .filter_map(|run| {
+                let k = run[1] as usize;
+                let at = position(&p[k]);
+                let (i, j) = (
+                    (at[0] / spacing).round().clamp(0.0, last) as u32,
+                    (at[1] / spacing).round().clamp(0.0, last) as u32,
+                );
+                let lake = lakes.iter().position(|l| l.stands_at(height, i, j))?;
+                Some(Outlet {
+                    lake: lake as u32,
+                    at,
+                    down: [f64::from(p[k].direction[0]), f64::from(p[k].direction[1])],
+                    level: f64::from(lakes[lake].level),
+                    half_width: f64::from(p[k].half_width),
+                })
+            })
+            .collect();
     }
     ribbons.sort_by(|a, b| {
         a.mouth_area
