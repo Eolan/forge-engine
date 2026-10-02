@@ -321,6 +321,7 @@ dependencies = [
  "forge-physics",
  "forge-procgen",
  "forge-render",
+ "forge-sim",
  "forge-task",
  "glam",
  "tracing",
@@ -736,6 +737,14 @@ dependencies = [
  "forge-world",
  "glam",
  "tracing",
+]
+
+[[package]]
+name = "forge-sim"
+version = "0.1.0"
+dependencies = [
+ "forge-core",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

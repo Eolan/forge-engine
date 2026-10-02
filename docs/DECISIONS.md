@@ -234,6 +234,14 @@ RabbitMQ for events only. Proof stages: 2-player handoff → 100 bots at ≤ 24 
 100 ms / 2 % loss for 10 min → 8-player hit registration → 200 bots crossing a worker
 boundary with replay diff → browser client.
 *(research: netcode.md)* Accepted by the owner 2026-09-24.
+*First stage built* (#137, 2026-10-02, `forge-sim`): commands stamped with their tick and sent
+again until acknowledged, a server that takes a late one at its next tick, clients that run
+ahead by the delay and two ticks, and reconciliation by digest: a client compares each
+snapshot's digest with the one it predicted for that tick and goes back to the server's state
+only when they differ, which a deterministic simulation makes the rare case (96 snapshots in
+99 predicted to the bit over 100 ms and 2 % loss, the misses the other player's throws). The
+link is in-process; the snapshots are whole states (280 KB in the lab), so the baselines,
+quantisation and interest management above remain Phase 5's.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

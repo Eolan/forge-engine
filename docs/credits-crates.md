@@ -62,7 +62,7 @@ Where Forge uses them:
 - `rayon`: task-bench
 - `serde`: forge-core
 - `serde_json`: credits
-- `thiserror`: forge-gpu, forge-physics
+- `thiserror`: forge-gpu, forge-physics, forge-sim
 - `tracing`: asteroids, city-blocks, forge-app, forge-gpu, forge-render, forge-task, meshlets
 - `tracing-subscriber`: forge-app
 - `tracy-client`: forge-app, forge-task

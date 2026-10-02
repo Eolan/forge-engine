@@ -27,6 +27,7 @@
 "demos/physics-lab/**" = ["lab"]
 "demos/city-blocks/src/lab.rs" = ["lab"]
 "crates/forge-physics/**" = ["lab"]
+"crates/forge-sim/**" = ["lab"]
 "third_party/jolt/**" = ["lab"]
 "demos/city-blocks/**" = ["island", "city", "lab"]
 "crates/forge-geom/src/stone.rs" = ["island"]

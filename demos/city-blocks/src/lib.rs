@@ -259,6 +259,19 @@ struct Args {
     /// flat floor through `forge-physics`.
     #[arg(long, value_enum)]
     lab: Option<lab::LabScene>,
+    /// With `--lab`, write the session's commands and digests to this file at exit (#137).
+    #[arg(long)]
+    record: Option<PathBuf>,
+    /// With `--lab`, play a recorded session again instead of the keys, checking its digests.
+    #[arg(long)]
+    replay: Option<PathBuf>,
+    /// With `--lab`, run the scene through a server and this player's client over a link of
+    /// this many milliseconds one way, 2 % of the packets lost, a bot throwing too (#137).
+    #[arg(long)]
+    net: Option<f64>,
+    /// With `--lab`, throw a ball from the camera every this many frames, as Space does.
+    #[arg(long)]
+    throw_every: Option<u64>,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -982,6 +995,12 @@ impl Demo for Gallery {
             None => self.sea_time + f64::from(self.step),
         };
         if let Some(lab) = &mut self.lab {
+            if let Some(every) = self.args.throw_every
+                && self.frame > 0
+                && self.frame.is_multiple_of(every.max(1))
+            {
+                lab.throw(self.camera.position, self.camera.forward());
+            }
             lab.advance(dt, self.args.fixed_step);
         }
         if let Some(length) = self.args.day {

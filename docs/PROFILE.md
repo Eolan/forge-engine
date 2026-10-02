@@ -982,6 +982,12 @@ rain lands and up to 464 bodies are awake. The window's title shows the tick's m
 since the last title and the bodies awake; the run's are logged at exit. The frame around it:
 p50 1.15 ms, p99 1.77 ms at 1600 × 900.
 
+With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
+three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
+throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three
+times in 600 ticks. The clients digest their world every tick (two batched reads and a hash of
+496 bodies, inside the tick's time).
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

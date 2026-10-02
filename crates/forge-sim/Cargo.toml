@@ -1,0 +1,15 @@
+[package]
+name = "forge-sim"
+description = "Forge simulation: the fixed tick, stamped commands, recordings and replays, a server and predicting clients over an in-process link (D-010)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+thiserror = { workspace = true }

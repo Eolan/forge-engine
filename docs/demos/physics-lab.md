@@ -18,7 +18,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | Scene | What it tests | State |
 |---|---|---|
 | `drop` | the binding: boxes, cylinders, spheres and convex hulls falling, stacking, rolling and going to sleep; the determinism hash | ✅ #136 |
-| the fixed tick and replays | inputs as commands, the state saved, restored and hashed, two copies of the world apart by 100 ms | step 2 |
+| `drop --record`, `--replay`, `--net MS` | inputs as commands, recordings replayed to the same digests, a server and predicting clients over a lossy link | ✅ #137 |
 | `pool` | buoyancy: barrels, logs, crates and a boat on the water we render | step 3 |
 | walking, vehicles, flight, destruction, creatures, fluids | the later steps of the plan | planned |
 
@@ -82,8 +82,56 @@ Measured on the 9800X3D and the 5070 Ti at 1600 × 900, `--fixed-step`, 600 tick
 | awake at tick 60, 300, 600 | 260, 452, 340 of 496 |
 | the frame (GPU and CPU) | p50 1.15 ms, p99 1.77 ms |
 
+## Commands, recordings and the network (`forge-sim`, issue #137)
+
+The lab's world is a `forge_sim::Simulation`: it ticks at 60 Hz, saves, restores and digests
+itself (its bodies' transforms and velocities to the bit, the tick, the next ball to throw).
+What a player does reaches it as commands stamped with the tick they act on, applied in a fixed
+order (by player, then by number) whatever order they arrived in: Space is a `Throw` (a ball
+from the camera), Enter a `Reset` (everything back to the start; the clock runs on).
+`--throw-every N` throws as Space does every N frames.
+
+**Recordings.** `--record FILE` writes the session's commands and a digest every second at
+exit; `--replay FILE` plays them again in place of the keys and checks each digest. A session
+of 601 ticks and 13 throws replays to all 10 digests, and to the same digests at ticks 60, 300
+and 600 and at the end. A recording with one throw left out leaves it at the next digest
+(the tests).
+
+**The network, in one process.** `--net MS` runs the scene through a server and this player's
+client, the second player a bot throwing at the pyramid every 2.5 s, over links of MS one way
+with 10 % of it as jitter and 2 % of the packets lost, both ways, from seeds:
+- the server owns the world and takes every player's commands at their tick; one that comes
+  after its tick is taken at the next;
+- a client runs ahead of the server by the delay and two ticks, so its commands arrive in time,
+  applies its own at once, and sends every command it has not seen acknowledged in each packet,
+  so a lost packet loses none;
+- each snapshot (every 6 ticks) carries the server's state, its digest and the commands taken;
+  the client compares the digest with the one it predicted for that tick. When they agree it
+  does nothing; when they differ (the other player threw, a command came late) it goes back to
+  the server's state and runs the ticks since again with its commands not yet taken (D-010's
+  reconciliation).
+
+A single-player game runs the same server in its own process: nothing changes when a second
+player joins. With `--net 100 --throw-every 45`, 600 ticks:
+
+| | |
+|---|---|
+| snapshots taken by this player's client | 99: 96 predicted to the bit, 3 corrected (the bot's throws), 42 ticks run again |
+| a correction (the state restored, 14 ticks run again) | at most 9.9 ms |
+| a tick: the server, the two clients | mean 2.0 ms, p99 10.9 ms (the corrections) |
+| commands taken by the server | all 17, none late |
+| bytes down to a client | 280 KB a snapshot (the bodies and the contacts between them), 2.8 MB/s: a whole state, uncompressed |
+
+The last line is what Phase 5's netcode is for: snapshots against an acknowledged baseline,
+quantised, only of what a client sees (D-010's budget is 24 KB/s). The tests check the scheme
+on a toy world (a lone client is never corrected over 205 snapshots; two clients correct each
+other and end where the server is; late commands) and on this one (a session over the lossy
+link ends where the server is, to the bit).
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
 twin with the occlusion off (`lab-drop90-noocc`, 0 px apart: the movers are culled like
-everything else) and `lab-drop600` (the pile at rest), on both geometry paths.
+everything else), `lab-drop600` (the pile at rest) and `lab-net300` (the client's view through
+`--net 100 --throw-every 45`: thrown balls in flight, the bot's corrections behind it), on both
+geometry paths.

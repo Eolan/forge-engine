@@ -106,9 +106,11 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   sand round its outcrops and tors.
 - **Phase 3's start** (the owner's go of 2026-10-02, the plan in "Phase 3" below): Jolt
   bound in `forge-physics` and `physics-lab`'s first scene ✅ (#136): the same hash on Windows
-  and Linux and at any thread count, 496 bodies in 0.56 ms a tick. Next, the fixed tick with
-  record and replay (step 2), then buoyancy on the water we render (step 3). The island's
-  barrels (#107) still drift at the water's speed, without physics, until step 3.
+  and Linux and at any thread count, 496 bodies in 0.56 ms a tick. The fixed tick, recordings
+  and a server with predicting clients ✅ (#137, `forge-sim`): a recorded session replays to
+  every digest, and over a 100 ms link losing 2 % a client predicts 96 snapshots in 99 to the
+  bit. Next, buoyancy on the water we render (step 3). The island's barrels (#107) still drift
+  at the water's speed, without physics, until step 3.
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map.
@@ -390,10 +392,11 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 
 1. **The binding** ✅ (#136): Jolt 5.6 in `forge-physics`, deterministic across platforms and
    thread counts; `physics-lab --lab drop`, a pyramid under a rain of barrels, rocks and balls.
-2. **The fixed tick, record and replay:** the simulation at 60 Hz driven by input commands, its
-   state saved, restored and hashed; a single player runs it in-process (its own local server),
-   a multiplayer game on the server with the clients predicting (D-010). Proved by two copies
-   of a world in one process, one fed 100 ms late with losses, that must agree.
+2. **The fixed tick, record and replay** ✅ (#137, `forge-sim`): the simulation at 60 Hz driven
+   by commands stamped with their tick, its state saved, restored and digested; a single player
+   runs it in-process (its own local server), a multiplayer game on the server with the clients
+   predicting (D-010). `physics-lab --record`, `--replay` and `--net MS`: a server, this
+   player's client and a bot's over in-process links that delay and lose packets.
 3. **Water:** buoyancy from the submerged part of each hull (Kerner's triangles, D-009) on the
    water we render: barrels, logs, crates, then a boat with a propeller and a rudder; then the
    island's rivers and sea. The same pool tests caustics, light shafts under the water and the

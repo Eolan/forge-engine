@@ -458,6 +458,30 @@ impl World {
         out.extend(active.iter().map(|&a| a != 0));
     }
 
+    /// A digest of `bodies`' transforms and velocities to the bit: two worlds whose digests
+    /// agree hold those bodies in the same place and the same motion (`forge-sim`'s checks).
+    pub fn digest(&self, bodies: &[BodyId]) -> u64 {
+        let mut transforms = Vec::new();
+        let mut velocities = Vec::new();
+        self.transforms(bodies, &mut transforms);
+        self.velocities(bodies, &mut velocities);
+        let mut bytes = Vec::with_capacity(bodies.len() * 64);
+        for t in &transforms {
+            for p in t.position.to_array() {
+                bytes.extend_from_slice(&p.to_bits().to_le_bytes());
+            }
+            for r in t.rotation.to_array() {
+                bytes.extend_from_slice(&r.to_bits().to_le_bytes());
+            }
+        }
+        for v in &velocities {
+            for x in v.linear.to_array().into_iter().chain(v.angular.to_array()) {
+                bytes.extend_from_slice(&x.to_bits().to_le_bytes());
+            }
+        }
+        xxhash_rust::xxh3::xxh3_64(&bytes)
+    }
+
     /// Pushes a body through its centre of mass, N·s, waking it.
     pub fn add_impulse(&mut self, body: BodyId, impulse: Vec3) {
         let i = impulse.to_array();

@@ -21,6 +21,7 @@ forge-procgen = { path = "crates/forge-procgen" }
 forge-render = { path = "crates/forge-render" }
 forge-world = { path = "crates/forge-world" }
 forge-physics = { path = "crates/forge-physics" }
+forge-sim = { path = "crates/forge-sim" }
 # The demos the island demo builds on
 city-blocks = { path = "demos/city-blocks" }
 

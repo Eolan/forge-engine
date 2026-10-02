@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Writes the capture batch every rendering change is checked with (issue #74; docs/PROCESS.md):
-# 64 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
+# 66 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
 # island, the island demo's golden shots (#96) and the physics lab (#136), on the mesh path and
 # on the fallback (`--force-fallback`). Compare two batches with tools/compare.sh.
 #
@@ -219,6 +219,9 @@ for path in $paths; do
     capture "$path-lab-drop90" 90 "$lab" --lab drop --fixed-step "${flag[@]}"
     capture "$path-lab-drop90-noocc" 90 "$lab" --lab drop --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-lab-drop600" 600 "$lab" --lab drop --fixed-step "${flag[@]}"
+    # Through a server and a client over 100 ms (#137), balls thrown from the camera and by the
+    # bot: the client's prediction, corrected by the bot's throws, from seeded links.
+    capture "$path-lab-net300" 300 "$lab" --lab drop --fixed-step --net 100 --throw-every 45 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

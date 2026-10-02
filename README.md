@@ -30,6 +30,7 @@ crates/forge-app      window, input, frame loop, capture, fly camera, Tracy hook
 crates/forge-world    world frames (phase 2): f64 reference frames in an integer sector grid, positions in cells for the GPU (#93),
                       the flat grid and the cube sphere cut into u64-named cells, cell streaming plans with hysteresis
 crates/forge-physics  rigid bodies (phase 3): Jolt Physics 5.6 behind a C layer of Forge's own, deterministic across platforms (third_party/jolt)
+crates/forge-sim      the simulation's clock (phase 3): the fixed tick, stamped commands, recordings and replays, a server and predicting clients
 crates/forge-procgen  procedural generation on the CPU (phase 2): fields, lattice noise, the island's terrain genesis, its rivers, lakes, coast distance and sea spectrum
                       (mask, uplift, priority flood, drainage, stream-power erosion), PNG previews
 shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, aces2, tonemap, display, overlay, mipcheck, tonecheck)
@@ -209,8 +210,11 @@ cargo run --release -p physics-lab
 Test scenes of rigid bodies on a flat floor through `forge-physics` (Jolt Physics 5.6, built
 from source with cross-platform determinism, D-009), each with its numbers and its determinism
 hash. `--lab drop` (the default): a pyramid of 204 blocks under a rain of 260 barrels, rocks and
-balls. Space throws a ball from the camera, Enter starts the scene over. It shares
-`city-blocks`' renderer, keys and options (`city-blocks --lab drop` draws the same). Numbers:
+balls. Space throws a ball from the camera, Enter starts the scene over. `--record FILE` and
+`--replay FILE` play a session again and check its digests; `--net 100` runs it through a
+server and this player's client over a 100 ms link that loses 2 % of its packets, with a bot
+throwing too (`forge-sim`). It shares `city-blocks`' renderer, keys and options
+(`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 
 ### `task-bench` — job system

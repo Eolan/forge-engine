@@ -321,3 +321,18 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     (<https://github.com/GPUOpen-Effects/FidelityFX-FSR2>), its value capped at 0.9.
   - **Each drop's random numbers:** the `pcg3d` hash of Mark Jarzynski and Marc Olano, "Hash
     Functions for GPU Rendering", *Journal of Computer Graphics Techniques* 9(3), 2020.
+
+**Simulation and networking** (`forge-sim`, `forge-physics`, the physics lab):
+- **The fixed tick.** Glenn Fiedler, "Fix Your Timestep!", Gaffer On Games, 2004: the
+  simulation advanced in fixed steps from an accumulator, drawn between the last two (#136).
+- **Prediction and reconciliation.** Yahn W. Bernier, "Latency Compensating Methods in
+  Client/Server In-game Protocol Design and Optimization", GDC 2001, and Gabriel Gambetta,
+  "Fast-Paced Multiplayer": the client applies its own commands at once and, corrected by the
+  server, replays those not yet acknowledged (#137).
+- **Rollback over a deterministic simulation.** Timothy Ford, "Overwatch Gameplay Architecture
+  and Netcode", GDC 2017, and Jared Cone, "It IS Rocket Science! The Physics of Rocket League
+  Detailed", GDC 2018: the predicted state taken back to the server's and run forward again
+  (#137); Forge skips the replay when the snapshot's digest is the one predicted.
+- **Networked physics.** Glenn Fiedler, "Introduction to Networked Physics" and the series
+  after it, Gaffer On Games, 2014–2015: the link conditioner and the commands sent again until
+  acknowledged (#137).
