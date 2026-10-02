@@ -972,11 +972,16 @@ The second migration: the visible-cluster list (16 MiB per slot in the city), it
 (8 MiB), the fallback's draw commands and pass 2's rejects (8 MiB). They live until the
 resolve, so they share less: the heap grows.
 
-| City, frame 60 | before #78 | the culls' lists | and the visible lists |
-|---|---|---|---|
-| GPU work buffers | 145.9 MiB | 106.5 | 42.5 |
-| transient heap | 43.75 MiB | 43.75 | 64.19 |
-| both | 189.6 MiB | 150.2 | 106.7 |
+| City, frame 60 | before #78 | the culls' lists | and the visible lists | and the deferred instances |
+|---|---|---|---|---|
+| GPU work buffers | 145.9 MiB | 106.5 | 42.5 | 34.9 |
+| transient heap | 43.75 MiB | 43.75 | 64.19 | 68.01 |
+| both | 189.6 MiB | 150.2 | 106.7 | 102.9 |
+
+The last column (#124, 2026-10-02): the list of the instances instance cull 1 defers to
+instance cull 2, 4 bytes an instance behind its grid (3.8 MiB per slot in the city). It lives
+from the first pass to instance cull 2, beside the culls' lists, so the heap grows by about its
+size and the saving is the second slot's copy.
 
 **The CPU's recording** (#78, the issue's "measure first"). `cpu/record commands` is now
 three zones: `cpu/declare passes` (the demo's and the overlay's declarations), `cpu/graph

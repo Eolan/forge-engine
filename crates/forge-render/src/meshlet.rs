@@ -1290,22 +1290,8 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
-            deferred: (0..FRAMES_IN_FLIGHT)
-                .map(|i| {
-                    device
-                        .create_buffer(BufferDesc {
-                            size: std::mem::size_of_val(&DEFERRED_GRID_START) as u64
-                                + 4 * self.instances.len().max(1) as u64,
-                            usage: usage
-                                | vk::BufferUsageFlags::INDIRECT_BUFFER
-                                | vk::BufferUsageFlags::TRANSFER_DST,
-                            location: MemoryLocation::GpuOnly,
-                            category: MemoryCategory::Work,
-                            name: &format!("deferred instances {i}"),
-                        })
-                        .map(GraphBuffer::new)
-                })
-                .collect::<Result<Vec<_>>>()?,
+            deferred_bytes: std::mem::size_of_val(&DEFERRED_GRID_START) as u64
+                + 4 * self.instances.len().max(1) as u64,
             // `CellBounds` in the shader: 32 bytes a cell (issue #93).
             cells: GraphBuffer::new(device.create_buffer(BufferDesc {
                 size: 32 * cell_count.max(1),
@@ -1492,9 +1478,9 @@ pub struct MeshletScene {
     /// Per frame slot: per pass (pass 1 or the single pass, then pass 2) the draw grid
     /// (x, y, 1) and the count of listed clusters, then the two cluster culls' tickets.
     clusters: Vec<GraphBuffer>,
-    /// Per frame slot, with occlusion: instance cull 2's grid (x, y, 1, count), then the
-    /// instances instance cull 1 deferred to it (issue #38).
-    deferred: Vec<GraphBuffer>,
+    /// Bytes of the list of the instances instance cull 1 defers to instance cull 2, behind the
+    /// latter's grid (x, y, 1, count; issue #38): a transient of the frame's graph (#78).
+    deferred_bytes: u64,
     /// Per cell of 64 instances (in table order), the bounding sphere of theirs: xyz centre,
     /// w radius (issue #38). Written by [`MeshletScene::build_cells`], and the movers' every
     /// frame (#79).
@@ -2885,8 +2871,8 @@ impl MeshletRenderer {
             instances: scene.instances.address(),
             stats: self.stats.address(),
             // The work lists, the status words, the visible list and its raster lists and draw
-            // commands, and the rejects are transients (#78): their addresses are written at
-            // record time ("geometry/cull clears"), 0 here.
+            // commands, the rejects and the deferred instances are transients (#78): their
+            // addresses are written at record time ("geometry/cull clears"), 0 here.
             cluster_lookback: 0,
             cluster_groups: cull_groups(self.work_target),
             prev_hzb_image: self.hzb[prev.pyramid].sampled().0,
@@ -2917,7 +2903,7 @@ impl MeshletRenderer {
             sun_color: self.sun_color.extend(0.0).to_array(),
             tlas: scene.rays.as_ref().map_or(0, SceneRays::tlas_address),
             rt_scene: scene.rays.as_ref().map_or(0, SceneRays::hit_address),
-            deferred: scene.deferred[slot.index].address(),
+            deferred: 0,
             cells: scene.cells.address(),
             cell_list: scene.cell_lists[slot.index].address(),
             rejects: 0,
@@ -3023,7 +3009,11 @@ impl MeshletRenderer {
                 size: LOOKBACK_RUNS * u64::from(scene.instance_count.div_ceil(64).max(1)) * 8,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             }),
-            deferred: graph.import_buffer(&scene.deferred[slot.index]),
+            deferred: graph.transient_buffer(TransientBufferDesc {
+                name: "deferred instances",
+                size: scene.deferred_bytes,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            }),
             // On the fallback path, one `VkDrawIndexedIndirectCommand` per hardware-drawn
             // cluster of the pass being drawn.
             draws: (self.path == GeometryPath::IndirectCount).then(|| {
@@ -3180,7 +3170,7 @@ impl MeshletRenderer {
         // raced the device's writes of two frames before, which nothing made available to it.
         let (indirect, clusters): (&'f GraphBuffer, &'f GraphBuffer) =
             (&scene.indirect[slot.index], &scene.clusters[slot.index]);
-        let deferred: &'f GraphBuffer = &scene.deferred[slot.index];
+        let deferred_handle = io.deferred;
         let cells = self.instance_cells(&params);
         let cell_list: &'f GraphBuffer = &scene.cell_lists[slot.index];
         let mut clears = graph
@@ -3214,11 +3204,12 @@ impl MeshletRenderer {
                 block.draws = draws_handle.map_or(0, |h| resources.buffer(h).address());
                 // Without occlusion there is no pass 2, and no list for it.
                 block.rejects = resources.buffer_address(rejects_handle);
+                block.deferred = resources.buffer(deferred_handle).address();
                 frame_buffer.write(offset, &[block]);
             }
             commands.update_buffer(indirect, 0, &INDIRECT_START);
             commands.update_buffer(clusters, 0, &CLUSTER_ARGS_START);
-            commands.update_buffer(deferred, 0, &DEFERRED_GRID_START);
+            commands.update_buffer(resources.buffer(deferred_handle), 0, &DEFERRED_GRID_START);
             if cells {
                 commands.update_buffer(cell_list, 0, &CELL_LIST_START);
             }
@@ -3842,7 +3833,6 @@ impl MeshletRenderer {
     ) {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let pipeline = &self.pipeline_cull_deferred;
-        let deferred: &'f GraphBuffer = &scene.deferred[slot.index];
         if cells {
             let pipeline = &self.pipeline_cell_cull_deferred;
             let cell_list: &'f GraphBuffer = &scene.cell_lists[slot.index];
@@ -3877,10 +3867,10 @@ impl MeshletRenderer {
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
             .buffer_if(io.instances, BufferAccess::ShaderRead(compute))
             .image(io.hzb, ImageAccess::Sampled(compute))
-            .run(move |_, commands| {
+            .run(move |resources, commands| {
                 commands.bind_pipeline(pipeline);
                 commands.push_constants(pipeline, &self.push(frame_address));
-                commands.dispatch_indirect(deferred, 0);
+                commands.dispatch_indirect(resources.buffer(io.deferred), 0);
                 Ok(())
             });
     }
