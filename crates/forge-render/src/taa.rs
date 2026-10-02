@@ -23,7 +23,7 @@ use forge_gpu::{
 use glam::{DMat4, Mat4, Vec2};
 
 use crate::cells::CellPos;
-use crate::display::{ToneTables, ToneTablesPush, Tonemap, format_encodes_srgb};
+use crate::display::{HdrOutput, OutputEncoding, OutputPush, ToneTables, ToneTablesPush, Tonemap};
 
 /// Colour format of the offscreen scene target and the history.
 pub const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -92,12 +92,43 @@ struct ResolvePush {
     blend: f32,
     history_scale: f32,
     curve: u32,
-    encode_srgb: u32,
     /// The bloom chain's top level (sampled index), or `u32::MAX` for none.
     bloom: u32,
     /// How much of the shown image is bloom (`crate::bloom`).
     bloom_strength: f32,
+    output: OutputPush,
+    pad: u32,
     tables: ToneTablesPush,
+}
+
+/// The resolve's pipeline, writing the history and an output image of `output_format`.
+fn resolve_pipeline(
+    device: &Arc<Device>,
+    shaders: &ShaderCompiler,
+    output_format: vk::Format,
+) -> Result<Pipeline> {
+    let vertex = device.create_shader_module(
+        &shaders.compile("taa.slang", "vert_main", ShaderStage::Vertex)?,
+        "taa vs",
+    )?;
+    let resolve = device.create_shader_module(
+        &shaders.compile("taa.slang", "resolve_main", ShaderStage::Fragment)?,
+        "taa resolve",
+    )?;
+    let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
+        vertex: (vertex, "vert_main"),
+        fragment: (resolve, "resolve_main"),
+        color_formats: &[HDR_FORMAT, output_format],
+        push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
+        alpha_blend: false,
+        depth_test: None,
+        depth_write: false,
+        name: "taa resolve",
+    });
+    for module in [vertex, resolve] {
+        device.destroy_shader_module(module);
+    }
+    pipeline
 }
 
 fn create_history(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
@@ -154,7 +185,8 @@ pub struct Taa {
     previous_camera: Option<CellPos>,
     previous_exposure: f32,
     reset: bool,
-    encode_srgb: bool,
+    output_format: vk::Format,
+    hdr: HdrOutput,
     tables: ToneTables,
     /// Steady-state share of the current frame (0.1 is a typical TAA; 1 disables the history).
     pub blend: f32,
@@ -186,10 +218,6 @@ impl Taa {
             &shaders.compile("taa.slang", "motion_main", ShaderStage::Fragment)?,
             "taa motion",
         )?;
-        let resolve = device.create_shader_module(
-            &shaders.compile("taa.slang", "resolve_main", ShaderStage::Fragment)?,
-            "taa resolve",
-        )?;
         let pipeline_motion = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
             vertex: (vertex, "vert_main"),
             fragment: (motion, "motion_main"),
@@ -200,20 +228,16 @@ impl Taa {
             depth_write: false,
             name: "taa motion",
         })?;
-        let pipeline_resolve = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
-            vertex: (vertex, "vert_main"),
-            fragment: (resolve, "resolve_main"),
-            color_formats: &[HDR_FORMAT, output_format],
-            push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
-            alpha_blend: false,
-            depth_test: None,
-            depth_write: false,
-            name: "taa resolve",
-        })?;
-        for module in [vertex, motion, resolve] {
+        for module in [vertex, motion] {
             device.destroy_shader_module(module);
         }
+        let pipeline_resolve = resolve_pipeline(device, shaders, output_format)?;
         let history = create_history(device, extent)?;
+        let mut tables = ToneTables::new(device)?;
+        let hdr = HdrOutput::default();
+        if OutputEncoding::for_format(output_format).is_hdr() {
+            tables.set_hdr(hdr.preset)?;
+        }
         Ok(Self {
             device: Arc::clone(device),
             pipeline_motion,
@@ -225,13 +249,34 @@ impl Taa {
             previous_camera: None,
             previous_exposure: 0.0,
             reset: true,
-            encode_srgb: !format_encodes_srgb(output_format),
-            tables: ToneTables::new(device)?,
+            output_format,
+            hdr,
+            tables,
             blend: 0.1,
             enabled: true,
             bloom_strength: 0.04,
             jitter_phases: JITTER_PHASES,
         })
+    }
+
+    /// Follows the output (issue #94): a new target format recompiles the resolve (call it
+    /// while no frame uses the old one, as after a swapchain's recreation), an HDR one bakes
+    /// its preset's table.
+    pub fn set_output(
+        &mut self,
+        shaders: &ShaderCompiler,
+        format: vk::Format,
+        hdr: HdrOutput,
+    ) -> Result<()> {
+        if format != self.output_format {
+            self.pipeline_resolve = resolve_pipeline(&self.device, shaders, format)?;
+            self.output_format = format;
+        }
+        if OutputEncoding::for_format(format).is_hdr() {
+            self.tables.set_hdr(hdr.preset)?;
+        }
+        self.hdr = hdr;
+        Ok(())
     }
 
     /// Recreates the histories (device idle) and restarts the history.
@@ -398,7 +443,11 @@ impl Taa {
         curve: Tonemap,
         bloom: Option<ImageHandle>,
     ) -> ImageHandle {
-        let encode_srgb = u32::from(self.encode_srgb);
+        let encoding = OutputPush::new(
+            OutputEncoding::for_format(self.output_format),
+            &self.hdr,
+            self.frame_index as u32,
+        );
         let bloom_strength = self.bloom_strength;
         let tables = self.tables.push();
         use vk::PipelineStageFlags2 as S;
@@ -435,9 +484,10 @@ impl Taa {
                     blend: frame.blend,
                     history_scale: frame.history_scale,
                     curve: curve.index(),
-                    encode_srgb,
                     bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
                     bloom_strength,
+                    output: encoding,
+                    pad: 0,
                     tables,
                 },
             );

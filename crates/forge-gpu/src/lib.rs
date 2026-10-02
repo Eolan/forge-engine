@@ -15,6 +15,7 @@ mod accel;
 mod bindless;
 mod commands;
 mod device;
+mod display;
 pub mod dlss;
 mod error;
 mod frame;
@@ -41,6 +42,7 @@ pub use commands::Commands;
 pub use device::{
     Device, DeviceFeatures, DeviceOptions, MeshShaderLimits, QueueKind, VENDOR_NVIDIA,
 };
+pub use display::DisplayCaps;
 pub use dlss::{Dlss, DlssFrame, DlssImage, DlssImages, DlssMode, DlssToken};
 pub use error::{GpuError, Result};
 pub use frame::{FRAMES_IN_FLIGHT, FrameSlot, Frames};
@@ -57,5 +59,5 @@ pub use pipeline::{
     ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline, VertexPipelineDesc,
 };
 pub use shader::{ShaderCompiler, ShaderEntry, ShaderStage};
-pub use swapchain::Swapchain;
+pub use swapchain::{SurfaceMode, Swapchain};
 pub use timers::{GpuTimerSlot, GpuTimers, GpuZone, MAX_MARKS_PER_FRAME};

@@ -16,6 +16,8 @@ pub struct Instance {
     surface_loader: khr::surface::Instance,
     debug: Option<(ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
     validation: bool,
+    /// `VK_EXT_swapchain_colorspace` is enabled: surfaces can list HDR formats (issue #94).
+    swapchain_colorspace: bool,
     /// Last, so it is dropped after the entry: the Vulkan API came from its interposer.
     #[cfg(all(feature = "dlss", windows))]
     streamline: Option<Arc<crate::streamline::Streamline>>,
@@ -123,8 +125,20 @@ impl Instance {
         }
 
         let mut extensions: Vec<*const i8> = Vec::new();
+        let mut swapchain_colorspace = false;
         if let Some(display) = display {
             extensions.extend_from_slice(ash_window::enumerate_required_extensions(display)?);
+            // Without it drivers list sRGB surface formats alone: the HDR ones need it
+            // (issue #94). Skipped when the loader does not offer it.
+            // SAFETY: plain property enumeration.
+            let available = unsafe { entry.enumerate_instance_extension_properties(None)? };
+            swapchain_colorspace = available.iter().any(|e| {
+                e.extension_name_as_c_str()
+                    .is_ok_and(|n| n == ext::swapchain_colorspace::NAME)
+            });
+            if swapchain_colorspace {
+                extensions.push(ext::swapchain_colorspace::NAME.as_ptr());
+            }
         }
         if validation {
             extensions.push(ext::debug_utils::NAME.as_ptr());
@@ -199,6 +213,7 @@ impl Instance {
             surface_loader,
             debug,
             validation,
+            swapchain_colorspace,
             #[cfg(all(feature = "dlss", windows))]
             streamline: None,
         })
@@ -222,6 +237,11 @@ impl Instance {
     /// Whether validation is active (debug names are only set when it is).
     pub fn validation_enabled(&self) -> bool {
         self.validation
+    }
+
+    /// Whether surfaces can offer HDR colour spaces (`VK_EXT_swapchain_colorspace`).
+    pub fn swapchain_colorspace(&self) -> bool {
+        self.swapchain_colorspace
     }
 
     /// Creates a window surface. The window must outlive it.

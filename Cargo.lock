@@ -700,6 +700,7 @@ dependencies = [
  "raw-window-handle",
  "thiserror 2.0.21",
  "tracing",
+ "windows-sys 0.61.2",
  "xxhash-rust",
 ]
 

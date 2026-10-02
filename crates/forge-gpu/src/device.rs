@@ -26,6 +26,9 @@ pub struct DeviceFeatures {
     /// 64-bit atomics on storage buffers (`shaderBufferInt64Atomics`), usable from fragment
     /// shaders (`fragmentStoresAndAtomics`): the meshlet renderer's visibility buffer.
     pub int64_atomics: bool,
+    /// `VK_EXT_hdr_metadata`: an HDR swapchain can carry the mastering display's description
+    /// (issue #94).
+    pub hdr_metadata: bool,
 }
 
 /// The queues a render-graph pass can run on (issue #77).
@@ -114,6 +117,8 @@ pub struct Device {
     limits: vk::PhysicalDeviceLimits,
     name: String,
     swapchain_loader: khr::swapchain::Device,
+    /// HDR metadata on swapchains, when the device offers it and has a surface.
+    hdr_metadata_loader: Option<ext::hdr_metadata::Device>,
     mesh_loader: Option<ext::mesh_shader::Device>,
     /// Acceleration structures, with ray queries.
     acceleration_loader: Option<khr::acceleration_structure::Device>,
@@ -195,6 +200,9 @@ impl Device {
         }
         if best.features.memory_budget {
             extensions.push(ext::memory_budget::NAME.as_ptr());
+        }
+        if best.features.hdr_metadata && surface.is_some() {
+            extensions.push(ext::hdr_metadata::NAME.as_ptr());
         }
         if let Some(name) = best.index_type_uint8 {
             extensions.push(name.as_ptr());
@@ -396,6 +404,8 @@ impl Device {
         })?;
 
         let swapchain_loader = khr::swapchain::Device::new(raw_instance, &raw);
+        let hdr_metadata_loader = (best.features.hdr_metadata && surface.is_some())
+            .then(|| ext::hdr_metadata::Device::new(raw_instance, &raw));
         let acceleration_loader = best
             .features
             .ray_query
@@ -445,6 +455,7 @@ impl Device {
             limits,
             name: best.name,
             swapchain_loader,
+            hdr_metadata_loader,
             mesh_loader,
             acceleration_loader,
             scratch_alignment,
@@ -696,6 +707,7 @@ impl Device {
             index_type_uint8: uint8_ext.is_some() && uint8.index_type_uint8 == vk::TRUE,
             int64_atomics: v12.shader_buffer_int64_atomics == vk::TRUE
                 && fragment_stores_and_atomics == vk::TRUE,
+            hdr_metadata: has(ext::hdr_metadata::NAME),
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
@@ -827,6 +839,11 @@ impl Device {
     /// Swapchain functions.
     pub fn swapchain_loader(&self) -> &khr::swapchain::Device {
         &self.swapchain_loader
+    }
+
+    /// HDR metadata functions when available (issue #94).
+    pub fn hdr_metadata_loader(&self) -> Option<&ext::hdr_metadata::Device> {
+        self.hdr_metadata_loader.as_ref()
     }
 
     /// Mesh-shader functions when available.

@@ -99,6 +99,13 @@ pub const P3_D65: Primaries = Primaries {
     blue: [0.150, 0.060],
     white: [0.3127, 0.3290],
 };
+/// Rec.2020 (Rec.2100), D65: the HDR10 signal's primaries.
+pub const REC2020: Primaries = Primaries {
+    red: [0.708, 0.292],
+    green: [0.170, 0.797],
+    blue: [0.131, 0.046],
+    white: [0.3127, 0.3290],
+};
 /// The appearance model's cone primaries.
 const CAM16: Primaries = Primaries {
     red: [0.8336, 0.1735],
@@ -234,6 +241,11 @@ fn conversion(src: &Primaries, dst: &Primaries, bradford: bool) -> D33 {
     }
     let adapt = d_mul(&d_inverse(&BRADFORD), &d_mul(&scale, &BRADFORD));
     d_mul(&xyz_to_dst, &d_mul(&adapt, &src_to_xyz))
+}
+
+/// RGB in `src` to RGB in `dst` without white adaptation, as rows (for shaders' constants).
+pub fn conversion_rows(src: &Primaries, dst: &Primaries) -> [[f32; 3]; 3] {
+    conversion(src, dst, false).map(|row| row.map(|v| v as f32))
 }
 
 fn mul3(v: F3, m: &M33) -> F3 {
@@ -1397,57 +1409,75 @@ impl Default for Sdr {
 }
 
 /// Float4 rows of `Aces2Params` in `aces2.slang`: six matrices of three rows, six rows of
-/// scalars, then the hue table and the reach table.
-pub const GPU_PARAM_ROWS: usize = 6 * 3 + 6 + 2 * TOTAL_SIZE;
+/// scalars, the hue table and the reach table, then the display's matrix and clamp.
+pub const GPU_PARAM_ROWS: usize = 6 * 3 + 6 + 2 * TOTAL_SIZE + 4;
 
 impl Sdr {
     /// The parameters and tables `aces2_analytic` reads, as `Aces2Params` lays them out.
     pub fn gpu_params(&self) -> Vec<[f32; 4]> {
-        let t = &self.transform;
-        let (p_in, p_out) = (&t.p_in, &t.p_out);
-        debug_assert!(
-            p_in.cz == p_out.cz && p_in.a_w_j == p_out.a_w_j && p_in.f_l_n == p_out.f_l_n
-        );
-        let mut rows = Vec::with_capacity(GPU_PARAM_ROWS);
-        for m in [
-            &self.rec709_to_ap1,
-            &self.ap1_to_ap0,
-            &p_in.rgb_to_cam16_c,
-            &p_in.cone_response_to_aab,
-            &p_out.aab_to_cone_response,
-            &p_out.cam16_c_to_rgb,
-        ] {
-            for r in 0..3 {
-                rows.push([m[r * 3], m[r * 3 + 1], m[r * 3 + 2], 0.0]);
-            }
-        }
-        let (ts, c, g) = (&t.tonescale, &t.chroma, &t.gamut);
-        rows.push([p_in.f_l_n, p_in.cz, p_in.inv_cz, p_in.a_w_j]);
-        rows.push([
-            p_in.inv_a_w_j,
-            t.limit_j_max,
-            t.model_gamma_inv,
-            ts.forward_limit,
-        ]);
-        rows.push([ts.n_r, ts.g, ts.t_1, ts.s_2]);
-        rows.push([ts.m_2, g.mid_j, g.focus_dist, g.lower_hull_gamma_inv]);
-        rows.push([c.sat, c.sat_thr, c.compr, c.scale]);
-        rows.push([
-            f32::from_bits(g.search_range[0] as u32),
-            f32::from_bits(g.search_range[1] as u32),
-            0.0,
-            0.0,
-        ]);
-        for i in 0..TOTAL_SIZE {
-            let cusp = g.cusp_table[i];
-            rows.push([g.hue_table[i], cusp[0], cusp[1], cusp[2]]);
-        }
-        for &reach in &t.reach_m {
-            rows.push([reach, 0.0, 0.0, 0.0]);
-        }
-        debug_assert_eq!(rows.len(), GPU_PARAM_ROWS);
+        let mut rows = params_rows(&self.transform, &self.rec709_to_ap1, &self.ap1_to_ap0);
+        push_display_rows(&mut rows, &diag([1.0; 3]), 1.0);
         rows
     }
+}
+
+/// The display's rows of `Aces2Params`: the limiting primaries to the signal's, and the
+/// output clamp (in the limiting primaries, before the conversion).
+fn push_display_rows(rows: &mut Vec<[f32; 4]>, to_display: &M33, top: f32) {
+    for r in 0..3 {
+        rows.push([
+            to_display[r * 3],
+            to_display[r * 3 + 1],
+            to_display[r * 3 + 2],
+            0.0,
+        ]);
+    }
+    rows.push([top, 0.0, 0.0, 0.0]);
+    debug_assert_eq!(rows.len(), GPU_PARAM_ROWS);
+}
+
+/// The rows of `Aces2Params` up to the display's.
+fn params_rows(t: &OutputTransform, rec709_to_ap1: &M33, ap1_to_ap0: &M33) -> Vec<[f32; 4]> {
+    let (p_in, p_out) = (&t.p_in, &t.p_out);
+    debug_assert!(p_in.cz == p_out.cz && p_in.a_w_j == p_out.a_w_j && p_in.f_l_n == p_out.f_l_n);
+    let mut rows = Vec::with_capacity(GPU_PARAM_ROWS);
+    for m in [
+        rec709_to_ap1,
+        ap1_to_ap0,
+        &p_in.rgb_to_cam16_c,
+        &p_in.cone_response_to_aab,
+        &p_out.aab_to_cone_response,
+        &p_out.cam16_c_to_rgb,
+    ] {
+        for r in 0..3 {
+            rows.push([m[r * 3], m[r * 3 + 1], m[r * 3 + 2], 0.0]);
+        }
+    }
+    let (ts, c, g) = (&t.tonescale, &t.chroma, &t.gamut);
+    rows.push([p_in.f_l_n, p_in.cz, p_in.inv_cz, p_in.a_w_j]);
+    rows.push([
+        p_in.inv_a_w_j,
+        t.limit_j_max,
+        t.model_gamma_inv,
+        ts.forward_limit,
+    ]);
+    rows.push([ts.n_r, ts.g, ts.t_1, ts.s_2]);
+    rows.push([ts.m_2, g.mid_j, g.focus_dist, g.lower_hull_gamma_inv]);
+    rows.push([c.sat, c.sat_thr, c.compr, c.scale]);
+    rows.push([
+        f32::from_bits(g.search_range[0] as u32),
+        f32::from_bits(g.search_range[1] as u32),
+        0.0,
+        0.0,
+    ]);
+    for i in 0..TOTAL_SIZE {
+        let cusp = g.cusp_table[i];
+        rows.push([g.hue_table[i], cusp[0], cusp[1], cusp[2]]);
+    }
+    for &reach in &t.reach_m {
+        rows.push([reach, 0.0, 0.0, 0.0]);
+    }
+    rows
 }
 
 /// The table `tonemap.slang` samples, baked once per process: RGBA16F texels of a
@@ -1461,6 +1491,179 @@ pub fn shared_lut_texels() -> &'static [u8] {
 pub fn sdr() -> &'static Sdr {
     static SDR: OnceLock<Sdr> = OnceLock::new();
     SDR.get_or_init(Sdr::new)
+}
+
+// ---- HDR outputs (issue #94) ---------------------------------------------------------------
+
+/// The gamut an HDR preset limits its colours to, inside the Rec.2020 signal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Limiting {
+    /// Display P3 with a D65 white: what HDR panels cover.
+    #[default]
+    P3D65,
+    /// The whole of Rec.2020.
+    Rec2020,
+}
+
+impl Limiting {
+    /// The primaries.
+    pub fn primaries(self) -> &'static Primaries {
+        match self {
+            Limiting::P3D65 => &P3_D65,
+            Limiting::Rec2020 => &REC2020,
+        }
+    }
+
+    /// Display name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Limiting::P3D65 => "P3-D65",
+            Limiting::Rec2020 => "Rec.2020",
+        }
+    }
+}
+
+/// One of ACES 2.0's HDR outputs: Rec.2100 PQ for a display of `peak` nits, its colours
+/// limited to `limiting`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Preset {
+    /// The display's peak luminance, in nits.
+    pub peak: f32,
+    /// The gamut the colours are limited to.
+    pub limiting: Limiting,
+}
+
+impl Default for Preset {
+    /// The Academy's first HDR output: 1000 nits, P3-D65 limited.
+    fn default() -> Self {
+        Self {
+            peak: 1000.0,
+            limiting: Limiting::P3D65,
+        }
+    }
+}
+
+impl Preset {
+    /// The Academy's HDR peaks, in nits.
+    pub const PEAKS: [f32; 4] = [500.0, 1000.0, 2000.0, 4000.0];
+
+    /// The preset for a display whose peak is `peak` nits: the largest of [`Preset::PEAKS`]
+    /// not above it (the smallest for dimmer displays), P3-D65 limited.
+    pub fn for_display(peak: f32) -> Self {
+        let peak = Self::PEAKS
+            .into_iter()
+            .rev()
+            .find(|&p| p <= peak)
+            .unwrap_or(Self::PEAKS[0]);
+        Self {
+            peak,
+            limiting: Limiting::P3D65,
+        }
+    }
+
+    /// The next of [`Preset::PEAKS`], the limiting kept (a key cycles them).
+    pub fn next_peak(self) -> Self {
+        let i = Self::PEAKS
+            .iter()
+            .position(|&p| p == self.peak)
+            .map_or(0, |i| (i + 1) % Self::PEAKS.len());
+        Self {
+            peak: Self::PEAKS[i],
+            ..self
+        }
+    }
+
+    /// Display name, such as "1000 nits P3-D65".
+    pub fn label(self) -> String {
+        format!("{} nits {}", self.peak, self.limiting.label())
+    }
+}
+
+/// An HDR output as Forge uses it: linear Rec.709 scene colour in, linear Rec.2020 display
+/// colour out, 1.0 being 100 nits. The chain of the Academy's HDR outputs ("ACES 2.0 -
+/// HDR 1000 nits (P3 D65)" in Rec.2100 PQ): the input clamped to [0, forward limit] in AP1,
+/// the transform, the output clamped to the peak in the limiting primaries, then converted to
+/// Rec.2020 for the signal ([`pq_encode`]).
+#[derive(Clone, Debug)]
+pub struct Hdr {
+    preset: Preset,
+    transform: OutputTransform,
+    rec709_to_ap1: M33,
+    ap1_to_ap0: M33,
+    limiting_to_rec2020: M33,
+}
+
+impl Hdr {
+    /// Builds the tables for `preset` (a few milliseconds).
+    pub fn new(preset: Preset) -> Self {
+        let limiting = preset.limiting.primaries();
+        Self {
+            preset,
+            transform: OutputTransform::new(preset.peak, limiting),
+            rec709_to_ap1: to_m33(&conversion(&REC709, &AP1, true)),
+            ap1_to_ap0: to_m33(&conversion(&AP1, &AP0, false)),
+            limiting_to_rec2020: to_m33(&conversion(limiting, &REC2020, false)),
+        }
+    }
+
+    /// The preset.
+    pub fn preset(&self) -> Preset {
+        self.preset
+    }
+
+    /// The display colour of a scene colour: linear Rec.2020, 1.0 being 100 nits.
+    pub fn apply(&self, rec709: F3) -> F3 {
+        let limit = self.transform.forward_limit();
+        let ap1 = mul3(rec709, &self.rec709_to_ap1).map(|v| min_f(max_f(v, 0.0), limit));
+        let out = self.transform.apply(mul3(ap1, &self.ap1_to_ap0));
+        let top = self.preset.peak / REFERENCE_LUMINANCE;
+        let clamped = out.map(|v| min_f(max_f(v, 0.0), top));
+        mul3(clamped, &self.limiting_to_rec2020).map(|v| max_f(v, 0.0))
+    }
+
+    /// The signal of a scene colour: [`Hdr::apply`] PQ-encoded.
+    pub fn apply_pq(&self, rec709: F3) -> F3 {
+        self.apply(rec709)
+            .map(|v| pq_encode(v * REFERENCE_LUMINANCE))
+    }
+
+    /// The top of the table's grid: the transform's own clamp (4096 at 1000 nits).
+    pub fn lut_max(&self) -> f32 {
+        self.transform.forward_limit()
+    }
+
+    /// The parameters and tables `aces2_analytic` reads ([`Sdr::gpu_params`]), followed by
+    /// the conversion to Rec.2020 and the output clamp.
+    pub fn gpu_params(&self) -> Vec<[f32; 4]> {
+        let mut rows = params_rows(&self.transform, &self.rec709_to_ap1, &self.ap1_to_ap0);
+        push_display_rows(
+            &mut rows,
+            &self.limiting_to_rec2020,
+            self.preset.peak / REFERENCE_LUMINANCE,
+        );
+        rows
+    }
+}
+
+/// SMPTE ST 2084's constants.
+const PQ_M1: f32 = 2610.0 / 16384.0;
+const PQ_M2: f32 = 2523.0 / 4096.0 * 128.0;
+const PQ_C1: f32 = 3424.0 / 4096.0;
+const PQ_C2: f32 = 2413.0 / 4096.0 * 32.0;
+const PQ_C3: f32 = 2392.0 / 4096.0 * 32.0;
+/// PQ's largest luminance, in nits.
+pub const PQ_PEAK: f32 = 10_000.0;
+
+/// SMPTE ST 2084 (PQ): an absolute luminance in nits to the signal, in [0, 1].
+pub fn pq_encode(nits: f32) -> f32 {
+    let p = (nits / PQ_PEAK).clamp(0.0, 1.0).powf(PQ_M1);
+    ((PQ_C1 + PQ_C2 * p) / (1.0 + PQ_C3 * p)).powf(PQ_M2)
+}
+
+/// The inverse of [`pq_encode`].
+pub fn pq_decode(signal: f32) -> f32 {
+    let e = signal.clamp(0.0, 1.0).powf(1.0 / PQ_M2);
+    (max_f(e - PQ_C1, 0.0) / (PQ_C2 - PQ_C3 * e)).powf(1.0 / PQ_M1) * PQ_PEAK
 }
 
 // ---- The baked table -----------------------------------------------------------------------
@@ -1500,29 +1703,102 @@ fn encode_srgb(v: f32) -> f32 {
 /// uniform in lightness), `size`³ RGB triples with red fastest, then green, then blue.
 pub fn bake(sdr: &Sdr, size: u32) -> Vec<F3> {
     let n = size as usize;
-    let mut out = vec![[0.0_f32; 3]; n * n * n];
     let axis: Vec<f32> = (0..n)
         .map(|i| lut_shaper_inverse(i as f32 / (n - 1) as f32))
         .collect();
+    bake_grid(&axis, |rgb| {
+        sdr.apply(rgb).map(|v| {
+            let e = encode_srgb(v);
+            if e.is_finite() { e } else { 0.0 }
+        })
+    })
+}
+
+/// The HDR transform over its grid, PQ-encoded (PQ is close to uniform in lightness), laid
+/// out as [`bake`]'s. The grid's top is the preset's own clamp ([`Hdr::lut_max`]).
+pub fn bake_hdr(hdr: &Hdr, size: u32) -> Vec<F3> {
+    let n = size as usize;
+    let max = hdr.lut_max();
+    let axis: Vec<f32> = (0..n)
+        .map(|i| hdr_shaper_inverse(i as f32 / (n - 1) as f32, max))
+        .collect();
+    bake_grid(&axis, |rgb| hdr.apply_pq(rgb))
+}
+
+/// `f` over the grid `axis`³, red fastest, on every core.
+fn bake_grid(axis: &[f32], f: impl Fn(F3) -> F3 + Sync) -> Vec<F3> {
+    let n = axis.len();
+    let mut out = vec![[0.0_f32; 3]; n * n * n];
     let threads = thread::available_parallelism().map_or(1, |t| t.get());
     let slices_per_thread = n.div_ceil(threads);
     thread::scope(|scope| {
         for (chunk_index, chunk) in out.chunks_mut(slices_per_thread * n * n).enumerate() {
-            let axis = &axis;
+            let f = &f;
             scope.spawn(move || {
                 for (i, texel) in chunk.iter_mut().enumerate() {
                     let index = chunk_index * slices_per_thread * n * n + i;
                     let (r, g, b) = (index % n, index / n % n, index / (n * n));
-                    let display = sdr.apply([axis[r], axis[g], axis[b]]);
-                    *texel = display.map(|v| {
-                        let e = encode_srgb(v);
-                        if e.is_finite() { e } else { 0.0 }
-                    });
+                    *texel = f([axis[r], axis[g], axis[b]]);
                 }
             });
         }
     });
     out
+}
+
+/// The HDR table's shaper: [`lut_shaper`] with its top at `max`.
+pub fn hdr_shaper(x: f32, max: f32) -> f32 {
+    let lo = LUT_EPSILON.log2();
+    let hi = (max + LUT_EPSILON).log2();
+    (((x.clamp(0.0, max) + LUT_EPSILON).log2() - lo) / (hi - lo)).clamp(0.0, 1.0)
+}
+
+/// The inverse of [`hdr_shaper`].
+pub fn hdr_shaper_inverse(s: f32, max: f32) -> f32 {
+    let lo = LUT_EPSILON.log2();
+    let hi = (max + LUT_EPSILON).log2();
+    ((lo + s * (hi - lo)).exp2() - LUT_EPSILON).max(0.0)
+}
+
+/// The HDR table sampled as `tonemap.slang` does, on the CPU: trilinear in the shaper's
+/// space, the PQ signal out.
+pub fn sample_hdr(table: &[F3], size: u32, max: f32, rec709: F3) -> F3 {
+    let n = size as usize;
+    let u = rec709.map(|x| hdr_shaper(x.max(0.0), max) * (n - 1) as f32);
+    let i0 = u.map(|v| (v.floor() as usize).min(n - 2));
+    let f = [0, 1, 2].map(|k| u[k] - i0[k] as f32);
+    let at = |r: usize, g: usize, b: usize| table[r + n * (g + n * b)];
+    let mut out = [0.0_f32; 3];
+    for corner in 0..8 {
+        let (dr, dg, db) = (corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+        let w = [(dr, 0), (dg, 1), (db, 2)]
+            .iter()
+            .map(|&(d, k)| if d == 1 { f[k] } else { 1.0 - f[k] })
+            .product::<f32>();
+        let v = at(i0[0] + dr, i0[1] + dg, i0[2] + db);
+        for k in 0..3 {
+            out[k] += w * v[k];
+        }
+    }
+    out
+}
+
+/// The HDR table as RGBA16 UNORM texels of PQ signal, laid out as [`lut_texels`].
+pub fn hdr_lut_texels(table: &[F3], size: u32) -> Vec<u8> {
+    let n = size as usize;
+    let mut bytes = Vec::with_capacity(n * n * n * 8);
+    let unorm = |v: f32| (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
+    for g in 0..n {
+        for b in 0..n {
+            for r in 0..n {
+                let v = table[r + n * (g + n * b)];
+                for c in [unorm(v[0]), unorm(v[1]), unorm(v[2]), u16::MAX] {
+                    bytes.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+        }
+    }
+    bytes
 }
 
 /// The table sampled as `tonemap.slang` does, on the CPU: trilinear in the shaper's space,
@@ -1579,6 +1855,13 @@ pub fn test_colours(count: usize) -> Vec<F3> {
 pub fn code_difference(a: F3, b: F3) -> f32 {
     (0..3)
         .map(|k| (encode_srgb(a[k]) - encode_srgb(b[k])).abs() * 255.0)
+        .fold(0.0, f32::max)
+}
+
+/// A signal's largest channel difference from another, in 10-bit PQ codes.
+pub fn pq_code_difference(a: F3, b: F3) -> f32 {
+    (0..3)
+        .map(|k| (a[k] - b[k]).abs() * 1023.0)
         .fold(0.0, f32::max)
 }
 
@@ -1847,6 +2130,152 @@ mod tests {
                 let over_1 = errors.iter().filter(|&&e| e > 1.0).count();
                 println!(
                     "{name} {size}³: bake {bake_ms:.0} ms, 8-bit codes: p50 {:.3}, p99 {:.3}, p99.9 {:.3}, max {:.2} at {worst:?}, over 1 code: {over_1} of {}",
+                    at(0.5),
+                    at(0.99),
+                    at(0.999),
+                    errors[errors.len() - 1],
+                    errors.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pq_matches_st_2084() {
+        // BT.2100's reference points: 100 nits at 0.5081, BT.2408's 203-nit white at 0.5807,
+        // 1000 nits at 0.7518, 10 000 nits at 1.
+        for (nits, signal) in [
+            (100.0, 0.508_078),
+            (203.0, 0.580_689),
+            (1000.0, 0.751_827),
+            (10_000.0, 1.0),
+        ] {
+            let e = pq_encode(nits);
+            assert!((e - signal).abs() < 1e-4, "{nits} nits: {e}");
+            assert!(
+                (pq_decode(e) - nits).abs() / nits < 1e-3,
+                "{nits} nits round trip: {}",
+                pq_decode(e)
+            );
+        }
+        assert!(pq_encode(0.0) < 1e-6);
+        assert_eq!(pq_decode(0.0), 0.0);
+    }
+
+    #[test]
+    fn hdr_grey_and_white_land_where_aces_2_puts_them() {
+        let hdr = Hdr::new(Preset::default());
+        // At 1000 nits 0.18 gives 14.5 nits and 1.0 gives 107 (1.0 being 100 nits; the
+        // luminance of a Rec.2020 grey is its value).
+        let grey = hdr.apply([0.18; 3]);
+        assert!((0.14..0.152).contains(&grey[1]), "{grey:?}");
+        assert!(
+            grey.iter().all(|&v| (v - grey[1]).abs() < 1e-4),
+            "grey stays grey: {grey:?}"
+        );
+        let white = hdr.apply([1.0; 3]);
+        assert!((1.0..1.15).contains(&white[1]), "{white:?}");
+        assert_eq!(hdr.apply([0.0; 3]), [0.0; 3]);
+        // The brightest whites reach the peak and stop there.
+        let peak = hdr.apply([1.0e4; 3]);
+        assert!(
+            peak.iter().all(|&v| (9.9..=10.0001).contains(&v)),
+            "{peak:?}"
+        );
+        assert_eq!(hdr.lut_max(), hdr.transform.forward_limit());
+        // A brighter preset keeps grey a little higher and white much the same.
+        let bright = Hdr::new(Preset {
+            peak: 4000.0,
+            limiting: Limiting::P3D65,
+        });
+        assert!(bright.apply([0.18; 3])[1] > grey[1]);
+    }
+
+    #[test]
+    fn hdr_stays_inside_the_limiting_gamut() {
+        // A saturated Rec.709 green, P3-limited, never leaves P3 inside the Rec.2020 signal:
+        // back in P3 its channels stay positive.
+        let hdr = Hdr::new(Preset::default());
+        let to_p3 = to_m33(&conversion(&REC2020, &P3_D65, false));
+        for scene in [[0.0, 4.0, 0.0], [8.0, 0.0, 0.2], [0.0, 0.1, 30.0]] {
+            let p3 = mul3(hdr.apply(scene), &to_p3);
+            assert!(p3.iter().all(|&v| v > -1e-3), "{scene:?} gives {p3:?}");
+        }
+    }
+
+    #[test]
+    fn presets_follow_the_display() {
+        let peak = |nits: f32| Preset::for_display(nits).peak;
+        assert_eq!(peak(300.0), 500.0);
+        assert_eq!(peak(600.0), 500.0);
+        assert_eq!(peak(1000.0), 1000.0);
+        assert_eq!(peak(1499.0), 1000.0);
+        assert_eq!(peak(10_000.0), 4000.0);
+        let mut p = Preset::default();
+        for _ in 0..Preset::PEAKS.len() {
+            p = p.next_peak();
+        }
+        assert_eq!(p, Preset::default());
+        assert_eq!(Preset::default().label(), "1000 nits P3-D65");
+    }
+
+    #[test]
+    fn the_hdr_table_follows_the_transform() {
+        let hdr = Hdr::new(Preset::default());
+        let table = bake_hdr(&hdr, LUT_SIZE);
+        let max = hdr.lut_max();
+        // The grid's points are the transform itself.
+        for &c in &[[0.0; 3], [max; 3]] {
+            let sampled = sample_hdr(&table, LUT_SIZE, max, c);
+            let exact = hdr.apply_pq(c);
+            assert!(
+                (0..3).all(|k| (sampled[k] - exact[k]).abs() < 1e-6),
+                "{c:?}"
+            );
+        }
+        // Between them, about a 10-bit code at the 99th percentile (1.3 on 400 000 colours,
+        // where the SDR table is at 1.5 8-bit codes).
+        let mut errors: Vec<f32> = test_colours(20_000)
+            .iter()
+            .map(|&c| pq_code_difference(sample_hdr(&table, LUT_SIZE, max, c), hdr.apply_pq(c)))
+            .collect();
+        errors.sort_unstable_by(f32::total_cmp);
+        let p99 = errors[errors.len() * 99 / 100];
+        assert!(p99 < 1.6, "p99 {p99} codes");
+        let texels = hdr_lut_texels(&table, LUT_SIZE);
+        assert_eq!(texels.len(), (LUT_SIZE * LUT_SIZE * LUT_SIZE * 8) as usize);
+    }
+
+    /// `cargo test --release -p forge-render hdr_lut_error -- --ignored --nocapture`: how far
+    /// the sampled HDR tables are from the transform, in 10-bit PQ codes.
+    #[test]
+    #[ignore]
+    fn hdr_lut_error_report() {
+        let colours = test_colours(400_000);
+        for peak in Preset::PEAKS {
+            let hdr = Hdr::new(Preset {
+                peak,
+                limiting: Limiting::P3D65,
+            });
+            let exact: Vec<F3> = colours.iter().map(|&c| hdr.apply_pq(c)).collect();
+            for size in [65, 129] {
+                let start = std::time::Instant::now();
+                let table = bake_hdr(&hdr, size);
+                let bake_ms = start.elapsed().as_secs_f64() * 1e3;
+                let mut errors: Vec<f32> = colours
+                    .iter()
+                    .zip(&exact)
+                    .map(|(&c, &e)| {
+                        pq_code_difference(sample_hdr(&table, size, hdr.lut_max(), c), e)
+                    })
+                    .collect();
+                errors.sort_unstable_by(f32::total_cmp);
+                let at =
+                    |p: f64| errors[((p * errors.len() as f64) as usize).min(errors.len() - 1)];
+                let over_1 = errors.iter().filter(|&&e| e > 1.0).count();
+                println!(
+                    "{peak} nits, {size}³ (top {:.0}): bake {bake_ms:.0} ms, 10-bit PQ codes: p50 {:.3}, p99 {:.3}, p99.9 {:.3}, max {:.2}, over 1 code: {over_1} of {}",
+                    hdr.lut_max(),
                     at(0.5),
                     at(0.99),
                     at(0.999),

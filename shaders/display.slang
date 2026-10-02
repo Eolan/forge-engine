@@ -1,6 +1,7 @@
 // The display pass, driven by crates/forge-render/src/display.rs: a pre-exposed HDR image in,
-// the display image out through the chosen tone curve (`tonemap.slang`). The ballad does the
-// same inside its TAA resolve; this pass serves the paths without temporal filtering.
+// the display image out through the chosen tone curve and the output's encoding
+// (`tonemap.slang`). The ballad does the same inside its TAA resolve; this pass serves the
+// paths without temporal filtering.
 import bindless;
 import tonemap;
 
@@ -8,8 +9,7 @@ struct DisplayPush
 {
     uint image;
     uint curve;
-    uint encode_srgb;
-    uint pad;
+    Output output;
     ToneTables tables;
 };
 
@@ -32,6 +32,7 @@ Varyings vert_main(uint id : SV_VertexID)
 [shader("fragment")]
 float4 frag_main(Varyings input) : SV_Target
 {
-    float3 hdr = g_sampled_images[NonUniformResourceIndex(display_push.image)].Load(int3(int2(input.position.xy), 0)).rgb;
-    return float4(display_output(hdr, display_push.curve, display_push.encode_srgb != 0, display_push.tables), 1.0);
+    uint2 pixel = uint2(input.position.xy);
+    float3 hdr = g_sampled_images[NonUniformResourceIndex(display_push.image)].Load(int3(int2(pixel), 0)).rgb;
+    return float4(display_output(hdr, display_push.curve, display_push.output, display_push.tables, pixel), 1.0);
 }

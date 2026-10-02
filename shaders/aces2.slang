@@ -60,6 +60,8 @@ public struct Aces2Params
     int4 search;       // the hue search's window (lo, hi)
     float4 table[363]; // per hue entry: hue, cusp J, cusp M, 1 / upper hull gamma
     float4 reach[363]; // per whole degree: reach M (x)
+    float4 to_display[3]; // the limiting primaries to the signal's (HDR: Rec.2020)
+    float4 display_clamp; // the output's top in the limiting primaries (x): peak / 100
 };
 
 static const float PI = 3.14159265358979;
@@ -301,6 +303,24 @@ float3 gamut_compress(float3 jmh, float reach_max_m, Aces2Params* p)
 // Linear Rec.709 scene colour in, linear Rec.709 display colour in [0, 1] out.
 public float3 aces2_analytic(float3 rec709, Aces2Params* p)
 {
+    float3 rgb_out = aces2_limiting(rec709, p);
+    return float3(min_f(max_f(rgb_out.x, 0.0), 1.0), min_f(max_f(rgb_out.y, 0.0), 1.0), min_f(max_f(rgb_out.z, 0.0), 1.0));
+}
+
+// An HDR preset (issue #94, aces2.rs `Hdr`): linear Rec.709 scene colour in, linear Rec.2020
+// display colour out, 1.0 being 100 nits.
+public float3 aces2_analytic_hdr(float3 rec709, Aces2Params* p)
+{
+    float3 rgb_out = aces2_limiting(rec709, p);
+    float top = p[0].display_clamp.x;
+    rgb_out = float3(min_f(max_f(rgb_out.x, 0.0), top), min_f(max_f(rgb_out.y, 0.0), top), min_f(max_f(rgb_out.z, 0.0), top));
+    return max(rows(p[0].to_display[0], p[0].to_display[1], p[0].to_display[2], rgb_out), 0.0);
+}
+
+// The transform without its output clamp: linear RGB in the limiting primaries, 1.0 being
+// 100 nits.
+float3 aces2_limiting(float3 rec709, Aces2Params* p)
+{
     float4 model = p[0].model;
     float4 model2 = p[0].model2;
     float limit = model2.w;
@@ -332,9 +352,8 @@ public float3 aces2_analytic(float3 rec709, Aces2Params* p)
     float a_out = pow(compressed.x * (1.0 / J_SCALE), model.z);
     float3 aab_out = float3(a_out, compressed.y * cos_hr, compressed.y * sin_hr);
     float3 cone = rows(p[0].out_aab_to_cone[0], p[0].out_aab_to_cone[1], p[0].out_aab_to_cone[2], aab_out);
-    float3 rgb_out = rows(p[0].out_cam16_c_to_rgb[0], p[0].out_cam16_c_to_rgb[1], p[0].out_cam16_c_to_rgb[2],
-                          float3(cone_inv(cone.x), cone_inv(cone.y), cone_inv(cone.z)));
-    return float3(min_f(max_f(rgb_out.x, 0.0), 1.0), min_f(max_f(rgb_out.y, 0.0), 1.0), min_f(max_f(rgb_out.z, 0.0), 1.0));
+    return rows(p[0].out_cam16_c_to_rgb[0], p[0].out_cam16_c_to_rgb[1], p[0].out_cam16_c_to_rgb[2],
+                float3(cone_inv(cone.x), cone_inv(cone.y), cone_inv(cone.z)));
 }
 
 float3 decode_srgb(float3 encoded)
@@ -360,4 +379,21 @@ public float3 aces2_lut(float3 rec709, uint lut)
     float3 c0 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb;
     float3 c1 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv + float2(LUT_SIZE / width, 0.0), 0.0).rgb;
     return decode_srgb(lerp(c0, c1, f));
+}
+
+// An HDR preset's table (issue #94, aces2.rs `bake_hdr`): laid out as the SDR one, its grid's
+// top at the preset's clamp (`lut_max`), the PQ signal in Rec.2020 out.
+public float3 aces2_hdr_lut(float3 rec709, uint lut, float lut_max)
+{
+    float lo = log2(LUT_EPSILON);
+    float hi = log2(lut_max + LUT_EPSILON);
+    float3 shaped = saturate((log2(clamp(rec709, 0.0, lut_max) + LUT_EPSILON) - lo) / (hi - lo));
+    float3 u = shaped * (LUT_SIZE - 1.0);
+    float slice = min(floor(u.z), LUT_SIZE - 2.0);
+    float f = u.z - slice;
+    float width = LUT_SIZE * LUT_SIZE;
+    float2 uv = float2((u.x + 0.5 + slice * LUT_SIZE) / width, (u.y + 0.5) / LUT_SIZE);
+    float3 c0 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb;
+    float3 c1 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv + float2(LUT_SIZE / width, 0.0), 0.0).rgb;
+    return lerp(c0, c1, f);
 }

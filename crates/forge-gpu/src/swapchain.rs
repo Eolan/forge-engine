@@ -6,6 +6,49 @@ use crate::device::Device;
 use crate::error::Result;
 use crate::instance::Surface;
 
+/// What a swapchain presents (issue #94).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceMode {
+    /// 8-bit sRGB.
+    #[default]
+    Sdr,
+    /// HDR10: Rec.2100 PQ over Rec.2020 primaries in 10 bits (`HDR10_ST2084_EXT`).
+    Hdr10,
+    /// scRGB: linear Rec.709 in half floats, 1.0 being 80 nits (`EXTENDED_SRGB_LINEAR_EXT`).
+    ScRgb,
+}
+
+impl SurfaceMode {
+    /// Whether `format` is one this mode presents.
+    fn accepts(self, format: &vk::SurfaceFormatKHR) -> bool {
+        match self {
+            SurfaceMode::Sdr => {
+                (format.format == vk::Format::B8G8R8A8_SRGB
+                    || format.format == vk::Format::R8G8B8A8_SRGB)
+                    && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+            }
+            SurfaceMode::Hdr10 => {
+                (format.format == vk::Format::A2B10G10R10_UNORM_PACK32
+                    || format.format == vk::Format::A2R10G10B10_UNORM_PACK32)
+                    && format.color_space == vk::ColorSpaceKHR::HDR10_ST2084_EXT
+            }
+            SurfaceMode::ScRgb => {
+                format.format == vk::Format::R16G16B16A16_SFLOAT
+                    && format.color_space == vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT
+            }
+        }
+    }
+
+    /// Short name for logs and overlays.
+    pub fn name(self) -> &'static str {
+        match self {
+            SurfaceMode::Sdr => "SDR",
+            SurfaceMode::Hdr10 => "HDR10",
+            SurfaceMode::ScRgb => "scRGB",
+        }
+    }
+}
+
 /// The window's presentable images.
 pub struct Swapchain {
     device: Arc<Device>,
@@ -16,6 +59,9 @@ pub struct Swapchain {
     format: vk::Format,
     extent: vk::Extent2D,
     vsync: bool,
+    /// The mode asked for, and the one the surface gave.
+    requested: SurfaceMode,
+    mode: SurfaceMode,
 }
 
 impl Swapchain {
@@ -36,9 +82,65 @@ impl Swapchain {
             format: vk::Format::UNDEFINED,
             extent: vk::Extent2D::default(),
             vsync,
+            requested: SurfaceMode::Sdr,
+            mode: SurfaceMode::Sdr,
         };
         this.recreate(width, height)?;
         Ok(this)
+    }
+
+    /// The modes the surface offers (SDR always).
+    pub fn supported_modes(&self) -> Result<Vec<SurfaceMode>> {
+        // SAFETY: a surface query on a live surface and physical device.
+        let formats = unsafe {
+            self.device
+                .instance()
+                .surface_loader()
+                .get_physical_device_surface_formats(self.device.physical(), self.surface.raw())?
+        };
+        Ok([SurfaceMode::Sdr, SurfaceMode::Hdr10, SurfaceMode::ScRgb]
+            .into_iter()
+            .filter(|&mode| mode == SurfaceMode::Sdr || formats.iter().any(|f| mode.accepts(f)))
+            .collect())
+    }
+
+    /// Asks for `mode` and recreates the swapchain (waits for the device to be idle). Returns
+    /// the mode the surface gave: SDR when it does not offer the one asked for.
+    pub fn set_mode(&mut self, mode: SurfaceMode) -> Result<SurfaceMode> {
+        self.requested = mode;
+        let extent = self.extent;
+        self.recreate(extent.width, extent.height)?;
+        Ok(self.mode)
+    }
+
+    /// The mode presented.
+    pub fn mode(&self) -> SurfaceMode {
+        self.mode
+    }
+
+    /// Describes the HDR content to the display (`VK_EXT_hdr_metadata`, when the device has
+    /// it; issue #94): Rec.2020 primaries, a D65 white, `peak` nits as the mastering peak and
+    /// the brightest pixel, `black` nits as its black. SDR swapchains are left alone.
+    pub fn set_hdr_metadata(&self, peak: f32, black: f32) {
+        let Some(loader) = self.device.hdr_metadata_loader() else {
+            return;
+        };
+        if self.mode == SurfaceMode::Sdr {
+            return;
+        }
+        let xy = |x, y| vk::XYColorEXT { x, y };
+        let metadata = vk::HdrMetadataEXT::default()
+            .display_primary_red(xy(0.708, 0.292))
+            .display_primary_green(xy(0.170, 0.797))
+            .display_primary_blue(xy(0.131, 0.046))
+            .white_point(xy(0.3127, 0.3290))
+            .max_luminance(peak)
+            .min_luminance(black)
+            .max_content_light_level(peak)
+            .max_frame_average_light_level(0.0);
+        // SAFETY: a live swapchain created on this device.
+        unsafe { loader.set_hdr_metadata(&[self.raw], &[metadata]) };
+        tracing::info!(peak, black, "HDR metadata set");
     }
 
     /// Rebuilds the swapchain for a new size (waits for the device to be idle).
@@ -56,15 +158,23 @@ impl Swapchain {
                 loader.get_physical_device_surface_present_modes(physical, surface)?,
             )
         };
-        let format = formats
-            .iter()
-            .find(|f| {
-                (f.format == vk::Format::B8G8R8A8_SRGB || f.format == vk::Format::R8G8B8A8_SRGB)
-                    && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-            })
+        let hdr = formats.iter().find(|f| self.requested.accepts(f));
+        if self.requested != SurfaceMode::Sdr && hdr.is_none() {
+            tracing::warn!(
+                requested = self.requested.name(),
+                "the surface offers no such format: SDR"
+            );
+        }
+        let format = hdr
+            .or_else(|| formats.iter().find(|f| SurfaceMode::Sdr.accepts(f)))
             .or_else(|| formats.first())
             .copied()
             .ok_or_else(|| crate::GpuError::Unsupported("surface has no formats".into()))?;
+        let mode = if hdr.is_some() {
+            self.requested
+        } else {
+            SurfaceMode::Sdr
+        };
         // `FORGE_PRESENT_MODE=immediate|mailbox|fifo` overrides the choice (debugging aid).
         let forced = match std::env::var("FORGE_PRESENT_MODE").ok().as_deref() {
             Some("immediate") => Some(vk::PresentModeKHR::IMMEDIATE),
@@ -149,7 +259,8 @@ impl Swapchain {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.format = format.format;
         self.extent = extent;
-        tracing::info!(?extent, ?present_mode, format = ?format.format, images = self.images.len(), "swapchain created");
+        self.mode = mode;
+        tracing::info!(?extent, ?present_mode, format = ?format.format, mode = mode.name(), images = self.images.len(), "swapchain created");
         Ok(())
     }
 

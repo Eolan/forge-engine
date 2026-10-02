@@ -5,6 +5,7 @@
 module tonemap;
 
 import aces2;
+import noise;
 
 public static const uint TONEMAP_AGX = 0;
 public static const uint TONEMAP_ACES = 1;
@@ -14,12 +15,30 @@ public static const uint TONEMAP_ACES2 = 3;
 public static const uint TONEMAP_ACES2_ANALYTIC = 4;
 
 // What the ACES 2.0 curves read (crates/forge-render/src/display.rs, `ToneTables`): the
-// baked table's bindless index and the transform's parameters.
+// baked tables' bindless indices and the transform's parameters, SDR and the HDR preset's.
 public struct ToneTables
 {
     public uint lut;
-    public uint pad;
+    public uint hdr_lut;      // the HDR preset's table: the PQ signal, RGBA16 UNORM
     public Aces2Params* aces2;
+    public Aces2Params* hdr;  // the HDR preset's parameters (aces2.rs, `Hdr::gpu_params`)
+    public float hdr_max;     // the HDR table's top (aces2.rs, `Hdr::lut_max`)
+    public uint pad;
+};
+
+// How the display image is encoded (display.rs, `OutputEncoding`, issue #94).
+public static const uint OUTPUT_SRGB_TARGET = 0; // the target encodes sRGB on write
+public static const uint OUTPUT_SRGB = 1;        // a UNORM SDR target: the shader encodes
+public static const uint OUTPUT_PQ = 2;          // HDR10: Rec.2100 PQ, Rec.2020 primaries
+public static const uint OUTPUT_SCRGB = 3;       // scRGB: linear Rec.709, 1.0 being 80 nits
+
+// The display's side of the output (display.rs, `OutputPush`).
+public struct Output
+{
+    public uint encoding;     // OUTPUT_*
+    public float scene_gain;  // HDR: the paper-white offset (2^stops), before ACES 2.0
+    public float sdr_white;   // HDR: the nits of an SDR curve's white (the UI's paper white)
+    public uint frame;        // the dither's frame
 };
 
 // AgX (Sobotka; Blender 4.0's default view), in the minimal real-time form of Wrensch 2023:
@@ -111,10 +130,74 @@ public float3 encode_srgb(float3 linear)
     return select(linear <= 0.0031308, low, high);
 }
 
-// The display value of a pre-exposed HDR colour: the curve, then the sRGB encoding when the
-// target does not do it on write.
-public float3 display_output(float3 color, uint curve, bool encode, ToneTables tables)
+// SMPTE ST 2084 (PQ), as aces2.rs: nits in, the signal in [0, 1] out, and back.
+public float3 pq_encode(float3 nits)
 {
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 2523.0 / 4096.0 * 128.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 2413.0 / 4096.0 * 32.0;
+    const float c3 = 2392.0 / 4096.0 * 32.0;
+    float3 p = pow(saturate(nits / 10000.0), m1);
+    return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+}
+
+public float3 pq_decode(float3 signal)
+{
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 2523.0 / 4096.0 * 128.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 2413.0 / 4096.0 * 32.0;
+    const float c3 = 2392.0 / 4096.0 * 32.0;
+    float3 e = pow(saturate(signal), 1.0 / m2);
+    return pow(max(e - c1, 0.0) / (c2 - c3 * e), 1.0 / m1) * 10000.0;
+}
+
+// Between Rec.709 and Rec.2020 (both D65; display.rs, `REC709_TO_REC2020`, checked against
+// aces2.rs's conversion).
+public float3 rec709_to_rec2020(float3 c)
+{
+    return float3(
+        dot(c, float3(0.6274039, 0.32928304, 0.04331307)),
+        dot(c, float3(0.06909729, 0.9195404, 0.01136232)),
+        dot(c, float3(0.01639144, 0.08801331, 0.89559525)));
+}
+
+public float3 rec2020_to_rec709(float3 c)
+{
+    return float3(
+        dot(c, float3(1.660491, -0.5876411, -0.07284986)),
+        dot(c, float3(-0.12455047, 1.1328999, -0.00834942)),
+        dot(c, float3(-0.01815076, -0.1005789, 1.1187297)));
+}
+
+// The HDR signal of a pre-exposed colour: ACES 2.0 through the preset (the scene raised by the
+// paper-white offset first), any other curve as its SDR image at the UI's white.
+float3 hdr_signal(float3 color, uint curve, Output output, ToneTables tables)
+{
+    if (curve == TONEMAP_ACES2)
+        return aces2_hdr_lut(max(color * output.scene_gain, 0.0), tables.hdr_lut, tables.hdr_max);
+    if (curve == TONEMAP_ACES2_ANALYTIC)
+        return pq_encode(aces2_analytic_hdr(max(color * output.scene_gain, 0.0), tables.hdr) * 100.0);
     float3 display = saturate(tonemap(color, curve, tables));
-    return encode ? encode_srgb(display) : display;
+    return pq_encode(rec709_to_rec2020(display) * output.sdr_white);
+}
+
+// The display value of a pre-exposed HDR colour at `pixel`: the curve, then the encoding.
+// SDR: the sRGB encoding when the target does not do it on write. PQ: half a 10-bit code of
+// dither, so smooth gradients do not band. scRGB: PQ's luminance back in linear Rec.709.
+public float3 display_output(float3 color, uint curve, Output output, ToneTables tables, uint2 pixel)
+{
+    if (output.encoding < OUTPUT_PQ)
+    {
+        float3 display = saturate(tonemap(color, curve, tables));
+        return output.encoding == OUTPUT_SRGB ? encode_srgb(display) : display;
+    }
+    float3 signal = hdr_signal(color, curve, output, tables);
+    if (output.encoding == OUTPUT_PQ)
+    {
+        float dither = spatio_temporal_noise(pixel, output.frame).x - 0.5;
+        return saturate(signal + dither * (1.0 / 1023.0));
+    }
+    return rec2020_to_rec709(pq_decode(signal)) / 80.0;
 }

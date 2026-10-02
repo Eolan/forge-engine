@@ -70,9 +70,10 @@ struct ResolvePush
     float blend; // how much of the result may come from this frame; 1 discards the history
     float history_scale; // this frame's exposure over the history's
     uint curve;          // TONEMAP_* of tonemap.slang
-    uint encode_srgb;    // 1 when the display target is UNORM
     uint bloom;          // the bloom chain's top level (sampled index), 0xFFFFFFFF for none (bloom.slang)
     float bloom_strength; // how much of the shown image is bloom
+    Output output;       // the display's encoding (tonemap.slang)
+    uint pad;
     ToneTables tables;   // what the ACES 2.0 curves read (tonemap.slang)
 };
 
@@ -174,7 +175,7 @@ ResolveOut resolve_main(Varyings input)
         float3 bloom = sample_image_level(resolve_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
         shown = lerp(color, bloom, resolve_push.bloom_strength);
     }
-    o.output = float4(display_output(shown, resolve_push.curve, resolve_push.encode_srgb != 0, resolve_push.tables), 1.0);
+    o.output = float4(display_output(shown, resolve_push.curve, resolve_push.output, resolve_push.tables, uint2(input.position.xy)), 1.0);
     return o;
 }
 

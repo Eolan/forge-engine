@@ -26,3 +26,7 @@ raw-window-handle = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 xxhash-rust = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# The display configuration API (issue #94): the HDR switch and the SDR white level.
+windows-sys = { version = "0.61", features = ["Win32_Devices_Display", "Win32_Foundation", "Win32_Graphics_Gdi"] }

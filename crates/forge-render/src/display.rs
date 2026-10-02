@@ -9,6 +9,7 @@
 //! image); [`Display`] is the stand-alone pass for paths without temporal filtering. The CPU
 //! functions below mirror the shader and pin its behaviour in tests.
 
+use std::cell::Cell;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use forge_gpu::{
 };
 use glam::Vec3;
 
-use crate::aces2;
+use crate::aces2::{self, Preset};
 
 /// A tone curve (index as in `tonemap.slang`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -119,12 +120,23 @@ impl FromStr for Tonemap {
 
 /// What the ACES 2.0 curves read on the GPU (issue #76): the baked table, a bindless
 /// texture, and the per-pixel transform's parameters and tables in a buffer. Both are
-/// written once, here.
+/// written once, here. An HDR output adds its preset's table and parameters (issue #94),
+/// baked when first asked for and again when the preset changes.
 pub struct ToneTables {
     device: Arc<Device>,
     _lut: Image,
     lut: SampledImageId,
     params: Buffer,
+    hdr: Option<HdrTables>,
+}
+
+/// One HDR preset's table and parameters.
+struct HdrTables {
+    preset: Preset,
+    _lut: Image,
+    lut: SampledImageId,
+    params: Buffer,
+    lut_max: f32,
 }
 
 /// Mirrors `ToneTables` in `tonemap.slang`.
@@ -132,8 +144,11 @@ pub struct ToneTables {
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct ToneTablesPush {
     lut: u32,
-    pad: u32,
+    hdr_lut: u32,
     aces2: u64,
+    hdr: u64,
+    hdr_max: f32,
+    pad: u32,
 }
 
 impl ToneTables {
@@ -165,15 +180,74 @@ impl ToneTables {
             _lut: lut,
             lut: sampled,
             params,
+            hdr: None,
         })
     }
 
-    /// The fields of a push constant block.
+    /// Bakes `preset`'s table and uploads its parameters unless they are already there (about
+    /// 10 ms). Waits for the device first when it replaces another preset's.
+    pub fn set_hdr(&mut self, preset: Preset) -> Result<()> {
+        if self.hdr.as_ref().is_some_and(|h| h.preset == preset) {
+            return Ok(());
+        }
+        let start = std::time::Instant::now();
+        let hdr = aces2::Hdr::new(preset);
+        let size = aces2::LUT_SIZE;
+        let texels = aces2::hdr_lut_texels(&aces2::bake_hdr(&hdr, size), size);
+        let lut = self.device.create_image_with_data(
+            ImageDesc {
+                width: size * size,
+                height: size,
+                format: vk::Format::R16G16B16A16_UNORM,
+                usage: vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+                name: "ACES 2.0 HDR table",
+            },
+            &texels,
+        )?;
+        let sampled = self
+            .device
+            .register_sampled_image(lut.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let params = self.device.create_buffer_with_data(
+            &hdr.gpu_params(),
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryCategory::Textures,
+            "ACES 2.0 HDR parameters",
+        )?;
+        if let Some(old) = self.hdr.take() {
+            self.device.wait_idle();
+            self.device.release_sampled_image(old.lut);
+        }
+        tracing::info!(
+            preset = %preset.label(),
+            ms = format!("{:.1}", start.elapsed().as_secs_f64() * 1e3),
+            "ACES 2.0 HDR table baked"
+        );
+        self.hdr = Some(HdrTables {
+            preset,
+            _lut: lut,
+            lut: sampled,
+            params,
+            lut_max: hdr.lut_max(),
+        });
+        Ok(())
+    }
+
+    /// The fields of a push constant block. Without an HDR preset the HDR fields repeat the
+    /// SDR ones (only HDR outputs read them).
     pub fn push(&self) -> ToneTablesPush {
+        let (hdr_lut, hdr, hdr_max) = match &self.hdr {
+            Some(h) => (h.lut.0, h.params.address(), h.lut_max),
+            None => (self.lut.0, self.params.address(), aces2::LUT_MAX),
+        };
         ToneTablesPush {
             lut: self.lut.0,
-            pad: 0,
+            hdr_lut,
             aces2: self.params.address(),
+            hdr,
+            hdr_max,
+            pad: 0,
         }
     }
 }
@@ -181,8 +255,137 @@ impl ToneTables {
 impl Drop for ToneTables {
     fn drop(&mut self) {
         self.device.release_sampled_image(self.lut);
+        if let Some(hdr) = self.hdr.take() {
+            self.device.release_sampled_image(hdr.lut);
+        }
     }
 }
+
+/// How the display image is encoded (`OUTPUT_*` in `tonemap.slang`, issue #94).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputEncoding {
+    /// An sRGB target: it encodes on write.
+    SrgbTarget,
+    /// A UNORM SDR target: the shader encodes sRGB.
+    Srgb,
+    /// HDR10: Rec.2100 PQ over Rec.2020 primaries in a 10-bit target.
+    Pq,
+    /// scRGB: linear Rec.709 in half floats, 1.0 being 80 nits.
+    ScRgb,
+}
+
+impl OutputEncoding {
+    /// The encoding a target of `format` gets: Forge creates HDR10 targets as 10-bit UNORM
+    /// and scRGB ones as half floats, and SDR ones as 8-bit sRGB or UNORM.
+    pub fn for_format(format: vk::Format) -> Self {
+        match format {
+            vk::Format::A2B10G10R10_UNORM_PACK32 | vk::Format::A2R10G10B10_UNORM_PACK32 => {
+                OutputEncoding::Pq
+            }
+            vk::Format::R16G16B16A16_SFLOAT => OutputEncoding::ScRgb,
+            f if format_encodes_srgb(f) => OutputEncoding::SrgbTarget,
+            _ => OutputEncoding::Srgb,
+        }
+    }
+
+    /// The shader's index.
+    pub fn index(self) -> u32 {
+        match self {
+            OutputEncoding::SrgbTarget => 0,
+            OutputEncoding::Srgb => 1,
+            OutputEncoding::Pq => 2,
+            OutputEncoding::ScRgb => 3,
+        }
+    }
+
+    /// Whether the output is HDR.
+    pub fn is_hdr(self) -> bool {
+        matches!(self, OutputEncoding::Pq | OutputEncoding::ScRgb)
+    }
+}
+
+/// An HDR output's settings (issue #94, D-022): ACES 2.0's preset, the paper-white offset and
+/// the UI's white. SDR outputs ignore them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HdrOutput {
+    /// ACES 2.0's preset (the display's peak, the limiting gamut).
+    pub preset: Preset,
+    /// The paper-white offset: stops added to the scene before ACES 2.0. 0, the default, is
+    /// the Academy's look (a scene white at 107 nits at 1000 nits; the owner's pick).
+    pub scene_stops: f32,
+    /// The nits of the UI's white, and of the other curves' white (their SDR image): the
+    /// OS's SDR white level when known, BT.2408's 203 nits otherwise.
+    pub sdr_white: f32,
+}
+
+impl Default for HdrOutput {
+    fn default() -> Self {
+        Self {
+            preset: Preset::default(),
+            scene_stops: 0.0,
+            sdr_white: 203.0,
+        }
+    }
+}
+
+/// Mirrors `Output` in `tonemap.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub struct OutputPush {
+    encoding: u32,
+    scene_gain: f32,
+    sdr_white: f32,
+    frame: u32,
+}
+
+impl OutputPush {
+    /// The block for `encoding` with `hdr`'s settings, dithered for `frame`.
+    pub fn new(encoding: OutputEncoding, hdr: &HdrOutput, frame: u32) -> Self {
+        Self {
+            encoding: encoding.index(),
+            scene_gain: hdr.scene_stops.exp2(),
+            sdr_white: hdr.sdr_white,
+            frame,
+        }
+    }
+}
+
+/// Rec.709 to Rec.2020, both D65 (BT.2087), as `tonemap.slang` writes it; rows.
+pub const REC709_TO_REC2020: [[f32; 3]; 3] = [
+    [0.627_403_9, 0.329_283_04, 0.043_313_07],
+    [0.069_097_29, 0.919_540_4, 0.011_362_32],
+    [0.016_391_44, 0.088_013_31, 0.895_595_25],
+];
+
+/// The CPU mirror of `display_output`'s HDR side, before the dither: the PQ signal (or for
+/// scRGB, the linear value) of a pre-exposed colour through `curve`.
+pub fn hdr_output(color: Vec3, curve: Tonemap, encoding: OutputEncoding, hdr: &HdrOutput) -> Vec3 {
+    let signal = match curve {
+        Tonemap::Aces2 | Tonemap::Aces2Analytic => Vec3::from(
+            aces2::Hdr::new(hdr.preset)
+                .apply_pq((color * hdr.scene_stops.exp2()).max(Vec3::ZERO).to_array()),
+        ),
+        _ => {
+            let display = curve.apply(color);
+            let rec2020 = rows(REC709_TO_REC2020, display) * hdr.sdr_white;
+            Vec3::from(rec2020.to_array().map(aces2::pq_encode))
+        }
+    };
+    match encoding {
+        OutputEncoding::ScRgb => {
+            let nits = Vec3::from(signal.to_array().map(aces2::pq_decode));
+            rows(REC2020_TO_REC709, nits) / 80.0
+        }
+        _ => signal,
+    }
+}
+
+/// Rec.2020 to Rec.709 (the inverse of [`REC709_TO_REC2020`]), as `tonemap.slang` writes it.
+pub const REC2020_TO_REC709: [[f32; 3]; 3] = [
+    [1.660_491, -0.587_641_1, -0.072_849_86],
+    [-0.124_550_47, 1.132_899_9, -0.008_349_42],
+    [-0.018_150_76, -0.100_578_9, 1.118_729_7],
+];
 
 /// Whether a target of `format` encodes sRGB on write (so the shader must not).
 pub fn format_encodes_srgb(format: vk::Format) -> bool {
@@ -272,15 +475,17 @@ fn pbr_neutral(color: Vec3) -> Vec3 {
 struct DisplayPush {
     image: u32,
     curve: u32,
-    encode_srgb: u32,
-    pad: u32,
+    output: OutputPush,
     tables: ToneTablesPush,
 }
 
 /// The stand-alone display pass.
 pub struct Display {
+    device: Arc<Device>,
     pipeline: Pipeline,
-    encode_srgb: bool,
+    format: vk::Format,
+    hdr: HdrOutput,
+    frame: Cell<u32>,
     tables: ToneTables,
 }
 
@@ -291,6 +496,46 @@ impl Display {
         shaders: &ShaderCompiler,
         output_format: vk::Format,
     ) -> Result<Self> {
+        let mut tables = ToneTables::new(device)?;
+        let hdr = HdrOutput::default();
+        if OutputEncoding::for_format(output_format).is_hdr() {
+            tables.set_hdr(hdr.preset)?;
+        }
+        Ok(Self {
+            device: Arc::clone(device),
+            pipeline: Self::pipeline(device, shaders, output_format)?,
+            format: output_format,
+            hdr,
+            frame: Cell::new(0),
+            tables,
+        })
+    }
+
+    /// Follows the output (issue #94): a new target format recompiles the pass (call it while
+    /// no frame uses the old one, as after a swapchain's recreation), an HDR one bakes its
+    /// preset's table.
+    pub fn set_output(
+        &mut self,
+        shaders: &ShaderCompiler,
+        format: vk::Format,
+        hdr: HdrOutput,
+    ) -> Result<()> {
+        if format != self.format {
+            self.pipeline = Self::pipeline(&self.device, shaders, format)?;
+            self.format = format;
+        }
+        if OutputEncoding::for_format(format).is_hdr() {
+            self.tables.set_hdr(hdr.preset)?;
+        }
+        self.hdr = hdr;
+        Ok(())
+    }
+
+    fn pipeline(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        output_format: vk::Format,
+    ) -> Result<Pipeline> {
         let vertex = device.create_shader_module(
             &shaders.compile("display.slang", "vert_main", ShaderStage::Vertex)?,
             "display vs",
@@ -311,11 +556,7 @@ impl Display {
         })?;
         device.destroy_shader_module(vertex);
         device.destroy_shader_module(fragment);
-        Ok(Self {
-            pipeline,
-            encode_srgb: !format_encodes_srgb(output_format),
-            tables: ToneTables::new(device)?,
-        })
+        Ok(pipeline)
     }
 
     /// Declares the pass "post/display transform": `src` (pre-exposed HDR) through `curve`
@@ -329,7 +570,9 @@ impl Display {
         curve: Tonemap,
     ) {
         let pipeline = &self.pipeline;
-        let encode_srgb = u32::from(self.encode_srgb);
+        let frame = self.frame.get();
+        self.frame.set(frame.wrapping_add(1));
+        let output = OutputPush::new(OutputEncoding::for_format(self.format), &self.hdr, frame);
         let tables = self.tables.push();
         graph
             .pass("post/display transform")
@@ -359,8 +602,7 @@ impl Display {
                     &DisplayPush {
                         image: resources.sampled(src).0,
                         curve: curve.index(),
-                        encode_srgb,
-                        pad: 0,
+                        output,
                         tables,
                     },
                 );
@@ -431,6 +673,88 @@ mod tests {
         // A dim red stays red.
         let dim = Tonemap::AgX.apply(Vec3::new(0.2, 0.01, 0.01));
         assert!(dim.x > 3.0 * dim.y, "{dim}");
+    }
+
+    #[test]
+    fn the_shader_s_gamut_matrices_match_the_primaries() {
+        let check = |written: [[f32; 3]; 3], derived: [[f32; 3]; 3]| {
+            for r in 0..3 {
+                for c in 0..3 {
+                    assert!(
+                        (written[r][c] - derived[r][c]).abs() < 1e-6,
+                        "{written:?} against {derived:?}"
+                    );
+                }
+            }
+        };
+        check(
+            REC709_TO_REC2020,
+            aces2::conversion_rows(&aces2::REC709, &aces2::REC2020),
+        );
+        check(
+            REC2020_TO_REC709,
+            aces2::conversion_rows(&aces2::REC2020, &aces2::REC709),
+        );
+    }
+
+    #[test]
+    fn outputs_follow_the_target_format() {
+        use OutputEncoding as E;
+        assert_eq!(E::for_format(vk::Format::B8G8R8A8_SRGB), E::SrgbTarget);
+        assert_eq!(E::for_format(vk::Format::B8G8R8A8_UNORM), E::Srgb);
+        assert_eq!(E::for_format(vk::Format::A2B10G10R10_UNORM_PACK32), E::Pq);
+        assert_eq!(E::for_format(vk::Format::R16G16B16A16_SFLOAT), E::ScRgb);
+        assert!(E::Pq.is_hdr() && !E::Srgb.is_hdr());
+        // The blocks the shaders mirror.
+        assert_eq!(std::mem::size_of::<OutputPush>(), 16);
+        assert_eq!(std::mem::size_of::<ToneTablesPush>(), 32);
+        assert_eq!(std::mem::size_of::<DisplayPush>(), 56);
+    }
+
+    #[test]
+    fn hdr_outputs_put_grey_and_the_ui_where_d_022_says() {
+        let hdr = HdrOutput::default();
+        let nits = |signal: Vec3| aces2::pq_decode(signal.y);
+        // ACES 2.0 at 1000 nits, the Academy's look: grey at 14.5 nits.
+        let grey = nits(hdr_output(
+            Vec3::splat(0.18),
+            Tonemap::Aces2,
+            OutputEncoding::Pq,
+            &hdr,
+        ));
+        assert!((14.0..15.2).contains(&grey), "{grey}");
+        // One stop of paper-white offset lifts it 2.4 times (the curve's contrast steepens the
+        // stop).
+        let lifted = HdrOutput {
+            scene_stops: 1.0,
+            ..hdr
+        };
+        let brighter = nits(hdr_output(
+            Vec3::splat(0.18),
+            Tonemap::Aces2,
+            OutputEncoding::Pq,
+            &lifted,
+        ));
+        assert!(brighter > 2.0 * grey && brighter < 2.8 * grey, "{brighter}");
+        // Another curve's white is the UI's.
+        let white = nits(hdr_output(
+            Vec3::splat(1.0e4),
+            Tonemap::AgX,
+            OutputEncoding::Pq,
+            &hdr,
+        ));
+        assert!((white - 203.0).abs() < 2.0, "{white}"); // AgX tops out at 0.997
+        // scRGB: the same light, 1.0 being 80 nits.
+        let sc = hdr_output(
+            Vec3::splat(1.0e4),
+            Tonemap::AgX,
+            OutputEncoding::ScRgb,
+            &hdr,
+        );
+        assert!(
+            (sc - Vec3::splat(203.0 / 80.0)).abs().max_element() < 0.03,
+            "{sc}"
+        );
     }
 
     #[test]

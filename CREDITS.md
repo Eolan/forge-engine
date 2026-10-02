@@ -40,6 +40,7 @@ in. CI checks the crate list.
 | [meshopt](https://github.com/gwihlidal/meshopt-rs) | Graham Wihlidal | meshoptimizer from Rust | MIT OR Apache-2.0 |
 | [gpu-allocator](https://github.com/Traverse-Research/gpu-allocator) | Traverse Research | GPU memory (`forge-gpu`) | MIT OR Apache-2.0 |
 | [winit](https://github.com/rust-windowing/winit) | Pierre Krieger and the winit contributors | windows and input (`forge-app`) | Apache-2.0 |
+| [windows-sys](https://github.com/microsoft/windows-rs) | Microsoft | Windows' display configuration: the HDR switch and the SDR white level (`forge-gpu`, issue #94) | MIT OR Apache-2.0 |
 | [glam](https://github.com/bitshifter/glam-rs) | Cameron Hart and contributors | vector and matrix maths | MIT OR Apache-2.0 |
 | [crossbeam](https://github.com/crossbeam-rs/crossbeam) | the crossbeam contributors | the work-stealing deques and channels under `forge-task` | MIT OR Apache-2.0 |
 | [Tracy](https://github.com/wolfpld/tracy) | Bartosz Taudul | the profiler behind `--features profiling` | BSD-3-Clause |
@@ -161,7 +162,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     Apache-2.0). Its tonescale is Daniele Siragusano's, and its appearance model a
     simplified form of Luke Hellwig and Mark D. Fairchild's 2022 revision of CAM16. Forge
     ports OpenColorIO's implementation (see the table above) and checks it against OCIO's
-    test values (issue #76).
+    test values (issue #76). Its HDR outputs follow the Academy's presets (issue #94).
+- **HDR signals.** SMPTE ST 2084, the perceptual quantizer (Scott Miller, Mahdi Nezamabadi and
+  Scott Daly, "Perceptual Signal Coding for More Efficient Usage of Bit Codes", *SMPTE Motion
+  Imaging Journal* 122(4), 2013), and ITU-R BT.2100, BT.2087 and BT.2408 (Rec.2020 primaries,
+  the conversion from Rec.709, the 203-nit reference white): the HDR10 output
+  (`shaders/tonemap.slang`, `crates/forge-render/src/aces2.rs`, issue #94).
 - **Bloom.** Jorge Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare",
   SIGGRAPH 2014: the downsample and upsample chain, and its firefly weighting.
 - **TAA.**
