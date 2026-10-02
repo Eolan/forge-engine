@@ -745,8 +745,9 @@ struct SeaSlopes
 };
 
 // The wakes' slopes at `world` (#107, `wakes.slang`): what moves through the lakes and the sea
-// makes waves of half a metre, fading out over the field's last tenth and where a pixel spans
-// more than a fifth of their radius (the field holds no mips: they would only shimmer there).
+// makes waves half a metre long, fading out over the field's last tenth, and where a pixel
+// spans more than an eighth of their length, gone at half of it, their Nyquist limit: past
+// it the crests would only shimmer (the field holds no mips).
 float2 wake_slope(WaterSurface* w, float2 world, float footprint)
 {
     float4 window = w[0].wake_window;
@@ -754,7 +755,7 @@ float2 wake_slope(WaterSurface* w, float2 world, float footprint)
         return 0.0;
     float2 uv = (world - window.xy) * window.z;
     float edge = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
-    float fade = smoothstep(0.0, 0.1, edge) * (1.0 - smoothstep(0.1, 0.4, footprint));
+    float fade = smoothstep(0.0, 0.1, edge) * (1.0 - smoothstep(0.06, 0.25, footprint));
     if (fade <= 0.0)
         return 0.0;
     return sample_image_level(w[0].wake_slopes, SAMPLER_LINEAR_CLAMP, uv, 0.0).xy * fade;

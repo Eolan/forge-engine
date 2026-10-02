@@ -1889,8 +1889,10 @@ follow a flow. So the lakes and the sea get the wave particles of `docs/research
     (cells of 12.5 cm, whole micrometres added atomically, so a frame's field is the same
     whatever order the particles come in). `wakes/slopes` turns it into slopes.
 - **The water's shading** adds those slopes to the sea's and the lakes' (`wake_slope` in
-  `water.slang`), fading out over the field's last tenth and where a pixel spans more than
-  10–40 cm (the field has no mips; there its waves would only shimmer).
+  `water.slang`), fading out over the field's last tenth, and where a pixel spans 6 to 25 cm:
+  gone at half the waves' length, their Nyquist limit, past which the moving crests would
+  only shimmer (the field has no mips). Faded from 10 to 40 cm at first, half their height was
+  left at the limit and a quarter at 30 cm.
 - **The towed barrel**: the last of the `--movers` barrels goes round a circle of 20 m on the
   largest lake at 2.5 m/s (its middle found as the mask's sample farthest from the shore). The
   log gives a view of it at frame 300, its wake grown (`2168.0,36.90,-1234.0,-102.9,-36.2`).
@@ -1901,8 +1903,8 @@ changed):
 - `towed.png`: the towed barrel from its logged view. Crests ring its bow and trail 15 m behind
   it along its curve, the sun's glint broken on them; 35 138 pixels differ, ꟻLIP mean 0.0070,
   max 0.99 where a crest catches the sun.
-- `towed-low.png`: the same 2 m over the water from 16 m: fine lines of ripples in its wake;
-  9 987 pixels, ꟻLIP mean 0.0012.
+- `towed-low.png`: the same 2 m over the water from 16 m: fine lines of ripples in its wake,
+  fading out behind it where the view grazes the water; 4 080 pixels, ꟻLIP mean 0.0005.
 - The barrels carried slowly through the lakes leave faint rings.
 
 ![The towed barrel's wake from above: without the wakes, with them, and the pixels that changed](../../reports/2026-10-02-107/towed.png)

@@ -35,8 +35,9 @@ field around the camera whose slopes the water adds. Frame 300 with the fixed st
   that changed. Crests ring its bow and trail 15 m behind it along its curve; 35 138 pixels,
   ꟻLIP mean 0.0070, max 0.99 where a crest catches the sun.
 - `towed-low.png`: the same from 2 m over the water and 16 m away
-  (`2163.1,30.9,-1235.1,-102.9,-7`): fine lines of ripples in its wake; 9 987 pixels, ꟻLIP mean
-  0.0012.
+  (`2163.1,30.9,-1235.1,-102.9,-7`): fine lines of ripples in its wake, fading out where the view
+  grazes the water (the wakes fade before their Nyquist limit since a later commit); 4 080
+  pixels, ꟻLIP mean 0.0005.
 
 **Cost** (2560 × 1440, two rounds): the frame 0.08 ms more (3.60–3.62 → 3.68–3.70 ms from the
 towed barrel); on the compute queue `wakes/advance` 0.08–0.11 ms, `wakes/emit` 0.014–0.018,
