@@ -104,9 +104,11 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   LOD keeping their shading (#131); in the rivers, rounded cobbles (#132), then chunks the
   water broke and wore, mostly pebbles (#133). The granite's grus ✅ (#135): aprons of coarse
   sand round its outcrops and tors.
-- **Phase 3's start:** `forge-sim` and the physics engine (D-009). Its first visible use is the
-  island's water: buoyancy for what floats (#107's barrels are carried at the water's speed,
-  without physics), boats and swimming from the owner's inbox. Its demo is `materials-yard`.
+- **Phase 3's start** (the owner's go of 2026-10-02, the plan in "Phase 3" below): Jolt
+  bound in `forge-physics` and `physics-lab`'s first scene ✅ (#136): the same hash on Windows
+  and Linux and at any thread count, 496 bodies in 0.56 ms a tick. Next, the fixed tick with
+  record and replay (step 2), then buoyancy on the water we render (step 3). The island's
+  barrels (#107) still drift at the water's speed, without physics, until step 3.
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map.
@@ -379,6 +381,40 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    island placed as an uplift override of the coarse genesis.
 
 ## Phase 3 — Simulation, physics, materials, weather
+
+**The plan, step by step** (the owner's brief of 2026-10-02: simple dedicated environments
+first, one per kind of object, then a demo where everything comes together; keep the shared
+networked world in mind, but test locally first, since a single-player game has no server to
+run the physics). Each step is an issue and a scene of `physics-lab` with its numbers and its
+hash (`docs/demos/physics-lab.md`); the island is where they come together.
+
+1. **The binding** ✅ (#136): Jolt 5.6 in `forge-physics`, deterministic across platforms and
+   thread counts; `physics-lab --lab drop`, a pyramid under a rain of barrels, rocks and balls.
+2. **The fixed tick, record and replay:** the simulation at 60 Hz driven by input commands, its
+   state saved, restored and hashed; a single player runs it in-process (its own local server),
+   a multiplayer game on the server with the clients predicting (D-010). Proved by two copies
+   of a world in one process, one fed 100 ms late with losses, that must agree.
+3. **Water:** buoyancy from the submerged part of each hull (Kerner's triangles, D-009) on the
+   water we render: barrels, logs, crates, then a boat with a propeller and a rudder; then the
+   island's rivers and sea. The same pool tests caustics, light shafts under the water and the
+   surface seen from below.
+4. **Walking:** a character controller (Jolt's `CharacterVirtual`): pushing crates, stairs, a
+   moving deck.
+5. **Vehicles and flight:** a car, a boat, a glider or a plane (lift and drag), a rocket or a
+   spaceship in zero g.
+6. **Destruction:** a brick wall of bonded bricks with breakable joints, rocks and asteroids
+   fractured on impact (#24, #12), a ship's hull breaking open on its decks (#89).
+7. **Creatures:** a glTF importer and skinning (Phase 7's start), models from Blender (the
+   owner's machine has Blender 5.2): a humanoid, a quadruped, a flyer, a slime as a soft body;
+   then ragdolls.
+8. **Fluids:** the shallow-water layer near the player, particles for splashes, the
+   authoritative water model (a dam break).
+
+Later tests for an advanced demo: a domino run that ends the same on two machines, a ship in a
+storm losing its cargo, a dam bursting down an island valley, a rockfall from the tors, a bridge
+collapsing under a convoy, a networked tug-of-war on one crate at 100 ms.
+
+The items below are the phase's original outline; the plan above orders them.
 
 1. `forge-sim`: `bevy_ecs` + Forge executor, fixed tick, frame packet to the renderer,
    simulation LOD, determinism digests.

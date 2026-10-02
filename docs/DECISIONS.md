@@ -208,6 +208,14 @@ pure-Rust reserve. Water: far = analytic spectrum evaluated identically on CPU a
 mid = server-authoritative column model shadowed by a GPU shallow-water heightfield; near =
 GPU particles, visual only; boats by submerged-triangle hydrostatics.
 *(research: physics-fluids.md)* Accepted by the owner 2026-09-24.
+*Built* (#136, 2026-10-02, the owner's go for the downloads): Jolt 5.6.0's library vendored in
+`third_party/jolt`, compiled by `forge-physics`' `build.rs` through `cc` with
+`CROSS_PLATFORM_DETERMINISTIC`, double precision, precise floating point and AVX2 without FMA.
+The "fork of JoltC" became a C layer of Forge's own written after it: narrow and batched, bound
+by hand (JoltC's bindings need bindgen and libclang, and its surface is many times what Forge
+calls). Three of §6's tests pass, and the cross-platform one: one hash on Windows (MSVC) and
+Linux (gcc), checked by CI on both. Jolt's job system runs its own threads for now (the client's
+cores less two); bridging it to `forge-task` waits for `forge-sim`.
 
 ## D-010 — Netcode: QUIC transport, our own replication ✅ (2026-09-24)
 

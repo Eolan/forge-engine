@@ -55,6 +55,8 @@ pub enum PropKind {
     Stone(Stone),
     /// A surface of revolution (see [`lathe`]).
     Lathe(Lathe),
+    /// A box with rounded edges (see [`block`]): crates, blocks, a floor.
+    Block(Block),
     /// The ground (see [`terrain_mesh`]).
     Terrain(Terrain),
     /// A ground made elsewhere (the island of `forge-procgen`; see [`heightfield_mesh`]).
@@ -164,6 +166,7 @@ impl PropSpec {
             } => rubble(*seed, *pieces, *segments),
             PropKind::Stone(s) => stone(s),
             PropKind::Lathe(l) => lathe(l),
+            PropKind::Block(b) => block(b),
             PropKind::Terrain(t) => terrain_mesh(t),
             PropKind::Heightfield(h) => {
                 let heights = (h.source)();
@@ -189,7 +192,7 @@ impl PropSpec {
         CookOptions {
             normal_weight: match self.kind {
                 PropKind::Building(_) => 1.0,
-                PropKind::Lathe(_) => 0.5,
+                PropKind::Lathe(_) | PropKind::Block(_) => 0.5,
                 PropKind::Stone(ref s) => s.normal_weight,
                 PropKind::Boulder { .. }
                 | PropKind::Rubble { .. }
@@ -949,6 +952,84 @@ pub fn lathe(l: &Lathe) -> TriMesh {
     mesh
 }
 
+/// A box with rounded edges, centred on the origin (issue #136: `physics-lab`'s blocks and
+/// floor).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Block {
+    /// Half its size along x, y and z, metres.
+    pub half: [f32; 3],
+    /// The edges' radius, metres (at most the smallest half size).
+    pub radius: f32,
+    /// Quads along each side of a face, besides the two rows on its rounded rims.
+    pub segments: u32,
+}
+
+/// A rounded box (see [`Block`]): each face a grid whose outer rows are the rims, each vertex
+/// on the box shrunk by the radius and pushed out by it along the way from that inner box, so
+/// the faces stay flat and the edges and corners are quarter cylinders and spheres in one
+/// step of the grid.
+pub fn block(b: &Block) -> TriMesh {
+    let half = Vec3::from(b.half);
+    // At least a millimetre: the rims are rows of their own, and a zero radius would make them
+    // degenerate triangles.
+    let r = b.radius.clamp(1e-3, half.min_element());
+    let inner = half - Vec3::splat(r);
+    let n = b.segments.max(1) + 2;
+    // Along a face's side from −1 to 1: the rim's row, the flat part evenly, the other rim's.
+    let along = |k: u32, h: f32| -> f32 {
+        match k {
+            0 => -h,
+            k if k == n => h,
+            k => -(h - r) + 2.0 * (h - r) * (k - 1) as f32 / (n - 2) as f32,
+        }
+    };
+    let mut mesh = TriMesh::default();
+    // Each face: its normal axis and sign, and the two axes along it, ordered so that
+    // `u × v` points out of the box.
+    for (axis, sign) in [
+        (0, 1.0),
+        (0, -1.0),
+        (1, 1.0),
+        (1, -1.0),
+        (2, 1.0),
+        (2, -1.0),
+    ] {
+        let (u, v) = if sign > 0.0 {
+            ((axis + 1) % 3, (axis + 2) % 3)
+        } else {
+            ((axis + 2) % 3, (axis + 1) % 3)
+        };
+        let first = mesh.positions.len() as u32;
+        for j in 0..=n {
+            for i in 0..=n {
+                let mut p = Vec3::ZERO;
+                p[axis] = sign * half[axis];
+                p[u] = along(i, half[u]);
+                p[v] = along(j, half[v]);
+                let core = p.clamp(-inner, inner);
+                let out = (p - core).normalize_or(Vec3::ZERO);
+                let normal = if out == Vec3::ZERO {
+                    let mut f = Vec3::ZERO;
+                    f[axis] = sign;
+                    f
+                } else {
+                    out
+                };
+                mesh.positions.push((core + normal * r).to_array());
+                mesh.normals.push(normal.to_array());
+            }
+        }
+        let at = |i: u32, j: u32| first + j * (n + 1) + i;
+        for j in 0..n {
+            for i in 0..n {
+                let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+                mesh.indices.extend_from_slice(&[a, b, d, a, d, c]);
+            }
+        }
+    }
+    mesh
+}
+
 /// Triangles `building` makes for `b` (the grid's quads twice; rooftop units left out).
 pub fn building_triangles(b: &Building) -> u64 {
     let n = |x: f32| u64::from((x / b.cell).ceil().max(1.0) as u32);
@@ -1094,6 +1175,34 @@ pub fn city_props() -> Vec<PropSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_block_fills_its_box_with_its_faces_outward() {
+        let b = Block {
+            half: [0.4, 0.25, 0.6],
+            radius: 0.03,
+            segments: 4,
+        };
+        let mesh = block(&b);
+        let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for p in &mesh.positions {
+            low = low.min(Vec3::from(*p));
+            high = high.max(Vec3::from(*p));
+        }
+        assert!(high.abs_diff_eq(Vec3::from(b.half), 1e-6), "{high}");
+        assert!(low.abs_diff_eq(-Vec3::from(b.half), 1e-6), "{low}");
+        for t in mesh.indices.as_chunks::<3>().0 {
+            let [a, c, d] = t.map(|i| Vec3::from(mesh.positions[i as usize]));
+            let normal = (c - a).cross(d - a);
+            assert!(normal.length() > 0.0, "a degenerate triangle");
+            assert!(normal.dot(a + c + d) > 0.0, "a face turned inward");
+        }
+        for n in &mesh.normals {
+            assert!((Vec3::from(*n).length() - 1.0).abs() < 1e-5);
+        }
+        // Six faces of (4 + 2) × (4 + 2) quads.
+        assert_eq!(mesh.triangle_count(), 6 * 6 * 6 * 2);
+    }
 
     #[test]
     fn a_refined_heightfield_has_no_crack_and_keeps_its_coarse_cells() {

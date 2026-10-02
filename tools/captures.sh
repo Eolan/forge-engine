@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Writes the capture batch every rendering change is checked with (issue #74; docs/PROCESS.md):
-# 58 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
-# island, and the island demo's golden shots (#96), on the mesh path and on the fallback
-# (`--force-fallback`). Compare two batches with tools/compare.sh.
+# 64 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
+# island, the island demo's golden shots (#96) and the physics lab (#136), on the mesh path and
+# on the fallback (`--force-fallback`). Compare two batches with tools/compare.sh.
 #
 #   tools/captures.sh OUT [BIN]
 #
@@ -17,7 +17,8 @@
 #   FORGE_SETS   the sets to capture, separated by spaces or commas (default all): sentinels
 #                (static60 orbit120 noocc120 ast-notaa600 ast240 ast240-noocc ast-hdr600 city60
 #                city60-noocc gallery60), meshlets, ballad, city, island (the city's island and
-#                the island demo's shots), all. The images keep their names.
+#                the island demo's shots), lab (the physics lab's scenes), all. The images keep
+#                their names.
 #   FORGE_PATHS  the paths, mesh and fb (default both).
 #   FORGE_RECOOK 1: make the cached meshes again. The props and the island's tiles are cached
 #                in BIN's tree (mesh-cache/) by their parameters' text, not the code that makes
@@ -37,8 +38,8 @@ paths=${paths//,/ }
 recook=${FORGE_RECOOK:-0}
 for set in $sets; do
   case $set in
-    all | sentinels | meshlets | ballad | city | island) ;;
-    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island or all" >&2; exit 1 ;;
+    all | sentinels | meshlets | ballad | city | island | lab) ;;
+    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island, lab or all" >&2; exit 1 ;;
   esac
 done
 for path in $paths; do
@@ -56,6 +57,8 @@ asteroids=$bin/asteroids$exe
 city=$bin/city-blocks$exe
 # The island demo (#96), which a baseline from before it lacks: its shots are then skipped.
 island_demo=$bin/island$exe
+# The physics lab (#136), which a baseline from before it lacks: its captures are then skipped.
+lab=$bin/physics-lab$exe
 for demo in "$meshlets" "$asteroids" "$city"; do
   [ -f "$demo" ] || { echo "missing $demo: build with cargo build --release" >&2; exit 1; }
 done
@@ -78,7 +81,7 @@ fi
   echo "sets:$sets"
   echo "paths: $paths"
   echo "driver: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -n 1)"
-  for demo in "$meshlets" "$asteroids" "$city" "$island_demo"; do
+  for demo in "$meshlets" "$asteroids" "$city" "$island_demo" "$lab"; do
     [ -f "$demo" ] && echo "binary: $(sha256sum "$demo" | cut -c1-16) $(basename "$demo") $(date -u -r "$demo" +%FT%TZ)"
   done
 } > "$out/batch.txt"
@@ -93,6 +96,7 @@ sets_of() {
     city60 | city60-noocc | gallery60) echo city sentinels ;;
     city*) echo city ;;
     island* | water* | shot-*) echo island ;;
+    lab-*) echo lab ;;
   esac
 }
 # wanted NAME: true when FORGE_SETS asks for the capture NAME.
@@ -118,6 +122,8 @@ scene() {
     [[ " $* " == *" --island-drawn 8 "* ]] && echo island8 || echo island2
   elif [ "$demo" = "$city" ]; then
     [[ " $* " == *" --gallery "* ]] && echo gallery || echo city
+  elif [ "$demo" = "$lab" ]; then
+    echo lab
   fi
 }
 
@@ -205,6 +211,14 @@ for path in $paths; do
     for shot in mouth lake island valley; do
       capture "$path-shot-$shot" 60 "$island_demo" --shot "$shot" --sw-raster on --fixed-step "${flag[@]}"
     done
+  fi
+  # The physics lab (#136), a tick a frame: the rain in mid-air at tick 90, with the occlusion
+  # off for the A/B harness (the movers are culled like the rest), and the pile at rest at tick
+  # 600.
+  if [ -f "$lab" ]; then
+    capture "$path-lab-drop90" 90 "$lab" --lab drop --fixed-step "${flag[@]}"
+    capture "$path-lab-drop90-noocc" 90 "$lab" --lab drop --fixed-step --no-occlusion "${flag[@]}"
+    capture "$path-lab-drop600" 600 "$lab" --lab drop --fixed-step "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

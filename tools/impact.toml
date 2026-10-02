@@ -5,7 +5,7 @@
 # full batch: an unknown path is a shared one until it is mapped here.
 #
 # Patterns: `**/` any directories (none too), `**` anything, `*` anything but `/`. Sets: the
-# names tools/captures.sh knows (sentinels, meshlets, ballad, city, island); [] means no
+# names tools/captures.sh knows (sentinels, meshlets, ballad, city, island, lab); [] means no
 # capture, the gate only. Tier 0 always adds the sentinels when a set is selected.
 #
 # One entry per line, `"pattern" = [...]` or `"pattern" = true`: verify.sh reads this subset
@@ -23,7 +23,12 @@
 "crates/forge-procgen/**" = ["island"]
 "demos/island/**" = ["island"]
 "demos/city-blocks/src/island_demo.rs" = ["island"]
-"demos/city-blocks/**" = ["island", "city"]
+# The physics lab (#136): its demo and scenes, the physics under them, Jolt's sources.
+"demos/physics-lab/**" = ["lab"]
+"demos/city-blocks/src/lab.rs" = ["lab"]
+"crates/forge-physics/**" = ["lab"]
+"third_party/jolt/**" = ["lab"]
+"demos/city-blocks/**" = ["island", "city", "lab"]
 "crates/forge-geom/src/stone.rs" = ["island"]
 "crates/forge-render/src/water.rs" = ["island"]
 "crates/forge-render/src/wakes.rs" = ["island"]

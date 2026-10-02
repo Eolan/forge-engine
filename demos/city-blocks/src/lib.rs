@@ -5,7 +5,8 @@
 //! (issue #35): a street grid of buildings, lamp posts and plazas, and rocks over the hills
 //! around it. Their cluster pages stream from the cache files through a GPU pool as the LOD
 //! cut asks for them (issue #36); `--fly` flies a loop at 300 m/s through TAA (issue #13).
-//! `--gallery` shows the twenty props side by side instead.
+//! `--gallery` shows the twenty props side by side instead; `--lab SCENE` one of `physics-lab`'s
+//! scenes (issue #136, Space throws a ball, Enter starts it over).
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
@@ -53,6 +54,7 @@ use glam::{Mat4, Quat, Vec2, Vec3};
 use winit::keyboard::KeyCode;
 
 mod island_demo;
+mod lab;
 
 #[derive(Parser, Debug, Clone)]
 #[command(about = "City blocks: the prop gallery")]
@@ -253,6 +255,10 @@ struct Args {
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
+    /// Show one of `physics-lab`'s scenes instead of the city (issue #136): rigid bodies on a
+    /// flat floor through `forge-physics`.
+    #[arg(long, value_enum)]
+    lab: Option<lab::LabScene>,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -436,6 +442,8 @@ struct Gallery {
     sea_time_submitted: f32,
     /// `--movers` (#79): the barrels drifting down the island's rivers, on the sea's clock.
     barrels: Option<Barrels>,
+    /// `--lab` (#136): the physics lab's world, whose bodies are the movers.
+    lab: Option<lab::Lab>,
     /// Their waves in the lakes and the sea (#107), with the water and the movers.
     wakes: Option<WaterWakes>,
     /// The spray where the water splashes (#107), with the water: the steps' falls, and with
@@ -544,7 +552,12 @@ impl Gallery {
                 .collect();
             tracing::info!(shots = %shots.join("  "), "the island's golden shots (--shot)");
         }
-        let (scene, placed) = if args.gallery {
+        let mut lab = None;
+        let (scene, placed) = if let Some(kind) = args.lab {
+            let (scene, built) = lab::build(ctx, &args, cooked, kind)?;
+            lab = Some(built);
+            (scene, Vec::new())
+        } else if args.gallery {
             build_gallery(ctx, &args, cooked)?
         } else if args.island.is_some() {
             (build_island(ctx, &args, cooked, &camera)?, Vec::new())
@@ -806,6 +819,7 @@ impl Gallery {
         }
         let mut gallery = Self {
             barrels,
+            lab,
             wakes,
             splashes,
             falls,
@@ -940,6 +954,16 @@ impl Demo for Gallery {
                 self.taa.enabled = !self.taa.enabled;
                 self.taa.reset_history();
             }
+            KeyCode::Space => {
+                if let Some(lab) = &mut self.lab {
+                    lab.throw(self.camera.position, self.camera.forward());
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(lab) = &mut self.lab {
+                    lab.reset();
+                }
+            }
             _ => {}
         }
     }
@@ -957,6 +981,9 @@ impl Demo for Gallery {
             Some(still) => still,
             None => self.sea_time + f64::from(self.step),
         };
+        if let Some(lab) = &mut self.lab {
+            lab.advance(dt, self.args.fixed_step);
+        }
         if let Some(length) = self.args.day {
             self.day_time += self.step;
             self.set_sun_of_day((self.day_time / length.max(1.0)).fract());
@@ -1118,6 +1145,10 @@ impl Demo for Gallery {
         // The movers where they stand at the sea's time (#79).
         if let Some(barrels) = &self.barrels {
             self.scene.set_movers(&barrels.transforms(self.sea_time));
+        }
+        // The lab's bodies between their last two ticks (#136).
+        if let Some(lab) = &self.lab {
+            self.scene.set_movers(&lab.movers());
         }
         let targets = self.renderer.draw(
             &mut frame.graph,
@@ -1442,6 +1473,10 @@ impl Demo for Gallery {
             }
             None => title,
         };
+        let title = match &mut self.lab {
+            Some(lab) => format!("{title} | {}", lab.title()),
+            None => title,
+        };
         self.streaming.clear();
         self.stats.clear();
         self.gpu_ms.clear();
@@ -1751,7 +1786,35 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
+        // The physics lab's barrels and balls (#136): red paint and orange rubber.
+        let red_paint = add(
+            "painted metal (red)",
+            RenderLayer {
+                color_a: [0.32, 0.045, 0.03],
+                color_b: [0.28, 0.05, 0.035],
+                roughness: RenderLayer::roughness_for_power(60.0),
+                specular: 0.25,
+                ..RenderLayer::default()
+            },
+        );
+        let rubber = add(
+            "rubber (orange)",
+            RenderLayer {
+                color_a: [0.62, 0.2, 0.03],
+                color_b: [0.55, 0.22, 0.04],
+                roughness: RenderLayer::roughness_for_power(20.0),
+                specular: 0.04,
+                ..RenderLayer::default()
+            },
+        );
         let by_prop = HashMap::from([
+            ("lab-floor", concrete_grey),
+            ("lab-block", sandstone),
+            ("lab-barrel", red_paint),
+            ("lab-rock-1", rock),
+            ("lab-rock-2", rock),
+            ("lab-rock-3", rock),
+            ("lab-ball", rubber),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -2245,7 +2308,9 @@ struct Cooked {
 /// Cooks (or loads) the props of this run: the start-up's CPU work, which runs behind the
 /// loading screen (issue #25).
 fn cook(args: &Args) -> Cooked {
-    let props = if args.island.is_some() {
+    let props = if args.lab.is_some() {
+        lab::props()
+    } else if args.island.is_some() {
         // The island, the sea around it and the rocks on it (`docs/demos/island.md`).
         island_props(args)
     } else {
@@ -2259,7 +2324,7 @@ fn cook(args: &Args) -> Cooked {
         props
     };
     // The streamed city keeps its pages on the GPU only (issue #36).
-    let pages_in_memory = args.gallery || args.stream_pool == 0;
+    let pages_in_memory = args.gallery || args.lab.is_some() || args.stream_pool == 0;
     let (meshes, ms) = cook_props(&props, args.recook, pages_in_memory);
     Cooked { meshes, ms }
 }
@@ -3559,7 +3624,16 @@ fn water_check(
 /// Where the camera starts: the island's first view, the gallery's or the city's, or
 /// `--view`.
 fn start_camera(args: &Args) -> Result<FlyCamera> {
-    let mut camera = if args.island.is_some() {
+    let mut camera = if args.lab.is_some() {
+        // South-east of the pyramid, a little above its top, looking at it.
+        FlyCamera {
+            position: Vec3::new(13.0, 7.5, 17.0),
+            yaw: 0.65,
+            pitch: -0.22,
+            speed: 8.0,
+            ..FlyCamera::default()
+        }
+    } else if args.island.is_some() {
         island_camera(args)
     } else if args.gallery {
         FlyCamera {
@@ -5111,6 +5185,18 @@ pub fn main_island() -> Result<()> {
     let mut args = Args::from_arg_matches(&matches)?;
     args.island.get_or_insert(ISLAND_SEED);
     run(args, "forge island")
+}
+
+/// The `physics-lab` binary (#136): the same demo with one of the lab's scenes (`--lab`, `drop`
+/// unless given).
+pub fn main_lab() -> Result<()> {
+    let matches = Args::command()
+        .name("physics-lab")
+        .about("The physics lab: rigid bodies through Jolt, one test scene at a time")
+        .get_matches();
+    let mut args = Args::from_arg_matches(&matches)?;
+    args.lab.get_or_insert(lab::LabScene::Drop);
+    run(args, "forge physics-lab")
 }
 
 /// The island the `island` binary draws unless `--island` picks another.

@@ -13,7 +13,8 @@
 #
 # FORGE_SETS (issue #134): the runs to make, separated by spaces or commas (default all):
 # ballad (with its ships and HDR output), meshlets, city, island (the city's island, its water
-# and the island demo), sentinels (the ballad, meshlets and the city's first run), all.
+# and the island demo), lab (the physics lab), sentinels (the ballad, meshlets and the city's
+# first run), all.
 # FORGE_PATHS: mesh and fb (default both).
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,8 +27,8 @@ paths=${FORGE_PATHS:-mesh fb}
 paths=${paths//,/ }
 for set in $sets; do
   case $set in
-    all | sentinels | meshlets | ballad | city | island) ;;
-    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island or all" >&2; exit 1 ;;
+    all | sentinels | meshlets | ballad | city | island | lab) ;;
+    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island, lab or all" >&2; exit 1 ;;
   esac
 done
 # sets_of NAME: the sets a run belongs to, from its name without the path.
@@ -39,6 +40,7 @@ sets_of() {
     hdr-display) echo meshlets ;;
     city) echo city sentinels ;;
     city-* | gallery) echo city ;;
+    lab) echo lab ;;
     *) echo island ;;
   esac
 }
@@ -118,6 +120,8 @@ for path in $paths; do
   # The island demo (#96): its tour's first 10 s, out of the steep valley, at a time of day
   # whose exposure is metered from the scene.
   [ -f "$bin/island$exe" ] && validate "island-tour$tag" "$bin/island$exe" --tour --fixed-step --time-of-day 0.3 --frames 600 $path
+  # The physics lab (#136): its rain landing, a tick a frame.
+  [ -f "$bin/physics-lab$exe" ] && validate "lab$tag" "$bin/physics-lab$exe" --fixed-step --frames 120 $path
   # And ships through the belt, the camera chasing the first (#79's demo).
   validate "ships$tag" "$bin/asteroids$exe" --frames 60 --ships 24 --chase 0 $path
   # The HDR output drawn off-screen and previewed (#94), through ACES 2.0: from the TAA resolve

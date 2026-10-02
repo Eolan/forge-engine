@@ -191,6 +191,8 @@ pub struct BodyDesc<'a> {
     pub ccd: bool,
     /// Whether it may sleep when it comes to rest.
     pub allow_sleep: bool,
+    /// Whether it starts asleep (until something wakes it: a contact, an impulse, a move).
+    pub asleep: bool,
 }
 
 impl<'a> BodyDesc<'a> {
@@ -211,6 +213,7 @@ impl<'a> BodyDesc<'a> {
             user_data: 0,
             ccd: false,
             allow_sleep: true,
+            asleep: false,
         }
     }
 
@@ -294,6 +297,7 @@ impl Default for WorldDesc {
 /// A physics world: its bodies, its broad phase and its worker threads.
 pub struct World {
     raw: NonNull<ffi::FjWorld>,
+    threads: u32,
 }
 
 // SAFETY: the world is used from one thread at a time (`&mut self` for every change); Jolt's
@@ -321,10 +325,16 @@ impl World {
         let world = unsafe { ffi::fj_world_new(&raw) };
         Self {
             raw: NonNull::new(world).expect("Jolt's world"),
+            threads: desc.threads,
         }
     }
 
-    /// Adds a body; it starts awake unless it is static.
+    /// Worker threads besides the caller's.
+    pub fn threads(&self) -> u32 {
+        self.threads
+    }
+
+    /// Adds a body; it starts awake unless it is static or [`BodyDesc::asleep`].
     pub fn add_body(&mut self, desc: &BodyDesc) -> Result<BodyId, PhysicsError> {
         let raw = ffi::FjBodyDesc {
             shape: desc.shape.raw.as_ptr(),
@@ -345,7 +355,7 @@ impl World {
             },
             ccd: u8::from(desc.ccd),
             allow_sleep: u8::from(desc.allow_sleep),
-            activate: u8::from(desc.motion != Motion::Static),
+            activate: u8::from(desc.motion != Motion::Static && !desc.asleep),
         };
         // SAFETY: the world is live and `raw` (and the shape it points at, which the body
         // takes a reference to) is read during the call.

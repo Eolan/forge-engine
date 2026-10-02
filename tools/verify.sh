@@ -123,7 +123,7 @@ read_impact() {
         value=${value//[\[\]\",]/ }
         for set in $value; do
           case $set in
-            sentinels | meshlets | ballad | city | island) ;;
+            sentinels | meshlets | ballad | city | island | lab) ;;
             *) echo "tools/impact.toml: unknown set $set for $pattern" >&2; exit 2 ;;
           esac
         done

@@ -972,6 +972,16 @@ The stones' normals weighed when they are cooked (#131, `--stone-normals 2`) and
 cobbles (#132) cost about 0.01 ms: the island 1.501–1.503 ms against 1.491–1.493, the tour
 1.324–1.337 against 1.318–1.325.
 
+## `physics-lab` — the physics tick (#136, 2026-10-02)
+
+The tick is CPU work: Jolt's step on its own threads (5 workers and the caller on the 9800X3D's
+8 cores, the client's rule), then one call that reads every body's transform. `drop` at
+`--fixed-step`, 600 ticks, 496 bodies (204 blocks, 100 barrels, 100 rock hulls, 92 balls, 32 of
+them asleep under the floor): **0.56 ms a tick** on average, p99 0.80 ms, max 0.89 ms, while the
+rain lands and up to 464 bodies are awake. The window's title shows the tick's mean and maximum
+since the last title and the bodies awake; the run's are logged at exit. The frame around it:
+p50 1.15 ms, p99 1.77 ms at 1600 × 900.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

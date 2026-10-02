@@ -1,0 +1,15 @@
+[package]
+name = "physics-lab"
+description = "The physics lab: rigid bodies through Jolt, one test scene at a time, Phase 3's first demo (issue #136)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+city-blocks = { workspace = true }
