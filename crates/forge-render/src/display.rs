@@ -184,16 +184,15 @@ impl ToneTables {
         })
     }
 
-    /// Bakes `preset`'s table and uploads its parameters unless they are already there (about
-    /// 10 ms). Waits for the device first when it replaces another preset's.
+    /// Uploads `preset`'s table (baked on its first use in the process, 10–15 ms) and
+    /// parameters unless they are already there. Waits for the device first when it replaces
+    /// another preset's.
     pub fn set_hdr(&mut self, preset: Preset) -> Result<()> {
         if self.hdr.as_ref().is_some_and(|h| h.preset == preset) {
             return Ok(());
         }
-        let start = std::time::Instant::now();
-        let hdr = aces2::Hdr::new(preset);
+        let (texels, lut_max) = aces2::shared_hdr_lut_texels(preset);
         let size = aces2::LUT_SIZE;
-        let texels = aces2::hdr_lut_texels(&aces2::bake_hdr(&hdr, size), size);
         let lut = self.device.create_image_with_data(
             ImageDesc {
                 width: size * size,
@@ -210,7 +209,7 @@ impl ToneTables {
             .device
             .register_sampled_image(lut.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         let params = self.device.create_buffer_with_data(
-            &hdr.gpu_params(),
+            &aces2::Hdr::new(preset).gpu_params(),
             vk::BufferUsageFlags::STORAGE_BUFFER,
             MemoryCategory::Textures,
             "ACES 2.0 HDR parameters",
@@ -219,17 +218,12 @@ impl ToneTables {
             self.device.wait_idle();
             self.device.release_sampled_image(old.lut);
         }
-        tracing::info!(
-            preset = %preset.label(),
-            ms = format!("{:.1}", start.elapsed().as_secs_f64() * 1e3),
-            "ACES 2.0 HDR table baked"
-        );
         self.hdr = Some(HdrTables {
             preset,
             _lut: lut,
             lut: sampled,
             params,
-            lut_max: hdr.lut_max(),
+            lut_max,
         });
         Ok(())
     }
@@ -316,6 +310,18 @@ pub struct HdrOutput {
     /// The nits of the UI's white, and of the other curves' white (their SDR image): the
     /// OS's SDR white level when known, BT.2408's 203 nits otherwise.
     pub sdr_white: f32,
+}
+
+impl HdrOutput {
+    /// The settings for a display of `peak` nits (ACES 2.0's preset not above it, P3-D65
+    /// limited), with `scene_stops` of paper-white offset and the UI's white at `sdr_white`.
+    pub fn new(peak: f32, scene_stops: f32, sdr_white: f32) -> Self {
+        Self {
+            preset: Preset::for_display(peak),
+            scene_stops,
+            sdr_white,
+        }
+    }
 }
 
 impl Default for HdrOutput {

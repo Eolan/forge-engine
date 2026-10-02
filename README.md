@@ -75,7 +75,9 @@ the path and fly freely, **T** TAA,
 is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
 what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **V** the belt's dust, **Y** translucent ice, **G** tone curve (ACES → PBR Neutral → ACES 2.0 →
 AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
-(built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU).
+(built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU),
+**F2** HDR on or off, **F3** the HDR peak (500 → 1000 → 2000 → 4000 nits), **F4** the HDR
+preview's false colours (F2–F4 in every demo).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
 `--origin M` (the field moved M metres from the world's origin along every axis, the camera
 with it: the far-origin check, issue #93), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--planet-march [STEPS]` (the planet by a march per pixel, 16 segments, instead
@@ -85,7 +87,11 @@ untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-du
 `--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
 sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
-`--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral|aces2|aces2-analytic`, `--ev100 EV` (fixed
+`--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral|aces2|aces2-analytic`,
+`--hdr off|hdr10|scrgb|offscreen` (the HDR output, issue #94: HDR10 or scRGB on the display
+when Windows shows it in HDR, "Use HDR"; `offscreen` draws HDR10 into an image and previews it
+on any monitor, its captures adding the PQ codes as a 16-bit `-pq.png`; ACES 2.0, G, is the
+curve made for it), `--ev100 EV` (fixed
 exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (128 000),
 `--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
 of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance`,
@@ -181,7 +187,9 @@ thread with a real-time thread alongside). Options: `--workers N`, `--frames N`,
 cargo run --release -p imgdiff -- a.png b.png --out diff.png --tolerance 2
 ```
 
-Exit code 1 when more than `--max-different` pixels differ. `--report N` prints the first N
+Exit code 1 when more than `--max-different` pixels differ. Two 16-bit images (the HDR
+output's PQ codes, issue #94) are compared at 16 bits, the tolerance counted in 8-bit steps
+(`--tolerance 0` for an exact match). `--report N` prints the first N
 differing pixels with both colours; `--crop x,y,w,h --zoom K --crops out.png` writes the two
 crops and the diff side by side, enlarged, for looking at a difference.
 `--then next_a.png next_b.png` counts the pixels whose change to the next frame differs between
@@ -215,6 +223,9 @@ What each script does and how to build a baseline from an older commit:
 |---|---|
 | `FORGE_MONITOR` | `secondary` (default: the first non-primary monitor), `primary`, or a monitor index. Scripted runs (`--frames`) never take keyboard focus. |
 | `FORGE_OVERLAY` | `off`, `compact` or `full`: the profiling overlay's start mode (default: compact when interactive, off in scripted runs; F1 cycles at run time). |
+| `FORGE_HDR` | `off`, `hdr10`, `scrgb` or `offscreen`: the HDR output, over the demo's `--hdr` (issue #94; F2 switches at run time). |
+| `FORGE_HDR_CYCLE=N` | press F2 every N frames: the HDR switch in scripted runs (`tools/validate.sh`). |
+| `FORGE_HDR_FALSE_COLOURS=1` | the off-screen HDR preview starts in false colours (F4): yellow above paper white, red at the peak, blue outside Rec.709. |
 | `FORGE_OVERLAY_FONT` | TTF/OTF for the overlay (default `assets/fonts/jetbrains-mono/JetBrainsMono-Variable.ttf`; a built-in pixel font if unreadable). |
 | `FORGE_OVERLAY_FONT_PX` | Overlay font size in pixels (default 14). |
 | `FORGE_VRAM_BUDGET_MB=N` | cap the device-local memory budget the overlay's memory group measures against (rehearsing a smaller card; the group turns red past 90 %). |

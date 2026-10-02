@@ -40,7 +40,7 @@ pub use atmosphere::{Atmosphere, AtmosphereFrame, AtmosphereParams};
 pub use blit::blit;
 pub use bloom::Bloom;
 pub use cells::{CELL_SIZE, CellPos};
-pub use display::{Display, ToneTables, Tonemap};
+pub use display::{Display, HdrOutput, OutputEncoding, ToneTables, Tonemap};
 pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;

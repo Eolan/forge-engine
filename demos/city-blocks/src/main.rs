@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, Input};
+use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input};
 use forge_core::material::{
     LayerContour, Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
 };
@@ -40,7 +40,7 @@ use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
-    FrameStats, GroundSky, Gtao, GtaoParams, LuminanceMeter, MAX_FLOATERS, MAX_WAKES,
+    FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter, MAX_FLOATERS, MAX_WAKES,
     MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, ProbeParams, Probes,
     Residency, SkyParams, StartView, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap,
     WaterCascadeDesc, WaterCascades, WaterCaustics, WaterFloater, WaterLake, WaterMouth,
@@ -105,6 +105,11 @@ struct Args {
     /// Tone curve: agx, aces or neutral (G cycles them).
     #[arg(long, default_value = "agx")]
     tonemap: Tonemap,
+    /// HDR output: off, hdr10, scrgb or offscreen (F2 switches it at run time, F3 steps the
+    /// peak). HDR10 and scRGB need the OS to show the display in HDR; offscreen previews an HDR10
+    /// image on any monitor. ACES 2.0 (G) is the curve made for it.
+    #[arg(long, default_value = "off")]
+    hdr: HdrMode,
     /// Force the profiling overlay on (also in scripted runs). F1 toggles it.
     #[arg(long)]
     overlay: bool,
@@ -399,12 +404,7 @@ const COLUMNS: u32 = 5;
 impl Gallery {
     fn new(ctx: &mut Context, args: Args, cooked: Cooked) -> Result<Self> {
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
-        let mut taa = Taa::new(
-            &ctx.device,
-            &ctx.shaders,
-            ctx.extent(),
-            ctx.swapchain.format(),
-        )?;
+        let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
         taa.enabled = !args.no_taa;
         taa.bloom_strength = args.bloom;
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
@@ -824,6 +824,9 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
+        // The target's format and the HDR settings (issue #94).
+        let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
+        self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
@@ -4032,6 +4035,7 @@ fn main() -> Result<()> {
         capture_every: None,
         overlay: if args.overlay { Some(true) } else { None },
         force_fallback: args.force_fallback,
+        hdr: args.hdr,
         width: args.width,
         height: args.height,
         ..AppConfig::default()

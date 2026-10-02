@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Writes the capture batch every rendering change is checked with (issue #74; docs/PROCESS.md):
-# 42 fixed-step captures of meshlets, the ballad, city-blocks and its island (#96), on the mesh
-# path and on the fallback (`--force-fallback`). Compare two batches with tools/compare.sh.
+# 50 fixed-step captures of meshlets, the ballad (its HDR output too, #94), city-blocks and its
+# island (#96), on the mesh path and on the fallback (`--force-fallback`). Compare two batches
+# with tools/compare.sh.
 #
 #   tools/captures.sh OUT [BIN]
 #
@@ -76,6 +77,10 @@ for path in mesh fb; do
   capture "$path-ast240-noocc" 240 "$asteroids" --fixed-step --no-taa --no-occlusion "${flag[@]}"
   capture "$path-ast240-nocone" 240 "$asteroids" --fixed-step --no-taa --no-cone "${flag[@]}"
   capture "$path-ast240-culled" 240 "$asteroids" --fixed-step --no-taa --show-culled "${flag[@]}"
+  # Its HDR output (#94), drawn off-screen in HDR10 through ACES 2.0 at 1000 nits: each run
+  # writes the SDR preview and the PQ codes (`-pq.png`, 16 bits, compared exactly).
+  capture "$path-ast-hdr240" 240 "$asteroids" --fixed-step --no-taa --tonemap aces2 --hdr offscreen "${flag[@]}"
+  capture "$path-ast-hdr600" 600 "$asteroids" --fixed-step --tonemap aces2 --hdr offscreen "${flag[@]}"
   # city-blocks: every page resident (streaming would make the start depend on timing), and
   # the gallery of the twenty props.
   capture "$path-city60" 60 "$city" --stream-pool 0 "${flag[@]}"

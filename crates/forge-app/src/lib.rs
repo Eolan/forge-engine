@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod camera;
+mod hdr;
 mod input;
 mod loading;
 mod overlay;
@@ -21,6 +22,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 pub use camera::FlyCamera;
+/// Re-exported: what the OS says of the display, in [`DisplayOutput`].
+pub use forge_gpu::DisplayCaps;
 /// Re-exported for demos that declare their own per-frame targets.
 pub use forge_gpu::TransientDesc;
 /// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
@@ -28,9 +31,10 @@ pub use forge_gpu::vk;
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, Device, DeviceOptions, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance, MemoryCategory,
-    MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface, Swapchain,
-    VENDOR_NVIDIA,
+    MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface, SurfaceMode,
+    Swapchain, VENDOR_NVIDIA,
 };
+pub use hdr::{DisplayOutput, HdrMode, OFFSCREEN_FORMAT, PEAKS, preset_peak};
 pub use input::Input;
 pub use loading::Finish;
 pub use overlay::{Canvas, Color, Overlay};
@@ -76,6 +80,10 @@ pub struct AppConfig {
     /// Create the device without `VK_EXT_mesh_shader` even when the GPU has it, so the
     /// renderers take their fallback paths (`--force-fallback`).
     pub force_fallback: bool,
+    /// The HDR output asked for (issue #94; `FORGE_HDR=off|hdr10|scrgb|offscreen` overrides
+    /// it). On the display it needs the OS to show the display in HDR; F2 switches at run
+    /// time.
+    pub hdr: HdrMode,
 }
 
 impl Default for AppConfig {
@@ -93,6 +101,7 @@ impl Default for AppConfig {
             overlay: None,
             streamline: false,
             force_fallback: false,
+            hdr: HdrMode::Off,
         }
     }
 }
@@ -103,6 +112,9 @@ pub struct Context {
     pub device: Arc<Device>,
     /// The swapchain (recreated on resize; watch [`Context::extent`]).
     pub swapchain: Swapchain,
+    /// The frame target's format and the HDR settings (issue #94): display passes follow it
+    /// every frame (forge-render's `set_output`).
+    pub output: DisplayOutput,
     /// Frames in flight.
     pub frames: Frames,
     /// The shader compiler rooted at the workspace `shaders/` directory.
@@ -143,8 +155,10 @@ impl Context {
 pub struct FrameInfo<'f> {
     /// The frame's render graph: the demo declares its passes into it.
     pub graph: FrameGraph<'f>,
-    /// The swapchain image (contents undefined on entry). The demo's last pass on it must
-    /// write it; the shell adds the overlay, the capture and the present transition after.
+    /// The image to draw the frame into (contents undefined on entry), of
+    /// [`Context::output`]'s format: the swapchain image, or in the off-screen HDR mode an
+    /// HDR10 image the shell previews on it. The demo's last pass on it must write it; the
+    /// shell adds the overlay, the capture and the present transition after.
     pub target: ImageHandle,
     /// The frame slot (index, number, previous GPU time).
     pub slot: FrameSlot,
@@ -270,6 +284,77 @@ pub fn workspace_root_from(manifest_dir: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// The OS's name of the window's monitor (Windows' `\\.\DISPLAYn`), for [`DisplayCaps`].
+fn monitor_name(window: &Window) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::MonitorHandleExtWindows;
+        window.current_monitor().map(|monitor| monitor.native_id())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        None
+    }
+}
+
+/// Switches the output to `mode` (issue #94). HDR10 and scRGB recreate the swapchain in that
+/// mode when the OS shows the display in HDR (and stay off otherwise); off-screen keeps the
+/// swapchain SDR and has the frame drawn into an HDR10 image. Waits for the device whenever the
+/// target's format changes, so the display passes can rebuild their pipelines. Returns whether
+/// the swapchain was recreated.
+fn apply_hdr_mode(
+    ctx: &mut Context,
+    overlay: &mut Overlay,
+    preview: &mut Option<hdr::Preview>,
+    mut mode: HdrMode,
+) -> Result<bool> {
+    let on_display = matches!(mode, HdrMode::Hdr10 | HdrMode::ScRgb);
+    if on_display && ctx.output.caps.is_some_and(|c| !c.hdr_on) {
+        tracing::warn!(
+            asked = mode.name(),
+            "the OS shows this display in SDR (Windows: turn on \"Use HDR\"): HDR stays off"
+        );
+        mode = HdrMode::Off;
+    }
+    let wanted = match mode {
+        HdrMode::Hdr10 => SurfaceMode::Hdr10,
+        HdrMode::ScRgb => SurfaceMode::ScRgb,
+        HdrMode::Off | HdrMode::Offscreen => SurfaceMode::Sdr,
+    };
+    let recreated = wanted != ctx.swapchain.mode();
+    if recreated {
+        if ctx.swapchain.set_mode(wanted)? != wanted {
+            mode = HdrMode::Off;
+        }
+        ctx.frames.resize_swapchain(ctx.swapchain.image_count())?;
+    }
+    let format = if mode == HdrMode::Offscreen {
+        OFFSCREEN_FORMAT
+    } else {
+        ctx.swapchain.format()
+    };
+    if format != ctx.output.format {
+        ctx.device.wait_idle();
+    }
+    ctx.output.mode = mode;
+    ctx.output.format = format;
+    if mode == HdrMode::Offscreen && preview.is_none() {
+        *preview = Some(hdr::Preview::new(
+            &ctx.device,
+            &ctx.shaders,
+            ctx.swapchain.format(),
+        )?);
+    }
+    if matches!(mode, HdrMode::Hdr10 | HdrMode::ScRgb) {
+        let black = ctx.output.caps.and_then(|c| c.black).unwrap_or(0.005);
+        ctx.swapchain.set_hdr_metadata(ctx.output.peak, black);
+    }
+    overlay.set_output(&ctx.shaders, ctx.swapchain.format(), ctx.output.ui_white)?;
+    tracing::info!("{}", ctx.output.describe());
+    Ok(recreated)
+}
+
 struct State<D: Demo> {
     demo: D,
     ctx: Context,
@@ -284,7 +369,15 @@ struct State<D: Demo> {
     debug_no_title: bool,
     /// `FORGE_STALL_MS=N`: sleep N ms after every frame (debugging).
     debug_stall_ms: u64,
+    /// `FORGE_HDR_CYCLE=N`: press F2 every N frames (the HDR switch in scripted runs).
+    debug_hdr_cycle: u64,
+    /// The frame of the last scripted switch (a frame can start twice, after a resize).
+    last_hdr_cycle: u64,
     overlay: Overlay,
+    /// The off-screen HDR mode's preview pass, made when the mode is first used.
+    preview: Option<hdr::Preview>,
+    /// The HDR mode asked for at start (`--hdr`, `FORGE_HDR`): the one F2 turns on.
+    hdr_requested: HdrMode,
     /// The render graph's counters of the previous frame (shown in the overlay).
     graph_stats: GraphStats,
     /// When the memory counters were last sampled, and the traffic totals then.
@@ -354,6 +447,39 @@ impl<D: Demo> State<D> {
         self.sample_memory_since(self.memory_start);
     }
 
+    /// F2: HDR on or off. On, it is the mode asked for at start, else HDR10 when the OS shows
+    /// the display in HDR, else off-screen; the display is read again first (the window may
+    /// have moved, or HDR been turned on).
+    fn toggle_hdr(&mut self) -> Result<()> {
+        let caps = monitor_name(&self.ctx.window).and_then(|name| DisplayCaps::query(&name));
+        if caps != self.ctx.output.caps {
+            tracing::info!(?caps, "display");
+            self.ctx.output.refresh(caps);
+        }
+        let mode = match self.hdr_requested {
+            _ if self.ctx.output.is_hdr() => HdrMode::Off,
+            HdrMode::Off if caps.is_some_and(|c| c.hdr_on) => HdrMode::Hdr10,
+            HdrMode::Off => HdrMode::Offscreen,
+            asked => asked,
+        };
+        if apply_hdr_mode(&mut self.ctx, &mut self.overlay, &mut self.preview, mode)? {
+            self.demo.resized(&mut self.ctx)?;
+        }
+        Ok(())
+    }
+
+    /// F3: the next of ACES 2.0's peaks.
+    fn next_peak(&mut self) {
+        self.ctx.output.peak = hdr::next_peak(self.ctx.output.peak);
+        if matches!(self.ctx.output.mode, HdrMode::Hdr10 | HdrMode::ScRgb) {
+            let black = self.ctx.output.caps.and_then(|c| c.black).unwrap_or(0.005);
+            self.ctx
+                .swapchain
+                .set_hdr_metadata(self.ctx.output.peak, black);
+        }
+        tracing::info!("{}", self.ctx.output.describe());
+    }
+
     fn new(window: Arc<Window>, config: AppConfig, init: InitFn<D>) -> Result<Self> {
         let display = window.display_handle()?.as_raw();
         let window_handle = window.window_handle()?.as_raw();
@@ -420,6 +546,12 @@ impl<D: Demo> State<D> {
             size.height,
             config.vsync,
         )?;
+        // What the OS says of the window's display (issue #94).
+        let caps = monitor_name(&window).and_then(|name| DisplayCaps::query(&name));
+        if let Some(caps) = &caps {
+            tracing::info!(?caps, "display");
+        }
+        let output = DisplayOutput::new(swapchain.format(), caps);
         let frames = Frames::new(Arc::clone(&device), swapchain.image_count())?;
         let shaders = ShaderCompiler::new(
             root.join("shaders"),
@@ -433,7 +565,7 @@ impl<D: Demo> State<D> {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(14.0);
-        let overlay = Overlay::new(
+        let mut overlay = Overlay::new(
             &device,
             &shaders,
             swapchain.format(),
@@ -452,6 +584,7 @@ impl<D: Demo> State<D> {
         let mut ctx = Context {
             device,
             swapchain,
+            output,
             frames,
             shaders,
             window,
@@ -463,10 +596,21 @@ impl<D: Demo> State<D> {
             _surface: surface,
             _instance: instance,
         };
+        let requested = match std::env::var("FORGE_HDR") {
+            Ok(text) => text.parse().unwrap_or_else(|error| {
+                tracing::warn!("FORGE_HDR: {error}");
+                config.hdr
+            }),
+            Err(_) => config.hdr,
+        };
+        let mut preview = None;
+        apply_hdr_mode(&mut ctx, &mut overlay, &mut preview, requested)?;
         let demo = init(&mut ctx)?;
         Ok(Self {
             demo,
             ctx,
+            preview,
+            hdr_requested: requested,
             input: Input::default(),
             needs_resize: None,
             last_frame: Instant::now(),
@@ -478,6 +622,11 @@ impl<D: Demo> State<D> {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
+            debug_hdr_cycle: std::env::var("FORGE_HDR_CYCLE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            last_hdr_cycle: 0,
             overlay,
             graph_stats: GraphStats::default(),
             memory_mark: None,
@@ -519,6 +668,18 @@ impl<D: Demo> State<D> {
     }
 
     fn frame(&mut self) -> Result<()> {
+        if self.debug_hdr_cycle > 0
+            && !self.ctx.loading
+            && self.ctx.frames_rendered > 0
+            && self
+                .ctx
+                .frames_rendered
+                .is_multiple_of(self.debug_hdr_cycle)
+            && self.ctx.frames_rendered != self.last_hdr_cycle
+        {
+            self.last_hdr_cycle = self.ctx.frames_rendered;
+            self.toggle_hdr()?;
+        }
         if let Some(size) = self.needs_resize.take() {
             if size.width == 0 || size.height == 0 {
                 self.needs_resize = Some(size);
@@ -642,16 +803,46 @@ impl<D: Demo> State<D> {
         {
             self.sample_memory_since(self.memory_mark);
         }
-        let capture = capture_path
-            .map(|path| {
-                let buffer = self.ctx.device.create_buffer(BufferDesc {
-                    size: u64::from(extent.width) * u64::from(extent.height) * 4,
+        // In the off-screen HDR mode the frame is drawn into an HDR10 image (issue #94).
+        let offscreen = self.ctx.output.mode == HdrMode::Offscreen && !self.ctx.loading;
+        let capture_buffer = |name: &'static str, format: vk::Format| {
+            let bytes_per_pixel = if format == vk::Format::R16G16B16A16_SFLOAT {
+                8
+            } else {
+                4
+            };
+            self.ctx
+                .device
+                .create_buffer(BufferDesc {
+                    size: u64::from(extent.width) * u64::from(extent.height) * bytes_per_pixel,
                     usage: vk::BufferUsageFlags::TRANSFER_DST,
                     location: MemoryLocation::GpuToCpu,
                     category: MemoryCategory::Transfer,
-                    name: "capture",
-                })?;
-                Ok::<_, forge_gpu::GpuError>((path, GraphBuffer::new(buffer)))
+                    name,
+                })
+                .map(GraphBuffer::new)
+        };
+        let capture = capture_path
+            .as_ref()
+            .map(|path| {
+                Ok::<_, forge_gpu::GpuError>((
+                    path.clone(),
+                    capture_buffer("capture", self.ctx.swapchain.format())?,
+                ))
+            })
+            .transpose()?;
+        // Beside the preview, the HDR image's PQ codes (`-pq.png`, 16 bits).
+        let capture_hdr = capture_path
+            .filter(|_| offscreen)
+            .map(|path| {
+                let stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "capture".to_owned());
+                Ok::<_, forge_gpu::GpuError>((
+                    path.with_file_name(format!("{stem}-pq.png")),
+                    capture_buffer("capture hdr", OFFSCREEN_FORMAT)?,
+                ))
             })
             .transpose()?;
 
@@ -663,7 +854,7 @@ impl<D: Demo> State<D> {
             let mut graph = FrameGraph::new(extent);
             // The acquired swapchain image: contents undefined, usable once the acquire
             // semaphore's stage (colour output) has passed.
-            let target = graph.import_raw(RawImage {
+            let swapchain_image = graph.import_raw(RawImage {
                 image: self.ctx.swapchain.image(image_index),
                 view: self.ctx.swapchain.view(image_index),
                 extent,
@@ -677,6 +868,21 @@ impl<D: Demo> State<D> {
                 },
                 name: "swapchain",
             });
+            let target = if offscreen {
+                graph.transient(TransientDesc {
+                    name: "hdr target",
+                    width: extent.width,
+                    height: extent.height,
+                    format: OFFSCREEN_FORMAT,
+                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                        | vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::TRANSFER_SRC,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    mip_levels: 1,
+                })
+            } else {
+                swapchain_image
+            };
             let mut frame = FrameInfo {
                 graph,
                 target,
@@ -685,24 +891,39 @@ impl<D: Demo> State<D> {
                 dt,
             };
             self.demo.render(&mut self.ctx, &mut frame)?;
+            if offscreen && let Some(preview) = &self.preview {
+                preview.draw(
+                    &mut frame.graph,
+                    target,
+                    swapchain_image,
+                    extent,
+                    &self.ctx.output,
+                );
+            }
             if self.ctx.profile.is_visible() && !self.ctx.loading {
+                if self.ctx.output.is_hdr() {
+                    self.ctx.profile.counter(self.ctx.output.describe());
+                }
                 let title = self.config.title.clone();
                 let canvas = self.overlay.begin(extent);
                 self.ctx.profile.layout(canvas, &title, extent);
                 self.overlay
-                    .draw(&mut frame.graph, slot.index, target, extent);
+                    .draw(&mut frame.graph, slot.index, swapchain_image, extent);
             }
-            if let Some((_, buffer)) = &capture {
+            for (image, capture) in [(swapchain_image, &capture), (target, &capture_hdr)] {
+                let Some((_, buffer)) = capture else {
+                    continue;
+                };
                 // The copy, then the host read after the wait below: declared, so the
                 // device's writes are made visible to the host.
                 let handle = frame.graph.import_buffer(buffer);
                 frame
                     .graph
                     .pass("app/capture")
-                    .image(target, ImageAccess::TransferSrc)
+                    .image(image, ImageAccess::TransferSrc)
                     .buffer(handle, BufferAccess::TransferDst)
                     .run(move |resources, commands| {
-                        commands.copy_image_to_buffer(resources.image(target).raw, extent, buffer);
+                        commands.copy_image_to_buffer(resources.image(image).raw, extent, buffer);
                         Ok(())
                     });
                 frame
@@ -714,7 +935,7 @@ impl<D: Demo> State<D> {
             frame
                 .graph
                 .pass("app/present")
-                .image(target, ImageAccess::Present)
+                .image(swapchain_image, ImageAccess::Present)
                 .run(|_, _| Ok(()));
             // What the demo and the overlay declared, then the graph's compile and its
             // recording (#78: the split the gate for parallel recording reads).
@@ -755,10 +976,15 @@ impl<D: Demo> State<D> {
             // Debugging aid (`FORGE_WAIT_IDLE=1`): no CPU/GPU overlap at all.
             self.ctx.device.wait_idle();
         }
-        if let Some((path, buffer)) = capture {
-            self.ctx.device.wait_idle();
-            save_capture(&path, &buffer, extent, self.ctx.swapchain.format())?;
-            tracing::info!(path = %path.display(), "captured frame {}", self.ctx.frames_rendered);
+        for (capture, format) in [
+            (capture, self.ctx.swapchain.format()),
+            (capture_hdr, OFFSCREEN_FORMAT),
+        ] {
+            if let Some((path, buffer)) = capture {
+                self.ctx.device.wait_idle();
+                save_capture(&path, &buffer, extent, format)?;
+                tracing::info!(path = %path.display(), "captured frame {}", self.ctx.frames_rendered);
+            }
         }
         if !self.ctx.loading {
             self.ctx.frames_rendered += 1;
@@ -782,8 +1008,27 @@ fn save_capture(
     extent: vk::Extent2D,
     format: vk::Format,
 ) -> Result<()> {
+    if format == vk::Format::R16G16B16A16_SFLOAT {
+        tracing::warn!(path = %path.display(), "scRGB frames are not captured: use --hdr offscreen");
+        return Ok(());
+    }
     let mut pixels = vec![0_u8; (extent.width * extent.height * 4) as usize];
     buffer.read(0, &mut pixels);
+    if format == vk::Format::A2B10G10R10_UNORM_PACK32
+        || format == vk::Format::A2R10G10B10_UNORM_PACK32
+    {
+        // HDR10: the 10-bit PQ codes in a 16-bit PNG (issue #94).
+        let mut rgb = hdr::a2b10g10r10_to_rgb16(&pixels);
+        if format == vk::Format::A2R10G10B10_UNORM_PACK32 {
+            for px in rgb.as_chunks_mut::<3>().0 {
+                px.swap(0, 2);
+            }
+        }
+        image::ImageBuffer::<image::Rgb<u16>, _>::from_raw(extent.width, extent.height, rgb)
+            .ok_or_else(|| anyhow::anyhow!("capture size"))?
+            .save(path)?;
+        return Ok(());
+    }
     if format == vk::Format::B8G8R8A8_SRGB || format == vk::Format::B8G8R8A8_UNORM {
         for px in pixels.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
@@ -876,6 +1121,25 @@ impl<D: Demo> ApplicationHandler for App<D> {
                     }
                     if pressed && code == KeyCode::F1 {
                         state.ctx.profile.cycle_mode();
+                        return;
+                    }
+                    // The HDR output (issue #94): on and off, the peak, the preview's false
+                    // colours.
+                    if pressed && code == KeyCode::F2 {
+                        if let Err(e) = state.toggle_hdr() {
+                            self.error = Some(e);
+                            event_loop.exit();
+                        }
+                        return;
+                    }
+                    if pressed && code == KeyCode::F3 {
+                        state.next_peak();
+                        return;
+                    }
+                    if pressed && code == KeyCode::F4 {
+                        if let Some(preview) = &mut state.preview {
+                            preview.false_colours = !preview.false_colours;
+                        }
                         return;
                     }
                     if pressed

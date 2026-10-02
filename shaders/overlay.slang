@@ -7,6 +7,7 @@
 // Cell (uint): bits 0-7 glyph (ASCII, 0 = empty, 255 = bar), 8-11 foreground colour,
 // 12-15 background colour (0 = transparent), 16-23 bar fill (0..255), 24-27 bar colour.
 import bindless;
+import tonemap;
 
 struct Push
 {
@@ -16,6 +17,8 @@ struct Push
     uint cell_w;
     uint cell_h;
     uint atlas;      // sampled image: 95 glyph cells of cell_w × cell_h, coverage
+    uint encoding;   // OUTPUT_* of tonemap.slang: HDR targets get the palette at the UI's white
+    float ui_white;  // nits of the UI's white on an HDR target (issue #94)
     uint pad;
 };
 
@@ -91,5 +94,9 @@ float4 frag_main(float4 position : SV_Position) : SV_Target
     }
     if (color.a <= 0.0)
         discard;
+    if (push.encoding == OUTPUT_PQ)
+        color.rgb = pq_encode(rec709_to_rec2020(color.rgb) * push.ui_white);
+    else if (push.encoding == OUTPUT_SCRGB)
+        color.rgb *= push.ui_white / 80.0;
     return color;
 }

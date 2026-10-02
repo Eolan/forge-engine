@@ -500,6 +500,38 @@ from the pre-exposed HDR frame, before the tone curve:
 The history stays unbloomed, so bloom never feeds back. It costs 0.04 ms at 1600×900 and
 0.08 ms at 1440p.
 
+**HDR output** (issue #94, 2026-10-02; research: `docs/research/hdr-output.md`). The display
+transform's output is encoded for its target, chosen from the target's format:
+- **HDR10**: `A2B10G10R10_UNORM_PACK32` in `HDR10_ST2084_EXT`, the shader writing Rec.2100
+  PQ over Rec.2020 itself, with half a 10-bit code of spatio-temporal dither against banding.
+- **scRGB**: `R16G16B16A16_SFLOAT` in `EXTENDED_SRGB_LINEAR_EXT`, linear Rec.709, 1.0 being
+  80 nits.
+- **SDR** as before (the capture batch is unchanged to the pixel).
+
+On the display, an HDR mode is entered only when asked (`--hdr`, `FORGE_HDR`, F2) and when the
+OS shows the display in HDR (Windows' "Use HDR", read through the display configuration API),
+so scripted runs never switch the owner's monitor. `VK_EXT_hdr_metadata` gets Rec.2020
+primaries, the preset's peak and the panel's black. **Off-screen** draws the same HDR10 image
+into a transient and previews it on the SDR swapchain (`post/hdr preview`: what a display at
+paper white shows below it, or false colours): everything but the present runs, and is
+captured, on any monitor.
+
+**ACES 2.0's HDR presets.** The Academy's peaks (500, 1000, 2000, 4000 nits, P3-D65 limited;
+Rec.2020 limiting available) run the SDR chain with the output clamped at the peak and
+converted to Rec.2020. The preset is the largest not above the panel's peak (DXGI), 1000 nits
+when unknown, and F3 steps through them. Each runs through its own 65³ table of the PQ
+signal (`R16G16B16A16_UNORM`, its grid's top at the preset's clamp, 4096 at 1000 nits),
+baked once per process (10–15 ms). Against the per-pixel transform it is within 1.3 10-bit
+codes at the 99th percentile, where the SDR table is at 1.5 8-bit codes. `meshlets
+--tone-check` holds both GPU paths within 0.10 code of the CPU's. At 1000 nits a scene's 0.18
+lands at 14.5 nits and its 1.0 at 107 nits.
+
+**Paper white** (the owner's pick, 2026-10-02: the Academy's look): an exposure offset in
+stops in front of ACES 2.0, 0 by default, so the transform's own grey and white stand. The
+UI, and every other tone curve (their SDR image), are drawn at the UI's white: Windows' SDR
+white level for that display, BT.2408's 203 nits when unknown. The overlay is written at
+that white and never through a curve.
+
 ## D-023 — Atmospheres: Hillaire 2020 tables in the graph, a per-pixel march from space ✅ (2026-09-24)
 
 An atmosphere belongs to a planet (or any body massive enough to hold one): a Rayleigh

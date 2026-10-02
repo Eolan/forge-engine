@@ -73,6 +73,12 @@ for path in "" --force-fallback; do
   validate "movers$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --movers 1000 --view=-238.2,318.14,-1843.9,135.2,-18.1 $path
   # And ships through the belt, the camera chasing the first (#79's demo).
   validate "ships$tag" "$bin/asteroids$exe" --frames 60 --ships 24 --chase 0 $path
+  # The HDR output drawn off-screen and previewed (#94), through ACES 2.0: from the TAA resolve
+  # (the ballad) and from the stand-alone display pass (the bench).
+  validate "hdr$tag" "$bin/asteroids$exe" --frames 60 --tonemap aces2 --hdr offscreen $path
+  # And switched on and off every 20 frames (F2), the passes rebuilt for each target.
+  validate "hdr-switch$tag" env FORGE_HDR_CYCLE=20 "$bin/asteroids$exe" --frames 130 --tonemap aces2 $path
+  validate "hdr-display$tag" "$bin/meshlets$exe" --frames 30 --tonemap aces2 --hdr offscreen $path
 done
 [ "$keep" != 0 ] && say "logs in $out/logs, summary in $summary"
 exit 0

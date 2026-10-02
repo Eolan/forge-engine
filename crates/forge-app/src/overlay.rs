@@ -182,17 +182,35 @@ struct Push {
     cell_w: u32,
     cell_h: u32,
     atlas: u32,
+    encoding: u32,
+    ui_white: f32,
     pad: u32,
 }
 
 /// The overlay pass, its font atlas and per-slot cell buffers.
 pub struct Overlay {
+    device: Arc<Device>,
     pipeline: Pipeline,
+    format: vk::Format,
+    /// `OUTPUT_*` of `tonemap.slang` for the target's format, and the UI's white in nits on
+    /// HDR targets (issue #94).
+    encoding: u32,
+    ui_white: f32,
     atlas: GraphImage,
     cells: Vec<Buffer>,
     canvas: Canvas,
     cell_w: u32,
     cell_h: u32,
+}
+
+/// `OUTPUT_*` of `tonemap.slang` for a target of `format` (as forge-render's
+/// `OutputEncoding::for_format`, SDR targets taking the palette as it is).
+fn encoding(format: vk::Format) -> u32 {
+    match format {
+        vk::Format::A2B10G10R10_UNORM_PACK32 | vk::Format::A2R10G10B10_UNORM_PACK32 => 2,
+        vk::Format::R16G16B16A16_SFLOAT => 3,
+        _ => 0,
+    }
 }
 
 impl Overlay {
@@ -206,27 +224,7 @@ impl Overlay {
         font: Option<&Path>,
         font_px: f32,
     ) -> Result<Self> {
-        let vertex = device.create_shader_module(
-            &shaders.compile("overlay.slang", "vert_main", ShaderStage::Vertex)?,
-            "overlay vs",
-        )?;
-        let fragment = device.create_shader_module(
-            &shaders.compile("overlay.slang", "frag_main", ShaderStage::Fragment)?,
-            "overlay fs",
-        )?;
-        let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
-            vertex: (vertex, "vert_main"),
-            fragment: (fragment, "frag_main"),
-            color_formats: &[format],
-            push_constant_bytes: std::mem::size_of::<Push>() as u32,
-            alpha_blend: true,
-            depth_test: None,
-            depth_write: false,
-            name: "overlay",
-        })?;
-        device.destroy_shader_module(vertex);
-        device.destroy_shader_module(fragment);
-
+        let pipeline = Self::pipeline(device, shaders, format)?;
         let atlas = font
             .and_then(|path| match std::fs::read(path) {
                 Ok(bytes) => rasterize_ttf(&bytes, font_px),
@@ -266,13 +264,62 @@ impl Overlay {
             "overlay font ready"
         );
         Ok(Self {
+            device: Arc::clone(device),
             pipeline,
+            format,
+            encoding: encoding(format),
+            ui_white: 203.0,
             atlas: image,
             cells,
             canvas: Canvas::new(),
             cell_w: atlas.cell_w,
             cell_h: atlas.cell_h,
         })
+    }
+
+    fn pipeline(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        format: vk::Format,
+    ) -> Result<Pipeline> {
+        let vertex = device.create_shader_module(
+            &shaders.compile("overlay.slang", "vert_main", ShaderStage::Vertex)?,
+            "overlay vs",
+        )?;
+        let fragment = device.create_shader_module(
+            &shaders.compile("overlay.slang", "frag_main", ShaderStage::Fragment)?,
+            "overlay fs",
+        )?;
+        let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
+            vertex: (vertex, "vert_main"),
+            fragment: (fragment, "frag_main"),
+            color_formats: &[format],
+            push_constant_bytes: std::mem::size_of::<Push>() as u32,
+            alpha_blend: true,
+            depth_test: None,
+            depth_write: false,
+            name: "overlay",
+        });
+        device.destroy_shader_module(vertex);
+        device.destroy_shader_module(fragment);
+        pipeline
+    }
+
+    /// Follows the target (issue #94): a new format recompiles the pass (while no frame uses
+    /// the old one); on HDR targets the palette's white is `ui_white` nits.
+    pub fn set_output(
+        &mut self,
+        shaders: &ShaderCompiler,
+        format: vk::Format,
+        ui_white: f32,
+    ) -> Result<()> {
+        if format != self.format {
+            self.pipeline = Self::pipeline(&self.device, shaders, format)?;
+            self.format = format;
+            self.encoding = encoding(format);
+        }
+        self.ui_white = ui_white;
+        Ok(())
     }
 
     /// Starts a frame's drawing: a cleared canvas sized to `extent`.
@@ -306,6 +353,8 @@ impl Overlay {
             cell_w: self.cell_w,
             cell_h: self.cell_h,
             atlas: self.atlas.sampled().0,
+            encoding: self.encoding,
+            ui_white: self.ui_white,
             pad: 0,
         };
         let atlas = graph.import(&self.atlas);

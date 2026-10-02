@@ -29,8 +29,10 @@ status=0
 # difference its perceptual error, LDR-FLIP's mean and largest value (issue #75).
 pair() {
   [ -f "$1" ] && [ -f "$2" ] || return 0
-  local out line flip count max mean peak
-  out=$("$imgdiff" "$1" "$2" 2>&1)
+  local out line flip count max mean peak tolerance=()
+  # HDR10 captures' PQ codes (16 bits, #94) must match to the code.
+  [[ "$2" == *-pq.png ]] && tolerance=(--tolerance 0)
+  out=$("$imgdiff" "$1" "$2" "${tolerance[@]}" 2>&1)
   line=$(grep "pixels differ" <<< "$out" | tail -n 1)
   flip=$(grep "LDR-FLIP" <<< "$out" | tail -n 1)
   count=$(sed -n 's/.*: \([0-9]*\) \/ [0-9]* pixels differ.*/\1/p' <<< "$line")
@@ -70,7 +72,7 @@ main() {
     pair "$new/$path-water60.png" "$new/$path-water60-noocc.png" "$path island with water, occlusion off"
     pair "$new/$path-island8-60.png" "$new/$path-island8-60-resident.png" "$path island at 8 m, streamed against resident"
   done
-  for name in static60 orbit120 nolod120 ast240 ast-notaa600 city60 cityorbit120 gallery60 island60 water60; do
+  for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   if [ $status = 0 ]; then

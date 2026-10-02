@@ -176,12 +176,16 @@ fn main() -> Result<ExitCode> {
         !(judge_by_flip && args.no_flip),
         "--max-flip and --max-flip-mean need ꟻLIP: drop --no-flip"
     );
-    let a = image::open(&args.a)
-        .with_context(|| format!("open {}", args.a.display()))?
-        .to_rgba8();
-    let b = image::open(&args.b)
-        .with_context(|| format!("open {}", args.b.display()))?
-        .to_rgba8();
+    let a_image = image::open(&args.a).with_context(|| format!("open {}", args.a.display()))?;
+    let b_image = image::open(&args.b).with_context(|| format!("open {}", args.b.display()))?;
+    // Two 16-bit images (the PQ codes of HDR10 captures, issue #94) are compared at 16 bits,
+    // so one 10-bit code apart counts; the tolerance stays in 8-bit steps (times 257).
+    let sixteen =
+        |i: &image::DynamicImage| i.color().bytes_per_pixel() == 2 * i.color().channel_count();
+    let wide = (sixteen(&a_image) && sixteen(&b_image))
+        .then(|| (a_image.to_rgba16(), b_image.to_rgba16()));
+    let a = a_image.to_rgba8();
+    let b = b_image.to_rgba8();
     if a.dimensions() != b.dimensions() {
         anyhow::bail!(
             "size mismatch: {:?} vs {:?}",
@@ -201,7 +205,14 @@ fn main() -> Result<ExitCode> {
         let err = (0..3).map(|c| pa[c].abs_diff(pb[c])).max().unwrap_or(0);
         max_error = max_error.max(err);
         sum_error += u64::from(err);
-        let bad = err > args.tolerance;
+        let bad = match &wide {
+            Some((a16, b16)) => {
+                let (qa, qb) = (a16.get_pixel(x, y), b16.get_pixel(x, y));
+                let err16 = (0..3).map(|c| qa[c].abs_diff(qb[c])).max().unwrap_or(0);
+                u32::from(err16) > u32::from(args.tolerance) * 257
+            }
+            None => err > args.tolerance,
+        };
         different += u64::from(bad);
         if bad {
             let luma = |p: &image::Rgba<u8>| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);

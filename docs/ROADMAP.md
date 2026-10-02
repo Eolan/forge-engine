@@ -69,8 +69,13 @@ zones ✅: recording 0.12 ms in the city, under the 0.5 ms gate, so parallel rec
 unbuilt (#124). Then #94 (an
 HDR display output; researched 2026-09-26, `docs/research/hdr-output.md`: the swapchain pair
 to enable, the OS white level to read, ACES 2.0's presets as a rebake, paper white as the one
-real decision, everything but the present verifiable on an SDR monitor), #39 (the RTX 3080
-run, which can also retry #95's double buffer).
+real decision, everything but the present verifiable on an SDR monitor). Built 2026-10-02,
+the owner having picked the Academy's look for paper white: HDR10 and scRGB on the display
+when Windows shows it in HDR, an off-screen HDR10 mode previewed and captured on any monitor,
+ACES 2.0's 500–4000-nit presets as tables, F2/F3/F4 (`docs/demos/asteroids.md`, "HDR
+output"; 0.01 ms in the resolve at 1440p). The present waits for "Use HDR" on the owner's
+monitor; the calibration pages are #125, HDR-ꟻLIP #126. Then #39 (the RTX 3080 run, which
+can also retry #95's double buffer).
 
 **Proposed next, for the owner to pick:**
 - #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes

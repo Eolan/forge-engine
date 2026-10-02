@@ -105,6 +105,12 @@ exposure (EV100, target, compensation, curve) the last.
 
   The bench's `post/display transform` at 1600 × 900 takes 0.011 ms with the ACES fit,
   0.013 with the table and 0.055 per pixel.
+- The HDR output (#94), ACES 2.0's 1000-nit table in HDR10 against SDR, the ballad's flight
+  (600 frames, three alternating rounds): `temporal/TAA resolve` 0.173–0.177 → 0.182–0.187 ms
+  at 1440p and 0.056–0.057 → 0.060 at 1600 × 900, the PQ encoding and its dither. The
+  off-screen mode adds `post/hdr preview`, 0.038–0.042 ms at 1440p and 0.014 at 1600 × 900;
+  its frame 2.616–2.648 → 2.659–2.714 ms at 1440p. Each HDR preset's table is baked once per
+  process, 10–15 ms.
 - Pass 2's cluster cull over pass 1's rejects only (#92): pass 1 lists the 36 k clusters the
   previous pyramid hid, and pass 2 tests those alone. Cluster cull 2 goes 0.134 → 0.017 ms,
   cluster cull 1 0.139 → 0.167; in all 1.403 → 1.308 ms at 1600 × 900 and 2.82 → 2.67 ms at

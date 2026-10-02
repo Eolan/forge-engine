@@ -278,6 +278,46 @@ Material classification and the material table came with #20 (below). The softwa
 rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
 **H**; `docs/demos/meshlets.md`).
 
+## HDR output (2026-10-02, issue #94)
+
+`--hdr hdr10|scrgb|offscreen` (or **F2**, in every demo) shows the frame in HDR, through
+ACES 2.0's HDR presets (D-022; research: `docs/research/hdr-output.md`):
+- **HDR10** (Rec.2100 PQ over Rec.2020, 10 bits) or **scRGB** (linear half floats) on the
+  display. The demo enters it only when Windows shows the display in HDR ("Use HDR"); otherwise
+  it says so and stays SDR.
+- **Off-screen**: the same HDR10 image drawn into a transient and previewed on the SDR
+  swapchain, so it can be run, captured and compared on any monitor. A capture adds the PQ
+  codes as a 16-bit `-pq.png`.
+
+**What it does:**
+- **The curve:** ACES 2.0 (**G**) runs through the preset's own table of PQ codes. The other
+  curves show their SDR image at the UI's white, so pressing G never breaks the picture.
+- **The peak:** the panel's peak from Windows (DXGI), rounded down to the Academy's presets
+  (500, 1000, 2000, 4000 nits); 1000 when unknown. **F3** steps through them.
+- **Paper white** (the owner's pick): the Academy's look. At 1000 nits a scene's grey lands at
+  14.5 nits and its white at 107. The overlay is drawn at Windows' SDR white level for the
+  display (203 nits when unknown).
+- **F4** switches the preview to false colours: yellow above paper white, red at the peak,
+  blue outside Rec.709.
+
+![SDR, the HDR preview at a 203-nit white, false colours (frame 600)](../../reports/2026-10-02-94/hdr.png)
+
+Left to right:
+- **SDR.**
+- **The HDR preview:** dimmer, since the Academy's white of 107 nits sits under the UI's
+  203.
+- **False colours:** only the sun's glow goes above paper white, and its disc reaches the
+  peak.
+
+**Cost** at 2560 × 1440: the TAA resolve 0.173–0.177 → 0.182–0.187 ms for the PQ encoding and
+its dither; the off-screen preview another 0.04 ms. The table is baked once, 10–15 ms. Its
+accuracy, the tone check and the captures are in `reports/2026-10-02-94/`.
+
+**Left for later:**
+- the calibration pages (peak, black, paper white) and MaxCLL from the frame (#125);
+- HDR-ꟻLIP in `imgdiff` (#126);
+- the present on an HDR display, which waits for "Use HDR" on the owner's monitor.
+
 ## Ships through the belt (2026-10-02, issue #79)
 
 The demo #79 asks for, and the first step of the space battle (#80): `--ships N` sets N ships

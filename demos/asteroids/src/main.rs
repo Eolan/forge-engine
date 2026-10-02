@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, Input, vk};
+use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input, vk};
 use forge_core::hash::hash_cell3;
 use forge_core::material::{Material, RenderLayer};
 use forge_core::{MaterialTable, Seed, SplitMix64};
@@ -29,8 +29,8 @@ use forge_render::meshlet::DrawParams;
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     Display, DlssMode, DlssUpscaler, DustParams, DustVolume, FrameStats, Gtao, GtaoParams,
-    HDR_FORMAT, LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform,
-    Starfield, Taa, Tonemap, UpscaleCamera,
+    HDR_FORMAT, HdrOutput, LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
+    MoverTransform, Starfield, Taa, Tonemap, UpscaleCamera,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -219,6 +219,11 @@ struct Args {
     /// space black, where AgX's wide log encoding lifts the nebula to a flat grey.
     #[arg(long, default_value = "aces")]
     tonemap: Tonemap,
+    /// HDR output: off, hdr10, scrgb or offscreen (F2 switches it at run time, F3 steps the
+    /// peak). HDR10 and scRGB need the OS to show the display in HDR; offscreen previews an HDR10
+    /// image on any monitor. ACES 2.0 (G) is the curve made for it.
+    #[arg(long, default_value = "off")]
+    hdr: HdrMode,
     /// Fixed exposure value at ISO 100 instead of automatic exposure.
     #[arg(long)]
     ev100: Option<f32>,
@@ -514,15 +519,10 @@ impl Ballad {
             .as_ref()
             .map(|path| std::fs::File::create(path).map(std::io::BufWriter::new))
             .transpose()?;
-        let taa = Taa::new(
-            &ctx.device,
-            &ctx.shaders,
-            ctx.extent(),
-            ctx.swapchain.format(),
-        )?;
+        let taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
         // DLSS takes over from the TAA resolve when asked for and available; its HDR output goes
         // to the swapchain through the stand-alone display pass.
-        let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
+        let display = Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         let requested = match args.upscaler.as_str() {
             "taa" => None,
             name => Some(DlssMode::from_name(name).ok_or_else(|| {
@@ -825,6 +825,11 @@ impl Demo for Ballad {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
+        // The target's format and the HDR settings (issue #94).
+        let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
+        self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        self.display
+            .set_output(&ctx.shaders, ctx.output.format, hdr)?;
         let frame_stats = self.renderer.begin_frame(frame.slot, &mut self.scene)?;
         let frame_hashes = self
             .hasher
@@ -1633,6 +1638,7 @@ fn main() -> Result<()> {
         // to DLSS at run time.
         streamline: cfg!(feature = "dlss"),
         force_fallback: args.force_fallback,
+        hdr: args.hdr,
         width: args.width,
         height: args.height,
         ..AppConfig::default()

@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, Input};
+use forge_app::{AppConfig, Context, Demo, FlyCamera, FrameInfo, HdrMode, Input};
 use forge_app::{TransientDesc, vk};
 use forge_core::{MaterialTable, Seed};
 use forge_geom::{MeshletMesh, procedural};
@@ -23,8 +23,8 @@ use forge_render::meshlet::DrawParams;
 use forge_render::mipcheck::MipCheck;
 use forge_render::tonecheck::ToneCheck;
 use forge_render::{
-    AmbientLight, CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, Tonemap, exposure_from_ev100,
+    AmbientLight, CullCamera, CullFlags, Display, FrameStats, HDR_FORMAT, HdrOutput,
+    MeshletRenderer, MeshletScene, MeshletSceneBuilder, Tonemap, exposure_from_ev100,
 };
 use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
@@ -82,6 +82,11 @@ struct Args {
     /// Tone curve: agx, aces or neutral (G cycles them).
     #[arg(long, default_value = "agx")]
     tonemap: Tonemap,
+    /// HDR output: off, hdr10, scrgb or offscreen (F2 switches it at run time, F3 steps the
+    /// peak). HDR10 and scRGB need the OS to show the display in HDR; offscreen previews an HDR10
+    /// image on any monitor. ACES 2.0 (G) is the curve made for it.
+    #[arg(long, default_value = "off")]
+    hdr: HdrMode,
     /// Force the profiling overlay on (also in scripted runs). F1 toggles it.
     #[arg(long)]
     overlay: bool,
@@ -133,7 +138,7 @@ impl Bench {
         let args_mip_check = args.mip_check;
         let args_tone_check = args.tone_check;
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
-        let display = Display::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?;
+        let display = Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         let tonemap = args.tonemap;
         let scene = build_scene(ctx, &args)?;
         let side = args.side as f32;
@@ -216,21 +221,30 @@ impl Drop for Bench {
         }
         if let Some(check) = &self.tone_check {
             let result = check.result();
-            let [p50, p99, p999, max] = result.table_error;
-            let table_error = format!("p50 {p50:.3}, p99 {p99:.3}, p99.9 {p999:.3}, max {max:.2}");
+            let spread = |[p50, p99, p999, max]: [f32; 4]| {
+                format!("p50 {p50:.3}, p99 {p99:.3}, p99.9 {p999:.3}, max {max:.2}")
+            };
+            let table_error = spread(result.table_error);
+            let hdr_table_error = spread(result.hdr_table_error);
             if result.passes() {
                 tracing::info!(
                     analytic_codes = %format_args!("{:.3}", result.analytic),
                     table_codes = %format_args!("{:.3}", result.table),
                     %table_error,
+                    hdr_analytic_codes = %format_args!("{:.3}", result.hdr_analytic),
+                    hdr_table_codes = %format_args!("{:.3}", result.hdr_table),
+                    %hdr_table_error,
                     colours = result.colours,
-                    "tone check passed: both ACES 2.0 paths agree with the CPU transform"
+                    "tone check passed: every ACES 2.0 path, SDR and HDR, agrees with the CPU transform"
                 );
             } else {
                 tracing::error!(
                     analytic_codes = result.analytic,
                     table_codes = result.table,
                     %table_error,
+                    hdr_analytic_codes = result.hdr_analytic,
+                    hdr_table_codes = result.hdr_table,
+                    %hdr_table_error,
                     colours = result.colours,
                     "tone check FAILED: an ACES 2.0 path is a code or more from the CPU's"
                 );
@@ -282,6 +296,10 @@ impl Demo for Bench {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let cpu_start = Instant::now();
+        // The target's format and the HDR settings (issue #94).
+        let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
+        self.display
+            .set_output(&ctx.shaders, ctx.output.format, hdr)?;
         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
@@ -521,6 +539,7 @@ fn main() -> Result<()> {
         capture_every: None,
         overlay: if args.overlay { Some(true) } else { None },
         force_fallback: args.force_fallback,
+        hdr: args.hdr,
         ..AppConfig::default()
     };
     forge_app::run(config, move |ctx| Bench::new(ctx, args))

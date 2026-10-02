@@ -49,7 +49,7 @@
 //! SPDX-License-Identifier: BSD-3-Clause
 
 use std::f32::consts::PI;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 type F2 = [f32; 2];
@@ -1643,6 +1643,27 @@ impl Hdr {
         );
         rows
     }
+}
+
+/// `preset`'s table as [`hdr_lut_texels`] lays it out, baked once per process (the display
+/// passes share it), and the top of its grid.
+pub fn shared_hdr_lut_texels(preset: Preset) -> (Arc<Vec<u8>>, f32) {
+    type Baked = Vec<(Preset, Arc<Vec<u8>>, f32)>;
+    static TABLES: Mutex<Baked> = Mutex::new(Vec::new());
+    let mut tables = TABLES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, texels, max)) = tables.iter().find(|(p, ..)| *p == preset) {
+        return (Arc::clone(texels), *max);
+    }
+    let start = std::time::Instant::now();
+    let hdr = Hdr::new(preset);
+    let texels = Arc::new(hdr_lut_texels(&bake_hdr(&hdr, LUT_SIZE), LUT_SIZE));
+    tracing::info!(
+        preset = %preset.label(),
+        ms = format!("{:.1}", start.elapsed().as_secs_f64() * 1e3),
+        "ACES 2.0 HDR table baked"
+    );
+    tables.push((preset, Arc::clone(&texels), hdr.lut_max()));
+    (texels, hdr.lut_max())
 }
 
 /// SMPTE ST 2084's constants.
