@@ -8,15 +8,16 @@
 //!   the image's PQ codes as a 16-bit PNG beside the preview's.
 //!
 //! F2 turns HDR on and off, F3 steps the peak through ACES 2.0's presets, F4 switches the
-//! preview to false colours.
+//! preview to false colours, F5 opens the calibration pages (`calibration.rs`, issue #125).
+//! The display's metadata takes MaxCLL and MaxFALL from the frames shown (`content_light.rs`).
 
 use std::str::FromStr;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Device, DisplayCaps, FrameGraph, FullscreenPipelineDesc, ImageAccess, ImageHandle, Pipeline,
-    Result, ShaderCompiler, ShaderStage, vk,
+    Device, DisplayCaps, FrameGraph, FullscreenPipelineDesc, HdrMetadata, ImageAccess, ImageHandle,
+    Pipeline, Result, ShaderCompiler, ShaderStage, vk,
 };
 
 /// The HDR output asked for (`--hdr`, `FORGE_HDR`).
@@ -67,6 +68,40 @@ pub const OFFSCREEN_FORMAT: vk::Format = vk::Format::A2B10G10R10_UNORM_PACK32;
 /// The ACES 2.0 peaks the HDR output steps through (F3), in nits: the Academy's presets.
 pub const PEAKS: [f32; 4] = [500.0, 1000.0, 2000.0, 4000.0];
 
+/// What the calibration pages set of the display (issue #125), in nits; `None` takes what the
+/// OS says.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DisplaySettings {
+    /// The brightest the display shows (HGiG's MaxTML).
+    pub peak: Option<f32>,
+    /// The darkest level at which it still shows detail (HGiG's MinTML).
+    pub black: Option<f32>,
+    /// The UI's white (paper white).
+    pub ui_white: Option<f32>,
+}
+
+/// MaxCLL and MaxFALL of the frames shown (issue #125), in nits: the brightest pixel's largest
+/// channel, and the largest frame average of the pixels' largest channels (CTA-861.3, over
+/// Rec.2020).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContentLight {
+    /// MaxCLL.
+    pub max_cll: f32,
+    /// MaxFALL.
+    pub max_fall: f32,
+}
+
+impl ContentLight {
+    /// Takes in a frame's values. Returns whether either grew by more than 1 %: worth telling
+    /// the display again.
+    pub(crate) fn grow(&mut self, frame: ContentLight) -> bool {
+        let grew = frame.max_cll > self.max_cll * 1.01 || frame.max_fall > self.max_fall * 1.01;
+        self.max_cll = self.max_cll.max(frame.max_cll);
+        self.max_fall = self.max_fall.max(frame.max_fall);
+        grew
+    }
+}
+
 /// What the frame's target is and how HDR is set, for the demos' display passes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisplayOutput {
@@ -76,15 +111,26 @@ pub struct DisplayOutput {
     pub format: vk::Format,
     /// What the OS says of the window's display.
     pub caps: Option<DisplayCaps>,
+    /// What the calibration pages set (issue #125), over what the OS says.
+    pub settings: DisplaySettings,
+    /// The display's peak in nits: the calibration's, else the OS's when it shows HDR, else
+    /// 1000.
+    pub display_peak: f32,
+    /// The display's black in nits: the calibration's, else the OS's when it shows HDR, else
+    /// 0.005.
+    pub black: f32,
     /// The peak the HDR output is made for, in nits (ACES 2.0's preset: the largest of
-    /// [`PEAKS`] not above it).
+    /// [`PEAKS`] not above the display's).
     pub peak: f32,
     /// The paper-white offset: stops added to the scene before ACES 2.0. 0 is the Academy's
     /// look (the owner's pick, D-022).
     pub scene_stops: f32,
-    /// The UI's white in nits: the OS's SDR white level when it shows HDR, BT.2408's 203
-    /// nits otherwise.
+    /// The UI's white in nits: the calibration's, else the OS's SDR white level when it shows
+    /// HDR, else BT.2408's 203 nits.
     pub ui_white: f32,
+    /// MaxCLL and MaxFALL of the frames shown since the mode or the peak last changed; `None`
+    /// before the first is measured.
+    pub content_light: Option<ContentLight>,
 }
 
 impl DisplayOutput {
@@ -94,26 +140,66 @@ impl DisplayOutput {
             mode: HdrMode::Off,
             format,
             caps,
+            settings: DisplaySettings::default(),
+            display_peak: 1000.0,
+            black: 0.005,
             peak: 1000.0,
             scene_stops: 0.0,
             ui_white: 203.0,
+            content_light: None,
         };
         output.refresh(caps);
         output
     }
 
-    /// Takes what the OS now says of the display: its peak (as a preset) and SDR white when
-    /// it shows HDR, 1000 and 203 nits otherwise. The paper-white offset stays.
+    /// Takes what the OS now says of the display, under the calibration's values: the peak
+    /// (and its preset), the black and the UI's white. The paper-white offset stays.
     pub(crate) fn refresh(&mut self, caps: Option<DisplayCaps>) {
         let hdr_on = caps.filter(|c| c.hdr_on);
         self.caps = caps;
-        self.peak = hdr_on.and_then(|c| c.peak).map_or(1000.0, preset_peak);
-        self.ui_white = hdr_on.map_or(203.0, |c| c.sdr_white);
+        self.display_peak = self
+            .settings
+            .peak
+            .or(hdr_on.and_then(|c| c.peak))
+            .unwrap_or(1000.0);
+        self.peak = preset_peak(self.display_peak);
+        self.black = self
+            .settings
+            .black
+            .or(hdr_on.and_then(|c| c.black))
+            .unwrap_or(0.005);
+        self.ui_white = self
+            .settings
+            .ui_white
+            .or(hdr_on.map(|c| c.sdr_white))
+            .unwrap_or(203.0);
+    }
+
+    /// The OS's values alone, without the calibration's: what Backspace goes back to on a
+    /// calibration page.
+    pub(crate) fn os_values(&self) -> DisplayOutput {
+        let mut os = DisplayOutput {
+            settings: DisplaySettings::default(),
+            ..*self
+        };
+        os.refresh(self.caps);
+        os
     }
 
     /// Whether the target holds HDR.
     pub fn is_hdr(&self) -> bool {
         self.mode != HdrMode::Off
+    }
+
+    /// What the display is told of the content: the preset's peak, the black, and MaxCLL and
+    /// MaxFALL once measured (the peak and 0, unknown, before).
+    pub fn metadata(&self) -> HdrMetadata {
+        HdrMetadata {
+            peak: self.peak,
+            black: self.black,
+            max_cll: self.content_light.map_or(self.peak, |c| c.max_cll),
+            max_fall: self.content_light.map_or(0.0, |c| c.max_fall),
+        }
     }
 
     /// The overlay's line.
@@ -128,16 +214,49 @@ impl DisplayOutput {
             ),
             None => "display: unknown".to_owned(),
         };
+        let calibrated = if self.settings == DisplaySettings::default() {
+            ""
+        } else {
+            " (calibrated)"
+        };
+        let light = self.content_light.map_or(String::new(), |c| {
+            format!(", MaxCLL {:.0} MaxFALL {:.0} nits", c.max_cll, c.max_fall)
+        });
         format!(
-            "hdr: {} ({:?}), ACES 2.0 at {:.0} nits, paper white {:+.1} stops, UI {:.0} nits; {os}; F2 HDR, F3 peak, F4 false colours",
+            "hdr: {} ({:?}), ACES 2.0 at {:.0} nits, paper white {:+.1} stops, UI {:.0} nits, peak {:.0} black {:.4} nits{calibrated}{light}; {os}; F2 HDR, F3 peak, F4 false colours, F5 calibrate",
             self.mode.name(),
             self.format,
             self.peak,
             self.scene_stops,
-            self.ui_white
+            self.ui_white,
+            self.display_peak,
+            self.black
         )
     }
 }
+
+/// The PQ signal (SMPTE ST 2084) of `nits`, in [0, 1].
+pub fn pq_encode(nits: f32) -> f32 {
+    let (m1, m2, c1, c2, c3) = PQ;
+    let p = (nits / 10000.0).clamp(0.0, 1.0).powf(m1);
+    ((c1 + c2 * p) / (1.0 + c3 * p)).powf(m2)
+}
+
+/// The nits of the PQ signal `signal` (SMPTE ST 2084).
+pub fn pq_decode(signal: f32) -> f32 {
+    let (m1, m2, c1, c2, c3) = PQ;
+    let e = signal.clamp(0.0, 1.0).powf(1.0 / m2);
+    ((e - c1).max(0.0) / (c2 - c3 * e)).powf(1.0 / m1) * 10000.0
+}
+
+/// ST 2084's m1, m2, c1, c2 and c3.
+const PQ: (f32, f32, f32, f32, f32) = (
+    2610.0 / 16384.0,
+    2523.0 / 4096.0 * 128.0,
+    3424.0 / 4096.0,
+    2413.0 / 4096.0 * 32.0,
+    2392.0 / 4096.0 * 32.0,
+);
 
 /// The largest of [`PEAKS`] not above `nits` (the smallest for dimmer displays).
 pub fn preset_peak(nits: f32) -> f32 {
@@ -328,5 +447,79 @@ mod tests {
         );
         assert_eq!((off.peak, off.ui_white), (1000.0, 203.0));
         assert!(!off.is_hdr());
+    }
+
+    #[test]
+    fn pq_gives_the_known_codes() {
+        // docs/research/hdr-output.md: 497 / 520 / 594 / 769 / 923 of 1023 for 80 / 100 / 203 /
+        // 1000 / 4000 nits.
+        for (nits, code) in [
+            (80.0, 497.0),
+            (100.0, 520.0),
+            (203.0, 594.0),
+            (1000.0, 769.0),
+            (4000.0, 923.0),
+        ] {
+            assert_eq!((pq_encode(nits) * 1023.0).round(), code, "{nits}");
+            assert!((pq_decode(pq_encode(nits)) / nits - 1.0).abs() < 1e-4);
+        }
+        // Black is a hair above 0 (c1^m2), well inside code 0.
+        assert!(pq_encode(0.0) < 1e-6 && pq_decode(0.0) == 0.0);
+        assert_eq!(pq_encode(10000.0), 1.0);
+    }
+
+    #[test]
+    fn the_calibration_goes_over_the_os() {
+        let caps = DisplayCaps {
+            hdr_on: true,
+            hdr_supported: true,
+            sdr_white: 240.0,
+            peak: Some(1015.0),
+            full_frame_peak: Some(400.0),
+            black: Some(0.01),
+        };
+        let mut output = DisplayOutput::new(vk::Format::A2B10G10R10_UNORM_PACK32, Some(caps));
+        assert_eq!((output.display_peak, output.black), (1015.0, 0.01));
+        output.settings = DisplaySettings {
+            peak: Some(2400.0),
+            black: None,
+            ui_white: Some(160.0),
+        };
+        output.refresh(Some(caps));
+        assert_eq!(
+            (
+                output.display_peak,
+                output.peak,
+                output.black,
+                output.ui_white
+            ),
+            (2400.0, 2000.0, 0.01, 160.0)
+        );
+        let os = output.os_values();
+        assert_eq!((os.peak, os.ui_white), (1000.0, 240.0));
+        // The metadata: the preset's peak and the black; MaxCLL the peak until measured.
+        let metadata = output.metadata();
+        assert_eq!((metadata.peak, metadata.black), (2000.0, 0.01));
+        assert_eq!((metadata.max_cll, metadata.max_fall), (2000.0, 0.0));
+        output.content_light = Some(ContentLight {
+            max_cll: 812.0,
+            max_fall: 64.0,
+        });
+        assert_eq!(
+            (output.metadata().max_cll, output.metadata().max_fall),
+            (812.0, 64.0)
+        );
+    }
+
+    #[test]
+    fn the_content_light_keeps_the_largest() {
+        let mut light = ContentLight {
+            max_cll: 500.0,
+            max_fall: 50.0,
+        };
+        let frame = |max_cll, max_fall| ContentLight { max_cll, max_fall };
+        assert!(!light.grow(frame(400.0, 50.2)), "within 1 %");
+        assert!(light.grow(frame(600.0, 20.0)));
+        assert_eq!((light.max_cll, light.max_fall), (600.0, 50.2));
     }
 }

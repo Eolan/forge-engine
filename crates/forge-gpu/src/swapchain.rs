@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
+use crate::bindless::SampledImageId;
 use crate::device::Device;
 use crate::error::Result;
 use crate::instance::Surface;
@@ -49,6 +50,20 @@ impl SurfaceMode {
     }
 }
 
+/// What an HDR swapchain tells the display of its content (`VK_EXT_hdr_metadata`, CTA-861.3),
+/// in nits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HdrMetadata {
+    /// The mastering display's peak: the tone curve's.
+    pub peak: f32,
+    /// The mastering display's black.
+    pub black: f32,
+    /// MaxCLL: the brightest pixel's largest channel.
+    pub max_cll: f32,
+    /// MaxFALL: the largest frame average of the pixels' largest channels; 0 when unknown.
+    pub max_fall: f32,
+}
+
 /// The window's presentable images.
 pub struct Swapchain {
     device: Arc<Device>,
@@ -56,6 +71,9 @@ pub struct Swapchain {
     raw: vk::SwapchainKHR,
     images: Vec<vk::Image>,
     views: Vec<vk::ImageView>,
+    /// The images' sampled handles, in the HDR modes when the surface allows it (issue #125:
+    /// the metadata histogram reads the frame there).
+    sampled: Vec<SampledImageId>,
     format: vk::Format,
     extent: vk::Extent2D,
     vsync: bool,
@@ -79,6 +97,7 @@ impl Swapchain {
             raw: vk::SwapchainKHR::null(),
             images: Vec::new(),
             views: Vec::new(),
+            sampled: Vec::new(),
             format: vk::Format::UNDEFINED,
             extent: vk::Extent2D::default(),
             vsync,
@@ -119,9 +138,9 @@ impl Swapchain {
     }
 
     /// Describes the HDR content to the display (`VK_EXT_hdr_metadata`, when the device has
-    /// it; issue #94): Rec.2020 primaries, a D65 white, `peak` nits as the mastering peak and
-    /// the brightest pixel, `black` nits as its black. SDR swapchains are left alone.
-    pub fn set_hdr_metadata(&self, peak: f32, black: f32) {
+    /// it; issues #94, #125): Rec.2020 primaries, a D65 white and `metadata`. SDR swapchains
+    /// are left alone.
+    pub fn set_hdr_metadata(&self, metadata: HdrMetadata) {
         let Some(loader) = self.device.hdr_metadata_loader() else {
             return;
         };
@@ -129,18 +148,18 @@ impl Swapchain {
             return;
         }
         let xy = |x, y| vk::XYColorEXT { x, y };
-        let metadata = vk::HdrMetadataEXT::default()
+        let raw = vk::HdrMetadataEXT::default()
             .display_primary_red(xy(0.708, 0.292))
             .display_primary_green(xy(0.170, 0.797))
             .display_primary_blue(xy(0.131, 0.046))
             .white_point(xy(0.3127, 0.3290))
-            .max_luminance(peak)
-            .min_luminance(black)
-            .max_content_light_level(peak)
-            .max_frame_average_light_level(0.0);
+            .max_luminance(metadata.peak)
+            .min_luminance(metadata.black)
+            .max_content_light_level(metadata.max_cll)
+            .max_frame_average_light_level(metadata.max_fall);
         // SAFETY: a live swapchain created on this device.
-        unsafe { loader.set_hdr_metadata(&[self.raw], &[metadata]) };
-        tracing::info!(peak, black, "HDR metadata set");
+        unsafe { loader.set_hdr_metadata(&[self.raw], &[raw]) };
+        tracing::info!(?metadata, "HDR metadata set");
     }
 
     /// Rebuilds the swapchain for a new size (waits for the device to be idle).
@@ -210,6 +229,26 @@ impl Swapchain {
         if caps.max_image_count > 0 {
             image_count = image_count.min(caps.max_image_count);
         }
+        // HDR images are also sampled (the metadata histogram, issue #125) when the surface and
+        // the format allow it; SDR ones stay as they were.
+        // SAFETY: a format query on a live physical device.
+        let features = unsafe {
+            instance
+                .raw()
+                .get_physical_device_format_properties(physical, format.format)
+        }
+        .optimal_tiling_features;
+        let sampled = mode != SurfaceMode::Sdr
+            && caps
+                .supported_usage_flags
+                .contains(vk::ImageUsageFlags::SAMPLED)
+            && features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE);
+        let mut usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::TRANSFER_SRC;
+        if sampled {
+            usage |= vk::ImageUsageFlags::SAMPLED;
+        }
         let info = vk::SwapchainCreateInfoKHR::default()
             .surface(surface)
             .min_image_count(image_count)
@@ -217,11 +256,7 @@ impl Swapchain {
             .image_color_space(format.color_space)
             .image_extent(extent)
             .image_array_layers(1)
-            .image_usage(
-                vk::ImageUsageFlags::COLOR_ATTACHMENT
-                    | vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::TRANSFER_SRC,
-            )
+            .image_usage(usage)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(caps.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
@@ -257,14 +292,27 @@ impl Swapchain {
                 unsafe { self.device.raw().create_image_view(&view_info, None) }
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        if sampled {
+            self.sampled = self
+                .views
+                .iter()
+                .map(|&view| {
+                    self.device
+                        .register_sampled_image(view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                })
+                .collect();
+        }
         self.format = format.format;
         self.extent = extent;
         self.mode = mode;
-        tracing::info!(?extent, ?present_mode, format = ?format.format, mode = mode.name(), images = self.images.len(), "swapchain created");
+        tracing::info!(?extent, ?present_mode, format = ?format.format, mode = mode.name(), images = self.images.len(), sampled, "swapchain created");
         Ok(())
     }
 
     fn destroy_views_and_swapchain(&mut self) {
+        for id in self.sampled.drain(..) {
+            self.device.release_sampled_image(id);
+        }
         // SAFETY: the device is idle (callers wait) so no frame uses these views or images.
         unsafe {
             for view in self.views.drain(..) {
@@ -327,6 +375,10 @@ impl Swapchain {
     /// View of image `index`.
     pub fn view(&self, index: u32) -> vk::ImageView {
         self.views[index as usize]
+    }
+    /// Sampled handle of image `index`, when the images are sampled (HDR modes, issue #125).
+    pub fn sampled(&self, index: u32) -> Option<SampledImageId> {
+        self.sampled.get(index as usize).copied()
     }
     /// Number of images.
     pub fn image_count(&self) -> usize {

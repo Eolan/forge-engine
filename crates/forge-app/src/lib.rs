@@ -9,7 +9,9 @@
 
 #![forbid(unsafe_code)]
 
+mod calibration;
 mod camera;
+mod content_light;
 mod hdr;
 mod input;
 mod loading;
@@ -21,9 +23,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use calibration::{Action, Calibration, Page, SettingsFile};
 pub use camera::FlyCamera;
+use content_light::ContentLightMeter;
 /// Re-exported: what the OS says of the display, in [`DisplayOutput`].
 pub use forge_gpu::DisplayCaps;
+/// Re-exported: what an HDR swapchain tells the display ([`DisplayOutput::metadata`]).
+pub use forge_gpu::HdrMetadata;
 /// Re-exported for demos that declare their own per-frame targets.
 pub use forge_gpu::TransientDesc;
 /// Re-exported so demos can name Vulkan types without depending on `forge-gpu` directly.
@@ -34,7 +40,9 @@ use forge_gpu::{
     MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface, SurfaceMode,
     Swapchain, VENDOR_NVIDIA,
 };
-pub use hdr::{DisplayOutput, HdrMode, OFFSCREEN_FORMAT, PEAKS, preset_peak};
+pub use hdr::{
+    ContentLight, DisplayOutput, DisplaySettings, HdrMode, OFFSCREEN_FORMAT, PEAKS, preset_peak,
+};
 pub use input::Input;
 pub use loading::Finish;
 pub use overlay::{Canvas, Color, Overlay};
@@ -84,6 +92,11 @@ pub struct AppConfig {
     /// it). On the display it needs the OS to show the display in HDR; F2 switches at run
     /// time.
     pub hdr: HdrMode,
+    /// The paper-white offset: stops added to the scene before ACES 2.0's HDR presets (0, the
+    /// Academy's look, D-022; `--hdr-stops`).
+    pub hdr_stops: f32,
+    /// The UI's white in HDR, in nits, over the calibration's and the OS's (`--hdr-ui-white`).
+    pub hdr_ui_white: Option<f32>,
 }
 
 impl Default for AppConfig {
@@ -102,6 +115,8 @@ impl Default for AppConfig {
             streamline: false,
             force_fallback: false,
             hdr: HdrMode::Off,
+            hdr_stops: 0.0,
+            hdr_ui_white: None,
         }
     }
 }
@@ -245,6 +260,13 @@ pub fn run<D: Demo>(
         if let Some(cpu) = state.ctx.profile.cpu_run_summary() {
             tracing::info!("cpu: {cpu}");
         }
+        if let Some(light) = state.ctx.output.content_light {
+            tracing::info!(
+                "hdr: MaxCLL {:.1} nits, MaxFALL {:.1} nits",
+                light.max_cll,
+                light.max_fall
+            );
+        }
         drop(state);
         tracing::info!(frames, "exited cleanly");
     }
@@ -298,15 +320,25 @@ fn monitor_name(window: &Window) -> Option<String> {
     }
 }
 
+/// The shell's HDR passes besides the demo's (issues #94, #125).
+struct HdrPasses {
+    /// The off-screen mode's preview, made when the mode is first used.
+    preview: Option<hdr::Preview>,
+    /// MaxCLL and MaxFALL from the frames shown, made when HDR is first used.
+    meter: Option<ContentLightMeter>,
+    /// The calibration pages (F5).
+    calibration: Calibration,
+}
+
 /// Switches the output to `mode` (issue #94). HDR10 and scRGB recreate the swapchain in that
 /// mode when the OS shows the display in HDR (and stay off otherwise); off-screen keeps the
 /// swapchain SDR and has the frame drawn into an HDR10 image. Waits for the device whenever the
-/// target's format changes, so the display passes can rebuild their pipelines. Returns whether
-/// the swapchain was recreated.
+/// target's format changes, so the display passes can rebuild their pipelines. The content light
+/// starts again from the new mode's frames (#125). Returns whether the swapchain was recreated.
 fn apply_hdr_mode(
     ctx: &mut Context,
     overlay: &mut Overlay,
-    preview: &mut Option<hdr::Preview>,
+    passes: &mut HdrPasses,
     mut mode: HdrMode,
 ) -> Result<bool> {
     let on_display = matches!(mode, HdrMode::Hdr10 | HdrMode::ScRgb);
@@ -339,17 +371,30 @@ fn apply_hdr_mode(
     }
     ctx.output.mode = mode;
     ctx.output.format = format;
-    if mode == HdrMode::Offscreen && preview.is_none() {
-        *preview = Some(hdr::Preview::new(
+    ctx.output.content_light = None;
+    if mode == HdrMode::Offscreen && passes.preview.is_none() {
+        passes.preview = Some(hdr::Preview::new(
             &ctx.device,
             &ctx.shaders,
             ctx.swapchain.format(),
         )?);
     }
-    if matches!(mode, HdrMode::Hdr10 | HdrMode::ScRgb) {
-        let black = ctx.output.caps.and_then(|c| c.black).unwrap_or(0.005);
-        ctx.swapchain.set_hdr_metadata(ctx.output.peak, black);
+    if mode != HdrMode::Off && passes.meter.is_none() {
+        passes.meter = Some(ContentLightMeter::new(&ctx.device, &ctx.shaders)?);
     }
+    if let Some(meter) = &mut passes.meter {
+        meter.forget();
+    }
+    if passes.calibration.page().is_some() {
+        if mode == HdrMode::Off {
+            passes.calibration.close();
+        } else {
+            passes
+                .calibration
+                .prepare(&ctx.device, &ctx.shaders, format)?;
+        }
+    }
+    ctx.swapchain.set_hdr_metadata(ctx.output.metadata());
     overlay.set_output(&ctx.shaders, ctx.swapchain.format(), ctx.output.ui_white)?;
     tracing::info!("{}", ctx.output.describe());
     Ok(recreated)
@@ -374,10 +419,14 @@ struct State<D: Demo> {
     /// The frame of the last scripted switch (a frame can start twice, after a resize).
     last_hdr_cycle: u64,
     overlay: Overlay,
-    /// The off-screen HDR mode's preview pass, made when the mode is first used.
-    preview: Option<hdr::Preview>,
+    /// The preview, the content-light meter and the calibration pages.
+    hdr: HdrPasses,
     /// The HDR mode asked for at start (`--hdr`, `FORGE_HDR`): the one F2 turns on.
     hdr_requested: HdrMode,
+    /// Where the calibration is saved, in interactive runs (#125), and the monitor it is the
+    /// calibration of: the one the window opened on.
+    settings_file: Option<SettingsFile>,
+    monitor: String,
     /// The render graph's counters of the previous frame (shown in the overlay).
     graph_stats: GraphStats,
     /// When the memory counters were last sampled, and the traffic totals then.
@@ -462,7 +511,7 @@ impl<D: Demo> State<D> {
             HdrMode::Off => HdrMode::Offscreen,
             asked => asked,
         };
-        if apply_hdr_mode(&mut self.ctx, &mut self.overlay, &mut self.preview, mode)? {
+        if apply_hdr_mode(&mut self.ctx, &mut self.overlay, &mut self.hdr, mode)? {
             self.demo.resized(&mut self.ctx)?;
         }
         Ok(())
@@ -470,14 +519,60 @@ impl<D: Demo> State<D> {
 
     /// F3: the next of ACES 2.0's peaks.
     fn next_peak(&mut self) {
-        self.ctx.output.peak = hdr::next_peak(self.ctx.output.peak);
-        if matches!(self.ctx.output.mode, HdrMode::Hdr10 | HdrMode::ScRgb) {
-            let black = self.ctx.output.caps.and_then(|c| c.black).unwrap_or(0.005);
-            self.ctx
-                .swapchain
-                .set_hdr_metadata(self.ctx.output.peak, black);
-        }
+        let peak = self.ctx.output.peak;
+        self.ctx.output.peak = hdr::next_peak(peak);
+        self.content_light_changed(peak);
         tracing::info!("{}", self.ctx.output.describe());
+    }
+
+    /// The preset's peak was `peak` and may have changed: the content light starts again (the
+    /// curve's range is another), and the display is told.
+    fn content_light_changed(&mut self, peak: f32) {
+        if self.ctx.output.peak != peak {
+            self.ctx.output.content_light = None;
+            if let Some(meter) = &mut self.hdr.meter {
+                meter.forget();
+            }
+        }
+        self.ctx
+            .swapchain
+            .set_hdr_metadata(self.ctx.output.metadata());
+    }
+
+    /// F5: the calibration pages, from the first, in an HDR mode (#125).
+    fn open_calibration(&mut self, page: Page) -> Result<()> {
+        if !self.ctx.output.is_hdr() {
+            tracing::warn!("the HDR calibration needs an HDR mode: F2 first");
+            return Ok(());
+        }
+        self.hdr
+            .calibration
+            .open(&self.ctx.device, &self.ctx.shaders, &self.ctx.output, page)?;
+        Ok(())
+    }
+
+    /// A key on the open calibration pages (`fine`: Shift is down).
+    fn calibration_key(&mut self, code: KeyCode, fine: bool) -> Result<()> {
+        let peak = self.ctx.output.peak;
+        let action = self.hdr.calibration.key(code, fine, &mut self.ctx.output);
+        if action == Action::None {
+            return Ok(());
+        }
+        self.overlay.set_output(
+            &self.ctx.shaders,
+            self.ctx.swapchain.format(),
+            self.ctx.output.ui_white,
+        )?;
+        self.content_light_changed(peak);
+        if action == (Action::Closed { save: true }) {
+            if let Some(file) = &self.settings_file
+                && let Err(error) = file.save(&self.monitor, self.ctx.output.settings)
+            {
+                tracing::warn!(%error, "the HDR calibration was not saved");
+            }
+            tracing::info!("{}", self.ctx.output.describe());
+        }
+        Ok(())
     }
 
     fn new(window: Arc<Window>, config: AppConfig, init: InitFn<D>) -> Result<Self> {
@@ -546,12 +641,28 @@ impl<D: Demo> State<D> {
             size.height,
             config.vsync,
         )?;
-        // What the OS says of the window's display (issue #94).
-        let caps = monitor_name(&window).and_then(|name| DisplayCaps::query(&name));
+        // What the OS says of the window's display (issue #94), under the calibration saved for
+        // it and the flags (#125). Scripted runs keep to the OS's values, so captures do not
+        // depend on a calibration.
+        let monitor = monitor_name(&window);
+        let caps = monitor.as_deref().and_then(DisplayCaps::query);
         if let Some(caps) = &caps {
             tracing::info!(?caps, "display");
         }
-        let output = DisplayOutput::new(swapchain.format(), caps);
+        let monitor = monitor.unwrap_or_else(|| "default".to_owned());
+        let settings_file = config
+            .frame_limit
+            .is_none()
+            .then(|| SettingsFile::new(root.join("settings/display.txt")));
+        let mut output = DisplayOutput::new(swapchain.format(), caps);
+        if let Some(file) = &settings_file {
+            output.settings = file.load(&monitor);
+        }
+        if config.hdr_ui_white.is_some() {
+            output.settings.ui_white = config.hdr_ui_white;
+        }
+        output.scene_stops = config.hdr_stops;
+        output.refresh(caps);
         let frames = Frames::new(Arc::clone(&device), swapchain.image_count())?;
         let shaders = ShaderCompiler::new(
             root.join("shaders"),
@@ -603,14 +714,31 @@ impl<D: Demo> State<D> {
             }),
             Err(_) => config.hdr,
         };
-        let mut preview = None;
-        apply_hdr_mode(&mut ctx, &mut overlay, &mut preview, requested)?;
+        let mut hdr = HdrPasses {
+            preview: None,
+            meter: None,
+            calibration: Calibration::new(),
+        };
+        apply_hdr_mode(&mut ctx, &mut overlay, &mut hdr, requested)?;
+        // `FORGE_HDR_CALIBRATION=peak|black|white` opens a calibration page (scripted captures).
+        if let Ok(name) = std::env::var("FORGE_HDR_CALIBRATION") {
+            match Page::parse(&name) {
+                Some(page) if ctx.output.is_hdr() => {
+                    hdr.calibration
+                        .open(&ctx.device, &ctx.shaders, &ctx.output, page)?;
+                }
+                Some(_) => tracing::warn!("FORGE_HDR_CALIBRATION needs an HDR mode"),
+                None => tracing::warn!("FORGE_HDR_CALIBRATION: peak, black or white"),
+            }
+        }
         let demo = init(&mut ctx)?;
         Ok(Self {
             demo,
             ctx,
-            preview,
+            hdr,
             hdr_requested: requested,
+            settings_file,
+            monitor,
             input: Input::default(),
             needs_resize: None,
             last_frame: Instant::now(),
@@ -762,6 +890,23 @@ impl<D: Demo> State<D> {
         if let Some(ms) = slot.previous_gpu_ms {
             tracy_client::plot!("gpu ms", ms);
         }
+        // The content light the slot's last frame measured (#125): the display hears of it
+        // when it grows.
+        if let Some((measured, light)) = self.hdr.meter.as_mut().and_then(|m| m.take(slot)) {
+            tracing::debug!(frame = measured, ?light, "content light");
+            let grew = match &mut self.ctx.output.content_light {
+                Some(content) => content.grow(light),
+                None => {
+                    self.ctx.output.content_light = Some(light);
+                    true
+                }
+            };
+            if grew {
+                self.ctx
+                    .swapchain
+                    .set_hdr_metadata(self.ctx.output.metadata());
+            }
+        }
         let acquire_start = Instant::now();
         let Some(image_index) = self
             .ctx
@@ -866,6 +1011,7 @@ impl<D: Demo> State<D> {
                     access: vk::AccessFlags2::NONE,
                     write: false,
                 },
+                sampled: self.ctx.swapchain.sampled(image_index),
                 name: "swapchain",
             });
             let target = if offscreen {
@@ -891,7 +1037,35 @@ impl<D: Demo> State<D> {
                 dt,
             };
             self.demo.render(&mut self.ctx, &mut frame)?;
-            if offscreen && let Some(preview) = &self.preview {
+            // In HDR (#125): a calibration page over the frame, or the content light of the
+            // frame as shown (when its image can be sampled: always off-screen, on the display
+            // when the surface allows it).
+            let hdr_frame = self.ctx.output.is_hdr() && !self.ctx.loading;
+            let calibrating = hdr_frame && self.hdr.calibration.page().is_some();
+            if calibrating {
+                self.hdr
+                    .calibration
+                    .draw(&mut frame.graph, target, extent, &self.ctx.output);
+            } else if hdr_frame
+                && (offscreen || self.ctx.swapchain.sampled(image_index).is_some())
+                && let Some(meter) = &mut self.hdr.meter
+            {
+                // `OUTPUT_SCRGB` or `OUTPUT_PQ` of `tonemap.slang`.
+                let encoding = if self.ctx.output.format == vk::Format::R16G16B16A16_SFLOAT {
+                    3
+                } else {
+                    2
+                };
+                meter.measure(
+                    &mut frame.graph,
+                    slot,
+                    frame_number,
+                    target,
+                    extent,
+                    encoding,
+                );
+            }
+            if offscreen && let Some(preview) = &self.hdr.preview {
                 preview.draw(
                     &mut frame.graph,
                     target,
@@ -900,13 +1074,17 @@ impl<D: Demo> State<D> {
                     &self.ctx.output,
                 );
             }
-            if self.ctx.profile.is_visible() && !self.ctx.loading {
-                if self.ctx.output.is_hdr() {
+            if calibrating || (self.ctx.profile.is_visible() && !self.ctx.loading) {
+                if !calibrating && self.ctx.output.is_hdr() {
                     self.ctx.profile.counter(self.ctx.output.describe());
                 }
                 let title = self.config.title.clone();
                 let canvas = self.overlay.begin(extent);
-                self.ctx.profile.layout(canvas, &title, extent);
+                if calibrating {
+                    self.hdr.calibration.layout(canvas, &self.ctx.output);
+                } else {
+                    self.ctx.profile.layout(canvas, &title, extent);
+                }
                 self.overlay
                     .draw(&mut frame.graph, slot.index, swapchain_image, extent);
             }
@@ -1115,6 +1293,26 @@ impl<D: Demo> ApplicationHandler for App<D> {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let pressed = event.state == ElementState::Pressed;
+                    // The open calibration pages take the keys (#125); Escape leaves them.
+                    if state.hdr.calibration.page().is_some() {
+                        // Shift is tracked for the steps, and releases always (a key held
+                        // when the pages opened must not stay down for the demo).
+                        if !pressed || matches!(code, KeyCode::ShiftLeft | KeyCode::ShiftRight) {
+                            state.input.set_key(code, pressed);
+                        }
+                        let fine = state.input.is_down(KeyCode::ShiftLeft)
+                            || state.input.is_down(KeyCode::ShiftRight);
+                        // Held, Up and Down repeat; the other keys act once.
+                        let steps = matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown);
+                        if pressed
+                            && (steps || !event.repeat)
+                            && let Err(e) = state.calibration_key(code, fine)
+                        {
+                            self.error = Some(e);
+                            event_loop.exit();
+                        }
+                        return;
+                    }
                     if pressed && code == KeyCode::Escape {
                         event_loop.exit();
                         return;
@@ -1137,8 +1335,15 @@ impl<D: Demo> ApplicationHandler for App<D> {
                         return;
                     }
                     if pressed && code == KeyCode::F4 {
-                        if let Some(preview) = &mut state.preview {
+                        if let Some(preview) = &mut state.hdr.preview {
                             preview.false_colours = !preview.false_colours;
+                        }
+                        return;
+                    }
+                    if pressed && code == KeyCode::F5 {
+                        if let Err(e) = state.open_calibration(Page::Peak) {
+                            self.error = Some(e);
+                            event_loop.exit();
                         }
                         return;
                     }

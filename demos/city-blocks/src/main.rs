@@ -106,10 +106,19 @@ struct Args {
     #[arg(long, default_value = "agx")]
     tonemap: Tonemap,
     /// HDR output: off, hdr10, scrgb or offscreen (F2 switches it at run time, F3 steps the
-    /// peak). HDR10 and scRGB need the OS to show the display in HDR; offscreen previews an HDR10
-    /// image on any monitor. ACES 2.0 (G) is the curve made for it.
+    /// peak, F5 opens the calibration pages). HDR10 and scRGB need the OS to show the display in
+    /// HDR; offscreen previews an HDR10 image on any monitor. ACES 2.0 (G) is the curve made for
+    /// it.
     #[arg(long, default_value = "off")]
     hdr: HdrMode,
+    /// The paper-white offset in HDR: stops added to the scene before ACES 2.0 (0, the
+    /// Academy's look).
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    hdr_stops: f32,
+    /// The UI's white in HDR, in nits (by default the calibration's, else the OS's SDR white,
+    /// else 203).
+    #[arg(long)]
+    hdr_ui_white: Option<f32>,
     /// Force the profiling overlay on (also in scripted runs). F1 toggles it.
     #[arg(long)]
     overlay: bool,
@@ -4036,6 +4045,8 @@ fn main() -> Result<()> {
         overlay: if args.overlay { Some(true) } else { None },
         force_fallback: args.force_fallback,
         hdr: args.hdr,
+        hdr_stops: args.hdr_stops,
+        hdr_ui_white: args.hdr_ui_white,
         width: args.width,
         height: args.height,
         ..AppConfig::default()

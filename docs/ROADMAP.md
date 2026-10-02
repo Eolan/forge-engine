@@ -74,7 +74,8 @@ the owner having picked the Academy's look for paper white: HDR10 and scRGB on t
 when Windows shows it in HDR, an off-screen HDR10 mode previewed and captured on any monitor,
 ACES 2.0's 500–4000-nit presets as tables, F2/F3/F4 (`docs/demos/asteroids.md`, "HDR
 output"; 0.01 ms in the resolve at 1440p). The present waits for "Use HDR" on the owner's
-monitor; the calibration pages are #125. HDR-ꟻLIP for the HDR captures ✅ (#126: it matches
+monitor. The calibration pages and MaxCLL and MaxFALL from the frame ✅ (#125: F5, peak, black
+and paper white, saved per monitor). HDR-ꟻLIP for the HDR captures ✅ (#126: it matches
 NVIDIA's tool; class 2's HDR thresholds proposed in D-017's second amendment 🟡). Then #39
 (the RTX 3080 run, which can also retry #95's double buffer).
 

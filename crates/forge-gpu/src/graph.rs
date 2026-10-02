@@ -551,6 +551,9 @@ pub struct RawImage {
     pub aspect: vk::ImageAspectFlags,
     /// State on entry (for a swapchain image: `UNDEFINED`, waiting at the acquire stage).
     pub state: ResourceState,
+    /// Its sampled-image handle, registered with `SHADER_READ_ONLY_OPTIMAL`, when shaders may
+    /// read it (an HDR swapchain's images, issue #125).
+    pub sampled: Option<SampledImageId>,
     /// Debug name.
     pub name: &'static str,
 }
@@ -1830,7 +1833,7 @@ impl RenderGraph {
                         format: raw.format,
                         usage: vk::ImageUsageFlags::empty(),
                         sampled_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                        sampled: None,
+                        sampled: raw.sampled,
                         storage: Vec::new(),
                     });
                     image_states.push(vec![raw.state]);

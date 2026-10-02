@@ -111,6 +111,13 @@ exposure (EV100, target, compensation, curve) the last.
   off-screen mode adds `post/hdr preview`, 0.038–0.042 ms at 1440p and 0.014 at 1600 × 900;
   its frame 2.616–2.648 → 2.659–2.714 ms at 1440p. Each HDR preset's table is baked once per
   process, 10–15 ms.
+- MaxCLL and MaxFALL from the frame shown (#125), in every HDR mode: `post/hdr metadata
+  histogram` takes 0.033–0.038 ms at 1440p and 0.015–0.016 at 1600 × 900 (the ballad, three
+  runs), about what the exposure histogram costs. The first kernel, a thread per pixel with
+  the largest signal kept by a shared atomic, took 0.048–0.051 ms. A 2 × 2 quad per thread (a
+  quad of one bin counted with one atomic, a wave of them with one) and the largest reduced
+  over the wave first took it to 0.033. Sixteen pixels per thread were slower again (0.045). The calibration page
+  (`app/hdr calibration`) takes 0.029 ms at 1440p while it is open, and the meter rests then.
 - Pass 2's cluster cull over pass 1's rejects only (#92): pass 1 lists the 36 k clusters the
   previous pyramid hid, and pass 2 tests those alone. Cluster cull 2 goes 0.134 → 0.017 ms,
   cluster cull 1 0.139 → 0.167; in all 1.403 → 1.308 ms at 1600 × 900 and 2.82 → 2.67 ms at

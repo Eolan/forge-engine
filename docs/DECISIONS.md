@@ -530,15 +530,16 @@ transform's output is encoded for its target, chosen from the target's format:
 On the display, an HDR mode is entered only when asked (`--hdr`, `FORGE_HDR`, F2) and when the
 OS shows the display in HDR (Windows' "Use HDR", read through the display configuration API),
 so scripted runs never switch the owner's monitor. `VK_EXT_hdr_metadata` gets Rec.2020
-primaries, the preset's peak and the panel's black. **Off-screen** draws the same HDR10 image
+primaries, the preset's peak, the panel's black, and the content's MaxCLL and MaxFALL (#125,
+below). **Off-screen** draws the same HDR10 image
 into a transient and previews it on the SDR swapchain (`post/hdr preview`: what a display at
 paper white shows below it, or false colours): everything but the present runs, and is
 captured, on any monitor.
 
 **ACES 2.0's HDR presets.** The Academy's peaks (500, 1000, 2000, 4000 nits, P3-D65 limited;
 Rec.2020 limiting available) run the SDR chain with the output clamped at the peak and
-converted to Rec.2020. The preset is the largest not above the panel's peak (DXGI), 1000 nits
-when unknown, and F3 steps through them. Each runs through its own 65³ table of the PQ
+converted to Rec.2020. The preset is the largest not above the panel's peak (the calibration's,
+else DXGI's), 1000 nits when unknown, and F3 steps through them. Each runs through its own 65³ table of the PQ
 signal (`R16G16B16A16_UNORM`, its grid's top at the preset's clamp, 4096 at 1000 nits),
 baked once per process (10–15 ms). Against the per-pixel transform it is within 1.3 10-bit
 codes at the 99th percentile, where the SDR table is at 1.5 8-bit codes. `meshlets
@@ -550,6 +551,30 @@ stops in front of ACES 2.0, 0 by default, so the transform's own grey and white 
 UI, and every other tone curve (their SDR image), are drawn at the UI's white: Windows' SDR
 white level for that display, BT.2408's 203 nits when unknown. The overlay is written at
 that white and never through a curve.
+
+**Calibration** (issue #125, 2026-10-02). F5 opens three pages in HGiG's and Unity's form,
+drawn over the frame in the target's encoding without dither (`app/hdr calibration`):
+- **Peak:** a mark inside a square of a tenth of the screen at the signal's top (10 000 nits),
+  raised until it disappears: the brightest the display shows (HGiG's MaxTML). Unity fills the
+  screen; a tenth keeps a panel's full-screen limit from lowering the answer.
+- **Black:** a mark on black, at the darkest value it still shows (MinTML).
+- **Paper white:** half the screen at that peak, half black, the mark at the UI's white.
+
+Up and Down move the value by 4 PQ codes (1 with Shift), and it applies at once. The calibrated
+values go over the OS's: the peak picks the preset (the largest not above it), the black goes
+to the metadata, the UI's white to the overlay and the other curves. ACES 2.0 has no black
+parameter, so the black changes nothing on screen. Leaving the last page saves the values per
+monitor in `settings/display.txt` (ignored by git). Scripted runs neither read nor write it,
+so captures never depend on it. `--hdr-ui-white` sets the UI's white over both, and
+`--hdr-stops` the paper-white offset.
+
+**MaxCLL and MaxFALL** come from the frames shown (`post/hdr metadata histogram`): each
+pixel's largest channel as a PQ signal over Rec.2020, counted into 256 bins with the largest
+signal kept, read back two frames later. The display is told the largest values since the mode
+or the preset last changed, and told again when one grows by more than 1 %. MaxCLL is exact to
+the code; MaxFALL is within half a bin (2 % of the luminance). On the display the swapchain's
+images are sampled for it when the surface allows. When it doesn't, MaxCLL stays the preset's
+peak and MaxFALL 0, as before.
 
 ## D-023 — Atmospheres: Hillaire 2020 tables in the graph, a per-pixel march from space ✅ (2026-09-24)
 

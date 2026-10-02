@@ -167,7 +167,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Scott Daly, "Perceptual Signal Coding for More Efficient Usage of Bit Codes", *SMPTE Motion
   Imaging Journal* 122(4), 2013), and ITU-R BT.2100, BT.2087 and BT.2408 (Rec.2020 primaries,
   the conversion from Rec.709, the 203-nit reference white): the HDR10 output
-  (`shaders/tonemap.slang`, `crates/forge-render/src/aces2.rs`, issue #94).
+  (`shaders/tonemap.slang`, `crates/forge-render/src/aces2.rs`, issue #94). CTA-861.3's
+  MaxCLL and MaxFALL, measured from the frames shown (`shaders/hdr_metadata.slang`, #125).
+- **HDR calibration.** The HDR Gaming Interest Group's guidelines ("For a Better HDR Gaming
+  Experience": MaxTML, MinTML, the mark that disappears) and Unity's HDR Calibration Sample
+  (Unity Technologies: the peak, black and paper-white pages): the calibration pages
+  (`crates/forge-app/src/calibration.rs`, #125).
 - **Bloom.** Jorge Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare",
   SIGGRAPH 2014: the downsample and upsample chain, and its firefly weighting.
 - **TAA.**

@@ -59,5 +59,5 @@ pub use pipeline::{
     ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline, VertexPipelineDesc,
 };
 pub use shader::{ShaderCompiler, ShaderEntry, ShaderStage};
-pub use swapchain::{SurfaceMode, Swapchain};
+pub use swapchain::{HdrMetadata, SurfaceMode, Swapchain};
 pub use timers::{GpuTimerSlot, GpuTimers, GpuZone, MAX_MARKS_PER_FRAME};

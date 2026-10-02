@@ -18,6 +18,8 @@
 .env.*
 server-auth.md
 config/server-identity/
+# The HDR calibration saved by the demos (F5, issue #125): per machine and monitor.
+/settings/
 
 # Editors and OS noise
 .vscode/

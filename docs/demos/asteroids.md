@@ -319,9 +319,36 @@ SDR preview clips and what the dark space hides: GTAO off against on peaks at 0.
 0.135 in SDR. Its measurements and proposed thresholds are in `docs/PROCESS.md` ("The
 perceptual check", "HDR captures") and `reports/2026-10-02-126/`.
 
-**Left for later:**
-- the calibration pages (peak, black, paper white) and MaxCLL from the frame (#125);
-- the present on an HDR display, which waits for "Use HDR" on the owner's monitor.
+**Calibrating the display** (#125): **F5** opens three pages over the frame, in HGiG's and
+Unity's form (D-022, "Calibration"):
+- **Peak:** raise the mark (Up) until it disappears into the white square, which sits at the
+  signal's top on a tenth of the screen. That is the brightest the display shows, and it picks
+  ACES 2.0's preset.
+- **Black:** the darkest mark that still shows.
+- **Paper white:** the mark across a half at the peak and a half of black: the UI's white.
+
+Up and Down move the value by 4 PQ codes (1 with Shift), Backspace goes back to what Windows
+says, F5 moves on and saves after the last page, and Esc leaves with the values of before. Each
+value applies at once, and the saved ones are kept per monitor in `settings/display.txt`
+(interactive runs only). `--hdr-ui-white` and `--hdr-stops` set the UI's white and the
+paper-white offset from the command line.
+
+![The pages' PQ codes as grey: peak, black (codes ×16), paper white](../../reports/2026-10-02-125/pages.png)
+
+The pages' captures hold exactly the codes they should: the square at 1023 and the mark at
+769 (1000 nits); the black page's mark alone on code 0; the paper-white halves at 769 and 0,
+the mark at 594 (203 nits).
+
+**The display's metadata** now takes MaxCLL and MaxFALL from the frames shown (`post/hdr
+metadata histogram`), and the overlay's HDR line shows them. On the ballad's frame 600 the
+meter reads MaxCLL 1007.9 nits, the capture's brightest code (770) exactly. Its frame
+average, 10.07 nits, is within 0.1 % of the 10.06 the capture's pixels give. The pass takes
+0.033–0.038 ms at 1440p and 0.015–0.016 at 1600 × 900, in HDR only. The calibration page
+takes 0.029 ms at 1440p while it is open, and the meter rests then. Checks in
+`reports/2026-10-02-125/`.
+
+**Left for later:** the present on an HDR display, which waits for "Use HDR" on the owner's
+monitor; then the calibration on it.
 
 ## Ships through the belt (2026-10-02, issue #79)
 
