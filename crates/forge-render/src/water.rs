@@ -530,9 +530,12 @@ struct GpuWaterSurface {
     at_camera: u64,
     pad_at_camera: [u32; 2],
     fresh: [f32; 4],
+    floaters: u64,
+    floater_cells: u64,
+    floater_grid: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 768);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 800);
 
 /// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
 /// its absorption and its scattering, then `water/under`'s dispatch.
@@ -636,6 +639,83 @@ fn mouth_grid(mouths: &[WaterMouth], origin: [f32; 2], extent: f32) -> Vec<u32> 
 struct GpuRiverStone {
     /// World x, z, the radius at the water's level (0 under it), the mean radius.
     a: [f32; 4],
+}
+
+/// Something floating in the water this frame ([`WaterSurface::set_floaters`], #107): the
+/// rivers' water flows around it as around a stone, the flow taken relative to it, so a thing
+/// carried at the stream's speed barely stirs it and one slower or faster piles up white in
+/// front and trails a wake. Still water and the sea are left alone (their wakes are waves:
+/// wave particles, still to come).
+#[derive(Clone, Copy, Debug)]
+pub struct WaterFloater {
+    /// World x and z (the sea's frame), metres.
+    pub position: [f32; 2],
+    /// The radius of its outline at the water's level, metres.
+    pub waterline: f32,
+    /// Its velocity, world x and z, m/s.
+    pub velocity: [f32; 2],
+}
+
+/// Mirrors `Floater` in `water.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuFloater {
+    /// World x, z, the radius at the water's level, 0.
+    a: [f32; 4],
+    /// The velocity (world x, z), 0, 0.
+    b: [f32; 4],
+}
+
+/// Floaters a frame's water takes at most (the nearest the caller chose).
+pub const MAX_FLOATERS: usize = 64;
+
+/// How far a floater parts the flow, in radii of its outline (`FLOATER_REACH` in `water.slang`).
+const FLOATER_REACH: f32 = 30.0;
+/// The grid that lists the floaters reaching each cell around the camera, so a pixel looks at
+/// those alone: metres a cell, cells a side, and the entries of its lists at most.
+const FLOATER_CELL: f32 = 16.0;
+const FLOATER_CELLS: usize = 32;
+const FLOATER_ENTRIES: usize = 4096;
+/// Bytes after the frame's block: the floaters, then the grid's cells and its lists.
+const FLOATER_BYTES: usize = MAX_FLOATERS * std::mem::size_of::<GpuFloater>()
+    + (FLOATER_CELLS * FLOATER_CELLS + FLOATER_ENTRIES) * 4;
+
+/// The floaters' grid around `camera` (world x and z): its origin, and per cell the first entry
+/// of its list and their count (16 bits each), then the lists, the floaters' indices. A floater
+/// is listed in each cell its reach overlaps; one past the grid, or past its entries, is left
+/// out.
+fn floater_grid(floaters: &[GpuFloater], camera: [f64; 2]) -> ([f32; 2], Vec<u32>) {
+    let n = FLOATER_CELLS;
+    let origin = camera
+        .map(|c| ((c / f64::from(FLOATER_CELL)).floor() as f32 - (n / 2) as f32) * FLOATER_CELL);
+    let at = |v: f32, axis: usize| ((v - origin[axis]) / FLOATER_CELL).floor() as i64;
+    let mut lists: Vec<Vec<u32>> = vec![Vec::new(); n * n];
+    for (index, f) in floaters.iter().enumerate() {
+        let reach = FLOATER_REACH * f.a[2];
+        let (x0, x1) = (
+            at(f.a[0] - reach, 0).max(0),
+            at(f.a[0] + reach, 0).min(n as i64 - 1),
+        );
+        let (y0, y1) = (
+            at(f.a[1] - reach, 1).max(0),
+            at(f.a[1] + reach, 1).min(n as i64 - 1),
+        );
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                lists[y as usize * n + x as usize].push(index as u32);
+            }
+        }
+    }
+    let mut cells = Vec::with_capacity(n * n + FLOATER_ENTRIES);
+    let mut entries = Vec::new();
+    for list in &lists {
+        let first = entries.len();
+        let count = list.len().min(FLOATER_ENTRIES - first);
+        entries.extend_from_slice(&list[..count]);
+        cells.push(first as u32 | (count as u32) << 16);
+    }
+    cells.extend(entries);
+    (origin, cells)
 }
 
 /// A stone in a river ([`WaterShore::stones`]): the water flows around it where it breaks the
@@ -1050,6 +1130,8 @@ pub struct WaterSurface {
     /// The water at the camera (`WaterAtCamera`), which `water/at-camera` writes.
     at_camera: GraphBuffer,
     blocks: Vec<Buffer>,
+    /// The floaters [`WaterSurface::set_floaters`] gave for the next draw (#107).
+    floaters: std::cell::RefCell<Vec<GpuFloater>>,
     /// The surface's quads as indices into a level's vertices ([`surface_indices`]), and each
     /// set's ranges per block.
     surface_indices: Buffer,
@@ -1311,8 +1393,9 @@ impl WaterSurface {
         let (lakes, lakes_under) = fresh_pipelines("lake", "water lakes")?;
         let blocks = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
+                // The block, then this frame's floaters and their grid (`set_floaters`).
                 device.create_buffer(BufferDesc {
-                    size: std::mem::size_of::<GpuWaterSurface>() as u64,
+                    size: (std::mem::size_of::<GpuWaterSurface>() + FLOATER_BYTES) as u64,
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                     location: MemoryLocation::CpuToGpu,
                     category: MemoryCategory::Frame,
@@ -1591,10 +1674,25 @@ impl WaterSurface {
             under: under?,
             at_camera,
             blocks,
+            floaters: std::cell::RefCell::new(Vec::new()),
             surface_indices,
             surface_ranges,
             shore,
         })
+    }
+
+    /// What floats in the water this frame (#107): at most [`MAX_FLOATERS`] of `floaters`, the
+    /// nearest the caller chose. The next [`WaterSurface::draw`] takes them; a draw without
+    /// any draws none.
+    pub fn set_floaters(&self, floaters: &[WaterFloater]) {
+        *self.floaters.borrow_mut() = floaters
+            .iter()
+            .take(MAX_FLOATERS)
+            .map(|f| GpuFloater {
+                a: [f.position[0], f.position[1], f.waterline, 0.0],
+                b: [f.velocity[0], f.velocity[1], 0.0, 0.0],
+            })
+            .collect();
     }
 
     /// Bytes of the rivers' points and of the heights they lie on (0 without rivers).
@@ -1870,6 +1968,24 @@ impl WaterSurface {
         // The water at the camera.
         let at_camera = in_reach.then(|| graph.import_buffer(&self.at_camera));
         let at_camera_address = at_camera.map_or(0, |_| self.at_camera.address());
+        // What floats in the water (#107), after the block: the floaters `set_floaters` gave,
+        // then their grid around the camera.
+        let floater_list = std::mem::take(&mut *self.floaters.borrow_mut());
+        let floaters = address + std::mem::size_of::<GpuWaterSurface>() as u64;
+        let floater_cells = floaters + (MAX_FLOATERS * std::mem::size_of::<GpuFloater>()) as u64;
+        let floater_grid = if floater_list.is_empty() {
+            [0.0; 4]
+        } else {
+            let (origin, cells) = floater_grid(&floater_list, [params.camera.x, params.camera.z]);
+            block.write(floaters - address, &floater_list);
+            block.write(floater_cells - address, &cells);
+            [
+                origin[0],
+                origin[1],
+                1.0 / FLOATER_CELL,
+                FLOATER_CELLS as f32,
+            ]
+        };
         if let Some(at_camera) = at_camera {
             let pipeline = &self.at_camera_pass;
             let mut pass = graph
@@ -1976,6 +2092,9 @@ impl WaterSurface {
                     at_camera: at_camera_address,
                     pad_at_camera: [0; 2],
                     fresh,
+                    floaters,
+                    floater_cells,
+                    floater_grid,
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.

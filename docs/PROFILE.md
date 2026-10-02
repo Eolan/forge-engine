@@ -739,6 +739,17 @@ With the movers' acceleration structure (the second step), the same views and ro
 - The probes' wake (#69, the third step), `gi/probe wake` on the compute queue: 0.010 ms with
   1 000 movers and 0.008 with 10 000 (600 frames from the largest mouth).
 
+**Objects in the rivers** (#107, 2026-10-02): the water parting around the floaters, 1 000
+barrels with and without `--no-floaters`, two rounds, 1 500 frames each, 2560 × 1440.
+
+| View | `water/surface`: without → with the floaters | frame |
+|---|---|---|
+| the moored barrel from above (`-1954.0,51.69,249.9,77.1,-49.6`) | 0.069 → 0.081 ms | 3.38 → 3.39 ms |
+| the largest mouth from 4 m (`4384,4.0,-2840,-88.9,-20`) | 0.451 → 0.446–0.479 ms | 3.47 → 3.42–3.51 ms |
+
+- A pixel looks at the floaters its cell of a 16 m grid lists. Looping over all 64 in every
+  river pixel cost 0.10 ms from the moored barrel and 0.34 ms from the mouth.
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

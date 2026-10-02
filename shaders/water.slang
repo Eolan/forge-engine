@@ -288,6 +288,13 @@ struct RiverStone
     float4 a; // world x, z (the sea's frame), the radius of its outline at the water's level (m; 0 under it), its mean radius (m)
 };
 
+// Something floating in the water this frame (`GpuFloater` in water.rs, #107).
+struct Floater
+{
+    float4 a; // world x, z (the sea's frame), the radius of its outline at the water's level (m), 0
+    float4 b; // its velocity (world x, z; m/s), 0, 0
+};
+
 // The water at the camera (`water/at-camera`, #108): its surface there as a plane, and its
 // water's colour.
 struct WaterAtCamera
@@ -344,6 +351,9 @@ struct WaterSurface
     WaterAtCamera* at_camera; // the water at the camera, or null: the camera stands too high to be under it
     uint2 pad_at_camera;
     float4 fresh;         // the fresh water the camera stands in or over: its level (m), 1 a lake or 2 a river (0: the sea's), 0, 0
+    Floater* floaters;    // what floats in the water this frame (#107)
+    uint* floater_cells;  // their grid around the camera: per cell its list's first entry and count (16 bits each), then the lists (indices into `floaters`)
+    float4 floater_grid;  // the grid's origin (world x, z), 1 / metres a cell, cells a side (0: no floaters)
 };
 
 struct SurfacePush
@@ -1220,6 +1230,63 @@ StoneFlow stones_at(WaterSurface* w, uint segment, float2 world, float2 velocity
     return o;
 }
 
+// What floats in a river (#107): the water parts around each thing as around a stone breaking
+// the surface (`stones_at`), the flow taken relative to it, so a thing the stream carries at
+// its own speed barely stirs it and one held back or pushed through it piles up white in front
+// and trails a wake. (In still water and the sea a wake is waves, which the stones' flow does
+// not draw: wave particles, `docs/research/water.md`.) Its flow and its wake fade out over the
+// second half of this many radii of its outline. A pixel looks at those its cell of the grid
+// around the camera lists, the ones whose reach overlaps it.
+static const float FLOATER_REACH = 30.0;
+
+StoneFlow floaters_at(WaterSurface* w, float2 world, StoneFlow o)
+{
+    float4 grid = w[0].floater_grid;
+    uint cells = uint(grid.w);
+    int2 cell = int2(floor((world - grid.xy) * grid.z));
+    if (any(cell < 0) || any(cell >= int(cells)))
+        return o;
+    uint listed = w[0].floater_cells[uint(cell.y) * cells + uint(cell.x)];
+    uint first = cells * cells + (listed & 0xFFFFu);
+    float2 change = 0.0;
+    float fastest = 0.0;
+    for (uint j = first; j < first + (listed >> 16); j++)
+    {
+        Floater f = w[0].floaters[w[0].floater_cells[j]];
+        float2 d = world - f.a.xy;
+        float outline = f.a.z;
+        float reach = FLOATER_REACH * outline;
+        float r2 = max(dot(d, d), 1e-4);
+        if (r2 >= reach * reach)
+            continue;
+        float r = sqrt(r2);
+        float fade = 1.0 - smoothstep(0.5, 1.0, r / reach);
+        float2 relative = o.velocity - f.b.xy;
+        float speed = length(relative);
+        if (speed < 1e-3)
+            continue;
+        fastest = max(fastest, speed);
+        float2 down = relative / speed;
+        float2 side = float2(-down.y, down.x);
+        float x = dot(d, down);
+        float y = dot(d, side);
+        float k = outline * outline / (r2 * r2);
+        float2 local = float2(1.0 - k * (x * x - y * y), -2.0 * k * x * y);
+        change += (down * (local.x - 1.0) + side * local.y) * (speed * fade);
+        float front = (r - outline) / (0.3 * outline + 0.05);
+        float pillow = exp(-front * front) * saturate(-x / r);
+        float spread = outline + RIVER_WAKE_SPREAD * max(x, 0.0);
+        float across = y / spread;
+        float wake = x > 0.0 ? exp(-across * across) * exp(-x / (RIVER_WAKE_LENGTH * outline)) * fade : 0.0;
+        o.white = max(o.white, max(pillow, 0.7 * wake) * smoothstep(0.3, 1.5, speed));
+        o.rough = max(o.rough, wake);
+    }
+    // As around the stones: never faster than twice the flow past them.
+    float changed = length(change);
+    o.velocity += changed > fastest ? change * (fastest / changed) : change;
+    return o;
+}
+
 // White water's pattern: metres a cell of its coarser octave of noise across the river, and how
 // many times longer the cells are down it (the finer octave is 2.5 times finer both ways).
 static const float RIVER_FOAM_CELL = 0.35;
@@ -1388,6 +1455,9 @@ FreshWater river_water(WaterSurface* w, RiverOut input)
     float u = saturate(out_from_middle / max(half_water, 1e-3));
     float2 velocity = down * (input.river.w * (1.0 - 0.4 * u * u));
     StoneFlow stones = stones_at(w, input.segment, world, velocity);
+    // And around what floats in it (#107).
+    if (w[0].floater_grid.w > 0.0)
+        stones = floaters_at(w, world, stones);
     // White water in riffles where the water falls steeply and fast, and on and behind the
     // stones. (Not along the banks: the water's edge there follows the carved ground's metre
     // triangles, and a line of foam drew them.)

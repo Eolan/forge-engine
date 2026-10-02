@@ -814,7 +814,8 @@ water in a carved channel:
   as a potential flow parts around a cylinder, piles up white in front of it and trails a wake
   behind, widening and fading over 8 radii; a stone under the water roughens the surface over
   it. Anything else standing in the water shows by the contact, the water's edge fading where it
-  thins against it; the stones' list is the place for a game's objects to join the flow. (A
+  thins against it. A game's objects join the flow through a list of their own, written every
+  frame (#107, "Objects in the water"). (A
   line of foam wherever fast water thinned against anything drew the banks' metre triangles and
   was left out.)
 - **White water** (the riffles', the stones') is broken by two octaves of noise in streaks down
@@ -1703,8 +1704,10 @@ which water the camera is in.
 ## Moving geometry (#79, 2026-10-02)
 
 The first thing Forge draws that moves: `--movers N` sets N barrels drifting down the island's
-four largest rivers at 1.5 m/s, half under the water's level, rolling and bobbing, each river's
-barrels spread along its course and starting over at its head (`reports/2026-10-02-79/`). It
+four largest rivers, half under the water's level, rolling and bobbing, each river's barrels
+spread along its course and starting over at its head (`reports/2026-10-02-79/`). They drifted
+at 1.5 m/s here; since #107 the water carries them at its own speed and one in ten is moored
+("Objects in the water"), so the views below are no longer the log's. It
 follows `docs/research/dynamic-scenes.md` ("Recommendation for Forge"), in three steps: the
 movers drawn with their motion vectors, their own acceleration structure (their shadows and
 reflections), and the probes woken where they pass (#69).
@@ -1792,8 +1795,71 @@ not to trace):
   change: the barrels are small beside a 4 m probe.
 - Where the water is drawn over a mover, its motion comes from the water's depth, not the
   mover's.
-- The barrels drift at one speed and jump back to their river's head past its end; the
-  water parting around them, and their wakes, are #107.
+- The barrels jump back to their river's head past its end. The water parting around them is
+  #107 (below).
+
+## Objects in the water (#107, 2026-10-02)
+
+The owner, on the rivers: the water should flow around obstacles, or at least react to objects
+in it, like rocks or game items. The stones of the rivers' beds already part the flow
+("The rivers' beds, level water, mouths and stones"); this is the same for what arrives or moves
+at run time, in the rivers first, as the issue proposes (`reports/2026-10-02-107/`).
+
+**What changed.**
+- **A list of floaters every frame** (`WaterSurface::set_floaters`, `WaterFloater`):
+  - The caller gives each thing's position, the radius of its outline at the water's level and
+    its velocity.
+  - The water takes the nearest 64 (`MAX_FLOATERS`), written after the frame's block in the
+    same host-visible buffer.
+  - With them goes a grid of 16 m cells, 32 a side around the camera, listing per cell the
+    floaters whose reach overlaps it, so a pixel looks at those alone (`floater_grid`). Looping
+    over all 64 in every river pixel cost 0.1–0.34 ms at 1440p.
+  - A frame that writes none draws none.
+- **In the rivers** (`floaters_at` in `water.slang`, after `stones_at`):
+  - Each floater adds the stones' flow: the potential flow past a cylinder, white piled up in
+    front, a rougher, whiter wake behind, widening and fading over 8 radii.
+  - The flow is the river's relative to the floater. So a thing the stream carries at its own
+    speed leaves the water as it is, and one held back or pushed through it parts the stream.
+  - Its change fades out over the second half of 30 radii, so the reach has no edge.
+- **The demo's barrels** (`--movers N`):
+  - The water carries them at its own speed: a table of the seconds to each point of the
+    course from the points' speeds, at least 0.2 m/s where a river slows into a lake.
+  - One in ten is moored where it is and only bobs, so the stream runs past it.
+  - The log's `barrels on the rivers` line now gives two views: the first barrel from 4 m, and
+    the first moored barrel the water passes at 1.2 m/s or more, from above
+    (`-1954.0,51.69,249.9,77.1,-49.6`).
+  - `--no-floaters` is the A/B.
+
+**Sheet** (`moored.png`, frame 60, seed 7, 1 000 barrels): the moored barrel without floaters,
+with them, and the pixels that changed:
+- The wake runs downstream (to the right): white water in streaks and a rougher surface over
+  3–4 m, where the riffles' white already was.
+- In front, the pillow of white is there (a debug colour showed it in place), but the white
+  water's streak pattern leaves the 0.3 m in front of the barrel mostly clear, as it does for
+  the stones.
+- 8 588 pixels differ; ꟻLIP mean 0.0017, max 0.40.
+- The carried barrels change nothing where they float: their speed is the water's in the middle
+  of the river. Only the slower water towards the banks moves past them a little.
+
+![A moored barrel in a river from above: without the floaters, with them, and the pixels that changed (the wake downstream, to the right)](../../reports/2026-10-02-107/moored.png)
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440, 1 000 barrels, two rounds): `water/surface` 0.081 ms
+with the floaters against 0.069 without from the moored barrel, and no change beyond the
+rounds' spread from the largest mouth (0.446–0.479 against 0.451).
+
+**Checks:**
+- Without movers the capture batch is unchanged (0 px), and so are the A/B harness and mesh
+  against fallback.
+- `validate.sh` is clean, its 1 000 movers included.
+
+**Left for later:**
+- In still water and the sea a wake is waves, which the stones' flow does not draw. A first try
+  on the lakes, the stones' flow around a barrel crossing still water, gave a smooth pale
+  crescent rather than a wake: the lakes' white water has no streak pattern, and their ripples
+  barely follow a flow. That is the wave particles of `docs/research/water.md` (D-038's
+  afterwards).
+- Splashes, when something falls in.
+- There are no game objects yet (`forge-sim`, Phase 3): the barrels stand in for them.
 
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 
