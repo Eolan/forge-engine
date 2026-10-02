@@ -342,7 +342,9 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    owner's `k` = 3 (the widest 40 m, `--river-k`); the valleys carved into the 8 m field, a
    floor for the water, benches and floodplains on the gentler reaches (#116, `--no-valleys`);
    the steep valleys' look, rocky beds, scree and scrub on the walls with stones on the banks
-   (#118); rivers meeting lakes where the lakes' water stands, mouths without a hollow (#120); the
+   (#118); rivers meeting lakes where the lakes' water stands, mouths without a hollow, and
+   deltas where they run in: the water easing flat to the lake's level, the channel widening, a
+   fan of sand on the lake's floor (#120, `--no-deltas`); the
    confluences' corners rounded, in the ground and the water (#119); the steep reaches in steps
    and pools, a boulder or two on most lips, the falls white (#122, `--no-steps`). D-041's far
    water in the terrain's material was checked first and left out: the ribbons already draw the

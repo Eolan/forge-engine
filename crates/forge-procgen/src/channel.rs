@@ -10,7 +10,8 @@
 //! - Into and out of a lake ([`crate::Ribbon::lake_runs`]: where the lake's water stands over
 //!   the ground) the channel shoals and its banks flatten into the shore, a mouth; in the lake
 //!   it runs on as far and fades out, so it ends in no hollow wherever the lake's edge lies
-//!   (#120).
+//!   (#120). In front of a mouth into a lake the river's delta raises the lake's floor into a fan
+//!   ([`crate::Delta`]), which the channel is then cut across.
 //! - Around them, within [`ChannelParams::margin`] of the water's edge, the ground is the
 //!   field's samples through a cubic ([`crate::river::smooth_height`]) rather than the 8 m
 //!   cells' planes, blended back to those planes by the margin's end, so the valleys the
@@ -32,8 +33,8 @@ use std::ops::RangeInclusive;
 use crate::field::Field2;
 use crate::lake::LakeWater;
 use crate::river::{
-    Corner, Ribbon, Step, corner_samples, cross, drawn_height, lip_shift, offset, segment_distance,
-    smooth_height, smoothstep, sub,
+    Corner, Delta, Ribbon, Step, corner_samples, cross, drawn_height, lip_shift, offset,
+    segment_distance, smooth_height, smoothstep, sub,
 };
 
 /// How the channels are carved.
@@ -175,6 +176,11 @@ pub struct Channels {
     corners: Vec<Fillet>,
     corner_start: Vec<u32>,
     corner_list: Vec<u32>,
+    /// The deltas' fans on the lakes' floors ([`Delta`], #120), and per cell where its fans
+    /// start in `fan_list`.
+    fans: Vec<Delta>,
+    fan_start: Vec<u32>,
+    fan_list: Vec<u32>,
     refined: Vec<u32>,
     /// Per sample, whether every cell around it is refined: the smoothed ground's weight there
     /// (bilinear between the samples, so it is 0 all along the refined region's outline).
@@ -341,6 +347,21 @@ impl Channels {
                 .map(|c| corner_cells(c, spacing))
                 .collect::<Vec<_>>(),
         );
+        // The deltas' fans: the cells within their reach of their apexes.
+        let fans: Vec<Delta> = ribbons
+            .iter()
+            .flat_map(|r| r.deltas.iter().copied())
+            .collect();
+        let fan_cells = |f: &Delta| {
+            let grow = f.reach();
+            let last = i64::from(side) - 1;
+            let cell = |v: f64| ((v / spacing).floor() as i64).clamp(0, last) as u32;
+            (
+                cell(f.apex[0] - grow)..=cell(f.apex[0] + grow),
+                cell(f.apex[1] - grow)..=cell(f.apex[1] + grow),
+            )
+        };
+        let (fan_start, fan_list) = bucket(side, &fans.iter().map(fan_cells).collect::<Vec<_>>());
         // Each corner's bank rises as the rivers' banks it touches do, half a metre out of
         // their water there: no step where it meets them, and no steeper.
         let corners: Vec<Fillet> = corners
@@ -396,9 +417,41 @@ impl Channels {
                 }
             }
         }
+        // The cells a fan raises the ground in (sampled every half a cell), and a cell more all
+        // round, so it never raises the outline the coarser cells share.
+        let side_us = side as usize;
+        let mut fanned = vec![false; count];
+        for f in &fans {
+            let (xs, ys) = fan_cells(f);
+            for y in ys {
+                for x in xs.clone() {
+                    let raised = (0..3).any(|v| {
+                        (0..3).any(|u| {
+                            let q = [
+                                (f64::from(x) + 0.5 * f64::from(u)) * spacing,
+                                (f64::from(y) + 0.5 * f64::from(v)) * spacing,
+                            ];
+                            f.surface(q)
+                                .is_some_and(|(z, _)| z > drawn_height(height, q[0], q[1]) + 0.01)
+                        })
+                    });
+                    fanned[y as usize * side_us + x as usize] |= raised;
+                }
+            }
+        }
+        for c in (0..count).filter(|&c| fanned[c]) {
+            let (x, y) = (c % side_us, c / side_us);
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    let (nx, ny) = ((x + dx).wrapping_sub(1), (y + dy).wrapping_sub(1));
+                    if nx < side_us && ny < side_us {
+                        is_refined[ny * side_us + nx] = true;
+                    }
+                }
+            }
+        }
         // The lakes' shores: the cells of a lake's mask whose ground spans its level within
         // `shore`, and a cell more all round, where the smoothed ground takes over.
-        let side_us = side as usize;
         let mut shore = vec![false; count];
         for lake in lakes {
             let level = f64::from(lake.level);
@@ -471,9 +524,25 @@ impl Channels {
             corners,
             corner_start,
             corner_list,
+            fans,
+            fan_start,
+            fan_list,
             refined,
             inner,
         }
+    }
+
+    /// `base` at `q` in cell `c`, raised by the deltas' fans that reach it.
+    fn fanned(&self, c: usize, q: [f64; 2], base: f64) -> f64 {
+        let mut out = base;
+        for &f in &self.fan_list[self.fan_start[c] as usize..self.fan_start[c + 1] as usize] {
+            if let Some((z, keep)) = self.fans[f as usize].surface(q)
+                && z > base
+            {
+                out = out.max(base + (z - base) * keep);
+            }
+        }
+        out
     }
 
     /// The smoothed ground's weight from the refined cells at (x, y): the samples' `inner`,
@@ -544,10 +613,12 @@ impl Channels {
                 }
             }
             if smooth == 0.0 {
-                return drawn;
+                return self.fanned(c, [x, y], drawn);
             }
             drawn + (smooth_height(height, x, y) - drawn) * smooth
         };
+        // The deltas' fans on the lakes' floors, under the channels cut across them.
+        let base = self.fanned(c, [x, y], base);
         let (a, b) = self.params.bank;
         let mut carved = base;
         for &s in segments {
@@ -1008,6 +1079,46 @@ pub fn paint_beds(layers: &mut Field2<u8>, ribbons: &[Ribbon], layer: u8, beyond
     painted
 }
 
+/// Paints the tops of the rivers' deltas' fans ([`Delta`], #120) into `layers` (over the field's
+/// square) as `layer`, the sand a river lays on a lake's floor in front of its mouth: every texel
+/// a sixth of the fan's half length or more inside its top, in front of its mouth, whose `ground`
+/// (x, y in the field's frame: the ground as drawn) is the fan's or the channel cut across it,
+/// not the shore's shallows standing over it. The texels' blend then fades the sand out by the
+/// top's outline, where the front drops off. Returns the texels painted.
+pub fn paint_fans(
+    layers: &mut Field2<u8>,
+    ribbons: &[Ribbon],
+    ground: &dyn Fn(f64, f64) -> f64,
+    layer: u8,
+) -> usize {
+    let cell = layers.spacing;
+    let last = i64::from(layers.size) - 1;
+    let mut painted = 0;
+    for f in ribbons.iter().flat_map(|r| r.deltas.iter()) {
+        let grow = f.length.max(f.half_width) + f.wander;
+        let lo = |v: f64| (((v - grow) / cell).floor() as i64).clamp(0, last);
+        let hi = |v: f64| (((v + grow) / cell).ceil() as i64).clamp(0, last);
+        for ty in lo(f.apex[1])..=hi(f.apex[1]) {
+            for tx in lo(f.apex[0])..=hi(f.apex[0]) {
+                let q = [(tx as f64 + 0.5) * cell, (ty as f64 + 0.5) * cell];
+                let along = (q[0] - f.apex[0]) * f.down[0] + (q[1] - f.apex[1]) * f.down[1];
+                let fan = f
+                    .surface(q)
+                    .is_some_and(|(z, _)| ground(q[0], q[1]) <= z + 0.05);
+                let inside = f.outside(q) < -f.length / 12.0;
+                if along > -f.half_width && inside && fan {
+                    let texel = &mut layers.data[(ty as u32 * layers.size + tx as u32) as usize];
+                    if *texel != layer {
+                        *texel = layer;
+                        painted += 1;
+                    }
+                }
+            }
+        }
+    }
+    painted
+}
+
 /// Paints the rivers' banks into `layers` (over the field's square): every texel of one of the
 /// layers of `from` whose centre is within `reach.0 + reach.1 × width` metres of a river's
 /// water becomes `to` (D-041's riparian strip: the lush grass along the banks, wider along a
@@ -1237,6 +1348,146 @@ mod tests {
             channels.cubic_height_at(&valley, x, y),
             smooth_height(&valley, x, y)
         );
+    }
+
+    #[test]
+    fn a_river_runs_into_a_lake_through_a_delta_easing_flat_widening_and_laying_a_fan() {
+        // The bowl's valley of the test above: the river runs in from y = 400 m, towards y = 0.
+        let valley = Field2::from_fn(41, 10.0, |x, y| {
+            let (dx, dy) = (x as f32 - 20.0, y as f32 - 20.0);
+            let bowl = 8.0 * (1.0 - (dx * dx + dy * dy).sqrt() / 6.0).max(0.0);
+            2.0 * dx.abs() + y as f32 + 1.0 - bowl
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&valley, 0.0, &pool);
+        let filled = crate::flow::priority_flood(&valley, 0.0);
+        let lakes = crate::hydrology::trace_lakes(&valley, &filled, &flow, 0.5);
+        let waters = crate::lake::lake_waters(&valley, &filled, &lakes, 0.0);
+        let level = f64::from(waters[0].level);
+        let rivers = trace_rivers(&valley, &flow, 15);
+        let delta = crate::river::DeltaParams::default();
+        let with = RibbonParams {
+            delta: Some(delta),
+            ..RibbonParams::default()
+        };
+        let plain = ribbons(&valley, &rivers, &waters, &RibbonParams::default());
+        let deltas = ribbons(&valley, &rivers, &waters, &with);
+        let (before, after) = (
+            &plain.last().expect("the river").points,
+            &deltas.last().expect("the river").points,
+        );
+        assert_eq!(before.len(), after.len());
+        // One delta, at the first point where the lake's water stands, before its run.
+        let ribbon = deltas.last().expect("the river");
+        assert_eq!(ribbon.deltas.len(), 1);
+        let d = ribbon.deltas[0];
+        let mouth = after
+            .iter()
+            .position(|q| {
+                let [x, y] = [q.position[0], q.position[1]].map(|v| f64::from(v) / 10.0);
+                waters[0].stands_at(&valley, x.round() as u32, y.round() as u32)
+            })
+            .expect("the lake");
+        assert!(mouth < ribbon.lake_runs[0][0] as usize + 1);
+        assert_eq!(d.apex, [0, 1].map(|i| f64::from(after[mouth].position[i])));
+        assert_eq!(d.level, level);
+        assert!(d.down[1] < -0.9, "{:?}", d.down);
+        // The water eases flat to the lake's level over the reach before it, `L + (z − L)(2t −
+        // t²)` at `t` of the reach up from the mouth: only ever lowered, still only falling, and
+        // unchanged beyond.
+        let width = 2.0 * f64::from(before[mouth].half_width);
+        let reach = delta.reach.0 + delta.reach.1 * width;
+        let arc = |k: usize| {
+            (k..mouth)
+                .map(|j| {
+                    let (a, b) = (after[j].position, after[j + 1].position);
+                    f64::from(b[0] - a[0]).hypot(f64::from(b[1] - a[1]))
+                })
+                .sum::<f64>()
+        };
+        let lake = f64::from(after[mouth].level);
+        let mut eased = 0;
+        for k in 0..mouth {
+            let t = arc(k) / reach;
+            let was = f64::from(before[k].level);
+            let wanted = if t < 1.0 {
+                eased += 1;
+                lake + (was - lake) * (2.0 * t - t * t)
+            } else {
+                was
+            };
+            assert!((f64::from(after[k].level) - wanted).abs() < 1e-4, "{k}");
+            assert!(after[k].level <= before[k].level, "{k}");
+            assert!(after[k + 1].level <= after[k].level, "{k}");
+        }
+        assert!(eased >= 3, "{eased}");
+        assert!(after[mouth - 3].level < before[mouth - 3].level - 0.01);
+        // Twice as wide and two fifths shallower at the mouth, as wide as before past the reach.
+        let ratio = after[mouth].half_width / before[mouth].half_width;
+        assert!((ratio - 2.0).abs() < 1e-4, "{ratio}");
+        assert!((after[mouth].depth / before[mouth].depth - 0.6).abs() < 1e-4);
+        let far = (0..mouth)
+            .rev()
+            .find(|&k| arc(k) > reach)
+            .expect("the reach");
+        assert_eq!(after[far].half_width, before[far].half_width);
+        // The fan: in front of the mouth its top stands under the lake's water by 0.3 m and
+        // deeper away from it, its front falls to the lake's floor, and the ground is never
+        // raised over the lake's level less its top's water, nor anywhere out of the lake.
+        let channels = Channels::new(&valley, &deltas, &waters, &ChannelParams::default());
+        let ground = |q: [f64; 2]| channels.cubic_height_at(&valley, q[0], q[1]);
+        let ahead = |along: f64, across: f64| {
+            [
+                d.apex[0] + d.down[0] * along - d.down[1] * across,
+                d.apex[1] + d.down[1] * along + d.down[0] * across,
+            ]
+        };
+        let mut on_top = 0;
+        for i in 0..=40 {
+            for j in -20..=20 {
+                let q = ahead(f64::from(i) * 0.1 * d.length, f64::from(j) * 0.1 * d.length);
+                let h = ground(q);
+                let base = smooth_height(&valley, q[0], q[1]);
+                assert!(h <= base.max(level - d.top.0) + 1e-9, "{q:?}: {h} {base}");
+                if let Some((z, _)) = d.surface(q)
+                    && z > base + 0.05
+                    && d.outside(q) < -1.0
+                {
+                    on_top += 1;
+                    assert!(
+                        h >= z - 1e-6 && h <= level - d.top.0 + 1e-9,
+                        "{q:?}: {h} {z}"
+                    );
+                }
+            }
+        }
+        assert!(on_top >= 20, "{on_top}");
+        let near = d.surface(ahead(0.1 * d.length, 0.0)).expect("the top").0;
+        let end = d.surface(ahead(0.9 * d.length, 0.0)).expect("the top").0;
+        assert!(near > end + 0.5 * d.top.1, "{near} {end}");
+        // Its cells are drawn finer, and its top is painted.
+        let cell = |q: [f64; 2]| ((q[1] / 10.0).floor() * 40.0 + (q[0] / 10.0).floor()) as u32;
+        assert!(
+            channels
+                .refined()
+                .binary_search(&cell(ahead(0.5 * d.length, 0.0)))
+                .is_ok()
+        );
+        let mut layers = Field2::new(200, 2.0);
+        // The streams down the bowl's sides have small deltas of their own.
+        let painted = paint_fans(&mut layers, &deltas, &|x, y| ground([x, y]), 3);
+        let all: Vec<_> = deltas.iter().flat_map(|r| r.deltas.iter()).collect();
+        assert!(painted > 0 && all.len() > 1);
+        let mut on_main = 0;
+        for (t, &l) in layers.data.iter().enumerate() {
+            if l == 3 {
+                let q = [(t % 200) as f64 * 2.0 + 1.0, (t / 200) as f64 * 2.0 + 1.0];
+                assert!(ground(q) < level - 0.2, "{q:?}");
+                assert!(all.iter().any(|f| f.outside(q) < 0.0), "{q:?}");
+                on_main += usize::from(d.outside(q) < 0.0);
+            }
+        }
+        assert!(on_main > 0);
     }
 
     #[test]

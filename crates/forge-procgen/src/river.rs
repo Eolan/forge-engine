@@ -20,7 +20,9 @@
 //!   water drawn by the nearer river ([`RibbonPoint::cover`]).
 //! - A river gives way to the sea where its level reaches the sea's, and to a lake inside its
 //!   water: a river running in fades out over the lake's water, one running out fades in over
-//!   it, so the two meet wherever the lake's edge lies (#120).
+//!   it, so the two meet wherever the lake's edge lies (#120). Running in, it has a delta
+//!   ([`DeltaParams`]): its water eases flat to the lake's level and it widens over its last
+//!   reach, and its sand builds a fan on the lake's floor in front of its mouth ([`Delta`]).
 //! - In a bend the ribbon's half width stays under a share of the bend's radius, so its inner
 //!   edge never folds over itself.
 //! - On the steep reaches ([`StepParams`], #122) the water stands in pools and falls from one
@@ -59,6 +61,9 @@ const GROUND_SAMPLES: f64 = 0.5;
 
 /// The seed of the steps' spacings (#122).
 const STEP_SEED: u64 = 0x5745_5053_504f_4f4c;
+
+/// The seed of the deltas' fans' outlines (#120).
+const DELTA_SEED: u64 = 0x4445_4c54_4146_414e;
 
 /// Steps and pools on a river's steep reaches (#122, D-041's type A): where its water falls
 /// faster than `from`, it stands in pools and drops from each into the next over a step, as a
@@ -124,6 +129,123 @@ impl Default for StepParams {
     }
 }
 
+/// A river's delta where it runs into a lake (D-041's lake entry, #120): over its last reach
+/// before the lake its water eases flat to the lake's level and its channel widens, and in front
+/// of its mouth its sediment builds a fan on the lake's floor ([`Delta`]), a shallow top just
+/// under the water that drops off at its front into the lake's depth (`docs/research/rivers.md`,
+/// its recommendation's step 7).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DeltaParams {
+    /// Over how many metres, plus how many of its widths, before the lake's edge the river's
+    /// water eases flat to the lake's level and its channel widens.
+    pub reach: (f64, f64),
+    /// How much wider the river is at the lake's edge (1: twice as wide), growing over the
+    /// reach's last stretch as a trumpet does.
+    pub flare: f64,
+    /// The share of its depth it loses there.
+    pub shallow: f64,
+    /// The fan's length in front of the mouth, `a + b ×` the river's width there, metres; at
+    /// most `.2` of the lake's water ahead of it.
+    pub fan: (f64, f64, f64),
+    /// The water over the fan's top at its apex, metres, and how much deeper it is at the top's
+    /// far end, whatever the fan's length.
+    pub top: (f64, f64),
+    /// The fan's front, its slope down to the lake's floor, m/m.
+    pub front: f64,
+    /// How far the fan's outline wanders, a share of its half length.
+    pub wander: f64,
+}
+
+impl Default for DeltaParams {
+    /// Over 8 m and five widths (D-041's five to ten), twice as wide at the lake and two fifths
+    /// shallower, as the estuaries; a fan 6 m and three and a half widths long, at most three
+    /// fifths of the lake ahead, its top 0.3 m under the water at the mouth and 1.1 m at its far
+    /// end, so its sand fades into the lake's colour, its front falling at 0.3 (17°), its
+    /// outline wandering by a fifth.
+    fn default() -> Self {
+        Self {
+            reach: (8.0, 5.0),
+            flare: 1.0,
+            shallow: 0.4,
+            fan: (6.0, 3.5, 0.6),
+            top: (0.3, 0.8),
+            front: 0.3,
+            wander: 0.2,
+        }
+    }
+}
+
+/// Where a river runs into a lake (D-041's lake entry, #120): the fan its sediment builds on the
+/// lake's floor in front of its mouth. Its top is a lobe from the mouth, the disc whose diameter
+/// is its length along the river's direction, joined to a disc of the river's half width round
+/// the mouth, its outline wandering; the water stands [`Delta::top`] over it, deeper away from
+/// the mouth. Past the top's outline its front falls at [`Delta::front`] until it meets the
+/// lake's floor. It only ever raises the ground, under the lake's water.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Delta {
+    /// The mouth: where the lake's water starts to stand over the river's course, metres in the
+    /// field's frame.
+    pub apex: [f64; 2],
+    /// The river's direction there, unit: the fan's axis.
+    pub down: [f64; 2],
+    /// The lake's level, metres.
+    pub level: f64,
+    /// The lowest the lake's floor goes, metres: the front reaches no deeper.
+    pub floor: f64,
+    /// The river's half width at the mouth, metres.
+    pub half_width: f64,
+    /// The fan's length along its axis, metres.
+    pub length: f64,
+    /// The water over its top at the mouth, metres, and how much deeper it is at the top's far
+    /// end ([`Delta::length`] from the mouth).
+    pub top: (f64, f64),
+    /// Its front's slope, m/m.
+    pub front: f64,
+    /// How far its outline wanders, metres.
+    pub wander: f64,
+    /// The wander's seed.
+    pub seed: u64,
+}
+
+impl Delta {
+    /// How far outside the fan's top `q` is, metres (negative inside), its outline wandering.
+    pub fn outside(&self, q: [f64; 2]) -> f64 {
+        let half = 0.5 * self.length;
+        let centre = [
+            self.apex[0] + self.down[0] * half,
+            self.apex[1] + self.down[1] * half,
+        ];
+        let lobe = (q[0] - centre[0]).hypot(q[1] - centre[1]) - half;
+        let mouth = (q[0] - self.apex[0]).hypot(q[1] - self.apex[1]) - self.half_width;
+        // A single octave over the fan's half length: a few broad lobes, not a ragged edge.
+        let scale = half.max(1.0);
+        lobe.min(mouth)
+            + self.wander * crate::noise::fbm(self.seed, q[0] / scale, q[1] / scale, 1, 2.0, 0.5)
+    }
+
+    /// The fan's surface at `q`, metres, and the share of it kept (it fades in over the river's
+    /// half width behind the mouth, into its channel), or none where it is under the lake's floor
+    /// or behind the mouth.
+    pub fn surface(&self, q: [f64; 2]) -> Option<(f64, f64)> {
+        let (dx, dy) = (q[0] - self.apex[0], q[1] - self.apex[1]);
+        let along = dx * self.down[0] + dy * self.down[1];
+        if along <= -self.half_width || dx.hypot(dy) > self.reach() {
+            return None;
+        }
+        let r = dx.hypot(dy) / self.length.max(1e-3);
+        let z = self.level - self.top.0 - self.top.1 * r - self.front * self.outside(q).max(0.0);
+        (z > self.floor).then(|| (z, smoothstep(-self.half_width, 0.0, along)))
+    }
+
+    /// How far from its apex the fan may raise the ground, metres: its length, the wander, and
+    /// as far as its front can fall to the lake's floor.
+    pub fn reach(&self) -> f64 {
+        self.length.max(self.half_width)
+            + self.wander
+            + (self.level - self.floor).max(0.0) / self.front.max(1e-3)
+    }
+}
+
 /// How the ribbons are made.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RibbonParams {
@@ -181,6 +303,8 @@ pub struct RibbonParams {
     pub confluence: (f64, f64),
     /// Steps and pools on the steep reaches (#122); `None` lets the water fall evenly.
     pub steps: Option<StepParams>,
+    /// The deltas where rivers run into lakes (#120); `None` runs them in as they come.
+    pub delta: Option<DeltaParams>,
 }
 
 impl Default for RibbonParams {
@@ -190,7 +314,7 @@ impl Default for RibbonParams {
     /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
     /// of 60 % at most, rising to its banks over 8 m and three widths into a lake, the lakes of a
     /// hectare, twice as wide at the sea from 1.5 m over it, a confluence's corners rounded over
-    /// 2 m and a tributary's width along each edge, no steps.
+    /// 2 m and a tributary's width along each edge, no steps, no deltas.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -213,6 +337,7 @@ impl Default for RibbonParams {
             brooks: None,
             confluence: (2.0, 1.0),
             steps: None,
+            delta: None,
         }
     }
 }
@@ -221,12 +346,13 @@ impl RibbonParams {
     /// The island's rivers (D-041): the defaults, sized by the regional curves three times as
     /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01)
     /// from 3 km² of catchment, brooks of nature's size at 0.5 km² (#123), in steps and pools
-    /// on their steep reaches.
+    /// on their steep reaches, a delta where they run into a lake (#120).
     pub fn island() -> Self {
         Self {
             regional: Some((3.0, 1.5)),
             brooks: Some((500_000.0, 3_000_000.0)),
             steps: Some(StepParams::default()),
+            delta: Some(DeltaParams::default()),
             ..Self::default()
         }
     }
@@ -320,6 +446,8 @@ pub struct Ribbon {
     pub corners: Vec<Corner>,
     /// The steps of its steep reaches, head first (#122).
     pub steps: Vec<Step>,
+    /// Its deltas where it runs into a lake, head first (#120).
+    pub deltas: Vec<Delta>,
 }
 
 /// A step of a steep reach (#122): where the water falls from one pool into the next.
@@ -445,6 +573,7 @@ pub fn ribbons(
                 lake_runs: Vec::new(),
                 corners: Vec::new(),
                 steps: Vec::new(),
+                deltas: Vec::new(),
             })
         })
         .collect();
@@ -454,9 +583,9 @@ pub fn ribbons(
             .total_cmp(&a.mouth_area)
             .then(a.river.cmp(&b.river))
     });
-    // The level of the lake whose water stands over the nearest sample, and how deep it is
-    // there.
-    let lake_level = |x: f64, y: f64| -> Option<(f64, f64)> {
+    // The level of the lake whose water stands over the nearest sample, how deep it is there, and
+    // how deep it is at its deepest.
+    let lake_at = |x: f64, y: f64| -> Option<(f64, f64, f64)> {
         let last = f64::from(height.size - 1);
         let (i, j) = (
             (x / spacing).round().clamp(0.0, last) as u32,
@@ -466,9 +595,11 @@ pub fn ribbons(
             (
                 f64::from(l.level),
                 f64::from(l.level) - f64::from(height.get(i, j)),
+                f64::from(l.depth),
             )
         })
     };
+    let lake_level = |x: f64, y: f64| lake_at(x, y).map(|(level, depth, _)| (level, depth));
     let mut done: Vec<Option<usize>> = vec![None; rivers.rivers.len()];
     for r in 0..ribbons.len() {
         let joins = match rivers.rivers[ribbons[r].river as usize].mouth {
@@ -479,7 +610,8 @@ pub fn ribbons(
             Mouth::Outlet(_) => None,
         };
         let main = joins.map(|(m, at)| (&ribbons[m].points, at));
-        let (points, in_lake) = levels(&ribbons[r].points, height, &lake_level, main, params);
+        let (points, in_lake, mut mouths) =
+            levels(&ribbons[r].points, height, &lake_level, main, params);
         let mut runs: Vec<[u32; 2]> = Vec::new();
         for (k, _) in in_lake.iter().enumerate().filter(|(_, l)| **l) {
             match runs.last_mut() {
@@ -502,8 +634,24 @@ pub fn ribbons(
             for run in &mut ribbons[r].lake_runs {
                 *run = run.map(|k| index[k as usize]);
             }
+            for mouth in &mut mouths {
+                *mouth = index[*mouth] as usize;
+            }
             ribbons[r].points = points;
             ribbons[r].steps = made;
+        }
+        if let Some(delta) = &params.delta {
+            let seed = hash_cell3(DELTA_SEED, ribbons[r].river as i32, 0, 0);
+            let lake_runs = ribbons[r].lake_runs.clone();
+            ribbons[r].deltas = deltas(
+                &mut ribbons[r].points,
+                &mouths,
+                &lake_runs,
+                &lake_at,
+                delta,
+                params,
+                seed,
+            );
         }
         done[ribbons[r].river as usize] = Some(r);
     }
@@ -783,15 +931,17 @@ pub(crate) fn segment_distance(q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f
     ((dx * dx + dy * dy).sqrt(), t)
 }
 
-/// The points with their levels, banks, speeds, slopes and fades, and whether each is in a lake;
-/// `main` is the river this one joins (its points, with their levels, and the junction).
+/// The points with their levels, banks, speeds, slopes and fades, whether each is in a lake, and
+/// with [`RibbonParams::delta`], the points where it runs into one (the first where the lake's
+/// water stands, before a run in it); `main` is the river this one joins (its points, with their
+/// levels, and the junction).
 fn levels(
     points: &[RibbonPoint],
     height: &Field2<f32>,
     lake_level: &dyn Fn(f64, f64) -> Option<(f64, f64)>,
     main: Option<(&Vec<RibbonPoint>, [f64; 2])>,
     params: &RibbonParams,
-) -> (Vec<RibbonPoint>, Vec<bool>) {
+) -> (Vec<RibbonPoint>, Vec<bool>, Vec<usize>) {
     let n = points.len();
     // A tributary ends on its river's smoothed course (the junction's D8 point may be off it).
     let mut points = points.to_vec();
@@ -950,6 +1100,40 @@ fn levels(
             }
         }
     }
+    // Into a lake, with a delta (D-041's lake entry): over its reach before the lake's edge (the
+    // first point where the lake's water stands, before a run in it) the water eases flat to the
+    // lake's level, `L + (z − L)(2t − t²)` at `t` of the reach up from the edge. It meets the lake
+    // with no fall, falls a third faster than it did at most (two thirds of the way up), and is
+    // only ever lowered, so it still only falls and stands under its banks. It stops at another
+    // lake's water upstream.
+    let mut mouths = Vec::new();
+    if let Some(delta) = &params.delta {
+        let mut k = 1;
+        while k < n {
+            if wet[k].is_none() || wet[k - 1].is_some() {
+                k += 1;
+                continue;
+            }
+            let mut end = k;
+            while end + 1 < n && wet[end + 1].is_some() {
+                end += 1;
+            }
+            if in_lake[k..=end].iter().any(|&l| l) {
+                mouths.push(k);
+                let lake = level[k];
+                let reach = affine(delta.reach, 2.0 * f64::from(points[k].half_width));
+                for j in (0..k).rev() {
+                    let up = arc[k] - arc[j];
+                    if up >= reach || wet[j].is_some() {
+                        break;
+                    }
+                    let t = up / reach;
+                    level[j] = lake + (level[j] - lake).max(0.0) * (2.0 * t - t * t);
+                }
+            }
+            k = end + 1;
+        }
+    }
     // How far each point is from the water of the river it joins: from its edge (its half
     // width), in units of how far inside it the tributary's water is gone, 3 m or six tenths of
     // the half width. The water is whole from half that outside the edge, and thins over the
@@ -1032,7 +1216,94 @@ fn levels(
             }
         })
         .collect();
-    (points, in_lake)
+    (points, in_lake, mouths)
+}
+
+/// With [`DeltaParams`], each mouth of `mouths` (a river's points where it runs into a lake,
+/// levelled and stepped) widens the river over the reach before it as a trumpet, `1 + flare (1 −
+/// t)²` times as wide and `shallow (1 − t)²` shallower at `t` of the reach up from the lake's edge,
+/// and on so into the lake while the river's water fades there; and gives the fan in front of it
+/// on the lake's floor ([`Delta`]), its length shortened to `fan.2` of the lake's water ahead of it.
+/// `lake_at` gives the lake's level at a point, its depth there and at its deepest.
+fn deltas(
+    points: &mut [RibbonPoint],
+    mouths: &[usize],
+    lake_runs: &[[u32; 2]],
+    lake_at: &dyn Fn(f64, f64) -> Option<(f64, f64, f64)>,
+    delta: &DeltaParams,
+    params: &RibbonParams,
+    seed: u64,
+) -> Vec<Delta> {
+    let n = points.len();
+    let mut arc = vec![0.0; n];
+    for k in 1..n {
+        let (a, b) = (position(&points[k - 1]), position(&points[k]));
+        arc[k] = arc[k - 1] + (b[0] - a[0]).hypot(b[1] - a[1]);
+    }
+    let mut made = Vec::new();
+    for (index, &k) in mouths.iter().enumerate() {
+        let width = 2.0 * f64::from(points[k].half_width);
+        let reach = affine(delta.reach, width);
+        // The river's water fades out three points into the run it takes, which starts at the
+        // mouth or a few points past it, across the lake's shallow margin.
+        let faded = lake_runs
+            .iter()
+            .find(|r| r[0] as usize >= k)
+            .map_or(k, |r| (r[0] as usize + LAKE_FADE as usize).min(n - 1));
+        let widen = |p: &mut RibbonPoint, e: f64| {
+            let half = f64::from(p.half_width) * (1.0 + delta.flare * e);
+            p.half_width = half as f32;
+            p.reach = (half + affine(params.tuck, half)) as f32;
+            p.depth = (f64::from(p.depth) * (1.0 - delta.shallow * e)) as f32;
+        };
+        for j in (0..k).rev() {
+            let up = arc[k] - arc[j];
+            if up >= reach {
+                break;
+            }
+            let t = 1.0 - up / reach;
+            widen(&mut points[j], t * t);
+        }
+        for p in &mut points[k..=faded] {
+            widen(p, 1.0);
+        }
+        // The fan: in front of the mouth, along the river's last few metres' direction, as far
+        // as the lake's water stands ahead of it at most.
+        let at = position(&points[k]);
+        let back = position(&points[k.saturating_sub(2)]);
+        let ahead = position(&points[(k + 2).min(n - 1)]);
+        let (dx, dy) = (ahead[0] - back[0], ahead[1] - back[1]);
+        let length = dx.hypot(dy);
+        let Some((level, _, deepest)) = lake_at(at[0], at[1]) else {
+            continue;
+        };
+        if length <= 0.0 {
+            continue;
+        }
+        let down = [dx / length, dy / length];
+        let wanted = affine((delta.fan.0, delta.fan.1), width);
+        let mut water = 0.0;
+        while water < wanted / delta.fan.2
+            && lake_at(at[0] + down[0] * water, at[1] + down[1] * water).is_some()
+        {
+            water += 1.0;
+        }
+        let half_width = f64::from(points[k].half_width);
+        let length = wanted.min(delta.fan.2 * water).max(half_width);
+        made.push(Delta {
+            apex: at,
+            down,
+            level,
+            floor: level - deepest,
+            half_width,
+            length,
+            top: delta.top,
+            front: delta.front,
+            wander: delta.wander * 0.5 * length,
+            seed: seed ^ index as u64,
+        });
+    }
+    made
 }
 
 /// Fills the runs of at most `most` `None`s between two equal values of `v` with that value.

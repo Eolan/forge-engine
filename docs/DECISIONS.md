@@ -1709,4 +1709,8 @@ of it, gathers seed 7 into basins of 23, 18 and 12 km² at the sea (the dome's l
 the trunks drained come back as a bowl on each trunk (D-040's lakes placed on purpose). The
 lower courses keep a grade of 0.3 % to the sea, the erosion having laid the trunks flat at its
 level, and under 3 km² of catchment the rivers ease to nature's size, brooks (the
-carved-channel threshold kept at 0.5 km²).
+carved-channel threshold kept at 0.5 km²). The lake entry is #120's deltas
+(`forge_procgen::DeltaParams`): over 8 m and five widths before the lake's edge the water eases
+flat to the lake's level and the channel widens to twice its width, and in front of the mouth a
+fan raises the lake's floor to a top 0.3–1.1 m under the water, painted with silty sand, whose
+front drops off into the lake.

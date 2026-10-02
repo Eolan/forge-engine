@@ -58,7 +58,8 @@ pub mod valley;
 
 pub use amplify::{AmplifyParams, amplify};
 pub use channel::{
-    ChannelParams, Channels, FineGround, Stone, bank_stones, paint_banks, paint_beds, stones,
+    ChannelParams, Channels, FineGround, Stone, bank_stones, paint_banks, paint_beds, paint_fans,
+    stones,
 };
 pub use coast::{coast_distance, sea_floor, site_distance, smooth_shore};
 pub use erosion::{Erosion, ErosionParams, erode};
@@ -79,8 +80,8 @@ pub use layers::{
 };
 pub use ocean::{Ocean, OceanParams, OceanSurface, tma};
 pub use river::{
-    Corner, Ribbon, RibbonParams, RibbonPoint, Step, StepParams, drawn_height, lip_shift, rest_on,
-    ribbons, sea_mouth, smooth_height,
+    Corner, Delta, DeltaParams, Ribbon, RibbonParams, RibbonPoint, Step, StepParams, drawn_height,
+    lip_shift, rest_on, ribbons, sea_mouth, smooth_height,
 };
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};
 pub use valley::{

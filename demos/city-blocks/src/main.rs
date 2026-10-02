@@ -212,6 +212,10 @@ struct Args {
     /// instead of brooks of nature's size easing to it by 3 km² of catchment (#123, D-041).
     #[arg(long)]
     no_brooks: bool,
+    /// Run the island's rivers into their lakes as they come, without their deltas: no easing
+    /// to the lake's level, no widening, no fan on the lake's floor (#120, D-041).
+    #[arg(long)]
+    no_deltas: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1912,6 +1916,19 @@ impl CityMaterials {
                 "island: scrub",
                 textured(scrub, [1.0, 1.0, 1.0], [1.1, 1.08, 0.95], 16.0, 6.0, 0.02),
             ),
+            (
+                // Silty sand on the deltas' fans under the lakes' shallows (#120): greyer and
+                // darker than the beaches', lighter than the lakes' mud.
+                "island: lake sand",
+                textured(
+                    concrete,
+                    [0.46, 0.43, 0.34],
+                    [0.52, 0.48, 0.38],
+                    2.0,
+                    10.0,
+                    0.04,
+                ),
+            ),
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
@@ -2046,8 +2063,12 @@ mod island_layer {
     /// Scrub: low shrubs on the steep ground that holds soil, the wetter rock (#118,
     /// `forge_procgen::paint_scrub`).
     pub const SCRUB: u8 = 11;
+    /// Pale silty sand on the tops of the rivers' deltas' fans, under the lakes' shallow water in
+    /// front of their mouths (#120, `forge_procgen::paint_fans`). Not the beaches' sand, whose
+    /// top follows the coast's contour.
+    pub const LAKE_SAND: u8 = 12;
     /// How many layers there are.
-    pub const COUNT: u8 = 12;
+    pub const COUNT: u8 = 13;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -2706,6 +2727,39 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
         into = %into.join("  "),
         out_of = %out_of.join("  "),
         "rivers into and out of the lakes (--view)"
+    );
+    // The rivers' deltas (#120): their fans' lengths, and the two longest from 40 m back up the
+    // river, 12 m over the lake, looking down it at the fan, and from 70 m over the fan's middle.
+    let mut deltas: Vec<&forge_procgen::Delta> =
+        ribbons.iter().flat_map(|r| r.deltas.iter()).collect();
+    deltas.sort_by(|a, b| b.length.total_cmp(&a.length));
+    let half_m = f64::from(half);
+    let delta_views: Vec<String> = deltas
+        .iter()
+        .take(2)
+        .map(|d| {
+            let back = [d.apex[0] - 40.0 * d.down[0], d.apex[1] - 40.0 * d.down[1]];
+            let yaw = (-d.down[0]).atan2(-d.down[1]).to_degrees();
+            let mid = [
+                d.apex[0] + 0.5 * d.length * d.down[0],
+                d.apex[1] + 0.5 * d.length * d.down[1],
+            ];
+            format!(
+                "{:.0},{:.1},{:.0},{yaw:.1},-20  {:.0},{:.1},{:.0},0,-89",
+                back[0] - half_m,
+                d.level + 12.0,
+                back[1] - half_m,
+                mid[0] - half_m,
+                d.level + 70.0,
+                mid[1] - half_m,
+            )
+        })
+        .collect();
+    tracing::info!(
+        deltas = deltas.len(),
+        fans_m = %deltas.iter().map(|d| format!("{:.0}", d.length)).collect::<Vec<_>>().join(" "),
+        views = %delta_views.join("  "),
+        "the rivers' deltas into the lakes (--view)"
     );
     let lakes: Vec<WaterLake> = lakes
         .iter()
@@ -3842,6 +3896,18 @@ fn build_island(
             0.5,
         )
     };
+    // The rivers' deltas (#120): the pale sand they lay on the lakes' floors in front of their
+    // mouths, over the mud, under the water.
+    let fan_texels = if args.water() {
+        forge_procgen::paint_fans(
+            &mut layers,
+            &ribbons,
+            &|x, y| channels.height_at(&height, x, y),
+            island_layer::LAKE_SAND,
+        )
+    } else {
+        0
+    };
     // The steep ground's scrub (#118): plants on the wetter rock, the hollows and the valleys'
     // sides, in patches; the dry spurs and the cliffs stay bare.
     let scrubbed = forge_procgen::paint_scrub(
@@ -3886,6 +3952,7 @@ fn build_island(
             .filter(|l| l.area(height.spacing) >= 10_000.0 && l.level > 0.5)
             .count(),
         lake_texels,
+        fan_texels,
         dry_texels = dried,
         lush_texels = greened,
         ms = rivers_start.elapsed().as_millis(),
@@ -4313,6 +4380,7 @@ fn main() -> Result<()> {
                 .map(|(_, depth)| (args.river_k, depth)),
             steps: island.steps.filter(|_| !args.no_steps),
             brooks: island.brooks.filter(|_| !args.no_brooks),
+            delta: island.delta.filter(|_| !args.no_deltas),
             ..island
         })
         .expect("the rivers' parameters, set once");

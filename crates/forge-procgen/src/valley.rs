@@ -726,6 +726,7 @@ mod tests {
             lake_runs: Vec::new(),
             corners: Vec::new(),
             steps: Vec::new(),
+            deltas: Vec::new(),
         };
         (height, ribbon)
     }

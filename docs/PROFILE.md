@@ -840,6 +840,20 @@ queue and drawn after the water. 1 000 barrels with and without `--no-splashes`,
 - **Serially** (`FORGE_ASYNC=0`) the frame stays within the runs' spread, and the TAA resolve
   does not change with the reactive mask (0.146–0.171 ms either way).
 
+**The rivers' deltas into the lakes** (#120, 2026-10-02): `--no-deltas` against the default, the
+same build, two rounds of each view without then with (a cook per switch), 1 500 frames each,
+2560 × 1440.
+
+| View | frame | `shading/layered` | `water/reflections` | `water/surface` |
+|---|---|---|---|---|
+| the trunk's delta from 40 m up (`1470,69,-1300,-107.2,-35`) | 3.612–3.622 → 3.629–3.661 ms | 1.345 → 1.372 | 0.234–0.270 → 0.358–0.361 | 0.129 → 0.135 |
+| a brook into its bay from low (`2303,41.1,-890,-47.0,-20`) | 2.765–2.769 → 2.755–2.760 ms | 0.880 → 0.880 | 0.101 → 0.106 | 0.088 → 0.095 |
+
+- Over the trunk's delta `water/reflections` takes 0.1 ms more, its water in view wider and
+  shallower; the frame takes 0.01–0.05 ms more.
+- The fans' 816 more refined cells of 2 m draw no measurable time. `tools/timings.sh` is within
+  noise on every view (the island 1.601–1.607 ms against 1.604–1.606).
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

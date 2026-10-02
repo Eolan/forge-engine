@@ -1254,8 +1254,8 @@ A/B harness, the streamed island against resident and mesh against fallback stay
   the lake's water there to the river's, which softens it.
 - Past a hill lake's lip a pale patch of thin water lies on one bank: the river's water over a
   bank lower than it at the mask's soft edge (a similar patch was there before, by the old cap).
-- D-041's lake entry also widens the channel and paints a fan on the lake's floor; neither is
-  done.
+- D-041's lake entry also widens the channel and paints a fan on the lake's floor: done since
+  (2026-10-02, "The rivers' deltas into the lakes" below).
 
 **The confluences' corners** (#119, 2026-10-01; `forge_procgen::river::Corner`, `channel`). The
 owner, at the logged confluence: "the junction on the left could not be that sharp with flowing
@@ -1700,6 +1700,98 @@ which water the camera is in.
 - Clearer lake water for diving, a choice of look (`LAKE_ABSORPTION`, `LAKE_SCATTER`), for the
   owner.
 - The ripples on the lakes' and the rivers' surfaces seen from below.
+
+**The rivers' deltas into the lakes** (#120, D-041's lake entry, 2026-10-02;
+`forge_procgen::DeltaParams`, `Delta`, `paint_fans`; `city-blocks --no-deltas` for the rivers
+before). #120 met the lakes where their water stands, but a river still ran in as it came:
+- the trunk ran down its steps to a few metres from the north-east lake, then into its dark
+  water through a neck as wide as itself;
+- a brook on the plain reached its bay as a straight canal with square corners.
+
+D-041's lake entry asks for three things (`docs/research/rivers.md`, its recommendation's
+step 7).
+
+**What changed.**
+- **The water eases flat to the lake's level.**
+  - The reach is 8 m and five widths before the lake's edge, the first point where the lake's
+    water stands.
+  - Over it the river's level becomes `L + (z − L)(2t − t²)`, `t` the share of the reach up
+    from the edge.
+  - It meets the lake with no fall. It falls a third faster than it did at most, two thirds of
+    the way up, and is only ever lowered.
+  - The valleys' carve (#116) reads the rivers' levels, so the floor beside the water comes
+    down with it.
+- **The channel widens.** Over the same reach the river grows as a trumpet, `1 + (1 − t)²`
+  times its width and two fifths shallower at the edge, as the estuaries do. It stays so while
+  its water fades into the lake's. Its banks already flattened into the shore there (#114).
+- **A fan on the lake's floor** (`Delta`):
+  - **Its shape.** In front of the mouth, a lobe 6 m and three and a half widths long along
+    the river, at most three fifths of the lake's water ahead of it. The lobe is the disc whose
+    diameter is that length, joined to a disc of the river's half width round the mouth. Its
+    outline wanders by a fifth over one octave of noise.
+  - **Its depth.** The water stands 0.3 m over its top at the mouth and 1.1 m at its far end.
+    Past the outline its front falls at 0.3 (17°) to the lake's floor.
+  - **The ground.** It only raises the ground, under the lake's water, before the channel is cut
+    across it (`Channels`). The cells it raises are drawn finer, with a cell more round them, so
+    the 8 m ground draws it too.
+  - **Its sand.** Its top is painted with a new layer of silty sand, darker and greyer than the
+    beaches' (`island_layer::LAKE_SAND`). The beaches' sand gives way to the grass over 2.5 m
+    (#106), so it could not be used. The paint stops a sixth of the half length inside the
+    outline, so the sand fades out where the front drops off.
+
+**The first try** was a fan 10 m and four widths long, its top 0.2 m under the water and a
+centimetre deeper a metre out, painted with pale sand to its outline. From above it read as a
+white cloud in the lake, and at the brook's mouth it spilled onto the shore's shallows. Smaller,
+deeper, darker, and painted only where the ground is the fan's, it reads as a shallow of sand in
+front of the mouth that fades into the lake.
+
+Before (left, 1606253, the same as `--no-deltas` to the pixel) and now (right), frame 60
+(`reports/2026-10-02-120/`):
+- `into-lakes.png`: the trunk into the north-east lake from 40 m up it (ꟻLIP mean 0.141), from
+  4 m over its water (0.162) and from 40 m up (0.125); a brook on the plain into its bay (0.118)
+  and a brook from the south into the same lake (0.062). The water widens into the lake over a
+  shallow of sand where it ran into dark water through a neck.
+- `from-above.png`: the three mouths from 70 m straight down (0.178, 0.118, 0.082). The fans are
+  pale lobes in front of the mouths, darker towards their fronts.
+
+The close views change beyond the delta too. The valleys' carve follows the eased water, and the
+rivers traced again over the carved field move by a few metres over their last 50 m: the logged
+junction views (`rivers into and out of the lakes`) moved from `1504,-1290` to `1506,-1294` and
+from `2303,-890` to `2296,-891`, and their steps, stones and the valley's paint with them. The
+demo logs the two longest deltas as `the rivers' deltas into the lakes (--view)`, from low and
+from above.
+
+**Numbers** (seed 7):
+- 6 deltas, the fans 48, 23, 22, 17, 16 and 15 m long: the trunk, 11.9 m wide, into the
+  north-east lake, and five brooks of 2.7 to 4.9 m into it and into the south one.
+- 133 texels of sand.
+- 71 271 cells of 8 m refined (71 220), 1 140 336 at 2 m (1 139 520); the valleys' carve lowers
+  44 666 samples (44 625).
+
+**Checks:**
+- The capture batch changes the island's images only: `island60` ꟻLIP mean 0.0015, `island8-60`
+  0.0016, `water60` 0.0019.
+- The A/B harness, the streamed island against resident and mesh against fallback are at 0 px.
+- `validate.sh` is clean.
+- A new test runs the bowl's river into its lake by its delta:
+  - its levels eased by the formula over the reach, never raised, still falling, the same
+    beyond;
+  - twice as wide and two fifths shallower at the mouth;
+  - the fan's top under the water by 0.3 m and deeper away from the mouth, and the ground never
+    raised over the lake's level less that, nor out of the lake;
+  - the fan's cells refined and its top painted.
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440): over the trunk's delta the frame takes 0.01–0.05 ms
+more (`water/reflections` 0.1 ms more, `shading/layered` 0.03), a brook's within noise;
+`timings.sh` within noise on every view.
+
+**Left for later:**
+- One channel runs in. D-041's research lets a large fan split into distributaries.
+- Above the water the delta is the valley's floor: no bars of sand at the mouth.
+- The outlets' leftovers above remain. At the north-east lake's outlet the lake's water still ends
+  in a soft wavy edge across the river's channel, its 8 m mask's.
+- The knobs, for the owner's look, are `DeltaParams`: the reach, the flare, the fan's length,
+  its top's water, its front and its wander.
 
 ## Moving geometry (#79, 2026-10-02)
 
