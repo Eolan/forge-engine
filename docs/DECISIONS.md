@@ -1715,4 +1715,9 @@ flat to the lake's level and the channel widens to twice its width, and in front
 fan raises the lake's floor to a top 0.3–1.1 m under the water, painted with silty sand, whose
 front drops off into the lake. The outlet's sill is #120's too: past an outlet, the shallow arm a
 flat valley floor at the lake's level floods into rises 0.2 m over the level, the river's channel
-cut through it, and the lake's water is trimmed off it (`forge_procgen::trim_outlets`).
+cut through it, and the lake's water is trimmed off it (`forge_procgen::trim_outlets`). The
+mouths' bars are #127 (`forge_procgen::BarParams`): a river 20 m wide or more at the sea has one
+bar of sand in its widened mouth, 40 m or more two, teardrops whose crests stand 0.3 m over the
+water, the river widened by their breadth, so its water runs round them to the sea in two or
+three channels. They stand inside the mouth's reach only; distributaries leaving the river apart
+were not built.

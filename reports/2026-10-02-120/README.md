@@ -101,3 +101,10 @@ is drawn at all (the outlet's trimmed arm left out), then falls as before.
 The batch changes the island's images in 4 to 11 pixels (ꟻLIP means 0.000001 to 0.000003). The
 A/B pairs stay at 0 px; an asteroids frame 600 on the fallback path differed in 87 px once and
 matched on two recaptures. `validate.sh` is clean; 253 tests; timings within noise.
+
+**A correction** (found with #127): the captures above drew the ground the tile cache held. The
+cache is keyed by the parameters' text, and this fix moved the river's levels in code only, so
+the carve under the held stretch was the old one. `handover-fresh.png` shows the hill outlet's
+three views before (left), as reported (middle) and on freshly cooked ground (`--recook`,
+right): the river runs out of the lake in one channel all the same. The fresh views differ from
+the reported ones by ꟻLIP means of 0.006, 0.006 and 0.011, the north-east outlet's by 0.003.

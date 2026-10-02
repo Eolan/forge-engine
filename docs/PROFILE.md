@@ -840,6 +840,20 @@ queue and drawn after the water. 1 000 barrels with and without `--no-splashes`,
 - **Serially** (`FORGE_ASYNC=0`) the frame stays within the runs' spread, and the TAA resolve
   does not change with the reactive mask (0.146–0.171 ms either way).
 
+**The bars in the large mouths** (#127, 2026-10-02): `--no-bars` against the default, the same
+build, two rounds of each view without then with (a cook per switch), 1 500 frames each,
+2560 × 1440.
+
+| View | frame | `shading/layered` | `water/surface` | `water/reflections` |
+|---|---|---|---|---|
+| the largest mouth from 40 m back, 15 m up (`4249,15.1,-2810,-75.3,-20`) | 3.082–3.091 → 3.154–3.155 ms | 1.051–1.061 → 1.063–1.064 | 0.364–0.376 → 0.410–0.415 | 0.289–0.292 → 0.307–0.310 |
+| the same from straight over its bars (`4335,119.1,-2832,0,-89`) | 2.865–2.871 → 2.901–2.902 ms | 1.151–1.153 → 1.155–1.158 | 0.176–0.177 → 0.186–0.192 | 0.168–0.171 → 0.191 |
+
+- The water widened round the bars covers more of the view: `water/surface` takes 0.01–0.05 ms
+  more and `water/reflections` 0.02, the frame 0.03–0.07 ms.
+- The bars' 160 more 2 m cells draw no measurable time. `tools/timings.sh` is within noise on
+  every view.
+
 **The rivers' deltas into the lakes** (#120, 2026-10-02): `--no-deltas` against the default, the
 same build, two rounds of each view without then with (a cook per switch), 1 500 frames each,
 2560 × 1440.

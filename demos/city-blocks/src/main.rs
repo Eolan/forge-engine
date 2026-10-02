@@ -220,6 +220,10 @@ struct Args {
     /// level there, the lake's water not trimmed off them (#120).
     #[arg(long)]
     no_sills: bool,
+    /// Run the island's large rivers into the sea in one channel, without the bars of sand their
+    /// water splits around in their mouths (#127, D-041).
+    #[arg(long)]
+    no_bars: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -2780,6 +2784,50 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
         views = %delta_views.join("  "),
         "the rivers' deltas into the lakes (--view)"
     );
+    // The bars in the large mouths at the sea (#127): per mouth with bars, how many and the
+    // longest's length; and the two largest such mouths from 40 m back up the river from the
+    // bars' upstream tip, 15 m over the water, and from straight over the bars' middle.
+    let barred: Vec<&forge_procgen::Ribbon> = ribbons
+        .iter()
+        .rev()
+        .filter(|r| !r.bars.is_empty())
+        .collect();
+    let bar_views: Vec<String> = barred
+        .iter()
+        .take(2)
+        .map(|r| {
+            let (b, n) = (r.bars[0], r.bars.len() as f64);
+            let mid = r.bars.iter().fold([0.0; 2], |m, b| {
+                [m[0] + b.centre[0] / n, m[1] + b.centre[1] / n]
+            });
+            let length = r.bars.iter().fold(0.0_f64, |m, b| m.max(2.0 * b.half[0]));
+            let back = 0.5 * length + 40.0;
+            let at = [mid[0] - back * b.down[0], mid[1] - back * b.down[1]];
+            let yaw = (-b.down[0]).atan2(-b.down[1]).to_degrees();
+            format!(
+                "{:.0},{:.1},{:.0},{yaw:.1},-20  {:.0},{:.1},{:.0},0,-89",
+                at[0] - half_m,
+                b.level[0] + 15.0,
+                at[1] - half_m,
+                mid[0] - half_m,
+                b.level[1] + 1.2 * length,
+                mid[1] - half_m,
+            )
+        })
+        .collect();
+    tracing::info!(
+        mouths = barred.len(),
+        bars = %barred
+            .iter()
+            .map(|r| {
+                let longest = r.bars.iter().fold(0.0_f64, |m, b| m.max(2.0 * b.half[0]));
+                format!("{}x{longest:.0}m", r.bars.len())
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        views = %bar_views.join("  "),
+        "the bars in the large mouths (--view)"
+    );
     let lakes: Vec<WaterLake> = lakes
         .iter()
         .map(|l| WaterLake {
@@ -3927,6 +3975,12 @@ fn build_island(
     } else {
         0
     };
+    // The bars in the large mouths at the sea (#127): the beach's sand.
+    let bar_texels = if args.water() {
+        forge_procgen::paint_bars(&mut layers, &ribbons, island_layer::SAND)
+    } else {
+        0
+    };
     // The steep ground's scrub (#118): plants on the wetter rock, the hollows and the valleys'
     // sides, in patches; the dry spurs and the cliffs stay bare.
     let scrubbed = forge_procgen::paint_scrub(
@@ -3972,6 +4026,7 @@ fn build_island(
             .count(),
         lake_texels,
         fan_texels,
+        bar_texels,
         dry_texels = dried,
         lush_texels = greened,
         ms = rivers_start.elapsed().as_millis(),
@@ -4400,6 +4455,7 @@ fn main() -> Result<()> {
             steps: island.steps.filter(|_| !args.no_steps),
             brooks: island.brooks.filter(|_| !args.no_brooks),
             delta: island.delta.filter(|_| !args.no_deltas),
+            bars: island.bars.filter(|_| !args.no_bars),
             ..island
         })
         .expect("the rivers' parameters, set once");

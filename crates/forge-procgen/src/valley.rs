@@ -728,6 +728,7 @@ mod tests {
             steps: Vec::new(),
             deltas: Vec::new(),
             outlets: Vec::new(),
+            bars: Vec::new(),
         };
         (height, ribbon)
     }

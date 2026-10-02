@@ -69,6 +69,9 @@ const STEP_SEED: u64 = 0x5745_5053_504f_4f4c;
 /// The seed of the deltas' fans' outlines (#120).
 const DELTA_SEED: u64 = 0x4445_4c54_4146_414e;
 
+/// The seed of the mouths' bars (#127).
+const BAR_SEED: u64 = 0x4241_5253_4d4f_5554;
+
 /// Steps and pools on a river's steep reaches (#122, D-041's type A): where its water falls
 /// faster than `from`, it stands in pools and drops from each into the next over a step, as a
 /// mountain stream does. Montgomery & Buffington (1997) find step-pools from 3 % and cascades
@@ -250,6 +253,146 @@ impl Delta {
     }
 }
 
+/// The bars in a large river's mouth at the sea (D-041's mouths: "distributaries split around
+/// bars where the catchment is large", #127). Over its last reach before the sea one bar of sand,
+/// or two side by side, stand a little over the water in its widened channel, and the water runs
+/// round them in two or three channels to the sea; the river widens by the bars' breadth there,
+/// so each channel keeps its share of the water.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarParams {
+    /// Metres of the river's width at its mouth per bar: a river this wide or more has one, twice
+    /// as wide two.
+    pub per: f64,
+    /// The most bars in a mouth.
+    pub most: u32,
+    /// A bar's length, in the river's widths at the mouth.
+    pub length: f64,
+    /// A bar's half breadth at its middle, a share of the river's width at the mouth.
+    pub breadth: f64,
+    /// How far up the river from the mouth a bar's downstream tip stands, in its widths.
+    pub gap: f64,
+    /// Metres the bar's crest stands over the water.
+    pub top: f64,
+    /// Its slopes, m/m: out of the water to its crest, and under the water down to the bed.
+    pub slopes: (f64, f64),
+    /// How far its outline wanders, a share of its half breadth.
+    pub wander: f64,
+}
+
+impl Default for BarParams {
+    /// A bar per 20 m of the mouth's width, two at most, each two and a half widths long and
+    /// three tenths of the width broad, its tip a third of a width up from the mouth, its crest
+    /// 0.3 m over the water on slopes of 1 in 12 out of it and 1 in 3 under it, its outline
+    /// wandering by a quarter of its half breadth.
+    fn default() -> Self {
+        Self {
+            per: 20.0,
+            most: 2,
+            length: 2.5,
+            breadth: 0.15,
+            gap: 1.0 / 3.0,
+            top: 0.3,
+            slopes: (1.0 / 12.0, 1.0 / 3.0),
+            wander: 0.25,
+        }
+    }
+}
+
+/// The share of a bar's half length its blunt head takes upstream of its widest ([`Bar`]); its
+/// tail takes the rest, `2 −` this.
+const BAR_HEAD: f64 = 0.6;
+
+/// The power along a bar's tail: under 2 it tapers to a point rather than rounding off.
+const BAR_TAIL: f64 = 1.4;
+
+/// A bar of sand in a river's mouth at the sea ([`BarParams`], #127): a teardrop along the river,
+/// a blunt head upstream and a long tail tapering downstream, its outline wandering, where the
+/// water's edge lies; inside it the sand rises to its crest over
+/// the water, outside it falls under the water to the channel's bed. It only ever raises the
+/// ground.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bar {
+    /// Its widest point, between its head and its tail, metres in the field's frame.
+    pub centre: [f64; 2],
+    /// Its long axis, downstream, unit: the river's direction there, turned a little.
+    pub down: [f64; 2],
+    /// Its half length and half breadth, metres.
+    pub half: [f64; 2],
+    /// The water's level at its upstream tip and at its downstream one, metres.
+    pub level: [f64; 2],
+    /// Metres its crest stands over the water.
+    pub top: f64,
+    /// Its slopes out of the water and under it, m/m.
+    pub slopes: (f64, f64),
+    /// How far its outline wanders, metres.
+    pub wander: f64,
+    /// The wander's seed.
+    pub seed: u64,
+}
+
+impl Bar {
+    /// `q` along the bar's axis from its middle, and across it (positive to its left seen
+    /// downstream), metres.
+    fn local(&self, q: [f64; 2]) -> (f64, f64) {
+        let (dx, dy) = (q[0] - self.centre[0], q[1] - self.centre[1]);
+        (
+            dx * self.down[0] + dy * self.down[1],
+            dx * -self.down[1] + dy * self.down[0],
+        )
+    }
+
+    /// How far outside the bar's outline `q` is, metres (negative inside), its outline wandering:
+    /// the teardrop's implicit distance to first order. Upstream of its widest it is a half
+    /// ellipse [`BAR_HEAD`] of its half length long, a blunt head; downstream a tail the rest of
+    /// its length, tapering to a point ([`BAR_TAIL`]'s power along it).
+    pub fn outside(&self, q: [f64; 2]) -> f64 {
+        let (u, v) = self.local(q);
+        let (a, p) = if u < 0.0 {
+            (self.half[0] * BAR_HEAD, 2.0)
+        } else {
+            (self.half[0] * (2.0 - BAR_HEAD), BAR_TAIL)
+        };
+        let (a, b) = (a.max(1e-3), self.half[1].max(1e-3));
+        let along = u.abs() / a;
+        let k = (along.powf(p) + (v / b) * (v / b)).sqrt();
+        let gradient = if k > 1e-9 {
+            (0.5 * p * along.powf(p - 1.0) / a).hypot(v.abs() / (b * b)) / k
+        } else {
+            1.0 / b
+        };
+        // One octave over a third of its half length: a few long bays and spits.
+        let scale = (self.half[0] / 3.0).max(1.0);
+        (k - 1.0) / gradient.max(1e-9)
+            + self.wander * crate::noise::fbm(self.seed, q[0] / scale, q[1] / scale, 1, 2.0, 0.5)
+    }
+
+    /// The water's level at `q`, metres: from the upstream tip's to the downstream one's along
+    /// the bar.
+    pub fn level_at(&self, q: [f64; 2]) -> f64 {
+        let (u, _) = self.local(q);
+        let t = ((u + BAR_HEAD * self.half[0]) / (2.0 * self.half[0]).max(1e-3)).clamp(0.0, 1.0);
+        self.level[0] + (self.level[1] - self.level[0]) * t
+    }
+
+    /// The bar's surface at `q`, metres: its crest over the water inside, its flank under it
+    /// outside, as far as [`Bar::reach`].
+    pub fn surface(&self, q: [f64; 2]) -> f64 {
+        let e = self.outside(q);
+        let level = self.level_at(q);
+        if e < 0.0 {
+            level + (self.slopes.0 * -e).min(self.top)
+        } else {
+            level - self.slopes.1 * e
+        }
+    }
+
+    /// How far from its middle the bar may raise the ground, metres: its half length, the wander
+    /// and its flank down a channel's depth of `deepest` metres.
+    pub fn reach(&self, deepest: f64) -> f64 {
+        (2.0 - BAR_HEAD) * self.half[0] + self.wander + deepest / self.slopes.1.max(1e-3)
+    }
+}
+
 /// How the ribbons are made.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RibbonParams {
@@ -309,6 +452,8 @@ pub struct RibbonParams {
     pub steps: Option<StepParams>,
     /// The deltas where rivers run into lakes (#120); `None` runs them in as they come.
     pub delta: Option<DeltaParams>,
+    /// The bars in the large rivers' mouths at the sea (#127); `None` leaves them one channel.
+    pub bars: Option<BarParams>,
 }
 
 impl Default for RibbonParams {
@@ -318,7 +463,7 @@ impl Default for RibbonParams {
     /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
     /// of 60 % at most, rising to its banks over 8 m and three widths into a lake, the lakes of a
     /// hectare, twice as wide at the sea from 1.5 m over it, a confluence's corners rounded over
-    /// 2 m and a tributary's width along each edge, no steps, no deltas.
+    /// 2 m and a tributary's width along each edge, no steps, no deltas, no bars.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -342,6 +487,7 @@ impl Default for RibbonParams {
             confluence: (2.0, 1.0),
             steps: None,
             delta: None,
+            bars: None,
         }
     }
 }
@@ -350,13 +496,15 @@ impl RibbonParams {
     /// The island's rivers (D-041): the defaults, sized by the regional curves three times as
     /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01)
     /// from 3 km² of catchment, brooks of nature's size at 0.5 km² (#123), in steps and pools
-    /// on their steep reaches, a delta where they run into a lake (#120).
+    /// on their steep reaches, a delta where they run into a lake (#120), bars in their large
+    /// mouths at the sea (#127).
     pub fn island() -> Self {
         Self {
             regional: Some((3.0, 1.5)),
             brooks: Some((500_000.0, 3_000_000.0)),
             steps: Some(StepParams::default()),
             delta: Some(DeltaParams::default()),
+            bars: Some(BarParams::default()),
             ..Self::default()
         }
     }
@@ -454,6 +602,8 @@ pub struct Ribbon {
     pub deltas: Vec<Delta>,
     /// Where it leaves a lake, head first (#120).
     pub outlets: Vec<Outlet>,
+    /// The bars in its mouth at the sea (#127).
+    pub bars: Vec<Bar>,
 }
 
 /// Where a river leaves a lake (#120): the last point of a run in it, where the lake's water still
@@ -600,6 +750,7 @@ pub fn ribbons(
                 steps: Vec::new(),
                 deltas: Vec::new(),
                 outlets: Vec::new(),
+                bars: Vec::new(),
             })
         })
         .collect();
@@ -735,6 +886,13 @@ pub fn ribbons(
                 p.reach = (half + affine(params.tuck, half)) as f32;
                 p.depth = (f64::from(p.depth) * (1.0 - 0.4 * e)) as f32;
             }
+        }
+    }
+    // The large mouths' bars, on the estuaries' widths (#127).
+    if let Some(bars) = &params.bars {
+        for ribbon in &mut ribbons {
+            let seed = hash_cell3(BAR_SEED, ribbon.river as i32, 0, 0);
+            ribbon.bars = mouth_bars(&mut ribbon.points, bars, params, seed);
         }
     }
     // The confluences' rounded corners, on the final widths, and the water drawn over them: each
@@ -1344,6 +1502,113 @@ fn levels(
 /// and on so into the lake while the river's water fades there; and gives the fan in front of it
 /// on the lake's floor ([`Delta`]), its length shortened to `fan.2` of the lake's water ahead of it.
 /// `lake_at` gives the lake's level at a point, its depth there and at its deepest.
+/// With [`BarParams`], the bars in the mouth of a river at the sea as wide as [`BarParams::per`]
+/// or more ([`sea_mouth`]): over its length up the river from the mouth, ending
+/// [`BarParams::gap`] widths short of it, the river widens by the bars' breadth, and the bars
+/// stand side by side across it, staggered, channels between them and its banks. None for a
+/// river that does not reach the sea, is narrower, or is too short.
+fn mouth_bars(
+    points: &mut [RibbonPoint],
+    bars: &BarParams,
+    params: &RibbonParams,
+    seed: u64,
+) -> Vec<Bar> {
+    let Some(m) = sea_mouth(points) else {
+        return Vec::new();
+    };
+    let width = 2.0 * f64::from(points[m].half_width);
+    let count = ((width / bars.per).floor() as u32).min(bars.most);
+    let n = points.len();
+    let mut arc = vec![0.0; n];
+    for k in 1..n {
+        let (a, b) = (position(&points[k - 1]), position(&points[k]));
+        arc[k] = arc[k - 1] + (b[0] - a[0]).hypot(b[1] - a[1]);
+    }
+    let length = bars.length * width;
+    let middle = arc[m] - bars.gap * width - 0.5 * length;
+    if count == 0 || middle - 0.5 * length < 0.0 {
+        return Vec::new();
+    }
+    // The course's point and the water's level at `s` metres along it.
+    let course: Vec<([f64; 2], f64)> = points
+        .iter()
+        .map(|p| (position(p), f64::from(p.level)))
+        .collect();
+    let at = |s: f64| -> ([f64; 2], f64) {
+        let k = arc.partition_point(|&a| a < s).clamp(1, n - 1);
+        let t = ((s - arc[k - 1]) / (arc[k] - arc[k - 1]).max(1e-9)).clamp(0.0, 1.0);
+        let ((a, la), (b, lb)) = (course[k - 1], course[k]);
+        (
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t],
+            la + (lb - la) * t,
+        )
+    };
+    // The bars' axis: the chord over their length.
+    let (up, _) = at(middle - 0.5 * length);
+    let (down_tip, _) = at(middle + 0.5 * length);
+    let chord = [down_tip[0] - up[0], down_tip[1] - up[1]];
+    let chord_length = chord[0].hypot(chord[1]).max(1e-9);
+    let down = [chord[0] / chord_length, chord[1] / chord_length];
+    let side = [-down[1], down[0]];
+    // Each bar its own: from three quarters to one and a quarter of the breadth, the shorter by
+    // up to two fifths, staggered along the river, and turned off its axis a little.
+    let hash = |i: u32, j: i32| f64::from(unit_f32(hash_cell3(seed, i as i32, j, 0)));
+    let breadths: Vec<f64> = (0..count)
+        .map(|i| bars.breadth * width * (0.75 + 0.5 * hash(i, 3)))
+        .collect();
+    let breadth: f64 = breadths.iter().sum();
+    // The river widens by the bars' breadth over their length, a parabola along it, so each
+    // channel round them keeps its share of the water.
+    for k in 0..n {
+        let s = (arc[k] - middle) / (0.5 * length);
+        if s.abs() < 1.0 {
+            let p = &mut points[k];
+            let half = f64::from(p.half_width) + breadth * (1.0 - s * s);
+            p.half_width = half as f32;
+            p.reach = (half + affine(params.tuck, half)) as f32;
+        }
+    }
+    // Across the widened river, channels and bars in turn from its right bank: each channel
+    // the river's width there before, shared.
+    let wide = 2.0 * f64::from(points[arc.partition_point(|&a| a < middle).min(n - 1)].half_width);
+    let channel = (wide - 2.0 * breadth) / f64::from(count + 1);
+    let mut across = -0.5 * wide;
+    (0..count)
+        .map(|i| {
+            let b = breadths[i as usize];
+            across += channel + b;
+            let at_bar = across;
+            across += b;
+            // Its widest point where the river is about widest, and its tail no further down
+            // than the widening's end.
+            let shift = (hash(i, 1) - 0.5) * 0.2 * length;
+            let half_length = (0.5 * length * (0.6 + 0.4 * hash(i, 0)))
+                .min((0.5 * length - shift) / (2.0 - BAR_HEAD));
+            // Turned so its tail moves across by two fifths of a channel at most.
+            let most = (0.4 * channel / ((2.0 - BAR_HEAD) * half_length)).atan();
+            let turn = (2.0 * hash(i, 4) - 1.0) * most;
+            let (sin, cos) = (turn.sin(), turn.cos());
+            let axis = [down[0] * cos - down[1] * sin, down[0] * sin + down[1] * cos];
+            // Across the course where it is widest, from the course's point there.
+            let (on, _) = at(middle + shift);
+            let level = |u: f64| at(middle + shift + u).1;
+            Bar {
+                centre: [on[0] + side[0] * at_bar, on[1] + side[1] * at_bar],
+                down: axis,
+                half: [half_length, b],
+                level: [
+                    level(-BAR_HEAD * half_length),
+                    level((2.0 - BAR_HEAD) * half_length),
+                ],
+                top: bars.top,
+                slopes: bars.slopes,
+                wander: bars.wander * b,
+                seed: hash_cell3(seed, i as i32, 2, 0),
+            }
+        })
+        .collect()
+}
+
 fn deltas(
     points: &mut [RibbonPoint],
     mouths: &[usize],

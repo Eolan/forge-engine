@@ -1863,6 +1863,73 @@ Before (9f4f039) and now, frame 60 (`reports/2026-10-02-120/handover.png`):
 - The test of a river through a bowl's lake now checks that the river keeps the lake's level as
   far past the lip as the lake's water is drawn, and a point more, and falls past that.
 
+**A correction** (found with #127): those captures drew the ground the tile cache held. The
+cache is keyed by the parameters' text, and the fix moved the river's levels in code only, so
+the carve under the held stretch was the old one. On freshly cooked ground (`--recook`) the
+river runs out of the hill lake in one channel all the same; those views differ from the ones
+above by ꟻLIP means of 0.003 to 0.011.
+
+## The bars in the large mouths (#127, 2026-10-02)
+
+D-041's mouth rule: "distributaries split around bars where the catchment is large"
+(`docs/DECISIONS.md`; `forge_procgen::BarParams`, `Bar`, `paint_bars`; `city-blocks --no-bars`
+for the mouths before). The four largest rivers crossed the beach into the sea in one channel,
+35–52 m wide after the estuary's widening.
+
+**What changed.**
+- **Where:** a river whose mouth at the sea (`sea_mouth`) is 20 m wide or more gets a bar, 40 m
+  or more two.
+- **The bars:** teardrops along the river, a blunt head upstream and a tail tapering
+  downstream, two and a half widths long between them, ending a third of a width short of the
+  mouth. Each bar is 0.3 of the width broad, give or take a quarter. Each its own: up to two
+  fifths shorter, staggered along the river, turned a little, its outline wandering in long
+  bays and spits.
+- **Their sand** rises 1 in 12 out of the water to a crest 0.3 m over it, and falls 1 in 3
+  under it to the channels' beds (`Channels`, after the channels' carve; their cells are drawn
+  finer). The water stays level across: the sand rising through it draws the channels round the
+  bars, as a lake's shore draws itself.
+- **The river widens** by the bars' breadth over their length, a parabola along it, so each of
+  the two or three channels keeps its share of the water. Across it, channels and bars take
+  turns from the right bank.
+- **The sand** is the beach's layer (`paint_bars`); on seed 7 the mouths were already sand.
+
+Seed 7: four mouths with bars, two in each of the three largest (the longest 99, 78 and 66 m)
+and one in the fourth (72 m); the widest river 86 m where it was 52; 10 more refined cells of
+8 m. The demo logs the two largest mouths' views as `the bars in the large mouths (--view)`.
+Before (`--no-bars`) and now, frame 60 (`reports/2026-10-02-127/`):
+- `mouths.png`: the largest mouth from 40 m back up the river, 15 m over its water (ꟻLIP mean
+  0.055), and from straight over its bars (0.061); the second's the same (0.067, 0.076). The
+  channels run round the bars to the sea; past the bars they join again over the beach.
+- `sea-far.png`: the largest mouth from 4 m over its water, 30 m back (0.028), a bar's head in
+  front; and from 500 m up the valley, 80 m up (0.003).
+
+From far away the bars read darker than the beach and fade into the water: the ground's coarser
+levels of detail lower their 0.3 m crests, the sea's surface is drawn wherever the coarser
+ground dips under its level, and the wet sand by the water is darker. Cutting the river's water
+out over the bars on the GPU (their spans across each point) changed the far views by ꟻLIP
+means under 0.00002, so it was left out.
+
+**Checks:**
+- The capture batch changes the island's images only: `island60` 9 240 px (ꟻLIP mean 0.0020),
+  `island8-60` 9 683 (0.0021), `water60` 9 092 (0.0026). That is the bars and the hill outlet's
+  fix on freshly cooked ground (the batch before drew the old carve, above).
+- The A/B harness, the streamed island against resident and mesh against fallback are at 0 px.
+- `validate.sh` is clean; `timings.sh` within noise on every view (the island 1.583–1.586 ms
+  against 1.582–1.585).
+- 254 tests: a new one runs a broad valley into the sea. Its 64 m mouth gets two bars, the river
+  widened by their breadths and otherwise unchanged, each bar short of the mouth, its crest 0.3 m
+  over the water, the channels either side under it, the sand painted inside the outlines.
+- The cost at 2560 × 1440 is in `docs/PROFILE.md`: a bar's mouth in view takes 0.03–0.07 ms
+  more of the frame, its water wider.
+
+**Left for later:**
+- The bars only stand in the mouths' widened reach. True distributaries, channels leaving the
+  river to reach the sea apart, would need a ribbon each.
+- Bars on the large lake fans (the trunk's 48 m fan into the north-east lake), if the owner
+  wants them.
+- Past the widened mouth's banks, the steep sand face where a beach's berm meets the carve
+  (`--view 4354,14,-2830,180,-25`) stands a few metres nearer the water.
+
 ## Moving geometry (#79, 2026-10-02)
 
 The first thing Forge draws that moves: `--movers N` sets N barrels drifting down the island's

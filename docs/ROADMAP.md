@@ -354,8 +354,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    basins of 23, 18 and 12 km² where the dome's largest were 11, 11 and 9, with a lake's bowl on
    each trunk, the lower courses graded to the sea, and the rivers under 3 km² brooks of
    nature's size (#123, `--island-basins 0 --island-grade 0 --no-brooks` for the island before).
-   Next: the owner's judgement of the rivers and of the new island; D-041's distributaries around
-   sand bars at the large mouths (#127).
+   The large mouths at the sea split round one or two bars of sand standing over the water
+   (#127, `--no-bars`). Next: the owner's judgement of the rivers and of the new island.
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

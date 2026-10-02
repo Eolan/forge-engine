@@ -33,9 +33,13 @@ use std::ops::RangeInclusive;
 use crate::field::Field2;
 use crate::lake::LakeWater;
 use crate::river::{
-    Corner, Delta, Ribbon, Step, corner_samples, cross, drawn_height, lip_shift, offset,
+    Bar, Corner, Delta, Ribbon, Step, corner_samples, cross, drawn_height, lip_shift, offset,
     segment_distance, smooth_height, smoothstep, sub,
 };
+
+/// The deepest a channel's bed lies under its water by a bar ([`Bar`], #127), metres: how far
+/// down its flank may raise the ground.
+const BAR_DEEPEST: f64 = 3.0;
 
 /// How the channels are carved.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -226,6 +230,11 @@ pub struct Channels {
     sills: Vec<Sill>,
     sill_start: Vec<u32>,
     sill_list: Vec<u32>,
+    /// The bars in the large mouths ([`Bar`], #127), and per cell where its bars start in
+    /// `bar_list`.
+    bars: Vec<Bar>,
+    bar_start: Vec<u32>,
+    bar_list: Vec<u32>,
     refined: Vec<u32>,
     /// Per sample, whether every cell around it is refined: the smoothed ground's weight there
     /// (bilinear between the samples, so it is 0 all along the refined region's outline).
@@ -432,6 +441,22 @@ impl Channels {
         };
         let (sill_start, sill_list) =
             bucket(side, &sills.iter().map(sill_cells).collect::<Vec<_>>());
+        // The mouths' bars: the cells within their reach of their middles, their flanks falling
+        // as deep as a channel's bed can be.
+        let bars: Vec<Bar> = ribbons
+            .iter()
+            .flat_map(|r| r.bars.iter().copied())
+            .collect();
+        let bar_cells = |b: &Bar| {
+            let grow = b.reach(BAR_DEEPEST);
+            let last = i64::from(side) - 1;
+            let cell = |v: f64| ((v / spacing).floor() as i64).clamp(0, last) as u32;
+            (
+                cell(b.centre[0] - grow)..=cell(b.centre[0] + grow),
+                cell(b.centre[1] - grow)..=cell(b.centre[1] + grow),
+            )
+        };
+        let (bar_start, bar_list) = bucket(side, &bars.iter().map(bar_cells).collect::<Vec<_>>());
         // Each corner's bank rises as the rivers' banks it touches do, half a metre out of
         // their water there: no step where it meets them, and no steeper.
         let corners: Vec<Fillet> = corners
@@ -506,6 +531,21 @@ impl Channels {
                         })
                     });
                     fanned[y as usize * side_us + x as usize] |= raised;
+                }
+            }
+        }
+        // And the cells a bar may raise the ground in.
+        for b in &bars {
+            let (xs, ys) = bar_cells(b);
+            for y in ys {
+                for x in xs.clone() {
+                    let centre = [
+                        (f64::from(x) + 0.5) * spacing,
+                        (f64::from(y) + 0.5) * spacing,
+                    ];
+                    if b.outside(centre) <= half_diagonal + BAR_DEEPEST / b.slopes.1.max(1e-3) {
+                        fanned[y as usize * side_us + x as usize] = true;
+                    }
                 }
             }
         }
@@ -619,6 +659,9 @@ impl Channels {
             sills,
             sill_start,
             sill_list,
+            bars,
+            bar_start,
+            bar_list,
             refined,
             inner,
         }
@@ -639,6 +682,15 @@ impl Channels {
             }
         }
         out
+    }
+
+    /// `ground` at `q` in cell `c`, raised by the mouths' bars that reach it: their sand over the
+    /// water, their flanks under it down to the channels' beds.
+    fn barred(&self, c: usize, q: [f64; 2], ground: f64) -> f64 {
+        self.bar_list[self.bar_start[c] as usize..self.bar_start[c + 1] as usize]
+            .iter()
+            .map(|&b| self.bars[b as usize].surface(q))
+            .fold(ground, f64::max)
     }
 
     /// `base` at `q` in cell `c`, raised by the deltas' fans that reach it.
@@ -722,7 +774,8 @@ impl Channels {
                 }
             }
             if smooth == 0.0 {
-                return self.silled(c, [x, y], self.fanned(c, [x, y], drawn));
+                let ground = self.silled(c, [x, y], self.fanned(c, [x, y], drawn));
+                return self.barred(c, [x, y], ground);
             }
             drawn + (smooth_height(height, x, y) - drawn) * smooth
         };
@@ -779,7 +832,8 @@ impl Channels {
                 carved = carved.min(base + (ground.min(base) - base) * weight);
             }
         }
-        carved
+        // The mouths' bars over the channels cut round them.
+        self.barred(c, [x, y], carved)
     }
 
     /// The heights of the refined cells' fine vertices, in the layout
@@ -1216,6 +1270,33 @@ pub fn paint_fans(
                     .is_some_and(|(z, _)| ground(q[0], q[1]) <= z + 0.05);
                 let inside = f.outside(q) < -f.length / 12.0;
                 if along > -f.half_width && inside && fan {
+                    let texel = &mut layers.data[(ty as u32 * layers.size + tx as u32) as usize];
+                    if *texel != layer {
+                        *texel = layer;
+                        painted += 1;
+                    }
+                }
+            }
+        }
+    }
+    painted
+}
+
+/// Paints the mouths' bars ([`Bar`], #127) into `layers` (over the field's square) as `layer`,
+/// their sand: every texel whose centre lies inside a bar's outline, or within its flank's first
+/// metre under the water. Returns the texels painted.
+pub fn paint_bars(layers: &mut Field2<u8>, ribbons: &[Ribbon], layer: u8) -> usize {
+    let cell = layers.spacing;
+    let last = i64::from(layers.size) - 1;
+    let mut painted = 0;
+    for b in ribbons.iter().flat_map(|r| r.bars.iter()) {
+        let grow = b.reach(0.0) + 1.0;
+        let lo = |v: f64| (((v - grow) / cell).floor() as i64).clamp(0, last);
+        let hi = |v: f64| (((v + grow) / cell).ceil() as i64).clamp(0, last);
+        for ty in lo(b.centre[1])..=hi(b.centre[1]) {
+            for tx in lo(b.centre[0])..=hi(b.centre[0]) {
+                let q = [(tx as f64 + 0.5) * cell, (ty as f64 + 0.5) * cell];
+                if b.outside(q) < 1.0 / b.slopes.1.max(1e-3) {
                     let texel = &mut layers.data[(ty as u32 * layers.size + tx as u32) as usize];
                     if *texel != layer {
                         *texel = layer;
@@ -1776,6 +1857,97 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_large_river_s_mouth_splits_round_bars_of_sand_over_its_water() {
+        // A broad valley falling 0.1 m a sample towards the sea at y = 0, its sides rising 0.5 m
+        // a sample: its river, thirty times nature's width, is 64 m wide at its mouth.
+        let valley = Field2::from_fn(41, 10.0, |x, y| {
+            0.1 * y as f32 - 0.5 + 0.5 * (x as f32 - 20.0).abs()
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&valley, 0.0, &pool);
+        let rivers = trace_rivers(&valley, &flow, 15);
+        let plain = RibbonParams {
+            regional: Some((30.0, 1.0)),
+            ..RibbonParams::default()
+        };
+        let bars = crate::river::BarParams::default();
+        let barred = RibbonParams {
+            bars: Some(bars),
+            ..plain
+        };
+        let without = ribbons(&valley, &rivers, &[], &plain);
+        let with = ribbons(&valley, &rivers, &[], &barred);
+        assert_eq!(with, ribbons(&valley, &rivers, &[], &barred));
+        let (ribbon, before) = (
+            with.last().expect("the valley's river"),
+            without.last().expect("the valley's river"),
+        );
+        assert!(before.bars.is_empty());
+        // Two bars: one per 20 m of the mouth's width, two at most.
+        let m = crate::river::sea_mouth(&ribbon.points).expect("a mouth at the sea");
+        let width = 2.0 * f64::from(ribbon.points[m].half_width);
+        assert!(width > 3.0 * bars.per, "{width}");
+        assert_eq!(ribbon.bars.len(), 2);
+        // The river runs as it did, but wider over the bars' length by their breadths, a
+        // parabola along it, ending a third of its width short of the mouth.
+        let breadth: f64 = ribbon.bars.iter().map(|b| b.half[1]).sum();
+        let length = bars.length * width;
+        let mut arc = vec![0.0; ribbon.points.len()];
+        for k in 1..arc.len() {
+            let (a, b) = (ribbon.points[k - 1].position, ribbon.points[k].position);
+            arc[k] = arc[k - 1] + f64::from((b[0] - a[0]).hypot(b[1] - a[1]));
+        }
+        let middle = arc[m] - bars.gap * width - 0.5 * length;
+        for (k, (p, q)) in ribbon.points.iter().zip(&before.points).enumerate() {
+            let s = (arc[k] - middle) / (0.5 * length);
+            let wider = if s.abs() < 1.0 {
+                breadth * (1.0 - s * s)
+            } else {
+                0.0
+            };
+            let grown = f64::from(p.half_width) - f64::from(q.half_width);
+            assert!((grown - wider).abs() < 1e-3, "{k}: {grown} against {wider}");
+            assert_eq!((p.position, p.level), (q.position, q.level));
+        }
+        // Each bar stands short of the mouth, its crest 0.3 m over the water, the channels
+        // either side of it under the water.
+        let channels = Channels::new(&valley, &with, &[], &ChannelParams::default());
+        let mouth = ribbon.points[m].position[1];
+        for b in &ribbon.bars {
+            let tail = b.centre[1] + b.down[1] * b.reach(0.0);
+            assert!(tail > f64::from(mouth), "{tail} past the mouth at {mouth}");
+            let crest = channels.height_at(&valley, b.centre[0], b.centre[1]);
+            assert!(
+                (crest - b.level_at(b.centre) - bars.top).abs() < 1e-6,
+                "{crest}"
+            );
+            let side = [-b.down[1], b.down[0]];
+            for s in [-1.0, 1.0] {
+                let out = s * (b.half[1] + b.wander + 2.0);
+                let q = [b.centre[0] + side[0] * out, b.centre[1] + side[1] * out];
+                let ground = channels.height_at(&valley, q[0], q[1]);
+                assert!(ground < b.level_at(q), "{ground} at {q:?}");
+            }
+        }
+        // Their sand, painted inside their outlines and down their flanks' first metre.
+        let mut layers = Field2::from_fn(81, 5.0, |_, _| 0u8);
+        let painted = paint_bars(&mut layers, &with, 1);
+        assert!(painted > 100, "{painted}");
+        for (t, _) in layers.data.iter().enumerate().filter(|(_, l)| **l == 1) {
+            let q = [
+                (f64::from(t as u32 % 81) + 0.5) * 5.0,
+                (f64::from(t as u32 / 81) + 0.5) * 5.0,
+            ];
+            let inside = ribbon
+                .bars
+                .iter()
+                .map(|b| b.outside(q))
+                .fold(f64::MAX, f64::min);
+            assert!(inside < 3.0, "{q:?}");
         }
     }
 }
