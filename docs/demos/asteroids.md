@@ -1232,7 +1232,9 @@ into the big asteroids, ships in pursuit, lasers, missiles, rocks breaking by ma
    sun's disc, a closer planet if the owner wants its air to read as a band, the planet-view
    table (#26, done: above), volumetric dust and the nebula lit by the sun.
 3. Physics (Phase 3): tumbling, collisions, fracture by mass; then ships, lasers, missiles,
-   crashes (Phases 5–7), a second player, spatial audio.
+   crashes (Phases 5–7), a second player, spatial audio. Ships already fly the corridor on
+   scripted paths (2026-10-02, #79, above: `--ships N`, `--chase K`), the first step of the
+   space battle (#80).
 4. Look (owner's request, 2026-09-24, after the systems): rock asteroids as angular
    *chunks* of rock (fractured faces, edges, flat facets — a Voronoi/fracture-based
    generator rather than a displaced sphere), and ice asteroids as ice *blocks/chunks*,
