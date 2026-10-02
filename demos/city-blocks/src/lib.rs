@@ -1878,7 +1878,7 @@ impl CityMaterials {
         let [rock, concrete, _, grass] = self.sets;
         // The valleys' own sets (#118), the island's only: generated here, in parallel.
         let start = Instant::now();
-        let mut valley_sets: [Option<[TextureData; 2]>; 7] = Default::default();
+        let mut valley_sets: [Option<[TextureData; 2]>; 8] = Default::default();
         TaskPool::client().scope(|s| {
             for (i, slot) in valley_sets.iter_mut().enumerate() {
                 s.spawn(move |_| {
@@ -1889,7 +1889,8 @@ impl CityMaterials {
                         3 => textures::shingle(18, 512),
                         4 => textures::granite(19, 512),
                         5 => textures::limestone(20, 512),
-                        _ => textures::karst(21, 512),
+                        6 => textures::karst(21, 512),
+                        _ => textures::grus(22, 512),
                     });
                 });
             }
@@ -1898,11 +1899,21 @@ impl CityMaterials {
         for set in valley_sets.iter().flatten() {
             ids.push((self.textures.add(&set[0])?, self.textures.add(&set[1])?));
         }
-        let [gravel, scree, scrub, shingle, granite, limestone, karst] =
-            [ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]];
+        let [
+            gravel,
+            scree,
+            scrub,
+            shingle,
+            granite,
+            limestone,
+            karst,
+            grus,
+        ] = [
+            ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6], ids[7],
+        ];
         tracing::info!(
             ms = start.elapsed().as_millis(),
-            "island textures: gravel, scree, scrub, shingle, granite, limestone and karst"
+            "island textures: gravel, scree, scrub, shingle, granite, limestone, karst and grus"
         );
         let ground = self.table.add(Material::new(
             "island ground",
@@ -2096,6 +2107,19 @@ impl CityMaterials {
                     0.04,
                 ),
             ),
+            (
+                // Grus on the granite's gentle ground near its outcrops (#135): coarse buff
+                // sand of feldspar, quartz and mica, small pieces of granite lying on it.
+                "island: grus",
+                textured(
+                    grus,
+                    [0.56, 0.53, 0.49],
+                    [0.62, 0.58, 0.53],
+                    3.0,
+                    12.0,
+                    0.04,
+                ),
+            ),
         ];
         assert_eq!(rows.len(), usize::from(island_layer::COUNT));
         for (name, layer) in rows {
@@ -2285,8 +2309,11 @@ mod island_layer {
     /// Karst: the limestone's bare pavements of blocks and fissures, on its driest gentler
     /// ground (#129).
     pub const KARST: u8 = 15;
+    /// Grus: the coarse sand the granite rots into, on its gentle ground near the bare
+    /// rock (#135).
+    pub const GRUS: u8 = 16;
     /// How many layers there are.
-    pub const COUNT: u8 = 16;
+    pub const COUNT: u8 = 17;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -4443,7 +4470,8 @@ fn build_island(
         "island moisture, rivers and lakes"
     );
     // The rock by the island's geology (D-042, #129), after the rules that read the rock: the
-    // hills' granite, the low ground's limestone, and karst on the limestone's dry ground.
+    // hills' granite, the low ground's limestone, and karst on the limestone's dry ground, grus on
+    // the granite's gentle ground near its bare rock (#135).
     if !args.no_rock_types {
         let geology_start = Instant::now();
         let rocks = forge_procgen::paint_geology(
@@ -4452,8 +4480,10 @@ fn build_island(
             forge_procgen::GeologyLayers {
                 rock: island_layer::ROCK,
                 limestone: island_layer::LIMESTONE,
+                grass: island_layer::GRASS,
                 dry_grass: island_layer::DRY_GRASS,
                 karst: island_layer::KARST,
+                grus: island_layer::GRUS,
             },
             &forge_procgen::GeologyRule::default(),
         );
@@ -4507,6 +4537,7 @@ fn build_island(
             island_layer::ROCK,
             island_layer::LIMESTONE,
             island_layer::KARST,
+            island_layer::GRUS,
         ]
         .iter()
         .filter_map(|&l| view(l))
@@ -4515,9 +4546,10 @@ fn build_island(
             granite_texels = rocks.granite,
             limestone_texels = rocks.limestone,
             karst_texels = rocks.karst,
+            grus_texels = rocks.grus,
             ms = geology_start.elapsed().as_millis(),
             views = %views.join("  "),
-            "the island's rocks: granite, limestone, karst (D-042, #129, --view)"
+            "the island's rocks: granite, limestone, karst, grus (D-042, #129, #135, --view)"
         );
     }
     // Where the loose rocks lie, and which rock they are (#130): the map the placement draws

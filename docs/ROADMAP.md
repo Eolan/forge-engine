@@ -102,8 +102,8 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   with karst on its dry slopes. The boulders by the rocks ✅ (#130): fewer, of the island's own
   granite and limestone in shapes of their own, where rocks gather (talus, crests, karst); their
   LOD keeping their shading (#131); in the rivers, rounded cobbles (#132), then chunks the
-  water broke and wore, mostly pebbles (#133). Next for them: the granite's grus on its gentle
-  slopes.
+  water broke and wore, mostly pebbles (#133). The granite's grus ✅ (#135): aprons of coarse
+  sand round its outcrops and tors.
 - **Phase 3's start:** `forge-sim` and the physics engine (D-009). Its first visible use is the
   island's water: buoyancy for what floats (#107's barrels are carried at the water's speed,
   without physics), boats and swimming from the owner's inbox. Its demo is `materials-yard`.

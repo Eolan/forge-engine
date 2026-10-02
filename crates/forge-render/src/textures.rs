@@ -475,6 +475,67 @@ pub fn granite(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// Grus (#135, D-042): the coarse sand granite rots into on its gentle ground. Loose grains of
+/// pink feldspar, white quartz and black mica on a buff to ochre ground, small angular pieces of
+/// the granite lying on it, and the odd tuft of dry grass.
+pub fn grus(seed: u64, size: u32) -> [TextureData; 2] {
+    // A piece of granite: a tilted face round its cell's point, a third of the cells holding one.
+    let piece = |u: f32, v: f32| {
+        let (f1, f2, cell, offset) = worley(seed ^ 0x6C5, u, v, 22);
+        let h = hash_cell2(seed ^ 0x6C6, cell.0, cell.1);
+        let (a, b) = (unit_f32(h) - 0.5, unit_f32(h.rotate_left(23)) - 0.5);
+        let size = 0.18 + 0.2 * unit_f32(h.rotate_left(41));
+        let on = unit_f32(h.rotate_left(7)) < 0.35;
+        let inside = if on {
+            smoothstep(size, size - 0.06, f1) * smoothstep(0.0, 0.08, f2 - f1)
+        } else {
+            0.0
+        };
+        let face = 0.7 + 0.6 * (a * offset[0] + b * offset[1]);
+        (inside, face, h)
+    };
+    let tuft = |u: f32, v: f32| smoothstep(0.62, 0.72, fbm(seed ^ 0x7F7, u, v, 10, 3));
+    let heights = grid(size, |u, v| {
+        let (inside, face, _) = piece(u, v);
+        let sand = 0.12 * fbm(seed ^ 0x6A1, u, v, 160, 2) + 0.2 * fbm(seed, u, v, 6, 3);
+        sand + 0.5 * inside * face + 0.15 * tuft(u, v) * fbm(seed ^ 0x7F8, u, v, 96, 1)
+    });
+    let colours = grid(size, |u, v| {
+        // The grains, each a cell of a fine lattice: feldspar, quartz, mica, or the ground's.
+        let (_, _, cell, _) = worley(seed ^ 0x6C2, u, v, 140);
+        let kind = unit_f32(hash_cell2(seed ^ 0x6C2, cell.0, cell.1));
+        let ground = mix3(
+            [0.56, 0.47, 0.36],
+            [0.62, 0.5, 0.42],
+            smoothstep(0.35, 0.65, fbm(seed ^ 0xB0F, u, v, 4, 3)),
+        );
+        let grain = if kind < 0.18 {
+            [0.68, 0.5, 0.43]
+        } else if kind < 0.3 {
+            [0.78, 0.76, 0.72]
+        } else if kind < 0.35 {
+            [0.12, 0.11, 0.1]
+        } else {
+            ground
+        };
+        let shade = 0.88 + 0.24 * fbm(seed ^ 0x6A1, u, v, 160, 2);
+        let sand = grain.map(|c| c * shade);
+        let (inside, face, h) = piece(u, v);
+        let light = 0.8 + 0.3 * unit_f32(h.rotate_left(13));
+        let stone = [0.56, 0.51, 0.48].map(|c| c * light * (0.85 + 0.25 * face));
+        let dry = mix3(
+            [0.42, 0.37, 0.22],
+            [0.55, 0.49, 0.3],
+            fbm(seed ^ 0x7F8, u, v, 96, 1),
+        );
+        mix3(mix3(sand, stone, inside), dry, 0.8 * tuft(u, v))
+    });
+    [
+        albedo_texture("grus albedo", size, colours),
+        normal_texture("grus normal", size, &heights, size as f32 / 40.0),
+    ]
+}
+
 /// Limestone (#129, D-042): the island's low ground and sea cliffs, the old reefs raised with
 /// it. Pale cream-grey, fine-grained, pitted where the rain dissolves it, blotched grey and
 /// darker where it weathers.

@@ -382,6 +382,15 @@ pub struct GeologyRule {
     pub karst_share: f64,
     /// Metres across the karst's patches.
     pub karst_patch: f64,
+    /// Rise over run between which the granite's grass may be bare grus, the coarse sand the
+    /// granite rots into (#135), over `slope_over` metres.
+    pub grus_slope: (f32, f32),
+    /// Metres from the bare granite within which the grus lies: the outcrops shed it.
+    pub grus_near: f64,
+    /// The share of that grass the grus takes, in patches `grus_patch` metres across.
+    pub grus_share: f64,
+    /// Metres across the grus's patches.
+    pub grus_patch: f64,
     /// The seed of the wander and the patches.
     pub seed: u64,
 }
@@ -389,7 +398,8 @@ pub struct GeologyRule {
 impl Default for GeologyRule {
     /// Limestone under 45 m, give or take 25 m over patches 1.5 km across, its contact ragged by
     /// 4 m; karst on a fifth of the limestone's dry grass between slopes of 0.12 and 0.35
-    /// (over 8 m), in patches 25 m across.
+    /// (over 8 m), in patches 25 m across; grus on half the granite's grass between slopes of
+    /// 0.05 and 0.45 within 48 m of its bare rock, in patches 30 m across drawn towards it.
     fn default() -> Self {
         Self {
             limestone_below: (45.0, 25.0),
@@ -399,6 +409,10 @@ impl Default for GeologyRule {
             slope_over: 8.0,
             karst_share: 0.2,
             karst_patch: 25.0,
+            grus_slope: (0.05, 0.45),
+            grus_near: 48.0,
+            grus_share: 0.5,
+            grus_patch: 30.0,
             seed: 0x6765_6f6c_6f67_7921,
         }
     }
@@ -425,14 +439,18 @@ pub struct GeologyLayers {
     pub rock: u8,
     /// The limestone the rock turns to on the low ground.
     pub limestone: u8,
-    /// The dry grass ([`paint_moisture`]) the karst takes.
+    /// The grass the grus may take, near the granite.
+    pub grass: u8,
+    /// The dry grass ([`paint_moisture`]) the karst and the grus take.
     pub dry_grass: u8,
     /// The karst's pavements.
     pub karst: u8,
+    /// The grus, the granite's coarse sand (#135).
+    pub grus: u8,
 }
 
 /// What [`paint_geology`] painted: texels of rock left granite, of rock turned to limestone,
-/// and of karst.
+/// of karst and of grus.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GeologyStats {
     /// Texels of the hills' rock, granite.
@@ -441,13 +459,16 @@ pub struct GeologyStats {
     pub limestone: usize,
     /// Texels of karst.
     pub karst: usize,
+    /// Texels of grus.
+    pub grus: usize,
 }
 
 /// Splits the island's rock by `rule` (D-042): over `height` (the sea at 0 m), the rock of
 /// `layers` (a layer map over the field's extent, rows along +y) under the limestone's height
 /// turns to `ids.limestone`, and on that limestone ground some of its gentler dry grass turns
-/// to karst. The rest of the rock stays `ids.rock`, the granite of the hills. Run it after the
-/// rules that read the rock.
+/// to karst. The rest of the rock stays `ids.rock`, the granite of the hills, and some of the
+/// granite's gentle grass near its bare rock, which sheds it, turns to grus (#135). Run it
+/// after the rules that read the rock.
 pub fn paint_geology(
     layers: &mut Field2<u8>,
     height: &Field2<f32>,
@@ -460,54 +481,95 @@ pub fn paint_geology(
         (gx * gx + gy * gy).sqrt()
     });
     let cell = layers.spacing;
-    let n = layers.size;
+    let n = layers.size as usize;
+    let centre = |t: usize| (((t % n) as f64 + 0.5) * cell, ((t / n) as f64 + 0.5) * cell);
     let mut stats = GeologyStats::default();
-    let mut candidates: Vec<(usize, f64)> = Vec::new();
+    // The rock first: the low ground's turns to limestone, the rest stays granite.
+    let mut limestone = vec![false; layers.data.len()];
+    let mut granite = vec![0.0; layers.data.len()];
     for t in 0..layers.data.len() {
         let layer = layers.data[t];
+        // The grass's rock is read later, only where the grus may lie: the island has 16 M
+        // texels of it.
         if layer != ids.rock && layer != ids.dry_grass {
             continue;
         }
-        let (x, y) = (
-            (f64::from(t as u32 % n) + 0.5) * cell,
-            (f64::from(t as u32 / n) + 0.5) * cell,
-        );
-        let limestone = rule.is_limestone(x, y, height.sample(x, y));
+        let (x, y) = centre(t);
+        limestone[t] = rule.is_limestone(x, y, height.sample(x, y));
         if layer == ids.rock {
-            if limestone {
+            if limestone[t] {
                 layers.data[t] = ids.limestone;
                 stats.limestone += 1;
             } else {
+                granite[t] = 1.0;
                 stats.granite += 1;
             }
-        } else if limestone {
+        }
+    }
+    // How much bare granite lies near each texel: its share in cells 16 m across, blurred over
+    // `grus_near` (a coarse grid: the texels' own blur took half a second).
+    let k = (16.0 / cell).round().max(1.0) as usize;
+    let m = n.div_ceil(k);
+    let mut coarse = vec![0.0; m * m];
+    for (t, &g) in granite.iter().enumerate() {
+        coarse[(t / n / k) * m + (t % n) / k] += g / (k * k) as f64;
+    }
+    let coarse = crate::beach::blur(&coarse, m, (rule.grus_near / 16.0).round() as usize);
+    let near = |t: usize| coarse[(t / n / k) * m + (t % n) / k];
+    // The grass that may be karst (the limestone's dry grass) or grus (the granite's).
+    let mut karst: Vec<(usize, f64)> = Vec::new();
+    let mut grus: Vec<(usize, f64)> = Vec::new();
+    for (t, (&layer, &on_limestone)) in layers.data.iter().zip(&limestone).enumerate() {
+        if layer != ids.dry_grass && layer != ids.grass {
+            continue;
+        }
+        let (x, y) = centre(t);
+        let patch = |salt: u64, across: f64| {
+            noise::fbm(rule.seed ^ salt, x / across, y / across, 2, 2.0, 0.5)
+        };
+        if layer == ids.dry_grass && on_limestone {
             let slope = slopes.sample(x, y);
             if slope >= rule.karst_slope.0 && slope <= rule.karst_slope.1 {
-                let patch = noise::fbm(
-                    rule.seed ^ 2,
-                    x / rule.karst_patch,
-                    y / rule.karst_patch,
-                    2,
-                    2.0,
-                    0.5,
-                );
-                candidates.push((t, patch));
+                karst.push((t, patch(2, rule.karst_patch)));
+            }
+            continue;
+        }
+        // The grus: the cheap tests first.
+        if near(t) <= 0.0 {
+            continue;
+        }
+        let slope = slopes.sample(x, y);
+        if slope < rule.grus_slope.0 || slope > rule.grus_slope.1 {
+            continue;
+        }
+        if layer == ids.grass && rule.is_limestone(x, y, height.sample(x, y)) {
+            continue;
+        }
+        // In patches, drawn towards the outcrops: a texel with a tenth of its surroundings bare
+        // granite counts as much as the noise's whole swing.
+        let shed = (near(t) / 0.1).min(1.0);
+        grus.push((t, patch(3, rule.grus_patch) + 2.0 * shed));
+    }
+    // Each: the patchiest share of its candidates, by the score's quantile.
+    let mut take = |candidates: &[(usize, f64)], share: f64, id: u8| {
+        if candidates.is_empty() || share <= 0.0 {
+            return 0;
+        }
+        let mut scores: Vec<f64> = candidates.iter().map(|c| c.1).collect();
+        scores.sort_by(f64::total_cmp);
+        let k = ((scores.len() - 1) as f64 * (1.0 - share).clamp(0.0, 1.0)) as usize;
+        let at = scores[k];
+        let mut painted = 0;
+        for &(t, score) in candidates {
+            if score > at {
+                layers.data[t] = id;
+                painted += 1;
             }
         }
-    }
-    // The karst: the patchiest share of the candidates, by the noise's quantile.
-    if !candidates.is_empty() && rule.karst_share > 0.0 {
-        let mut patches: Vec<f64> = candidates.iter().map(|c| c.1).collect();
-        patches.sort_by(f64::total_cmp);
-        let k = ((patches.len() - 1) as f64 * (1.0 - rule.karst_share).clamp(0.0, 1.0)) as usize;
-        let at = patches[k];
-        for &(t, patch) in &candidates {
-            if patch > at {
-                layers.data[t] = ids.karst;
-                stats.karst += 1;
-            }
-        }
-    }
+        painted
+    };
+    stats.karst = take(&karst, rule.karst_share, ids.karst);
+    stats.grus = take(&grus, rule.grus_share, ids.grus);
     stats
 }
 
@@ -736,14 +798,16 @@ mod tests {
         let ids = GeologyLayers {
             rock: 3,
             limestone: 14,
+            grass: 1,
             dry_grass: 5,
             karst: 15,
+            grus: 16,
         };
         let mut layers = Field2::from_fn(1024, 4.0, |i, _| if i < 512 { 3 } else { 5 });
         let rule = GeologyRule::default();
         let stats = paint_geology(&mut layers, &height, ids, &rule);
         assert!(
-            stats.granite > 0 && stats.limestone > 0 && stats.karst > 0,
+            stats.granite > 0 && stats.limestone > 0 && stats.karst > 0 && stats.grus > 0,
             "{stats:?}"
         );
         let (mean, swing) = rule.limestone_below;
@@ -758,12 +822,15 @@ mod tests {
                 if l == 14 || l == 15 {
                     assert!(h < mean + reach, "{i} {j}: {h}");
                 }
-                if l == 3 {
+                if l == 3 || l == 16 {
                     assert!(h > mean - reach, "{i} {j}: {h}");
                 }
-                // Karst only where the dry grass was.
-                if l == 15 {
+                // Karst and grus only where the dry grass was, the grus near the granite.
+                if l == 15 || l == 16 {
                     assert!(i >= 512);
+                }
+                if l == 16 {
+                    assert!(i < 512 + (rule.grus_near / 4.0) as u32 + 8, "{i} {j}");
                 }
             }
         }

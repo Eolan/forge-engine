@@ -2671,3 +2671,44 @@ props and procgen):
 - **Left for Tier 2:** the fallback path, validation and timings (no GPU code or pass changed).
 
 Report: `reports/2026-10-02-133/`.
+
+## The granite's grus (#135, 2026-10-02)
+
+The last step D-042 left for the rocks. Granite rots in place into grus: loose grains of
+feldspar, quartz and mica with small angular pieces of the rock, buff to ochre. It gathers on the
+gentle ground round the outcrops and tors that shed it, where the soil is too thin for much
+grass (Corsica's, Sardinia's and the Seychelles' granite).
+
+**Where** (`forge_procgen::paint_geology`, after the karst): the granite's grass and dry grass on
+slopes of 0.05 to 0.45, within 48 m of its bare rock. Half of it, in patches 30 m across drawn
+towards the rock: a texel with a tenth of its surroundings bare granite scores as much as the
+patches' whole swing. A first try took any of the granite's gentle dry grass, without the rock
+near: 6 % of it put pale blobs over the open grass, the karst's first mistake again (#129).
+Requiring the rock leaves aprons round the outcrops and the crests' tors, and nothing out on the
+grass.
+
+**Look** (`textures::grus`, a layer of its own, `island_layer::GRUS`): coarse buff to pinkish
+sand, grains of pink feldspar, white quartz and black mica, small grey-pink pieces of granite
+lying on it a third of the cells, the odd tuft of dry grass; 3 m a repeat.
+
+Seed 7: 76 257 texels of grus (1.2 km²) beside the granite's 64 070 (1.0 km²); the karst is
+unchanged (17 948). The rule adds about 11 ms at start (the rocks' rules take 379 ms against 368;
+the bare granite near each texel is counted on a 16 m grid, the texels' own blur took half a
+second). The log gives a view: the fourth of `the island's rocks`.
+
+Before and now, frame 60 (`reports/2026-10-02-135/`):
+- `grus.png`, by rows:
+  - the crest's tors from 50 m (`--view -249,548,-84,-60.5,-18.4`), ꟻLIP mean 0.0215;
+  - the tors from the grass (`--view -150,512,-140,-60.5,-12`), 0.0199;
+  - the granite's hill from 150 m (`--view -1279,167,-3122,-59.4,-18.4`), 0.0099;
+  - the `island` shot, 0.0103.
+- `close.png`: the grus between the tors at twice the size, and where the frame changes.
+
+**Checks** (Tier 0: an island change to procgen, a new texture and the demo):
+- **The gate:** fmt, clippy, 261 tests (the geology's test with grus near the granite only).
+- **The sentinels** (meshlets, the ballad, the city, the gallery), against #133's set: 0 px.
+- **The island's captures** (recooked): the views by about 4 700 px (ꟻLIP mean 0.0024), the
+  `island` shot by 5 175, the `valley` by 13 060 and the `mouth` by 636; the `lake` 0 px. The
+  A/B pairs and streamed against resident: 0 px.
+- **Left for Tier 2:** the fallback path, validation and timings (no GPU code or pass changed;
+  the ground has one more layer row and texture).
