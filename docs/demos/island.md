@@ -1946,8 +1946,10 @@ Before (`--no-bars`) and now, frame 60 (`reports/2026-10-02-127/`):
   river to reach the sea apart, would need a ribbon each.
 - Bars on the large lake fans (the trunk's 48 m fan into the north-east lake), if the owner
   wants them.
-- Past the widened mouth's banks, the steep sand face where a beach's berm meets the carve
-  (`--view 4354,14,-2830,180,-25`) stands a few metres nearer the water.
+- Past the widened mouth's banks, the steep sand face (`--view 4354,14,-2830,180,-25`) stands a
+  few metres nearer the water. *Corrected the same day:* it is no berm but the river's own
+  bank. The coastal plain stands about 1 m over the water there, and the bank climbs it over
+  2–4 m; its face turned from the sun reads dark ("The island demo", below).
 
 ## Moving geometry (#79, 2026-10-02)
 
@@ -2371,8 +2373,14 @@ At 1600 × 900 it takes 1.43 ms of GPU a frame (p99 frame 2.10 ms), and at 2560 
 (p99 3.67 ms; `docs/PROFILE.md`).
 
 **Seen, left for later:**
-- **The dawn mouth:** a dark line along the right bank, the steep face where a beach's berm meets
-  the carve (#127's leftover), which the low sun's shadow shows.
+- **The dawn mouth:** a dark blue band along the right bank, the bank's shadow on the water.
+  - **What it is:** the river stands about 1 m under the coastal plain there, and its bank
+    climbs that metre over 2–4 m. With the sun 6° up, that metre throws a shadow about 9.5 m
+    long across the water, which loses its glitter there.
+  - **Its cause:** dawn's own light, not a fault in the ground (measured across the river at 2 m
+    steps).
+  - **To soften it:** lower or gentler banks where a river crosses the coastal plain, the
+    owner's call.
 - **The tour's plainer moments:** climbing out of the valley, and the sea alone as it turns.
 - **The planet variant** (orbit-to-ground, `docs/research/planet-terrain.md`): the demo's second
   step.

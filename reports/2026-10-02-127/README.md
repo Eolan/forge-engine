@@ -46,8 +46,9 @@ The demo logs the two largest mouths' views as `the bars in the large mouths (--
 - ~~From far away the bars read darker and fade into the water.~~ Fixed the same day, below.
 - True distributaries leaving the river to reach the sea apart, each its own ribbon.
 - Bars on the large lake fans, if wanted.
-- Past the widened mouth's banks, the steep sand face where a beach's berm meets the carve
-  (`--view 4354,14,-2830,180,-25`) stands a few metres nearer the water.
+- Past the widened mouth's banks, the steep sand face (`--view 4354,14,-2830,180,-25`) stands a
+  few metres nearer the water. Corrected later the same day: no berm, but the river's own
+  bank climbing the metre up to the coastal plain over 2–4 m (`docs/demos/island.md`).
 
 ## From far away (2026-10-02, later)
 

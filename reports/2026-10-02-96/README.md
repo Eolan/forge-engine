@@ -53,8 +53,14 @@ views have one like it (41 ms).
   ridge between them by its clearance. Clippy and fmt pass.
 
 **Seen in the shots, left for later:**
-- **The dawn mouth:** a dark line runs along the right bank. It is the steep sand face where a
-  beach's berm meets the carve (#127's leftover), and the low sun's shadow shows it.
+- **The dawn mouth:** a dark blue band runs along the right bank. It is the bank's shadow on the
+  water:
+  - the river stands about 1 m under the coastal plain there, and its bank climbs that metre
+    over 2–4 m;
+  - with the sun 6° up, that metre throws a shadow about 9.5 m long across the water.
+
+  A first note blamed a beach's berm (#127); measured across the river, there is none. Lower
+  or gentler banks on the coastal plain would soften it, if wanted.
 - **The tour's plainer moments:** climbing out of the valley (5 s), and the sea alone as it
   turns at 55 s.
 - **The planet variant** (orbit-to-ground): the demo's second step, not started.
