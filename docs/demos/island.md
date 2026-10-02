@@ -14,7 +14,7 @@ cloud session, following `docs/research/terrain-genesis.md` ("Recommendation for
 | Hydrology: rivers as polylines with Strahler orders and widths, lakes with levels and outlets, the depressions under 5 ha filled (stage 4, the lake rule of #97) | ✅ `forge_procgen::hydrology` |
 | The water's fields: the signed coast distance; the sea's directional spectrum (JONSWAP/TMA, Horvath's spreading) synthesised by an inverse FFT on the CPU into a tiling patch of heights, displacements, slopes and the Jacobian | ✅ `forge_procgen::coast`, `forge_procgen::ocean`; the GPU's three cascades (#105, `forge_render::water`) agree with it within 3 × 10⁻⁶ ("The sea on the GPU" below); the surface drawn from them with `--water`, reflecting the island through traced mirror rays |
 | Amplification to 2 m per tile with halos (stage 5) | started on the CPU: ×2 with a detail erosion, tiles with halos equal to the untiled field (`forge_procgen::amplify`, `genesis --amplify`; "Amplification" below); the ground drawn in tiles (#106), at 2 m with the amplification's detail (`--island-drawn 8` for the field's cells; "The ground in tiles, towards 2 m" below) |
-| Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); moisture, soil and the rivers' banks planned |
+| Materials from the fields, the layer map (stage 6) | started: sea floor, sand, grass and rock from the height and the slope, dry and lush grass by the wetness index, the rivers and lakes painted in (`forge_procgen::slope_layers`, `paint_rivers`, `paint_lakes`; "In the engine" below); the beaches by type, black sand, shingle and pale sand ("The beaches by type" below, #128); moisture, soil and the rivers' banks planned |
 | The hand-off to the cluster-DAG cook: the island drawn by today's renderer (stage 7) | ✅ drawn on the 5070 Ti (2026-09-26): `city-blocks --island SEED`, with its own ground, a sea floor, rocks and a stand-in sea ("In the engine" below, #96) |
 | The demo of its own: golden shots at four times of day, a tour (#96's step 3) | ✅ `cargo run -p island` (2026-10-02; "The island demo" below) |
 | The planet: the same stages on the cube sphere's coarse graph, tiles amplified at streaming time | planned |
@@ -2384,3 +2384,56 @@ At 1600 × 900 it takes 1.43 ms of GPU a frame (p99 frame 2.10 ms), and at 2560 
 - **The tour's plainer moments:** climbing out of the valley, and the sea alone as it turns.
 - **The planet variant** (orbit-to-ground, `docs/research/planet-terrain.md`): the demo's second
   step.
+
+## The beaches by type (#128, 2026-10-02)
+
+The owner's inbox asked for beaches of sand, of rock and of volcanic rock. Every shore of the
+island was the same pale sand, the beach band the slope rule paints over the land's first metres
+above the sea. Now `forge_procgen::paint_beaches` splits that band into three types
+(`--no-beach-types` for the island before, `reports/2026-10-02-128/`):
+- **Black sand** where the rock behind the beach is hardest: the hardness field of stage 2, which
+  the erosion already carved the steep ground from, read as volcanic rock the waves grind. A
+  sixth of the beaches away from the mouths.
+- **Shingle** where the coast is roughest: on the headlands (much sea within 300 m) and under
+  steep land (the land's height within 150 m behind). A quarter of the rest. Its texture is new,
+  `textures::shingle`: flattened pebbles of grey, blue-grey and brown stone with the odd white
+  quartz, lying apart on coarse sand. The river beds' packed cobbles read as paving on a beach.
+- **Pale sand** in the bays, on the gentler coasts, and within 400 m of a river's mouth, where
+  the river brings its sand.
+
+**How the rule reads the coast:**
+- **Stretches:** the fields are read on a 32 m grid, each blurred over a few hundred metres, so
+  a beach keeps its type along a stretch.
+- **Ends:** within 0.8 of a standard deviation of a type's threshold, the types mix in patches
+  about 10 m across, so one stretch fades into the next over tens of metres. Cut sharply, the
+  first black stretch read as a dark rectangle.
+- **Under the sea:** shingle and black sand run 12 m out over the sea floor, so the water's
+  edge does not show a pale floor beside a dark beach.
+
+**The contour** (#106) now takes a set of layers under its height: the beaches' sand as before,
+and the shingle and the black sand. Each beach's top follows the drawn ground, not the map's
+4 m texels. The layered resolve's registers are unchanged: 96, with no spill.
+
+Seed 7: of 30.9 km of beach, 19.7 km are pale sand, 7.4 km shingle and 3.3 km black sand. The
+log gives a view of each, from 70 m out at sea: `the island's beaches: sand, shingle, black sand
+(#128, --view)`. The rule takes 82 ms at start, and its views 60 ms.
+
+Before (`--no-beach-types`) and now, frame 60:
+- `beaches.png`:
+  - the shingle from 70 m out (ꟻLIP mean 0.055);
+  - the black sand from 70 m out (0.123);
+  - on the shingle (0.254);
+  - on the black sand (0.242).
+- `above.png`:
+  - the black stretch from 400 m up (0.031), its ends mixing into the sand;
+  - the island from the sea, the `island` shot (0.0056).
+
+**Checks:**
+- **The batch:** it changes the island's images only. `island60` changes by 19 px, `water60` by
+  23 and the `island` shot by 2 539 (ꟻLIP mean 0.0056); the other three shots are unchanged.
+- **The A/B harness and the paths:** 0 px.
+- **Validation and tests:** `validate.sh` is clean; 256 tests pass. They cover the rule on a
+  synthetic coast (shingle on its headland, black sand on its hard patch, pale sand in its bay
+  and at its mouth, the dark types three texels out under the sea) and the contour's set.
+- **Timings:** `timings.sh` is within noise. The island's layered shading takes 0.318–0.334 ms
+  against 0.329–0.331, its frame 1.618–1.640 ms against 1.637–1.709.

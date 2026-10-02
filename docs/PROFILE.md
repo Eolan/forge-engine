@@ -948,6 +948,10 @@ as it flies. `tools/timings.sh` runs it as "island tour" when both builds have t
 
 One frame of the run takes 49 ms; no second's p99 passes 3.93 ms at 1440p.
 
+The beaches by type (#128): no pass of their own; the contour's set of layers under its height
+leaves `shading/layered` at 96 registers with no spill, 0.318–0.334 ms on the island against
+0.329–0.331 (`timings.sh`, 1600 × 900). Their rule takes 82 ms at start.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

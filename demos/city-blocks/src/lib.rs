@@ -226,6 +226,10 @@ struct Args {
     /// water splits around in their mouths (#127, D-041).
     #[arg(long)]
     no_bars: bool,
+    /// Leave every beach of the island pale sand: no shingle on the headlands, no black sand under
+    /// the hardest rock (#128).
+    #[arg(long)]
+    no_beach_types: bool,
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
@@ -1839,14 +1843,15 @@ impl CityMaterials {
         let [rock, concrete, _, grass] = self.sets;
         // The valleys' own sets (#118), the island's only: generated here, in parallel.
         let start = Instant::now();
-        let mut valley_sets: [Option<[TextureData; 2]>; 3] = Default::default();
+        let mut valley_sets: [Option<[TextureData; 2]>; 4] = Default::default();
         TaskPool::client().scope(|s| {
             for (i, slot) in valley_sets.iter_mut().enumerate() {
                 s.spawn(move |_| {
                     *slot = Some(match i {
                         0 => textures::gravel(15, 512),
                         1 => textures::scree(16, 512),
-                        _ => textures::scrub(17, 512),
+                        2 => textures::scrub(17, 512),
+                        _ => textures::shingle(18, 512),
                     });
                 });
             }
@@ -1855,10 +1860,10 @@ impl CityMaterials {
         for set in valley_sets.iter().flatten() {
             ids.push((self.textures.add(&set[0])?, self.textures.add(&set[1])?));
         }
-        let [gravel, scree, scrub] = [ids[0], ids[1], ids[2]];
+        let [gravel, scree, scrub, shingle] = [ids[0], ids[1], ids[2], ids[3]];
         tracing::info!(
             ms = start.elapsed().as_millis(),
-            "island textures: gravel, scree and scrub"
+            "island textures: gravel, scree, scrub and shingle"
         );
         let ground = self.table.add(Material::new(
             "island ground",
@@ -1871,17 +1876,21 @@ impl CityMaterials {
                 cavity: 1.0,
                 // The sand's top follows the drawn ground's height, not the map's texels: they
                 // drew it in teeth along the coast (#106).
-                contour: Some(LayerContour::new(
-                    island_layer::SAND,
-                    &[
-                        island_layer::GRASS,
-                        island_layer::DRY_GRASS,
-                        island_layer::LUSH_GRASS,
-                        island_layer::RIVERBANK,
-                    ],
-                    SAND_BELOW,
-                    SAND_WANDER,
-                )),
+                contour: Some(
+                    LayerContour::new(
+                        island_layer::SAND,
+                        &[
+                            island_layer::GRASS,
+                            island_layer::DRY_GRASS,
+                            island_layer::LUSH_GRASS,
+                            island_layer::RIVERBANK,
+                        ],
+                        SAND_BELOW,
+                        SAND_WANDER,
+                    )
+                    // The other beaches' tops follow it too (#128).
+                    .with_others(&[island_layer::SHINGLE, island_layer::BLACK_SAND]),
+                ),
                 ..RenderLayer::default()
             },
         ));
@@ -1995,6 +2004,31 @@ impl CityMaterials {
                     2.0,
                     10.0,
                     0.04,
+                ),
+            ),
+            (
+                // Shingle on the headlands' beaches (#128): rounded grey, blue-grey and brown
+                // pebbles on coarse sand, that glint when wet.
+                "island: shingle",
+                textured(
+                    shingle,
+                    [0.66, 0.68, 0.7],
+                    [0.74, 0.76, 0.78],
+                    1.0,
+                    20.0,
+                    0.07,
+                ),
+            ),
+            (
+                // Black volcanic sand (#128): the beaches' sand ground from the dark rock.
+                "island: black sand",
+                textured(
+                    concrete,
+                    [0.13, 0.125, 0.12],
+                    [0.18, 0.17, 0.16],
+                    2.0,
+                    12.0,
+                    0.06,
                 ),
             ),
         ];
@@ -2135,8 +2169,13 @@ mod island_layer {
     /// front of their mouths (#120, `forge_procgen::paint_fans`). Not the beaches' sand, whose
     /// top follows the coast's contour.
     pub const LAKE_SAND: u8 = 12;
+    /// Shingle: the pebbles of the beaches on the headlands and under steep land (#128,
+    /// `forge_procgen::paint_beaches`).
+    pub const SHINGLE: u8 = 13;
+    /// Black sand: the beaches where the rock behind them is hardest, volcanic (#128).
+    pub const BLACK_SAND: u8 = 14;
     /// How many layers there are.
-    pub const COUNT: u8 = 13;
+    pub const COUNT: u8 = 15;
 }
 
 /// The island's generation settings from the arguments (`--island`, `--island-spacing`,
@@ -3984,6 +4023,98 @@ fn build_island(
         channels,
         lakes: lake_waters,
     } = island_water(&height);
+    // The beaches by the coast (#128): black sand under the hardest rock, shingle on the
+    // headlands and under steep land, pale sand in the bays and by the rivers' mouths.
+    if !args.no_beach_types {
+        let beaches_start = Instant::now();
+        let settings = island_settings(args).0;
+        let mouths: Vec<[f64; 2]> = ribbons
+            .iter()
+            .filter_map(|r| {
+                let p = r.points[forge_procgen::sea_mouth(&r.points)?].position;
+                Some([f64::from(p[0]), f64::from(p[1])])
+            })
+            .collect();
+        let beaches = forge_procgen::paint_beaches(
+            &mut layers,
+            &height,
+            &|x, y| forge_procgen::island::island_hardness(&settings, x, y),
+            &mouths,
+            forge_procgen::BeachLayers {
+                sand: island_layer::SAND,
+                sea: island_layer::SEABED,
+                shingle: island_layer::SHINGLE,
+                black: island_layer::BLACK_SAND,
+            },
+            &forge_procgen::BeachRule::default(),
+        );
+        let km = |k: usize| format!("{:.1}", beaches.coast_m[k] / 1000.0);
+        // A view of each: the block of 256 m with the most of it, from 70 m out at sea and 18 m
+        // up, looking back at its nearest texel to the block's middle.
+        let size = layers.size;
+        let cell = layers.spacing;
+        let half_m = height.extent() * 0.5;
+        let views: Vec<String> = [
+            island_layer::SAND,
+            island_layer::SHINGLE,
+            island_layer::BLACK_SAND,
+        ]
+        .iter()
+        .filter_map(|&layer| {
+            let block = 64;
+            let blocks = size / block;
+            let (bx, by) = (0..blocks * blocks)
+                .map(|b| (b % blocks, b / blocks))
+                .max_by_key(|&(bx, by)| {
+                    (0..block * block)
+                        .filter(|t| {
+                            layers.get(bx * block + t % block, by * block + t / block) == layer
+                        })
+                        .count()
+                })?;
+            let middle = [
+                (bx * block + block / 2) as f64,
+                (by * block + block / 2) as f64,
+            ];
+            let (tx, ty) = (0..block * block)
+                .map(|t| (bx * block + t % block, by * block + t / block))
+                .filter(|&(x, y)| layers.get(x, y) == layer)
+                .min_by(|a, b| {
+                    let d = |p: (u32, u32)| {
+                        (f64::from(p.0) - middle[0]).hypot(f64::from(p.1) - middle[1])
+                    };
+                    d(*a).total_cmp(&d(*b))
+                })?;
+            let at = [(f64::from(tx) + 0.5) * cell, (f64::from(ty) + 0.5) * cell];
+            // Out to sea: down the ground's slope there.
+            let step = 8.0;
+            let down = [
+                height.sample(at[0] - step, at[1]) - height.sample(at[0] + step, at[1]),
+                height.sample(at[0], at[1] - step) - height.sample(at[0], at[1] + step),
+            ];
+            let len = f64::from(down[0].hypot(down[1])).max(1e-6);
+            let out = [f64::from(down[0]) / len, f64::from(down[1]) / len];
+            let eye = [at[0] + 70.0 * out[0], at[1] + 70.0 * out[1]];
+            let yaw = out[0].atan2(out[1]).to_degrees();
+            let pitch = (-(18.0_f64).atan2(70.0)).to_degrees();
+            Some(format!(
+                "{:.0},18,{:.0},{yaw:.1},{pitch:.1}",
+                eye[0] - half_m,
+                eye[1] - half_m
+            ))
+        })
+        .collect();
+        tracing::info!(
+            sand_km = %km(0),
+            shingle_km = %km(1),
+            black_sand_km = %km(2),
+            texels = ?beaches.texels,
+            under_sea = beaches.under_sea,
+            ms = beaches_start.elapsed().as_millis(),
+            views = %views.join("  "),
+            "the island's beaches: sand, shingle, black sand (#128, --view)"
+        );
+    }
     let painted = if args.water() {
         0
     } else {

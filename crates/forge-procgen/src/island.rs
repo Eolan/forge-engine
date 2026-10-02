@@ -435,12 +435,18 @@ fn across_sector(trunks: &[f64], angle: f64) -> f64 {
     }
 }
 
+/// The rock's hardness at (`x`, `y`) metres in the field's frame, as [`island_fields`] samples
+/// it: 1 give or take a half, in patches about 1.8 km across.
+pub fn island_hardness(p: &IslandParams, x: f64, y: f64) -> f32 {
+    let n = fbm(lattice(p.seed, 3), x / 1800.0, y / 1800.0, 3, 2.0, 0.5);
+    (1.0 + 0.5 * n) as f32
+}
+
 /// Stages 1 and 2: the mask, then the uplift, hardness and rain fields.
 pub fn island_fields(p: &IslandParams) -> IslandFields {
     let half = 0.5 * p.extent();
     let coast_seed = lattice(p.seed, 1);
     let ridge_seed = lattice(p.seed, 2);
-    let hardness_seed = lattice(p.seed, 3);
     let plain_seed = lattice(p.seed, 4);
     let basin_seed = lattice(p.seed, 5);
     let trunks = trunk_angles(p, basin_seed);
@@ -536,9 +542,7 @@ pub fn island_fields(p: &IslandParams) -> IslandFields {
         (p.uplift * inland * (0.35 + 0.65 * ridges)) as f32
     });
     let hardness = Field2::from_fn(p.size, p.spacing, |x, y| {
-        let (mx, my) = (f64::from(x) * p.spacing, f64::from(y) * p.spacing);
-        let n = fbm(hardness_seed, mx / 1800.0, my / 1800.0, 3, 2.0, 0.5);
-        (1.0 + 0.5 * n) as f32
+        island_hardness(p, f64::from(x) * p.spacing, f64::from(y) * p.spacing)
     });
     let rain = Field2::from_fn(p.size, p.spacing, |_, _| 1.0);
     IslandFields {

@@ -46,7 +46,8 @@ pub struct GpuMaterial {
     /// Its height, object space, and how far it wanders (metres).
     contour_height: f32,
     contour_wander: f32,
-    pad: u32,
+    /// Its other layers under the height, one bit each (#128).
+    contour_below: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 112);
@@ -205,7 +206,7 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 contour_above: r.contour.map_or(0, |c| c.above),
                 contour_height: r.contour.map_or(0.0, |c| c.height),
                 contour_wander: r.contour.map_or(0.0, |c| c.wander),
-                pad: 0,
+                contour_below: r.contour.map_or(0, |c| c.others),
             }
         })
         .collect()

@@ -373,6 +373,69 @@ pub fn gravel(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// A shingle beach (#128): rounded, flattened pebbles of grey, blue-grey and brown stone with
+/// the odd white quartz, worn smooth by the waves, lying apart on coarse sand. Not the river
+/// bed's packed cobbles ([`gravel`]), which read as paving on a beach.
+pub fn shingle(seed: u64, size: u32) -> [TextureData; 2] {
+    // A pebble: an ellipse round its cell's point, turned and stretched by the cell's hash,
+    // domed; 0 outside it.
+    let pebble = |u: f32, v: f32, cells: u32, salt: u64| {
+        let (_, _, cell, d) = worley(seed ^ salt, u, v, cells);
+        let h = hash_cell2(seed ^ salt ^ 0x7E, cell.0, cell.1);
+        let angle = unit_f32(h) * std::f32::consts::PI;
+        let stretch = 1.0 + 0.6 * unit_f32(h.rotate_left(11));
+        let radius = 0.36 + 0.12 * unit_f32(h.rotate_left(23));
+        let (c, s) = (angle.cos(), angle.sin());
+        let (a, b) = (d[0] * c + d[1] * s, -d[0] * s + d[1] * c);
+        let r = (a / stretch).hypot(b * stretch) / radius;
+        ((1.0 - r * r).max(0.0).sqrt(), cell)
+    };
+    let heights = grid(size, |u, v| {
+        let (big, _) = pebble(u, v, 18, 0x5B1);
+        let (small, _) = pebble(u, v, 41, 0x5B2);
+        big.max(0.6 * small) + 0.03 * fbm(seed ^ 0x5B3, u, v, 128, 2)
+    });
+    let colours = grid(size, |u, v| {
+        let tone = |cell: (i32, i32), salt: u64| {
+            let h = hash_cell2(seed ^ salt, cell.0, cell.1);
+            let kind = unit_f32(h);
+            let light = 0.8 + 0.4 * unit_f32(h.rotate_left(17));
+            let colour = if kind < 0.35 {
+                [0.42, 0.42, 0.41]
+            } else if kind < 0.6 {
+                [0.35, 0.38, 0.42]
+            } else if kind < 0.82 {
+                [0.45, 0.38, 0.3]
+            } else if kind < 0.95 {
+                [0.24, 0.24, 0.24]
+            } else {
+                [0.72, 0.7, 0.66]
+            };
+            colour.map(|c| c * light)
+        };
+        let (big, big_cell) = pebble(u, v, 18, 0x5B1);
+        let (small, small_cell) = pebble(u, v, 41, 0x5B2);
+        let grain = 0.85 + 0.3 * fbm(seed ^ 0x5B4, u, v, 128, 2);
+        let sand = [0.38, 0.34, 0.27].map(|c| c * grain);
+        // Each stone darker towards its rim, where it meets the sand.
+        let stone = |dome: f32, cell, salt| tone(cell, salt).map(|c| c * (0.75 + 0.25 * dome));
+        let under = mix3(
+            sand,
+            stone(small, small_cell, 0x5B2),
+            smoothstep(0.0, 0.15, small),
+        );
+        mix3(
+            under,
+            stone(big, big_cell, 0x5B1),
+            smoothstep(0.0, 0.12, big),
+        )
+    });
+    [
+        albedo_texture("shingle albedo", size, colours),
+        normal_texture("shingle normal", size, &heights, size as f32 / 40.0),
+    ]
+}
+
 /// Scree (#118): broken rock fallen from the walls above, angular fragments of pale grey stone,
 /// each a flat face tilted its own way, dark in the cracks between them.
 pub fn scree(seed: u64, size: u32) -> [TextureData; 2] {

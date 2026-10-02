@@ -118,7 +118,7 @@ public struct Material
     public uint contour_above;      // its layers over the height, one bit each
     public float contour_height;    // its height, object space, and how far it wanders (metres)
     public float contour_wander;
-    public uint pad2;
+    public uint contour_below;      // its other layers under the height, one bit each (#128)
 };
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
@@ -2684,17 +2684,25 @@ float shore_caustics(ShoreGround* g, float3 world, float footprint)
 
 // A layered row's contour (`RenderLayer::contour`, the island's sand, #106): the rule that made
 // the layer map, at the drawn mesh's resolution. Where the map shows one of the contour's layers
-// (its layer under the height and those over it), the ground's height under the pixel picks
-// between the layer under and one over: the map's own, or where the map shows the layer under,
-// the heaviest layer over among the four texels (none: it stays). Its edge then follows the
-// mesh, not the map's texels. The height wanders over two octaves of noise 7 m and 2.3 m wide,
-// and the layers blend over CONTOUR_BAND metres of it, or the height a pixel spans.
+// (its layers under the height and those over it), the ground's height under the pixel picks
+// between a layer under and one over: under it, the map's own if it is one of the layers under,
+// or the heaviest of them among the four texels (none: the contour's first, the beaches' sand,
+// #128); over it, the map's own if it is one over, or the heaviest over among the four texels
+// (none: it stays). Its edge then follows the mesh, not the map's texels. The height wanders
+// over two octaves of noise 7 m and 2.3 m wide, and the layers blend over CONTOUR_BAND metres
+// of it, or the height a pixel spans.
 static const float CONTOUR_BAND = 0.08;
 static const uint NO_LAYER = 0xFFFFFFFFu;
 
+// Whether layer `id` is one of the contour's layers under its height.
+bool contour_low(Material mat, uint id)
+{
+    return id == mat.contour - 1u || (id < 32u && ((mat.contour_below >> id) & 1u) != 0u);
+}
+
 bool contour_own(Material mat, uint id)
 {
-    return id == mat.contour - 1u || (id < 32u && ((mat.contour_above >> id) & 1u) != 0u);
+    return contour_low(mat, id) || (id < 32u && ((mat.contour_above >> id) & 1u) != 0u);
 }
 
 // The height over the contour's beyond which a pixel is wholly over it (or, negated, under it),
@@ -2819,15 +2827,22 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         float span = abs(s.dpdx.y) + abs(s.dpdy.y);
         if (mat.contour != 0u && (contour_own(mat, first) || contour_own(mat, second))
             && (s.object_position.y - mat.contour_height < contour_reach(mat, span)
-            || first == mat.contour - 1u || second == mat.contour - 1u))
+            || contour_low(mat, first) || contour_low(mat, second)))
         {
+            // The heaviest layer under the height among the four texels and the heaviest over.
             uint low = mat.contour - 1u;
             uint over = NO_LAYER;
-            float w_over = 0.0;
+            float w_low = 0.0, w_over = 0.0;
             [unroll]
             for (uint k = 0; k < 4; k++)
             {
-                if (ids[k] != low && contour_own(mat, ids[k]) && total[k] > w_over)
+                bool is_low = contour_low(mat, ids[k]);
+                if (is_low && total[k] > w_low)
+                {
+                    low = ids[k];
+                    w_low = total[k];
+                }
+                else if (!is_low && contour_own(mat, ids[k]) && total[k] > w_over)
                 {
                     over = ids[k];
                     w_over = total[k];
@@ -2842,12 +2857,13 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             for (uint k = 0; k < 2; k++)
             {
                 uint id = pair[k];
-                uint up = id != low ? id : over;
+                bool is_low = contour_low(mat, id);
+                uint up = is_low ? over : id;
                 if (!contour_own(mat, id) || up == NO_LAYER)
                     add_layer(layer, weight, id, pair_weight[k]);
                 else
                 {
-                    add_layer(layer, weight, low, pair_weight[k] * under);
+                    add_layer(layer, weight, is_low ? id : low, pair_weight[k] * under);
                     add_layer(layer, weight, up, pair_weight[k] * (1.0 - under));
                 }
             }
@@ -3191,7 +3207,8 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
         float2 texel = (object_position.xz * mat.inv_texture_scale + 0.5) * float2(size);
         int2 at = clamp(int2(texel), int2(0, 0), int2(size) - 1);
         uint id = map.Load(int3(at, 0));
-        if (mat.contour != 0u && contour_own(mat, id) && contour_under(mat, object_position, 0.0) > 0.5)
+        if (mat.contour != 0u && contour_own(mat, id) && !contour_low(mat, id)
+            && contour_under(mat, object_position, 0.0) > 0.5)
             id = mat.contour - 1u;
         mat = f[0].materials[row + 1 + id];
     }

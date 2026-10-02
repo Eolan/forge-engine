@@ -115,13 +115,18 @@ pub struct RenderLayer {
 }
 
 /// A layer of a [`ShadingClass::Layered`] row drawn by the ground's height under each pixel: the
-/// rule that made the layer map, at the drawn mesh's resolution. Where the map shows the layer or
-/// one of `above`, the pixel takes `below` under `height` and its `above` layer over it (the map's
-/// own when it shows one, `below` where it shows none); the other layers keep the map's edges.
+/// rule that made the layer map, at the drawn mesh's resolution. Where the map shows `below`, one
+/// of `others` or one of `above`, the pixel takes a layer under `height` (the map's own when it
+/// shows `below` or one of `others`, the heaviest of them around it otherwise, `below` where it
+/// shows none) and an `above` layer over it (the map's own when it shows one, the heaviest around
+/// it otherwise); the other layers keep the map's edges.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LayerContour {
-    /// The layer under the height.
+    /// The layer under the height where the map shows no other one of them.
     pub below: u8,
+    /// The other layers under the height, one bit each (bit `k` for layer `k`): the island's
+    /// beaches but its sand (#128).
+    pub others: u32,
     /// The layers over the height, one bit each (bit `k` for layer `k`).
     pub above: u32,
     /// Metres of object space.
@@ -141,10 +146,21 @@ impl LayerContour {
         );
         Self {
             below,
+            others: 0,
             above: above.iter().fold(0, |mask, &layer| mask | 1 << layer),
             height,
             wander,
         }
+    }
+
+    /// The same contour with `others` under the height besides `below` (layers 0 to 31).
+    pub fn with_others(mut self, others: &[u8]) -> Self {
+        assert!(
+            others.iter().all(|&layer| layer < 32),
+            "layers 0 to 31 under a contour"
+        );
+        self.others = others.iter().fold(0, |mask, &layer| mask | 1 << layer);
+        self
     }
 }
 
@@ -367,6 +383,11 @@ mod tests {
         assert_eq!(contour.below, 1);
         assert_eq!(contour.above, 0b110_0001);
         assert_eq!(LayerContour::new(1, &[], 2.5, 0.0).above, 0);
+        // The other layers under the height, the island's other beaches (#128).
+        assert_eq!(contour.others, 0);
+        let beaches = contour.with_others(&[13, 14]);
+        assert_eq!(beaches.others, 0b110 << 12);
+        assert_eq!((beaches.below, beaches.above), (1, 0b110_0001));
     }
 
     #[test]

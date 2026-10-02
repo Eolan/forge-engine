@@ -19,6 +19,8 @@
 //! - [`hydrology`]: stage 4, the river network as polylines with Strahler orders and widths
 //!   from the catchment, and the lakes with their levels and outlets.
 //! - [`coast`]: the signed distance to the coast, what the shore's water keys on.
+//! - [`beach`]: stage 6's beaches by type along the coast: black sand under the hardest rock,
+//!   shingle on the headlands and under steep land, pale sand in the bays and by the mouths.
 //! - [`ocean`]: the open sea's directional spectrum (JONSWAP/TMA) and its inverse FFT on the
 //!   CPU, the reference the GPU's cascades are diffed against.
 //! - [`shore`]: the shore's waves: the floor's depth against the coast distance, and per train
@@ -40,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 pub mod amplify;
+pub mod beach;
 pub mod channel;
 pub mod coast;
 pub mod erosion;
@@ -57,6 +60,7 @@ pub mod shore;
 pub mod valley;
 
 pub use amplify::{AmplifyParams, amplify};
+pub use beach::{BeachLayers, BeachRule, BeachStats, paint_beaches};
 pub use channel::{
     ChannelParams, Channels, FineGround, Stone, bank_stones, paint_banks, paint_bars, paint_beds,
     paint_fans, stones,
