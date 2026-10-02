@@ -59,8 +59,8 @@ Their steps, stones and the valley's paint move with them. The batch's far views
 - `timings.sh`: every view within noise.
 
 **Left for later:**
-- One channel runs in; D-041's research lets a large fan split into distributaries.
-- Above the water the delta is the valley's floor: no bars of sand at the mouth.
+- One channel runs in, and above the water the delta is the valley's floor: D-041's distributaries
+  around sand bars at the large mouths are #127.
 - The outlets' two leftovers of the first part: the north-east lake's is done (below); the other
   lake went with #123.
 

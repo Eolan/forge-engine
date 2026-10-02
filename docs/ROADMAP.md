@@ -345,7 +345,7 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    (#118); rivers meeting lakes where the lakes' water stands, mouths without a hollow, and
    deltas where they run in: the water easing flat to the lake's level, the channel widening, a
    fan of sand on the lake's floor (#120, `--no-deltas`), and sills where they run out over a
-   flooded flat (#120, `--no-sills`); the
+   flooded flat (#120, `--no-sills`), at the lake's level while its water shows; the
    confluences' corners rounded, in the ground and the water (#119); the steep reaches in steps
    and pools, a boulder or two on most lips, the falls white (#122, `--no-steps`). D-041's far
    water in the terrain's material was checked first and left out: the ribbons already draw the
@@ -354,7 +354,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    basins of 23, 18 and 12 km² where the dome's largest were 11, 11 and 9, with a lake's bowl on
    each trunk, the lower courses graded to the sea, and the rivers under 3 km² brooks of
    nature's size (#123, `--island-basins 0 --island-grade 0 --no-brooks` for the island before).
-   Next: the owner's judgement of the rivers and of the new island.
+   Next: the owner's judgement of the rivers and of the new island; D-041's distributaries around
+   sand bars at the large mouths (#127).
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. The planet variant is researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of

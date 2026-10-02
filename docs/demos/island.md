@@ -1789,8 +1789,8 @@ more (`water/reflections` 0.1 ms more, `shading/layered` 0.03), a brook's within
 `timings.sh` within noise on every view.
 
 **Left for later:**
-- One channel runs in. D-041's research lets a large fan split into distributaries.
-- Above the water the delta is the valley's floor: no bars of sand at the mouth.
+- One channel runs in, and above the water the delta is the valley's floor: D-041's distributaries
+  around sand bars at the large mouths are #127.
 - The outlets' leftovers above: since done (below).
 - The knobs, for the owner's look, are `DeltaParams`: the reach, the flare, the fan's length,
   its top's water, its front and its wander.
