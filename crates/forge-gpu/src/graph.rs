@@ -870,6 +870,12 @@ impl Resources<'_> {
         self.buffers[handle.0 as usize].expect("a transient buffer no pass uses has no memory")
     }
 
+    /// The device address of the buffer behind `handle`, or 0 for a transient no pass uses
+    /// (one a frame declares for passes it may leave out, #78).
+    pub fn buffer_address(&self, handle: BufferHandle) -> vk::DeviceAddress {
+        self.buffers[handle.0 as usize].map_or(0, Buffer::address)
+    }
+
     /// The image behind `handle`.
     pub fn image(&self, handle: ImageHandle) -> &ResolvedImage {
         &self.images[handle.0 as usize]
@@ -1642,8 +1648,13 @@ pub struct GraphStats {
     pub heap_rebuilds: u64,
     /// Resources waiting in the deferred-deletion queue.
     pub pending_destructions: usize,
-    /// Submissions of the frame (one per batch, issue #77).
+    /// Submissions of the frame (one per batch, issue #77), each one command buffer.
     pub batches: u32,
+    /// CPU milliseconds [`RenderGraph::execute`] spent ordering the passes, laying out the
+    /// transients and deriving the barriers (#78).
+    pub compile_ms: f32,
+    /// CPU milliseconds it spent recording: the barriers and the pass bodies (#78).
+    pub record_ms: f32,
     /// Passes per queue, in [`QueueKind::ALL`] order.
     pub queue_passes: [u32; 3],
 }
@@ -1700,6 +1711,7 @@ impl RenderGraph {
         frames: &mut Frames,
         slot: FrameSlot,
     ) -> Result<GraphStats> {
+        let started = std::time::Instant::now();
         let FrameGraph {
             extent,
             images,
@@ -1953,6 +1965,7 @@ impl RenderGraph {
         )?;
 
         // Record.
+        let recording = std::time::Instant::now();
         let names: Vec<String> = metas.iter().map(|m| m.name.clone()).collect();
         let resources = Resources {
             images: &resolved,
@@ -1987,6 +2000,7 @@ impl RenderGraph {
             heap_rebuilds: self.stats.heap_rebuilds,
             pending_destructions: frames.pending_destructions(),
             batches: batches.len() as u32,
+            compile_ms: (recording - started).as_secs_f32() * 1e3,
             ..GraphStats::default()
         };
         let timers = frames.timer_slot(slot);
@@ -2033,6 +2047,8 @@ impl RenderGraph {
                 signal: batch.signal,
             });
         }
+
+        stats.record_ms = recording.elapsed().as_secs_f32() * 1e3;
 
         // Persist the states.
         for (i, entry) in images.iter().enumerate() {

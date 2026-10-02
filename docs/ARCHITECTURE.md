@@ -119,16 +119,17 @@ and the date next to every number.
   and writes (per mip level where it matters), and `RenderGraph::execute` derives every
   barrier and layout transition from the tracked state of each resource, lays out the
   frame's transient images (depth, HDR colour, motion vectors) and transient buffers (the
-  culls' work lists and status words, #78; their addresses taken in a pass body, valid from
-  their first pass to their last) in one heap where lifetimes allow aliasing, records the
-  passes in declaration order with a profiler zone each, and carries the final states into
-  the next frame. A pass may ask for the async compute or the transfer queue (#77): the graph
-  moves it up to just after its last conflict, splits the frame into batches (one submission
-  each), and derives the timeline waits between queues from each resource's last writer and
-  readers per queue. Persistent images (`GraphImage`: depth pyramids, TAA histories) and
-  buffers (`GraphBuffer`: visible-cluster lists, indirect arguments) keep their state between
-  frames; resources a frame in flight may still use go through `Frames::destroy_later`. Nobody
-  outside `forge-gpu` records a barrier.
+  culls' work lists, status words, visible-cluster lists and rejects, #78; their addresses
+  taken in a pass body, valid from their first pass to their last) in one heap where
+  lifetimes allow aliasing, records the passes in declaration order with a profiler zone
+  each, and carries the final states into the next frame. A pass may ask for the async
+  compute or the transfer queue (#77): the graph moves it up to just after its last conflict,
+  splits the frame into batches (one submission each), and derives the timeline waits between
+  queues from each resource's last writer and readers per queue. Persistent images
+  (`GraphImage`: depth pyramids, TAA histories) and buffers (`GraphBuffer`: indirect
+  arguments, the probes' state, readbacks) keep their state between frames; resources a frame
+  in flight may still use go through `Frames::destroy_later`. Nobody outside `forge-gpu`
+  records a barrier.
 - **Audio thread**: real-time priority, never touches the pool, communicates by lock-free
   queues.
 - **Network thread**: `tokio` runtime for I/O only; packets are handed to the simulation.

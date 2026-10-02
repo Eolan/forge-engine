@@ -63,9 +63,10 @@ against the 8.33 ms of 120 fps), its south view 1.96 ms at 1600 × 900; the ball
 2026-09-26, `docs/research/render-graph-next.md`: transient buffers through the existing
 lifetime heap with a poison mode for the device-address hazard first; parallel recording only
 past a measured gate, since recording is 0.1 ms of the frame today). Transient buffers ✅
-(2026-10-02, `FORGE_GRAPH_POISON=1`): the culls' work lists and status words, the city's
-work buffers 145.9 → 106.5 MiB in the same heap. Next on it: the other per-frame lists, the
-CPU zones, and parallel recording behind its gate. Then #94 (an
+(2026-10-02, `FORGE_GRAPH_POISON=1`): the culls' work lists, status words, visible-cluster
+lists and rejects, the city's work buffers and transient heap 189.6 → 106.7 MiB. The CPU
+zones ✅: recording 0.12 ms in the city, under the 0.5 ms gate, so parallel recording stays
+unbuilt (#124). Then #94 (an
 HDR display output; researched 2026-09-26, `docs/research/hdr-output.md`: the swapchain pair
 to enable, the OS white level to read, ACES 2.0's presets as a rebake, paper white as the one
 real decision, everything but the present verifiable on an SDR monitor), #39 (the RTX 3080

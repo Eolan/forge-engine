@@ -716,15 +716,23 @@ impl<D: Demo> State<D> {
                 .pass("app/present")
                 .image(target, ImageAccess::Present)
                 .run(|_, _| Ok(()));
+            // What the demo and the overlay declared, then the graph's compile and its
+            // recording (#78: the split the gate for parallel recording reads).
+            self.ctx
+                .profile
+                .cpu_zone("cpu/declare passes", ms_since(record_start));
             // `FORGE_FRAME_BARRIER=1` (serialise frames on the GPU) lives in the graph now.
             self.graph_stats = self
                 .ctx
                 .graph
                 .execute(frame.graph, &mut self.ctx.frames, slot)?;
+            self.ctx
+                .profile
+                .cpu_zone("cpu/graph compile", f64::from(self.graph_stats.compile_ms));
+            self.ctx
+                .profile
+                .cpu_zone("cpu/graph record", f64::from(self.graph_stats.record_ms));
         }
-        self.ctx
-            .profile
-            .cpu_zone("cpu/record commands", ms_since(record_start));
         let submit_start = Instant::now();
         {
             #[cfg(feature = "profiling")]

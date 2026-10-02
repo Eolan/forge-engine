@@ -926,6 +926,31 @@ log):
 - `FORGE_GRAPH_POISON=1` fills each transient buffer with `0xDEADBEEF` after its last pass.
   The capture batch is at 0 px in the default, poison and no-alias modes.
 
+The second migration: the visible-cluster list (16 MiB per slot in the city), its raster lists
+(8 MiB), the fallback's draw commands and pass 2's rejects (8 MiB). They live until the
+resolve, so they share less: the heap grows.
+
+| City, frame 60 | before #78 | the culls' lists | and the visible lists |
+|---|---|---|---|
+| GPU work buffers | 145.9 MiB | 106.5 | 42.5 |
+| transient heap | 43.75 MiB | 43.75 | 64.19 |
+| both | 189.6 MiB | 150.2 | 106.7 |
+
+**The CPU's recording** (#78, the issue's "measure first"). `cpu/record commands` is now
+three zones: `cpu/declare passes` (the demo's and the overlay's declarations), `cpu/graph
+compile` (the order, the transients' layout, the barriers) and `cpu/graph record` (the
+barriers and the pass bodies). 1 500 fixed-step frames, two rounds, against the commit before
+the transient buffers:
+
+| | before: record commands | after: declare + compile + record |
+|---|---|---|
+| city | 0.168–0.187 ms | 0.020 + 0.045 + 0.116 = 0.181–0.183 |
+| ballad | 0.138–0.146 ms | 0.017 + 0.031 + 0.095 = 0.142–0.144 |
+
+The transient buffers cost no CPU time that shows. Recording is 0.12 ms against the 0.5 ms
+of pass bodies `docs/research/render-graph-next.md` sets as the gate for parallel recording,
+so that stays unbuilt.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

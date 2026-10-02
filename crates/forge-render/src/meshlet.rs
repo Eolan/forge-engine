@@ -2001,78 +2001,6 @@ fn cull_lookback_bytes(capacity: u32) -> u64 {
     3 * u64::from(cull_groups(capacity)) * 8
 }
 
-/// One frame slot's visible-cluster list: `(instance, meshlet | flags)` per listed cluster,
-/// pass 1 then pass 2; the pass being drawn's raster lists (list slots, hardware-drawn from
-/// the front, software-rasterised from the back); and on the
-/// fallback path one `VkDrawIndexedIndirectCommand` per hardware-drawn cluster of that pass.
-struct VisibleList {
-    visible: GraphBuffer,
-    raster: GraphBuffer,
-    draws: Option<GraphBuffer>,
-    capacity: u32,
-}
-
-impl VisibleList {
-    fn new(device: &Arc<Device>, path: GeometryPath, capacity: u32, slot: usize) -> Result<Self> {
-        let visible = device.create_buffer(BufferDesc {
-            size: u64::from(capacity) * 8,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            location: MemoryLocation::GpuOnly,
-            category: MemoryCategory::Work,
-            name: &format!("visible clusters {slot}"),
-        })?;
-        let raster = device.create_buffer(BufferDesc {
-            size: u64::from(capacity) * 4,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            location: MemoryLocation::GpuOnly,
-            category: MemoryCategory::Work,
-            name: &format!("raster lists {slot}"),
-        })?;
-        let draws = match path {
-            GeometryPath::MeshShader => None,
-            GeometryPath::IndirectCount => Some(device.create_buffer(BufferDesc {
-                size: u64::from(capacity) * u64::from(DRAW_COMMAND_BYTES),
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
-                location: MemoryLocation::GpuOnly,
-                category: MemoryCategory::Work,
-                name: &format!("cluster draws {slot}"),
-            })?),
-        };
-        Ok(Self {
-            visible: GraphBuffer::new(visible),
-            raster: GraphBuffer::new(raster),
-            draws: draws.map(GraphBuffer::new),
-            capacity,
-        })
-    }
-}
-
-/// One frame slot's list of the clusters pass 1 leaves to pass 2 (issue #92): (instance,
-/// meshlet | flags) per cluster pass 1 selected and found in view but the previous frame's
-/// pyramid hid, in cull order. Pass 2 tests them alone against this frame's pyramid. When they
-/// do not all fit, pass 2 walks pass 1's work items again, so nothing is lost, and
-/// [`MeshletRenderer::begin_frame`] grows the list from [`FrameStats::rejected`].
-struct RejectList {
-    list: GraphBuffer,
-    capacity: u32,
-}
-
-impl RejectList {
-    fn new(device: &Arc<Device>, capacity: u32, slot: usize) -> Result<Self> {
-        let list = device.create_buffer(BufferDesc {
-            size: u64::from(capacity) * 8,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            location: MemoryLocation::GpuOnly,
-            category: MemoryCategory::Work,
-            name: &format!("pass 2 rejects {slot}"),
-        })?;
-        Ok(Self {
-            list: GraphBuffer::new(list),
-            capacity,
-        })
-    }
-}
-
 /// Bytes of the software rasteriser's samples for `extent`: 8 per pixel
 /// (`shaders/vis64.slang`).
 pub fn vis64_bytes(extent: vk::Extent2D) -> u64 {
@@ -2149,13 +2077,10 @@ pub struct MeshletRenderer {
     /// memory, then copied into this frame slot's host-cached readback.
     stats: GraphBuffer,
     stats_readback: Vec<GraphBuffer>,
-    /// Per frame slot: the visible-cluster list and, on the fallback path, its draw commands.
-    lists: Vec<VisibleList>,
-    /// Slots every frame slot's list grows to (see [`MeshletRenderer::begin_frame`]).
+    /// Slots of the visible-cluster list, its raster lists and, on the fallback path, its draw
+    /// commands, transients of the frame's graph (#78; see [`MeshletRenderer::begin_frame`]).
     visible_target: u32,
-    /// Per frame slot: the clusters pass 1 leaves to pass 2 (issue #92).
-    rejects: Vec<RejectList>,
-    /// Slots every frame slot's reject list grows to.
+    /// Slots of the list of the clusters pass 1 leaves to pass 2 (issue #92), a transient.
     rejects_target: u32,
     /// [`VISIBLE_MAX_CAPACITY`], or less when the fallback's `maxDrawIndirectCount` or the mesh
     /// path's `maxMeshWorkGroupTotalCount` is lower.
@@ -2565,12 +2490,6 @@ impl MeshletRenderer {
             }
         };
         let visible_target = VISIBLE_INITIAL_CAPACITY.min(visible_max);
-        let lists = (0..FRAMES_IN_FLIGHT)
-            .map(|i| VisibleList::new(device, path, visible_target, i))
-            .collect::<Result<Vec<_>>>()?;
-        let rejects = (0..FRAMES_IN_FLIGHT)
-            .map(|i| RejectList::new(device, REJECTS_INITIAL_CAPACITY, i))
-            .collect::<Result<Vec<_>>>()?;
         tracing::info!(
             path = path.name(),
             visible_capacity = visible_target,
@@ -2607,9 +2526,7 @@ impl MeshletRenderer {
             frame_buffers,
             stats,
             stats_readback,
-            lists,
             visible_target,
-            rejects,
             rejects_target: REJECTS_INITIAL_CAPACITY,
             visible_max,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
@@ -2867,12 +2784,6 @@ impl MeshletRenderer {
                 self.visible_target = target;
             }
         }
-        let list = &mut self.lists[slot.index];
-        if list.capacity < self.visible_target {
-            // The frame that last used this slot has completed (the caller waited for the
-            // slot), so its list can go now.
-            *list = VisibleList::new(&self.device, self.path, self.visible_target, slot.index)?;
-        }
         if let Some(s) = stats {
             let wanted = u64::from(s.rejected);
             let target = grown_capacity(self.rejects_target, wanted, REJECTS_MAX_CAPACITY);
@@ -2885,10 +2796,6 @@ impl MeshletRenderer {
                 );
                 self.rejects_target = target;
             }
-        }
-        let rejects = &mut self.rejects[slot.index];
-        if rejects.capacity < self.rejects_target {
-            *rejects = RejectList::new(&self.device, self.rejects_target, slot.index)?;
         }
         Ok(stats)
     }
@@ -2977,25 +2884,23 @@ impl MeshletRenderer {
             meshes: scene.meshes.address(),
             instances: scene.instances.address(),
             stats: self.stats.address(),
-            // The work lists and the status words are transients (#78): their addresses are
-            // written at record time ("geometry/cull clears").
+            // The work lists, the status words, the visible list and its raster lists and draw
+            // commands, and the rejects are transients (#78): their addresses are written at
+            // record time ("geometry/cull clears"), 0 here.
             cluster_lookback: 0,
             cluster_groups: cull_groups(self.work_target),
             prev_hzb_image: self.hzb[prev.pyramid].sampled().0,
             work: 0,
             indirect: scene.indirect[slot.index].address(),
-            visible: self.lists[slot.index].visible.address(),
-            visible_capacity: self.lists[slot.index].capacity,
+            visible: 0,
+            visible_capacity: self.visible_target,
             exposure: params.exposure,
             sun_illuminance: self.sun_illuminance,
             sun_angular_radius: self.sun_angular_radius,
             clusters: scene.clusters[slot.index].address(),
-            draws: self.lists[slot.index]
-                .draws
-                .as_ref()
-                .map_or(0, |b| b.address()),
+            draws: 0,
             lookback: 0,
-            raster: self.lists[slot.index].raster.address(),
+            raster: 0,
             target_width: self.extent.width,
             target_height: self.extent.height,
             sw_raster_area: params.sw_raster_area.max(0.0),
@@ -3015,8 +2920,8 @@ impl MeshletRenderer {
             deferred: scene.deferred[slot.index].address(),
             cells: scene.cells.address(),
             cell_list: scene.cell_lists[slot.index].address(),
-            rejects: self.rejects[slot.index].list.address(),
-            rejects_capacity: self.rejects[slot.index].capacity,
+            rejects: 0,
+            rejects_capacity: self.rejects_target,
             rejects_pad: 0,
             tlas_movers: scene.rays.as_ref().map_or(0, SceneRays::movers_address),
         }
@@ -3119,13 +3024,40 @@ impl MeshletRenderer {
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             }),
             deferred: graph.import_buffer(&scene.deferred[slot.index]),
-            draws: self.lists[slot.index]
-                .draws
-                .as_ref()
-                .map(|b| graph.import_buffer(b)),
-            visible: graph.import_buffer(&self.lists[slot.index].visible),
-            raster: graph.import_buffer(&self.lists[slot.index].raster),
-            rejects: graph.import_buffer(&self.rejects[slot.index].list),
+            // On the fallback path, one `VkDrawIndexedIndirectCommand` per hardware-drawn
+            // cluster of the pass being drawn.
+            draws: (self.path == GeometryPath::IndirectCount).then(|| {
+                graph.transient_buffer(TransientBufferDesc {
+                    name: "cluster draws",
+                    size: u64::from(self.visible_target) * u64::from(DRAW_COMMAND_BYTES),
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                        | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                })
+            }),
+            // `(instance, meshlet | flags)` per listed cluster, pass 1 then pass 2, read by the
+            // draws and the resolve.
+            visible: graph.transient_buffer(TransientBufferDesc {
+                name: "visible clusters",
+                size: u64::from(self.visible_target) * 8,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            }),
+            // The pass being drawn's raster lists: list slots, hardware-drawn from the front,
+            // software-rasterised from the back.
+            raster: graph.transient_buffer(TransientBufferDesc {
+                name: "raster lists",
+                size: u64::from(self.visible_target) * 4,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            }),
+            // The clusters pass 1 leaves to pass 2 (issue #92): (instance, meshlet | flags)
+            // per cluster pass 1 selected and found in view but the previous frame's pyramid
+            // hid, in cull order. Pass 2 tests them alone against this frame's pyramid; when
+            // they do not all fit, it walks pass 1's work items again, so nothing is lost, and
+            // `begin_frame` grows the list from `FrameStats::rejected`.
+            rejects: graph.transient_buffer(TransientBufferDesc {
+                name: "pass 2 rejects",
+                size: u64::from(self.rejects_target) * 8,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            }),
             vis64: self
                 .vis64
                 .as_ref()
@@ -3235,6 +3167,8 @@ impl MeshletRenderer {
         let instance_groups = scene.instance_count.div_ceil(64).max(1);
         let (lookback, cluster_lookback) = (io.lookback, io.cluster_lookback);
         let (work_handle, roots_handle) = (io.work, io.roots);
+        let (visible_handle, raster_handle, draws_handle, rejects_handle) =
+            (io.visible, io.raster, io.draws, io.rejects);
         let frame_buffer: &'f Buffer = &self.frame_buffers[slot.index];
         let stats: &'f GraphBuffer = &self.stats;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -3275,6 +3209,11 @@ impl MeshletRenderer {
                 block.cluster_lookback = cluster_lookback.address();
                 block.work = resources.buffer(work_handle).address();
                 block.roots = resources.buffer(roots_handle).address();
+                block.visible = resources.buffer(visible_handle).address();
+                block.raster = resources.buffer(raster_handle).address();
+                block.draws = draws_handle.map_or(0, |h| resources.buffer(h).address());
+                // Without occlusion there is no pass 2, and no list for it.
+                block.rejects = resources.buffer_address(rejects_handle);
                 frame_buffer.write(offset, &[block]);
             }
             commands.update_buffer(indirect, 0, &INDIRECT_START);
@@ -3991,8 +3930,7 @@ impl MeshletRenderer {
         };
         let clusters: &'f GraphBuffer = &params.scene.clusters[slot.index];
         let triangles: &'f Buffer = &params.scene.pool;
-        let draws: Option<&'f GraphBuffer> = self.lists[slot.index].draws.as_ref();
-        let capacity = self.lists[slot.index].capacity;
+        let capacity = self.visible_target;
         let extent = params.extent;
         let push = self.push(pass.frame_address);
         let MeshPass {
@@ -4063,9 +4001,10 @@ impl MeshletRenderer {
                 commands.bind_pipeline(pipeline);
                 commands.set_viewport_full(extent);
                 commands.push_constants(pipeline, &push);
-                let result = match draws {
+                let result = match io.draws {
                     None => commands.draw_mesh_tasks_indirect(clusters, args_offset),
                     Some(draws) => {
+                        let draws = resources.buffer(draws);
                         commands.bind_index_buffer(triangles, 0, vk::IndexType::UINT8_KHR);
                         commands.draw_indexed_indirect_count(
                             draws,
