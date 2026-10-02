@@ -1,10 +1,10 @@
 //! Stage 6's beaches (#128, D-041's materials as rules): the beach band the slope rule paints
-//! sand ([`crate::slope_layers`]) split into pale sand, shingle and black sand along the coast.
-//! Black sand where the rock is hardest (the hardness field of stage 2: the dark volcanic rock
-//! the waves grind), shingle on the headlands and under steep land (the waves' energy leaves
-//! the pebbles there and takes the sand away), pale sand in the bays and wherever a river
-//! reaches the sea (its sediment). The dark beaches run a few metres out under the sea, so the
-//! waterline does not show a pale floor beside them.
+//! sand ([`crate::slope_layers`]) split along the coast: shingle on the headlands and under
+//! steep land (the waves' energy leaves the pebbles there and takes the sand away), pale sand in
+//! the bays and wherever a river reaches the sea (its sediment). On an island whose hard rock is
+//! volcanic, black sand where it is hardest (the hardness field of stage 2, the dark rock the
+//! waves grind); the owner's island has none, its hard rock being no basalt. The dark beaches
+//! run a few metres out under the sea, so the waterline does not show a pale floor beside them.
 //!
 //! The rule reads its fields on a coarse grid, each blurred over a few hundred metres, so a
 //! beach keeps its type along a stretch of coast; a little noise lets the stretches' ends wander
@@ -70,8 +70,9 @@ pub struct BeachLayers {
     pub sea: u8,
     /// Pebbles.
     pub shingle: u8,
-    /// Black volcanic sand.
-    pub black: u8,
+    /// Black volcanic sand, for an island whose hard rock is volcanic; `None`, none, whatever
+    /// [`BeachRule::black`] says (the owner's island: its hard rock is no basalt).
+    pub black: Option<u8>,
 }
 
 /// What [`paint_beaches`] painted.
@@ -199,18 +200,27 @@ pub fn paint_beaches(
             )
         })
         .collect();
-    // Black sand: the hardest share of the beaches away from the mouths; shingle: the roughest
-    // share of the rest.
-    let black_at = quantile(
-        scores
-            .iter()
-            .zip(&free)
-            .filter(|(_, f)| **f)
-            .map(|(s, _)| s.0)
-            .collect(),
-        1.0 - rule.black,
-    );
-    let rest = (1.0 - rule.black).max(1e-9);
+    // Black sand, where there is any: the hardest share of the beaches away from the mouths;
+    // shingle: the roughest share of the rest.
+    let black = ids.black.filter(|_| rule.black > 0.0);
+    let black_at = if black.is_some() {
+        quantile(
+            scores
+                .iter()
+                .zip(&free)
+                .filter(|(_, f)| **f)
+                .map(|(s, _)| s.0)
+                .collect(),
+            1.0 - rule.black,
+        )
+    } else {
+        f64::INFINITY
+    };
+    let rest = if black.is_some() {
+        (1.0 - rule.black).max(1e-9)
+    } else {
+        1.0
+    };
     let shingle_at = quantile(
         scores
             .iter()
@@ -227,20 +237,21 @@ pub fn paint_beaches(
         let patch = 0.5 + 0.5 * noise::fbm(rule.seed ^ k, x / 10.0, y / 10.0, 2, 2.0, 0.5);
         patch < share
     };
+    let kinds = [Some(ids.sand), Some(ids.shingle), black];
     let mut stats = BeachStats::default();
     for (k, &t) in beach.iter().enumerate() {
         let (hard, rough) = scores[k];
         let (x, y) = at(t);
         let kind = if !free[k] {
             0
-        } else if mixed(hard, black_at, x, y, 3) {
+        } else if black.is_some() && mixed(hard, black_at, x, y, 3) {
             2
         } else if mixed(rough, shingle_at, x, y, 4) {
             1
         } else {
             0
         };
-        layers.data[t] = [ids.sand, ids.shingle, ids.black][kind];
+        layers.data[t] = kinds[kind].expect("a type painted");
         stats.texels[kind] += 1;
     }
     // The coast's length by type: the beach's texels beside the sea.
@@ -259,9 +270,9 @@ pub fn paint_beaches(
             .flatten()
             .any(|u| layers.data[u] == ids.sea)
         {
-            let kind = [ids.sand, ids.shingle, ids.black]
+            let kind = kinds
                 .iter()
-                .position(|&l| l == layers.data[t])
+                .position(|&l| l == Some(layers.data[t]))
                 .expect("a beach's layer");
             stats.coast_m[kind] += texel;
         }
@@ -269,15 +280,19 @@ pub fn paint_beaches(
     // The dark beaches out under the sea, a texel a step from the last step's, black sand
     // before shingle.
     let steps = (rule.under_sea / texel).round() as usize;
-    let mut fronts: [Vec<usize>; 2] = [ids.black, ids.shingle].map(|dark| {
-        beach
-            .iter()
-            .copied()
-            .filter(|&t| layers.data[t] == dark)
-            .collect()
-    });
+    let darks: Vec<u8> = black.into_iter().chain([ids.shingle]).collect();
+    let mut fronts: Vec<Vec<usize>> = darks
+        .iter()
+        .map(|&dark| {
+            beach
+                .iter()
+                .copied()
+                .filter(|&t| layers.data[t] == dark)
+                .collect()
+        })
+        .collect();
     for _ in 0..steps {
-        for (front, dark) in fronts.iter_mut().zip([ids.black, ids.shingle]) {
+        for (front, &dark) in fronts.iter_mut().zip(&darks) {
             let mut next = Vec::new();
             for &t in front.iter() {
                 for u in neighbours(t).into_iter().flatten() {
@@ -335,6 +350,19 @@ fn quantile(mut values: Vec<f64>, share: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// The type of the beach at `x` (layers 1, 3 or 4): the most texels of its column's band.
+    fn kind_in(layers: &Field2<u8>, x: f64) -> usize {
+        let i = (x / 4.0) as u32;
+        let mut count = [0; 5];
+        for j in 0..1024 {
+            count[usize::from(layers.get(i, j))] += 1;
+        }
+        [1, 3, 4]
+            .into_iter()
+            .max_by_key(|&l| count[l])
+            .expect("a beach")
+    }
+
     #[test]
     fn a_coast_turns_to_shingle_on_its_headland_black_where_hard_and_sand_in_its_bay() {
         // A coast along y = 1 km over a 4 km square at 8 m: land to the north (lower y), the
@@ -356,19 +384,22 @@ mod tests {
             sand: 1,
             sea: 2,
             shingle: 3,
-            black: 4,
+            black: Some(4),
         };
         // Sand on the first 2 m over the sea, grass over it (the slope rule's shore).
-        let mut layers = Field2::from_fn(1024, 4.0, |i, j| {
-            let h = height.sample((f64::from(i) + 0.5) * 4.0, (f64::from(j) + 0.5) * 4.0);
-            if h <= 0.0 {
-                2
-            } else if h < 2.0 {
-                1
-            } else {
-                0
-            }
-        });
+        let fresh = || {
+            Field2::from_fn(1024, 4.0, |i, j| {
+                let h = height.sample((f64::from(i) + 0.5) * 4.0, (f64::from(j) + 0.5) * 4.0);
+                if h <= 0.0 {
+                    2
+                } else if h < 2.0 {
+                    1
+                } else {
+                    0
+                }
+            })
+        };
+        let mut layers = fresh();
         let rule = BeachRule::default();
         let stats = paint_beaches(
             &mut layers,
@@ -378,22 +409,10 @@ mod tests {
             ids,
             &rule,
         );
-        // The type of the beach at x, the most texels of its column's band.
-        let kind = |x: f64| {
-            let i = (x / 4.0) as u32;
-            let mut count = [0; 5];
-            for j in 0..1024 {
-                count[usize::from(layers.get(i, j))] += 1;
-            }
-            [1, 3, 4]
-                .into_iter()
-                .max_by_key(|&l| count[l])
-                .expect("a beach")
-        };
-        assert_eq!(kind(1000.0), 3, "the headland's shingle");
-        assert_eq!(kind(2000.0), 4, "the hard rock's black sand");
-        assert_eq!(kind(3000.0), 1, "the bay's sand");
-        assert_eq!(kind(3600.0), 1, "the mouth's sand");
+        assert_eq!(kind_in(&layers, 1000.0), 3, "the headland's shingle");
+        assert_eq!(kind_in(&layers, 2000.0), 4, "the hard rock's black sand");
+        assert_eq!(kind_in(&layers, 3000.0), 1, "the bay's sand");
+        assert_eq!(kind_in(&layers, 3600.0), 1, "the mouth's sand");
         // About a sixth black and a quarter shingle, the rest sand.
         let total: usize = stats.texels.iter().sum();
         let share = |k: usize| stats.texels[k] as f64 / total as f64;
@@ -419,5 +438,22 @@ mod tests {
                 }
             }
         }
+        // Without black sand (an island whose hard rock is no basalt): none, the hard rock's
+        // beach pale sand or shingle, and a quarter of the beaches shingle.
+        let mut layers = fresh();
+        let stats = paint_beaches(
+            &mut layers,
+            &height,
+            &|x, y| hardness.sample(x, y),
+            &[[3600.0, coast(3600.0)]],
+            BeachLayers { black: None, ..ids },
+            &rule,
+        );
+        assert_eq!(stats.texels[2], 0);
+        assert!(!layers.data.contains(&4));
+        let total: usize = stats.texels.iter().sum();
+        let shingle = stats.texels[1] as f64 / total as f64;
+        assert!((shingle - 0.25).abs() < 0.08, "{stats:?}");
+        assert_eq!(kind_in(&layers, 1000.0), 3, "the headland's shingle");
     }
 }

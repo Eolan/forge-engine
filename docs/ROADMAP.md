@@ -96,9 +96,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   planet variant (orbit-to-ground, researched in `docs/research/planet-terrain.md`) is its
   second step, not started.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
-  2026-10-02): black sand under the hardest rock, shingle on the headlands and under steep
-  land, pale sand in the bays and by the rivers' mouths. Next, the rock types (limestone and
-  karst, from the owner's inbox), small and seen at once on the island.
+  2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
+  the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's
+  call). Next, the rock types, as the island's geology allows.
 - **Phase 3's start:** `forge-sim` and the physics engine (D-009). Its first visible use is the
   island's water: buoyancy for what floats (#107's barrels are carried at the water's speed,
   without physics), boats and swimming from the owner's inbox. Its demo is `materials-yard`.

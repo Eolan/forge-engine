@@ -1,5 +1,10 @@
 # #128: the beaches by type (2026-10-02)
 
+**Later the same day: black sand taken out.** The owner judged that black sand makes no
+geological sense on this island, whose hard rock is no basalt. The island now has shingle and
+pale sand: 22.9 km of pale sand and 7.5 km of shingle. The sheets below were taken before, and
+still show the black sand. The rule keeps it for a volcanic island (`BeachLayers::black`).
+
 Before (left, `--no-beach-types`) and now (right), frame 60, `island` (seed 7):
 - **`beaches.png`**, by rows:
   - the longest shingle stretch from 70 m out at sea, 18 m up (`--view 4264,18,1725,32.9,-14.4`),

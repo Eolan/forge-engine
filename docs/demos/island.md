@@ -2389,13 +2389,16 @@ At 1600 × 900 it takes 1.43 ms of GPU a frame (p99 frame 2.10 ms), and at 2560 
 
 The owner's inbox asked for beaches of sand, of rock and of volcanic rock. Every shore of the
 island was the same pale sand, the beach band the slope rule paints over the land's first metres
-above the sea. Now `forge_procgen::paint_beaches` splits that band into three types
+above the sea. Now `forge_procgen::paint_beaches` splits that band into two types
 (`--no-beach-types` for the island before, `reports/2026-10-02-128/`):
-- **Black sand** where the rock behind the beach is hardest: the hardness field of stage 2, which
-  the erosion already carved the steep ground from, read as volcanic rock the waves grind. A
-  sixth of the beaches away from the mouths.
+- **Black sand, taken out the same day.** It went where the rock behind the beach is hardest
+  (stage 2's hardness field, read as volcanic rock). The owner judged it makes no geological
+  sense here, since the island's hard rock is no basalt. The rule keeps it for a volcanic
+  island (`BeachLayers::black`); this island passes none. The report's first sheets, taken
+  before, still show it.
 - **Shingle** where the coast is roughest: on the headlands (much sea within 300 m) and under
-  steep land (the land's height within 150 m behind). A quarter of the rest. Its texture is new,
+  steep land (the land's height within 150 m behind). A quarter of the beaches away from the
+  mouths. Its texture is new,
   `textures::shingle`: flattened pebbles of grey, blue-grey and brown stone with the odd white
   quartz, lying apart on coarse sand. The river beds' packed cobbles read as paving on a beach.
 - **Pale sand** in the bays, on the gentler coasts, and within 400 m of a river's mouth, where
@@ -2407,18 +2410,18 @@ above the sea. Now `forge_procgen::paint_beaches` splits that band into three ty
 - **Ends:** within 0.8 of a standard deviation of a type's threshold, the types mix in patches
   about 10 m across, so one stretch fades into the next over tens of metres. Cut sharply, the
   first black stretch read as a dark rectangle.
-- **Under the sea:** shingle and black sand run 12 m out over the sea floor, so the water's
+- **Under the sea:** shingle runs 12 m out over the sea floor, so the water's
   edge does not show a pale floor beside a dark beach.
 
 **The contour** (#106) now takes a set of layers under its height: the beaches' sand as before,
-and the shingle and the black sand. Each beach's top follows the drawn ground, not the map's
+and the shingle. Each beach's top follows the drawn ground, not the map's
 4 m texels. The layered resolve's registers are unchanged: 96, with no spill.
 
-Seed 7: of 30.9 km of beach, 19.7 km are pale sand, 7.4 km shingle and 3.3 km black sand. The
-log gives a view of each, from 70 m out at sea: `the island's beaches: sand, shingle, black sand
-(#128, --view)`. The rule takes 82 ms at start, and its views 60 ms.
+Seed 7, without black sand: of 30.4 km of beach, 22.9 km are pale sand and 7.5 km shingle. The
+log gives a view of each, from 70 m out at sea: `the island's beaches: sand, shingle (#128,
+--view)`. The rule and its views take 134 ms at start.
 
-Before (`--no-beach-types`) and now, frame 60:
+Before (`--no-beach-types`) and with the black sand still in, frame 60:
 - `beaches.png`:
   - the shingle from 70 m out (ꟻLIP mean 0.055);
   - the black sand from 70 m out (0.123);
