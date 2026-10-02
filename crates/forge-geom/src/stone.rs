@@ -32,6 +32,9 @@ pub enum StoneShape {
     /// `size[0]` across its length, and stands as `crate::city::boulder` does, the water's
     /// model of a river's stone: its centre 0.65 of that up, so the water's outline of it holds.
     Cobble,
+    /// A stone in a river (#133): a chunk the water broke off, of any proportions, its faces still
+    /// there but its edges and corners worn round.
+    Worn,
 }
 
 /// A stone (see [`stone`]).
@@ -67,6 +70,7 @@ pub fn stone(s: &Stone) -> TriMesh {
             Vec3::ZERO,
         ),
         StoneShape::Block => append(&mut mesh, block(root, size, s.segments), Vec3::ZERO),
+        StoneShape::Worn => append(&mut mesh, worn(root, size, s.segments), Vec3::ZERO),
         StoneShape::Cobble => append(
             &mut mesh,
             rounded(root, size, 2.2, (0.03, 0.004), s.segments),
@@ -214,6 +218,53 @@ fn rounded(seed: Seed, half: Vec3, e: f32, rough: (f32, f32), segments: u32) -> 
     })
 }
 
+/// The smooth minimum of `a` and `b` over `k` (a polynomial blend): the edge where two faces
+/// meet, rounded over about `k`.
+fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
+    let h = (k - (a - b).abs()).max(0.0) / k;
+    a.min(b) - h * h * k * 0.25
+}
+
+/// A worn chunk (see [`StoneShape::Worn`]): the ellipsoid of `half` (exponent 2.5) cut by four to
+/// seven planes at random, 0.6 to 0.9 of its reach along each, every edge rounded over a third
+/// of its least half-size, and a faint noise.
+fn worn(seed: Seed, half: Vec3, segments: u32) -> TriMesh {
+    let mut rng = seed.derive_str("worn planes").rng();
+    let cuts = 4 + (rng.next_f32() * 4.0) as u32;
+    let planes: Vec<(Vec3, f32)> = (0..cuts)
+        .map(|_| {
+            let n = loop {
+                let v = Vec3::new(
+                    rng.next_f32() * 2.0 - 1.0,
+                    rng.next_f32() * 2.0 - 1.0,
+                    rng.next_f32() * 2.0 - 1.0,
+                );
+                let l = v.length_squared();
+                if l > 1e-4 && l <= 1.0 {
+                    break v / l.sqrt();
+                }
+            };
+            // The ellipsoid's reach along n, cut back.
+            (n, (n * half).length() * (0.6 + 0.3 * rng.next_f32()))
+        })
+        .collect();
+    let broad = seed.derive_str("broad").value();
+    let fine = seed.derive_str("fine").value();
+    let least = half.min_element();
+    let k = 0.35 * least;
+    cube_sphere(segments, |dir| {
+        let mut r = superellipsoid(dir, half, 2.5);
+        for &(n, d) in &planes {
+            let c = dir.dot(n);
+            if c > 1e-4 {
+                r = smooth_min(r, d / c, k);
+            }
+        }
+        let bump = least * (0.04 * fbm(broad, dir * 2.2, 4) + 0.008 * fbm(fine, dir * 9.0, 3));
+        dir * (r + bump)
+    })
+}
+
 /// A limestone block (see [`StoneShape::Block`]).
 fn block(seed: Seed, half: Vec3, segments: u32) -> TriMesh {
     let mut rng = seed.derive_str("block planes").rng();
@@ -274,6 +325,7 @@ mod tests {
             StoneShape::Slab,
             StoneShape::Block,
             StoneShape::Cobble,
+            StoneShape::Worn,
         ] {
             let s = Stone {
                 seed: 5,

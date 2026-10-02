@@ -2634,3 +2634,40 @@ Checks (both together):
 - **Validation:** clean; 261 tests pass, the stone test with a cobble.
 - **Timings:** the island takes 1.501–1.503 ms against 1.491–1.493, the tour 1.324–1.337
   against 1.318–1.325: the stones' finer levels cost about 0.01 ms.
+
+## The rivers' worn stones (#133, 2026-10-02)
+
+The owner, on #132's round cobbles: a river's stones are "like other stones with different size
+and shapes but often more like cobble / pebbles because water broken the big chunks first, but
+they are more rounded at the edges because of erosion", and no giant ones beside the water,
+where gravity would roll them away. "Pebbles are more likely in the river beds I think not very
+big."
+
+**Shapes** (`StoneShape::Worn`): a chunk broken off, then worn. A rounded box (a superellipsoid
+of exponent 2.5) is cut by four to seven planes at random, each at 0.6 to 0.9 of the box's reach
+along it: the faces of the break. Where the cuts meet the box and each other, a smooth minimum
+(Inigo Quilez's quadratic one, credited) rounds the edge over about a third of the stone's
+least half-size; a faint noise roughens the faces. Five granite chunks and three limestone ones,
+each a metre long and 0.4 to 0.9 as high and wide, flat, blocky or long. A round pebble of each
+rock (#132's `Cobble`) stays among them, one in six of the granite's and one in four of the
+limestone's.
+
+**Sizes** (`channel::stones`, `channel::bank_stones`):
+- **In the water:** one stone in four is a boulder of 0.25 to 0.85 m in radius that breaks the
+  surface, as before. The rest are pebbles and cobbles of 0.08 to 0.38 m, mostly small, lying on
+  the bed. The chance of a stone past each point doubles to 6 % (over a third on the rapids):
+  4 552 stones against 4 216, of which 3 866 break the water against 4 059.
+- **Beside the water:** 0.08 to 0.33 m in radius instead of 0.3 to 1.1 (991 stones).
+- **On the steps' lips:** unchanged, a boulder about as tall as the step (#122), now in the
+  worn shapes.
+
+**Checks** (the first change verified by tiers, Tier 0: a CPU-only change to the island's
+props and procgen):
+- **The gate:** fmt, clippy, 261 tests.
+- **The sentinels** (meshlets, the ballad, the city, mesh path): 0 px against #132's batch.
+- **The island's captures** (recooked): the views by 175–197 px (ꟻLIP mean ≤ 0.0003), the shots
+  by 33–842 px apart from the `valley`, 232 577 px (0.0438): its stones and the water over and
+  around them. The A/B pairs and streamed against resident: 0 px.
+- **Left for Tier 2:** the fallback path, validation and timings (no GPU code or pass changed).
+
+Report: `reports/2026-10-02-133/`.

@@ -1053,10 +1053,12 @@ impl Stone {
 }
 
 /// The stones in the rivers' channels: past each point of a ribbon drawn in full (not fading),
-/// a stone with a chance of 3 %, rising to a third where the water falls 15 % (the rapids), at a
-/// random place across the middle 70 % of the water and along to the next point. Its radius is
-/// 0.25 to 0.85 m, at least 0.8 of the water's depth there, so most break the surface, and at
-/// most 0.45 of the half width, so the river flows past them. On three steps' lips in five
+/// a stone with a chance of 6 %, rising to over a third where the water falls 15 % (the rapids),
+/// at a random place across the middle 70 % of the water and along to the next point. One in four
+/// is a boulder 0.25 to 0.85 m in radius, at least 0.8 of the water's depth there, so it breaks
+/// the surface; the rest are pebbles and cobbles 0.08 to 0.38 m, mostly small, on the bed (#133:
+/// the water breaks the big chunks first, the owner's note). Each is at most 0.45 of the half
+/// width, so the river flows past them. On three steps' lips in five
 /// (#122), one or two boulders about as tall as the step ([`lip_stones`]). Every draw is a hash
 /// of `seed`, the ribbon and the point (the point's index before the steps; a lip's index,
 /// negated, for its stones) (D-016).
@@ -1082,7 +1084,7 @@ pub fn stones(
             let key = p.key as i32;
             let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, key, salt)));
             let fall = f64::from(p.grade);
-            if draw(0) >= 0.03 + 0.3 * smoothstep(0.03, 0.15, fall) {
+            if draw(0) >= 0.06 + 0.3 * smoothstep(0.03, 0.15, fall) {
                 continue;
             }
             let half = f64::from(p.half_width);
@@ -1095,7 +1097,12 @@ pub fn stones(
             let q = offset(&p, t * (dx * dx + dy * dy).sqrt(), across);
             let u = across / half;
             let depth = f64::from(p.depth) * (1.0 - u * u);
-            let radius = (0.25 + 0.6 * draw(3)).max(0.8 * depth).min(0.45 * half);
+            let radius = if draw(6) < 0.25 {
+                (0.25 + 0.6 * draw(3)).max(0.8 * depth)
+            } else {
+                0.08 + 0.3 * draw(3) * draw(3)
+            }
+            .min(0.45 * half);
             out.push(Stone {
                 position: q,
                 bed: channels.height_at(height, q[0], q[1]),
@@ -1162,8 +1169,9 @@ fn lip_stones(
 
 /// The stones beside the steeper rivers' water (#118): on the gravel of their floors, past each
 /// point drawn in full a stone with a chance of up to two fifths where the water falls 6 % or
-/// more (none under 2.5 %), on either side, half a metre to three metres past the water's edge,
-/// 0.3 to 1.1 m across. They stand clear of the water. Every draw is a hash of `seed`, the
+/// more (none under 2.5 %), on either side, half a metre to three metres past the water's edge:
+/// pebbles and cobbles 0.08 to 0.33 m in radius, mostly small (#133: a big stone there would
+/// have rolled into the water). They stand clear of the water. Every draw is a hash of `seed`, the
 /// ribbon and the point (D-016).
 pub fn bank_stones(
     ribbons: &[Ribbon],
@@ -1194,7 +1202,7 @@ pub fn bank_stones(
             out.push(Stone {
                 position: q,
                 bed: channels.height_at(height, q[0], q[1]),
-                radius: 0.3 + 0.8 * draw(4) * draw(4),
+                radius: 0.08 + 0.25 * draw(4) * draw(4),
                 level: f64::from(p.level) + f64::from(next.level - p.level) * t,
                 turn: draw(5),
                 pick: (draw(6) * 65536.0) as u32,
@@ -1435,7 +1443,7 @@ mod tests {
                 across >= half + 0.5 - 1e-6 && across <= half + 3.0 + 1e-6,
                 "{across}"
             );
-            assert!((0.3..=1.1).contains(&s.radius));
+            assert!((0.08..=0.33).contains(&s.radius));
         }
         // The fine heights match the carve, and they are the field's on the refined region's
         // outline (where the coarse cells meet it).

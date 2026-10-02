@@ -2180,7 +2180,7 @@ impl CityMaterials {
                 };
                 self.by_prop.insert(name, rock);
             }
-            for (i, (name, _)) in ISLAND_COBBLES.iter().enumerate() {
+            for (i, (name, _, _)) in ISLAND_COBBLES.iter().enumerate() {
                 let rock = if i < GRANITE_COBBLES {
                     granite
                 } else {
@@ -3675,31 +3675,36 @@ const ISLAND_STONES: [(&str, StoneShape, [f32; 3]); 16] = [
 /// How many of [`ISLAND_STONES`] are granite (the first ones).
 const GRANITE_STONES: usize = 8;
 
-/// The cobbles in the island's rivers (#132), granite's then limestone's: the name and the half-width
-/// across (their length is a metre, their height 0.75 m, the water's model of a river's stone).
-const ISLAND_COBBLES: [(&str, f32); 6] = [
-    ("granite-cobble-1", 1.0),
-    ("granite-cobble-2", 0.85),
-    ("granite-cobble-3", 0.7),
-    ("granite-cobble-4", 0.9),
-    ("limestone-cobble-1", 0.95),
-    ("limestone-cobble-2", 0.8),
+/// The stones in the island's rivers (#132, #133), granite's then limestone's: the name, the shape
+/// and the half-size, a metre long. Mostly chunks the water broke off, of any proportions, their
+/// edges worn round; a round pebble among them.
+const ISLAND_COBBLES: [(&str, StoneShape, [f32; 3]); 10] = [
+    ("granite-worn-1", StoneShape::Worn, [1.0, 0.7, 0.8]),
+    ("granite-worn-2", StoneShape::Worn, [1.0, 0.5, 0.7]),
+    ("granite-worn-3", StoneShape::Worn, [1.0, 0.8, 0.9]),
+    ("granite-worn-4", StoneShape::Worn, [1.0, 0.45, 0.55]),
+    ("granite-worn-5", StoneShape::Worn, [1.0, 0.65, 0.6]),
+    ("granite-pebble", StoneShape::Cobble, [1.0, 0.75, 0.85]),
+    ("limestone-worn-1", StoneShape::Worn, [1.0, 0.55, 0.8]),
+    ("limestone-worn-2", StoneShape::Worn, [1.0, 0.7, 0.65]),
+    ("limestone-worn-3", StoneShape::Worn, [1.0, 0.4, 0.75]),
+    ("limestone-pebble", StoneShape::Cobble, [1.0, 0.75, 0.8]),
 ];
 
 /// How many of [`ISLAND_COBBLES`] are granite (the first ones).
-const GRANITE_COBBLES: usize = 4;
+const GRANITE_COBBLES: usize = 6;
 
-/// The props of [`ISLAND_COBBLES`], a metre in radius.
+/// The props of [`ISLAND_COBBLES`], a metre long.
 fn island_cobble_props(normals: f32) -> Vec<PropSpec> {
     ISLAND_COBBLES
         .iter()
         .enumerate()
-        .map(|(i, &(name, across))| PropSpec {
+        .map(|(i, &(name, shape, size))| PropSpec {
             name: name.to_owned(),
             kind: PropKind::Stone(Stone {
                 seed: 150 + i as u64,
-                shape: StoneShape::Cobble,
-                size: [1.0, 0.75, across],
+                shape,
+                size,
                 segments: 64,
                 normal_weight: normals,
             }),
@@ -4589,10 +4594,10 @@ fn build_island(
             _ => None,
         })
         .collect();
-    let cobble = |names: &[(&str, f32)]| -> Vec<MeshId> {
+    let cobble = |names: &[(&str, StoneShape, [f32; 3])]| -> Vec<MeshId> {
         names
             .iter()
-            .map(|(name, _)| ids[props.iter().position(|p| p.name == *name).expect("cobble")])
+            .map(|(name, _, _)| ids[props.iter().position(|p| p.name == *name).expect("cobble")])
             .collect()
     };
     let cobbles = (!args.no_rock_sites).then(|| {

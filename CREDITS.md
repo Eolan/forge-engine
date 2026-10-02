@@ -83,6 +83,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Superquadrics.** Alan H. Barr, "Superquadrics and Angle-Preserving Transformations", *IEEE
   Computer Graphics and Applications* 1(1), 1981: the superellipsoids the island's stones are
   shaped from, rounder for granite, squarer for limestone (`forge_geom::stone`, #130).
+- **Smooth minimum.** Inigo Quilez, ["Smooth Minimum"](https://iquilezles.org/articles/smin/),
+  2013: the quadratic polynomial smooth minimum that wears
+  the edges of the rivers' broken stones round (`forge_geom::stone`, #133).
 - **The visibility buffer.**
   - Christopher A. Burns, Warren A. Hunt, "The Visibility Buffer: A Cache-Friendly Approach
     to Deferred Shading", JCGT 2013.
