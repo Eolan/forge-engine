@@ -20,6 +20,7 @@ forge-app = { path = "crates/forge-app" }
 forge-procgen = { path = "crates/forge-procgen" }
 forge-render = { path = "crates/forge-render" }
 forge-world = { path = "crates/forge-world" }
+forge-physics = { path = "crates/forge-physics" }
 # The demos the island demo builds on
 city-blocks = { path = "demos/city-blocks" }
 
@@ -64,7 +65,8 @@ rayon = "1.12"
 
 [workspace.lints.rust]
 # `unsafe` is allowed only where a crate opts in explicitly (`forge-task` for scoped lifetimes,
-# the GPU crates for Vulkan). Every other crate forbids it at the crate root.
+# the GPU crates for Vulkan, `forge-physics` for Jolt). Every other crate forbids it at the crate
+# root.
 unsafe_code = "warn"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"

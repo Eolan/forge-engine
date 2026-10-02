@@ -1,0 +1,151 @@
+//! The C layer of `cpp/forge_jolt.h`, bound by hand: every struct mirrors its C twin field for
+//! field, and the `layout` test checks the sizes against the compiler's.
+
+#![allow(missing_docs)]
+
+#[repr(C)]
+pub struct FjWorld {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+pub struct FjShape {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FjWorldDesc {
+    pub max_bodies: u32,
+    pub max_body_pairs: u32,
+    pub max_contact_constraints: u32,
+    pub threads: u32,
+    pub gravity: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FjBodyDesc {
+    pub shape: *const FjShape,
+    pub position: [f64; 3],
+    pub rotation: [f32; 4],
+    pub linear_velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub friction: f32,
+    pub restitution: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub mass: f32,
+    pub user_data: u64,
+    pub motion: u8,
+    pub ccd: u8,
+    pub allow_sleep: u8,
+    pub activate: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FjRayHit {
+    pub body: u32,
+    pub fraction: f32,
+    pub normal: [f32; 3],
+}
+
+#[cfg(test)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FjLayout {
+    pub world_desc: u32,
+    pub body_desc: u32,
+    pub ray_hit: u32,
+}
+
+unsafe extern "C" {
+    #[cfg(test)]
+    pub fn fj_layout() -> FjLayout;
+    pub fn fj_init();
+
+    pub fn fj_shape_box(half_extent: *const f32, convex_radius: f32, density: f32) -> *mut FjShape;
+    pub fn fj_shape_sphere(radius: f32, density: f32) -> *mut FjShape;
+    pub fn fj_shape_capsule(half_height: f32, radius: f32, density: f32) -> *mut FjShape;
+    pub fn fj_shape_cylinder(
+        half_height: f32,
+        radius: f32,
+        convex_radius: f32,
+        density: f32,
+    ) -> *mut FjShape;
+    pub fn fj_shape_convex_hull(
+        points: *const f32,
+        count: u32,
+        max_convex_radius: f32,
+        density: f32,
+    ) -> *mut FjShape;
+    pub fn fj_shape_mesh(
+        vertices: *const f32,
+        vertex_count: u32,
+        indices: *const u32,
+        triangle_count: u32,
+    ) -> *mut FjShape;
+    pub fn fj_shape_offset(
+        inner: *const FjShape,
+        position: *const f32,
+        rotation: *const f32,
+    ) -> *mut FjShape;
+    pub fn fj_shape_release(shape: *const FjShape);
+
+    pub fn fj_world_new(desc: *const FjWorldDesc) -> *mut FjWorld;
+    pub fn fj_world_free(world: *mut FjWorld);
+    pub fn fj_world_optimize_broad_phase(world: *mut FjWorld);
+    pub fn fj_world_step(world: *mut FjWorld, dt: f32, collision_steps: i32) -> u32;
+    pub fn fj_world_active_bodies(world: *const FjWorld) -> u32;
+
+    pub fn fj_body_add(world: *mut FjWorld, desc: *const FjBodyDesc) -> u32;
+    pub fn fj_body_remove(world: *mut FjWorld, body: u32);
+
+    pub fn fj_bodies_transforms(
+        world: *const FjWorld,
+        bodies: *const u32,
+        count: u32,
+        positions: *mut f64,
+        rotations: *mut f32,
+    );
+    pub fn fj_bodies_velocities(
+        world: *const FjWorld,
+        bodies: *const u32,
+        count: u32,
+        linear: *mut f32,
+        angular: *mut f32,
+    );
+    pub fn fj_bodies_active(world: *const FjWorld, bodies: *const u32, count: u32, active: *mut u8);
+
+    pub fn fj_body_add_impulse(world: *mut FjWorld, body: u32, impulse: *const f32);
+    pub fn fj_body_add_impulse_at(
+        world: *mut FjWorld,
+        body: u32,
+        impulse: *const f32,
+        point: *const f64,
+    );
+    pub fn fj_body_add_force(world: *mut FjWorld, body: u32, force: *const f32);
+    pub fn fj_body_set_velocity(
+        world: *mut FjWorld,
+        body: u32,
+        linear: *const f32,
+        angular: *const f32,
+    );
+    pub fn fj_body_set_transform(
+        world: *mut FjWorld,
+        body: u32,
+        position: *const f64,
+        rotation: *const f32,
+    );
+
+    pub fn fj_world_cast_ray(
+        world: *const FjWorld,
+        origin: *const f64,
+        direction: *const f32,
+        hit: *mut FjRayHit,
+    ) -> i32;
+
+    pub fn fj_world_save_state(world: *mut FjWorld, size: *mut usize) -> *const u8;
+    pub fn fj_world_restore_state(world: *mut FjWorld, data: *const u8, size: usize) -> i32;
+}

@@ -64,8 +64,9 @@ takes the lock `%TEMP%/forge-gpu.lock`; take it by hand for any other demo run.
 
 ## Conventions
 
-- Rust edition 2024, `unsafe` only in `forge-gpu` with a `// SAFETY:` comment, every public
-  item documented (`missing_docs` is a warning we keep at zero).
+- Rust edition 2024, `unsafe` only in `forge-gpu`, `forge-task` and `forge-physics` (Jolt) with a
+  `// SAFETY:` comment, every public item documented (`missing_docs` is a warning we keep at
+  zero).
 - Coordinates: right-handed, +Y up, −Z forward, 1 unit = 1 metre, reversed-Z infinite
   projection; f64 frames and camera-relative f32 (D-004). Determinism rules in D-016.
 - Shaders: one Slang file per pass in `shaders/`, buffers by device address (`T*` in a

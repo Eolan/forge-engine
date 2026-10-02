@@ -1,0 +1,201 @@
+//! The binding's checks, and the determinism tests of `docs/research/physics-fluids.md` §6: the
+//! same run twice, at several thread counts, replayed from a saved state, and on Windows and
+//! Linux (CI runs both against one constant).
+
+use super::*;
+
+/// A pile to drop: 256 bodies (boxes, balls, cylinders, hulls) in four layers of 8 × 8 over a
+/// 100 m ground, each turned by a rotation made without trigonometry (the platforms' `sin`
+/// differ in their last bits; a square root does not).
+struct Pile {
+    world: World,
+    bodies: Vec<BodyId>,
+    _shapes: Vec<Shape>,
+}
+
+fn mix(mut x: u64) -> u64 {
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// A number in [-1, 1) from `x`, exactly.
+fn unit(x: u64) -> f32 {
+    (mix(x) >> 40) as f32 / (1u64 << 23) as f32 - 1.0
+}
+
+fn pile(threads: u32) -> Pile {
+    let mut world = World::new(&WorldDesc {
+        threads,
+        ..WorldDesc::default()
+    });
+    let ground = Shape::cuboid(Vec3::new(50.0, 0.5, 50.0), 0.05, 0.0).unwrap();
+    world
+        .add_body(&BodyDesc::fixed(&ground, DVec3::new(0.0, -0.5, 0.0)))
+        .unwrap();
+    // A rock: twelve points about their mean, so the body's origin lies inside it.
+    let points: Vec<Vec3> = (0..12)
+        .map(|k| Vec3::new(unit(100 + 3 * k), unit(101 + 3 * k), unit(102 + 3 * k)) * 0.4)
+        .collect();
+    let mean = points.iter().sum::<Vec3>() / points.len() as f32;
+    let rock: Vec<Vec3> = points.iter().map(|&p| p - mean).collect();
+    let shapes = vec![
+        Shape::cuboid(Vec3::splat(0.4), 0.05, 600.0).unwrap(),
+        Shape::sphere(0.35, 1000.0).unwrap(),
+        Shape::cylinder(0.44, 0.3, 0.05, 400.0).unwrap(),
+        Shape::convex_hull(&rock, 0.05, 2600.0).unwrap(),
+        ground,
+    ];
+    let mut bodies = Vec::new();
+    for layer in 0..4u64 {
+        for j in 0..8u64 {
+            for i in 0..8u64 {
+                let k = (layer * 8 + j) * 8 + i;
+                let rotation = Quat::from_xyzw(
+                    unit(4 * k),
+                    unit(4 * k + 1),
+                    unit(4 * k + 2),
+                    unit(4 * k + 3),
+                )
+                .normalize();
+                let desc = BodyDesc {
+                    rotation,
+                    friction: 0.5,
+                    restitution: 0.1,
+                    // Rolling resistance, roughly: no ball rolls on for ever.
+                    angular_damping: 0.3,
+                    ..BodyDesc::dynamic(
+                        &shapes[(k % 4) as usize],
+                        DVec3::new(
+                            (i as f64 - 3.5) * 1.3,
+                            2.0 + layer as f64 * 1.6,
+                            (j as f64 - 3.5) * 1.3,
+                        ),
+                    )
+                };
+                bodies.push(world.add_body(&desc).unwrap());
+            }
+        }
+    }
+    world.optimize_broad_phase();
+    Pile {
+        world,
+        bodies,
+        _shapes: shapes,
+    }
+}
+
+impl Pile {
+    fn run(&mut self, steps: u32) {
+        for _ in 0..steps {
+            self.world.step(1.0 / 60.0, 1).unwrap();
+        }
+    }
+
+    fn hash(&self) -> u64 {
+        let mut transforms = Vec::new();
+        self.world.transforms(&self.bodies, &mut transforms);
+        state_hash(&transforms)
+    }
+}
+
+/// The pile's hash after five seconds, on every platform (CI's Windows and Linux runners).
+const PILE_HASH_300: u64 = 0x3e65_693b_8892_8ad9;
+
+#[test]
+fn the_c_structs_and_their_rust_twins_agree() {
+    // SAFETY: no arguments.
+    let c = unsafe { ffi::fj_layout() };
+    assert_eq!(
+        c,
+        ffi::FjLayout {
+            world_desc: size_of::<ffi::FjWorldDesc>() as u32,
+            body_desc: size_of::<ffi::FjBodyDesc>() as u32,
+            ray_hit: size_of::<ffi::FjRayHit>() as u32,
+        }
+    );
+}
+
+#[test]
+fn the_same_run_twice_gives_the_same_hash() {
+    let (mut a, mut b) = (pile(3), pile(3));
+    a.run(300);
+    b.run(300);
+    assert_eq!(a.hash(), b.hash());
+}
+
+#[test]
+fn the_hash_does_not_depend_on_the_threads() {
+    let hashes: Vec<u64> = [0, 1, 3, 7]
+        .iter()
+        .map(|&threads| {
+            let mut p = pile(threads);
+            p.run(300);
+            p.hash()
+        })
+        .collect();
+    assert!(hashes.iter().all(|&h| h == hashes[0]), "{hashes:x?}");
+}
+
+#[test]
+fn the_hash_is_the_same_on_every_platform() {
+    let mut p = pile(3);
+    p.run(300);
+    assert_eq!(p.hash(), PILE_HASH_300, "{:#x}", p.hash());
+}
+
+#[test]
+fn a_restored_state_replays_the_same_steps() {
+    let mut p = pile(3);
+    p.run(100);
+    let saved = p.world.save_state();
+    p.run(200);
+    let straight = p.hash();
+    p.world.restore_state(&saved).unwrap();
+    p.run(200);
+    assert_eq!(p.hash(), straight);
+}
+
+#[test]
+fn the_pile_comes_to_rest_on_the_ground() {
+    let mut p = pile(3);
+    p.run(1800);
+    let mut transforms = Vec::new();
+    p.world.transforms(&p.bodies, &mut transforms);
+    let lowest = transforms
+        .iter()
+        .map(|t| t.position.y)
+        .fold(f64::INFINITY, f64::min);
+    assert!(lowest > 0.0, "a body sank to {lowest}");
+    // The boxes and the rocks sleep; a ball or a cylinder may still roll, slowly (Jolt has no
+    // rolling resistance: its spin's damping stands in for it).
+    let mut awake = Vec::new();
+    p.world.awake(&p.bodies, &mut awake);
+    let flat_awake = awake
+        .iter()
+        .enumerate()
+        .filter(|&(k, &a)| a && (k % 4 == 0 || k % 4 == 3))
+        .count();
+    assert_eq!(flat_awake, 0, "boxes and rocks asleep after 30 s");
+    assert!(p.world.active_bodies() < 32, "{}", p.world.active_bodies());
+}
+
+#[test]
+fn a_ray_down_meets_the_ground() {
+    let p = pile(0);
+    let hit = p
+        .world
+        .cast_ray(DVec3::new(30.0, 10.0, 30.0), Vec3::new(0.0, -20.0, 0.0))
+        .expect("the ground");
+    assert!((hit.fraction - 0.5).abs() < 1e-4, "{}", hit.fraction);
+    assert!(hit.normal.abs_diff_eq(Vec3::Y, 1e-4), "{}", hit.normal);
+}
+
+#[test]
+fn a_hull_of_one_point_is_refused() {
+    let point = [Vec3::ONE; 4];
+    assert_eq!(
+        Shape::convex_hull(&point, 0.0, 1000.0).err(),
+        Some(PhysicsError::ShapeRefused)
+    );
+}

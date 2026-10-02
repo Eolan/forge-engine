@@ -705,6 +705,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-physics"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "glam",
+ "thiserror 2.0.21",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "forge-procgen"
 version = "0.1.0"
 dependencies = [
