@@ -73,7 +73,8 @@ struct ResolvePush
     uint bloom;          // the bloom chain's top level (sampled index), 0xFFFFFFFF for none (bloom.slang)
     float bloom_strength; // how much of the shown image is bloom
     Output output;       // the display's encoding (tonemap.slang)
-    uint pad;
+    uint reactive;       // the splashes' reactive mask (sampled index, #107), 0xFFFFFFFF for none:
+                         // at least that share of the pixel comes from this frame
     ToneTables tables;   // what the ACES 2.0 curves read (tonemap.slang)
 };
 
@@ -238,6 +239,8 @@ float3 resolve_color(Varyings input)
 
     float alpha = saturate(resolve_push.blend * lerp(0.4, 1.0, nearest_weight));
     alpha = max(alpha, saturate(length(motion * size) / 48.0));
+    if (resolve_push.reactive != 0xFFFFFFFFu)
+        alpha = max(alpha, g_sampled_images_r[NonUniformResourceIndex(resolve_push.reactive)].Load(int3(int2(input.position.xy), 0)));
     float3 result = expand(lerp(history, current, alpha));
     if (any(isnan(result)))
         result = expand(current);

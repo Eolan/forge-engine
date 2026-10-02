@@ -823,6 +823,23 @@ queue, 1 000 barrels with and without `--no-wakes`, two rounds, 1 500 frames eac
 - `wakes/clear` 0.004 ms. The compute passes take 0.13 ms and the frame 0.08 ms more: the
   async queue hides some of it.
 
+**Splashes** (#107's third part, 2026-10-02): ballistic spray, emitted and moved on the compute
+queue and drawn after the water. 1 000 barrels with and without `--no-splashes`, two rounds,
+1 500 frames each, 2560 × 1440.
+
+| View | `splashes/draw` | `splashes/emit` | `splashes/advance` | drops alive at most |
+|---|---|---|---|---|
+| the dropped barrel, over its 10 s cycle (`2160.0,30.55,-1234.0,0.0,-8.5`) | 0.010 ms | 0.001 | 0.003 | 1 447 |
+| the highest step from 8 m (`283.9,31.1,3133.0,-29.3,-8`) | 0.032 ms | 0.004 | 0.003 | 4 830 |
+
+- **The frame's total moves through the async overlap, not the splashes' work.** It reads
+  3.47–3.48 → 3.31 ms from the barrel and 3.66 → 3.64 from the step. With the splashes' compute
+  passes first on the compute queue, the probes' rays overlap other graphics passes
+  (`gi/probe rays` 0.60 → 0.42 ms, `shading/layered` 1.08 → 0.96, `temporal/TAA resolve`
+  0.15 → 0.24).
+- **Serially** (`FORGE_ASYNC=0`) the frame stays within the runs' spread, and the TAA resolve
+  does not change with the reactive mask (0.146–0.171 ms either way).
+
 **The contour's third layer** (#111, 2026-10-01). `FORGE_SHADER_STATS=resolve_layered`
 (`docs/PROCESS.md`) gives the layered pass's registers:
 - With the sand's contour: 127 registers, no spill.

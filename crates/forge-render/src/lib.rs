@@ -26,6 +26,7 @@ pub mod precision;
 pub mod probes;
 pub mod raytrace;
 pub mod sky;
+pub mod splashes;
 pub mod starfield;
 pub mod streaming;
 pub mod taa;
@@ -52,6 +53,7 @@ pub use meshlet::{
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
+pub use splashes::{SPLASH_CAPACITY, SplashParams, SplashSource, SplashStats, WaterSplashes};
 pub use starfield::Starfield;
 pub use streaming::{Residency, StartView, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};

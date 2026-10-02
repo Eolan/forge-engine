@@ -739,6 +739,805 @@ water talk has a negative answer (§9).
 
 ---
 
+## 7. Splashes and spray
+
+> Written 2026-10-02 for the splashes that follow the wakes (#107). It is a companion to
+> `physics-fluids.md` §5, which describes D-009's near tier ("GPU particles, visual only, spawned
+> where the heightfield fails", after Chentanez & Müller 2010), and to §2–§3 above (the shore's
+> breaking trains and the steep reaches' steps). Every citation was checked that day with
+> WebSearch and WebFetch only. Each entry's grade is listed under
+> [Verification notes (splashes)](#verification-notes-splashes). What could not be found is under
+> [Checked and left out (splashes)](#checked-and-left-out-splashes). Chentanez & Müller 2010 and
+> Yuksel 2007 are already in this document and in `physics-fluids.md`. Here they are read for
+> their splash rules only.
+
+The question is how Forge should make the water splash when:
+
+- an object is dropped into a lake or the sea,
+- the towed barrel's bow pushes through it at 2.5 m/s,
+- a step of a steep reach plunges into its pool,
+- a wave breaks on the shore.
+
+The renderer is the one it has: a visibility buffer, the render graph's async compute queue, bindless images, and HDR under TAA, which the owner watches for shimmer.
+
+The short answer has five parts:
+
+- **Shipped games use ballistic particles.** None of the shipped titles documented here uses a fluid solver for splashes. They use ballistic GPU particles that read the water's fields, baked surface effects, or (Crimson Desert, 2026) a 2D particle shallow water near the camera. Epic's own guidance keeps 3D liquid solvers for cinematics.
+- **The physics gives usable emission rules:**
+  - an impact makes a crown and a cavity only above a few metres per second;
+  - its jet rises about 2√(R/g) after impact, whatever the drop height;
+  - a bow wave stands U²/2g high and starts to plunge near a diameter Froude number of 1.5;
+  - a falling nappe stays compact until its break-up length, 6 q^0.32 m, which sets how much of a fall turns to spray and mist.
+- **The research recipe is still the one to follow.** Chentanez & Müller 2010 gives spray, splash and foam particles with drag, emitted at breaking crests, waterfall faces and moving bodies, and depositing foam where they land.
+- **TAA is the hard part.** Sub-pixel droplets must be clamped to a pixel and faded by area. Fast droplets should become velocity-aligned streaks. The spray must write a reactive mask that the TAA (and DLSS) reads. Mist belongs in a volume, not in stacked sprites. And the draw order must not change from frame to frame.
+
+> **State of the art in five sentences.** Real-time splashes are point masses with gravity and
+> drag, born where a height field cannot represent the liquid (steep rising crests, waterfall
+> faces, triangles of a body sweeping through the surface faster than a threshold), carrying
+> velocities derived from the relative velocity of the impact, and dying into foam and ripples
+> where they land (Chentanez & Müller 2010; Ihmsen et al. 2012 for the spray–foam–bubble life
+> cycle). Shipped engines expose this as generic GPU particle systems that can sample the water
+> (Unreal's Niagara water data interface, HDRP's VFX Graph sampling, Crest's particle inputs into
+> foam and dynamic waves), with volumetric fluid templates kept for cinematics. On the GPU the
+> update is negligible next to the draw: 320 000 rain drops cost under 0.1 ms to update and
+> 0.4–4 ms to draw in Assassin's Creed IV. The look is set by the emission physics: the cavity
+> threshold and the pinch-off clock of water entry, the stagnation head of a bow wave, and the
+> break-up length of a falling jet. Under TAA, small transparent particles need help: a reactive
+> mask (FSR 2, Streamline's hints), a minimum projected size with an alpha fade (Persson's
+> phone-wire AA), velocity-aligned streaks, soft depth fades, and order-independent or
+> order-stable blending.
+
+### 7.1 What shipped games and engines do
+
+**Nigel Ang, Andrew Catling, Francesco Cifariello Ciardi, Valentine Kozin (Rare). "The Technical
+Art of Sea of Thieves." *SIGGRAPH 2018 Talks*.** [talk] [still-current]
+<https://history.siggraph.org/wp-content/uploads/2022/09/2018-Talks-Ang_The-Technical-Art-of-Sea-of-Thieves.pdf>
+(DOI 10.1145/3214745.3214820)
+
+The talk documents the water's secondary detail, not a splash system:
+
+- Foam is added around anything that cuts the surface. It is found by comparing depths inside a camera-centred window, then blurred with feedback so it spreads and softens.
+- Water on a ship's deck is a GPU shallow-water simulation based on Mei et al. 2007.
+- Waterfalls and streams project the camera's depth into their own simulation's texture space. A character then occludes the falling water and gets foam at its feet.
+
+No spray particles are described.
+
+*Bearing:* the cheapest coupling in a shipped game is foam written where objects meet the water, in a window around the camera, decayed and blurred over frames. That is the foam-deposit image Forge's droplets should write when they land (§7.5).
+
+**Hugh Malan (Guerrilla). "Rendering Water in Horizon Forbidden West." SIGGRAPH 2022, *Advances in
+Real-Time Rendering in Games*.** [talk] [still-current]
+<https://advances.realtimerendering.com/s2022/SIGGRAPH2022-Advances-Water-Malan.pdf>
+
+Cited in §2 for the breaking waves. Two parts of it bear on splashes:
+
+- **Waterfall impacts are baked surface effects.** They come from a library of localized 2D effects, baked from Houdini simulations, placed procedurally along the rivers and then refined by artists.
+- **Mesh density limits splashes.** The surface mesh's triangle density limited what deformation could carry. Simulations with high splashes had to be toned down to hide polygon edges, and impacts from the machines were not done as deformation at all.
+
+The speaker names surface foam as the next thing to improve. He points to Weta's whitewater paper (Wretborn et al.) as the direction.
+
+*Bearing:* a deformed surface cannot carry a splash. The crown and the jet must be particles or sheet geometry above the surface. The surface's share of the event is a ring of waves (Forge's wakes) plus foam. A baked or procedural ring at each fall's foot is the surface half of the plunge emitter below.
+
+**Ubisoft Singapore's Skull and Bones team. "Water, Water Everywhere: A Q&A with Ubisoft's Skull
+and Bones team." *Game Developer*.** [blog] [still-current]
+<https://www.gamedeveloper.com/design/water-water-everywhere-a-q-a-with-ubisoft-s-i-skull-and-bones-i-team>
+
+The art and game directors treat ocean spray as a gameplay read:
+
+- spray thrown up by the hull drifts with the wind;
+- droplets on the camera drift the same way;
+- the sails turn with that same wind.
+
+They warn that pushing the feedback further makes the look cartoony. No technique or particle count is given.
+
+*Bearing:* the spray's drift must come from the same wind as everything else (D-019's weather state), so a gust reads the same on sails, grass and spray. In the particle update that is a drag term towards the wind's velocity.
+
+**Bartłomiej Wroński (Ubisoft Montréal). "Assassin's Creed IV: Black Flag — Road to Next-Gen
+Graphics." GDC 2014.** [talk] [still-current]
+<https://bartwronski.com/wp-content/uploads/2014/03/ac4_gdc.pdf> (session
+<https://www.gdcvault.com/play/1020397/Assassin-s-Creed-IV-Black>)
+
+Cited in §6 for the ocean lineage. Its procedural rain is the one shipped GPU particle system in this survey with published per-pass costs. Drops are simulated in compute in a 3 × 3 grid of clusters around the camera, which avoids drops popping in. The model has:
+
+- random mass and size per drop;
+- wind and gravity;
+- a 128 × 128 top-down occlusion map;
+- collisions against the depth buffer;
+- a second population of bounced drops.
+
+The published costs per pass:
+
+| Pass | Cost |
+|---|---|
+| Updating up to 320 000 drops | under 0.1 ms |
+| Screen-space collision | 0.2 ms |
+| Bounced drops | under 0.05 ms |
+| Drawing through a geometry shader | 0.4–4.0 ms |
+
+The slides conclude that the compute update is negligible, that geometry shaders were the bottleneck, and that more particle systems should move to the GPU.
+
+*Bearing:* this is the cost model for Forge's spray. Simulation is free at tens of thousands of particles; the draw is the budget. So the effort goes into:
+
+- small sprites;
+- no geometry shader (vertex pulling instead);
+- mist kept out of stacked sprites.
+
+Bounced drops are the pattern for a second generation of particles born where the first ones land.
+
+**Matt Vainio (Sucker Punch). "How stunning visual effects bring Ghost of Tsushima to life."
+*PlayStation Blog*, 12 January 2021.** [blog] [still-current]
+<https://blog.playstation.com/2021/01/12/how-stunning-visual-effects-bring-ghost-of-tsushima-to-life/>
+
+The game's particles are expression-driven, from a system Bill Rockenbeck wrote for inFAMOUS Second Son. They read the world's data streams:
+
+- the global wind and the player's own wind;
+- character displacement;
+- terrain and water position;
+- wetness and time of day.
+
+In water, blood disperses into clouds that move with the current. The floating lanterns are themselves particles that bob on the water and respond to the player's displacement.
+
+*Bearing:* splash particles are only as good as the fields they can read. Forge's update must sample, bindlessly:
+
+- the sea's displacement cascades;
+- the wakes field;
+- the rivers' level and flow;
+- the wind.
+
+Then droplets land on the moving surface, and their foam drifts with the river.
+
+**Wataru Ikeda (Naughty Dog). "Creative and Experimental VFX in 'The Last of Us Part II'." GDC
+2021.** [talk] [recent]
+<https://gdcvault.com/play/1027072/Creative-and-Experimental-VFX-in>
+
+A VFX-art talk on three techniques: edge ripples where objects meet the water, the curl wave at the beach with its splashes and foam, and a depth-of-field treatment for small particles. Only the session description could be read.
+
+*Bearing:* small particles under a temporal pipeline are a known problem that shipped games treat specially. Forge's answer is the size clamp and the reactive mask of §7.4. This talk is the one to watch before building the shore-crest emitter.
+
+**Pearl Abyss. Crimson Desert's water (BlackSpace Engine): GDC 2025 showcase as reported by 80.lv
+(25 March 2025); a Digital Foundry interview as reported by Sportskeeda (March 2026).** [blog]
+[recent]
+<https://80.lv/articles/pearl-abyss-demonstrated-crimson-desert-s-blackspace-engine-tech-advancements> ·
+<https://tech.sportskeeda.com/gaming-news/crimson-desert-water-tech-might-dethrone-xbox-game-studios-finest>
+
+The engine pairs an FFT ocean with a shallow-water simulation. Per the developer, as reported:
+
+- the near water is a particle simulation solving the shallow-water equations;
+- it runs up to 250 000 particles near the camera;
+- the particles collide with the terrain's height, the shoreline's distance fields and each other;
+- so water piles up against obstacles, rises and falls back.
+
+Secondary sources only.
+
+*Bearing:* this is the most recent shipped data point for a near-camera particle budget, a quarter of a million on 2026 consoles. It is also a reminder that D-009's near tier can be a 2D particle shallow water rather than a 3D solver. Forge's splashes stay an order of magnitude below that count.
+
+**Epic Games. Niagara Fluids reference; `UNiagaraDataInterfaceWater` (Water plugin); Material
+properties (Responsive AA, Output Velocity). Unreal Engine 5 documentation.** [docs]
+[still-current]
+<https://dev.epicgames.com/documentation/en-us/unreal-engine/niagara-fluids-reference-in-unreal-engine> ·
+<https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Plugins/Water/UNiagaraDataInterfaceWater> ·
+<https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-engine-material-properties>
+
+- **Splashes are ordinary Niagara particles.** The experimental Water plugin gives Niagara a data interface that samples a water body at a point (`GetWaterDataAtPoint`, the wave parameter table, the depth).
+- **Fluid templates are mostly for cinematics.** Niagara Fluids ships 2D and 3D gas and liquid templates and a shallow-water one. Epic's guidance: 2D simulations suit games; 3D ones cost memory and GPU time and are for hero effects and cinematics, or are baked to flipbooks.
+- **Two material flags address TAA.** Responsive AA switches small moving features such as particles to an AA path that keeps them from being smeared away. Output Velocity lets translucent materials write motion vectors.
+
+*Bearing:* the most widely used engine ships splashes as particles that read the water, not as a fluid solver. Forge's design is the same with its own fields. The two flags are the two TAA knobs Forge's spray needs (§7.4).
+
+**Unity Technologies. "Interaction between the water system and the VFX Graph", HDRP 17.2
+documentation; Adrien de Tocqueville, "The new Water System in Unity 2022 LTS and 2023.1", Unity
+blog, 28 June 2023.** [docs] [still-current]
+<https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.2/manual/water-vfx-interaction.html> ·
+<https://unity.com/blog/engine-platform/new-hdrp-water-system-in-2022-lts-and-2023-1>
+
+HDRP's water has no splash system of its own:
+
+- The VFX Graph can sample the surface's height, normal and current at a point.
+- Only one surface per graph can be sampled, bound globally, because the surface lives in a scene and the graph is an asset.
+- Foam generators make white water behind boats, waves and rocks, and deformers make local waves.
+
+The 2023 blog says the team was concentrating on stability, with no new features planned.
+
+*Bearing:* this is Unreal's split again: a surface system plus generic particles that query it, with the same two coupling primitives Forge needs (a foam source and a local wave source). Unity's one-surface limit is what Forge avoids by binding the sea, the wakes field and the rivers bindlessly.
+
+**Wave Harmonic. Crest Water 5 manual, "Water Inputs"; API, `SphereWaterInteraction`.** [docs]
+[still-current]
+<https://docs.crest.waveharmonic.com/Manual/Basics/WaterInputs.html> ·
+<https://docs.crest.waveharmonic.com/API/WaveHarmonic.Crest/SphereWaterInteraction.html>
+
+- Crest's data layers (animated waves, dynamic waves, foam, flow, level, clip, absorption, scattering and others) accept inputs from any renderer: meshes, trails, lines and particle systems.
+- Objects make waves through spheres placed under them. Each sphere's force has a weight, plus a separate weight for vertical motion.
+
+*Bearing:* the coupling path is generic: particles may write into the dynamic-wave and foam layers. Crest's vertical-motion weight plays the role of the `rise` term of Forge's `WaterWake`, which is what turns a body entering the water into a ring.
+
+**Who does what** (from the entries above only):
+
+| | What a splash is | Emission | Coupling to the surface | Published numbers |
+|---|---|---|---|---|
+| Sea of Thieves (Rare) | not described in the talk | — | foam where objects cut the surface (depth compare, feedback blur); deck shallow water | — |
+| Horizon Forbidden West (Guerrilla) | waterfall impacts as baked local surface effects | procedural placement (Houdini) | the surface itself | — |
+| Skull and Bones (Ubisoft Singapore) | hull spray, droplets on the camera | wind-driven | — | — |
+| Assassin's Creed IV (Ubisoft) | rain as GPU particles (the closest analogue) | camera-relative clusters | depth-buffer collisions, bounced drops | 320K drops; < 0.1 ms update, 0.4–4 ms draw |
+| Ghost of Tsushima (Sucker Punch) | expression-driven particles | read wind, water height, displacement | lanterns as particles; blood clouds carried by the current | — |
+| The Last of Us Part II (Naughty Dog) | curl-wave splashes, edge ripples | — | edge ripples | — |
+| Crimson Desert (Pearl Abyss) | particle shallow water near the camera | — | it is the surface | up to 250K particles |
+| Unreal (Epic) | Niagara particles; Fluids 3D for cinematics | Niagara | water data interface | — |
+| Unity HDRP | VFX Graph particles | VFX Graph | samples height, normal, current; foam generators | — |
+| Crest | any particle system | — | particles write foam and dynamic waves | — |
+| Chentanez & Müller 2010 (research) | spray, splash, foam particles | breaking crests, waterfall faces, bodies | mass and momentum deposit; foam on landing | 56K–250K; 0.4–1.2 ms simulation on a GTX 480 |
+
+### 7.2 The physics that sets the emitters
+
+Forge's bodies are barrels, crates, stones and hulls: R of 0.1–1 m arriving at 1–10 m/s. Their Froude number Fr = U/√(gR) runs from about 0.5 to 10. Their Weber number We = ρU²d/σ is 10⁴–10⁶: for the 0.3 m barrel at 6 m/s it is about 3 × 10⁵. So gravity and inertia set the crown's height, the cavity and the jet's timing. Surface tension decides only how the sheets tear into droplets, and nobody can yet predict that exactly (van der Meer below).
+
+**Tadd T. Truscott, Brenden P. Epps, Jesse Belden. "Water Entry of Projectiles." *Annual Review of
+Fluid Mechanics* 46, 2014, 355–378.** [paper] [foundational]
+<https://www.annualreviews.org/content/journals/10.1146/annurev-fluid-011212-140753> (DOI
+10.1146/annurev-fluid-011212-140753)
+
+The review of the field covers entries from slow ones dominated by surface tension to high-speed ballistics where cavitation matters. It treats the splash curtain, the cavity and its seal (surface or deep), the pinch-off and the jets after it, organised by the Froude, Weber, Bond and Reynolds numbers and by the body's wettability. The publisher refused the fetch, so only the record was read.
+
+*Bearing:* the map to read before tuning: which beats of a splash exist at which speed. Forge's bodies sit in its gravity–inertia corner.
+
+**Cyril Duez, Christophe Ybert, Christophe Clanet, Lydéric Bocquet. "Making a splash with water
+repellency." *Nature Physics* 3, 2007, 180–183.** [paper] [foundational]
+<https://arxiv.org/abs/cond-mat/0701093>
+
+An impacting body entrains an air cavity, which makes the loud splash with a crown, only above a threshold speed of a few metres per second. That threshold:
+
+- falls as the body becomes more water-repellent, and a superhydrophobic body splashes at any speed;
+- is proportional to the liquid's capillary velocity;
+- does not depend on the sphere's diameter (7–25 mm in the tests).
+
+*Bearing:* the impact emitter has two regimes. Below the threshold the liquid film follows the body: a ring and a few drops. Above it come a crown, a cavity and, later, a jet.
+
+- The threshold becomes a per-material parameter, defaulting to 2 m/s. That default is Forge's choice; the paper measures smooth spheres.
+- A barrel dropped from 1 m arrives at √(2gh) = 4.4 m/s, and from 2 m at 6.3 m/s. Both are above the threshold.
+
+**Rafsan Rabbi, Nathan B. Speirs, Akihito Kiyama, Jesse Belden, Tadd T. Truscott. "Impact force
+reduction by consecutive water entry of spheres." arXiv:2007.01943, 2020 (*Journal of Fluid
+Mechanics*, 2021); with Jeffrey M. Aristoff, Tadd T. Truscott, Alexandra H. Techet, John W. M.
+Bush, "The water entry of decelerating spheres", *Physics of Fluids* 22, 032102, 2010.** [paper]
+[still-current]
+<https://arxiv.org/html/2007.01943v1> (journal record
+<https://www.cambridge.org/core/journals/journal-of-fluid-mechanics/article/impact-force-reduction-by-consecutive-water-entry-of-spheres/1F76DB78B53CCB244257451F22A244ED>) ·
+<https://thales.mit.edu/bush/wp-content/uploads/2012/04/Aristoff-PoF.pdf> (DOI 10.1063/1.3309454)
+
+These give the cavity's clock:
+
+- **Pinch-off time.** For deep-seal entries at low Froude number, the pinch-off time is t_p = β √(d / 2g), which is β √(R/g).
+- **The constant β.** Values between 1.72 and 2.285 appear in the literature they cite (Glasheen & McMahon, Duclaux et al., Bergmann et al., Marston et al.); Rabbi et al. measure 2.03 ± 0.10.
+- **The jet.** The Worthington jet rises from the pinch-off.
+- **Buoyant bodies (Aristoff et al.).** As a sphere's density falls, the pinch-off depth, the sphere's depth at pinch-off and the pinch-off time all decrease. The pinch-off depth stops following the √Fr law seen for heavy disks at constant speed.
+
+*Bearing:* the second beat of an impact depends only on size: t_p ≈ 2√(R/g). That is 0.36 s for the 0.3 m barrel and 0.2 s for a 0.1 m stone, whatever the drop height. Buoyant bodies (barrels, crates) make shallower cavities and weaker jets than dense ones (stones, anchors), so the jet's strength scales with the body's density relative to water.
+
+**Stephan Gekle, José Manuel Gordillo. "Generation and breakup of Worthington jets after cavity
+collapse. Part 1. Jet formation." *Journal of Fluid Mechanics* 663, 2010, 293–330.** [paper]
+[still-current]
+<https://research.utwente.nl/en/publications/generation-and-breakup-of-worthington-jets-after-cavity-collapse--2/>
+(preprint of the same title: <https://arxiv.org/abs/0907.5154>)
+
+Boundary-integral simulations and a model of the jet after a disk's cavity collapses:
+
+- the radial inflow turns upward in a short acceleration region;
+- the jet's liquid then flies ballistically;
+- the tip breaks into drops because it decelerates (a capillary effect), not because of ambient noise;
+- the jet's velocity and shape can be predicted from quantities known before pinch-off.
+
+*Bearing:* once formed, the jet is ballistic. It is one burst of particles launched together at t_p, with speeds falling from tip to base and the tip shedding a few fat drops. That is a particle burst with a speed gradient, not a fluid simulation.
+
+**Devaraj van der Meer. "Wrapping up a century of splashes." *Journal of Fluid Mechanics* 800,
+2016, 1–4 (a Focus article on J. O. Marston, T. T. Truscott, N. B. Speirs, M. M. Mansoor, S. T.
+Thoroddsen, "Crown sealing and buckling instability during water entry of spheres", *JFM* 794,
+2016, 506–529).** [paper] [still-current]
+<https://www.cambridge.org/core/services/aop-cambridge-core/content/view/EB163351FCAFD3130B7504585AA4445C/S0022112016003281a.pdf/wrapping-up-a-century-of-splashes.pdf>
+(DOI 10.1017/jfm.2016.328; Marston et al.: DOI 10.1017/jfm.2016.165)
+
+The crown of a sphere's splash is a thin sheet:
+
+- Air rushing into the cavity lowers the pressure inside the sheet. Together with surface tension, this closes it over the cavity (the surface seal).
+- As it closes through a cylindrical shape, it buckles into vertical striations. Marston et al. trace the striations' wavelength to a contact-line instability on the sphere.
+- What sets the number of droplets a crown sheds is still an open question.
+
+*Bearing:* the crown is a sheet first and droplets second. Draw it as a short-lived curtain (a ring of quads with ribbed alpha that tears into strips) shedding droplets from its rim. Treat the droplet count as an art parameter, because the physics does not give it.
+
+**J. R. Chaplin, P. Teigen. "Steady flow past a vertical surface-piercing circular cylinder."
+*Journal of Fluids and Structures* 18(3–4), 2003, 271–285; with Shannon Keough, Andrew Ooi,
+Jimmy Philip, Jason Monty, "Characterisation of flow regimes in the bow wave of a surface piercing
+cylinder", *Applied Ocean Research* 145, 2024.** [paper] [still-current]
+<https://www.sciencedirect.com/science/article/abs/pii/S0889974603001166> ·
+<https://www.sciencedirect.com/science/article/pii/S0141118724000580>
+
+**Chaplin & Teigen** towed a 210 mm cylinder at Froude numbers (on its diameter) up to 1.67 and measured the bow wave and the run-up. At low Froude numbers the inviscid Bernoulli estimate holds: the bow wave's height is D₁ = U²/2g, i.e. D₁/d = Fr_d²/2. Work citing them puts the onset of a plunging bow wave near Fr_d ≈ 1.5.
+
+**Keough et al.** towed a 39 mm cylinder and saw six regimes as the speed rose: a steady hydraulic jump at the bow, then spilling, then plunging breakers. They began mapping the regimes on Froude, Weber and Reynolds numbers.
+
+*Bearing:* this gives the towed barrel's numbers. With d ≈ 0.6 m at 2.5 m/s:
+
+- Fr_d ≈ 1.0;
+- the run-up is U²/2g ≈ 0.32 m;
+- the bow wave spills rather than plunges: foam and a thin fringe of droplets, no spray sheet.
+
+Spray sheets begin near Fr_d ≈ 1.5, which is 3.6 m/s for that barrel. A boat uses its beam as d.
+
+**P. Horeni (1956), as cited by Luis G. Castillo, José M. Carrillo, Álvaro Blázquez, "Plunge pool
+dynamic pressures: a temporal analysis in the nappe flow case", *Journal of Hydraulic Research*
+53(1), 2015, 101–118.** [paper] [still-current]
+(DOI 10.1080/00221686.2014.968226; no page could be fetched, see the verification notes)
+
+A falling rectangular nappe stays a compact, aerating jet over a break-up length L_b. Beyond it, the jet has disintegrated into large drops that keep shrinking in the air.
+
+- **Horeni's length.** L_b ≈ 6 q^0.32, in metres, with q the discharge per unit width in m²/s. It is fitted to laboratory flows below about 0.25 m²/s.
+- **Castillo et al.** give a form that depends on the jet's turbulence, and classify plunge-pool impacts by the ratio of fall height to break-up length, H/L_b.
+
+*Bearing:* a fall's spray and mist scale with H/L_b. The island's numbers:
+
+- The water over a step's lip is 0.4 of its depth (`StepParams::lip`), so q ≈ 0.4 × depth × speed. For q of 0.05–0.3 m²/s, L_b is 2.3–4.1 m.
+- The island's steps drop at most 2 m (`StepParams::highest`), so they stay below break-up: a compact plunge with a ring, white water and some mist.
+- Only falls taller than L_b would arrive as rain and drown their foot in mist.
+- The impact speed at the foot is v_i = √(v₀² + 2gH), at most about 6.4 m/s for the steps.
+
+**Martin A. Erinin, Chang Liu, Sophie D. Wang, Xinan Liu, James H. Duncan. "Plunging Breakers —
+Part 2. Droplet Generation." arXiv:2210.01923, 2022.** [paper] [recent]
+<https://arxiv.org/abs/2210.01923>
+
+Holographic measurements, at 650 holograms a second, of the droplets from three plunging breakers, weak to strong:
+
+- **Four generation mechanisms:** the closing gap between the plunging jet and its splash, bubbles bursting under the jet, turbulent splashing, and small bubbles bursting on the following crest.
+- **Sizes:** droplets from 100 µm up. The break in the size distribution's power law moves from 0.82 mm to 1.48 mm as the breaker strengthens.
+
+*Bearing:* breaking-crest spray is millimetre droplets, sub-pixel beyond a few metres. On the shore it is drawn as a soft spray band along the crest plus mist, with individual droplets only near the camera. Stronger breakers mean bigger drops, not just more of them.
+
+**Rules of thumb for the emitters** (from the entries above):
+
+- **Impact speed:** U = √(2gh) from a drop height h.
+- **Cavity and crown threshold:** a few m/s. It is lower for rough or water-repellent bodies and does not depend on size.
+- **Jet time:** t_p ≈ β√(R/g), with β ≈ 2 (1.7–2.3).
+- **Cavity and jet strength:** smaller for buoyant bodies.
+- **Bow run-up:** D₁ = U²/2g. The bow wave plunges and throws spray above Fr_d = U/√(gd) ≈ 1.5.
+- **Nappe break-up length:** L_b ≈ 6 q^0.32 m. Spray and mist grow with H/L_b; the foot's impact speed is √(v₀² + 2gH).
+- **Breaking-crest droplets:** about 0.1–1.5 mm, larger for stronger breakers.
+
+### 7.3 Simulating the particles
+
+**Nuttapong Chentanez, Matthias Müller. "Real-time Simulation of Large Bodies of Water with Small
+Scale Details." SCA 2010.** [paper] [foundational] [still-current]
+<https://matthias-research.github.io/pages/publications/hfFluid.pdf>
+(<https://dl.acm.org/doi/10.5555/1921427.1921457>)
+
+This paper is in `physics-fluids.md` §5 for the coupling idea. Its splash rules are these.
+
+**Three kinds of particle:**
+
+- spray (small, fast drops);
+- splash (the rest), as point masses with no particle–particle forces and different drag coefficients for spray and splash;
+- foam, which rides the surface with a noisy lifetime.
+
+**Mass bookkeeping.** A particle born from a cell takes mass and momentum from it and returns them where it lands. A constant C_deposit of 1–10 amplifies the volume each particle carries, trading particle count against volume.
+
+**Four sources of emission:**
+
+- **Breaking crests:** cells that are steep, rising fast and at a crest, with three thresholds in grid units.
+- **Waterfall faces** where the terrain drops sharply: particles carry the volume crossing the face, and the face becomes a reflecting wall for the cell below.
+- **Bodies.** Each triangle is subdivided to particle size. Samples that sweep through the surface faster than a threshold emit particles, more of them the further the speed is above the threshold. Each particle's velocity is the fluid velocity plus:
+  - 0.86 × the normal part of the relative velocity;
+  - 0.10–0.23 × its tangential part;
+  - 0–0.01 × the vertical speed along the triangle's normal;
+  - 0.17–0.61 × the relative velocity mirrored in the water plane.
+- **User sources.**
+
+**Landing.** A splash particle landing makes a foam particle with a probability set by its impact speed.
+
+**Rendering:**
+
+- spray as ellipses stretched along the velocity;
+- foam as disks on the surface;
+- splash particles as a screen-space fluid surface (van der Laan et al. 2009).
+
+**Costs** (GTX 480, CUDA):
+
+| Scene | Particles | Generation | Simulation |
+|---|---|---|---|
+| Waterfall | 56 000 | 0.82 ms | 0.44 ms |
+| Beach | 220 000 | 1.87 ms | 0.90 ms |
+| Boat | 250 000 | 1.36 ms | 1.15 ms |
+
+The secondary jet after a body submerges is named as not modelled.
+
+*Bearing:* the emission recipe Forge copies almost whole. The body rule with its coefficients is the impact and bow emitter; waterfall faces are the step emitter. Forge's height field is not a simulation, so the mass bookkeeping becomes visual coupling (§7.5). The jet the paper lacks comes from §7.2.
+
+**Markus Ihmsen, Nadir Akinci, Gizem Akinci, Matthias Teschner. "Unified Spray, Foam and Air
+Bubbles for Particle-Based Fluids." *The Visual Computer* 28(6–8), 2012 (CGI 2012), 669–677.**
+[paper] [foundational]
+<https://cg.informatik.uni-freiburg.de/publications/2012_CGI_sprayFoamBubbles.pdf>
+
+A post-process on an SPH simulation that turns fluid particles into diffuse particles.
+
+**Three potentials, each clamped between user thresholds into 0–1:**
+
+- trapped air: neighbours moving towards each other;
+- wave crest: a convex surface moving along its normal;
+- kinetic energy.
+
+**Emission.** Each fluid particle emits n = I_k (k_ta I_ta + k_wc I_wc) Δt diffuse particles per step, placed in a cylinder along its velocity.
+
+**Classification, every step, by the count of fluid neighbours:**
+
+- under 6: spray, which is ballistic (gravity plus external forces);
+- over 20: a bubble, with buoyancy and drag towards the fluid's velocity;
+- otherwise: foam, moved with the averaged fluid velocity and given a lifetime.
+
+The scenes have millions of diffuse particles at seconds per frame: offline.
+
+*Bearing:* the unified life cycle is that one particle is spray in the air, foam on the surface and a bubble below it. Forge applies it with the height field in place of neighbour counts:
+
+- above the surface, a particle is spray;
+- at the surface, its landing writes foam into the deposit image;
+- below the surface, it is dropped.
+
+The crest × kinetic-energy potential is the right vocabulary for the shore-crest emitter.
+
+**Frank Losasso, Jerry O. Talton, Nipun Kwatra, Ronald Fedkiw. "Two-way coupled SPH and particle
+level set fluid simulation." *IEEE Transactions on Visualization and Computer Graphics* 14(4), 2008,
+797–804.** [paper] [foundational]
+(record only; see the verification notes)
+
+The dense liquid is a particle level set and the diffuse regions such as spray are SPH. Particles that the level set produces in under-resolved regions are absorbed into the SPH, and the two representations exchange mass both ways. Offline.
+
+*Bearing:* the ancestor of "spray is a different representation from the bulk". For Forge that is the height field plus particles; there is nothing to implement from it.
+
+**Nuttapong Chentanez, Matthias Müller, Tae-Yong Kim. "Coupling 3D Eulerian, Heightfield and
+Particle Methods for Interactive Simulation of Large Scale Liquid Phenomena." *IEEE TVCG* 21(10),
+2015, 1116–1128 (SCA 2014).** [paper] [still-current]
+<https://diglib.eg.org/items/e8fb33da-d8a6-4b58-bc8d-87a65e2a42f4> (PubMed record
+<https://pubmed.ncbi.nlm.nih.gov/26340036>)
+
+The 2010 design grown a dimension:
+
+- a 3D grid, with particles where needed, in the regions of interest;
+- a shallow-water height field outside them;
+- coupling so that waves cross the border naturally.
+
+It runs in real time or at interactive rates, including a whale breaching.
+
+*Bearing:* this is D-009's near-tier option if a hero event, such as a hull slamming into a wave, ever needs a volumetric splash. Forge's first splashes do not need it.
+
+**Gareth Thomas (AMD). "Advanced Visual Effects with DirectX 11: Compute-Based GPU Particle
+Systems." GDC 2014; with AMD's GPUParticles11 sample (MIT).** [talk] [code] [foundational]
+<https://gdcvault.com/play/1020002/Advanced-Visual-Effects-with-DirectX> ·
+<https://github.com/GPUOpen-LibrariesAndSDKs/GPUParticles11>
+
+The classical compute particle architecture:
+
+- **Buffers:** a particle pool, a dead list of free indices and a sort list (from the search engine's record of the slides).
+- **Sorting:** a bitonic sort for correct alpha blending.
+- **Collisions** against the depth buffer.
+- **Drawing:** a tiled compute rasteriser as an alternative to drawing billboards.
+
+The sample is MIT-licensed, DirectX 11.
+
+*Bearing:* the reference design. Forge departs from it (a spawn ring, see the recommendation) because splashes are bursts with bounded lives decided on the CPU, and because the draw order must not change between frames under TAA. Forge's own wakes (`wakes.rs`) use the third pattern: ping-pong buffers compacted through an atomic counter.
+
+### 7.4 Drawing spray under TAA and HDR
+
+**Tristan Lorach (NVIDIA). "Soft Particles." DirectX 10 SDK whitepaper, January 2007.** [docs]
+[foundational]
+<https://developer.download.nvidia.com/whitepapers/2007/SDK10/SoftParticles_hi.pdf>
+
+A sprite's opacity fades with the difference between the scene's depth and its own.
+
+- The fade uses a smooth, symmetric contrast curve rather than a linear ramp, because a saturated ramp leaves visible kinks.
+- The depth comes from the depth buffer read as a texture, or from a second render target.
+- In a synthetic test on a GeForce 8800, the depth-texture version was much slower, because unbinding the depth buffer disabled the hardware's depth optimisations.
+
+*Bearing:* every spray sprite, crown curtain and mist sprite fades against the water's depth (the water writes depth, D-038) and the opaque depth. The curve matters because the waterline is exactly where splashes live. Forge reads depth bindlessly, so the second variant's extra target is unnecessary.
+
+**Iain Cantlay (NVIDIA). "High-Speed, Off-Screen Particles." *GPU Gems 3*, chapter 23, 2007.**
+[docs] [foundational] [still-current]
+<https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-23-high-speed-screen-particles>
+
+Particles are drawn into a 2 × 2 or 4 × 4 downsampled target:
+
+- against a downsampled depth, where the maximum of the depth samples reduces halos;
+- with separate alpha blending so the result composites correctly;
+- with a Sobel pass on the low-resolution result plus a stencil to redraw only the edge pixels at full resolution.
+
+At 4 × 4 the test scene's frame rate doubled on a GeForce 8800 GTX.
+
+*Bearing:* this is for mist sprites and large splash sheets, never for droplets, which are near or below a pixel and would vanish. Under TAA, the low-resolution layer is composited before the resolve with the depth-aware edge fix-up. Otherwise its edges crawl.
+
+**Morgan McGuire, Louis Bavoil. "Weighted Blended Order-Independent Transparency." *Journal of
+Computer Graphics Techniques* 2(2), 2013, 122–141.** [paper] [foundational] [still-current]
+<https://jcgt.org/published/0002/02/09/>
+
+Two targets are composited in one pass:
+
+- premultiplied colour multiplied by a weight that falls with depth, accumulated additively;
+- the product of (1 − α), the revealage.
+
+No sorting is needed and the memory is constant. It suits low-opacity layers (smoke, spray, glass) and errs where opaque-looking layers overlap.
+
+*Bearing:* under TAA, order stability matters more than order correctness. An unsorted list whose order changes every frame flickers wherever particles overlap. Forge gets stability from the spawn ring's fixed slot order first, and keeps WBOIT as the fallback if the dense crown shows ordering errors. Its transient cost is one RGBA16F and one R16 target at 1440p, aliased by the graph.
+
+**AMD. FidelityFX Super Resolution 2 (GitHub README, "Reactive mask", "Transparency and
+composition mask"); NVIDIA. Streamline Programming Guide (buffer types).** [docs] [code]
+[still-current]
+<https://github.com/GPUOpen-Effects/FidelityFX-FSR2> ·
+<https://gpuopen.com/manuals/fidelityfx_sdk/fidelityfx_sdk-page_techniques_super-resolution-temporal/> ·
+<https://raw.githubusercontent.com/NVIDIA-RTX/Streamline/main/docs/ProgrammingGuide.md>
+
+**FSR 2:**
+
+- The reactive mask is an R8 render-resolution image telling the upscaler to rely less on history.
+- The alpha used to composite a blended object is named as a good proxy for it, with the maximum capped near 0.9.
+- Particles are named as the case where writing motion vectors may be prohibitive, which is what the mask is for.
+- There is also a separate transparency-and-composition mask.
+
+**Streamline** declares optional hints:
+
+- `kBufferTypeReactiveMaskHint`;
+- `kBufferTypeBiasCurrentColorHint`, a lerp from history to the current colour, where 1 rejects history;
+- `kBufferTypeParticleHint`;
+- `kBufferTypeTransparencyHint`.
+
+*Bearing:* Forge's TAA (`taa.slang`) has one global `blend`. It gains a per-pixel reactive term read from an R8 image that the spray pass writes (the maximum of its coverage, capped at 0.9), with blend = max(global, reactive). With DLSS on (D-024), the same image goes to Streamline as the reactive or bias hint. One mask serves both paths.
+
+**Emil Persson (Humus). "Phone-wire AA." Demo and article, 26 June 2012.** [blog] [code]
+[foundational] [still-current]
+<https://www.humus.name/index.php?page=3D&ID=89>
+
+Thin wires alias because their width falls below a pixel. Below a pixel, "it clamps the width to a pixel and instead fades with an alpha value" (Persson 2012) in the ratio of the lost radius: a wire half a pixel wide is drawn one pixel wide at half coverage.
+
+*Bearing:* the same rule for droplets, applied to area:
+
+- Clamp the projected diameter to at least one pixel (1.5 px for a streak's width).
+- Multiply alpha by (true / clamped)².
+- A droplet then fades smoothly with distance instead of flickering between zero and one pixel as TAA's jitter moves it.
+
+At 1440p with Forge's default 70° vertical field (`precision.rs`), a pixel spans about 0.85 mrad, so a 1 cm droplet covers one pixel at about 12 m.
+
+**Sarah Tariq (NVIDIA). "Rain." DirectX 10 SDK whitepaper, 2007.** [docs] [foundational]
+<https://developer.download.nvidia.com/whitepapers/2007/SDK10/RainSDKWhitePaper.pdf>
+
+Rain particles are animated entirely on the GPU and expanded each frame into camera-facing sprites. The sprites are textured from Garg & Nayar's rain-streak database, indexed by viewing and lighting angles. The reason: a falling drop, motion-blurred into a streak, has a complex brightness pattern that a constant-brightness streak misses.
+
+*Bearing:* fast droplets become velocity-aligned streaks:
+
+- the length is the screen-space distance travelled during a half-frame shutter;
+- the alpha is scaled by width over length to keep the energy constant.
+
+A streak covers the same pixels continuously, so TAA sees a stable shape rather than a jittering dot. Forge expands sprites in the vertex shader by vertex pulling; the Assassin's Creed IV lesson is to avoid geometry shaders. The streak texture can be one procedural lobe, not a database.
+
+**Johannes Jendersie, Eugene d'Eon (NVIDIA). "An Approximate Mie Scattering Function for Fog and
+Cloud Rendering." *SIGGRAPH 2023 Talks*.** [paper] [recent]
+<https://dl.acm.org/doi/10.1145/3587421.3595409> (DOI 10.1145/3587421.3595409)
+
+A blend of the Henyey–Greenstein and Draine phase functions fitted to Mie scattering by water droplets over a wide range of sizes. It is parameterised by the mean droplet diameter, with analytic evaluation and sampling.
+
+*Bearing:* the phase function for mist and spray. Droplets scatter strongly forward, so spray glows against the sun and turns grey with the sun behind the viewer. Each emitter needs only one parameter, the diameter. The froxel volume of D-032 uses Henyey–Greenstein with g = 0.7 today; the mist can use the same volume with this phase.
+
+### 7.5 Coupling back to the surface
+
+Four sources agree on the coupling:
+
+- **Chentanez & Müller:** landing particles return their mass and momentum, and make foam with a probability set by their impact speed.
+- **Crest:** particles write into the foam and dynamic-wave layers.
+- **Sea of Thieves:** foam is deposited where things cut the surface, then decays and blurs over frames.
+- **Yuksel's wave particles (§2):** an impact is a ring of outgoing wave particles.
+
+Forge already has the ring. A `WaterWake` with a negative `rise` pushes its whole outline out (`wakes.slang`'s height term), so an impact is a wake emitter with `rise = −U` for a frame or two. The jet's collapse at t_p is a second, weaker ring.
+
+What Forge lacks is the path back from the droplets. Each landing (a particle crossing the surface height sampled at its xz) does three things:
+
+- **Foam.** It adds foam, in integer units, into a foam-deposit image over the wakes' 128 m window. Integer atomics are order-independent, as the wakes' heights are. The surface shader reads the deposits beside the Jacobian's whitecaps, and a decay pass ages them.
+- **Ripples.** It adds an integer impulse into the same cell. Cells whose impulse passes a threshold emit a small ring through the wakes next frame, capped at a few hundred rings a frame, so a downpour of spray becomes a field of ripples without one wave particle per drop.
+- **Death.** The particle dies there. Below the surface, Ihmsen's bubble phase is skipped at first; the underwater view can later tint the volume where many particles landed.
+
+On the rivers the deposits decay in place at first. Advecting them with the ribbons' flow comes later.
+
+### Recommendation for Forge's splashes
+
+**What, in one paragraph.** Build ballistic GPU particles with quadratic drag towards the wind:
+
+- emitted by rules from §7.2, decided on the CPU from deterministic events;
+- simulated and lit on the async compute queue;
+- drawn as small soft sprites and streaks before TAA, with a reactive mask;
+- mist as density in a froxel volume (or half-resolution sprites until the island has one);
+- the surface's share of every event (rings and foam) through the wakes and a foam-deposit image.
+
+No fluid solver. None of the shipped titles found uses one for splashes, Epic keeps its 3D liquids for cinematics, and D-009's PBF/FLIP near tier stays the later option for hero events.
+
+**Where it sits in the frame** (render graph, D-020):
+
+- **`splash/emit` and `splash/advance`**, on the compute queue (`.queue(QueueKind::Compute)`), after `wakes/slopes`, so they read this frame's wakes field and the cascades.
+  - `emit` writes the blocks of new particles the CPU allocated: position, velocity, render radius, seed and birth time.
+  - `advance` applies `v += (g + k·|w − v|·(w − v))·Δt`, with w the wind and k = g/v_t². It sub-steps when Δt > 1/60.
+  - It tests landing against the water's height at the particle's xz: the cascades plus the wakes field on the sea and lakes, the ribbon's level on the rivers.
+  - On landing it writes the foam and impulse deposits (§7.5) and kills the particle.
+  - It lights the particle once per frame:
+    - the sun through the sky's transmittance (D-023);
+    - sun visibility by one ray query per particle every fourth frame (D-029), smoothed inside the particle so shadows do not pop;
+    - the sky's ambient light;
+    - the phase function at the current view angle.
+
+    The result is packed into the particle.
+- **`splash/draw`**, on the graphics queue, after `water/surface` (it needs the water's depth for the soft fades and the depth test) and before TAA.
+  - Vertex pulling, six vertices per slot over the ring's live range: two draws when the range wraps, and dead slots emit degenerate triangles.
+  - The ring's base slot goes in a push constant, not as the draw's first vertex, because `SV_VertexID` excludes the draw's vertex offset.
+  - Premultiplied colour in slot order; depth test without depth write.
+  - It writes HDR colour and the reactive mask (R8, maximum coverage capped at 0.9).
+- **`splash/mist`.**
+  - Preferred: density sources injected into a froxel volume (D-032's design; the island has none yet).
+  - Until then: about 8–20 large mist sprites per active fall, drawn into a half-resolution target with a max-depth downsample and composited before TAA (Cantlay).
+- **TAA.** `taa.slang` reads the reactive image, and the same image goes to Streamline when DLSS is on.
+- **Profiling.** Every pass gets its F1 zone from the graph and its `PROFILE.md` line.
+- **Cross-vendor.** There are no subgroup-size assumptions and no subgroup operations at all. Image atomics on `R32_UINT` and ray queries are cross-vendor.
+
+**Allocation: a spawn ring, decided on the CPU.**
+
+- The CPU computes every emission count from the rules below, using deterministic event data.
+- It allocates contiguous slot blocks in a 65 536-slot ring, in event order.
+- It records each block's expiry (birth plus that block's longest lifetime), so it knows the live range exactly and never overwrites a live block.
+- When the ring is full, emission is capped, and the cap is logged.
+- Capacity: 65 536 slots over a 2 s maximum life sustain 32 000 new particles a second.
+
+What this removes: atomics, a dead list, compaction and readback. What it gives: the draw order is the slot order, identical from frame to frame, and a particle's random numbers come from `pcg3d(event seed, slot index, 0)`, so a replay is identical.
+
+*Not chosen:*
+
+- **The wakes' append-and-compact scheme.** The order changes every frame, and unsorted blending then flickers.
+- **A dead list (Thomas 2014).** The same flicker, from the free list's order.
+- **A depth sort.** Its cost buys nothing for low-alpha white spray.
+
+**Against the shimmer the owner sees first:**
+
+- **Size clamp:** a minimum projected diameter of 1 px, with alpha scaled by the area ratio (Persson).
+- **Streaks** for fast droplets: length = |v_screen|·Δt/2, alpha × width/length (Tariq).
+- **Fades:** in over 40 ms, out over the last quarter of a life. Foam deposits fade in too.
+- **No temporal noise:** per-particle constants come from the seed. A flipbook frame, if any, comes from age with a crossfade.
+- **Reactive mask** capped at 0.9, read by TAA and by Streamline.
+- **Luminance cap:** each particle's pre-exposed luminance is capped (start at 16× the frame's average), and sun glints are a phase lobe rather than a delta. No fireflies.
+- **Distance LOD:**
+  - beyond about 12 m, where a 1 cm droplet is under a pixel, emitters switch to fewer, larger spray puffs that conserve coverage;
+  - beyond about 150 m only the surface's part (rings and foam) and the mist remain.
+- **Stable order** from the ring.
+- **Measure** with the ꟻLIP between consecutive frames of a still camera over a scripted splash loop (`tools/compare.sh`), with a `--no-splashes` A/B flag like `--no-wakes`, and golden images from fixed seeds (D-017).
+
+**The four emitters** (starting values from §7.2 and Chentanez's rules, to be tuned by eye; R is the body's radius at the waterline, U its speed into the water, s its density over water's):
+
+| Case | Trigger | Particles | Launch | Render radius, life | Surface |
+|---|---|---|---|---|---|
+| Impact (crown) | Jolt contact, U ≥ U* (2 m/s by default, per material); below it, the ring and ≤ 20 drops | N = 100·(U − U*)·2πR, ≤ 2 000. The barrel dropped from 2 m (U = 6.3 m/s): about 810. A 0.1 m stone at 8 m/s: about 380 | from the waterline circle at 55–80° elevation, speed 0.2–0.6 U (Chentanez's mirrored-velocity factor 0.17–0.61), ±15 % noise; peak height (0.6U)²/2g ≈ 0.7 m for the barrel | 0.5–1.5 cm, drag terminal speed 7–9 m/s; ballistic, at most 1.5 s | wakes ring `rise = −U`, 2 frames; landing foam and impulses |
+| Impact (jet) | dense bodies (s > 1) above U* | 30–150 at t_p = 2√(R/g) (0.36 s for R = 0.3 m) | a vertical column, speed falling from tip to base; strength × s for buoyant bodies (Aristoff), tuned by eye | 0.8–2 cm at the tip, 0.5 cm below; ≤ 1.5 s | second ring at t_p, weaker |
+| Bow (towed barrel, 2.5 m/s, d = 0.6 m) | each frame: Fr_d = U/√(gd) | 0.7 < Fr_d < 1.5: a fringe of 50·d·(Fr_d − 0.7) drops/s (≈ 10/s for the barrel, under 5 alive). Fr_d > 1.5: two side fans of 400·d·(Fr_d − 1.5)/s | forward and up from the bow at 0.3–0.6 U (fans at ±40°, 0.5–1.0 U) | 0.3–0.8 cm, 0.3–0.6 s | the run-up U²/2g = 0.32 m is the wakes' push; foam deposit at the bow and along the sides ∝ U |
+| Step falls | per step from genesis (`Step`: width w, drop H; lip speed v₀, q = 0.4·depth·v₀) | L_b = 6q^0.32, b = min(1.5, H/L_b). 150·w·b drops/s at the foot: about 200 alive for w = 4 m, b = 0.5; about 4K over 20 steps in view | from the foot across w at 40–80°, 0.15–0.35 v_i with v_i = √(v₀² + 2gH) ≤ 6.4 m/s, biased downstream | 0.5–1 cm, 0.4–0.9 s; none beyond 150 m | the ribbon's step foam (#122) stays; mist ∝ q·v_i²·b in an ellipsoid of radius 0.5–1·H at the foot, drifting with the wind |
+| Shore crests | where the shore's breaking trains break (water.md step 2), within 150 m | 100 drops/s per metre of breaking crest × strength 0–1; ≤ 8K alive | along the wave at c = √(g·d_b) plus 1–3 m/s up, drifting with the wind | 0.5–1.5 cm near, puffs beyond 12 m; 0.5–1.0 s | the shore's foam line exists; landing foam adds to it |
+
+**Budget** (estimates for 1440p on the RTX 5070 Ti, to be replaced by the F1 zones):
+
+| Item | Memory | Time |
+|---|---|---|
+| Ring: 65 536 × 40 B (position f32×3, velocity f16×3, radius, birth, seed, packed light) | 2.6 MB, persistent | — |
+| Emission table (≤ 4 096 blocks × 32 B per frame in flight) | 0.4 MB | CPU, microseconds |
+| `splash/emit` + `splash/advance` + lighting, compute queue | — | 0.03–0.08 ms (about 6 MB of traffic; 16K ray queries a frame) |
+| Foam and impulse deposits: R32_UINT 1024² × 2 over the wakes' window | 8 MB, persistent | in the advance pass |
+| `splash/draw` | reactive mask R8 2560×1440: 3.7 MB, transient | 0.05–0.2 ms typical; 0.5–1.0 ms with the camera inside a crown |
+| `splash/mist` | half-resolution RGBA16F: 7.4 MB transient (none as froxel injection) | 0.05–0.15 ms (about 0.02 ms as froxel injection) |
+| WBOIT, only if needed | RGBA16F + R16 at 1440p: about 37 MB, transient, aliased | +0.05 ms |
+| **Total** | **about 11 MB persistent, 11 MB transient** | **≤ 0.3 ms typical on the graphics queue, ≤ 1 ms worst case; compute hidden** |
+
+The draw dominates, as it did in Assassin's Creed IV: 0.4–4 ms for 320K drops on 2013 consoles, against under 0.1 ms to update them.
+
+**What is deterministic and what is visual only** (D-016, D-009):
+
+- **Deterministic, on the CPU:**
+  - the events: Jolt's water contacts with time, point, normal, relative velocity, waterline radius and density;
+  - the emitter parameters derived from them and from genesis: the steps' q, H and L_b, and later the shore's breaking crests;
+  - the per-event seed (`Seed::derive`);
+  - the slot allocation.
+
+  All of it is cheap and replayable, and a server could reproduce it. It never needs to.
+- **Visual only, on the GPU:** the particles, the foam and impulse deposits, the landing rings and the mist. Nothing is read back, and nothing touches buoyancy, damage or AI.
+
+Thanks to per-particle seeds, the ring's fixed order and integer atomics for the deposits, a replay renders the same image on the same GPU, so golden images work.
+
+**Build order, for the look:**
+
+1. **The impact splash** in the island view of `city-blocks`: a scripted barrel dropped into a lake. Crown droplets, the wakes ring, the size clamp, the streaks, the fades and the reactive mask in TAA from the first commit. Measure the ꟻLIP of consecutive frames and the zones.
+2. **Landing coupling:** the foam-deposit image read by the surface, and the landing rings.
+3. **The step falls**, emitted from genesis's `Step` records with the H/L_b rule, plus the mist (half-resolution sprites now; froxel injection when the island gets a volume).
+4. **The towed barrel's bow:** the fringe and the foam, and the side fans above Fr_d 1.5 for faster craft later.
+5. **The jet and the crown curtain** for dense bodies: the second beat at t_p.
+6. **Shore-crest spray**, once the shore's breaking trains run on the GPU (water.md step 2), using Ihmsen's crest × kinetic-energy potential as the rate.
+7. **Only if the look demands it:** a PBF/FLIP box for hero events (D-009's near tier, Chentanez, Müller & Kim 2015), seeded by the same emitters.
+
+### Checked and left out (splashes)
+
+- **Red Dead Redemption 2.** No Rockstar talk on its water or splashes was found. The PC "Water Physics Quality" setting is described only by community guides, as a ripple simulation. A former Rockstar artist's praise of Crimson Desert, reported in the press, is not a technical source.
+- **Assassin's Creed IV's ocean spray.** Press coverage (GamersNexus) describes individually lit spray particles. This could not be found in Wroński's slides, so it is not cited.
+- **Uncharted's water talks.** Gonzalez-Ochoa's GDC 2012 "Water Technology of Uncharted" (session description read), the 2016 rapids talk (§3) and SideFX's 2016 interview with Popka and Naicker (fetched) cover meshes, flow maps and baked river data, not splash particles.
+- **Sea of Thieves splash particles.** None are in Ang et al. Rare's "Inn-side Story" on visual effects is video only.
+- **Skull and Bones's ocean team at SIGGRAPH 2024** (§2). It is about rolling waves; nothing on spray was found.
+- **Horizon Forbidden West VFX talks.** Schneider's GDC 2022 superstorm talk is about clouds. No Guerrilla talk on water particles was found.
+- **Kovalovs, "GPU Driven Effects of The Last of Us: Part Two", SIGGRAPH 2020.** Found (history.siggraph.org PDF, ACM) but not read. It covers world-aware GPU effects in general.
+- **Whitley, "The Destiny Particle Architecture", SIGGRAPH 2017**, and **Jankkila & Jagadeesan, "Can We Do It with Particles?: VFX Learnings from Returnal", GDC 2022.** Both are particle-system architecture and fluid-driven fog. Neither is about water; only summaries and session descriptions were read.
+- **Turánszki, "GPU-based particle simulation", Wicked Engine blog, 2017.** The standard dead-list and alive-list description. Both URLs tried returned 404; the search engine's record agrees with Thomas 2014, which stands for it.
+- **Huang, Qu, Tan, Zhang, Michels, Jiang, "Ships, Splashes, and Waves on a Vast Ocean", 2021** (arXiv 2108.05481, abstract read). Offline FLIP coupled to a boundary-element ocean; no real-time path.
+- **Müller-Fischer, "Fast Water Simulation for Games Using Height Fields", GDC 2008** (slides read). Its splash content is Thürey et al. 2007's breaking-wave patches, superseded by Chentanez & Müller 2010.
+- **Li & Li, "Dynamics and universal scaling of Worthington jets in the cavity-free regime", arXiv 2412.16508.** A jet-height law, but for the cavity-free regime of small drops, not for bodies at game scale. No closed formula for a game-scale jet's height was found, so the jet's speeds are tuned by eye.
+- **Eshraghi, Jung, Vlachos, "To Seal or Not To Seal", *Physical Review Fluids* 5, 104001, 2020** (abstract read). The surface seal is governed by the airflow into the cavity; finer than a game needs.
+- **Ervine & Falvey 1987 (jets in air and plunge pools)**, and **Chanson et al. 2004 (onset of air entrainment by plunging jets, about 1 m/s)**. The first could not be reached and Horeni through Castillo stands for it. The second: every fall in Forge exceeds that onset speed.
+- **Monahan & O'Muircheartaigh 1980 (whitecap coverage against wind speed)** and **de Leeuw et al. 2011 (sea-spray aerosol production)**. The coefficients could not be verified (both pages refused), and the aerosol work is about sub-micron particles, not visible spray. The open sea's whitecaps already come from the Jacobian (§1).
+- **Van der Laan, Green, Sainz, "Screen space fluid rendering with curvature flow", I3D 2009** (record only). The surface Chentanez draws dense splash particles with. It is an option for a dense crown later, at the cost of full-screen passes; the curtain is cheaper first.
+- **Münstermann et al., "Moment-Based Order-Independent Transparency", 2018** (seen in search). Heavier than WBOIT; not needed for low-alpha spray.
+- **Niagara Fluids' 3D liquid templates.** Epic's documentation places them in cinematics; the solver they use is not stated.
+- **Garg & Nayar's rain-streak database (2006)**, used by Tariq. Not fetched; a procedural streak lobe is enough for spray.
+
+### Verification notes (splashes)
+
+Checked on 2026-10-02 with WebSearch and WebFetch only: no browser pane, no videos watched, nothing downloaded outside WebFetch, nothing installed. Many more hosts were reachable than on 2026-09-25.
+
+Where WebFetch fetched a PDF but could not read its bytes, it saves the file in the session's tool-results folder. That saved copy was converted to text with the `pdftotext` already on the machine and read; these are marked "PDF→text". This section paraphrases throughout and quotes only once (Persson).
+
+- **Fetched and read (HTML):**
+  - Ghost of Tsushima, PlayStation Blog;
+  - the Skull and Bones Q&A (gamedeveloper.com);
+  - GDC Vault session pages for Ikeda 2021, Thomas 2014, Wroński 2014 (via the §6 entry), Gonzalez-Ochoa 2012, Returnal 2022 and Photon Water 2023;
+  - 80.lv (Crimson Desert; Destiny);
+  - Sportskeeda (Crimson Desert);
+  - SideFX (Uncharted 4);
+  - Epic's Niagara Fluids reference, Niagara Fluids overview, `UNiagaraDataInterfaceWater` API and Material Properties pages;
+  - Unity's HDRP 17.2 water–VFX page and the 2023 Unity blog;
+  - Crest's Water Inputs and `SphereWaterInteraction` pages;
+  - the GPUParticles11 README (github.com and raw);
+  - the FSR 2 README (github.com) and the GPUOpen FSR 2 manual (partial);
+  - Streamline's `ProgrammingGuide.md` (raw.githubusercontent.com); its `ProgrammingGuideDLSS.md` had no transparency content, and github.com returned 503 once;
+  - GPU Gems 3 chapter 23 (developer.nvidia.com);
+  - Humus's Phone-wire AA page;
+  - arXiv abstract pages: Duez 2007, Gekle & Gordillo, Erinin 2022, Huang 2021, Li & Li 2024, Eshraghi 2019/2020;
+  - arXiv HTML of Rabbi et al. 2020 (the β range and 2.03 read there).
+- **PDF→text:**
+  - Chentanez & Müller 2010 (matthias-research.github.io): rules, coefficients, Tables 1–2;
+  - Ihmsen et al. 2012 (cg.informatik.uni-freiburg.de): equations, thresholds, Table 1;
+  - Malan 2022 (advances.realtimerendering.com), with speaker notes;
+  - Ang et al. 2018 (history.siggraph.org);
+  - Wroński 2014 (bartwronski.com): the rain slides and timings;
+  - Lorach 2007 and Tariq 2007 (developer.download.nvidia.com);
+  - Duez 2007 (arXiv PDF);
+  - Aristoff et al. 2010 (thales.mit.edu): the citation and DOI from its first page;
+  - van der Meer 2016 (cambridge.org PDF);
+  - Müller-Fischer 2008 (media.gdcvault.com);
+  - Chen, Zhao & Wan's ISOPE 2020 paper (dcwan.sjtu.edu.cn), used only for the reference list that confirms Chaplin & Teigen's journal, volume and pages.
+- **The search engine's record only** (the host refused, or the page was not fetched), with the facts that rest on it:
+  - **Truscott et al. 2014** (annualreviews.org 403): title, volume, pages, DOI, scope.
+  - **Chaplin & Teigen 2003** (sciencedirect 403): the 210 mm cylinder, Fr_d up to 1.67, D₁/d = Fr_d²/2. The onset of plunging near Fr_d ≈ 1.5 comes from search extracts of citing papers, not from the paper.
+  - **Keough et al. 2024** (sciencedirect and SSRN 403): the 39 mm cylinder, six regimes, volume 145.
+  - **Horeni 1956 / Castillo et al. 2015** (mdpi, ascelibrary 403; upct.es 404): L_b = 6q^0.32 and its validity range, the H/L_b classification, the JHR citation and DOI. Horeni's own title is not given because it was not seen.
+  - **Gekle & Gordillo 2010**: the JFM volume and pages (Twente record); the jet's three regions (search extract).
+  - **Marston et al. 2016**: volume, pages and DOI.
+  - **Losasso et al. 2008**: the record; Semantic Scholar 403/429; the physbam PDF 404.
+  - **Chentanez, Müller & Kim 2015**: EG diglib and PubMed records.
+  - **McGuire & Bavoil 2013**: jcgt.org returned an empty page and the PDF exceeded the fetch limit; the method is described from the record and well-known content.
+  - **Jendersie & d'Eon 2023**: ACM and ResearchGate records. The fit's diameter range was not confirmed, so none is given.
+  - **Thomas 2014**: the dead list, sort list and bitonic sort come from search extracts of the slides.
+  - **Marston, Truscott, Speirs, Mansoor & Thoroddsen**: read through van der Meer.
+  - **Rabbi et al.**: the journal year from the record; no volume given.
+- **Weaker confirmations, stated plainly:**
+  - **Crimson Desert:** the 250 000-particle figure is a developer statement relayed by Sportskeeda from a Digital Foundry interview that was not seen; 80.lv's GDC 2025 article confirms only "FFT ocean and shallow water simulation".
+  - **Assassin's Creed IV:** the rain timings' platform is "the next-gen consoles of the talk"; the extracted rain slides do not name one.
+  - **Skull and Bones:** the Q&A's date was not shown in the fetched text, and the interviewees are named here only by role.
+  - **Duez's threshold:** the default U* = 2 m/s is Forge's choice. The paper says only "a few metres per second" for its smooth spheres.
+  - **Forge's numbers from the code as of 2026-10-02:**
+    - `StepParams` (`highest` 2 m, `lip` 0.4);
+    - `BARREL_RADIUS` 0.3 m and `TOW_SPEED` 2.5 m/s in `demos/city-blocks`;
+    - the wakes' 2¹⁷-particle capacity, 32 B particles and 1024² × 0.125 m field;
+    - `fov_y` 70° in `precision.rs`;
+    - the single global `blend` in `taa.slang`;
+    - D-032's froxel volume (Henyey–Greenstein, g = 0.7, 0.105 ms measured).
+- **Numbers to re-check before they enter a decision.** Every emitter count, rate, launch speed, life and radius in the recommendation is a starting value derived from the cited rules plus arithmetic, not a measurement. Every millisecond is an estimate, to be replaced by the F1 zones. The jet's speeds have no source at game scale and are tuned by eye.
+
+---
+
 ## Recommendation for Forge
 
 **Where the water sits in the frame.** The water is a forward pass after the opaque resolve and

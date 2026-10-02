@@ -282,3 +282,34 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Stefan Jeschke and Chris Wojtan, "Water Wave Packets", *ACM Transactions on Graphics* 36(4),
   SIGGRAPH 2017 (<https://visualcomputing.ist.ac.at/publications/2017/WWP/>) carry a group of
   wave trains.
+- **Splashes** (`shaders/splashes.slang`, `forge_render::splashes`, issue #107;
+  `docs/research/water.md` §7).
+  - **The spray as ballistic particles with drag, born where the water splashes:** Nuttapong
+    Chentanez and Matthias Müller, "Real-time Simulation of Large Bodies of Water with Small
+    Scale Details", SCA 2010 (<https://matthias-research.github.io/pages/publications/hfFluid.pdf>),
+    whose emission from bodies sets the crown's speeds (0.2–0.6 of the body's).
+  - **When an impact makes a crown:** Cyril Duez, Christophe Ybert, Christophe Clanet and
+    Lydéric Bocquet, "Making a splash with water repellency", *Nature Physics* 3, 2007
+    (<https://arxiv.org/abs/cond-mat/0701093>): only above a few metres a second.
+  - **When the jet rises:** at 2 √(R / g), the cavity's pinch-off, from Tadd T. Truscott, Brenden
+    P. Epps and Jesse Belden, "Water Entry of Projectiles", *Annual Review of Fluid Mechanics* 46,
+    2014 (DOI 10.1146/annurev-fluid-011212-140753), and Rafsan Rabbi et al., "Impact force
+    reduction by consecutive water entry of spheres", *Journal of Fluid Mechanics*, 2021
+    (<https://arxiv.org/abs/2007.01943>). It is weaker for a buoyant body: Jeffrey M. Aristoff
+    et al., "The water entry of decelerating spheres", *Physics of Fluids* 22, 2010.
+  - **A bow's spray by its Froude number:** J. R. Chaplin and P. Teigen, "Steady flow past a
+    vertical surface-piercing circular cylinder", *Journal of Fluids and Structures* 18, 2003.
+  - **A fall's sheet breaking up over 6 q^0.32 m:** P. Horeni (1956), as given by Luis G.
+    Castillo, José M. Carrillo and Álvaro Blázquez, "Plunge pool dynamic pressures: a temporal
+    analysis in the nappe flow case", *Journal of Hydraulic Research* 53(1), 2015.
+  - **Drops at least a pixel wide, their alpha scaled by the area they lack:** Emil Persson,
+    "Phone-wire AA", 2012 (<https://www.humus.name/index.php?page=3D&ID=89>).
+  - **Fast drops as streaks over the shutter:** Sarah Tariq, "Rain", NVIDIA DirectX 10 SDK
+    whitepaper, 2007.
+  - **Soft edges against the scene:** Tristan Lorach, "Soft Particles", NVIDIA DirectX 10 SDK
+    whitepaper, 2007.
+  - **A reactive mask that tells TAA to trust the current frame where the spray is:** as AMD's
+    FidelityFX Super Resolution 2 does for its transparencies
+    (<https://github.com/GPUOpen-Effects/FidelityFX-FSR2>), its value capped at 0.9.
+  - **Each drop's random numbers:** the `pcg3d` hash of Mark Jarzynski and Marc Olano, "Hash
+    Functions for GPU Rendering", *Journal of Computer Graphics Techniques* 9(3), 2020.

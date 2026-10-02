@@ -42,10 +42,10 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
     FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter, MAX_FLOATERS, MAX_WAKES,
     MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, ProbeParams, Probes,
-    Residency, SkyParams, StartView, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap,
-    WaterCascadeDesc, WaterCascades, WaterCaustics, WaterFloater, WaterLake, WaterMouth,
-    WaterRiverPoint, WaterShore, WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams,
-    WaterWake, WaterWakes, exposure_from_ev100, sh_irradiance,
+    Residency, SkyParams, SplashParams, SplashSource, StartView, StreamingConfig, StreamingStats,
+    SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics, WaterFloater,
+    WaterLake, WaterMouth, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes, WaterStone,
+    WaterSurface, WaterSurfaceParams, WaterWake, WaterWakes, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec2, Vec3};
@@ -288,6 +288,14 @@ struct Args {
     /// No waves from the movers in the lakes and the sea (#107's A/B for the wakes).
     #[arg(long)]
     no_wakes: bool,
+    /// No spray where the water splashes: the steps' falls, a barrel dropped into a lake, the
+    /// towed barrel's bow (#107's A/B for the splashes).
+    #[arg(long)]
+    no_splashes: bool,
+    /// Draw the spray without the reactive mask, so TAA keeps its history there (the mask's
+    /// A/B, #107).
+    #[arg(long, hide = true)]
+    no_reactive: bool,
     /// Holds the waves still at this many seconds (the shimmer's measure: what changes
     /// between frames of a still camera is then the aliasing alone).
     #[arg(long)]
@@ -376,6 +384,15 @@ struct Gallery {
     barrels: Option<Barrels>,
     /// Their waves in the lakes and the sea (#107), with the water and the movers.
     wakes: Option<WaterWakes>,
+    /// The spray where the water splashes (#107), with the water: the steps' falls, and with
+    /// the movers the dropped barrel and the towed one's bow.
+    splashes: Option<WaterSplashes>,
+    falls: Vec<SplashSource>,
+    /// The air the spray drifts in, m/s.
+    wind: Vec3,
+    /// The most drops alive at once, and those born, over the run.
+    splash_peak: u32,
+    splash_born: u64,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     meter: LuminanceMeter,
@@ -522,10 +539,16 @@ impl Gallery {
             None
         };
         // The island's sea (issue #105): three cascades of FFT waves on the async compute
-        // queue, their spectra from the CPU's.
+        // queue, their spectra from the CPU's. With it, the steps' falls that splash (#107) and
+        // the air the spray drifts in: the sea's wind, slowed near the water.
+        let mut falls = Vec::new();
+        let mut wind = Vec3::ZERO;
         let water = if args.island.is_some() && args.water() {
             let seed = forge_core::Seed::new(args.island.unwrap_or(7)).derive(0x5EA);
             let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
+            let sea = &oceans[0].params;
+            let (sin, cos) = (sea.wind_direction as f32).sin_cos();
+            wind = SPRAY_WIND * sea.wind_speed as f32 * Vec3::new(cos, 0.0, sin);
             let descs: Vec<WaterCascadeDesc> = oceans
                 .iter()
                 .map(|o| {
@@ -582,7 +605,14 @@ impl Gallery {
                     .join(", "),
                 "shore trains"
             );
-            let (rivers, mouths, stones, lakes) = island_ribbons(&height);
+            let IslandRivers {
+                rivers,
+                mouths,
+                stones,
+                lakes,
+                falls: island_falls,
+            } = island_ribbons(&height);
+            falls = island_falls;
             let surface = WaterSurface::new(
                 &ctx.device,
                 &ctx.shaders,
@@ -624,7 +654,7 @@ impl Gallery {
         // The movers (#79): barrels on the island's largest rivers.
         let barrels = (args.movers > 0 && args.island.is_some()).then(|| {
             let heights = island_heights(&args);
-            let (rivers, _, _, lakes) = island_ribbons(&heights);
+            let IslandRivers { rivers, lakes, .. } = island_ribbons(&heights);
             let barrels = Barrels::new(&rivers, &lakes, heights.spacing as f32, args.movers);
             // Views with the fixed step: of the first barrel at frame 60 (a second in) from 4 m to
             // its side and 1.5 m over it; of the first moored barrel the water runs past at
@@ -653,12 +683,26 @@ impl Gallery {
             let towed = barrels.towed.map_or(String::from("none"), |_| {
                 view_of(barrels.count - 1, 5.0, 10.0, 8.0, -4.0)
             });
+            // The dropped barrel (#107's splashes) from 6 m off and 1.5 m over the water, looking
+            // at where it meets it; with the fixed step it first does 2.73 s in, at frame 164.
+            let dropped = barrels.dropped.map_or(String::from("none"), |(at, level)| {
+                let eye = Vec3::new(at.x, level + 1.5, at.y + 6.0);
+                let look = (Vec3::new(at.x, level + 0.6, at.y) - eye).normalize();
+                format!(
+                    "{:.1},{:.2},{:.1},0.0,{:.1}",
+                    eye.x,
+                    eye.y,
+                    eye.z,
+                    look.y.asin().to_degrees()
+                )
+            });
             tracing::info!(
                 movers = args.movers,
                 rivers = barrels.rivers.len(),
                 %view,
                 %moored,
                 %towed,
+                %dropped,
                 tow_radius_m = barrels.towed.map_or(0.0, |t| t.1),
                 "barrels on the rivers (--movers)"
             );
@@ -667,9 +711,25 @@ impl Gallery {
         let wakes = (barrels.is_some() && water.is_some() && !args.no_wakes)
             .then(|| WaterWakes::new(&ctx.device, &ctx.shaders))
             .transpose()?;
+        let splashes = (water.is_some() && !args.no_splashes)
+            .then(|| WaterSplashes::new(&ctx.device, &ctx.shaders))
+            .transpose()?;
+        if splashes.is_some() {
+            tracing::info!(
+                falls = falls.len(),
+                wind = %format_args!("{:.1},{:.1},{:.1}", wind.x, wind.y, wind.z),
+                capacity = forge_render::SPLASH_CAPACITY,
+                "splashes"
+            );
+        }
         Ok(Self {
             barrels,
             wakes,
+            splashes,
+            falls,
+            wind,
+            splash_peak: 0,
+            splash_born: 0,
             tonemap: args.tonemap,
             args,
             renderer,
@@ -1093,6 +1153,8 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
         );
+        // The splashes' reactive mask for TAA (#107), when spray is alive.
+        let mut reactive = None;
         if let (Some((cascades, surface, _)), Some(waves)) = (&self.water, &waves) {
             // The barrels nearest the camera part the rivers' flow, and make waves in still
             // water (#107).
@@ -1155,6 +1217,40 @@ impl Demo for Gallery {
                     },
                 );
             }
+            // The spray where it splashes (#107), over the water and its reflections.
+            if let Some(splashes) = &self.splashes {
+                let mut sources = self.falls.clone();
+                if let Some(barrels) = &self.barrels {
+                    barrels.splashes(self.sea_time, &mut sources);
+                }
+                let projection = taa_frame.jittered_projection;
+                reactive = splashes.update(
+                    &mut frame.graph,
+                    frame.slot,
+                    &sources,
+                    &sky,
+                    SplashParams {
+                        view_proj: projection * self.camera.view_rotation(),
+                        camera: camera_in_scene,
+                        near: projection.w_axis.z,
+                        focal: 0.5 * projection.y_axis.y * extent.height as f32,
+                        sun_dir: self.renderer.sun_dir,
+                        sun_radiance: self.renderer.sun_color
+                            * (self.renderer.sun_illuminance * exposure),
+                        sky_scale: self.renderer.sun_illuminance * exposure,
+                        wind: self.wind,
+                        time: self.sea_time_submitted,
+                        shutter: 0.5 * self.step,
+                        tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                    },
+                    taa_frame.color,
+                    targets.depth,
+                    extent,
+                );
+                let stats = splashes.stats();
+                self.splash_peak = self.splash_peak.max(stats.live);
+                self.splash_born += u64::from(stats.fresh);
+            }
         }
         if self.args.day.is_some() {
             // Meter the finished HDR scene for the exposure of the frames to come.
@@ -1193,6 +1289,7 @@ impl Demo for Gallery {
             frame.target,
             self.tonemap,
             bloom,
+            reactive.filter(|_| !self.args.no_reactive),
         );
         Ok(())
     }
@@ -1266,6 +1363,14 @@ impl Drop for Gallery {
             max = format!("{:.2}", percentile(&mut frames, 1.0)),
             "frame times (ms) over the run"
         );
+        if let Some(splashes) = &self.splashes {
+            tracing::info!(
+                peak = self.splash_peak,
+                born = self.splash_born,
+                dropped = splashes.stats().dropped,
+                "splashes' drops over the run (live at most, born, no room)"
+            );
+        }
     }
 }
 
@@ -2159,16 +2264,22 @@ fn island_stones(
     forge_procgen::stones(ribbons, channels, height, RIVER_STONES)
 }
 
+/// The island's rivers as the water draws them ([`island_ribbons`]), in the sea's frame.
+struct IslandRivers {
+    /// The tributaries first.
+    rivers: Vec<Vec<WaterRiverPoint>>,
+    /// Where they meet the sea.
+    mouths: Vec<WaterMouth>,
+    stones: Vec<WaterStone>,
+    lakes: Vec<WaterLake>,
+    /// The steps' falls that splash (#107).
+    falls: Vec<SplashSource>,
+}
+
 /// The island's rivers as the water draws them (#105, D-038's rivers), in the sea's frame (the
-/// field centred on the origin), the tributaries first, and where they meet the sea.
-fn island_ribbons(
-    height: &Field2<f32>,
-) -> (
-    Vec<Vec<WaterRiverPoint>>,
-    Vec<WaterMouth>,
-    Vec<WaterStone>,
-    Vec<WaterLake>,
-) {
+/// field centred on the origin), the tributaries first, where they meet the sea, and the steps'
+/// falls that splash (#107).
+fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
     let start = Instant::now();
     let IslandWater {
         ribbons,
@@ -2176,6 +2287,36 @@ fn island_ribbons(
         lakes,
     } = island_water(height);
     let half = (0.5 * height.extent()) as f32;
+    // Each step's fall (#122), in a few pieces across: where its sheet meets the pool below, its
+    // line bowed downstream as the water draws it (`lip_shift`) and the sheet thrown on by the
+    // speed over the lip for the time it falls.
+    const PIECES: usize = 4;
+    let step_falls: Vec<SplashSource> = ribbons
+        .iter()
+        .flat_map(|r| r.steps.iter().map(move |s| (r, s)))
+        .enumerate()
+        .flat_map(|(i, (r, s))| {
+            let (lip, foot) = (r.points[s.lip as usize], r.points[s.foot as usize]);
+            let down = Vec2::from(foot.direction);
+            let side = Vec2::new(-down.y, down.x);
+            let thrown = lip.speed * (2.0 * s.drop as f32 / 9.81).sqrt();
+            (0..PIECES).map(move |k| {
+                // The piece's middle, -1 at the right bank (seen downstream) to 1 at the left.
+                let u = foot.half_width * ((k as f32 + 0.5) / PIECES as f32 * 2.0 - 1.0);
+                let bow = forge_procgen::lip_shift(lip.lip, f64::from(u / foot.reach.max(1e-3)));
+                let at = Vec2::from(foot.position) + side * u + down * (bow as f32 + thrown);
+                SplashSource::Fall {
+                    foot: Vec3::new(at.x - half, foot.level, at.y - half),
+                    downstream: down,
+                    half_width: foot.half_width / PIECES as f32,
+                    drop: s.drop as f32,
+                    speed: lip.speed,
+                    depth: lip.depth,
+                    seed: ((i * PIECES + k) as u32).wrapping_mul(0x9e37_79b9) ^ 0x5eed_fa11,
+                }
+            })
+        })
+        .collect();
     let points = ribbons.iter().flat_map(|r| &r.points);
     let widest = points
         .clone()
@@ -2695,7 +2836,13 @@ fn island_ribbons(
         stone_view = %stone_view,
         "the rivers' stones and mouths"
     );
-    (rivers, mouths, stones, lakes)
+    IslandRivers {
+        rivers,
+        mouths,
+        stones,
+        lakes,
+        falls: step_falls,
+    }
 }
 
 /// The island's sea floor (`forge_procgen::sea_floor`): metres of depth it levels off at, and
@@ -3186,17 +3333,30 @@ const BARREL_RIVERS: usize = 4;
 /// circle's radius at most, metres.
 const TOW_SPEED: f32 = 2.5;
 const TOW_RADIUS: f32 = 20.0;
+/// The dropped barrel (#107's splashes), one more than `--movers` when it has two or more: over
+/// the middle of the towed barrel's circle, every period it hangs a while this far over its
+/// floating level, falls, bobs, and is lifted out again from the given second.
+const DROP_PERIOD: f64 = 10.0;
+const DROP_HEIGHT: f32 = 3.0;
+const DROP_HANG: f64 = 2.0;
+const DROP_LIFT: f64 = 6.5;
+/// The air near the water, a share of the sea's wind at 10 m: the spray drifts in it.
+const SPRAY_WIND: f32 = 0.15;
 
 /// The movers of `--movers` (#79): barrels carried down the island's largest rivers at the
 /// water's speed, spread along each river's course and starting over at its head once past its
 /// mouth; one in ten moored where it is, bobbing as the stream runs past (#107). The last one is
 /// towed round a circle on the largest lake, faster than its waves (#107's wakes). They float
-/// with their axis across their way, half under the water's level, rolling as they go.
+/// with their axis across their way, half under the water's level, rolling as they go. With two
+/// or more, one more is dropped into the middle of the towed one's circle again and again
+/// (#107's splashes).
 struct Barrels {
     rivers: Vec<BarrelCourse>,
     count: u32,
     /// The towed barrel's circle: its centre (world x, z), radius and the lake's level.
     towed: Option<(Vec2, f32, f32)>,
+    /// Where the dropped barrel falls (world x, z) and the level of the water it falls into.
+    dropped: Option<(Vec2, f32)>,
 }
 
 /// A river's course as the barrels follow it.
@@ -3249,10 +3409,114 @@ impl Barrels {
                 let (centre, room) = lake_middle(lake, spacing);
                 (centre, (0.6 * room).min(TOW_RADIUS), lake.level)
             });
+        // Without a lake it waits far under the ground: the movers' table counts it all the same.
+        let dropped = (count > 1)
+            .then(|| towed.map_or((Vec2::ZERO, -1000.0), |(centre, _, level)| (centre, level)));
         Self {
             rivers,
             count,
             towed,
+            dropped,
+        }
+    }
+
+    /// The movers the barrels take in the table: `--movers`, and the dropped barrel.
+    fn movers(count: u32) -> u32 {
+        count + u32::from(count > 1)
+    }
+
+    /// The dropped barrel `time` seconds in: its transform, its centre, its speed upwards, and
+    /// where its drop cycle stands (the cycle's number and the seconds into it).
+    fn dropped_pose(&self, time: f64) -> Option<(MoverTransform, Vec3, f32, (u64, f64))> {
+        let (centre, level) = self.dropped?;
+        let cycle = (time / DROP_PERIOD).floor().max(0.0);
+        let into = time - cycle * DROP_PERIOD;
+        let rest = level - 0.05;
+        let (height, falls_at) = (
+            f64::from(DROP_HEIGHT),
+            (2.0 * f64::from(DROP_HEIGHT) / 9.81).sqrt(),
+        );
+        let (y, rise) = if into < DROP_HANG {
+            (f64::from(rest) + height, 0.0)
+        } else if into < DROP_HANG + falls_at {
+            // Falling.
+            let s = into - DROP_HANG;
+            (f64::from(rest) + height - 0.5 * 9.81 * s * s, -9.81 * s)
+        } else if into < DROP_LIFT {
+            // Plunging and bobbing back up, damped.
+            let (u, v) = (into - DROP_HANG - falls_at, 9.81 * falls_at);
+            let (omega, damping) = (std::f64::consts::TAU * 0.8, 3.0);
+            let decay = (-damping * u).exp();
+            (
+                f64::from(rest) - v / omega * decay * (omega * u).sin(),
+                -v * decay * ((omega * u).cos() - damping / omega * (omega * u).sin()),
+            )
+        } else {
+            // Lifted out again, smoothly.
+            let span = DROP_PERIOD - DROP_LIFT;
+            let w = (into - DROP_LIFT) / span;
+            (
+                f64::from(rest) + height * w * w * (3.0 - 2.0 * w),
+                height * 6.0 * w * (1.0 - w) / span,
+            )
+        };
+        let rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::X);
+        let middle = Vec3::new(centre.x, y as f32, centre.y);
+        let transform = MoverTransform {
+            position: middle - rotation * Vec3::new(0.0, 0.5 * BARREL_LENGTH, 0.0),
+            rotation,
+            scale: 1.0,
+        };
+        Some((transform, middle, rise as f32, (cycle as u64, into)))
+    }
+
+    /// Where the barrels make the water splash `time` seconds in (#107): the dropped barrel
+    /// meeting the water, and the drops running off it as it is lifted out; the towed barrel's
+    /// bow.
+    fn splashes(&self, time: f64, out: &mut Vec<SplashSource>) {
+        if let (Some((_, middle, rise, (cycle, _))), Some((_, level))) =
+            (self.dropped_pose(time), self.dropped)
+        {
+            let seed = (cycle as u32).wrapping_mul(0x9e37_79b9) ^ 0xd209;
+            // Its bottom meets the water a little before its centre reaches its rest.
+            let fall = 2.0 * f64::from(DROP_HEIGHT - 0.05 - BARREL_RADIUS) / 9.81;
+            let meets = cycle as f64 * DROP_PERIOD + DROP_HANG + fall.sqrt();
+            if (0.0..=1.0).contains(&(time - meets)) {
+                // Lying across its fall: the circle of its outline's area.
+                let radius = (2.0 * BARREL_RADIUS * BARREL_LENGTH / std::f32::consts::PI).sqrt();
+                out.push(SplashSource::Impact {
+                    position: Vec3::new(middle.x, level, middle.z),
+                    velocity: Vec3::new(0.0, -9.81 * fall.sqrt() as f32, 0.0),
+                    radius,
+                    density: 0.5,
+                    time: meets as f32,
+                    seed,
+                });
+            }
+            // Out of the water and rising: drops run off its underside, fewer as it climbs.
+            let above = middle.y - BARREL_RADIUS - level;
+            if above > 0.0 && rise > 0.0 {
+                out.push(SplashSource::Drip {
+                    position: middle - Vec3::new(0.0, BARREL_RADIUS, 0.0),
+                    spread: Vec3::new(0.5 * BARREL_LENGTH, 0.0, 0.0),
+                    velocity: Vec3::new(0.0, rise, 0.0),
+                    level,
+                    rate: 60.0 * (-above / 0.5).exp(),
+                    seed: seed ^ 0xd419,
+                });
+            }
+        }
+        if self.towed.is_some() {
+            let (_, centre, velocity, _) = self.pose(self.count - 1, time);
+            let ahead = velocity.normalize_or_zero();
+            out.push(SplashSource::Bow {
+                bow: Vec3::new(centre.x, centre.y + 0.05, centre.z)
+                    + BARREL_RADIUS * Vec3::new(ahead.x, 0.0, ahead.y),
+                velocity,
+                beam: BARREL_LENGTH,
+                length: 2.0 * BARREL_RADIUS,
+                seed: 0x70ed,
+            });
         }
     }
 
@@ -3346,7 +3610,10 @@ impl Barrels {
 
     /// Their transforms `time` seconds in, relative to the scene's origin (the sea's frame).
     fn transforms(&self, time: f64) -> Vec<MoverTransform> {
-        (0..self.count).map(|k| self.pose(k, time).0).collect()
+        (0..self.count)
+            .map(|k| self.pose(k, time).0)
+            .chain(self.dropped_pose(time).map(|d| d.0))
+            .collect()
     }
 
     /// The barrels nearest `camera` (world x and z) as the rivers' water sees them (#107):
@@ -3388,6 +3655,20 @@ impl Barrels {
                 (flat.distance_squared(camera), wake)
             })
             .collect();
+        // The dropped barrel while it is in the water: going in, it pushes a ring out.
+        if let (Some((_, middle, rise, _)), Some((_, level))) =
+            (self.dropped_pose(time), self.dropped)
+            && (-1.0..=BARREL_RADIUS + 0.05).contains(&(middle.y - level))
+        {
+            let flat = Vec2::new(middle.x, middle.z);
+            let wake = WaterWake {
+                position: flat.to_array(),
+                waterline: 0.5 * BARREL_LENGTH,
+                velocity: [0.0; 2],
+                rise,
+            };
+            near.push((flat.distance_squared(camera), wake));
+        }
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
         near.into_iter().take(MAX_WAKES).map(|(_, w)| w).collect()
     }
@@ -3739,7 +4020,7 @@ fn build_island(
     // The movers (#79), the table's last instances: their transforms come every frame.
     if args.movers > 0 {
         let barrel = *ids.last().expect("the barrel");
-        builder.reserve_movers(&[(barrel, args.movers)]);
+        builder.reserve_movers(&[(barrel, Barrels::movers(args.movers))]);
     }
     // No rock on the cells the channels are carved in or the lakes' shores smoothed (the
     // placement reads the 8 m samples, which those cells no longer follow), nor under a lake:

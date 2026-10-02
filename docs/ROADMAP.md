@@ -327,7 +327,9 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    waterline across the lens; the waves' caustics on the floor under the sea); objects in the
    water (#107): the rivers part around what floats in them, the flow taken relative to each
    ✅, and what moves through the lakes and the sea leaves a wake of wave particles carrying
-   packets of waves on the async compute queue ✅, with splashes still to come. The
+   packets of waves on the async compute queue ✅, and splashes ✅ (ballistic spray on the
+   GPU: a crown and a jet where something meets the water, drops and mist at the steps' falls,
+   a bow's fringe, drips, with a reactive mask for TAA; their landing's foam and rings later). The
    owner's judgement of the rivers (2026-10-01, #112): streams rather than rivers, not yet
    natural or integrated. The research (`docs/research/rivers.md`) and D-040/D-041 (accepted
    the same day: the engines' way, features carve and paint the ground around them) set the

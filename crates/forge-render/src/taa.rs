@@ -97,7 +97,8 @@ struct ResolvePush {
     /// How much of the shown image is bloom (`crate::bloom`).
     bloom_strength: f32,
     output: OutputPush,
-    pad: u32,
+    /// The reactive mask (sampled index), or `u32::MAX` for none (#107).
+    reactive: u32,
     tables: ToneTablesPush,
 }
 
@@ -431,7 +432,9 @@ impl Taa {
 
     /// Declares the pass that resolves the frame drawn into `frame.color` with `depth` and
     /// `motion` (from [`Taa::motion_vectors`]) into the next history and, through `curve`,
-    /// into `output` at once. Returns the history it wrote.
+    /// into `output` at once. Where `reactive` (an R8 mask, #107: the splashes' coverage) is
+    /// set, a pixel takes at least that share of this frame, so what moves without motion
+    /// vectors is not smeared. Returns the history it wrote.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve<'f>(
         &'f self,
@@ -442,6 +445,7 @@ impl Taa {
         output: ImageHandle,
         curve: Tonemap,
         bloom: Option<ImageHandle>,
+        reactive: Option<ImageHandle>,
     ) -> ImageHandle {
         let encoding = OutputPush::new(
             OutputEncoding::for_format(self.output_format),
@@ -467,6 +471,9 @@ impl Taa {
         if let Some(bloom) = bloom {
             pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
         }
+        if let Some(reactive) = reactive {
+            pass = pass.image(reactive, ImageAccess::Sampled(S::FRAGMENT_SHADER));
+        }
         pass.run(move |resources, commands| {
             fullscreen_pass(
                 commands,
@@ -487,7 +494,7 @@ impl Taa {
                     bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
                     bloom_strength,
                     output: encoding,
-                    pad: 0,
+                    reactive: reactive.map_or(u32::MAX, |r| resources.sampled(r).0),
                     tables,
                 },
             );

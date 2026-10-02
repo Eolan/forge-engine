@@ -1152,6 +1152,7 @@ impl Demo for Ballad {
                     frame.target,
                     self.tonemap,
                     bloom,
+                    None,
                 );
                 (Some(history), bloom)
             }

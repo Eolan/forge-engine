@@ -74,6 +74,8 @@ for path in "" --force-fallback; do
   validate "under-lake$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=2248,20.2,-1184,0,25 $path
   # Moving geometry (#79): a thousand barrels on the rivers, the first one in view.
   validate "movers$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --movers 1000 --view=-238.2,318.14,-1843.9,135.2,-18.1 $path
+  # Splashes (#107): the dropped barrel meets its lake at frame 164, the crown and the jet after.
+  validate "splashes$tag" "$bin/city-blocks$exe" --island 7 --frames 200 --fixed-step --movers 1000 --view=2160.0,30.55,-1234.0,0.0,-8.5 $path
   # And ships through the belt, the camera chasing the first (#79's demo).
   validate "ships$tag" "$bin/asteroids$exe" --frames 60 --ships 24 --chase 0 $path
   # The HDR output drawn off-screen and previewed (#94), through ACES 2.0: from the TAA resolve

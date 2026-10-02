@@ -1507,6 +1507,41 @@ of `forge_procgen::hydrology`; `docs/demos/island.md`, "The water's fields").
 issue #96)* Proposed 2026-09-26; accepted by the owner 2026-09-30 as proposed ("go with
 recommendations"). The choice for D-009's physics band still waits for Phase 3's boats.
 
+**Splashes (#107, 2026-10-02).** One of the afterwards, picked by the owner the same day: D-009's
+near water ("GPU particles, visual only") as the research recommends (`docs/research/water.md`
+§7). The particles are ballistic, without a fluid solver: none of the shipped games found uses
+one for splashes, and D-009's PBF/FLIP tier stays for hero events.
+- **Sources, by rules from the physics.** The caller lists where the water splashes:
+  - **Something meeting it:** a crown above 2 m/s, and a jet at 2 √(R / g).
+  - **A step's fall:** drops and mist by how far its sheet breaks up, after Horeni.
+  - **A bow:** by its Froude number.
+  - **Drips.**
+
+  The research's numbers are starting values. The falls' drops are livelier than its (0.2–0.5
+  of the impact speed, 200 a metre a second): a 2 m step's barely left the white water.
+- **A ring of slots handed out by the CPU, in order.**
+  - The draw's order never changes from frame to frame, so overlapping drops don't flicker
+    under TAA. This replaces a dead list or a sort.
+  - A stream's drops are born at fixed times from its seed, so the same at any frame rate.
+  - Emission and motion run on the async compute queue.
+- **The draw, after the water, before TAA:**
+  - Soft sprites streaked over half a frame, at least a pixel wide with their alpha scaled by
+    the area they lack (Persson).
+  - Lit through a shadow ray in the vertex shader, against the static TLAS, which is built
+    before any frame.
+  - A reactive mask, which the TAA resolve takes as the least share of the current frame (FSR
+    2's idea, capped at 0.9). Without it the history smears the crown away.
+- **Deterministic and visual-only parts.** The sources come from deterministic data (genesis's
+  steps, the caller's events) and every drop from its seed. Nothing is read back, and nothing
+  feeds gameplay.
+- **Measured:** 0.01–0.03 ms of draw and under 0.01 ms of compute at 1440p, with 1 400–4 800
+  drops alive (`docs/demos/island.md`, "Objects in the water").
+- **Left for later:**
+  - the landing coupling: foam and rings where drops fall back;
+  - the crown's curtain and the shore's crests;
+  - mist in a froxel volume;
+  - the mask passed to DLSS.
+
 ## D-039 — Buildings are grammar-derived assemblies of kit modules; a style set per district; a proxy per far building ✅ (2026-09-30)
 
 Proposed from `docs/research/city-generation.md` (§3–§6 and its recommendation) for #86, which

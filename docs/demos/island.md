@@ -1926,8 +1926,90 @@ changed):
 - The wakes' particles cross the shore: they do not reflect, they fade where the water is not
   drawn.
 - The rivers draw no wave particles: there the stones' flow stands for the wake.
-- Splashes, when something falls in.
 - There are no game objects yet (`forge-sim`, Phase 3): the barrels stand in for them.
+
+**Splashes** (the third part, 2026-10-02; `forge_render::splashes`, `shaders/splashes.slang`;
+`docs/research/water.md` §7; D-038, "Splashes"). Spray where the water splashes, as ballistic
+particles on the GPU: D-009's near water, visual only, without a fluid solver. None of the
+shipped games the research found uses one for splashes.
+- **Where it splashes** (`WaterSplashes::update`, `SplashSource`). Each source's drops follow
+  the research's rules:
+  - **Something meeting the water:** a crown thrown up and out round its waterline, a hundred
+    drops a metre of it per m/s over 2 m/s (Duez et al.'s threshold), at 0.2–0.6 of its speed
+    (Chentanez & Müller). When its cavity closes, 2 √(R / g) later, a jet rises, weaker for a
+    buoyant body.
+  - **A step's fall:** drops at its foot and mist over it, by how much of the drop lies past the
+    falling sheet's break-up length (Horeni's 6 q^0.32 m). The 4 457 steps are four pieces
+    across each, along the fall's line as the water bows it (`lip_shift`), plus the distance the
+    sheet is thrown.
+  - **A bow:** a fringe of drops from a Froude number of 0.7, fans either side from 1.5. The
+    towed barrel's is 1.03, so it only spills.
+  - **Drips** off something lifted out of the water.
+- **The drops:**
+  - They live in a ring of 65 536 slots that the CPU hands out in blocks, in order. The draw's
+    order is the same from frame to frame, so nothing flickers where drops overlap: no dead list,
+    no sort.
+  - A stream's drops are born at fixed times from its seed (`(k + phase) / rate`), and their
+    random numbers come from the seed and `k`, so a stream is the same at any frame rate.
+  - `splashes/emit` and `splashes/advance` run on the async compute queue: gravity, a quadratic
+    drag towards the air (the sea's wind at 0.15 near the water), and death where a drop falls
+    back into its water. Mist rides over it instead.
+- **The draw** (`splashes/draw`, after the water and its reflections, before TAA):
+  - Each drop is a soft sprite streaked along its velocity over half a frame.
+  - It is at least a pixel wide (a streak a pixel and a half), its alpha scaled by the area it
+    lacks (Persson's phone-wire AA), so a far drop fades instead of flickering.
+  - The light: the sun through a shadow ray, scattered forwards (Henyey–Greenstein), and the
+    sky's irradiance. The brightest a drop shows is sixteen times a white surface in the sun.
+  - It is hazed by the aerial perspective and faded against the scene's depth.
+  - It writes an R8 reactive mask, its coverage × 0.9. There, TAA takes at least that share of
+    the current frame, so the history does not smear the spray away.
+- **The demo:**
+  - With `--movers 2` or more, one more barrel hangs 3 m over the middle of the towed barrel's
+    lake. Every 10 s it falls (meeting the water at 7.2 m/s), plunges, bobs, and is lifted out,
+    dripping.
+  - Its view is logged (`dropped`, `2160.0,30.55,-1234.0,0.0,-8.5`). With `--fixed-step` it meets
+    the water at frame 164.
+  - The steps' falls splash with or without movers.
+  - `--no-splashes` is the A/B; the hidden `--no-reactive` drops the mask.
+  - The exit log gives the most drops alive and those born.
+
+**Sheets** (`reports/2026-10-02-107/`, the fixed step, seed 7):
+- `splash-drop.png`: the dropped barrel at frames 160, 170, 185, 200 and 215, and 185 without
+  the splashes.
+  - The crown rises at 170, opens out by 185, and rains back at 200 while the barrel bobs up.
+  - The jet stays hidden behind the rising barrel, as it should for a buoyant body.
+  - At 185, 13 313 px differ, ꟻLIP mean 0.0043.
+- `splash-reactive.png`: the crown at frame 175 with the reactive mask, without it, and without
+  the splashes. Without the mask the crown is dimmer and smeared: 5 627 px, ꟻLIP mean 0.0014.
+- `splash-fall.png`: the foot of the highest step (2 m) from 8 m, enlarged three times.
+  - A scatter of drops in front of the white water, and a haze of mist: 67 660 px, ꟻLIP mean
+    0.0103.
+  - From the step's logged view at 15 m: 15 860 px, ꟻLIP mean 0.0024.
+  - A 2 m step stays a compact plunge (Horeni), so its spray is fine. With the research's
+    starting values (150 drops a metre a second at 0.15–0.35 of the impact speed) the drops
+    barely left the white water. They are now 200 at 0.2–0.5, and 0.8–2.5 cm across.
+
+![The dropped barrel, frames 160 to 215, and 185 without the splashes](../../reports/2026-10-02-107/splash-drop.png)
+
+**Cost** (`docs/PROFILE.md`, 2560 × 1440, two rounds):
+- From the dropped barrel over its cycle: `splashes/draw` 0.010 ms, emit and advance 0.004 ms on
+  the compute queue, 1 447 drops alive at most.
+- From 8 m below the highest step: the draw 0.032 ms and 0.007 ms of compute, 4 830 drops alive.
+- The frame's total moves by up to 0.17 ms either way, from the async overlap. Serially it stays
+  within the runs' spread.
+
+**Checks:**
+- The capture batch is unchanged (0 px): no fall lies within 150 m of its views.
+- `validate.sh` is silent, with a run across the drop on both paths.
+
+**Left for later:**
+- **Landing:** drops falling back leave no foam and no ripples yet (the research's second step:
+  a foam deposit, rings from the wakes).
+- **The crown's curtain:** the crown is drops alone, not a sheet that tears into them.
+- **Shore spray:** the shore's breaking crests throw none.
+- **Mist:** it is sprites, not density in a froxel volume.
+- **DLSS:** the reactive mask does not go to Streamline yet.
+- **The underwater view:** spray over the water is not drawn as seen from under it.
 
 ## The ground in tiles, towards 2 m (#106, 2026-10-01)
 
