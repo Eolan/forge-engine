@@ -37,6 +37,7 @@ struct GpuDust {
     params: [f32; 4],
     fill: [f32; 4],
     tlas: u64,
+    tlas_movers: u64,
     light: u32,
     light_sampled: u32,
     volume: u32,
@@ -49,7 +50,7 @@ struct GpuDust {
     pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuDust>() == 192);
+const _: () = assert!(std::mem::size_of::<GpuDust>() == 200);
 
 /// What a frame's dust needs.
 #[derive(Clone, Copy, Debug)]
@@ -77,6 +78,11 @@ pub struct DustParams {
     pub fill: Vec3,
     /// The scene's top-level acceleration structure (0: no shafts).
     pub tlas: u64,
+    /// The movers' structure ([`crate::raytrace::SceneRays::movers_address`], #79), traced
+    /// after the static one so they cast shafts too (0: none).
+    pub tlas_movers: u64,
+    /// This frame's movers ([`crate::DrawTargets::movers`]), whose structure the shafts read.
+    pub movers: Option<crate::MoversFrame>,
     /// The noise's frame (TAA's, modulo its jitter period).
     pub frame: u32,
 }
@@ -155,6 +161,7 @@ impl DustVolume {
         graph
             .pass("dust/light")
             .image(light, ImageAccess::StorageWrite(compute))
+            .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true))
             .run(move |resources, commands| {
                 buffer.write(
                     0,
@@ -170,6 +177,7 @@ impl DustVolume {
                         params: [params.extinction, params.far, params.anisotropy, 1.0 / 45.0],
                         fill: params.fill.extend(0.0).to_array(),
                         tlas: params.tlas,
+                        tlas_movers: params.tlas_movers,
                         light: resources.storage(light, 0).0,
                         light_sampled: resources.sampled(light).0,
                         volume: resources.storage(volume, 0).0,

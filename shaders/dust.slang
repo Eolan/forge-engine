@@ -16,7 +16,8 @@ struct Dust
     float4 params;          // x: extinction (1/m), y: the volume's far end (m), z: anisotropy g, w: noise scale (1/m)
     float4 fill;            // rgb: light scattered from the surroundings, pre-exposed units per unit extinction
     uint64_t tlas;          // 0: no shafts
-    uint light;             // storage index of the lit froxels: rgb scattered light, a extinction
+    uint64_t tlas_movers;   // the movers' structure (#79), traced after the static one; 0: none
+    uint light;            // storage index of the lit froxels: rgb scattered light, a extinction
     uint light_sampled;
     uint volume;            // storage index of the integrated volume: rgb in-scattered, a transmittance
     uint volume_sampled;
@@ -115,6 +116,15 @@ void light_main(uint3 id : SV_DispatchThreadID)
         q.TraceRayInline(RaytracingAccelerationStructure(d[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
         q.Proceed();
         visible = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+        // The movers' own structure when the static one let the sun through (#79): the ships
+        // cast their shafts too.
+        if (visible > 0.0 && d[0].tlas_movers != 0)
+        {
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> m;
+            m.TraceRayInline(RaytracingAccelerationStructure(d[0].tlas_movers), RAY_FLAG_NONE, 0xFF, ray);
+            m.Proceed();
+            visible = m.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+        }
     }
     float phase = henyey_greenstein(dot(-direction, -sun), d[0].params.z);
     float3 scattered = extinction * (d[0].sun.w * d[0].sun_color.rgb * phase * visible + d[0].fill.rgb);

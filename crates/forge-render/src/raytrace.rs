@@ -316,7 +316,7 @@ impl SceneRays {
     }
 
     /// The movers' structure's address (0 without movers).
-    pub(crate) fn movers_address(&self) -> u64 {
+    pub fn movers_address(&self) -> u64 {
         self.movers.as_ref().map_or(0, |(t, _)| t.address())
     }
 

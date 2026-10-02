@@ -1052,6 +1052,8 @@ impl Demo for Ballad {
                     anisotropy: 0.7,
                     fill: Vec3::new(0.10, 0.12, 0.18) * 0.02 * sun_luminance,
                     tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                    tlas_movers: self.scene.rays().map_or(0, |r| r.movers_address()),
+                    movers: targets.movers,
                     frame: (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32,
                 },
                 targets.depth,

@@ -314,8 +314,12 @@ the frame is cheaper, 2.318–2.329 ms: they crowd the corridor and hide rocks (
 **Checks:** without ships the capture batch is unchanged (0 px); `validate.sh` is clean and now
 also runs 24 ships chased on both paths.
 
-**Left for later:** the dust's shadow rays trace the static structure only, so the ships cast
-no shafts in it; physics, weapons and the rest of #80.
+**Their shafts in the dust** (`dust.slang`): the dust's sun rays trace the movers' structure
+after the static one, as the shading's do, so the ships shade the dust too. At the belt's
+density a 14 m ship's shaft is faint and soft over the coarse froxels. `dust/light` 0.107 →
+0.122 ms with 24 ships at 1440p; nothing without them.
+
+**Left for later:** physics, weapons and the rest of #80.
 
 ## Far from the origin (2026-09-25, issue #93)
 
