@@ -58,6 +58,9 @@ for path in "" --force-fallback; do
   validate "meshlets$tag" "$bin/meshlets$exe" --mip-check --tone-check --frames 60 $path
   validate "city$tag" "$bin/city-blocks$exe" --frames 90 $path
   validate "city-resident$tag" "$bin/city-blocks$exe" --stream-pool 0 --frames 60 $path
+  # The flight streams pages on the transfer queue after the start, and the frames after a copy
+  # leave out the waits their queue already made (#104).
+  validate "city-fly$tag" "$bin/city-blocks$exe" --fly --frames 600 $path
   validate "gallery$tag" "$bin/city-blocks$exe" --gallery --frames 60 $path
   # The island resident on its 8 m ground (the 2 m ground's pages exceed a resident pool, #106),
   # then as it starts by default: at 2 m, streamed.

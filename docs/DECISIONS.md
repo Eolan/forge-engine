@@ -424,6 +424,11 @@ memory-streaming.md §2; issue #1)*
   wait at its stages, plus a barrier on its own queue from everything that queue did before.
   The last batch is graphics and waits for every other queue's last one, so a frame slot is
   free when its graphics work is.
+- **Waits made once (#104, 2026-10-02).** With `vkQueueSubmit2`, a wait covers every later
+  submission of its queue at its stages. So the graph remembers, per queue and per stage, the
+  latest value each queue waited for on the others, from frame to frame, and leaves out a
+  wait an earlier batch already made. Before, every frame after a streaming copy waited for
+  that copy again, and the wait split a graphics batch.
 - **Sharing.** Every buffer, and every image except a render target, is `CONCURRENT` over the
   families, with no ownership transfers. NVIDIA ignores the mode; on AMD a `CONCURRENT` image
   loses DCC, so render targets stay `EXCLUSIVE`. The graph refuses them on another queue, and

@@ -31,8 +31,11 @@
 //! that wait for the same batches of the other queues. Every resource remembers which batch
 //! last wrote it and which read it since, on each queue, from frame to frame; an access from
 //! another queue becomes a timeline wait, and a barrier on the new queue from all its earlier
-//! work. The last batch is graphics and waits for every other queue's last one, so a frame
-//! slot is free when its graphics work is. Resources shared by queues must be `CONCURRENT`
+//! work. A wait covers every later submission of its queue at its stages, so a batch leaves
+//! out what an earlier batch of its queue waited for, in this frame or a previous one (#104:
+//! a frame without streaming uploads no longer waits for the last copy again). The last
+//! batch is graphics and waits for every other queue's last one, so a frame slot is free
+//! when its graphics work is. Resources shared by queues must be `CONCURRENT`
 //! (every buffer, and every image but a render target: [`Device::image_concurrent`]); an
 //! async pass may not use a transient (its memory could be aliased while it runs).
 //!
@@ -78,6 +81,64 @@ struct QueueSync {
     writer: Option<(QueueKind, u64)>,
     /// Per queue: the latest batch that read it since that write (0: none).
     readers: [u64; 3],
+}
+
+/// What each queue's batches already waited for on the other queues' timelines (issue #104),
+/// carried from frame to frame like [`QueueSync`]. A semaphore wait of `vkQueueSubmit2`
+/// covers every later command of its queue in submission order at its stages, so a later
+/// batch needs no wait for a value at or below one its queue waited for at the same stages.
+/// Without it, every frame without streaming uploads waited again for the pool's last copy,
+/// and that wait split a graphics batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Waited {
+    /// Per waiting queue, per queue waited for, per stage bit: the largest value waited for.
+    values: [[[u64; 64]; 3]; 3],
+}
+
+impl Default for Waited {
+    fn default() -> Self {
+        Self {
+            values: [[[0; 64]; 3]; 3],
+        }
+    }
+}
+
+impl Waited {
+    /// Whether `queue` already waited for `value` or later of `kind`'s timeline at each of
+    /// `stages`, or at every stage.
+    fn covers(
+        &self,
+        queue: QueueKind,
+        kind: QueueKind,
+        value: u64,
+        stages: vk::PipelineStageFlags2,
+    ) -> bool {
+        let known = &self.values[queue.index()][kind.index()];
+        let all = known[vk::PipelineStageFlags2::ALL_COMMANDS
+            .as_raw()
+            .trailing_zeros() as usize];
+        !stages.is_empty() && stage_bits(stages).all(|bit| known[bit].max(all) >= value)
+    }
+
+    /// Records the waits of `batch`, submitted before every later batch of its queue.
+    fn record(&mut self, batch: &CompiledBatch) {
+        for kind in QueueKind::ALL {
+            let (value, stages) = batch.waits[kind.index()];
+            if value == 0 {
+                continue;
+            }
+            let known = &mut self.values[batch.queue.index()][kind.index()];
+            for bit in stage_bits(stages) {
+                known[bit] = known[bit].max(value);
+            }
+        }
+    }
+}
+
+/// The index of each bit set in `stages`.
+fn stage_bits(stages: vk::PipelineStageFlags2) -> impl Iterator<Item = usize> {
+    let raw = stages.as_raw();
+    (0..64).filter(move |bit| raw & (1 << bit) != 0)
 }
 
 /// The last known use of an image subresource or a buffer, kept between frames.
@@ -1029,6 +1090,7 @@ fn compile(
         buffer_states,
         &mut image_sync,
         &mut buffer_sync,
+        &mut Waited::default(),
         false,
         &mut |kind| {
             next[kind.index()] += 1;
@@ -1065,18 +1127,23 @@ fn wait_stages(stage: vk::PipelineStageFlags2) -> vk::PipelineStageFlags2 {
 
 /// Adds to `waits` what an access on `queue` to a resource with `sync` must wait for: the
 /// batch of another queue that last wrote it, and for a write, the batches of other queues
-/// that read it since.
+/// that read it since; unless an earlier batch of `queue` waited for it already (`waited`).
 fn access_waits(
     waits: &mut [(u64, vk::PipelineStageFlags2); 3],
+    waited: &Waited,
     sync: &QueueSync,
     queue: QueueKind,
     write: bool,
     stage: vk::PipelineStageFlags2,
 ) {
     let mut wait = |kind: QueueKind, value: u64| {
+        let stages = wait_stages(stage);
+        if waited.covers(queue, kind, value, stages) {
+            return;
+        }
         let entry = &mut waits[kind.index()];
         entry.0 = entry.0.max(value);
-        entry.1 |= wait_stages(stage);
+        entry.1 |= stages;
     };
     if let Some((kind, value)) = sync.writer
         && kind != queue
@@ -1109,9 +1176,10 @@ fn record_access(sync: &mut QueueSync, queue: QueueKind, write: bool, signal: u6
 /// and advances the states and the queue records of every resource to the end of the frame.
 /// `passes` are in execution order ([`schedule`]) with their queues resolved; `reserve`
 /// hands out each queue's next timeline value. The last batch is graphics and waits for the
-/// last batch of every other queue. With `poison`, each transient buffer is filled with a
-/// sentinel after its last pass (`FORGE_GRAPH_POISON=1`, #78). Pure: tests run it on null
-/// handles.
+/// last batch of every other queue. A wait an earlier batch of the same queue made is left
+/// out, and `waited` gains the frame's waits (#104). With `poison`, each transient buffer is
+/// filled with a sentinel after its last pass (`FORGE_GRAPH_POISON=1`, #78). Pure: tests run
+/// it on null handles.
 #[allow(clippy::too_many_arguments)]
 fn compile_queued(
     passes: &[PassDecl],
@@ -1121,6 +1189,7 @@ fn compile_queued(
     buffer_states: &mut [ResourceState],
     image_sync: &mut [QueueSync],
     buffer_sync: &mut [QueueSync],
+    waited: &mut Waited,
     poison: bool,
     reserve: &mut dyn FnMut(QueueKind) -> u64,
 ) -> Result<(Vec<CompiledPass>, Vec<CompiledBatch>)> {
@@ -1163,7 +1232,14 @@ fn compile_queued(
                 )));
             }
             let dst = use_.access.state(meta.sampled_layout);
-            access_waits(&mut waits, &image_sync[i], queue, dst.write, dst.stage);
+            access_waits(
+                &mut waits,
+                waited,
+                &image_sync[i],
+                queue,
+                dst.write,
+                dst.stage,
+            );
         }
         for use_ in &pass.buffers {
             let i = use_.handle.0 as usize;
@@ -1182,7 +1258,7 @@ fn compile_queued(
                 )));
             }
             let dst = use_.access.state();
-            access_waits(&mut waits, sync, queue, dst.write, dst.stage);
+            access_waits(&mut waits, waited, sync, queue, dst.write, dst.stage);
         }
         // The pass joins the open batch when that batch is on its queue and already waits
         // for everything it needs; otherwise it opens a batch.
@@ -1205,6 +1281,8 @@ fn compile_queued(
         }
         let batch = batches.len() - 1;
         let signal = batches[batch].signal;
+        // The queue's later batches need not wait for these again.
+        waited.record(&batches[batch]);
 
         let mut out = CompiledPass {
             batch,
@@ -1414,6 +1492,7 @@ fn compile_queued(
             }
         }
     }
+    waited.record(&batches[last]);
     // Zones close where the label changes or the batch does.
     for index in 0..compiled.len() {
         let next = passes
@@ -1677,6 +1756,8 @@ pub struct RenderGraph {
     /// `FORGE_FRAME_BARRIER=1`: a full barrier at the start of each queue's first batch, which
     /// serialises frames on the GPU (a debugging aid).
     frame_barrier: bool,
+    /// What each queue's batches waited for on the other queues, from frame to frame (#104).
+    waited: Waited,
     last_plan: u64,
 }
 
@@ -1694,6 +1775,7 @@ impl RenderGraph {
             allow_alias: !flag("FORGE_GRAPH_NO_ALIAS"),
             poison: flag("FORGE_GRAPH_POISON"),
             frame_barrier: flag("FORGE_FRAME_BARRIER"),
+            waited: Waited::default(),
             last_plan: 0,
         }
     }
@@ -1955,6 +2037,8 @@ impl RenderGraph {
             })
             .collect();
 
+        // Kept only once the frame is recorded, like the resources' states.
+        let mut waited = self.waited;
         let (compiled, batches) = compile_queued(
             &decls,
             &metas,
@@ -1963,6 +2047,7 @@ impl RenderGraph {
             &mut buffer_states,
             &mut image_sync,
             &mut buffer_sync,
+            &mut waited,
             self.poison,
             &mut |kind| frames.reserve_value(kind),
         )?;
@@ -2084,6 +2169,7 @@ impl RenderGraph {
                 buffer.sync.set(buffer_sync[i]);
             }
         }
+        self.waited = waited;
         self.stats = stats;
 
         if self.log {
@@ -2680,6 +2766,7 @@ mod tests {
                 &mut [ResourceState::UNDEFINED],
                 &mut [],
                 &mut [QueueSync::default()],
+                &mut Waited::default(),
                 false,
                 &mut |_| 1,
             )
@@ -2732,6 +2819,7 @@ mod tests {
                 buffer_states,
                 &mut [QueueSync::default()],
                 &mut [QueueSync::default()],
+                &mut Waited::default(),
                 false,
                 &mut |_| 1,
             )
@@ -2777,6 +2865,7 @@ mod tests {
             &mut buffer_states,
             &mut [],
             &mut [QueueSync::default(); 2],
+            &mut Waited::default(),
             true,
             &mut |_| 1,
         )
@@ -2884,16 +2973,25 @@ mod tests {
         decl
     }
 
-    /// Runs the scheduler and the compiler as `execute` does, from persistent `sync`.
+    /// The queues' timelines and what each queue waited for, from frame to frame.
+    #[derive(Default)]
+    struct Queues {
+        next: [u64; 3],
+        waited: Waited,
+    }
+
+    /// Runs the scheduler and the compiler as `execute` does, from persistent `sync` and
+    /// `queues`.
     fn frame(
         passes: &[PassDecl],
         images: &[ImageMeta],
         states: &mut [Vec<ResourceState>],
         sync: &mut [QueueSync],
-        next: &mut [u64; 3],
+        queues: &mut Queues,
     ) -> Result<(Vec<&'static str>, Vec<CompiledPass>, Vec<CompiledBatch>)> {
         let order = schedule(passes);
         let ordered: Vec<PassDecl> = order.iter().map(|&i| passes[i].clone()).collect();
+        let next = &mut queues.next;
         let (compiled, batches) = compile_queued(
             &ordered,
             images,
@@ -2902,6 +3000,7 @@ mod tests {
             &mut [],
             sync,
             &mut [],
+            &mut queues.waited,
             false,
             &mut |kind| {
                 next[kind.index()] += 1;
@@ -2917,7 +3016,7 @@ mod tests {
         let images = [meta("x", 1, None), meta("y", 1, None), meta("z", 1, None)];
         let mut states = vec![vec![ResourceState::UNDEFINED]; 3];
         let mut sync = vec![QueueSync::default(); 3];
-        let mut next = [0; 3];
+        let mut next = Queues::default();
         let write = ImageAccess::StorageWrite(S::COMPUTE_SHADER);
         let read = ImageAccess::Sampled(S::COMPUTE_SHADER);
         let passes = [
@@ -2971,7 +3070,7 @@ mod tests {
         let images = [meta("x", 1, None)];
         let mut states = vec![vec![ResourceState::UNDEFINED]];
         let mut sync = vec![QueueSync::default()];
-        let mut next = [0; 3];
+        let mut next = Queues::default();
         let passes = [
             pass(
                 "g/a",
@@ -2993,6 +3092,125 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_an_earlier_batch_of_the_queue_made_is_not_made_again() {
+        use QueueKind::{Compute, Graphics, Transfer};
+        // The city's streaming (#104): the pool copied on the transfer queue in one frame,
+        // read by the culls in every frame after it, the probes rebuilt on the compute queue.
+        let images = [
+            meta("pool", 1, None),
+            meta("probes", 1, None),
+            meta("list", 1, None),
+        ];
+        let mut states = vec![vec![ResourceState::UNDEFINED]; 3];
+        let mut sync = vec![QueueSync::default(); 3];
+        let mut queues = Queues::default();
+        let read = ImageAccess::Sampled(S::COMPUTE_SHADER);
+        let list = ImageAccess::StorageReadWrite(S::COMPUTE_SHADER);
+        let clear = pass("g/clear", &[(2, None, ImageAccess::TransferDst)]);
+        let upload = on(
+            Transfer,
+            pass("t/upload", &[(0, None, ImageAccess::TransferDst)]),
+        );
+        let probes = on(
+            Compute,
+            pass(
+                "c/probes",
+                &[(1, None, ImageAccess::StorageWrite(S::COMPUTE_SHADER))],
+            ),
+        );
+        let cull = pass("g/cull", &[(0, None, read), (2, None, list)]);
+        let shade = pass(
+            "g/shade",
+            &[(0, None, read), (1, None, read), (2, None, list)],
+        );
+        let passes = [
+            clear.clone(),
+            upload,
+            probes.clone(),
+            cull.clone(),
+            shade.clone(),
+        ];
+        let (order, compiled, batches) =
+            frame(&passes, &images, &mut states, &mut sync, &mut queues).unwrap();
+        assert_eq!(
+            order,
+            ["c/probes", "t/upload", "g/clear", "g/cull", "g/shade"]
+        );
+        let copy = batches[compiled[1].batch].signal;
+        let (cull_batch, shade_batch) = (batches[compiled[3].batch], batches[compiled[4].batch]);
+        assert_eq!(
+            cull_batch.waits[Transfer.index()],
+            (copy, S::COMPUTE_SHADER)
+        );
+        // The shading's own wait for the copy is the cull's; it waits for the probes, and as
+        // the frame's last batch for the copy at every stage.
+        assert_eq!(shade_batch.waits[Compute.index()].0, 1);
+        assert_eq!(shade_batch.waits[Transfer.index()], (copy, S::ALL_COMMANDS));
+        assert!(
+            queues
+                .waited
+                .covers(Graphics, Transfer, copy, S::VERTEX_SHADER)
+        );
+
+        // A frame without a copy: the cull joins the clear's batch, nothing waits for the copy.
+        let passes = [clear, probes, cull, shade];
+        let (order, compiled, batches) =
+            frame(&passes, &images, &mut states, &mut sync, &mut queues).unwrap();
+        assert_eq!(order, ["c/probes", "g/clear", "g/cull", "g/shade"]);
+        let queues_of: Vec<_> = batches.iter().map(|b| b.queue).collect();
+        assert_eq!(queues_of, [Compute, Graphics, Graphics]);
+        assert_eq!(compiled[2].batch, compiled[1].batch);
+        assert!(batches.iter().all(|b| b.waits[Transfer.index()].0 == 0));
+    }
+
+    #[test]
+    fn a_wait_at_other_stages_is_still_made() {
+        use QueueKind::{Compute, Graphics, Transfer};
+        let images = [meta("pool", 1, None), meta("probes", 1, None)];
+        let mut states = vec![vec![ResourceState::UNDEFINED]; 2];
+        let mut sync = vec![QueueSync::default(); 2];
+        let mut queues = Queues::default();
+        let passes = [
+            on(
+                Transfer,
+                pass("t/upload", &[(0, None, ImageAccess::TransferDst)]),
+            ),
+            pass("g/a", &[(0, None, ImageAccess::Sampled(S::COMPUTE_SHADER))]),
+            on(
+                Compute,
+                pass(
+                    "c/probes",
+                    &[(1, None, ImageAccess::StorageWrite(S::COMPUTE_SHADER))],
+                ),
+            ),
+            pass(
+                "g/b",
+                &[
+                    (0, None, ImageAccess::Sampled(S::FRAGMENT_SHADER)),
+                    (1, None, ImageAccess::Sampled(S::COMPUTE_SHADER)),
+                ],
+            ),
+        ];
+        let (order, compiled, batches) =
+            frame(&passes, &images, &mut states, &mut sync, &mut queues).unwrap();
+        assert_eq!(order, ["c/probes", "t/upload", "g/a", "g/b"]);
+        // g/a's wait blocked compute shaders only: g/b's fragment shaders wait for the copy.
+        let b = batches[compiled[3].batch];
+        assert_eq!(b.waits[Transfer.index()], (1, S::FRAGMENT_SHADER));
+        assert!(
+            !queues
+                .waited
+                .covers(Graphics, Transfer, 1, S::VERTEX_SHADER)
+        );
+        assert!(queues.waited.covers(
+            Graphics,
+            Transfer,
+            1,
+            S::COMPUTE_SHADER | S::FRAGMENT_SHADER
+        ));
+    }
+
+    #[test]
     fn mips_rebuilt_on_the_compute_queue_after_a_vertex_read_name_no_graphics_stage() {
         use QueueKind::Compute;
         // The water's images (issue #105): level 0 written, the mips built from it on the
@@ -3000,7 +3218,7 @@ mod tests {
         let images = [meta("waves", 3, None)];
         let mut states = vec![vec![ResourceState::UNDEFINED; 3]];
         let mut sync = vec![QueueSync::default()];
-        let mut next = [0; 3];
+        let mut next = Queues::default();
         let write = ImageAccess::StorageWrite(S::COMPUTE_SHADER);
         let read = ImageAccess::Sampled(S::COMPUTE_SHADER);
         let passes = [
@@ -3050,9 +3268,27 @@ mod tests {
         )];
         let transient = [meta("t", 1, Some(None))];
         let mut sync = vec![QueueSync::default()];
-        assert!(frame(&passes, &transient, &mut states, &mut sync, &mut [0; 3]).is_err());
+        assert!(
+            frame(
+                &passes,
+                &transient,
+                &mut states,
+                &mut sync,
+                &mut Queues::default()
+            )
+            .is_err()
+        );
         let mut target = meta("target", 1, None);
         target.concurrent = false;
-        assert!(frame(&passes, &[target], &mut states, &mut sync, &mut [0; 3]).is_err());
+        assert!(
+            frame(
+                &passes,
+                &[target],
+                &mut states,
+                &mut sync,
+                &mut Queues::default()
+            )
+            .is_err()
+        );
     }
 }

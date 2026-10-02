@@ -246,8 +246,10 @@ the queues itself (D-020):
   `gi/probe blend`). They run while the graphics queue culls and draws the geometry.
 - **On the transfer queue:** the streamed cluster pages' copies (`streaming/upload`).
 - **The frame.** Each queue gets batches of passes, placed as early as their inputs allow.
-  A batch waits for another queue only where a resource crosses between them, and the frame
-  ends on the graphics queue, after every other batch.
+  A batch waits for another queue only where a resource crosses between them, and only if its
+  queue has not waited for it already. The frames after a streaming copy no longer wait for
+  it, which saves one graphics batch (#104). The frame ends on the graphics queue, after
+  every other batch.
 
 | View (1600 × 900) | before | async |
 |---|---|---|

@@ -125,7 +125,8 @@ and the date next to every number.
   each, and carries the final states into the next frame. A pass may ask for the async
   compute or the transfer queue (#77): the graph moves it up to just after its last conflict,
   splits the frame into batches (one submission each), and derives the timeline waits between
-  queues from each resource's last writer and readers per queue. Persistent images
+  queues from each resource's last writer and readers per queue, leaving out those its queue
+  already made (#104). Persistent images
   (`GraphImage`: depth pyramids, TAA histories) and buffers (`GraphBuffer`: indirect
   arguments, the probes' state, readbacks) keep their state between frames; resources a frame
   in flight may still use go through `Frames::destroy_later`. Nobody outside `forge-gpu`

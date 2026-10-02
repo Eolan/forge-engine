@@ -263,6 +263,13 @@ geometry passes left idle. The change stays out of the engine, and its patch and
 in `reports/2026-09-30-95/`. What stays is the frame's measure. A frame whose async work starts
 during the previous one is timed from that frame's end, so the overlap is not counted twice
 (the span read 3.90 ms for a 2.1 ms frame). Without overlap the number is the same.
+The frames after a streaming copy no longer wait for it again (#104, 2026-10-02). The graph
+leaves out a wait its queue already made, so the flight's frames without a copy run one
+compute batch and two graphics batches, where they ran three graphics batches. Over five
+alternating runs of 6 000 frames, its CPU submit + present went 0.158–0.162 → 0.149–0.150 ms
+and its GPU frame 1.873–1.881 → 1.870–1.873 ms. The first run of the new build was an
+outlier at 0.164 and 1.890. The other views of `tools/timings.sh` do not move (within
+0.01 ms).
 With pass 2's cluster cull over pass 1's rejects only (#92: pass 1 lists the 80–160 k clusters
 the previous pyramid hid, pass 2 tests those alone instead of walking pass 1's work again),
 against the build before in alternating runs (three each; these runs measure the same build
