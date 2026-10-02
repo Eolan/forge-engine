@@ -121,7 +121,19 @@ Measured on 2026-10-02 (RTX 5070 Ti):
 | a docs-only change | gate | 16 s (55 s with clippy's first run in a tree) |
 | #133 (`def84e5`) against its parent | 0: sentinels, island, city; recooked | 233 s in all: 23 captures with the island cooked again (218 s), the gate beside them |
 | #133 by hand, before this tool | 0 | about 4 min of captures |
-| the full batch | 1 | 15–20 min of captures |
+| `ec4e626` (#133 to #135 since the last accepted set), `--tier 2 --timings` | 2 | 1 592 s (26.5 min) in all |
+
+The Tier 2 run's steps, which also give Tier 1's (about 11 min, 20 with the timings):
+- **The full batch:** 58 images (54 runs on both paths, recooked) in 390 s, then the compare.
+  The 34 pairs within the batch read 0 px.
+- **The batch with `FORGE_ASYNC=0`:** 333 s. It matched the async batch except for
+  `fb-ast-taa600`, which flaked (245 px, recognised).
+- **`tools/origins.sh`:** 39 s. **Validation:** 38 runs in 242 s, clean.
+- **The gate:** beside the captures, done before them.
+- **The timings:** 565 s.
+
+Before #134 a check was quoted at 15–20 minutes of captures, a "before" batch and an "after"
+batch. Accepted sets remove the "before" batch.
 
 ## The verification batch (`tools/`, issue #74)
 
@@ -297,7 +309,9 @@ covers the city (still, orbit, flight, every page resident), meshlets (still, or
 alternating between the two builds. ZONES is a regex that also prints the matching GPU
 zones, for example `cull`. `FORGE_SETS` times only some views (`city`, `island`, `meshlets`,
 `ballad`; `sentinels` is the city, meshlets and the ballad at 900p). Put the numbers before
-and after, or the F1 overlay's, in the report and in `docs/PROFILE.md`.
+and after, or the F1 overlay's, in the report and in `docs/PROFILE.md`. The noise to beat:
+the same build against itself (2026-10-02, all views, 565 s) stayed within 0.04 ms per view.
+That is within 1 % except the island, at 1.400–1.439 ms (3 %).
 
 **Far from the origin (issue #93):** `tools/origins.sh OUT [BIN] [ORIGINS]` captures the
 city's south view and the ballad's frame 240 with the scene moved 10⁴, 10⁵, 10⁶ and 10⁷ m from
@@ -305,9 +319,13 @@ the world's origin along every axis (`--origin`, the camera and everything ancho
 scene going with it), and compares each with the same view at the origin: pixels, ꟻLIP, the
 difference and the error map beside each capture. A renderer without a precision limit would
 give 0 px at every offset; the world-space `f32` instance table before #93 did not (the numbers
-in `docs/research/large-worlds.md` §1), and with the cells record (2026-09-26) it is a 0 px
-check, up to a few pixels from the split's 0.1 mm rounding. Run it for a change that touches
-how positions reach the GPU, and put its lines in the report.
+in `docs/research/large-worlds.md` §1). With the cells record (2026-09-26) an offset of whole
+cells gives 0 px. The far offsets keep a residue that does not grow with the distance: the
+offset's rounding inside a cell, turned into pixels by the traced shadows' edges and TAA. On
+2026-10-02 (Tier 2 at `ec4e626`) it was 2 307–2 428 px in the city (ꟻLIP mean ≤ 0.0016, largest
+0.093) and 1 518–1 519 px in the ballad (≤ 0.0005, 0.29), as in #98 (2 486–2 730 and 1 519).
+A change of these numbers is what to look at. Run it for a change that touches how positions
+reach the GPU, and in Tier 2, and put its lines in the report.
 
 **Debugging aids:**
 - `FORGE_TRACE_FRAMES=<file>` with `FORGE_HASH_IMAGES=1` writes per-frame hashes of the

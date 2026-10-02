@@ -24,26 +24,43 @@ the research index `docs/RESEARCH.md`, where the time goes `docs/PROFILE.md`. Th
 - Never rewrite pushed history: `main` refuses force-pushes and deletion (rulesets in
   `.github/rulesets/`, repository settings in `docs/PROCESS.md`).
 
-## Verification before a PR (all of it, every time)
+## Verification before a push: in tiers (D-043)
+
+```
+tools/verify.sh            # picks the tier from the changed paths, says why, runs it
+tools/verify.sh --dry-run  # only says which tier and why
+```
+
+`docs/PROCESS.md`, "Checking a change in tiers", has the details. Every tier runs the gate,
+exactly as CI:
 
 ```
 cargo build --release
 cargo test --release
-cargo clippy --release --all-features --all-targets -- -D warnings   # exactly as CI
+cargo clippy --release --all-features --all-targets -- -D warnings
 cargo fmt --all -- --check
+cargo run --release -q -p credits -- --check
 ```
 
-Rendering changes additionally run the verification batch (`docs/PROCESS.md`, `tools/`):
-- **`tools/captures.sh`:** before and after the change.
-- **`tools/compare.sh`:** the culling A/B harness (`--no-occlusion`, `--no-cone`) and the mesh
-  path against the fallback must differ in **0 pixels**, and `--show-culled` must show no red.
-  Images the change is meant to alter are named in the report, with the ꟻLIP numbers
-  `compare.sh` prints (how visible the change is; `docs/PROCESS.md`, "The perceptual check").
-- **`tools/validate.sh`:** no validation errors. The GOG overlay layer's naming warnings are
-  noise.
+- **Gate only:** docs, reports and Markdown.
+- **Tier 0, every other change whose paths `tools/impact.toml` maps:** the sentinels and the
+  captures those paths select, compared with the last accepted set (`captures/accepted/`).
+- **Tier 1, shared rendering or any unmapped path:** the full batch on both paths and
+  validation.
+- **Tier 2, a milestone** (every ~5 commits, before a showcase; `--tier 2`): Tier 1, the batch
+  with `FORGE_ASYNC=0`, `tools/origins.sh`, and the real-time tour for the owner.
 
-Performance changes: run `tools/timings.sh` (or read the F1 overlay) before and after, and
-update `docs/PROFILE.md`.
+What must hold:
+- The culling A/B harness (`--no-occlusion`, `--no-cone`), streamed against resident, and the
+  mesh path against the fallback differ in **0 pixels**, and `--show-culled` shows no red.
+- Images the change is meant to alter are passed with `--expect` and named in the report, with
+  the ꟻLIP numbers `compare.sh` prints (`docs/PROCESS.md`, "The perceptual check").
+- #71's flake prints `FLAKE #71` and does not fail.
+- Validation has no errors. The GOG overlay layer's naming warnings are noise.
+
+Performance changes: `tools/verify.sh --timings BASE_BIN` (a build of the base in another tree),
+or the F1 overlay before and after; update `docs/PROFILE.md`. The GPU is shared: `verify.sh`
+takes the lock `%TEMP%/forge-gpu.lock`; take it by hand for any other demo run.
 
 ## Conventions
 

@@ -53,7 +53,7 @@ imgdiff=$root/target/release/imgdiff
 status=0
 flakes=0
 expected=0
-missing=0
+missing=""
 # flake NAME COUNT MEAN PEAK: true when a difference of NAME against its base has #71's
 # signature.
 flake() {
@@ -96,8 +96,7 @@ is_expected() {
 # base), the flake (#71) and FORGE_EXPECT's images are told apart and do not fail.
 pair() {
   if [ "${4:-}" = same ] && [ ! -f "$1" ] && [ -f "$2" ]; then
-    echo "$3: not in $base"
-    missing=$((missing + 1))
+    missing="$missing $3"
     return 0
   fi
   [ -f "$1" ] && [ -f "$2" ] || return 0
@@ -161,7 +160,7 @@ main() {
   local others=""
   [ $flakes != 0 ] && others="$others, $flakes the flake (#71)"
   [ $expected != 0 ] && others="$others, $expected expected (FORGE_EXPECT)"
-  [ $missing != 0 ] && echo "$missing images not in $base: not compared"
+  [ -n "$missing" ] && echo "not in $base, not compared ($(wc -w <<< "$missing")):$missing"
   if [ $status = 0 ] && [ -z "$others" ]; then
     echo "every line is 0 px: the pass"
   elif [ $status = 0 ]; then

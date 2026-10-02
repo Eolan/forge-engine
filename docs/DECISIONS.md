@@ -1774,7 +1774,10 @@ change in tiers"):
 
 Measured on 2026-10-02: a docs-only change runs the gate in 16 s. #133 against its parent runs
 Tier 0 (the sentinels, the island and the city, recooked) in 233 s, the gate included: the
-sentinels and the city read 0 px, the island its expected changes.
+sentinels and the city read 0 px, the island its expected changes. A first Tier 2 at `ec4e626`
+took 1 592 s, the timings included: the full batch in 390 s, the same with `FORGE_ASYNC=0` in
+333 s (0 px against it but for one recognised flake), `origins.sh`, clean validation, and the
+timings of the build against itself, within 0.04 ms per view.
 
 Not chosen: the full batch every time (too slow), and the sentinels alone (an island change
 must see the island). A 3DMark-style benchmark in one process ("forge-mark") is a later step,

@@ -516,12 +516,12 @@ case $tier in
     left="$left, timings, tools/origins.sh, FORGE_ASYNC=0 and the real-time tour"
     ;;
   1) left="tools/origins.sh, FORGE_ASYNC=0 and the real-time tour" ;;
-  2) left="the real-time tour, for the owner to watch: target/release/island --tour" ;;
+  2) left="the real-time tour, to watch for shimmer and pops: target/release/island --tour" ;;
 esac
 [ "$tier" != gate ] && [ "$tier" != 0 ] && [ -z "$timings_bin" ] && left="timings (--timings BASE_BIN), $left"
 step "verdict"
 echo "Tier $tier in $((SECONDS - start)) s, run in $run"
-echo "left for Tier 2: $left"
+if [ "$tier" = 2 ]; then echo "left for the owner: $left"; else echo "left for Tier 2: $left"; fi
 if [ ${#failed[@]} -gt 0 ]; then
   echo "verdict: fail" >> "$run/state.txt"
   echo "FAILED: ${failed[*]}"
