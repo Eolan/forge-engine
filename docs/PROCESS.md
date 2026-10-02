@@ -164,6 +164,53 @@ on every statistic, and its error maps are identical (0 px), at 30, 67 and 120 p
 
 It costs about 0.2 s per differing 1600 × 900 pair. Identical pairs skip it.
 
+**HDR captures (issue #126).** Two 16-bit images are the HDR output's PQ codes (`-pq.png`,
+#94). `imgdiff` counts their pixels at 16 bits (`compare.sh` passes `--tolerance 0`, so one
+10-bit code counts) and prints the largest error in codes. Their ꟻLIP is HDR-ꟻLIP
+(Andersson, Nilsson, Shirley and Akenine-Möller, Eurographics 2021):
+- both images are decoded to light: Rec.2020 to Rec.709, 1.0 = 100 nits, colours outside
+  Rec.709 clipped as an sRGB display would;
+- both are tone-mapped (ACES) at one exposure per stop, from the one that puts the
+  reference's brightest pixel at 0.85 to the one that puts its median there;
+- LDR-ꟻLIP runs at each exposure, and each pixel keeps its largest error.
+
+`--exr a.exr b.exr` writes that light, for NVIDIA's tool or an HDR image viewer. The port
+matches NVIDIA's tool (v1.7) to six decimals on 28 pairs at 30, 67 and 120 ppd: every
+statistic, the exposures included, and error maps identical to the pixel. It costs about
+0.8 s per differing 1600 × 900 pair (nine exposures for the ballad).
+
+HDR-ꟻLIP looks at the image over a range of exposures, the ballad's up to 7 stops above its
+display, so it sees differences in the dark that the display hides. On a whole-frame change
+its numbers run about five times LDR-ꟻLIP's on the SDR frame; on a speck they are about the
+same. Measured on the ballad (`asteroids --tonemap aces2 --hdr offscreen`, 1600 × 900,
+2026-10-02):
+
+| Pair | Pixels that differ | Codes | HDR-ꟻLIP mean | Largest | Pixels ≥ 0.1 | In SDR (LDR-ꟻLIP mean, largest) |
+|---|---|---|---|---|---|---|
+| ACES 2.0's HDR table against its per-pixel transform, frames 240 and 600 | 719 762–755 552 | 2 | 0.021–0.025 | 0.090–0.102 | 0–2 | 0.0044, 0.034 (frame 600) |
+| one code brighter over the whole frame | 1 440 000 | 1 | 0.037 | 0.070 | 0 | — |
+| two codes, three codes | 1 440 000 | 2, 3 | 0.062, 0.083 | 0.115, 0.148 | 9 108, 246 153 | — |
+| the field 100 km and 1 000 km from the origin (#93), frame 240 | 26 546–27 158 | 292 | 0.0019 | 0.577 | 510 | 0.0005, 0.266 |
+| the same at frame 600, TAA on | 179 876 | 81 | 0.0061 | 0.523 | 127 | 0.0019, 0.072 |
+| one pixel 20 codes brighter, then 60 | 1 | 20, 60 | — | 0.083, 0.192 | 0, 7 | — |
+| a line of 128 pixels, 20 codes brighter | 128 | 20 | — | 0.240 | 390 | — |
+| a 3 × 3 block, 20 codes brighter | 9 | 20 | — | 0.311 | 21 | — |
+| GTAO off against on, frames 240 and 600 | 320 677–357 581 | 54–120 | 0.013–0.018 | 0.59–0.91 | 20 932–51 139 | 0.0034, 0.135 (frame 600) |
+| a quarter stop brighter (`--exposure-compensation 0.25`) | 1 439 480 | 70 | 0.277 | 0.410 | 1 423 602 | 0.119, 0.201 |
+| AgX against ACES 2.0 | 1 439 973 | 176 | 0.831 | 0.984 | 1 436 998 | — |
+
+The largest values far from the origin are single pixels in the dark space, a dust mote that
+moved, invisible on the display and glaring seven stops up. The synthetic pairs edit frame
+600's PQ codes at its centre. Four more runs of frame 600 matched it to the code (#71's flake
+did not show). The error maps of the GTAO pair, SDR above and HDR below, are in
+`reports/2026-10-02-126/`.
+
+What HDR differences are acceptable (proposed, D-017's second amendment 🟡): the same classes
+as LDR-ꟻLIP. For class 2 the largest value stays at 0.15, with the same rule for isolated
+pixels: the 20-code line (0.24) and 3 × 3 block (0.31) fail, one pixel passes. The mean
+becomes 0.05: the HDR table (0.021–0.025) and one code over the whole frame (0.037) pass, two
+codes (0.062) fail. `imgdiff --max-flip 0.15 --max-flip-mean 0.05` judges by it.
+
 **Performance:** `tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]` times the usual views. It
 covers the city (still, orbit, flight, every page resident), meshlets (still, orbit,
 `--side 700`) and the ballad at 900p and 1440p. Each view runs three times per build,

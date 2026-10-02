@@ -12,10 +12,16 @@
 //! LDR-ꟻLIP ([`flip`], issue #75) prints its mean, weighted quartiles, percentiles and
 //! largest value, `a` taken as the reference. `--flip-map` writes its error map. With
 //! `--max-flip` or `--max-flip-mean`, the exit code judges ꟻLIP instead of the pixel count.
+//!
+//! Two 16-bit images are HDR10 captures' PQ codes (issue #94): their pixels are counted at 16
+//! bits, and ꟻLIP is HDR-ꟻLIP on their light ([`pq`], [`flip::hdr_error_map`], issue #126).
+//! `--exr` writes that light, for NVIDIA's tool or an HDR image viewer.
 
 #![forbid(unsafe_code)]
 
+mod exr;
 mod flip;
+mod pq;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,7 +70,7 @@ struct Args {
     /// `--out` then writes these pixels, and `--crops` shows them beside the crops.
     #[arg(long, num_args = 2, value_names = ["NEXT_A", "NEXT_B"])]
     then: Option<Vec<PathBuf>>,
-    /// Skip the perceptual error (LDR-ꟻLIP).
+    /// Skip the perceptual error (LDR-ꟻLIP, or HDR-ꟻLIP for two PQ captures).
     #[arg(long)]
     no_flip: bool,
     /// Pixels per degree of visual angle for ꟻLIP. The default is the reference's: a 0.7 m
@@ -82,6 +88,10 @@ struct Args {
     /// value.
     #[arg(long)]
     max_flip_mean: Option<f32>,
+    /// Two PQ captures only: write the light HDR-ꟻLIP compares (linear Rec.709, 1.0 = 100
+    /// nits) as 32-bit float EXR files, for NVIDIA's tool or an HDR image viewer.
+    #[arg(long, num_args = 2, value_names = ["A_EXR", "B_EXR"])]
+    exr: Option<Vec<PathBuf>>,
 }
 
 fn parse_point(text: &str) -> std::result::Result<[u32; 2], String> {
@@ -196,6 +206,8 @@ fn main() -> Result<ExitCode> {
     let (width, height) = a.dimensions();
     let mut different = 0_u64;
     let mut max_error = 0_u8;
+    // At 16 bits, and in 10-bit codes: adjacent codes can share an 8-bit value.
+    let (mut max_error_16, mut max_codes) = (0_u16, 0_u16);
     let mut sum_error = 0_u64;
     let mut darker_in_a = 0_u64;
     let mut reported = 0_usize;
@@ -209,6 +221,9 @@ fn main() -> Result<ExitCode> {
             Some((a16, b16)) => {
                 let (qa, qb) = (a16.get_pixel(x, y), b16.get_pixel(x, y));
                 let err16 = (0..3).map(|c| qa[c].abs_diff(qb[c])).max().unwrap_or(0);
+                max_error_16 = max_error_16.max(err16);
+                let codes = (0..3).map(|c| (qa[c] >> 6).abs_diff(qb[c] >> 6)).max();
+                max_codes = max_codes.max(codes.unwrap_or(0));
                 u32::from(err16) > u32::from(args.tolerance) * 257
             }
             None => err > args.tolerance,
@@ -233,30 +248,68 @@ fn main() -> Result<ExitCode> {
         );
     }
     let total = u64::from(width) * u64::from(height);
+    let codes = if wide.is_some() {
+        format!(", max PQ code error {max_codes}")
+    } else {
+        String::new()
+    };
     println!(
-        "{} vs {}: {different} / {total} pixels differ (> {}), {:.4} %, max channel error {max_error}, mean error {:.4}, darker in a: {darker_in_a}",
+        "{} vs {}: {different} / {total} pixels differ (> {}), {:.4} %, max channel error {max_error}{codes}, mean error {:.4}, darker in a: {darker_in_a}",
         args.a.display(),
         args.b.display(),
         args.tolerance,
         different as f64 * 100.0 / total as f64,
         sum_error as f64 / total as f64
     );
+    // Two PQ captures as light (issue #126).
+    let light = wide
+        .as_ref()
+        .map(|(a16, b16)| (pq::to_linear(a16), pq::to_linear(b16)));
+    if let Some(paths) = &args.exr {
+        let (la, lb) = light
+            .as_ref()
+            .context("--exr needs two 16-bit PQ captures")?;
+        exr::write(&paths[0], la, width as usize)?;
+        exr::write(&paths[1], lb, width as usize)?;
+    }
     let mut flip_fails = false;
     if !args.no_flip {
         let ppd = args.ppd.unwrap_or_else(flip::default_ppd);
         // Identical images have no error anywhere: skip the filtering.
-        let (errors, s) = if max_error > 0 {
-            let errors = flip::error_map(&a, &b, ppd);
-            let s = flip::stats(&errors, width);
-            (errors, s)
+        let differs = max_error > 0 || max_error_16 > 0;
+        let (name, errors) = match &light {
+            Some((la, lb)) => {
+                let exposures = flip::Exposures::of(la);
+                let errors = if differs {
+                    flip::hdr_error_map(la, lb, width as usize, ppd, exposures)
+                } else {
+                    vec![0.0; total as usize]
+                };
+                let name = format!(
+                    "HDR-FLIP at {ppd:.1} ppd, {} exposures from {:.4} to {:.4} stops (ACES)",
+                    exposures.count, exposures.start, exposures.stop
+                );
+                (name, errors)
+            }
+            None => {
+                let errors = if differs {
+                    flip::error_map(&a, &b, ppd)
+                } else {
+                    vec![0.0; total as usize]
+                };
+                (format!("LDR-FLIP at {ppd:.1} ppd"), errors)
+            }
+        };
+        let s = if differs {
+            flip::stats(&errors, width)
         } else {
-            (vec![0.0; total as usize], flip::Stats::default())
+            flip::Stats::default()
         };
         let [p50, p99, p999] = s.percentiles;
         let [q1, q3] = s.weighted_quartiles;
         let [above_1, above_2, above_5] = s.above;
         println!(
-            "LDR-FLIP at {ppd:.1} ppd: mean {:.6}, weighted median {:.6}, weighted quartiles {q1:.6} / {q3:.6}, p50 {p50:.6}, p99 {p99:.6}, p99.9 {p999:.6}, max {:.6} at ({}, {}), pixels >= 0.1: {above_1}, >= 0.2: {above_2}, >= 0.5: {above_5}",
+            "{name}: mean {:.6}, weighted median {:.6}, weighted quartiles {q1:.6} / {q3:.6}, p50 {p50:.6}, p99 {p99:.6}, p99.9 {p999:.6}, max {:.6} at ({}, {}), pixels >= 0.1: {above_1}, >= 0.2: {above_2}, >= 0.5: {above_5}",
             s.mean, s.weighted_median, s.max, s.max_at.0, s.max_at.1
         );
         flip_fails = args.max_flip.is_some_and(|limit| s.max >= limit)

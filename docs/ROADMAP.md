@@ -74,8 +74,9 @@ the owner having picked the Academy's look for paper white: HDR10 and scRGB on t
 when Windows shows it in HDR, an off-screen HDR10 mode previewed and captured on any monitor,
 ACES 2.0's 500–4000-nit presets as tables, F2/F3/F4 (`docs/demos/asteroids.md`, "HDR
 output"; 0.01 ms in the resolve at 1440p). The present waits for "Use HDR" on the owner's
-monitor; the calibration pages are #125, HDR-ꟻLIP #126. Then #39 (the RTX 3080 run, which
-can also retry #95's double buffer).
+monitor; the calibration pages are #125. HDR-ꟻLIP for the HDR captures ✅ (#126: it matches
+NVIDIA's tool; class 2's HDR thresholds proposed in D-017's second amendment 🟡). Then #39
+(the RTX 3080 run, which can also retry #95's double buffer).
 
 **Proposed next, for the owner to pick:**
 - #79, moving geometry: ships on paths in the belt, or cars on the city's streets. It closes
@@ -244,9 +245,10 @@ Goal: the renderer skeleton every later system draws through.
    AgX / ACES fit / Khronos PBR Neutral switchable at run time, golden captures per curve.
    Bloom ✅ (issue #44: the downsample/upsample chain of Jimenez 2014 before the tone
    curve, 0.04 ms at 900p). A perceptual golden-image metric ✅ (#75: LDR-ꟻLIP in
-   `imgdiff`). ACES 2.0's output transform ✅ (#76: a fourth curve, the SDR preset through a
-   baked 65³ table, +0.007 ms at 1440p; the per-pixel transform kept as the reference).
-   Still to come: an HDR display output (#94: ACES 2.0's 1000-nit presets, PQ).
+   `imgdiff`; HDR-ꟻLIP for the HDR captures, #126). ACES 2.0's output transform ✅ (#76: a
+   fourth curve, the SDR preset through a baked 65³ table, +0.007 ms at 1440p; the per-pixel
+   transform kept as the reference). An HDR display output ✅ (#94: ACES 2.0's 500–4000-nit
+   presets, HDR10 and scRGB; the present on an HDR display still to see).
    Hillaire atmosphere ✅ (2026-09-24, D-023: transmittance and multiple-scattering tables
    as graph passes, the per-pixel march for planets seen from space; the planet-view table ✅
    (issue #26: two fetches instead of the march, 0.333 → 0.105 ms at 50°); the sky-view table, the aerial perspective and the sun seen from the

@@ -36,7 +36,7 @@ demos/task-bench      job-system benchmarks and the frame-pacing demonstration
 demos/meshlets        culling test bench: every culling stage switchable and measurable
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
 demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster pages streamed, the 300 m/s flight
-tools/imgdiff         pixel and perceptual (LDR-FLIP) comparison of captures (golden images)
+tools/imgdiff         pixel and perceptual (LDR- and HDR-FLIP) comparison of captures (golden images)
 tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
 tools/credits         the Rust crates in the build, their licences and authors (docs/credits-crates.md; CI checks it)
 tools/genesis         the terrain genesis pipeline over a 16 km island, with timings and PNG previews (docs/demos/island.md)
@@ -199,8 +199,11 @@ the two sequences: LOD pops against a full-detail reference
 When pixels differ it also prints the perceptual error LDR-ꟻLIP (NVIDIA's metric, issue #75):
 its mean, weighted quartiles, p50/p99/p99.9 and largest value. `--flip-map map.png` writes
 the error map, `--ppd` sets the viewing distance, and `--max-flip X` / `--max-flip-mean Y`
-make the exit code judge by ꟻLIP instead of the pixel count. Which check applies where:
-[docs/PROCESS.md](docs/PROCESS.md), "The perceptual check".
+make the exit code judge by ꟻLIP instead of the pixel count. For two PQ captures it prints
+the largest error in 10-bit codes and HDR-ꟻLIP instead (issue #126): ꟻLIP of their light
+over a range of exposures. `--exr a.exr b.exr` writes that light, for NVIDIA's tool or an HDR
+image viewer. Which check applies where: [docs/PROCESS.md](docs/PROCESS.md), "The perceptual
+check".
 
 ### The verification batch
 

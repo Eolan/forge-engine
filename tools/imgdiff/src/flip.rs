@@ -12,6 +12,9 @@
 //! [0, 1], 0 where nobody would see a difference. The arithmetic follows the reference step by
 //! step in `f32`, in the same order, so the maps and statistics agree with its tool.
 //!
+//! HDR-ꟻLIP (issue #126) compares two linear HDR images: LDR-ꟻLIP of both tone-mapped at a
+//! range of exposures, the largest error of each pixel kept ([`hdr_error_map`]).
+//!
 //! The reference's licence, which this port keeps:
 //!
 //! Copyright (c) 2020-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -43,7 +46,8 @@
 use std::f32::consts::PI;
 use std::thread;
 
-type Color = [f32; 3];
+/// A linear RGB colour (Rec.709 primaries).
+pub type Color = [f32; 3];
 
 const PI_SQ: f32 = PI * PI;
 
@@ -268,21 +272,37 @@ fn for_rows<T: Send>(out: &mut [T], width: usize, f: impl Fn(usize, &mut [T]) + 
     });
 }
 
-/// An 8-bit sRGB image in YCxCz, the way the reference's tool loads a PNG.
-fn to_ycxcz(image: &image::RgbaImage) -> Vec<Color> {
+/// An 8-bit sRGB image in linear RGB, the way the reference's tool loads a PNG.
+fn srgb_image_to_linear(image: &image::RgbaImage) -> Vec<Color> {
     image
         .pixels()
-        .map(|p| {
-            let c = [0, 1, 2].map(|k| clamp01(srgb_to_linear(f32::from(p[k]) / 255.0)));
-            xyz_to_ycxcz(linear_rgb_to_xyz(c))
-        })
+        .map(|p| [0, 1, 2].map(|k| srgb_to_linear(f32::from(p[k]) / 255.0)))
+        .collect()
+}
+
+/// A linear-RGB image in YCxCz, each channel clamped to [0, 1] first.
+fn to_ycxcz(image: &[Color]) -> Vec<Color> {
+    image
+        .iter()
+        .map(|c| xyz_to_ycxcz(linear_rgb_to_xyz(c.map(clamp01))))
         .collect()
 }
 
 /// The LDR-ꟻLIP error of every pixel, row by row; `reference` and `test` have the same size.
 pub fn error_map(reference: &image::RgbaImage, test: &image::RgbaImage, ppd: f32) -> Vec<f32> {
-    let (width, height) = reference.dimensions();
-    let (w, h) = (width as usize, height as usize);
+    let width = reference.width() as usize;
+    ldr_error_map(
+        &srgb_image_to_linear(reference),
+        &srgb_image_to_linear(test),
+        width,
+        ppd,
+    )
+}
+
+/// The LDR-ꟻLIP error of every pixel of two linear-RGB images `width` pixels wide, row by row:
+/// the reference's `LDR_FLIP`. Each channel is clamped to [0, 1].
+fn ldr_error_map(reference: &[Color], test: &[Color], width: usize, ppd: f32) -> Vec<f32> {
+    let (w, h) = (width, reference.len() / width);
     let images = [to_ycxcz(reference), to_ycxcz(test)];
 
     // The colour difference: filter both images horizontally, then vertically, and compare.
@@ -389,6 +409,95 @@ pub fn error_map(reference: &image::RgbaImage, test: &image::RgbaImage, ppd: f32
             *out = out.powf(1.0 - feature_difference);
         }
     });
+    errors
+}
+
+/// The tone curve HDR-ꟻLIP applies at each exposure, the reference's default: Narkowicz's fit
+/// of ACES with its 0.6 pre-exposure folded in, `(x² c0 + x c1 + c2) / (x² c3 + x c4 + c5)`
+/// per channel.
+const ACES: [f32; 6] = [
+    0.6 * 0.6 * 2.51,
+    0.6 * 0.03,
+    0.0,
+    0.6 * 0.6 * 2.43,
+    0.6 * 0.59,
+    0.14,
+];
+
+fn tone_map(c: f32) -> f32 {
+    let t = ACES;
+    ((c * c) * t[0] + c * t[1] + t[2]) / (c * c * t[3] + c * t[4] + t[5])
+}
+
+fn luminance(c: Color) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+/// The exposures HDR-ꟻLIP tone-maps both images at, in stops.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Exposures {
+    /// The first: the reference's brightest pixel lands at 0.85 after the tone curve.
+    pub start: f32,
+    /// The last: its median lands there.
+    pub stop: f32,
+    /// How many, evenly spaced: one per stop, at least two.
+    pub count: usize,
+}
+
+impl Exposures {
+    /// The reference's `computeExposures` for a linear-RGB image.
+    pub fn of(reference: &[Color]) -> Exposures {
+        // The larger root of tone_map(x) = 0.85.
+        let t = 0.85_f32;
+        let a = ACES[0] - t * ACES[3];
+        let b = ACES[1] - t * ACES[4];
+        let c = ACES[2] - t * ACES[5];
+        let d1 = -0.5 * (b / a);
+        let d2 = ((d1 * d1) - (c / a)).sqrt();
+        let x_max = d1 + d2;
+        let mut luminances: Vec<f32> = reference.iter().map(|&c| luminance(c)).collect();
+        let y_max = luminances.iter().fold(-1e30_f32, |m, &y| m.max(y));
+        let middle = luminances.len() / 2;
+        // Kept above zero when more than half of the image is black, as the reference does.
+        let (_, &mut median, _) = luminances.select_nth_unstable_by(middle, f32::total_cmp);
+        let median = median.max(f32::EPSILON);
+        // An all-black reference (where the reference's tool stops) gets one exposure twice.
+        let y_max = y_max.max(median);
+        let (start, stop) = ((x_max / y_max).log2(), (x_max / median).log2());
+        Exposures {
+            start,
+            stop,
+            count: (stop - start).ceil().max(2.0) as usize,
+        }
+    }
+}
+
+/// The HDR-ꟻLIP error of every pixel of two linear-RGB images `width` pixels wide, row by row
+/// (Andersson, Nilsson, Shirley and Akenine-Möller, "Visualizing Errors in Rendered High
+/// Dynamic Range Images", Eurographics 2021; the reference's `evaluate` with `useHDR`). Both
+/// images are exposed and tone-mapped at each of `exposures`, and each pixel keeps its largest
+/// LDR-ꟻLIP error.
+pub fn hdr_error_map(
+    reference: &[Color],
+    test: &[Color],
+    width: usize,
+    ppd: f32,
+    exposures: Exposures,
+) -> Vec<f32> {
+    let step = (exposures.stop - exposures.start) / (exposures.count - 1) as f32;
+    let mut errors = vec![0.0_f32; reference.len()];
+    for i in 0..exposures.count {
+        let m = 2.0_f32.powf(exposures.start + i as f32 * step);
+        let exposed = |image: &[Color]| -> Vec<Color> {
+            image.iter().map(|c| c.map(|v| tone_map(v * m))).collect()
+        };
+        let ldr = ldr_error_map(&exposed(reference), &exposed(test), width, ppd);
+        for (error, e) in errors.iter_mut().zip(ldr) {
+            if e > *error {
+                *error = e;
+            }
+        }
+    }
     errors
 }
 
@@ -561,6 +670,43 @@ mod tests {
             "{s:?}"
         );
         assert!(errors[0] < 0.01, "a far corner: {}", errors[0]);
+    }
+
+    #[test]
+    fn the_exposures_span_the_brightest_pixel_to_the_median() {
+        // Half the pixels at 1, a quarter at 0.25, a quarter at 16.
+        let image: Vec<Color> = (0..400)
+            .map(|i| [[1.0; 3], [1.0; 3], [0.25; 3], [16.0; 3]][i % 4])
+            .collect();
+        let e = Exposures::of(&image);
+        assert!((tone_map(16.0 * 2.0_f32.powf(e.start)) - 0.85).abs() < 1e-4);
+        assert!((tone_map(2.0_f32.powf(e.stop)) - 0.85).abs() < 1e-4);
+        assert!((e.stop - e.start - 4.0).abs() < 1e-4, "{e:?}");
+        assert_eq!(e.count, 4, "one per stop: {e:?}");
+        let black = Exposures::of(&[[0.0; 3]; 16]);
+        assert_eq!((black.start, black.count), (black.stop, 2));
+    }
+
+    #[test]
+    fn hdr_flip_sees_what_ldr_flip_clips() {
+        // A grey field at 4 times white, a block at 8 times in the test image.
+        let (w, h) = (48, 48);
+        let reference = vec![[4.0_f32; 3]; w * h];
+        let mut test = reference.clone();
+        for y in 20..28 {
+            for x in 20..28 {
+                test[y * w + x] = [8.0; 3];
+            }
+        }
+        let ldr = ldr_error_map(&reference, &test, w, default_ppd());
+        assert!(ldr.iter().all(|&e| e == 0.0), "both clip to white");
+        let exposures = Exposures::of(&reference);
+        let same = hdr_error_map(&reference, &reference, w, default_ppd(), exposures);
+        assert!(same.iter().all(|&e| e == 0.0));
+        let hdr = hdr_error_map(&reference, &test, w, default_ppd(), exposures);
+        let s = stats(&hdr, w as u32);
+        assert!(s.max > 0.2, "{s:?}");
+        assert!((20..28).contains(&s.max_at.0), "{s:?}");
     }
 
     #[test]

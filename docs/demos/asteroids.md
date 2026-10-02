@@ -313,9 +313,14 @@ Left to right:
 its dither; the off-screen preview another 0.04 ms. The table is baked once, 10–15 ms. Its
 accuracy, the tone check and the captures are in `reports/2026-10-02-94/`.
 
+**Comparing HDR captures** (#126): `imgdiff` gives two PQ captures HDR-ꟻLIP, the error a
+person would see at any exposure from the brightest pixel's to the median's. It sees what the
+SDR preview clips and what the dark space hides: GTAO off against on peaks at 0.59 in HDR and
+0.135 in SDR. Its measurements and proposed thresholds are in `docs/PROCESS.md` ("The
+perceptual check", "HDR captures") and `reports/2026-10-02-126/`.
+
 **Left for later:**
 - the calibration pages (peak, black, paper white) and MaxCLL from the frame (#125);
-- HDR-ꟻLIP in `imgdiff` (#126);
 - the present on an HDR display, which waits for "Use HDR" on the owner's monitor.
 
 ## Ships through the belt (2026-10-02, issue #79)

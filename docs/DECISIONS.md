@@ -331,6 +331,25 @@ largest value above 0.15 sends the reviewer to the error map and the crops
 (`imgdiff --crop --crops`), and isolated pixels pass, while a cluster of them (a speck, a line,
 a patch) fails.
 
+**Second amendment 🟡 (proposed 2026-10-02, #126): HDR-ꟻLIP for the HDR captures.** For two
+PQ captures (#94), `imgdiff` prints HDR-ꟻLIP (Andersson et al. 2021) instead of LDR-ꟻLIP:
+LDR-ꟻLIP of both images tone-mapped at one exposure per stop over the reference's range, the
+largest error of each pixel kept. It matches NVIDIA's tool to six decimals. The classes stay
+the same; class 2's thresholds change:
+- **The largest value stays below 0.15,** isolated pixels passing as above. A speck is about
+  as large as in LDR-ꟻLIP: a line of 20 codes reaches 0.24 and a 3 × 3 block 0.31, so both
+  fail, while one pixel reaches 0.08. Far from the origin (#93), single pixels in the dark
+  space reach 0.52–0.58: isolated, they pass.
+- **The mean rises from 0.02 to 0.05.** HDR-ꟻLIP sees the dark space up to 7 stops above the
+  display, so a change over the whole frame scores about five times its LDR-ꟻLIP. ACES 2.0's
+  HDR table against its per-pixel transform, which nobody can tell apart, scores 0.021–0.025
+  (0.0044 in SDR). One code over the whole frame scores 0.037 and passes; two codes, 0.062,
+  fail.
+
+Class 3 is unchanged. GTAO off against on peaks at 0.59–0.91 in HDR, against 0.135 for the
+SDR frame, whose curve crushes the dark fill GTAO changes. The measurements are in
+`docs/PROCESS.md`, "The perceptual check", "HDR captures".
+
 ## D-018 — Memory and streaming ✅ (2026-09-24)
 
 **CPU:** a tagged heap over one reserved virtual range (2 MiB blocks, per-worker blocks,

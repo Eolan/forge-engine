@@ -4,12 +4,12 @@
 #   tools/compare.sh BASE NEW
 #
 # Prints, per image both batches hold, the pixels that differ by more than 2 levels (imgdiff's
-# default tolerance) and the largest channel error; for a difference, also its LDR-FLIP mean and
-# largest value (issue #75: how visible it is). Then the pairs within NEW that must match:
-# the A/B harness (occlusion and cone culling off against on, `--show-culled` against the plain
-# frame: no red), the island streamed from its start view against resident (#121) and the mesh
-# path against the fallback. Exit code 1 when any image of either
-# list differs, so a script can stop on it. "0 px" on every line is the pass. With
+# default tolerance) and the largest channel error; for a difference, also its FLIP mean and
+# largest value (issue #75: how visible it is; HDR-FLIP for the HDR10 captures, #126). Then the
+# pairs within NEW that must match: the A/B harness (occlusion and cone culling off against on,
+# `--show-culled` against the plain frame: no red), the island streamed from its start view
+# against resident (#121) and the mesh path against the fallback. Exit code 1 when any image of
+# either list differs, so a script can stop on it. "0 px" on every line is the pass. With
 # FORGE_KEEP_LOGS=1 the same lines go to NEW/compare.txt, for a cloud session to read
 # (tools/report.sh gathers it).
 #
@@ -26,24 +26,27 @@ imgdiff=$root/target/release/imgdiff
 
 status=0
 # pair A B LABEL: one line with the count of differing pixels and the largest error, and for a
-# difference its perceptual error, LDR-FLIP's mean and largest value (issue #75).
+# difference its perceptual error, FLIP's mean and largest value (issue #75). The HDR10
+# captures' PQ codes (16 bits, #94) must match to the code; their largest error is in 10-bit
+# codes, and their FLIP is HDR-FLIP on their light (#126).
 pair() {
   [ -f "$1" ] && [ -f "$2" ] || return 0
-  local out line flip count max mean peak tolerance=()
-  # HDR10 captures' PQ codes (16 bits, #94) must match to the code.
+  local out line flip count max mean peak label=FLIP tolerance=()
   [[ "$2" == *-pq.png ]] && tolerance=(--tolerance 0)
   out=$("$imgdiff" "$1" "$2" "${tolerance[@]}" 2>&1)
   line=$(grep "pixels differ" <<< "$out" | tail -n 1)
-  flip=$(grep "LDR-FLIP" <<< "$out" | tail -n 1)
+  flip=$(grep -E "^(LDR|HDR)-FLIP" <<< "$out" | tail -n 1)
+  [[ "$flip" == HDR-FLIP* ]] && label=HDR-FLIP
   count=$(sed -n 's/.*: \([0-9]*\) \/ [0-9]* pixels differ.*/\1/p' <<< "$line")
   max=$(sed -n 's/.*max channel error \([0-9]*\).*/\1/p' <<< "$line")
+  [[ "$line" == *"PQ code error"* ]] && max="$(sed -n 's/.*max PQ code error \([0-9]*\).*/\1/p' <<< "$line") codes"
   mean=$(sed -n 's/.*: mean \([0-9.]*\),.*/\1/p' <<< "$flip")
   peak=$(sed -n 's/.* max \([0-9.]*\) at .*/\1/p' <<< "$flip")
   if [ -z "$count" ]; then
     echo "$3: imgdiff failed"
     status=1
   elif [ "$count" != 0 ]; then
-    echo "$3: $count px differ (max $max), FLIP mean $mean, max $peak"
+    echo "$3: $count px differ (max $max), $label mean $mean, max $peak"
     status=1
   else
     echo "$3: 0 px"
