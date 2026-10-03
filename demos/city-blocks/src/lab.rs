@@ -42,6 +42,7 @@ mod flood;
 mod fly;
 mod rocket;
 mod sea;
+mod tug;
 mod walk;
 mod wall;
 
@@ -73,6 +74,8 @@ pub(crate) enum LabScene {
     Bridge,
     /// A rocket on a launch pad (#148).
     Rocket,
+    /// A tug-of-war on a sled, two teams pulling (#149); with `--net`, against the bot.
+    Tug,
 }
 
 /// The floor's half side, metres.
@@ -134,6 +137,8 @@ const DOMINO: usize = FLOOD + 5;
 const BRIDGE: usize = DOMINO + 1;
 /// The rocket, its fins and its pad, after the bridge's two.
 const ROCKET: usize = BRIDGE + 2;
+/// The tug-of-war's rope and line, after the rocket's three.
+const TUG: usize = ROCKET + 3;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -150,7 +155,7 @@ const FRESH: Fluid = Fluid {
     ..Fluid::SEA
 };
 /// Numbers of the players' controls in a saved state ([`LabWorld::words`]).
-const WORDS: usize = 15;
+const WORDS: usize = 17;
 /// Ticks between the digests a recording keeps.
 const RECORD_EVERY: u64 = 60;
 /// `--net`: ticks between the server's snapshots, the share of packets lost, ticks between the
@@ -158,6 +163,8 @@ const RECORD_EVERY: u64 = 60;
 const SNAPSHOT_EVERY: u64 = 6;
 const NET_LOSS: f64 = 0.02;
 const BOT_EVERY: u64 = 150;
+/// `--net` in the tug-of-war: ticks between the bot's changes of pull.
+const BOT_PULL_EVERY: u64 = 90;
 
 /// The props the lab draws, in this order: the floor, the block, the barrel, the rocks, the
 /// ball, then the sea's: the crate, the log, the pillar, the deck, the boat; then the
@@ -175,6 +182,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(dominoes::props());
     props.extend(bridge::props());
     props.extend(rocket::props());
+    props.extend(tug::props());
     props
 }
 
@@ -286,12 +294,18 @@ pub(crate) enum LabCommand {
         /// The four, in that order.
         controls: [f32; 4],
     },
-    /// The wrecking ball let go (#142).
+    /// What the scene holds back let go: the wrecking ball (#142), the flood's gate (#144), the
+    /// first domino (#146), the convoy (#147).
     Release,
     /// The creatures' motors let go, or powered again (#143), held until the next.
     Limp {
         /// Let go.
         on: bool,
+    },
+    /// The player's team's pull in the tug-of-war (#149), held until the next.
+    Pull {
+        /// 0 to 1 of full strength.
+        strength: f32,
     },
 }
 
@@ -326,6 +340,10 @@ impl Codec for LabCommand {
             }
             Self::Release => out.push(7),
             Self::Limp { on } => out.extend_from_slice(&[8, u8::from(*on)]),
+            Self::Pull { strength } => {
+                out.push(9);
+                out.extend_from_slice(&strength.to_bits().to_le_bytes());
+            }
         }
     }
 
@@ -388,6 +406,13 @@ impl Codec for LabCommand {
                 *bytes = rest;
                 Some(Self::Limp { on: on != 0 })
             }
+            9 => {
+                let (word, rest) = bytes.split_first_chunk::<4>()?;
+                *bytes = rest;
+                Some(Self::Pull {
+                    strength: f32::from_bits(u32::from_le_bytes(*word)),
+                })
+            }
             _ => None,
         }
     }
@@ -446,6 +471,10 @@ pub(crate) struct LabWorld {
     convoy: Option<bridge::Convoy>,
     /// The rocket, flown with the pilot's controls.
     rocket: Option<BodyId>,
+    /// The tug-of-war's sled, and the teams' pulls (0 to 1): the left for player 0, the right
+    /// for player 1.
+    tug: Option<BodyId>,
+    pulls: [f32; 2],
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -482,7 +511,8 @@ impl LabWorld {
             | LabScene::Flood
             | LabScene::Dominoes
             | LabScene::Bridge
-            | LabScene::Rocket => 0.0,
+            | LabScene::Rocket
+            | LabScene::Tug => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -565,6 +595,7 @@ impl LabWorld {
         let mut run = None;
         let mut convoy = None;
         let mut rocket = None;
+        let mut tug = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -892,6 +923,12 @@ impl LabWorld {
                 group(ROCKET, vec![site.rocket], &mut bodies);
                 rocket = Some(site.rocket);
             }
+            LabScene::Tug => {
+                let site = tug::build(&mut world, TUG + 1)?;
+                statics.extend(site.statics);
+                group(CRATE, vec![site.sled], &mut bodies);
+                tug = Some(site.sled);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -940,6 +977,13 @@ impl LabWorld {
         if rocket.is_some() {
             groups.push(Group {
                 prop: ROCKET + 1,
+                count: 2,
+            });
+        }
+        // The tug-of-war's two ropes.
+        if tug.is_some() {
+            groups.push(Group {
+                prop: TUG,
                 count: 2,
             });
         }
@@ -1001,6 +1045,8 @@ impl LabWorld {
                 run,
                 convoy,
                 rocket,
+                pulls: tug.map_or([0.0; 2], |_| [tug::HOLD; 2]),
+                tug,
                 limp: false,
                 pool,
             },
@@ -1019,6 +1065,9 @@ impl LabWorld {
         self.pilot.propeller(&self.world, self.tick, out);
         if let Some(r) = self.rocket {
             rocket::fins_at(&self.world, r, out);
+        }
+        if let Some(sled) = self.tug {
+            tug::ropes(&self.world, sled, out);
         }
         if let Some(wall) = &self.wall {
             wall.chain(&self.world, out);
@@ -1054,7 +1103,7 @@ impl LabWorld {
     /// The players' controls as the state carries them, [`WORDS`] numbers: the boat's
     /// throttle and rudder, the walk, a jump waiting, the player's facing, the car's throttle,
     /// steering and handbrake, the aeroplane's throttle, elevator, ailerons and rudder, the
-    /// creatures let go (0 where there is none).
+    /// creatures let go, the tug-of-war's two pulls (0 where there is none).
     fn words(&self) -> [f32; WORDS] {
         let (throttle, rudder) = self.boat.map_or((0.0, 0.0), |b| (b.throttle, b.rudder));
         let p = &self.player;
@@ -1074,6 +1123,8 @@ impl LabWorld {
             self.pilot.aileron,
             self.pilot.rudder,
             f32::from(u8::from(self.limp)),
+            self.pulls[0],
+            self.pulls[1],
         ]
     }
 
@@ -1155,6 +1206,9 @@ impl Simulation for LabWorld {
                         ..fly::Pilot::default()
                     };
                     self.limp = false;
+                    if self.tug.is_some() {
+                        self.pulls = [tug::HOLD; 2];
+                    }
                     if let (Some(water), Some(start)) = (&mut self.water, &self.water_start) {
                         water.clone_from(start);
                     }
@@ -1199,6 +1253,13 @@ impl Simulation for LabWorld {
                     }
                 }
                 LabCommand::Limp { on } => self.limp = on,
+                LabCommand::Pull { strength } => {
+                    if self.tug.is_some()
+                        && let Some(pull) = self.pulls.get_mut(usize::from(c.player))
+                    {
+                        *pull = strength.clamp(0.0, 1.0);
+                    }
+                }
             }
         }
         // The sea at this tick's start: what floats pushed by it, the boat's motor too.
@@ -1238,6 +1299,9 @@ impl Simulation for LabWorld {
         self.pilot.tick(&mut self.world);
         if let Some(r) = self.rocket {
             rocket::tick(&mut self.world, r, &self.pilot);
+        }
+        if let Some(sled) = self.tug {
+            tug::pull(&mut self.world, sled, self.pulls);
         }
         let column = self.wall.as_ref().map(|w| w.column_velocity(&self.world));
         // The creatures' motors driven to their poses at this tick (or let go).
@@ -1318,6 +1382,7 @@ impl Simulation for LabWorld {
         self.pilot.aileron = w[12];
         self.pilot.rudder = w[13];
         self.limp = w[14] != 0.0;
+        self.pulls = [w[15], w[16]];
         let world = match &mut self.water {
             Some(water) => &world[water.restore(world)..],
             None => world,
@@ -1364,8 +1429,9 @@ struct Net {
     /// Milliseconds the client's corrections took since the last title, and the most.
     correction_ms: Vec<f64>,
     worst_correction_ms: f64,
-    /// Whether the bot plays.
+    /// Whether the bot plays, and whether it pulls (the tug-of-war) rather than throws.
     bot_on: bool,
+    bot_pulls: bool,
 }
 
 impl Net {
@@ -1390,6 +1456,7 @@ impl Net {
             correction_ms: Vec::new(),
             worst_correction_ms: 0.0,
             bot_on: true,
+            bot_pulls: kind == LabScene::Tug,
         })
     }
 
@@ -1410,9 +1477,17 @@ impl Net {
                 link.send(now, snapshot.clone(), bytes);
             }
         }
-        // The bot throws at the pyramid from one of eight places round it, every 2.5 s.
+        // In the tug-of-war the bot (the right team) pulls hard and eases off in turn, every
+        // 1.5 s; elsewhere it throws at the pyramid from one of eight places round it, every 2.5 s.
         let bot_tick = self.bot.sim.now();
-        if self.bot_on && bot_tick > 0 && bot_tick.is_multiple_of(BOT_EVERY) {
+        if self.bot_pulls {
+            if self.bot_on && bot_tick > 0 && bot_tick.is_multiple_of(BOT_PULL_EVERY) {
+                let hard = (bot_tick / BOT_PULL_EVERY) % 2 == 1;
+                self.bot.command(LabCommand::Pull {
+                    strength: if hard { 1.0 } else { 0.3 },
+                });
+            }
+        } else if self.bot_on && bot_tick > 0 && bot_tick.is_multiple_of(BOT_EVERY) {
             const ROUND: [[f32; 2]; 8] = [
                 [14.0, 0.0],
                 [10.0, 10.0],
@@ -1625,7 +1700,12 @@ pub(crate) fn build(
             delay_ms,
             loss = NET_LOSS,
             snapshot_every = SNAPSHOT_EVERY,
-            "the lab through a server and a client, a bot throwing too"
+            bot = if kind == LabScene::Tug {
+                "pulls"
+            } else {
+                "throws"
+            },
+            "the lab through a server and a client, a bot playing too"
         );
         Mode::Net(Box::new(Net::new(kind, delay_ms, &pool)?))
     } else {
@@ -1748,6 +1828,23 @@ impl Lab {
                         }),
                     )
                 };
+                // The tug-of-war: where the sled is, the teams' pulls, who won.
+                let tug = {
+                    let shown = self.shown();
+                    shown.tug.map_or(String::from("none"), |sled| {
+                        let mut t = Vec::new();
+                        shown.world.transforms(&[sled], &mut t);
+                        let won = match tug::winner(&shown.world, sled) {
+                            Some(0) => "the left",
+                            Some(_) => "the right",
+                            None => "nobody yet",
+                        };
+                        format!(
+                            "x {:.2}, pulls {:.1} and {:.1}, won by {won}",
+                            t[0].position.x, shown.pulls[0], shown.pulls[1]
+                        )
+                    })
+                };
                 // The bridge's deck: joints still holding, of all; cars across and down.
                 let deck = {
                     let shown = self.shown();
@@ -1772,6 +1869,7 @@ impl Lab {
                     stands,
                     fallen,
                     deck,
+                    tug,
                     "physics lab state"
                 );
             }
@@ -1930,6 +2028,16 @@ impl Lab {
     /// Whether the scene has an aeroplane.
     pub(crate) fn has_plane(&mut self) -> bool {
         self.shown().pilot.plane.is_some()
+    }
+
+    /// Whether the scene is the tug-of-war.
+    pub(crate) fn has_tug(&mut self) -> bool {
+        self.shown().tug.is_some()
+    }
+
+    /// This player's team's pull in the tug-of-war from the next tick (0 to 1).
+    pub(crate) fn pull(&mut self, strength: f32) {
+        self.queued.push(LabCommand::Pull { strength });
     }
 
     /// Whether the scene has a rocket, flown with the aeroplane's controls.
@@ -2533,6 +2641,71 @@ mod tests {
         }
         climb.replay(&mut second).expect("the same digests");
         turn.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_tug_of_war_goes_to_the_stronger_team_and_replays() {
+        let (mut first, _) = LabWorld::new(LabScene::Tug, test_pool()).unwrap();
+        let sled = first.tug.unwrap();
+        let x = |lab: &LabWorld| {
+            let mut t = Vec::new();
+            lab.world.transforms(&[sled], &mut t);
+            t[0].position.x
+        };
+        // A second with both teams holding: the sled stays on the middle line.
+        for _ in 0..60 {
+            first.tick(&[]);
+        }
+        assert!(x(&first).abs() < 0.01, "{}", x(&first));
+        assert_eq!(tug::winner(&first.world, sled), None);
+        // The left team pulls with all its strength: 2 000 N against the right's 1 000 and the
+        // sled's 785 N of friction pulls it over the left line in about 2.4 s.
+        let commands = vec![Stamped {
+            tick: 60,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Pull { strength: 1.0 },
+        }];
+        let recording = Recording::record(&mut first, commands, 180, 60);
+        assert_eq!(tug::winner(&first.world, sled), Some(0), "{}", x(&first));
+        let (mut second, _) = LabWorld::new(LabScene::Tug, test_pool()).unwrap();
+        for _ in 0..60 {
+            second.tick(&[]);
+        }
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn a_tug_of_war_over_a_lossy_link_ends_where_the_server_is() {
+        let mut net = Net::new(LabScene::Tug, 100.0, &test_pool()).unwrap();
+        // This player eases at its tick 30 and pulls harder at 400; the bot pulls hard
+        // and eases off every 1.5 s until its tick 600 (six changes), then everyone runs on.
+        let mine = [(30, 0.4), (400, 0.8)];
+        let mut queued = Vec::new();
+        for k in 0..720 {
+            net.bot_on = k < 600;
+            let now = net.client.sim.now();
+            queued.extend(
+                mine.iter()
+                    .filter(|&&(tick, _)| tick == now)
+                    .map(|&(_, strength)| LabCommand::Pull { strength }),
+            );
+            net.tick(&mut queued);
+        }
+        // Every command taken in time: this player's two and the bot's six.
+        assert_eq!(net.server.stats.applied, 2 + 6);
+        assert_eq!(net.server.stats.late, 0);
+        // The client predicts the sled until the bot changes its pull, which it learns a link
+        // late: corrected then, to the bit otherwise.
+        let c = net.client.stats;
+        assert!(c.matched > 0 && c.corrected >= 6, "{c:?}");
+        let state = net.server.sim.save();
+        let (mut server, _) = LabWorld::new(LabScene::Tug, test_pool()).unwrap();
+        server.restore(&state);
+        while server.now() < net.client.sim.now() {
+            server.tick(&[]);
+        }
+        assert_eq!(server.digest(), net.client.sim.digest());
     }
 
     #[test]

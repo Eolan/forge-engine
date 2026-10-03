@@ -492,6 +492,8 @@ struct Gallery {
     handbrake: bool,
     /// The aeroplane's controls last sent (#141).
     flying: [f32; 4],
+    /// The tug-of-war's pull last sent (#149).
+    pulling: f32,
     lab: Option<lab::Lab>,
     /// Their waves in the lakes and the sea (#107), with the water and the movers.
     wakes: Option<WaterWakes>,
@@ -889,6 +891,7 @@ impl Gallery {
             walking: [0.0; 2],
             handbrake: false,
             flying: [0.0; 4],
+            pulling: 0.5,
             wakes,
             splashes,
             falls,
@@ -1143,6 +1146,21 @@ impl Demo for Gallery {
                 if pulled != self.handbrake {
                     self.handbrake = pulled;
                     lab.handbrake(pulled);
+                }
+            }
+            // The tug-of-war (#149): ← held pulls with all the left team's strength, → held
+            // eases to a fifth, neither holds at half.
+            if lab.has_tug() {
+                let pulling = if input.is_down(KeyCode::ArrowLeft) {
+                    1.0
+                } else if input.is_down(KeyCode::ArrowRight) {
+                    0.2
+                } else {
+                    0.5
+                };
+                if pulling != self.pulling {
+                    self.pulling = pulling;
+                    lab.pull(pulling);
                 }
             }
             // The playground's player (#139): WASD along the view, Shift to run, or `--walk`;
@@ -2259,6 +2277,8 @@ impl CityMaterials {
             ("lab-rocket", white_paint),
             ("lab-rocket-fins", red_paint),
             ("lab-pad", concrete_grey),
+            ("lab-rope", bark),
+            ("lab-line", white_paint),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -4088,6 +4108,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.15,
             speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Tug) {
+        // In front of the sled, the three lines and most of the ropes in view: the left team's to
+        // the left.
+        FlyCamera {
+            position: Vec3::new(0.0, 2.6, 8.0),
+            yaw: 0.0,
+            pitch: -0.2,
+            speed: 6.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Rocket) {

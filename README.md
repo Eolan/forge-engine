@@ -229,7 +229,8 @@ them, ↓ lets them go limp. `--lab flood`: a dam break, the shallow-water model
 basin round blocks and a hut, carrying crates, barrels and logs; Space lifts the gate.
 `--lab dominoes`: 300 dominoes on a spiral, Space tips the first, and a recording of the run
 replays to the same digests. `--lab bridge`: a timber bridge over a gap and four cars; Space sends
-them across, and the deck gives way under the second. It shares `city-blocks`' renderer, keys and
+them across, and the deck gives way under the second. `--lab tug --net 100`: a tug-of-war on a sled
+against the bot over a lossy link; ← pulls, → eases. It shares `city-blocks`' renderer, keys and
 options (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 

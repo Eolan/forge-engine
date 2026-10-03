@@ -275,6 +275,11 @@ for path in $paths; do
     capture "$path-lab-rocket120" 120 "$lab" --lab rocket --fixed-step --pilot 1,0.1,0,0 "${flag[@]}"
     capture "$path-lab-rocket120-noocc" 120 "$lab" --lab rocket --fixed-step --pilot 1,0.1,0,0 --no-occlusion "${flag[@]}"
     capture "$path-lab-rocket600" 600 "$lab" --lab rocket --fixed-step --pilot 1,0.1,0,0 "${flag[@]}"
+    # The tug-of-war (#149) through `--net 100`, the bot pulling hard and easing off every 1.5 s:
+    # the sled on its way right at tick 200 and its A/B twin, over the right line at tick 600.
+    capture "$path-lab-tug-net200" 200 "$lab" --lab tug --net 100 --fixed-step "${flag[@]}"
+    capture "$path-lab-tug-net200-noocc" 200 "$lab" --lab tug --net 100 --fixed-step --no-occlusion "${flag[@]}"
+    capture "$path-lab-tug-net600" 600 "$lab" --lab tug --net 100 --fixed-step "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

@@ -446,7 +446,8 @@ dominoes`: 300 on a spiral, replayed to the same digests), a ship in a
 storm losing its cargo, a dam bursting down an island valley, a rockfall from the tors, a bridge
 collapsing under a convoy (✅ #147, `--lab bridge`: a timber deck of breakable joints, four cars on
 an autopilot; it holds the first and falls under the second), a networked tug-of-war on one crate
-at 100 ms.
+at 100 ms (✅ #149, `--lab tug --net 100`: a sled two players pull, the client corrected on each
+change of the bot's pull and ending where the server is).
 
 The items below are the phase's original outline; the plan above orders them.
 

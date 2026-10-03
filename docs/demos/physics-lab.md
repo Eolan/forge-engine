@@ -29,6 +29,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats | ✅ #144 |
 | `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
 | `bridge` | an advanced test: a timber bridge that stands empty and collapses under a convoy of cars, replayed | ✅ #147 |
+| `tug --net 100` | an advanced test: a tug-of-war on one sled, this player against the bot over a lossy link | ✅ #149 |
 | skinned creatures, the GPU's water, particles | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
@@ -526,6 +527,56 @@ them go and checks, ten seconds on:
 The wall's and the track's images did not change with the shared code (0 px). A tick: **0.11 ms**
 on average, p99 0.23 ms, max 0.34 ms (52 bodies, 4 vehicles).
 
+## `tug`: a tug-of-war over the network (issue #149)
+
+```
+cargo run --release -p physics-lab -- --lab tug --net 100
+```
+
+The third advanced test ("a networked tug-of-war on one crate at 100 ms"): the netcode (#137) on
+a body two players fight over.
+
+**The game:**
+- A 200 kg sled sits on the floor (friction 0.4, 785 N to start it moving) between two ropes, on
+  the middle of three lines 3 m apart.
+- Each team pulls along its rope with up to 2 kN: the left team as player 0 (this player) says,
+  the right as player 1, each with a `Pull` command.
+- The pulls are held in the world's state like the other controls, so they are saved, restored and
+  digested with it.
+- Both start holding at half. Once the sled's middle is over a line, that team has won and both let
+  go.
+
+**Locally:** ← pulls with all the left team's strength and → eases to a fifth, against a right
+team that holds.
+
+**Over `--net 100`:** the right team is the bot, pulling hard and easing off to 0.3 every 1.5 s.
+This player's client predicts the sled, but learns of each change of the bot's a link late:
+- every snapshot after one disagrees with the client's prediction (the pulls are in the digest,
+  and so is where the sled went);
+- the client goes back to the server's state and runs the ticks since again.
+
+Holding at half, this player loses: the sled is over the right line by tick 300.
+
+![Both holding; the bot pulling hard, the sled on its way right at tick 200; over the right line at 300; still there at 600, the game over](images/physics-lab-tug.png)
+
+`--net 100`, 600 ticks, this player holding:
+
+| | |
+|---|---|
+| snapshots taken by this player's client | 99: 93 predicted to the bit, 6 corrected (one for each change of the bot's pull), 84 ticks run again |
+| a correction (the state restored, 14 ticks run again) | at most 0.55 ms |
+| a tick: the server and the two clients | mean 0.12 ms, p99 0.30 ms, max 0.66 ms |
+| commands taken by the server | the bot's 6, none late |
+| bytes down to a client | 6.0 KB a snapshot (one sled), 60 KB/s |
+
+The lab's tests:
+- **Locally:** a second with both teams holding leaves the sled on the middle line. The left team
+  pulling with all its strength (2 000 N against 1 000 and the friction) wins within 3 s, and the
+  run replays to the same digests.
+- **Over the lossy link:** this player eases and then pulls harder while the bot changes its pull
+  six times. The server takes all eight commands in time, the client corrects at least six times,
+  and it ends where the server is, to the bit.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -546,4 +597,5 @@ dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3
 and from the bridge (#147) `lab-bridge360` (the deck falling with two cars) with its twin and
 `lab-bridge600` (in the gap); and the rocket (#148) at full throttle with the stick a tenth
 pushed, `lab-rocket120` (climbing off the pad) with its twin and `lab-rocket600` (pitched over
-downrange).
+downrange); and the tug-of-war (#149) through `--net 100`, `lab-tug-net200` (the sled on its way
+right) with its twin and `lab-tug-net600` (over the line).

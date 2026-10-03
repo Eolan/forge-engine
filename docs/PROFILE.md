@@ -1032,6 +1032,9 @@ max 0.34), 52 bodies and 4 vehicles, the deck's 17 joints checked after each ste
 `--lab rocket` (#148), full throttle with the stick a tenth pushed, 600 ticks: **0.04 ms a tick**
 (p99 0.08, max 0.18), the rocket, its fins' and body's air and its engine worked out before each step.
 
+`--lab tug --net 100` (#149), 600 ticks of the server and two clients: **0.12 ms a tick** (p99
+0.30, max 0.66), 6 corrections of 14 ticks each at most 0.55 ms; a snapshot 6.0 KB.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three
