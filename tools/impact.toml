@@ -39,6 +39,9 @@
 "demos/city-blocks/**" = ["island", "city", "lab"]
 "crates/forge-geom/src/stone.rs" = ["island"]
 "crates/forge-render/src/water.rs" = ["island", "lab"]
+# The cloud layer (#145): the island draws it with `--clouds`.
+"crates/forge-render/src/clouds.rs" = ["island"]
+"shaders/clouds.slang" = ["island"]
 "crates/forge-render/src/wakes.rs" = ["island"]
 "crates/forge-render/src/splashes.rs" = ["island", "lab"]
 "shaders/water.slang" = ["island", "lab"]

@@ -972,6 +972,14 @@ The stones' normals weighed when they are cooked (#131, `--stone-normals 2`) and
 cobbles (#132) cost about 0.01 ms: the island 1.501–1.503 ms against 1.491–1.493, the tour
 1.324–1.337 against 1.318–1.325.
 
+## The cloud layer (`--clouds`, #145, 2026-10-03)
+
+`sky/clouds`, a compute pass at half resolution (800 × 450 for a 1600 × 900 frame), 48 steps
+through the layer and six towards the sun where a sample is in a cloud: **0.21 ms** on the
+island's start view at a coverage of 0.5 (the frame 1.45 → 1.65 ms over 300 frames).
+`sky/compose` reads its result where it draws the sky, at no cost to measure (0.022 ms either
+way). The noises are baked on the CPU at start, about 0.1 s.
+
 ## `physics-lab` — the physics tick (#136, 2026-10-02)
 
 The tick is CPU work: Jolt's step on its own threads (5 workers and the caller on the 9800X3D's

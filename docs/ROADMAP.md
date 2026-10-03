@@ -126,7 +126,10 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   step 7's skinned creatures (GPU skinning, with Phase 7's first step), then Phase 4's sky.
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
-  already settles the clouds' rendering from a camera-centred weather map.
+  already settles the clouds' rendering from a camera-centred weather map. A first layer of
+  cumulus ✅ behind `--clouds` (#145, for the owner to judge before it is on by default); next
+  for them: their shadows, their light in the water and the sky's irradiance, the weather map
+  from the climate.
 - **The rivers' and the water's polish, from their issues' "left for later":**
   - standing waves on the 2–4 % rapids (#122);
   - a bar and a scour hole at confluences (#119);
@@ -471,7 +474,8 @@ The items below are the phase's original outline; the plan above orders them.
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's
    jitter, 0.02 ms at 1440p); structures that follow streaming and motion next.
-3. Clouds (Nubis-style), froxel fog (the first froxel volume ✅: the ballad's dust, #58, D-032), night sky; weather rendering (rain, snow, lightning,
+3. Clouds (Nubis-style; a first layer ✅ behind `--clouds`, #145: cumulus from a weather map and
+   Perlin–Worley noise, lit by octaves of multiple scattering, 0.21 ms), froxel fog (the first froxel volume ✅: the ballad's dust, #58, D-032), night sky; weather rendering (rain, snow, lightning,
    wet surfaces) driven by the shared weather state (D-034) and its director. The sun already moves: `city-blocks --day`
    (issue #57) runs sunrise to sunset with automatic exposure.
 4. T2/T3: ReSTIR GI, radiance cache, Ray Reconstruction, path-traced reference with cluster

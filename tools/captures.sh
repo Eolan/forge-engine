@@ -95,7 +95,7 @@ sets_of() {
     ast*) echo ballad ;;
     city60 | city60-noocc | gallery60) echo city sentinels ;;
     city*) echo city ;;
-    island* | water* | shot-*) echo island ;;
+    island* | water* | clouds* | shot-*) echo island ;;
     lab-*) echo lab ;;
   esac
 }
@@ -200,6 +200,10 @@ for path in $paths; do
   # The island with its water (#105, the default): at a fixed step, so the waves are the same.
   capture "$path-water60" 60 "$city" "${island[@]}" --fixed-step "${flag[@]}"
   capture "$path-water60-noocc" 60 "$city" "${island[@]}" --fixed-step --no-occlusion "${flag[@]}"
+  # The cloud layer over it (#145, behind `--clouds`): fair-weather cumulus over half the sky,
+  # sixty frames for its blend over frames to settle.
+  capture "$path-clouds60" 60 "$city" "${island[@]}" --fixed-step --clouds 0.5 "${flag[@]}"
+  capture "$path-clouds60-noocc" 60 "$city" "${island[@]}" --fixed-step --clouds 0.5 --no-occlusion "${flag[@]}"
   # Its 8 m ground streamed from the start view and resident (#121): equal, or the start view
   # missed pages the cut wants.
   capture "$path-island8-60" 60 "$city" "${island[@]}" --island-drawn 8 --no-water "${flag[@]}"

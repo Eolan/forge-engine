@@ -1147,3 +1147,17 @@ TIFFs: `aces-output/tests/images/README.md`). OCIO's own tolerances are 1e-5 on 
 
 The agent's cost estimate held: the per-pixel transform adds 0.10 ms at 1440p, the table
 0.007 ms. Details are in `docs/demos/asteroids.md`, "ACES 2.0".
+
+## Implementation notes from Forge: a first cloud layer (2026-10-03, issue #145)
+
+Schneider 2015's layer, as §6's bearing asks first, behind `--clouds` (`forge_render::clouds`,
+`shaders/clouds.slang`; the island page has the pictures and the numbers):
+- The volumes live in 2-D atlases of their slices with a wrapped border texel each (the bindless
+  set has no 3-D images), sampled as two bilinear lookups and a lerp.
+- Beer's law with the powder term alone left the clouds slate-grey with a thin lit rim: at an
+  extinction of 0.06 m⁻¹ the light that reaches a sample through a kilometre of cloud is nil.
+  Hillaire 2016 sums Wrenninge's octaves of multiple scattering (each with a fraction of the
+  extinction, a rounder phase and less weight): with four octaves (0.3, 0.6, 0.5) the clouds
+  came out white on top and grey underneath, as cumulus are.
+- Half resolution, a blue-noise start per pixel and frame, and a 0.9 blend with last frame's
+  result reprojected by the camera's turn: smooth at frame 60, 0.21 ms at 1600 × 900.

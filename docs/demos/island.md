@@ -2712,3 +2712,39 @@ Before and now, frame 60 (`reports/2026-10-02-135/`):
   A/B pairs and streamed against resident: 0 px.
 - **Left for Tier 2:** the fallback path, validation and timings (no GPU code or pass changed;
   the ground has one more layer row and texture).
+
+## A first cloud layer (#145, 2026-10-03)
+
+```
+cargo run --release -p city-blocks -- --island 7 --clouds 0.5
+cargo run --release -p physics-lab -- --lab fly --clouds 0.5
+```
+
+Phase 4's first clouds, behind `--clouds COVERAGE` (0 to 1; 0.45 is fair-weather cumulus) so that
+every other image stays as it was until they are agreed. After Schneider's 2015 cloudscapes
+(lighting-gi.md §6; D-034's "Nubis-style clouds"):
+
+- **The layer:** between 1.5 and 4 km over the planet, its coverage and the clouds' height from
+  a tiling 256² weather map spanning 48 km that drifts on a 10 m/s wind; their shapes from a 64³
+  Perlin–Worley volume spanning 4 km, their edges eroded by a 32³ Worley volume spanning 700 m,
+  wispy at the bottom and billowing higher up. Both volumes are baked on the CPU at start (about
+  0.1 s) into 2-D atlases of their slices, a texel of wrapped border round each so a slice filters
+  without seams: the bindless set holds 2-D images, as the aerial perspective's volume already
+  found.
+- **The light:** the sun through the air (the atmosphere's transmittance at the layer), through
+  the cloud above each sample by six steps doubling from 40 m; the light scattered many times as
+  four of Wrenninge's octaves, each with less of the extinction and a rounder two-lobed phase (as
+  Hillaire's Frostbite clouds sum them: Beer's law alone lit only a thin rim and left the clouds
+  slate-grey); a little powder darkening; the sky's irradiance from above as ambient. Far clouds
+  fade into the haze.
+- **The march:** half resolution, 48 steps through the layer, each pixel's start jittered by the
+  spatio-temporal blue noise, and blended 9 to 1 with last frame's clouds reprojected by the
+  camera's turn (they are far): the jitter settles into smooth clouds instead of shimmering.
+  `sky/compose` lays them over the sky and the sun's disc.
+
+![The island's coast at frame 60 under fair-weather cumulus, and the field's aeroplane climbing](images/island-clouds.png)
+
+At 1600 × 900 on the 5070 Ti the march (`sky/clouds`) takes **0.21 ms** over half the sky (the
+island's start view: the frame 1.45 → 1.65 ms). Not yet: the clouds' shadows on the ground and
+the water, the clouds in the water's reflections and in the sky's irradiance, D-034's weather
+map from the climate, flying into them (Nubis³'s voxel clouds).

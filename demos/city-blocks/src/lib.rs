@@ -41,14 +41,14 @@ use forge_render::meshlet::{DrawParams, MeshId};
 use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
-    AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
-    FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter, MAX_FLOATERS, MAX_WAKES,
-    MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, ProbeParams, Probes,
-    Residency, SkyParams, SplashParams, SplashSource, StartView, StreamingConfig, StreamingStats,
-    SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics, WaterFloater,
-    WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes,
-    WaterStone, WaterSurface, WaterSurfaceParams, WaterWake, WaterWakes, exposure_from_ev100,
-    sh_irradiance,
+    AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CloudParams, Clouds,
+    CullCamera, CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter,
+    MAX_FLOATERS, MAX_WAKES, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform,
+    ProbeParams, Probes, Residency, SkyParams, SplashParams, SplashSource, StartView,
+    StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades,
+    WaterCaustics, WaterFloater, WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore,
+    WaterShoreTrain, WaterSplashes, WaterStone, WaterSurface, WaterSurfaceParams, WaterWake,
+    WaterWakes, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec2, Vec3};
@@ -285,6 +285,10 @@ struct Args {
     /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     pilot: Option<Vec<f32>>,
+    /// Draw the cloud layer (#145) over this share of the sky (0 to 1; 0.45 is fair-weather
+    /// cumulus).
+    #[arg(long)]
+    clouds: Option<f32>,
     /// With `--lab creatures`, let the creatures' motors go at this frame, as ↓ does (#143).
     #[arg(long)]
     limp_at: Option<u64>,
@@ -456,6 +460,9 @@ struct Gallery {
     /// The Earth's atmosphere the city stands in, and the sky seen from the ground (issue #43).
     atmosphere: Atmosphere,
     sky: GroundSky,
+    /// The cloud layer (#145, `--clouds`), and last frame's view-projection it reprojects by.
+    clouds: Option<Clouds>,
+    clouds_previous: Mat4,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -569,6 +576,11 @@ impl Gallery {
         }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
+        // The cloud layer (#145), over the given share of the sky.
+        let clouds = args
+            .clouds
+            .map(|_| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
+            .transpose()?;
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args)?;
         let tour = if args.tour {
@@ -890,6 +902,8 @@ impl Gallery {
             bloom_on,
             atmosphere,
             sky,
+            clouds,
+            clouds_previous: Mat4::IDENTITY,
             sky_light,
             gtao,
             ao_on,
@@ -1380,13 +1394,15 @@ impl Demo for Gallery {
             self.atmosphere
                 .frame(&mut frame.graph, frame.slot, view_km, self.renderer.sun_dir);
         // The sky's tables first: the resolve lights the shaded sides with its irradiance
-        // (issue #47).
+        // (issue #47). The cloud layer's images, this frame's and last (#145).
+        let cloud_images = self.clouds.as_ref().map(|c| c.images(&mut frame.graph));
+        let sky_view_proj = taa_frame.jittered_projection * self.camera.view_rotation();
         let sky = self.sky.tables(
             &mut frame.graph,
             frame.slot,
             &air,
             SkyParams {
-                view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                view_proj: sky_view_proj,
                 camera: Vec3::ZERO,
                 sun_dir: self.renderer.sun_dir,
                 sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
@@ -1395,8 +1411,29 @@ impl Demo for Gallery {
             },
             targets.depth,
             taa_frame.color,
+            cloud_images.map(|(this, _)| this),
             extent,
         );
+        // The clouds marched after the tables (their sun through the air, the sky's light),
+        // before the compose lays them over the sky; the weather drifting on a 10 m/s wind.
+        if let (Some(clouds), Some(images), Some(coverage)) =
+            (&self.clouds, cloud_images, self.args.clouds)
+        {
+            let time = self.sea_time as f32;
+            clouds.march(
+                &mut frame.graph,
+                frame.slot,
+                &sky,
+                CloudParams {
+                    camera: [self.camera.position.x, self.camera.position.z],
+                    drift: [8.0 * time, 6.0 * time],
+                    previous: self.clouds_previous,
+                    ..CloudParams::fair(coverage)
+                },
+                images,
+            );
+            self.clouds_previous = sky_view_proj;
+        }
         // The sea's waves (issue #105), on the async compute queue; the surface drawn from
         // them after the sky's compose.
         let waves = if let Some((water, _, _)) = &self.water {

@@ -56,7 +56,8 @@ struct GpuSky {
     color: u32,
     width: u32,
     height: u32,
-    pad: [u32; 2],
+    clouds: u32,
+    pad: u32,
     planet: u64,
     irradiance: u64,
 }
@@ -101,6 +102,8 @@ pub struct SkyFrame {
     transmittance: ImageHandle,
     sky_view: ImageHandle,
     aerial: ImageHandle,
+    /// The cloud layer the compose lays over the sky (#145), if any.
+    clouds: Option<ImageHandle>,
     address: u64,
     /// The sky's irradiance, for the resolve.
     pub light: SkyLight,
@@ -116,6 +119,11 @@ impl SkyFrame {
     /// The aerial-perspective volume, for the same passes.
     pub fn aerial(&self) -> ImageHandle {
         self.aerial
+    }
+
+    /// The atmosphere's transmittance table, for the clouds' sunlight (#145).
+    pub fn transmittance(&self) -> ImageHandle {
+        self.transmittance
     }
 }
 
@@ -193,7 +201,8 @@ impl GroundSky {
 
     /// Declares the tables' passes for this frame's camera and sun: the sky-view table, the
     /// sky's irradiance and the aerial perspective. `depth` and `color` are the images
-    /// [`Self::compose`] will read and write.
+    /// [`Self::compose`] will read and write, `clouds` the cloud layer it lays over the sky
+    /// (#145, [`crate::Clouds::images`]), if any.
     #[allow(clippy::too_many_arguments)]
     pub fn tables<'f>(
         &'f self,
@@ -203,6 +212,7 @@ impl GroundSky {
         params: SkyParams,
         depth: ImageHandle,
         color: ImageHandle,
+        clouds: Option<ImageHandle>,
         extent: vk::Extent2D,
     ) -> SkyFrame {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -250,7 +260,8 @@ impl GroundSky {
                         color: resources.storage(color, 0).0,
                         width: extent.width,
                         height: extent.height,
-                        pad: [0; 2],
+                        clouds: clouds.map_or(u32::MAX, |c| resources.sampled(c).0),
+                        pad: 0,
                         planet,
                         irradiance: irradiance_address,
                     }],
@@ -290,6 +301,7 @@ impl GroundSky {
             transmittance,
             sky_view,
             aerial,
+            clouds,
             address,
             light: SkyLight {
                 buffer: irradiance,
@@ -312,23 +324,26 @@ impl GroundSky {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let pipeline = &self.compose_pipeline;
         let address = sky.address;
-        graph
+        let mut pass = graph
             .pass("sky/compose")
             .image(sky.transmittance, ImageAccess::Sampled(compute))
             .image(sky.sky_view, ImageAccess::Sampled(compute))
             .image(sky.aerial, ImageAccess::Sampled(compute))
             .image(depth, ImageAccess::Sampled(compute))
-            .image(color, ImageAccess::StorageReadWrite(compute))
-            .run(move |_, commands| {
-                commands.bind_pipeline(pipeline);
-                commands.push_constants(pipeline, &address);
-                commands.dispatch(
-                    extent.width.div_ceil(GROUP),
-                    extent.height.div_ceil(GROUP),
-                    1,
-                );
-                Ok(())
-            });
+            .image(color, ImageAccess::StorageReadWrite(compute));
+        if let Some(clouds) = sky.clouds {
+            pass = pass.image(clouds, ImageAccess::Sampled(compute));
+        }
+        pass.run(move |_, commands| {
+            commands.bind_pipeline(pipeline);
+            commands.push_constants(pipeline, &address);
+            commands.dispatch(
+                extent.width.div_ceil(GROUP),
+                extent.height.div_ceil(GROUP),
+                1,
+            );
+            Ok(())
+        });
     }
 }
 

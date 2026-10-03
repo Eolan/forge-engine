@@ -25,7 +25,8 @@ public struct Sky
     public uint color;               // the frame's HDR colour (storage, read and written)
     public uint width;
     public uint height;
-    public uint2 pad;
+    public uint clouds;              // sampled: the cloud layer over the sky (#145), or ~0: none
+    public uint pad;
     public Planet* planet;
     public float4* irradiance;       // the sky's irradiance, SH_COEFFICIENTS coefficients, then up and forward (irradiance_main)
 };

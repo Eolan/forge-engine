@@ -108,6 +108,8 @@ for path in $paths; do
   validate "island$tag" "$bin/city-blocks$exe" --island 7 --island-drawn 8 --no-water --stream-pool 0 --frames 60 $path
   validate "water$tag" "$bin/city-blocks$exe" --island 7 --island-drawn 8 --stream-pool 0 --frames 60 $path
   validate "island-2m$tag" "$bin/city-blocks$exe" --island 7 --frames 60 $path
+  # The cloud layer (#145).
+  validate "clouds$tag" "$bin/city-blocks$exe" --island 7 --clouds 0.5 --frames 60 $path
   # Under the sea (#108, the log's `under the sea` view): the water at the camera, the surface
   # from below and the water between.
   validate "under-sea$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=4770,-3.0,-2847,91.1,-10 $path

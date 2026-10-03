@@ -151,6 +151,7 @@ main() {
     pair "$new/$path-city60.png" "$new/$path-city60-culled.png" "$path city, show-culled"
     pair "$new/$path-island60.png" "$new/$path-island60-noocc.png" "$path island, occlusion off"
     pair "$new/$path-water60.png" "$new/$path-water60-noocc.png" "$path island with water, occlusion off"
+    pair "$new/$path-clouds60.png" "$new/$path-clouds60-noocc.png" "$path island with clouds, occlusion off"
     pair "$new/$path-island8-60.png" "$new/$path-island8-60-resident.png" "$path island at 8 m, streamed against resident"
     pair "$new/$path-lab-drop90.png" "$new/$path-lab-drop90-noocc.png" "$path lab, occlusion off"
     pair "$new/$path-lab-sea300.png" "$new/$path-lab-sea300-noocc.png" "$path lab's sea, occlusion off"
@@ -161,7 +162,7 @@ main() {
     pair "$new/$path-lab-creatures120.png" "$new/$path-lab-creatures120-noocc.png" "$path lab's creatures, occlusion off"
     pair "$new/$path-lab-flood150.png" "$new/$path-lab-flood150-noocc.png" "$path lab's flood, occlusion off"
   done
-  for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60 \
+  for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60 clouds60 \
     shot-mouth shot-lake shot-island shot-valley lab-drop90 lab-drop600 lab-net300 lab-sea300 lab-sea-steer600 lab-walk150 lab-walk-crates240 \
     lab-drive300 lab-drive-turn600 lab-fly1200 lab-break85 lab-break300 lab-creatures120 \
     lab-creatures-throw240 lab-creatures-limp240 lab-flood150 lab-flood300; do

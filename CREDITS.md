@@ -357,6 +357,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   past a load or a strain, as engines' breakable constraints do (#142).
 - **Powered ragdolls.** Jolt's `Ragdoll`, `Skeleton` and motorised swing-twist and hinge
   constraints (Jorrit Rouwé), set up after Jolt's ragdoll samples (#143); D-012's physics layer.
+- **Clouds.** Andrew Schneider and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon:
+  Zero Dawn", SIGGRAPH 2015 Advances in Real-Time Rendering: a layer from a weather map,
+  Perlin–Worley shapes eroded by Worley noise, Beer's law with the powder term, temporal
+  reprojection; Sébastien Hillaire, "Physically Based Sky, Atmosphere and Cloud Rendering in
+  Frostbite", SIGGRAPH 2016: multiple scattering as Magnus Wrenninge's octaves ("Oz: The Great
+  and Volumetric", SIGGRAPH 2013 Talks) (`forge_render::clouds`, #145).
 - **Shallow water.** Matthias Müller-Fischer, "Fast Water Simulation for Games Using Height
   Fields", GDC 2008: depths on a grid, velocities on its faces carried along semi-Lagrangian,
   upwind fluxes kept from overdrawing a cell (`forge_physics::shallow`, #144). A. Ritter's

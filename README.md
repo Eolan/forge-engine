@@ -198,8 +198,9 @@ their own boulders where rocks gather, and the view under the water. It shares
 largest mouth), `lake` (morning), `island` (the afternoon, from the sea) and `valley` (dusk up a
 steep valley); the log lists them for any seed. `--tour` flies 70 s from that valley over the
 hills to the lake and the mouth and out to sea, resting at each shot. `--time-of-day T` holds
-the sun where `--day` has it (0 sunrise, 0.5 noon, 1 sunset), the exposure metered. Numbers:
-[docs/demos/island.md](docs/demos/island.md).
+the sun where `--day` has it (0 sunrise, 0.5 noon, 1 sunset), the exposure metered.
+`--clouds COVERAGE` draws a first layer of cumulus over that share of the sky (0.5: half;
+Phase 4's start, for review). Numbers: [docs/demos/island.md](docs/demos/island.md).
 
 ### `physics-lab` — Phase 3's first demo
 

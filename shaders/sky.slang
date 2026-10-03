@@ -137,8 +137,16 @@ void compose_main(uint3 id : SV_DispatchThreadID)
         // The sun's disc, through the air (when the ground does not hide it).
         if (dot(direction, sun) > s[0].sun.w && elevation > -0.01)
             luminance += sunlight_at(p, s[0].transmittance, p.view_position.xyz, sun) * s[0].scale.y;
+        float3 seen = luminance * s[0].scale.x;
+        // The cloud layer over the sky and the sun (#145): what they let through, and their
+        // own light (pre-exposed).
+        if (s[0].clouds != 0xFFFFFFFFu)
+        {
+            float4 c = sample_image_level(s[0].clouds, SAMPLER_LINEAR_CLAMP, uv, 0.0);
+            seen = seen * c.a + c.rgb;
+        }
         // Pre-exposed, the disc can pass fp16's 65 504 at low exposures: clamp it well below.
-        color[id.xy] = float4(min(luminance * s[0].scale.x, 32768.0), 1.0);
+        color[id.xy] = float4(min(seen, 32768.0), 1.0);
         return;
     }
     // Reversed-Z: the pixel's world position from its depth, its distance in km.
