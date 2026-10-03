@@ -34,7 +34,8 @@ With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 (Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad says
 so and keeps TAA).
 Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the path and fly
-freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing, **O** occlusion
+freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing (sharpened,
+plain, off: `--rcas STOPS`, half a stop by default, `--no-rcas`; D-045), **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
 red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **V** the belt's dust (`--no-dust`), **Y** translucent ice (`--no-translucency`), **G** tone curve,
@@ -965,7 +966,8 @@ every nine seconds, never faster than half a stop per second.
 
 ![The capture sequence behind the curve: one frame every 7.5 s of the path, ACES](images/asteroids-exposure-sequence.png)
 
-**Tone curves.** **G** cycles ACES → Khronos PBR Neutral → ACES 2.0 → AgX (`--tonemap`).
+**Tone curves.** **G** cycles AgX punchy → ACES → Khronos PBR Neutral → ACES 2.0 → AgX
+(`--tonemap`).
 The curve is applied in the TAA resolve, which writes the HDR history and the display image
 in one pass; the bench uses the stand-alone display pass. The same frame 600
 (`--fixed-step`, TAA on, automatic exposure), the golden captures of the four curves

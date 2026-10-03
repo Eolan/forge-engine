@@ -28,6 +28,9 @@ pub enum Tonemap {
     /// AgX (Sobotka; Blender 4.0's default): hue-safe, bright colours desaturate to white.
     #[default]
     AgX,
+    /// AgX with its "punchy" look (Wrensch 2023, as Filament's): deeper blacks, more saturated
+    /// colours (D-045).
+    AgXPunchy,
     /// ACES 1.x RRT + sRGB ODT, Hill's fit: contrasty, film-like, darker mid-tones.
     Aces,
     /// Khronos PBR Neutral: base colours unchanged up to ~0.76, highlights compressed.
@@ -42,8 +45,9 @@ pub enum Tonemap {
 
 impl Tonemap {
     /// Every curve, in cycling order.
-    pub const ALL: [Tonemap; 4] = [
+    pub const ALL: [Tonemap; 5] = [
         Tonemap::AgX,
+        Tonemap::AgXPunchy,
         Tonemap::Aces,
         Tonemap::PbrNeutral,
         Tonemap::Aces2,
@@ -57,6 +61,7 @@ impl Tonemap {
             Tonemap::PbrNeutral => 2,
             Tonemap::Aces2 => 3,
             Tonemap::Aces2Analytic => 4,
+            Tonemap::AgXPunchy => 5,
         }
     }
 
@@ -64,6 +69,7 @@ impl Tonemap {
     pub fn name(self) -> &'static str {
         match self {
             Tonemap::AgX => "agx",
+            Tonemap::AgXPunchy => "agx-punchy",
             Tonemap::Aces => "aces",
             Tonemap::PbrNeutral => "neutral",
             Tonemap::Aces2 => "aces2",
@@ -75,6 +81,7 @@ impl Tonemap {
     pub fn label(self) -> &'static str {
         match self {
             Tonemap::AgX => "AgX",
+            Tonemap::AgXPunchy => "AgX punchy",
             Tonemap::Aces => "ACES (Hill fit)",
             Tonemap::PbrNeutral => "Khronos PBR Neutral",
             Tonemap::Aces2 => "ACES 2.0 (SDR, table)",
@@ -93,7 +100,8 @@ impl Tonemap {
     /// against it is measured in [`crate::aces2`].
     pub fn apply(self, color: Vec3) -> Vec3 {
         let display = match self {
-            Tonemap::AgX => agx(color),
+            Tonemap::AgX => agx(color, false),
+            Tonemap::AgXPunchy => agx(color, true),
             Tonemap::Aces => aces(color),
             Tonemap::PbrNeutral => pbr_neutral(color),
             Tonemap::Aces2 | Tonemap::Aces2Analytic => {
@@ -113,7 +121,9 @@ impl FromStr for Tonemap {
             .chain([Tonemap::Aces2Analytic])
             .find(|t| t.name().eq_ignore_ascii_case(text))
             .ok_or_else(|| {
-                format!("unknown tone curve {text:?}: agx, aces, neutral, aces2 or aces2-analytic")
+                format!(
+                    "unknown tone curve {text:?}: agx, agx-punchy, aces, neutral, aces2 or aces2-analytic"
+                )
             })
     }
 }
@@ -409,7 +419,7 @@ fn rows(m: [[f32; 3]; 3], v: Vec3) -> Vec3 {
     )
 }
 
-fn agx(color: Vec3) -> Vec3 {
+fn agx(color: Vec3, punchy: bool) -> Vec3 {
     const MIN_EV: f32 = -12.47393;
     const MAX_EV: f32 = 4.026069;
     let inset = [
@@ -433,6 +443,12 @@ fn agx(color: Vec3) -> Vec3 {
     let curve =
         15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x
             - Vec3::splat(0.00232);
+    let curve = if punchy {
+        let luma = curve.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        Vec3::splat(luma) + 1.4 * (curve.max(Vec3::ZERO).powf(1.35) - Vec3::splat(luma))
+    } else {
+        curve
+    };
     rows(outset, curve).max(Vec3::ZERO).powf(2.2)
 }
 
@@ -679,6 +695,26 @@ mod tests {
         // A dim red stays red.
         let dim = Tonemap::AgX.apply(Vec3::new(0.2, 0.01, 0.01));
         assert!(dim.x > 3.0 * dim.y, "{dim}");
+    }
+
+    #[test]
+    fn agx_punchy_deepens_the_blacks_and_keeps_the_white() {
+        // The room's black squares in the sun (#159): AgX lifts them to a milky grey.
+        let black = |curve: Tonemap| curve.apply(Vec3::splat(0.03)).x;
+        assert!(
+            black(Tonemap::AgXPunchy) < 0.3 * black(Tonemap::AgX),
+            "{} against {}",
+            black(Tonemap::AgXPunchy),
+            black(Tonemap::AgX)
+        );
+        let white = Tonemap::AgXPunchy.apply(Vec3::splat(16.0)).x;
+        assert!(white > 0.9, "{white}");
+        // More saturated: a dim red's green falls further below its red.
+        let red = |curve: Tonemap| {
+            let c = curve.apply(Vec3::new(0.2, 0.05, 0.05));
+            c.y / c.x
+        };
+        assert!(red(Tonemap::AgXPunchy) < red(Tonemap::AgX));
     }
 
     #[test]

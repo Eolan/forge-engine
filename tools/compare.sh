@@ -96,8 +96,10 @@ preview_flaked() {
 }
 # is_expected NAME: true when NAME matches a pattern of FORGE_EXPECT.
 is_expected() {
-  local pattern
-  for pattern in $expect; do
+  local pattern patterns
+  # Split on spaces only: unquoted, `*` took the names of the files where the script runs.
+  read -ra patterns <<< "$expect"
+  for pattern in "${patterns[@]}"; do
     # shellcheck disable=SC2053 # the pattern is a glob on purpose
     [[ $1 == $pattern ]] && return 0
   done

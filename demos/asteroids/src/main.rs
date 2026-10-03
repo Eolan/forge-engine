@@ -167,9 +167,16 @@ struct Args {
     /// Also capture every N-th frame (`<capture stem>-NNNNN.png`).
     #[arg(long)]
     capture_every: Option<u64>,
-    /// Start with temporal anti-aliasing off (T toggles it).
+    /// Start with temporal anti-aliasing off (T cycles it sharpened, plain and off).
     #[arg(long)]
     no_taa: bool,
+    /// How strongly TAA's image is sharpened (FidelityFX RCAS, D-045): this many stops below
+    /// its strongest, each stop half as strong.
+    #[arg(long, default_value_t = 0.5)]
+    rcas: f32,
+    /// Show TAA's image unsharpened.
+    #[arg(long)]
+    no_rcas: bool,
     /// Anti-aliasing and upscaling: taa, or a DLSS mode (dlaa, quality, balanced, performance,
     /// ultra-performance; needs `--features dlss`, the Streamline SDK and an RTX GPU). U cycles
     /// them at run time.
@@ -609,6 +616,7 @@ impl Ballad {
         let mut taa = taa;
         taa.blend = args.taa_blend;
         taa.bloom_strength = args.bloom;
+        taa.sharpen = (!args.no_rcas).then_some(args.rcas);
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
@@ -753,8 +761,13 @@ impl Demo for Ballad {
         match code {
             KeyCode::KeyU => self.cycle_upscaler(ctx),
             KeyCode::KeyP => self.paused = !self.paused,
+            // TAA sharpened (D-045), plain, off.
             KeyCode::KeyT => {
-                self.taa_enabled = !self.taa_enabled;
+                (self.taa_enabled, self.taa.sharpen) = match (self.taa_enabled, self.taa.sharpen) {
+                    (true, Some(_)) => (true, None),
+                    (true, None) => (false, None),
+                    (false, _) => (true, Some(self.args.rcas)),
+                };
                 self.taa.reset_history();
             }
             KeyCode::KeyM => self.flags.toggle(CullFlags::MESHLET_COLORS),

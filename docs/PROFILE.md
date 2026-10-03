@@ -111,6 +111,10 @@ exposure (EV100, target, compensation, curve) the last.
   off-screen mode adds `post/hdr preview`, 0.038–0.042 ms at 1440p and 0.014 at 1600 × 900;
   its frame 2.616–2.648 → 2.659–2.714 ms at 1440p. Each HDR preset's table is baked once per
   process, 10–15 ms.
+- TAA's sharpening (D-045, RCAS on by default at half a stop), the sharpness room at 1600 × 900
+  (59 frames): `temporal/sharpen` 0.073 ms, and `temporal/TAA resolve` 0.055 → 0.046 ms
+  without its display output. That is +0.06 ms in all; the pass tone-maps the five pixels of
+  its cross. DLAA, for comparison, takes 0.48 ms.
 - MaxCLL and MaxFALL from the frame shown (#125), in every HDR mode: `post/hdr metadata
   histogram` takes 0.033–0.038 ms at 1440p and 0.015–0.016 at 1600 × 900 (the ballad, three
   runs), about what the exposure histogram costs. The first kernel, a thread per pixel with

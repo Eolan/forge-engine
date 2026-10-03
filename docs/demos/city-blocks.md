@@ -40,7 +40,7 @@ cargo run --release -p city-blocks
 
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** TAA, **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass and the water, **Z** soft or hard shadows, **P** the probes' light, **U** that
+what it drew, **[** / **]** LOD threshold, **T** TAA (sharpened, plain, off: `--rcas STOPS`, half a stop by default, `--no-rcas`; D-045), **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass and the water, **Z** soft or hard shadows, **P** the probes' light, **U** that
 light alone, **Tab** wireframe, **G** tone curve.
 
 Options:
@@ -82,7 +82,7 @@ Options:
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--instance-occlusion auto|on|off`, `--no-instance-cells` (cull the instances one by
   one, not by cells of 64, #38), `--show-culled` (what culling rejected drawn in red),
-  `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|aces|neutral|aces2|aces2-analytic`, `--force-fallback`,
+  `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|agx-punchy|aces|neutral|aces2|aces2-analytic`, `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
 
 ## The probes' cadence (issue #103, 2026-09-30)

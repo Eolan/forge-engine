@@ -13,6 +13,8 @@ public static const uint TONEMAP_PBR_NEUTRAL = 2;
 // ACES 2.0's output transform through its baked table, and per pixel (the reference).
 public static const uint TONEMAP_ACES2 = 3;
 public static const uint TONEMAP_ACES2_ANALYTIC = 4;
+// AgX with its "punchy" look: deeper blacks, more saturated colours (D-045).
+public static const uint TONEMAP_AGX_PUNCHY = 5;
 
 // What the ACES 2.0 curves read (crates/forge-render/src/display.rs, `ToneTables`): the
 // baked tables' bindless indices and the transform's parameters, SDR and the HDR preset's.
@@ -52,7 +54,9 @@ float3 agx_contrast(float3 x)
     return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
 }
 
-float3 agx(float3 color)
+// With `punchy`, Wrensch's "punchy" look between the sigmoid and the outset (as Filament's
+// `AgxLook::PUNCHY`): an ASC CDL of power 1.35, then saturation 1.4 about the luma before it.
+float3 agx(float3 color, bool punchy)
 {
     const float min_ev = -12.47393;
     const float max_ev = 4.026069;
@@ -63,6 +67,11 @@ float3 agx(float3 color)
         dot(c, float3(0.0423756549057051, 0.0784336, 0.879142973793104)));
     v = clamp(log2(max(v, 1e-10)), min_ev, max_ev);
     v = agx_contrast((v - min_ev) / (max_ev - min_ev));
+    if (punchy)
+    {
+        float luma = dot(v, float3(0.2126, 0.7152, 0.0722));
+        v = luma + 1.4 * (pow(max(v, 0.0), 1.35) - luma);
+    }
     v = float3(
         dot(v, float3(1.19687900512017, -0.0980208811401368, -0.0990297440797205)),
         dot(v, float3(-0.0528968517574562, 1.15190312990417, -0.0989611768448433)),
@@ -120,7 +129,7 @@ public float3 tonemap(float3 color, uint curve, ToneTables tables)
         return aces2_lut(max(color, 0.0), tables.lut);
     if (curve == TONEMAP_ACES2_ANALYTIC)
         return aces2_analytic(max(color, 0.0), tables.aces2);
-    return agx(color);
+    return agx(color, curve == TONEMAP_AGX_PUNCHY);
 }
 
 public float3 encode_srgb(float3 linear)
@@ -194,6 +203,37 @@ public float3 display_output(float3 color, uint curve, Output output, ToneTables
         return output.encoding == OUTPUT_SRGB ? encode_srgb(display) : display;
     }
     float3 signal = hdr_signal(color, curve, output, tables);
+    if (output.encoding == OUTPUT_PQ)
+    {
+        float dither = spatio_temporal_noise(pixel, output.frame).x - 0.5;
+        return saturate(signal + dither * (1.0 / 1023.0));
+    }
+    return rec2020_to_rec709(pq_decode(signal)) / 80.0;
+}
+
+public float3 decode_srgb(float3 encoded)
+{
+    float3 low = encoded / 12.92;
+    float3 high = pow((encoded + 0.055) / 1.055, 2.4);
+    return select(encoded <= 0.04045, low, high);
+}
+
+// The display's signal of a pre-exposed colour, in [0, 1] and even to the eye: an SDR curve's
+// image sRGB-encoded, or the PQ signal. A sharpening pass works on it (taa.slang, D-045), then
+// `display_from_signal` finishes it as `display_output` would.
+public float3 display_signal(float3 color, uint curve, Output output, ToneTables tables)
+{
+    if (output.encoding < OUTPUT_PQ)
+        return encode_srgb(saturate(tonemap(color, curve, tables)));
+    return hdr_signal(color, curve, output, tables);
+}
+
+public float3 display_from_signal(float3 signal, Output output, uint2 pixel)
+{
+    if (output.encoding == OUTPUT_SRGB)
+        return signal;
+    if (output.encoding == OUTPUT_SRGB_TARGET)
+        return decode_srgb(signal);
     if (output.encoding == OUTPUT_PQ)
     {
         float dither = spatio_temporal_noise(pixel, output.frame).x - 0.5;

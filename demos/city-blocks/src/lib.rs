@@ -474,6 +474,13 @@ struct Args {
     /// Draw without TAA (no jitter, no history): the raw frame, aliased.
     #[arg(long)]
     no_taa: bool,
+    /// How strongly TAA's image is sharpened (FidelityFX RCAS, D-045): this many stops below
+    /// its strongest, each stop half as strong. T cycles TAA sharpened, plain and off.
+    #[arg(long, default_value_t = 0.5)]
+    rcas: f32,
+    /// Show TAA's image unsharpened.
+    #[arg(long)]
+    no_rcas: bool,
     /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution) in place of TAA, to
     /// compare the two (#159): a build with `--features dlss`, the Streamline SDK in
     /// `streamline-sdk/` and an RTX GPU, else TAA with a warning. No bloom on that path.
@@ -679,6 +686,7 @@ impl Gallery {
         let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
         taa.enabled = !args.no_taa;
         taa.bloom_strength = args.bloom;
+        taa.sharpen = (!args.no_rcas).then_some(args.rcas);
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let sky_light = !args.no_sky_light;
@@ -1246,8 +1254,13 @@ impl Demo for Gallery {
                 };
             }
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
+            // TAA sharpened (D-045), plain, off.
             KeyCode::KeyT => {
-                self.taa.enabled = !self.taa.enabled;
+                (self.taa.enabled, self.taa.sharpen) = match (self.taa.enabled, self.taa.sharpen) {
+                    (true, Some(_)) => (true, None),
+                    (true, None) => (false, None),
+                    (false, _) => (true, Some(self.args.rcas)),
+                };
                 self.taa.reset_history();
             }
             // Space: the player jumps in the playground (#139), the car's handbrake on the track

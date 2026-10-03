@@ -2059,3 +2059,13 @@ together'."
   - the exposure's half to whole stop;
   - a history at twice the resolution;
   - FSR 3 at native resolution, to measure when the AMD work starts (#67).
+
+**Done so far:**
+- **RCAS after TAA**, on by default at half a stop (`--rcas`, `--no-rcas`, T cycles). It gives
+  back about 60 % of the contrast moving edges lose (MTF at 0.25 c/px, panning at 2 m/s: 0.62–0.67
+  → 0.83–0.87) and overshoots still edges by 9 %. At 1 stop it gives back a third. It costs
+  +0.06 ms at 1600 × 900. Frame to frame, the image changes a little more (the city: ꟻLIP mean
+  0.0078 → 0.0085).
+- **AgX punchy** among the curves (`--tonemap agx-punchy`, G): black squares at sRGB 0.055–0.08,
+  the white wall at 0.55 (AgX: 0.20–0.23 and 0.67). AgX stays the default.
+- **Next:** DLAA by default on RTX cards, the Lanczos-3 history, SSAA 2 × 2 for captures.

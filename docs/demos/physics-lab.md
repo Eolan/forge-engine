@@ -899,7 +899,36 @@ square's left; frame 60, TAA's history full):
   A sunlit white wall shows short of white under all three at EV 15. AgX's lifted blacks are
   much of the "not clear" look in a still image.
 
-What to do about it is the owner's choice: D-045 (🟡).
+What to do about it: D-045, accepted. The first two steps are done.
+
+**TAA sharpened** (`--rcas STOPS`, half a stop by default; `--no-rcas`; T cycles TAA sharpened,
+plain and off). A pass after the resolve sharpens the display's signal (sRGB-encoded, or PQ)
+with FidelityFX RCAS. The MTF at 0.25 c/px, the three edges (over 1 is an overshoot, a halo):
+
+| RCAS | Still | Panning 0.5 m/s | Panning 2 m/s |
+|---|---|---|---|
+| none | 0.85–0.86 | 0.62–0.73 | 0.62–0.67 |
+| 1.5 stops | 0.94–0.95 | 0.70–0.80 | 0.70–0.74 |
+| 1 stop | 0.99–1.00 | 0.73–0.83 | 0.74–0.78 |
+| **half a stop** | 1.08–1.09 | 0.83–0.91 | 0.83–0.87 |
+| 0 (the strongest) | 1.32–1.35 | 1.08–1.16 | 1.08–1.11 |
+
+- **The MTF50:** half a stop takes it to 0.60–0.62 still, an ideal pixel's (DLAA's 0.60–0.61),
+  and to 0.37–0.40 panning at 2 m/s, against 0.30–0.33 unsharpened (DLAA's 0.43–0.48).
+- **Why half a stop:** it gives back about 60 % of the contrast the moving edges lose, against a
+  third at 1 stop. The still edges overshoot by 9 %, a halo too faint to see; at 0 stops it
+  shows as a light line.
+- **What it costs:**
+  - 0.073 ms for the pass at 1600 × 900, less the 0.009 the resolve saves (`docs/PROFILE.md`).
+  - What changes from frame to frame changes a little more. The city's view from frame 120 to
+    121 differs by a ꟻLIP mean of 0.0085 against 0.0078, and 1172 pixels over 0.1 against 833.
+- **Matching the preview:** the GPU pass gives the numbers `tools/sharpness --rcas` predicted from
+  the captures.
+
+**AgX with more contrast** (`--tonemap agx-punchy`, in G's cycle after AgX): Wrensch's "punchy"
+look, a power of 1.35 and saturation 1.4 between AgX's sigmoid and its outset. The black squares
+show at sRGB 0.055–0.08, against AgX's 0.20–0.23 and ACES's 0.07–0.09. The sunlit white wall
+shows at 0.55, against 0.67. AgX stays the default (the owner's answer 3).
 
 ![The sharpness room from its start view; below, the board square's left edge enlarged four times: TAA still, TAA panning at 2 m/s, DLAA panning at 2 m/s, TAA panning with RCAS at half a stop](images/physics-lab-room.png)
 

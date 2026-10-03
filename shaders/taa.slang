@@ -6,7 +6,8 @@
 // resolve fetches the history there, clips it to what this frame's neighbourhood allows and
 // blends it with this frame's samples. The scene is pre-exposed: the history, stored at the
 // previous frame's exposure, is rescaled by `history_scale` before it is compared. The second
-// output is the display image, through the tone curve of `tonemap.slang`.
+// output is the display image, through the tone curve of `tonemap.slang`; with sharpening
+// (D-045), the resolve writes the history alone and `sharpen_main` shows it.
 import bindless;
 import tonemap;
 
@@ -245,4 +246,70 @@ float3 resolve_color(Varyings input)
     if (any(isnan(result)))
         result = expand(current);
     return result;
+}
+
+// ---- Sharpening (D-045) -------------------------------------------------------------------------
+
+// The resolve alone, when a sharpening pass shows the image: the next history only.
+[shader("fragment")]
+float4 resolve_history_main(Varyings input) : SV_Target0
+{
+    return float4(resolve_color(input), 1.0);
+}
+
+struct SharpenPush
+{
+    uint resolved;        // the resolve's colour, the history it wrote (sampled index)
+    uint width;
+    uint height;
+    float sharpness;      // RCAS's scale, 2^-stops: 1 its strongest
+    uint curve;           // TONEMAP_* of tonemap.slang
+    uint bloom;           // as the resolve's
+    float bloom_strength;
+    uint pad;
+    Output output;
+    ToneTables tables;
+};
+
+[[vk::push_constant]]
+SharpenPush sharpen_push;
+
+// What the display shows at `pixel`, as a signal in [0, 1] (tonemap.slang, `display_signal`),
+// with `bloom` (the centre's: it changes slowly) mixed in as the resolve mixes it.
+float3 signal_at(int2 pixel, float3 bloom)
+{
+    int2 last = int2(sharpen_push.width, sharpen_push.height) - 1;
+    float3 color = g_sampled_images[NonUniformResourceIndex(sharpen_push.resolved)].Load(int3(clamp(pixel, int2(0), last), 0)).rgb;
+    float3 shown = sharpen_push.bloom != 0xFFFFFFFFu ? lerp(color, bloom, sharpen_push.bloom_strength) : color;
+    return display_signal(shown, sharpen_push.curve, sharpen_push.output, sharpen_push.tables);
+}
+
+// FidelityFX RCAS (FSR 1's `FsrRcasF`, MIT, without its noise detection), as tools/sharpness
+// previews it: each pixel sharpened by its four neighbours, as strongly as the cross's darkest
+// and brightest let it without clipping, at most RCAS's limit, scaled by `sharpness`. On the
+// display's signal, so the sharpening is even to the eye.
+[shader("fragment")]
+float4 sharpen_main(Varyings input) : SV_Target
+{
+    int2 pixel = int2(input.position.xy);
+    float3 bloom = 0.0;
+    if (sharpen_push.bloom != 0xFFFFFFFFu)
+    {
+        float2 uv = input.position.xy / float2(float(sharpen_push.width), float(sharpen_push.height));
+        bloom = sample_image_level(sharpen_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
+    }
+    float3 e = signal_at(pixel, bloom);
+    float3 b = signal_at(pixel + int2(0, -1), bloom);
+    float3 d = signal_at(pixel + int2(-1, 0), bloom);
+    float3 f = signal_at(pixel + int2(1, 0), bloom);
+    float3 h = signal_at(pixel + int2(0, 1), bloom);
+    const float LIMIT = 0.25 - 1.0 / 16.0;
+    float3 lo = min(min(b, d), min(f, h));
+    float3 hi = max(max(b, d), max(f, h));
+    float3 hit_lo = min(lo, e) / max(4.0 * hi, 1e-9);
+    float3 hit_hi = (1.0 - max(hi, e)) / min(4.0 * lo - 4.0, -1e-9);
+    float3 lobes = max(-hit_lo, hit_hi);
+    float lobe = clamp(max(lobes.x, max(lobes.y, lobes.z)), -LIMIT, 0.0) * sharpen_push.sharpness;
+    float3 sharp = saturate((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0));
+    return float4(display_from_signal(sharp, sharpen_push.output, uint2(pixel)), 1.0);
 }

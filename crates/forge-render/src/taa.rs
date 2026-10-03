@@ -7,6 +7,10 @@
 //! curve, [`crate::display`]) in one pass.
 //! Ported from the previous project's `temporal.rs` (Karis 2014, Jimenez 2016, Playdead 2016).
 //!
+//! With [`Taa::sharpen`] (D-045), the resolve writes the history alone and a pass of its own
+//! shows it, sharpened by AMD's FidelityFX RCAS on the display's signal: TAA's history,
+//! resampled every frame, softens what moves.
+//!
 //! The scene is pre-exposed ([`crate::exposure`]): when the exposure changes between frames
 //! the history, stored at the previous exposure, is rescaled by the ratio before blending.
 //!
@@ -102,34 +106,82 @@ struct ResolvePush {
     tables: ToneTablesPush,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SharpenPush {
+    resolved: u32,
+    width: u32,
+    height: u32,
+    /// RCAS's scale, 2^-stops.
+    sharpness: f32,
+    curve: u32,
+    bloom: u32,
+    bloom_strength: f32,
+    pad: u32,
+    output: OutputPush,
+    tables: ToneTablesPush,
+}
+
+/// A fullscreen pass of `taa.slang`: its `entry` writing `color_formats`.
+fn taa_pipeline<P>(
+    device: &Arc<Device>,
+    shaders: &ShaderCompiler,
+    entry: &str,
+    color_formats: &[vk::Format],
+    name: &str,
+) -> Result<Pipeline> {
+    let vertex = device.create_shader_module(
+        &shaders.compile("taa.slang", "vert_main", ShaderStage::Vertex)?,
+        "taa vs",
+    )?;
+    let fragment = device.create_shader_module(
+        &shaders.compile("taa.slang", entry, ShaderStage::Fragment)?,
+        name,
+    )?;
+    let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
+        vertex: (vertex, "vert_main"),
+        fragment: (fragment, entry),
+        color_formats,
+        push_constant_bytes: std::mem::size_of::<P>() as u32,
+        alpha_blend: false,
+        depth_test: None,
+        depth_write: false,
+        name,
+    });
+    for module in [vertex, fragment] {
+        device.destroy_shader_module(module);
+    }
+    pipeline
+}
+
 /// The resolve's pipeline, writing the history and an output image of `output_format`.
 fn resolve_pipeline(
     device: &Arc<Device>,
     shaders: &ShaderCompiler,
     output_format: vk::Format,
 ) -> Result<Pipeline> {
-    let vertex = device.create_shader_module(
-        &shaders.compile("taa.slang", "vert_main", ShaderStage::Vertex)?,
-        "taa vs",
-    )?;
-    let resolve = device.create_shader_module(
-        &shaders.compile("taa.slang", "resolve_main", ShaderStage::Fragment)?,
+    taa_pipeline::<ResolvePush>(
+        device,
+        shaders,
+        "resolve_main",
+        &[HDR_FORMAT, output_format],
         "taa resolve",
-    )?;
-    let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
-        vertex: (vertex, "vert_main"),
-        fragment: (resolve, "resolve_main"),
-        color_formats: &[HDR_FORMAT, output_format],
-        push_constant_bytes: std::mem::size_of::<ResolvePush>() as u32,
-        alpha_blend: false,
-        depth_test: None,
-        depth_write: false,
-        name: "taa resolve",
-    });
-    for module in [vertex, resolve] {
-        device.destroy_shader_module(module);
-    }
-    pipeline
+    )
+}
+
+/// The sharpening pass's pipeline, writing an output image of `output_format`.
+fn sharpen_pipeline(
+    device: &Arc<Device>,
+    shaders: &ShaderCompiler,
+    output_format: vk::Format,
+) -> Result<Pipeline> {
+    taa_pipeline::<SharpenPush>(
+        device,
+        shaders,
+        "sharpen_main",
+        &[output_format],
+        "taa sharpen",
+    )
 }
 
 fn create_history(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
@@ -178,6 +230,9 @@ pub struct Taa {
     device: Arc<Device>,
     pipeline_motion: Pipeline,
     pipeline_resolve: Pipeline,
+    /// The resolve writing the history alone, and the pass that shows it sharpened.
+    pipeline_history: Pipeline,
+    pipeline_sharpen: Pipeline,
     history: [GraphImage; 2],
     extent: vk::Extent2D,
     frame_index: u64,
@@ -200,6 +255,9 @@ pub struct Taa {
     /// Length of the jitter sequence ([`JITTER_PHASES`] at native resolution, more when an
     /// upscaler draws below it: [`jitter_phases`]).
     pub jitter_phases: u32,
+    /// The display image sharpened by RCAS this many stops below its strongest (D-045), while
+    /// TAA is on; `None` shows the resolve as it is.
+    pub sharpen: Option<f32>,
 }
 
 impl Taa {
@@ -233,6 +291,14 @@ impl Taa {
             device.destroy_shader_module(module);
         }
         let pipeline_resolve = resolve_pipeline(device, shaders, output_format)?;
+        let pipeline_history = taa_pipeline::<ResolvePush>(
+            device,
+            shaders,
+            "resolve_history_main",
+            &[HDR_FORMAT],
+            "taa resolve history",
+        )?;
+        let pipeline_sharpen = sharpen_pipeline(device, shaders, output_format)?;
         let history = create_history(device, extent)?;
         let mut tables = ToneTables::new(device)?;
         let hdr = HdrOutput::default();
@@ -243,6 +309,8 @@ impl Taa {
             device: Arc::clone(device),
             pipeline_motion,
             pipeline_resolve,
+            pipeline_history,
+            pipeline_sharpen,
             history,
             extent,
             frame_index: 0,
@@ -257,6 +325,7 @@ impl Taa {
             enabled: true,
             bloom_strength: 0.04,
             jitter_phases: JITTER_PHASES,
+            sharpen: None,
         })
     }
 
@@ -271,6 +340,7 @@ impl Taa {
     ) -> Result<()> {
         if format != self.output_format {
             self.pipeline_resolve = resolve_pipeline(&self.device, shaders, format)?;
+            self.pipeline_sharpen = sharpen_pipeline(&self.device, shaders, format)?;
             self.output_format = format;
         }
         if OutputEncoding::for_format(format).is_hdr() {
@@ -432,7 +502,8 @@ impl Taa {
 
     /// Declares the pass that resolves the frame drawn into `frame.color` with `depth` and
     /// `motion` (from [`Taa::motion_vectors`]) into the next history and, through `curve`,
-    /// into `output` at once. Where `reactive` (an R8 mask, #107: the splashes' coverage) is
+    /// into `output` at once; with [`Taa::sharpen`], into `output` by a sharpening pass after
+    /// it. Where `reactive` (an R8 mask, #107: the splashes' coverage) is
     /// set, a pixel takes at least that share of this frame, so what moves without motion
     /// vectors is not smeared. Returns the history it wrote.
     #[allow(clippy::too_many_arguments)]
@@ -459,25 +530,40 @@ impl Taa {
         let extent = frame.extent;
         let history_written = graph.import(&self.history[frame.written]);
         let history_read = graph.import(&self.history[1 - frame.written]);
-        let pipeline_resolve = &self.pipeline_resolve;
+        // Sharpened, the resolve writes the history alone and the next pass shows it.
+        let sharpen = self.sharpen.filter(|_| self.enabled);
+        let shown = if sharpen.is_some() {
+            None
+        } else {
+            Some(output)
+        };
+        let pipeline_resolve = if sharpen.is_some() {
+            &self.pipeline_history
+        } else {
+            &self.pipeline_resolve
+        };
         let mut pass = graph
             .pass("temporal/TAA resolve")
             .image(frame.color, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(motion, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(depth, ImageAccess::Sampled(S::FRAGMENT_SHADER))
             .image(history_read, ImageAccess::Sampled(S::FRAGMENT_SHADER))
-            .image(history_written, ImageAccess::ColorAttachment)
-            .image(output, ImageAccess::ColorAttachment);
-        if let Some(bloom) = bloom {
-            pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
+            .image(history_written, ImageAccess::ColorAttachment);
+        if let Some(output) = shown {
+            pass = pass.image(output, ImageAccess::ColorAttachment);
+            if let Some(bloom) = bloom {
+                pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
+            }
         }
         if let Some(reactive) = reactive {
             pass = pass.image(reactive, ImageAccess::Sampled(S::FRAGMENT_SHADER));
         }
         pass.run(move |resources, commands| {
+            let mut targets = vec![resources.view(history_written)];
+            targets.extend(shown.map(|o| resources.view(o)));
             fullscreen_pass(
                 commands,
-                &[resources.view(history_written), resources.view(output)],
+                &targets,
                 extent,
                 pipeline_resolve,
                 &ResolvePush {
@@ -491,7 +577,9 @@ impl Taa {
                     blend: frame.blend,
                     history_scale: frame.history_scale,
                     curve: curve.index(),
-                    bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
+                    bloom: bloom
+                        .filter(|_| shown.is_some())
+                        .map_or(u32::MAX, |b| resources.sampled(b).0),
                     bloom_strength,
                     output: encoding,
                     reactive: reactive.map_or(u32::MAX, |r| resources.sampled(r).0),
@@ -500,6 +588,37 @@ impl Taa {
             );
             Ok(())
         });
+        if let Some(stops) = sharpen {
+            let pipeline_sharpen = &self.pipeline_sharpen;
+            let mut pass = graph
+                .pass("temporal/sharpen")
+                .image(history_written, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+                .image(output, ImageAccess::ColorAttachment);
+            if let Some(bloom) = bloom {
+                pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
+            }
+            pass.run(move |resources, commands| {
+                fullscreen_pass(
+                    commands,
+                    &[resources.view(output)],
+                    extent,
+                    pipeline_sharpen,
+                    &SharpenPush {
+                        resolved: resources.sampled(history_written).0,
+                        width: extent.width,
+                        height: extent.height,
+                        sharpness: (-stops).exp2(),
+                        curve: curve.index(),
+                        bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
+                        bloom_strength,
+                        pad: 0,
+                        output: encoding,
+                        tables,
+                    },
+                );
+                Ok(())
+            });
+        }
         history_written
     }
 }
@@ -582,5 +701,13 @@ mod tests {
         };
         let moved = to_pixels(shifted * point) - to_pixels(projection * point);
         assert!(moved.abs_diff_eq(Vec2::new(0.25, -0.5), 1e-3), "{moved}");
+    }
+
+    #[test]
+    fn the_sharpening_push_matches_the_shader() {
+        // `SharpenPush` in taa.slang: eight words, `Output`, then `ToneTables` (its pointers on
+        // 8 bytes).
+        assert_eq!(std::mem::size_of::<SharpenPush>(), 32 + 16 + 32);
+        assert_eq!(std::mem::offset_of!(SharpenPush, tables), 48);
     }
 }
