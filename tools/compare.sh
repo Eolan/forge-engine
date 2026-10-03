@@ -24,7 +24,8 @@
 # output's frame 600 has TAA on too and flakes the same way (#134): its SDR preview
 # (*-ast-hdr600) by the same signature, and its PQ codes (*-ast-hdr600-pq, ~100 000 codes apart
 # in the dark) only when the preview flaked too, with HDR-FLIP mean at most 0.005 and largest
-# below 0.2 (three flakes: 0.0034-0.0044 and 0.16-0.19; a line of 20 codes reaches 0.24). Both
+# below 0.22 (three flakes: 0.0034-0.0044 and 0.16-0.19; on 2026-10-03 eight more, largest
+# 0.14-0.201, and a line of 20 codes reaches 0.24). Both
 # HDR captures' PQ codes (*-ast-hdr240-pq, *-ast-hdr600-pq) can also differ by one code on a few
 # dozen pixels with the preview the same (2026-10-03, two Tier 2 runs: 20 and 19 px, HDR-FLIP
 # largest 0.013-0.016): at most 100 px of one code, largest below 0.02, is the flake too. The
@@ -77,7 +78,7 @@ flake() {
       fi
       [[ $1 == *-ast-hdr600-pq ]] || return 1
       awk -v mean="$3" -v peak="$4" \
-        'BEGIN { exit !(mean != "" && peak != "" && mean <= 0.005 && peak < 0.2) }' || return 1
+        'BEGIN { exit !(mean != "" && peak != "" && mean <= 0.005 && peak < 0.22) }' || return 1
       preview_flaked "${1%-pq}"
       ;;
     *) return 1 ;;
