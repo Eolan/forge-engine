@@ -2744,7 +2744,19 @@ every other image stays as it was until they are agreed. After Schneider's 2015 
 
 ![The island's coast at frame 60 under fair-weather cumulus, and the field's aeroplane climbing](images/island-clouds.png)
 
-At 1600 × 900 on the 5070 Ti the march (`sky/clouds`) takes **0.21 ms** over half the sky (the
-island's start view: the frame 1.45 → 1.65 ms). Not yet: the clouds' shadows on the ground and
-the water, the clouds in the water's reflections and in the sky's irradiance, D-034's weather
-map from the climate, flying into them (Nubis³'s voxel clouds).
+**Their shadows** (the same day): `sky/cloud shadow` writes, for the ground under each texel of a
+30 km square round the camera (384², its corner snapped to its texels so it does not crawl), the
+sun's share through the layer along the sun's direction, sixteen steps through the clouds
+without their fine detail, softened as their light's octaves soften them and never darker than
+15 %; the resolve multiplies the sun's ray-traced shadow by it, a point `y` up reading it `y /
+sun.y` towards the sun's foot. The island at noon under a 0.4 cover, from the sea and from 1.5 km
+up:
+
+![The island at noon under clouds, from the sea and from above: their shadows on its slopes](images/island-cloud-shadows.png)
+
+At 1600 × 900 on the 5070 Ti the march (`sky/clouds`) takes **0.22 ms** over half the sky and the
+shadow map **0.02 ms** (the island's start view: the frame 1.46 → 1.70 ms). With a low sun the
+slanting path through the layer crosses several clouds, and most of the ground lies in shade. Not
+yet: the sea and the water under their shadow (the water pass shades itself), the clouds in the
+water's reflections and in the sky's irradiance, D-034's weather map from the climate, flying
+into them (Nubis³'s voxel clouds).

@@ -978,7 +978,9 @@ cobbles (#132) cost about 0.01 ms: the island 1.501–1.503 ms against 1.491–1
 through the layer and six towards the sun where a sample is in a cloud: **0.21 ms** on the
 island's start view at a coverage of 0.5 (the frame 1.45 → 1.65 ms over 300 frames).
 `sky/compose` reads its result where it draws the sky, at no cost to measure (0.022 ms either
-way). The noises are baked on the CPU at start, about 0.1 s.
+way). The noises are baked on the CPU at start, about 0.1 s. Their shadow (`sky/cloud shadow`,
+384² texels, sixteen steps each): **0.02 ms**, and the resolve's one lookup a pixel no more than
+the runs' noise (the frame 1.46 → 1.70 ms with both).
 
 ## `physics-lab` — the physics tick (#136, 2026-10-02)
 

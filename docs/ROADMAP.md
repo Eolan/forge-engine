@@ -127,9 +127,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of
-  cumulus ✅ behind `--clouds` (#145, for the owner to judge before it is on by default); next
-  for them: their shadows, their light in the water and the sky's irradiance, the weather map
-  from the climate.
+  cumulus ✅ behind `--clouds` (#145, for the owner to judge before it is on by default), their
+  shadows on the ground ✅; next for them: their shadow and light in the water, the sky's
+  irradiance under them, the weather map from the climate.
 - **The rivers' and the water's polish, from their issues' "left for later":**
   - standing waves on the 2–4 % rapids (#122);
   - a bar and a scour hole at confluences (#119);

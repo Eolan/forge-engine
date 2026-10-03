@@ -491,9 +491,15 @@ struct ResolvePush {
     probes: u64,
     /// The shore's `ShoreGround` block (issue #105: the wet sand), or 0: dry ground.
     shore: u64,
+    /// The clouds' shadow map's frame (#145, [`crate::CloudShadow`]): its first corner (world
+    /// x, z), 1 / the metres it spans, 0.
+    cloud_frame: [f32; 4],
+    /// Its sampled index (r32f: the sun's share through the clouds), or `u32::MAX`.
+    cloud_shadow: u32,
+    cloud_pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<ResolvePush>() == 96);
+const _: () = assert!(std::mem::size_of::<ResolvePush>() == 120);
 
 /// Mirrors `RequestedRaysPush` in `meshlet.slang`.
 #[repr(C)]
@@ -545,6 +551,8 @@ pub struct AmbientLight {
     pub wet_ground: Option<WetGround>,
     /// This frame's movers (#79, [`DrawTargets::movers`]), which the rays may meet.
     pub movers: Option<MoversFrame>,
+    /// The clouds' shadow on the sun's light (#145, [`crate::Clouds::shadow`]); `None`: none.
+    pub clouds: Option<crate::CloudShadow>,
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -3546,6 +3554,11 @@ impl MeshletRenderer {
             request_image: request.map_or(u32::MAX, |r| resources.storage(r, 0).0),
             probes: ambient.sky.and(ambient.probes).map_or(0, |p| p.address),
             shore: ambient.wet_ground.map_or(0, |g| g.address),
+            cloud_frame: ambient.clouds.map_or([0.0; 4], |c| c.frame),
+            cloud_shadow: ambient
+                .clouds
+                .map_or(u32::MAX, |c| resources.sampled(c.image).0),
+            cloud_pad: 0,
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -3582,6 +3595,9 @@ impl MeshletRenderer {
         }
         if let Some(ao) = ambient.occlusion {
             builder = builder.image(ao, ImageAccess::Sampled(compute));
+        }
+        if let Some(clouds) = ambient.clouds {
+            builder = builder.image(clouds.image, ImageAccess::Sampled(compute));
         }
         if let Some(g) = ambient.wet_ground {
             builder = g.images().fold(builder, |b, image| {
@@ -3628,6 +3644,9 @@ impl MeshletRenderer {
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
             }
+            if let Some(clouds) = ambient.clouds {
+                builder = builder.image(clouds.image, ImageAccess::Sampled(compute));
+            }
             if let Some(g) = ambient.wet_ground {
                 builder = g.images().fold(builder, |b, image| {
                     b.image(image, ImageAccess::Sampled(compute))
@@ -3663,6 +3682,9 @@ impl MeshletRenderer {
                 .image(sky.table, ImageAccess::Sampled(compute));
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
+            }
+            if let Some(clouds) = ambient.clouds {
+                builder = builder.image(clouds.image, ImageAccess::Sampled(compute));
             }
             if let Some(g) = ambient.wet_ground {
                 builder = g.images().fold(builder, |b, image| {

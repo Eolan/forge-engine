@@ -29,6 +29,8 @@ struct Clouds
     uint height;
     uint frame;
     Sky* sky;
+    uint2 pad;
+    float4 shadow;         // the shadow map's first corner (world x, z), metres a texel, 0 (its pass only)
 };
 
 struct CloudsPush
@@ -238,4 +240,40 @@ void march_main(uint3 id : SV_DispatchThreadID)
         }
     }
     g_storage_images_rgba16f[NonUniformResourceIndex(c[0].target)][id.xy] = result;
+}
+
+// The clouds' shadow (#145): for the ground under each texel of a square round the camera, the
+// sun's share through the layer along its direction, the clouds sampled without their fine
+// detail. Softened as the octaves soften the clouds' own light, and never quite dark (light
+// still reaches the ground round and through a cloud).
+static const uint SHADOW_STEPS = 16;
+static const float SHADOW_SOFTEN = 0.3;
+static const float SHADOW_STRENGTH = 0.85;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void shadow_main(uint3 id : SV_DispatchThreadID)
+{
+    Clouds* c = clouds_push.clouds;
+    if (id.x >= c[0].width || id.y >= c[0].height)
+        return;
+    float3 sun = c[0].sky[0].sun.xyz;
+    float lit = 1.0;
+    if (sun.y > 0.03)
+    {
+        float2 ground = c[0].shadow.xy + (float2(id.xy) + 0.5) * c[0].shadow.z;
+        float t0 = c[0].layer.x / sun.y;
+        float t1 = c[0].layer.y / sun.y;
+        float step = (t1 - t0) / float(SHADOW_STEPS);
+        float optical = 0.0;
+        for (uint i = 0; i < SHADOW_STEPS; i++)
+        {
+            float t = t0 + (float(i) + 0.5) * step;
+            float3 p = float3(ground.x + sun.x * t, sun.y * t, ground.y + sun.z * t);
+            float h = saturate((p.y - c[0].layer.x) / (c[0].layer.y - c[0].layer.x));
+            optical += density_at(c, p, h, false) * step;
+        }
+        lit = lerp(1.0, exp(-c[0].layer.w * optical * SHADOW_SOFTEN), SHADOW_STRENGTH);
+    }
+    g_storage_images_r32f[NonUniformResourceIndex(c[0].target)][id.xy] = lit;
 }

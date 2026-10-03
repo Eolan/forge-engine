@@ -2976,10 +2976,27 @@ struct ResolvePush
     uint request_image;  // storage index of the mirror rays' requests (issue #52), or 0xFFFFFFFF
     ProbeField* probes;  // the diffuse light's probes (probes.slang, issue #53), or null
     ShoreGround* shore;  // the shore whose swash wets the sand (issue #105), or null
+    float4 cloud_frame;  // the clouds' shadow map (#145): its first corner (world x, z), 1 / the metres it spans
+    uint cloud_shadow;   // its sampled index (r32f: the sun's share through the clouds), or 0xFFFFFFFF
+    uint cloud_pad;
 };
 
 [[vk::push_constant]]
 ResolvePush resolve_push;
+
+// The sun's share through the clouds (#145) at `world` (the scene's frame): the shadow map holds
+// it for the ground, so a point `y` up reads it `y / sun.y` along the sun's foot. 1 without
+// clouds, or off the map.
+float cloud_light(float3 world, float3 sun)
+{
+    if (resolve_push.cloud_shadow == 0xFFFFFFFFu)
+        return 1.0;
+    float2 ground = world.xz - sun.xz * (world.y / max(sun.y, 0.05));
+    float2 uv = (ground - resolve_push.cloud_frame.xy) * resolve_push.cloud_frame.z;
+    if (any(uv < 0.0) || any(uv > 1.0))
+        return 1.0;
+    return sample_depth_level(resolve_push.cloud_shadow, SAMPLER_LINEAR_CLAMP, uv, 0.0);
+}
 
 // The standard class shades in the full-screen pass that classifies (`resolve_standard_main`),
 // so a frame of standard materials costs one pass over the visibility buffer. Every other
@@ -3390,6 +3407,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
         s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
+    // Under the clouds (#145).
+    if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
+        s.shadow *= cloud_light(surface_scene, normalize(f[0].sun_dir));
     s.transmitted = float3(0.0);
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
         s.transmitted = ice_transmission(f, record.x, surface_scene, mat.scattering);

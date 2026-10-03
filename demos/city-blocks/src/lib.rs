@@ -1416,22 +1416,20 @@ impl Demo for Gallery {
         );
         // The clouds marched after the tables (their sun through the air, the sky's light),
         // before the compose lays them over the sky; the weather drifting on a 10 m/s wind.
+        // Their shadow on the sun's light for the resolve.
+        let mut cloud_shadow = None;
         if let (Some(clouds), Some(images), Some(coverage)) =
             (&self.clouds, cloud_images, self.args.clouds)
         {
             let time = self.sea_time as f32;
-            clouds.march(
-                &mut frame.graph,
-                frame.slot,
-                &sky,
-                CloudParams {
-                    camera: [self.camera.position.x, self.camera.position.z],
-                    drift: [8.0 * time, 6.0 * time],
-                    previous: self.clouds_previous,
-                    ..CloudParams::fair(coverage)
-                },
-                images,
-            );
+            let params = CloudParams {
+                camera: [self.camera.position.x, self.camera.position.z],
+                drift: [8.0 * time, 6.0 * time],
+                previous: self.clouds_previous,
+                ..CloudParams::fair(coverage)
+            };
+            clouds.march(&mut frame.graph, frame.slot, &sky, params, images);
+            cloud_shadow = Some(clouds.shadow(&mut frame.graph, frame.slot, &sky, params));
             self.clouds_previous = sky_view_proj;
         }
         // The sea's waves (issue #105), on the async compute queue; the surface drawn from
@@ -1512,6 +1510,7 @@ impl Demo for Gallery {
                 probes,
                 wet_ground,
                 movers: targets.movers,
+                clouds: cloud_shadow,
             },
         );
         self.sky.compose(
@@ -1591,6 +1590,7 @@ impl Demo for Gallery {
                         probes,
                         wet_ground: None,
                         movers: targets.movers,
+                        clouds: None,
                     },
                 );
             }

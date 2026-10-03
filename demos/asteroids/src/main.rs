@@ -1038,6 +1038,7 @@ impl Demo for Ballad {
                 probes: None,
                 wet_ground: None,
                 movers: None,
+                clouds: None,
             },
         );
         if let Some(h) = hasher {

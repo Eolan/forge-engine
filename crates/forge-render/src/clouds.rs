@@ -16,7 +16,8 @@ use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, GraphImage, Image, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
-    MemoryLocation, Pipeline, Result, SampledImageId, ShaderCompiler, ShaderStage, vk,
+    MemoryLocation, Pipeline, Result, SampledImageId, ShaderCompiler, ShaderStage, TransientDesc,
+    vk,
 };
 use glam::Mat4;
 
@@ -47,9 +48,11 @@ struct GpuClouds {
     frame: u32,
     sky: u64,
     pad: [u32; 2],
+    /// The shadow map's first corner (world x, z), metres a texel, 0 (its pass only).
+    shadow: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuClouds>() == 144);
+const _: () = assert!(std::mem::size_of::<GpuClouds>() == 160);
 
 /// What a frame's clouds need besides the sky.
 #[derive(Clone, Copy, Debug)]
@@ -82,9 +85,24 @@ impl CloudParams {
     }
 }
 
+/// The clouds' shadow on the sun's light this frame ([`Clouds::shadow`]), for the resolve.
+#[derive(Clone, Copy, Debug)]
+pub struct CloudShadow {
+    /// `r32f`: the sun's share through the layer for the ground under each texel (along the
+    /// sun: a point at height y reads it `y / sun.y` towards the sun's foot).
+    pub image: ImageHandle,
+    /// Its first corner (world x, z), 1 / the metres it spans, 0.
+    pub frame: [f32; 4],
+}
+
+/// The shadow map: texels a side, metres it spans round the camera.
+const SHADOW_TEXELS: u32 = 384;
+const SHADOW_SPAN: f32 = 30_000.0;
+
 /// The cloud layer's noises, its pass and its two images, this frame's and last.
 pub struct Clouds {
     pipeline: Pipeline,
+    shadow_pipeline: Pipeline,
     _noises: [Image; 3],
     shape: SampledImageId,
     detail: SampledImageId,
@@ -103,16 +121,21 @@ impl Clouds {
         shaders: &ShaderCompiler,
         extent: vk::Extent2D,
     ) -> Result<Self> {
-        let module = device.create_shader_module(
-            &shaders.compile("clouds.slang", "march_main", ShaderStage::Compute)?,
-            "clouds",
-        )?;
-        let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
-            shader: (module, "march_main"),
-            push_constant_bytes: 8,
-            name: "clouds",
-        });
-        device.destroy_shader_module(module);
+        let compute = |entry: &str, name: &str| -> Result<Pipeline> {
+            let module = device.create_shader_module(
+                &shaders.compile("clouds.slang", entry, ShaderStage::Compute)?,
+                name,
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: 8,
+                name,
+            });
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let pipeline = compute("march_main", "clouds");
+        let shadow_pipeline = compute("shadow_main", "cloud shadow");
         let upload = |side: u32, texels: Vec<u8>, name: &str| -> Result<(Image, SampledImageId)> {
             let image = device.create_image_with_data(
                 ImageDesc {
@@ -168,7 +191,8 @@ impl Clouds {
             )
         });
         let [a, b] = history;
-        let blocks = (0..FRAMES_IN_FLIGHT)
+        // A block per frame slot for the march, and one for the shadow's pass.
+        let blocks = (0..2 * FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
                     size: std::mem::size_of::<GpuClouds>() as u64,
@@ -181,6 +205,7 @@ impl Clouds {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             pipeline: pipeline?,
+            shadow_pipeline: shadow_pipeline?,
             _noises: [shape_image, detail_image, weather_image],
             shape,
             detail,
@@ -190,6 +215,83 @@ impl Clouds {
             frame: Cell::new(0),
             blocks,
         })
+    }
+
+    /// Declares `sky/cloud shadow`: the sun's share through the layer for the ground round the
+    /// camera (`SHADOW_SPAN` metres, its corner snapped to its texels so the map does not crawl
+    /// as the camera moves), for the resolve ([`crate::AmbientLight::clouds`]).
+    pub fn shadow<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        sky: &SkyFrame,
+        params: CloudParams,
+    ) -> CloudShadow {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let image = graph.transient(TransientDesc {
+            name: "cloud shadow",
+            width: SHADOW_TEXELS,
+            height: SHADOW_TEXELS,
+            format: vk::Format::R32_SFLOAT,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let texel = SHADOW_SPAN / SHADOW_TEXELS as f32;
+        let corner = params
+            .camera
+            .map(|c| ((c - 0.5 * SHADOW_SPAN) / texel).floor() * texel);
+        let block: &'f Buffer = &self.blocks[FRAMES_IN_FLIGHT + slot.index];
+        let address = block.address();
+        let pipeline = &self.shadow_pipeline;
+        let sky_address = sky.address();
+        let (shape, detail, weather) = (self.shape, self.detail, self.weather);
+        graph
+            .pass("sky/cloud shadow")
+            .image(image, ImageAccess::StorageWrite(compute))
+            .run(move |resources, commands| {
+                block.write(
+                    0,
+                    &[GpuClouds {
+                        previous: Mat4::IDENTITY.to_cols_array(),
+                        camera: [
+                            params.camera[0],
+                            params.camera[1],
+                            params.drift[0],
+                            params.drift[1],
+                        ],
+                        layer: [
+                            params.layer[0],
+                            params.layer[1],
+                            params.coverage,
+                            params.density,
+                        ],
+                        shape: shape.0,
+                        detail: detail.0,
+                        weather: weather.0,
+                        history: u32::MAX,
+                        target: resources.storage(image, 0).0,
+                        width: SHADOW_TEXELS,
+                        height: SHADOW_TEXELS,
+                        frame: 0,
+                        sky: sky_address,
+                        pad: [0; 2],
+                        shadow: [corner[0], corner[1], texel, 0.0],
+                    }],
+                );
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &address);
+                commands.dispatch(
+                    SHADOW_TEXELS.div_ceil(GROUP),
+                    SHADOW_TEXELS.div_ceil(GROUP),
+                    1,
+                );
+                Ok(())
+            });
+        CloudShadow {
+            image,
+            frame: [corner[0], corner[1], 1.0 / SHADOW_SPAN, 0.0],
+        }
     }
 
     /// This frame's image and last frame's (none on the first): the sky's tables are told of
@@ -254,6 +356,7 @@ impl Clouds {
                     frame,
                     sky: sky_address,
                     pad: [0; 2],
+                    shadow: [0.0; 4],
                 }],
             );
             commands.bind_pipeline(pipeline);
