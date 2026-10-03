@@ -485,6 +485,10 @@ struct Args {
     /// Show TAA's image unsharpened.
     #[arg(long)]
     no_rcas: bool,
+    /// What the props' textures keep: full (colour and relief), flat (colour alone) or none
+    /// (plain colours), to compare.
+    #[arg(long, value_enum, default_value_t = TextureMode::Full)]
+    textures: TextureMode,
     /// Resample TAA's history through Catmull-Rom (5 bilinear fetches), as before D-045, rather
     /// than Lanczos-3 (36 texels).
     #[arg(long)]
@@ -2354,11 +2358,13 @@ fn textured(
     power: f32,
     specular: f32,
 ) -> RenderLayer {
+    // `--textures` (the owner's question of 2026-10-03: are the textures what looks fuzzy?).
+    let mode = TEXTURES.get().copied().unwrap_or_default();
     RenderLayer {
         color_a: a,
         color_b: b,
-        albedo_texture: Some(albedo),
-        normal_texture: Some(normal),
+        albedo_texture: (mode != TextureMode::None).then_some(albedo),
+        normal_texture: (mode == TextureMode::Full).then_some(normal),
         texture_scale: scale,
         roughness: RenderLayer::roughness_for_power(power),
         specular,
@@ -3502,6 +3508,21 @@ fn island_lake_waters(
 /// Whether the lakes' outlets rise into sills over their shallow arms, set once at start
 /// (`--no-sills`, #120).
 static SILLS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// `--textures`: what the props' procedural textures keep, to compare.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum TextureMode {
+    /// The colour and the relief (normal) maps.
+    #[default]
+    Full,
+    /// The colour map alone: flat surfaces.
+    Flat,
+    /// Neither: each material's plain colours.
+    None,
+}
+
+/// Set once from `--textures` before the materials are made.
+static TEXTURES: std::sync::OnceLock<TextureMode> = std::sync::OnceLock::new();
 
 /// The island's rivers' parameters, set once at start from the arguments (`--river-k`).
 static RIBBON_PARAMS: std::sync::OnceLock<forge_procgen::RibbonParams> = std::sync::OnceLock::new();
@@ -6404,6 +6425,9 @@ fn run(args: Args, title: &'static str) -> Result<()> {
         })
         .expect("the rivers' parameters, set once");
     SILLS.set(!args.no_sills).expect("the sills, set once");
+    TEXTURES
+        .set(args.textures)
+        .expect("the textures' mode, set once");
     let config = AppConfig {
         title: title.into(),
         vsync: args.vsync,
