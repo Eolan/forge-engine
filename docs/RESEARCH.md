@@ -18,7 +18,7 @@ the system you are about to touch.
 | [research/large-worlds.md](research/large-worlds.md) | coordinates, partitioning, streaming, LOD, impostors, terrain | 49 | done |
 | [research/lighting-gi.md](research/lighting-gi.md) | GI tiers, path tracing, shadows, sky, upscaling | 45 | done (weather rendering: planet-environment.md §4) |
 | [research/physics-fluids.md](research/physics-fluids.md) | rigid bodies, engines compared, characters, destruction, water | 45 | done |
-| [research/particle-fluids.md](research/particle-fluids.md) | real-time particle liquids: SPH, PBF, FLIP/APIC, MLS-MPM and PB-MPM compared; GPU sort, scan and fixed-point atomics on Vulkan; drawing the liquid (screen-space, grid ray-march, underwater, the medium transition, glass, caustics); engines' fluids; Jolt coupling; determinism | 67 | done (#155, 2026-10-03; the decision proposed 🟡) |
+| [research/particle-fluids.md](research/particle-fluids.md) | real-time particle liquids: SPH, PBF, FLIP/APIC, MLS-MPM and PB-MPM compared; GPU sort, scan and fixed-point atomics on Vulkan; drawing the liquid (screen-space, grid ray-march, underwater, the medium transition, glass, caustics); engines' fluids; Jolt coupling; determinism | 67 | done (#155, 2026-10-03; the decision taken in D-044 on the same day) |
 | [research/netcode.md](research/netcode.md) | transport, replication, prediction, server topology | 48 | done |
 | [research/audio.md](research/audio.md) | mixer, spatialisation, propagation, synthesis, middleware | 46 | done |
 | [research/vegetation-materials.md](research/vegetation-materials.md) | trees, impostors, grass, trim sheets, unified materials, deformation | 50 | done |

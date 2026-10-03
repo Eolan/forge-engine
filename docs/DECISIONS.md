@@ -1834,7 +1834,7 @@ Not chosen: the full batch every time (too slow), and the sentinels alone (an is
 must see the island). A 3DMark-style benchmark in one process ("forge-mark") is a later step,
 run far less often.
 
-## D-044 — A particle liquid for the lab; the heightfield and particles for the world 🟡 (2026-10-03)
+## D-044 — A particle liquid for the lab; the heightfield and particles for the world ✅ (2026-10-03)
 
 The owner's request of 2026-10-03 (#155, #156): glass tanks in the physics lab with the water's
 volume drawn, a dam break and a gate with a round hole, the camera crossing the surface, and a
@@ -1842,7 +1842,27 @@ liquid that behaves round obstacles; "I think we will have to use fluid simulati
 particles for that." Research: [research/particle-fluids.md](research/particle-fluids.md)
 (67 sources, read with WebFetch and WebSearch; claims from a search snippet alone marked †).
 
-**Proposed (the owner's to take):**
+**The owner's answers of 2026-10-03** (to the seven questions below):
+1. "Let's try with hybrid for now": the particle–grid hybrid.
+2. "I would stay visual lab for now": the liquid stays in the lab and moves nothing outside it.
+3. "Let's try bigger or finer (1 cm, ~640 000), if it's too much after some testing we will
+   reduce a bit": the first tank runs at 1 cm, and the size comes down only if measured too
+   slow.
+4. "Hard too tell, we wil need to do some testing to find the right compromise": the budget is
+   measured, not set. Every pass is in the F1 overlay and `docs/PROFILE.md`, and the cell size
+   and substeps are run-time options, so it can be found by trying.
+5. "Water should be physically pale (pure water barely tints a metre) and the hole's jet should
+   foam (let's me see). Also some future game or demo may need more stylised fluids": pure
+   water's absorption by default, the jet's foam drawn, and the colour, absorption and
+   scattering kept as a material's parameters, not constants, so a stylised liquid is a
+   setting.
+6. "Frozen until the lab's liquid exists": the column model's flood is not tuned further.
+7. "You could use the RDNA 2 iGPU but it's far less powerful and many users may not have it or
+   an equivalent. You could use it in labs if you need additional computation power": the iGPU
+   stands in as the AMD check. The liquid never requires a second GPU, and the lab may use one
+   only as an option.
+
+**Taken:**
 1. **The lab's liquid:** a GPU particle–grid hybrid.
    - Particles carry the water with APIC transfers (MLS-MPM's quadratic B-splines).
    - A grid's pressure projection keeps it incompressible, and a correction on the particles'
@@ -1875,8 +1895,10 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
 
 **A first milestone, "Glass tank 1" (estimates, to be measured):**
 - One tank, 1.0 × 0.5 × 0.6 m inside, with a 0.4 m block of water behind a gate.
-- A 1.5 cm grid, about 190 000 particles, 4 substeps a frame.
-- At most 2.5 ms of simulation and 1.5 ms of drawing at 1440p on the RTX 5070 Ti.
+- A 1 cm grid (the owner's answer 3; 1.5 cm was proposed), about 640 000 particles, 4 substeps a
+  frame.
+- Proposed at 1.5 cm: at most 2.5 ms of simulation and 1.5 ms of drawing at 1440p on the RTX
+  5070 Ti. At 1 cm the particles are 3.4 times as many: measured, then the owner picks (answer 4).
 - Checks:
   - the volume within 1 %;
   - the final level within 2 mm of V / A, the check the column model fails;
@@ -1884,7 +1906,7 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
   - the hole's jet near √(2gh) with a discharge coefficient near 0.6;
   - three runs to the same digests.
 
-**Open questions for the owner:**
+**The questions put to the owner** (answered above):
 1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be
    grid-free (PBF or SPH: more compression, more tuning)?
 2. Should the lab's liquid stay visual and lab-only, or move bodies in ways that matter beyond
