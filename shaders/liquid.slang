@@ -36,6 +36,7 @@ static const uint AIR = 0u;
 static const uint LIQUID = 1u;
 static const uint SOLID = 2u;
 static const uint MAX_SUBSTEPS = 8u;
+static const uint MG_LEVELS = 8u;
 // The statistics' words (LIQUID_STAT_* in liquid.rs).
 static const uint STAT_PARTICLES = 0u;
 static const uint STAT_LOST = 1u;
@@ -49,6 +50,9 @@ static const uint STAT_COLUMNS = 9u;
 static const uint STAT_VOLUME = 10u;
 static const uint STAT_SPEED = 11u;
 static const uint STAT_BEHIND = 12u;
+static const uint STAT_RESIDUAL = 13u;
+static const uint STAT_DIVERGENCE = 14u;
+static const uint STAT_RESIDUAL_MAX = 15u;
 // Foam: what the skin takes in a second per m/s over FOAM_SPEED where the water meets the air;
 // what an impact beats in a second per m/s² over FOAM_IMPACT.
 static const float FOAM_SKIN = 1.5;
@@ -95,6 +99,16 @@ struct LiquidFrame
     uint* bin_start;  // per cell: where its particles start within its block of SCAN cells
     uint* block_start;// per block of SCAN cells: where its particles start
     uint2* bin_slot;  // per particle: its cell and its place among the cell's
+    // The pressure's multigrid (`LiquidSolver::cycles` > 0): level 0 is the tank's grid, each
+    // next one half as fine; from `mg_group` down, one workgroup solves them all.
+    uint4 levels[MG_LEVELS]; // xyz: cells along x, y and z; w: where its cells start in mg_*
+    uint mg_levels;   // levels, the tank's grid included
+    uint mg_group;
+    uint smooth;      // red-black sweeps before and after each level's correction
+    float smooth_omega; // their over-relaxation
+    uint* mg_kind;    // per cell of levels 1 and on: AIR, LIQUID or SOLID
+    float* mg_x;      // the pressure's correction, m/s
+    float* mg_b;      // what it must undo: the finer level's residual, restricted
 };
 
 struct LiquidPush
@@ -102,6 +116,8 @@ struct LiquidPush
     LiquidFrame* frame;
     uint substep;     // into `steps`
     uint colour;      // pressure: 0 red, 1 black
+    uint level;       // pressure: the multigrid's level
+    uint pad;
 };
 
 [[vk::push_constant]]
@@ -381,6 +397,186 @@ void cells_main(uint3 id : SV_DispatchThreadID)
     f[0].crowding[i] = crowding;
 }
 
+// The pressure: in each liquid cell, its open sides' pressure differences undo its outflow
+// (`open · p − Σ p_liquid = b`, the air's pressure 0, the solids' sides closed). Level 0 is the
+// tank's grid, its `b` the outflow's opposite; a multigrid's coarser levels solve for the
+// correction to the finer one's, `b` its residual restricted. Their cells live in the frame's
+// buffers, or the coarse ones in a workgroup's memory (`mg_group_main`): `Levels` reads either.
+interface Levels
+{
+    uint3 cells_of(uint l);
+    uint kind(uint l, uint i);
+    float x(uint l, uint i);
+    float b(uint l, uint i);
+    void set_x(uint l, uint i, float v);
+    // A coarse cell made by restriction: its kind, what it must undo, its correction 0.
+    void set_coarse(uint l, uint i, uint k, float b);
+}
+
+uint level_index(uint3 n, int3 c)
+{
+    return uint(c.x) + n.x * (uint(c.y) + n.y * uint(c.z));
+}
+
+uint level_kind<S : Levels>(S s, uint l, int3 c)
+{
+    uint3 n = s.cells_of(l);
+    return all(c >= 0) && all(c < int3(n)) ? s.kind(l, level_index(n, c)) : SOLID;
+}
+
+// Red-black Gauss–Seidel on cell `j` of colour `colour`'s half of level `l`.
+void relax<S : Levels>(S s, uint l, uint j, uint colour, float omega)
+{
+    uint3 n = s.cells_of(l);
+    uint half_x = (n.x + 1u) / 2u;
+    if (j >= half_x * n.y * n.z)
+        return;
+    int y = int((j / half_x) % n.y);
+    int z = int(j / (half_x * n.y));
+    int x = int(2u * (j % half_x)) + ((y + z + int(colour)) & 1);
+    if (x >= int(n.x))
+        return;
+    int3 c = int3(x, y, z);
+    uint i = level_index(n, c);
+    if (s.kind(l, i) != LIQUID)
+        return;
+    float sum = 0.0;
+    float open = 0.0;
+    for (uint a = 0u; a < 3u; a++)
+    {
+        for (int sign = -1; sign <= 1; sign += 2)
+        {
+            int3 m = c + sign * unit(a);
+            uint k = level_kind(s, l, m);
+            if (k == SOLID)
+                continue;
+            open += 1.0;
+            if (k == LIQUID)
+                sum += s.x(l, level_index(n, m));
+        }
+    }
+    if (open == 0.0)
+        return;
+    float p = s.x(l, i);
+    s.set_x(l, i, p + omega * ((sum + s.b(l, i)) / open - p));
+}
+
+// What liquid cell `c` of level `l` has left to undo.
+float residual<S : Levels>(S s, uint l, int3 c)
+{
+    uint3 n = s.cells_of(l);
+    float sum = 0.0;
+    float open = 0.0;
+    for (uint a = 0u; a < 3u; a++)
+    {
+        for (int sign = -1; sign <= 1; sign += 2)
+        {
+            int3 m = c + sign * unit(a);
+            uint k = level_kind(s, l, m);
+            if (k == SOLID)
+                continue;
+            open += 1.0;
+            if (k == LIQUID)
+                sum += s.x(l, level_index(n, m));
+        }
+    }
+    uint i = level_index(n, c);
+    return s.b(l, i) + sum - open * s.x(l, i);
+}
+
+// Coarse cell `i` of level `l` from its eight cells of level `l - 1` (McAdams et al. 2010):
+// air if any is (the free surface kept where the fine level has it), else liquid if any is,
+// else solid. It must undo their residuals' mean four times over: its cells are twice as wide,
+// and the equation's differences are a cell's side squared.
+void restrict_cell<S : Levels>(S s, uint l, uint i)
+{
+    uint3 n = s.cells_of(l);
+    uint3 fine = s.cells_of(l - 1u);
+    int3 c = int3(int(i % n.x), int((i / n.x) % n.y), int(i / (n.x * n.y)));
+    bool air = false;
+    bool liquid = false;
+    float r = 0.0;
+    for (uint d = 0u; d < 8u; d++)
+    {
+        int3 m = 2 * c + int3(int(d & 1u), int((d >> 1u) & 1u), int(d >> 2u));
+        if (any(m >= int3(fine)))
+            continue;
+        uint k = s.kind(l - 1u, level_index(fine, m));
+        if (k == AIR)
+            air = true;
+        else if (k == LIQUID)
+        {
+            liquid = true;
+            r += residual(s, l - 1u, m);
+        }
+    }
+    uint k = air ? AIR : (liquid ? LIQUID : SOLID);
+    s.set_coarse(l, i, k, k == LIQUID ? 0.5 * r : 0.0);
+}
+
+// Level `l`'s correction at cell `c` of level `l - 1`: trilinear over the eight nearest coarse
+// cells' centres, the air's correction 0, the solids' left out (the walls' sides are closed).
+float prolong<S : Levels>(S s, uint l, int3 c)
+{
+    int3 base = (c - 1) >> 1;
+    float3 high = select((c & 1) == 0, float3(0.75), float3(0.25));
+    float value = 0.0;
+    float total = 0.0;
+    uint3 n = s.cells_of(l);
+    for (uint d = 0u; d < 8u; d++)
+    {
+        int3 corner = int3(int(d & 1u), int((d >> 1u) & 1u), int(d >> 2u));
+        int3 m = base + corner;
+        uint k = level_kind(s, l, m);
+        if (k == SOLID)
+            continue;
+        float3 w3 = select(corner == 1, high, 1.0 - high);
+        float w = w3.x * w3.y * w3.z;
+        total += w;
+        if (k == LIQUID)
+            value += w * s.x(l, level_index(n, m));
+    }
+    return total > 0.0 ? value / total : 0.0;
+}
+
+// The levels in the frame's buffers: level 0 the tank's grid, the rest in mg_*.
+struct FrameLevels : Levels
+{
+    LiquidFrame* f;
+    uint3 cells_of(uint l)
+    {
+        return f[0].levels[l].xyz;
+    }
+    uint kind(uint l, uint i)
+    {
+        return l == 0u ? f[0].kind[i] : f[0].mg_kind[f[0].levels[l].w + i];
+    }
+    float x(uint l, uint i)
+    {
+        return l == 0u ? f[0].pressure[i] : f[0].mg_x[f[0].levels[l].w + i];
+    }
+    float b(uint l, uint i)
+    {
+        return l == 0u ? -f[0].divergence[i] : f[0].mg_b[f[0].levels[l].w + i];
+    }
+    void set_x(uint l, uint i, float v)
+    {
+        if (l == 0u)
+            f[0].pressure[i] = v;
+        else
+            f[0].mg_x[f[0].levels[l].w + i] = v;
+    }
+    void set_coarse(uint l, uint i, uint k, float b)
+    {
+        uint at = f[0].levels[l].w + i;
+        f[0].mg_kind[at] = k;
+        f[0].mg_b[at] = b;
+        f[0].mg_x[at] = 0.0;
+    }
+}
+
+// The plain sweeps, over-relaxed by `omega` (the multigrid's are `relax_main`'s: this one keeps
+// level 0's reads unbranched, an eighth faster).
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void pressure_main(uint3 id : SV_DispatchThreadID)
@@ -419,6 +615,158 @@ void pressure_main(uint3 id : SV_DispatchThreadID)
         return;
     float p = f[0].pressure[i];
     f[0].pressure[i] = p + f[0].omega * ((sum - f[0].divergence[i]) / open - p);
+}
+
+// The multigrid's sweeps on a level in the frame's buffers.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void relax_main(uint3 id : SV_DispatchThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    FrameLevels s = { f };
+    relax(s, liquid_push.level, id.x, liquid_push.colour, f[0].smooth_omega);
+}
+
+// Level `level`'s cells from level `level - 1`'s.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void restrict_main(uint3 id : SV_DispatchThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    FrameLevels s = { f };
+    uint3 n = s.cells_of(liquid_push.level);
+    if (id.x < n.x * n.y * n.z)
+        restrict_cell(s, liquid_push.level, id.x);
+}
+
+// Level `level`'s correction added to level `level - 1`'s liquid cells.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void prolong_main(uint3 id : SV_DispatchThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    FrameLevels s = { f };
+    uint l = liquid_push.level;
+    uint3 n = s.cells_of(l - 1u);
+    uint i = id.x;
+    if (i >= n.x * n.y * n.z || s.kind(l - 1u, i) != LIQUID)
+        return;
+    int3 c = int3(int(i % n.x), int((i / n.x) % n.y), int(i / (n.x * n.y)));
+    s.set_x(l - 1u, i, s.x(l - 1u, i) + prolong(s, l, c));
+}
+
+// The coarse levels, `mg_group` and below, in one workgroup's memory: a dispatch a level costs
+// more than the work of a small one. `mg_group`'s kinds and residual come from the frame's
+// buffers (`restrict_main`), and its correction goes back to them.
+static const uint GROUP_THREADS = 1024u;
+static const uint GROUP_FIRST = 4608u; // cells of `mg_group` at most (30 KB in all: AMD allows 32)
+static const uint GROUP_REST = 1024u;  // cells of the levels below it at most
+static const uint COARSEST_SWEEPS = 16u;
+groupshared float group_x[GROUP_FIRST];
+groupshared float rest_x[GROUP_REST];
+groupshared float rest_b[GROUP_REST];
+groupshared uint rest_kind[GROUP_REST];
+
+struct GroupLevels : Levels
+{
+    LiquidFrame* f;
+    uint first;
+    // Where level `l` starts in rest_* (`l` > `first`).
+    uint rest(uint l)
+    {
+        return f[0].levels[l].w - f[0].levels[first + 1u].w;
+    }
+    uint3 cells_of(uint l)
+    {
+        return f[0].levels[l].xyz;
+    }
+    uint kind(uint l, uint i)
+    {
+        return l == first ? f[0].mg_kind[f[0].levels[l].w + i] : rest_kind[rest(l) + i];
+    }
+    float x(uint l, uint i)
+    {
+        return l == first ? group_x[i] : rest_x[rest(l) + i];
+    }
+    float b(uint l, uint i)
+    {
+        return l == first ? f[0].mg_b[f[0].levels[l].w + i] : rest_b[rest(l) + i];
+    }
+    void set_x(uint l, uint i, float v)
+    {
+        if (l == first)
+            group_x[i] = v;
+        else
+            rest_x[rest(l) + i] = v;
+    }
+    void set_coarse(uint l, uint i, uint k, float b)
+    {
+        uint at = rest(l) + i;
+        rest_kind[at] = k;
+        rest_b[at] = b;
+        rest_x[at] = 0.0;
+    }
+}
+
+uint cell_total(uint3 n)
+{
+    return n.x * n.y * n.z;
+}
+
+void group_sweeps(GroupLevels s, uint l, uint sweeps, uint thread)
+{
+    uint3 n = s.cells_of(l);
+    uint half = (n.x + 1u) / 2u * n.y * n.z;
+    float omega = s.f[0].smooth_omega;
+    for (uint k = 0u; k < sweeps; k++)
+    {
+        for (uint colour = 0u; colour < 2u; colour++)
+        {
+            for (uint j = thread; j < half; j += GROUP_THREADS)
+                relax(s, l, j, colour, omega);
+            GroupMemoryBarrierWithGroupSync();
+        }
+    }
+}
+
+[shader("compute")]
+[numthreads(1024, 1, 1)]
+void mg_group_main(uint3 thread_id : SV_GroupThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    uint t = thread_id.x;
+    uint first = f[0].mg_group;
+    uint last = f[0].mg_levels - 1u;
+    GroupLevels s = { f, first };
+    uint count = cell_total(s.cells_of(first));
+    for (uint i = t; i < count; i += GROUP_THREADS)
+        group_x[i] = 0.0;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint l = first; l < last; l++)
+    {
+        group_sweeps(s, l, f[0].smooth, t);
+        uint coarse = cell_total(s.cells_of(l + 1u));
+        for (uint i = t; i < coarse; i += GROUP_THREADS)
+            restrict_cell(s, l + 1u, i);
+        GroupMemoryBarrierWithGroupSync();
+    }
+    group_sweeps(s, last, COARSEST_SWEEPS, t);
+    for (uint l = last; l > first; l--)
+    {
+        uint3 n = s.cells_of(l - 1u);
+        for (uint i = t; i < cell_total(n); i += GROUP_THREADS)
+        {
+            if (s.kind(l - 1u, i) != LIQUID)
+                continue;
+            int3 c = int3(int(i % n.x), int((i / n.x) % n.y), int(i / (n.x * n.y)));
+            s.set_x(l - 1u, i, s.x(l - 1u, i) + prolong(s, l, c));
+        }
+        GroupMemoryBarrierWithGroupSync();
+        group_sweeps(s, l - 1u, f[0].smooth, t);
+    }
+    uint at = f[0].levels[first].w;
+    for (uint i = t; i < count; i += GROUP_THREADS)
+        f[0].mg_x[at + i] = group_x[i];
 }
 
 [shader("compute")]
@@ -665,7 +1013,8 @@ void stats_main(uint3 id : SV_DispatchThreadID)
 }
 
 // Per column: where its surface stands (the highest cell at least half full, interpolated to
-// half), and how much water it holds.
+// half), how much water it holds, and how much outflow the last substep's pressure left in its
+// liquid cells against what it had to undo (the solve's residual).
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void level_main(uint3 id : SV_DispatchThreadID)
@@ -680,6 +1029,9 @@ void level_main(uint3 id : SV_DispatchThreadID)
     float full = 0.0;
     float top = -1.0;
     uint cells = 0u;
+    float left = 0.0;
+    float undone = 0.0;
+    float worst = 0.0;
     for (int y = int(n.y) - 1; y >= 0; y--)
     {
         uint i = cell_index(f, int3(x, y, z));
@@ -688,7 +1040,19 @@ void level_main(uint3 id : SV_DispatchThreadID)
         float rho = float(f[0].density[i]) / FIX / f[0].rest;
         full += min(rho, 1.0);
         if (f[0].kind[i] == LIQUID)
+        {
             cells++;
+            int3 c = int3(x, y, z);
+            float outflow = 0.0;
+            for (uint a = 0u; a < 3u; a++)
+            {
+                uint offset = a * f[0].nodes;
+                outflow += f[0].face[offset + node_index(f, c + unit(a))] - f[0].face[offset + node_index(f, c)];
+            }
+            left += abs(outflow);
+            undone += abs(f[0].divergence[i]);
+            worst = max(worst, abs(outflow));
+        }
         if (top < 0.0 && rho >= 0.5)
         {
             float above = y + 1 < int(n.y) ? float(f[0].density[cell_index(f, int3(x, y + 1, z))]) / FIX / f[0].rest : 0.0;
@@ -697,6 +1061,10 @@ void level_main(uint3 id : SV_DispatchThreadID)
     }
     InterlockedAdd(st[STAT_CELLS], cells);
     InterlockedAdd(st[STAT_VOLUME], uint(full * 1000.0 + 0.5));
+    // 10 µm/s units; the worst as its bits (a positive float's order is its bits').
+    InterlockedAdd(st[STAT_RESIDUAL], uint(left * 1e5 + 0.5));
+    InterlockedAdd(st[STAT_DIVERGENCE], uint(undone * 1e5 + 0.5));
+    InterlockedMax(st[STAT_RESIDUAL_MAX], asuint(worst));
     if (top >= 0.0)
     {
         InterlockedAdd(st[STAT_LEVEL], uint(top * f[0].size.w * 10000.0 + 0.5));

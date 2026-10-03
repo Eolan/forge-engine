@@ -382,6 +382,10 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     "Implicit Density Projection for Volume Conserving Liquids", IEEE TVCG 27(4), 2019, and
     Matthias Müller's Ten Minute Physics FLIP tutorial (#18, its drift compensation, MIT).
     Forge moves the particles down their crowding's gradient instead (no code taken).
+  - **The pressure's multigrid** (opt-in, `--liquid-cycles`): after Aleka McAdams, Eftychios
+    Sifakis and Joseph Teran, "A Parallel Multigrid Poisson Solver for Fluids Simulation on Large
+    Grids", SCA 2010. A coarse cell is air where any of its eight is, and the correction comes
+    back trilinear (no code taken).
   - **Pure water's absorption:** Robin M. Pope and Edward S. Fry, "Absorption spectrum (380–700
     nm) of pure water. II. Integrating cavity measurements", Applied Optics 36(33), 1997.
   - **The bench:** a floor of squares in four tints, a plain background and tinted water to tune

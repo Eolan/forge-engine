@@ -41,6 +41,13 @@ pub const FRESH_FOAM_LIFE: f32 = 0.3;
 /// Cells a workgroup of the sort's scan takes (`SCAN` in `liquid.slang`); the blocks' scan takes
 /// 1024 blocks at most, so a tank of a million cells.
 const SCAN: u32 = 1024;
+/// The pressure multigrid's levels at most, the tank's grid included (`MG_LEVELS` in
+/// `liquid.slang`).
+const MG_LEVELS: usize = 8;
+/// The cells of the first level the single workgroup solves at most, and of the levels below it
+/// together (`GROUP_FIRST`, `GROUP_REST` in `liquid.slang`).
+const GROUP_FIRST: u32 = 4608;
+const GROUP_REST: u32 = 1024;
 /// Words of the statistics (`STAT_*` in `liquid.slang`).
 const STAT_WORDS: usize = 16;
 const STAT_BYTES: u64 = (STAT_WORDS * 4) as u64;
@@ -101,10 +108,17 @@ pub struct LiquidStep {
 pub struct LiquidSolver {
     /// A substep, seconds.
     pub dt: f32,
-    /// Red-black Gauss–Seidel sweeps of the pressure a substep (a dispatch a colour).
+    /// Red-black Gauss–Seidel sweeps of the pressure a substep (a dispatch a colour), without
+    /// `cycles`.
     pub sweeps: u32,
     /// Their over-relaxation.
     pub omega: f32,
+    /// Multigrid V-cycles of the pressure a substep, in place of the sweeps (0: the sweeps).
+    pub cycles: u32,
+    /// Red-black sweeps before and after each level's correction in a V-cycle.
+    pub smooth: u32,
+    /// Their over-relaxation.
+    pub smooth_omega: f32,
     /// The share of the particles' crowding undone a substep.
     pub drift: f32,
     /// Gravity, m/s².
@@ -117,6 +131,9 @@ impl Default for LiquidSolver {
             dt: 1.0 / 240.0,
             sweeps: 32,
             omega: 1.7,
+            cycles: 0,
+            smooth: 2,
+            smooth_omega: 1.0,
             drift: 0.25,
             gravity: Vec3::new(0.0, -9.81, 0.0),
         }
@@ -196,6 +213,11 @@ pub struct LiquidStats {
     pub volume: f32,
     /// Particles behind the gate (on its near side), whether it stands or not.
     pub behind: u32,
+    /// The last substep's pressure solve: the outflow it left in the liquid cells over the
+    /// outflow it had to undo (both summed as magnitudes; 0 is a solve to convergence).
+    pub residual: f32,
+    /// The most outflow it left in one cell, m/s (a cell's faces' velocities summed).
+    pub residual_max: f32,
 }
 
 /// What the drawing shows of the liquid (`mode` in `liquid_draw.slang`).
@@ -283,9 +305,17 @@ struct GpuLiquidFrame {
     bin_start: u64,
     block_start: u64,
     bin_slot: u64,
+    levels: [[u32; 4]; MG_LEVELS],
+    mg_levels: u32,
+    mg_group: u32,
+    smooth: u32,
+    smooth_omega: f32,
+    mg_kind: u64,
+    mg_x: u64,
+    mg_b: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 416);
+const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 584);
 
 /// Mirrors `LiquidView` in `liquid_draw.slang`.
 #[repr(C)]
@@ -334,6 +364,8 @@ struct SolverPush {
     frame: u64,
     substep: u32,
     colour: u32,
+    level: u32,
+    pad: u32,
 }
 
 /// Mirrors `ClearPush` in `liquid_draw.slang`.
@@ -388,11 +420,15 @@ struct Layout {
     bin_start: u64,
     block_start: u64,
     bin_slot: u64,
+    /// The pressure multigrid's coarse levels, one after the other.
+    mg_kind: u64,
+    mg_x: u64,
+    mg_b: u64,
     total: u64,
 }
 
 impl Layout {
-    fn new(particles: u64, nodes: u64, cells: u64, bricks: u64) -> Self {
+    fn new(particles: u64, nodes: u64, cells: u64, bricks: u64, coarse: u64) -> Self {
         let mut at = 0_u64;
         let mut take = |bytes: u64| {
             let start = at;
@@ -424,6 +460,9 @@ impl Layout {
         let bin_start = take(cells * 4);
         let block_start = take(cells.div_ceil(u64::from(SCAN)) * 4);
         let bin_slot = take(particles * 8);
+        let mg_kind = take(coarse * 4);
+        let mg_x = take(coarse * 4);
+        let mg_b = take(coarse * 4);
         Self {
             position,
             velocity,
@@ -449,6 +488,9 @@ impl Layout {
             bin_start,
             block_start,
             bin_slot,
+            mg_kind,
+            mg_x,
+            mg_b,
             total: at,
         }
     }
@@ -463,6 +505,28 @@ fn bricks_of(cells: UVec3) -> UVec3 {
     )
 }
 
+/// The pressure multigrid's levels over `cells`, each half as fine as the last (rounded up) down
+/// to 32 cells or fewer, and the first the single workgroup solves with all below it.
+fn multigrid(cells: UVec3) -> (Vec<UVec3>, usize) {
+    let mut levels = vec![cells];
+    while levels.len() < 2
+        || (levels.len() < MG_LEVELS && levels[levels.len() - 1].element_product() > 32)
+    {
+        levels.push((levels[levels.len() - 1] + 1) / 2);
+    }
+    let group = (1..levels.len())
+        .find(|&g| {
+            levels[g].element_product() <= GROUP_FIRST
+                && levels[g + 1..]
+                    .iter()
+                    .map(|n| n.element_product())
+                    .sum::<u32>()
+                    <= GROUP_REST
+        })
+        .expect("a tank's grid too large for the pressure multigrid's levels");
+    (levels, group)
+}
+
 /// Indices of the passes' pipelines in [`Liquid::pipelines`].
 #[derive(Clone, Copy)]
 enum Kernel {
@@ -472,6 +536,10 @@ enum Kernel {
     Faces,
     Cells,
     Pressure,
+    Relax,
+    Restrict,
+    Prolong,
+    Group,
     Project,
     G2p,
     Foam,
@@ -497,7 +565,10 @@ impl Kernel {
             Kernel::P2g => "liquid/p2g",
             Kernel::Faces => "liquid/faces",
             Kernel::Cells => "liquid/cells",
-            Kernel::Pressure => "liquid/pressure",
+            Kernel::Pressure | Kernel::Relax => "liquid/pressure",
+            Kernel::Restrict => "liquid/restrict",
+            Kernel::Prolong => "liquid/prolong",
+            Kernel::Group => "liquid/coarse",
             Kernel::Project => "liquid/project",
             Kernel::G2p => "liquid/g2p",
             Kernel::Foam => "liquid/foam",
@@ -513,22 +584,26 @@ impl Kernel {
     }
 }
 
-const KERNELS: [(&str, &str, u32); 21] = [
-    ("liquid.slang", "seed_main", 16),
-    ("liquid.slang", "seed_cells_main", 16),
-    ("liquid.slang", "p2g_main", 16),
-    ("liquid.slang", "faces_main", 16),
-    ("liquid.slang", "cells_main", 16),
-    ("liquid.slang", "pressure_main", 16),
-    ("liquid.slang", "project_main", 16),
-    ("liquid.slang", "g2p_main", 16),
-    ("liquid.slang", "foam_main", 16),
-    ("liquid.slang", "bin_main", 16),
-    ("liquid.slang", "scan_main", 16),
-    ("liquid.slang", "scan_blocks_main", 16),
-    ("liquid.slang", "scatter_main", 16),
-    ("liquid.slang", "stats_main", 16),
-    ("liquid.slang", "level_main", 16),
+const KERNELS: [(&str, &str, u32); 25] = [
+    ("liquid.slang", "seed_main", 24),
+    ("liquid.slang", "seed_cells_main", 24),
+    ("liquid.slang", "p2g_main", 24),
+    ("liquid.slang", "faces_main", 24),
+    ("liquid.slang", "cells_main", 24),
+    ("liquid.slang", "pressure_main", 24),
+    ("liquid.slang", "relax_main", 24),
+    ("liquid.slang", "restrict_main", 24),
+    ("liquid.slang", "prolong_main", 24),
+    ("liquid.slang", "mg_group_main", 24),
+    ("liquid.slang", "project_main", 24),
+    ("liquid.slang", "g2p_main", 24),
+    ("liquid.slang", "foam_main", 24),
+    ("liquid.slang", "bin_main", 24),
+    ("liquid.slang", "scan_main", 24),
+    ("liquid.slang", "scan_blocks_main", 24),
+    ("liquid.slang", "scatter_main", 24),
+    ("liquid.slang", "stats_main", 24),
+    ("liquid.slang", "level_main", 24),
     ("liquid_draw.slang", "smooth_main", 8),
     ("liquid_draw.slang", "smooth2_main", 8),
     ("liquid_draw.slang", "bricks_main", 8),
@@ -542,6 +617,10 @@ pub struct Liquid {
     pipelines: Vec<Pipeline>,
     state: GraphBuffer,
     layout: Layout,
+    /// The pressure multigrid's levels (the tank's grid first), and the first one the single
+    /// workgroup solves.
+    levels: Vec<UVec3>,
+    group: usize,
     tank: LiquidTank,
     solver: LiquidSolver,
     look: LiquidLook,
@@ -586,11 +665,17 @@ impl Liquid {
         let cells = tank.cells();
         let nodes = u64::from((cells.x + 1) * (cells.y + 1) * (cells.z + 1));
         let bricks = bricks_of(cells);
+        let (levels, group) = multigrid(cells);
+        let coarse = levels[1..]
+            .iter()
+            .map(|n| u64::from(n.element_product()))
+            .sum();
         let layout = Layout::new(
             u64::from(tank.particles()),
             nodes,
             u64::from(cells.x * cells.y * cells.z),
             u64::from(bricks.x * bricks.y * bricks.z),
+            coarse,
         );
         let state = GraphBuffer::new(device.create_buffer(BufferDesc {
             size: layout.total,
@@ -629,6 +714,8 @@ impl Liquid {
             pipelines,
             state,
             layout,
+            levels,
+            group,
             tank,
             solver,
             look,
@@ -689,6 +776,8 @@ impl Liquid {
             volume: w[10] as f32 / 1000.0 * cell * cell * cell,
             max_speed: w[11] as f32 / 1000.0,
             behind: w[12],
+            residual: w[13] as f32 / w[14].max(1) as f32,
+            residual_max: f32::from_bits(w[15]),
         })
     }
 
@@ -786,17 +875,34 @@ impl Liquid {
                 bin_start: base + l.bin_start,
                 block_start: base + l.block_start,
                 bin_slot: base + l.bin_slot,
+                levels: std::array::from_fn(|i| {
+                    self.levels.get(i).map_or([0; 4], |n| {
+                        let start = self.levels[1..i.max(1)]
+                            .iter()
+                            .map(|m| m.element_product())
+                            .sum::<u32>();
+                        [n.x, n.y, n.z, start]
+                    })
+                }),
+                mg_levels: self.levels.len() as u32,
+                mg_group: self.group as u32,
+                smooth: self.solver.smooth,
+                smooth_omega: self.solver.smooth_omega,
+                mg_kind: base + l.mg_kind,
+                mg_x: base + l.mg_x,
+                mg_b: base + l.mg_b,
             }],
         );
         let address = frame.address();
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let state = state.0;
         let buffer: &'f Buffer = &self.state;
-        let dispatch = |graph: &mut FrameGraph<'f>,
-                        kernel: Kernel,
-                        threads: u32,
-                        substep: u32,
-                        colour: u32| {
+        let run = |graph: &mut FrameGraph<'f>,
+                   kernel: Kernel,
+                   groups: u32,
+                   substep: u32,
+                   colour: u32,
+                   level: u32| {
             let pipeline = self.pipeline(kernel);
             graph
                 .pass(kernel.label())
@@ -810,11 +916,20 @@ impl Liquid {
                             frame: address,
                             substep,
                             colour,
+                            level,
+                            pad: 0,
                         },
                     );
-                    commands.dispatch(threads.div_ceil(64), 1, 1);
+                    commands.dispatch(groups, 1, 1);
                     Ok(())
                 });
+        };
+        let dispatch = |graph: &mut FrameGraph<'f>,
+                        kernel: Kernel,
+                        threads: u32,
+                        substep: u32,
+                        colour: u32| {
+            run(graph, kernel, threads.div_ceil(64), substep, colour, 0);
         };
         if seed {
             dispatch(graph, Kernel::Seed, particles, 0, 0);
@@ -831,32 +946,20 @@ impl Liquid {
                     Ok(())
                 });
             dispatch(graph, Kernel::Bin, particles, 0, 0);
-            for (kernel, groups) in [
-                (Kernel::Scan, cell_count.div_ceil(SCAN)),
-                (Kernel::ScanBlocks, 1),
-            ] {
-                let pipeline = self.pipeline(kernel);
-                graph
-                    .pass("liquid/sort")
-                    .queue(QueueKind::Compute)
-                    .buffer(state, BufferAccess::ShaderReadWrite(compute))
-                    .run(move |_, commands| {
-                        commands.bind_pipeline(pipeline);
-                        commands.push_constants(
-                            pipeline,
-                            &SolverPush {
-                                frame: address,
-                                substep: 0,
-                                colour: 0,
-                            },
-                        );
-                        commands.dispatch(groups, 1, 1);
-                        Ok(())
-                    });
-            }
+            run(graph, Kernel::Scan, cell_count.div_ceil(SCAN), 0, 0, 0);
+            run(graph, Kernel::ScanBlocks, 1, 0, 0, 0);
             dispatch(graph, Kernel::Scatter, particles, 0, 0);
         }
-        let half = cells.x.div_ceil(2) * cells.y * cells.z;
+        // Red-black sweeps of level `l` by `kernel`, a dispatch a colour.
+        let sweeps = |graph: &mut FrameGraph<'f>, kernel: Kernel, l: usize, count: u32, s: u32| {
+            let n = self.levels[l];
+            let half = n.x.div_ceil(2) * n.y * n.z;
+            for _ in 0..count {
+                for colour in 0..2 {
+                    run(graph, kernel, half.div_ceil(64), s, colour, l as u32);
+                }
+            }
+        };
         for s in 0..steps.len() as u32 {
             // Clear the sums: the faces', the counts and the densities lie side by side.
             let (from, to) = (l.sums, l.density + u64::from(cell_count) * 4);
@@ -871,9 +974,37 @@ impl Liquid {
             dispatch(graph, Kernel::P2g, particles, s, 0);
             dispatch(graph, Kernel::Faces, nodes, s, 0);
             dispatch(graph, Kernel::Cells, cell_count, s, 0);
-            for _ in 0..self.solver.sweeps {
-                dispatch(graph, Kernel::Pressure, half, s, 0);
-                dispatch(graph, Kernel::Pressure, half, s, 1);
+            if self.solver.cycles == 0 {
+                sweeps(graph, Kernel::Pressure, 0, self.solver.sweeps, s);
+            }
+            // V-cycles: each level smoothed, its residual restricted to the next, down to the
+            // single workgroup's levels; then each level corrected by the coarser one and smoothed.
+            for _ in 0..self.solver.cycles {
+                for level in 0..self.group {
+                    sweeps(graph, Kernel::Relax, level, self.solver.smooth, s);
+                    let coarse = self.levels[level + 1].element_product();
+                    run(
+                        graph,
+                        Kernel::Restrict,
+                        coarse.div_ceil(64),
+                        s,
+                        0,
+                        level as u32 + 1,
+                    );
+                }
+                run(graph, Kernel::Group, 1, s, 0, 0);
+                for level in (0..self.group).rev() {
+                    let fine = self.levels[level].element_product();
+                    run(
+                        graph,
+                        Kernel::Prolong,
+                        fine.div_ceil(64),
+                        s,
+                        0,
+                        level as u32 + 1,
+                    );
+                    sweeps(graph, Kernel::Relax, level, self.solver.smooth, s);
+                }
             }
             dispatch(graph, Kernel::Project, nodes, s, 0);
             dispatch(graph, Kernel::G2p, particles, s, 0);
@@ -1123,7 +1254,18 @@ mod tests {
         assert_eq!(tank.particles(), 640_000);
         let nodes = u64::from((cells.x + 1) * (cells.y + 1) * (cells.z + 1));
         let count = u64::from(cells.x * cells.y * cells.z);
-        let l = Layout::new(u64::from(tank.particles()), nodes, count, 25 * 15 * 13);
+        let (levels, _) = multigrid(cells);
+        let coarse = levels[1..]
+            .iter()
+            .map(|n| u64::from(n.element_product()))
+            .sum();
+        let l = Layout::new(
+            u64::from(tank.particles()),
+            nodes,
+            count,
+            25 * 15 * 13,
+            coarse,
+        );
         for at in [
             l.position,
             l.velocity,
@@ -1149,5 +1291,41 @@ mod tests {
         assert!(l.sums < l.count && l.count < l.density);
         assert!(l.density + count * 4 <= l.face);
         assert!(l.sums >= l.affine + u64::from(tank.particles()) * 48);
+    }
+
+    #[test]
+    fn the_multigrid_halves_down_to_what_one_workgroup_holds() {
+        // The lab's tank at 1.25 cm: the workgroup takes 16 × 6 × 6 and below.
+        let (levels, group) = multigrid(UVec3::new(128, 48, 48));
+        assert_eq!(
+            levels,
+            [
+                UVec3::new(128, 48, 48),
+                UVec3::new(64, 24, 24),
+                UVec3::new(32, 12, 12),
+                UVec3::new(16, 6, 6),
+                UVec3::new(8, 3, 3),
+                UVec3::new(4, 2, 2),
+            ]
+        );
+        assert_eq!(group, 2);
+        // At 1 cm, odd sizes round up, and 40 × 15 × 15 is past the workgroup's first level.
+        let (levels, group) = multigrid(UVec3::new(160, 60, 60));
+        assert_eq!(levels[2], UVec3::new(40, 15, 15));
+        assert_eq!(group, 3);
+        for (levels, group) in [
+            multigrid(UVec3::new(128, 48, 48)),
+            multigrid(UVec3::new(160, 60, 60)),
+            multigrid(UVec3::new(3, 2, 1)),
+        ] {
+            assert!(levels.len() >= 2 && levels.len() <= MG_LEVELS);
+            assert!(levels[levels.len() - 1].element_product() <= 32);
+            assert!(levels[group].element_product() <= GROUP_FIRST);
+            let rest: u32 = levels[group + 1..]
+                .iter()
+                .map(|n| n.element_product())
+                .sum();
+            assert!(rest <= GROUP_REST);
+        }
     }
 }

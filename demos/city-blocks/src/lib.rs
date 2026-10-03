@@ -297,7 +297,8 @@ struct Args {
     /// glass tank's gate lifted (#156).
     #[arg(long)]
     release: Option<u64>,
-    /// `--lab tank` (#156): the liquid's pressure sweeps a substep (red and black each).
+    /// `--lab tank` (#156): the liquid's pressure sweeps a substep (red and black each), without
+    /// `--liquid-cycles`.
     #[arg(long, default_value_t = 32)]
     liquid_sweeps: u32,
     /// `--lab tank`: the liquid's cell, metres (590 000 particles at 1.25 cm, the default; 1.15
@@ -323,6 +324,17 @@ struct Args {
     /// `--lab tank`: the pressure sweeps' over-relaxation.
     #[arg(long, default_value_t = 1.7)]
     liquid_omega: f32,
+    /// `--lab tank`: multigrid V-cycles of the liquid's pressure a substep, in place of the
+    /// sweeps (0: the sweeps).
+    #[arg(long, default_value_t = 0)]
+    liquid_cycles: u32,
+    /// `--lab tank`: with `--liquid-cycles`, the red-black sweeps before and after each level's
+    /// correction.
+    #[arg(long, default_value_t = 2)]
+    liquid_smooth: u32,
+    /// `--lab tank`: their over-relaxation.
+    #[arg(long, default_value_t = 1.0)]
+    liquid_smooth_omega: f32,
     /// `--lab tank`: the lab's ticks between the liquid's lines in the log.
     #[arg(long, default_value_t = 60)]
     liquid_log: u64,
@@ -729,6 +741,9 @@ impl Gallery {
                 forge_render::LiquidSolver {
                     sweeps: args.liquid_sweeps,
                     omega: args.liquid_omega,
+                    cycles: args.liquid_cycles,
+                    smooth: args.liquid_smooth,
+                    smooth_omega: args.liquid_smooth_omega,
                     drift: args.liquid_drift,
                     gravity: Vec3::from_slice(
                         &[args.liquid_gravity.as_slice(), &[0.0; 3]].concat(),
@@ -2120,7 +2135,8 @@ impl Drop for Gallery {
 /// The glass tank's line in the log (#156): what is left of the water, where its surface stands
 /// against where its volume puts it over the floor, how far its front has run, how fast it moves,
 /// how high the water behind the gate stands (its particles' volume over the floor there: with the
-/// hole, its fall gives the outflow), and the digest a replay must match.
+/// hole, its fall gives the outflow), how much outflow the pressure solve left (its residual, as a
+/// share of what it had to undo, and the worst cell's, m/s), and the digest a replay must match.
 fn log_liquid(tick: u64, stats: &LiquidStats, tank: &LiquidTank) {
     let start = tank.water.as_vec3() * tank.cell;
     let volume = start.x * start.y * start.z;
@@ -2141,6 +2157,8 @@ fn log_liquid(tick: u64, stats: &LiquidStats, tank: &LiquidTank) {
         rms_speed = format!("{:.3}", stats.mean_speed2.sqrt()),
         max_speed = format!("{:.2}", stats.max_speed),
         behind_mm = format!("{:.1}", behind * 1e3),
+        residual = format!("{:.4}", stats.residual),
+        residual_max = format!("{:.4}", stats.residual_max),
         digest = format!("{:08x}{:08x}", stats.digest[0], stats.digest[1]),
         "liquid"
     );

@@ -1942,7 +1942,9 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
     and speckled panes of the owner's report.
   - **Its cost:** nothing measurable (`liquid/draw` 0.20 ms).
   - **The underwater hatching:** that was rounding, and is fixed.
-- **Not yet:** bodies in the water, caustics, a multigrid pressure.
+- **Not yet:** bodies in the water, caustics. A multigrid pressure was tried and stays opt-in
+  (`--liquid-cycles`): at the settings that keep still water still, it saves a fifth of the
+  sweeps' time at best, and leaves its worst cell 20 times as far off (`demos/physics-lab.md`).
 
 **The questions put to the owner** (answered above):
 1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be

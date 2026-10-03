@@ -690,6 +690,10 @@ side. The reservoir drains until both sides stand level, 152 mm.
 **The checks** (fixed step, `--liquid-log N` prints the line every N ticks):
 - **The particles:** none lost.
 - **The still water:** at rest to the bit before the gate lifts (rms and greatest speed 0.000 m/s).
+- **The pressure's residual:** the line's `residual` is the outflow the last substep's solve left
+  in the liquid cells, as a share of what it had to undo, and `residual_max` the worst cell's,
+  m/s. The 32 sweeps leave 0.7 to 6 % in the dam break (2.4 % on average over ticks 60 to 240),
+  0.03 m/s at worst.
 - **The settled level:** 149.4 mm nine seconds after the gate lifts, against the 150.0 mm its volume
   gives over the whole floor. D-044's check asks within 2 mm. The column model of `flood` fails it.
 - **The replays:** three runs give the same digests at all 100 logged ticks (every 6, 600 frames).
@@ -725,8 +729,47 @@ That makes 3.0 ms of simulation: more than D-044's 2.5 ms estimate for 190 000 p
   now over the particles' states whatever their order: runs still replay to it, and async and
   serial draw the same.
 - **Where the time could go next:**
-  - a multigrid pressure in place of the sweeps (now the most of it);
+  - the pressure in fewer passes: below, the multigrid tried for it;
   - a workgroup's sums gathered in groupshared memory before the atomics.
+
+**The pressure as a multigrid** (`--liquid-cycles N`, opt-in; after McAdams et al. 2010):
+- **The levels:** each half as fine as the last: 128 × 48 × 48 cells, then 64 × 24 × 24 and
+  32 × 12 × 12 in passes of their own. Below that, 16 × 6 × 6 down to 4 × 2 × 2 run in one
+  workgroup, in 30 KB of groupshared memory.
+- **A V-cycle:** `--liquid-smooth` red-black sweeps on each level, its residual to the next
+  coarser one (a coarse cell is air where any of its eight is), then each level corrected by the
+  coarser one's answer, trilinear, and smoothed again.
+
+It is not the default. In the dam break, against the sweeps (ms a frame: `liquid/pressure`,
+`restrict`, `prolong` and `coarse` together):
+
+| Pressure solve | Residual, mean of ticks 60–240 | Worst cell, m/s | Still water | ms |
+|---|---|---|---|---|
+| 32 sweeps, ω 1.7 (default) | 2.4 % | 0.03 | at rest | 1.27 |
+| 128 sweeps | 0.13 % | 0.0002 | | 4.94 |
+| V(2,2), a cycle a substep | 3.5 % | 0.41 | sinks 5 mm and sloshes | 0.75 |
+| V(3,3), a cycle | 2.6 % | 0.62 | at rest | 1.02 |
+| V(4,4), a cycle | 1.9 % | 0.32 | at rest | 1.24 |
+| V(2,2), two cycles | 1.0 % | 0.14 | at rest | 1.54 |
+
+- **Why it is not the default:** with two sweeps a level and one cycle a substep, the still
+  water's residual grows eightfold a tick from the first. The mode lies at the free surface,
+  which the coarse levels place up to a coarse cell off; McAdams et al. use their V-cycle as
+  conjugate gradients' preconditioner, not alone. With three sweeps the water stays still and
+  the cycle saves a fifth of the sweeps' time. But that is one sweep from diverging, and its
+  worst cell is 20 times the sweeps'. Over-relaxing the smoothing (ω 1.3 or 1.6) makes it
+  worse.
+- **What it doesn't change:** nine seconds on, every variant settles at 149.4 mm, and all slosh
+  alike after 12 s (0.16 to 0.18 m/s rms).
+- **Where its time goes:**
+  - **A pass costs about 4.6 µs whatever its size:** level 0's 147 000 threads or level 1's
+    18 000. That is a launch, a chain of dependent loads and a drain. 32 sweeps are 64 such
+    passes a substep, and a V(2,2) cycle 21.
+  - **The single workgroup's coarse levels take 72 µs a substep:** about 60 phases between
+    barriers on one multiprocessor.
+- **What would make it pay:** fewer passes that each smooth more, such as sweeps inside
+  groupshared tiles. On their own, the tiles' edges left errors that kept the water sloshing
+  (above); within a multigrid, the coarse levels correct exactly those.
 
 ## `room`: a plain room to measure sharpness by (issue #159)
 
