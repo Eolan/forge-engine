@@ -225,7 +225,9 @@ rudder. `--lab break`: a brick wall held by mortar that breaks, a wrecking ball 
 go) and a concrete column that shatters into pieces. `--lab creatures`: mannequins on poles and
 dogs from Blender as powered ragdolls, their motors driving moving poses; Space throws balls at
 them, ↓ lets them go limp. `--lab flood`: a dam break, the shallow-water model running down a
-basin round blocks and a hut, carrying crates, barrels and logs; Space lifts the gate. It shares `city-blocks`' renderer, keys and options
+basin round blocks and a hut, carrying crates, barrels and logs; Space lifts the gate.
+`--lab dominoes`: 300 dominoes on a spiral, Space tips the first, and a recording of the run
+replays to the same digests. It shares `city-blocks`' renderer, keys and options
 (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 

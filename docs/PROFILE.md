@@ -1023,6 +1023,9 @@ fluxes, the slopes), on one thread; then the pushes on 39 floaters. The water's 
 lakes' fresh-water shading over 36 000 triangles, inside the `water/surface` zone; its 295 KB
 of samples go up with the frame's water block.
 
+`--lab dominoes` (#146), the first pushed at tick 31, 3 000 ticks: **0.21 ms a tick** (p99 0.38,
+max 0.79), 332 bodies, those falling and fallen awake until the run is over.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

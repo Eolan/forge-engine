@@ -260,6 +260,11 @@ for path in $paths; do
     capture "$path-lab-flood150" 150 "$lab" --lab flood --fixed-step --release 31 "${flag[@]}"
     capture "$path-lab-flood150-noocc" 150 "$lab" --lab flood --fixed-step --release 31 --no-occlusion "${flag[@]}"
     capture "$path-lab-flood300" 300 "$lab" --lab flood --fixed-step --release 31 "${flag[@]}"
+    # The domino run (#146), the first pushed at tick 31: the fall a third of the way at tick
+    # 900 and its A/B twin, and all down at tick 3000.
+    capture "$path-lab-dominoes900" 900 "$lab" --lab dominoes --fixed-step --release 31 "${flag[@]}"
+    capture "$path-lab-dominoes900-noocc" 900 "$lab" --lab dominoes --fixed-step --release 31 --no-occlusion "${flag[@]}"
+    capture "$path-lab-dominoes3000" 3000 "$lab" --lab dominoes --fixed-step --release 31 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

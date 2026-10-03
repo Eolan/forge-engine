@@ -440,7 +440,8 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    left: the GPU's shallow-water layer near the player shadowing it, particles for splashes,
    two-way coupling (what floats displacing the water).
 
-Later tests for an advanced demo: a domino run that ends the same on two machines, a ship in a
+Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
+dominoes`: 300 on a spiral, replayed to the same digests), a ship in a
 storm losing its cargo, a dam bursting down an island valley, a rockfall from the tors, a bridge
 collapsing under a convoy, a networked tug-of-war on one crate at 100 ms.
 

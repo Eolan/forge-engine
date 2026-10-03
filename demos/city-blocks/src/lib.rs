@@ -2228,6 +2228,7 @@ impl CityMaterials {
             ("lab-gate", red_paint),
             ("lab-dam-block", concrete_grey),
             ("lab-hut", brick_red),
+            ("lab-domino", crate_wood),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -4057,6 +4058,15 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.15,
             speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Dominoes) {
+        // Over the spiral's outer edge, looking down across it.
+        FlyCamera {
+            position: Vec3::new(0.0, 6.5, 11.0),
+            yaw: 0.0,
+            pitch: -0.55,
+            speed: 6.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Flood) {

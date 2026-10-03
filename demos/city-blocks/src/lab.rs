@@ -34,6 +34,7 @@ use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
 mod creatures;
+mod dominoes;
 mod drive;
 mod flood;
 mod fly;
@@ -63,6 +64,8 @@ pub(crate) enum LabScene {
     Creatures,
     /// A dam break: a reservoir behind a gate, a basin with blocks and a hut, what floats (#144).
     Flood,
+    /// A domino run on a spiral (#146).
+    Dominoes,
 }
 
 /// The floor's half side, metres.
@@ -118,6 +121,8 @@ const CREATURE: usize = PIECE + wall::PIECES;
 const POLE: usize = CREATURE + 2 * creatures::PARTS;
 /// The flood's walls along x and z, its gate, a block, the hut.
 const FLOOD: usize = POLE + 1;
+/// The dominoes' prop, after the flood's five.
+const DOMINO: usize = FLOOD + 5;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -156,6 +161,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(wall::props());
     props.extend(creatures::props());
     props.extend(flood::props());
+    props.extend(dominoes::props());
     props
 }
 
@@ -422,6 +428,8 @@ pub(crate) struct LabWorld {
     water: Option<forge_physics::shallow::Pool>,
     dam: Option<flood::Dam>,
     water_start: Option<forge_physics::shallow::Pool>,
+    /// The domino run.
+    run: Option<dominoes::Run>,
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -455,7 +463,8 @@ impl LabWorld {
             | LabScene::Fly
             | LabScene::Break
             | LabScene::Creatures
-            | LabScene::Flood => 0.0,
+            | LabScene::Flood
+            | LabScene::Dominoes => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -535,6 +544,7 @@ impl LabWorld {
         let mut herd = None;
         let mut water = None;
         let mut dam = None;
+        let mut run = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -843,6 +853,11 @@ impl LabWorld {
                 water = Some(basin.pool);
                 dam = Some(basin.dam);
             }
+            LabScene::Dominoes => {
+                let spiral = dominoes::build(&mut world)?;
+                group(DOMINO, spiral.dominoes.clone(), &mut bodies);
+                run = Some(spiral);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -935,6 +950,7 @@ impl LabWorld {
                 water_start: water.clone(),
                 water,
                 dam,
+                run,
                 limp: false,
                 pool,
             },
@@ -1117,6 +1133,9 @@ impl Simulation for LabWorld {
                     }
                     if let (Some(dam), Some(water)) = (&self.dam, &mut self.water) {
                         dam.open(&mut self.world, water);
+                    }
+                    if let Some(run) = &self.run {
+                        run.push(&mut self.world);
                     }
                 }
                 LabCommand::Limp { on } => self.limp = on,
@@ -1644,8 +1663,8 @@ impl Lab {
                     })
                 };
                 // The wall's mortar: joints still holding, of all; the mannequins still on their
-                // stands.
-                let (mortar, stands) = {
+                // stands; the dominoes down, of all.
+                let (mortar, stands, fallen) = {
                     let shown = self.shown();
                     (
                         shown.wall.as_ref().map_or(String::from("none"), |w| {
@@ -1653,6 +1672,9 @@ impl Lab {
                         }),
                         shown.herd.as_ref().map_or(String::from("none"), |h| {
                             h.standing(&shown.world).to_string()
+                        }),
+                        shown.run.as_ref().map_or(String::from("none"), |r| {
+                            format!("{}/{}", r.fallen(&shown.world), r.dominoes.len())
                         }),
                     )
                 };
@@ -1665,6 +1687,7 @@ impl Lab {
                     player,
                     mortar,
                     stands,
+                    fallen,
                     "physics lab state"
                 );
             }
@@ -1831,7 +1854,7 @@ impl Lab {
     }
 
     /// Whether the scene holds something back for Space to let go: the wrecking ball, the
-    /// flood's gate.
+    /// flood's gate, the dominoes all standing.
     pub(crate) fn held(&mut self) -> bool {
         let shown = self.shown();
         shown.wall.as_ref().is_some_and(|w| w.held(&shown.world))
@@ -1840,6 +1863,10 @@ impl Lab {
                 .as_ref()
                 .zip(shown.water.as_ref())
                 .is_some_and(|(dam, water)| dam.closed(water))
+            || shown
+                .run
+                .as_ref()
+                .is_some_and(|run| run.fallen(&shown.world) == 0)
     }
 
     /// The flood's water as the shown world holds it, for its drawing.
@@ -2296,6 +2323,33 @@ mod tests {
             reach(&first)
         );
         let (mut second, _) = LabWorld::new(LabScene::Flood, test_pool()).unwrap();
+        for _ in 0..60 {
+            second.tick(&[]);
+        }
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_dominoes_fall_to_the_last_and_replay() {
+        let (mut first, _) = LabWorld::new(LabScene::Dominoes, test_pool()).unwrap();
+        let run = first.run.clone().unwrap();
+        // Standing a second untouched: none falls.
+        for _ in 0..60 {
+            first.tick(&[]);
+        }
+        assert_eq!(run.fallen(&first.world), 0);
+        // Pushed: the fall runs the spiral out, every domino down within 50 s (the wave runs at
+        // about 2.5 m/s, all down at tick 2 940 at the time of writing).
+        let commands = vec![Stamped {
+            tick: 60,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Release,
+        }];
+        let recording = Recording::record(&mut first, commands, 3000, 120);
+        let fallen = run.fallen(&first.world);
+        assert_eq!(fallen, run.dominoes.len(), "{fallen} down");
+        let (mut second, _) = LabWorld::new(LabScene::Dominoes, test_pool()).unwrap();
         for _ in 0..60 {
             second.tick(&[]);
         }

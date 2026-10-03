@@ -26,6 +26,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats | ✅ #144 |
+| `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
 | skinned creatures, the GPU's water, particles | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
@@ -420,6 +421,29 @@ floats more than 5 m on, and replays to the same digests. A tick (18 432 cells i
 steps, 39 floaters): **0.86 ms** on average, p99 1.1 ms. The GPU's own shallow-water layer
 shadowing the model near the player, and particles for splashes, come next.
 
+## `dominoes`: a run that ends the same (issue #146)
+
+```
+cargo run --release -p physics-lab -- --lab dominoes
+```
+
+The first of the advanced tests the plan suggests ("a domino run that ends the same on two
+machines"). 300 wooden dominoes (64 × 32 × 8 cm, 650 kg/m³) stand on a spiral from 3 m out to
+8 m, 40 cm apart along it (five eighths of their height), placed and turned through
+`forge_core::dmath`, so the run starts from the same bits everywhere. **Space** (or `--release
+N`) tips the first. The fall runs round the spiral at about 2.5 m/s, six dominoes a second,
+and the last is down at tick 2 940, 49 s on; the dominoes fall asleep where they lie.
+
+![Standing; the fall a turn in at tick 900, two turns at 1800; all down at tick 3000](images/physics-lab-dominoes.png)
+
+What it tests is the solver's determinism over a long chain of cause and effect, thousands of
+contacts made and broken in turn, where one bit off anywhere would show at the end: the lab's
+test runs the fall out (none falls untouched for a second; pushed, all 300 are down within 50 s)
+and replays it from its recording to the same 25 digests; `--net` runs it through a server and a
+client. That the world's hash does not depend on the workers, on a save and restore, or on the
+platform is the pile's test (#136, Windows and Linux in CI). A tick: **0.21 ms** on average, p99
+0.38 ms (332 bodies, those falling and fallen awake until the run is over).
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -434,5 +458,6 @@ twin and `lab-drive-turn600`; from the field (#141) `lab-fly1200` (climbing away
 twin; from the break scene (#142) `lab-break85` (the ball through the wall) with its twin and
 `lab-break300` (the wall broken, the column in pieces); and from the creatures (#143)
 `lab-creatures120` (posed) with its twin, `lab-creatures-throw240` (struck by balls) and
-`lab-creatures-limp240` (let go); and from the flood (#144) `lab-flood150` (the water running
-down the basin) with its twin and `lab-flood300` (spread round the blocks).
+`lab-creatures-limp240` (let go); from the flood (#144) `lab-flood150` (the water running
+down the basin) with its twin and `lab-flood300` (spread round the blocks); and from the
+dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3000` (all down).
