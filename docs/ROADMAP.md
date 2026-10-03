@@ -426,7 +426,8 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    `VehicleConstraint`, springs, a geared engine, a handbrake; a ramp, a slalom, a wall of
    crates), the boat (step 3), a plane ✅ (#141, `--lab fly`: lift and drag per flying surface,
    `forge_physics::aero`; a runway and a 5 km field), a rocket ✅ (#148, `--lab rocket`: thrust
-   vectoring, roll jets, fins as flying surfaces). Left: a spaceship in zero g, fuel burning off, the
+   vectoring, roll jets, fins as flying surfaces), a spaceship in zero g ✅ (#150, `--lab space`:
+   momentum kept through a crash into floating crates). Left: fuel burning off, the
    wind through `Air`.
 6. **Destruction:** a brick wall of bonded bricks with breakable joints ✅ (#142, `--lab break`:
    mortar that breaks on load or strain, a wrecking ball, a column shattered into Voronoi pieces

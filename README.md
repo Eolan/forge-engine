@@ -221,7 +221,8 @@ stairs, ramps, a moving platform and crates; WASD walk, Shift runs, Space jumps,
 button turns the view. `--lab drive`: a car on wheels and springs, a ramp, a slalom, a wall of
 crates; the arrows drive, Space holds the handbrake. `--lab fly`: an aeroplane on its flying
 surfaces over a runway and a field; W and S the throttle, the arrows the stick, A and D the
-rudder. `--lab rocket`: a rocket off a launch pad, the same keys: the stick swings its engine.
+rudder. `--lab rocket`: a rocket off a launch pad, the same keys: the stick swings its engine;
+`--lab space`: it as a spaceship in zero g, crashing into floating crates.
 `--lab break`: a brick wall held by mortar that breaks, a wrecking ball (Space lets it
 go) and a concrete column that shatters into pieces. `--lab creatures`: mannequins on poles and
 dogs from Blender as powered ragdolls, their motors driving moving poses; Space throws balls at

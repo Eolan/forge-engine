@@ -42,6 +42,7 @@ mod flood;
 mod fly;
 mod rocket;
 mod sea;
+mod space;
 mod tug;
 mod walk;
 mod wall;
@@ -76,6 +77,8 @@ pub(crate) enum LabScene {
     Rocket,
     /// A tug-of-war on a sled, two teams pulling (#149); with `--net`, against the bot.
     Tug,
+    /// The rocket as a spaceship in zero g, crates floating ahead of it (#150).
+    Space,
 }
 
 /// The floor's half side, metres.
@@ -475,6 +478,8 @@ pub(crate) struct LabWorld {
     /// for player 1.
     tug: Option<BodyId>,
     pulls: [f32; 2],
+    /// Whether the world is in space: no gravity, no air (#150).
+    space: bool,
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -497,6 +502,12 @@ impl LabWorld {
             threads: (std::thread::available_parallelism().map_or(4, |n| n.get()) / 2)
                 .saturating_sub(3)
                 .max(1) as u32,
+            // In space, none (#150).
+            gravity: if kind == LabScene::Space {
+                Vec3::ZERO
+            } else {
+                WorldDesc::default().gravity
+            },
             ..WorldDesc::default()
         });
         // The floor: under the pyramid at 0, under the sea 12 m down.
@@ -512,7 +523,8 @@ impl LabWorld {
             | LabScene::Dominoes
             | LabScene::Bridge
             | LabScene::Rocket
-            | LabScene::Tug => 0.0,
+            | LabScene::Tug
+            | LabScene::Space => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -929,6 +941,13 @@ impl LabWorld {
                 group(CRATE, vec![site.sled], &mut bodies);
                 tug = Some(site.sled);
             }
+            LabScene::Space => {
+                let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 150.0)?;
+                let site = space::build(&mut world, &crate_shape)?;
+                group(ROCKET, vec![site.ship], &mut bodies);
+                group(CRATE, site.crates, &mut bodies);
+                rocket = Some(site.ship);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -1047,6 +1066,7 @@ impl LabWorld {
                 rocket,
                 pulls: tug.map_or([0.0; 2], |_| [tug::HOLD; 2]),
                 tug,
+                space: kind == LabScene::Space,
                 limp: false,
                 pool,
             },
@@ -1298,7 +1318,7 @@ impl Simulation for LabWorld {
         }
         self.pilot.tick(&mut self.world);
         if let Some(r) = self.rocket {
-            rocket::tick(&mut self.world, r, &self.pilot);
+            rocket::tick(&mut self.world, r, &self.pilot, self.space);
         }
         if let Some(sled) = self.tug {
             tug::pull(&mut self.world, sled, self.pulls);
@@ -1845,6 +1865,21 @@ impl Lab {
                         )
                     })
                 };
+                // In space: the ship's and the crates' momentum, which should keep.
+                let momentum = {
+                    let shown = self.shown();
+                    match (shown.space, shown.rocket) {
+                        (true, Some(ship)) => {
+                            let p = space::momentum(
+                                &shown.world,
+                                ship,
+                                &shown.bodies[1..=space::CRATES],
+                            );
+                            format!("{:.2},{:.2},{:.2}", p.x, p.y, p.z)
+                        }
+                        _ => String::from("none"),
+                    }
+                };
                 // The bridge's deck: joints still holding, of all; cars across and down.
                 let deck = {
                     let shown = self.shown();
@@ -1870,6 +1905,7 @@ impl Lab {
                     fallen,
                     deck,
                     tug,
+                    momentum,
                     "physics lab state"
                 );
             }
@@ -2641,6 +2677,51 @@ mod tests {
         }
         climb.replay(&mut second).expect("the same digests");
         turn.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_ship_in_zero_g_keeps_momentum_through_its_crash_and_replays() {
+        let (mut first, _) = LabWorld::new(LabScene::Space, test_pool()).unwrap();
+        let ship = first.rocket.unwrap();
+        // The bodies: the ship, then the 27 crates.
+        let crates = first.bodies[1..=space::CRATES].to_vec();
+        let momentum = |lab: &LabWorld| space::momentum(&lab.world, ship, &crates);
+        // Half a second untouched: nothing moves.
+        for _ in 0..30 {
+            first.tick(&[]);
+        }
+        assert_eq!(momentum(&first), Vec3::ZERO);
+        let fly = |tick: u64, controls: [f32; 4]| Stamped {
+            tick,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Fly { controls },
+        };
+        // Full throttle for a second: 50 kN for 1 s gives 50 000 kg·m/s along −z (16.7 m/s),
+        // then it coasts.
+        let commands = vec![fly(30, [1.0, 0.0, 0.0, 0.0]), fly(90, [0.0; 4])];
+        let burn = Recording::record(&mut first, commands, 90, 30);
+        let before = momentum(&first);
+        assert!((before.z + 50_000.0).abs() < 5.0, "{before}");
+        assert!(before.x.abs() < 0.1 && before.y.abs() < 0.1, "{before}");
+        // Coasting into the crates (about 0.9 s on) and scattering them: 4 s on, the momentum is
+        // what it was, shared out.
+        let crash = Recording::record(&mut first, Vec::new(), 240, 60);
+        let after = momentum(&first);
+        assert!(
+            (after - before).length() < 1e-4 * before.length(),
+            "{before} {after}"
+        );
+        let mut v = Vec::new();
+        first.world.velocities(&crates, &mut v);
+        let moving = v.iter().filter(|v| v.linear.length() > 1.0).count();
+        assert!(moving > 10, "{moving} crates moving");
+        let (mut second, _) = LabWorld::new(LabScene::Space, test_pool()).unwrap();
+        for _ in 0..30 {
+            second.tick(&[]);
+        }
+        burn.replay(&mut second).expect("the same digests");
+        crash.replay(&mut second).expect("the same digests");
     }
 
     #[test]

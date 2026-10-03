@@ -24,6 +24,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `drive` | a car on wheels and springs: a jump ramp, a slalom of barrels, a wall of crates | ✅ #140 |
 | `fly` | an aeroplane on flying surfaces: a take-off from a runway, turns over a wide field | ✅ #141 |
 | `rocket` | a rocket off a launch pad: thrust vectoring, roll jets, fins as flying surfaces | ✅ #148 |
+| `space` | a spaceship in zero g: momentum kept through a crash into floating crates | ✅ #150 |
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats | ✅ #144 |
@@ -334,7 +335,40 @@ A tick: **0.04 ms** on average, p99 0.08 ms.
 Not yet:
 - fuel burning off (Jolt's mass would change in flight);
 - the exhaust's flame (it needs particles or an emissive material);
-- a spaceship in zero g.
+- a spaceship in zero g: `space` below.
+
+## `space`: a spaceship in zero g (issue #150)
+
+```
+cargo run --release -p physics-lab -- --lab space
+cargo run --release -p physics-lab -- --lab space --pilot 1,0,0,0
+```
+
+Step 5's last vehicle: the rocket as a spaceship in a world with no gravity (`WorldDesc::gravity`)
+and no air, 30 m over the lab's floor.
+- **The ship:** lies nose first along −z, its engine on the throttle.
+- **Its jets:** pitch and yaw it on the stick (5 kN·m) and roll it on the ailerons, where the air
+  turned the rocket. These are the rocket's controls, so a flight records and replays.
+- **The crates:** 27 of them float ahead of it in a block (100 kg each, 1.2 m apart).
+- **No damping:** nothing is damped, not the ship and not the crates.
+
+So what it tests is momentum:
+- the ship must gain exactly what its engine gives it;
+- when it ploughs through the crates and scatters them, the ship and the crates together must keep
+  that momentum.
+
+![Closing on the crates at full throttle; nearer at tick 90; through them at 150, the crates tumbling away](images/physics-lab-space.png)
+
+The lab's test:
+- **Untouched:** half a second leaves everything where it was.
+- **The burn:** 50 kN for 1 s gives 49 999.992 kg·m/s along −z (50 000 by Newton).
+- **The crash:** the ship coasts into the block and scatters it, 15 crates leaving at over 1 m/s.
+  4 s on, the ship and crates together carry 49 999.84 along −z and 0.3 across: within 9 parts
+  in a million.
+- **The replay:** the flight replays to the same digests.
+
+The state log prints the momentum every few seconds (`momentum`). A tick: **0.05 ms** on average,
+p99 0.15 ms.
 
 ## `break`: a wall, a wrecking ball, a column (issue #142)
 
@@ -598,4 +632,5 @@ and from the bridge (#147) `lab-bridge360` (the deck falling with two cars) with
 `lab-bridge600` (in the gap); and the rocket (#148) at full throttle with the stick a tenth
 pushed, `lab-rocket120` (climbing off the pad) with its twin and `lab-rocket600` (pitched over
 downrange); and the tug-of-war (#149) through `--net 100`, `lab-tug-net200` (the sled on its way
-right) with its twin and `lab-tug-net600` (over the line).
+right) with its twin and `lab-tug-net600` (over the line); and the spaceship (#150) at full throttle,
+`lab-space90` (closing on the crates) and `lab-space150` (through them) with its twin.

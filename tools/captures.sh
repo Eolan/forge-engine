@@ -280,6 +280,11 @@ for path in $paths; do
     capture "$path-lab-tug-net200" 200 "$lab" --lab tug --net 100 --fixed-step "${flag[@]}"
     capture "$path-lab-tug-net200-noocc" 200 "$lab" --lab tug --net 100 --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-lab-tug-net600" 600 "$lab" --lab tug --net 100 --fixed-step "${flag[@]}"
+    # The spaceship in zero g (#150) at full throttle: closing on the crates at tick 90, through
+    # them at tick 150 and its A/B twin.
+    capture "$path-lab-space90" 90 "$lab" --lab space --fixed-step --pilot 1,0,0,0 "${flag[@]}"
+    capture "$path-lab-space150" 150 "$lab" --lab space --fixed-step --pilot 1,0,0,0 "${flag[@]}"
+    capture "$path-lab-space150-noocc" 150 "$lab" --lab space --fixed-step --pilot 1,0,0,0 --no-occlusion "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

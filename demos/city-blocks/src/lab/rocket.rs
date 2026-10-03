@@ -27,7 +27,7 @@ const FIN_REACH: f32 = 1.7;
 const FIN_HEIGHT: f32 = 2.2;
 const FIN_BOTTOM: f32 = -0.8;
 /// Its mass, kg (fuelled), and its weight's height on its axis.
-const MASS: f32 = 3000.0;
+pub(super) const MASS: f32 = 3000.0;
 const CENTER_OF_MASS: Vec3 = Vec3::new(0.0, 5.0, 0.0);
 /// Its engine's push at full throttle, N (1.7 times its weight), where it acts (the nozzle's
 /// throat), and how far the stick swings it, as the sine of the angle (about 6°).
@@ -36,6 +36,8 @@ const NOZZLE: Vec3 = Vec3::new(0.0, -0.1, 0.0);
 const GIMBAL: f32 = 0.1;
 /// The roll jets' torque at full aileron, N·m.
 const ROLL: f32 = 2000.0;
+/// In space, the pitch and yaw jets' torque at full stick, N·m.
+const TURN: f32 = 5000.0;
 /// Its body's drag along its axis and across it (the drag coefficient times the area, m²).
 const AXIAL_DRAG: f32 = 0.35;
 const CROSS_DRAG: f32 = 8.0;
@@ -136,6 +138,22 @@ pub(super) fn build(world: &mut World, pad: usize) -> Result<Site> {
         friction: 0.8,
         ..BodyDesc::fixed(&pad_shape, pad_at)
     })?;
+    let at = DVec3::new(0.0, f64::from(2.0 * PAD_HALF[1] - FIN_BOTTOM), 0.0);
+    let rocket = add(world, at, Quat::IDENTITY, 0.05)?;
+    Ok(Site {
+        statics: vec![(pad, Mat4::from_translation(pad_at.as_vec3()))],
+        rocket,
+    })
+}
+
+/// Adds the rocket at `at`, turned by `rotation`, losing `angular_damping` of its spin a second:
+/// its body.
+pub(super) fn add(
+    world: &mut World,
+    at: DVec3,
+    rotation: Quat,
+    angular_damping: f32,
+) -> Result<BodyId> {
     // Its collision: the hull of its body, its nose and its fins' tips (it stands on them).
     let mut points = Vec::new();
     for k in 0..12 {
@@ -149,21 +167,16 @@ pub(super) fn build(world: &mut World, pad: usize) -> Result<Site> {
     }
     points.push(Vec3::new(0.0, NOSE_TIP, 0.0));
     let shape = Shape::convex_hull(&points, 0.03, 100.0)?.with_center_of_mass_at(CENTER_OF_MASS)?;
-    let rocket = world.add_body(&BodyDesc {
+    Ok(world.add_body(&BodyDesc {
+        rotation,
         mass: Some(MASS),
         friction: 0.6,
         allow_sleep: false,
         // Its drag is the air's (its body's and its fins'), not the solver's damping.
         linear_damping: 0.0,
-        ..BodyDesc::dynamic(
-            &shape,
-            DVec3::new(0.0, f64::from(2.0 * PAD_HALF[1] - FIN_BOTTOM), 0.0),
-        )
-    })?;
-    Ok(Site {
-        statics: vec![(pad, Mat4::from_translation(pad_at.as_vec3()))],
-        rocket,
-    })
+        angular_damping,
+        ..BodyDesc::dynamic(&shape, at)
+    })?)
 }
 
 /// The sine and cosine of the `k`th of twelve angles round a circle, without trigonometry (the
@@ -189,19 +202,31 @@ fn ring(k: u32) -> (f32, f32) {
 
 /// The air's push, the engine's and the roll jets' for the coming step, from the pilot's
 /// throttle and stick.
-pub(super) fn tick(world: &mut World, rocket: BodyId, pilot: &Pilot) {
+pub(super) fn tick(world: &mut World, rocket: BodyId, pilot: &Pilot, space: bool) {
     let (mut t, mut v, mut c) = (Vec::new(), Vec::new(), Vec::new());
     world.transforms(&[rocket], &mut t);
     world.velocities(&[rocket], &mut v);
     world.centers_of_mass(&[rocket], &mut c);
     let (t, v) = (t[0], v[0]);
-    let (mut force, mut torque) = push(&fins(), &[0.0, 0.0], t, v, c[0], &Air::STILL);
-    // The body's drag, split along its axis and across it.
     let axis = t.rotation * Vec3::Y;
-    let along = axis * v.linear.dot(axis);
-    let across = v.linear - along;
-    let q = 0.5 * Air::STILL.density;
-    force -= q * (AXIAL_DRAG * along.length() * along + CROSS_DRAG * across.length() * across);
+    let (force, mut torque) = if space {
+        // No air in space (#150): jets at its nose and tail pitch and yaw it as the stick says,
+        // the way the engine's swing would.
+        let jets = Vec3::new(
+            -pilot.elevator.clamp(-1.0, 1.0),
+            0.0,
+            -pilot.rudder.clamp(-1.0, 1.0),
+        );
+        (Vec3::ZERO, t.rotation * (jets * TURN))
+    } else {
+        let (mut force, torque) = push(&fins(), &[0.0, 0.0], t, v, c[0], &Air::STILL);
+        // The body's drag, split along its axis and across it.
+        let along = axis * v.linear.dot(axis);
+        let across = v.linear - along;
+        let q = 0.5 * Air::STILL.density;
+        force -= q * (AXIAL_DRAG * along.length() * along + CROSS_DRAG * across.length() * across);
+        (force, torque)
+    };
     // The engine along its axis, swung by the stick, as for an aeroplane pitched up on its tail:
     // pushing the stick (+elevator) pushes the tail back (+z) and tips the nose downrange (−z),
     // the rudder right pushes the tail left (−x) and yaws the nose right; the roll jets roll it

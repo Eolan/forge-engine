@@ -1035,6 +1035,9 @@ max 0.34), 52 bodies and 4 vehicles, the deck's 17 joints checked after each ste
 `--lab tug --net 100` (#149), 600 ticks of the server and two clients: **0.12 ms a tick** (p99
 0.30, max 0.66), 6 corrections of 14 ticks each at most 0.55 ms; a snapshot 6.0 KB.
 
+`--lab space` (#150), full throttle through the crates, 300 ticks: **0.05 ms a tick** (p99 0.15,
+max 0.25), the ship and 27 crates in zero g.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three
