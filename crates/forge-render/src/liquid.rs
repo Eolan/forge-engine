@@ -25,6 +25,7 @@ use forge_gpu::{
 };
 use glam::{Mat4, UVec3, Vec2, Vec3};
 
+use crate::meshlet::MoversFrame;
 use crate::sky::SkyFrame;
 use crate::taa::HDR_FORMAT;
 
@@ -197,6 +198,19 @@ pub struct LiquidStats {
     pub behind: u32,
 }
 
+/// What the drawing shows of the liquid (`mode` in `liquid_draw.slang`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LiquidMode {
+    /// The water as it looks.
+    #[default]
+    Look = 0,
+    /// The speed view, to tune by: the water's surface matte, coloured by the flow's speed.
+    Speed = 1,
+    /// The landing view, to check the drawing by: each pixel of water coloured by where its bent
+    /// ray lands (on a surface the camera sees, on one it does not, on the sky, nowhere).
+    Landing = 2,
+}
+
 /// What the drawing needs.
 #[derive(Clone, Copy, Debug)]
 pub struct LiquidDrawParams {
@@ -213,9 +227,17 @@ pub struct LiquidDrawParams {
     /// A plain background (pre-exposed radiance) where the depth is empty, also what the water
     /// mirrors and is lit by besides the sun; `None`: the sky.
     pub background: Option<Vec3>,
-    /// The speed view (to tune by): the water's surface coloured by the flow's speed, matte, in place
-    /// of the water as it looks.
-    pub speed_view: bool,
+    /// The camera in the scene's frame, the rays' structures', metres.
+    pub camera: Vec3,
+    /// The scene renderer's frame block for this slot ([`crate::MeshletRenderer::frame_address`];
+    /// 0: none): the bent rays are traced against its rays' structures to find where they land, and
+    /// where the camera does not see that, its surface is shaded as a mirror ray's hit. Without it
+    /// they take the scene behind their pixel.
+    pub frame: u64,
+    /// This frame's movers, whose structure the drawing reads.
+    pub movers: Option<MoversFrame>,
+    /// What the drawing shows of the liquid.
+    pub mode: LiquidMode,
 }
 
 /// The liquid's buffer in a frame's graph ([`Liquid::import`]).
@@ -281,8 +303,7 @@ struct GpuLiquidView {
     scattering: [f32; 4],
     glass: [f32; 4],
     background: [f32; 4],
-    gate: [f32; 4],
-    hole: [f32; 4],
+    camera: [f32; 4],
     rest: f32,
     nodes: u32,
     color: u32,
@@ -301,9 +322,10 @@ struct GpuLiquidView {
     sky_light: u64,
     foam: u64,
     foam_render: u64,
+    frame: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 424);
+const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 416);
 
 /// Mirrors `LiquidPush` in `liquid.slang`.
 #[repr(C)]
@@ -532,8 +554,6 @@ pub struct Liquid {
     seeded: Cell<bool>,
     /// Which of the particles' two sets holds them.
     current: Cell<usize>,
-    /// The last substep's gate, for the drawing.
-    last: Cell<LiquidStep>,
     asked: [Cell<bool>; FRAMES_IN_FLIGHT],
 }
 
@@ -617,7 +637,6 @@ impl Liquid {
             readback,
             seeded: Cell::new(false),
             current: Cell::new(0),
-            last: Cell::new(LiquidStep::default()),
             asked: std::array::from_fn(|_| Cell::new(false)),
         })
     }
@@ -697,9 +716,6 @@ impl Liquid {
         stats: bool,
     ) {
         let steps = &steps[..steps.len().min(LIQUID_MAX_SUBSTEPS)];
-        if let Some(&last) = steps.last() {
-            self.last.set(last);
-        }
         let seed = !self.seeded.replace(true);
         if steps.is_empty() && !seed && !stats {
             return;
@@ -957,13 +973,7 @@ impl Liquid {
                 background: params
                     .background
                     .map_or([0.0; 4], |b| b.extend(1.0).to_array()),
-                gate: tank.gate.map_or([0.0; 4], |[a, b]| {
-                    let last = self.last.get();
-                    [a, b, last.gate_bottom, last.shutter]
-                }),
-                hole: tank
-                    .hole
-                    .map_or([0.0; 4], |h| [h.centre.x, h.centre.y, h.radius, 0.0]),
+                camera: params.camera.extend(0.0).to_array(),
                 rest: PER_CELL as f32,
                 nodes: (cells.x + 1) * (cells.y + 1) * (cells.z + 1),
                 color: 0,
@@ -972,7 +982,7 @@ impl Liquid {
                 reactive: 0,
                 width: extent.width,
                 height: extent.height,
-                mode: u32::from(params.speed_view),
+                mode: params.mode as u32,
                 pad: 0,
                 density: base + l.density,
                 blur: base + l.blur,
@@ -982,6 +992,7 @@ impl Liquid {
                 sky_light: sky.light.address,
                 foam: base + l.foam,
                 foam_render: base + l.foam_render,
+                frame: params.frame,
             }],
         );
         let address = view.address();
@@ -1061,7 +1072,8 @@ impl Liquid {
                 Ok(())
             });
         let march = self.pipeline(Kernel::March);
-        graph
+        let movers = params.movers;
+        let builder = graph
             .pass(LABEL)
             .buffer(state, BufferAccess::ShaderRead(compute))
             .buffer(sky.light.buffer, BufferAccess::ShaderRead(compute))
@@ -1069,8 +1081,9 @@ impl Liquid {
             .image(scene, ImageAccess::Sampled(compute))
             .image(depth, ImageAccess::Sampled(compute))
             .image(color, ImageAccess::StorageReadWrite(compute))
-            .image(reactive, ImageAccess::StorageWrite(compute))
-            .run(move |resources, commands| {
+            .image(reactive, ImageAccess::StorageWrite(compute));
+        MoversFrame::declare(movers, builder, compute, params.frame != 0).run(
+            move |resources, commands| {
                 let offset = std::mem::offset_of!(GpuLiquidView, color) as u64;
                 view.write(
                     offset,
@@ -1085,7 +1098,8 @@ impl Liquid {
                 commands.push_constants(march, &address);
                 commands.dispatch(groups.0, groups.1, 1);
                 Ok(())
-            });
+            },
+        );
         reactive
     }
 }

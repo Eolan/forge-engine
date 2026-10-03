@@ -1932,9 +1932,16 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
   coefficient of 0.75 at 6.4 cells across, against a sharp-edged hole's 0.6); white water carried
   by the particles, short-lived in fresh water (the owner: "foam on clear, non salt water does
   not make too much sense"), its life a property of the liquid; the speed view for tuning.
-- **Under the water:** rays start on the near plane, so the camera can cross the surface (the
-  side walls seen from under the water still show a hatching to work on).
+- **Under the water:** rays start on the near plane, so the camera can cross the surface.
 - **The particles sorted** by cell once a frame: 3.0 ms of simulation, from 4.5.
+- **Where a bent ray lands:**
+  - **How it is found now:** the ray is traced against the scene's ray-tracing structures. It
+    takes the screen's colour where the camera sees that point; where it does not, the point is
+    shaded plainly, as a mirror ray's hit is.
+  - **What it replaced:** a search over the screen against the depth. It gave the sawtooth edges
+    and speckled panes of the owner's report.
+  - **Its cost:** nothing measurable (`liquid/draw` 0.20 ms).
+  - **The underwater hatching:** that was rounding, and is fixed.
 - **Not yet:** bodies in the water, caustics, a multigrid pressure.
 
 **The questions put to the owner** (answered above):

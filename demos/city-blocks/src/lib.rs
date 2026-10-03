@@ -308,10 +308,11 @@ struct Args {
     /// tension, none leaves the water as it stands.
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true, default_values_t = [0.0, -9.81, 0.0])]
     liquid_gravity: Vec<f32>,
-    /// `--lab tank`: start in the speed view (the water coloured by the flow's speed; 2 turns it on,
-    /// 1 off).
-    #[arg(long)]
-    liquid_speed: bool,
+    /// `--lab tank`: what the tank's drawing shows: the water as it looks (key 1), its speed view
+    /// (the surface coloured by the flow's speed; key 2) or its landing view (where its bent rays
+    /// land; key 3).
+    #[arg(long, value_enum, default_value_t = LiquidView::Look)]
+    liquid_view: LiquidView,
     /// `--lab tank`: how long the air the water takes in lasts, seconds (fresh water's 0.3 by
     /// default: white only where a jet plunges; longer for sea water's foam; 0 for none).
     #[arg(long, default_value_t = forge_render::FRESH_FOAM_LIFE)]
@@ -503,8 +504,8 @@ struct Gallery {
     liquid_next_log: u64,
     /// Enter was pressed: the liquid starts over at the next frame.
     liquid_reset: bool,
-    /// The liquid drawn in its speed view (2), or as it looks (1).
-    liquid_speed: bool,
+    /// What the liquid's drawing shows: as it looks (1), its speed view (2), its landing view (3).
+    liquid_mode: forge_render::LiquidMode,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -594,6 +595,27 @@ const PLANET_ANGLE_DEG: f32 = 32.0;
 const BENCH_SUN: Vec3 = Vec3::new(-0.45, 0.8, -0.4);
 const BENCH_BACKGROUND: Vec3 = Vec3::new(0.09, 0.07, 0.1);
 
+/// `--liquid-view`: what the tank's drawing shows (#156).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum LiquidView {
+    /// The water as it looks.
+    Look,
+    /// The speed view: the surface matte, coloured by the flow's speed.
+    Speed,
+    /// The landing view: each pixel of water coloured by where its bent ray lands.
+    Landing,
+}
+
+impl LiquidView {
+    fn mode(self) -> forge_render::LiquidMode {
+        match self {
+            Self::Look => forge_render::LiquidMode::Look,
+            Self::Speed => forge_render::LiquidMode::Speed,
+            Self::Landing => forge_render::LiquidMode::Landing,
+        }
+    }
+}
+
 /// The sky of space (`--lab space`, the owner's ask of 2026-10-03): the asteroids' starfield and
 /// the sun's disc, and an Earth-like planet under its atmosphere seen from orbit (D-023's
 /// models), drawn where the geometry left the depth clear, in place of the ground's sky. Its shaded
@@ -672,7 +694,7 @@ impl Gallery {
         // The glass tank's liquid (#156): pure water, the solver as the arguments set it; on its
         // bench, tinted, under a white sun from the left and behind.
         let bench = args.lab == Some(lab::LabScene::TankBench);
-        let liquid_speed = args.liquid_speed;
+        let liquid_mode = args.liquid_view.mode();
         if bench {
             renderer.sun_dir = BENCH_SUN.normalize();
             renderer.sun_color = Vec3::ONE;
@@ -1040,7 +1062,7 @@ impl Gallery {
             liquid_asked: [None; forge_gpu::FRAMES_IN_FLIGHT],
             liquid_next_log: 0,
             liquid_reset: false,
-            liquid_speed,
+            liquid_mode,
             sky_light,
             gtao,
             ao_on,
@@ -1187,9 +1209,10 @@ impl Demo for Gallery {
                     self.liquid_reset = true;
                 }
             }
-            // The tank's water as it looks, or coloured by its speed (#156).
-            KeyCode::Digit1 => self.liquid_speed = false,
-            KeyCode::Digit2 => self.liquid_speed = true,
+            // The tank's water as it looks, coloured by its speed, or by where its rays land (#156).
+            KeyCode::Digit1 => self.liquid_mode = forge_render::LiquidMode::Look,
+            KeyCode::Digit2 => self.liquid_mode = forge_render::LiquidMode::Speed,
+            KeyCode::Digit3 => self.liquid_mode = forge_render::LiquidMode::Landing,
             KeyCode::KeyC => self.chase = !self.chase,
             _ => {}
         }
@@ -1883,7 +1906,10 @@ impl Demo for Gallery {
                         BENCH_BACKGROUND
                             * (self.renderer.sun_illuminance * exposure / std::f32::consts::PI)
                     }),
-                    speed_view: self.liquid_speed,
+                    camera: camera_in_scene,
+                    frame: self.renderer.frame_address(frame.slot),
+                    movers: targets.movers,
+                    mode: self.liquid_mode,
                 },
                 taa_frame.color,
                 targets.depth,

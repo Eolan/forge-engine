@@ -1055,7 +1055,8 @@ The ground's sky tables still run under it (about 0.14 ms) and are not used.
 `liquid/sort` 0.24 (by cell into a second buffer, once a frame), `liquid/p2g` 1.15 (the particles'
 sums to the faces, 64-bit atomics), `liquid/pressure` 1.18 (32 red-black sweeps a substep, 256
 dispatches a frame), `liquid/g2p` 0.32, the rest 0.14; its drawing on the graphics queue 0.20 ms
-(`liquid/draw`, with the white water). Unsorted it took 4.5 ms (the p2g 2.02, the g2p 1.13): the
+(`liquid/draw`, with the white water; its bent rays traced against the scene since, at no measurable
+cost: 0.201). Unsorted it took 4.5 ms (the p2g 2.02, the g2p 1.13): the
 dam break mixes the particles, and the grid's cache suffered (`--lab tank-hole`, whose particles
 keep their order, took 3.1). On the first tank (640 000 particles at 1 cm):
 - packing the p2g's atomics in 64 bits took it from 2.68 ms to 2.05;

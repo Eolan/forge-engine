@@ -51,7 +51,7 @@ pub use forge_gpu::DlssMode;
 pub use gtao::{Gtao, GtaoParams};
 pub use liquid::{
     FRESH_FOAM_LIFE, LIQUID_MAX_SUBSTEPS, Liquid, LiquidDrawParams, LiquidHole, LiquidLook,
-    LiquidSolver, LiquidState, LiquidStats, LiquidStep, LiquidTank,
+    LiquidMode, LiquidSolver, LiquidState, LiquidStats, LiquidStep, LiquidTank,
 };
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,

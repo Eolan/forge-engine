@@ -3267,6 +3267,41 @@ float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin
     return float4(hit_radiance(f, sky, probes, hit, direction), 1.0);
 }
 
+// For the passes outside this file that trace the scene (#156: where the tank's bent rays land):
+// the nearest surface a ray meets in either structure, and that surface's light towards the ray
+// in the resolve's units, shaded plainly as a mirror ray's hit (without the probes).
+public struct SceneHit
+{
+    public bool hit;
+    public uint instance;
+    public uint primitive;
+    public float2 barycentrics;
+    public float t; // `tmax` on a miss
+};
+
+public SceneHit trace_scene(Frame* f, float3 origin, float3 direction, float tmin, float tmax)
+{
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = direction;
+    ray.TMin = tmin;
+    ray.TMax = tmax;
+    ClosestHit c = trace_closest(f, ray);
+    SceneHit o;
+    o.hit = c.hit;
+    o.instance = c.instance;
+    o.primitive = c.primitive;
+    o.barycentrics = c.barycentrics;
+    o.t = c.t;
+    return o;
+}
+
+public float3 scene_hit_radiance(Frame* f, float4* sky, SceneHit c, float3 origin, float3 direction)
+{
+    RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
+    return hit_radiance(f, sky, nullptr, hit, direction);
+}
+
 // Translucent ice (issues #59, #61): the sunlight that crosses the ice to reach `world`, the
 // point of instance `instance` a pixel shows, and leaves it towards the camera (per unit of the
 // sun's light, the phase's π included). A ray from the point towards the sun meets the

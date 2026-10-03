@@ -584,9 +584,16 @@ to the rim, falls back, sloshes and settles. `tank-bench` is the same tank as a 
 - a plain violet background and the sun alone;
 - the water tinted teal (`LiquidLook::tinted`) so its depth and motion show.
 
-The keys **1** and **2** switch between the water as it looks and its **speed view**
-(`--liquid-speed` to start in it): the surface matte, coloured by how fast the water flows, blue
-when still through cyan and white to orange at 3 m/s, as Lague colours his particles.
+The keys **1**, **2** and **3** switch between the water as it looks, its **speed view** and its
+**landing view** (`--liquid-view speed` or `landing` to start in one):
+- **The speed view:** the surface matte, coloured by how fast the water flows, blue when still,
+  through cyan and white, to orange at 3 m/s, as Lague colours his particles.
+- **The landing view:** each pixel of water coloured by where its bent ray lands:
+  - green: on a surface the camera sees;
+  - red: on one it does not;
+  - blue: on the sky;
+  - yellow: trapped, mirrored to and fro;
+  - grey: not bent.
 
 `tank-hole` is the owner's second tank: the gate fixed, with a round hole 8 cm across through it,
 low in its middle (its centre 12 cm over the floor), shut by a steel shutter on its dry side.
@@ -631,19 +638,39 @@ side. The reservoir drains until both sides stand level, 152 mm.
 - **Through the water:** absorbed and scattered along its path (pure water by default), out through
   the surface or the glass. Past the critical angle it is mirrored whole and marched on: a side
   wall seen at a slant mirrors the inside.
-- **Where it lands:** a short march over the screen against the depth, with a 25 cm thickness, so
-  something in front of the ray is not taken for where it lands.
-- **Bent rays and the gate:** a ray bent by the water stops where it meets the gate (the one opaque
-  thing in the tank), not where the pixel's depth put the straight ray: stopped there, it landed
-  anywhere.
+- **Where it lands:** the bent ray is traced against the scene's ray-tracing structures, the static
+  one and the movers' (the gate, the shutter). Inside the tank it stops at the first surface it
+  meets, the gate or anything later put in the water.
+  - **Seen by the camera:** where the depth at that point's pixel shows that point (within 3 cm,
+    plus 2 % of its distance), it takes the screen's colour there.
+  - **Hidden:** where something nearer hides it, it is shaded as the glass's mirror rays shade
+    theirs. That means its material's plain colour (its texture's average), in the sun with its
+    shadow traced, and in the sky. An example is the reservoir's floor behind the gate, seen from
+    the gate's dry side.
+  - **Meeting nothing:** it takes the sky.
+  - **The search it replaced:** a march over the screen against the depth (the owner's report of
+    2026-10-03, three screenshots: "the side reflections are very bugged. it bugs from above as
+    well"). It missed the surfaces a ray grazed between two of its steps, which gave sawtooth
+    edges, and it could not see what something nearer hid. There it took the last place it saw,
+    which gave the gate's red on the floor behind it and speckled panes.
 - **The normal:** the density's gradient over two cells either way, smoother than the particles'
   noise.
 - **Under the water:** each ray starts on the near plane, so a camera crossing the surface sees
   the water below the line its near plane cuts and the air above, with a thin dark waterline
   on the lens between them (`--view=-0.6,1.212,0.05,-90,-3` puts the camera's eye at the
-  reservoir's surface). Known: from under the water, the side walls seen at a slant, which the
-  glass mirrors whole, show a hatching. How many times a ray is mirrored there changes from pixel
-  to pixel. Still to work on.
+  reservoir's surface). The side walls seen at a slant mirror the inside whole, as an aquarium's
+  glass does.
+  - **The hatching it had:** the side walls first showed a hatching there. A straight ray stopped
+    where the depth put the scene, and when that lay beyond the tank, the stop was the far pane
+    itself, measured from the camera. The march measured the same pane from the ray's own
+    point. Which came first was rounding's call, pixel by pixel, and a ray called stopped never
+    bent. The depth now stops a straight ray only when what it shows stands inside the tank.
+- **Moving water over hard edges:** through fast water the scene's shadow edges show a fine
+  stair-step. The scene behind the water is the frame's own, before TAA smooths it: its shadows'
+  edges are sharp and aliased each frame, and soft only once TAA has averaged the sun's disc. The
+  water bends that image differently every frame, so TAA cannot average it (with no reactive
+  mask at all the stairs stay). A copy of the scene behind the water with TAA of its own would
+  fix it.
 - **The floor:** the floor's glass lies on the table and mirrors nothing.
 - **For TAA:** a reactive mask where the surface moves (at most half, at 3 m/s).
 - **At the glass:** the field goes on into the glass and the floor as it stands beside them (air
