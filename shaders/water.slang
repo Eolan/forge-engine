@@ -1703,11 +1703,13 @@ FreshWater lake_water(WaterSurface* w, LakeOut input)
 // each frame. Two triangles between each four samples, at the surface; a dry sample stands at
 // its bed, so the water's edge thins to nothing where it runs out, and is faded by its depth
 // over the last centimetres. Its water is the rivers' (`fresh_water`): silty, its ripples
-// carried on its flow, white where it runs fast.
+// carried on its flow and only where it moves (no wind blows over the lab's basin: still water
+// is a mirror, the owner's ask of 2026-10-03), white where it runs fast.
 
 // The depth over which the pool's edge fades in, metres, and the speeds between which its
-// water turns white (m/s).
+// water gathers its ripples and turns white (m/s).
 static const float POOL_EDGE = 0.03;
+static const float2 POOL_RIPPLED = float2(0.02, 0.5);
 static const float2 POOL_WHITE = float2(2.0, 5.0);
 
 struct PoolOut
@@ -1795,7 +1797,7 @@ FreshWater pool_water(WaterSurface* w, PoolOut input)
     s.scatter = RIVER_SCATTER;
     s.bed = RIVER_BED;
     s.deepest = input.water.x + RIVER_DEEPEST;
-    s.ripples = 1.0;
+    s.ripples = smoothstep(POOL_RIPPLED.x, POOL_RIPPLED.y, speed);
     return s;
 }
 
