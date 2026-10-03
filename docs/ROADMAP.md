@@ -116,7 +116,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   character up stairs, stopped by steep ramps, carried by a platform, shoving crates. A car ✅
   (#140, `--lab drive`): Jolt's wheeled vehicle, a Blender model, a ramp, a slalom and a wall of
   crates. An aeroplane ✅ (#141, `--lab fly`): lift and drag on each flying surface, a take-off
-  from a runway and turns over a 5 km field. Next, destruction (step 6).
+  from a runway and turns over a 5 km field. A brick wall and a column broken ✅
+  (#142, `--lab break`): 912 joints of mortar that break on load or strain, a wrecking ball, a
+  concrete column cut into Voronoi pieces ahead of time. Next, creatures (step 7).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map.
@@ -417,8 +419,10 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    crates), the boat (step 3), a plane ✅ (#141, `--lab fly`: lift and drag per flying surface,
    `forge_physics::aero`; a runway and a 5 km field). Left: a rocket or a spaceship in zero g, the
    wind through `Air`.
-6. **Destruction:** a brick wall of bonded bricks with breakable joints, rocks and asteroids
-   fractured on impact (#24, #12), a ship's hull breaking open on its decks (#89).
+6. **Destruction:** a brick wall of bonded bricks with breakable joints ✅ (#142, `--lab break`:
+   mortar that breaks on load or strain, a wrecking ball, a column shattered into Voronoi pieces
+   cut ahead of time); left: rocks and asteroids fractured on impact (#24, #12), a ship's hull
+   breaking open on its decks (#89).
 7. **Creatures:** a glTF importer and skinning (Phase 7's start), models from Blender (the
    owner's machine has Blender 5.2): a humanoid, a quadruped, a flyer, a slime as a soft body;
    then ragdolls.

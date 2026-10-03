@@ -240,6 +240,11 @@ for path in $paths; do
     # The field (#141): the aeroplane climbing off the runway at tick 1200, and its A/B twin.
     capture "$path-lab-fly1200" 1200 "$lab" --lab fly --fixed-step --pilot 1,-0.4,0,0 "${flag[@]}"
     capture "$path-lab-fly1200-noocc" 1200 "$lab" --lab fly --fixed-step --pilot 1,-0.4,0,0 --no-occlusion "${flag[@]}"
+    # The break scene (#142), the ball let go at the first tick: through the wall at tick 85
+    # and its A/B twin, and the wall broken, the column in pieces at tick 300.
+    capture "$path-lab-break85" 85 "$lab" --lab break --fixed-step --release 1 "${flag[@]}"
+    capture "$path-lab-break85-noocc" 85 "$lab" --lab break --fixed-step --release 1 --no-occlusion "${flag[@]}"
+    capture "$path-lab-break300" 300 "$lab" --lab break --fixed-step --release 1 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

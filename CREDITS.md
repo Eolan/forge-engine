@@ -349,3 +349,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   drag past the stall (`forge_physics::aero`, #141).
 - **Vehicles.** Jolt's `VehicleConstraint` and `WheeledVehicleController` (Jorrit Rouwé), set up
   after Jolt's own vehicle sample: the wheels, the anti-roll bars, the cylinder cast (#140).
+- **Fracture.** Pieces cut ahead of time as the Voronoi cells of points inside the solid and
+  swapped in for it on a blow, the common practice of game destruction (Blender's Cell Fracture
+  add-on, NVIDIA's Blast); see Matthias Müller, Nuttapong Chentanez and Tae-Yong Kim, "Real
+  Time Dynamic Fracture with Volumetric Approximate Convex Decompositions", SIGGRAPH 2013, for
+  Voronoi fracture patterns and convex pieces (`forge_geom::fracture`, #142). Joints that break
+  past a load or a strain, as engines' breakable constraints do (#142).

@@ -385,6 +385,20 @@ pub struct VehicleDesc {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VehicleId(u32);
 
+/// A joint of a [`World`] (#142): its index, in the order added.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct JointId(u32);
+
+/// What a joint carried in the last step.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct JointLoad {
+    /// The impulse of the part holding its points together, N·s.
+    pub position: f32,
+    /// The impulse of the part holding its bodies' turn, N·m·s (0 for a distance joint).
+    pub rotation: f32,
+}
+
 /// The nearest hit of a ray.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayHit {
@@ -826,6 +840,100 @@ impl World {
         // SAFETY: the world is live, the index one it gave; two numbers written.
         unsafe { ffi::fj_vehicle_engine(self.raw.as_ptr(), vehicle.0, &mut rpm, &mut gear) };
         (rpm, gear)
+    }
+
+    /// Holds `b` to `a` (or to the world, `None`) as they are now, like mortar or a weld (Jolt's
+    /// fixed constraint about the point between them). It is saved and restored with the world,
+    /// broken or not. `steps`: the solver's velocity and position iterations at the least over
+    /// the bodies it holds, `(0, 0)` for the world's (10 and 2); a wall of many courses needs
+    /// more to stand rigid.
+    pub fn join_fixed(&mut self, a: Option<BodyId>, b: BodyId, steps: (u32, u32)) -> JointId {
+        // SAFETY: the world is live and the bodies its own (or the world's marker).
+        JointId(unsafe {
+            ffi::fj_joint_fixed(
+                self.raw.as_ptr(),
+                a.map_or(u32::MAX, |a| a.0),
+                b.0,
+                steps.0,
+                steps.1,
+            )
+        })
+    }
+
+    /// Keeps `point_b` of `b` between `range.0` and `range.1` metres from `point_a` of `a` (or of
+    /// the world, `None`), both points given in the world as they are now: a chain or a rod.
+    pub fn join_distance(
+        &mut self,
+        a: Option<BodyId>,
+        b: BodyId,
+        point_a: DVec3,
+        point_b: DVec3,
+        range: (f32, f32),
+    ) -> JointId {
+        let (pa, pb) = (point_a.to_array(), point_b.to_array());
+        // SAFETY: the world is live, the bodies its own; the points read during the call.
+        JointId(unsafe {
+            ffi::fj_joint_distance(
+                self.raw.as_ptr(),
+                a.map_or(u32::MAX, |a| a.0),
+                b.0,
+                pa.as_ptr(),
+                pb.as_ptr(),
+                range.0,
+                range.1,
+            )
+        })
+    }
+
+    /// What `joints` carried in the last step, into `out` (cleared first). A load over the
+    /// step's length is the force: what decides whether mortar breaks.
+    pub fn joint_loads(&self, joints: &[JointId], out: &mut Vec<JointLoad>) {
+        let mut loads = vec![[0.0_f32; 2]; joints.len()];
+        // SAFETY: the world is live, the ids its own (`JointId` is a `u32`); two floats a joint.
+        unsafe {
+            ffi::fj_joints_load(
+                self.raw.as_ptr(),
+                joints.as_ptr().cast(),
+                joints.len() as u32,
+                loads.as_mut_ptr().cast(),
+            );
+        }
+        out.clear();
+        out.extend(
+            loads
+                .iter()
+                .map(|&[position, rotation]| JointLoad { position, rotation }),
+        );
+    }
+
+    /// Breaks `joints` (`holding` false) or mends them (true), waking their bodies.
+    pub fn set_holding(&mut self, joints: &[JointId], holding: bool) {
+        let flags = vec![u8::from(holding); joints.len()];
+        // SAFETY: the world is live, the ids its own; a flag a joint.
+        unsafe {
+            ffi::fj_joints_set(
+                self.raw.as_ptr(),
+                joints.as_ptr().cast(),
+                joints.len() as u32,
+                flags.as_ptr(),
+            );
+        }
+    }
+
+    /// Whether `joints` hold, into `out` (cleared first).
+    pub fn holding(&self, joints: &[JointId], out: &mut Vec<bool>) {
+        let mut flags = vec![0_u8; joints.len()];
+        // SAFETY: the world is live, the ids its own; a flag a joint.
+        unsafe {
+            ffi::fj_joints_holding(
+                self.raw.as_ptr(),
+                joints.as_ptr().cast(),
+                joints.len() as u32,
+                flags.as_mut_ptr(),
+            );
+        }
+        out.clear();
+        out.extend(flags.iter().map(|&f| f != 0));
     }
 
     /// The whole simulation's state (bodies, contacts, constraints): what

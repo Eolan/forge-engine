@@ -232,6 +232,31 @@ unsafe extern "C" {
     );
     pub fn fj_vehicle_engine(world: *const FjWorld, vehicle: u32, rpm: *mut f32, gear: *mut i32);
 
+    pub fn fj_joint_fixed(
+        world: *mut FjWorld,
+        a: u32,
+        b: u32,
+        velocity_steps: u32,
+        position_steps: u32,
+    ) -> u32;
+    pub fn fj_joint_distance(
+        world: *mut FjWorld,
+        a: u32,
+        b: u32,
+        point_a: *const f64,
+        point_b: *const f64,
+        min: f32,
+        max: f32,
+    ) -> u32;
+    pub fn fj_joints_load(world: *const FjWorld, joints: *const u32, count: u32, loads: *mut f32);
+    pub fn fj_joints_set(world: *mut FjWorld, joints: *const u32, count: u32, holding: *const u8);
+    pub fn fj_joints_holding(
+        world: *const FjWorld,
+        joints: *const u32,
+        count: u32,
+        holding: *mut u8,
+    );
+
     pub fn fj_world_save_state(world: *mut FjWorld, size: *mut usize) -> *const u8;
     pub fn fj_world_restore_state(world: *mut FjWorld, data: *const u8, size: usize) -> i32;
 }

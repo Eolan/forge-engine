@@ -37,6 +37,7 @@ mod drive;
 mod fly;
 mod sea;
 mod walk;
+mod wall;
 
 pub(crate) use walk::{RUN_SPEED, WALK_SPEED};
 
@@ -54,6 +55,8 @@ pub(crate) enum LabScene {
     Drive,
     /// An aeroplane on a runway (#141).
     Fly,
+    /// A brick wall held by mortar that breaks, and a wrecking ball (#142).
+    Break,
 }
 
 /// The floor's half side, metres.
@@ -96,6 +99,14 @@ const PLANE: usize = 19;
 const PROPELLER: usize = 20;
 const RUNWAY: usize = 21;
 const FIELD: usize = 22;
+const BRICK: usize = 23;
+const POST: usize = 24;
+const BEAM: usize = 25;
+const WRECKING_BALL: usize = 26;
+const CHAIN: usize = 27;
+const COLUMN: usize = 28;
+/// The column's pieces, each its own prop from here.
+const PIECE: usize = 29;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -122,6 +133,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(walk::props());
     props.extend(drive::props());
     props.extend(fly::props());
+    props.extend(wall::props());
     props
 }
 
@@ -233,6 +245,8 @@ pub(crate) enum LabCommand {
         /// The four, in that order.
         controls: [f32; 4],
     },
+    /// The wrecking ball let go (#142).
+    Release,
 }
 
 impl Codec for LabCommand {
@@ -264,6 +278,7 @@ impl Codec for LabCommand {
                     out.extend_from_slice(&v.to_bits().to_le_bytes());
                 }
             }
+            Self::Release => out.push(7),
         }
     }
 
@@ -320,6 +335,7 @@ impl Codec for LabCommand {
                 }
                 Some(Self::Fly { controls: v })
             }
+            7 => Some(Self::Release),
             _ => None,
         }
     }
@@ -355,6 +371,8 @@ pub(crate) struct LabWorld {
     driver: drive::Driver,
     /// The field's: the aeroplane and its pilot's controls.
     pilot: fly::Pilot,
+    /// The wall's mortar and the wrecking ball.
+    wall: Option<wall::Wall>,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
     pool: Arc<TaskPool>,
@@ -382,7 +400,7 @@ impl LabWorld {
         let floor_y = match kind {
             LabScene::Drop => 0.0,
             LabScene::Sea => sea::FLOOR_Y,
-            LabScene::Walk | LabScene::Drive | LabScene::Fly => 0.0,
+            LabScene::Walk | LabScene::Drive | LabScene::Fly | LabScene::Break => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -458,6 +476,7 @@ impl LabWorld {
         let mut platform = None;
         let mut driver = drive::Driver::default();
         let mut pilot = fly::Pilot::default();
+        let mut wall = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -684,6 +703,17 @@ impl LabWorld {
                 group(PLANE, vec![field.plane], &mut bodies);
                 pilot.plane = Some(field.plane);
             }
+            LabScene::Break => {
+                let site = wall::build(&mut world, POST, BEAM)?;
+                statics.extend(site.statics);
+                group(BRICK, site.bricks, &mut bodies);
+                group(WRECKING_BALL, vec![site.ball], &mut bodies);
+                group(COLUMN, vec![site.wall.column], &mut bodies);
+                for (k, &(piece, _)) in site.wall.pieces.iter().enumerate() {
+                    group(PIECE + k, vec![piece], &mut bodies);
+                }
+                wall = Some(site.wall);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -735,6 +765,13 @@ impl LabWorld {
                 count: 4,
             });
         }
+        // The wrecking ball's chain after the bodies.
+        if wall.is_some() {
+            groups.push(Group {
+                prop: CHAIN,
+                count: 1,
+            });
+        }
         // The player, drawn by two movers after the bodies': its capsule and its visor.
         if player.character.is_some() {
             groups.push(Group {
@@ -764,6 +801,7 @@ impl LabWorld {
                 platform,
                 driver,
                 pilot,
+                wall,
                 pool,
             },
             Layout { groups, statics },
@@ -776,6 +814,9 @@ impl LabWorld {
         // The car's wheels after the bodies.
         self.driver.wheels(&self.world, out);
         self.pilot.propeller(&self.world, self.tick, out);
+        if let Some(wall) = &self.wall {
+            wall.chain(&self.world, out);
+        }
         // The player's capsule and visor after the bodies, turned where it last walked.
         if let Some(c) = self.player.character {
             let at = Transform {
@@ -931,6 +972,11 @@ impl Simulation for LabWorld {
                     self.player.walk = v.clamp_length_max(walk::RUN_SPEED).to_array();
                 }
                 LabCommand::Jump => self.player.jump = true,
+                LabCommand::Release => {
+                    if let Some(wall) = &self.wall {
+                        wall.release(&mut self.world);
+                    }
+                }
             }
         }
         // The sea at this tick's start: what floats pushed by it, the boat's motor too.
@@ -952,8 +998,15 @@ impl Simulation for LabWorld {
             .tick(&mut self.world, self.platform, self.tick, TICK);
         self.driver.tick(&mut self.world);
         self.pilot.tick(&mut self.world);
+        let column = self.wall.as_ref().map(|w| w.column_velocity(&self.world));
         if let Err(e) = self.world.step(TICK, 1) {
             tracing::warn!("physics tick {}: {e}", self.tick);
+        }
+        // The mortar that carried more than it holds in that step breaks, and the column
+        // shatters under a blow.
+        if let (Some(wall), Some(before)) = (&self.wall, column) {
+            wall.crack(&mut self.world, TICK);
+            wall.shatter(&mut self.world, before, TICK);
         }
         self.tick += 1;
     }
@@ -1396,6 +1449,13 @@ impl Lab {
                         )
                     })
                 };
+                // The wall's mortar: joints still holding, of all.
+                let mortar = {
+                    let shown = self.shown();
+                    shown.wall.as_ref().map_or(String::from("none"), |w| {
+                        format!("{}/{}", w.holding(&shown.world), w.mortar.len())
+                    })
+                };
                 tracing::info!(
                     tick = now,
                     digest = format!("{digest:#018x}"),
@@ -1403,6 +1463,7 @@ impl Lab {
                     ride,
                     ride_speed = format!("{ride_speed:.2}"),
                     player,
+                    mortar,
                     "physics lab state"
                 );
             }
@@ -1568,6 +1629,17 @@ impl Lab {
         self.queued.push(LabCommand::Fly { controls });
     }
 
+    /// Whether the scene's wrecking ball is still held back.
+    pub(crate) fn ball_held(&mut self) -> bool {
+        let shown = self.shown();
+        shown.wall.as_ref().is_some_and(|w| w.held(&shown.world))
+    }
+
+    /// Lets the wrecking ball go at the next tick.
+    pub(crate) fn release(&mut self) {
+        self.queued.push(LabCommand::Release);
+    }
+
     /// The title's part: the ticks' time since the last title, the bodies awake, the session.
     pub(crate) fn title(&mut self) -> String {
         let n = self.tick_ms.len().max(1) as f64;
@@ -1700,6 +1772,10 @@ mod tests {
             walk,
             LabCommand::Jump,
             LabCommand::Handbrake { on: true },
+            LabCommand::Fly {
+                controls: [0.5, -1.0, 0.25, 0.0],
+            },
+            LabCommand::Release,
         ] {
             let mut bytes = Vec::new();
             c.encode(&mut bytes);
@@ -1843,6 +1919,57 @@ mod tests {
         assert!(end.x > 20.0, "turned right: {end}");
         assert!((rotation * Vec3::Y).y > 0.6, "upright");
         let (mut second, _) = LabWorld::new(LabScene::Fly, test_pool()).unwrap();
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_wall_stands_until_the_ball_breaks_it_and_replays() {
+        let (mut first, _) = LabWorld::new(LabScene::Break, test_pool()).unwrap();
+        let wall = first.wall.clone().unwrap();
+        let all = wall.mortar.len();
+        let mut built = Vec::new();
+        first.world.transforms(&first.bodies, &mut built);
+        // Two seconds untouched: no mortar breaks, the wall settles by a centimetre at most
+        // (Jolt's contacts give a little; 24 courses of it), stays upright and goes to sleep.
+        for _ in 0..120 {
+            first.tick(&[]);
+        }
+        assert_eq!(wall.holding(&first.world), all);
+        let mut t = Vec::new();
+        first.world.transforms(&first.bodies, &mut t);
+        let (settled, leant) = built.iter().zip(&t).fold((0.0, 0.0), |(s, l), (a, b)| {
+            let d = b.position - a.position;
+            (f64::max(s, d.length()), f64::max(l, d.z.abs()))
+        });
+        assert!(
+            settled < 0.015 && leant < 0.002,
+            "settled {settled} m, leant {leant} m"
+        );
+        assert!(first.awake() < 10, "{} bodies awake", first.awake());
+        // Let go: the ball swings into the wall, breaks its mortar and knocks bricks out.
+        let commands = vec![Stamped {
+            tick: 120,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Release,
+        }];
+        let recording = Recording::record(&mut first, commands, 240, 60);
+        let broken = all - wall.holding(&first.world);
+        first.world.transforms(&first.bodies, &mut t);
+        let knocked = built
+            .iter()
+            .zip(&t)
+            .filter(|(a, b)| a.position.distance(b.position) > 0.5)
+            .count();
+        assert!(
+            broken > 50 && knocked > 20,
+            "{broken} joints of {all} broken, {knocked} bricks knocked out"
+        );
+        // The same two seconds from a fresh world, to the same digests.
+        let (mut second, _) = LabWorld::new(LabScene::Break, test_pool()).unwrap();
+        for _ in 0..120 {
+            second.tick(&[]);
+        }
         recording.replay(&mut second).expect("the same digests");
     }
 

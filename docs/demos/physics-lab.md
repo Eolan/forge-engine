@@ -23,7 +23,8 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `walk` | a walking character: stairs, ramps, a moving platform, crates to push, blocks to jump onto | ✅ #139 |
 | `drive` | a car on wheels and springs: a jump ramp, a slalom of barrels, a wall of crates | ✅ #140 |
 | `fly` | an aeroplane on flying surfaces: a take-off from a runway, turns over a wide field | ✅ #141 |
-| destruction, creatures, fluids | the later steps of the plan | planned |
+| `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
+| creatures, fluids | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
 
@@ -289,6 +290,50 @@ stalls it (hence half the elevator by default). The lab's test takes off, banks 
 past 20 m and replays to the same digests. A tick of the field: **0.05 ms** on average, p99
 0.10 ms.
 
+## `break`: a wall, a wrecking ball, a column (issue #142)
+
+```
+cargo run --release -p physics-lab -- --lab break
+```
+
+Phase 3's step 6, its first part. A wall of 324 bricks (21.5 × 6.5 × 10.25 cm, 2.6 kg) in
+running bond, 24 courses on a 3 m run, every brick a body held to the bricks beside it, under it
+and over it, and the bottom course to the floor, by mortar: 912 joints, Jolt's fixed constraints
+through `World::join_fixed`. After each step the lab reads what every joint carried in it
+(`World::joint_loads`, one call) and where its bricks are, and breaks (`World::set_holding`)
+the joints that carried more than 2.5 kN or 150 N·m, or whose bricks moved apart by 3 mm or
+turned by 1.5° from where they were laid: an iterative solver's joints yield a little under a
+blow and pass on less of it than rigid mortar would, so the strain catches the cracks the load
+alone misses. The wall's joints take 30 velocity and 10 position iterations of the solver
+(Jolt's per-constraint override; the world's 10 and 2 let 24 courses sag and lean); standing,
+it settles by under a centimetre at its top in the first half second and goes to sleep. Jolt
+saves whether each joint holds, and its impulses, with the world: a broken wall restores, replays
+and goes through `--net` like the rest.
+
+A 3 t steel ball (0.45 m) hangs on a 5.5 m chain (a distance joint) from a yellow gantry, held
+back 60° by one more joint; **Space** lets it go (then throws balls, as elsewhere), and it meets
+the wall at about 7 m/s just past the bottom of its swing. Behind the wall stands a concrete
+column (0.4 × 2.4 m, 920 kg), cut ahead of time into 14 pieces: the Voronoi cells of points
+spread up it (`forge_geom::fracture`: the column clipped by the planes halfway between each
+point and the others, in `f64` without trigonometry, each piece a convex hull in the physics
+and a mesh whose cut faces are drawn paler). The pieces wait asleep on a shelf far under the
+floor; when a blow changes the column's velocity by more than 1.5 m/s in a step (gravity
+aside), they take its place, each with the velocity of its part of the column, and the column
+goes to the shelf. Nothing is added or removed from the world while it runs, so the state keeps
+its size and its order. `--release N` lets the ball go at frame N (the captures).
+
+![The ball held back, through the wall at tick 85, and at ticks 100 and 300: the hole, the column in pieces](images/physics-lab-break.png)
+
+At tick 300, five seconds on, 412 of the 912 joints are broken: the lower courses and the
+ends stand round a ragged breach, the column's pieces lie behind; by tick 600, after the ball's
+swings back, 349 joints hold. The tests: a joint carries its load (a beam
+of two boxes out of a wall: each joint the weight and the turn it should) and lets go when
+broken; a broken joint is mended by a restored state, which then runs to the same bits; a ball
+on a chain swings at its length; the cuts keep a box's volume and the Voronoi cells fill the
+column without overlap; and the lab's wall stands untouched for two seconds, then breaks under
+the ball and replays to the same digests. A tick through the impact (372 bodies, 912 joints):
+**0.99 ms** on average, p99 2.0 ms, at most 2.5 ms; the state is 87 KiB.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -299,5 +344,6 @@ geometry paths; and from the sea (#138) `lab-sea300` (what floats and the rocks 
 its occlusion-off twin, and `lab-sea-steer600` (the boat under way with the rudder over); and from
 the playground (#139) `lab-walk150` (halfway up the stairs) with its twin, and
 `lab-walk-crates240` (through the light crates); from the track (#140) `lab-drive300` with its
-twin and `lab-drive-turn600`; and from the field (#141) `lab-fly1200` (climbing away) with its
-twin.
+twin and `lab-drive-turn600`; from the field (#141) `lab-fly1200` (climbing away) with its
+twin; and from the break scene (#142) `lab-break85` (the ball through the wall) with its twin
+and `lab-break300` (the wall broken, the column in pieces).

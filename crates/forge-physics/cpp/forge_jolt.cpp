@@ -25,12 +25,15 @@
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/StateRecorder.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -164,6 +167,8 @@ struct FjWorld {
     // The cars: their constraints (in the system, which saves them) and wheel testers.
     std::vector<JPH::Ref<JPH::VehicleConstraint>> vehicles;
     std::vector<JPH::Ref<JPH::VehicleCollisionTester>> vehicle_testers;
+    // The joints, in the system too (which saves whether each holds, and its impulses).
+    std::vector<JPH::Ref<JPH::TwoBodyConstraint>> joints;
 
     explicit FjWorld(const FjWorldDesc &desc)
         : temp(64 * 1024 * 1024),
@@ -173,6 +178,21 @@ struct FjWorld {
         system.SetGravity(vec3(desc.gravity));
     }
 };
+
+namespace {
+
+// Makes a joint between `a` and `b` (FJ_WORLD, an invalid id, for the world: Jolt's fixed
+// body) and puts it in the system; its index.
+uint32_t add_joint(FjWorld *world, const JPH::TwoBodyConstraintSettings &settings, uint32_t a,
+                   uint32_t b) {
+    JPH::BodyInterface &bodies = world->system.GetBodyInterface();
+    JPH::Ref<JPH::TwoBodyConstraint> joint = bodies.CreateConstraint(&settings, id_of(a), id_of(b));
+    world->system.AddConstraint(joint);
+    world->joints.push_back(joint);
+    return static_cast<uint32_t>(world->joints.size() - 1);
+}
+
+} // namespace
 
 extern "C" {
 
@@ -563,6 +583,59 @@ void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32
         world->vehicles[vehicle]->GetController());
     *rpm = c->GetEngine().GetCurrentRPM();
     *gear = c->GetTransmission().GetCurrentGear();
+}
+
+uint32_t fj_joint_fixed(FjWorld *world, uint32_t a, uint32_t b, uint32_t velocity_steps,
+                        uint32_t position_steps) {
+    JPH::FixedConstraintSettings settings;
+    settings.mAutoDetectPoint = true;
+    settings.mNumVelocityStepsOverride = velocity_steps;
+    settings.mNumPositionStepsOverride = position_steps;
+    return add_joint(world, settings, a, b);
+}
+
+uint32_t fj_joint_distance(FjWorld *world, uint32_t a, uint32_t b, const double point_a[3],
+                           const double point_b[3], float min, float max) {
+    JPH::DistanceConstraintSettings settings;
+    settings.mPoint1 = rvec3(point_a);
+    settings.mPoint2 = rvec3(point_b);
+    settings.mMinDistance = min;
+    settings.mMaxDistance = max;
+    return add_joint(world, settings, a, b);
+}
+
+void fj_joints_load(const FjWorld *world, const uint32_t *joints, uint32_t count, float *loads) {
+    for (uint32_t i = 0; i < count; ++i) {
+        const JPH::TwoBodyConstraint *c = world->joints[joints[i]];
+        float position = 0.0f;
+        float rotation = 0.0f;
+        if (c->GetSubType() == JPH::EConstraintSubType::Fixed) {
+            const auto *f = static_cast<const JPH::FixedConstraint *>(c);
+            position = f->GetTotalLambdaPosition().Length();
+            rotation = f->GetTotalLambdaRotation().Length();
+        } else if (c->GetSubType() == JPH::EConstraintSubType::Distance) {
+            position = std::abs(static_cast<const JPH::DistanceConstraint *>(c)->GetTotalLambdaPosition());
+        }
+        loads[2 * i] = position;
+        loads[2 * i + 1] = rotation;
+    }
+}
+
+void fj_joints_set(FjWorld *world, const uint32_t *joints, uint32_t count,
+                   const uint8_t *holding) {
+    JPH::BodyInterface &bodies = world->system.GetBodyInterface();
+    for (uint32_t i = 0; i < count; ++i) {
+        JPH::TwoBodyConstraint *c = world->joints[joints[i]];
+        c->SetEnabled(holding[i] != 0);
+        bodies.ActivateConstraint(c);
+    }
+}
+
+void fj_joints_holding(const FjWorld *world, const uint32_t *joints, uint32_t count,
+                       uint8_t *holding) {
+    for (uint32_t i = 0; i < count; ++i) {
+        holding[i] = world->joints[joints[i]]->GetEnabled() ? 1 : 0;
+    }
 }
 
 const uint8_t *fj_world_save_state(FjWorld *world, size_t *size) {

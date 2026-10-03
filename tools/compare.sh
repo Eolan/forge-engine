@@ -157,10 +157,11 @@ main() {
     pair "$new/$path-lab-walk150.png" "$new/$path-lab-walk150-noocc.png" "$path lab's playground, occlusion off"
     pair "$new/$path-lab-drive300.png" "$new/$path-lab-drive300-noocc.png" "$path lab's track, occlusion off"
     pair "$new/$path-lab-fly1200.png" "$new/$path-lab-fly1200-noocc.png" "$path lab's field, occlusion off"
+    pair "$new/$path-lab-break85.png" "$new/$path-lab-break85-noocc.png" "$path lab's wall, occlusion off"
   done
   for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60 \
     shot-mouth shot-lake shot-island shot-valley lab-drop90 lab-drop600 lab-net300 lab-sea300 lab-sea-steer600 lab-walk150 lab-walk-crates240 \
-    lab-drive300 lab-drive-turn600 lab-fly1200; do
+    lab-drive300 lab-drive-turn600 lab-fly1200 lab-break85 lab-break300; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   local others=""

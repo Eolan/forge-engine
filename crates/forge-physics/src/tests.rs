@@ -451,3 +451,111 @@ fn a_car_drives_off_turns_and_replays() {
     world.transforms(&[chassis], &mut t);
     assert_eq!(t[0], turned);
 }
+
+/// Two boxes side by side over the ground, the left one held to the world and the right one
+/// to the left one, like a beam out of a wall.
+fn beam() -> (World, [BodyId; 2], [JointId; 2]) {
+    let mut world = World::new(&WorldDesc::default());
+    let ground = Shape::cuboid(Vec3::new(10.0, 0.5, 10.0), 0.05, 0.0).unwrap();
+    world
+        .add_body(&BodyDesc::fixed(&ground, DVec3::new(0.0, -0.5, 0.0)))
+        .unwrap();
+    // 1 m boxes of 100 kg, 3 m up.
+    let block = Shape::cuboid(Vec3::splat(0.5), 0.05, 100.0).unwrap();
+    let left = world
+        .add_body(&BodyDesc::dynamic(&block, DVec3::new(0.0, 3.0, 0.0)))
+        .unwrap();
+    let right = world
+        .add_body(&BodyDesc::dynamic(&block, DVec3::new(1.0, 3.0, 0.0)))
+        .unwrap();
+    let wall = world.join_fixed(None, left, (0, 0));
+    let joint = world.join_fixed(Some(left), right, (0, 0));
+    (world, [left, right], [wall, joint])
+}
+
+#[test]
+fn a_joint_carries_its_load_and_lets_go_when_broken() {
+    let (mut world, [left, right], joints) = beam();
+    let dt = 1.0 / 60.0;
+    for _ in 0..60 {
+        world.step(dt, 1).unwrap();
+    }
+    // The beam holds: the right box sags by less than a centimetre.
+    let mut t = Vec::new();
+    world.transforms(&[left, right], &mut t);
+    assert!((t[1].position.y - 3.0).abs() < 0.01, "{}", t[1].position);
+    // The wall's joint carries both boxes' weight, and the turn of the right one's 1 m out;
+    // the middle one the right box's weight, and its turn 0.5 m out.
+    let mut loads = Vec::new();
+    world.joint_loads(&joints, &mut loads);
+    let weight = 100.0 * 9.81 * dt;
+    let near = |load: f32, expected: f32| (load / expected - 1.0).abs() < 0.05;
+    assert!(near(loads[0].position, 2.0 * weight), "{loads:?}");
+    assert!(near(loads[1].position, weight), "{loads:?}");
+    assert!(near(loads[0].rotation, weight), "{loads:?}");
+    assert!(near(loads[1].rotation, 0.5 * weight), "{loads:?}");
+    // Broken, the right box falls to the ground; the left one stays.
+    world.set_holding(&joints[1..], false);
+    let mut holding = Vec::new();
+    world.holding(&joints, &mut holding);
+    assert_eq!(holding, [true, false]);
+    for _ in 0..120 {
+        world.step(dt, 1).unwrap();
+    }
+    world.transforms(&[left, right], &mut t);
+    assert!((t[0].position.y - 3.0).abs() < 0.01, "{}", t[0].position);
+    assert!(t[1].position.y < 0.6, "{}", t[1].position);
+}
+
+#[test]
+fn a_broken_joint_is_mended_by_a_restored_state() {
+    let (mut world, bodies, joints) = beam();
+    let run = |world: &mut World| {
+        for _ in 0..90 {
+            world.step(1.0 / 60.0, 1).unwrap();
+        }
+    };
+    let saved = world.save_state();
+    run(&mut world);
+    let mut t = Vec::new();
+    world.transforms(&bodies, &mut t);
+    let held = t.clone();
+    // Broken and run: the right box falls. Restored: the joint holds again and the run ends
+    // where the first did, to the bit.
+    world.restore_state(&saved).unwrap();
+    world.set_holding(&joints[1..], false);
+    run(&mut world);
+    world.transforms(&bodies, &mut t);
+    assert!(t[1].position.y < held[1].position.y - 1.0);
+    world.restore_state(&saved).unwrap();
+    let mut holding = Vec::new();
+    world.holding(&joints, &mut holding);
+    assert_eq!(holding, [true, true]);
+    run(&mut world);
+    world.transforms(&bodies, &mut t);
+    assert_eq!(t, held);
+}
+
+#[test]
+fn a_ball_on_a_chain_swings_at_its_length() {
+    let mut world = World::new(&WorldDesc::default());
+    let ball = Shape::sphere(0.3, 7800.0).unwrap();
+    // Hung from 6 m up, pulled 4 m aside, let go.
+    let pivot = DVec3::new(0.0, 6.0, 0.0);
+    let start = DVec3::new(4.0, 6.0 - 20.0_f64.sqrt(), 0.0);
+    let body = world.add_body(&BodyDesc::dynamic(&ball, start)).unwrap();
+    let chain = world.join_distance(None, body, pivot, start, (0.0, 6.0));
+    let mut t = Vec::new();
+    let mut lowest = f64::MAX;
+    for _ in 0..240 {
+        world.step(1.0 / 60.0, 1).unwrap();
+        world.transforms(&[body], &mut t);
+        lowest = lowest.min(t[0].position.y);
+        assert!(t[0].position.distance(pivot) < 6.02, "{}", t[0].position);
+    }
+    // It swung through the bottom, the chain taut there.
+    assert!(lowest < 0.05, "{lowest}");
+    let mut loads = Vec::new();
+    world.joint_loads(&[chain], &mut loads);
+    assert!(loads[0].position > 0.0);
+}

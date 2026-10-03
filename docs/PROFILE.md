@@ -996,6 +996,13 @@ ticks); the vehicle constraint's four cylinder casts and its wheels are the work
 (#141), the aeroplane alone awake: **0.05 ms a tick** (p99 0.10, 1200 ticks), its four surfaces'
 lift and drag a handful of products.
 
+`--lab break` (#142), the ball let go at the first tick, 600 ticks: **0.99 ms a tick** (p99 2.0,
+max 2.5), 372 bodies and 912 joints of mortar. The wall's joints ask Jolt for 30 velocity and 10
+position iterations over the bricks they hold (the world's are 10 and 2), so its island costs
+about three times a pile's; the cracking (the joints' loads and the bricks' transforms read in
+two calls, the strain of each joint) is a few microseconds. Asleep, before the ball and after
+the dust settles, the scene costs nothing.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

@@ -220,7 +220,8 @@ stairs, ramps, a moving platform and crates; WASD walk, Shift runs, Space jumps,
 button turns the view. `--lab drive`: a car on wheels and springs, a ramp, a slalom, a wall of
 crates; the arrows drive, Space holds the handbrake. `--lab fly`: an aeroplane on its flying
 surfaces over a runway and a field; W and S the throttle, the arrows the stick, A and D the
-rudder. It shares `city-blocks`' renderer, keys and options
+rudder. `--lab break`: a brick wall held by mortar that breaks, a wrecking ball (Space lets it
+go) and a concrete column that shatters into pieces. It shares `city-blocks`' renderer, keys and options
 (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 

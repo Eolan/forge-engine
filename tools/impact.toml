@@ -30,6 +30,7 @@
 "demos/city-blocks/src/lab.rs" = ["lab"]
 "demos/city-blocks/src/lab/**" = ["lab"]
 "crates/forge-geom/src/model.rs" = ["lab"]
+"crates/forge-geom/src/fracture.rs" = ["lab"]
 "assets/models/**" = ["lab"]
 "assets/blender/**" = []
 "crates/forge-physics/**" = ["lab"]

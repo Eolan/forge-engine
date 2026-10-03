@@ -284,6 +284,9 @@ struct Args {
     /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     pilot: Option<Vec<f32>>,
+    /// With `--lab break`, let the wrecking ball go at this frame, as Space does (#142).
+    #[arg(long)]
+    release: Option<u64>,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -998,11 +1001,14 @@ impl Demo for Gallery {
                 self.taa.reset_history();
             }
             // Space: the player jumps in the playground (#139), the car's handbrake on the track
-            // (#140, held: see `update`); elsewhere it throws, as X does.
+            // (#140, held: see `update`), the wrecking ball let go (#142); elsewhere it throws,
+            // as X does.
             KeyCode::Space => {
                 if let Some(lab) = &mut self.lab {
                     if lab.has_player() {
                         lab.jump();
+                    } else if lab.ball_held() {
+                        lab.release();
                     } else if !lab.has_car() {
                         lab.throw(self.camera.position, self.camera.forward());
                     }
@@ -1042,6 +1048,9 @@ impl Demo for Gallery {
                 && self.frame.is_multiple_of(every.max(1))
             {
                 lab.throw(self.camera.position, self.camera.forward());
+            }
+            if self.args.release == Some(self.frame) {
+                lab.release();
             }
             // The boat's motor (#138): the arrows, or `--steer` from the first frame; a command
             // when they change.
@@ -2023,6 +2032,64 @@ impl CityMaterials {
                 0.03,
             ),
         );
+        // The break scene's (#142): bricks of fired clay, each its own shade between two reds;
+        // a gantry painted yellow; a wrecking ball and its chain of dark, worn steel.
+        let clay = add(
+            "brick (clay)",
+            textured(
+                concrete,
+                [0.46, 0.16, 0.09],
+                [0.66, 0.3, 0.17],
+                0.6,
+                6.0,
+                0.03,
+            ),
+        );
+        let yellow_paint = add(
+            "painted metal (yellow)",
+            RenderLayer {
+                color_a: [0.7, 0.45, 0.03],
+                color_b: [0.7, 0.45, 0.03],
+                roughness: RenderLayer::roughness_for_power(60.0),
+                specular: 0.25,
+                ..RenderLayer::default()
+            },
+        );
+        let steel = add(
+            "steel (dull)",
+            RenderLayer {
+                color_a: [0.05, 0.05, 0.055],
+                color_b: [0.06, 0.058, 0.055],
+                roughness: RenderLayer::roughness_for_power(25.0),
+                specular: 0.35,
+                reflectance: 0.15,
+                ..RenderLayer::default()
+            },
+        );
+        // Its column: concrete, and paler and finer where it broke (the pieces' second
+        // section).
+        let column = add(
+            "concrete (column)",
+            textured(
+                concrete,
+                [0.72, 0.72, 0.7],
+                [0.64, 0.64, 0.62],
+                2.0,
+                12.0,
+                0.05,
+            ),
+        );
+        add(
+            "concrete (column): broken",
+            textured(
+                concrete,
+                [0.88, 0.86, 0.8],
+                [0.8, 0.78, 0.73],
+                0.7,
+                6.0,
+                0.02,
+            ),
+        );
         // The flight's runway (#141): dark asphalt.
         let asphalt = add(
             "asphalt",
@@ -2075,6 +2142,13 @@ impl CityMaterials {
             ("lab-visor", visor),
             ("lab-runway", asphalt),
             ("lab-field", grass),
+            ("lab-brick", clay),
+            ("lab-post", yellow_paint),
+            ("lab-beam", yellow_paint),
+            ("lab-wrecking-ball", steel),
+            ("lab-chain", steel),
+            ("lab-column", column),
+            ("lab-column-piece", column),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -3904,6 +3978,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.15,
             speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Break) {
+        // In front of the wall and to its left, clear of the gantry's post: the wall's face, the
+        // column behind it, the ball held back at the right edge.
+        FlyCamera {
+            position: Vec3::new(-6.5, 2.4, 7.5),
+            yaw: -0.71,
+            pitch: -0.1,
+            speed: 6.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Drive) {

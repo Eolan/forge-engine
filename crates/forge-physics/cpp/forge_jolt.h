@@ -212,6 +212,28 @@ void fj_vehicle_wheels(const FjWorld *world, uint32_t vehicle, double *positions
 // The engine's revs (rpm) and the gear engaged (0 neutral, −1 reverse).
 void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32_t *gear);
 
+// Joints (#142): what holds two bodies together, FJ_WORLD in place of a body for the world.
+// Each is saved and restored with the world: whether it holds, and its impulses.
+#define FJ_WORLD 0xffffffffu
+// Holds `a` and `b` as they are now (Jolt's FixedConstraint about the point between them); its
+// index. The solver takes at least `velocity_steps` and `position_steps` (0: the world's 10
+// and 2) over the bodies it holds: a tall stack of joints needs more to stay rigid.
+uint32_t fj_joint_fixed(FjWorld *world, uint32_t a, uint32_t b, uint32_t velocity_steps,
+                        uint32_t position_steps);
+// Keeps `point_b` of `b` between `min` and `max` from `point_a` of `a`, both given in the world
+// as they are now (Jolt's DistanceConstraint): a chain, a rope or a rod. Its index.
+uint32_t fj_joint_distance(FjWorld *world, uint32_t a, uint32_t b, const double point_a[3],
+                           const double point_b[3], float min, float max);
+// What `count` joints carried in the last step, two floats each: the impulse of the part that
+// holds their points together (N·s) and of the part that holds their turn (N·m·s, 0 for a
+// distance).
+void fj_joints_load(const FjWorld *world, const uint32_t *joints, uint32_t count, float *loads);
+// Breaks (0) or mends (1) joints, waking their bodies; a broken joint holds nothing.
+void fj_joints_set(FjWorld *world, const uint32_t *joints, uint32_t count, const uint8_t *holding);
+// Whether joints hold (1) or are broken (0).
+void fj_joints_holding(const FjWorld *world, const uint32_t *joints, uint32_t count,
+                       uint8_t *holding);
+
 // The whole simulation state (bodies, contacts, constraints) into a buffer the world owns,
 // valid until the next call; `size` receives its length.
 const uint8_t *fj_world_save_state(FjWorld *world, size_t *size);
