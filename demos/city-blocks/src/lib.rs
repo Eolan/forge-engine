@@ -1568,6 +1568,7 @@ impl Demo for Gallery {
                     pixel: 2.0 / (taa_frame.jittered_projection.y_axis.y * extent.height as f32),
                     wakes,
                     clouds: cloud_shadow,
+                    cloud_image: cloud_shadow.and(cloud_images).map(|(this, _)| this),
                 },
                 taa_frame.color,
                 targets.depth,

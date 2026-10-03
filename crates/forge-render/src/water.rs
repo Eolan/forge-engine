@@ -547,7 +547,10 @@ struct GpuWaterSurface {
     cloud_frame: [f32; 4],
     /// Its sampled index, or `u32::MAX`: no clouds.
     cloud_shadow: u32,
-    pad_cloud: [u32; 3],
+    /// The cloud layer seen this frame (#145, sampled; its alpha what it lets through), which
+    /// the sky's reflection looks up in the mirror direction where it is in view, or `u32::MAX`.
+    cloud_image: u32,
+    pad_cloud: [u32; 2],
 }
 
 const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 896);
@@ -1151,6 +1154,9 @@ pub struct WaterSurfaceParams {
     pub wakes: Option<crate::WakeFrame>,
     /// The clouds' shadow on the sun's light (#145, [`crate::Clouds::shadow`]); `None`: none.
     pub clouds: Option<crate::CloudShadow>,
+    /// The cloud layer as this frame sees it (#145, [`crate::Clouds::images`]): the sky's
+    /// reflection takes the clouds in view.
+    pub cloud_image: Option<ImageHandle>,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -2131,6 +2137,9 @@ impl WaterSurface {
         if let Some(at_camera) = at_camera {
             pass = pass.buffer(at_camera, BufferAccess::ShaderRead(fragment));
         }
+        if let Some(image) = params.cloud_image {
+            pass = pass.image(image, ImageAccess::Sampled(fragment));
+        }
         if let Some(clouds) = params.clouds {
             pass = pass.image(clouds.image, ImageAccess::Sampled(fragment));
         }
@@ -2218,7 +2227,10 @@ impl WaterSurface {
                     cloud_shadow: params
                         .clouds
                         .map_or(u32::MAX, |c| resources.sampled(c.image).0),
-                    pad_cloud: [0; 3],
+                    cloud_image: params
+                        .cloud_image
+                        .map_or(u32::MAX, |c| resources.sampled(c).0),
+                    pad_cloud: [0; 2],
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.

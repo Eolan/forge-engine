@@ -363,7 +363,8 @@ struct WaterSurface
     uint2 pool_size;      // its samples along x and z
     float4 cloud_frame;   // the clouds' shadow map (#145): its first corner (world x, z), 1 / the metres it spans
     uint cloud_shadow;    // its sampled index (r32f: the sun's share through the clouds), or 0xFFFFFFFF
-    uint3 pad_cloud;
+    uint cloud_image;     // the cloud layer as this frame sees it (sampled, rgba16f: their light, what they let through), or 0xFFFFFFFF
+    uint2 pad_cloud;
 };
 
 // The sun's share through the clouds (#145) at `world` (the scene's frame), from their shadow map
@@ -719,6 +720,22 @@ WaterLight water_light(WaterSurface* w, float3 n, float3 v, float a2, float3 wor
     r.y = abs(r.y);
     o.mirror = normalize(r);
     float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up, forward, o.mirror) * o.scale;
+    // The clouds in the mirror direction where this frame sees it (#145): what the water mirrors
+    // below the horizon mostly lies in view above it. Faded out towards the image's edges.
+    if (w[0].cloud_image != 0xFFFFFFFFu)
+    {
+        float4 clip = mul(w[0].view_proj, float4(o.mirror, 0.0));
+        if (clip.w > 0.0)
+        {
+            float2 uv = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+            float edge = saturate(min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * 10.0);
+            if (edge > 0.0)
+            {
+                float4 c = sample_image_level(w[0].cloud_image, SAMPLER_LINEAR_CLAMP, uv, 0.0);
+                mirror = lerp(mirror, mirror * c.a + c.rgb, edge);
+            }
+        }
+    }
     float3 sky_irradiance = sh_irradiance(w[0].sky_light, float3(0.0, 1.0, 0.0)) * o.scale / PI;
     o.blur = saturate(2.0 * a2);
     o.reflected = lerp(mirror, sky_irradiance, o.blur);

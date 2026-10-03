@@ -2766,3 +2766,8 @@ back dim under the clouds as the ground does (`water_light`, its point's share t
 clouds). The island from 1.5 km up at noon, the water unshaded (left) and shaded (right):
 
 ![The sea under the clouds' shadows, before and after](images/island-cloud-shadows-sea.png)
+
+**In the water's reflection** (the same day): where the water mirrors the sky, it looks the mirror
+direction up in the cloud layer this frame sees (a screen-space lookup for the clouds alone:
+what the water mirrors below the horizon mostly lies in view above it), faded out towards the
+image's edges, so the waves' faces take the clouds' grey and white.
