@@ -11,7 +11,9 @@ publish.workspace = true
 workspace = true
 
 [features]
-# DLAA through NVIDIA Streamline for `--dlaa` (Windows, the SDK in `streamline-sdk/`, an RTX GPU).
+# DLAA through NVIDIA Streamline (Windows, the SDK in `streamline-sdk/`, an RTX GPU), on by
+# default (D-045): DLAA where it runs, TAA elsewhere.
+default = ["dlss"]
 dlss = ["forge-app/dlss"]
 
 [dependencies]

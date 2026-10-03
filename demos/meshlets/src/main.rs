@@ -385,8 +385,14 @@ impl Demo for Bench {
         if let Some(check) = &self.tone_check {
             check.record(&mut frame.graph);
         }
-        self.display
-            .draw(&mut frame.graph, color, frame.target, extent, self.tonemap);
+        self.display.draw(
+            &mut frame.graph,
+            color,
+            frame.target,
+            extent,
+            self.tonemap,
+            None,
+        );
         self.cpu_ms.push(cpu_start.elapsed().as_secs_f64() * 1e3);
         Ok(())
     }

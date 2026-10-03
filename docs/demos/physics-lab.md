@@ -855,9 +855,9 @@ a room with a simple light source and find where it's getting blurry or fuzzy."
 **Two options to measure with.**
 - `--pan SPEED` slides the camera sideways at that many metres per second. Started SPEED metres
   to the left (`--view=-2,1.5,3,0,0` for 2 m/s), frame 60 lands on the still view.
-- `--dlaa` anti-aliases with NVIDIA's DLAA in place of TAA. It needs a build with
-  `--features dlss` (`CARGO_TARGET_DIR=target/dlss cargo build --release -p physics-lab --features dlss`
-  keeps the plain build's binaries apart).
+- `--dlaa` anti-aliases with NVIDIA's DLAA in place of TAA in a scripted run too. Since D-045
+  DLAA is the default of an interactive run where it runs (the Streamline SDK in
+  `streamline-sdk/`, an RTX GPU); `--no-dlaa` keeps to TAA.
 
 **What it found** (MTF50 in cycles a pixel, the board's left and right edges and the wall
 square's left; frame 60, TAA's history full):
@@ -901,8 +901,15 @@ square's left; frame 60, TAA's history full):
 
 What to do about it: D-045, accepted. The first two steps are done.
 
-**TAA sharpened** (`--rcas STOPS`, half a stop by default; `--no-rcas`; T cycles TAA sharpened,
-plain and off). A pass after the resolve sharpens the display's signal (sRGB-encoded, or PQ)
+**DLAA by default where it runs**, in an interactive run (`--no-dlaa` for TAA; T cycles DLAA,
+TAA sharpened, TAA plain and off). A scripted run (`--frames`) keeps to TAA unless `--dlaa`:
+two runs of the city under DLAA differ by up to 3 codes, and the captures' checks want the
+images to the bit. DLAA's display pass now mixes in bloom as TAA's resolve does (the black
+squares' level is the same under both). Panning at 2 m/s, its MTF50 is 0.43–0.48 against
+sharpened TAA's 0.37–0.40, and at 0.25 c/px 0.79–0.82 against 0.83–0.87. It costs 0.46 ms
+for the DLSS pass at 1600 × 900, and 0.02 for the display pass.
+
+**TAA sharpened** (`--rcas STOPS`, half a stop by default; `--no-rcas`). A pass after the resolve sharpens the display's signal (sRGB-encoded, or PQ)
 with FidelityFX RCAS. The MTF at 0.25 c/px, the three edges (over 1 is an overshoot, a halo):
 
 | RCAS | Still | Panning 0.5 m/s | Panning 2 m/s |

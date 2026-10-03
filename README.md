@@ -81,7 +81,7 @@ the path and fly freely, **T** TAA (sharpened → plain → off; `--rcas STOPS`,
 is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
 what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **V** the belt's dust, **Y** translucent ice, **G** tone curve (AgX punchy → ACES → PBR Neutral →
 ACES 2.0 → AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
-(built with `--features dlss`: Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU),
+(Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU; DLAA by default there, D-045),
 **F2** HDR on or off, **F3** the HDR peak (500 → 1000 → 2000 → 4000 nits), **F4** the HDR
 preview's false colours, **F5** the HDR calibration pages (peak, black, paper white; Up/Down,
 Shift for single codes, Backspace for the OS's value, F5 next and save, Esc cancel; saved per
@@ -104,7 +104,8 @@ Academy's look), `--hdr-ui-white NITS` (the UI's white in HDR, over the calibrat
 OS's), `--ev100 EV` (fixed
 exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (128 000),
 `--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
-of the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance`,
+of the sky), `--upscaler auto|taa|dlaa|quality|balanced|performance|ultra-performance` (auto:
+DLAA where it runs, in an interactive run; TAA in a scripted one),
 `--force-fallback` (the device without mesh shaders: the geometry is drawn through
 `vkCmdDrawIndexedIndirectCount`, pixel-identical), `--sw-raster auto|on|off` (the software
 rasteriser for dense clusters; auto runs it when a frame holds enough of them),
@@ -165,7 +166,7 @@ asphalt streets, sidewalks, paved plazas, grass, rocky slopes (issues #20, #41, 
 physical sky with haze by distance (`--sun-elevation DEG`, issue #43), lit by the sun with
 ray-traced soft shadows (issues #45, #54) and by the sky's light (issue #47), occluded by GTAO (issue #48) and, at the scale of the streets, by probes updated by ray queries that also bounce the light (DDGI, issue #53), reflected in the glass, coated on the towers (issues #49, #50, #56). Keys: **L** / **K** LOD and its
 colours, **M** cluster colours, **O** occlusion, **R** software rasteriser, **H** its pixels,
-**[** / **]** LOD threshold, **T** TAA (sharpened, plain, off), **B** bloom, **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays, **Z** soft or hard shadows, **P** probes, **U** their light alone, **Tab** wireframe, **G** tone curve. Options:
+**[** / **]** LOD threshold, **T** anti-aliasing (DLAA where it runs, TAA sharpened, plain, off), **B** bloom, **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays, **Z** soft or hard shadows, **P** probes, **U** their light alone, **Tab** wireframe, **G** tone curve. Options:
 `--gallery` (the twenty props side by side), `--focus NAME` (frame one of them),
 `--instances N`, `--recook`, `--orbit`, `--fly` (a loop at 300 m/s), `--fixed-step`,
 `--stream-pool MIB` (0: every page resident), `--stream-upload MIB`, `--width W --height H`,

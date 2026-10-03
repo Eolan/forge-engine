@@ -14,7 +14,9 @@ workspace = true
 # Tracy zones, frame marks and GPU-time plots (connect tracy/tracy-profiler.exe).
 profiling = ["forge-app/profiling"]
 # DLSS through NVIDIA Streamline (Windows, the SDK in `streamline-sdk/`, an RTX GPU): U switches
-# between TAA and the DLSS modes at run time.
+# between TAA and the DLSS modes at run time. On by default (D-045): DLAA where it runs, TAA
+# elsewhere.
+default = ["dlss"]
 dlss = ["forge-app/dlss"]
 
 [dependencies]

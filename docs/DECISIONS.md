@@ -2068,4 +2068,8 @@ together'."
   0.0078 → 0.0085).
 - **AgX punchy** among the curves (`--tonemap agx-punchy`, G): black squares at sRGB 0.055–0.08,
   the white wall at 0.55 (AgX: 0.20–0.23 and 0.67). AgX stays the default.
-- **Next:** DLAA by default on RTX cards, the Lanczos-3 history, SSAA 2 × 2 for captures.
+- **DLAA by default where it runs** (the `dlss` feature on by default; an RTX GPU and the
+  Streamline SDK), in interactive runs. Scripted runs keep to TAA unless `--dlaa`: DLAA's images
+  differ by up to 3 codes from run to run, and the captures' checks want them to the bit. Its
+  display pass mixes in bloom now. T cycles DLAA, TAA sharpened, TAA plain and off.
+- **Next:** the Lanczos-3 history, SSAA 2 × 2 for captures.

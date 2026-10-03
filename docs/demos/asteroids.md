@@ -25,14 +25,14 @@ the chunks are cooked, 0.5; 0 before #65), `--no-lod` (full detail only), `--lod
 `--ev100 EV` (a fixed exposure instead of the automatic one), `--exposure-compensation EV`,
 `--sun-lux LUX` (128 000, the Sun at 1 AU), `--exposure-log file.csv` (EV100 and its target
 per frame), `--look x,y,z` (hold the view direction while moving along the path: stills of
-the sky), `--upscaler taa|dlaa|quality|balanced|performance|ultra-performance` (taa),
+the sky), `--upscaler auto|taa|dlaa|quality|balanced|performance|ultra-performance` (auto:
+DLAA where it runs in an interactive run, D-045; TAA in a scripted one and elsewhere),
 `--cycle-upscaler N` (switch as U does every N frames: tests the switch in scripted runs),
 `--force-fallback` (the device without mesh shaders: the geometry goes through
 `vkCmdDrawIndexedIndirectCount`, pixel-identical; see [meshlets.md](meshlets.md)).
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
-`tracy/tracy-profiler.exe`. With DLSS: `cargo run --release -p asteroids --features dlss`
-(Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad says
-so and keeps TAA).
+`tracy/tracy-profiler.exe`. DLSS is built in by default (the `dlss` feature; Windows, the
+Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad keeps TAA).
 Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the path and fly
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing (sharpened,
 plain, off: `--rcas STOPS`, half a stop by default, `--no-rcas`; D-045), **O** occlusion
@@ -40,7 +40,7 @@ culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]**
 double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
 red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **V** the belt's dust (`--no-dust`), **Y** translucent ice (`--no-translucency`), **G** tone curve,
 **-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
-Quality → Balanced → Performance → Ultra Performance, with `--features dlss`), **Esc** quit.
+Quality → Balanced → Performance → Ultra Performance, where DLSS runs), **Esc** quit.
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 
 ![The ballad, phase 0](images/asteroids-ballad.png)
@@ -1157,8 +1157,13 @@ With `--features dlss` the Vulkan API comes through NVIDIA Streamline's interpos
 **U** (or `--upscaler`) replaces the TAA resolve with DLSS: the scene is drawn jittered at
 DLSS's input size, DLSS upscales the pre-exposed HDR colour with the depth and the TAA's
 motion vectors into an HDR image at the window's size, and the display pass takes it
-through the tone curve (D-024). TAA stays the default and the fallback. Without the
-feature, the SDK or an RTX GPU, U says so and nothing changes.
+through the tone curve (D-024). Without the feature, the SDK or an RTX GPU, U says so and
+nothing changes.
+
+Since D-045 (2026-10-03) the feature is on by default and DLAA is the default where it runs, in
+an interactive run (`--upscaler auto`). A scripted run (`--frames`) keeps to TAA unless
+`--upscaler` names a DLSS mode: DLAA's images differ by a code or two from run to run, and the
+captures' checks want them to the bit. The display pass mixes in bloom as the TAA resolve does.
 
 ![Frame 600, zoomed ×2: TAA, DLAA, DLSS Quality (1067×600), DLSS Performance (800×450)](images/asteroids-dlss.png)
 

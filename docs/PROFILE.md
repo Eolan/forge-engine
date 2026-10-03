@@ -115,6 +115,8 @@ exposure (EV100, target, compensation, curve) the last.
   (59 frames): `temporal/sharpen` 0.073 ms, and `temporal/TAA resolve` 0.055 → 0.046 ms
   without its display output. That is +0.06 ms in all; the pass tone-maps the five pixels of
   its cross. DLAA, for comparison, takes 0.48 ms.
+- DLAA by default where it runs (D-045), the same room: `temporal/DLSS` 0.463 ms, then
+  `post/display transform` 0.020 with bloom mixed in (`post/bloom` 0.041, as under TAA).
 - MaxCLL and MaxFALL from the frame shown (#125), in every HDR mode: `post/hdr metadata
   histogram` takes 0.033–0.038 ms at 1440p and 0.015–0.016 at 1600 × 900 (the ballad, three
   runs), about what the exposure histogram costs. The first kernel, a thread per pixel with

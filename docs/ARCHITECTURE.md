@@ -259,9 +259,11 @@ the sunlight on the scene takes the sun's colour through the air.
 **The resolve is TAA or DLSS** (issue #8, D-024). The scene is drawn jittered into a
 pre-exposed HDR target either way, and the motion vectors (UV offsets from depth and the two
 cameras) are their own pass. TAA resolves at the output size and writes the display image
-through the tone curve in the same pass. DLSS (builds with `--features dlss` on an RTX GPU,
-the Vulkan API through Streamline's interposer) draws the scene at its input size, upscales
-into an HDR image at the output size, and the display pass applies the curve. The DLSS pass
+through the tone curve in the same pass, or a sharpening pass does (RCAS, D-045). DLSS (the
+`dlss` feature, on by default, on an RTX GPU, the Vulkan API through Streamline's interposer)
+draws the scene at its input size, upscales into an HDR image at the output size, and the
+display pass applies the curve and bloom. DLAA is the default of interactive runs where it runs
+(D-045); scripted runs keep to TAA, whose images repeat to the bit. The DLSS pass
 is a graph pass like any other: it declares every image it hands to Streamline, and its
 output with a `Custom` access, because NGX clears it at the transfer stage before writing it.
 

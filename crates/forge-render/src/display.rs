@@ -497,6 +497,9 @@ fn pbr_neutral(color: Vec3) -> Vec3 {
 struct DisplayPush {
     image: u32,
     curve: u32,
+    /// The bloom chain's top level (sampled index), or `u32::MAX` for none.
+    bloom: u32,
+    bloom_strength: f32,
     output: OutputPush,
     tables: ToneTablesPush,
 }
@@ -582,7 +585,8 @@ impl Display {
     }
 
     /// Declares the pass "post/display transform": `src` (pre-exposed HDR) through `curve`
-    /// into every pixel of `dst`.
+    /// into every pixel of `dst`, with `bloom` (a bloom chain's top level and its share of the
+    /// image, as [`crate::Taa`]'s resolve mixes it) when given.
     pub fn draw<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -590,48 +594,52 @@ impl Display {
         dst: ImageHandle,
         extent: vk::Extent2D,
         curve: Tonemap,
+        bloom: Option<(ImageHandle, f32)>,
     ) {
         let pipeline = &self.pipeline;
         let frame = self.frame.get();
         self.frame.set(frame.wrapping_add(1));
         let output = OutputPush::new(OutputEncoding::for_format(self.format), &self.hdr, frame);
         let tables = self.tables.push();
-        graph
+        let sampled = ImageAccess::Sampled(vk::PipelineStageFlags2::FRAGMENT_SHADER);
+        let mut pass = graph
             .pass("post/display transform")
-            .image(
-                src,
-                ImageAccess::Sampled(vk::PipelineStageFlags2::FRAGMENT_SHADER),
-            )
-            .image(dst, ImageAccess::ColorAttachment)
-            .run(move |resources, commands| {
-                let attachments = [vk::RenderingAttachmentInfo::default()
-                    .image_view(resources.view(dst))
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
-                    .store_op(vk::AttachmentStoreOp::STORE)];
-                let info = vk::RenderingInfo::default()
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D::default(),
-                        extent,
-                    })
-                    .layer_count(1)
-                    .color_attachments(&attachments);
-                commands.begin_rendering(&info);
-                commands.bind_pipeline(pipeline);
-                commands.set_viewport_full(extent);
-                commands.push_constants(
-                    pipeline,
-                    &DisplayPush {
-                        image: resources.sampled(src).0,
-                        curve: curve.index(),
-                        output,
-                        tables,
-                    },
-                );
-                commands.draw(3, 1);
-                commands.end_rendering();
-                Ok(())
-            });
+            .image(src, sampled)
+            .image(dst, ImageAccess::ColorAttachment);
+        if let Some((image, _)) = bloom {
+            pass = pass.image(image, sampled);
+        }
+        pass.run(move |resources, commands| {
+            let attachments = [vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(dst))
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .store_op(vk::AttachmentStoreOp::STORE)];
+            let info = vk::RenderingInfo::default()
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent,
+                })
+                .layer_count(1)
+                .color_attachments(&attachments);
+            commands.begin_rendering(&info);
+            commands.bind_pipeline(pipeline);
+            commands.set_viewport_full(extent);
+            commands.push_constants(
+                pipeline,
+                &DisplayPush {
+                    image: resources.sampled(src).0,
+                    curve: curve.index(),
+                    bloom: bloom.map_or(u32::MAX, |(b, _)| resources.sampled(b).0),
+                    bloom_strength: bloom.map_or(0.0, |(_, s)| s),
+                    output,
+                    tables,
+                },
+            );
+            commands.draw(3, 1);
+            commands.end_rendering();
+            Ok(())
+        });
     }
 }
 
@@ -750,7 +758,7 @@ mod tests {
         // The blocks the shaders mirror.
         assert_eq!(std::mem::size_of::<OutputPush>(), 16);
         assert_eq!(std::mem::size_of::<ToneTablesPush>(), 32);
-        assert_eq!(std::mem::size_of::<DisplayPush>(), 56);
+        assert_eq!(std::mem::size_of::<DisplayPush>(), 64);
     }
 
     #[test]

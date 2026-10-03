@@ -481,11 +481,15 @@ struct Args {
     /// Show TAA's image unsharpened.
     #[arg(long)]
     no_rcas: bool,
-    /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution) in place of TAA, to
-    /// compare the two (#159): a build with `--features dlss`, the Streamline SDK in
-    /// `streamline-sdk/` and an RTX GPU, else TAA with a warning. No bloom on that path.
-    #[arg(long, conflicts_with = "no_taa")]
+    /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution) in place of TAA in a
+    /// scripted run too (`--frames`). DLAA is the default of an interactive run where it runs
+    /// (D-045: the Streamline SDK in `streamline-sdk/` and an RTX GPU); a scripted run keeps to
+    /// TAA, whose images repeat to the bit.
+    #[arg(long, conflicts_with_all = ["no_taa", "no_dlaa"])]
     dlaa: bool,
+    /// Anti-alias with TAA even where DLAA runs.
+    #[arg(long)]
+    no_dlaa: bool,
     /// Window width in pixels (the render size).
     #[arg(long, default_value_t = 1600)]
     width: u32,
@@ -535,8 +539,10 @@ struct Gallery {
     liquid_reset: bool,
     /// What the liquid's drawing shows: as it looks (1), its speed view (2), its landing view (3).
     liquid_mode: forge_render::LiquidMode,
-    /// `--dlaa`: DLSS at the output's size and the display pass it hands its HDR image to (#159).
+    /// DLAA where it runs (D-045): DLSS at the output's size and the display pass it hands its
+    /// HDR image to, in place of TAA while `dlaa_on` (T cycles it with TAA).
     dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
+    dlaa_on: bool,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -783,14 +789,14 @@ impl Gallery {
         let clouds = (args.clouds > 0.0 && space.is_none() && !bench && !room)
             .then(|| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
             .transpose()?;
-        // DLAA in place of TAA (#159), when asked for and the device has DLSS.
-        let dlaa = if args.dlaa {
+        // DLAA in place of TAA (D-045) where the device has DLSS.
+        let dlaa = if wants_dlaa(&args) {
             let dlss = forge_render::DlssUpscaler::new(
                 &ctx.device,
                 forge_render::DlssMode::Dlaa,
                 ctx.extent(),
             )?;
-            if dlss.is_none() {
+            if dlss.is_none() && args.dlaa {
                 tracing::warn!(
                     "DLAA is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): TAA instead"
                 );
@@ -1134,6 +1140,7 @@ impl Gallery {
             liquid_next_log: 0,
             liquid_reset: false,
             liquid_mode,
+            dlaa_on: dlaa.is_some(),
             dlaa,
             sky_light,
             gtao,
@@ -1254,13 +1261,28 @@ impl Demo for Gallery {
                 };
             }
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
-            // TAA sharpened (D-045), plain, off.
+            // DLAA where it runs, TAA sharpened, plain, off (D-045).
             KeyCode::KeyT => {
-                (self.taa.enabled, self.taa.sharpen) = match (self.taa.enabled, self.taa.sharpen) {
-                    (true, Some(_)) => (true, None),
-                    (true, None) => (false, None),
-                    (false, _) => (true, Some(self.args.rcas)),
-                };
+                let dlaa = self.dlaa.is_some();
+                (self.dlaa_on, self.taa.enabled, self.taa.sharpen) =
+                    match (self.dlaa_on, self.taa.enabled, self.taa.sharpen) {
+                        (true, ..) => (false, true, Some(self.args.rcas)),
+                        (false, true, Some(_)) => (false, true, None),
+                        (false, true, None) => (false, false, None),
+                        (false, false, _) if dlaa => (true, true, Some(self.args.rcas)),
+                        (false, false, _) => (false, true, Some(self.args.rcas)),
+                    };
+                tracing::info!(
+                    anti_aliasing = if self.dlaa_on {
+                        "DLAA"
+                    } else if !self.taa.enabled {
+                        "none"
+                    } else if self.taa.sharpen.is_some() {
+                        "TAA, sharpened"
+                    } else {
+                        "TAA"
+                    }
+                );
                 self.taa.reset_history();
             }
             // Space: the player jumps in the playground (#139), the car's handbrake on the track
@@ -2029,9 +2051,13 @@ impl Demo for Gallery {
                 taa_frame.jitter,
             );
         }
-        if let Some((dlss, display)) = self.dlaa.as_mut() {
-            // DLAA (#159): the jittered frame, its depth and motion to DLSS, its HDR image through
-            // the tone curve.
+        let dlaa_on = self.dlaa_on;
+        if let Some((dlss, display)) = self.dlaa.as_mut().filter(|_| dlaa_on) {
+            // DLAA (D-045): the jittered frame, its depth and motion to DLSS, its HDR image through
+            // the tone curve with bloom.
+            let bloom = self
+                .bloom_on
+                .then(|| self.bloom.draw(&mut frame.graph, taa_frame.color, extent));
             let upscaled = dlss.upscale(
                 &mut frame.graph,
                 ctx.frames_rendered,
@@ -2051,6 +2077,7 @@ impl Demo for Gallery {
                 frame.target,
                 ctx.extent(),
                 self.tonemap,
+                bloom.map(|b| (b, self.taa.bloom_strength)),
             );
             return Ok(());
         }
@@ -6312,6 +6339,13 @@ fn build_gallery(
     Ok((scene, placed))
 }
 
+/// Whether the run anti-aliases with DLAA where the device has it (D-045): an interactive run
+/// unless `--no-dlaa` or `--no-taa`, a scripted one (`--frames`) only with `--dlaa`. DLAA's
+/// images differ by a code or two from run to run, and the captures' checks want them to the bit.
+fn wants_dlaa(args: &Args) -> bool {
+    !args.no_dlaa && !args.no_taa && (args.dlaa || args.frames.is_none())
+}
+
 /// The `city-blocks` binary: the city, `--gallery` or `--island SEED`.
 pub fn main_city() -> Result<()> {
     run(Args::parse(), "forge city-blocks")
@@ -6370,8 +6404,8 @@ fn run(args: Args, title: &'static str) -> Result<()> {
         capture_every: args.capture_every,
         overlay: if args.overlay { Some(true) } else { None },
         force_fallback: args.force_fallback,
-        // The Vulkan loader through Streamline only for `--dlaa` in a `dlss` build (#159).
-        streamline: cfg!(feature = "dlss") && args.dlaa,
+        // The Vulkan loader through Streamline only where DLAA may run, in a `dlss` build.
+        streamline: cfg!(feature = "dlss") && wants_dlaa(&args),
         hdr: args.hdr,
         hdr_stops: args.hdr_stops,
         hdr_ui_white: args.hdr_ui_white,

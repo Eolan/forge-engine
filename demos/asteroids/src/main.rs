@@ -177,10 +177,11 @@ struct Args {
     /// Show TAA's image unsharpened.
     #[arg(long)]
     no_rcas: bool,
-    /// Anti-aliasing and upscaling: taa, or a DLSS mode (dlaa, quality, balanced, performance,
-    /// ultra-performance; needs `--features dlss`, the Streamline SDK and an RTX GPU). U cycles
-    /// them at run time.
-    #[arg(long, default_value = "taa")]
+    /// Anti-aliasing and upscaling: auto, taa, or a DLSS mode (dlaa, quality, balanced,
+    /// performance, ultra-performance; needs the Streamline SDK in `streamline-sdk/` and an RTX
+    /// GPU). Auto is DLAA where it runs (D-045), in an interactive run: a scripted one
+    /// (`--frames`) keeps to TAA, whose images repeat to the bit. U cycles them at run time.
+    #[arg(long, default_value = "auto")]
     upscaler: String,
     /// Switch the anti-aliasing as U does every N frames (tests the switch in scripted runs).
     #[arg(long)]
@@ -539,8 +540,10 @@ impl Ballad {
         // DLSS takes over from the TAA resolve when asked for and available; its HDR output goes
         // to the swapchain through the stand-alone display pass.
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
+        let auto = args.upscaler == "auto";
         let requested = match args.upscaler.as_str() {
             "taa" => None,
+            "auto" => args.frames.is_none().then_some(DlssMode::Dlaa),
             name => Some(DlssMode::from_name(name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "unknown upscaler '{name}': taa, dlaa, quality, balanced, performance or ultra-performance"
@@ -552,7 +555,7 @@ impl Ballad {
             requested.unwrap_or(DlssMode::Dlaa),
             ctx.extent(),
         )?;
-        if requested.is_some() && dlss.is_none() {
+        if requested.is_some() && dlss.is_none() && !auto {
             tracing::warn!(
                 "DLSS is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): TAA instead"
             );
@@ -1144,14 +1147,20 @@ impl Demo for Ballad {
                     motion,
                     exposure,
                 )?;
+                // Bloom from the frame drawn, at its size: it is blurred to the bone anyway.
+                let bloom = self.bloom_on.then(|| {
+                    self.bloom
+                        .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
+                });
                 self.display.draw(
                     &mut frame.graph,
                     upscaled,
                     frame.target,
                     ctx.extent(),
                     self.tonemap,
+                    bloom.map(|b| (b, self.taa.bloom_strength)),
                 );
-                (None, None)
+                (None, bloom)
             }
             _ => {
                 let bloom = self.bloom_on.then(|| {
@@ -1658,9 +1667,10 @@ fn main() -> Result<()> {
         } else {
             None
         },
-        // Built with `--features dlss`: the Vulkan API comes through Streamline so U can switch
-        // to DLSS at run time.
-        streamline: cfg!(feature = "dlss"),
+        // Built with `--features dlss` (the default): the Vulkan API comes through Streamline so
+        // U can switch to DLSS at run time, except in a scripted run on TAA.
+        streamline: cfg!(feature = "dlss")
+            && (args.frames.is_none() || !matches!(args.upscaler.as_str(), "auto" | "taa")),
         force_fallback: args.force_fallback,
         hdr: args.hdr,
         hdr_stops: args.hdr_stops,
