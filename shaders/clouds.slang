@@ -64,6 +64,18 @@ static const float KEEP = 0.9;
 static const float MULTIPLE = 2.0;
 // Octaves of the light scattered many times.
 static const uint OCTAVES = 4;
+// Fair weather (the owner, 2026-10-03: "whiter if no bad weather"): under a fair-weather cover
+// the clouds are bright cumulus, their shaded sides and bases lit by the light the clouds round
+// them and the ground send back. `fair` is 1 at a coverage of FAIR_COVER and under, 0 from
+// OVERCAST; in between, and beyond it, the octaves and the ambient go back towards the overcast's
+// grey. With it each octave sees less of the extinction and keeps more of the light, and the
+// sky's light reaches the bases nearly whole and stronger.
+static const float FAIR_COVER = 0.45;
+static const float OVERCAST = 0.75;
+static const float FAIR_EXTINCTION = 0.2;
+static const float FAIR_OCTAVE = 0.7;
+static const float FAIR_BASE = 0.8;
+static const float FAIR_AMBIENT = 1.6;
 
 // A tiling volume in an atlas at `p` (in its repeats), trilinear: two slices, each bilinear
 // within its tile.
@@ -173,6 +185,7 @@ void march_main(uint3 id : SV_DispatchThreadID)
         float3 sunlight = sunlight_at(p, s[0].transmittance, middle_km, sun) * s[0].scale.x;
         float3 ambient = sh_irradiance(s[0].irradiance, up) * (s[0].scale.x / PI);
         float sigma = c[0].layer.w;
+        float fair = saturate((OVERCAST - c[0].layer.z) / (OVERCAST - FAIR_COVER));
         float t = start + jitter.x * step;
         float3 luminance = 0.0;
         float transmittance = 1.0;
@@ -210,13 +223,13 @@ void march_main(uint3 id : SV_DispatchThreadID)
                 {
                     float ph = lerp(hg(cos_theta, -0.25 * g), hg(cos_theta, 0.75 * g), 0.7);
                     lit += b * exp(-a * sigma * optical) * ph;
-                    a *= 0.3;
-                    b *= 0.6;
+                    a *= lerp(0.3, FAIR_EXTINCTION, fair);
+                    b *= lerp(0.6, FAIR_OCTAVE, fair);
                     g *= 0.5;
                 }
                 float powder = 1.0 - exp(-2.0 * sigma * optical - 0.05);
                 float3 source = sunlight * (lit * lerp(1.0, powder, 0.3) * MULTIPLE)
-                    + ambient * lerp(0.45, 1.0, h);
+                    + ambient * lerp(lerp(0.45, FAIR_BASE, fair), 1.0, h) * lerp(1.0, FAIR_AMBIENT, fair);
                 float extinction = sigma * rho;
                 float segment = exp(-extinction * step);
                 luminance += transmittance * source * (1.0 - segment);

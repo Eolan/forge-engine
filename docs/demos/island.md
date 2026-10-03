@@ -2772,3 +2772,21 @@ clouds). The island from 1.5 km up at noon, the water unshaded (left) and shaded
 direction up in the cloud layer this frame sees (a screen-space lookup for the clouds alone:
 what the water mirrors below the horizon mostly lies in view above it), faded out towards the
 image's edges, so the waves' faces take the clouds' grey and white.
+
+**After the owner's look** (the same day, with the clouds on by default):
+- **The reflection's colour:** a lake's far shallows showed a band from yellow to dark red. It
+  was the clouds low over the horizon, lit warm by a low sun, that the hills hide.
+  - The lookup took them wherever the mirror direction pointed. Where it pointed at the hills, the
+    traced mirror rays put the hills' reflection in, but took away only the clear sky's, not the
+    clouds'.
+  - The water now takes the clouds only where the frame sees the sky at that point (the scene's
+    depth there is the sky's), as a screen-space reflection would. The golden valley shot's
+    stream lost its yellow patch.
+- **Whiter in fair weather** ("whiter if no bad weather"):
+  - At a coverage of 0.45 and under, each octave of the light scattered many times sees less of
+    the extinction (0.2 of the last's, against 0.3) and keeps more of the light (0.7, against
+    0.6).
+  - The sky's light reaches the bases nearly whole (0.8 of it, against 0.45) and 1.6 times as
+    strong: the light the clouds round them and the ground send back.
+  - Towards a coverage of 0.75 the clouds go back to the greyer look of before, for an overcast
+    or a storm.

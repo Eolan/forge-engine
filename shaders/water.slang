@@ -721,7 +721,10 @@ WaterLight water_light(WaterSurface* w, float3 n, float3 v, float a2, float3 wor
     o.mirror = normalize(r);
     float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up, forward, o.mirror) * o.scale;
     // The clouds in the mirror direction where this frame sees it (#145): what the water mirrors
-    // below the horizon mostly lies in view above it. Faded out towards the image's edges.
+    // below the horizon mostly lies in view above it. Faded out towards the image's edges, and
+    // only where the frame sees the sky there: the hills, and what stands in front of them, hide
+    // the clouds behind them from the water as from the camera (without that, the warm clouds
+    // low over the horizon at a low sun showed through the hills' reflections, yellow to red).
     if (w[0].cloud_image != 0xFFFFFFFFu)
     {
         float4 clip = mul(w[0].view_proj, float4(o.mirror, 0.0));
@@ -729,7 +732,7 @@ WaterLight water_light(WaterSurface* w, float3 n, float3 v, float a2, float3 wor
         {
             float2 uv = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
             float edge = saturate(min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * 10.0);
-            if (edge > 0.0)
+            if (edge > 0.0 && sample_depth_level(w[0].scene_depth, SAMPLER_LINEAR_CLAMP, uv, 0.0) <= 0.0)
             {
                 float4 c = sample_image_level(w[0].cloud_image, SAMPLER_LINEAR_CLAMP, uv, 0.0);
                 mirror = lerp(mirror, mirror * c.a + c.rgb, edge);
