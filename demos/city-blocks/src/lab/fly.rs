@@ -37,8 +37,9 @@ const RUDDER: f32 = 0.2;
 const START: DVec3 = DVec3::new(0.0, 1.45, 200.0);
 /// The runway: its half sizes, metres.
 pub(super) const RUNWAY_HALF: [f32; 3] = [12.0, 0.02, 260.0];
-/// The field around it, in place of the lab's floor: its half side, metres.
-pub(super) const FIELD_HALF: f32 = 2500.0;
+/// The field around it, in place of the lab's floor: its half side, metres. 40 km across, so its
+/// edges lie in the haze even from the rocket's height (#148: at 5 km its corner showed).
+pub(super) const FIELD_HALF: f32 = 20_000.0;
 
 /// The aeroplane's model, read once from `assets/models/plane.glb`, and its cache key.
 pub(super) fn plane_model() -> &'static (Model, String) {

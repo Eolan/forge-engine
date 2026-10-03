@@ -116,7 +116,7 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   character up stairs, stopped by steep ramps, carried by a platform, shoving crates. A car ✅
   (#140, `--lab drive`): Jolt's wheeled vehicle, a Blender model, a ramp, a slalom and a wall of
   crates. An aeroplane ✅ (#141, `--lab fly`): lift and drag on each flying surface, a take-off
-  from a runway and turns over a 5 km field. A brick wall and a column broken ✅
+  from a runway and turns over a 40 km field. A brick wall and a column broken ✅
   (#142, `--lab break`): 912 joints of mortar that break on load or strain, a wrecking ball, a
   concrete column cut into Voronoi pieces ahead of time. Creatures as powered ragdolls ✅
   (#143, `--lab creatures`): a mannequin and a dog from Blender, jointed puppets whose motors
@@ -425,7 +425,7 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 5. **Vehicles and flight:** a car ✅ (#140, `physics-lab --lab drive`: Jolt's
    `VehicleConstraint`, springs, a geared engine, a handbrake; a ramp, a slalom, a wall of
    crates), the boat (step 3), a plane ✅ (#141, `--lab fly`: lift and drag per flying surface,
-   `forge_physics::aero`; a runway and a 5 km field), a rocket ✅ (#148, `--lab rocket`: thrust
+   `forge_physics::aero`; a runway and a 40 km field), a rocket ✅ (#148, `--lab rocket`: thrust
    vectoring, roll jets, fins as flying surfaces), a spaceship in zero g ✅ (#150, `--lab space`:
    momentum kept through a crash into floating crates). Left: fuel burning off, the
    wind through `Air`.

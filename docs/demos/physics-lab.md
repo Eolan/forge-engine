@@ -269,9 +269,10 @@ cargo run --release -p physics-lab -- --lab fly
 ```
 
 A light high-wing aeroplane (7.3 m long, 10 m span, 750 kg; `assets/blender/plane.py`,
-`assets/models/plane.glb`, 124 KB) on a 520 m runway across a field of grass 5 km wide. It flies
-on its surfaces (`forge_physics::aero`): each wing's half, the tailplane and the fin is a plate in
-the aeroplane's frame, and the air past it, from the body's motion and its turning, gives it an
+`assets/models/plane.glb`, 124 KB) on a 520 m runway across a field of grass 40 km wide (5 km
+until #148, when its corner showed from the rocket's height). It flies on its surfaces
+(`forge_physics::aero`): each wing's half, the tailplane and the fin is a plate in the aeroplane's
+frame, and the air past it, from the body's motion and its turning, gives it an
 incidence. Its lift follows the thin-wing law (2π a radian) up to the stall near 14°, then falls
 to a flat plate's by 20°; its drag is a parasitic part, the drag its lift induces (by its aspect
 ratio) and the plate's broadside drag. The elevator, the ailerons and the rudder add to the
