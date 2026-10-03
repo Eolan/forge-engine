@@ -3425,6 +3425,7 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
         half_width: p.half_width,
         speed: p.speed,
         white: 0.0,
+        back: 0.0,
     };
     // How much of a river runs white over its last 16 m before the sea: the rapids' share of
     // `river_frag_main` (`water.slang`), by its fall and its speed.
@@ -3438,12 +3439,41 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
             .map(|p| smoothstep(0.06, 0.2, p.slope) * smoothstep(1.5, 3.0, p.speed))
             .fold(0.0, f32::max)
     };
+    // How far back from the mouth at point `k` (against `direction`) the river's water reaches:
+    // along its channel, its points walked away from the mouth (up the river, or down it from a
+    // lake's outlet), while each lies further back than the last and its middle within its half
+    // width of the line, at most 200 m. A straight band of a brook's water 200 m long had crossed
+    // a lake where its channel turned away (#152).
+    let back = |points: &[forge_procgen::RibbonPoint], k: usize, up: bool, direction: [f32; 2]| {
+        let from = points[k].position;
+        let mut reach = 0.0_f32;
+        let mut at = k;
+        while reach < 200.0 {
+            let next = if up {
+                at.checked_sub(1)
+            } else {
+                (at + 1 < points.len()).then_some(at + 1)
+            };
+            let Some(next) = next else { break };
+            let p = &points[next];
+            let d = [p.position[0] - from[0], p.position[1] - from[1]];
+            let behind = -(d[0] * direction[0] + d[1] * direction[1]);
+            let across = (d[0] * direction[1] - d[1] * direction[0]).abs();
+            if behind <= reach || across > p.half_width {
+                break;
+            }
+            reach = behind;
+            at = next;
+        }
+        reach.min(200.0)
+    };
     let mut mouths: Vec<WaterMouth> = ribbons
         .iter()
         .filter_map(|r| {
             let k = forge_procgen::sea_mouth(&r.points)?;
             Some(WaterMouth {
                 white: white(&r.points, k),
+                back: back(&r.points, k, true, r.points[k].direction),
                 ..mouth(&r.points[k])
             })
         })
@@ -3452,17 +3482,21 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
     for r in &ribbons {
         for &[k, last] in &r.lake_runs {
             // The speed the river comes in at: the point before the lake's.
-            let before = r.points[(k as usize).saturating_sub(1)];
+            let (k, last) = (k as usize, last as usize);
+            let before = r.points[k.saturating_sub(1)];
             mouths.push(WaterMouth {
                 speed: before.speed,
-                ..mouth(&r.points[k as usize])
+                back: back(&r.points, k, true, r.points[k].direction),
+                ..mouth(&r.points[k])
             });
             // And where it runs out (#120): the lake's water drawn into the river, the river's
             // own in a cone back into the lake, so the two meet as one water past the lip.
-            if let Some(out) = r.points.get(last as usize + 1) {
+            if let Some(out) = r.points.get(last + 1) {
+                let direction = [-out.direction[0], -out.direction[1]];
                 mouths.push(WaterMouth {
-                    direction: [-out.direction[0], -out.direction[1]],
+                    direction,
                     speed: -out.speed,
+                    back: back(&r.points, last + 1, false, direction),
                     ..mouth(out)
                 });
             }
@@ -3660,6 +3694,13 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
         lakes = lakes.len(),
         sea_mouths,
         lake_mouths = mouths.len() - sea_mouths,
+        // How far their water reaches back up their channels (#152): how many fall short of
+        // 200 m, and the shortest.
+        mouths_back_short = mouths.iter().filter(|m| m.back < 200.0).count(),
+        shortest_back_m = %format_args!(
+            "{:.0}",
+            mouths.iter().map(|m| m.back).fold(f32::INFINITY, f32::min)
+        ),
         views = %views.join("  "),
         %under,
         "the island's lakes (--view)"

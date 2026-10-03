@@ -781,7 +781,7 @@ pub struct WaterStone {
 struct GpuRiverMouth {
     /// World x, z, downstream (x, z).
     a: [f32; 4],
-    /// The half width, the speed, the white water's share, 0.
+    /// The half width, the speed, the white water's share, how far back the river's water reaches.
     b: [f32; 4],
 }
 
@@ -801,6 +801,10 @@ pub struct WaterMouth {
     /// How much of it runs white there, 0..1: the sea carries the white water on and out along
     /// the plume, fading.
     pub white: f32,
+    /// How far back from it, metres (against `direction`), the sea's or the lake's water is the
+    /// river's: where the river's channel runs on straight from here, filled by that water. At
+    /// most 200 m; 0 for none.
+    pub back: f32,
 }
 
 /// Quads across a river's ribbon (`RIVER_ACROSS` in `water.slang`).
@@ -1609,7 +1613,7 @@ impl WaterSurface {
                     .take(MAX_MOUTHS)
                     .map(|m| GpuRiverMouth {
                         a: [m.position[0], m.position[1], m.direction[0], m.direction[1]],
-                        b: [m.half_width, m.speed, m.white, 0.0],
+                        b: [m.half_width, m.speed, m.white, m.back],
                     })
                     .collect();
                 let extent = s.texels.saturating_sub(1) as f32 * s.spacing;

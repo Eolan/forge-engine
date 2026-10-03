@@ -273,7 +273,8 @@ struct RiverPoint
 struct RiverMouth
 {
     float4 a; // world x, z (the sea's frame), downstream (world x, z; unit)
-    float4 b; // the half width (m), the speed (m/s), the white water's share (0..1), 0
+    float4 b; // the half width (m), the speed (m/s), the white water's share (0..1), and how
+              // far back from it the river's water reaches (m: its channel's straight run)
 };
 
 // A lake (`GpuLake` in water.rs).
@@ -1169,7 +1170,8 @@ static const float RIVER_PLUME_LAYER = 1.5;
 static const float RIVER_SPILL = 6.0;
 
 // The rivers' water at `world` (x, z). Up a river's channel from where its level reaches the
-// sea's, where the sea fills it, the water is the river's and moves at its speed. Out from there it is a jet that widens and slows (a plane
+// sea's, where the sea fills it, the water is the river's and moves at its speed, as far as the
+// channel runs on straight (the mouth's `b.w`). Out from there it is a jet that widens and slows (a plane
 // jet's centre speed falls as the root of the distance), its water mixing into the sea's, the
 // plume's edge broken up offshore. Only the mouths the grid lists for the point's cell are
 // looked at.
@@ -1200,11 +1202,14 @@ Estuary estuary_at(WaterSurface* w, float2 world)
         float half_width = mouth.b.x;
         float reach = RIVER_PLUME_LENGTH * half_width;
         float spread = half_width + RIVER_PLUME_SPREAD * max(along, 0.0);
-        if (along > reach || along < -200.0 || across > spread + 3.0)
+        // Back up the channel only as far as it runs straight on (#152: a brook's channel
+        // turning away left a straight band of its water across a lake).
+        float back = mouth.b.w;
+        if (along > reach || along < -back || across > spread + 3.0)
             continue;
         float fresh = 1.0 - smoothstep(0.5 * spread, spread + 3.0, across);
         if (along < 0.0)
-            fresh *= 1.0 - smoothstep(150.0, 200.0, -along);
+            fresh *= 1.0 - smoothstep(0.75 * back, back, -along);
         else
         {
             fresh *= sqrt(half_width / spread) * (1.0 - smoothstep(0.4 * reach, reach, along));

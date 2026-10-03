@@ -802,7 +802,11 @@ water in a carved channel:
 - **The mouths.** A river's channel runs through the beach to the sea, and where its level comes
   down to the sea's the sea fills it. The ribbon fades out over the last 0.3 m of level, and from
   that point (25 mouths) the sea's own shading takes the river on: up the channel the water is
-  the river's, with its flow-mapped ripples and its absorption and scattering; out to sea it is
+  the river's, with its flow-mapped ripples and its absorption and scattering (since 2026-10-03
+  only as far as the channel runs on straight from the mouth, its middle within its half width
+  of the line, at most 200 m: today's island has 15-135 m at its sea mouths, 0-94 m at its
+  lakes'. Before, a straight band 200 m long ran on wherever the channel turned, and one crossed
+  a lake as a thin bright line, #152); out to sea it is
   a jet that widens by 0.2 m a metre and slows as the root of the distance, its water mixing into
   the sea's over 60 half widths, the plume's edge broken up by noise. The same ripple function
   draws the river, the sea at a mouth and later the lakes (still water is the same ripples
