@@ -1086,6 +1086,14 @@ keep their order, took 3.1). On the first tank (640 000 particles at 1 cm):
 
 The overlay now sums a label's zones within a frame (a substep's passes come back four times).
 
+`--lab flood` (#162), the gate lifted at tick 31, 300 frames at 1600 × 900: the GPU's finer
+layer (768 × 384 cells of 6.25 cm, two steps a tick) takes the frame **1.41 → 1.71 ms**. Its
+passes take 0.15 ms (`shallow/front` 0.041, `shallow/apply` 0.039, `shallow/advect` 0.030,
+`shallow/give` 0.028, the pull and the samples 0.018), the surface's draw 0.050 → 0.119 ms
+for sixteen times the quads, and the rest is latency between 18 small dependent passes. Four
+steps a tick took 0.78 ms in all. The frame's timestamps went from 96 to 256 a frame slot: the
+layer's passes had pushed the water's zones past the end.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

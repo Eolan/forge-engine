@@ -374,8 +374,8 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   and Volumetric", SIGGRAPH 2013 Talks) (`forge_render::clouds`, #145).
 - **Shallow water.** Matthias Müller-Fischer, "Fast Water Simulation for Games Using Height
   Fields", GDC 2008: depths on a grid, velocities on its faces carried along semi-Lagrangian,
-  upwind fluxes kept from overdrawing a cell (`forge_physics::shallow`, #144). A. Ritter's
-  dam-break solution (1892) for its test.
+  upwind fluxes kept from overdrawing a cell (`forge_physics::shallow`, #144; on the GPU,
+  `forge_render::shallow`, #162). A. Ritter's dam-break solution (1892) for its test.
 - **The lab's particle liquid** (`forge_render::liquid`, #156, D-044):
   - **APIC:** Chenfanfu Jiang, Craig Schroeder, Andrew Selle, Joseph Teran and Alexey
     Stomakhin, "The Affine Particle-In-Cell Method", ACM SIGGRAPH 2015. The particles carry their

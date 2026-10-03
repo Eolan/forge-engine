@@ -124,7 +124,7 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   the authoritative shallow-water model on the CPU, drawn as fresh water, carrying crates,
   barrels and logs. A dam break in a glass tank ✅ (#156, D-044, `--lab tank` and
   `--lab tank-bench`): the GPU's particle liquid, 590 000 particles on a 1.25 cm grid, drawn
-  through the glass, settling 1 mm off its level. Next: the GPU's shallow-water layer and splash particles (step 8's rest),
+  through the glass, settling 1 mm off its level. The GPU's shallow-water layer over the flood ✅ (#162). Next: splash particles (step 8's rest),
   step 7's skinned creatures (GPU skinning, with Phase 7's first step), then Phase 4's sky.
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
@@ -443,8 +443,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 8. **Fluids:** the authoritative water model, a dam break ✅ (#144, `--lab flood`:
    `forge_physics::shallow`, a staggered grid of columns, drawn as a pool by the water pass),
    two-way coupling ✅ (#151: what floats pushes the water aside, its volume under it a thickness
-   that the water's slopes see); left: the GPU's shallow-water layer near the player shadowing
-   it, particles for splashes.
+   that the water's slopes see), the GPU's finer layer shadowing it ✅ (#162: 6.25 cm cells over
+   the lab's basin, pulled towards the columns each frame, +0.30 ms); left: particles for
+   splashes (#162's step 2), and the layer as a window round the player on the island.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a

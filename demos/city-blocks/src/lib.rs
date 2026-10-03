@@ -415,6 +415,19 @@ struct Args {
     /// No waves from the movers in the lakes and the sea (#107's A/B for the wakes).
     #[arg(long)]
     no_wakes: bool,
+    /// Draw the flood's columns themselves, not the GPU's finer layer that shadows them (#162's
+    /// A/B).
+    #[arg(long)]
+    no_gpu_water: bool,
+    /// The GPU's layer: fine cells along a column's side (#162).
+    #[arg(long, default_value_t = 4)]
+    gpu_water_ratio: u32,
+    /// The GPU's layer: its steps a tick of the columns'.
+    #[arg(long, default_value_t = 2)]
+    gpu_water_substeps: u32,
+    /// The GPU's layer: the share of its gap to the columns it closes a frame.
+    #[arg(long, default_value_t = 0.25)]
+    gpu_water_rate: f32,
     /// No spray where the water splashes: the steps' falls, a barrel dropped into a lake, the
     /// towed barrel's bow (#107's A/B for the splashes).
     #[arg(long)]
@@ -552,6 +565,10 @@ struct Gallery {
     behind_taa: Option<Taa>,
     /// `FORGE_HASH_IMAGES=1`: per-frame image hashes in the log (#161).
     hasher: Option<forge_render::debug_hash::ImageHasher>,
+    /// The GPU's finer layer over the flood's columns (#162), made at the first frame that has
+    /// them, and the columns' tick it last followed.
+    shallow: Option<forge_render::ShallowLayer>,
+    shallow_tick: Option<u64>,
     liquid_asked: [Option<u64>; forge_gpu::FRAMES_IN_FLIGHT],
     /// The lab's tick at which the liquid's next line is due.
     liquid_next_log: u64,
@@ -1169,6 +1186,8 @@ impl Gallery {
             space,
             liquid,
             behind_taa,
+            shallow: None,
+            shallow_tick: None,
             hasher: std::env::var_os("FORGE_HASH_IMAGES")
                 .is_some_and(|v| v != "0")
                 .then(|| forge_render::debug_hash::ImageHasher::new(&ctx.device, &ctx.shaders))
@@ -1967,8 +1986,88 @@ impl Demo for Gallery {
             if let Some(barrels) = self.barrels.as_ref().filter(|_| !self.args.no_floaters) {
                 surface.set_floaters(&barrels.floaters(self.sea_time, camera));
             }
-            // The flood's water as the lab's world holds it (#144).
-            if let Some(pool) = self.lab.as_mut().and_then(lab::Lab::pool) {
+            // The flood's water as the lab's world holds it (#144): through the GPU's finer layer
+            // that shadows its columns (#162), or the columns themselves.
+            let columns = if self.args.no_gpu_water {
+                None
+            } else {
+                self.lab.as_mut().and_then(lab::Lab::columns)
+            };
+            if let Some((now, pool)) = columns {
+                if self.shallow.is_none() {
+                    let grid = forge_render::ShallowGrid {
+                        columns: [pool.size[0] as u32, pool.size[1] as u32],
+                        spacing: pool.spacing,
+                        origin: [pool.origin[0] as f32, pool.origin[1] as f32],
+                        ratio: self.args.gpu_water_ratio.max(1),
+                    };
+                    let mut layer =
+                        forge_render::ShallowLayer::new(&ctx.device, &ctx.shaders, grid)?;
+                    layer.params = forge_render::ShallowParams {
+                        substeps: self.args.gpu_water_substeps.max(1),
+                        rate: self.args.gpu_water_rate.clamp(0.0, 1.0),
+                        friction: pool.friction,
+                        gravity: pool.gravity,
+                    };
+                    tracing::info!(
+                        cells = ?grid.cells(),
+                        cell_m = grid.fine_spacing(),
+                        mib = format!("{:.1}", layer.bytes() as f64 / 1_048_576.0),
+                        "the GPU's water layer"
+                    );
+                    self.shallow = Some(layer);
+                }
+                let layer = self.shallow.as_ref().expect("made above");
+                // The ticks the columns took since the last frame; anything else (a reset, a
+                // replay, a correction from the server) starts the layer again from them.
+                let ticks = match self.shallow_tick {
+                    Some(last) if now >= last && now - last <= 8 => (now - last) as u32,
+                    _ => {
+                        layer.reset();
+                        0
+                    }
+                };
+                self.shallow_tick = Some(now);
+                if let Some(stats) = layer.take_stats(frame.slot) {
+                    tracing::info!(
+                        tick = now,
+                        volume_m3 = format!("{:.3}", stats.volume),
+                        columns_m3 = format!("{:.3}", stats.columns),
+                        gap = format!(
+                            "{:.3}%",
+                            100.0 * (stats.volume - stats.columns) / stats.columns.max(1e-9)
+                        ),
+                        mean_gap_mm = format!("{:.2}", 1000.0 * stats.mean_gap),
+                        largest_gap_mm = format!("{:.1}", 1000.0 * stats.largest_gap),
+                        "the GPU's water layer"
+                    );
+                }
+                let (u, w) = pool.faces();
+                let state = layer.import(&mut frame.graph);
+                layer.simulate(
+                    &mut frame.graph,
+                    state,
+                    frame.slot,
+                    forge_render::ShallowColumns {
+                        depth: &pool.depth,
+                        u,
+                        w,
+                        floats: &pool.displaced,
+                        bed: &pool.bed,
+                    },
+                    ticks,
+                    forge_sim::TICK,
+                    ctx.frames_rendered.is_multiple_of(60),
+                );
+                let grid = layer.grid();
+                surface.set_pool_on_gpu(forge_render::WaterPoolOnGpu {
+                    buffer: state.buffer,
+                    samples: state.samples,
+                    origin: grid.fine_origin(),
+                    spacing: grid.fine_spacing(),
+                    size: grid.cells(),
+                });
+            } else if let Some(pool) = self.lab.as_mut().and_then(lab::Lab::pool) {
                 surface.set_pool(&WaterPool {
                     origin: pool.origin,
                     spacing: pool.spacing,

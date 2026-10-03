@@ -27,6 +27,7 @@ pub mod placement;
 pub mod precision;
 pub mod probes;
 pub mod raytrace;
+pub mod shallow;
 pub mod sky;
 pub mod splashes;
 pub mod starfield;
@@ -60,6 +61,9 @@ pub use meshlet::{
     RayRequests, SwRaster,
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
+pub use shallow::{
+    ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
+};
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
 pub use splashes::{SPLASH_CAPACITY, SplashParams, SplashSource, SplashStats, WaterSplashes};
 pub use starfield::Starfield;
@@ -69,7 +73,7 @@ pub use upscale::{DlssUpscaler, UpscaleCamera};
 pub use wakes::{MAX_WAKES, WakeFrame, WaterWake, WaterWakes};
 pub use water::{
     MAX_FLOATERS, MAX_POOL_SAMPLES, WATER_MIPS, WATER_SIZE, WaterCascadeDesc, WaterCascades,
-    WaterCaustics, WaterFloater, WaterFrame, WaterLake, WaterMouth, WaterPool, WaterRiverPoint,
-    WaterSample, WaterShore, WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams,
-    WetGround,
+    WaterCaustics, WaterFloater, WaterFrame, WaterLake, WaterMouth, WaterPool, WaterPoolOnGpu,
+    WaterRiverPoint, WaterSample, WaterShore, WaterShoreTrain, WaterStone, WaterSurface,
+    WaterSurfaceParams, WetGround,
 };

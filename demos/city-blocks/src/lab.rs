@@ -2209,6 +2209,14 @@ impl Lab {
             || shown.convoy.as_ref().is_some_and(|c| c.held(&shown.world))
     }
 
+    /// The flood's columns as the shown world holds them, and the world's tick, for the GPU's
+    /// layer that shadows them (#162).
+    pub(crate) fn columns(&mut self) -> Option<(u64, &forge_physics::shallow::Pool)> {
+        let shown = self.shown();
+        let now = shown.now();
+        shown.water.as_ref().map(|water| (now, water))
+    }
+
     /// The flood's water as the shown world holds it, for its drawing.
     pub(crate) fn pool(&mut self) -> Option<PoolView> {
         let water = self.shown().water.as_ref()?;

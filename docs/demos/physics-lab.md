@@ -27,7 +27,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `space` | a sci-fi spaceship in zero g over a planet under the stars: momentum kept through a crash into floating crates | ✅ #150 |
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
-| `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats, which pushes it aside | ✅ #144, #151 |
+| `flood` | a dam break: the authoritative shallow-water model, drawn through the GPU's finer layer that shadows it, carrying what floats, which pushes it aside | ✅ #144, #151, #162 |
 | `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
 | `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
@@ -562,6 +562,39 @@ A tick: **1.12 ms**, against 0.90 for the same run before (measured the same day
 alone gives 1.00 ms, so much of the rest is the floaters moving differently, more of them
 jostling.
 
+### The GPU's finer layer (issue #162)
+
+What is drawn is now a finer grid on the GPU, `forge_render::ShallowLayer`
+(`shaders/shallow.slang`), as D-044 planned: the heightfield stays authoritative and the GPU
+adds detail near the player. `--no-gpu-water` draws the columns themselves.
+- **The grid:** 768 × 384 cells of 6.25 cm, four a column's side, over the whole basin
+  (12.4 MiB).
+- **The scheme:** the column model's, ported pass for pass (advect, the share each cell can
+  give, the depths, the front and the slopes), each tick in two steps (`--gpu-water-substeps`).
+  Each pass writes what it does not read, with no atomics: three runs and the serial frame give
+  the same image.
+- **Shadowing:** once a frame, each block of 4 × 4 fine cells moves a quarter of the way to its
+  column's depth (the same amount on each, so the column's volume is what moves), and each fine
+  face a quarter of the way to the columns' velocity there (`--gpu-water-rate`). What floats
+  is taken between the columns bilinearly. Nothing reads the layer back: buoyancy, the replay
+  and the network stay on the columns.
+- **How close it stays,** before each frame's pull: the volume to the columns' to the litre
+  (both keep theirs), a wet column's fine cells 4–8 mm from its depth on average, at most 11–21 cm
+  at the front.
+- **The look:** the water curls round a floating crate where the columns cut a square hole, and
+  the patches pushed aside round the barrels round off.
+
+![The flood at tick 120, close: the columns drawn (left), the GPU's layer (right)](images/physics-lab-flood-gpu.png)
+
+**Its cost,** at 1600 × 900: the frame 1.41 → 1.71 ms of GPU. The layer's passes take
+0.15 ms (`shallow/front` 0.041, `shallow/apply` 0.039, `shallow/advect` 0.030,
+`shallow/give` 0.028, the pull and the samples 0.018), and the surface's draw 0.050 → 0.119 ms
+for sixteen times the quads; the rest is the passes' latency. Four steps a tick cost
+0.78 ms in all for the same gaps.
+
+**Next (#162's step 2):** splashes where the layer fails, ballistic particles spawned at a steep
+front or an impact and given back where they land.
+
 ## `tank`, `tank-bench`, `tank-hole`, `tank-blocks`: a dam break in a glass tank (issue #156)
 
 ```
@@ -1093,7 +1126,8 @@ twin; from the break scene (#142) `lab-break85` (the ball through the wall) with
 `lab-break300` (the wall broken, the column in pieces); and from the creatures (#143)
 `lab-creatures120` (posed) with its twin, `lab-creatures-throw240` (struck by balls) and
 `lab-creatures-limp240` (let go); from the flood (#144) `lab-flood150` (the water running
-down the basin) with its twin and `lab-flood300` (spread round the blocks); and from the
+down the basin) with its twin, `lab-flood300` (spread round the blocks) and `lab-flood150-columns`
+(the columns drawn without the GPU's layer, #162); and from the
 dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3000` (all down);
 and from the bridge (#147) `lab-bridge360` (the deck falling with two cars) with its twin and
 `lab-bridge600` (in the gap); and the rocket (#148) at full throttle with the stick a tenth

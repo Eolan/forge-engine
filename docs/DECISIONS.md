@@ -1949,6 +1949,12 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
   (`--liquid-cycles`): at the settings that keep still water still, it saves a fifth of the
   sweeps' time at best, and leaves its worst cell 20 times as far off (`demos/physics-lab.md`).
 
+**Built, item 5's first step (#162, 2026-10-04):** the GPU's shallow-water layer over the lab's
+flood (`forge_render::ShallowLayer`, `docs/demos/physics-lab.md`). It is the column model's scheme
+at four times the resolution (6.25 cm over the whole basin), pulled a quarter of the way to the
+columns each frame, never read back; +0.30 ms at 1600 × 900. Left: the ballistic particles, and a
+window round the player for the island.
+
 **The questions put to the owner** (answered above):
 1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be
    grid-free (PBF or SPH: more compression, more tuning)?

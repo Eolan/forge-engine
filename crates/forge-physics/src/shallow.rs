@@ -329,6 +329,12 @@ impl Pool {
         }
     }
 
+    /// The velocities on the faces: along x, `(nx + 1) × nz` (face `x` of a row on cell `x`'s −x
+    /// side), and along z, `nx × (nz + 1)`; m/s. For a finer layer that shadows the pool (#162).
+    pub fn faces(&self) -> (&[f32], &[f32]) {
+        (&self.u, &self.w)
+    }
+
     /// The water's mean velocity on cell `(x, z)` (world x, z; m/s), zero where it is dry.
     pub fn velocity_at(&self, x: usize, z: usize) -> [f32; 2] {
         let nx = self.size[0];

@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
-    FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
-    MemoryLocation, Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, TransientDesc,
-    VertexPipelineDesc, vk,
+    Buffer, BufferAccess, BufferDesc, BufferHandle, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT,
+    FrameGraph, FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle,
+    MemoryCategory, MemoryLocation, Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage,
+    TransientDesc, VertexPipelineDesc, vk,
 };
 use glam::{DVec3, Mat4, Vec2, Vec3};
 
@@ -722,6 +722,22 @@ pub struct WaterPool<'a> {
     pub samples: &'a [[f32; 4]],
 }
 
+/// A pool's water written on the GPU this frame (#162, [`crate::ShallowLayer`]): samples laid
+/// out as [`WaterPool`]'s, in a buffer of the frame's graph.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterPoolOnGpu {
+    /// The buffer holding the samples, which the surface's pass reads.
+    pub buffer: BufferHandle,
+    /// The samples' device address.
+    pub samples: u64,
+    /// World x and z (the sea's frame) of the first sample, metres.
+    pub origin: [f32; 2],
+    /// Metres between samples.
+    pub spacing: f32,
+    /// Samples along x and z.
+    pub size: [u32; 2],
+}
+
 /// The floaters' grid around `camera` (world x and z): its origin, and per cell the first entry
 /// of its list and their count (16 bits each), then the lists, the floaters' indices. A floater
 /// is listed in each cell its reach overlaps; one past the grid, or past its entries, is left
@@ -1198,6 +1214,9 @@ pub struct WaterSurface {
     /// The pool [`WaterSurface::set_pool`] gave for the next draw (#144): its frame, its size
     /// and its samples.
     pool: std::cell::RefCell<Option<PoolUpload>>,
+    /// The pool [`WaterSurface::set_pool_on_gpu`] gave for the next draw (#162), drawn in place
+    /// of [`WaterSurface::set_pool`]'s.
+    pool_on_gpu: std::cell::Cell<Option<WaterPoolOnGpu>>,
     /// Whether the sea is drawn ([`WaterSurface::set_sea`]).
     sea: std::cell::Cell<bool>,
     /// The surface's quads as indices into a level's vertices ([`surface_indices`]), and each
@@ -1751,6 +1770,7 @@ impl WaterSurface {
             blocks,
             floaters: std::cell::RefCell::new(Vec::new()),
             pool: std::cell::RefCell::new(None),
+            pool_on_gpu: std::cell::Cell::new(None),
             sea: std::cell::Cell::new(true),
             surface_indices,
             surface_ranges,
@@ -1778,6 +1798,13 @@ impl WaterSurface {
                     pool.samples[..n].to_vec(),
                 )
             });
+    }
+
+    /// A pool's water the GPU writes this frame (#162) for the next [`WaterSurface::draw`],
+    /// drawn in place of [`WaterSurface::set_pool`]'s; a draw without one draws none.
+    pub fn set_pool_on_gpu(&self, pool: WaterPoolOnGpu) {
+        self.pool_on_gpu
+            .set((pool.size[0] >= 2 && pool.size[1] >= 2).then_some(pool));
     }
 
     /// What floats in the water this frame (#107): at most [`MAX_FLOATERS`] of `floaters`, the
@@ -2087,13 +2114,20 @@ impl WaterSurface {
         };
         // A pool's water (#144), after the floaters: its samples, and its quads to draw.
         let pool = self.pool.borrow_mut().take();
-        let pool_samples = floaters + FLOATER_BYTES as u64;
-        let (pool_frame, pool_size, pool_vertices) = match &pool {
-            Some((frame, size, samples)) => {
+        let pool_on_gpu = self.pool_on_gpu.take();
+        let mut pool_samples = floaters + FLOATER_BYTES as u64;
+        let (pool_frame, pool_size, pool_vertices) = match (&pool, pool_on_gpu) {
+            // The GPU's layer (#162), in place of the columns.
+            (_, Some(gpu)) => {
+                pool_samples = gpu.samples;
+                let frame = [gpu.origin[0], gpu.origin[1], gpu.spacing, 0.0];
+                (frame, gpu.size, (gpu.size[0] - 1) * (gpu.size[1] - 1) * 6)
+            }
+            (Some((frame, size, samples)), None) => {
                 block.write(pool_samples - address, samples);
                 (*frame, *size, (size[0] - 1) * (size[1] - 1) * 6)
             }
-            None => ([0.0; 4], [0; 2], 0),
+            (None, None) => ([0.0; 4], [0; 2], 0),
         };
         let pool_pipeline = if fresh_water.is_some() || params.camera.y < FRESH_SEA_REACH {
             &self.pools_under
@@ -2146,6 +2180,9 @@ impl WaterSurface {
         }
         if let Some(clouds) = params.clouds {
             pass = pass.image(clouds.image, ImageAccess::Sampled(fragment));
+        }
+        if let Some(gpu) = pool_on_gpu {
+            pass = pass.buffer(gpu.buffer, BufferAccess::ShaderRead(vertex));
         }
         if let Some(wakes) = params.wakes {
             pass = pass.image(wakes.slopes, ImageAccess::Sampled(fragment));

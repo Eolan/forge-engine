@@ -21,7 +21,7 @@ use crate::device::{Device, QueueKind};
 use crate::error::Result;
 
 /// Timestamps per frame slot (a start per batch, a mark per zone, the frame's end).
-pub const MAX_MARKS_PER_FRAME: u32 = 96;
+pub const MAX_MARKS_PER_FRAME: u32 = 256;
 
 /// One measured span of GPU work.
 #[derive(Clone, Copy, Debug)]
