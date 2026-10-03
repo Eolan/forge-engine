@@ -489,6 +489,10 @@ struct Args {
     /// (plain colours), to compare.
     #[arg(long, value_enum, default_value_t = TextureMode::Full)]
     textures: TextureMode,
+    /// Let the tank's water bend the scene as drawn, aliased, rather than anti-aliased by a TAA
+    /// of its own (#156: the A/B of that TAA).
+    #[arg(long)]
+    no_behind_taa: bool,
     /// Resample TAA's history through Catmull-Rom (5 bilinear fetches), as before D-045, rather
     /// than Lanczos-3 (36 texels).
     #[arg(long)]
@@ -544,6 +548,8 @@ struct Gallery {
     /// In `--lab tank`, the GPU liquid (#156), and per frame slot the lab's tick its statistics
     /// were asked at.
     liquid: Option<forge_render::Liquid>,
+    /// The TAA of the scene behind the tank's water (#156), its own history.
+    behind_taa: Option<Taa>,
     liquid_asked: [Option<u64>; forge_gpu::FRAMES_IN_FLIGHT],
     /// The lab's tick at which the liquid's next line is due.
     liquid_next_log: u64,
@@ -797,6 +803,17 @@ impl Gallery {
             )
         })
         .transpose()?;
+        // The scene behind the tank's water, anti-aliased by a TAA of its own before the water
+        // bends it (#156): bent differently every frame, an aliased scene's edges cannot be
+        // averaged after.
+        let behind_taa = (liquid.is_some() && !args.no_behind_taa)
+            .then(|| -> Result<Taa> {
+                let mut behind =
+                    Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
+                behind.lanczos = taa.lanczos;
+                Ok(behind)
+            })
+            .transpose()?;
         // The cloud layer (#145), over the given share of the sky; none at 0, nor in space, nor on the
         // tank's bench, nor in the sharpness room.
         let clouds = (args.clouds > 0.0 && space.is_none() && !bench && !room)
@@ -1149,6 +1166,7 @@ impl Gallery {
             clouds_previous: Mat4::IDENTITY,
             space,
             liquid,
+            behind_taa,
             liquid_asked: [None; forge_gpu::FRAMES_IN_FLIGHT],
             liquid_next_log: 0,
             liquid_reset: false,
@@ -1240,6 +1258,9 @@ impl Demo for Gallery {
         self.renderer.resize(ctx.extent())?;
         self.taa.resize(ctx.extent())?;
         self.taa.reset_history();
+        if let Some(behind) = &mut self.behind_taa {
+            behind.resize(ctx.extent())?;
+        }
         if let Some((dlss, _)) = &mut self.dlaa {
             dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
         }
@@ -2007,47 +2028,8 @@ impl Demo for Gallery {
                 self.splash_born += u64::from(stats.fresh);
             }
         }
-        // The glass tank and its water (#156), over the scene and the sky; its reactive mask for TAA
-        // (the spray's, where there is spray, comes first: the tank has none).
-        if let (Some(liquid), Some(state)) = (&self.liquid, liquid_state) {
-            let mask = liquid.draw(
-                &mut frame.graph,
-                state,
-                frame.slot,
-                &sky,
-                LiquidDrawParams {
-                    view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
-                    corner: lab::tank::corner(bench) - camera_in_scene,
-                    sun_dir: self.renderer.sun_dir,
-                    sun_radiance: self.renderer.sun_color
-                        * (self.renderer.sun_illuminance * exposure),
-                    sky_scale: self.renderer.sun_illuminance * exposure,
-                    // The bench's background: a dull violet card in the sun.
-                    background: bench.then(|| {
-                        BENCH_BACKGROUND
-                            * (self.renderer.sun_illuminance * exposure / std::f32::consts::PI)
-                    }),
-                    camera: camera_in_scene,
-                    frame: self.renderer.frame_address(frame.slot),
-                    movers: targets.movers,
-                    mode: self.liquid_mode,
-                },
-                taa_frame.color,
-                targets.depth,
-                extent,
-            );
-            reactive = reactive.or(Some(mask));
-        }
-        if metered {
-            // Meter the finished HDR scene for the exposure of the frames to come.
-            self.meter.measure(
-                &mut frame.graph,
-                frame.slot,
-                taa_frame.color,
-                extent,
-                exposure,
-            );
-        }
+        // The motion vectors, before the tank's water, whose scene behind them a TAA takes. They
+        // need only the depth and the cameras.
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
@@ -2062,6 +2044,65 @@ impl Demo for Gallery {
                 camera.view_proj,
                 taa_frame.previous_from_current,
                 taa_frame.jitter,
+            );
+        }
+        // The glass tank and its water (#156), over the scene and the sky; its reactive mask for TAA
+        // (the spray's, where there is spray, comes first: the tank has none).
+        if let (Some(liquid), Some(state)) = (&self.liquid, liquid_state) {
+            let background = bench.then(|| {
+                BENCH_BACKGROUND * (self.renderer.sun_illuminance * exposure / std::f32::consts::PI)
+            });
+            let mut scene = liquid.copy_scene(
+                &mut frame.graph,
+                background,
+                taa_frame.color,
+                targets.depth,
+                extent,
+            );
+            if let Some(behind) = &mut self.behind_taa {
+                let behind_frame = behind.follow(&taa_frame, scene);
+                scene = self.behind_taa.as_ref().expect("just used").resolve_hdr(
+                    &mut frame.graph,
+                    "liquid/scene TAA",
+                    &behind_frame,
+                    targets.depth,
+                    motion,
+                );
+            }
+            let mask = liquid.draw(
+                &mut frame.graph,
+                state,
+                frame.slot,
+                &sky,
+                LiquidDrawParams {
+                    view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                    corner: lab::tank::corner(bench) - camera_in_scene,
+                    sun_dir: self.renderer.sun_dir,
+                    sun_radiance: self.renderer.sun_color
+                        * (self.renderer.sun_illuminance * exposure),
+                    sky_scale: self.renderer.sun_illuminance * exposure,
+                    // The bench's background: a dull violet card in the sun.
+                    background,
+                    camera: camera_in_scene,
+                    frame: self.renderer.frame_address(frame.slot),
+                    movers: targets.movers,
+                    mode: self.liquid_mode,
+                },
+                scene,
+                taa_frame.color,
+                targets.depth,
+                extent,
+            );
+            reactive = reactive.or(Some(mask));
+        }
+        if metered {
+            // Meter the finished HDR scene for the exposure of the frames to come.
+            self.meter.measure(
+                &mut frame.graph,
+                frame.slot,
+                taa_frame.color,
+                extent,
+                exposure,
             );
         }
         let dlaa_on = self.dlaa_on;

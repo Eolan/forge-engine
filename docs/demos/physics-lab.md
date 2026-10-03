@@ -717,8 +717,12 @@ round the obstacles", where the column model of `flood` stuck above the level an
   stair-step. The scene behind the water is the frame's own, before TAA smooths it: its shadows'
   edges are sharp and aliased each frame, and soft only once TAA has averaged the sun's disc. The
   water bends that image differently every frame, so TAA cannot average it (with no reactive
-  mask at all the stairs stay). A copy of the scene behind the water with TAA of its own would
-  fix it.
+  mask at all the stairs stay).
+  - **Fixed:** the copy of the scene behind the water now has a TAA of its own
+    (`liquid/scene TAA`, 0.079 ms at 1600 × 900), with the frame's jitter and motion vectors
+    and its own history, so the water bends an anti-aliased scene. Through moving water, the
+    posts' sides and the shadows' edges were hatched and jagged; they are now smooth.
+    `--no-behind-taa` shows the old way.
 - **The floor:** the floor's glass lies on the table and mirrors nothing.
 - **For TAA:** a reactive mask where the surface moves (at most half, at 3 m/s).
 - **At the glass:** the field goes on into the glass and the floor as it stands beside them (air

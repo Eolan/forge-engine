@@ -219,8 +219,9 @@ flake too (20 and 19 px in two Tier 2 runs that day). Since TAA's image is sharp
 history resampled through Lanczos-3 (D-045, 2026-10-03), the flake is larger: three runs of one
 build were 1063–1121 px apart (ꟻLIP mean 0.0023–0.0024, largest 0.08–0.09), the PQ codes'
 HDR-ꟻLIP mean 0.0063. So for the ballad's frame 600 the signature is now at most 1500 px and a
-ꟻLIP mean at most 0.003 (the PQ codes: 0.008); the largest values keep their bounds, which tell
-a shape from scattered pixels. The physics lab's dominoes at frame 3000 (`*-lab-dominoes3000`,
+ꟻLIP mean at most 0.003 (the PQ codes: 0.008); the preview's largest value keeps its bound, which
+tells a shape from scattered pixels. The PQ codes' largest then reached 0.284 (a few scattered
+pixels on one rock's edge, the preview's own 0.078), so theirs is 0.30. The physics lab's dominoes at frame 3000 (`*-lab-dominoes3000`,
 #146) flake too: on 2026-10-03 the fallback path's differed between a Tier 2 run's two batches by
 3 px (3 levels, ꟻLIP mean 0.00001), and two more runs of the same build were 1–3 px from each
 and from both, the physics' digest the same to the bit each time. `compare.sh` judges it by the

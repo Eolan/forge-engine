@@ -458,6 +458,81 @@ impl Taa {
         }
     }
 
+    /// A frame of this TAA's own history that follows `main`, another TAA's frame of this
+    /// frame: its jitter, reprojection, exposure and blend, resolving `color` with
+    /// [`Taa::resolve_hdr`]. For the scene behind the tank's water (#156), anti-aliased before
+    /// the water bends it: bent differently every frame, an aliased scene cannot be averaged
+    /// after.
+    pub fn follow(&mut self, main: &TaaFrame, color: ImageHandle) -> TaaFrame {
+        let reset = self.reset || main.reset;
+        let written = (self.frame_index % 2) as usize;
+        self.frame_index += 1;
+        self.reset = false;
+        TaaFrame {
+            color,
+            reset,
+            blend: if reset { 1.0 } else { main.blend },
+            history_scale: if reset { 1.0 } else { main.history_scale },
+            written,
+            ..*main
+        }
+    }
+
+    /// Declares `label`, the resolve of `frame` into its history alone, and returns it: the
+    /// frame anti-aliased, pre-exposed HDR, no tone curve.
+    pub fn resolve_hdr<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        label: &'static str,
+        frame: &TaaFrame,
+        depth: ImageHandle,
+        motion: ImageHandle,
+    ) -> ImageHandle {
+        use vk::PipelineStageFlags2 as S;
+        let frame = *frame;
+        let extent = frame.extent;
+        let history_written = graph.import(&self.history[frame.written]);
+        let history_read = graph.import(&self.history[1 - frame.written]);
+        let pipeline = &self.pipeline_history;
+        let lanczos = self.lanczos;
+        graph
+            .pass(label)
+            .image(frame.color, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(motion, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(depth, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(history_read, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+            .image(history_written, ImageAccess::ColorAttachment)
+            .run(move |resources, commands| {
+                fullscreen_pass(
+                    commands,
+                    &[resources.view(history_written)],
+                    extent,
+                    pipeline,
+                    &ResolvePush {
+                        color: resources.sampled(frame.color).0,
+                        motion: resources.sampled(motion).0,
+                        depth: resources.sampled(depth).0,
+                        history: resources.sampled(history_read).0,
+                        width: extent.width,
+                        height: extent.height,
+                        jitter: frame.jitter.to_array(),
+                        blend: frame.blend,
+                        history_scale: frame.history_scale,
+                        curve: 0,
+                        bloom: u32::MAX,
+                        bloom_strength: 0.0,
+                        output: OutputPush::zeroed(),
+                        reactive: u32::MAX,
+                        tables: ToneTablesPush::zeroed(),
+                        lanczos: u32::from(lanczos),
+                        pad: 0,
+                    },
+                );
+                Ok(())
+            });
+        history_written
+    }
+
     /// Declares the pass "temporal/motion vectors": for every pixel of the frame drawn with
     /// `depth` (the depth buffer the scene was drawn with), the offset in UV to where it was in
     /// the previous frame, without jitter (camera motion; nothing in the scene moves yet). The

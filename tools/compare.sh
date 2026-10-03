@@ -36,6 +36,9 @@
 # frame 600 flakes larger: three runs of one build on 2026-10-03 were 1063-1121 px apart, FLIP
 # mean 0.0023-0.0024, largest 0.08-0.09, and the PQ codes' HDR-FLIP mean 0.0063. So for the
 # ballad's frame 600 the signature is at most 1500 px and a mean at most 0.003 (PQ: 0.008).
+# The PQ codes' largest error then reached 0.284 (a Tier 2 run, 2026-10-03: a few scattered
+# pixels on one rock's edge, the preview's own 0.078), so its bound is 0.30; the preview, whose
+# signature must hold too, is what tells a shape.
 #
 # FORGE_EXPECT: the images a change is meant to alter, as patterns separated by spaces or commas
 # (for example 'mesh-island* mesh-shot-*'): their differences print "expected" and do not fail.
@@ -86,7 +89,7 @@ flake() {
       fi
       [[ $1 == *-ast-hdr600-pq ]] || return 1
       awk -v mean="$3" -v peak="$4" \
-        'BEGIN { exit !(mean != "" && peak != "" && mean <= 0.008 && peak < 0.22) }' || return 1
+        'BEGIN { exit !(mean != "" && peak != "" && mean <= 0.008 && peak < 0.30) }' || return 1
       preview_flaked "${1%-pq}"
       ;;
     *) return 1 ;;

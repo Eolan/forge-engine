@@ -1092,8 +1092,60 @@ impl Liquid {
         }
     }
 
+    /// Declares `liquid/scene copy`: `color` (the frame's HDR image, the scene's sky composed)
+    /// copied for the water's rays to take the scene behind it from, where `depth` is empty
+    /// `background` when there is one. Returns the copy; anti-aliased by a TAA of its own
+    /// ([`crate::Taa::follow`]), it is what [`Liquid::draw`] takes as `scene`.
+    pub fn copy_scene<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        background: Option<Vec3>,
+        color: ImageHandle,
+        depth: ImageHandle,
+        extent: vk::Extent2D,
+    ) -> ImageHandle {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let scene = graph.transient(TransientDesc {
+            name: "liquid scene",
+            width: extent.width,
+            height: extent.height,
+            format: HDR_FORMAT,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let groups = (extent.width.div_ceil(8), extent.height.div_ceil(8));
+        let copy = self.pipeline(Kernel::Copy);
+        graph
+            .pass("liquid/scene copy")
+            .image(color, ImageAccess::Sampled(compute))
+            .image(depth, ImageAccess::Sampled(compute))
+            .image(scene, ImageAccess::StorageWrite(compute))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(copy);
+                commands.push_constants(
+                    copy,
+                    &CopyPush {
+                        color: resources.sampled(color).0,
+                        copy: resources.storage(scene, 0).0,
+                        width: extent.width,
+                        height: extent.height,
+                        depth: resources.sampled(depth).0,
+                        plain: u32::from(background.is_some()),
+                        pad: [0; 2],
+                        background: background.unwrap_or(Vec3::ZERO).extend(0.0).to_array(),
+                    },
+                );
+                commands.dispatch(groups.0, groups.1, 1);
+                Ok(())
+            });
+        scene
+    }
+
     /// Declares `liquid/draw` over `color` (the frame's HDR image, the scene's sky composed)
-    /// against `depth`: the tank's glass and water. Returns the reactive mask TAA reads.
+    /// against `depth`: the tank's glass and water, the scene behind it taken from `scene`
+    /// ([`Liquid::copy_scene`], anti-aliased or not). Returns the reactive mask TAA
+    /// reads.
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
@@ -1102,6 +1154,7 @@ impl Liquid {
         slot: FrameSlot,
         sky: &SkyFrame,
         params: LiquidDrawParams,
+        scene: ImageHandle,
         color: ImageHandle,
         depth: ImageHandle,
         extent: vk::Extent2D,
@@ -1191,34 +1244,8 @@ impl Liquid {
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         };
-        let scene = graph.transient(image("liquid scene", HDR_FORMAT));
         let reactive = graph.transient(image("liquid reactive mask", vk::Format::R32_SFLOAT));
         let groups = (extent.width.div_ceil(8), extent.height.div_ceil(8));
-        let copy = self.pipeline(Kernel::Copy);
-        let background = params.background;
-        graph
-            .pass(LABEL)
-            .image(color, ImageAccess::Sampled(compute))
-            .image(depth, ImageAccess::Sampled(compute))
-            .image(scene, ImageAccess::StorageWrite(compute))
-            .run(move |resources, commands| {
-                commands.bind_pipeline(copy);
-                commands.push_constants(
-                    copy,
-                    &CopyPush {
-                        color: resources.sampled(color).0,
-                        copy: resources.storage(scene, 0).0,
-                        width: extent.width,
-                        height: extent.height,
-                        depth: resources.sampled(depth).0,
-                        plain: u32::from(background.is_some()),
-                        pad: [0; 2],
-                        background: background.unwrap_or(Vec3::ZERO).extend(0.0).to_array(),
-                    },
-                );
-                commands.dispatch(groups.0, groups.1, 1);
-                Ok(())
-            });
         let clear = self.pipeline(Kernel::Clear);
         graph
             .pass(LABEL)

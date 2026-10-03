@@ -119,6 +119,8 @@ exposure (EV100, target, compensation, curve) the last.
   `post/display transform` 0.020 with bloom mixed in (`post/bloom` 0.041, as under TAA).
 - TAA's history through Lanczos-3 (D-045), the same room: `temporal/TAA resolve` 0.047 →
   0.077 ms, 36 texel loads in place of 5 bilinear fetches.
+- The scene behind the tank's water through a TAA of its own (#156): `liquid/scene TAA`
+  0.079 ms and `liquid/scene copy` 0.013 ms at 1600 × 900.
 - SSAA 2 × 2 for screenshots (D-045, `--ssaa`): the city's frame 2.363 → 5.134 ms at
   1600 × 900 (the frame drawn at 3200 × 1800), `post/ssaa` 0.021 ms.
 - MaxCLL and MaxFALL from the frame shown (#125), in every HDR mode: `post/hdr metadata
