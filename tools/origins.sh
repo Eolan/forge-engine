@@ -92,10 +92,11 @@ pair() {
   fi
 }
 
-# The same views as the batch's city60 and ast240 (tools/captures.sh), every page resident, no
+# The same views as the batch's city60 and ast240 (tools/captures.sh), at a fixed step (the clouds
+# drift on the clock, #145), every page resident, no
 # TAA on the ballad: the raw frame shows where the geometry moved.
 for origin in 0 $origins; do
-  capture "city-o$origin" 60 "$city" --stream-pool 0 --origin "$origin"
+  capture "city-o$origin" 60 "$city" --fixed-step --stream-pool 0 --origin "$origin"
   capture "ast-o$origin" 240 "$asteroids" --fixed-step --no-taa --origin "$origin"
 done
 say "== against the same view at the origin"

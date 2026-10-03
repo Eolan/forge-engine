@@ -181,12 +181,14 @@ for path in $paths; do
   capture "$path-ast-hdr240" 240 "$asteroids" --fixed-step --no-taa --tonemap aces2 --hdr offscreen "${flag[@]}"
   capture "$path-ast-hdr600" 600 "$asteroids" --fixed-step --tonemap aces2 --hdr offscreen "${flag[@]}"
   # city-blocks: every page resident (streaming would make the start depend on timing), and
-  # the gallery of the twenty props.
-  capture "$path-city60" 60 "$city" --stream-pool 0 "${flag[@]}"
-  capture "$path-city60-noocc" 60 "$city" --stream-pool 0 --no-occlusion "${flag[@]}"
-  capture "$path-city60-culled" 60 "$city" --stream-pool 0 --show-culled "${flag[@]}"
-  capture "$path-cityorbit120" 120 "$city" --stream-pool 0 --orbit "${flag[@]}"
-  capture "$path-gallery60" 60 "$city" --gallery "${flag[@]}"
+  # the gallery of the twenty props. At a fixed step, as every capture of city-blocks, island and
+  # physics-lab is since the clouds are on by default (#145): they drift on the scene's clock,
+  # which would otherwise run on the run's own timing.
+  capture "$path-city60" 60 "$city" --fixed-step --stream-pool 0 "${flag[@]}"
+  capture "$path-city60-noocc" 60 "$city" --fixed-step --stream-pool 0 --no-occlusion "${flag[@]}"
+  capture "$path-city60-culled" 60 "$city" --fixed-step --stream-pool 0 --show-culled "${flag[@]}"
+  capture "$path-cityorbit120" 120 "$city" --fixed-step --stream-pool 0 --orbit "${flag[@]}"
+  capture "$path-gallery60" 60 "$city" --fixed-step --gallery "${flag[@]}"
   # The island (#96) from its first view on the coast without its water (`--no-water`): its
   # heightfield, rocks and the stand-in sea.
   # The software rasteriser pinned on: its automatic switch follows how much the culls let
@@ -195,8 +197,8 @@ for path in $paths; do
   # of its first view's cut are loaded before the first frame (#121), so the fixed view reads
   # nothing more and a frame depends on no read's timing.
   island=(--island 7 --sw-raster on)
-  capture "$path-island60" 60 "$city" "${island[@]}" --no-water "${flag[@]}"
-  capture "$path-island60-noocc" 60 "$city" "${island[@]}" --no-water --no-occlusion "${flag[@]}"
+  capture "$path-island60" 60 "$city" --fixed-step "${island[@]}" --no-water "${flag[@]}"
+  capture "$path-island60-noocc" 60 "$city" --fixed-step "${island[@]}" --no-water --no-occlusion "${flag[@]}"
   # The island with its water (#105, the default): at a fixed step, so the waves are the same.
   capture "$path-water60" 60 "$city" "${island[@]}" --fixed-step "${flag[@]}"
   capture "$path-water60-noocc" 60 "$city" "${island[@]}" --fixed-step --no-occlusion "${flag[@]}"
@@ -207,8 +209,8 @@ for path in $paths; do
   capture "$path-clouds60-noocc" 60 "$city" "${island[@]}" --fixed-step --clouds 0.5 --no-occlusion "${flag[@]}"
   # Its 8 m ground streamed from the start view and resident (#121): equal, or the start view
   # missed pages the cut wants.
-  capture "$path-island8-60" 60 "$city" "${island[@]}" --island-drawn 8 --no-water "${flag[@]}"
-  capture "$path-island8-60-resident" 60 "$city" "${island[@]}" --island-drawn 8 --no-water --stream-pool 0 "${flag[@]}"
+  capture "$path-island8-60" 60 "$city" --fixed-step "${island[@]}" --island-drawn 8 --no-water "${flag[@]}"
+  capture "$path-island8-60-resident" 60 "$city" --fixed-step "${island[@]}" --island-drawn 8 --no-water --stream-pool 0 "${flag[@]}"
   # The island demo's golden shots (#96), each at its time of day, the exposure metered from the
   # scene: dawn over the largest mouth, the lake in the morning, the island from the sea in the
   # afternoon, dusk up a steep valley.
