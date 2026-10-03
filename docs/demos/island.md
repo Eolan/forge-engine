@@ -2757,8 +2757,8 @@ up:
 At 1600 × 900 on the 5070 Ti the march (`sky/clouds`) takes **0.22 ms** over half the sky and the
 shadow map **0.02 ms** (the island's start view: the frame 1.46 → 1.70 ms). With a low sun the
 slanting path through the layer crosses several clouds, and most of the ground lies in shade. Not
-yet: the clouds in the water's reflections and in the sky's irradiance, D-034's weather map from
-the climate, flying into them (Nubis³'s voxel clouds).
+yet: the clouds in the sky's irradiance (the water follows below), D-034's weather map from the
+climate, flying into them (Nubis³'s voxel clouds).
 
 **On the water** (the same day): the water pass reads the same shadow map where it lights the
 sea, the rivers, the lakes and a pool, so the sun's highlight and the light the water scatters
