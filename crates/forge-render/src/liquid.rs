@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
-    FrameSlot, GraphBuffer, ImageAccess, ImageHandle, MemoryCategory, MemoryLocation, Pipeline,
-    QueueKind, Result, ShaderCompiler, ShaderStage, TransientDesc, vk,
+    Buffer, BufferAccess, BufferDesc, BufferHandle, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT,
+    FrameGraph, FrameSlot, GraphBuffer, ImageAccess, ImageHandle, MemoryCategory, MemoryLocation,
+    Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
 use glam::{Mat4, UVec3, Vec2, Vec3};
 
@@ -198,6 +198,10 @@ pub struct LiquidDrawParams {
     /// mirrors and is lit by besides the sun; `None`: the sky.
     pub background: Option<Vec3>,
 }
+
+/// The liquid's buffer in a frame's graph ([`Liquid::import`]).
+#[derive(Clone, Copy, Debug)]
+pub struct LiquidState(BufferHandle);
 
 /// Mirrors `LiquidFrame` in `liquid.slang`.
 #[repr(C)]
@@ -592,12 +596,21 @@ impl Liquid {
         &self.pipelines[kernel as usize]
     }
 
+    /// The particles' and the grid's buffer in this frame's graph: imported once a frame and
+    /// handed to [`Liquid::simulate`] and [`Liquid::draw`]. Imported twice, the graph saw two
+    /// buffers, so the drawing did not wait for the frame's simulation on the async queue (the
+    /// water drawn from half-written sums, a few thousand pixels apart from the serial frame).
+    pub fn import<'f>(&'f self, graph: &mut FrameGraph<'f>) -> LiquidState {
+        LiquidState(graph.import_buffer(&self.state))
+    }
+
     /// Declares `liquid/simulate` on the async compute queue: the water seeded if it is new,
     /// then a substep for each of `steps` (at most [`LIQUID_MAX_SUBSTEPS`]), then with `stats`
     /// the statistics [`Liquid::take_stats`] returns once the frame is done.
     pub fn simulate<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
+        state: LiquidState,
         slot: FrameSlot,
         steps: &[LiquidStep],
         stats: bool,
@@ -659,7 +672,7 @@ impl Liquid {
         );
         let address = frame.address();
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        let state = graph.import_buffer(&self.state);
+        let state = state.0;
         let buffer: &'f Buffer = &self.state;
         let dispatch = |graph: &mut FrameGraph<'f>,
                         kernel: Kernel,
@@ -753,6 +766,7 @@ impl Liquid {
     pub fn draw<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
+        state: LiquidState,
         slot: FrameSlot,
         sky: &SkyFrame,
         params: LiquidDrawParams,
@@ -810,7 +824,7 @@ impl Liquid {
         );
         let address = view.address();
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        let state = graph.import_buffer(&self.state);
+        let state = state.0;
         let cell_count = cells.x * cells.y * cells.z;
         let brick_count = bricks.x * bricks.y * bricks.z;
         for (kernel, threads) in [

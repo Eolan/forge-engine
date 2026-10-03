@@ -1532,7 +1532,11 @@ impl Demo for Gallery {
         }
         // The glass tank's liquid (#156): the statistics a frame in this slot asked for, then the
         // substeps the lab's ticks owe it, on the async compute queue.
-        if let (Some(liquid), Some(lab)) = (&self.liquid, self.lab.as_mut()) {
+        // Its buffer imported once, for the simulation and the drawing both.
+        let liquid_state = self.liquid.as_ref().map(|l| l.import(&mut frame.graph));
+        if let (Some(liquid), Some(state), Some(lab)) =
+            (&self.liquid, liquid_state, self.lab.as_mut())
+        {
             if let Some(stats) = liquid.take_stats(frame.slot)
                 && let Some(tick) = self.liquid_asked[frame.slot.index].take()
             {
@@ -1550,7 +1554,7 @@ impl Demo for Gallery {
                 self.liquid_next_log = (now / every + 1) * every;
             }
             self.liquid_asked[frame.slot.index] = ask.then_some(now);
-            liquid.simulate(&mut frame.graph, frame.slot, &steps, ask);
+            liquid.simulate(&mut frame.graph, state, frame.slot, &steps, ask);
         }
         let targets = self.renderer.draw(
             &mut frame.graph,
@@ -1843,9 +1847,10 @@ impl Demo for Gallery {
         }
         // The glass tank and its water (#156), over the scene and the sky; its reactive mask for TAA
         // (the spray's, where there is spray, comes first: the tank has none).
-        if let Some(liquid) = &self.liquid {
+        if let (Some(liquid), Some(state)) = (&self.liquid, liquid_state) {
             let mask = liquid.draw(
                 &mut frame.graph,
+                state,
                 frame.slot,
                 &sky,
                 LiquidDrawParams {
