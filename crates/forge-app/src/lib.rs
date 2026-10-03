@@ -17,6 +17,7 @@ mod input;
 mod loading;
 mod overlay;
 mod profile;
+mod ssaa;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -97,6 +98,10 @@ pub struct AppConfig {
     pub hdr_stops: f32,
     /// The UI's white in HDR, in nits, over the calibration's and the OS's (`--hdr-ui-white`).
     pub hdr_ui_white: Option<f32>,
+    /// Supersample 2 × 2 (D-045, for screenshots): the demo draws at twice the window's width
+    /// and height ([`Context::extent`]) and the shell filters the frame down. Not with the
+    /// off-screen HDR mode.
+    pub ssaa: bool,
 }
 
 impl Default for AppConfig {
@@ -117,6 +122,7 @@ impl Default for AppConfig {
             hdr: HdrMode::Off,
             hdr_stops: 0.0,
             hdr_ui_white: None,
+            ssaa: false,
         }
     }
 }
@@ -146,6 +152,8 @@ pub struct Context {
     /// screen shows, and its frames do not count (`frames_rendered`, captures, the frame limit,
     /// the profile, the memory counters).
     pub loading: bool,
+    /// The frame's size over the window's, each way: 1, or [`ssaa::FACTOR`] when supersampling.
+    ssaa: u32,
     /// The first frame (in the frame slots' numbering) the demo recorded after the loading
     /// screen: the GPU zones of earlier frames are the loading screen's, not the demo's.
     counted_from: u64,
@@ -154,9 +162,14 @@ pub struct Context {
 }
 
 impl Context {
-    /// Current swapchain size.
+    /// The size the demo draws its frame at: the swapchain's, or twice it each way when
+    /// supersampling ([`AppConfig::ssaa`]).
     pub fn extent(&self) -> vk::Extent2D {
-        self.swapchain.extent()
+        let e = self.swapchain.extent();
+        vk::Extent2D {
+            width: e.width * self.ssaa,
+            height: e.height * self.ssaa,
+        }
     }
 
     /// Aspect ratio of the swapchain.
@@ -328,6 +341,8 @@ struct HdrPasses {
     meter: Option<ContentLightMeter>,
     /// The calibration pages (F5).
     calibration: Calibration,
+    /// Supersampling's last pass ([`AppConfig::ssaa`]), on the window's format.
+    ssaa: Option<ssaa::Ssaa>,
 }
 
 /// Switches the output to `mode` (issue #94). HDR10 and scRGB recreate the swapchain in that
@@ -703,6 +718,7 @@ impl<D: Demo> State<D> {
             profile: Profile::new(overlay_mode),
             graph,
             loading: false,
+            ssaa: 1,
             counted_from: 0,
             _surface: surface,
             _instance: instance,
@@ -718,8 +734,22 @@ impl<D: Demo> State<D> {
             preview: None,
             meter: None,
             calibration: Calibration::new(),
+            ssaa: None,
         };
         apply_hdr_mode(&mut ctx, &mut overlay, &mut hdr, requested)?;
+        if config.ssaa {
+            if ctx.output.mode == HdrMode::Offscreen {
+                tracing::warn!("no supersampling in the off-screen HDR mode");
+            } else {
+                ctx.ssaa = ssaa::FACTOR;
+                hdr.ssaa = Some(ssaa::Ssaa::new(
+                    &ctx.device,
+                    &ctx.shaders,
+                    ctx.swapchain.format(),
+                )?);
+                tracing::info!(extent = ?ctx.extent(), "supersampling 2 × 2");
+            }
+        }
         // `FORGE_HDR_CALIBRATION=peak|black|white` opens a calibration page (scripted captures).
         if let Ok(name) = std::env::var("FORGE_HDR_CALIBRATION") {
             match Page::parse(&name) {
@@ -991,6 +1021,17 @@ impl<D: Demo> State<D> {
             })
             .transpose()?;
 
+        // The window's format changes with HDR (F2): supersampling's pass follows it.
+        if let Some(pass) = &self.hdr.ssaa
+            && pass.format() != self.ctx.swapchain.format()
+        {
+            self.ctx.device.wait_idle();
+            self.hdr.ssaa = Some(ssaa::Ssaa::new(
+                &self.ctx.device,
+                &self.ctx.shaders,
+                self.ctx.swapchain.format(),
+            )?);
+        }
         self.ctx.frames.begin(slot)?;
         let record_start = Instant::now();
         {
@@ -1026,6 +1067,17 @@ impl<D: Demo> State<D> {
                     aspect: vk::ImageAspectFlags::COLOR,
                     mip_levels: 1,
                 })
+            } else if self.hdr.ssaa.is_some() && !self.ctx.loading {
+                let large = self.ctx.extent();
+                graph.transient(TransientDesc {
+                    name: "ssaa target",
+                    width: large.width,
+                    height: large.height,
+                    format: self.ctx.swapchain.format(),
+                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    mip_levels: 1,
+                })
             } else {
                 swapchain_image
             };
@@ -1037,6 +1089,14 @@ impl<D: Demo> State<D> {
                 dt,
             };
             self.demo.render(&mut self.ctx, &mut frame)?;
+            // Supersampled: the large frame filtered down to the window, which the rest takes.
+            let target = match &self.hdr.ssaa {
+                Some(pass) if target != swapchain_image => {
+                    pass.draw(&mut frame.graph, target, swapchain_image, extent);
+                    swapchain_image
+                }
+                _ => target,
+            };
             // In HDR (#125): a calibration page over the frame, or the content light of the
             // frame as shown (when its image can be sampled: always off-screen, on the display
             // when the surface allows it).

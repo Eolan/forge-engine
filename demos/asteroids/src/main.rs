@@ -241,6 +241,10 @@ struct Args {
     /// else 203).
     #[arg(long)]
     hdr_ui_white: Option<f32>,
+    /// Supersample 2 × 2 (D-045, for screenshots): the frame drawn at twice the window's width
+    /// and height and filtered down, about four times the cost.
+    #[arg(long)]
+    ssaa: bool,
     /// Fixed exposure value at ISO 100 instead of automatic exposure.
     #[arg(long)]
     ev100: Option<f32>,
@@ -1675,6 +1679,7 @@ fn main() -> Result<()> {
         hdr: args.hdr,
         hdr_stops: args.hdr_stops,
         hdr_ui_white: args.hdr_ui_white,
+        ssaa: args.ssaa,
         width: args.width,
         height: args.height,
         ..AppConfig::default()

@@ -945,6 +945,15 @@ samples it at the pixels' centres). Moving, with the sharpening:
 It costs 0.03 ms (the resolve 0.047 → 0.077 ms at 1600 × 900). No ringing shows: the history
 is clipped to the neighbourhood after it is sampled.
 
+**SSAA 2 × 2 for screenshots** (`--ssaa`, every demo): the shell hands the demo a frame twice the
+window's width and height and takes each window pixel as the mean of its four, in linear light.
+TAA and the sharpening still run, at the larger size.
+- **Sharpness:** MTF50 0.67–0.70 still and 0.60–0.66 panning at 2 m/s, an ideal pixel's even in
+  motion (TAA with everything above: 0.42–0.44; DLAA 0.43–0.48).
+- **Cost:** the city's frame 2.4 → 5.1 ms at 1600 × 900, and 0.02 ms for the filter. So it is for
+  captures and stills, not play.
+- Not with the off-screen HDR mode (it says so and draws at the window's size).
+
 **AgX with more contrast** (`--tonemap agx-punchy`, in G's cycle after AgX): Wrensch's "punchy"
 look, a power of 1.35 and saturation 1.4 between AgX's sigmoid and its outset. The black squares
 show at sRGB 0.055–0.08, against AgX's 0.20–0.23 and ACES's 0.07–0.09. The sunlit white wall

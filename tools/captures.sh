@@ -301,6 +301,8 @@ for path in $paths; do
     # (TAA's history resampled every frame: the edges across the motion softer).
     capture "$path-lab-room60" 60 "$lab" --lab room --fixed-step "${flag[@]}"
     capture "$path-lab-room-pan60" 60 "$lab" --lab room --fixed-step --pan 2 --view=-2,1.5,3,0,0 "${flag[@]}"
+    # The same, supersampled 2 × 2 (D-045: SSAA for screenshots).
+    capture "$path-lab-room-pan60-ssaa" 60 "$lab" --lab room --fixed-step --pan 2 --view=-2,1.5,3,0,0 --ssaa "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

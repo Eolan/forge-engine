@@ -32,6 +32,10 @@
 # physics lab's dominoes at frame 3000 (*-lab-dominoes3000, #146) flake the same way, judged by
 # the same signature: on 2026-10-03 two runs of one build gave 1 to 3 px apart (max 4 levels,
 # FLIP mean 0.00001) with the physics' digest the same to the bit.
+# Since TAA's image is sharpened and its history goes through Lanczos-3 (D-045), the ballad's
+# frame 600 flakes larger: three runs of one build on 2026-10-03 were 1063-1121 px apart, FLIP
+# mean 0.0023-0.0024, largest 0.08-0.09, and the PQ codes' HDR-FLIP mean 0.0063. So for the
+# ballad's frame 600 the signature is at most 1500 px and a mean at most 0.003 (PQ: 0.008).
 #
 # FORGE_EXPECT: the images a change is meant to alter, as patterns separated by spaces or commas
 # (for example 'mesh-island* mesh-shot-*'): their differences print "expected" and do not fail.
@@ -65,7 +69,11 @@ missing=""
 # signature.
 flake() {
   case $1 in
-    *-ast-taa600 | *-ast-hdr600 | *-lab-dominoes3000)
+    *-ast-taa600 | *-ast-hdr600)
+      awk -v n="$2" -v mean="$3" -v peak="$4" \
+        'BEGIN { exit !(n != "" && mean != "" && peak != "" && n <= 1500 && mean <= 0.003 && peak <= 0.15) }'
+      ;;
+    *-lab-dominoes3000)
       awk -v n="$2" -v mean="$3" -v peak="$4" \
         'BEGIN { exit !(n != "" && mean != "" && peak != "" && n <= 500 && mean <= 0.0015 && peak <= 0.15) }'
       ;;
@@ -78,7 +86,7 @@ flake() {
       fi
       [[ $1 == *-ast-hdr600-pq ]] || return 1
       awk -v mean="$3" -v peak="$4" \
-        'BEGIN { exit !(mean != "" && peak != "" && mean <= 0.005 && peak < 0.22) }' || return 1
+        'BEGIN { exit !(mean != "" && peak != "" && mean <= 0.008 && peak < 0.22) }' || return 1
       preview_flaked "${1%-pq}"
       ;;
     *) return 1 ;;
@@ -189,7 +197,7 @@ main() {
     lab-drive300 lab-drive-turn600 lab-fly1200 lab-break85 lab-break300 lab-creatures120 \
     lab-creatures-throw240 lab-creatures-limp240 lab-flood150 lab-flood300 lab-dominoes900 \
     lab-bridge360 lab-bridge600 lab-rocket120 lab-rocket600 lab-tug-net200 lab-tug-net600 lab-space90 lab-space150 \
-    lab-tank90 lab-tank-bench300 lab-tank-hole120 lab-tank-blocks56 lab-room60 lab-room-pan60; do
+    lab-tank90 lab-tank-bench300 lab-tank-hole120 lab-tank-blocks56 lab-room60 lab-room-pan60 lab-room-pan60-ssaa; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   local others=""

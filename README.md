@@ -106,7 +106,7 @@ exposure instead of automatic), `--exposure-compensation EV`, `--sun-lux LUX` (1
 `--exposure-log file.csv` (EV100 per frame), `--look x,y,z` (hold the view direction: stills
 of the sky), `--upscaler auto|taa|dlaa|quality|balanced|performance|ultra-performance` (auto:
 DLAA where it runs, in an interactive run; TAA in a scripted one),
-`--force-fallback` (the device without mesh shaders: the geometry is drawn through
+`--ssaa` (2 × 2 supersampling for screenshots, D-045; every demo), `--force-fallback` (the device without mesh shaders: the geometry is drawn through
 `vkCmdDrawIndexedIndirectCount`, pixel-identical), `--sw-raster auto|on|off` (the software
 rasteriser for dense clusters; auto runs it when a frame holds enough of them),
 `--sw-raster-area PX` (2: pixels of a cluster's bounding rectangle per triangle below which

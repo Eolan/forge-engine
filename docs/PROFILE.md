@@ -119,6 +119,8 @@ exposure (EV100, target, compensation, curve) the last.
   `post/display transform` 0.020 with bloom mixed in (`post/bloom` 0.041, as under TAA).
 - TAA's history through Lanczos-3 (D-045), the same room: `temporal/TAA resolve` 0.047 →
   0.077 ms, 36 texel loads in place of 5 bilinear fetches.
+- SSAA 2 × 2 for screenshots (D-045, `--ssaa`): the city's frame 2.363 → 5.134 ms at
+  1600 × 900 (the frame drawn at 3200 × 1800), `post/ssaa` 0.021 ms.
 - MaxCLL and MaxFALL from the frame shown (#125), in every HDR mode: `post/hdr metadata
   histogram` takes 0.033–0.038 ms at 1440p and 0.015–0.016 at 1600 × 900 (the ballad, three
   runs), about what the exposure histogram costs. The first kernel, a thread per pixel with

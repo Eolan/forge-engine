@@ -82,7 +82,7 @@ Options:
 - `--no-lod`, `--no-occlusion`, `--lod-error PX`, `--sw-raster auto|on|off`,
   `--instance-occlusion auto|on|off`, `--no-instance-cells` (cull the instances one by
   one, not by cells of 64, #38), `--show-culled` (what culling rejected drawn in red),
-  `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|agx-punchy|aces|neutral|aces2|aces2-analytic`, `--force-fallback`,
+  `--sw-raster-area PX`, `--ev100 EV`, `--tonemap agx|agx-punchy|aces|neutral|aces2|aces2-analytic`, `--ssaa` (2 × 2 supersampling for screenshots, D-045), `--force-fallback`,
   `--frames N`, `--capture file.png`, `--capture-frame N`.
 
 ## The probes' cadence (issue #103, 2026-09-30)

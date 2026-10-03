@@ -28,7 +28,7 @@ per frame), `--look x,y,z` (hold the view direction while moving along the path:
 the sky), `--upscaler auto|taa|dlaa|quality|balanced|performance|ultra-performance` (auto:
 DLAA where it runs in an interactive run, D-045; TAA in a scripted one and elsewhere),
 `--cycle-upscaler N` (switch as U does every N frames: tests the switch in scripted runs),
-`--force-fallback` (the device without mesh shaders: the geometry goes through
+`--ssaa` (2 × 2 supersampling for screenshots, D-045), `--force-fallback` (the device without mesh shaders: the geometry goes through
 `vkCmdDrawIndexedIndirectCount`, pixel-identical; see [meshlets.md](meshlets.md)).
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`. DLSS is built in by default (the `dlss` feature; Windows, the

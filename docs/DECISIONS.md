@@ -2074,4 +2074,6 @@ together'."
   display pass mixes in bloom now. T cycles DLAA, TAA sharpened, TAA plain and off.
 - **The Lanczos-3 history** by default (`--taa-catmull-rom` for the old filter): panning at
   2 m/s, sharpened TAA's MTF50 goes 0.37–0.40 → 0.42–0.44 (DLAA: 0.43–0.48), for 0.03 ms.
-- **Next:** SSAA 2 × 2 for captures.
+- **SSAA 2 × 2 for screenshots** (`--ssaa`, in the shell for every demo): MTF50 0.60–0.66
+  panning at 2 m/s, an ideal pixel's; the city's frame 2.4 → 5.1 ms.
+- That completes what D-045 took. The open points stay open.

@@ -96,6 +96,10 @@ struct Args {
     /// else 203).
     #[arg(long)]
     hdr_ui_white: Option<f32>,
+    /// Supersample 2 × 2 (D-045, for screenshots): the frame drawn at twice the window's width
+    /// and height and filtered down, about four times the cost.
+    #[arg(long)]
+    ssaa: bool,
     /// Force the profiling overlay on (also in scripted runs). F1 toggles it.
     #[arg(long)]
     overlay: bool,
@@ -557,6 +561,7 @@ fn main() -> Result<()> {
         hdr: args.hdr,
         hdr_stops: args.hdr_stops,
         hdr_ui_white: args.hdr_ui_white,
+        ssaa: args.ssaa,
         ..AppConfig::default()
     };
     forge_app::run(config, move |ctx| Bench::new(ctx, args))

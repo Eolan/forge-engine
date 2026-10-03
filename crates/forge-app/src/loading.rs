@@ -184,7 +184,8 @@ impl<D: Demo> Demo for Stage<D> {
             Self::Loading {
                 pipeline, started, ..
             } => {
-                let extent = ctx.extent();
+                // The window's own size: the loading screen is not supersampled.
+                let extent = ctx.swapchain.extent();
                 let push = [
                     extent.width as f32,
                     extent.height as f32,

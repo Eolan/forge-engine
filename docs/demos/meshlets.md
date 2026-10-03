@@ -3,7 +3,7 @@
 Run: `cargo run --release -p meshlets` (options `--side N`, `--detail N`, `--roughness R`,
 `--vsync`, `--validate`, `--no-occlusion`, `--lod-error PX` (1.0), `--no-lod`, `--orbit`,
 `--frames N`, `--capture file.png --capture-frame N`, `--overlay`, `--ev100 EV` (15),
-`--tonemap agx|agx-punchy|aces|neutral|aces2|aces2-analytic`, `--force-fallback`, `--mip-check` (see
+`--tonemap agx|agx-punchy|aces|neutral|aces2|aces2-analytic`, `--ssaa` (2 × 2 supersampling for screenshots, D-045), `--force-fallback`, `--mip-check` (see
 "Textures and the mip check" below), `--tone-check` (ACES 2.0's GPU paths against the CPU,
 issue #76: see [asteroids.md](asteroids.md), "ACES 2.0")).
 Controls: WASD/QE move, Shift fast, right mouse drag to look, **F1** profiler, **F** freeze
