@@ -54,7 +54,7 @@ in. CI checks the crate list.
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Jorrit Rouwé and the Jolt contributors | rigid bodies (`forge-physics`, D-009, issue #136): v5.6.0's library sources vendored in `third_party/jolt` with its licence, built with `CROSS_PLATFORM_DETERMINISTIC` and double precision | MIT |
 | [JoltC](https://github.com/SecondHalfGames/JoltC) | Second Half Games (Lucien Greathouse and contributors) | the model for `forge-physics`' C layer: opaque shape handles, the layer set-up | MIT OR Apache-2.0 |
 | [gltf](https://github.com/gltf-rs/gltf) | David Harvey-Macaulay and the gltf-rs contributors | reading glTF 2.0 models (`forge_geom::model`, #138) | MIT OR Apache-2.0 |
-| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py` models the lab's boat in it and exports it as glTF (#138) | GPL-2.0-or-later (the tool; what it makes is ours) |
+| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py` and `plane.py` model the lab's boat, car and aeroplane in it and export them as glTF (#138, #140, #141) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets
 
@@ -343,3 +343,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Game Developer (Gamasutra), 2015: closed hulls cut at the water's surface, each submerged
   piece pushed by the pressure at its depth and dragged by the water it moves through
   (`forge_physics::buoyancy`, #138).
+- **Lift and drag.** Thin-aerofoil theory and Prandtl's lifting line, as taught in John D.
+  Anderson, *Fundamentals of Aerodynamics* (McGraw-Hill): a lift slope of 2π a radian, the drag
+  a wing's lift induces by its aspect ratio with an Oswald efficiency, a flat plate's lift and
+  drag past the stall (`forge_physics::aero`, #141).
+- **Vehicles.** Jolt's `VehicleConstraint` and `WheeledVehicleController` (Jorrit Rouwé), set up
+  after Jolt's own vehicle sample: the wheels, the anti-roll bars, the cylinder cast (#140).

@@ -991,6 +991,11 @@ left out (0.7 ms more for centimetres).
 `--lab walk` (#139), 72 bodies and the character, walking through the crates: **0.08 ms a
 tick** (p99 0.22): most bodies sleep, and the character's sweep and stair test are a few casts.
 
+`--lab drive` (#140), 73 bodies, the car and its turning: **0.06 ms a tick** (p99 0.16, 1200
+ticks); the vehicle constraint's four cylinder casts and its wheels are the work. `--lab fly`
+(#141), the aeroplane alone awake: **0.05 ms a tick** (p99 0.10, 1200 ticks), its four surfaces'
+lift and drag a handful of products.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

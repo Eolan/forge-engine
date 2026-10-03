@@ -114,6 +114,7 @@ fn the_c_structs_and_their_rust_twins_agree() {
             ray_hit: size_of::<ffi::FjRayHit>() as u32,
             character_desc: size_of::<ffi::FjCharacterDesc>() as u32,
             character_state: size_of::<ffi::FjCharacterState>() as u32,
+            vehicle_desc: size_of::<ffi::FjVehicleDesc>() as u32,
         }
     );
 }
@@ -365,4 +366,88 @@ fn a_platform_carries_a_character_and_a_saved_world_replays_it() {
     world.restore_state(&saved).unwrap();
     walk(&mut world, rider, Vec3::ZERO, 60);
     assert_eq!(world.character(rider).position, after.position);
+}
+
+/// A car: a 1 200 kg box chassis on four wheels, on a floor.
+fn car() -> (World, BodyId, VehicleId) {
+    let mut world = World::new(&WorldDesc::default());
+    let floor = Shape::cuboid(Vec3::new(200.0, 0.5, 200.0), 0.05, 0.0).unwrap();
+    world
+        .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
+        .unwrap();
+    let body = Shape::cuboid(Vec3::new(0.85, 0.35, 1.9), 0.05, 0.0)
+        .unwrap()
+        .offset(Vec3::new(0.0, 0.6, 0.0), Quat::IDENTITY)
+        .unwrap();
+    let chassis = world
+        .add_body(&BodyDesc {
+            mass: Some(1200.0),
+            friction: 0.5,
+            ..BodyDesc::dynamic(&body, DVec3::new(0.0, 0.1, 0.0))
+        })
+        .unwrap();
+    let vehicle = world
+        .add_vehicle(
+            chassis,
+            &VehicleDesc {
+                half_track: 0.74,
+                half_wheelbase: 1.225,
+                attach_y: 0.55,
+                suspension: (0.05, 0.35),
+                spring: (1.5, 0.5),
+                wheel: (0.31, 0.2),
+                max_steer: 0.6,
+                engine: (300.0, 6000.0),
+                brakes: (1500.0, 4000.0),
+            },
+        )
+        .unwrap();
+    (world, chassis, vehicle)
+}
+
+#[test]
+fn a_car_drives_off_turns_and_replays() {
+    let (mut world, chassis, car) = car();
+    let mut t = Vec::new();
+    let run = |world: &mut World, ticks: u32| {
+        for _ in 0..ticks {
+            world.step(1.0 / 60.0, 1).unwrap();
+        }
+    };
+    run(&mut world, 60);
+    world.drive(car, 1.0, 0.0, 0.0, 0.0);
+    run(&mut world, 180);
+    world.transforms(&[chassis], &mut t);
+    let ahead = t[0];
+    assert!(
+        ahead.position.z < -6.0,
+        "3 s of throttle: {}",
+        ahead.position
+    );
+    // Upright: its up still up.
+    assert!((ahead.rotation * Vec3::Y).y > 0.95);
+    let mut wheels = Vec::new();
+    world.wheels(car, &mut wheels);
+    assert_eq!(wheels.len(), 4);
+    assert!(
+        wheels.iter().all(|w| (w.position.y - 0.31).abs() < 0.08),
+        "{wheels:?}"
+    );
+    let (rpm, gear) = world.engine(car);
+    assert!(rpm > 1000.0 && gear >= 1, "{rpm} rpm in gear {gear}");
+    // Steering right turns it towards +x; saved first, and replayed to the bit.
+    world.drive(car, 0.6, 1.0, 0.0, 0.0);
+    let saved = world.save_state();
+    run(&mut world, 120);
+    world.transforms(&[chassis], &mut t);
+    let turned = t[0];
+    assert!(
+        turned.position.x > ahead.position.x + 2.0,
+        "{}",
+        turned.position
+    );
+    world.restore_state(&saved).unwrap();
+    run(&mut world, 120);
+    world.transforms(&[chassis], &mut t);
+    assert_eq!(t[0], turned);
 }

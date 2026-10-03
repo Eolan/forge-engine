@@ -12,6 +12,9 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -158,6 +161,9 @@ struct FjWorld {
     JPH::CharacterVsCharacterCollisionSimple character_pairs;
     std::vector<JPH::Ref<JPH::CharacterVirtual>> characters;
     std::vector<JPH::CharacterVirtual::ExtendedUpdateSettings> character_steps;
+    // The cars: their constraints (in the system, which saves them) and wheel testers.
+    std::vector<JPH::Ref<JPH::VehicleConstraint>> vehicles;
+    std::vector<JPH::Ref<JPH::VehicleCollisionTester>> vehicle_testers;
 
     explicit FjWorld(const FjWorldDesc &desc)
         : temp(64 * 1024 * 1024),
@@ -175,7 +181,8 @@ FjLayout fj_layout(void) {
                     static_cast<uint32_t>(sizeof(FjBodyDesc)),
                     static_cast<uint32_t>(sizeof(FjRayHit)),
                     static_cast<uint32_t>(sizeof(FjCharacterDesc)),
-                    static_cast<uint32_t>(sizeof(FjCharacterState))};
+                    static_cast<uint32_t>(sizeof(FjCharacterState)),
+                    static_cast<uint32_t>(sizeof(FjVehicleDesc))};
 }
 
 void fj_init(void) {
@@ -246,6 +253,10 @@ FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const fl
     JPH::RotatedTranslatedShapeSettings settings(vec3(position), quat(rotation), shape_of(inner));
     settings.SetEmbedded();
     return hand_out(settings.Create());
+}
+
+void fj_shape_center_of_mass(const FjShape *shape, float out[3]) {
+    shape_of(shape)->GetCenterOfMass().StoreFloat3(reinterpret_cast<JPH::Float3 *>(out));
 }
 
 FjShape *fj_shape_offset_center_of_mass(const FjShape *inner, const float offset[3]) {
@@ -458,6 +469,100 @@ void fj_character_state(const FjWorld *world, uint32_t character, FjCharacterSta
     c.GetGroundVelocity().StoreFloat3(reinterpret_cast<JPH::Float3 *>(state->ground_velocity));
     state->ground_body = c.GetGroundBodyID().GetIndexAndSequenceNumber();
     state->ground_state = static_cast<uint32_t>(c.GetGroundState());
+}
+
+uint32_t fj_vehicle_add(FjWorld *world, uint32_t chassis, const FjVehicleDesc *desc) {
+    JPH::VehicleConstraintSettings settings;
+    settings.mUp = JPH::Vec3::sAxisY();
+    settings.mForward = -JPH::Vec3::sAxisZ();
+    // Front left, front right, rear left, rear right; the front ones steer, the rear ones take
+    // the handbrake.
+    const float x[4] = {-desc->half_track, desc->half_track, -desc->half_track, desc->half_track};
+    const float z[4] = {-desc->half_wheelbase, -desc->half_wheelbase, desc->half_wheelbase,
+                        desc->half_wheelbase};
+    for (int w = 0; w < 4; ++w) {
+        JPH::WheelSettingsWV *wheel = new JPH::WheelSettingsWV();
+        wheel->mPosition = JPH::Vec3(x[w], desc->attach_y, z[w]);
+        wheel->mWheelForward = -JPH::Vec3::sAxisZ();
+        wheel->mSuspensionMinLength = desc->suspension_min;
+        wheel->mSuspensionMaxLength = desc->suspension_max;
+        wheel->mSuspensionSpring.mFrequency = desc->spring_frequency;
+        wheel->mSuspensionSpring.mDamping = desc->spring_damping;
+        wheel->mRadius = desc->wheel_radius;
+        wheel->mWidth = desc->wheel_width;
+        wheel->mMaxSteerAngle = w < 2 ? desc->max_steer : 0.0f;
+        wheel->mMaxBrakeTorque = desc->brake_torque;
+        wheel->mMaxHandBrakeTorque = w < 2 ? 0.0f : desc->handbrake_torque;
+        settings.mWheels.push_back(wheel);
+    }
+    JPH::Ref<JPH::WheeledVehicleControllerSettings> controller =
+        new JPH::WheeledVehicleControllerSettings();
+    controller->mEngine.mMaxTorque = desc->engine_torque;
+    controller->mEngine.mMaxRPM = desc->max_rpm;
+    // Front-wheel drive.
+    controller->mDifferentials.resize(1);
+    controller->mDifferentials[0].mLeftWheel = 0;
+    controller->mDifferentials[0].mRightWheel = 1;
+    settings.mController = controller;
+    // An anti-roll bar on each axle keeps it from leaning over in the corners.
+    settings.mAntiRollBars.resize(2);
+    settings.mAntiRollBars[0].mLeftWheel = 0;
+    settings.mAntiRollBars[0].mRightWheel = 1;
+    settings.mAntiRollBars[1].mLeftWheel = 2;
+    settings.mAntiRollBars[1].mRightWheel = 3;
+
+    JPH::Ref<JPH::VehicleConstraint> vehicle;
+    {
+        // The chassis held while the constraint takes it.
+        JPH::BodyLockWrite lock(world->system.GetBodyLockInterface(), id_of(chassis));
+        if (!lock.Succeeded()) {
+            return UINT32_MAX;
+        }
+        vehicle = new JPH::VehicleConstraint(lock.GetBody(), settings);
+    }
+    JPH::Ref<JPH::VehicleCollisionTester> tester =
+        new JPH::VehicleCollisionTesterCastCylinder(kMoving);
+    vehicle->SetVehicleCollisionTester(tester);
+    world->system.AddConstraint(vehicle);
+    world->system.AddStepListener(vehicle);
+    world->vehicles.push_back(vehicle);
+    world->vehicle_testers.push_back(tester);
+    return static_cast<uint32_t>(world->vehicles.size() - 1);
+}
+
+void fj_vehicle_drive(FjWorld *world, uint32_t vehicle, float forward, float right, float brake,
+                      float handbrake) {
+    JPH::VehicleConstraint &v = *world->vehicles[vehicle];
+    static_cast<JPH::WheeledVehicleController *>(v.GetController())
+        ->SetDriverInput(forward, right, brake, handbrake);
+    // A parked car sleeps; a driver's input wakes it.
+    if (forward != 0.0f || right != 0.0f || brake != 0.0f || handbrake != 0.0f) {
+        world->system.GetBodyInterface().ActivateBody(v.GetVehicleBody()->GetID());
+    }
+}
+
+void fj_vehicle_wheels(const FjWorld *world, uint32_t vehicle, double *positions,
+                       float *rotations) {
+    const JPH::VehicleConstraint &v = *world->vehicles[vehicle];
+    for (uint32_t w = 0; w < 4; ++w) {
+        const JPH::RMat44 m = v.GetWheelWorldTransform(w, JPH::Vec3::sAxisX(), JPH::Vec3::sAxisY());
+        const JPH::RVec3 p = m.GetTranslation();
+        positions[3 * w] = p.GetX();
+        positions[3 * w + 1] = p.GetY();
+        positions[3 * w + 2] = p.GetZ();
+        const JPH::Quat q = m.GetQuaternion();
+        rotations[4 * w] = q.GetX();
+        rotations[4 * w + 1] = q.GetY();
+        rotations[4 * w + 2] = q.GetZ();
+        rotations[4 * w + 3] = q.GetW();
+    }
+}
+
+void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32_t *gear) {
+    const auto *c = static_cast<const JPH::WheeledVehicleController *>(
+        world->vehicles[vehicle]->GetController());
+    *rpm = c->GetEngine().GetCurrentRPM();
+    *gear = c->GetTransmission().GetCurrentGear();
 }
 
 const uint8_t *fj_world_save_state(FjWorld *world, size_t *size) {

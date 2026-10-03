@@ -40,7 +40,7 @@ sets_of() {
     hdr-display) echo meshlets ;;
     city) echo city sentinels ;;
     city-* | gallery) echo city ;;
-    lab | lab-sea | lab-walk) echo lab ;;
+    lab | lab-sea | lab-walk | lab-drive | lab-fly) echo lab ;;
     *) echo island ;;
   esac
 }
@@ -124,6 +124,8 @@ for path in $paths; do
   [ -f "$bin/physics-lab$exe" ] && validate "lab$tag" "$bin/physics-lab$exe" --fixed-step --frames 120 $path
   [ -f "$bin/physics-lab$exe" ] && validate "lab-sea$tag" "$bin/physics-lab$exe" --lab sea --fixed-step --steer 1,0.6 --frames 120 $path
   [ -f "$bin/physics-lab$exe" ] && validate "lab-walk$tag" "$bin/physics-lab$exe" --lab walk --fixed-step --walk 2,0 --frames 120 $path
+  [ -f "$bin/physics-lab$exe" ] && validate "lab-drive$tag" "$bin/physics-lab$exe" --lab drive --fixed-step --steer 1,0.3 --frames 120 $path
+  [ -f "$bin/physics-lab$exe" ] && validate "lab-fly$tag" "$bin/physics-lab$exe" --lab fly --fixed-step --pilot 1,-0.4,0,0 --frames 120 $path
   # And ships through the belt, the camera chasing the first (#79's demo).
   validate "ships$tag" "$bin/asteroids$exe" --frames 60 --ships 24 --chase 0 $path
   # The HDR output drawn off-screen and previewed (#94), through ACES 2.0: from the TAA resolve

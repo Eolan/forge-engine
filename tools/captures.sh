@@ -232,6 +232,14 @@ for path in $paths; do
     capture "$path-lab-walk150" 150 "$lab" --lab walk --fixed-step --walk 2,0 "${flag[@]}"
     capture "$path-lab-walk150-noocc" 150 "$lab" --lab walk --fixed-step --walk 2,0 --no-occlusion "${flag[@]}"
     capture "$path-lab-walk-crates240" 240 "$lab" --lab walk --fixed-step --walk 0,2 "${flag[@]}"
+    # The track (#140): the car down it at tick 300 and its A/B twin, and turning into the
+    # slalom at tick 600.
+    capture "$path-lab-drive300" 300 "$lab" --lab drive --fixed-step --steer 1,0 "${flag[@]}"
+    capture "$path-lab-drive300-noocc" 300 "$lab" --lab drive --fixed-step --steer 1,0 --no-occlusion "${flag[@]}"
+    capture "$path-lab-drive-turn600" 600 "$lab" --lab drive --fixed-step --steer 1,0.3 "${flag[@]}"
+    # The field (#141): the aeroplane climbing off the runway at tick 1200, and its A/B twin.
+    capture "$path-lab-fly1200" 1200 "$lab" --lab fly --fixed-step --pilot 1,-0.4,0,0 "${flag[@]}"
+    capture "$path-lab-fly1200-noocc" 1200 "$lab" --lab fly --fixed-step --pilot 1,-0.4,0,0 --no-occlusion "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

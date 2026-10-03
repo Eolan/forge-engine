@@ -33,6 +33,8 @@ use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 
 use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
+mod drive;
+mod fly;
 mod sea;
 mod walk;
 
@@ -48,6 +50,10 @@ pub(crate) enum LabScene {
     Sea,
     /// A playground to walk in: stairs, ramps, a moving platform, crates, blocks (#139).
     Walk,
+    /// A car on a test track: a jump, a slalom, a wall of crates (#140).
+    Drive,
+    /// An aeroplane on a runway (#141).
+    Fly,
 }
 
 /// The floor's half side, metres.
@@ -84,6 +90,12 @@ const RAMP: usize = 13;
 const PLATFORM: usize = 14;
 const PLAYER: usize = 15;
 const VISOR: usize = 16;
+const CAR: usize = 17;
+const WHEEL: usize = 18;
+const PLANE: usize = 19;
+const PROPELLER: usize = 20;
+const RUNWAY: usize = 21;
+const FIELD: usize = 22;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -91,7 +103,7 @@ const SEA_LOGS: u32 = 16;
 const SEA_BALLS: u32 = 20;
 const SEA_ROCKS: u32 = 18;
 /// Numbers of the players' controls in a saved state ([`LabWorld::words`]).
-const WORDS: usize = 7;
+const WORDS: usize = 14;
 /// Ticks between the digests a recording keeps.
 const RECORD_EVERY: u64 = 60;
 /// `--net`: ticks between the server's snapshots, the share of packets lost, ticks between the
@@ -102,11 +114,14 @@ const BOT_EVERY: u64 = 150;
 
 /// The props the lab draws, in this order: the floor, the block, the barrel, the rocks, the
 /// ball, then the sea's: the crate, the log, the pillar, the deck, the boat; then the
-/// playground's: the stairs' slab, the ramp, the platform, the player and its visor.
+/// playground's: the stairs' slab, the ramp, the platform, the player and its visor; then the
+/// car's body and wheel; then the aeroplane, its propeller, the runway and the field.
 pub(crate) fn props() -> Vec<PropSpec> {
     let mut props = drop_props();
     props.extend(sea::props());
     props.extend(walk::props());
+    props.extend(drive::props());
+    props.extend(fly::props());
     props
 }
 
@@ -207,6 +222,17 @@ pub(crate) enum LabCommand {
     },
     /// The player jumps, if on firm ground.
     Jump,
+    /// The car's handbrake on or off, held until the next.
+    Handbrake {
+        /// Pulled.
+        on: bool,
+    },
+    /// The aeroplane's controls, held until the next: throttle (0 to 1), elevator (−1 pull
+    /// to 1 push), ailerons (−1 left to 1 right), rudder (−1 left to 1 right).
+    Fly {
+        /// The four, in that order.
+        controls: [f32; 4],
+    },
 }
 
 impl Codec for LabCommand {
@@ -231,6 +257,13 @@ impl Codec for LabCommand {
                 }
             }
             Self::Jump => out.push(4),
+            Self::Handbrake { on } => out.extend_from_slice(&[5, u8::from(*on)]),
+            Self::Fly { controls } => {
+                out.push(6);
+                for v in controls {
+                    out.extend_from_slice(&v.to_bits().to_le_bytes());
+                }
+            }
         }
     }
 
@@ -273,6 +306,20 @@ impl Codec for LabCommand {
                 Some(Self::Walk { velocity: v })
             }
             4 => Some(Self::Jump),
+            5 => {
+                let (&on, rest) = bytes.split_first()?;
+                *bytes = rest;
+                Some(Self::Handbrake { on: on != 0 })
+            }
+            6 => {
+                let mut v = [0.0_f32; 4];
+                for x in &mut v {
+                    let (word, rest) = bytes.split_first_chunk::<4>()?;
+                    *x = f32::from_bits(u32::from_le_bytes(*word));
+                    *bytes = rest;
+                }
+                Some(Self::Fly { controls: v })
+            }
             _ => None,
         }
     }
@@ -304,6 +351,10 @@ pub(crate) struct LabWorld {
     boat: Option<sea::Boat>,
     /// The playground's: the player's input and character, and the shuttling platform.
     player: walk::Player,
+    /// The track's: the car and its driver's controls.
+    driver: drive::Driver,
+    /// The field's: the aeroplane and its pilot's controls.
+    pilot: fly::Pilot,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
     pool: Arc<TaskPool>,
@@ -331,12 +382,17 @@ impl LabWorld {
         let floor_y = match kind {
             LabScene::Drop => 0.0,
             LabScene::Sea => sea::FLOOR_Y,
-            LabScene::Walk => 0.0,
+            LabScene::Walk | LabScene::Drive | LabScene::Fly => 0.0,
+        };
+        // The flight's is a field of grass, wide enough to fly over for a while.
+        let (floor, floor_half) = match kind {
+            LabScene::Fly => (FIELD, fly::FIELD_HALF),
+            _ => (FLOOR, FLOOR_HALF),
         };
         let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
-        let floor_shape = Shape::cuboid(Vec3::new(FLOOR_HALF, 0.5, FLOOR_HALF), 0.05, 0.0)?;
+        let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
         world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
-        let mut statics = vec![(FLOOR, Mat4::from_translation(floor_at))];
+        let mut statics = vec![(floor, Mat4::from_translation(floor_at))];
         // The shapes, each with its origin where its mesh has its own: the barrel's and the
         // ball's at their bottom, the rocks' hulls from their meshes' vertices.
         let block_shape = Shape::cuboid(Vec3::splat(BLOCK_HALF), 0.03, 2300.0)?;
@@ -400,6 +456,8 @@ impl LabWorld {
         let mut boat = None;
         let mut player = walk::Player::default();
         let mut platform = None;
+        let mut driver = drive::Driver::default();
+        let mut pilot = fly::Pilot::default();
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -604,6 +662,28 @@ impl LabWorld {
                 platform = Some(ground.platform);
                 player.character = Some(ground.player);
             }
+            LabScene::Drive => {
+                let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 150.0)?;
+                let track = drive::build(
+                    &mut world,
+                    RAMP,
+                    walk::RAMP_HALF,
+                    &barrel_shape,
+                    &crate_shape,
+                    sea::CRATE_HALF,
+                )?;
+                statics.extend(track.statics);
+                group(BARREL, track.barrels, &mut bodies);
+                group(CRATE, track.crates, &mut bodies);
+                group(CAR, vec![track.chassis], &mut bodies);
+                driver.car = Some((track.chassis, track.vehicle));
+            }
+            LabScene::Fly => {
+                let field = fly::build(&mut world, RUNWAY)?;
+                statics.extend(field.statics);
+                group(PLANE, vec![field.plane], &mut bodies);
+                pilot.plane = Some(field.plane);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -641,6 +721,20 @@ impl LabWorld {
             group(BOAT, vec![body], &mut bodies);
             boat = Some(sea::boat_still(body));
         }
+        // The aeroplane's propeller after them.
+        if pilot.plane.is_some() {
+            groups.push(Group {
+                prop: PROPELLER,
+                count: 1,
+            });
+        }
+        // The car's four wheels after the bodies' movers.
+        if driver.car.is_some() {
+            groups.push(Group {
+                prop: WHEEL,
+                count: 4,
+            });
+        }
         // The player, drawn by two movers after the bodies': its capsule and its visor.
         if player.character.is_some() {
             groups.push(Group {
@@ -668,6 +762,8 @@ impl LabWorld {
                 boat,
                 player,
                 platform,
+                driver,
+                pilot,
                 pool,
             },
             Layout { groups, statics },
@@ -677,6 +773,9 @@ impl LabWorld {
     /// Its bodies' transforms, in the movers' order, into `out`.
     pub(crate) fn transforms(&self, out: &mut Vec<Transform>) {
         self.world.transforms(&self.bodies, out);
+        // The car's wheels after the bodies.
+        self.driver.wheels(&self.world, out);
+        self.pilot.propeller(&self.world, self.tick, out);
         // The player's capsule and visor after the bodies, turned where it last walked.
         if let Some(c) = self.player.character {
             let at = Transform {
@@ -706,7 +805,9 @@ impl LabWorld {
     }
 
     /// The players' controls as the state carries them, [`WORDS`] numbers: the boat's
-    /// throttle and rudder, the walk, a jump waiting, the player's facing (0 where there is none).
+    /// throttle and rudder, the walk, a jump waiting, the player's facing, the car's throttle,
+    /// steering and handbrake, the aeroplane's throttle, elevator, ailerons and rudder (0 where
+    /// there is none).
     fn words(&self) -> [f32; WORDS] {
         let (throttle, rudder) = self.boat.map_or((0.0, 0.0), |b| (b.throttle, b.rudder));
         let p = &self.player;
@@ -718,15 +819,34 @@ impl LabWorld {
             f32::from(u8::from(p.jump)),
             p.facing[0],
             p.facing[1],
+            self.driver.throttle,
+            self.driver.steer,
+            self.driver.handbrake,
+            self.pilot.throttle,
+            self.pilot.elevator,
+            self.pilot.aileron,
+            self.pilot.rudder,
         ]
     }
 
     /// The boat's transform, when the scene has one.
-    pub(crate) fn boat(&self) -> Option<Transform> {
+    #[cfg(test)]
+    fn boat(&self) -> Option<Transform> {
         let boat = self.boat?;
         let mut t = Vec::new();
         self.world.transforms(&[boat.body], &mut t);
         t.first().copied()
+    }
+
+    /// The mover of what a player rides, the boat, the car or the aeroplane: its body's place among the
+    /// bodies, which the movers draw first.
+    pub(crate) fn ride(&self) -> Option<usize> {
+        let body = self
+            .boat
+            .map(|b| b.body)
+            .or(self.driver.car.map(|c| c.0))
+            .or(self.pilot.plane)?;
+        self.bodies.iter().position(|&b| b == body)
     }
 
     /// Whether the scene has the sea.
@@ -775,12 +895,35 @@ impl Simulation for LabWorld {
                     if let Some(boat) = &mut self.boat {
                         (boat.throttle, boat.rudder) = (0.0, 0.0);
                     }
+                    (
+                        self.driver.throttle,
+                        self.driver.steer,
+                        self.driver.handbrake,
+                    ) = (0.0, 0.0, 0.0);
+                    let plane = self.pilot.plane;
+                    self.pilot = fly::Pilot {
+                        plane,
+                        ..fly::Pilot::default()
+                    };
                 }
                 LabCommand::Steer { throttle, rudder } => {
+                    let (throttle, rudder) = (throttle.clamp(-1.0, 1.0), rudder.clamp(-1.0, 1.0));
                     if let Some(boat) = &mut self.boat {
-                        boat.throttle = throttle.clamp(-1.0, 1.0);
-                        boat.rudder = rudder.clamp(-1.0, 1.0);
+                        (boat.throttle, boat.rudder) = (throttle, rudder);
                     }
+                    if self.driver.car.is_some() {
+                        (self.driver.throttle, self.driver.steer) = (throttle, rudder);
+                    }
+                }
+                LabCommand::Handbrake { on } => {
+                    self.driver.handbrake = f32::from(u8::from(on));
+                }
+                LabCommand::Fly { controls } => {
+                    let p = &mut self.pilot;
+                    p.throttle = controls[0].clamp(0.0, 1.0);
+                    p.elevator = controls[1].clamp(-1.0, 1.0);
+                    p.aileron = controls[2].clamp(-1.0, 1.0);
+                    p.rudder = controls[3].clamp(-1.0, 1.0);
                 }
                 LabCommand::Walk { velocity } => {
                     let v = Vec2::from(velocity);
@@ -807,6 +950,8 @@ impl Simulation for LabWorld {
         // The playground's platform and player, before the bodies move.
         self.player
             .tick(&mut self.world, self.platform, self.tick, TICK);
+        self.driver.tick(&mut self.world);
+        self.pilot.tick(&mut self.world);
         if let Err(e) = self.world.step(TICK, 1) {
             tracing::warn!("physics tick {}: {e}", self.tick);
         }
@@ -845,6 +990,15 @@ impl Simulation for LabWorld {
         self.player.walk = [w[2], w[3]];
         self.player.jump = w[4] != 0.0;
         self.player.facing = [w[5], w[6]];
+        (
+            self.driver.throttle,
+            self.driver.steer,
+            self.driver.handbrake,
+        ) = (w[7], w[8], w[9]);
+        self.pilot.throttle = w[10];
+        self.pilot.elevator = w[11];
+        self.pilot.aileron = w[12];
+        self.pilot.rudder = w[13];
         if let Err(e) = self.world.restore_state(world) {
             tracing::warn!("a lab state: {e}");
         }
@@ -1024,7 +1178,7 @@ pub(crate) struct Lab {
     /// Bodies awake at the last tick.
     awake: u32,
     /// Ticks at which the hash is logged.
-    logged: [u64; 3],
+    logged: [u64; 5],
     /// `--record`: where the session goes at exit.
     record: Option<PathBuf>,
 }
@@ -1080,6 +1234,25 @@ pub(crate) fn build(
             .map(|m| (m.name.clone(), super::model_layer(m)))
             .collect(),
     );
+    // The car's body and its wheel, and the aeroplane and its propeller, the same way (#140,
+    // #141).
+    let (car, _) = drive::car_model();
+    let (plane, _) = fly::plane_model();
+    for (model, prop, mesh) in [
+        (car, "lab-car", "car"),
+        (car, "lab-wheel", "car-wheel"),
+        (plane, "lab-plane", "plane"),
+        (plane, "lab-propeller", "plane-prop"),
+    ] {
+        let mesh = model.mesh(mesh).context("a model's mesh")?;
+        materials.add_rows(
+            prop,
+            mesh.materials
+                .iter()
+                .map(|m| (m.name.clone(), super::model_layer(m)))
+                .collect(),
+        );
+    }
     materials.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
     builder.set_origin(scene_origin(args));
@@ -1161,7 +1334,7 @@ pub(crate) fn build(
             tick_ms: Vec::new(),
             run_tick_ms: Vec::new(),
             awake: 0,
-            logged: [60, 300, 600],
+            logged: [60, 300, 600, 900, 1200],
             record: args.record.clone(),
         },
     ))
@@ -1207,24 +1380,28 @@ impl Lab {
                     let p = p.position;
                     format!("{:.2},{:.2},{:.2}", p.x, p.y, p.z)
                 });
-                let boat = self.shown().boat().map_or(String::from("none"), |b| {
-                    let p = b.position;
-                    format!("{:.1},{:.2},{:.1}", p.x, p.y, p.z)
-                });
-                let boat_speed = {
+                // What the scene rides (the boat, the car, the aeroplane): where it is and how
+                // fast it goes.
+                let (ride, ride_speed) = {
                     let shown = self.shown();
-                    shown.boat.map_or(0.0, |b| {
-                        let mut v = Vec::new();
-                        shown.world.velocities(&[b.body], &mut v);
-                        v[0].linear.length()
+                    shown.ride().map_or((String::from("none"), 0.0), |k| {
+                        let body = shown.bodies[k];
+                        let (mut t, mut v) = (Vec::new(), Vec::new());
+                        shown.world.transforms(&[body], &mut t);
+                        shown.world.velocities(&[body], &mut v);
+                        let p = t[0].position;
+                        (
+                            format!("{:.1},{:.2},{:.1}", p.x, p.y, p.z),
+                            v[0].linear.length(),
+                        )
                     })
                 };
                 tracing::info!(
                     tick = now,
                     digest = format!("{digest:#018x}"),
                     awake,
-                    boat,
-                    boat_speed = format!("{boat_speed:.2}"),
+                    ride,
+                    ride_speed = format!("{ride_speed:.2}"),
                     player,
                     "physics lab state"
                 );
@@ -1365,10 +1542,30 @@ impl Lab {
         movers.get(movers.len().checked_sub(2)?).copied()
     }
 
-    /// The boat as drawn, when the scene has one: the movers' last.
-    pub(crate) fn boat(&mut self) -> Option<MoverTransform> {
-        self.shown().boat()?;
-        self.movers().last().copied()
+    /// What the camera follows (C) as drawn: the boat or the car, when the scene has one.
+    pub(crate) fn ride(&mut self) -> Option<MoverTransform> {
+        let k = self.shown().ride()?;
+        self.movers().get(k).copied()
+    }
+
+    /// Whether the scene has a car.
+    pub(crate) fn has_car(&mut self) -> bool {
+        self.shown().driver.car.is_some()
+    }
+
+    /// The car's handbrake from the next tick.
+    pub(crate) fn handbrake(&mut self, on: bool) {
+        self.queued.push(LabCommand::Handbrake { on });
+    }
+
+    /// Whether the scene has an aeroplane.
+    pub(crate) fn has_plane(&mut self) -> bool {
+        self.shown().pilot.plane.is_some()
+    }
+
+    /// The aeroplane's controls from the next tick: throttle, elevator, ailerons, rudder.
+    pub(crate) fn fly(&mut self, controls: [f32; 4]) {
+        self.queued.push(LabCommand::Fly { controls });
     }
 
     /// The title's part: the ticks' time since the last title, the bodies awake, the session.
@@ -1502,6 +1699,7 @@ mod tests {
             steer,
             walk,
             LabCommand::Jump,
+            LabCommand::Handbrake { on: true },
         ] {
             let mut bytes = Vec::new();
             c.encode(&mut bytes);
@@ -1584,6 +1782,67 @@ mod tests {
         let end = first.player().unwrap().position;
         assert!(end.x > 4.0 && end.z > 2.0, "the player ended at {end}");
         let (mut second, _) = LabWorld::new(LabScene::Walk, test_pool()).unwrap();
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_track_replays_a_drive_with_a_turn_and_the_handbrake() {
+        let command = |tick: u64, seq: u32, command: LabCommand| Stamped {
+            tick,
+            player: 0,
+            seq,
+            command,
+        };
+        let steer = |throttle: f32, rudder: f32| LabCommand::Steer { throttle, rudder };
+        let commands = vec![
+            command(30, 0, steer(1.0, 0.0)),
+            command(150, 1, steer(1.0, 0.4)),
+            command(240, 2, LabCommand::Handbrake { on: true }),
+            command(270, 3, LabCommand::Handbrake { on: false }),
+            command(280, 4, steer(-1.0, 0.0)),
+        ];
+        let (mut first, _) = LabWorld::new(LabScene::Drive, test_pool()).unwrap();
+        let car = first.driver.car.unwrap().0;
+        let mut t = Vec::new();
+        first.world.transforms(&[car], &mut t);
+        let start = t[0].position;
+        let recording = Recording::record(&mut first, commands, 330, 60);
+        first.world.transforms(&[car], &mut t);
+        let moved = t[0].position.distance(start);
+        assert!(moved > 10.0, "the car moved {moved} m");
+        assert!((t[0].rotation * Vec3::Y).y > 0.9, "upright");
+        let (mut second, _) = LabWorld::new(LabScene::Drive, test_pool()).unwrap();
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_field_replays_a_take_off() {
+        let fly = |tick: u64, seq: u32, controls: [f32; 4]| Stamped {
+            tick,
+            player: 0,
+            seq,
+            command: LabCommand::Fly { controls },
+        };
+        // Full throttle and the stick a little back: it lifts off near 30 m/s, 20 s on. Then a
+        // roll to the right with some rudder, the wings held banked, the stick further back.
+        let commands = vec![
+            fly(10, 0, [1.0, -0.4, 0.0, 0.0]),
+            fly(1200, 1, [1.0, -0.5, 0.5, 0.2]),
+            fly(1260, 2, [1.0, -0.6, 0.0, 0.0]),
+        ];
+        let (mut first, _) = LabWorld::new(LabScene::Fly, test_pool()).unwrap();
+        let plane = first.pilot.plane.unwrap();
+        let mut t = Vec::new();
+        first.world.transforms(&[plane], &mut t);
+        let start = t[0].position;
+        let recording = Recording::record(&mut first, commands, 1500, 120);
+        first.world.transforms(&[plane], &mut t);
+        let (end, rotation) = (t[0].position, t[0].rotation);
+        // Climbing (35 m at the time of writing), turned right (by 48°), banked 35°.
+        assert!(end.y > start.y + 20.0, "airborne: {end}");
+        assert!(end.x > 20.0, "turned right: {end}");
+        assert!((rotation * Vec3::Y).y > 0.6, "upright");
+        let (mut second, _) = LabWorld::new(LabScene::Fly, test_pool()).unwrap();
         recording.replay(&mut second).expect("the same digests");
     }
 

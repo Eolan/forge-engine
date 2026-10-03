@@ -75,6 +75,25 @@ pub struct FjCharacterState {
     pub ground_state: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FjVehicleDesc {
+    pub half_track: f32,
+    pub half_wheelbase: f32,
+    pub attach_y: f32,
+    pub suspension_min: f32,
+    pub suspension_max: f32,
+    pub spring_frequency: f32,
+    pub spring_damping: f32,
+    pub wheel_radius: f32,
+    pub wheel_width: f32,
+    pub max_steer: f32,
+    pub engine_torque: f32,
+    pub max_rpm: f32,
+    pub brake_torque: f32,
+    pub handbrake_torque: f32,
+}
+
 #[cfg(test)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +103,7 @@ pub struct FjLayout {
     pub ray_hit: u32,
     pub character_desc: u32,
     pub character_state: u32,
+    pub vehicle_desc: u32,
 }
 
 unsafe extern "C" {
@@ -121,6 +141,7 @@ unsafe extern "C" {
         inner: *const FjShape,
         offset: *const f32,
     ) -> *mut FjShape;
+    pub fn fj_shape_center_of_mass(shape: *const FjShape, out: *mut f32);
     pub fn fj_shape_release(shape: *const FjShape);
 
     pub fn fj_world_new(desc: *const FjWorldDesc) -> *mut FjWorld;
@@ -193,6 +214,23 @@ unsafe extern "C" {
     pub fn fj_character_add(world: *mut FjWorld, desc: *const FjCharacterDesc) -> u32;
     pub fn fj_character_move(world: *mut FjWorld, character: u32, dt: f32, velocity: *const f32);
     pub fn fj_character_state(world: *const FjWorld, character: u32, state: *mut FjCharacterState);
+
+    pub fn fj_vehicle_add(world: *mut FjWorld, chassis: u32, desc: *const FjVehicleDesc) -> u32;
+    pub fn fj_vehicle_drive(
+        world: *mut FjWorld,
+        vehicle: u32,
+        forward: f32,
+        right: f32,
+        brake: f32,
+        handbrake: f32,
+    );
+    pub fn fj_vehicle_wheels(
+        world: *const FjWorld,
+        vehicle: u32,
+        positions: *mut f64,
+        rotations: *mut f32,
+    );
+    pub fn fj_vehicle_engine(world: *const FjWorld, vehicle: u32, rpm: *mut f32, gear: *mut i32);
 
     pub fn fj_world_save_state(world: *mut FjWorld, size: *mut usize) -> *const u8;
     pub fn fj_world_restore_state(world: *mut FjWorld, data: *const u8, size: usize) -> i32;

@@ -21,7 +21,9 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `drop --record`, `--replay`, `--net MS` | inputs as commands, recordings replayed to the same digests, a server and predicting clients over a lossy link | ✅ #137 |
 | `sea` | buoyancy on the sea we render: crates, barrels, logs, balls and a Blender boat afloat, rocks that sink, a jetty | ✅ #138 |
 | `walk` | a walking character: stairs, ramps, a moving platform, crates to push, blocks to jump onto | ✅ #139 |
-| vehicles, flight, destruction, creatures, fluids | the later steps of the plan | planned |
+| `drive` | a car on wheels and springs: a jump ramp, a slalom of barrels, a wall of crates | ✅ #140 |
+| `fly` | an aeroplane on flying surfaces: a take-off from a runway, turns over a wide field | ✅ #141 |
+| destruction, creatures, fluids | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
 
@@ -221,6 +223,72 @@ platform moving at 1 m/s for a second, and the same second again from a saved wo
 and the playground replays a walk up the stairs, a jump and a turn to the same digests. A tick
 of the playground (72 bodies, the character, the platform): **0.08 ms** on average, p99 0.22 ms.
 
+## `drive`: a car (issue #140)
+
+```
+cargo run --release -p physics-lab -- --lab drive
+```
+
+A car on the lab's floor: Jolt's `VehicleConstraint` with its wheeled controller, through
+`forge-physics` (`World::add_vehicle`, `drive`, `wheels`, `engine`). The chassis is a 1200 kg
+convex hull of the car's shell with its weight 25 cm low; four wheels of 31 cm on springs of
+1.6 Hz (0.55 damped) travelling 30 cm, found by casting a cylinder down, so they ride over edges
+a ray would drop through; the front two steer by up to 31° and are driven through a
+differential by an engine of 320 N·m up to 6500 rpm and its gearbox; anti-roll bars front and
+back. Brakes of 1600 N·m, the handbrake 4000 N·m on the rear wheels. The car and its wheel were
+modelled in Blender from code (`assets/blender/car.py`, a hatchback with its wheel arches cut
+from the lower body; `assets/models/car.glb`, 100 KB) and drawn as the boat is: the body moves
+with the chassis, each wheel is a mover placed where Jolt puts it, turned by its steering and its
+roll.
+
+The track: a 14° jump ramp ahead, a slalom of eight barrels to the right, and a wall of 32
+crates in four courses at 95 m. **The arrow keys** drive (up the throttle, down the brake and,
+once stopped, reverse; left and right steer), **Space** holds the handbrake, **C** lets the
+camera go from behind the car. The throttle and the steering are the boat's command (`Steer`)
+and the handbrake one of its own (`Handbrake`), so a drive records, replays and goes through
+`--net`; `--steer T,S` holds them from the first frame.
+
+![Down the track at tick 300, and turning past the slalom at tick 600](images/physics-lab-drive.png)
+
+A test drives off, turns and replays (the car 10 m on and upright, the same digests the second
+time); the lab's test drives the track with a turn, the handbrake and a throttle astern and
+replays it. A tick of the track (73 bodies): **0.06 ms** on average, p99 0.16 ms.
+
+## `fly`: an aeroplane (issue #141)
+
+```
+cargo run --release -p physics-lab -- --lab fly
+```
+
+A light high-wing aeroplane (7.3 m long, 10 m span, 750 kg; `assets/blender/plane.py`,
+`assets/models/plane.glb`, 124 KB) on a 520 m runway across a field of grass 5 km wide. It flies
+on its surfaces (`forge_physics::aero`): each wing's half, the tailplane and the fin is a plate in
+the aeroplane's frame, and the air past it, from the body's motion and its turning, gives it an
+incidence. Its lift follows the thin-wing law (2π a radian) up to the stall near 14°, then falls
+to a flat plate's by 20°; its drag is a parasitic part, the drag its lift induces (by its aspect
+ratio) and the plate's broadside drag. The elevator, the ailerons and the rudder add to the
+incidence of their surface. As in the buoyancy, the incidence is carried by its sine and cosine
+taken from the airflow, so the forces are the same bits everywhere. The wing is rigged 2° up with
+4° of dihedral (a high wing's effective dihedral), the tailplane 1° down; the propeller pulls
+3 kN at full throttle at the nose, and the fuselage and the gear drag besides.
+
+On the ground it rests on the hull of its three wheels, a tail skid and its fuselage, with its
+weight just ahead of the main wheels (`Shape::with_center_of_mass_at`); its friction is its
+wheels' (0.04), and off its wheels (low and banked or turned over past 45°) it scrapes on the
+field with 0.6 of its weight. **W** and **S** open and close the throttle, **the arrows** are the
+stick (down pulls the nose up: half of the elevator, all of it with **Shift**; left and right
+roll), **A** and **D** the rudder; the camera follows 17 m behind. The controls are a command
+(`Fly`), and `--pilot T,E,A,R` holds them from the first frame.
+
+![Down the runway at tick 600, and climbing away at tick 1200](images/physics-lab-fly.png)
+
+With full throttle and the stick 0.4 back it rotates near 24 m/s, lifts off near 30 m/s after
+about 300 m, and climbs at 5 m/s; the ailerons roll it at up to about 37° a second, a banked turn
+holds its bank and loses height unless the stick comes back, and a full pull from the keys
+stalls it (hence half the elevator by default). The lab's test takes off, banks right, climbs
+past 20 m and replays to the same digests. A tick of the field: **0.05 ms** on average, p99
+0.10 ms.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -230,4 +298,6 @@ everything else), `lab-drop600` (the pile at rest) and `lab-net300` (the client'
 geometry paths; and from the sea (#138) `lab-sea300` (what floats and the rocks on the floor) with
 its occlusion-off twin, and `lab-sea-steer600` (the boat under way with the rudder over); and from
 the playground (#139) `lab-walk150` (halfway up the stairs) with its twin, and
-`lab-walk-crates240` (through the light crates).
+`lab-walk-crates240` (through the light crates); from the track (#140) `lab-drive300` with its
+twin and `lab-drive-turn600`; and from the field (#141) `lab-fly1200` (climbing away) with its
+twin.

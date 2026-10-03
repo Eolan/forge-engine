@@ -14,6 +14,7 @@
 
 #![allow(unsafe_code)]
 
+pub mod aero;
 pub mod buoyancy;
 mod ffi;
 
@@ -144,6 +145,20 @@ impl Shape {
 }
 
 impl Shape {
+    /// Its centre of mass in its body's frame (a hull's, of its volume at even density).
+    pub fn center_of_mass(&self) -> Vec3 {
+        let mut c = [0.0_f32; 3];
+        // SAFETY: `self.raw` is a live shape; three floats written during the call.
+        unsafe { ffi::fj_shape_center_of_mass(self.raw.as_ptr(), c.as_mut_ptr()) };
+        Vec3::from_array(c)
+    }
+
+    /// This shape with its centre of mass at `at` in its body's frame (an aeroplane's, ahead
+    /// of its wing's lift and over its wheels).
+    pub fn with_center_of_mass_at(&self, at: Vec3) -> Result<Self, PhysicsError> {
+        self.with_center_of_mass_offset(at - self.center_of_mass())
+    }
+
     /// This shape with its centre of mass moved by `offset` in its body's frame: a boat's
     /// weight sits low in its hull, which keeps it upright.
     pub fn with_center_of_mass_offset(&self, offset: Vec3) -> Result<Self, PhysicsError> {
@@ -340,6 +355,35 @@ pub struct CharacterState {
     /// The body it stands on, if any.
     pub ground_body: Option<BodyId>,
 }
+
+/// A four-wheeled car on a chassis body (Jolt's `VehicleConstraint`, D-009): front-wheel drive,
+/// the front wheels steering, the rear ones braking with the handbrake, an anti-roll bar on
+/// each axle. The chassis' frame: −z forward, +y up.
+#[derive(Clone, Copy, Debug)]
+pub struct VehicleDesc {
+    /// Half the distance between the left and right wheels, metres.
+    pub half_track: f32,
+    /// Half the distance between the axles, metres.
+    pub half_wheelbase: f32,
+    /// Where the suspension hangs from, metres up in the chassis' frame.
+    pub attach_y: f32,
+    /// How far the suspension reaches down, at the least and the most, metres.
+    pub suspension: (f32, f32),
+    /// The springs' frequency (Hz) and damping (1 critical).
+    pub spring: (f32, f32),
+    /// The wheels' radius and width, metres.
+    pub wheel: (f32, f32),
+    /// The front wheels' steering at the most, radians.
+    pub max_steer: f32,
+    /// The engine's torque, N·m, and its top revs, rpm.
+    pub engine: (f32, f32),
+    /// The brakes' torque on each wheel and the handbrake's on the rear ones, N·m.
+    pub brakes: (f32, f32),
+}
+
+/// A car of a [`World`]: its index, in the order added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VehicleId(u32);
 
 /// The nearest hit of a ray.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -698,6 +742,90 @@ impl World {
             ground_velocity: Vec3::from_array(s.ground_velocity),
             ground_body: (s.ground_body != u32::MAX).then_some(BodyId(s.ground_body)),
         }
+    }
+
+    /// Makes `chassis` (a dynamic body) a car; it is saved and restored with the world.
+    pub fn add_vehicle(
+        &mut self,
+        chassis: BodyId,
+        desc: &VehicleDesc,
+    ) -> Result<VehicleId, PhysicsError> {
+        let raw = ffi::FjVehicleDesc {
+            half_track: desc.half_track,
+            half_wheelbase: desc.half_wheelbase,
+            attach_y: desc.attach_y,
+            suspension_min: desc.suspension.0,
+            suspension_max: desc.suspension.1,
+            spring_frequency: desc.spring.0,
+            spring_damping: desc.spring.1,
+            wheel_radius: desc.wheel.0,
+            wheel_width: desc.wheel.1,
+            max_steer: desc.max_steer,
+            engine_torque: desc.engine.0,
+            max_rpm: desc.engine.1,
+            brake_torque: desc.brakes.0,
+            handbrake_torque: desc.brakes.1,
+        };
+        // SAFETY: the world is live and `raw` read during the call; the constraint lives as
+        // long as the world.
+        let id = unsafe { ffi::fj_vehicle_add(self.raw.as_ptr(), chassis.0, &raw) };
+        if id == u32::MAX {
+            Err(PhysicsError::WorldFull)
+        } else {
+            Ok(VehicleId(id))
+        }
+    }
+
+    /// The driver: throttle (−1 astern to 1 ahead), steering (−1 left to 1 right), brake and
+    /// handbrake (0 to 1), held until the next call; any of them wakes a parked car.
+    pub fn drive(
+        &mut self,
+        vehicle: VehicleId,
+        throttle: f32,
+        steer: f32,
+        brake: f32,
+        handbrake: f32,
+    ) {
+        // SAFETY: the world is live and the index one it gave.
+        unsafe {
+            ffi::fj_vehicle_drive(
+                self.raw.as_ptr(),
+                vehicle.0,
+                throttle,
+                steer,
+                brake,
+                handbrake,
+            );
+        }
+    }
+
+    /// A car's four wheels in the world (front left, front right, rear left, rear right), their
+    /// axles along their x, into `out` (cleared first).
+    pub fn wheels(&self, vehicle: VehicleId, out: &mut Vec<Transform>) {
+        let mut positions = [[0.0_f64; 3]; 4];
+        let mut rotations = [[0.0_f32; 4]; 4];
+        // SAFETY: the world is live, the index one it gave; four transforms written.
+        unsafe {
+            ffi::fj_vehicle_wheels(
+                self.raw.as_ptr(),
+                vehicle.0,
+                positions.as_mut_ptr().cast(),
+                rotations.as_mut_ptr().cast(),
+            );
+        }
+        out.clear();
+        out.extend(positions.iter().zip(&rotations).map(|(&p, &r)| Transform {
+            position: DVec3::from_array(p),
+            rotation: Quat::from_array(r),
+        }));
+    }
+
+    /// A car's engine: its revs (rpm) and the gear engaged (0 neutral, −1 reverse).
+    pub fn engine(&self, vehicle: VehicleId) -> (f32, i32) {
+        let (mut rpm, mut gear) = (0.0, 0);
+        // SAFETY: the world is live, the index one it gave; two numbers written.
+        unsafe { ffi::fj_vehicle_engine(self.raw.as_ptr(), vehicle.0, &mut rpm, &mut gear) };
+        (rpm, gear)
     }
 
     /// The whole simulation's state (bodies, contacts, constraints): what

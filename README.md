@@ -217,7 +217,10 @@ throwing too (`forge-sim`). `--lab sea`: crates, barrels, logs and balls afloat 
 waves, rocks sinking to the floor, a jetty, and a boat modelled in Blender and read through
 glTF; the arrow keys drive the boat, C follows it. `--lab walk`: a character in a playground of
 stairs, ramps, a moving platform and crates; WASD walk, Shift runs, Space jumps, the right mouse
-button turns the view. It shares `city-blocks`' renderer, keys and options
+button turns the view. `--lab drive`: a car on wheels and springs, a ramp, a slalom, a wall of
+crates; the arrows drive, Space holds the handbrake. `--lab fly`: an aeroplane on its flying
+surfaces over a runway and a field; W and S the throttle, the arrows the stick, A and D the
+rudder. It shares `city-blocks`' renderer, keys and options
 (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 

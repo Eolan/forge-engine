@@ -113,8 +113,10 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   tick, buoyancy by submerged triangles, a boat modelled in Blender read through glTF and driven
   by its outboard. Next, the island's rivers and lakes for what floats (its barrels, #107,
   still drift at the water's speed, without physics). Walking ✅ (#139, `--lab walk`): a
-  character up stairs, stopped by steep ramps, carried by a platform, shoving crates. Next,
-  vehicles and flight (step 5).
+  character up stairs, stopped by steep ramps, carried by a platform, shoving crates. A car ✅
+  (#140, `--lab drive`): Jolt's wheeled vehicle, a Blender model, a ramp, a slalom and a wall of
+  crates. An aeroplane ✅ (#141, `--lab fly`): lift and drag on each flying surface, a take-off
+  from a runway and turns over a 5 km field. Next, destruction (step 6).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map.
@@ -410,8 +412,11 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 4. **Walking** ✅ (#139, `physics-lab --lab walk`): a character controller (Jolt's
    `CharacterVirtual`): pushing crates, stairs, ramps, a moving platform; a moving deck with the
    island's boats.
-5. **Vehicles and flight:** a car, a boat, a glider or a plane (lift and drag), a rocket or a
-   spaceship in zero g.
+5. **Vehicles and flight:** a car ✅ (#140, `physics-lab --lab drive`: Jolt's
+   `VehicleConstraint`, springs, a geared engine, a handbrake; a ramp, a slalom, a wall of
+   crates), the boat (step 3), a plane ✅ (#141, `--lab fly`: lift and drag per flying surface,
+   `forge_physics::aero`; a runway and a 5 km field). Left: a rocket or a spaceship in zero g, the
+   wind through `Air`.
 6. **Destruction:** a brick wall of bonded bricks with breakable joints, rocks and asteroids
    fractured on impact (#24, #12), a ship's hull breaking open on its decks (#89).
 7. **Creatures:** a glTF importer and skinning (Phase 7's start), models from Blender (the

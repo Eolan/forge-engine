@@ -280,6 +280,10 @@ struct Args {
     /// ground, in place of the keys (#139).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     walk: Option<Vec<f32>>,
+    /// With `--lab fly`, the aeroplane's controls from the first frame, `T,E,A,R` (throttle
+    /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    pilot: Option<Vec<f32>>,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -469,6 +473,10 @@ struct Gallery {
     steering: (f32, f32),
     /// The player's walk last sent (#139).
     walking: [f32; 2],
+    /// The car's handbrake last sent (#140).
+    handbrake: bool,
+    /// The aeroplane's controls last sent (#141).
+    flying: [f32; 4],
     lab: Option<lab::Lab>,
     /// Their waves in the lakes and the sea (#107), with the water and the movers.
     wakes: Option<WaterWakes>,
@@ -849,9 +857,12 @@ impl Gallery {
         let mut gallery = Self {
             barrels,
             lab,
-            chase: false,
+            // The car is followed from the start (C lets it go); the aeroplane always is.
+            chase: args.lab == Some(lab::LabScene::Drive),
             steering: (0.0, 0.0),
             walking: [0.0; 2],
+            handbrake: false,
+            flying: [0.0; 4],
             wakes,
             splashes,
             falls,
@@ -986,12 +997,13 @@ impl Demo for Gallery {
                 self.taa.enabled = !self.taa.enabled;
                 self.taa.reset_history();
             }
-            // Space: the player jumps in the playground (#139); elsewhere it throws, as X does.
+            // Space: the player jumps in the playground (#139), the car's handbrake on the track
+            // (#140, held: see `update`); elsewhere it throws, as X does.
             KeyCode::Space => {
                 if let Some(lab) = &mut self.lab {
                     if lab.has_player() {
                         lab.jump();
-                    } else {
+                    } else if !lab.has_car() {
                         lab.throw(self.camera.position, self.camera.forward());
                     }
                 }
@@ -1046,6 +1058,42 @@ impl Demo for Gallery {
             if steering != self.steering {
                 self.steering = steering;
                 lab.steer(steering.0, steering.1);
+            }
+            // The aeroplane (#141): W and S open and close the throttle, the arrows are the
+            // stick (down pulls the nose up, left and right roll; half the elevator, all of it
+            // with Shift, as a full pull from the keys stalls it), A and D the rudder; or
+            // `--pilot T,E,A,R`. A command when they change; the camera follows it.
+            if lab.has_plane() {
+                self.chase = true;
+                let keys = |a: KeyCode, b: KeyCode| {
+                    f32::from(u8::from(input.is_down(a))) - f32::from(u8::from(input.is_down(b)))
+                };
+                let throttle = (self.flying[0]
+                    + 0.5 * self.step * keys(KeyCode::KeyW, KeyCode::KeyS))
+                .clamp(0.0, 1.0);
+                let shift = input.is_down(KeyCode::ShiftLeft) || input.is_down(KeyCode::ShiftRight);
+                let elevator = if shift { 1.0 } else { 0.5 };
+                let mut flying = [
+                    throttle,
+                    elevator * keys(KeyCode::ArrowUp, KeyCode::ArrowDown),
+                    keys(KeyCode::ArrowRight, KeyCode::ArrowLeft),
+                    keys(KeyCode::KeyD, KeyCode::KeyA),
+                ];
+                if let Some(f) = &self.args.pilot {
+                    flying = std::array::from_fn(|k| f.get(k).copied().unwrap_or(0.0));
+                }
+                if flying != self.flying {
+                    self.flying = flying;
+                    lab.fly(flying);
+                }
+            }
+            // The car's handbrake (#140): Space held.
+            if lab.has_car() {
+                let pulled = input.is_down(KeyCode::Space);
+                if pulled != self.handbrake {
+                    self.handbrake = pulled;
+                    lab.handbrake(pulled);
+                }
             }
             // The playground's player (#139): WASD along the view, Shift to run, or `--walk`;
             // a command when the walk changes.
@@ -1117,15 +1165,21 @@ impl Demo for Gallery {
         } else {
             self.camera.update(input, dt);
         }
-        // C: the camera behind the lab's boat and over it, looking where it goes (#138).
+        // C: the camera behind the lab's boat, car or aeroplane and over it, looking where it
+        // goes (#138, #140, #141); further back from the aeroplane, 7 m long with a 10 m span.
+        let (back, over, pitch) = if self.lab.as_mut().is_some_and(lab::Lab::has_plane) {
+            (17.0, 3.5, -0.1)
+        } else {
+            (8.0, 2.8, -0.18)
+        };
         if self.chase
-            && let Some(boat) = self.lab.as_mut().and_then(lab::Lab::boat)
+            && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
         {
-            let forward = boat.rotation * Vec3::NEG_Z;
+            let forward = ride.rotation * Vec3::NEG_Z;
             let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or(Vec3::NEG_Z);
-            self.camera.position = boat.position - flat * 8.0 + Vec3::new(0.0, 2.8, 0.0);
+            self.camera.position = ride.position - flat * back + Vec3::new(0.0, over, 0.0);
             self.camera.yaw = (-flat.x).atan2(-flat.z);
-            self.camera.pitch = -0.18;
+            self.camera.pitch = pitch;
         }
         self.frame += 1;
     }
@@ -1969,6 +2023,18 @@ impl CityMaterials {
                 0.03,
             ),
         );
+        // The flight's runway (#141): dark asphalt.
+        let asphalt = add(
+            "asphalt",
+            textured(
+                concrete,
+                [0.24, 0.24, 0.26],
+                [0.22, 0.22, 0.24],
+                3.0,
+                8.0,
+                0.03,
+            ),
+        );
         // The playground's player (#139): a blue body, a dark glossy visor.
         let player_paint = add(
             "painted (blue)",
@@ -2007,6 +2073,8 @@ impl CityMaterials {
             ("lab-platform", red_paint),
             ("lab-player", player_paint),
             ("lab-visor", visor),
+            ("lab-runway", asphalt),
+            ("lab-field", grass),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -3829,7 +3897,25 @@ fn water_check(
 /// Where the camera starts: the island's first view, the gallery's or the city's, or
 /// `--view`.
 fn start_camera(args: &Args) -> Result<FlyCamera> {
-    let mut camera = if args.lab == Some(lab::LabScene::Walk) {
+    let mut camera = if args.lab == Some(lab::LabScene::Fly) {
+        // Behind the aeroplane on the runway's threshold; it follows the aeroplane.
+        FlyCamera {
+            position: Vec3::new(0.0, 4.0, 210.0),
+            yaw: 0.0,
+            pitch: -0.15,
+            speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Drive) {
+        // Behind the car and to its right, the track ahead along −z.
+        FlyCamera {
+            position: Vec3::new(4.0, 3.0, 8.0),
+            yaw: 0.35,
+            pitch: -0.15,
+            speed: 10.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Walk) {
         // Behind the player, looking along −z at the ramps, a little down; it follows the
         // player from the first frame.
         FlyCamera {

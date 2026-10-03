@@ -90,6 +90,32 @@ typedef struct FjCharacterState {
     uint32_t ground_state;
 } FjCharacterState;
 
+// A four-wheeled car on a chassis body (Jolt's VehicleConstraint with its wheeled controller):
+// the wheels hang from the chassis on springs, their contact found by casting a cylinder down.
+// The chassis' frame: −z forward, +y up; wheels front left, front right, rear left, rear right.
+typedef struct FjVehicleDesc {
+    // Half the distance between the left and right wheels, and between the axles, metres.
+    float half_track;
+    float half_wheelbase;
+    // Where the suspension hangs from in the chassis' frame, metres up, and how far it reaches
+    // down at the most and the least.
+    float attach_y;
+    float suspension_min;
+    float suspension_max;
+    // The springs: their frequency (Hz) and damping (1 critical).
+    float spring_frequency;
+    float spring_damping;
+    float wheel_radius;
+    float wheel_width;
+    // The front wheels' steering at the most, radians.
+    float max_steer;
+    // The engine's torque (N·m) and top revs (rpm), the brakes' and the handbrake's torques.
+    float engine_torque;
+    float max_rpm;
+    float brake_torque;
+    float handbrake_torque;
+} FjVehicleDesc;
+
 // The sizes of the structs above, for the layout test.
 typedef struct FjLayout {
     uint32_t world_desc;
@@ -97,6 +123,7 @@ typedef struct FjLayout {
     uint32_t ray_hit;
     uint32_t character_desc;
     uint32_t character_state;
+    uint32_t vehicle_desc;
 } FjLayout;
 
 FjLayout fj_layout(void);
@@ -117,6 +144,8 @@ FjShape *fj_shape_mesh(const float *vertices, uint32_t vertex_count, const uint3
                        uint32_t triangle_count);
 // `inner` moved by `position` and turned by `rotation` (x, y, z, w) in its body's frame.
 FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const float rotation[4]);
+// A shape's centre of mass in its frame (three floats).
+void fj_shape_center_of_mass(const FjShape *shape, float out[3]);
 // `inner` with its centre of mass moved by `offset` (a boat's weight low in its hull).
 FjShape *fj_shape_offset_center_of_mass(const FjShape *inner, const float offset[3]);
 void fj_shape_release(const FjShape *shape);
@@ -169,6 +198,19 @@ uint32_t fj_character_add(FjWorld *world, const FjCharacterDesc *desc);
 // Moves it through a step of `dt` at `velocity` (the world's gravity presses it down).
 void fj_character_move(FjWorld *world, uint32_t character, float dt, const float velocity[3]);
 void fj_character_state(const FjWorld *world, uint32_t character, FjCharacterState *state);
+
+// Makes `chassis` a car; its index. Saved and restored with the world (a constraint of it).
+uint32_t fj_vehicle_add(FjWorld *world, uint32_t chassis, const FjVehicleDesc *desc);
+// The driver: throttle (−1 astern to 1), steering (−1 left to 1 right), brake and handbrake
+// (0 to 1), held until the next call.
+void fj_vehicle_drive(FjWorld *world, uint32_t vehicle, float forward, float right, float brake,
+                      float handbrake);
+// The four wheels' transforms in the world (three doubles and four floats each), their axles
+// along their x.
+void fj_vehicle_wheels(const FjWorld *world, uint32_t vehicle, double *positions,
+                       float *rotations);
+// The engine's revs (rpm) and the gear engaged (0 neutral, −1 reverse).
+void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32_t *gear);
 
 // The whole simulation state (bodies, contacts, constraints) into a buffer the world owns,
 // valid until the next call; `size` receives its length.
