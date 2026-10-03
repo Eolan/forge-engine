@@ -37,6 +37,9 @@ const BRICK: u32 = 4;
 /// How long the air fresh water takes in lasts, seconds: its bubbles rise and burst in a fraction
 /// of a second (sea water's, held by salt and surfactants, last seconds to minutes).
 pub const FRESH_FOAM_LIFE: f32 = 0.3;
+/// Cells a workgroup of the sort's scan takes (`SCAN` in `liquid.slang`); the blocks' scan takes
+/// 1024 blocks at most, so a tank of a million cells.
+const SCAN: u32 = 1024;
 /// Words of the statistics (`STAT_*` in `liquid.slang`).
 const STAT_WORDS: usize = 16;
 const STAT_BYTES: u64 = (STAT_WORDS * 4) as u64;
@@ -251,9 +254,16 @@ struct GpuLiquidFrame {
     crowding: u64,
     foam: u64,
     stats: u64,
+    from_position: u64,
+    from_velocity: u64,
+    from_affine: u64,
+    bin_count: u64,
+    bin_start: u64,
+    block_start: u64,
+    bin_slot: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 360);
+const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 416);
 
 /// Mirrors `LiquidView` in `liquid_draw.slang`.
 #[repr(C)]
@@ -348,6 +358,14 @@ struct Layout {
     foam_render: u64,
     bricks: u64,
     stats: u64,
+    /// The particles' second set (the sort copies from one to the other), and the sort's bins.
+    position2: u64,
+    velocity2: u64,
+    affine2: u64,
+    bin_count: u64,
+    bin_start: u64,
+    block_start: u64,
+    bin_slot: u64,
     total: u64,
 }
 
@@ -377,6 +395,13 @@ impl Layout {
         let foam_render = take(cells * 4);
         let bricks = take(bricks * 16);
         let stats = take(STAT_BYTES);
+        let position2 = take(particles * 16);
+        let velocity2 = take(particles * 16);
+        let affine2 = take(particles * 48);
+        let bin_count = take(cells * 4);
+        let bin_start = take(cells * 4);
+        let block_start = take(cells.div_ceil(u64::from(SCAN)) * 4);
+        let bin_slot = take(particles * 8);
         Self {
             position,
             velocity,
@@ -395,6 +420,13 @@ impl Layout {
             foam_render,
             bricks,
             stats,
+            position2,
+            velocity2,
+            affine2,
+            bin_count,
+            bin_start,
+            block_start,
+            bin_slot,
             total: at,
         }
     }
@@ -421,6 +453,10 @@ enum Kernel {
     Project,
     G2p,
     Foam,
+    Bin,
+    Scan,
+    ScanBlocks,
+    Scatter,
     Stats,
     Level,
     Smooth,
@@ -443,6 +479,7 @@ impl Kernel {
             Kernel::Project => "liquid/project",
             Kernel::G2p => "liquid/g2p",
             Kernel::Foam => "liquid/foam",
+            Kernel::Bin | Kernel::Scan | Kernel::ScanBlocks | Kernel::Scatter => "liquid/sort",
             Kernel::Stats | Kernel::Level => "liquid/stats",
             Kernel::Smooth
             | Kernel::Smooth2
@@ -454,7 +491,7 @@ impl Kernel {
     }
 }
 
-const KERNELS: [(&str, &str, u32); 17] = [
+const KERNELS: [(&str, &str, u32); 21] = [
     ("liquid.slang", "seed_main", 16),
     ("liquid.slang", "seed_cells_main", 16),
     ("liquid.slang", "p2g_main", 16),
@@ -464,6 +501,10 @@ const KERNELS: [(&str, &str, u32); 17] = [
     ("liquid.slang", "project_main", 16),
     ("liquid.slang", "g2p_main", 16),
     ("liquid.slang", "foam_main", 16),
+    ("liquid.slang", "bin_main", 16),
+    ("liquid.slang", "scan_main", 16),
+    ("liquid.slang", "scan_blocks_main", 16),
+    ("liquid.slang", "scatter_main", 16),
     ("liquid.slang", "stats_main", 16),
     ("liquid.slang", "level_main", 16),
     ("liquid_draw.slang", "smooth_main", 8),
@@ -489,6 +530,8 @@ pub struct Liquid {
     /// Whether the particles have been seeded, and per slot whether its readback holds a
     /// frame's statistics.
     seeded: Cell<bool>,
+    /// Which of the particles' two sets holds them.
+    current: Cell<usize>,
     /// The last substep's gate, for the drawing.
     last: Cell<LiquidStep>,
     asked: [Cell<bool>; FRAMES_IN_FLIGHT],
@@ -573,6 +616,7 @@ impl Liquid {
             views: per_slot(std::mem::size_of::<GpuLiquidView>(), "liquid view")?,
             readback,
             seeded: Cell::new(false),
+            current: Cell::new(0),
             last: Cell::new(LiquidStep::default()),
             asked: std::array::from_fn(|_| Cell::new(false)),
         })
@@ -660,13 +704,27 @@ impl Liquid {
         if steps.is_empty() && !seed && !stats {
             return;
         }
+        // The particles' two sets: a frame that steps sorts them from the one they are in into the
+        // other, and steps that (the seeding's frame does not: they are sorted as seeded).
+        let l = self.layout;
+        let sets = [
+            (l.position, l.velocity, l.affine),
+            (l.position2, l.velocity2, l.affine2),
+        ];
+        let held = self.current.get();
+        let sort = !seed && !steps.is_empty();
+        let (now, from) = if sort {
+            self.current.set(1 - held);
+            (sets[1 - held], sets[held])
+        } else {
+            (sets[held], sets[1 - held])
+        };
         let tank = &self.tank;
         let cells = tank.cells();
         let nodes = (cells.x + 1) * (cells.y + 1) * (cells.z + 1);
         let cell_count = cells.x * cells.y * cells.z;
         let particles = tank.particles();
         let base = self.state.address();
-        let l = self.layout;
         let mut gpu_steps = [[0.0_f32; 4]; LIQUID_MAX_SUBSTEPS];
         for (g, s) in gpu_steps.iter_mut().zip(steps) {
             *g = [s.gate_bottom, s.gate_speed, s.shutter, 0.0];
@@ -692,9 +750,9 @@ impl Liquid {
                 cell_count,
                 foam_life: self.look.foam_life,
                 pad: 0,
-                position: base + l.position,
-                velocity: base + l.velocity,
-                affine: base + l.affine,
+                position: base + now.0,
+                velocity: base + now.1,
+                affine: base + now.2,
                 sums: base + l.sums,
                 face: base + l.face,
                 count: base + l.count,
@@ -705,6 +763,13 @@ impl Liquid {
                 crowding: base + l.crowding,
                 foam: base + l.foam,
                 stats: base + l.stats,
+                from_position: base + from.0,
+                from_velocity: base + from.1,
+                from_affine: base + from.2,
+                bin_count: base + l.bin_count,
+                bin_start: base + l.bin_start,
+                block_start: base + l.block_start,
+                bin_slot: base + l.bin_slot,
             }],
         );
         let address = frame.address();
@@ -738,6 +803,42 @@ impl Liquid {
         if seed {
             dispatch(graph, Kernel::Seed, particles, 0, 0);
             dispatch(graph, Kernel::SeedCells, cell_count, 0, 0);
+        }
+        if sort {
+            let (bins, bins_bytes) = (l.bin_count, u64::from(cell_count) * 4);
+            graph
+                .pass("liquid/sort")
+                .queue(QueueKind::Compute)
+                .buffer(state, BufferAccess::TransferDst)
+                .run(move |_, commands| {
+                    commands.fill_buffer(buffer, bins, bins_bytes, 0);
+                    Ok(())
+                });
+            dispatch(graph, Kernel::Bin, particles, 0, 0);
+            for (kernel, groups) in [
+                (Kernel::Scan, cell_count.div_ceil(SCAN)),
+                (Kernel::ScanBlocks, 1),
+            ] {
+                let pipeline = self.pipeline(kernel);
+                graph
+                    .pass("liquid/sort")
+                    .queue(QueueKind::Compute)
+                    .buffer(state, BufferAccess::ShaderReadWrite(compute))
+                    .run(move |_, commands| {
+                        commands.bind_pipeline(pipeline);
+                        commands.push_constants(
+                            pipeline,
+                            &SolverPush {
+                                frame: address,
+                                substep: 0,
+                                colour: 0,
+                            },
+                        );
+                        commands.dispatch(groups, 1, 1);
+                        Ok(())
+                    });
+            }
+            dispatch(graph, Kernel::Scatter, particles, 0, 0);
         }
         let half = cells.x.div_ceil(2) * cells.y * cells.z;
         for s in 0..steps.len() as u32 {

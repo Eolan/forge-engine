@@ -1051,13 +1051,13 @@ max 0.25), the ship and 27 crates in zero g. With the sci-fi ship and its flight
 The ground's sky tables still run under it (about 0.14 ms) and are not used.
 
 `--lab tank` (#156), the gate lifted at tick 31, 600 frames at 1600 × 900: the liquid's
-590 000 particles take **4.5 ms a frame** on the async compute queue, four substeps a tick:
-`liquid/p2g` 2.02 ms (the particles' sums to the faces, 64-bit atomics), `liquid/pressure`
-1.16 (32 red-black sweeps a substep, 256 dispatches a frame), `liquid/g2p` 1.13, the rest
-0.15 (the white water's splat 0.02); its drawing on the graphics queue 0.21 ms (`liquid/draw`,
-with the white water). `--lab tank-hole`: 3.1 ms, the p2g 1.28 and the g2p 0.52, since its
-particles keep their order (the dam break mixes them, and the grid's cache suffers). On the first
-tank (640 000 particles at 1 cm):
+590 000 particles take **3.0 ms a frame** on the async compute queue, four substeps a tick:
+`liquid/sort` 0.24 (by cell into a second buffer, once a frame), `liquid/p2g` 1.15 (the particles'
+sums to the faces, 64-bit atomics), `liquid/pressure` 1.18 (32 red-black sweeps a substep, 256
+dispatches a frame), `liquid/g2p` 0.32, the rest 0.14; its drawing on the graphics queue 0.20 ms
+(`liquid/draw`, with the white water). Unsorted it took 4.5 ms (the p2g 2.02, the g2p 1.13): the
+dam break mixes the particles, and the grid's cache suffered (`--lab tank-hole`, whose particles
+keep their order, took 3.1). On the first tank (640 000 particles at 1 cm):
 - packing the p2g's atomics in 64 bits took it from 2.68 ms to 2.05;
 - shuffling the particles, so a wave's threads meet no common face, made it 4.70 ms (the grid's
   cache lost);

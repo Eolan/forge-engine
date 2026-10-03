@@ -88,6 +88,13 @@ struct LiquidFrame
     float* crowding;  // per liquid cell: its density over a full cell's, less 1 (0 elsewhere)
     int* foam;        // per cell: the particles' foam at its centre, fixed-point (`liquid/foam`)
     uint* stats;      // the statistics' words
+    float4* from_position; // `liquid/sort`: last frame's particles, sorted into `position`, ...
+    float4* from_velocity;
+    float4* from_affine;
+    uint* bin_count;  // per cell: its particles (the sort's)
+    uint* bin_start;  // per cell: where its particles start within its block of SCAN cells
+    uint* block_start;// per block of SCAN cells: where its particles start
+    uint2* bin_slot;  // per particle: its cell and its place among the cell's
 };
 
 struct LiquidPush
@@ -651,8 +658,10 @@ void stats_main(uint3 id : SV_DispatchThreadID)
         InterlockedAdd(st[STAT_BEHIND], 1u);
     uint3 bits = asuint(x);
     uint3 vbits = asuint(v);
-    InterlockedAdd(st[STAT_DIGEST], mix(i ^ mix(bits.x ^ mix(bits.y ^ mix(bits.z)))));
-    InterlockedAdd(st[STAT_DIGEST + 1u], mix(i ^ mix(vbits.x ^ mix(vbits.y ^ mix(vbits.z)))));
+    // Over the particles' states, whatever their order in the buffer (the sort's order within a
+    // cell is the atomics': the states are the same, their places not).
+    InterlockedAdd(st[STAT_DIGEST], mix(bits.x ^ mix(bits.y ^ mix(bits.z ^ mix(vbits.x)))));
+    InterlockedAdd(st[STAT_DIGEST + 1u], mix(vbits.y ^ mix(vbits.z ^ mix(bits.x + 0x9e3779b9u))));
 }
 
 // Per column: where its surface stands (the highest cell at least half full, interpolated to
@@ -693,4 +702,117 @@ void level_main(uint3 id : SV_DispatchThreadID)
         InterlockedAdd(st[STAT_LEVEL], uint(top * f[0].size.w * 10000.0 + 0.5));
         InterlockedAdd(st[STAT_COLUMNS], 1u);
     }
+}
+
+// The sort (`liquid/sort`, once a frame): the particles by cell, so a wave's threads touch
+// neighbouring faces. As the dam break mixes them, the buffer's neighbours stop being the tank's,
+// and the p2g's atomics and the g2p's gathers miss the cache (the dam break's p2g took 2.0 ms a
+// frame, the hole's, whose particles keep their order, 1.3). A counting sort: each particle
+// takes a place in its cell (`bin_main`), the cells' counts are scanned (`scan_main` within
+// blocks of SCAN cells, `scan_blocks_main` over the blocks) and each particle copied to its cell's
+// start plus its place (`scatter_main`). The places within a cell come from the atomics, in no
+// fixed order: the physics does not mind (the grid's sums are integers, the rest per particle).
+static const uint SCAN = 1024u;
+groupshared uint s_scan[256];
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void bin_main(uint3 id : SV_DispatchThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    uint i = id.x;
+    if (i >= f[0].cells.w)
+        return;
+    float3 x = f[0].from_position[i].xyz;
+    int3 home = clamp(int3(floor(x / f[0].size.w)), int3(0), cells_of(f) - 1);
+    uint c = cell_index(f, home);
+    uint place;
+    InterlockedAdd(f[0].bin_count[c], 1u, place);
+    f[0].bin_slot[i] = uint2(c, place);
+}
+
+// Exclusive scan of SCAN counts a workgroup (256 threads, 4 counts each): within the block into
+// `bin_start`, its total into `block_start`.
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void scan_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    uint n = f[0].cell_count;
+    uint first = group.x * SCAN + thread.x * 4u;
+    uint v[4];
+    uint sum = 0u;
+    for (uint k = 0u; k < 4u; k++)
+    {
+        v[k] = first + k < n ? f[0].bin_count[first + k] : 0u;
+        sum += v[k];
+    }
+    s_scan[thread.x] = sum;
+    GroupMemoryBarrierWithGroupSync();
+    // Hillis–Steele over the threads' sums.
+    for (uint d = 1u; d < 256u; d *= 2u)
+    {
+        uint add = thread.x >= d ? s_scan[thread.x - d] : 0u;
+        GroupMemoryBarrierWithGroupSync();
+        s_scan[thread.x] += add;
+        GroupMemoryBarrierWithGroupSync();
+    }
+    uint running = s_scan[thread.x] - sum;
+    for (uint k = 0u; k < 4u; k++)
+    {
+        if (first + k < n)
+            f[0].bin_start[first + k] = running;
+        running += v[k];
+    }
+    if (thread.x == 255u)
+        f[0].block_start[group.x] = s_scan[255];
+}
+
+// Exclusive scan of the blocks' totals in place, one workgroup (at most 256 × 4 blocks).
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void scan_blocks_main(uint3 thread : SV_GroupThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    uint blocks = (f[0].cell_count + SCAN - 1u) / SCAN;
+    uint first = thread.x * 4u;
+    uint v[4];
+    uint sum = 0u;
+    for (uint k = 0u; k < 4u; k++)
+    {
+        v[k] = first + k < blocks ? f[0].block_start[first + k] : 0u;
+        sum += v[k];
+    }
+    s_scan[thread.x] = sum;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint d = 1u; d < 256u; d *= 2u)
+    {
+        uint add = thread.x >= d ? s_scan[thread.x - d] : 0u;
+        GroupMemoryBarrierWithGroupSync();
+        s_scan[thread.x] += add;
+        GroupMemoryBarrierWithGroupSync();
+    }
+    uint running = s_scan[thread.x] - sum;
+    for (uint k = 0u; k < 4u; k++)
+    {
+        if (first + k < blocks)
+            f[0].block_start[first + k] = running;
+        running += v[k];
+    }
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void scatter_main(uint3 id : SV_DispatchThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    uint i = id.x;
+    if (i >= f[0].cells.w)
+        return;
+    uint2 slot = f[0].bin_slot[i];
+    uint to = f[0].block_start[slot.x / SCAN] + f[0].bin_start[slot.x] + slot.y;
+    f[0].position[to] = f[0].from_position[i];
+    f[0].velocity[to] = f[0].from_velocity[i];
+    for (uint a = 0u; a < 3u; a++)
+        f[0].affine[3u * to + a] = f[0].from_affine[3u * i + a];
 }

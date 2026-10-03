@@ -677,22 +677,28 @@ side. The reservoir drains until both sides stand level, 152 mm.
 
 **The cost** on the RTX 5070 Ti, 1600 × 900, on the async compute queue (600 frames):
 
-| Zone | `tank` (ms a frame) | `tank-hole` |
-|---|---|---|
-| `liquid/p2g` | 2.02 | 1.28 |
-| `liquid/pressure` | 1.16 | 1.14 |
-| `liquid/g2p` | 1.13 | 0.52 |
-| `liquid/faces`, `cells`, `project`, `clear`, `foam` | 0.15 | 0.15 |
-| `liquid/draw` (graphics) | 0.21 | 0.21 |
+| Zone | `tank` (ms a frame) | `tank-hole` | `tank`, unsorted |
+|---|---|---|---|
+| `liquid/sort` | 0.24 | 0.21 | |
+| `liquid/p2g` | 1.15 | 1.10 | 2.02 |
+| `liquid/pressure` | 1.18 | 1.15 | 1.16 |
+| `liquid/g2p` | 0.32 | 0.33 | 1.13 |
+| `liquid/faces`, `cells`, `project`, `clear`, `foam` | 0.14 | 0.14 | 0.15 |
+| `liquid/draw` (graphics) | 0.20 | 0.21 | 0.21 |
 
-That makes 4.5 ms of simulation for the dam break, 3.1 for the hole: more than D-044's 2.5 ms
-estimate for 190 000 particles (answer 4: to be found by trying). The particles' sums to the grid
-are the most of it, and they cost more as the dam break mixes the particles: neighbours in the
-buffer stop being neighbours in the tank, and the grid's cache and its atomics suffer. Through
-the hole the water keeps its order, and the same sums take 1.28 ms. Where the time could go:
-- sorting the particles by cell once a frame, and summing a workgroup's into groupshared memory
-  first;
-- a multigrid pressure in place of the sweeps.
+That makes 3.0 ms of simulation: more than D-044's 2.5 ms estimate for 190 000 particles
+(answer 4: to be found by trying).
+- **The sort:** the particles go by cell into a second buffer once a frame, a counting sort:
+  places taken by atomics, the counts scanned in groupshared blocks. Unsorted, the dam break
+  mixed them: neighbours in the buffer stopped being neighbours in the tank, and the sums to the
+  grid and the gathers back missed the cache (4.5 ms in all).
+- **Determinism:** the places within a cell come from the atomics, in no fixed order, which the
+  physics does not mind (the grid's sums are integers, the rest per particle). The digest is
+  now over the particles' states whatever their order: runs still replay to it, and async and
+  serial draw the same.
+- **Where the time could go next:**
+  - a multigrid pressure in place of the sweeps (now the most of it);
+  - a workgroup's sums gathered in groupshared memory before the atomics.
 
 ## `dominoes`: a run that ends the same (issue #146)
 
