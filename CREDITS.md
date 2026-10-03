@@ -133,9 +133,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Ambient occlusion.** Jorge Jimenez, Xian-Chun Wu, Angelo Pesce, Adrian Jarabo, "Practical
   Real-Time Strategies for Accurate Indirect Occlusion", SIGGRAPH 2016: GTAO and its
   multi-bounce fit. Forge ports Intel's implementation, XeGTAO (Filip Strugar and
-  contributors; MIT, notice in `shaders/third-party/XeGTAO-LICENSE.txt`). Its sample noise
-  combines a Hilbert curve with Martin Roberts' R2 sequence ("The Unreasonable Effectiveness
-  of Quasirandom Sequences", 2018).
+  contributors; MIT, notice in `shaders/third-party/XeGTAO-LICENSE.txt`). XeGTAO's sample noise,
+  which combines a Hilbert curve with Martin Roberts' R2 sequence ("The Unreasonable
+  Effectiveness of Quasirandom Sequences", 2018), still drives the clouds', the dust's and the
+  dither's samples. GTAO's own samples use Jorge Jimenez's interleaved gradient noise ("Next
+  Generation Post Processing in Call of Duty: Advanced Warfare", SIGGRAPH 2014).
 - **Diffuse light from probes.** Zander Majercik, Jean-Philippe Guertin, Derek Nowrouzezahrai,
   Morgan McGuire, "Dynamic Diffuse Global Illumination with Ray-Traced Irradiance Fields",
   *Journal of Computer Graphics Techniques* 8(2), 2019, and Zander Majercik, Adam Marrs, Josef

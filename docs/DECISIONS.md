@@ -1068,7 +1068,8 @@ notice is in `shaders/third-party/XeGTAO-LICENSE.txt`.
   each a 2×2 average weighted towards the near samples (XeGTAO's filter, so a thin
   occluder survives).
 - **GTAO:** 3 slices and 3 steps per side, which is XeGTAO's "high" preset. The samples are
-  placed by a Hilbert-curve index into the R2 sequence, and their distance picks the level
+  placed by a Hilbert-curve index into the R2 sequence (since 2026-10-03, by interleaved
+  gradient noise: see the second departure below), and their distance picks the level
   they read. The normal is rebuilt from the depth with XeGTAO's edge-aware cross products.
   The effect radius is 1.5 m (×1.457); the constants are XeGTAO's.
 - **One 3×3 denoise** that does not cross depth edges.
@@ -1081,6 +1082,19 @@ albedo, so bright materials lose less. Scenes without a sky do not compute it.
 every 64. With 64, TAA's history drifted between patterns: on a static view, 0.24 % of the
 pixels changed by more than two levels over 32 frames, against 0.09 % without AO. With 8 it
 is 0.10 %. A second denoise pass did not move either figure.
+
+**A second departure (2026-10-03, the owner's report from the physics lab's walk):**
+- **What was seen:** the samples' noise is Jorge Jimenez's interleaved gradient noise (SIGGRAPH 2014),
+  not the Hilbert curve's R2. With the R2, the 3×3 denoise left tiles of horizontal stripes. These
+  showed on faces in shadow, which only the sky lights, wherever TAA had no history to average
+  them (a moving camera).
+- **The cause:** holding the noise constant removed the stripes, so they were the noise's own
+  pattern, not the geometry's.
+- **The fix:** the gradient noise spreads each 3×3 block of pixels over the whole range, so the
+  denoise averages it out. Even without TAA, the occlusion is then a smooth gradient.
+- **The cost:** a still view's change over 32 frames is unchanged (the city's start, no clouds:
+  0.280 % of the pixels by more than two levels with the R2, 0.278 % with the gradient noise,
+  0.277 % without AO).
 
 **Left for later:**
 - specular occlusion and bent normals from the same horizons;

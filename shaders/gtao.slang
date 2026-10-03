@@ -1,9 +1,10 @@
 // Ground-truth ambient occlusion (issue #48): how much of the sky a pixel's surface sees past
 // the depth around it. Jimenez, Wu, Pesce, Jarabo, "Practical Real-Time Strategies for
 // Accurate Indirect Occlusion", SIGGRAPH 2016, as Intel's XeGTAO implements it: this file
-// follows XeGTAO's structure and constants (the depth prefilter, the slice and step loops,
-// the spatio-temporal noise). XeGTAO is Copyright (C) 2016-2021, Intel Corporation, under
-// the MIT licence (shaders/third-party/XeGTAO-LICENSE.txt).
+// follows XeGTAO's structure and constants (the depth prefilter, the slice and step loops).
+// Its noise is Jimenez's interleaved gradient noise in place of XeGTAO's Hilbert curve and R2
+// (`noise.slang`). XeGTAO is Copyright (C) 2016-2021, Intel Corporation, under the MIT licence
+// (shaders/third-party/XeGTAO-LICENSE.txt).
 //
 // Four passes, driven by crates/forge-render/src/gtao.rs:
 // - `prefilter0_main`: the distance along the view axis of every pixel, from the reversed-Z
@@ -172,7 +173,8 @@ void gtao_main(uint3 id : SV_DispatchThreadID)
     float pixel_view_size = position.z * abs(push.ndc_to_view_mul.x) * push.pixel_size.x;
     float screen_radius = effect / pixel_view_size;
     float min_s = PIXEL_TOO_CLOSE / screen_radius;
-    float2 jitter = spatio_temporal_noise(id.xy, push.frame);
+    float2 jitter = float2(interleaved_gradient_noise(id.xy, push.frame, float2(0.0, 0.0)),
+        interleaved_gradient_noise(id.xy, push.frame, float2(47.0, 17.0)));
 
     float visibility = 0.0;
     for (uint slice = 0; slice < SLICES; slice++)

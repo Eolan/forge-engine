@@ -10,8 +10,9 @@
 //!   visible arc, integrated against a normal rebuilt from the depth;
 //! - `ao/denoise`: a 3×3 blur that does not cross depth edges.
 //!
-//! The noise that places the samples changes every frame (a Hilbert curve and the R2
-//! sequence) and repeats with TAA's jitter, which averages it.
+//! The noise that places the samples changes every frame (Jimenez's interleaved gradient
+//! noise, which the 3×3 denoise averages out) and repeats with TAA's jitter, which averages
+//! what is left.
 
 use std::sync::Arc;
 

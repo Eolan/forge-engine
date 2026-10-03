@@ -1031,6 +1031,11 @@ as the default. What the port taught:
   static view's pixels changed by more than two levels over 32 frames, against 0.09 %
   without AO. Repeating the noise every 8 frames brought it to 0.10 %; a second denoise
   pass did nothing for it.
+- **The noise has to suit the denoise too (2026-10-03).** Under XeGTAO's Hilbert-curve R2,
+  the 3×3 denoise left tiles of horizontal stripes wherever TAA had no history, as on a
+  moving camera. Faces lit only by the sky showed them in the physics lab (the owner's
+  report). Jimenez's interleaved gradient noise spreads every 3×3 block over the whole range,
+  and the stripes went. A still view's change over 32 frames did not move (0.280 → 0.278 %).
 - **Screen-space AO is contact AO at city scale.** A 1.5 m radius (2.2 m with XeGTAO's
   multiplier) reads recesses, basins and the feet of walls. It does not reach the sky
   hidden by a street's buildings, which is the probes' work (step 3), or rays against the
