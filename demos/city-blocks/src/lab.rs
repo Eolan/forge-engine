@@ -88,6 +88,9 @@ pub(crate) enum LabScene {
     /// The same tank as a bench to tune the liquid by: no glass, frame or table to see, a floor of
     /// 10 cm squares, a plain background, the sun alone, the water tinted (#156).
     TankBench,
+    /// The glass tank with the gate fixed and a round hole through it, a shutter over it: the jet
+    /// (#156).
+    TankHole,
 }
 
 /// The floor's half side, metres.
@@ -154,7 +157,7 @@ const TUG: usize = ROCKET + 3;
 /// The spaceship and its engines' flame, after the tug-of-war's two.
 const SHIP: usize = TUG + 2;
 /// The glass tank's table, its frame's bars along x, y and z, its gate, its bench's four floors,
-/// after the ship's two.
+/// its holed gate and the shutter, after the ship's two.
 const TANK: usize = SHIP + 2;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
@@ -544,7 +547,8 @@ impl LabWorld {
             | LabScene::Tug
             | LabScene::Space
             | LabScene::Tank
-            | LabScene::TankBench => 0.0,
+            | LabScene::TankBench
+            | LabScene::TankHole => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -975,10 +979,15 @@ impl LabWorld {
                 group(CRATE, site.crates, &mut bodies);
                 ship = Some(site.ship);
             }
-            LabScene::Tank | LabScene::TankBench => {
-                let built = tank::build(&mut world, TANK, kind == LabScene::TankBench)?;
+            LabScene::Tank | LabScene::TankBench | LabScene::TankHole => {
+                let built = tank::build(
+                    &mut world,
+                    TANK,
+                    kind == LabScene::TankBench,
+                    kind == LabScene::TankHole,
+                )?;
                 statics.extend(built.statics);
-                group(TANK + 4, vec![built.tank.gate], &mut bodies);
+                group(built.mover.0, vec![built.mover.1], &mut bodies);
                 tank = Some(built.tank);
             }
         }
@@ -1860,9 +1869,9 @@ impl Lab {
         };
         for _ in 0..ticks {
             let start = Instant::now();
-            let gate_from = self.gate_bottom();
+            let gate_from = self.tank_state();
             self.tick();
-            if let (Some(from), Some(to)) = (gate_from, self.gate_bottom()) {
+            if let (Some(from), Some(to)) = (gate_from, self.tank_state()) {
                 self.tank_steps.extend(tank::steps(from, to));
             }
             let ms = start.elapsed().as_secs_f64() * 1e3;
@@ -2146,10 +2155,10 @@ impl Lab {
         self.shown().ship.is_some()
     }
 
-    /// The tank's gate bottom over its floor, metres, in the shown world.
-    fn gate_bottom(&mut self) -> Option<f32> {
+    /// The tank's gate and shutter bottoms over its floor, metres, in the shown world.
+    fn tank_state(&mut self) -> Option<[f32; 2]> {
         let shown = self.shown();
-        shown.tank.as_ref().map(|t| t.gate_bottom(&shown.world))
+        shown.tank.as_ref().map(|t| t.state(&shown.world))
     }
 
     /// The liquid's substeps the ticks since the last call owe it, with where the gate stood.

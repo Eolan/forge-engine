@@ -308,6 +308,14 @@ struct Args {
     /// tension, none leaves the water as it stands.
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true, default_values_t = [0.0, -9.81, 0.0])]
     liquid_gravity: Vec<f32>,
+    /// `--lab tank`: start in the speed view (the water coloured by the flow's speed; 2 turns it on,
+    /// 1 off).
+    #[arg(long)]
+    liquid_speed: bool,
+    /// `--lab tank`: how long the air the water takes in lasts, seconds (fresh water's 0.3 by
+    /// default: white only where a jet plunges; longer for sea water's foam; 0 for none).
+    #[arg(long, default_value_t = forge_render::FRESH_FOAM_LIFE)]
+    liquid_foam: f32,
     /// `--lab tank`: the share of the particles' crowding undone a substep.
     #[arg(long, default_value_t = 0.25)]
     liquid_drift: f32,
@@ -495,6 +503,8 @@ struct Gallery {
     liquid_next_log: u64,
     /// Enter was pressed: the liquid starts over at the next frame.
     liquid_reset: bool,
+    /// The liquid drawn in its speed view (2), or as it looks (1).
+    liquid_speed: bool,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -662,19 +672,20 @@ impl Gallery {
         // The glass tank's liquid (#156): pure water, the solver as the arguments set it; on its
         // bench, tinted, under a white sun from the left and behind.
         let bench = args.lab == Some(lab::LabScene::TankBench);
+        let liquid_speed = args.liquid_speed;
         if bench {
             renderer.sun_dir = BENCH_SUN.normalize();
             renderer.sun_color = Vec3::ONE;
         }
         let liquid = matches!(
             args.lab,
-            Some(lab::LabScene::Tank | lab::LabScene::TankBench)
+            Some(lab::LabScene::Tank | lab::LabScene::TankBench | lab::LabScene::TankHole)
         )
         .then(|| {
             forge_render::Liquid::new(
                 &ctx.device,
                 &ctx.shaders,
-                lab::tank::liquid(args.liquid_cell),
+                lab::tank::liquid(args.liquid_cell, args.lab == Some(lab::LabScene::TankHole)),
                 forge_render::LiquidSolver {
                     sweeps: args.liquid_sweeps,
                     omega: args.liquid_omega,
@@ -684,10 +695,13 @@ impl Gallery {
                     ),
                     ..forge_render::LiquidSolver::default()
                 },
-                if bench {
-                    forge_render::LiquidLook::tinted()
-                } else {
-                    forge_render::LiquidLook::pure_water()
+                forge_render::LiquidLook {
+                    foam_life: args.liquid_foam,
+                    ..if bench {
+                        forge_render::LiquidLook::tinted()
+                    } else {
+                        forge_render::LiquidLook::pure_water()
+                    }
                 },
             )
         })
@@ -1026,6 +1040,7 @@ impl Gallery {
             liquid_asked: [None; forge_gpu::FRAMES_IN_FLIGHT],
             liquid_next_log: 0,
             liquid_reset: false,
+            liquid_speed,
             sky_light,
             gtao,
             ao_on,
@@ -1172,6 +1187,9 @@ impl Demo for Gallery {
                     self.liquid_reset = true;
                 }
             }
+            // The tank's water as it looks, or coloured by its speed (#156).
+            KeyCode::Digit1 => self.liquid_speed = false,
+            KeyCode::Digit2 => self.liquid_speed = true,
             KeyCode::KeyC => self.chase = !self.chase,
             _ => {}
         }
@@ -1865,6 +1883,7 @@ impl Demo for Gallery {
                         BENCH_BACKGROUND
                             * (self.renderer.sun_illuminance * exposure / std::f32::consts::PI)
                     }),
+                    speed_view: self.liquid_speed,
                 },
                 taa_frame.color,
                 targets.depth,
@@ -2001,11 +2020,16 @@ impl Drop for Gallery {
 
 /// The glass tank's line in the log (#156): what is left of the water, where its surface stands
 /// against where its volume puts it over the floor, how far its front has run, how fast it moves,
-/// and the digest a replay must match.
+/// how high the water behind the gate stands (its particles' volume over the floor there: with the
+/// hole, its fall gives the outflow), and the digest a replay must match.
 fn log_liquid(tick: u64, stats: &LiquidStats, tank: &LiquidTank) {
     let start = tank.water.as_vec3() * tank.cell;
     let volume = start.x * start.y * start.z;
     let level = volume / (tank.size.x * tank.size.z);
+    let particle = tank.cell.powi(3) / 8.0;
+    let behind = tank.gate.map_or(0.0, |g| {
+        stats.behind as f32 * particle / (g[0] * tank.size.z)
+    });
     tracing::info!(
         tick,
         particles = stats.particles,
@@ -2017,6 +2041,7 @@ fn log_liquid(tick: u64, stats: &LiquidStats, tank: &LiquidTank) {
         height_mm = format!("{:.1}", stats.mean_height * 1e3),
         rms_speed = format!("{:.3}", stats.mean_speed2.sqrt()),
         max_speed = format!("{:.2}", stats.max_speed),
+        behind_mm = format!("{:.1}", behind * 1e3),
         digest = format!("{:08x}{:08x}", stats.digest[0], stats.digest[1]),
         "liquid"
     );
@@ -2526,6 +2551,8 @@ impl CityMaterials {
             ("lab-tank-bar-y", steel),
             ("lab-tank-bar-z", steel),
             ("lab-tank-gate", red_paint),
+            ("lab-tank-wall", red_paint),
+            ("lab-tank-shutter", steel),
             ("lab-bench-blue", bench_blue),
             ("lab-bench-violet", bench_violet),
             ("lab-bench-sand", bench_sand),
@@ -4438,6 +4465,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.55,
             speed: 6.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::TankHole) {
+        // In front of the tank, right of the gate, a little over the rim: the hole low in the gate
+        // and the dry side its jet runs into.
+        FlyCamera {
+            position: Vec3::new(0.55, 1.3, 1.2),
+            yaw: 0.5,
+            pitch: -0.25,
+            speed: 0.8,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::TankBench) {

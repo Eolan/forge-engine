@@ -289,10 +289,12 @@ for path in $paths; do
     capture "$path-lab-space150" 150 "$lab" --lab space --fixed-step --pilot 1,0,0,0 "${flag[@]}"
     capture "$path-lab-space150-noocc" 150 "$lab" --lab space --fixed-step --pilot 1,0,0,0 --no-occlusion "${flag[@]}"
     # The glass tank (#156), the gate lifted at tick 31: the wave climbing the far wall at tick 90
-    # and its A/B twin; on the bench, the water settling at tick 300.
+    # and its A/B twin; on the bench, the water settling at tick 300; through the holed gate, the jet
+    # and the water white at the far wall at tick 120.
     capture "$path-lab-tank90" 90 "$lab" --lab tank --fixed-step --release 31 "${flag[@]}"
     capture "$path-lab-tank90-noocc" 90 "$lab" --lab tank --fixed-step --release 31 --no-occlusion "${flag[@]}"
     capture "$path-lab-tank-bench300" 300 "$lab" --lab tank-bench --fixed-step --release 31 "${flag[@]}"
+    capture "$path-lab-tank-hole120" 120 "$lab" --lab tank-hole --fixed-step --release 31 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

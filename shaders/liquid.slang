@@ -22,6 +22,14 @@
 //   half a second), and kept inside the tank and out of the gate.
 // Pressure here is in velocity units: a face's velocity loses the pressure's difference across
 // it, so the still water's rises by g·dt a cell downwards.
+//
+// White water (D-044's answer 5, "the hole's jet should foam"; then the owner: "foam on clear, non
+// salt water does not make too much sense"): each particle carries how much air it holds (its
+// position's w, 0 to 1), taken in where fast water meets the air (its skin tears) and where it is
+// stopped hard (an impact beats air in), and lost as the bubbles rise and burst over the
+// liquid's `foam_life`: a fraction of a second in fresh water, which only whitens where the jet
+// plunges; longer in salt water or with surfactants, where foam lasts; 0 for none.
+// `liquid/foam` splats it to the cells once a frame for the drawing.
 
 static const float FIX = 1048576.0; // fixed-point units of the grid's sums (2^20)
 static const uint AIR = 0u;
@@ -40,6 +48,13 @@ static const uint STAT_LEVEL = 8u;
 static const uint STAT_COLUMNS = 9u;
 static const uint STAT_VOLUME = 10u;
 static const uint STAT_SPEED = 11u;
+static const uint STAT_BEHIND = 12u;
+// Foam: what the skin takes in a second per m/s over FOAM_SPEED where the water meets the air;
+// what an impact beats in a second per m/s² over FOAM_IMPACT.
+static const float FOAM_SKIN = 1.5;
+static const float FOAM_SPEED = 1.5;
+static const float FOAM_HARD = 0.02;
+static const float FOAM_IMPACT = 60.0;
 
 // Must match GpuLiquidFrame in liquid.rs.
 struct LiquidFrame
@@ -50,7 +65,7 @@ struct LiquidFrame
     float4 gate;      // x, y: the gate's faces along x, metres (y <= x: no gate); zw: unused
     float4 hole;      // xy: the hole's centre (its y and z), metres; z: its radius (0: none); w: unused
     float4 steps[MAX_SUBSTEPS]; // per substep: x: the gate's bottom, metres; y: its speed up, m/s;
-                                // z: 1 while the hole is plugged; w: the substep's time, s
+                                // z: the shutter's bottom (the hole open below it), metres; w: unused
     float4 gravity;   // xyz: m/s² (the lab's 9.81 down by default; `--liquid-gravity`); w: unused
     float dt;         // a substep, seconds
     float rest;       // a full cell's density at rest (its particles' weight)
@@ -58,9 +73,9 @@ struct LiquidFrame
     float omega;      // the pressure's over-relaxation
     uint nodes;       // (cells.x + 1)(cells.y + 1)(cells.z + 1): each component's faces
     uint cell_count;
-    uint pad0;
+    float foam_life;  // how long the air it takes in lasts, seconds (0: none)
     uint pad1;
-    float4* position; // per particle: xyz, metres from the tank's inside corner
+    float4* position; // per particle: xyz, metres from the tank's inside corner; w: its foam
     float4* velocity; // xyz, m/s
     float4* affine;   // three per particle: c of the faces' x, y and z components, 1/s
     int64_t* sums;    // 3 × nodes: weight << 32 + momentum, both fixed-point
@@ -71,6 +86,7 @@ struct LiquidFrame
     float* pressure;  // per cell, m/s
     float* divergence;// per cell: the outflow, m/s
     float* crowding;  // per liquid cell: its density over a full cell's, less 1 (0 elsewhere)
+    int* foam;        // per cell: the particles' foam at its centre, fixed-point (`liquid/foam`)
     uint* stats;      // the statistics' words
 };
 
@@ -137,7 +153,7 @@ bool inside(LiquidFrame* f, int3 c)
 }
 
 // Whether the point `p` lies in the gate's solid part at substep `s`: its slab across the tank,
-// above its bottom, outside the hole while the hole is open.
+// above its bottom, outside its hole where the shutter has uncovered it.
 bool in_gate(LiquidFrame* f, float3 p, uint s)
 {
     float4 g = f[0].gate;
@@ -147,7 +163,7 @@ bool in_gate(LiquidFrame* f, float3 p, uint s)
     if (p.y < step.x)
         return false;
     float4 h = f[0].hole;
-    if (h.z > 0.0 && step.z == 0.0 && length(p.yz - h.xy) < h.z)
+    if (h.z > 0.0 && p.y < step.z && length(p.yz - h.xy) < h.z)
         return false;
     return true;
 }
@@ -460,6 +476,24 @@ float gather(LiquidFrame* f, uint a, float3 x, out float3 c)
     return v;
 }
 
+// The particles' density at `x` over a full cell's, trilinear between the cell centres (this
+// substep's p2g).
+float density_at(LiquidFrame* f, float3 x)
+{
+    float3 g = x / f[0].size.w - 0.5;
+    int3 base = int3(floor(g));
+    float3 t = g - float3(base);
+    int3 top = cells_of(f) - 1;
+    float sum = 0.0;
+    for (uint k = 0u; k < 8u; k++)
+    {
+        int3 o = int3(int(k & 1u), int((k >> 1u) & 1u), int((k >> 2u) & 1u));
+        float3 w3 = select(o == 1, t, 1.0 - t);
+        sum += w3.x * w3.y * w3.z * float(f[0].density[cell_index(f, clamp(base + o, int3(0), top))]);
+    }
+    return sum / FIX / f[0].rest;
+}
+
 // The drift correction's velocity at `x`: down the crowding's gradient, a share `drift` of it
 // undone a substep (its gradient is about the crowding over a cell, so a move of `drift` times
 // the crowding times a cell), at most half a cell a substep. The glass round the tank takes the
@@ -522,11 +556,21 @@ void g2p_main(uint3 id : SV_DispatchThreadID)
     if (i >= f[0].cells.w)
         return;
     uint s = liquid_push.substep;
-    float3 x = f[0].position[i].xyz;
+    float4 held = f[0].position[i];
+    float3 x = held.xyz;
+    float3 before = f[0].velocity[i].xyz;
     float3 v;
     float3 c[3];
     for (uint a = 0u; a < 3u; a++)
         v[a] = gather(f, a, x, c[a]);
+    // Its air: in where its skin is fast and where it is stopped hard, out over `foam_life`.
+    float dt = f[0].dt;
+    float air = saturate((0.8 - density_at(f, x)) / 0.3);
+    float stopped = length(v - before - f[0].gravity.xyz * dt) / dt;
+    float taken = FOAM_SKIN * air * max(length(v) - FOAM_SPEED, 0.0)
+                + FOAM_HARD * max(stopped - FOAM_IMPACT, 0.0);
+    float life = f[0].foam_life;
+    float foam = life > 0.0 ? saturate(held.w * exp(-dt / life) + taken * dt) : 0.0;
     float3 to = x + (v + drift_velocity(f, x)) * f[0].dt;
     // Inside the glass by a hundredth of a cell, moving no further into it.
     float margin = 0.01 * f[0].size.w;
@@ -545,10 +589,36 @@ void g2p_main(uint3 id : SV_DispatchThreadID)
         }
     }
     to = stop_at_gate(f, x, to, s, v);
-    f[0].position[i] = float4(to, 0.0);
+    f[0].position[i] = float4(to, foam);
     f[0].velocity[i] = float4(v, 0.0);
     for (uint a = 0u; a < 3u; a++)
         f[0].affine[3u * i + a] = float4(c[a], 0.0);
+}
+
+// The particles' foam to the cell centres round each (trilinear), once a frame for the drawing.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void foam_main(uint3 id : SV_DispatchThreadID)
+{
+    LiquidFrame* f = liquid_push.frame;
+    uint i = id.x;
+    if (i >= f[0].cells.w)
+        return;
+    float4 p = f[0].position[i];
+    if (p.w <= 1e-3)
+        return;
+    float3 g = p.xyz / f[0].size.w - 0.5;
+    int3 base = int3(floor(g));
+    float3 t = g - float3(base);
+    for (uint k = 0u; k < 8u; k++)
+    {
+        int3 o = int3(int(k & 1u), int((k >> 1u) & 1u), int((k >> 2u) & 1u));
+        int3 c = base + o;
+        if (!inside(f, c))
+            continue;
+        float3 w3 = select(o == 1, t, 1.0 - t);
+        InterlockedAdd(f[0].foam[cell_index(f, c)], int(round(p.w * w3.x * w3.y * w3.z * FIX)));
+    }
 }
 
 // The statistics the log reads: what is left, how high its middle stands, how far the front
@@ -577,6 +647,8 @@ void stats_main(uint3 id : SV_DispatchThreadID)
         InterlockedMax(st[STAT_FRONT], uint(x.x * 10000.0));
     InterlockedAdd(st[STAT_ENERGY], uint(dot(v, v) * 100.0 + 0.5));
     InterlockedMax(st[STAT_SPEED], uint(length(v) * 1000.0));
+    if (f[0].gate.y > f[0].gate.x && x.x < f[0].gate.x)
+        InterlockedAdd(st[STAT_BEHIND], 1u);
     uint3 bits = asuint(x);
     uint3 vbits = asuint(v);
     InterlockedAdd(st[STAT_DIGEST], mix(i ^ mix(bits.x ^ mix(bits.y ^ mix(bits.z)))));

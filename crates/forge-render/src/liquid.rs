@@ -34,6 +34,9 @@ pub const LIQUID_MAX_SUBSTEPS: usize = 8;
 const PER_CELL: u32 = 8;
 /// Cells a side of the bricks the march skips over (`BRICK` in `liquid_draw.slang`).
 const BRICK: u32 = 4;
+/// How long the air fresh water takes in lasts, seconds: its bubbles rise and burst in a fraction
+/// of a second (sea water's, held by salt and surfactants, last seconds to minutes).
+pub const FRESH_FOAM_LIFE: f32 = 0.3;
 /// Words of the statistics (`STAT_*` in `liquid.slang`).
 const STAT_WORDS: usize = 16;
 const STAT_BYTES: u64 = (STAT_WORDS * 4) as u64;
@@ -49,7 +52,8 @@ pub struct LiquidTank {
     pub water: UVec3,
     /// The gate's faces along x, metres from the inside's corner: a slab across the tank.
     pub gate: Option<[f32; 2]>,
-    /// A round hole through the gate, plugged until a step says otherwise.
+    /// A round hole through the gate, open below the shutter's bottom a step gives
+    /// (`LiquidStep::shutter`).
     pub hole: Option<LiquidHole>,
     /// The glass's thickness, metres.
     pub glass: f32,
@@ -83,8 +87,9 @@ pub struct LiquidStep {
     pub gate_bottom: f32,
     /// How fast it rises, m/s.
     pub gate_speed: f32,
-    /// Whether the hole is still plugged.
-    pub plugged: bool,
+    /// The bottom of the shutter over the gate's hole, metres over the floor: the hole is open
+    /// below it.
+    pub shutter: f32,
 }
 
 /// How the solver runs: the owner wanted it found by trying (D-044's answer 4).
@@ -127,6 +132,10 @@ pub struct LiquidLook {
     /// What one pane of the tank's glass lets through, per channel; `None`: no glass to see (the
     /// bench's, whose walls hold the water and show nothing).
     pub glass: Option<Vec3>,
+    /// How long the air the water takes in lasts, seconds: a fraction of a second in fresh water
+    /// (its bubbles burst at once: white only where a jet plunges), longer in salt water or with
+    /// surfactants (foam that lasts); 0 for none.
+    pub foam_life: f32,
 }
 
 impl LiquidLook {
@@ -138,6 +147,7 @@ impl LiquidLook {
             scattering: Vec3::new(0.0003, 0.0013, 0.0016),
             ior: 1.333,
             glass: Some(Vec3::new(0.90, 0.93, 0.91)),
+            foam_life: FRESH_FOAM_LIFE,
         }
     }
 
@@ -150,6 +160,7 @@ impl LiquidLook {
             scattering: Vec3::new(0.5, 1.6, 2.2),
             ior: 1.333,
             glass: None,
+            foam_life: FRESH_FOAM_LIFE,
         }
     }
 }
@@ -179,6 +190,8 @@ pub struct LiquidStats {
     pub columns: u32,
     /// The water's volume (each cell's density up to full), m³.
     pub volume: f32,
+    /// Particles behind the gate (on its near side), whether it stands or not.
+    pub behind: u32,
 }
 
 /// What the drawing needs.
@@ -197,6 +210,9 @@ pub struct LiquidDrawParams {
     /// A plain background (pre-exposed radiance) where the depth is empty, also what the water
     /// mirrors and is lit by besides the sun; `None`: the sky.
     pub background: Option<Vec3>,
+    /// The speed view (to tune by): the water's surface coloured by the flow's speed, matte, in place
+    /// of the water as it looks.
+    pub speed_view: bool,
 }
 
 /// The liquid's buffer in a frame's graph ([`Liquid::import`]).
@@ -220,7 +236,8 @@ struct GpuLiquidFrame {
     omega: f32,
     nodes: u32,
     cell_count: u32,
-    pad: [u32; 2],
+    foam_life: f32,
+    pad: u32,
     position: u64,
     velocity: u64,
     affine: u64,
@@ -232,10 +249,11 @@ struct GpuLiquidFrame {
     pressure: u64,
     divergence: u64,
     crowding: u64,
+    foam: u64,
     stats: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 352);
+const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 360);
 
 /// Mirrors `LiquidView` in `liquid_draw.slang`.
 #[repr(C)]
@@ -261,15 +279,19 @@ struct GpuLiquidView {
     reactive: u32,
     width: u32,
     height: u32,
+    mode: u32,
+    pad: u32,
     density: u64,
     blur: u64,
     render: u64,
     brick_range: u64,
     face: u64,
     sky_light: u64,
+    foam: u64,
+    foam_render: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 368);
+const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 392);
 
 /// Mirrors `LiquidPush` in `liquid.slang`.
 #[repr(C)]
@@ -318,8 +340,10 @@ struct Layout {
     pressure: u64,
     divergence: u64,
     crowding: u64,
+    foam: u64,
     blur: u64,
     render: u64,
+    foam_render: u64,
     bricks: u64,
     stats: u64,
     total: u64,
@@ -345,9 +369,11 @@ impl Layout {
         let pressure = take(cells * 4);
         let divergence = take(cells * 4);
         let crowding = take(cells * 4);
+        let foam = take(cells * 4);
         let blur = take(cells * 4);
         let render = take(cells * 4);
-        let bricks = take(bricks * 8);
+        let foam_render = take(cells * 4);
+        let bricks = take(bricks * 16);
         let stats = take(STAT_BYTES);
         Self {
             position,
@@ -361,8 +387,10 @@ impl Layout {
             pressure,
             divergence,
             crowding,
+            foam,
             blur,
             render,
+            foam_render,
             bricks,
             stats,
             total: at,
@@ -390,6 +418,7 @@ enum Kernel {
     Pressure,
     Project,
     G2p,
+    Foam,
     Stats,
     Level,
     Smooth,
@@ -411,6 +440,7 @@ impl Kernel {
             Kernel::Pressure => "liquid/pressure",
             Kernel::Project => "liquid/project",
             Kernel::G2p => "liquid/g2p",
+            Kernel::Foam => "liquid/foam",
             Kernel::Stats | Kernel::Level => "liquid/stats",
             Kernel::Smooth
             | Kernel::Smooth2
@@ -422,7 +452,7 @@ impl Kernel {
     }
 }
 
-const KERNELS: [(&str, &str, u32); 16] = [
+const KERNELS: [(&str, &str, u32); 17] = [
     ("liquid.slang", "seed_main", 16),
     ("liquid.slang", "seed_cells_main", 16),
     ("liquid.slang", "p2g_main", 16),
@@ -431,6 +461,7 @@ const KERNELS: [(&str, &str, u32); 16] = [
     ("liquid.slang", "pressure_main", 16),
     ("liquid.slang", "project_main", 16),
     ("liquid.slang", "g2p_main", 16),
+    ("liquid.slang", "foam_main", 16),
     ("liquid.slang", "stats_main", 16),
     ("liquid.slang", "level_main", 16),
     ("liquid_draw.slang", "smooth_main", 8),
@@ -589,6 +620,7 @@ impl Liquid {
             columns: w[9],
             volume: w[10] as f32 / 1000.0 * cell * cell * cell,
             max_speed: w[11] as f32 / 1000.0,
+            behind: w[12],
         })
     }
 
@@ -629,12 +661,7 @@ impl Liquid {
         let l = self.layout;
         let mut gpu_steps = [[0.0_f32; 4]; LIQUID_MAX_SUBSTEPS];
         for (g, s) in gpu_steps.iter_mut().zip(steps) {
-            *g = [
-                s.gate_bottom,
-                s.gate_speed,
-                if s.plugged { 1.0 } else { 0.0 },
-                0.0,
-            ];
+            *g = [s.gate_bottom, s.gate_speed, s.shutter, 0.0];
         }
         let frame = &self.frames[slot.index];
         frame.write(
@@ -655,7 +682,8 @@ impl Liquid {
                 omega: self.solver.omega,
                 nodes,
                 cell_count,
-                pad: [0; 2],
+                foam_life: self.look.foam_life,
+                pad: 0,
                 position: base + l.position,
                 velocity: base + l.velocity,
                 affine: base + l.affine,
@@ -667,6 +695,7 @@ impl Liquid {
                 pressure: base + l.pressure,
                 divergence: base + l.divergence,
                 crowding: base + l.crowding,
+                foam: base + l.foam,
                 stats: base + l.stats,
             }],
         );
@@ -723,6 +752,19 @@ impl Liquid {
             }
             dispatch(graph, Kernel::Project, nodes, s, 0);
             dispatch(graph, Kernel::G2p, particles, s, 0);
+        }
+        // The particles' foam to the cells, once a frame, for the drawing.
+        if !steps.is_empty() || seed {
+            let (foam_at, foam_bytes) = (l.foam, u64::from(cell_count) * 4);
+            graph
+                .pass("liquid/foam")
+                .queue(QueueKind::Compute)
+                .buffer(state, BufferAccess::TransferDst)
+                .run(move |_, commands| {
+                    commands.fill_buffer(buffer, foam_at, foam_bytes, 0);
+                    Ok(())
+                });
+            dispatch(graph, Kernel::Foam, particles, 0, 0);
         }
         self.asked[slot.index].set(stats);
         if stats {
@@ -814,12 +856,16 @@ impl Liquid {
                 reactive: 0,
                 width: extent.width,
                 height: extent.height,
+                mode: u32::from(params.speed_view),
+                pad: 0,
                 density: base + l.density,
                 blur: base + l.blur,
                 render: base + l.render,
                 brick_range: base + l.bricks,
                 face: base + l.face,
                 sky_light: sky.light.address,
+                foam: base + l.foam,
+                foam_render: base + l.foam_render,
             }],
         );
         let address = view.address();
@@ -960,8 +1006,10 @@ mod tests {
             l.pressure,
             l.divergence,
             l.crowding,
+            l.foam,
             l.blur,
             l.render,
+            l.foam_render,
             l.bricks,
             l.stats,
         ] {

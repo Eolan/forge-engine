@@ -27,10 +27,16 @@ static const float SURFACE = 0.5;
 static const float WATER_F0 = 0.02;
 static const float GLASS_F0 = 0.04;
 // The most a moving surface asks of TAA's current frame, and the speed that asks it, m/s.
-static const float REACTIVE = 0.85;
-static const float REACTIVE_SPEED = 1.5;
+static const float REACTIVE = 0.5;
+static const float REACTIVE_SPEED = 3.0;
 // How far behind a surface of the depth a bent ray may be and still have met it, metres.
 static const float THICKNESS = 0.25;
+// Foam: how much light a full cell's worth of foamy particles scatters and blocks a metre (white
+// water is near opaque over a few centimetres), and the least a brick's foam must be to march it.
+static const float FOAM_SIGMA = 40.0;
+static const float FOAM_EPS = 0.01;
+// The speed view's top of scale, m/s.
+static const float SPEED_TOP = 3.0;
 
 // Must match GpuLiquidView in liquid.rs.
 struct LiquidView
@@ -55,12 +61,16 @@ struct LiquidView
     uint reactive;          // the reactive mask (storage, r32f)
     uint width;
     uint height;
+    uint mode;              // 0: the water as it looks; 1: its surface coloured by the flow's speed
+    uint pad;
     int* density;           // the solver's, per cell, fixed-point
     float* blur;            // the first of the two smoothing passes'
     float* render;          // smoothed, over a full cell's
-    float2* brick_range;    // per brick: least and most of `render`
+    float4* brick_range;    // per brick: least and most of `render`, most of `foam_render`
     float* face;            // the solver's faces' velocities, for the reactive mask
     float4* sky_light;      // the sky's irradiance (SH), then its up and forward (sky.rs)
+    int* foam;              // the solver's foam per cell, fixed-point (`liquid/foam`)
+    float* foam_render;     // smoothed, over a full cell's worth of foamy particles
 };
 
 struct ViewPush
@@ -111,6 +121,7 @@ void smooth_main(uint3 id : SV_DispatchThreadID)
     if (id.x >= n.x * n.y * n.z)
         return;
     v[0].blur[id.x] = blur3(v, v[0].density, 1.0 / FIX / v[0].rest, cell_of(v, id.x));
+    v[0].foam_render[id.x] = blur3(v, v[0].foam, 1.0 / FIX / v[0].rest, cell_of(v, id.x));
 }
 
 [shader("compute")]
@@ -148,15 +159,18 @@ void bricks_main(uint3 id : SV_DispatchThreadID)
     int3 hi = min(k * int(BRICK) + int(BRICK), n - 1);
     float least = 1e9;
     float most = -1e9;
+    float foam = 0.0;
     for (int z = lo.z; z <= hi.z; z++)
         for (int y = lo.y; y <= hi.y; y++)
             for (int x = lo.x; x <= hi.x; x++)
             {
-                float r = v[0].render[cell_index(v, int3(x, y, z))];
+                uint c = cell_index(v, int3(x, y, z));
+                float r = v[0].render[c];
                 least = min(least, r);
                 most = max(most, r);
+                foam = max(foam, v[0].foam_render[c]);
             }
-    v[0].brick_range[i] = float2(least, most);
+    v[0].brick_range[i] = float4(least, most, foam, 0.0);
 }
 
 struct CopyPush
@@ -187,12 +201,41 @@ void copy_main(uint3 id : SV_DispatchThreadID)
     g_storage_images_rgba16f[copy_push.copy][id.xy] = c;
 }
 
+// A field over the cells at `p` (tank coordinates), trilinear between the cell centres; none
+// outside.
+float field_at(LiquidView* v, float* field, float3 p)
+{
+    // Air over the open top; at the glass and the floor the field goes on as it stands beside
+    // them (as the smoothing takes it), so the surface's normal there does not turn into the
+    // glass (it did: rays through a pane into thin water came out speckled).
+    float3 size = v[0].size.xyz;
+    if (p.y > size.y)
+        return 0.0;
+    p = clamp(p, float3(0.0), size);
+    int3 n = int3(v[0].cells.xyz);
+    float3 g = clamp(p / v[0].tank.w - 0.5, float3(0.0), float3(n - 1));
+    int3 base = min(int3(floor(g)), n - 2);
+    float3 t = g - float3(base);
+    float r = 0.0;
+    for (uint k = 0u; k < 8u; k++)
+    {
+        int3 o = int3(int(k & 1u), int((k >> 1u) & 1u), int((k >> 2u) & 1u));
+        float3 w3 = select(o == 1, t, 1.0 - t);
+        r += w3.x * w3.y * w3.z * field[cell_index(v, base + o)];
+    }
+    return r;
+}
+
 // The density at `p` (tank coordinates), trilinear between the cell centres; none outside.
 float density_at(LiquidView* v, float3 p)
 {
+    // Air over the open top; at the glass and the floor the field goes on as it stands beside
+    // them (as the smoothing takes it), so the surface's normal there does not turn into the
+    // glass (it did: rays through a pane into thin water came out speckled).
     float3 size = v[0].size.xyz;
-    if (any(p < 0.0) || any(p > size))
+    if (p.y > size.y)
         return 0.0;
+    p = clamp(p, float3(0.0), size);
     int3 n = int3(v[0].cells.xyz);
     float3 g = clamp(p / v[0].tank.w - 0.5, float3(0.0), float3(n - 1));
     int3 base = min(int3(floor(g)), n - 2);
@@ -244,8 +287,9 @@ float2 box_span(float3 p, float3 d, float3 lo, float3 hi, out float3 face)
 }
 
 // How far along the ray from `p` the density first crosses the surface, the ray starting in
-// the water (`water`) or out of it; `span` if it does not within `span`.
-float crossing(LiquidView* v, float3 p, float3 d, float span, bool water, inout uint steps)
+// the water (`water`) or out of it; `span` if it does not within `span`. Adds the foam it
+// passes through (its foam times metres) to `foam_path`.
+float crossing(LiquidView* v, float3 p, float3 d, float span, bool water, inout uint steps, inout float foam_path)
 {
     float h = v[0].tank.w;
     float step = 0.5 * h;
@@ -258,16 +302,18 @@ float crossing(LiquidView* v, float3 p, float3 d, float span, bool water, inout 
         steps++;
         float3 q = p + d * s;
         int3 k = clamp(int3(floor(q / brick)), int3(0), bricks - 1);
-        float2 range = v[0].brick_range[uint(k.x) + uint(bricks.x) * (uint(k.y) + uint(bricks.y) * uint(k.z))];
-        if ((water && range.x >= SURFACE) || (!water && range.y < SURFACE))
+        float4 range = v[0].brick_range[uint(k.x) + uint(bricks.x) * (uint(k.y) + uint(bricks.y) * uint(k.z))];
+        if (range.z < FOAM_EPS && ((water && range.x >= SURFACE) || (!water && range.y < SURFACE)))
         {
-            // The brick is all water or all air: on to its far side.
+            // The brick is all water or all air, and no foam: on to its far side.
             float3 face;
             float3 lo = float3(k) * brick;
             last = s;
             s += box_exit(q, d, lo, lo + brick, face) + 0.01 * h;
             continue;
         }
+        if (range.z >= FOAM_EPS)
+            foam_path += field_at(v, v[0].foam_render, q) * step;
         float r = density_at(v, q);
         if ((r >= SURFACE) != water)
         {
@@ -329,6 +375,26 @@ float3 in_water_light(LiquidView* v)
     float3 sky = v[0].background.w > 0.0 ? v[0].background.rgb
                                          : sh_irradiance(v[0].sky_light, float3(0.0, 1.0, 0.0)) * scale / PI;
     return 0.5 * sky + v[0].sun_radiance.rgb * saturate(v[0].sun.y) / (4.0 * PI);
+}
+
+// A speed over the view's scale (0 to 1) as a colour: deep blue, cyan, white, orange.
+float3 speed_colour(float t)
+{
+    t = saturate(t);
+    float3 a = float3(0.05, 0.15, 0.6);
+    float3 b = float3(0.1, 0.7, 0.9);
+    float3 c = float3(0.95, 0.95, 0.95);
+    float3 d = float3(1.0, 0.45, 0.1);
+    return t < 0.33 ? lerp(a, b, t / 0.33) : (t < 0.66 ? lerp(b, c, (t - 0.33) / 0.33) : lerp(c, d, (t - 0.66) / 0.34));
+}
+
+// What foam sends back: a white matte surface's light under the sky and the sun.
+float3 foam_light(LiquidView* v)
+{
+    float scale = v[0].sun_radiance.w;
+    float3 sky = v[0].background.w > 0.0 ? v[0].background.rgb
+                                         : sh_irradiance(v[0].sky_light, float3(0.0, 1.0, 0.0)) * scale / PI;
+    return 0.85 * (sky + v[0].sun_radiance.rgb * saturate(v[0].sun.y) / PI);
 }
 
 // What the scene shows where the ray from `o` (camera-relative) along `d` first goes behind it:
@@ -438,6 +504,7 @@ void march_main(uint3 id : SV_DispatchThreadID)
     float3 sigma = v[0].absorption.rgb + v[0].scattering.rgb;
     float3 albedo = v[0].scattering.rgb / max(sigma, 1e-6);
     float3 lit = in_water_light(v);
+    float3 foam_lit = foam_light(v);
     float ior = v[0].absorption.w;
     float3 colour = 0.0;
     float3 through = 1.0;
@@ -455,6 +522,13 @@ void march_main(uint3 id : SV_DispatchThreadID)
     float travelled = start;
     float left = min(inner.y, scene) - start;
     bool water = density_at(v, p + dir * (0.01 * v[0].tank.w)) >= SURFACE;
+    // The speed view, the water met at the tank's side: its colour there.
+    if (v[0].mode == 1u && water)
+    {
+        float speed = length(face_velocity(v, p));
+        colour += through * speed_colour(speed / SPEED_TOP) * foam_lit * 0.6;
+        through = 0.0;
+    }
     // Entering the water through a pane: bent at the glass as from air into water (flat glass
     // only shifts the ray).
     if (water && start > 0.0 && inner_face.y < 0.5)
@@ -473,11 +547,19 @@ void march_main(uint3 id : SV_DispatchThreadID)
         // What the scene shows inside the tank (the gate) ends the ray; once bent, only roughly.
         float limit = bent_any ? max(scene - travelled, 0.0) + 0.5 : left;
         float span = min(to_box, limit);
-        float s = crossing(v, p, dir, span, water, steps);
+        float foam_path = 0.0;
+        float s = crossing(v, p, dir, span, water, steps, foam_path);
         if (water)
         {
             float3 t = exp(-sigma * s);
             colour += through * albedo * (1.0 - t) * lit;
+            through *= t;
+        }
+        // Foam on the way, in the water or in the spray: white, lit as a matte surface.
+        if (foam_path > 0.0)
+        {
+            float t = exp(-FOAM_SIGMA * foam_path);
+            colour += through * (1.0 - t) * foam_lit;
             through *= t;
         }
         p += dir * s;
@@ -511,6 +593,15 @@ void march_main(uint3 id : SV_DispatchThreadID)
         float3 n = normal_at(v, p);
         if (!water)
         {
+            if (v[0].mode == 1u)
+            {
+                // The speed view (for tuning, after Sebastian Lague's renders): the surface matte,
+                // blue when still, through cyan and white to orange at SPEED_TOP.
+                float speed = length(face_velocity(v, p));
+                colour += through * speed_colour(speed / SPEED_TOP) * foam_lit * (0.35 + 0.65 * saturate(dot(n, normalize(v[0].sun.xyz))));
+                through = 0.0;
+                break;
+            }
             // Into the water: Fresnel's reflection, the rest bent down into it.
             float f = fresnel(WATER_F0, dot(-dir, n));
             colour += through * f * mirrored(v, dir, n);

@@ -40,7 +40,7 @@ sets_of() {
     hdr-display) echo meshlets ;;
     city) echo city sentinels ;;
     city-* | gallery) echo city ;;
-    lab | lab-sea | lab-walk | lab-drive | lab-fly | lab-break | lab-creatures | lab-flood | lab-dominoes | lab-bridge | lab-rocket | lab-tug | lab-space | lab-tank | lab-tank-bench) echo lab ;;
+    lab | lab-sea | lab-walk | lab-drive | lab-fly | lab-break | lab-creatures | lab-flood | lab-dominoes | lab-bridge | lab-rocket | lab-tug | lab-space | lab-tank | lab-tank-bench | lab-tank-hole) echo lab ;;
     *) echo island ;;
   esac
 }
@@ -138,6 +138,7 @@ for path in $paths; do
   [ -f "$bin/physics-lab$exe" ] && validate "lab-space$tag" "$bin/physics-lab$exe" --lab space --fixed-step --pilot 1,0,0,0 --frames 120 $path
   [ -f "$bin/physics-lab$exe" ] && validate "lab-tank$tag" "$bin/physics-lab$exe" --lab tank --fixed-step --release 31 --frames 120 $path
   [ -f "$bin/physics-lab$exe" ] && validate "lab-tank-bench$tag" "$bin/physics-lab$exe" --lab tank-bench --fixed-step --release 31 --frames 120 $path
+  [ -f "$bin/physics-lab$exe" ] && validate "lab-tank-hole$tag" "$bin/physics-lab$exe" --lab tank-hole --fixed-step --release 31 --frames 120 $path
   # And ships through the belt, the camera chasing the first (#79's demo).
   validate "ships$tag" "$bin/asteroids$exe" --frames 60 --ships 24 --chase 0 $path
   # The HDR output drawn off-screen and previewed (#94), through ACES 2.0: from the TAA resolve

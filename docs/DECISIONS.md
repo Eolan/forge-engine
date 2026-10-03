@@ -1928,8 +1928,12 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
   - 4.5 ms a frame of simulation and 0.16 ms of drawing at 1600 × 900, against 2.5 + 1.5
     proposed for a third of the particles: the owner's answer 4 is to find the compromise by
     trying.
-- **Not yet:** the hole in the gate and its foaming jet, the camera under the water, bodies in the
-  water, caustics.
+- **Then (#156):** `--lab tank-hole`, a jet through a round hole in the fixed gate (a discharge
+  coefficient of 0.75 at 6.4 cells across, against a sharp-edged hole's 0.6); white water carried
+  by the particles, short-lived in fresh water (the owner: "foam on clear, non salt water does
+  not make too much sense"), its life a property of the liquid; the speed view for tuning.
+- **Not yet:** the camera under the water, bodies in the water, caustics, the sums sorted for
+  speed.
 
 **The questions put to the owner** (answered above):
 1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be

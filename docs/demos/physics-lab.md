@@ -28,7 +28,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats, which pushes it aside | ✅ #144, #151 |
-| `tank`, `tank-bench` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by | ✅ #156 |
+| `tank`, `tank-bench`, `tank-hole` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate | ✅ #156 |
 | `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
 | `bridge` | an advanced test: a timber bridge that stands empty and collapses under a convoy of cars, replayed | ✅ #147 |
 | `tug --net 100` | an advanced test: a tug-of-war on one sled, this player against the bot over a lossy link | ✅ #149 |
@@ -561,11 +561,12 @@ A tick: **1.12 ms**, against 0.90 for the same run before (measured the same day
 alone gives 1.00 ms, so much of the rest is the floaters moving differently, more of them
 jostling.
 
-## `tank` and `tank-bench`: a dam break in a glass tank (issue #156)
+## `tank`, `tank-bench`, `tank-hole`: a dam break in a glass tank (issue #156)
 
 ```
 cargo run --release -p physics-lab -- --lab tank
 cargo run --release -p physics-lab -- --lab tank-bench
+cargo run --release -p physics-lab -- --lab tank-hole
 ```
 
 D-044's first milestone, after the owner's answers of 2026-10-03: the water is particles on a
@@ -582,6 +583,15 @@ to the rim, falls back, sloshes and settles. `tank-bench` is the same tank as a 
 - a floor of 10 cm squares in four tints, a darker line every metre, to read distances off;
 - a plain violet background and the sun alone;
 - the water tinted teal (`LiquidLook::tinted`) so its depth and motion show.
+
+The keys **1** and **2** switch between the water as it looks and its **speed view**
+(`--liquid-speed` to start in it): the surface matte, coloured by how fast the water flows, blue
+when still through cyan and white to orange at 3 m/s, as Lague colours his particles.
+
+`tank-hole` is the owner's second tank: the gate fixed, with a round hole 8 cm across through it,
+low in its middle (its centre 12 cm over the floor), shut by a steel shutter on its dry side.
+**Space** slides the shutter up at 2 m/s and the water jets out through the hole into the empty
+side. The reservoir drains until both sides stand level, 152 mm.
 
 **The solver** (APIC on a MAC grid, Jiang et al. 2015):
 - **The particles:** 589 824, eight a cell, on a 1.25 cm grid (128 × 48 × 48 cells). That spends
@@ -624,33 +634,51 @@ to the rim, falls back, sloshes and settles. `tank-bench` is the same tank as a 
 - **Where it lands:** a short march over the screen against the depth, with a 25 cm thickness, so
   something in front of the ray is not taken for where it lands.
 - **The floor:** the floor's glass lies on the table and mirrors nothing.
-- **For TAA:** a reactive mask where the surface moves.
+- **For TAA:** a reactive mask where the surface moves (at most half, at 3 m/s).
+- **At the glass:** the field goes on into the glass and the floor as it stands beside them (air
+  only over the open top). Ending it at the glass turned the surface's normal into the pane, and
+  rays through a pane into thin water came out speckled.
+- **White water:** each particle carries the air it holds, taken in where fast water meets the air
+  (over 1.5 m/s) and where it is stopped hard (over 60 m/s²). It loses it as the bubbles rise
+  and burst, over the liquid's `foam_life`, splatted to the cells once a frame and drawn as
+  white scattering, in the water and in the spray. Fresh water's bubbles burst in a fraction of a
+  second (0.3 s, `--liquid-foam`): it whitens only where the jet plunges and where it slams
+  into a wall. The owner: "foam on clear, non salt water does not make too much sense". A sea
+  water's foam, held by salt and surfactants, is a longer life; 0 is none.
 
 ![The glass tank as the wave climbs the far wall; the bench as the gate lifts and as the wave climbs the far wall](images/physics-lab-tank.png)
 
 **The checks** (fixed step, `--liquid-log N` prints the line every N ticks):
 - **The particles:** none lost.
 - **The still water:** at rest to the bit before the gate lifts (rms and greatest speed 0.000 m/s).
-- **The settled level:** 149.2 mm nine seconds after the gate lifts, against the 150.0 mm its volume
+- **The settled level:** 149.4 mm nine seconds after the gate lifts, against the 150.0 mm its volume
   gives over the whole floor. D-044's check asks within 2 mm. The column model of `flood` fails it.
 - **The replays:** three runs give the same digests at all 100 logged ticks (every 6, 600 frames).
 - **The front:** from the gate to the far wall (0.98 m) in 0.47 s; between ticks 42 and 54 it
   runs 3.0 m/s, three quarters of Ritter's 2√(g h₀) = 3.96 m/s for a dam removed at once (this
   gate lifts at 3 m/s, letting the water go over a tenth of a second).
+- **The hole's outflow** (`tank-hole`): the reservoir falls 23.8 mm/s in the first second, 8.6
+  litres a second through 50 cm² under a head of 0.265 m: a discharge coefficient of 0.75. A
+  sharp-edged hole's is about 0.6; at 6.4 cells across the jet's contraction past the hole is
+  under-resolved. Both sides stand level at 152 mm in the end (25 mm apart after 14 s).
+
+![The holed tank as the jet leaves the hole and as the water slams into the far wall, white for a moment; the bench in the speed view as the wave climbs the far wall](images/physics-lab-tank-hole.png)
 
 **The cost** on the RTX 5070 Ti, 1600 × 900, on the async compute queue (600 frames):
 
-| Zone | ms a frame |
-|---|---|
-| `liquid/p2g` | 2.16 |
-| `liquid/pressure` | 1.19 |
-| `liquid/g2p` | 1.00 |
-| `liquid/faces`, `cells`, `project`, `clear` | 0.13 |
-| `liquid/draw` (graphics) | 0.16 |
+| Zone | `tank` (ms a frame) | `tank-hole` |
+|---|---|---|
+| `liquid/p2g` | 2.02 | 1.28 |
+| `liquid/pressure` | 1.16 | 1.14 |
+| `liquid/g2p` | 1.13 | 0.52 |
+| `liquid/faces`, `cells`, `project`, `clear`, `foam` | 0.15 | 0.15 |
+| `liquid/draw` (graphics) | 0.21 | 0.21 |
 
-That makes 4.5 ms of simulation, more than D-044's 2.5 ms estimate for 190 000 particles (answer
-4: to be found by trying). The particles' sums to the grid are the most of it. Where the time
-could go:
+That makes 4.5 ms of simulation for the dam break, 3.1 for the hole: more than D-044's 2.5 ms
+estimate for 190 000 particles (answer 4: to be found by trying). The particles' sums to the grid
+are the most of it, and they cost more as the dam break mixes the particles: neighbours in the
+buffer stop being neighbours in the tank, and the grid's cache and its atomics suffer. Through
+the hole the water keeps its order, and the same sums take 1.28 ms. Where the time could go:
 - sorting the particles by cell once a frame, and summing a workgroup's into groupshared memory
   first;
 - a multigrid pressure in place of the sweeps.
@@ -792,4 +820,5 @@ downrange); and the tug-of-war (#149) through `--net 100`, `lab-tug-net200` (the
 right) with its twin and `lab-tug-net600` (over the line); and the spaceship (#150) at full throttle,
 `lab-space90` (closing on the crates) and `lab-space150` (through them) with its twin;
 and the glass tank (#156), the gate lifted at tick 31, `lab-tank90` (the wave climbing the far
-wall) with its twin and `lab-tank-bench300` (the bench, the water settling).
+wall) with its twin and `lab-tank-bench300` (the bench, the water settling), and `lab-tank-hole120`
+(the jet, the far wall white for a moment).
