@@ -688,6 +688,27 @@ pub fn scrub(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// A floor to measure by (#156, the tank's bench): ten squares a repeat each way in two greys
+/// (10 cm squares at a metre a repeat), a darker line on the repeat's edges (every metre) and a
+/// fainter one through its middle; flat. Its mips keep it from shimmering at a slant.
+pub fn checker(size: u32) -> [TextureData; 2] {
+    const SQUARES: f32 = 10.0;
+    let colours = grid(size, |u, v| {
+        let parity = |t: f32| (t * SQUARES).floor() as i32 & 1;
+        let odd = (parity(u) ^ parity(v)) as f32;
+        let line = |t: f32, width: f32| 1.0 - smoothstep(0.0, width, t.min(1.0 - t));
+        let metre = line(u, 0.006).max(line(v, 0.006));
+        let half = line((u - 0.5).abs(), 0.003).max(line((v - 0.5).abs(), 0.003));
+        let grey = (0.55 + 0.2 * odd) * (1.0 - 0.45 * metre) * (1.0 - 0.2 * half);
+        [grey, grey, grey]
+    });
+    let heights = vec![0.0; (size * size) as usize];
+    [
+        albedo_texture("checker albedo", size, colours),
+        normal_texture("checker normal", size, &heights, 1.0),
+    ]
+}
+
 /// A test texture for the mip check (`--mip-check`): level `k` is filled with `k / 16`, so a
 /// trilinear sample returns the level of detail the sampler chose, over 16.
 pub fn mip_ramp(size: u32) -> TextureData {

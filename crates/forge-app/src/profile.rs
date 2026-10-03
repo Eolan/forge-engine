@@ -250,16 +250,25 @@ impl Profile {
         for zone in &mut self.gpu {
             zone.seen = false;
         }
+        // A label that comes back in a frame (a solver's substeps, #156) counts its zones'
+        // sum, in the overlay as in the run's summary.
+        let mut frame: Vec<(std::borrow::Cow<'_, str>, f64)> = Vec::new();
         for zone in zones {
             let label = if zone.queue == QueueKind::Graphics {
                 std::borrow::Cow::Borrowed(zone.label)
             } else {
                 std::borrow::Cow::Owned(format!("{} [{}]", zone.label, zone.queue.name()))
             };
-            upsert(&mut self.gpu, &label, zone.ms);
-            match self.run_gpu.iter_mut().find(|(l, _)| *l == label) {
+            match frame.iter_mut().find(|(l, _)| *l == label) {
                 Some((_, sum)) => *sum += zone.ms,
-                None => self.run_gpu.push((label.into_owned(), zone.ms)),
+                None => frame.push((label, zone.ms)),
+            }
+        }
+        for (label, ms) in frame {
+            upsert(&mut self.gpu, &label, ms);
+            match self.run_gpu.iter_mut().find(|(l, _)| *l == label) {
+                Some((_, sum)) => *sum += ms,
+                None => self.run_gpu.push((label.into_owned(), ms)),
             }
         }
         if let Some(span) = span_ms {

@@ -1906,6 +1906,31 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
   - the hole's jet near √(2gh) with a discharge coefficient near 0.6;
   - three runs to the same digests.
 
+**Built, the first step (#156, 2026-10-03):** `physics-lab --lab tank` and `--lab tank-bench`
+(`docs/demos/physics-lab.md`).
+- **The tank:** larger than proposed, at the owner's ask: 1.6 × 0.6 × 0.6 m with the same 0.4 m
+  of water behind the gate. It runs at 1.25 cm (590 000 particles: answer 3's budget spent on
+  "bigger"); `--liquid-cell 0.01` gives 1.15 million.
+- **The bench:** the same tank to tune by, the owner's ask: no glass, a floor of squares, a plain
+  background, tinted water.
+- **Departures from the proposal:**
+  - trilinear weights, not MLS-MPM's quadratic B-splines (8 faces a component, not 27, at this
+    many particles);
+  - the volume held by moving the particles down their crowding's gradient, not by a second
+    projection or a divergence target (as a target it fed the velocity and shook still water
+    apart);
+  - the grid's sums as 64-bit atomics, weight and momentum packed.
+- **Measured:**
+  - still water at rest to the bit;
+  - settled 0.8 mm under the level its volume gives (D-044's check: 2 mm);
+  - the front at three quarters of Ritter's speed;
+  - three runs to the same digests;
+  - 4.5 ms a frame of simulation and 0.16 ms of drawing at 1600 × 900, against 2.5 + 1.5
+    proposed for a third of the particles: the owner's answer 4 is to find the compromise by
+    trying.
+- **Not yet:** the hole in the gate and its foaming jet, the camera under the water, bodies in the
+  water, caustics.
+
 **The questions put to the owner** (answered above):
 1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be
    grid-free (PBF or SPH: more compression, more tuning)?

@@ -44,6 +44,7 @@ mod rocket;
 mod sea;
 mod ship;
 mod space;
+pub(crate) mod tank;
 mod tug;
 mod walk;
 mod wall;
@@ -81,6 +82,12 @@ pub(crate) enum LabScene {
     /// A sci-fi spaceship in zero g over a planet under the stars, crates floating ahead of it
     /// (#150).
     Space,
+    /// A dam break in a glass tank on a table: the GPU liquid, 640 000 particles on a 1 cm grid
+    /// (#156, D-044).
+    Tank,
+    /// The same tank as a bench to tune the liquid by: no glass, frame or table to see, a floor of
+    /// 10 cm squares, a plain background, the sun alone, the water tinted (#156).
+    TankBench,
 }
 
 /// The floor's half side, metres.
@@ -146,6 +153,9 @@ const ROCKET: usize = BRIDGE + 2;
 const TUG: usize = ROCKET + 3;
 /// The spaceship and its engines' flame, after the tug-of-war's two.
 const SHIP: usize = TUG + 2;
+/// The glass tank's table, its frame's bars along x, y and z, its gate, its bench's four floors,
+/// after the ship's two.
+const TANK: usize = SHIP + 2;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -191,6 +201,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(rocket::props());
     props.extend(tug::props());
     props.extend(ship::props());
+    props.extend(tank::props());
     props
 }
 
@@ -485,6 +496,8 @@ pub(crate) struct LabWorld {
     pulls: [f32; 2],
     /// The spaceship, flown with the pilot's controls in space: no gravity, no air (#150).
     ship: Option<BodyId>,
+    /// The glass tank's gate (#156).
+    tank: Option<tank::Tank>,
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -529,7 +542,9 @@ impl LabWorld {
             | LabScene::Bridge
             | LabScene::Rocket
             | LabScene::Tug
-            | LabScene::Space => 0.0,
+            | LabScene::Space
+            | LabScene::Tank
+            | LabScene::TankBench => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -537,9 +552,10 @@ impl LabWorld {
             _ => (FLOOR, FLOOR_HALF),
         };
         let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
-        // None in space: the ship flies over a planet far below.
+        // None in space: the ship flies over a planet far below; none on the tank's bench, whose
+        // floor is its own.
         let mut statics = Vec::new();
-        if kind != LabScene::Space {
+        if !matches!(kind, LabScene::Space | LabScene::TankBench) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
             statics.push((floor, Mat4::from_translation(floor_at)));
@@ -617,6 +633,7 @@ impl LabWorld {
         let mut convoy = None;
         let mut rocket = None;
         let mut ship = None;
+        let mut tank = None;
         let mut tug = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
@@ -958,6 +975,12 @@ impl LabWorld {
                 group(CRATE, site.crates, &mut bodies);
                 ship = Some(site.ship);
             }
+            LabScene::Tank | LabScene::TankBench => {
+                let built = tank::build(&mut world, TANK, kind == LabScene::TankBench)?;
+                statics.extend(built.statics);
+                group(TANK + 4, vec![built.tank.gate], &mut bodies);
+                tank = Some(built.tank);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -1084,6 +1107,7 @@ impl LabWorld {
                 pulls: tug.map_or([0.0; 2], |_| [tug::HOLD; 2]),
                 tug,
                 ship,
+                tank,
                 limp: false,
                 pool,
             },
@@ -1292,6 +1316,9 @@ impl Simulation for LabWorld {
                     if let Some(convoy) = &self.convoy {
                         convoy.release(&mut self.world);
                     }
+                    if let Some(tank) = &self.tank {
+                        tank.open(&mut self.world);
+                    }
                 }
                 LabCommand::Limp { on } => self.limp = on,
                 LabCommand::Pull { strength } => {
@@ -1368,6 +1395,9 @@ impl Simulation for LabWorld {
         // The lifted gate stops at its top.
         if let Some(dam) = &self.dam {
             dam.tick(&mut self.world);
+        }
+        if let Some(tank) = &self.tank {
+            tank.tick(&mut self.world);
         }
         // The mortar that carried more than it holds in that step breaks, and the column
         // shatters under a blow.
@@ -1629,6 +1659,8 @@ pub(crate) struct Lab {
     logged: [u64; 5],
     /// `--record`: where the session goes at exit.
     record: Option<PathBuf>,
+    /// The glass tank's liquid substeps the ticks since the last frame owe it (#156).
+    tank_steps: Vec<forge_render::LiquidStep>,
 }
 
 /// The sea scene's water (#138): the island's cascades of FFT waves from the same seed as the
@@ -1801,6 +1833,7 @@ pub(crate) fn build(
             awake: 0,
             logged: [60, 300, 600, 900, 1200],
             record: args.record.clone(),
+            tank_steps: Vec::new(),
         },
     ))
 }
@@ -1827,7 +1860,11 @@ impl Lab {
         };
         for _ in 0..ticks {
             let start = Instant::now();
+            let gate_from = self.gate_bottom();
             self.tick();
+            if let (Some(from), Some(to)) = (gate_from, self.gate_bottom()) {
+                self.tank_steps.extend(tank::steps(from, to));
+            }
             let ms = start.elapsed().as_secs_f64() * 1e3;
             self.tick_ms.push(ms);
             self.run_tick_ms.push(ms);
@@ -2107,6 +2144,22 @@ impl Lab {
     /// Whether the scene has the spaceship, flown with the aeroplane's controls (in space).
     pub(crate) fn has_ship(&mut self) -> bool {
         self.shown().ship.is_some()
+    }
+
+    /// The tank's gate bottom over its floor, metres, in the shown world.
+    fn gate_bottom(&mut self) -> Option<f32> {
+        let shown = self.shown();
+        shown.tank.as_ref().map(|t| t.gate_bottom(&shown.world))
+    }
+
+    /// The liquid's substeps the ticks since the last call owe it, with where the gate stood.
+    pub(crate) fn take_tank_steps(&mut self) -> Vec<forge_render::LiquidStep> {
+        std::mem::take(&mut self.tank_steps)
+    }
+
+    /// The shown world's tick.
+    pub(crate) fn now(&mut self) -> u64 {
+        self.shown().now()
     }
 
     /// The aeroplane's controls from the next tick: throttle, elevator, ailerons, rudder.

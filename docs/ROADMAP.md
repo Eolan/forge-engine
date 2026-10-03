@@ -122,7 +122,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   (#143, `--lab creatures`): a mannequin and a dog from Blender, jointed puppets whose motors
   drive moving poses, shoved by balls, limp on command. A dam break ✅ (#144, `--lab flood`):
   the authoritative shallow-water model on the CPU, drawn as fresh water, carrying crates,
-  barrels and logs. Next: the GPU's shallow-water layer and splash particles (step 8's rest),
+  barrels and logs. A dam break in a glass tank ✅ (#156, D-044, `--lab tank` and
+  `--lab tank-bench`): the GPU's particle liquid, 590 000 particles on a 1.25 cm grid, drawn
+  through the glass, settling 1 mm off its level. Next: the GPU's shallow-water layer and splash particles (step 8's rest),
   step 7's skinned creatures (GPU skinning, with Phase 7's first step), then Phase 4's sky.
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034

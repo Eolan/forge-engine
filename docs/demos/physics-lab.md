@@ -28,10 +28,11 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats, which pushes it aside | ✅ #144, #151 |
+| `tank`, `tank-bench` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by | ✅ #156 |
 | `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
 | `bridge` | an advanced test: a timber bridge that stands empty and collapses under a convoy of cars, replayed | ✅ #147 |
 | `tug --net 100` | an advanced test: a tug-of-war on one sled, this player against the bot over a lossy link | ✅ #149 |
-| skinned creatures, the GPU's water, particles | the later steps of the plan | planned |
+| skinned creatures, the GPU's shallow water, splashes | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
 
@@ -560,6 +561,100 @@ A tick: **1.12 ms**, against 0.90 for the same run before (measured the same day
 alone gives 1.00 ms, so much of the rest is the floaters moving differently, more of them
 jostling.
 
+## `tank` and `tank-bench`: a dam break in a glass tank (issue #156)
+
+```
+cargo run --release -p physics-lab -- --lab tank
+cargo run --release -p physics-lab -- --lab tank-bench
+```
+
+D-044's first milestone, after the owner's answers of 2026-10-03: the water is particles on a
+grid, simulated and drawn on the GPU (`forge_render::liquid`, `shaders/liquid.slang`,
+`shaders/liquid_draw.slang`), visual and lab-only.
+
+**The scene.** A tank 1.6 m long, 0.6 m tall and 0.6 m deep inside, on a table, with 0.4 m of
+water behind a red gate 60 cm from its left end. The owner asked for it larger than the first
+1.0 × 0.6 × 0.5 m, with the same depth behind the gate, so 1.8 times the water. **Space** (or
+`--release N`) lifts the gate at 3 m/s. The water runs out along the floor, climbs the far wall
+to the rim, falls back, sloshes and settles. `tank-bench` is the same tank as a bench to tune by
+(the owner's ask, after Sebastian Lague's fluid videos):
+- no glass, frame or table to see;
+- a floor of 10 cm squares in four tints, a darker line every metre, to read distances off;
+- a plain violet background and the sun alone;
+- the water tinted teal (`LiquidLook::tinted`) so its depth and motion show.
+
+**The solver** (APIC on a MAC grid, Jiang et al. 2015):
+- **The particles:** 589 824, eight a cell, on a 1.25 cm grid (128 × 48 × 48 cells). That spends
+  the owner's budget of answer 3 (~640 000, "bigger or finer") on the larger tank;
+  `--liquid-cell 0.01` gives 1.15 million.
+- **The substeps:** four of 1/240 s per tick of the lab's, with the gate's height and speed each.
+- **The transfers:** trilinear weights, the affine vector per component. The faces' sums are
+  64-bit fixed-point atomics (the weight and the momentum packed in one add), so a run replays to
+  the same bits.
+- **The pressure:** 32 red-black Gauss–Seidel sweeps with over-relaxation 1.7, warm-started
+  from the last substep. The still water starts at its hydrostatic pressure.
+- **The volume:** each cell's density, against a full cell's, is the particles' crowding. The
+  particles move down its gradient, a quarter of it undone a substep, inside the water only
+  (the surface's part-full cells are left alone). A cell against the glass expects an eighth
+  less per solid side.
+- **Gravity:** `--liquid-gravity x,y,z`, 9.81 m/s² down by default. At `0,0,0` the block floats
+  where it stands: there is no surface tension yet.
+
+**What it took to be still.**
+- **The volume correction as a velocity:** first written as Ten Minute Physics writes it, a target
+  for the pressure's divergence. Still water then shook itself apart in half a second (the
+  owner's report: "it's always moving for no reason"). The correction went into the particles'
+  velocity every substep, a spring with nothing to damp it. As a move it adds no energy: the still
+  water stays at rest to the bit (rms speed 0.000 m/s over 540 ticks).
+- **Correcting crowding only:** water that splashed apart settled 20 % high, its sparse cells
+  holding their volume like full ones.
+- **Tiled pressure sweeps:** sweeps in groupshared tiles, 8 cells a side, cost a third as much.
+  They left errors on the tiles' edges that kept the water sloshing (0.4 m/s rms after 12 s,
+  against 0.05), so they were dropped.
+
+**The drawing.**
+- **The density field:** the particles' density, smoothed twice by a 3 × 3 × 3 binomial, with
+  4-cell bricks of its least and most to skip air and the water's inside.
+- **The march:** each pixel's ray through the glass (Fresnel's reflection, its tint), into the
+  water where the density crosses one half. There it is bent by Snell's law, with Fresnel's share
+  mirrored (the sky, the sun's highlight).
+- **Through the water:** absorbed and scattered along its path (pure water by default), out through
+  the surface or the glass. Past the critical angle it is mirrored whole and marched on: a side
+  wall seen at a slant mirrors the inside.
+- **Where it lands:** a short march over the screen against the depth, with a 25 cm thickness, so
+  something in front of the ray is not taken for where it lands.
+- **The floor:** the floor's glass lies on the table and mirrors nothing.
+- **For TAA:** a reactive mask where the surface moves.
+
+![The glass tank as the wave climbs the far wall; the bench as the gate lifts and as the wave climbs the far wall](images/physics-lab-tank.png)
+
+**The checks** (fixed step, `--liquid-log N` prints the line every N ticks):
+- **The particles:** none lost.
+- **The still water:** at rest to the bit before the gate lifts (rms and greatest speed 0.000 m/s).
+- **The settled level:** 149.2 mm nine seconds after the gate lifts, against the 150.0 mm its volume
+  gives over the whole floor. D-044's check asks within 2 mm. The column model of `flood` fails it.
+- **The replays:** three runs give the same digests at all 100 logged ticks (every 6, 600 frames).
+- **The front:** from the gate to the far wall (0.98 m) in 0.47 s; between ticks 42 and 54 it
+  runs 3.0 m/s, three quarters of Ritter's 2√(g h₀) = 3.96 m/s for a dam removed at once (this
+  gate lifts at 3 m/s, letting the water go over a tenth of a second).
+
+**The cost** on the RTX 5070 Ti, 1600 × 900, on the async compute queue (600 frames):
+
+| Zone | ms a frame |
+|---|---|
+| `liquid/p2g` | 2.16 |
+| `liquid/pressure` | 1.19 |
+| `liquid/g2p` | 1.00 |
+| `liquid/faces`, `cells`, `project`, `clear` | 0.13 |
+| `liquid/draw` (graphics) | 0.16 |
+
+That makes 4.5 ms of simulation, more than D-044's 2.5 ms estimate for 190 000 particles (answer
+4: to be found by trying). The particles' sums to the grid are the most of it. Where the time
+could go:
+- sorting the particles by cell once a frame, and summing a workgroup's into groupshared memory
+  first;
+- a multigrid pressure in place of the sweeps.
+
 ## `dominoes`: a run that ends the same (issue #146)
 
 ```
@@ -695,4 +790,6 @@ and from the bridge (#147) `lab-bridge360` (the deck falling with two cars) with
 pushed, `lab-rocket120` (climbing off the pad) with its twin and `lab-rocket600` (pitched over
 downrange); and the tug-of-war (#149) through `--net 100`, `lab-tug-net200` (the sled on its way
 right) with its twin and `lab-tug-net600` (over the line); and the spaceship (#150) at full throttle,
-`lab-space90` (closing on the crates) and `lab-space150` (through them) with its twin.
+`lab-space90` (closing on the crates) and `lab-space150` (through them) with its twin;
+and the glass tank (#156), the gate lifted at tick 31, `lab-tank90` (the wave climbing the far
+wall) with its twin and `lab-tank-bench300` (the bench, the water settling).

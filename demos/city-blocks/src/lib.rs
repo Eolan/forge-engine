@@ -42,13 +42,13 @@ use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CloudParams, Clouds,
-    CullCamera, CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter,
-    MAX_FLOATERS, MAX_WAKES, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform,
-    ProbeParams, Probes, Residency, SkyParams, SplashParams, SplashSource, Starfield, StartView,
-    StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades,
-    WaterCaustics, WaterFloater, WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore,
-    WaterShoreTrain, WaterSplashes, WaterStone, WaterSurface, WaterSurfaceParams, WaterWake,
-    WaterWakes, exposure_from_ev100, sh_irradiance,
+    CullCamera, CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LiquidDrawParams,
+    LiquidStats, LiquidTank, LuminanceMeter, MAX_FLOATERS, MAX_WAKES, MeshletRenderer,
+    MeshletScene, MeshletSceneBuilder, MoverTransform, ProbeParams, Probes, Residency, SkyParams,
+    SplashParams, SplashSource, Starfield, StartView, StreamingConfig, StreamingStats, SwRaster,
+    Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics, WaterFloater, WaterLake,
+    WaterMouth, WaterPool, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes, WaterStone,
+    WaterSurface, WaterSurfaceParams, WaterWake, WaterWakes, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec2, Vec3};
@@ -293,9 +293,30 @@ struct Args {
     #[arg(long)]
     limp_at: Option<u64>,
     /// At this frame, as Space does: the wrecking ball let go (`--lab break`, #142), the flood's
-    /// gate lifted (#144), the first domino tipped (#146), the convoy sent across (#147).
+    /// gate lifted (#144), the first domino tipped (#146), the convoy sent across (#147). The
+    /// glass tank's gate lifted (#156).
     #[arg(long)]
     release: Option<u64>,
+    /// `--lab tank` (#156): the liquid's pressure sweeps a substep (red and black each).
+    #[arg(long, default_value_t = 32)]
+    liquid_sweeps: u32,
+    /// `--lab tank`: the liquid's cell, metres (590 000 particles at 1.25 cm, the default; 1.15
+    /// million at 1 cm).
+    #[arg(long, default_value_t = lab::tank::CELL)]
+    liquid_cell: f32,
+    /// `--lab tank`: the liquid's gravity, m/s² (x,y,z; `0,0,0` for none). Without surface
+    /// tension, none leaves the water as it stands.
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true, default_values_t = [0.0, -9.81, 0.0])]
+    liquid_gravity: Vec<f32>,
+    /// `--lab tank`: the share of the particles' crowding undone a substep.
+    #[arg(long, default_value_t = 0.25)]
+    liquid_drift: f32,
+    /// `--lab tank`: the pressure sweeps' over-relaxation.
+    #[arg(long, default_value_t = 1.7)]
+    liquid_omega: f32,
+    /// `--lab tank`: the lab's ticks between the liquid's lines in the log.
+    #[arg(long, default_value_t = 60)]
+    liquid_log: u64,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -466,6 +487,14 @@ struct Gallery {
     clouds_previous: Mat4,
     /// In `--lab space`, the sky of space in place of the ground's.
     space: Option<SpaceSky>,
+    /// In `--lab tank`, the GPU liquid (#156), and per frame slot the lab's tick its statistics
+    /// were asked at.
+    liquid: Option<forge_render::Liquid>,
+    liquid_asked: [Option<u64>; forge_gpu::FRAMES_IN_FLIGHT],
+    /// The lab's tick at which the liquid's next line is due.
+    liquid_next_log: u64,
+    /// Enter was pressed: the liquid starts over at the next frame.
+    liquid_reset: bool,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -550,6 +579,10 @@ const SPACE_SUN: Vec3 = Vec3::new(0.75, 0.35, 0.5);
 /// clouds rather than only the haze along its limb (from low orbit, 70°, it was a grey wall).
 const PLANET_DIR: Vec3 = Vec3::new(-0.55, -0.45, -0.7);
 const PLANET_ANGLE_DEG: f32 = 32.0;
+/// The tank's bench (#156): towards its sun (high, from the left and behind), and its background's
+/// albedo (a dull violet, after Sebastian Lague's fluid renders).
+const BENCH_SUN: Vec3 = Vec3::new(-0.45, 0.8, -0.4);
+const BENCH_BACKGROUND: Vec3 = Vec3::new(0.09, 0.07, 0.1);
 
 /// The sky of space (`--lab space`, the owner's ask of 2026-10-03): the asteroids' starfield and
 /// the sun's disc, and an Earth-like planet under its atmosphere seen from orbit (D-023's
@@ -626,8 +659,42 @@ impl Gallery {
             renderer.sun_dir = SPACE_SUN.normalize();
             renderer.sun_color = Vec3::ONE;
         }
-        // The cloud layer (#145), over the given share of the sky; none at 0, nor in space.
-        let clouds = (args.clouds > 0.0 && space.is_none())
+        // The glass tank's liquid (#156): pure water, the solver as the arguments set it; on its
+        // bench, tinted, under a white sun from the left and behind.
+        let bench = args.lab == Some(lab::LabScene::TankBench);
+        if bench {
+            renderer.sun_dir = BENCH_SUN.normalize();
+            renderer.sun_color = Vec3::ONE;
+        }
+        let liquid = matches!(
+            args.lab,
+            Some(lab::LabScene::Tank | lab::LabScene::TankBench)
+        )
+        .then(|| {
+            forge_render::Liquid::new(
+                &ctx.device,
+                &ctx.shaders,
+                lab::tank::liquid(args.liquid_cell),
+                forge_render::LiquidSolver {
+                    sweeps: args.liquid_sweeps,
+                    omega: args.liquid_omega,
+                    drift: args.liquid_drift,
+                    gravity: Vec3::from_slice(
+                        &[args.liquid_gravity.as_slice(), &[0.0; 3]].concat(),
+                    ),
+                    ..forge_render::LiquidSolver::default()
+                },
+                if bench {
+                    forge_render::LiquidLook::tinted()
+                } else {
+                    forge_render::LiquidLook::pure_water()
+                },
+            )
+        })
+        .transpose()?;
+        // The cloud layer (#145), over the given share of the sky; none at 0, nor in space, nor on the
+        // tank's bench.
+        let clouds = (args.clouds > 0.0 && space.is_none() && !bench)
             .then(|| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
             .transpose()?;
         // Known before the scene, whose streamed pages it loads first (#121).
@@ -955,6 +1022,10 @@ impl Gallery {
             clouds,
             clouds_previous: Mat4::IDENTITY,
             space,
+            liquid,
+            liquid_asked: [None; forge_gpu::FRAMES_IN_FLIGHT],
+            liquid_next_log: 0,
+            liquid_reset: false,
             sky_light,
             gtao,
             ao_on,
@@ -1097,6 +1168,8 @@ impl Demo for Gallery {
             KeyCode::Enter => {
                 if let Some(lab) = &mut self.lab {
                     lab.reset();
+                    // The tank's water too: seeded again, the tick that puts the gate back skipped.
+                    self.liquid_reset = true;
                 }
             }
             KeyCode::KeyC => self.chase = !self.chase,
@@ -1325,7 +1398,9 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
-        let in_space = self.space.is_some();
+        // In space and on the tank's bench, no sky: its light a constant fill.
+        let bench = self.args.lab == Some(lab::LabScene::TankBench);
+        let in_space = self.space.is_some() || bench;
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
@@ -1454,6 +1529,28 @@ impl Demo for Gallery {
         // The lab's bodies between their last two ticks (#136).
         if let Some(lab) = &self.lab {
             self.scene.set_movers(&lab.movers());
+        }
+        // The glass tank's liquid (#156): the statistics a frame in this slot asked for, then the
+        // substeps the lab's ticks owe it, on the async compute queue.
+        if let (Some(liquid), Some(lab)) = (&self.liquid, self.lab.as_mut()) {
+            if let Some(stats) = liquid.take_stats(frame.slot)
+                && let Some(tick) = self.liquid_asked[frame.slot.index].take()
+            {
+                log_liquid(tick, &stats, liquid.tank());
+            }
+            let mut steps = lab.take_tank_steps();
+            if std::mem::take(&mut self.liquid_reset) {
+                liquid.reset();
+                steps.clear();
+            }
+            let now = lab.now();
+            let every = self.args.liquid_log.max(1);
+            let ask = now >= self.liquid_next_log;
+            if ask {
+                self.liquid_next_log = (now / every + 1) * every;
+            }
+            self.liquid_asked[frame.slot.index] = ask.then_some(now);
+            liquid.simulate(&mut frame.graph, frame.slot, &steps, ask);
         }
         let targets = self.renderer.draw(
             &mut frame.graph,
@@ -1624,7 +1721,7 @@ impl Demo for Gallery {
                 exposure,
                 Some(planet),
             );
-        } else {
+        } else if !bench {
             self.sky.compose(
                 &mut frame.graph,
                 &sky,
@@ -1743,6 +1840,32 @@ impl Demo for Gallery {
                 self.splash_peak = self.splash_peak.max(stats.live);
                 self.splash_born += u64::from(stats.fresh);
             }
+        }
+        // The glass tank and its water (#156), over the scene and the sky; its reactive mask for TAA
+        // (the spray's, where there is spray, comes first: the tank has none).
+        if let Some(liquid) = &self.liquid {
+            let mask = liquid.draw(
+                &mut frame.graph,
+                frame.slot,
+                &sky,
+                LiquidDrawParams {
+                    view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                    corner: lab::tank::corner(bench) - camera_in_scene,
+                    sun_dir: self.renderer.sun_dir,
+                    sun_radiance: self.renderer.sun_color
+                        * (self.renderer.sun_illuminance * exposure),
+                    sky_scale: self.renderer.sun_illuminance * exposure,
+                    // The bench's background: a dull violet card in the sun.
+                    background: bench.then(|| {
+                        BENCH_BACKGROUND
+                            * (self.renderer.sun_illuminance * exposure / std::f32::consts::PI)
+                    }),
+                },
+                taa_frame.color,
+                targets.depth,
+                extent,
+            );
+            reactive = reactive.or(Some(mask));
         }
         if metered {
             // Meter the finished HDR scene for the exposure of the frames to come.
@@ -1869,6 +1992,29 @@ impl Drop for Gallery {
             );
         }
     }
+}
+
+/// The glass tank's line in the log (#156): what is left of the water, where its surface stands
+/// against where its volume puts it over the floor, how far its front has run, how fast it moves,
+/// and the digest a replay must match.
+fn log_liquid(tick: u64, stats: &LiquidStats, tank: &LiquidTank) {
+    let start = tank.water.as_vec3() * tank.cell;
+    let volume = start.x * start.y * start.z;
+    let level = volume / (tank.size.x * tank.size.z);
+    tracing::info!(
+        tick,
+        particles = stats.particles,
+        lost = stats.lost,
+        level_mm = format!("{:.1}", stats.level * 1e3),
+        settled_mm = format!("{:.1}", level * 1e3),
+        volume = format!("{:.4}", stats.volume / volume),
+        front_mm = format!("{:.0}", stats.front * 1e3),
+        height_mm = format!("{:.1}", stats.mean_height * 1e3),
+        rms_speed = format!("{:.3}", stats.mean_speed2.sqrt()),
+        max_speed = format!("{:.2}", stats.max_speed),
+        digest = format!("{:08x}{:08x}", stats.digest[0], stats.digest[1]),
+        "liquid"
+    );
 }
 
 /// The `q` quantile of `values` (sorted in place; 0 when empty).
@@ -2321,6 +2467,15 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
+        // The tank's bench (#156): a floor of 10 cm squares to measure by, a tint a quadrant.
+        let squares = textures::checker(512);
+        let squares = (textures.add(&squares[0])?, textures.add(&squares[1])?);
+        let mut bench =
+            |name: &str, tint: [f32; 3]| add(name, textured(squares, tint, tint, 1.0, 20.0, 0.1));
+        let bench_blue = bench("bench (blue)", [0.3, 0.45, 0.95]);
+        let bench_violet = bench("bench (violet)", [0.62, 0.38, 0.9]);
+        let bench_sand = bench("bench (sand)", [0.9, 0.7, 0.38]);
+        let bench_green = bench("bench (green)", [0.35, 0.78, 0.42]);
         let by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -2361,6 +2516,15 @@ impl CityMaterials {
             ("lab-pad", concrete_grey),
             ("lab-rope", bark),
             ("lab-line", white_paint),
+            ("lab-tank-table", deck_wood),
+            ("lab-tank-bar-x", steel),
+            ("lab-tank-bar-y", steel),
+            ("lab-tank-bar-z", steel),
+            ("lab-tank-gate", red_paint),
+            ("lab-bench-blue", bench_blue),
+            ("lab-bench-violet", bench_violet),
+            ("lab-bench-sand", bench_sand),
+            ("lab-bench-green", bench_green),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -4269,6 +4433,25 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.55,
             speed: 6.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::TankBench) {
+        // Over the bench's front right, looking down across the tank at its floor of squares.
+        FlyCamera {
+            position: Vec3::new(1.0, 1.05, 1.5),
+            yaw: 0.58,
+            pitch: -0.42,
+            speed: 0.8,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Tank) {
+        // In front of the tank and to its right, a little over its rim, looking down into it: the
+        // reservoir behind the gate on the left.
+        FlyCamera {
+            position: Vec3::new(0.45, 1.4, 1.6),
+            yaw: 0.28,
+            pitch: -0.22,
+            speed: 0.8,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Flood) {

@@ -1050,6 +1050,20 @@ max 0.25), the ship and 27 crates in zero g. With the sci-fi ship and its flight
 0.55 ms, of which the starfield and the planet in view take 0.14 ms (`sky/starfield + planet`).
 The ground's sky tables still run under it (about 0.14 ms) and are not used.
 
+`--lab tank` (#156), the gate lifted at tick 31, 600 frames at 1600 × 900: the liquid's
+590 000 particles take **4.5 ms a frame** on the async compute queue, four substeps a tick:
+`liquid/p2g` 2.16 ms (the particles' sums to the faces, 64-bit atomics), `liquid/pressure`
+1.19 (32 red-black sweeps a substep, 256 dispatches a frame), `liquid/g2p` 1.00, the rest
+0.13; its drawing on the graphics queue 0.16 ms (`liquid/draw`). On the first tank (640 000
+particles at 1 cm):
+- packing the p2g's atomics in 64 bits took it from 2.68 ms to 2.05;
+- shuffling the particles, so a wave's threads meet no common face, made it 4.70 ms (the grid's
+  cache lost);
+- the sweeps in groupshared tiles cost 0.50 ms against 1.44 but kept the water sloshing
+  (`docs/demos/physics-lab.md`).
+
+The overlay now sums a label's zones within a frame (a substep's passes come back four times).
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

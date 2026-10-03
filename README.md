@@ -230,6 +230,9 @@ go) and a concrete column that shatters into pieces. `--lab creatures`: mannequi
 dogs from Blender as powered ragdolls, their motors driving moving poses; Space throws balls at
 them, ↓ lets them go limp. `--lab flood`: a dam break, the shallow-water model running down a
 basin round blocks and a hut, carrying crates, barrels and logs; Space lifts the gate.
+`--lab tank`: a dam break in a glass tank on a table, the water 590 000 GPU particles on a grid,
+drawn through the glass; Space lifts the gate. `--lab tank-bench`: the same tank on a floor of
+squares, tinted, to tune the liquid by.
 `--lab dominoes`: 300 dominoes on a spiral, Space tips the first, and a recording of the run
 replays to the same digests. `--lab bridge`: a timber bridge over a gap and four cars; Space sends
 them across, and the deck gives way under the second. `--lab tug --net 100`: a tug-of-war on a sled

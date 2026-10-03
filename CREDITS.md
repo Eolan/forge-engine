@@ -370,3 +370,16 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Fields", GDC 2008: depths on a grid, velocities on its faces carried along semi-Lagrangian,
   upwind fluxes kept from overdrawing a cell (`forge_physics::shallow`, #144). A. Ritter's
   dam-break solution (1892) for its test.
+- **The lab's particle liquid** (`forge_render::liquid`, #156, D-044):
+  - **APIC:** Chenfanfu Jiang, Craig Schroeder, Andrew Selle, Joseph Teran and Alexey
+    Stomakhin, "The Affine Particle-In-Cell Method", ACM SIGGRAPH 2015. The particles carry their
+    velocity's gradient to and from a MAC grid, with trilinear weights.
+  - **The volume:** after Tassilo Kugelstadt, Andreas Longva, Nils Thuerey and Jan Bender,
+    "Implicit Density Projection for Volume Conserving Liquids", IEEE TVCG 27(4), 2019, and
+    Matthias Müller's Ten Minute Physics FLIP tutorial (#18, its drift compensation, MIT).
+    Forge moves the particles down their crowding's gradient instead (no code taken).
+  - **Pure water's absorption:** Robin M. Pope and Edward S. Fry, "Absorption spectrum (380–700
+    nm) of pure water. II. Integrating cavity measurements", Applied Optics 36(33), 1997.
+  - **The bench:** a floor of squares in four tints, a plain background and tinted water to tune
+    by, after Sebastian Lague's fluid simulation videos (the owner's pointer, 2026-10-03; nothing
+    taken but the idea).

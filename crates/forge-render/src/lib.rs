@@ -19,6 +19,7 @@ pub mod display;
 pub mod dust;
 pub mod exposure;
 pub mod gtao;
+pub mod liquid;
 pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
@@ -48,6 +49,10 @@ pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;
 pub use gtao::{Gtao, GtaoParams};
+pub use liquid::{
+    LIQUID_MAX_SUBSTEPS, Liquid, LiquidDrawParams, LiquidHole, LiquidLook, LiquidSolver,
+    LiquidStats, LiquidStep, LiquidTank,
+};
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,
     MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame,

@@ -50,6 +50,10 @@
 "shaders/shore.slang" = ["island"]
 "shaders/wakes.slang" = ["island"]
 "shaders/splashes.slang" = ["island", "lab"]
+# The lab's liquid (#156).
+"crates/forge-render/src/liquid.rs" = ["lab"]
+"shaders/liquid.slang" = ["lab"]
+"shaders/liquid_draw.slang" = ["lab"]
 
 # The ballad and the shaders only it draws.
 "demos/asteroids/**" = ["ballad"]
