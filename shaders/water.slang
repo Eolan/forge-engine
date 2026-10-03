@@ -361,7 +361,24 @@ struct WaterSurface
     float4 pool_frame;    // a pool's first sample (world x, z), metres between samples, 0 (#144)
     float4* pool;         // its samples: the surface (m), the depth (m, 0: dry), the velocity (world x, z; m/s); null: none
     uint2 pool_size;      // its samples along x and z
+    float4 cloud_frame;   // the clouds' shadow map (#145): its first corner (world x, z), 1 / the metres it spans
+    uint cloud_shadow;    // its sampled index (r32f: the sun's share through the clouds), or 0xFFFFFFFF
+    uint3 pad_cloud;
 };
+
+// The sun's share through the clouds (#145) at `world` (the scene's frame), from their shadow map
+// as the resolve reads it (meshlet.slang's `cloud_light`); 1 without clouds or off the map.
+float cloud_share(WaterSurface* w, float3 world)
+{
+    if (w[0].cloud_shadow == 0xFFFFFFFFu)
+        return 1.0;
+    float3 sun = normalize(w[0].sun.xyz);
+    float2 ground = world.xz - sun.xz * (world.y / max(sun.y, 0.05));
+    float2 uv = (ground - w[0].cloud_frame.xy) * w[0].cloud_frame.z;
+    if (any(uv < 0.0) || any(uv > 1.0))
+        return 1.0;
+    return sample_depth_level(w[0].cloud_shadow, SAMPLER_LINEAR_CLAMP, uv, 0.0);
+}
 
 struct SurfacePush
 {
@@ -684,8 +701,10 @@ struct WaterLight
     float scale;           // the sky's luminance scale
 };
 
-WaterLight water_light(WaterSurface* w, float3 n, float3 v, float a2)
+WaterLight water_light(WaterSurface* w, float3 n, float3 v, float a2, float3 world)
 {
+    // The sun through the clouds there (#145).
+    float shade = cloud_share(w, world);
     WaterLight o;
     float nv = max(dot(n, v), 1e-4);
     float f0 = 0.02;
@@ -711,9 +730,9 @@ WaterLight water_light(WaterSurface* w, float3 n, float3 v, float a2)
     {
         float3 h = normalize(l + v);
         float fh = f0 + (1.0 - f0) * pow(1.0 - saturate(dot(v, h)), 5.0);
-        o.sun = w[0].sun_radiance.rgb * ggx(saturate(dot(n, h)), a2) * smith_visibility(nv, nl, a2) * fh * nl;
+        o.sun = w[0].sun_radiance.rgb * ggx(saturate(dot(n, h)), a2) * smith_visibility(nv, nl, a2) * fh * nl * shade;
     }
-    o.sun_light = w[0].sun_radiance.rgb * saturate(l.y);
+    o.sun_light = w[0].sun_radiance.rgb * saturate(l.y) * shade;
     o.lit = sky_irradiance * PI + o.sun_light;
     return o;
 }
@@ -838,7 +857,7 @@ SurfaceTargets sea_from_above(WaterSurface* w, SurfaceOut input)
     float3 v = normalize(-input.relative);
     // GGX's α² from the unresolved slopes' variance (α² = 2σ²), over a calm surface's.
     float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
-    WaterLight light = water_light(w, n, v, a2);
+    WaterLight light = water_light(w, n, v, a2, input.relative + w[0].camera.xyz);
     float fresnel = light.fresnel;
     float scale = light.scale;
     float3 r = light.mirror;
@@ -1374,7 +1393,7 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
     float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
     float3 v = normalize(-s.relative);
     float a2 = clamp(0.0004 + 2.0 * variance, 0.0004, 1.0);
-    WaterLight light = water_light(w, n, v, a2);
+    WaterLight light = water_light(w, n, v, a2, s.relative + w[0].camera.xyz);
     uint2 pixel = uint2(s.position.xy);
     float2 uv = (float2(pixel) + 0.5) / float2(w[0].width, w[0].height);
     float3 under = g_sampled_images[NonUniformResourceIndex(w[0].scene_color)].Load(int3(pixel, 0)).rgb;

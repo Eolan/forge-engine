@@ -542,9 +542,15 @@ struct GpuWaterSurface {
     pool: u64,
     /// Its samples along x and z.
     pool_size: [u32; 2],
+    /// The clouds' shadow map's frame (#145): its first corner (world x, z), 1 / the metres it
+    /// spans, 0.
+    cloud_frame: [f32; 4],
+    /// Its sampled index, or `u32::MAX`: no clouds.
+    cloud_shadow: u32,
+    pad_cloud: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 864);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 896);
 
 /// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
 /// its absorption and its scattering, then `water/under`'s dispatch.
@@ -1143,6 +1149,8 @@ pub struct WaterSurfaceParams {
     pub pixel: f32,
     /// The wakes on the lakes and the sea this frame (#107, [`crate::WaterWakes`]).
     pub wakes: Option<crate::WakeFrame>,
+    /// The clouds' shadow on the sun's light (#145, [`crate::Clouds::shadow`]); `None`: none.
+    pub clouds: Option<crate::CloudShadow>,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -2123,6 +2131,9 @@ impl WaterSurface {
         if let Some(at_camera) = at_camera {
             pass = pass.buffer(at_camera, BufferAccess::ShaderRead(fragment));
         }
+        if let Some(clouds) = params.clouds {
+            pass = pass.image(clouds.image, ImageAccess::Sampled(fragment));
+        }
         if let Some(wakes) = params.wakes {
             pass = pass.image(wakes.slopes, ImageAccess::Sampled(fragment));
         }
@@ -2203,6 +2214,11 @@ impl WaterSurface {
                     pool_frame,
                     pool: if pool_vertices > 0 { pool_samples } else { 0 },
                     pool_size,
+                    cloud_frame: params.clouds.map_or([0.0; 4], |c| c.frame),
+                    cloud_shadow: params
+                        .clouds
+                        .map_or(u32::MAX, |c| resources.sampled(c.image).0),
+                    pad_cloud: [0; 3],
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.

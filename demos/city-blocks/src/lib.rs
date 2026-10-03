@@ -1567,6 +1567,7 @@ impl Demo for Gallery {
                     time: self.sea_time_submitted,
                     pixel: 2.0 / (taa_frame.jittered_projection.y_axis.y * extent.height as f32),
                     wakes,
+                    clouds: cloud_shadow,
                 },
                 taa_frame.color,
                 targets.depth,
