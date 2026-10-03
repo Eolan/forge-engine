@@ -602,6 +602,9 @@ accumulation pass.
 
 ### Volumetric liquid for gameplay moments
 
+*Taken further on 2026-10-03 in [particle-fluids.md](particle-fluids.md) (#155): the solvers
+compared for real time, their GPU building blocks on Vulkan, drawing the liquid, and Jolt.*
+
 **Matthias Müller, David Charypar, Markus Gross. "Particle-Based Fluid Simulation for Interactive
 Applications." SCA 2003.** [paper] [foundational]
 <https://matthias-research.github.io/pages/publications/sca03.pdf>

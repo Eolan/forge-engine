@@ -1820,7 +1820,8 @@ change in tiers"):
 - **#71's flake** is told by its signature (at most 500 px, ꟻLIP mean at most 0.0015, largest
   at most 0.15) and no longer fails a run. It also shows on the HDR output's TAA frame 600, a
   sentinel (two runs in six on 2026-10-02): its PQ codes count as the flake only when its SDR
-  preview does.
+  preview does. Since 2026-10-03, one PQ code on at most 100 px of either HDR capture (frame
+  240 or 600) counts too, with the preview the same (two Tier 2 runs: 20 and 19 px).
 
 Measured on 2026-10-02: a docs-only change runs the gate in 16 s. #133 against its parent runs
 Tier 0 (the sentinels, the island and the city, recooked) in 233 s, the gate included: the
@@ -1832,3 +1833,68 @@ timings of the build against itself, within 0.04 ms per view.
 Not chosen: the full batch every time (too slow), and the sentinels alone (an island change
 must see the island). A 3DMark-style benchmark in one process ("forge-mark") is a later step,
 run far less often.
+
+## D-044 — A particle liquid for the lab; the heightfield and particles for the world 🟡 (2026-10-03)
+
+The owner's request of 2026-10-03 (#155, #156): glass tanks in the physics lab with the water's
+volume drawn, a dam break and a gate with a round hole, the camera crossing the surface, and a
+liquid that behaves round obstacles; "I think we will have to use fluid simulation using
+particles for that." Research: [research/particle-fluids.md](research/particle-fluids.md)
+(67 sources, read with WebFetch and WebSearch; claims from a search snippet alone marked †).
+
+**Proposed (the owner's to take):**
+1. **The lab's liquid:** a GPU particle–grid hybrid.
+   - Particles carry the water with APIC transfers (MLS-MPM's quadratic B-splines).
+   - A grid's pressure projection keeps it incompressible, and a correction on the particles'
+     density holds its volume and level (Kugelstadt et al. 2019).
+   - It runs as Vulkan compute in Slang, with no CUDA, no float atomics and no wave-size
+     assumption.
+   - Its transfers and sums use 32-bit fixed-point atomics, and any ordering of the particles uses
+     a stable radix sort, so it is bit-deterministic on one GPU.
+   - EA SEED's Position-Based MPM (BSD-3) stays the alternative pressure model, behind the same
+     data, decided by an A/B at the second milestone.
+2. **Its drawing:** a ray-march of the solver's density grid.
+   - The glass walls and floor are analytic planes.
+   - Snell's refraction, Beer–Lambert absorption (pure water's, scaled), single scattering and
+     total internal reflection.
+   - A near-plane underwater mask with a meniscus line for the camera crossing the surface.
+   - Motion vectors from the grid's velocity for TAA.
+   - Spray, foam and bubbles as diffuse particles (Ihmsen et al. 2012), shared with the island.
+3. **Jolt:** bodies are written into the grid as moving solids. The GPU hands back each body's
+   submerged volume, centre of buoyancy and the water's velocity, a frame late, for Jolt's
+   buoyancy impulse. Full momentum exchange is the second milestone.
+4. **Determinism:** the GPU liquid is never network or gameplay state outside the single-player
+   lab. In the lab it replays to the same digests on one GPU and is checked by measures
+   (volume, level, outflow) on others.
+5. **The island:** the heightfield stays authoritative (the CPU column model, the GPU's shallow
+   water near the player). Ballistic GPU particles are spawned where it fails (Chentanez &
+   Müller 2010) and returned to it when they land.
+6. **Code to learn from or port, with credit:** MIT, BSD-3 and Apache-2.0 only (WebGPU-Ocean,
+   pbmpm, Blub, FidelityFX Parallel Sort, GPUPrefixSums). Not GPUMPM (GPLv3). PhysX and FleX as
+   references only (CUDA).
+
+**A first milestone, "Glass tank 1" (estimates, to be measured):**
+- One tank, 1.0 × 0.5 × 0.6 m inside, with a 0.4 m block of water behind a gate.
+- A 1.5 cm grid, about 190 000 particles, 4 substeps a frame.
+- At most 2.5 ms of simulation and 1.5 ms of drawing at 1440p on the RTX 5070 Ti.
+- Checks:
+  - the volume within 1 %;
+  - the final level within 2 mm of V / A, the check the column model fails;
+  - the front against Ritter's speed;
+  - the hole's jet near √(2gh) with a discharge coefficient near 0.6;
+  - three runs to the same digests.
+
+**Open questions for the owner:**
+1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be
+   grid-free (PBF or SPH: more compression, more tuning)?
+2. Should the lab's liquid stay visual and lab-only, or move bodies in ways that matter beyond
+   the lab?
+3. Is the tank's size and detail right (1.5 cm, ~190 000 particles), or bigger or finer (1 cm,
+   ~640 000)?
+4. How many of the 16.7 ms may the liquid take next to the ray-traced shadows, the GI and TAA?
+5. Should the water be physically pale (pure water barely tints a metre) or stylised bluer and
+   cloudier, and should the hole's jet foam?
+6. Should the column model's flood be fixed further in the meantime (its look round obstacles
+   was #153), or frozen until the lab's liquid exists?
+7. Is the dev machine's RDNA 2 iGPU acceptable as the AMD check until an RX 9070 XT is
+   available?
