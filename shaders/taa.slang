@@ -77,6 +77,8 @@ struct ResolvePush
     uint reactive;       // the splashes' reactive mask (sampled index, #107), 0xFFFFFFFF for none:
                          // at least that share of the pixel comes from this frame
     ToneTables tables;   // what the ACES 2.0 curves read (tonemap.slang)
+    uint lanczos;        // 1: the history through Lanczos-3 (36 texels), else Catmull-Rom (D-045)
+    uint pad;
 };
 
 // Levels the bloom chain's top level sums (crates/forge-render/src/bloom.rs, LEVELS).
@@ -141,6 +143,48 @@ float3 sample_history(float2 uv, float2 size)
         + history_at(float2(t3.x, t12.y)) * (w3.x * w12.y)
         + history_at(float2(t12.x, t3.y)) * (w12.x * w3.y);
     float weight = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return max(sum / weight, 0.0);
+}
+
+float lanczos3(float x)
+{
+    x = abs(x);
+    if (x < 1e-4)
+        return 1.0;
+    if (x >= 3.0)
+        return 0.0;
+    float a = 3.14159265 * x;
+    return 3.0 * sin(a) * sin(a / 3.0) / (a * a);
+}
+
+// Lanczos-3 from 36 texels (D-045): resampled each frame at a fraction of a pixel, the history
+// keeps more of the edges' contrast than through Catmull-Rom (the room, panning: MTF50 0.35–0.375
+// against 0.30–0.33 unsharpened). Its ringing is clipped with the rest of the history.
+float3 sample_history_lanczos(float2 uv, float2 size)
+{
+    float2 position = uv * size - 0.5;
+    int2 base = int2(floor(position));
+    float2 f = position - float2(base);
+    int2 last = int2(size) - 1;
+    float wx[6];
+    float wy[6];
+    for (int i = 0; i < 6; i++)
+    {
+        wx[i] = lanczos3(f.x - float(i - 2));
+        wy[i] = lanczos3(f.y - float(i - 2));
+    }
+    float3 sum = 0.0;
+    float weight = 0.0;
+    for (int y = 0; y < 6; y++)
+    {
+        for (int x = 0; x < 6; x++)
+        {
+            int2 p = clamp(base + int2(x - 2, y - 2), int2(0, 0), last);
+            float w = wx[x] * wy[y];
+            sum += g_sampled_images[NonUniformResourceIndex(resolve_push.history)].Load(int3(p, 0)).rgb * w;
+            weight += w;
+        }
+    }
     return max(sum / weight, 0.0);
 }
 
@@ -235,7 +279,8 @@ float3 resolve_color(Varyings input)
     // Clip the history to the mean ± 1.25 standard deviations of the nine samples around.
     float3 mean = moment1 / 9.0;
     float3 deviation = sqrt(abs(moment2 / 9.0 - mean * mean));
-    float3 history = compress(sample_history(history_uv, size) * resolve_push.history_scale);
+    float3 sampled = resolve_push.lanczos != 0u ? sample_history_lanczos(history_uv, size) : sample_history(history_uv, size);
+    float3 history = compress(sampled * resolve_push.history_scale);
     history = from_ycocg(clip_to_box(to_ycocg(history), mean - 1.25 * deviation, mean + 1.25 * deviation));
 
     float alpha = saturate(resolve_push.blend * lerp(0.4, 1.0, nearest_weight));

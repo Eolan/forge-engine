@@ -2072,4 +2072,6 @@ together'."
   Streamline SDK), in interactive runs. Scripted runs keep to TAA unless `--dlaa`: DLAA's images
   differ by up to 3 codes from run to run, and the captures' checks want them to the bit. Its
   display pass mixes in bloom now. T cycles DLAA, TAA sharpened, TAA plain and off.
-- **Next:** the Lanczos-3 history, SSAA 2 × 2 for captures.
+- **The Lanczos-3 history** by default (`--taa-catmull-rom` for the old filter): panning at
+  2 m/s, sharpened TAA's MTF50 goes 0.37–0.40 → 0.42–0.44 (DLAA: 0.43–0.48), for 0.03 ms.
+- **Next:** SSAA 2 × 2 for captures.

@@ -481,6 +481,10 @@ struct Args {
     /// Show TAA's image unsharpened.
     #[arg(long)]
     no_rcas: bool,
+    /// Resample TAA's history through Catmull-Rom (5 bilinear fetches), as before D-045, rather
+    /// than Lanczos-3 (36 texels).
+    #[arg(long)]
+    taa_catmull_rom: bool,
     /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution) in place of TAA in a
     /// scripted run too (`--frames`). DLAA is the default of an interactive run where it runs
     /// (D-045: the Streamline SDK in `streamline-sdk/` and an RTX GPU); a scripted run keeps to
@@ -693,6 +697,7 @@ impl Gallery {
         taa.enabled = !args.no_taa;
         taa.bloom_strength = args.bloom;
         taa.sharpen = (!args.no_rcas).then_some(args.rcas);
+        taa.lanczos = !args.taa_catmull_rom;
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let sky_light = !args.no_sky_light;

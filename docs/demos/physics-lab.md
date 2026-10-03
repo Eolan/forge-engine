@@ -932,6 +932,19 @@ with FidelityFX RCAS. The MTF at 0.25 c/px, the three edges (over 1 is an oversh
 - **Matching the preview:** the GPU pass gives the numbers `tools/sharpness --rcas` predicted from
   the captures.
 
+**A Lanczos-3 history** (by default; `--taa-catmull-rom` for the five bilinear fetches before
+it). TAA's history is resampled through 36 texels. Still, nothing changes (a still camera
+samples it at the pixels' centres). Moving, with the sharpening:
+
+| History | Panning 0.5 m/s, MTF50 (at 0.25 c/px) | Panning 2 m/s |
+|---|---|---|
+| Catmull-Rom | 0.36–0.43 (0.83–0.91) | 0.37–0.40 (0.83–0.87) |
+| **Lanczos-3** | 0.42–0.47 (0.92–0.97) | 0.42–0.44 (0.92–0.95) |
+| DLAA, for comparison | | 0.43–0.48 (0.79–0.82) |
+
+It costs 0.03 ms (the resolve 0.047 → 0.077 ms at 1600 × 900). No ringing shows: the history
+is clipped to the neighbourhood after it is sampled.
+
 **AgX with more contrast** (`--tonemap agx-punchy`, in G's cycle after AgX): Wrensch's "punchy"
 look, a power of 1.35 and saturation 1.4 between AgX's sigmoid and its outset. The black squares
 show at sRGB 0.055–0.08, against AgX's 0.20–0.23 and ACES's 0.07–0.09. The sunlit white wall

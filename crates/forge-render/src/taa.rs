@@ -104,6 +104,9 @@ struct ResolvePush {
     /// The reactive mask (sampled index), or `u32::MAX` for none (#107).
     reactive: u32,
     tables: ToneTablesPush,
+    /// 1: the history through Lanczos-3, else Catmull-Rom (D-045).
+    lanczos: u32,
+    pad: u32,
 }
 
 #[repr(C)]
@@ -258,6 +261,9 @@ pub struct Taa {
     /// The display image sharpened by RCAS this many stops below its strongest (D-045), while
     /// TAA is on; `None` shows the resolve as it is.
     pub sharpen: Option<f32>,
+    /// The history resampled through Lanczos-3 (36 texels) rather than Catmull-Rom (5 bilinear
+    /// fetches), D-045: on by default.
+    pub lanczos: bool,
 }
 
 impl Taa {
@@ -326,6 +332,7 @@ impl Taa {
             bloom_strength: 0.04,
             jitter_phases: JITTER_PHASES,
             sharpen: None,
+            lanczos: true,
         })
     }
 
@@ -532,6 +539,7 @@ impl Taa {
         let history_read = graph.import(&self.history[1 - frame.written]);
         // Sharpened, the resolve writes the history alone and the next pass shows it.
         let sharpen = self.sharpen.filter(|_| self.enabled);
+        let lanczos = self.lanczos;
         let shown = if sharpen.is_some() {
             None
         } else {
@@ -584,6 +592,8 @@ impl Taa {
                     output: encoding,
                     reactive: reactive.map_or(u32::MAX, |r| resources.sampled(r).0),
                     tables,
+                    lanczos: u32::from(lanczos),
+                    pad: 0,
                 },
             );
             Ok(())
@@ -709,5 +719,8 @@ mod tests {
         // 8 bytes).
         assert_eq!(std::mem::size_of::<SharpenPush>(), 32 + 16 + 32);
         assert_eq!(std::mem::offset_of!(SharpenPush, tables), 48);
+        // `ResolvePush`: its tables on 8 bytes at 72, then the filter and its padding.
+        assert_eq!(std::mem::offset_of!(ResolvePush, tables), 72);
+        assert_eq!(std::mem::size_of::<ResolvePush>(), 112);
     }
 }
