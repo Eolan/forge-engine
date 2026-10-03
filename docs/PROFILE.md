@@ -1045,7 +1045,10 @@ max 0.34), 52 bodies and 4 vehicles, the deck's 17 joints checked after each ste
 0.30, max 0.66), 6 corrections of 14 ticks each at most 0.55 ms; a snapshot 6.0 KB.
 
 `--lab space` (#150), full throttle through the crates, 300 ticks: **0.05 ms a tick** (p99 0.15,
-max 0.25), the ship and 27 crates in zero g.
+max 0.25), the ship and 27 crates in zero g. With the sci-fi ship and its flight computer
+(2026-10-03), 600 ticks: 0.061 ms (p99 0.142, max 0.196). Its frame on the GPU, at 1600 × 900:
+0.55 ms, of which the starfield and the planet in view take 0.14 ms (`sky/starfield + planet`).
+The ground's sky tables still run under it (about 0.14 ms) and are not used.
 
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's

@@ -42,6 +42,7 @@ mod flood;
 mod fly;
 mod rocket;
 mod sea;
+mod ship;
 mod space;
 mod tug;
 mod walk;
@@ -77,7 +78,8 @@ pub(crate) enum LabScene {
     Rocket,
     /// A tug-of-war on a sled, two teams pulling (#149); with `--net`, against the bot.
     Tug,
-    /// The rocket as a spaceship in zero g, crates floating ahead of it (#150).
+    /// A sci-fi spaceship in zero g over a planet under the stars, crates floating ahead of it
+    /// (#150).
     Space,
 }
 
@@ -142,6 +144,8 @@ const BRIDGE: usize = DOMINO + 1;
 const ROCKET: usize = BRIDGE + 2;
 /// The tug-of-war's rope and line, after the rocket's three.
 const TUG: usize = ROCKET + 3;
+/// The spaceship and its engines' flame, after the tug-of-war's two.
+const SHIP: usize = TUG + 2;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -186,6 +190,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(bridge::props());
     props.extend(rocket::props());
     props.extend(tug::props());
+    props.extend(ship::props());
     props
 }
 
@@ -478,8 +483,8 @@ pub(crate) struct LabWorld {
     /// for player 1.
     tug: Option<BodyId>,
     pulls: [f32; 2],
-    /// Whether the world is in space: no gravity, no air (#150).
-    space: bool,
+    /// The spaceship, flown with the pilot's controls in space: no gravity, no air (#150).
+    ship: Option<BodyId>,
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -532,9 +537,13 @@ impl LabWorld {
             _ => (FLOOR, FLOOR_HALF),
         };
         let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
-        let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
-        world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
-        let mut statics = vec![(floor, Mat4::from_translation(floor_at))];
+        // None in space: the ship flies over a planet far below.
+        let mut statics = Vec::new();
+        if kind != LabScene::Space {
+            let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
+            world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
+            statics.push((floor, Mat4::from_translation(floor_at)));
+        }
         // The shapes, each with its origin where its mesh has its own: the barrel's and the
         // ball's at their bottom, the rocks' hulls from their meshes' vertices.
         let block_shape = Shape::cuboid(Vec3::splat(BLOCK_HALF), 0.03, 2300.0)?;
@@ -607,6 +616,7 @@ impl LabWorld {
         let mut run = None;
         let mut convoy = None;
         let mut rocket = None;
+        let mut ship = None;
         let mut tug = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
@@ -944,9 +954,9 @@ impl LabWorld {
             LabScene::Space => {
                 let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 150.0)?;
                 let site = space::build(&mut world, &crate_shape)?;
-                group(ROCKET, vec![site.ship], &mut bodies);
+                group(SHIP, vec![site.ship], &mut bodies);
                 group(CRATE, site.crates, &mut bodies);
-                rocket = Some(site.ship);
+                ship = Some(site.ship);
             }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
@@ -997,6 +1007,13 @@ impl LabWorld {
             groups.push(Group {
                 prop: ROCKET + 1,
                 count: 2,
+            });
+        }
+        // The ship's engines' flames.
+        if ship.is_some() {
+            groups.push(Group {
+                prop: SHIP + 1,
+                count: ship::FLAMES,
             });
         }
         // The tug-of-war's two ropes.
@@ -1066,7 +1083,7 @@ impl LabWorld {
                 rocket,
                 pulls: tug.map_or([0.0; 2], |_| [tug::HOLD; 2]),
                 tug,
-                space: kind == LabScene::Space,
+                ship,
                 limp: false,
                 pool,
             },
@@ -1085,6 +1102,9 @@ impl LabWorld {
         self.pilot.propeller(&self.world, self.tick, out);
         if let Some(r) = self.rocket {
             rocket::fins_at(&self.world, r, out);
+        }
+        if let Some(s) = self.ship {
+            ship::flames_at(&self.world, s, self.pilot.throttle, out);
         }
         if let Some(sled) = self.tug {
             tug::ropes(&self.world, sled, out);
@@ -1165,7 +1185,8 @@ impl LabWorld {
             .map(|b| b.body)
             .or(self.driver.car.map(|c| c.0))
             .or(self.pilot.plane)
-            .or(self.rocket)?;
+            .or(self.rocket)
+            .or(self.ship)?;
         self.bodies.iter().position(|&b| b == body)
     }
 
@@ -1320,7 +1341,10 @@ impl Simulation for LabWorld {
         }
         self.pilot.tick(&mut self.world);
         if let Some(r) = self.rocket {
-            rocket::tick(&mut self.world, r, &self.pilot, self.space);
+            rocket::tick(&mut self.world, r, &self.pilot);
+        }
+        if let Some(s) = self.ship {
+            ship::tick(&mut self.world, s, &self.pilot);
         }
         if let Some(sled) = self.tug {
             tug::pull(&mut self.world, sled, self.pulls);
@@ -1658,15 +1682,18 @@ pub(crate) fn build(
             .map(|m| (m.name.clone(), super::model_layer(m)))
             .collect(),
     );
-    // The car's body and its wheel, and the aeroplane and its propeller, the same way (#140,
-    // #141).
+    // The car's body and its wheel, the aeroplane and its propeller, the spaceship and its flame,
+    // the same way (#140, #141; the ship's glowing parts emissive).
     let (car, _) = drive::car_model();
     let (plane, _) = fly::plane_model();
+    let (ship, _) = ship::ship_model();
     for (model, prop, mesh) in [
         (car, "lab-car", "car"),
         (car, "lab-wheel", "car-wheel"),
         (plane, "lab-plane", "plane"),
         (plane, "lab-propeller", "plane-prop"),
+        (ship, "lab-ship", "ship"),
+        (ship, "lab-ship-flame", "ship-flame"),
     ] {
         let mesh = model.mesh(mesh).context("a model's mesh")?;
         materials.add_rows(
@@ -1870,17 +1897,11 @@ impl Lab {
                 // In space: the ship's and the crates' momentum, which should keep.
                 let momentum = {
                     let shown = self.shown();
-                    match (shown.space, shown.rocket) {
-                        (true, Some(ship)) => {
-                            let p = space::momentum(
-                                &shown.world,
-                                ship,
-                                &shown.bodies[1..=space::CRATES],
-                            );
-                            format!("{:.2},{:.2},{:.2}", p.x, p.y, p.z)
-                        }
-                        _ => String::from("none"),
-                    }
+                    shown.ship.map_or(String::from("none"), |ship| {
+                        let p =
+                            space::momentum(&shown.world, ship, &shown.bodies[1..=space::CRATES]);
+                        format!("{:.2},{:.2},{:.2}", p.x, p.y, p.z)
+                    })
                 };
                 // The bridge's deck: joints still holding, of all; cars across and down.
                 let deck = {
@@ -2081,6 +2102,11 @@ impl Lab {
     /// Whether the scene has a rocket, flown with the aeroplane's controls.
     pub(crate) fn has_rocket(&mut self) -> bool {
         self.shown().rocket.is_some()
+    }
+
+    /// Whether the scene has the spaceship, flown with the aeroplane's controls (in space).
+    pub(crate) fn has_ship(&mut self) -> bool {
+        self.shown().ship.is_some()
     }
 
     /// The aeroplane's controls from the next tick: throttle, elevator, ailerons, rudder.
@@ -2684,7 +2710,7 @@ mod tests {
     #[test]
     fn the_ship_in_zero_g_keeps_momentum_through_its_crash_and_replays() {
         let (mut first, _) = LabWorld::new(LabScene::Space, test_pool()).unwrap();
-        let ship = first.rocket.unwrap();
+        let ship = first.ship.unwrap();
         // The bodies: the ship, then the 27 crates.
         let crates = first.bodies[1..=space::CRATES].to_vec();
         let momentum = |lab: &LabWorld| space::momentum(&lab.world, ship, &crates);
@@ -2699,14 +2725,14 @@ mod tests {
             seq: 0,
             command: LabCommand::Fly { controls },
         };
-        // Full throttle for a second: 50 kN for 1 s gives 50 000 kg·m/s along −z (16.7 m/s),
-        // then it coasts.
+        // Full throttle for a second: 60 kN for 1 s gives 60 000 kg·m/s along −z (15 m/s), then
+        // it coasts; the flight assist's jets turn it but push nothing.
         let commands = vec![fly(30, [1.0, 0.0, 0.0, 0.0]), fly(90, [0.0; 4])];
         let burn = Recording::record(&mut first, commands, 90, 30);
         let before = momentum(&first);
-        assert!((before.z + 50_000.0).abs() < 5.0, "{before}");
+        assert!((before.z + ship::THRUST).abs() < 5.0, "{before}");
         assert!(before.x.abs() < 0.1 && before.y.abs() < 0.1, "{before}");
-        // Coasting into the crates (about 0.9 s on) and scattering them: 4 s on, the momentum is
+        // Coasting into the crates (about 1.2 s on) and scattering them: 4 s on, the momentum is
         // what it was, shared out.
         let crash = Recording::record(&mut first, Vec::new(), 240, 60);
         let after = momentum(&first);
@@ -2724,6 +2750,43 @@ mod tests {
         }
         burn.replay(&mut second).expect("the same digests");
         crash.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_ship_turns_at_the_rate_its_stick_asks_and_holds_still_when_let_go() {
+        let (mut lab, _) = LabWorld::new(LabScene::Space, test_pool()).unwrap();
+        let ship = lab.ship.unwrap();
+        let spin = |lab: &LabWorld| {
+            let (mut t, mut v) = (Vec::new(), Vec::new());
+            lab.world.transforms(&[ship], &mut t);
+            lab.world.velocities(&[ship], &mut v);
+            t[0].rotation.inverse() * v[0].angular
+        };
+        let fly = |tick: u64, controls: [f32; 4]| Stamped {
+            tick,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Fly { controls },
+        };
+        // Half the stick to the right for two seconds: it rolls right (about its nose, −z) at
+        // half its most rate, 0.7 rad/s, and turns about nothing else.
+        lab.tick(&[fly(0, [0.0, 0.0, 0.5, 0.0])]);
+        for _ in 0..120 {
+            lab.tick(&[]);
+        }
+        let rolling = spin(&lab);
+        assert!((rolling.z + 0.7).abs() < 0.02, "{rolling}");
+        assert!(
+            rolling.x.abs() < 0.01 && rolling.y.abs() < 0.01,
+            "{rolling}"
+        );
+        // Let go: within a second and a half the jets have stopped it.
+        lab.tick(&[fly(lab.tick, [0.0; 4])]);
+        for _ in 0..90 {
+            lab.tick(&[]);
+        }
+        let still = spin(&lab);
+        assert!(still.length() < 0.01, "{still}");
     }
 
     #[test]

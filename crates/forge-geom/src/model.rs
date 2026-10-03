@@ -44,6 +44,10 @@ pub struct ModelMaterial {
     pub roughness: f32,
     /// 0 for a dielectric, 1 for a metal.
     pub metallic: f32,
+    /// The light it emits, linear RGB: the emissive factor times its strength
+    /// (`KHR_materials_emissive_strength`, Blender's emission strength). Forge reads it in units
+    /// of the light a white surface facing the sun returns.
+    pub emissive: [f32; 3],
 }
 
 /// One mesh of a model, in the scene's frame.
@@ -155,11 +159,13 @@ fn read_mesh(
         };
         let material = primitive.material();
         let pbr = material.pbr_metallic_roughness();
+        let strength = material.emissive_strength().unwrap_or(1.0);
         let this = ModelMaterial {
             name: material.name().unwrap_or_default().to_owned(),
             base_color: pbr.base_color_factor(),
             roughness: pbr.roughness_factor(),
             metallic: pbr.metallic_factor(),
+            emissive: material.emissive_factor().map(|c| c * strength),
         };
         let section = match materials.iter().position(|m| *m == this) {
             Some(s) => s,

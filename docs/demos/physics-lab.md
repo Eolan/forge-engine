@@ -24,7 +24,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `drive` | a car on wheels and springs: a jump ramp, a slalom of barrels, a wall of crates | ✅ #140 |
 | `fly` | an aeroplane on flying surfaces: a take-off from a runway, turns over a wide field | ✅ #141 |
 | `rocket` | a rocket off a launch pad: thrust vectoring, roll jets, fins as flying surfaces | ✅ #148 |
-| `space` | a spaceship in zero g: momentum kept through a crash into floating crates | ✅ #150 |
+| `space` | a sci-fi spaceship in zero g over a planet under the stars: momentum kept through a crash into floating crates | ✅ #150 |
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats, which pushes it aside | ✅ #144, #151 |
@@ -348,31 +348,55 @@ cargo run --release -p physics-lab -- --lab space
 cargo run --release -p physics-lab -- --lab space --pilot 1,0,0,0
 ```
 
-Step 5's last vehicle: the rocket as a spaceship in a world with no gravity (`WorldDesc::gravity`)
-and no air, 30 m over the lab's floor.
-- **The ship:** lies nose first along −z, its engine on the throttle.
-- **Its jets:** pitch and yaw it on the stick (5 kN·m) and roll it on the ailerons, where the air
-  turned the rocket. These are the rocket's controls, so a flight records and replays.
+Step 5's last vehicle: a spaceship in a world with no gravity (`WorldDesc::gravity`) and no air.
+It was the rocket until the owner's look of 2026-10-03 ("make the space scene look like space,
+and spaceship looks like a more sci-fi spaceship").
+- **The sky:** space's, in place of the ground's. The asteroids' starfield
+  (`forge_render::Starfield`) draws the stars, the sun's disc and an Earth-like planet low on the
+  left under its air (D-023), seen from about 5 600 km up so its oceans, land and clouds show. Its
+  nebula is at a quarter of the asteroids' (`Starfield::faint`): the chase camera looks along the
+  Milky Way's band, which at full strength lay over everything like a cloudy sky. The sun is
+  unfiltered white, from the ship's right. There is no floor and no cloud. The shaded sides take
+  space's constant fill, occluded by GTAO: no sky's light, no probes.
+- **The ship:** a 16.9 m fighter-shuttle with a 13 m span, modelled in Blender from code
+  (`assets/blender/ship.py` → `assets/models/ship.glb`):
+  - a faceted hull with a dark canopy and glowing strips along its sides;
+  - swept wings with blades turned down at their tips;
+  - two engine nacelles and a main engine in the tail;
+  - running lights, red and green.
+  Its glowing parts are emissive (the glTF reader now takes a material's emission and its
+  strength). Its collision is the hull of a coarse shell in the model. Its meshes weigh their
+  normals as the rocket's do (#157).
+- **Its engines:** 60 kN together along its nose (4 t, 1.5 g). Each flame slides out of its nozzle
+  with the throttle, hidden inside it when closed.
+- **Its jets:** a flight computer's. The stick asks for a rate of turn (pitch and yaw 0.8 rad/s,
+  roll 1.4 rad/s at full stick), and the jets push towards it (150 kN·m per rad/s off, at most
+  80 kN·m in pitch and yaw, 60 in roll). Centred, it holds still. These are the aeroplane's
+  controls, so a flight records and replays.
 - **The crates:** 27 of them float ahead of it in a block (100 kg each, 1.2 m apart).
-- **No damping:** nothing is damped, not the ship and not the crates.
+- **No damping:** the solver damps nothing, not the ship and not the crates. The jets push no
+  linear momentum.
 
 So what it tests is momentum:
-- the ship must gain exactly what its engine gives it;
+- the ship must gain exactly what its engines give it;
 - when it ploughs through the crates and scatters them, the ship and the crates together must keep
   that momentum.
 
-![Closing on the crates at full throttle; nearer at tick 90; through them at 150, the crates tumbling away](images/physics-lab-space.png)
+![At full throttle over the planet, the crates ahead; through them at tick 150; turning and rolling over the planet at half throttle](images/physics-lab-space.png)
 
-The lab's test:
+The lab's tests:
 - **Untouched:** half a second leaves everything where it was.
-- **The burn:** 50 kN for 1 s gives 49 999.992 kg·m/s along −z (50 000 by Newton).
+- **The burn:** 60 kN for 1 s gives 60 000.004 kg·m/s along −z (60 000 by Newton).
 - **The crash:** the ship coasts into the block and scatters it, 15 crates leaving at over 1 m/s.
-  4 s on, the ship and crates together carry 49 999.84 along −z and 0.3 across: within 9 parts
-  in a million.
+  4 s on, the ship and crates together carry 59 999.973 along −z and 0.001 across: within half a
+  part in a million.
 - **The replay:** the flight replays to the same digests.
+- **The handling:** half the stick to the right rolls it at 0.7 rad/s within 2 s about its nose
+  alone, and let go it stops within 1.5 s.
 
-The state log prints the momentum every few seconds (`momentum`). A tick: **0.05 ms** on average,
-p99 0.15 ms.
+The state log prints the momentum every few seconds (`momentum`). A tick: **0.061 ms** on average,
+p99 0.142 ms. Its frame on the GPU: 0.55 ms at 1600 × 900, the starfield and the planet 0.14 ms of
+it.
 
 ## `break`: a wall, a wrecking ball, a column (issue #142)
 

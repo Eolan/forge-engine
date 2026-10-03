@@ -44,7 +44,7 @@ use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CloudParams, Clouds,
     CullCamera, CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter,
     MAX_FLOATERS, MAX_WAKES, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform,
-    ProbeParams, Probes, Residency, SkyParams, SplashParams, SplashSource, StartView,
+    ProbeParams, Probes, Residency, SkyParams, SplashParams, SplashSource, Starfield, StartView,
     StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades,
     WaterCaustics, WaterFloater, WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore,
     WaterShoreTrain, WaterSplashes, WaterStone, WaterSurface, WaterSurfaceParams, WaterWake,
@@ -464,6 +464,8 @@ struct Gallery {
     /// The cloud layer (#145, `--clouds`), and last frame's view-projection it reprojects by.
     clouds: Option<Clouds>,
     clouds_previous: Mat4,
+    /// In `--lab space`, the sky of space in place of the ground's.
+    space: Option<SpaceSky>,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -540,6 +542,42 @@ struct Gallery {
     settled: bool,
 }
 
+/// `--lab space`'s sun: from the ship's right and a little behind it and above, so the chase
+/// camera sees its lit side and the planet's day side with its terminator far to the left.
+const SPACE_SUN: Vec3 = Vec3::new(0.75, 0.35, 0.5);
+/// The planet: its direction from the scene, low on the left ahead of the ship, and its angular
+/// radius (32°, the Earth's from about 5 600 km up), so its face shows its oceans, land and
+/// clouds rather than only the haze along its limb (from low orbit, 70°, it was a grey wall).
+const PLANET_DIR: Vec3 = Vec3::new(-0.55, -0.45, -0.7);
+const PLANET_ANGLE_DEG: f32 = 32.0;
+
+/// The sky of space (`--lab space`, the owner's ask of 2026-10-03): the asteroids' starfield and
+/// the sun's disc, and an Earth-like planet under its atmosphere seen from orbit (D-023's
+/// models), drawn where the geometry left the depth clear, in place of the ground's sky. Its shaded
+/// sides take space's constant fill (no sky's light, no probes), occluded by GTAO.
+struct SpaceSky {
+    starfield: Starfield,
+    /// The planet's air, and the camera from its centre (km).
+    planet: Atmosphere,
+    view: Vec3,
+}
+
+impl SpaceSky {
+    fn new(ctx: &Context, sun_illuminance: f32) -> Result<Self> {
+        let params = AtmosphereParams::earth();
+        let view = params.view_from_space(PLANET_DIR, PLANET_ANGLE_DEG.to_radians());
+        let mut planet = Atmosphere::new(&ctx.device, &ctx.shaders, params)?;
+        planet.planet_view = true;
+        let mut starfield = Starfield::faint(&ctx.device, &ctx.shaders, forge_render::HDR_FORMAT)?;
+        starfield.sun_illuminance = sun_illuminance;
+        Ok(Self {
+            starfield,
+            planet,
+            view,
+        })
+    }
+}
+
 /// Metres between the centres of neighbouring props in the gallery.
 const SPACING: f32 = 60.0;
 /// Props per row of the gallery.
@@ -579,8 +617,17 @@ impl Gallery {
         }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
-        // The cloud layer (#145), over the given share of the sky; none at 0.
-        let clouds = (args.clouds > 0.0)
+        // In space (the owner's ask of 2026-10-03): the sun unfiltered by any air, from the right
+        // and behind the ship; stars, its disc and a planet below for the sky.
+        let space = (args.lab == Some(lab::LabScene::Space))
+            .then(|| SpaceSky::new(ctx, renderer.sun_illuminance))
+            .transpose()?;
+        if space.is_some() {
+            renderer.sun_dir = SPACE_SUN.normalize();
+            renderer.sun_color = Vec3::ONE;
+        }
+        // The cloud layer (#145), over the given share of the sky; none at 0, nor in space.
+        let clouds = (args.clouds > 0.0 && space.is_none())
             .then(|| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
             .transpose()?;
         // Known before the scene, whose streamed pages it loads first (#121).
@@ -907,6 +954,7 @@ impl Gallery {
             sky,
             clouds,
             clouds_previous: Mat4::IDENTITY,
+            space,
             sky_light,
             gtao,
             ao_on,
@@ -1115,7 +1163,7 @@ impl Demo for Gallery {
             // with Shift, as a full pull from the keys stalls it), A and D the rudder; or
             // `--pilot T,E,A,R`. A command when they change; the camera follows it. The rocket
             // (#148) takes the same: the stick swings its engine, the ailerons are its roll jets.
-            if lab.has_plane() || lab.has_rocket() {
+            if lab.has_plane() || lab.has_rocket() || lab.has_ship() {
                 self.chase = true;
                 let keys = |a: KeyCode, b: KeyCode| {
                     f32::from(u8::from(input.is_down(a))) - f32::from(u8::from(input.is_down(b)))
@@ -1240,7 +1288,20 @@ impl Demo for Gallery {
             (8.0, 2.8, -0.18)
         };
         let rocket = self.lab.as_mut().is_some_and(lab::Lab::has_rocket);
+        let ship = self.lab.as_mut().is_some_and(lab::Lab::has_ship);
         if self.chase
+            && ship
+            && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
+        {
+            // The spaceship from behind and over it, along its nose and its up as it turns,
+            // looking a little ahead of it.
+            let forward = ride.rotation * Vec3::NEG_Z;
+            let up = ride.rotation * Vec3::Y;
+            self.camera.position = ride.position - forward * 24.0 + up * 6.0;
+            let to = ride.position + forward * 10.0 - self.camera.position;
+            self.camera.yaw = (-to.x).atan2(-to.z);
+            self.camera.pitch = to.y.atan2(Vec3::new(to.x, 0.0, to.z).length());
+        } else if self.chase
             && rocket
             && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
         {
@@ -1264,6 +1325,7 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
+        let in_space = self.space.is_some();
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
@@ -1491,7 +1553,7 @@ impl Demo for Gallery {
         // The probes' light in place of the open sky's (issue #53): after the sky's tables,
         // which light their rays' misses, before the resolve.
         let probes = match &mut self.probes {
-            Some(probes) if self.probes_on && self.sky_light => {
+            Some(probes) if self.probes_on && self.sky_light && !in_space => {
                 if !self.probes_live {
                     probes.reset();
                 }
@@ -1513,8 +1575,9 @@ impl Demo for Gallery {
                 None
             }
         };
-        // The sky's light, occluded by what the depth shows around each pixel (issue #48).
-        let occlusion = (self.sky_light && self.ao_on).then(|| {
+        // The sky's light (in space, its constant fill), occluded by what the depth shows around
+        // each pixel (issue #48).
+        let occlusion = ((self.sky_light || in_space) && self.ao_on).then(|| {
             self.gtao.draw(
                 &mut frame.graph,
                 targets.depth,
@@ -1534,7 +1597,7 @@ impl Demo for Gallery {
             extent,
             None,
             AmbientLight {
-                sky: self.sky_light.then_some(sky.light),
+                sky: (self.sky_light && !in_space).then_some(sky.light),
                 occlusion,
                 probes,
                 wet_ground,
@@ -1542,13 +1605,34 @@ impl Demo for Gallery {
                 clouds: cloud_shadow,
             },
         );
-        self.sky.compose(
-            &mut frame.graph,
-            &sky,
-            targets.depth,
-            taa_frame.color,
-            extent,
-        );
+        if let Some(space) = self.space.as_mut() {
+            // Space's sky where nothing was drawn: the stars, the sun's disc, the planet and its
+            // air seen from orbit; no haze over the ship.
+            let planet = space.planet.frame(
+                &mut frame.graph,
+                frame.slot,
+                space.view,
+                self.renderer.sun_dir,
+            );
+            space.starfield.draw(
+                &mut frame.graph,
+                taa_frame.color,
+                targets.depth,
+                extent,
+                sky_view_proj,
+                self.renderer.sun_dir,
+                exposure,
+                Some(planet),
+            );
+        } else {
+            self.sky.compose(
+                &mut frame.graph,
+                &sky,
+                targets.depth,
+                taa_frame.color,
+                extent,
+            );
+        }
         // The splashes' reactive mask for TAA (#107), when spray is alive.
         let mut reactive = None;
         if let (Some((cascades, surface, _)), Some(waves)) = (&self.water, &waves) {
@@ -1616,7 +1700,7 @@ impl Demo for Gallery {
                     taa_frame.color,
                     extent,
                     AmbientLight {
-                        sky: self.sky_light.then_some(sky.light),
+                        sky: (self.sky_light && !in_space).then_some(sky.light),
                         occlusion: None,
                         probes,
                         wet_ground: None,
@@ -1875,6 +1959,7 @@ fn model_layer(m: &forge_geom::model::ModelMaterial) -> RenderLayer {
         color_b: color,
         roughness: m.roughness.clamp(0.05, 1.0),
         specular: 0.05 + 0.35 * m.metallic,
+        emissive: m.emissive,
         ..RenderLayer::default()
     }
 }

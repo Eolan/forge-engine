@@ -138,6 +138,23 @@ Ground planet_ground(float3 n)
 [shader("fragment")]
 float4 frag_main(VertexOut input) : SV_Target
 {
+    return sky(input, 1.0);
+}
+
+// The same sky with its nebula and Milky-Way band at `FAINT_NEBULA` of their strength: the
+// physics lab's space (the owner's ask of 2026-10-03), whose chase camera looks along the band,
+// where at full strength it lay over the view like a cloudy sky.
+static const float FAINT_NEBULA = 0.25;
+
+[shader("fragment")]
+float4 frag_faint_main(VertexOut input) : SV_Target
+{
+    return sky(input, FAINT_NEBULA);
+}
+
+// The sky at a pixel, its nebula and band scaled by `nebula_strength`.
+float4 sky(VertexOut input, float nebula_strength)
+{
     float4 far = mul(push.inv_view_proj, float4(input.ndc, 0.0001, 1.0));
     float4 near = mul(push.inv_view_proj, float4(input.ndc, 1.0, 1.0));
     float3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
@@ -190,7 +207,8 @@ float4 frag_main(VertexOut input) : SV_Target
         float dust = saturate(n1 * 0.6 + n2 * 0.3 + n3 * 0.1 - 0.35) * 2.2;
         float3 nebula = band * dust * float3(0.25, 0.28, 0.42) * 0.35 + band * 0.02 * float3(0.6, 0.6, 0.8);
         float3 warm = value_noise(dir * 4.0 + 20.0, 17u) * band * float3(0.30, 0.16, 0.10) * 0.25;
-        color = stars(dir, 160.0, 0.010, 1.0, pixel_size) * 0.9 + stars(dir, 60.0, 0.006, 2.0, pixel_size) * 1.6 + nebula * 1.8 + warm * 1.5;
+        // The strength folded into each weight, so a full-strength sky sums as it always did.
+        color = stars(dir, 160.0, 0.010, 1.0, pixel_size) * 0.9 + stars(dir, 60.0, 0.006, 2.0, pixel_size) * 1.6 + nebula * (1.8 * nebula_strength) + warm * (1.5 * nebula_strength);
 
         // The sun: a glow (authored, like the stars) around a physical disc whose edge is
         // antialiased over one pixel. The angle comes from the cross product, which keeps its

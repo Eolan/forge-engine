@@ -33,7 +33,7 @@ winit = "0.30"
 raw-window-handle = "0.6"
 meshopt = "0.6"
 # glTF models (forge-geom, #138): the binary form with its buffer inside; no images, no URIs.
-gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_emissive_strength"] }
 
 # Concurrency
 crossbeam-deque = "0.8"

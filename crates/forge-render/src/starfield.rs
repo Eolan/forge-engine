@@ -82,17 +82,37 @@ impl Starfield {
         shaders: &ShaderCompiler,
         color_format: vk::Format,
     ) -> Result<Self> {
+        Self::with_entry(device, shaders, color_format, "frag_main")
+    }
+
+    /// The same sky with its nebula and Milky-Way band at a quarter of their strength
+    /// (`FAINT_NEBULA` in `starfield.slang`): for a view that looks along the band, where the full
+    /// one lies over everything (the physics lab's space).
+    pub fn faint(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        color_format: vk::Format,
+    ) -> Result<Self> {
+        Self::with_entry(device, shaders, color_format, "frag_faint_main")
+    }
+
+    fn with_entry(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        color_format: vk::Format,
+        entry: &'static str,
+    ) -> Result<Self> {
         let vertex = device.create_shader_module(
             &shaders.compile("starfield.slang", "vert_main", ShaderStage::Vertex)?,
             "starfield vs",
         )?;
         let fragment = device.create_shader_module(
-            &shaders.compile("starfield.slang", "frag_main", ShaderStage::Fragment)?,
+            &shaders.compile("starfield.slang", entry, ShaderStage::Fragment)?,
             "starfield fs",
         )?;
         let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
             vertex: (vertex, "vert_main"),
-            fragment: (fragment, "frag_main"),
+            fragment: (fragment, entry),
             color_formats: &[color_format],
             push_constant_bytes: std::mem::size_of::<Push>() as u32,
             alpha_blend: false,
