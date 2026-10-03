@@ -208,7 +208,10 @@ impl Dam {
 }
 
 /// The pool's samples for the water's drawing: the surface, the depth (0 where it is dry),
-/// the velocity; a dry sample stands at its bed.
+/// the velocity. A dry sample stands at its bed, so the water's edge thins onto the floor; one
+/// whose bed stands over the water beside it (on a block, the hut, a wall, the gate) stands at
+/// the highest wet neighbour's surface instead, so the water runs on level into what stands in
+/// it, hidden there, rather than climbing its side as a sheet (the owner's report, 2026-10-03).
 pub(super) fn samples(pool: &Pool) -> Vec<[f32; 4]> {
     let [nx, nz] = pool.size;
     let mut out = Vec::with_capacity(nx * nz);
@@ -217,7 +220,23 @@ pub(super) fn samples(pool: &Pool) -> Vec<[f32; 4]> {
             let i = pool.index(x, z);
             let d = pool.depth[i];
             let [u, w] = pool.velocity_at(x, z);
-            out.push([pool.surface(i), if d < DRY { 0.0 } else { d }, u, w]);
+            let mut height = pool.surface(i);
+            if d < DRY {
+                let mut beside = None::<f32>;
+                for bz in z.saturating_sub(1)..=(z + 1).min(nz - 1) {
+                    for bx in x.saturating_sub(1)..=(x + 1).min(nx - 1) {
+                        let j = pool.index(bx, bz);
+                        if pool.depth[j] >= DRY {
+                            let s = pool.surface(j);
+                            beside = Some(beside.map_or(s, |b| b.max(s)));
+                        }
+                    }
+                }
+                if let Some(b) = beside {
+                    height = height.min(b);
+                }
+            }
+            out.push([height, if d < DRY { 0.0 } else { d }, u, w]);
         }
     }
     out

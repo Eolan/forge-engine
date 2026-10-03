@@ -483,7 +483,11 @@ the sea's (#138) with the pool's surface and its flow in place of the waves (fre
 The water is drawn by the island's water pass as fresh water, a pool (#144): each frame the
 lab hands the renderer its columns' surface, depth and velocity (`WaterSurface::set_pool`, 295
 KB), two triangles between each four samples at the surface, faded in over the last 3 cm of
-depth so its edge thins to nothing; the rivers' shading (`fresh_water`) gives it the scene seen
+depth so its edge thins to nothing. A dry sample stands at its bed, so the front thins onto the
+floor. Where its bed is the top of a block, the hut, a wall or the gate, it stands instead at
+the water beside it, so the water runs on level into the obstacle, hidden there. Before
+2026-10-03 the water climbed the obstacle's side in one cell, a grey sheet over the hut's lower
+half (the owner's report). The rivers' shading (`fresh_water`) gives it the scene seen
 through it, the sky and sun on it, its ripples carried on its flow and white water past 2 m/s.
 The scene draws no sea (`WaterSurface::set_sea`).
 
