@@ -2,8 +2,8 @@
 //! that breaks, and a wrecking ball on a chain from a gantry. Every brick is a body, held to the
 //! bricks beside it, under it and over it, and the bottom course to the floor, by a fixed joint
 //! (`World::join_fixed`); after each step the joints that carried more than the mortar holds are
-//! broken. Jolt saves whether each joint holds with the world, so a broken wall restores, replays
-//! and goes through `--net` like the rest. R lets the ball go.
+//! broken (`bonds`, shared with the bridge). Jolt saves whether each joint holds with the world, so
+//! a broken wall restores, replays and goes through `--net` like the rest. R lets the ball go.
 
 use std::sync::{Arc, OnceLock};
 
@@ -11,8 +11,10 @@ use anyhow::Result;
 use forge_geom::city::{Block, Imported, Lathe, PropKind, PropSpec};
 use forge_geom::fracture::{Polyhedron, hull_points, voronoi};
 use forge_geom::procedural::TriMesh;
-use forge_physics::{BodyDesc, BodyId, JointId, JointLoad, Shape, Transform, Velocity, World};
+use forge_physics::{BodyDesc, BodyId, JointId, Shape, Transform, Velocity, World};
 use glam::{DVec3, Mat4, Quat, Vec3};
+
+use super::bonds::{Bonds, Limits};
 
 /// A brick's half sizes (21.5 × 6.5 × 10.25 cm), its density, kg/m³, and the wall: courses of
 /// stretchers in running bond, the even ones this many bricks long and the odd ones one fewer,
@@ -21,13 +23,14 @@ pub(super) const BRICK_HALF: [f32; 3] = [0.1075, 0.0325, 0.051_25];
 const BRICK_DENSITY: f32 = 1800.0;
 const COURSES: u32 = 24;
 const BRICKS: u32 = 14;
-/// What the mortar holds before it breaks: a force, N, and a torque, N·m.
-const MORTAR_FORCE: f32 = 2500.0;
-const MORTAR_TORQUE: f32 = 150.0;
-/// How far the mortar gives before it breaks: its bricks moved apart by `STRETCH` metres, or
-/// turned by about 1.5° (the sine of half the angle).
-const STRETCH: f64 = 0.003;
-const TWIST: f32 = 0.013;
+/// What the mortar holds before it breaks: a force of 2 500 N and a torque of 150 N·m; and how far
+/// it gives: its bricks moved apart by 3 mm, or turned by about 1.5° (the sine of half the angle).
+const MORTAR: Limits = Limits {
+    force: 2500.0,
+    torque: 150.0,
+    stretch: 0.003,
+    twist: 0.013,
+};
 /// The solver's velocity and position iterations over the wall: enough for 24 courses of
 /// joints to stand rigid (the world's 10 and 2 let it sag and lean).
 const MORTAR_STEPS: (u32, u32) = (30, 10);
@@ -135,23 +138,12 @@ pub(super) struct Site {
     pub wall: Wall,
 }
 
-/// A joint of the mortar: the bricks it holds (indices into the wall's, `None` for the floor)
-/// and where the second was laid from the first.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Bond {
-    joint: JointId,
-    a: Option<u32>,
-    b: u32,
-    offset: DVec3,
-}
-
-/// The wall's mortar, what holds the ball back until it is let go, and the column with its
-/// pieces (each with its centre in the column's frame).
+/// The wall's mortar (between its bricks, and the bottom course to the floor), what holds the
+/// ball back until it is let go, and the column with its pieces (each with its centre in the
+/// column's frame).
 #[derive(Clone, Debug)]
 pub(super) struct Wall {
-    pub mortar: Vec<JointId>,
-    bonds: Vec<Bond>,
-    bricks: Vec<BodyId>,
+    pub mortar: Bonds,
     pub hold: JointId,
     pub ball: BodyId,
     pub column: BodyId,
@@ -206,28 +198,14 @@ pub(super) fn build(world: &mut World, post: usize, beam: usize) -> Result<Site>
     // The mortar: each brick to the next along its course, the bottom course to the floor, and
     // each brick to the two it sits on (an odd course's brick j on bricks j and j + 1 of the
     // even course under it; an even course's brick i on bricks i − 1 and i of the odd one).
-    let mut bonds = Vec::new();
-    let mut bond = |world: &mut World, a: Option<u32>, b: u32| {
-        let joint = world.join_fixed(
-            a.map(|a| bricks[a as usize]),
-            bricks[b as usize],
-            MORTAR_STEPS,
-        );
-        let offset = laid[b as usize] - a.map_or(DVec3::ZERO, |a| laid[a as usize]);
-        bonds.push(Bond {
-            joint,
-            a,
-            b,
-            offset,
-        });
-    };
+    let mut mortar = Bonds::new(bricks.clone(), laid, MORTAR);
     for (c, course) in courses.iter().enumerate() {
         for pair in course.windows(2) {
-            bond(world, Some(pair[0]), pair[1]);
+            mortar.join(world, Some(pair[0]), pair[1], MORTAR_STEPS);
         }
         if c == 0 {
             for &brick in course {
-                bond(world, None, brick);
+                mortar.join(world, None, brick, MORTAR_STEPS);
             }
             continue;
         }
@@ -239,11 +217,10 @@ pub(super) fn build(world: &mut World, post: usize, beam: usize) -> Result<Site>
                 [i.checked_sub(1), (i < under.len()).then_some(i)]
             };
             for j in on.into_iter().flatten() {
-                bond(world, Some(under[j]), brick);
+                mortar.join(world, Some(under[j]), brick, MORTAR_STEPS);
             }
         }
     }
-    let mortar = bonds.iter().map(|b| b.joint).collect();
     // The ball, held back by 60° towards the front (a 3, 4, 5 triangle's would need a sine:
     // cos 60° and sin 60° are ½ and √3 ⁄ 2), on its chain, and held there until let go.
     let back = DVec3::new(0.0, -0.5, 0.75_f64.sqrt()) * f64::from(CHAIN);
@@ -275,12 +252,10 @@ pub(super) fn build(world: &mut World, post: usize, beam: usize) -> Result<Site>
     }
     Ok(Site {
         statics,
-        bricks: bricks.clone(),
+        bricks,
         ball,
         wall: Wall {
             mortar,
-            bonds,
-            bricks,
             hold,
             ball,
             column,
@@ -290,44 +265,10 @@ pub(super) fn build(world: &mut World, post: usize, beam: usize) -> Result<Site>
 }
 
 impl Wall {
-    /// After a step of `dt`: breaks the mortar that carried more than it holds, or that its
-    /// bricks pulled or turned out of where they were laid by more than it gives (a solver's
-    /// joints yield a little under a blow and pass on less of it than rigid mortar would), in
-    /// the joints' order (the same on every machine). How many broke.
+    /// After a step of `dt`: breaks the mortar that carried more than it holds or gave more
+    /// than it gives ([`Bonds::crack`]). How many joints broke.
     pub(super) fn crack(&self, world: &mut World, dt: f32) -> usize {
-        let mut holding = Vec::new();
-        world.holding(&self.mortar, &mut holding);
-        let mut loads: Vec<JointLoad> = Vec::new();
-        world.joint_loads(&self.mortar, &mut loads);
-        let mut at = Vec::new();
-        world.transforms(&self.bricks, &mut at);
-        let (force, torque) = (MORTAR_FORCE * dt, MORTAR_TORQUE * dt);
-        let strained = |bond: &Bond| {
-            let b = at[bond.b as usize];
-            let (offset, turn) = match bond.a {
-                Some(a) => {
-                    let a = at[a as usize];
-                    let back = a.rotation.inverse();
-                    (
-                        back.as_dquat() * (b.position - a.position),
-                        back * b.rotation,
-                    )
-                }
-                None => (b.position, b.rotation),
-            };
-            offset.distance(bond.offset) > STRETCH || turn.xyz().length() > TWIST
-        };
-        let broken: Vec<JointId> = self
-            .bonds
-            .iter()
-            .zip(holding.iter().zip(&loads))
-            .filter(|(bond, (h, l))| {
-                **h && (l.position > force || l.rotation > torque || strained(bond))
-            })
-            .map(|(bond, _)| bond.joint)
-            .collect();
-        world.set_holding(&broken, false);
-        broken.len()
+        self.mortar.crack(world, dt)
     }
 
     /// The column's velocity, for [`Wall::shatter`] after the step.
@@ -400,9 +341,7 @@ impl Wall {
 
     /// The mortar's joints still holding.
     pub(super) fn holding(&self, world: &World) -> usize {
-        let mut holding = Vec::new();
-        world.holding(&self.mortar, &mut holding);
-        holding.iter().filter(|&&h| h).count()
+        self.mortar.holding(world)
     }
 
     /// The chain for the movers, after the bodies: from the pivot to the ball (for the eye

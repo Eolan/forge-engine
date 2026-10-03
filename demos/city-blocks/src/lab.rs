@@ -33,6 +33,8 @@ use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 
 use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
+mod bonds;
+mod bridge;
 mod creatures;
 mod dominoes;
 mod drive;
@@ -66,6 +68,8 @@ pub(crate) enum LabScene {
     Flood,
     /// A domino run on a spiral (#146).
     Dominoes,
+    /// A bridge collapsing under a convoy of cars (#147).
+    Bridge,
 }
 
 /// The floor's half side, metres.
@@ -123,6 +127,8 @@ const POLE: usize = CREATURE + 2 * creatures::PARTS;
 const FLOOD: usize = POLE + 1;
 /// The dominoes' prop, after the flood's five.
 const DOMINO: usize = FLOOD + 5;
+/// The bridge's bank and deck panel, after the domino.
+const BRIDGE: usize = DOMINO + 1;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -162,6 +168,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(creatures::props());
     props.extend(flood::props());
     props.extend(dominoes::props());
+    props.extend(bridge::props());
     props
 }
 
@@ -428,8 +435,9 @@ pub(crate) struct LabWorld {
     water: Option<forge_physics::shallow::Pool>,
     dam: Option<flood::Dam>,
     water_start: Option<forge_physics::shallow::Pool>,
-    /// The domino run.
+    /// The domino run, and the bridge with its convoy.
     run: Option<dominoes::Run>,
+    convoy: Option<bridge::Convoy>,
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -464,7 +472,8 @@ impl LabWorld {
             | LabScene::Break
             | LabScene::Creatures
             | LabScene::Flood
-            | LabScene::Dominoes => 0.0,
+            | LabScene::Dominoes
+            | LabScene::Bridge => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -545,6 +554,7 @@ impl LabWorld {
         let mut water = None;
         let mut dam = None;
         let mut run = None;
+        let mut convoy = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -858,6 +868,14 @@ impl LabWorld {
                 group(DOMINO, spiral.dominoes.clone(), &mut bodies);
                 run = Some(spiral);
             }
+            LabScene::Bridge => {
+                let site = bridge::build(&mut world, BRIDGE)?;
+                statics.extend(site.statics);
+                group(BRIDGE + 1, site.panels, &mut bodies);
+                let cars = site.convoy.cars.iter().map(|c| c.0).collect();
+                group(CAR, cars, &mut bodies);
+                convoy = Some(site.convoy);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -909,6 +927,13 @@ impl LabWorld {
                 count: 4,
             });
         }
+        // The convoy's, car by car.
+        if let Some(convoy) = &convoy {
+            groups.push(Group {
+                prop: WHEEL,
+                count: 4 * convoy.cars.len() as u32,
+            });
+        }
         // The wrecking ball's chain after the bodies.
         if wall.is_some() {
             groups.push(Group {
@@ -951,6 +976,7 @@ impl LabWorld {
                 water,
                 dam,
                 run,
+                convoy,
                 limp: false,
                 pool,
             },
@@ -963,6 +989,9 @@ impl LabWorld {
         self.world.transforms(&self.bodies, out);
         // The car's wheels after the bodies.
         self.driver.wheels(&self.world, out);
+        if let Some(convoy) = &self.convoy {
+            convoy.wheels(&self.world, out);
+        }
         self.pilot.propeller(&self.world, self.tick, out);
         if let Some(wall) = &self.wall {
             wall.chain(&self.world, out);
@@ -1137,6 +1166,9 @@ impl Simulation for LabWorld {
                     if let Some(run) = &self.run {
                         run.push(&mut self.world);
                     }
+                    if let Some(convoy) = &self.convoy {
+                        convoy.release(&mut self.world);
+                    }
                 }
                 LabCommand::Limp { on } => self.limp = on,
             }
@@ -1172,6 +1204,9 @@ impl Simulation for LabWorld {
         self.player
             .tick(&mut self.world, self.platform, self.tick, TICK);
         self.driver.tick(&mut self.world);
+        if let Some(convoy) = &self.convoy {
+            convoy.tick(&mut self.world);
+        }
         self.pilot.tick(&mut self.world);
         let column = self.wall.as_ref().map(|w| w.column_velocity(&self.world));
         // The creatures' motors driven to their poses at this tick (or let go).
@@ -1198,6 +1233,10 @@ impl Simulation for LabWorld {
         if let (Some(wall), Some(before)) = (&self.wall, column) {
             wall.crack(&mut self.world, TICK);
             wall.shatter(&mut self.world, before, TICK);
+        }
+        // The deck's joints that carried more than they hold break.
+        if let Some(convoy) = &self.convoy {
+            convoy.deck.crack(&mut self.world, TICK);
         }
         self.tick += 1;
     }
@@ -1668,7 +1707,7 @@ impl Lab {
                     let shown = self.shown();
                     (
                         shown.wall.as_ref().map_or(String::from("none"), |w| {
-                            format!("{}/{}", w.holding(&shown.world), w.mortar.len())
+                            format!("{}/{}", w.holding(&shown.world), w.mortar.joints.len())
                         }),
                         shown.herd.as_ref().map_or(String::from("none"), |h| {
                             h.standing(&shown.world).to_string()
@@ -1677,6 +1716,19 @@ impl Lab {
                             format!("{}/{}", r.fallen(&shown.world), r.dominoes.len())
                         }),
                     )
+                };
+                // The bridge's deck: joints still holding, of all; cars across and down.
+                let deck = {
+                    let shown = self.shown();
+                    shown.convoy.as_ref().map_or(String::from("none"), |c| {
+                        format!(
+                            "{}/{}, {} across, {} down",
+                            c.deck.holding(&shown.world),
+                            c.deck.joints.len(),
+                            c.across(&shown.world),
+                            c.down(&shown.world)
+                        )
+                    })
                 };
                 tracing::info!(
                     tick = now,
@@ -1688,6 +1740,7 @@ impl Lab {
                     mortar,
                     stands,
                     fallen,
+                    deck,
                     "physics lab state"
                 );
             }
@@ -1854,7 +1907,7 @@ impl Lab {
     }
 
     /// Whether the scene holds something back for Space to let go: the wrecking ball, the
-    /// flood's gate, the dominoes all standing.
+    /// flood's gate, the dominoes all standing, the convoy.
     pub(crate) fn held(&mut self) -> bool {
         let shown = self.shown();
         shown.wall.as_ref().is_some_and(|w| w.held(&shown.world))
@@ -1867,6 +1920,7 @@ impl Lab {
                 .run
                 .as_ref()
                 .is_some_and(|run| run.fallen(&shown.world) == 0)
+            || shown.convoy.as_ref().is_some_and(|c| c.held(&shown.world))
     }
 
     /// The flood's water as the shown world holds it, for its drawing.
@@ -2182,7 +2236,7 @@ mod tests {
     fn the_wall_stands_until_the_ball_breaks_it_and_replays() {
         let (mut first, _) = LabWorld::new(LabScene::Break, test_pool()).unwrap();
         let wall = first.wall.clone().unwrap();
-        let all = wall.mortar.len();
+        let all = wall.mortar.joints.len();
         let mut built = Vec::new();
         first.world.transforms(&first.bodies, &mut built);
         // Two seconds untouched: no mortar breaks, the wall settles by a centimetre at most
@@ -2350,6 +2404,38 @@ mod tests {
         let fallen = run.fallen(&first.world);
         assert_eq!(fallen, run.dominoes.len(), "{fallen} down");
         let (mut second, _) = LabWorld::new(LabScene::Dominoes, test_pool()).unwrap();
+        for _ in 0..60 {
+            second.tick(&[]);
+        }
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_bridge_stands_and_falls_under_the_convoy_and_replays() {
+        let (mut first, _) = LabWorld::new(LabScene::Bridge, test_pool()).unwrap();
+        let convoy = first.convoy.clone().unwrap();
+        let all = convoy.deck.joints.len();
+        // A second untouched: the deck stands and the cars wait.
+        for _ in 0..60 {
+            first.tick(&[]);
+        }
+        assert_eq!(convoy.deck.holding(&first.world), all);
+        assert!(convoy.held(&first.world));
+        // Let go: the deck carries the first car, then gives way with the second on it too (about
+        // 4.7 s on at the time of writing); most of its joints break, the two cars on it fall
+        // into the gap, and the two behind stop on the near bank.
+        let commands = vec![Stamped {
+            tick: 60,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Release,
+        }];
+        let recording = Recording::record(&mut first, commands, 600, 60);
+        let holding = convoy.deck.holding(&first.world);
+        assert!(holding < all / 2, "{holding} of {all} joints holding");
+        assert_eq!(convoy.down(&first.world), 2);
+        assert_eq!(convoy.across(&first.world), 0);
+        let (mut second, _) = LabWorld::new(LabScene::Bridge, test_pool()).unwrap();
         for _ in 0..60 {
             second.tick(&[]);
         }

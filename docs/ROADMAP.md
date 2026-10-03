@@ -443,7 +443,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a
 storm losing its cargo, a dam bursting down an island valley, a rockfall from the tors, a bridge
-collapsing under a convoy, a networked tug-of-war on one crate at 100 ms.
+collapsing under a convoy (✅ #147, `--lab bridge`: a timber deck of breakable joints, four cars on
+an autopilot; it holds the first and falls under the second), a networked tug-of-war on one crate
+at 100 ms.
 
 The items below are the phase's original outline; the plan above orders them.
 

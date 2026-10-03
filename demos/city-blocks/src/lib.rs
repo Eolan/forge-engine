@@ -292,7 +292,8 @@ struct Args {
     /// With `--lab creatures`, let the creatures' motors go at this frame, as ↓ does (#143).
     #[arg(long)]
     limp_at: Option<u64>,
-    /// With `--lab break`, let the wrecking ball go at this frame, as Space does (#142).
+    /// At this frame, as Space does: the wrecking ball let go (`--lab break`, #142), the flood's
+    /// gate lifted (#144), the first domino tipped (#146), the convoy sent across (#147).
     #[arg(long)]
     release: Option<u64>,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
@@ -2229,6 +2230,8 @@ impl CityMaterials {
             ("lab-dam-block", concrete_grey),
             ("lab-hut", brick_red),
             ("lab-domino", crate_wood),
+            ("lab-bank", sandstone),
+            ("lab-bridge-panel", crate_wood),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -4058,6 +4061,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.15,
             speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Bridge) {
+        // Beside the gap, a little over the deck, looking across the bridge from its side: the
+        // cars come from the left.
+        FlyCamera {
+            position: Vec3::new(20.0, 7.0, 2.0),
+            yaw: 1.5,
+            pitch: -0.15,
+            speed: 10.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Dominoes) {

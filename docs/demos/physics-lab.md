@@ -27,6 +27,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats | ✅ #144 |
 | `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
+| `bridge` | an advanced test: a timber bridge that stands empty and collapses under a convoy of cars, replayed | ✅ #147 |
 | skinned creatures, the GPU's water, particles | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
@@ -444,6 +445,46 @@ client. That the world's hash does not depend on the workers, on a save and rest
 platform is the pile's test (#136, Windows and Linux in CI). A tick: **0.21 ms** on average, p99
 0.38 ms (332 bodies, those falling and fallen awake until the run is over).
 
+## `bridge`: a convoy on a bridge that gives way (issue #147)
+
+```
+cargo run --release -p physics-lab -- --lab bridge
+```
+
+The second advanced test ("a bridge collapsing under a convoy"), where the car (#140) meets the
+joints that break (#142). The bridge:
+- **The deck:** 16 timber panels (4.4 m × 1 m × 12 cm, 600 kg/m³) spanning a 16 m gap between
+  two banks 4 m high.
+- **Its joints:** each panel is joined to the next, and the end ones to the banks, by fixed
+  joints that break as the wall's mortar does.
+  - That rule is now shared code (`lab/bonds.rs`): a joint breaks on its load (here 120 kN or
+    78 kN·m) or its strain (12 mm or 1.3°), and Jolt saves whether each holds.
+  - The panels settle under their own weight for five seconds as the scene is built: laid without
+    their load, the joints swing past their load at rest on the way (93 kN·m against 55).
+- **The convoy:** four of the track's cars wait on the near bank, held where they stand.
+  - **Space** (or `--release N`) lets them go.
+  - An autopilot keeps each on the middle line (against its offset and heading) at 4 m/s.
+  - It stops each past a line on the far bank, or at once behind a car that went down.
+
+The empty deck carries 55 kN·m at its worst joint. It holds the first car (up to 71 kN·m) and gives
+way about 4.7 s after the cars set off, when the second is on it too:
+1. the far bank's joint goes first;
+2. the deck swings down from the near bank with both cars on it;
+3. then the rest of its joints break as it lands.
+
+The two cars behind stop on the near bank, the third 2 m short of the edge.
+
+![The first car on the deck; the second on it too, the deck sagging; falling; in the gap, the two behind stopped](images/physics-lab-bridge.png)
+
+The lab's test checks the deck standing for a second untouched with the cars held. Then it lets
+them go and checks, ten seconds on:
+- most of the joints broken (16 of 17 at the time of writing);
+- two cars down and none across;
+- the run replayed from its recording to the same digests.
+
+The wall's and the track's images did not change with the shared code (0 px). A tick: **0.11 ms**
+on average, p99 0.23 ms, max 0.34 ms (52 bodies, 4 vehicles).
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -460,4 +501,6 @@ twin; from the break scene (#142) `lab-break85` (the ball through the wall) with
 `lab-creatures120` (posed) with its twin, `lab-creatures-throw240` (struck by balls) and
 `lab-creatures-limp240` (let go); from the flood (#144) `lab-flood150` (the water running
 down the basin) with its twin and `lab-flood300` (spread round the blocks); and from the
-dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3000` (all down).
+dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3000` (all down);
+and from the bridge (#147) `lab-bridge360` (the deck falling with two cars) with its twin and
+`lab-bridge600` (in the gap).

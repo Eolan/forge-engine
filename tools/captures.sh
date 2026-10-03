@@ -265,6 +265,11 @@ for path in $paths; do
     capture "$path-lab-dominoes900" 900 "$lab" --lab dominoes --fixed-step --release 31 "${flag[@]}"
     capture "$path-lab-dominoes900-noocc" 900 "$lab" --lab dominoes --fixed-step --release 31 --no-occlusion "${flag[@]}"
     capture "$path-lab-dominoes3000" 3000 "$lab" --lab dominoes --fixed-step --release 31 "${flag[@]}"
+    # The bridge (#147), the convoy let go at tick 31: the deck falling with two cars at tick
+    # 360 and its A/B twin, and in the gap at tick 600.
+    capture "$path-lab-bridge360" 360 "$lab" --lab bridge --fixed-step --release 31 "${flag[@]}"
+    capture "$path-lab-bridge360-noocc" 360 "$lab" --lab bridge --fixed-step --release 31 --no-occlusion "${flag[@]}"
+    capture "$path-lab-bridge600" 600 "$lab" --lab bridge --fixed-step --release 31 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

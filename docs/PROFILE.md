@@ -1026,6 +1026,9 @@ of samples go up with the frame's water block.
 `--lab dominoes` (#146), the first pushed at tick 31, 3 000 ticks: **0.21 ms a tick** (p99 0.38,
 max 0.79), 332 bodies, those falling and fallen awake until the run is over.
 
+`--lab bridge` (#147), the convoy let go at tick 31, 900 ticks: **0.11 ms a tick** (p99 0.23,
+max 0.34), 52 bodies and 4 vehicles, the deck's 17 joints checked after each step.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

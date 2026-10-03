@@ -144,7 +144,19 @@ pub(super) fn build(
             })?);
         }
     }
-    // The car, facing −z down the track, its chassis the model's shell.
+    // The car, facing −z down the track.
+    let (chassis, vehicle) = car(world, DVec3::new(0.0, 0.15, 0.0))?;
+    Ok(Track {
+        statics,
+        chassis,
+        vehicle,
+        barrels,
+        crates,
+    })
+}
+
+/// Adds a car at `at`, facing −z, its chassis the model's shell: its body and its vehicle.
+pub(super) fn car(world: &mut World, at: DVec3) -> Result<(BodyId, VehicleId)> {
     let (model, _) = car_model();
     let shell = model.mesh("car-shell").context("the model's shell")?;
     let points: Vec<Vec3> = shell
@@ -160,16 +172,10 @@ pub(super) fn build(
         friction: 0.4,
         // Kept awake: a parked car sleeps, and a sleeping car takes no input.
         allow_sleep: false,
-        ..BodyDesc::dynamic(&body_shape, DVec3::new(0.0, 0.15, 0.0))
+        ..BodyDesc::dynamic(&body_shape, at)
     })?;
     let vehicle = world.add_vehicle(chassis, &VEHICLE)?;
-    Ok(Track {
-        statics,
-        chassis,
-        vehicle,
-        barrels,
-        crates,
-    })
+    Ok((chassis, vehicle))
 }
 
 /// The driver's controls as the world holds them: throttle (−1 to 1), steering (−1 left to
