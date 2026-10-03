@@ -17,6 +17,7 @@
 "reports/**" = []
 "**/*.md" = []
 "tools/credits/**" = []
+"tools/sharpness/**" = []
 
 # The island: its generator, its demo, its stones and its water. The city-blocks code that
 # serves both the city and its island selects both.

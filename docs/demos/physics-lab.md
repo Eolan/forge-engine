@@ -29,6 +29,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats, which pushes it aside | ✅ #144, #151 |
 | `tank`, `tank-bench`, `tank-hole` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate | ✅ #156 |
+| `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
 | `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
 | `bridge` | an advanced test: a timber bridge that stands empty and collapses under a convoy of cars, replayed | ✅ #147 |
 | `tug --net 100` | an advanced test: a tug-of-war on one sled, this player against the bot over a lossy link | ✅ #149 |
@@ -727,6 +728,91 @@ That makes 3.0 ms of simulation: more than D-044's 2.5 ms estimate for 190 000 p
   - a multigrid pressure in place of the sweeps (now the most of it);
   - a workgroup's sums gathered in groupshared memory before the atomics.
 
+## `room`: a plain room to measure sharpness by (issue #159)
+
+```
+cargo run --release -p physics-lab -- --lab room
+cargo run --release -p sharpness -- capture.png --edge 712,600,48,96 --edge 764,434,24,36
+```
+
+The owner's report of 2026-10-03: "I feel like the image is always a bit blurry of fuzzy, never
+clear and neat as it should ... we can start with a very simple environment, simple geometry. in
+a room with a simple light source and find where it's getting blurry or fuzzy."
+
+**The scene.**
+- **The room:** 8 × 10 m, white matte walls on three sides, open to the sky above, and a floor of
+  black and white squares (12.5 cm, a test texture of their own).
+- **The light:** the sun alone, white, with no sky light (the bench's constant fill).
+- **The targets:** three black squares on the back wall, 8 m from the camera's start, and a
+  fourth on a white board 2.5 m away. Each is turned 5° off the pixel grid.
+  - They are flat colour, so their edges' softness is the pipeline's own: the raster, TAA,
+    bloom, the tone curve.
+  - The floor seen at a slant is the textures' filtering.
+
+**The measure:** `tools/sharpness`, the slanted-edge method (ISO 12233, after Burns 2000).
+- Each `--edge` is a rectangle round one edge. The tool fits the edge's line and bins every
+  pixel's distance from it at a quarter of a pixel, which gives the edge's profile.
+- From the profile it gives the 10–90 % rise in pixels and the MTF, the contrast left at each
+  spatial frequency in cycles per pixel.
+- An ideal pixel, the light averaged over its square, rises over 0.8 px and keeps half its
+  contrast at 0.60 cycles a pixel (MTF50).
+- `--rcas STOPS` sharpens the capture first as AMD's FidelityFX RCAS would, a preview of a
+  sharpening pass.
+- At 1600 × 900 from the start view, the four edges of the board's square are
+  `712,600,48,96`, `750,555,96,48`, `840,590,48,96` and `760,682,96,48`; the middle wall
+  square's are `764,434,24,36` and `780,414,36,24`.
+
+**Two options to measure with.**
+- `--pan SPEED` slides the camera sideways at that many metres per second. Started SPEED metres
+  to the left (`--view=-2,1.5,3,0,0` for 2 m/s), frame 60 lands on the still view.
+- `--dlaa` anti-aliases with NVIDIA's DLAA in place of TAA. It needs a build with
+  `--features dlss` (`CARGO_TARGET_DIR=target/dlss cargo build --release -p physics-lab --features dlss`
+  keeps the plain build's binaries apart).
+
+**What it found** (MTF50 in cycles a pixel, the board's left and right edges and the wall
+square's left; frame 60, TAA's history full):
+
+| | Still | Panning 0.5 m/s | Panning 2 m/s |
+|---|---|---|---|
+| An ideal pixel | 0.60 | 0.60 | 0.60 |
+| TAA (today's) | 0.54 | 0.30–0.38 | 0.30–0.33 |
+| No TAA | over 1 (a hard, aliased step) | over 1 | over 1 |
+| DLAA | 0.60–0.61 | 0.41–0.44 | 0.43–0.48 |
+
+- **A still image is sharp.** TAA's edges are within a tenth of an ideal pixel's. The edges along
+  the motion keep 0.56–0.59 in every pan.
+- **Moving, it is not.** The edges across the motion lose half their contrast at 0.25 cycles a
+  pixel and nearly all of it at 0.5. That is TAA's history, resampled each frame where the motion
+  is a fraction of a pixel and blended for about ten frames.
+  - At whole-pixel motion it stays sharp. At 0.7469 m/s the wall's squares move exactly 1 px a
+    frame: 0.551, against 0.544 still.
+  - With the jitter frozen it is just as soft (0.29–0.33). It follows the history's weight: at a
+    blend of 0.3 it is 0.37–0.39, at 0.6 it is 0.56–0.60, and at 1 the edges are sharp and
+    aliased.
+  - The history's filter hardly matters. A 16-tap Catmull-Rom and a Lanczos-2 give the same as
+    today's five taps; a Lanczos-3 (36 taps) gives 0.35–0.375.
+  - Clipping and the motion term of the blend are not the cause: without either it is a little
+    softer.
+- **DLAA** is an ideal pixel's sharpness still, and keeps about 40 % more than TAA in motion. It
+  costs 0.48 ms at 1600 × 900, against TAA's resolve at 0.055.
+- **A sharpening pass** (RCAS, previewed on the captures): at 1 stop it brings the still image's
+  contrast at 0.25 c/px from 0.85 to 0.99 without halos. Panning, at 0.5 stop, 0.62–0.67 becomes
+  0.83–0.87. The finest detail lost in motion stays lost.
+- **Bloom** at 4 % blurs nothing but lifts the black squares by a fifth (0.032 to 0.026 linear
+  without it): less contrast.
+- **The tone curve:** the black squares show as follows, in sRGB codes against a white wall at
+  0.63–0.69:
+  - AgX, the default: 0.20–0.23, a milky grey;
+  - ACES: 0.07–0.09;
+  - neutral: 0.07–0.09.
+
+  A sunlit white wall shows short of white under all three at EV 15. AgX's lifted blacks are
+  much of the "not clear" look in a still image.
+
+What to do about it is the owner's choice: D-045 (🟡).
+
+![The sharpness room from its start view; below, the board square's left edge enlarged four times: TAA still, TAA panning at 2 m/s, DLAA panning at 2 m/s, TAA panning with RCAS at half a stop](images/physics-lab-room.png)
+
 ## `dominoes`: a run that ends the same (issue #146)
 
 ```
@@ -865,4 +951,5 @@ right) with its twin and `lab-tug-net600` (over the line); and the spaceship (#1
 `lab-space90` (closing on the crates) and `lab-space150` (through them) with its twin;
 and the glass tank (#156), the gate lifted at tick 31, `lab-tank90` (the wave climbing the far
 wall) with its twin and `lab-tank-bench300` (the bench, the water settling), and `lab-tank-hole120`
-(the jet, the far wall white for a moment).
+(the jet, the far wall white for a moment); and the sharpness room (#159), `lab-room60` (still) and
+`lab-room-pan60` (slid sideways at 2 m/s into the same view).

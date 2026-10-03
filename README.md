@@ -41,6 +41,7 @@ demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster 
 demos/island          Phase 2's demo: a 16 km island from a seed, its sea, rivers and lakes, golden shots and a tour
 demos/physics-lab     Phase 3's first demo: test scenes of rigid bodies through Jolt (forge-physics), each with its numbers and its hash
 tools/imgdiff         pixel and perceptual (LDR- and HDR-FLIP) comparison of captures (golden images)
+tools/sharpness       how sharp a capture's edges are: the slanted-edge method's rise and MTF (#159)
 tools/contact-sheet   lays captures out on one image of thumbnails (optionally cropped and enlarged)
 tools/credits         the Rust crates in the build, their licences and authors (docs/credits-crates.md; CI checks it)
 tools/genesis         the terrain genesis pipeline over a 16 km island, with timings and PNG previews (docs/demos/island.md)
@@ -274,6 +275,23 @@ the largest error in 10-bit codes and HDR-ꟻLIP instead (issue #126): ꟻLIP of
 over a range of exposures. `--exr a.exr b.exr` writes that light, for NVIDIA's tool or an HDR
 image viewer. Which check applies where: [docs/PROCESS.md](docs/PROCESS.md), "The perceptual
 check".
+
+### `sharpness` — how sharp an image is
+
+```
+cargo run --release -p sharpness -- capture.png --edge 712,600,48,96 --edge 764,434,24,36
+```
+
+Each `--edge x,y,w,h` is a rectangle round one straight edge a few degrees off the pixel grid.
+The tool measures it by the slanted-edge method (ISO 12233), giving:
+- its 10–90 % rise in pixels;
+- its MTF50, the frequency in cycles a pixel where half the contrast is left;
+- its MTF at 0.25 and 0.5 cycles a pixel.
+
+An ideal pixel rises over 0.8 px and has an MTF50 of 0.60. `--rcas STOPS` previews a
+sharpening pass (AMD's RCAS) on the capture first, and `--write` saves what it measured. The
+physics lab's sharpness room (`--lab room`) is built for it: see
+[docs/demos/physics-lab.md](docs/demos/physics-lab.md) (issue #159).
 
 ### The verification batch
 

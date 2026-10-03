@@ -10,6 +10,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# DLAA through NVIDIA Streamline for `--dlaa` (Windows, the SDK in `streamline-sdk/`, an RTX GPU).
+dlss = ["forge-app/dlss"]
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }

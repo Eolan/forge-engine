@@ -709,6 +709,27 @@ pub fn checker(size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// The sharpness room's floor (#159): eight squares a repeat each way (12.5 cm at a metre a
+/// repeat), near black and near white, each square a whole number of texels at a power-of-two
+/// `size`, so the squares' edges fall between texels; flat.
+pub fn black_and_white(size: u32) -> [TextureData; 2] {
+    const SQUARES: f32 = 8.0;
+    let colours = grid(size, |u, v| {
+        let parity = |t: f32| (t * SQUARES).floor() as i32 & 1;
+        let grey = if parity(u) ^ parity(v) == 1 {
+            0.8
+        } else {
+            0.03
+        };
+        [grey, grey, grey]
+    });
+    let heights = vec![0.0; (size * size) as usize];
+    [
+        albedo_texture("black and white albedo", size, colours),
+        normal_texture("black and white normal", size, &heights, 1.0),
+    ]
+}
+
 /// A test texture for the mip check (`--mip-check`): level `k` is filled with `k / 16`, so a
 /// trilinear sample returns the level of detail the sampler chose, over 16.
 pub fn mip_ramp(size: u32) -> TextureData {

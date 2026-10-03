@@ -187,7 +187,7 @@ main() {
     lab-drive300 lab-drive-turn600 lab-fly1200 lab-break85 lab-break300 lab-creatures120 \
     lab-creatures-throw240 lab-creatures-limp240 lab-flood150 lab-flood300 lab-dominoes900 \
     lab-bridge360 lab-bridge600 lab-rocket120 lab-rocket600 lab-tug-net200 lab-tug-net600 lab-space90 lab-space150 \
-    lab-tank90 lab-tank-bench300 lab-tank-hole120; do
+    lab-tank90 lab-tank-bench300 lab-tank-hole120 lab-room60 lab-room-pan60; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   local others=""

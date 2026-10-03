@@ -451,12 +451,22 @@ struct Args {
     /// time with `--fixed-step`): a steady approach for measuring LOD pops (#131).
     #[arg(long, conflicts_with_all = ["fly", "orbit", "tour"])]
     dolly: Option<f32>,
+    /// Slide sideways from the start view at this many metres per second, to the right (a frame at a
+    /// time with `--fixed-step`): every edge moves across the screen and TAA resamples its history
+    /// each frame, for measuring sharpness in motion (#159).
+    #[arg(long, conflicts_with_all = ["fly", "orbit", "tour", "dolly"])]
+    pan: Option<f32>,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
     /// Draw without TAA (no jitter, no history): the raw frame, aliased.
     #[arg(long)]
     no_taa: bool,
+    /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution) in place of TAA, to
+    /// compare the two (#159): a build with `--features dlss`, the Streamline SDK in
+    /// `streamline-sdk/` and an RTX GPU, else TAA with a warning. No bloom on that path.
+    #[arg(long, conflicts_with = "no_taa")]
+    dlaa: bool,
     /// Window width in pixels (the render size).
     #[arg(long, default_value_t = 1600)]
     width: u32,
@@ -506,6 +516,8 @@ struct Gallery {
     liquid_reset: bool,
     /// What the liquid's drawing shows: as it looks (1), its speed view (2), its landing view (3).
     liquid_mode: forge_render::LiquidMode,
+    /// `--dlaa`: DLSS at the output's size and the display pass it hands its HDR image to (#159).
+    dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -699,6 +711,12 @@ impl Gallery {
             renderer.sun_dir = BENCH_SUN.normalize();
             renderer.sun_color = Vec3::ONE;
         }
+        // The sharpness room (#159): the sun alone, white, from the front left.
+        let room = args.lab == Some(lab::LabScene::Room);
+        if room {
+            renderer.sun_dir = lab::room::SUN.normalize();
+            renderer.sun_color = Vec3::ONE;
+        }
         let liquid = matches!(
             args.lab,
             Some(lab::LabScene::Tank | lab::LabScene::TankBench | lab::LabScene::TankHole)
@@ -729,10 +747,31 @@ impl Gallery {
         })
         .transpose()?;
         // The cloud layer (#145), over the given share of the sky; none at 0, nor in space, nor on the
-        // tank's bench.
-        let clouds = (args.clouds > 0.0 && space.is_none() && !bench)
+        // tank's bench, nor in the sharpness room.
+        let clouds = (args.clouds > 0.0 && space.is_none() && !bench && !room)
             .then(|| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
             .transpose()?;
+        // DLAA in place of TAA (#159), when asked for and the device has DLSS.
+        let dlaa = if args.dlaa {
+            let dlss = forge_render::DlssUpscaler::new(
+                &ctx.device,
+                forge_render::DlssMode::Dlaa,
+                ctx.extent(),
+            )?;
+            if dlss.is_none() {
+                tracing::warn!(
+                    "DLAA is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): TAA instead"
+                );
+            }
+            dlss.map(|dlss| -> Result<_> {
+                let display =
+                    forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
+                Ok((dlss, display))
+            })
+            .transpose()?
+        } else {
+            None
+        };
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args)?;
         let tour = if args.tour {
@@ -1063,6 +1102,7 @@ impl Gallery {
             liquid_next_log: 0,
             liquid_reset: false,
             liquid_mode,
+            dlaa,
             sky_light,
             gtao,
             ao_on,
@@ -1148,6 +1188,9 @@ impl Demo for Gallery {
         self.renderer.resize(ctx.extent())?;
         self.taa.resize(ctx.extent())?;
         self.taa.reset_history();
+        if let Some((dlss, _)) = &mut self.dlaa {
+            dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
+        }
         Ok(())
     }
 
@@ -1370,6 +1413,10 @@ impl Demo for Gallery {
         } else if let Some(speed) = self.args.dolly {
             let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
             self.camera.position += self.camera.forward() * speed * step;
+        } else if let Some(speed) = self.args.pan {
+            let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            let right = self.camera.forward().cross(Vec3::Y).normalize_or_zero();
+            self.camera.position += right * speed * step;
         } else if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.
             let angle = self.frame as f32 * 0.004;
@@ -1439,9 +1486,10 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
-        // In space and on the tank's bench, no sky: its light a constant fill.
+        // In space, on the tank's bench and in the sharpness room (#159), no sky light: a constant fill.
         let bench = self.args.lab == Some(lab::LabScene::TankBench);
-        let in_space = self.space.is_some() || bench;
+        let room = self.args.lab == Some(lab::LabScene::Room);
+        let in_space = self.space.is_some() || bench || room;
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
@@ -1942,6 +1990,31 @@ impl Demo for Gallery {
                 taa_frame.previous_from_current,
                 taa_frame.jitter,
             );
+        }
+        if let Some((dlss, display)) = self.dlaa.as_mut() {
+            // DLAA (#159): the jittered frame, its depth and motion to DLSS, its HDR image through
+            // the tone curve.
+            let upscaled = dlss.upscale(
+                &mut frame.graph,
+                ctx.frames_rendered,
+                &taa_frame,
+                forge_render::UpscaleCamera {
+                    projection: self.camera.projection(ctx.aspect()),
+                    near: self.camera.near,
+                    vertical_fov: self.camera.fov_y,
+                },
+                targets.depth,
+                motion,
+                exposure,
+            )?;
+            display.draw(
+                &mut frame.graph,
+                upscaled,
+                frame.target,
+                ctx.extent(),
+                self.tonemap,
+            );
+            return Ok(());
         }
         let bloom = self
             .bloom_on
@@ -2532,6 +2605,23 @@ impl CityMaterials {
         let bench_violet = bench("bench (violet)", [0.62, 0.38, 0.9]);
         let bench_sand = bench("bench (sand)", [0.9, 0.7, 0.38]);
         let bench_green = bench("bench (green)", [0.35, 0.78, 0.42]);
+        // The sharpness room (#159): matte white and black in flat colour, and a floor of black and
+        // white squares.
+        let matte = |c: f32| RenderLayer {
+            color_a: [c; 3],
+            color_b: [c; 3],
+            roughness: RenderLayer::roughness_for_power(4.0),
+            specular: 0.02,
+            ..RenderLayer::default()
+        };
+        let room_white = add("matte (white)", matte(0.8));
+        let room_black = add("matte (black)", matte(0.03));
+        let squares = textures::black_and_white(512);
+        let squares = (textures.add(&squares[0])?, textures.add(&squares[1])?);
+        let room_floor = add(
+            "squares (black and white)",
+            textured(squares, [1.0; 3], [1.0; 3], 1.0, 4.0, 0.02),
+        );
         let by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -2583,6 +2673,12 @@ impl CityMaterials {
             ("lab-bench-violet", bench_violet),
             ("lab-bench-sand", bench_sand),
             ("lab-bench-green", bench_green),
+            ("lab-room-floor", room_floor),
+            ("lab-room-wall", room_white),
+            ("lab-room-side", room_white),
+            ("lab-room-target", room_black),
+            ("lab-room-board", room_white),
+            ("lab-room-board-target", room_black),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -4493,6 +4589,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             speed: 6.0,
             ..FlyCamera::default()
         }
+    } else if args.lab == Some(lab::LabScene::Room) {
+        // In the sharpness room's middle at eye height, looking level at the back wall's targets
+        // 8 m away; the board's, 2.5 m away, below them.
+        FlyCamera {
+            position: Vec3::new(0.0, 1.5, 3.0),
+            yaw: 0.0,
+            pitch: 0.0,
+            speed: 2.0,
+            ..FlyCamera::default()
+        }
     } else if args.lab == Some(lab::LabScene::TankHole) {
         // In front of the tank, right of the gate, a little over the rim: the hole low in the gate
         // and the dry side its jet runs into.
@@ -6183,6 +6289,8 @@ fn run(args: Args, title: &'static str) -> Result<()> {
         capture_every: args.capture_every,
         overlay: if args.overlay { Some(true) } else { None },
         force_fallback: args.force_fallback,
+        // The Vulkan loader through Streamline only for `--dlaa` in a `dlss` build (#159).
+        streamline: cfg!(feature = "dlss") && args.dlaa,
         hdr: args.hdr,
         hdr_stops: args.hdr_stops,
         hdr_ui_white: args.hdr_ui_white,

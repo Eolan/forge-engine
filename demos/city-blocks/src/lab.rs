@@ -41,6 +41,7 @@ mod drive;
 mod flood;
 mod fly;
 mod rocket;
+pub(crate) mod room;
 mod sea;
 mod ship;
 mod space;
@@ -91,6 +92,9 @@ pub(crate) enum LabScene {
     /// The glass tank with the gate fixed and a round hole through it, a shutter over it: the jet
     /// (#156).
     TankHole,
+    /// A plain room to measure sharpness by: white walls, a floor of black and white squares, black
+    /// squares turned 5° on the back wall and on a board, the sun alone (#159).
+    Room,
 }
 
 /// The floor's half side, metres.
@@ -159,6 +163,9 @@ const SHIP: usize = TUG + 2;
 /// The glass tank's table, its frame's bars along x, y and z, its gate, its bench's four floors,
 /// its holed gate and the shutter, after the ship's two.
 const TANK: usize = SHIP + 2;
+/// The sharpness room's floor, back wall, side wall, target, board and the board's target, after the
+/// tank's eleven.
+const ROOM: usize = TANK + 11;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -205,6 +212,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(tug::props());
     props.extend(ship::props());
     props.extend(tank::props());
+    props.extend(room::props());
     props
 }
 
@@ -548,7 +556,8 @@ impl LabWorld {
             | LabScene::Space
             | LabScene::Tank
             | LabScene::TankBench
-            | LabScene::TankHole => 0.0,
+            | LabScene::TankHole
+            | LabScene::Room => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -556,10 +565,10 @@ impl LabWorld {
             _ => (FLOOR, FLOOR_HALF),
         };
         let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
-        // None in space: the ship flies over a planet far below; none on the tank's bench, whose
-        // floor is its own.
+        // None in space: the ship flies over a planet far below; none on the tank's bench nor in the
+        // sharpness room, whose floors are their own.
         let mut statics = Vec::new();
-        if !matches!(kind, LabScene::Space | LabScene::TankBench) {
+        if !matches!(kind, LabScene::Space | LabScene::TankBench | LabScene::Room) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
             statics.push((floor, Mat4::from_translation(floor_at)));
@@ -990,6 +999,7 @@ impl LabWorld {
                 group(built.mover.0, vec![built.mover.1], &mut bodies);
                 tank = Some(built.tank);
             }
+            LabScene::Room => statics.extend(room::build(ROOM)),
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();

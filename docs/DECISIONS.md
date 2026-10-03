@@ -1958,3 +1958,75 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
    was #153), or frozen until the lab's liquid exists?
 7. Is the dev machine's RDNA 2 iGPU acceptable as the AMD check until an RX 9070 XT is
    available?
+
+---
+
+## D-045 — An image that stays sharp in motion, and deeper blacks 🟡 (2026-10-03)
+
+The owner's report of 2026-10-03 (#159): "I feel like the image is always a bit blurry of fuzzy,
+never clear and neat as it should". Then, with a summary of Digital Foundry's piece on TAA:
+"what about other techniques?" (DLAA, SSAA, DLSS or FSR at native resolution, SMAA). Measured in
+the physics lab's sharpness room (`--lab room`, `tools/sharpness`: slanted edges, MTF50 in
+cycles a pixel, an ideal pixel's 0.60; [demos/physics-lab.md](demos/physics-lab.md)).
+
+**Where the softness is:**
+
+| | Still | Panning 0.5 m/s | Panning 2 m/s | Cost at 1600 × 900 |
+|---|---|---|---|---|
+| TAA (today's) | 0.54 | 0.30–0.38 | 0.30–0.33 | 0.055 ms |
+| DLAA | 0.60–0.61 | 0.41–0.44 | 0.43–0.48 | 0.48 ms |
+| TAA, Lanczos-3 history | 0.54 | | 0.35–0.375 | 36 loads a pixel |
+| No anti-aliasing | over 1, aliased | over 1, aliased | over 1, aliased | |
+
+- **Still, TAA is sharp.** It is within a tenth of an ideal pixel.
+- **Moving, it is not.** The edges across the motion lose half their contrast at a quarter cycle
+  a pixel. TAA resamples its history each frame where the motion is a fraction of a pixel (at
+  whole pixels it stays sharp), over the ten or so frames its blend of 0.1 keeps.
+  - The history's filter changes little.
+  - Its weight decides: at a blend of 0.6 the moving edges are as sharp as still ones, but the
+    aliasing and the noise TAA averages away come back. The sun disc's soft shadows and the
+    probes' noise are averaged over its 8 jitter phases.
+- **A sharpening pass** (FidelityFX RCAS, previewed on the captures) gives back the contrast at
+  a quarter cycle: 0.85 to 0.99 still at 1 stop, 0.65 to 0.85 panning at half a stop. It does not
+  give back the finest detail.
+- **The flat look is the tone curve.** AgX, the default, shows the black squares at sRGB
+  0.20–0.23, a milky grey; ACES and neutral show them at 0.07–0.09. Bloom at 4 % lifts them by a
+  further fifth. A sunlit white wall stays short of white under all three at EV 15.
+
+**The options:**
+1. **DLAA on NVIDIA's RTX cards**, TAA elsewhere. It is in the engine already (the asteroids'
+   `--upscaler dlaa`, the lab's `--dlaa`). It is the sharpest measured, still and moving, and it
+   is temporal, so it keeps TAA's calm: no shimmer. It is NVIDIA-only and costs 0.43 ms more, and
+   Streamline's DLLs ship with the build.
+2. **A better TAA for every GPU:**
+   - an RCAS pass after the resolve (about 0.05 ms);
+   - a Lanczos-3 history (+15 % moving);
+   - later, a history at twice the resolution, which quarters the resampling's loss, as Unreal's
+     TSR offers (`r.TSR.History.ScreenPercentage`). That means four times the history's memory and a
+     larger change.
+3. **FSR 3 at native resolution** (AMD FidelityFX, MIT, both vendors): a tuned TAA with its own
+   sharpening, not yet measured here. AMD-specific work waits for an RX 9070 XT (#67), but this
+   also runs on NVIDIA.
+4. **SSAA**, the scene drawn at 2 × 2 the pixels: the reference image, still and moving. It costs
+   about four times the frame (the island and the city would leave 60 fps), so it suits screenshots
+   and cinematics, not play.
+5. **SMAA** (1x or T2x): sharp and without ghosts. It does not settle sub-pixel shimmer (the
+   asteroids' first complaint) nor the noise of the effects TAA averages today: the soft shadows
+   and GTAO.
+6. **The tone:** neutral or ACES by default in place of AgX, or AgX with more contrast (its
+   "punchy" look); bloom at 2 %; the exposure half a stop to a stop brighter so white reads
+   white.
+
+**Proposed:** 1 and 2 together.
+- DLAA by default where the GPU has it: the owner's 5070 Ti.
+- TAA with an RCAS pass and a Lanczos-3 history everywhere else, each measured in the room
+  before and after.
+- SSAA as an option for captures.
+- The tone curve chosen by the owner's eye from the room's captures under each (G cycles them).
+
+**Questions for the owner:**
+1. DLAA by default on RTX cards, with TAA where there is none?
+2. A sharpening pass after TAA, and how strong: half a stop or a whole one (shown on the same
+   captures)?
+3. Which tone: AgX as it is, AgX with more contrast, neutral or ACES?
+4. SSAA for screenshots and cinematics?
