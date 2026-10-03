@@ -22,6 +22,8 @@ import skyview;
 static const float PI = 3.14159265358979;
 static const uint BRICK = 4u;
 static const uint MAX_STEPS = 384u;
+// Surfaces and panes a ray crosses or is mirrored at, at most.
+static const uint MAX_CROSSINGS = 10u;
 static const float SURFACE = 0.5;
 // Fresnel's reflectance head-on: water, glass.
 static const float WATER_F0 = 0.02;
@@ -31,6 +33,8 @@ static const float REACTIVE = 0.5;
 static const float REACTIVE_SPEED = 3.0;
 // How far behind a surface of the depth a bent ray may be and still have met it, metres.
 static const float THICKNESS = 0.25;
+// How much the waterline on the lens darkens.
+static const float WATERLINE = 0.55;
 // Foam: how much light a full cell's worth of foamy particles scatters and blocks a metre (white
 // water is near opaque over a few centimetres), and the least a brick's foam must be to march it.
 static const float FOAM_SIGMA = 40.0;
@@ -53,6 +57,8 @@ struct LiquidView
     float4 scattering;      // rgb: its scattering, 1/m; w: unused
     float4 glass;           // rgb: what a pane lets through; w: 1 where the glass shows, 0 where it does not
     float4 background;      // rgb: the plain background's pre-exposed radiance; w: 1 for one, 0 for the sky
+    float4 gate;            // x, y: the gate's faces along x (y <= x: none); z: its bottom; w: the shutter's bottom
+    float4 hole;            // xy: the hole through it (its centre's y and z); z: its radius (0: none)
     float rest;             // a full cell's density
     uint nodes;             // the faces' grid, per component
     uint color;             // the frame's HDR colour (storage)
@@ -250,10 +256,12 @@ float density_at(LiquidView* v, float3 p)
     return r;
 }
 
-// The surface's normal at `p`, out of the water.
+// The surface's normal at `p`, out of the water: the density's gradient over two cells either way,
+// smoother than the particles' noise (over one, a still surface seen from below at a grazing
+// angle flipped between mirroring and letting through from pixel to pixel).
 float3 normal_at(LiquidView* v, float3 p)
 {
-    float e = v[0].tank.w;
+    float e = 2.0 * v[0].tank.w;
     float3 g = float3(density_at(v, p + float3(e, 0, 0)) - density_at(v, p - float3(e, 0, 0)),
                       density_at(v, p + float3(0, e, 0)) - density_at(v, p - float3(0, e, 0)),
                       density_at(v, p + float3(0, 0, e)) - density_at(v, p - float3(0, 0, e)));
@@ -455,6 +463,44 @@ float3 face_velocity(LiquidView* v, float3 p)
     return float3(v[0].face[i], v[0].face[v[0].nodes + i], v[0].face[2u * v[0].nodes + i]);
 }
 
+// How far along the ray from `p` it meets the gate (as the last substep left it), or `far`: its
+// slab across the tank above its bottom, the ray let through where it enters the hole the shutter
+// has uncovered. The gate is the one opaque thing inside the tank: a bent ray, whose way the
+// depth does not know, stops there.
+float to_gate(LiquidView* v, float3 p, float3 d, float far)
+{
+    float4 g = v[0].gate;
+    if (g.y <= g.x)
+        return far;
+    float3 face;
+    float2 span = box_span(p, d, float3(g.x, g.z, 0.0), float3(g.y, v[0].size.y + 1.0, v[0].size.z), face);
+    if (span.x >= span.y || span.y <= 0.0 || span.x >= far)
+        return far;
+    float3 at = p + d * max(span.x, 0.0);
+    float4 h = v[0].hole;
+    if (h.z > 0.0 && at.y < g.w && length(at.yz - h.xy) < h.z)
+        return far;
+    return max(span.x, 0.0);
+}
+
+// Whether the near point of the pixel at `ndc` lies in the water.
+bool near_in_water(LiquidView* v, float2 ndc, float3 o)
+{
+    float4 p = mul(v[0].inv_view_proj, float4(ndc, 1.0, 1.0));
+    float3 q = o + p.xyz / p.w;
+    return all(q >= 0.0) && all(q <= v[0].size.xyz) && density_at(v, q) >= SURFACE;
+}
+
+// 1 where the pixel's near point and its right or lower neighbour's are on either side of the
+// surface (`water`: this one's), else 0.
+float waterline(LiquidView* v, float2 ndc, float3 o, bool water)
+{
+    float2 step = 2.0 / float2(v[0].width, v[0].height);
+    bool right = near_in_water(v, ndc + float2(step.x, 0.0), o);
+    bool below = near_in_water(v, ndc - float2(0.0, step.y), o);
+    return (right != water || below != water) ? 1.0 : 0.0;
+}
+
 // Where the depth is empty, the plain background, if there is one.
 void plain_background(LiquidView* v, uint2 pixel, float depth)
 {
@@ -483,20 +529,24 @@ void march_main(uint3 id : SV_DispatchThreadID)
     }
     float3 size = v[0].size.xyz;
     float g = v[0].size.w;
-    // The camera in the tank's frame.
+    // The camera in the tank's frame; the ray starts on the near plane (reversed-Z: depth 1), so
+    // a camera half in the water sees the water below the line its near plane cuts and the air
+    // above it.
     float3 o = -v[0].tank.xyz;
+    float4 near_hit = mul(v[0].inv_view_proj, float4(ndc, 1.0, 1.0));
+    float near = length(near_hit.xyz / near_hit.w);
     // The glass box, open at the top.
     float3 entry_face;
     float2 outer = box_span(o, d, float3(-g, -g, -g), float3(size.x + g, size.y, size.z + g), entry_face);
-    if (outer.x >= outer.y || outer.y <= 0.0 || max(outer.x, 0.0) >= scene)
+    if (outer.x >= outer.y || outer.y <= near || max(outer.x, near) >= scene)
     {
         plain_background(v, id.xy, depth);
         return;
     }
     float3 inner_face;
     float2 inner = box_span(o, d, float3(0.0), size, inner_face);
-    float start = max(inner.x, 0.0);
-    if (inner.x >= inner.y || inner.y <= 0.0 || start >= scene)
+    float start = max(inner.x, near);
+    if (inner.x >= inner.y || inner.y <= near || start >= scene)
     {
         plain_background(v, id.xy, depth);
         return;
@@ -510,7 +560,7 @@ void march_main(uint3 id : SV_DispatchThreadID)
     float3 through = 1.0;
     // Through a pane on the way in (not over the open top, nor from inside the glass box).
     bool shows = v[0].glass.w > 0.0;
-    bool pane_in = shows && outer.x > 0.0 && entry_face.y < 0.5;
+    bool pane_in = shows && outer.x > near && entry_face.y < 0.5;
     if (pane_in)
     {
         float f = fresnel(GLASS_F0, dot(-d, entry_face));
@@ -522,6 +572,7 @@ void march_main(uint3 id : SV_DispatchThreadID)
     float travelled = start;
     float left = min(inner.y, scene) - start;
     bool water = density_at(v, p + dir * (0.01 * v[0].tank.w)) >= SURFACE;
+    bool water_at_start = water;
     // The speed view, the water met at the tank's side: its colour there.
     if (v[0].mode == 1u && water)
     {
@@ -531,21 +582,24 @@ void march_main(uint3 id : SV_DispatchThreadID)
     }
     // Entering the water through a pane: bent at the glass as from air into water (flat glass
     // only shifts the ray).
-    if (water && start > 0.0 && inner_face.y < 0.5)
+    if (water && start > near && inner_face.y < 0.5)
     {
         float3 bent = refract(dir, inner_face, 1.0 / ior);
         if (dot(bent, bent) > 0.0)
             dir = normalize(bent);
     }
-    bool bent_any = water && start > 0.0 && inner_face.y < 0.5;
+    bool bent_any = water && start > near && inner_face.y < 0.5;
     float reactive = 0.0;
     uint steps = 0u;
-    for (uint crossings = 0u; crossings < 8u; crossings++)
+    uint crossings = 0u;
+    for (; crossings < MAX_CROSSINGS; crossings++)
     {
         float3 face;
         float to_box = box_exit(p, dir, float3(0.0), size, face);
-        // What the scene shows inside the tank (the gate) ends the ray; once bent, only roughly.
-        float limit = bent_any ? max(scene - travelled, 0.0) + 0.5 : left;
+        // What the scene shows inside the tank ends the ray: straight, where the depth says; bent,
+        // where it meets the gate (the depth says nothing of a bent ray: stopped there, it
+        // landed anywhere, hatching the walls seen from under the water).
+        float limit = bent_any ? to_gate(v, p, dir, 1e9) : left;
         float span = min(to_box, limit);
         float foam_path = 0.0;
         float s = crossing(v, p, dir, span, water, steps, foam_path);
@@ -628,9 +682,17 @@ void march_main(uint3 id : SV_DispatchThreadID)
         bent_any = true;
         p += dir * (0.02 * v[0].tank.w);
     }
-    float3 behind = bent_any ? behind_along(v, p + v[0].tank.xyz, dir, id.xy)
-                             : g_sampled_images[v[0].scene].Load(int3(id.xy, 0)).rgb;
+    // A ray still inside after MAX_CROSSINGS (mirrored whole between the surface and the walls, as
+    // in a light guide) takes the scene straight behind its pixel: where it would land is anyone's
+    // guess, and a guess per pixel was noise.
+    bool trapped = crossings >= MAX_CROSSINGS;
+    float3 behind = bent_any && !trapped ? behind_along(v, p + v[0].tank.xyz, dir, id.xy)
+                                         : g_sampled_images[v[0].scene].Load(int3(id.xy, 0)).rgb;
     float3 result = colour + through * behind;
+    // Where the near plane crosses the surface, the waterline on the lens: a thin dark line where
+    // this pixel's near point and its neighbour's are on either side.
+    if (start <= near + 1e-4)
+        result *= 1.0 - WATERLINE * waterline(v, ndc, o, water_at_start);
     g_storage_images_rgba16f[v[0].color][id.xy] = float4(result, 1.0);
     if (v[0].reactive != 0xFFFFFFFFu)
         g_storage_images_r32f[v[0].reactive][id.xy] = reactive;

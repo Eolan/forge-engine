@@ -633,6 +633,17 @@ side. The reservoir drains until both sides stand level, 152 mm.
   wall seen at a slant mirrors the inside.
 - **Where it lands:** a short march over the screen against the depth, with a 25 cm thickness, so
   something in front of the ray is not taken for where it lands.
+- **Bent rays and the gate:** a ray bent by the water stops where it meets the gate (the one opaque
+  thing in the tank), not where the pixel's depth put the straight ray: stopped there, it landed
+  anywhere.
+- **The normal:** the density's gradient over two cells either way, smoother than the particles'
+  noise.
+- **Under the water:** each ray starts on the near plane, so a camera crossing the surface sees
+  the water below the line its near plane cuts and the air above, with a thin dark waterline
+  on the lens between them (`--view=-0.6,1.212,0.05,-90,-3` puts the camera's eye at the
+  reservoir's surface). Known: from under the water, the side walls seen at a slant, which the
+  glass mirrors whole, show a hatching. How many times a ray is mirrored there changes from pixel
+  to pixel. Still to work on.
 - **The floor:** the floor's glass lies on the table and mirrors nothing.
 - **For TAA:** a reactive mask where the surface moves (at most half, at 3 m/s).
 - **At the glass:** the field goes on into the glass and the floor as it stands beside them (air

@@ -271,6 +271,8 @@ struct GpuLiquidView {
     scattering: [f32; 4],
     glass: [f32; 4],
     background: [f32; 4],
+    gate: [f32; 4],
+    hole: [f32; 4],
     rest: f32,
     nodes: u32,
     color: u32,
@@ -291,7 +293,7 @@ struct GpuLiquidView {
     foam_render: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 392);
+const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 424);
 
 /// Mirrors `LiquidPush` in `liquid.slang`.
 #[repr(C)]
@@ -487,6 +489,8 @@ pub struct Liquid {
     /// Whether the particles have been seeded, and per slot whether its readback holds a
     /// frame's statistics.
     seeded: Cell<bool>,
+    /// The last substep's gate, for the drawing.
+    last: Cell<LiquidStep>,
     asked: [Cell<bool>; FRAMES_IN_FLIGHT],
 }
 
@@ -569,6 +573,7 @@ impl Liquid {
             views: per_slot(std::mem::size_of::<GpuLiquidView>(), "liquid view")?,
             readback,
             seeded: Cell::new(false),
+            last: Cell::new(LiquidStep::default()),
             asked: std::array::from_fn(|_| Cell::new(false)),
         })
     }
@@ -648,6 +653,9 @@ impl Liquid {
         stats: bool,
     ) {
         let steps = &steps[..steps.len().min(LIQUID_MAX_SUBSTEPS)];
+        if let Some(&last) = steps.last() {
+            self.last.set(last);
+        }
         let seed = !self.seeded.replace(true);
         if steps.is_empty() && !seed && !stats {
             return;
@@ -848,6 +856,13 @@ impl Liquid {
                 background: params
                     .background
                     .map_or([0.0; 4], |b| b.extend(1.0).to_array()),
+                gate: tank.gate.map_or([0.0; 4], |[a, b]| {
+                    let last = self.last.get();
+                    [a, b, last.gate_bottom, last.shutter]
+                }),
+                hole: tank
+                    .hole
+                    .map_or([0.0; 4], |h| [h.centre.x, h.centre.y, h.radius, 0.0]),
                 rest: PER_CELL as f32,
                 nodes: (cells.x + 1) * (cells.y + 1) * (cells.z + 1),
                 color: 0,

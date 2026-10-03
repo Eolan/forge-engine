@@ -1932,8 +1932,9 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
   coefficient of 0.75 at 6.4 cells across, against a sharp-edged hole's 0.6); white water carried
   by the particles, short-lived in fresh water (the owner: "foam on clear, non salt water does
   not make too much sense"), its life a property of the liquid; the speed view for tuning.
-- **Not yet:** the camera under the water, bodies in the water, caustics, the sums sorted for
-  speed.
+- **Under the water:** rays start on the near plane, so the camera can cross the surface (the
+  side walls seen from under the water still show a hatching to work on).
+- **Not yet:** bodies in the water, caustics, the sums sorted for speed.
 
 **The questions put to the owner** (answered above):
 1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be
