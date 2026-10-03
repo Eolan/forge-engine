@@ -213,7 +213,12 @@ runs in six, from both builds, by 238–299 px (ꟻLIP mean ≤ 0.0015, largest 
 codes then differ by 91 000–125 000 pixels in the dark (HDR-ꟻLIP mean 0.0034–0.0044, largest
 0.16–0.19). So the preview is judged by the same signature, and the PQ codes are a flake only
 when their preview flaked too, with an HDR-ꟻLIP mean at most 0.005 and largest below 0.2 (a
-line of 20 codes reaches 0.24).
+line of 20 codes reaches 0.24). The physics lab's dominoes at frame 3000 (`*-lab-dominoes3000`,
+#146) flake too: on 2026-10-03 the fallback path's differed between a Tier 2 run's two batches by
+3 px (3 levels, ꟻLIP mean 0.00001), and two more runs of the same build were 1–3 px from each
+and from both, the physics' digest the same to the bit each time. `compare.sh` judges it by the
+same signature, and it is left out of the mesh-against-fallback pairs, as the ballad's frame
+600 is.
 
 **The perceptual check (issue #75).** For each differing pair, `imgdiff` prints LDR-ꟻLIP:
 the error a person would see when flipping between the two images, from 0 (none) to 1. It is
