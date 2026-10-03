@@ -982,6 +982,11 @@ way). The noises are baked on the CPU at start, about 0.1 s. Their shadow (`sky/
 384² texels, sixteen steps each): **0.02 ms**, and the resolve's one lookup a pixel no more than
 the runs' noise (the frame 1.46 → 1.70 ms with both).
 
+Since 2026-10-03 the clouds are on by default at 0.45 (the owner's choice), so every frame of
+`city-blocks`, `island` and `physics-lab` pays them, about 0.24 ms at 1600 × 900. The frames
+measured before that date, quoted elsewhere in this file, are without them; `--clouds 0` gives
+those frames again.
+
 ## `physics-lab` — the physics tick (#136, 2026-10-02)
 
 The tick is CPU work: Jolt's step on its own threads (5 workers and the caller on the 9800X3D's

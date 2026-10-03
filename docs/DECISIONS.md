@@ -1297,6 +1297,10 @@ Weather comes after the current rendering work.
 - audio: Phase 6;
 - ecosystems and seasons: Phase 8 (`four-km-forest`, across an altitude ecotone).
 
+**The clouds by default** (owner, 2026-10-03): the first cloud layer (#145) is on by default at a
+coverage of 0.45, fair-weather cumulus, until the weather map from the climate drives it
+(`--clouds COVERAGE` sets another, 0 none).
+
 *(research: planet-environment.md; extends D-019; D-007, D-014, D-016, D-028, D-032; issue #11)*
 
 ## D-035 — Content as packages: namespaced ids, layered records, a deterministic merge ✅ (2026-09-25)

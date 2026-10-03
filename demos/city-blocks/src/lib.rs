@@ -285,10 +285,10 @@ struct Args {
     /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     pilot: Option<Vec<f32>>,
-    /// Draw the cloud layer (#145) over this share of the sky (0 to 1; 0.45 is fair-weather
-    /// cumulus).
-    #[arg(long)]
-    clouds: Option<f32>,
+    /// The cloud layer's share of the sky (#145; 0 to 1): fair-weather cumulus by default (the
+    /// owner's choice, 2026-10-03), 0 for none.
+    #[arg(long, default_value_t = 0.45)]
+    clouds: f32,
     /// With `--lab creatures`, let the creatures' motors go at this frame, as ↓ does (#143).
     #[arg(long)]
     limp_at: Option<u64>,
@@ -579,10 +579,9 @@ impl Gallery {
         }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
-        // The cloud layer (#145), over the given share of the sky.
-        let clouds = args
-            .clouds
-            .map(|_| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
+        // The cloud layer (#145), over the given share of the sky; none at 0.
+        let clouds = (args.clouds > 0.0)
+            .then(|| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
             .transpose()?;
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args)?;
@@ -1450,15 +1449,13 @@ impl Demo for Gallery {
         // before the compose lays them over the sky; the weather drifting on a 10 m/s wind.
         // Their shadow on the sun's light for the resolve.
         let mut cloud_shadow = None;
-        if let (Some(clouds), Some(images), Some(coverage)) =
-            (&self.clouds, cloud_images, self.args.clouds)
-        {
+        if let (Some(clouds), Some(images)) = (&self.clouds, cloud_images) {
             let time = self.sea_time as f32;
             let params = CloudParams {
                 camera: [self.camera.position.x, self.camera.position.z],
                 drift: [8.0 * time, 6.0 * time],
                 previous: self.clouds_previous,
-                ..CloudParams::fair(coverage)
+                ..CloudParams::fair(self.args.clouds)
             };
             clouds.march(&mut frame.graph, frame.slot, &sky, params, images);
             cloud_shadow = Some(clouds.shadow(&mut frame.graph, frame.slot, &sky, params));

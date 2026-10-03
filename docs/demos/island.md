@@ -2720,9 +2720,10 @@ cargo run --release -p city-blocks -- --island 7 --clouds 0.5
 cargo run --release -p physics-lab -- --lab fly --clouds 0.5
 ```
 
-Phase 4's first clouds, behind `--clouds COVERAGE` (0 to 1; 0.45 is fair-weather cumulus) so that
-every other image stays as it was until they are agreed. After Schneider's 2015 cloudscapes
-(lighting-gi.md §6; D-034's "Nubis-style clouds"):
+Phase 4's first clouds, `--clouds COVERAGE` (0 to 1). They were off until agreed. Since
+2026-10-03 they are on by default at 0.45, fair-weather cumulus (the owner's choice), in
+`city-blocks`, `island` and `physics-lab` alike; `--clouds 0` draws none. After Schneider's 2015
+cloudscapes (lighting-gi.md §6; D-034's "Nubis-style clouds"):
 
 - **The layer:** between 1.5 and 4 km over the planet, its coverage and the clouds' height from
   a tiling 256² weather map spanning 48 km that drifts on a 10 m/s wind; their shapes from a 64³

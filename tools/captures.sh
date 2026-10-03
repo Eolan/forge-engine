@@ -200,7 +200,8 @@ for path in $paths; do
   # The island with its water (#105, the default): at a fixed step, so the waves are the same.
   capture "$path-water60" 60 "$city" "${island[@]}" --fixed-step "${flag[@]}"
   capture "$path-water60-noocc" 60 "$city" "${island[@]}" --fixed-step --no-occlusion "${flag[@]}"
-  # The cloud layer over it (#145, behind `--clouds`): fair-weather cumulus over half the sky,
+  # The cloud layer over it (#145, on by default at 0.45 since 2026-10-03, so in every image of
+  # city-blocks, island and physics-lab): here a second coverage, half the sky,
   # sixty frames for its blend over frames to settle.
   capture "$path-clouds60" 60 "$city" "${island[@]}" --fixed-step --clouds 0.5 "${flag[@]}"
   capture "$path-clouds60-noocc" 60 "$city" "${island[@]}" --fixed-step --clouds 0.5 --no-occlusion "${flag[@]}"

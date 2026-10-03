@@ -199,8 +199,9 @@ largest mouth), `lake` (morning), `island` (the afternoon, from the sea) and `va
 steep valley); the log lists them for any seed. `--tour` flies 70 s from that valley over the
 hills to the lake and the mouth and out to sea, resting at each shot. `--time-of-day T` holds
 the sun where `--day` has it (0 sunrise, 0.5 noon, 1 sunset), the exposure metered.
-`--clouds COVERAGE` draws a first layer of cumulus over that share of the sky (0.5: half;
-Phase 4's start, for review). Numbers: [docs/demos/island.md](docs/demos/island.md).
+A first layer of cumulus covers 0.45 of the sky by default (the owner's choice, 2026-10-03, #145);
+`--clouds COVERAGE` sets another share, `--clouds 0` none. Numbers:
+[docs/demos/island.md](docs/demos/island.md).
 
 ### `physics-lab` — Phase 3's first demo
 
