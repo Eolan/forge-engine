@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use forge_geom::city::{Block, Imported, Lathe, PropKind, PropSpec};
+use forge_geom::city::{Block, Imported, Lathe, PropKind, PropSpec, lathe};
 use forge_geom::fracture::Polyhedron;
 use forge_geom::procedural::TriMesh;
 use forge_physics::aero::{Air, Surface, push};
@@ -26,6 +26,9 @@ const NOSE_TIP: f32 = 13.5;
 const FIN_REACH: f32 = 1.7;
 const FIN_HEIGHT: f32 = 2.2;
 const FIN_BOTTOM: f32 = -0.8;
+/// How much the rocket's normals weigh in its meshes' simplification error, metres per unit of
+/// normal change (a hard surface's is 0.5).
+const SMOOTH_NORMALS: f32 = 8.0;
 /// Its mass, kg (fuelled), and its weight's height on its axis.
 pub(super) const MASS: f32 = 3000.0;
 const CENTER_OF_MASS: Vec3 = Vec3::new(0.0, 5.0, 0.0);
@@ -60,16 +63,25 @@ pub(super) fn props() -> Vec<PropSpec> {
         (0.0, NOSE_TIP),
     ];
     let along = profile.len() as u32;
+    let body = lathe(&Lathe {
+        profile,
+        around: 48,
+        along,
+        flutes: 0,
+        flute_depth: 0.0,
+        flute_span: (0.0, 0.0),
+    });
     vec![
+        // Its body and fins simplify only where their shading does not change: the chase camera
+        // stays on them, and with a hard surface's weight (0.5) the light's line along the body
+        // moved a pixel as levels changed while it turned, 108 to 138 px a frame (the owner saw
+        // it shimmer in `--lab space`).
         PropSpec {
             name: "lab-rocket".to_owned(),
-            kind: PropKind::Lathe(Lathe {
-                profile,
-                around: 48,
-                along,
-                flutes: 0,
-                flute_depth: 0.0,
-                flute_span: (0.0, 0.0),
+            kind: PropKind::Imported(Imported {
+                key: "lab rocket body, 48 round".to_owned(),
+                mesh: Arc::new(body),
+                normal_weight: Some(SMOOTH_NORMALS),
             }),
         },
         PropSpec {
@@ -77,6 +89,7 @@ pub(super) fn props() -> Vec<PropSpec> {
             kind: PropKind::Imported(Imported {
                 key: "lab rocket fins, swept".to_owned(),
                 mesh: Arc::new(fin_pair()),
+                normal_weight: Some(SMOOTH_NORMALS),
             }),
         },
         PropSpec {

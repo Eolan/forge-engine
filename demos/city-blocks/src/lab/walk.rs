@@ -105,6 +105,7 @@ pub(super) fn props() -> Vec<PropSpec> {
             kind: PropKind::Imported(Imported {
                 key: "lab-visor 1".to_owned(),
                 mesh: Arc::new(visor),
+                normal_weight: None,
             }),
         },
     ]

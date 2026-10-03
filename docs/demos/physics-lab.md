@@ -307,7 +307,10 @@ cargo run --release -p physics-lab -- --lab rocket --pilot 1,0.1,0,0
 
 Step 5's rocket, on a concrete pad in the aeroplane's field.
 - **The rocket:** a white body 13.5 m tall with an ogive nose (a lathe), four swept red fins, 3 t
-  fuelled, its weight 5 m up its axis.
+  fuelled, its weight 5 m up its axis. Its meshes weigh their normals 16 times a hard surface's
+  in the simplification. With the default weight, the line between its lit and shaded sides
+  moved a pixel as the cluster levels changed while it turned, which the owner saw shimmer in
+  `--lab space`: 108–138 px a frame changed differently from the full-detail drawing, now 0–15.
 - **Its engine:** pushes 50 kN (1.7 times its weight) along its axis from the nozzle.
 - **The stick and the roll jets:** the stick swings the engine up to about 6° (thrust vectoring),
   as for an aeroplane pitched up on its tail:

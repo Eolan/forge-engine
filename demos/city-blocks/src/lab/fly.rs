@@ -71,6 +71,7 @@ pub(super) fn props() -> Vec<PropSpec> {
             kind: PropKind::Imported(Imported {
                 key: format!("{key} plane"),
                 mesh: Arc::new(mesh("plane").mesh.clone()),
+                normal_weight: None,
             }),
         },
         PropSpec {
@@ -78,6 +79,7 @@ pub(super) fn props() -> Vec<PropSpec> {
             kind: PropKind::Imported(Imported {
                 key: format!("{key} propeller"),
                 mesh: Arc::new(mesh("plane-prop").mesh.clone()),
+                normal_weight: None,
             }),
         },
         PropSpec {

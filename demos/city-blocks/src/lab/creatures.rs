@@ -184,6 +184,7 @@ pub(super) fn props() -> Vec<PropSpec> {
                 kind: PropKind::Imported(Imported {
                     key: format!("{key} {} {}", kind.prefix(), p.name),
                     mesh: Arc::new(mesh),
+                    normal_weight: None,
                 }),
             });
         }

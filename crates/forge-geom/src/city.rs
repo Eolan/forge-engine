@@ -134,6 +134,10 @@ pub struct Imported {
     pub key: String,
     /// The triangles, in the prop's frame.
     pub mesh: Arc<TriMesh>,
+    /// How much its normals weigh in the simplification error ([`CookOptions::normal_weight`]):
+    /// `None` for a hard-surface prop's 0.5. A smooth body the camera stays on wants more (the
+    /// lab's rocket, whose shading lines popped along its length as it turned).
+    pub normal_weight: Option<f32>,
 }
 
 impl fmt::Debug for Imported {
@@ -144,7 +148,7 @@ impl fmt::Debug for Imported {
 
 impl PartialEq for Imported {
     fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
+        self.key == other.key && self.normal_weight == other.normal_weight
     }
 }
 
@@ -218,7 +222,8 @@ impl PropSpec {
         CookOptions {
             normal_weight: match self.kind {
                 PropKind::Building(_) => 1.0,
-                PropKind::Lathe(_) | PropKind::Block(_) | PropKind::Imported(_) => 0.5,
+                PropKind::Lathe(_) | PropKind::Block(_) => 0.5,
+                PropKind::Imported(ref i) => i.normal_weight.unwrap_or(0.5),
                 PropKind::Stone(ref s) => s.normal_weight,
                 PropKind::Boulder { .. }
                 | PropKind::Rubble { .. }

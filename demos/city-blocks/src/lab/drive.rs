@@ -71,6 +71,7 @@ pub(super) fn props() -> Vec<PropSpec> {
             kind: PropKind::Imported(Imported {
                 key: format!("{key} car"),
                 mesh: Arc::new(mesh("car").mesh.clone()),
+                normal_weight: None,
             }),
         },
         PropSpec {
@@ -78,6 +79,7 @@ pub(super) fn props() -> Vec<PropSpec> {
             kind: PropKind::Imported(Imported {
                 key: format!("{key} wheel"),
                 mesh: Arc::new(mesh("car-wheel").mesh.clone()),
+                normal_weight: None,
             }),
         },
     ]

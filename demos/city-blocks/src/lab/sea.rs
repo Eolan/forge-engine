@@ -116,6 +116,7 @@ pub(super) fn props() -> Vec<PropSpec> {
             kind: PropKind::Imported(Imported {
                 key: key.clone(),
                 mesh: Arc::new(boat.mesh.clone()),
+                normal_weight: None,
             }),
         },
     ]

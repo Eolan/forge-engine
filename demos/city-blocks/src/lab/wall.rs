@@ -124,6 +124,7 @@ pub(super) fn props() -> Vec<PropSpec> {
         kind: PropKind::Imported(Imported {
             key: format!("lab column piece {k} of {PIECES}"),
             mesh: Arc::clone(mesh),
+            normal_weight: None,
         }),
     }));
     props
