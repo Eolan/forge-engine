@@ -46,8 +46,9 @@ use forge_render::{
     MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, ProbeParams, Probes,
     Residency, SkyParams, SplashParams, SplashSource, StartView, StreamingConfig, StreamingStats,
     SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics, WaterFloater,
-    WaterLake, WaterMouth, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes, WaterStone,
-    WaterSurface, WaterSurfaceParams, WaterWake, WaterWakes, exposure_from_ev100, sh_irradiance,
+    WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes,
+    WaterStone, WaterSurface, WaterSurfaceParams, WaterWake, WaterWakes, exposure_from_ev100,
+    sh_irradiance,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec2, Vec3};
@@ -681,6 +682,12 @@ impl Gallery {
         let water = if args.lab == Some(lab::LabScene::Sea) && args.water() {
             // The physics lab's sea (#138): the island's waves, open, no shore.
             Some(lab::water(ctx)?)
+        } else if args.lab == Some(lab::LabScene::Flood) && args.water() {
+            // The flood's water (#144): a pool drawn from its columns, no sea; the cascades
+            // still carry its ripples.
+            let water = lab::water(ctx)?;
+            water.1.set_sea(false);
+            Some(water)
         } else if args.island.is_some() && args.water() {
             let seed = forge_core::Seed::new(args.island.unwrap_or(7)).derive(0x5EA);
             let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
@@ -1010,7 +1017,7 @@ impl Demo for Gallery {
                 if let Some(lab) = &mut self.lab {
                     if lab.has_player() {
                         lab.jump();
-                    } else if lab.ball_held() {
+                    } else if lab.held() {
                         lab.release();
                     } else if !lab.has_car() {
                         lab.throw(self.camera.position, self.camera.forward());
@@ -1485,6 +1492,15 @@ impl Demo for Gallery {
             let camera = Vec2::new(camera_in_scene.x, camera_in_scene.z);
             if let Some(barrels) = self.barrels.as_ref().filter(|_| !self.args.no_floaters) {
                 surface.set_floaters(&barrels.floaters(self.sea_time, camera));
+            }
+            // The flood's water as the lab's world holds it (#144).
+            if let Some(pool) = self.lab.as_mut().and_then(lab::Lab::pool) {
+                surface.set_pool(&WaterPool {
+                    origin: pool.origin,
+                    spacing: pool.spacing,
+                    size: pool.size,
+                    samples: &pool.samples,
+                });
             }
             let wakes = self
                 .wakes
@@ -2168,6 +2184,11 @@ impl CityMaterials {
             ("lab-column", column),
             ("lab-column-piece", column),
             ("lab-pole", metal),
+            ("lab-dam-wall-x", concrete_grey),
+            ("lab-dam-wall-z", concrete_grey),
+            ("lab-gate", red_paint),
+            ("lab-dam-block", concrete_grey),
+            ("lab-hut", brick_red),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -3997,6 +4018,15 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.15,
             speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Flood) {
+        // Over the basin's lower corner, looking up it at the gate and the reservoir.
+        FlyCamera {
+            position: Vec3::new(12.0, 9.0, 16.0),
+            yaw: 0.9,
+            pitch: -0.34,
+            speed: 10.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Creatures) {

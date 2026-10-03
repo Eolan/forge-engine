@@ -224,6 +224,14 @@ replays to the same digests; `physics-lab --lab sea`.
 *Characters* (#139): `CharacterVirtual` with stair stepping and sticking to the floor, saved
 and restored after the bodies, its ids numbered per world (Jolt's run across the process, and a
 server and a client in one process must agree); `physics-lab --lab walk`.
+*Vehicles, joints, ragdolls* (#140–#143): the vehicle constraint (a car), breakable fixed and
+distance joints (a brick wall), motorised ragdolls (D-012's physics layer) through the same C
+layer; lift and drag in `forge_physics::aero` (an aeroplane).
+*The mid water* (#144): "a server-authoritative column model" built in
+`forge_physics::shallow`, depths on a grid and velocities on its faces (after Müller-Fischer
+2008), deterministic and saved with the world, the buoyancy reading its surface and its flow;
+`physics-lab --lab flood`. The water pass draws it as fresh water (a pool) from the columns
+uploaded each frame; the GPU's own heightfield shadowing it near the player is still to come.
 
 ## D-010 — Netcode: QUIC transport, our own replication ✅ (2026-09-24)
 

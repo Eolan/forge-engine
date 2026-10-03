@@ -1007,6 +1007,12 @@ the dust settles, the scene costs nothing.
 ticks: **0.11 ms a tick** (p99 0.21, max 0.28). Setting the 50 motors' targets is a few
 microseconds; the ragdolls stay awake while their poses move.
 
+`--lab flood` (#144), the gate lifted at tick 31, 600 ticks: **0.86 ms a tick** (p99 1.1, max
+1.4). Most of it is the water: 18 432 cells in two half steps (velocities carried along, the
+fluxes, the slopes), on one thread; then the pushes on 39 floaters. The water's drawing is the
+lakes' fresh-water shading over 36 000 triangles, inside the `water/surface` zone; its 295 KB
+of samples go up with the frame's water block.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

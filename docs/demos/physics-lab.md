@@ -25,7 +25,8 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `fly` | an aeroplane on flying surfaces: a take-off from a runway, turns over a wide field | ✅ #141 |
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
-| skinned creatures, fluids | the later steps of the plan | planned |
+| `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats | ✅ #144 |
+| skinned creatures, the GPU's water, particles | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
 
@@ -374,6 +375,51 @@ tick (55 parts in five ragdolls, balls thrown): **0.11 ms** on average, p99 0.21
 creatures that bend instead of being jointed (GPU skinning, Phase 7's first step) and a slime
 as a soft body are the step's second part.
 
+## `flood`: a dam break (issue #144)
+
+```
+cargo run --release -p physics-lab -- --lab flood
+```
+
+Phase 3's step 8, its first part: D-009's middle tier of water, the authoritative column model,
+which the server runs and the clients predict like the rest. `forge_physics::shallow` keeps a
+column of water on each cell of a grid and the water's velocities on the faces between cells,
+after Matthias Müller-Fischer's height-field water (GDC 2008): each step the velocities are
+carried along by themselves, the water flows through each face at its velocity times the depth
+it leaves, each cell's outflow scaled so that it never gives more than it holds, and the slope
+of the surface speeds the faces up; a face into a cell whose bed stands over the water carries
+nothing. Two first-order fixes made its fronts run: a still face is traced back along the
+velocity of the water arriving at it, and a dry cell the water runs into passes its speed on.
+The volume is kept to the rounding and no column goes below zero; it is `f32` sums, products
+and floors in a fixed order, saved, restored and digested with the world.
+
+The scene: a basin 48 m by 24 m walled in concrete, a cell every 25 cm (192 × 96), a reservoir
+2 m deep behind a red gate at its upper end, four concrete blocks and a brick hut downstream;
+18 crates, 12 barrels and 9 logs, two thirds afloat behind the gate and a third lying on the
+dry floor beyond it. **Space** (or `--release N`) lifts the gate: the water runs down the basin,
+white where it is fast, round the blocks and the hut, and carries what floats; the buoyancy is
+the sea's (#138) with the pool's surface and its flow in place of the waves (fresh water,
+1000 kg/m³). **Enter** fills the reservoir again.
+
+The water is drawn by the island's water pass as fresh water, a pool (#144): each frame the
+lab hands the renderer its columns' surface, depth and velocity (`WaterSurface::set_pool`, 295
+KB), two triangles between each four samples at the surface, faded in over the last 3 cm of
+depth so its edge thins to nothing; the rivers' shading (`fresh_water`) gives it the scene seen
+through it, the sky and sun on it, its ripples carried on its flow and white water past 2 m/s.
+The scene draws no sea (`WaterSurface::set_sea`).
+
+![Before the gate lifts; the water running out at tick 75 and 150; spread round the blocks at tick 300](images/physics-lab-flood.png)
+
+The tests: a dam break in a channel keeps its volume and never a negative depth; it follows
+Ritter's solution where the dam stood (a depth of 4⁄9 of the reservoir's within 5 % and ⅔ √(g h₀)
+within 10 %) and its front runs 3.25 m in the first second (Ritter's tip runs 6.3 m; a
+first-order scheme lags where the water thins to nothing); a saved pool runs on to the same
+bits; still water floats a box at its level. The lab's flood keeps its reservoir behind the
+shut gate, then in four seconds puts a third of it down the basin, every drop kept, carries what
+floats more than 5 m on, and replays to the same digests. A tick (18 432 cells in two half
+steps, 39 floaters): **0.86 ms** on average, p99 1.1 ms. The GPU's own shallow-water layer
+shadowing the model near the player, and particles for splashes, come next.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -388,4 +434,5 @@ twin and `lab-drive-turn600`; from the field (#141) `lab-fly1200` (climbing away
 twin; from the break scene (#142) `lab-break85` (the ball through the wall) with its twin and
 `lab-break300` (the wall broken, the column in pieces); and from the creatures (#143)
 `lab-creatures120` (posed) with its twin, `lab-creatures-throw240` (struck by balls) and
-`lab-creatures-limp240` (let go).
+`lab-creatures-limp240` (let go); and from the flood (#144) `lab-flood150` (the water running
+down the basin) with its twin and `lab-flood300` (spread round the blocks).

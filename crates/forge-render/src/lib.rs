@@ -60,7 +60,8 @@ pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
 pub use wakes::{MAX_WAKES, WakeFrame, WaterWake, WaterWakes};
 pub use water::{
-    MAX_FLOATERS, WATER_MIPS, WATER_SIZE, WaterCascadeDesc, WaterCascades, WaterCaustics,
-    WaterFloater, WaterFrame, WaterLake, WaterMouth, WaterRiverPoint, WaterSample, WaterShore,
-    WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams, WetGround,
+    MAX_FLOATERS, MAX_POOL_SAMPLES, WATER_MIPS, WATER_SIZE, WaterCascadeDesc, WaterCascades,
+    WaterCaustics, WaterFloater, WaterFrame, WaterLake, WaterMouth, WaterPool, WaterRiverPoint,
+    WaterSample, WaterShore, WaterShoreTrain, WaterStone, WaterSurface, WaterSurfaceParams,
+    WetGround,
 };

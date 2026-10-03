@@ -20,7 +20,7 @@ use std::time::Instant;
 use anyhow::{Context as _, Result};
 use forge_app::Context;
 use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
-use forge_physics::buoyancy::Hull;
+use forge_physics::buoyancy::{Fluid, Hull};
 use forge_physics::{BodyDesc, BodyId, Shape, Transform, Velocity, World, WorldDesc};
 use forge_render::meshlet::MeshId;
 use forge_render::{MeshletScene, MeshletSceneBuilder, MoverTransform};
@@ -35,6 +35,7 @@ use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
 mod creatures;
 mod drive;
+mod flood;
 mod fly;
 mod sea;
 mod walk;
@@ -60,6 +61,8 @@ pub(crate) enum LabScene {
     Break,
     /// Creatures as powered ragdolls: mannequins on stands and dogs (#143).
     Creatures,
+    /// A dam break: a reservoir behind a gate, a basin with blocks and a hut, what floats (#144).
+    Flood,
 }
 
 /// The floor's half side, metres.
@@ -113,12 +116,23 @@ const PIECE: usize = 29;
 /// The creatures' parts, a kind's eleven after the other's, then the mannequins' pole.
 const CREATURE: usize = PIECE + wall::PIECES;
 const POLE: usize = CREATURE + 2 * creatures::PARTS;
+/// The flood's walls along x and z, its gate, a block, the hut.
+const FLOOD: usize = POLE + 1;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
 const SEA_LOGS: u32 = 16;
 const SEA_BALLS: u32 = 20;
 const SEA_ROCKS: u32 = 18;
+/// What the flood carries: crates, barrels, logs.
+const FLOOD_CRATES: u32 = 18;
+const FLOOD_BARRELS: u32 = 12;
+const FLOOD_LOGS: u32 = 9;
+/// Fresh water: the sea's drag, its density 1000 kg/m³.
+const FRESH: Fluid = Fluid {
+    density: 1000.0,
+    ..Fluid::SEA
+};
 /// Numbers of the players' controls in a saved state ([`LabWorld::words`]).
 const WORDS: usize = 15;
 /// Ticks between the digests a recording keeps.
@@ -141,6 +155,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(fly::props());
     props.extend(wall::props());
     props.extend(creatures::props());
+    props.extend(flood::props());
     props
 }
 
@@ -359,6 +374,16 @@ impl Codec for LabCommand {
     }
 }
 
+/// The flood's water for the water pass (`forge_render::WaterPool`): its first sample (world x,
+/// z), metres between samples, samples along x and z, and per sample the surface, the depth and
+/// the velocity.
+pub(crate) struct PoolView {
+    pub origin: [f32; 2],
+    pub spacing: f32,
+    pub size: [u32; 2],
+    pub samples: Vec<[f32; 4]>,
+}
+
 /// The bodies of one mesh, in the movers' order: the prop drawing them and how many.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Group {
@@ -393,6 +418,10 @@ pub(crate) struct LabWorld {
     wall: Option<wall::Wall>,
     /// The creatures, and whether their motors are let go.
     herd: Option<creatures::Herd>,
+    /// The flood's water (the authoritative column model) and its dam.
+    water: Option<forge_physics::shallow::Pool>,
+    dam: Option<flood::Dam>,
+    water_start: Option<forge_physics::shallow::Pool>,
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -425,7 +454,8 @@ impl LabWorld {
             | LabScene::Drive
             | LabScene::Fly
             | LabScene::Break
-            | LabScene::Creatures => 0.0,
+            | LabScene::Creatures
+            | LabScene::Flood => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -503,6 +533,8 @@ impl LabWorld {
         let mut pilot = fly::Pilot::default();
         let mut wall = None;
         let mut herd = None;
+        let mut water = None;
+        let mut dam = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -748,6 +780,69 @@ impl LabWorld {
                 }
                 herd = Some(field.herd);
             }
+            LabScene::Flood => {
+                let basin = flood::build(
+                    &mut world,
+                    &flood::Props {
+                        wall_x: FLOOD,
+                        wall_z: FLOOD + 1,
+                        block: FLOOD + 3,
+                        hut: FLOOD + 4,
+                    },
+                )?;
+                statics.extend(basin.statics);
+                group(FLOOD + 2, vec![basin.gate], &mut bodies);
+                // What floats: crates, barrels and logs, two thirds afloat behind the gate and
+                // a third lying on the floor beyond it.
+                let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 600.0)?;
+                let log_half = sea::LOG_LENGTH * 0.5;
+                let log_shape = Shape::cylinder(log_half, sea::LOG_RADIUS, 0.03, 700.0)?
+                    .offset(up(log_half), Quat::IDENTITY)?;
+                let kinds = [
+                    (
+                        CRATE,
+                        &crate_shape,
+                        FLOOD_CRATES,
+                        Hull::cuboid(Vec3::splat(sea::CRATE_HALF), 3),
+                        None,
+                    ),
+                    (
+                        BARREL,
+                        &barrel_shape,
+                        FLOOD_BARRELS,
+                        Hull::cylinder(super::BARREL_RADIUS, super::BARREL_LENGTH, 0.0, 16, 3),
+                        Some(60.0),
+                    ),
+                    (
+                        LOG,
+                        &log_shape,
+                        FLOOD_LOGS,
+                        Hull::cylinder(sea::LOG_RADIUS, sea::LOG_LENGTH, 0.0, 12, 6),
+                        None,
+                    ),
+                ];
+                for (prop, shape, count, hull, mass) in kinds {
+                    hulls.push(hull);
+                    let mut ids = Vec::new();
+                    for _ in 0..count {
+                        k += 1;
+                        let body = world.add_body(&BodyDesc {
+                            rotation: rotation(k),
+                            friction: 0.6,
+                            mass,
+                            ..BodyDesc::dynamic(shape, flood::afloat_at(k, unit))
+                        })?;
+                        floaters.push(sea::Floater {
+                            body,
+                            hull: hulls.len() - 1,
+                        });
+                        ids.push(body);
+                    }
+                    group(prop, ids, &mut bodies);
+                }
+                water = Some(basin.pool);
+                dam = Some(basin.dam);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -837,6 +932,9 @@ impl LabWorld {
                 pilot,
                 wall,
                 herd,
+                water_start: water.clone(),
+                water,
+                dam,
                 limp: false,
                 pool,
             },
@@ -984,6 +1082,9 @@ impl Simulation for LabWorld {
                         ..fly::Pilot::default()
                     };
                     self.limp = false;
+                    if let (Some(water), Some(start)) = (&mut self.water, &self.water_start) {
+                        water.clone_from(start);
+                    }
                 }
                 LabCommand::Steer { throttle, rudder } => {
                     let (throttle, rudder) = (throttle.clamp(-1.0, 1.0), rudder.clamp(-1.0, 1.0));
@@ -1014,6 +1115,9 @@ impl Simulation for LabWorld {
                     if let Some(wall) = &self.wall {
                         wall.release(&mut self.world);
                     }
+                    if let (Some(dam), Some(water)) = (&self.dam, &mut self.water) {
+                        dam.open(&mut self.world, water);
+                    }
                 }
                 LabCommand::Limp { on } => self.limp = on,
             }
@@ -1025,12 +1129,25 @@ impl Simulation for LabWorld {
                 &mut self.world,
                 &self.floaters,
                 &self.hulls,
-                &heights,
+                &sea::Surface(&heights),
+                &Fluid::SEA,
                 &self.pool,
             );
             if let Some(boat) = &self.boat {
                 boat.drive(&mut self.world, &heights);
             }
+        }
+        // The flood's water a tick on, then what floats pushed by it.
+        if let Some(water) = &mut self.water {
+            water.step(TICK);
+            sea::float(
+                &mut self.world,
+                &self.floaters,
+                &self.hulls,
+                &*water,
+                &FRESH,
+                &self.pool,
+            );
         }
         // The playground's platform and player, before the bodies move.
         self.player
@@ -1053,6 +1170,10 @@ impl Simulation for LabWorld {
         if let Some(herd) = &self.herd {
             herd.knock(&mut self.world, TICK);
         }
+        // The lifted gate stops at its top.
+        if let Some(dam) = &self.dam {
+            dam.tick(&mut self.world);
+        }
         // The mortar that carried more than it holds in that step breaks, and the column
         // shatters under a blow.
         if let (Some(wall), Some(before)) = (&self.wall, column) {
@@ -1071,6 +1192,10 @@ impl Simulation for LabWorld {
         out.extend_from_slice(&self.next_throw.to_le_bytes());
         for word in self.words() {
             out.extend_from_slice(&word.to_bits().to_le_bytes());
+        }
+        // The flood's water, before the world's state (whose length Jolt knows).
+        if let Some(water) = &self.water {
+            water.save(&mut out);
         }
         out.extend(self.world.save_state());
         out
@@ -1104,6 +1229,10 @@ impl Simulation for LabWorld {
         self.pilot.aileron = w[12];
         self.pilot.rudder = w[13];
         self.limp = w[14] != 0.0;
+        let world = match &mut self.water {
+            Some(water) => &world[water.restore(world)..],
+            None => world,
+        };
         if let Err(e) = self.world.restore_state(world) {
             tracing::warn!("a lab state: {e}");
         }
@@ -1125,6 +1254,10 @@ impl Simulation for LabWorld {
             for (k, v) in s.velocity.to_array().into_iter().enumerate() {
                 d ^= u64::from(v.to_bits()).rotate_left(13 * k as u32 + 1);
             }
+        }
+        // The flood's water, every column and pipe to the bit.
+        if let Some(water) = &self.water {
+            d ^= water.digest().rotate_left(29);
         }
         d
     }
@@ -1697,10 +1830,27 @@ impl Lab {
         self.queued.push(LabCommand::Fly { controls });
     }
 
-    /// Whether the scene's wrecking ball is still held back.
-    pub(crate) fn ball_held(&mut self) -> bool {
+    /// Whether the scene holds something back for Space to let go: the wrecking ball, the
+    /// flood's gate.
+    pub(crate) fn held(&mut self) -> bool {
         let shown = self.shown();
         shown.wall.as_ref().is_some_and(|w| w.held(&shown.world))
+            || shown
+                .dam
+                .as_ref()
+                .zip(shown.water.as_ref())
+                .is_some_and(|(dam, water)| dam.closed(water))
+    }
+
+    /// The flood's water as the shown world holds it, for its drawing.
+    pub(crate) fn pool(&mut self) -> Option<PoolView> {
+        let water = self.shown().water.as_ref()?;
+        Some(PoolView {
+            origin: [water.origin[0] as f32, water.origin[1] as f32],
+            spacing: water.spacing,
+            size: [water.size[0] as u32, water.size[1] as u32],
+            samples: flood::samples(water),
+        })
     }
 
     /// Lets the wrecking ball go at the next tick.
@@ -2089,6 +2239,64 @@ mod tests {
         assert_eq!(herd.standing(&first.world), 3);
         let (mut second, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
         for _ in 0..120 {
+            second.tick(&[]);
+        }
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_flood_waits_for_its_gate_then_carries_what_floats_and_replays() {
+        let (mut first, _) = LabWorld::new(LabScene::Flood, test_pool()).unwrap();
+        let start = first.water.as_ref().unwrap().volume();
+        let downstream = |world: &LabWorld| {
+            let w = world.water.as_ref().unwrap();
+            let gate =
+                ((f64::from(flood::GATE_X) + 1.0 - w.origin[0]) / f64::from(w.spacing)) as usize;
+            let area = f64::from(w.spacing * w.spacing);
+            (0..w.size[1])
+                .flat_map(|z| (gate..w.size[0]).map(move |x| (x, z)))
+                .map(|(x, z)| f64::from(w.depth[w.index(x, z)]) * area)
+                .sum::<f64>()
+        };
+        let reach = |world: &LabWorld| {
+            let bodies: Vec<BodyId> = world.floaters.iter().map(|f| f.body).collect();
+            let mut t = Vec::new();
+            world.world.transforms(&bodies, &mut t);
+            t.iter().map(|t| t.position.x).fold(f64::MIN, f64::max)
+        };
+        // A second with the gate shut: the reservoir stays behind it.
+        for _ in 0..60 {
+            first.tick(&[]);
+        }
+        assert!(downstream(&first) < 1e-6 * start, "{}", downstream(&first));
+        let before = reach(&first);
+        // Lifted: in four seconds the water runs down the basin, every drop kept, and carries
+        // what floats past where it lay.
+        let commands = vec![Stamped {
+            tick: 60,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Release,
+        }];
+        let recording = Recording::record(&mut first, commands, 240, 60);
+        let water = first.water.as_ref().unwrap();
+        assert!(
+            (water.volume() - start).abs() < 1e-3 * start,
+            "{} of {start}",
+            water.volume()
+        );
+        assert!(
+            downstream(&first) > 0.3 * start,
+            "{} of {start}",
+            downstream(&first)
+        );
+        assert!(
+            reach(&first) > before + 5.0,
+            "{} from {before}",
+            reach(&first)
+        );
+        let (mut second, _) = LabWorld::new(LabScene::Flood, test_pool()).unwrap();
+        for _ in 0..60 {
             second.tick(&[]);
         }
         recording.replay(&mut second).expect("the same digests");

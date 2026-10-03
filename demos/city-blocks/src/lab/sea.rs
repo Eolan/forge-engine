@@ -147,7 +147,7 @@ impl Sea {
 }
 
 /// [`SeaHeights`] as the buoyancy reads the water.
-struct Surface<'a>(&'a SeaHeights);
+pub(super) struct Surface<'a>(pub &'a SeaHeights);
 
 impl Water for Surface<'_> {
     fn height(&self, x: f64, z: f64) -> f64 {
@@ -162,14 +162,15 @@ pub(super) struct Floater {
     pub hull: usize,
 }
 
-/// Pushes every floater by the water this tick: their states read in three calls, the pushes
-/// worked out in parallel (each alone, so the same with any workers), applied in one call. A
-/// body asleep wholly under the water (a rock on the floor) is left asleep.
+/// Pushes every floater by `water` (of `fluid`) this tick: their states read in three calls, the
+/// pushes worked out in parallel (each alone, so the same with any workers), applied in one call.
+/// A body asleep wholly under the water (a rock on the floor) is left asleep.
 pub(super) fn float(
     world: &mut World,
     floaters: &[Floater],
     hulls: &[Hull],
-    sea: &SeaHeights,
+    water: &(impl Water + Sync),
+    fluid: &Fluid,
     pool: &TaskPool,
 ) {
     let bodies: Vec<BodyId> = floaters.iter().map(|f| f.body).collect();
@@ -180,7 +181,7 @@ pub(super) fn float(
     world.centers_of_mass(&bodies, &mut centers);
     world.awake(&bodies, &mut awake);
     let mut pushes = vec![None; floaters.len()];
-    let surface = Surface(sea);
+    let surface = water;
     pool.scope(|scope| {
         for (k, out) in pushes.chunks_mut(16).enumerate() {
             let (floaters, transforms, velocities, centers, awake, surface) = (
@@ -189,7 +190,7 @@ pub(super) fn float(
                 &velocities,
                 &centers,
                 &awake,
-                &surface,
+                surface,
             );
             scope.spawn(move |_| {
                 for (i, slot) in out.iter_mut().enumerate() {
@@ -200,13 +201,10 @@ pub(super) fn float(
                         velocities[n],
                         centers[n],
                         surface,
-                        &Fluid::SEA,
+                        fluid,
                     );
                     let sunk = p.buoyancy.y
-                        >= hulls[floaters[n].hull].volume()
-                            * Fluid::SEA.density
-                            * Fluid::SEA.gravity
-                            * 0.999;
+                        >= hulls[floaters[n].hull].volume() * fluid.density * fluid.gravity * 0.999;
                     if awake[n] || !sunk {
                         *slot = Some((p.force, transforms[n].position, p.torque));
                     }

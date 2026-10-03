@@ -358,6 +358,9 @@ struct WaterSurface
     float4 wake_window;   // the wakes' field (#107, `wakes.slang`): its corner (world x, z), 1 / its size in metres (0: no wakes), 0
     uint wake_slopes;     // sampled index (rg16f): the field's slopes
     uint3 pad_wake;
+    float4 pool_frame;    // a pool's first sample (world x, z), metres between samples, 0 (#144)
+    float4* pool;         // its samples: the surface (m), the depth (m, 0: dry), the velocity (world x, z; m/s); null: none
+    uint2 pool_size;      // its samples along x and z
 };
 
 struct SurfacePush
@@ -1645,6 +1648,110 @@ FreshWater lake_water(WaterSurface* w, LakeOut input)
     // The waves of what moves through it (#107), carried as a lake has no fall of its own.
     float footprint = max(max(length(ddx(input.flat)), length(ddy(input.flat))), 1e-3);
     s.fall = wake_slope(w, world, footprint);
+    return s;
+}
+
+
+// ----------------------------------------------------------------- the pools ---
+//
+// A simulated pool's water (#144): the columns of a shallow-water grid (the authoritative
+// model on the CPU, `forge_physics::shallow`), its samples' surface, depth and flow uploaded
+// each frame. Two triangles between each four samples, at the surface; a dry sample stands at
+// its bed, so the water's edge thins to nothing where it runs out, and is faded by its depth
+// over the last centimetres. Its water is the rivers' (`fresh_water`): silty, its ripples
+// carried on its flow, white where it runs fast.
+
+// The depth over which the pool's edge fades in, metres, and the speeds between which its
+// water turns white (m/s).
+static const float POOL_EDGE = 0.03;
+static const float2 POOL_WHITE = float2(2.0, 5.0);
+
+struct PoolOut
+{
+    float4 position : SV_Position;
+    float3 relative : POSITION; // camera-relative metres
+    float2 flat : TEXCOORD0;    // camera-relative world x, z
+    float4 water : TEXCOORD1;   // its depth (m), its velocity (world x, z; m/s), 0
+    float2 slope : TEXCOORD2;   // the surface's slopes ∂h/∂x and ∂h/∂z
+};
+
+// Sample `s` of the pool, clamped to the grid.
+float4 pool_sample(WaterSurface* w, int2 s)
+{
+    int2 n = int2(w[0].pool_size);
+    int2 c = clamp(s, int2(0, 0), n - 1);
+    return w[0].pool[c.y * n.x + c.x];
+}
+
+[shader("vertex")]
+PoolOut pool_vert_main(uint id : SV_VertexID)
+{
+    WaterSurface* w = surface_push.surface;
+    uint quads = w[0].pool_size.x - 1u;
+    uint quad = id / 6u;
+    int2 s = int2(int(quad % quads), int(quad / quads)) + QUAD_CORNERS[id % 6u];
+    float4 here = pool_sample(w, s);
+    float spacing = w[0].pool_frame.z;
+    float2 world = w[0].pool_frame.xy + float2(s) * spacing;
+    // The surface's slopes from its neighbours (a dry one's bed counts: the water's edge).
+    float dx = pool_sample(w, s + int2(1, 0)).x - pool_sample(w, s - int2(1, 0)).x;
+    float dz = pool_sample(w, s + int2(0, 1)).x - pool_sample(w, s - int2(0, 1)).x;
+    float3 relative = float3(world.x, here.x, world.y) - w[0].camera.xyz;
+    PoolOut o;
+    o.position = mul(w[0].view_proj, float4(relative, 1.0));
+    o.relative = relative;
+    o.flat = relative.xz;
+    o.water = float4(here.y, here.z, here.w, 0.0);
+    o.slope = float2(dx, dz) / (2.0 * spacing);
+    return o;
+}
+
+[shader("fragment")]
+SurfaceTargets pool_frag_main(PoolOut input)
+{
+    WaterSurface* w = surface_push.surface;
+    return fresh_water(w, pool_water(w, input));
+}
+
+// A pool when the camera stands low enough to be under the water.
+[shader("fragment")]
+SurfaceTargets pool_under_frag_main(PoolOut input)
+{
+    WaterSurface* w = surface_push.surface;
+    return fresh_water_seen(w, pool_water(w, input));
+}
+
+// A pool's water at a pixel.
+FreshWater pool_water(WaterSurface* w, PoolOut input)
+{
+    float2 world = input.flat + w[0].camera.xz;
+    float2 velocity = input.water.yz;
+    float speed = length(velocity);
+    float2 down = speed > 1e-4 ? velocity / speed : float2(1.0, 0.0);
+    // The slope the water stands on, capped as a river's fall is for its shading.
+    float2 slope = clamp(input.slope, -0.5, 0.5);
+    FreshWater s;
+    s.position = input.position;
+    s.relative = input.relative;
+    s.flat = input.flat;
+    s.velocity = velocity;
+    s.fall = slope;
+    s.tilt = slope;
+    s.rough = 0.0;
+    s.coverage = smoothstep(0.0, POOL_EDGE, input.water.x);
+    s.drape = 0.0;
+    s.depth = input.water.x;
+    // White where it runs fast: a front, the race past an obstacle; streaked along its flow.
+    float riffles = smoothstep(0.35, 0.7, value_noise(world / 3.0));
+    s.white = smoothstep(POOL_WHITE.x, POOL_WHITE.y, speed) * lerp(0.5, 1.0, riffles);
+    s.froth = s.white * s.white;
+    s.streak = float2(dot(world, down), dot(world, float2(-down.y, down.x)));
+    s.speed = speed;
+    s.absorption = RIVER_ABSORPTION;
+    s.scatter = RIVER_SCATTER;
+    s.bed = RIVER_BED;
+    s.deepest = input.water.x + RIVER_DEEPEST;
+    s.ripples = 1.0;
     return s;
 }
 

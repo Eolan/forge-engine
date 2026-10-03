@@ -17,6 +17,7 @@
 pub mod aero;
 pub mod buoyancy;
 mod ffi;
+pub mod shallow;
 
 use std::ptr::NonNull;
 

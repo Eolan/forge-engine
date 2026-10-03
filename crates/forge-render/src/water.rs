@@ -536,9 +536,15 @@ struct GpuWaterSurface {
     wake_window: [f32; 4],
     wake_slopes: u32,
     pad_wake: [u32; 3],
+    /// The pool's first sample (world x, z), metres between samples, 0 (#144).
+    pool_frame: [f32; 4],
+    /// Its samples (surface, depth, velocity x, z), or 0: no pool.
+    pool: u64,
+    /// Its samples along x and z.
+    pool_size: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 832);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 864);
 
 /// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
 /// its absorption and its scattering, then `water/under`'s dispatch.
@@ -682,6 +688,30 @@ const FLOATER_ENTRIES: usize = 4096;
 /// Bytes after the frame's block: the floaters, then the grid's cells and its lists.
 const FLOATER_BYTES: usize = MAX_FLOATERS * std::mem::size_of::<GpuFloater>()
     + (FLOATER_CELLS * FLOATER_CELLS + FLOATER_ENTRIES) * 4;
+
+/// Samples of a pool a frame's water takes at most ([`WaterSurface::set_pool`]), and their
+/// bytes after the floaters.
+pub const MAX_POOL_SAMPLES: usize = 20_480;
+/// A pool as the next draw takes it: its first sample and spacing (as `pool_frame`), its
+/// samples along x and z, its samples.
+type PoolUpload = ([f32; 4], [u32; 2], Vec<[f32; 4]>);
+const POOL_BYTES: usize = MAX_POOL_SAMPLES * 16;
+
+/// Simulated water on a grid this frame (#144, a shallow-water pool's columns): drawn as fresh
+/// water whose surface, depth and flow come from its samples, its edge where it thins to
+/// nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct WaterPool<'a> {
+    /// World x and z (the sea's frame) of the first sample, metres.
+    pub origin: [f32; 2],
+    /// Metres between samples.
+    pub spacing: f32,
+    /// Samples along x and z (at most [`MAX_POOL_SAMPLES`] in all).
+    pub size: [u32; 2],
+    /// Per sample, row-major along +z: the surface's height, the water's depth (0: dry), its
+    /// velocity (world x, z; m/s).
+    pub samples: &'a [[f32; 4]],
+}
 
 /// The floaters' grid around `camera` (world x and z): its origin, and per cell the first entry
 /// of its list and their count (16 bits each), then the lists, the floaters' indices. A floater
@@ -1137,6 +1167,9 @@ pub struct WaterSurface {
     /// looks out from under them.
     rivers_under: Pipeline,
     lakes_under: Pipeline,
+    /// A simulated pool's water (#144), and seen from below.
+    pools: Pipeline,
+    pools_under: Pipeline,
     at_camera_pass: Pipeline,
     under: Pipeline,
     /// The water at the camera (`WaterAtCamera`), which `water/at-camera` writes.
@@ -1144,6 +1177,11 @@ pub struct WaterSurface {
     blocks: Vec<Buffer>,
     /// The floaters [`WaterSurface::set_floaters`] gave for the next draw (#107).
     floaters: std::cell::RefCell<Vec<GpuFloater>>,
+    /// The pool [`WaterSurface::set_pool`] gave for the next draw (#144): its frame, its size
+    /// and its samples.
+    pool: std::cell::RefCell<Option<PoolUpload>>,
+    /// Whether the sea is drawn ([`WaterSurface::set_sea`]).
+    sea: std::cell::Cell<bool>,
     /// The surface's quads as indices into a level's vertices ([`surface_indices`]), and each
     /// set's ranges per block.
     surface_indices: Buffer,
@@ -1403,11 +1441,15 @@ impl WaterSurface {
         // The lakes, drawn before the rivers so a river blends over a lake it runs into: a plane
         // each, clipped to its mask, its edge where the ground rises through it.
         let (lakes, lakes_under) = fresh_pipelines("lake", "water lakes")?;
+        // A simulated pool's water (#144), after the lakes.
+        let (pools, pools_under) = fresh_pipelines("pool", "water pools")?;
         let blocks = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
-                // The block, then this frame's floaters and their grid (`set_floaters`).
+                // The block, then this frame's floaters and their grid (`set_floaters`), then
+                // its pool's samples (`set_pool`).
                 device.create_buffer(BufferDesc {
-                    size: (std::mem::size_of::<GpuWaterSurface>() + FLOATER_BYTES) as u64,
+                    size: (std::mem::size_of::<GpuWaterSurface>() + FLOATER_BYTES + POOL_BYTES)
+                        as u64,
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                     location: MemoryLocation::CpuToGpu,
                     category: MemoryCategory::Frame,
@@ -1683,15 +1725,41 @@ impl WaterSurface {
             lakes_under: lakes_under?,
             rivers: rivers?,
             lakes: lakes?,
+            pools: pools?,
+            pools_under: pools_under?,
             at_camera_pass: at_camera_pass?,
             under: under?,
             at_camera,
             blocks,
             floaters: std::cell::RefCell::new(Vec::new()),
+            pool: std::cell::RefCell::new(None),
+            sea: std::cell::Cell::new(true),
             surface_indices,
             surface_ranges,
             shore,
         })
+    }
+
+    /// Whether the sea is drawn (it is unless told otherwise): a scene of fresh water alone
+    /// draws its lakes, rivers or pool without it.
+    pub fn set_sea(&self, drawn: bool) {
+        self.sea.set(drawn);
+    }
+
+    /// A pool's water for the next [`WaterSurface::draw`] (#144); a draw without one draws
+    /// none. More than [`MAX_POOL_SAMPLES`] samples, or fewer than two along an axis, draws
+    /// none.
+    pub fn set_pool(&self, pool: &WaterPool) {
+        let [nx, nz] = pool.size;
+        let n = nx as usize * nz as usize;
+        *self.pool.borrow_mut() =
+            (nx >= 2 && nz >= 2 && n <= MAX_POOL_SAMPLES && pool.samples.len() >= n).then(|| {
+                (
+                    [pool.origin[0], pool.origin[1], pool.spacing, 0.0],
+                    pool.size,
+                    pool.samples[..n].to_vec(),
+                )
+            });
     }
 
     /// What floats in the water this frame (#107): at most [`MAX_FLOATERS`] of `floaters`, the
@@ -1999,6 +2067,22 @@ impl WaterSurface {
                 FLOATER_CELLS as f32,
             ]
         };
+        // A pool's water (#144), after the floaters: its samples, and its quads to draw.
+        let pool = self.pool.borrow_mut().take();
+        let pool_samples = floaters + FLOATER_BYTES as u64;
+        let (pool_frame, pool_size, pool_vertices) = match &pool {
+            Some((frame, size, samples)) => {
+                block.write(pool_samples - address, samples);
+                (*frame, *size, (size[0] - 1) * (size[1] - 1) * 6)
+            }
+            None => ([0.0; 4], [0; 2], 0),
+        };
+        let pool_pipeline = if fresh_water.is_some() || params.camera.y < FRESH_SEA_REACH {
+            &self.pools_under
+        } else {
+            &self.pools
+        };
+        let sea = self.sea.get();
         if let Some(at_camera) = at_camera {
             let pipeline = &self.at_camera_pass;
             let mut pass = graph
@@ -2116,6 +2200,9 @@ impl WaterSurface {
                         .map_or([0.0; 4], |w| [w.window[0], w.window[1], w.window[2], 0.0]),
                     wake_slopes: params.wakes.map_or(0, |w| resources.sampled(w.slopes).0),
                     pad_wake: [0; 3],
+                    pool_frame,
+                    pool: if pool_vertices > 0 { pool_samples } else { 0 },
+                    pool_size,
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.
@@ -2150,19 +2237,21 @@ impl WaterSurface {
                 .color_attachments(&attachment)
                 .depth_attachment(&depth_attachment);
             commands.begin_rendering(&info);
-            commands.bind_pipeline(surface);
             commands.set_viewport_full(extent);
-            commands.bind_index_buffer(surface_indices, 0, vk::IndexType::UINT16);
-            for &(first, count, level) in &surface_runs {
-                commands.push_constants(
-                    surface,
-                    &SurfacePush {
-                        surface: address,
-                        first: level,
-                        pad: 0,
-                    },
-                );
-                commands.draw_indexed(count, first, 0);
+            if sea {
+                commands.bind_pipeline(surface);
+                commands.bind_index_buffer(surface_indices, 0, vk::IndexType::UINT16);
+                for &(first, count, level) in &surface_runs {
+                    commands.push_constants(
+                        surface,
+                        &SurfacePush {
+                            surface: address,
+                            first: level,
+                            pad: 0,
+                        },
+                    );
+                    commands.draw_indexed(count, first, 0);
+                }
             }
             // The lakes, then the rivers over the land (a segment between each pair of a river's
             // points), which blend over the lakes they run into.
@@ -2177,6 +2266,19 @@ impl WaterSurface {
                     },
                 );
                 commands.draw(lake_count * 6, 1);
+            }
+            // A pool (#144): two triangles between each four of its samples.
+            if pool_vertices > 0 {
+                commands.bind_pipeline(pool_pipeline);
+                commands.push_constants(
+                    pool_pipeline,
+                    &SurfacePush {
+                        surface: address,
+                        first: 0,
+                        pad: 0,
+                    },
+                );
+                commands.draw(pool_vertices, 1);
             }
             if !river_runs.is_empty() {
                 commands.bind_pipeline(river_pipeline);

@@ -357,3 +357,7 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   past a load or a strain, as engines' breakable constraints do (#142).
 - **Powered ragdolls.** Jolt's `Ragdoll`, `Skeleton` and motorised swing-twist and hinge
   constraints (Jorrit Rouwé), set up after Jolt's ragdoll samples (#143); D-012's physics layer.
+- **Shallow water.** Matthias Müller-Fischer, "Fast Water Simulation for Games Using Height
+  Fields", GDC 2008: depths on a grid, velocities on its faces carried along semi-Lagrangian,
+  upwind fluxes kept from overdrawing a cell (`forge_physics::shallow`, #144). A. Ritter's
+  dam-break solution (1892) for its test.
