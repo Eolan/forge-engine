@@ -119,6 +119,11 @@ exposure (EV100, target, compensation, curve) the last.
   `post/display transform` 0.020 with bloom mixed in (`post/bloom` 0.041, as under TAA).
 - TAA's history through Lanczos-3 (D-045), the same room: `temporal/TAA resolve` 0.047 →
   0.077 ms, 36 texel loads in place of 5 bilinear fetches.
+- TAA's motion vectors and resolve as compute passes (#161, so the serial frame repeats), the
+  same room (60 frames, two runs): `temporal/TAA resolve` 0.077 → 0.079–0.082 ms,
+  `temporal/sharpen` 0.072, `temporal/motion vectors` 0.012. In the ballad at 1600 × 900: the
+  resolve 0.086, the sharpening 0.056, the motion 0.014–0.016. Unsharpened, the pass that shows
+  the history is `temporal/show`.
 - The scene behind the tank's water through a TAA of its own (#156): `liquid/scene TAA`
   0.079 ms and `liquid/scene copy` 0.013 ms at 1600 × 900.
 - SSAA 2 × 2 for screenshots (D-045, `--ssaa`): the city's frame 2.363 → 5.134 ms at

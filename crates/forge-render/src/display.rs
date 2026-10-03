@@ -5,8 +5,8 @@
 //! is the engine default (hue-safe), the ACES fit the contrasty film look (the ballad uses
 //! it: its toe keeps space black), Khronos PBR Neutral the view that keeps base colours for
 //! material checks, ACES 2.0 the Academy's current output transform ([`crate::aces2`]). The
-//! ballad applies it inside its TAA resolve (one pass writes the HDR history and the display
-//! image); [`Display`] is the stand-alone pass for paths without temporal filtering. The CPU
+//! ballad applies it in the pass that shows TAA's history (`temporal/sharpen`, or `temporal/show`
+//! unsharpened); [`Display`] is the stand-alone pass for paths without temporal filtering. The CPU
 //! functions below mirror the shader and pin its behaviour in tests.
 
 use std::cell::Cell;

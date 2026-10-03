@@ -28,6 +28,24 @@ pub enum HashKind {
         /// The image it should equal.
         other: ImageHandle,
     },
+    /// Where a float image differs from `other`: the words are the largest `y << 16 | x` of
+    /// the differing texels and the largest of its complement (the smallest, inverted); with
+    /// `columns`, `x << 16 | y`.
+    Where {
+        /// The image it should equal.
+        other: ImageHandle,
+        /// Ordered by column rather than by row.
+        columns: bool,
+    },
+    /// The range of x over the texels where a float image differs from `other`: the largest
+    /// of this image's and of `other`'s, as order-preserving bits; with `smallest`, the
+    /// smallest, inverted.
+    Range {
+        /// The image it should equal.
+        other: ImageHandle,
+        /// The smallest rather than the largest.
+        smallest: bool,
+    },
 }
 
 impl HashKind {
@@ -37,6 +55,8 @@ impl HashKind {
             Self::Depth => 1,
             Self::Uint => 2,
             Self::Compare { .. } => 4,
+            Self::Where { columns, .. } => 5 + u32::from(columns),
+            Self::Range { smallest, .. } => 7 + u32::from(smallest),
         }
     }
 }
@@ -176,7 +196,9 @@ impl ImageHasher {
             .image(image, ImageAccess::Sampled(compute))
             .buffer(recording.sums, BufferAccess::ShaderReadWrite(compute));
         let other = match kind {
-            HashKind::Compare { other } => {
+            HashKind::Compare { other }
+            | HashKind::Where { other, .. }
+            | HashKind::Range { other, .. } => {
                 pass = pass.image(other, ImageAccess::Sampled(compute));
                 Some(other)
             }

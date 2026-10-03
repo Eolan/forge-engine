@@ -1,7 +1,7 @@
 //! Bloom (issue #44, `shaders/bloom.slang`), after Jimenez 2014: the pre-exposed HDR image
 //! filtered down a chain of half-size levels (a 13-tap filter, the first step weighted against
 //! fireflies) and back up with a 3×3 tent, each level adding the one below. The top level,
-//! at half the image's size, is what the TAA resolve blends into the image it shows
+//! at half the image's size, is what TAA's last pass blends into the image it shows
 //! ([`crate::Taa::bloom_strength`]); the history stays unbloomed.
 
 use std::sync::Arc;

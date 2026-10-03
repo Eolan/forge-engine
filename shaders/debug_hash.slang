@@ -31,6 +31,65 @@ void hash_main(uint3 id : SV_DispatchThreadID)
 {
     uint h = 0;
     uint bad = 0;
+    if (hash_push.kind == 7 || hash_push.kind == 8)
+    {
+        // The range of x over the texels that differ from `other`: the largest of each image's
+        // (kind 7) or the smallest (kind 8, inverted), as order-preserving bits.
+        uint a = 0;
+        uint b = 0;
+        if (id.x < hash_push.width && id.y < hash_push.height)
+        {
+            int3 texel = int3(id.xy, 0);
+            float4 v = g_sampled_images[NonUniformResourceIndex(hash_push.image)].Load(texel);
+            float4 o = g_sampled_images[NonUniformResourceIndex(hash_push.other)].Load(texel);
+            if (any(asuint(v) != asuint(o)))
+            {
+                uint va = asuint(v.x);
+                uint ob = asuint(o.x);
+                va = (va & 0x80000000u) != 0 ? ~va : va | 0x80000000u;
+                ob = (ob & 0x80000000u) != 0 ? ~ob : ob | 0x80000000u;
+                a = hash_push.kind == 7 ? va : ~va;
+                b = hash_push.kind == 7 ? ob : ~ob;
+            }
+        }
+        uint wave_a = WaveActiveMax(a);
+        uint wave_b = WaveActiveMax(b);
+        if (WaveIsFirstLane() && (wave_a | wave_b) != 0)
+        {
+            uint ignored;
+            InterlockedMax(hash_push.out[hash_push.index * 2], wave_a, ignored);
+            InterlockedMax(hash_push.out[hash_push.index * 2 + 1], wave_b, ignored);
+        }
+        return;
+    }
+    if (hash_push.kind == 5 || hash_push.kind == 6)
+    {
+        // Where the image differs from `other`: the largest packed coordinate, and the largest
+        // of its complement, over the differing texels.
+        uint last = 0;
+        uint first = 0;
+        if (id.x < hash_push.width && id.y < hash_push.height)
+        {
+            int3 texel = int3(id.xy, 0);
+            float4 v = g_sampled_images[NonUniformResourceIndex(hash_push.image)].Load(texel);
+            float4 o = g_sampled_images[NonUniformResourceIndex(hash_push.other)].Load(texel);
+            if (any(asuint(v) != asuint(o)))
+            {
+                uint packed = hash_push.kind == 5 ? (id.y << 16) | id.x : (id.x << 16) | id.y;
+                last = packed;
+                first = ~packed;
+            }
+        }
+        uint wave_last = WaveActiveMax(last);
+        uint wave_first = WaveActiveMax(first);
+        if (WaveIsFirstLane() && wave_first != 0)
+        {
+            uint ignored;
+            InterlockedMax(hash_push.out[hash_push.index * 2], wave_last, ignored);
+            InterlockedMax(hash_push.out[hash_push.index * 2 + 1], wave_first, ignored);
+        }
+        return;
+    }
     if (id.x < hash_push.width && id.y < hash_push.height)
     {
         int3 texel = int3(id.xy, 0);

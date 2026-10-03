@@ -550,6 +550,8 @@ struct Gallery {
     liquid: Option<forge_render::Liquid>,
     /// The TAA of the scene behind the tank's water (#156), its own history.
     behind_taa: Option<Taa>,
+    /// `FORGE_HASH_IMAGES=1`: per-frame image hashes in the log (#161).
+    hasher: Option<forge_render::debug_hash::ImageHasher>,
     liquid_asked: [Option<u64>; forge_gpu::FRAMES_IN_FLIGHT],
     /// The lab's tick at which the liquid's next line is due.
     liquid_next_log: u64,
@@ -1167,6 +1169,10 @@ impl Gallery {
             space,
             liquid,
             behind_taa,
+            hasher: std::env::var_os("FORGE_HASH_IMAGES")
+                .is_some_and(|v| v != "0")
+                .then(|| forge_render::debug_hash::ImageHasher::new(&ctx.device, &ctx.shaders))
+                .transpose()?,
             liquid_asked: [None; forge_gpu::FRAMES_IN_FLIGHT],
             liquid_next_log: 0,
             liquid_reset: false,
@@ -1587,6 +1593,17 @@ impl Demo for Gallery {
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        // `FORGE_HASH_IMAGES=1` (#161): hashes of the clouds, the scene and TAA's history each
+        // frame, logged when their slot comes back, to find where two runs part without the
+        // waits that hide a race.
+        let hasher = self.hasher.as_ref();
+        if let Some(h) = hasher {
+            let hashes = h.take(frame.slot);
+            if !hashes.is_empty() {
+                tracing::info!(frame = ctx.frames_rendered, ?hashes, "image hashes");
+            }
+            h.begin(&mut frame.graph, frame.slot);
+        }
         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
@@ -1703,6 +1720,22 @@ impl Demo for Gallery {
             camera.position,
             exposure,
         );
+        if hasher.is_some() {
+            // What the motion vectors take from the CPU (#161), bit for bit.
+            let bits = |values: &[f32]| {
+                values.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, v| {
+                    (h ^ u64::from(v.to_bits())).wrapping_mul(0x0100_0000_01b3)
+                })
+            };
+            tracing::info!(
+                frame = ctx.frames_rendered,
+                reprojection = bits(&taa_frame.previous_from_current.to_cols_array()),
+                view_proj = bits(&camera.view_proj.to_cols_array()),
+                exposure = exposure.to_bits(),
+                jitter = ?taa_frame.jitter,
+                "taa inputs"
+            );
+        }
         // The camera in the scene frame, where the probes and the rays live (issue #93).
         let camera_in_scene = camera.position.relative_to(self.scene.origin());
         // The movers where they stand at the sea's time (#79).
@@ -1917,6 +1950,14 @@ impl Demo for Gallery {
                 extent,
             );
         }
+        if let Some(h) = hasher {
+            use forge_render::debug_hash::HashKind;
+            if let Some((clouds, _)) = cloud_images {
+                h.add(&mut frame.graph, clouds, HashKind::Float4, extent);
+            }
+            h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
+            h.add(&mut frame.graph, targets.depth, HashKind::Depth, extent);
+        }
         // The splashes' reactive mask for TAA (#107), when spray is alive.
         let mut reactive = None;
         if let (Some((cascades, surface, _)), Some(waves)) = (&self.water, &waves) {
@@ -2033,6 +2074,14 @@ impl Demo for Gallery {
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        if let Some(h) = hasher {
+            h.add(
+                &mut frame.graph,
+                motion,
+                forge_render::debug_hash::HashKind::Float4,
+                extent,
+            );
+        }
         // The movers' own motion over the camera's (#79).
         if !self.args.no_mover_motion {
             self.renderer.mover_motion(
@@ -2138,7 +2187,7 @@ impl Demo for Gallery {
         let bloom = self
             .bloom_on
             .then(|| self.bloom.draw(&mut frame.graph, taa_frame.color, extent));
-        self.taa.resolve(
+        let history = self.taa.resolve(
             &mut frame.graph,
             &taa_frame,
             targets.depth,
@@ -2148,6 +2197,12 @@ impl Demo for Gallery {
             bloom,
             reactive.filter(|_| !self.args.no_reactive),
         );
+        if let Some(h) = hasher {
+            use forge_render::debug_hash::HashKind;
+            h.add(&mut frame.graph, motion, HashKind::Float4, extent);
+            h.add(&mut frame.graph, history, HashKind::Float4, extent);
+            h.finish(&mut frame.graph);
+        }
         Ok(())
     }
 

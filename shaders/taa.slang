@@ -5,9 +5,14 @@
 // where each pixel was the frame before (static scene: depth and the two cameras suffice); the
 // resolve fetches the history there, clips it to what this frame's neighbourhood allows and
 // blends it with this frame's samples. The scene is pre-exposed: the history, stored at the
-// previous frame's exposure, is rescaled by `history_scale` before it is compared. The second
-// output is the display image, through the tone curve of `tonemap.slang`; with sharpening
-// (D-045), the resolve writes the history alone and `sharpen_main` shows it.
+// previous frame's exposure, is rescaled by `history_scale` before it is compared. A pass of
+// its own, `sharpen_main`, shows the history through the tone curve of `tonemap.slang`,
+// sharpened by RCAS when asked (D-045).
+//
+// The motion and the resolve are compute passes (#161): as fullscreen draws, on the serial frame
+// (FORGE_ASYNC=0) behind the clouds' compute work, the same draw from the same inputs came out
+// one of two ways from one run to the next (an fp16 step on up to a fifth of the pixels), and the
+// history kept the difference. Dispatched, they repeat to the bit.
 import bindless;
 import tonemap;
 
@@ -34,26 +39,34 @@ struct MotionPush
     uint depth;
     uint width;
     uint height;
+    uint motion;                    // the motion image (storage index)
 };
 
 [[vk::push_constant]]
 MotionPush motion_push;
 
-[shader("fragment")]
-float4 motion_main(Varyings input) : SV_Target
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void motion_main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= motion_push.width || id.y >= motion_push.height)
+        return;
+    g_storage_images_rg16f[NonUniformResourceIndex(motion_push.motion)][id.xy] = motion_at(int2(id.xy));
+}
+
+float2 motion_at(int2 pixel)
 {
     float2 size = float2(float(motion_push.width), float(motion_push.height));
-    int2 pixel = int2(input.position.xy);
     float depth = g_sampled_images_r[NonUniformResourceIndex(motion_push.depth)].Load(int3(pixel, 0));
     // The jittered projection moved the scene by the jitter: this pixel shows what sits that far
     // the other way in the unjittered view.
     float2 uv = (float2(pixel) + 0.5 - float2(motion_push.jitter_x, motion_push.jitter_y)) / size;
     float4 previous = mul(motion_push.previous_from_current, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
     if (previous.w <= 1e-9)
-        return float4(4.0, 4.0, 0.0, 1.0);
+        return float2(4.0, 4.0);
     float2 ndc = previous.xy / previous.w;
     float2 previous_uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    return float4(previous_uv - uv, 0.0, 1.0);
+    return previous_uv - uv;
 }
 
 // ---- Resolve ----------------------------------------------------------------------------------
@@ -63,21 +76,17 @@ struct ResolvePush
     uint color;
     uint motion;
     uint depth;
-    uint history;
+    uint history;        // the history read (sampled index)
     uint width;
     uint height;
     float jitter_x;
     float jitter_y;
     float blend; // how much of the result may come from this frame; 1 discards the history
     float history_scale; // this frame's exposure over the history's
-    uint curve;          // TONEMAP_* of tonemap.slang
-    uint bloom;          // the bloom chain's top level (sampled index), 0xFFFFFFFF for none (bloom.slang)
-    float bloom_strength; // how much of the shown image is bloom
-    Output output;       // the display's encoding (tonemap.slang)
     uint reactive;       // the splashes' reactive mask (sampled index, #107), 0xFFFFFFFF for none:
                          // at least that share of the pixel comes from this frame
-    ToneTables tables;   // what the ACES 2.0 curves read (tonemap.slang)
     uint lanczos;        // 1: the history through Lanczos-3 (36 texels), else Catmull-Rom (D-045)
+    uint written;        // the history written (storage index)
     uint pad;
 };
 
@@ -199,36 +208,21 @@ float3 clip_to_box(float3 value, float3 low, float3 high)
     return largest > 1.0 ? centre + offset / largest : value;
 }
 
-// The resolved colour goes to two targets at once: the next history (pre-exposed HDR) and the
-// display image through the tone curve, so no separate display pass is needed afterwards.
-struct ResolveOut
+// The resolve: the next history (pre-exposed HDR), which `sharpen_main` then shows.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_history_main(uint3 id : SV_DispatchThreadID)
 {
-    float4 history : SV_Target0;
-    float4 output : SV_Target1;
-};
-
-[shader("fragment")]
-ResolveOut resolve_main(Varyings input)
-{
-    float3 color = resolve_color(input);
-    ResolveOut o;
-    o.history = float4(color, 1.0);
-    // Bloom goes into the image shown, not into the history.
-    float3 shown = color;
-    if (resolve_push.bloom != 0xFFFFFFFFu)
-    {
-        float2 uv = input.position.xy / float2(float(resolve_push.width), float(resolve_push.height));
-        float3 bloom = sample_image_level(resolve_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
-        shown = lerp(color, bloom, resolve_push.bloom_strength);
-    }
-    o.output = float4(display_output(shown, resolve_push.curve, resolve_push.output, resolve_push.tables, uint2(input.position.xy)), 1.0);
-    return o;
+    if (id.x >= resolve_push.width || id.y >= resolve_push.height)
+        return;
+    g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.written)][id.xy] = float4(resolve_color(id.xy), 1.0);
 }
 
-float3 resolve_color(Varyings input)
+// The anti-aliased colour of output pixel `target`.
+float3 resolve_color(uint2 target)
 {
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
-    float2 uv = input.position.xy / size;
+    float2 uv = (float2(target) + 0.5) / size;
     float2 jitter = float2(resolve_push.jitter_x, resolve_push.jitter_y);
 
     // The render pixel whose sample lands nearest to this output pixel: pixel i's sample shows
@@ -286,21 +280,14 @@ float3 resolve_color(Varyings input)
     float alpha = saturate(resolve_push.blend * lerp(0.4, 1.0, nearest_weight));
     alpha = max(alpha, saturate(length(motion * size) / 48.0));
     if (resolve_push.reactive != 0xFFFFFFFFu)
-        alpha = max(alpha, g_sampled_images_r[NonUniformResourceIndex(resolve_push.reactive)].Load(int3(int2(input.position.xy), 0)));
+        alpha = max(alpha, g_sampled_images_r[NonUniformResourceIndex(resolve_push.reactive)].Load(int3(int2(target), 0)));
     float3 result = expand(lerp(history, current, alpha));
     if (any(isnan(result)))
         result = expand(current);
     return result;
 }
 
-// ---- Sharpening (D-045) -------------------------------------------------------------------------
-
-// The resolve alone, when a sharpening pass shows the image: the next history only.
-[shader("fragment")]
-float4 resolve_history_main(Varyings input) : SV_Target0
-{
-    return float4(resolve_color(input), 1.0);
-}
+// ---- Showing the history, sharpened (D-045) --------------------------------------------------
 
 struct SharpenPush
 {
@@ -332,7 +319,8 @@ float3 signal_at(int2 pixel, float3 bloom)
 // FidelityFX RCAS (FSR 1's `FsrRcasF`, MIT, without its noise detection), as tools/sharpness
 // previews it: each pixel sharpened by its four neighbours, as strongly as the cross's darkest
 // and brightest let it without clipping, at most RCAS's limit, scaled by `sharpness`. On the
-// display's signal, so the sharpening is even to the eye.
+// display's signal, so the sharpening is even to the eye. At `sharpness` 0 the pass only shows
+// the history.
 [shader("fragment")]
 float4 sharpen_main(Varyings input) : SV_Target
 {
@@ -344,6 +332,9 @@ float4 sharpen_main(Varyings input) : SV_Target
         bloom = sample_image_level(sharpen_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
     }
     float3 e = signal_at(pixel, bloom);
+    // Unsharpened, the pass only shows the history.
+    if (sharpen_push.sharpness <= 0.0)
+        return float4(display_from_signal(saturate(e), sharpen_push.output, uint2(pixel)), 1.0);
     float3 b = signal_at(pixel + int2(0, -1), bloom);
     float3 d = signal_at(pixel + int2(-1, 0), bloom);
     float3 f = signal_at(pixel + int2(1, 0), bloom);

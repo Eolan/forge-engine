@@ -337,7 +337,8 @@ cells gives 0 px. The far offsets keep a residue that does not grow with the dis
 offset's rounding inside a cell, turned into pixels by the traced shadows' edges and TAA. On
 2026-10-02 (Tier 2 at `ec4e626`) it was 2 307–2 428 px in the city (ꟻLIP mean ≤ 0.0016, largest
 0.093) and 1 518–1 519 px in the ballad (≤ 0.0005, 0.29), as in #98 (2 486–2 730 and 1 519).
-A change of these numbers is what to look at. Run it for a change that touches how positions
+TAA's sharpening (D-045) raised the city's to 4 013–4 193 px (≤ 0.0019, 0.106) on 2026-10-03,
+and it stood there after #161 (4 020–4 191; the ballad 1 513–1 514). A change of these numbers is what to look at. Run it for a change that touches how positions
 reach the GPU, and in Tier 2, and put its lines in the report.
 
 **Debugging aids:**
@@ -353,6 +354,23 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   #77). Captures must match in both modes.
 - `FORGE_FRAME_BARRIER=1` puts a full barrier at the start of each queue's first batch,
   which serialises frames on the GPU.
+- `FORGE_PARANOID_BARRIERS=1` puts a full barrier before every dispatch, draw and blit; a list
+  of pass-name prefixes (`=temporal/,debug/`) only before those passes. When it makes two runs
+  agree, timing is involved; bisect with the prefixes.
+- **Two runs that part (#161):** city-blocks' `FORGE_HASH_IMAGES=1` logs, each frame, hashes of
+  the clouds, the scene colour, the depth, the motion vectors (before and after the movers')
+  and TAA's history (`crates/forge-render/src/debug_hash.rs`). Diff the logs of two runs to find
+  the first image and the first frame that differ. `HashKind::Compare` counts the texels where
+  two images differ; `Where` and `Range` give their bounding box and their values. Running a
+  pass twice in one frame and comparing the two outputs shows whether the pass itself is
+  unrepeatable or one of its inputs is. The syncval layer sees nothing that goes through a
+  buffer's device address, and little through bindless indices: its silence does not clear a
+  hazard here.
+- **A pass whose output feeds a history is a compute pass (#161).** As fullscreen draws, TAA's
+  motion vectors and resolve came out one of two ways on the serial frame, from the same inputs
+  (an fp16 step on up to a fifth of the pixels), whichever way the timing fell; the history kept
+  the difference. Dispatched, they repeat to the bit. A draw whose output is only shown (the
+  display, the sharpening) changes one frame at most.
 - `FORGE_SHADER_STATS=<text>` logs what the driver compiled for each compute pipeline whose
   entry point holds the text (`1` for all): on NVIDIA the registers, the local and shared
   memory and the binary's size (`VK_KHR_pipeline_executable_properties`, #111; the local
