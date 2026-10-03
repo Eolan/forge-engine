@@ -1111,8 +1111,9 @@ impl Demo for Gallery {
             // The aeroplane (#141): W and S open and close the throttle, the arrows are the
             // stick (down pulls the nose up, left and right roll; half the elevator, all of it
             // with Shift, as a full pull from the keys stalls it), A and D the rudder; or
-            // `--pilot T,E,A,R`. A command when they change; the camera follows it.
-            if lab.has_plane() {
+            // `--pilot T,E,A,R`. A command when they change; the camera follows it. The rocket
+            // (#148) takes the same: the stick swings its engine, the ailerons are its roll jets.
+            if lab.has_plane() || lab.has_rocket() {
                 self.chase = true;
                 let keys = |a: KeyCode, b: KeyCode| {
                     f32::from(u8::from(input.is_down(a))) - f32::from(u8::from(input.is_down(b)))
@@ -1221,7 +1222,19 @@ impl Demo for Gallery {
         } else {
             (8.0, 2.8, -0.18)
         };
+        let rocket = self.lab.as_mut().is_some_and(lab::Lab::has_rocket);
         if self.chase
+            && rocket
+            && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
+        {
+            // The rocket (#148) from 30 m off its right, a little behind and over its middle,
+            // looking at it: its pitch downrange (−z) crosses the view.
+            let middle = ride.position + ride.rotation * Vec3::new(0.0, 6.0, 0.0);
+            self.camera.position = middle + Vec3::new(30.0, 2.0, 5.0);
+            let to = middle - self.camera.position;
+            self.camera.yaw = (-to.x).atan2(-to.z);
+            self.camera.pitch = to.y.atan2(Vec3::new(to.x, 0.0, to.z).length());
+        } else if self.chase
             && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
         {
             let forward = ride.rotation * Vec3::NEG_Z;
@@ -2197,6 +2210,17 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
+        // The rocket's (#148), after the others so their numbers stay.
+        let white_paint = add(
+            "painted (white)",
+            RenderLayer {
+                color_a: [0.62, 0.62, 0.6],
+                color_b: [0.6, 0.6, 0.58],
+                roughness: RenderLayer::roughness_for_power(60.0),
+                specular: 0.25,
+                ..RenderLayer::default()
+            },
+        );
         let by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -2232,6 +2256,9 @@ impl CityMaterials {
             ("lab-domino", crate_wood),
             ("lab-bank", sandstone),
             ("lab-bridge-panel", crate_wood),
+            ("lab-rocket", white_paint),
+            ("lab-rocket-fins", red_paint),
+            ("lab-pad", concrete_grey),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -4060,6 +4087,15 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             position: Vec3::new(0.0, 4.0, 210.0),
             yaw: 0.0,
             pitch: -0.15,
+            speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Rocket) {
+        // Off the rocket's right on the pad, looking at it; it follows the rocket once flown.
+        FlyCamera {
+            position: Vec3::new(30.0, 8.0, 5.0),
+            yaw: 1.406,
+            pitch: -0.01,
             speed: 20.0,
             ..FlyCamera::default()
         }

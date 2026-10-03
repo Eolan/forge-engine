@@ -40,6 +40,7 @@ mod dominoes;
 mod drive;
 mod flood;
 mod fly;
+mod rocket;
 mod sea;
 mod walk;
 mod wall;
@@ -70,6 +71,8 @@ pub(crate) enum LabScene {
     Dominoes,
     /// A bridge collapsing under a convoy of cars (#147).
     Bridge,
+    /// A rocket on a launch pad (#148).
+    Rocket,
 }
 
 /// The floor's half side, metres.
@@ -129,6 +132,8 @@ const FLOOD: usize = POLE + 1;
 const DOMINO: usize = FLOOD + 5;
 /// The bridge's bank and deck panel, after the domino.
 const BRIDGE: usize = DOMINO + 1;
+/// The rocket, its fins and its pad, after the bridge's two.
+const ROCKET: usize = BRIDGE + 2;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -169,6 +174,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(flood::props());
     props.extend(dominoes::props());
     props.extend(bridge::props());
+    props.extend(rocket::props());
     props
 }
 
@@ -438,6 +444,8 @@ pub(crate) struct LabWorld {
     /// The domino run, and the bridge with its convoy.
     run: Option<dominoes::Run>,
     convoy: Option<bridge::Convoy>,
+    /// The rocket, flown with the pilot's controls.
+    rocket: Option<BodyId>,
     limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
@@ -473,11 +481,12 @@ impl LabWorld {
             | LabScene::Creatures
             | LabScene::Flood
             | LabScene::Dominoes
-            | LabScene::Bridge => 0.0,
+            | LabScene::Bridge
+            | LabScene::Rocket => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
-            LabScene::Fly => (FIELD, fly::FIELD_HALF),
+            LabScene::Fly | LabScene::Rocket => (FIELD, fly::FIELD_HALF),
             _ => (FLOOR, FLOOR_HALF),
         };
         let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
@@ -555,6 +564,7 @@ impl LabWorld {
         let mut dam = None;
         let mut run = None;
         let mut convoy = None;
+        let mut rocket = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -876,6 +886,12 @@ impl LabWorld {
                 group(CAR, cars, &mut bodies);
                 convoy = Some(site.convoy);
             }
+            LabScene::Rocket => {
+                let site = rocket::build(&mut world, ROCKET + 2)?;
+                statics.extend(site.statics);
+                group(ROCKET, vec![site.rocket], &mut bodies);
+                rocket = Some(site.rocket);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -918,6 +934,13 @@ impl LabWorld {
             groups.push(Group {
                 prop: PROPELLER,
                 count: 1,
+            });
+        }
+        // The rocket's two pairs of fins.
+        if rocket.is_some() {
+            groups.push(Group {
+                prop: ROCKET + 1,
+                count: 2,
             });
         }
         // The car's four wheels after the bodies' movers.
@@ -977,6 +1000,7 @@ impl LabWorld {
                 dam,
                 run,
                 convoy,
+                rocket,
                 limp: false,
                 pool,
             },
@@ -993,6 +1017,9 @@ impl LabWorld {
             convoy.wheels(&self.world, out);
         }
         self.pilot.propeller(&self.world, self.tick, out);
+        if let Some(r) = self.rocket {
+            rocket::fins_at(&self.world, r, out);
+        }
         if let Some(wall) = &self.wall {
             wall.chain(&self.world, out);
         }
@@ -1059,14 +1086,15 @@ impl LabWorld {
         t.first().copied()
     }
 
-    /// The mover of what a player rides, the boat, the car or the aeroplane: its body's place among the
-    /// bodies, which the movers draw first.
+    /// The mover of what a player rides, the boat, the car, the aeroplane or the rocket: its body's
+    /// place among the bodies, which the movers draw first.
     pub(crate) fn ride(&self) -> Option<usize> {
         let body = self
             .boat
             .map(|b| b.body)
             .or(self.driver.car.map(|c| c.0))
-            .or(self.pilot.plane)?;
+            .or(self.pilot.plane)
+            .or(self.rocket)?;
         self.bodies.iter().position(|&b| b == body)
     }
 
@@ -1208,6 +1236,9 @@ impl Simulation for LabWorld {
             convoy.tick(&mut self.world);
         }
         self.pilot.tick(&mut self.world);
+        if let Some(r) = self.rocket {
+            rocket::tick(&mut self.world, r, &self.pilot);
+        }
         let column = self.wall.as_ref().map(|w| w.column_velocity(&self.world));
         // The creatures' motors driven to their poses at this tick (or let go).
         if let Some(herd) = &self.herd {
@@ -1901,6 +1932,11 @@ impl Lab {
         self.shown().pilot.plane.is_some()
     }
 
+    /// Whether the scene has a rocket, flown with the aeroplane's controls.
+    pub(crate) fn has_rocket(&mut self) -> bool {
+        self.shown().rocket.is_some()
+    }
+
     /// The aeroplane's controls from the next tick: throttle, elevator, ailerons, rudder.
     pub(crate) fn fly(&mut self, controls: [f32; 4]) {
         self.queued.push(LabCommand::Fly { controls });
@@ -2440,6 +2476,63 @@ mod tests {
             second.tick(&[]);
         }
         recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_rocket_climbs_as_its_thrust_says_tips_on_the_stick_and_replays() {
+        let (mut first, _) = LabWorld::new(LabScene::Rocket, test_pool()).unwrap();
+        let body = first.rocket.unwrap();
+        let at = |lab: &LabWorld| {
+            let (mut t, mut v) = (Vec::new(), Vec::new());
+            lab.world.transforms(&[body], &mut t);
+            lab.world.velocities(&[body], &mut v);
+            (t[0], v[0])
+        };
+        // Half a second untouched: it stands on its pad.
+        for _ in 0..30 {
+            first.tick(&[]);
+        }
+        let (start, _) = at(&first);
+        assert!((start.rotation * Vec3::Y).y > 0.9999);
+        let fly = |tick: u64, controls: [f32; 4]| Stamped {
+            tick,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Fly { controls },
+        };
+        // Full throttle for 5 s: 50 kN against 3 t climbs at 6.86 m/s² (the drag under 300 N),
+        // 86 m, straight up.
+        let climb = Recording::record(&mut first, vec![fly(30, [1.0, 0.0, 0.0, 0.0])], 300, 60);
+        let (t, v) = at(&first);
+        let height = t.position.y - start.position.y;
+        assert!((82.0..88.0).contains(&height), "{height:.1} m up");
+        assert!((t.rotation * Vec3::Y).y > 0.999, "{:?}", t.rotation);
+        assert!(
+            v.linear.x.abs() < 0.1 && v.linear.z.abs() < 0.1,
+            "{:?}",
+            v.linear
+        );
+        // The stick pushed for a second, then let go: it tips downrange (−z) and flies on that
+        // way, the fins keeping it into its wind.
+        let commands = vec![
+            fly(330, [1.0, 0.5, 0.0, 0.0]),
+            fly(390, [1.0, 0.0, 0.0, 0.0]),
+        ];
+        let turn = Recording::record(&mut first, commands, 300, 60);
+        let (t, v) = at(&first);
+        let axis = t.rotation * Vec3::Y;
+        assert!(
+            axis.z < -0.05 && v.linear.z < -2.0,
+            "{axis:?} {:?}",
+            v.linear
+        );
+        assert!(axis.x.abs() < 0.01, "{axis:?}");
+        let (mut second, _) = LabWorld::new(LabScene::Rocket, test_pool()).unwrap();
+        for _ in 0..30 {
+            second.tick(&[]);
+        }
+        climb.replay(&mut second).expect("the same digests");
+        turn.replay(&mut second).expect("the same digests");
     }
 
     #[test]

@@ -270,6 +270,11 @@ for path in $paths; do
     capture "$path-lab-bridge360" 360 "$lab" --lab bridge --fixed-step --release 31 "${flag[@]}"
     capture "$path-lab-bridge360-noocc" 360 "$lab" --lab bridge --fixed-step --release 31 --no-occlusion "${flag[@]}"
     capture "$path-lab-bridge600" 600 "$lab" --lab bridge --fixed-step --release 31 "${flag[@]}"
+    # The rocket (#148) at full throttle, the stick a tenth pushed: climbing off the pad at tick
+    # 120 and its A/B twin, pitched over downrange at tick 600.
+    capture "$path-lab-rocket120" 120 "$lab" --lab rocket --fixed-step --pilot 1,0.1,0,0 "${flag[@]}"
+    capture "$path-lab-rocket120-noocc" 120 "$lab" --lab rocket --fixed-step --pilot 1,0.1,0,0 --no-occlusion "${flag[@]}"
+    capture "$path-lab-rocket600" 600 "$lab" --lab rocket --fixed-step --pilot 1,0.1,0,0 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

@@ -23,6 +23,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `walk` | a walking character: stairs, ramps, a moving platform, crates to push, blocks to jump onto | ✅ #139 |
 | `drive` | a car on wheels and springs: a jump ramp, a slalom of barrels, a wall of crates | ✅ #140 |
 | `fly` | an aeroplane on flying surfaces: a take-off from a runway, turns over a wide field | ✅ #141 |
+| `rocket` | a rocket off a launch pad: thrust vectoring, roll jets, fins as flying surfaces | ✅ #148 |
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats | ✅ #144 |
@@ -294,6 +295,46 @@ stalls it (hence half the elevator by default). The lab's test takes off, banks 
 past 20 m and replays to the same digests. A tick of the field: **0.05 ms** on average, p99
 0.10 ms.
 
+## `rocket`: a rocket off a pad (issue #148)
+
+```
+cargo run --release -p physics-lab -- --lab rocket
+cargo run --release -p physics-lab -- --lab rocket --pilot 1,0.1,0,0
+```
+
+Step 5's rocket, on a concrete pad in the aeroplane's field.
+- **The rocket:** a white body 13.5 m tall with an ogive nose (a lathe), four swept red fins, 3 t
+  fuelled, its weight 5 m up its axis.
+- **Its engine:** pushes 50 kN (1.7 times its weight) along its axis from the nozzle.
+- **The stick and the roll jets:** the stick swings the engine up to about 6° (thrust vectoring),
+  as for an aeroplane pitched up on its tail:
+  - pushing tips the nose downrange (−z);
+  - the rudder yaws it;
+  - jets at the nose roll it, 2 kN·m at full aileron.
+- **The air:** the fins are flying surfaces (`forge_physics::aero`, the aeroplane's), so they turn
+  it into its wind. Its body drags along its axis and across it.
+- **Its controls:** the aeroplane's, from the keys or `--pilot T,E,A,R`, so a flight records,
+  replays and goes through `--net`.
+- **The camera:** follows from 30 m off its right, its pitch downrange crossing the view.
+
+![On the pad; climbing off it at full throttle, the stick a tenth pushed; pitched over at 6 s and 10 s](images/physics-lab-rocket.png)
+
+The lab's test:
+- **On the pad:** the rocket stands untouched.
+- **The climb:** at full throttle it climbs 85.68 m in 5 s straight up, where thrust and weight
+  alone (½ (T/m − g) t², the drag under 300 N) say 85.71. Jolt's default linear damping had taken
+  7 m of it, so the rocket has none: its drag is the air's.
+- **The stick:** pushed for a second, it tips the rocket 3.8° downrange, where the fins hold it,
+  339 m up at 10 s.
+- **The replay:** the flight replays to the same digests.
+
+A tick: **0.04 ms** on average, p99 0.08 ms.
+
+Not yet:
+- fuel burning off (Jolt's mass would change in flight);
+- the exhaust's flame (it needs particles or an emissive material);
+- a spaceship in zero g.
+
 ## `break`: a wall, a wrecking ball, a column (issue #142)
 
 ```
@@ -503,4 +544,6 @@ twin; from the break scene (#142) `lab-break85` (the ball through the wall) with
 down the basin) with its twin and `lab-flood300` (spread round the blocks); and from the
 dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3000` (all down);
 and from the bridge (#147) `lab-bridge360` (the deck falling with two cars) with its twin and
-`lab-bridge600` (in the gap).
+`lab-bridge600` (in the gap); and the rocket (#148) at full throttle with the stick a tenth
+pushed, `lab-rocket120` (climbing off the pad) with its twin and `lab-rocket600` (pitched over
+downrange).
