@@ -499,6 +499,36 @@ floats more than 5 m on, and replays to the same digests. A tick (18 432 cells i
 steps, 39 floaters): **0.86 ms** on average, p99 1.1 ms. The GPU's own shallow-water layer
 shadowing the model near the player, and particles for splashes, come next.
 
+**What floats pushes the water aside (#151, two-way coupling).** The water no longer only pushes
+what floats. After Müller-Fischer's height-field water (GDC 2008), as the column model already is:
+- **The thickness:** each tick, each floater's volume under the water (its buoyancy over ρg) is
+  spread as a thickness over the wet cells of its footprint (`Pool::displace`). The footprint is
+  three quarters of its hull's reach round its centre of mass: a crate's about its side, a log's
+  wider than the log.
+- **The slopes:** that thickness adds to the surface the water's slopes see. The water flows out
+  from under a body and rises round it: a body set down sends out a ring, and one carried along
+  pushes water ahead of it.
+- **The volume:** the depths keep it; the thickness is not water.
+- **Buoyancy:** a body afloat reads the same surface, so at rest it sees the level it would have
+  without it and sinks no deeper.
+- **The state:** the thickness is saved with the pool, so a run still replays to the bit.
+
+Each tick now pushes what floats by the water as it stands, then lets the water be pushed aside,
+then steps the water.
+
+The new test: 0.4 m³ set at once into still water 1 m deep in a 10 m square, over a footprint
+0.6 m round.
+- **The ring:** 1.6 m out, it rises over 5 mm within the second.
+- **The volume:** kept.
+- **Settled:** 40 s on, the water under the body is 0.6 m deep, and its surface and the far water's
+  stand level, 4 mm over the first (0.4 m³ over 100 m²).
+
+The lab's flood still carries what floats more than 5 m on and replays.
+
+A tick: **1.12 ms**, against 0.90 for the same run before (measured the same day). The new order
+alone gives 1.00 ms, so much of the rest is the floaters moving differently, more of them
+jostling.
+
 ## `dominoes`: a run that ends the same (issue #146)
 
 ```

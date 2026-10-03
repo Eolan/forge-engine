@@ -132,6 +132,11 @@ impl Hull {
         self.volume
     }
 
+    /// Its vertices, in its body's frame.
+    pub fn vertices(&self) -> &[Vec3] {
+        &self.vertices
+    }
+
     /// Triangles.
     pub fn triangles(&self) -> usize {
         self.triangles.len()

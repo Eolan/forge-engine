@@ -8,11 +8,13 @@
 //! surface across each face speeds its velocity up (the shallow-water equations' g ∂η/∂x). A
 //! face into a cell whose bed stands over the water's surface carries nothing. The volume is
 //! kept to the rounding, no column goes below zero, and a dam break's front runs as the water
-//! carries its speed. The grid's edges are walls.
+//! carries its speed. The grid's edges are walls. What floats pushes the water aside in turn
+//! (#151, [`Pool::displace`]): its volume under the water, as a thickness over its footprint,
+//! adds to the surface the slopes see.
 //!
-//! Sums, products, quotients and floors of `f32` in a fixed order and nothing else, so the same
-//! bytes on every platform; the state is the depths and the faces' velocities, saved and
-//! restored with the rest.
+//! Sums, products, quotients, floors and roundings of `f32` and `f64` in a fixed order and
+//! nothing else, so the same bytes on every platform; the state is the depths, the faces'
+//! velocities and what floats, saved and restored with the rest.
 
 use glam::Vec3;
 
@@ -36,6 +38,11 @@ pub struct Pool {
     pub bed: Vec<f32>,
     /// The water's depth on each cell, metres.
     pub depth: Vec<f32>,
+    /// The thickness of what floats in each cell's water, metres (two-way coupling, #151): set
+    /// each step from the bodies, it adds to the surface the water's slopes see, so the water
+    /// flows out from under a body and rises round it, and a body afloat sees the level it would
+    /// have without it. The depths keep the volume; this is not water.
+    pub displaced: Vec<f32>,
     /// The velocity along x on the faces between cells, m/s: `(nx + 1) × nz`, face `x` of a
     /// row on cell `x`'s −x side (the edges' faces are walls, always 0).
     u: Vec<f32>,
@@ -58,6 +65,7 @@ impl Pool {
             origin,
             bed: vec![0.0; nx * nz],
             depth: vec![0.0; nx * nz],
+            displaced: vec![0.0; nx * nz],
             u: vec![0.0; (nx + 1) * nz],
             w: vec![0.0; nx * (nz + 1)],
             friction: 0.3,
@@ -70,15 +78,68 @@ impl Pool {
         z * self.size[0] + x
     }
 
-    /// The water's surface on cell `i` (its bed where it is dry).
+    /// The water's surface on cell `i` (its bed where it is dry), with what floats in it.
     pub fn surface(&self, i: usize) -> f32 {
-        self.bed[i] + self.depth[i]
+        self.bed[i] + self.depth[i] + self.displaced[i]
     }
 
     /// The water held, m³.
     pub fn volume(&self) -> f64 {
         let area = f64::from(self.spacing) * f64::from(self.spacing);
         self.depth.iter().map(|&d| f64::from(d)).sum::<f64>() * area
+    }
+
+    /// What floats in the water (#151), from `bodies`: each its world (x, z), its volume under
+    /// the water, m³, and the radius of its footprint, metres. Each volume is spread evenly, as a
+    /// thickness, over the wet cells whose centres lie in its footprint (the nearest wet cell
+    /// when none does), in the bodies' order.
+    pub fn displace(&mut self, bodies: &[([f64; 2], f32, f32)]) {
+        self.displaced.fill(0.0);
+        let [nx, nz] = self.size;
+        let l = f64::from(self.spacing);
+        let area = self.spacing * self.spacing;
+        let mut cells = Vec::new();
+        for &([x, z], volume, radius) in bodies {
+            if volume <= 0.0 {
+                continue;
+            }
+            // In cells, from the first cell's centre.
+            let (gx, gz) = ((x - self.origin[0]) / l, (z - self.origin[1]) / l);
+            let r = f64::from(radius) / l;
+            let span = |g: f64, n: usize| {
+                let low = (g - r).ceil().max(0.0);
+                let high = (g + r).floor().min((n - 1) as f64);
+                (low as usize, high as usize, low <= high)
+            };
+            let ((x0, x1, xs), (z0, z1, zs)) = (span(gx, nx), span(gz, nz));
+            cells.clear();
+            if xs && zs {
+                for cz in z0..=z1 {
+                    for cx in x0..=x1 {
+                        let (dx, dz) = (cx as f64 - gx, cz as f64 - gz);
+                        let i = self.index(cx, cz);
+                        if dx * dx + dz * dz <= r * r && self.depth[i] >= DRY {
+                            cells.push(i);
+                        }
+                    }
+                }
+            }
+            if cells.is_empty() {
+                let (cx, cz) = (gx.round(), gz.round());
+                if cx < 0.0 || cz < 0.0 || cx > (nx - 1) as f64 || cz > (nz - 1) as f64 {
+                    continue;
+                }
+                let i = self.index(cx as usize, cz as usize);
+                if self.depth[i] < DRY {
+                    continue;
+                }
+                cells.push(i);
+            }
+            let each = volume / (cells.len() as f32 * area);
+            for &i in &cells {
+                self.displaced[i] += each;
+            }
+        }
     }
 
     /// Advances the water by `dt` seconds, in two halves.
@@ -293,7 +354,7 @@ impl Pool {
         Some(([cx, cz], [(gx - cx as f64) as f32, (gz - cz as f64) as f32]))
     }
 
-    /// The depths, the velocities and the bed as bytes, for a saved state.
+    /// The depths, the velocities, the bed and what floats as bytes, for a saved state.
     pub fn save(&self, out: &mut Vec<u8>) {
         for v in self
             .depth
@@ -301,6 +362,7 @@ impl Pool {
             .chain(&self.u)
             .chain(&self.w)
             .chain(&self.bed)
+            .chain(&self.displaced)
         {
             out.extend_from_slice(&v.to_bits().to_le_bytes());
         }
@@ -320,6 +382,7 @@ impl Pool {
             .chain(&mut self.u)
             .chain(&mut self.w)
             .chain(&mut self.bed)
+            .chain(&mut self.displaced)
         {
             *v = words.next().unwrap_or(0.0);
             read += 4;
@@ -506,5 +569,53 @@ mod tests {
         assert!((pool.height(0.3, -0.7) - 1.5).abs() < 1e-4);
         assert!(pool.current(0.3, -0.7).length() < 1e-4);
         assert!(pool.height(50.0, 0.0) < -1000.0);
+    }
+
+    #[test]
+    fn what_floats_pushes_the_water_aside() {
+        // Still water 1 m deep in a 10 m square, and a body of 0.4 m³ set into it at once over
+        // a footprint 0.6 m round: the water flows out from under it as a ring, keeps its
+        // volume, and settles level round it, the whole pool a little higher.
+        let mut pool = Pool::new([40, 40], 0.25, [-4.875, -4.875]);
+        pool.depth.fill(1.0);
+        let before = pool.volume();
+        let body = [([0.0, 0.0], 0.4, 0.6)];
+        let ring = pool.index(20 + 6, 20);
+        let mut highest = 0.0_f32;
+        for _ in 0..60 {
+            pool.displace(&body);
+            pool.step(1.0 / 60.0);
+            highest = highest.max(pool.depth[ring]);
+        }
+        assert!(highest > 1.005, "the ring 1.5 m out rose to {highest}");
+        // The ring sloshes round the box, losing half the friction's rate (its energy is half in
+        // its speed): 40 s to settle under a millimetre.
+        for _ in 0..2400 {
+            pool.displace(&body);
+            pool.step(1.0 / 60.0);
+        }
+        assert!(
+            (pool.volume() - before).abs() < 1e-3,
+            "{}",
+            pool.volume() - before
+        );
+        // Under the body the water is thinner by its thickness; its surface and the far water's
+        // stand level, 0.4 m³ over 100 m² (4 mm) over the first.
+        let under = pool.index(20, 20);
+        let far = pool.index(2, 2);
+        assert!(pool.depth[under] < 0.7, "{}", pool.depth[under]);
+        assert!(
+            (pool.surface(under) - pool.surface(far)).abs() < 2e-3,
+            "{} {} {} {}",
+            pool.surface(under),
+            pool.surface(far),
+            pool.depth[under],
+            pool.displaced[under]
+        );
+        assert!(
+            (pool.surface(far) - 1.004).abs() < 1e-3,
+            "{}",
+            pool.surface(far)
+        );
     }
 }

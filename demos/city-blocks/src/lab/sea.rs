@@ -164,7 +164,8 @@ pub(super) struct Floater {
 
 /// Pushes every floater by `water` (of `fluid`) this tick: their states read in three calls, the
 /// pushes worked out in parallel (each alone, so the same with any workers), applied in one call.
-/// A body asleep wholly under the water (a rock on the floor) is left asleep.
+/// A body asleep wholly under the water (a rock on the floor) is left asleep. Each floater's
+/// volume under the water, m³ (for the water it pushes aside, #151).
 pub(super) fn float(
     world: &mut World,
     floaters: &[Floater],
@@ -172,7 +173,7 @@ pub(super) fn float(
     water: &(impl Water + Sync),
     fluid: &Fluid,
     pool: &TaskPool,
-) {
+) -> Vec<f32> {
     let bodies: Vec<BodyId> = floaters.iter().map(|f| f.body).collect();
     let (mut transforms, mut velocities, mut centers, mut awake) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -180,7 +181,7 @@ pub(super) fn float(
     world.velocities(&bodies, &mut velocities);
     world.centers_of_mass(&bodies, &mut centers);
     world.awake(&bodies, &mut awake);
-    let mut pushes = vec![None; floaters.len()];
+    let mut pushes = vec![(None, 0.0_f32); floaters.len()];
     let surface = water;
     pool.scope(|scope| {
         for (k, out) in pushes.chunks_mut(16).enumerate() {
@@ -206,18 +207,21 @@ pub(super) fn float(
                     let sunk = p.buoyancy.y
                         >= hulls[floaters[n].hull].volume() * fluid.density * fluid.gravity * 0.999;
                     if awake[n] || !sunk {
-                        *slot = Some((p.force, transforms[n].position, p.torque));
+                        slot.0 = Some((p.force, transforms[n].position, p.torque));
                     }
+                    slot.1 = p.buoyancy.y.max(0.0) / (fluid.density * fluid.gravity);
                 }
             });
         }
     });
+    let volumes = pushes.iter().map(|p| p.1).collect();
     let (bodies, pushes): (Vec<BodyId>, Vec<(Vec3, DVec3, Vec3)>) = bodies
         .iter()
         .zip(&pushes)
-        .filter_map(|(&b, p)| p.map(|p| (b, p)))
+        .filter_map(|(&b, p)| p.0.map(|p| (b, p)))
         .unzip();
     world.push(&bodies, &pushes);
+    volumes
 }
 
 /// The boat: its body, and its motor's throttle (−1 astern to 1 ahead) and rudder (−1 to 1).

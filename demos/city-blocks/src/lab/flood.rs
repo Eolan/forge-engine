@@ -3,12 +3,15 @@
 //! concrete blocks and a hut downstream; crates, barrels and logs afloat behind the gate and
 //! lying on the dry floor beyond it. The water is D-009's authoritative column model
 //! (`forge_physics::shallow`), a cell every 25 cm, its bed raised where the walls, the gate and
-//! the blocks stand; what floats is pushed by it as by the sea (its surface and its flow).
+//! the blocks stand; what floats is pushed by it as by the sea (its surface and its flow), and
+//! pushes it aside in turn (#151: its volume under the water raises the surface the water's
+//! slopes see).
 //! Space (or `--release N`) lifts the gate: the water runs out down the basin, round the
 //! blocks, carrying what floats.
 
 use anyhow::Result;
 use forge_geom::city::{Block, PropKind, PropSpec};
+use forge_physics::buoyancy::Hull;
 use forge_physics::shallow::{DRY, Pool};
 use forge_physics::{BodyDesc, BodyId, Motion, Shape, Transform, Velocity, World};
 use glam::{DVec3, Mat4, Vec3};
@@ -214,7 +217,7 @@ pub(super) fn samples(pool: &Pool) -> Vec<[f32; 4]> {
             let i = pool.index(x, z);
             let d = pool.depth[i];
             let [u, w] = pool.velocity_at(x, z);
-            out.push([pool.bed[i] + d, if d < DRY { 0.0 } else { d }, u, w]);
+            out.push([pool.surface(i), if d < DRY { 0.0 } else { d }, u, w]);
         }
     }
     out
@@ -237,4 +240,33 @@ pub(super) fn afloat_at(k: u64, unit: impl Fn(u64) -> f64) -> DVec3 {
         0.6
     };
     DVec3::new(x, y + 0.3 * unit(3 * k + 2), z)
+}
+
+/// The water pushed aside by what floats (#151), from each floater's `volumes` under it: at its
+/// centre of mass, over a footprint of three quarters of its hull's reach from the hull's middle
+/// (a crate's 0.45 m, about its side; a log's spreads wider than the log).
+pub(super) fn displace(
+    pool: &mut Pool,
+    world: &World,
+    floaters: &[super::sea::Floater],
+    hulls: &[Hull],
+    volumes: &[f32],
+) {
+    let bodies: Vec<BodyId> = floaters.iter().map(|f| f.body).collect();
+    let mut centers = Vec::new();
+    world.centers_of_mass(&bodies, &mut centers);
+    let items: Vec<([f64; 2], f32, f32)> = floaters
+        .iter()
+        .zip(&centers)
+        .zip(volumes)
+        .map(|((f, c), &volume)| {
+            let vertices = hulls[f.hull].vertices();
+            let middle = vertices.iter().copied().sum::<Vec3>() / vertices.len() as f32;
+            let reach = vertices
+                .iter()
+                .fold(0.0_f32, |m, &v| m.max(v.distance(middle)));
+            ([c.x, c.z], volume, 0.75 * reach)
+        })
+        .collect();
+    pool.displace(&items);
 }

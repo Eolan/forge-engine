@@ -1297,10 +1297,10 @@ impl Simulation for LabWorld {
                 boat.drive(&mut self.world, &heights);
             }
         }
-        // The flood's water a tick on, then what floats pushed by it.
+        // The flood: what floats pushed by its water as it stands, the water pushed aside by
+        // what floats (#151), then the water a tick on.
         if let Some(water) = &mut self.water {
-            water.step(TICK);
-            sea::float(
+            let volumes = sea::float(
                 &mut self.world,
                 &self.floaters,
                 &self.hulls,
@@ -1308,6 +1308,8 @@ impl Simulation for LabWorld {
                 &FRESH,
                 &self.pool,
             );
+            flood::displace(water, &self.world, &self.floaters, &self.hulls, &volumes);
+            water.step(TICK);
         }
         // The playground's platform and player, before the bodies move.
         self.player

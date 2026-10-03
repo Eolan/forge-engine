@@ -438,9 +438,10 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    importer of skins and clips and GPU skinning (Phase 7's start), so creatures bend instead of
    being jointed, a humanoid, a quadruped, a flyer, a slime as a soft body.
 8. **Fluids:** the authoritative water model, a dam break ✅ (#144, `--lab flood`:
-   `forge_physics::shallow`, a staggered grid of columns, drawn as a pool by the water pass);
-   left: the GPU's shallow-water layer near the player shadowing it, particles for splashes,
-   two-way coupling (what floats displacing the water).
+   `forge_physics::shallow`, a staggered grid of columns, drawn as a pool by the water pass),
+   two-way coupling ✅ (#151: what floats pushes the water aside, its volume under it a thickness
+   that the water's slopes see); left: the GPU's shallow-water layer near the player shadowing
+   it, particles for splashes.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a

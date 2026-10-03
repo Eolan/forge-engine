@@ -1023,6 +1023,10 @@ fluxes, the slopes), on one thread; then the pushes on 39 floaters. The water's 
 lakes' fresh-water shading over 36 000 triangles, inside the `water/surface` zone; its 295 KB
 of samples go up with the frame's water block.
 
+With what floats pushing the water aside (#151): **1.12 ms a tick**, against 0.90 ms for the same
+run before it (measured the same day). The tick's new order without the displacement gives
+1.00 ms; the rest is mostly the floaters moving differently.
+
 `--lab dominoes` (#146), the first pushed at tick 31, 3 000 ticks: **0.21 ms a tick** (p99 0.38,
 max 0.79), 332 bodies, those falling and fallen awake until the run is over.
 
