@@ -536,6 +536,14 @@ The items below are the phase's original outline; the plan above orders them.
    virtual textures; Resizable BAR upload paths.
    **Demo:** fly-through at 300 m/s with residency and bandwidth graphs.
 
+## Later, low priority — Graphics settings and a dev console (#160)
+
+The owner's request of 2026-10-03: a graphics menu as games have, its preset fitted to the
+machine at first start and every setting still changeable. The subtler, technical settings go in
+a dev console, as named variables changed at run time. While in development Forge keeps the best
+techniques on, and new options stay flags and keys. The tone curves of D-045 are the first such
+setting.
+
 ## Phase 10 — The games again
 
 Rebuild `tropical-island` (#81), `world` and `shooter` (#82) on Forge, in that order,

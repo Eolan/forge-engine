@@ -37,6 +37,7 @@ static const uint LIQUID = 1u;
 static const uint SOLID = 2u;
 static const uint MAX_SUBSTEPS = 8u;
 static const uint MG_LEVELS = 8u;
+static const uint MAX_OBSTACLES = 8u;
 // The statistics' words (LIQUID_STAT_* in liquid.rs).
 static const uint STAT_PARTICLES = 0u;
 static const uint STAT_LOST = 1u;
@@ -78,7 +79,7 @@ struct LiquidFrame
     uint nodes;       // (cells.x + 1)(cells.y + 1)(cells.z + 1): each component's faces
     uint cell_count;
     float foam_life;  // how long the air it takes in lasts, seconds (0: none)
-    uint pad1;
+    uint obstacles;   // blocks standing in the water (`obstacle`)
     float4* position; // per particle: xyz, metres from the tank's inside corner; w: its foam
     float4* velocity; // xyz, m/s
     float4* affine;   // three per particle: c of the faces' x, y and z components, 1/s
@@ -109,6 +110,9 @@ struct LiquidFrame
     uint* mg_kind;    // per cell of levels 1 and on: AIR, LIQUID or SOLID
     float* mg_x;      // the pressure's correction, m/s
     float* mg_b;      // what it must undo: the finer level's residual, restricted
+    uint2 pad5;
+    float4 obstacle[2u * MAX_OBSTACLES]; // per block: its least corner, then its most, metres
+                                         // from the inside's corner
 };
 
 struct LiquidPush
@@ -191,12 +195,22 @@ bool in_gate(LiquidFrame* f, float3 p, uint s)
     return true;
 }
 
-// Whether cell `c` is solid: the glass round the tank, the gate's cells.
+// Whether the point `p` lies in one of the blocks standing in the water.
+bool in_obstacle(LiquidFrame* f, float3 p)
+{
+    for (uint k = 0u; k < f[0].obstacles; k++)
+        if (all(p >= f[0].obstacle[2u * k].xyz) && all(p <= f[0].obstacle[2u * k + 1u].xyz))
+            return true;
+    return false;
+}
+
+// Whether cell `c` is solid: the glass round the tank, the gate's cells, the blocks'.
 bool solid_cell(LiquidFrame* f, int3 c, uint s)
 {
     if (!inside(f, c))
         return true;
-    return in_gate(f, (float3(c) + 0.5) * f[0].size.w, s);
+    float3 p = (float3(c) + 0.5) * f[0].size.w;
+    return in_gate(f, p, s) || in_obstacle(f, p);
 }
 
 uint kind_at(LiquidFrame* f, int3 c)
@@ -329,7 +343,12 @@ void faces_main(uint3 id : SV_DispatchThreadID)
         if (glass)
             v = 0.0;
         else if (solid_cell(f, below, s) || solid_cell(f, n, s))
-            v = a == 1u ? f[0].steps[s].y : 0.0; // the gate's, rising
+        {
+            // The gate's, rising; the blocks' still.
+            float w = f[0].size.w;
+            bool gate = in_gate(f, (float3(below) + 0.5) * w, s) || in_gate(f, (float3(n) + 0.5) * w, s);
+            v = a == 1u && gate ? f[0].steps[s].y : 0.0;
+        }
         else
         {
             int64_t sum = f[0].sums[at];
@@ -902,6 +921,62 @@ float3 stop_at_gate(LiquidFrame* f, float3 from, float3 to, uint s, inout float3
     return to;
 }
 
+// Keeps a particle out of the blocks: one that would end in one (or within a hundredth of a cell
+// of it) stops that far outside the face it crossed last, moving no further into it; one already
+// inside leaves by the nearest face that is not against the glass (a block on the floor is never
+// left downwards). It stays inside the glass.
+float3 stop_at_obstacles(LiquidFrame* f, float3 from, float3 to, inout float3 v)
+{
+    float margin = 0.01 * f[0].size.w;
+    float3 size = f[0].size.xyz;
+    for (uint k = 0u; k < f[0].obstacles; k++)
+    {
+        float3 lo = f[0].obstacle[2u * k].xyz - margin;
+        float3 hi = f[0].obstacle[2u * k + 1u].xyz + margin;
+        if (any(to <= lo) || any(to >= hi))
+            continue;
+        uint axis = 0u;
+        bool low = true;
+        float latest = -1.0;
+        for (uint a = 0u; a < 3u; a++)
+        {
+            float t = -1.0;
+            if (from[a] < lo[a])
+                t = (lo[a] - from[a]) / (to[a] - from[a]);
+            else if (from[a] > hi[a])
+                t = (hi[a] - from[a]) / (to[a] - from[a]);
+            if (t > latest)
+            {
+                latest = t;
+                axis = a;
+                low = from[a] < lo[a];
+            }
+        }
+        if (latest < 0.0)
+        {
+            float nearest = 1e9;
+            for (uint a = 0u; a < 3u; a++)
+            {
+                if (lo[a] > margin && to[a] - lo[a] < nearest)
+                {
+                    nearest = to[a] - lo[a];
+                    axis = a;
+                    low = true;
+                }
+                if (hi[a] < size[a] - margin && hi[a] - to[a] < nearest)
+                {
+                    nearest = hi[a] - to[a];
+                    axis = a;
+                    low = false;
+                }
+            }
+        }
+        to[axis] = low ? lo[axis] : hi[axis];
+        v[axis] = low ? min(v[axis], 0.0) : max(v[axis], 0.0);
+    }
+    return clamp(to, float3(margin), size - margin);
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void g2p_main(uint3 id : SV_DispatchThreadID)
@@ -944,6 +1019,7 @@ void g2p_main(uint3 id : SV_DispatchThreadID)
         }
     }
     to = stop_at_gate(f, x, to, s, v);
+    to = stop_at_obstacles(f, x, to, v);
     f[0].position[i] = float4(to, foam);
     f[0].velocity[i] = float4(v, 0.0);
     for (uint a = 0u; a < 3u; a++)

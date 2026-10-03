@@ -731,13 +731,22 @@ impl Gallery {
         }
         let liquid = matches!(
             args.lab,
-            Some(lab::LabScene::Tank | lab::LabScene::TankBench | lab::LabScene::TankHole)
+            Some(
+                lab::LabScene::Tank
+                    | lab::LabScene::TankBench
+                    | lab::LabScene::TankHole
+                    | lab::LabScene::TankBlocks
+            )
         )
         .then(|| {
             forge_render::Liquid::new(
                 &ctx.device,
                 &ctx.shaders,
-                lab::tank::liquid(args.liquid_cell, args.lab == Some(lab::LabScene::TankHole)),
+                lab::tank::liquid(
+                    args.liquid_cell,
+                    args.lab == Some(lab::LabScene::TankHole),
+                    args.lab == Some(lab::LabScene::TankBlocks),
+                ),
                 forge_render::LiquidSolver {
                     sweeps: args.liquid_sweeps,
                     omega: args.liquid_omega,
@@ -1242,8 +1251,9 @@ impl Demo for Gallery {
                 self.taa.reset_history();
             }
             // Space: the player jumps in the playground (#139), the car's handbrake on the track
-            // (#140, held: see `update`), the wrecking ball let go (#142); elsewhere it throws,
-            // as X does.
+            // (#140, held: see `update`), what a scene holds back let go (the wrecking ball #142,
+            // the flood's gate, the tank's gate or shutter #156: `held`); elsewhere it throws, as
+            // X does.
             KeyCode::Space => {
                 if let Some(lab) = &mut self.lab {
                     if lab.has_player() {
@@ -2140,7 +2150,7 @@ impl Drop for Gallery {
 fn log_liquid(tick: u64, stats: &LiquidStats, tank: &LiquidTank) {
     let start = tank.water.as_vec3() * tank.cell;
     let volume = start.x * start.y * start.z;
-    let level = volume / (tank.size.x * tank.size.z);
+    let level = settled_level(tank, volume);
     let particle = tank.cell.powi(3) / 8.0;
     let behind = tank.gate.map_or(0.0, |g| {
         stats.behind as f32 * particle / (g[0] * tank.size.z)
@@ -2162,6 +2172,34 @@ fn log_liquid(tick: u64, stats: &LiquidStats, tank: &LiquidTank) {
         digest = format!("{:08x}{:08x}", stats.digest[0], stats.digest[1]),
         "liquid"
     );
+}
+
+/// Where `volume` of water stands over the tank's floor, less what the blocks in it take as it
+/// rises past them.
+fn settled_level(tank: &LiquidTank, volume: f32) -> f32 {
+    let held = |h: f32| {
+        tank.size.x * tank.size.z * h
+            - tank
+                .obstacles
+                .iter()
+                .map(|o| {
+                    (o.max.x - o.min.x) * (o.max.z - o.min.z) * (h.min(o.max.y) - o.min.y).max(0.0)
+                })
+                .sum::<f32>()
+    };
+    if tank.obstacles.is_empty() {
+        return volume / (tank.size.x * tank.size.z);
+    }
+    let (mut low, mut high) = (0.0, tank.size.y);
+    for _ in 0..40 {
+        let mid = 0.5 * (low + high);
+        if held(mid) < volume {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    0.5 * (low + high)
 }
 
 /// The `q` quantile of `values` (sorted in place; 0 when empty).
@@ -2687,6 +2725,8 @@ impl CityMaterials {
             ("lab-tank-gate", red_paint),
             ("lab-tank-wall", red_paint),
             ("lab-tank-shutter", steel),
+            ("lab-tank-cube", concrete_grey),
+            ("lab-tank-post", concrete_grey),
             ("lab-bench-blue", bench_blue),
             ("lab-bench-violet", bench_violet),
             ("lab-bench-sand", bench_sand),
@@ -4633,6 +4673,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             position: Vec3::new(1.0, 1.05, 1.5),
             yaw: 0.58,
             pitch: -0.42,
+            speed: 0.8,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::TankBlocks) {
+        // In front of the tank's right half, over its rim, looking down at the cube and the posts
+        // the wave meets past the gate.
+        FlyCamera {
+            position: Vec3::new(0.6, 1.3, 0.8),
+            yaw: 0.35,
+            pitch: -0.55,
             speed: 0.8,
             ..FlyCamera::default()
         }

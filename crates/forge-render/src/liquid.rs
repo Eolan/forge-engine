@@ -31,6 +31,8 @@ use crate::taa::HDR_FORMAT;
 
 /// Substeps a frame may run (two of the lab's ticks).
 pub const LIQUID_MAX_SUBSTEPS: usize = 8;
+/// Obstacles a tank may hold (`MAX_OBSTACLES` in `liquid.slang`).
+pub const LIQUID_MAX_OBSTACLES: usize = 8;
 /// Particles a full cell starts with: 2 × 2 × 2.
 const PER_CELL: u32 = 8;
 /// Cells a side of the bricks the march skips over (`BRICK` in `liquid_draw.slang`).
@@ -68,6 +70,9 @@ pub struct LiquidTank {
     pub hole: Option<LiquidHole>,
     /// The glass's thickness, metres.
     pub glass: f32,
+    /// Blocks standing in the water, at most [`LIQUID_MAX_OBSTACLES`], clear of the water at the
+    /// start: the water goes round them.
+    pub obstacles: &'static [LiquidObstacle],
 }
 
 impl LiquidTank {
@@ -80,6 +85,15 @@ impl LiquidTank {
     pub fn particles(&self) -> u32 {
         self.water.x * self.water.y * self.water.z * PER_CELL
     }
+}
+
+/// A block standing in the tank: a box along the axes, metres from the inside's corner.
+#[derive(Clone, Copy, Debug)]
+pub struct LiquidObstacle {
+    /// Its least corner.
+    pub min: Vec3,
+    /// Its most.
+    pub max: Vec3,
 }
 
 /// A round hole through the gate.
@@ -284,7 +298,7 @@ struct GpuLiquidFrame {
     nodes: u32,
     cell_count: u32,
     foam_life: f32,
-    pad: u32,
+    obstacles: u32,
     position: u64,
     velocity: u64,
     affine: u64,
@@ -313,9 +327,11 @@ struct GpuLiquidFrame {
     mg_kind: u64,
     mg_x: u64,
     mg_b: u64,
+    pad2: [u32; 2],
+    obstacle: [[f32; 4]; 2 * LIQUID_MAX_OBSTACLES],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 584);
+const _: () = assert!(std::mem::size_of::<GpuLiquidFrame>() == 848);
 
 /// Mirrors `LiquidView` in `liquid_draw.slang`.
 #[repr(C)]
@@ -353,9 +369,10 @@ struct GpuLiquidView {
     foam: u64,
     foam_render: u64,
     frame: u64,
+    kind: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 416);
+const _: () = assert!(std::mem::size_of::<GpuLiquidView>() == 424);
 
 /// Mirrors `LiquidPush` in `liquid.slang`.
 #[repr(C)]
@@ -662,6 +679,15 @@ impl Liquid {
                 pipeline
             })
             .collect::<Result<Vec<_>>>()?;
+        assert!(
+            tank.obstacles.len() <= LIQUID_MAX_OBSTACLES,
+            "a tank holds {LIQUID_MAX_OBSTACLES} obstacles at most"
+        );
+        let water = tank.water.as_vec3() * tank.cell;
+        assert!(
+            tank.obstacles.iter().all(|o| o.min.cmpge(water).any()),
+            "an obstacle in the water at the start"
+        );
         let cells = tank.cells();
         let nodes = u64::from((cells.x + 1) * (cells.y + 1) * (cells.z + 1));
         let bricks = bricks_of(cells);
@@ -854,7 +880,7 @@ impl Liquid {
                 nodes,
                 cell_count,
                 foam_life: self.look.foam_life,
-                pad: 0,
+                obstacles: tank.obstacles.len() as u32,
                 position: base + now.0,
                 velocity: base + now.1,
                 affine: base + now.2,
@@ -891,6 +917,14 @@ impl Liquid {
                 mg_kind: base + l.mg_kind,
                 mg_x: base + l.mg_x,
                 mg_b: base + l.mg_b,
+                pad2: [0; 2],
+                obstacle: std::array::from_fn(|i| {
+                    tank.obstacles.get(i / 2).map_or([0.0; 4], |o| {
+                        if i % 2 == 0 { o.min } else { o.max }
+                            .extend(0.0)
+                            .to_array()
+                    })
+                }),
             }],
         );
         let address = frame.address();
@@ -1124,6 +1158,7 @@ impl Liquid {
                 foam: base + l.foam,
                 foam_render: base + l.foam_render,
                 frame: params.frame,
+                kind: base + l.kind,
             }],
         );
         let address = view.address();
@@ -1248,6 +1283,7 @@ mod tests {
             gate: Some([0.4, 0.42]),
             hole: None,
             glass: 0.01,
+            obstacles: &[],
         };
         let cells = tank.cells();
         assert_eq!(cells, UVec3::new(100, 60, 50));

@@ -295,6 +295,8 @@ for path in $paths; do
     capture "$path-lab-tank90-noocc" 90 "$lab" --lab tank --fixed-step --release 31 --no-occlusion "${flag[@]}"
     capture "$path-lab-tank-bench300" 300 "$lab" --lab tank-bench --fixed-step --release 31 "${flag[@]}"
     capture "$path-lab-tank-hole120" 120 "$lab" --lab tank-hole --fixed-step --release 31 "${flag[@]}"
+    # The blocks in the tank (#156): the wave wrapping the cube and climbing the post at tick 56.
+    capture "$path-lab-tank-blocks56" 56 "$lab" --lab tank-blocks --fixed-step --release 31 "${flag[@]}"
     # The sharpness room (#159): still at frame 60, and slid sideways at 2 m/s into the same view
     # (TAA's history resampled every frame: the edges across the motion softer).
     capture "$path-lab-room60" 60 "$lab" --lab room --fixed-step "${flag[@]}"

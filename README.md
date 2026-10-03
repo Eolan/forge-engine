@@ -235,6 +235,7 @@ basin round blocks and a hut, carrying crates, barrels and logs; Space lifts the
 drawn through the glass; Space lifts the gate. `--lab tank-bench`: the same tank on a floor of
 squares, tinted, to tune the liquid by (2 colours the water by its speed, 1 back). `--lab
 tank-hole`: the gate fixed with a round hole through it; Space opens it and the water jets out.
+`--lab tank-blocks`: the dam break round a concrete cube and two posts.
 `--lab dominoes`: 300 dominoes on a spiral, Space tips the first, and a recording of the run
 replays to the same digests. `--lab bridge`: a timber bridge over a gap and four cars; Space sends
 them across, and the deck gives way under the second. `--lab tug --net 100`: a tug-of-war on a sled

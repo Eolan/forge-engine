@@ -92,6 +92,9 @@ pub(crate) enum LabScene {
     /// The glass tank with the gate fixed and a round hole through it, a shutter over it: the jet
     /// (#156).
     TankHole,
+    /// The glass tank's dam break with concrete blocks in the water's way: a cube, two posts
+    /// (#156).
+    TankBlocks,
     /// A plain room to measure sharpness by: white walls, a floor of black and white squares, black
     /// squares turned 5° on the back wall and on a board, the sun alone (#159).
     Room,
@@ -161,11 +164,11 @@ const TUG: usize = ROCKET + 3;
 /// The spaceship and its engines' flame, after the tug-of-war's two.
 const SHIP: usize = TUG + 2;
 /// The glass tank's table, its frame's bars along x, y and z, its gate, its bench's four floors,
-/// its holed gate and the shutter, after the ship's two.
+/// its holed gate and the shutter, the blocks' cube and post, after the ship's two.
 const TANK: usize = SHIP + 2;
 /// The sharpness room's floor, back wall, side wall, target, board and the board's target, after the
-/// tank's eleven.
-const ROOM: usize = TANK + 11;
+/// tank's thirteen.
+const ROOM: usize = TANK + 13;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -557,6 +560,7 @@ impl LabWorld {
             | LabScene::Tank
             | LabScene::TankBench
             | LabScene::TankHole
+            | LabScene::TankBlocks
             | LabScene::Room => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -988,12 +992,13 @@ impl LabWorld {
                 group(CRATE, site.crates, &mut bodies);
                 ship = Some(site.ship);
             }
-            LabScene::Tank | LabScene::TankBench | LabScene::TankHole => {
+            LabScene::Tank | LabScene::TankBench | LabScene::TankHole | LabScene::TankBlocks => {
                 let built = tank::build(
                     &mut world,
                     TANK,
                     kind == LabScene::TankBench,
                     kind == LabScene::TankHole,
+                    kind == LabScene::TankBlocks,
                 )?;
                 statics.extend(built.statics);
                 group(built.mover.0, vec![built.mover.1], &mut bodies);
@@ -2187,10 +2192,11 @@ impl Lab {
     }
 
     /// Whether the scene holds something back for Space to let go: the wrecking ball, the
-    /// flood's gate, the dominoes all standing, the convoy.
+    /// flood's gate, the dominoes all standing, the convoy, the tank's gate or shutter.
     pub(crate) fn held(&mut self) -> bool {
         let shown = self.shown();
         shown.wall.as_ref().is_some_and(|w| w.held(&shown.world))
+            || shown.tank.as_ref().is_some_and(|t| t.closed(&shown.world))
             || shown
                 .dam
                 .as_ref()
@@ -2954,5 +2960,31 @@ mod tests {
             server.tick(&[]);
         }
         assert_eq!(server.digest(), net.client.sim.digest());
+    }
+
+    #[test]
+    fn the_tanks_hold_their_water_back_for_space() {
+        // Space lets go only what the scene says it holds back: the tank's gate was left out,
+        // and Space threw a ball at it (#156, the owner's report).
+        for kind in [
+            LabScene::Tank,
+            LabScene::TankBench,
+            LabScene::TankHole,
+            LabScene::TankBlocks,
+        ] {
+            let (mut lab, _) = LabWorld::new(kind, test_pool()).unwrap();
+            let tank = lab.tank.clone().unwrap();
+            lab.tick(&[]);
+            assert!(tank.closed(&lab.world), "{kind:?}");
+            let release = Stamped {
+                tick: lab.now(),
+                player: 0,
+                seq: 0,
+                command: LabCommand::Release,
+            };
+            lab.tick(&[release]);
+            lab.tick(&[]);
+            assert!(!tank.closed(&lab.world), "{kind:?}");
+        }
     }
 }

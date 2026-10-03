@@ -78,6 +78,8 @@ struct LiquidView
     float* foam_render;     // smoothed, over a full cell's worth of foamy particles
     Frame* frame;           // the scene renderer's frame block (meshlet.slang), whose rays' structures the bent
                             // rays are traced against; null, or no structure: they take the scene behind their pixel
+    uint* kind;             // the solver's cells' kinds (its last substep's): SOLID inside the tank is the gate's
+                            // or a block's
 };
 
 struct ViewPush
@@ -89,28 +91,42 @@ struct ViewPush
 ViewPush view_push;
 
 static const float FIX = 1048576.0;
+static const uint SOLID = 2u; // `liquid.slang`'s
 
 uint cell_index(LiquidView* v, int3 c)
 {
     return uint(c.x) + v[0].cells.x * (uint(c.y) + v[0].cells.y * uint(c.z));
 }
 
+// The binomial weight of the neighbour at offset (x, y, z), cell `i`: none for a solid. A weight
+// of 0 rather than a `continue` in the loops: with a `continue` in `smooth2_main`'s, the device
+// was lost as the water reached `tank-blocks`' cube (#156), though nothing read its output; a
+// code generation fault we did not pin down.
+float solid_weight(LiquidView* v, uint i, int x, int y, int z)
+{
+    return v[0].kind[i] == SOLID ? 0.0 : float((2 - abs(x)) * (2 - abs(y)) * (2 - abs(z)));
+}
+
 // A cell's 3 × 3 × 3 binomial blur of `from` (fixed-point, `scale` to a full cell's), the glass
 // round the tank taking the water's own beside it (so the water meets the glass full rather than
-// fading into it).
+// fading into it). The solids inside the tank (the gate, the blocks) are left out of it, so the
+// water meets them full too, and they take the water's round them.
 float blur3(LiquidView* v, int* from, float scale, int3 c)
 {
     int3 n = int3(v[0].cells.xyz);
     float sum = 0.0;
+    float weight = 0.0;
     for (int z = -1; z <= 1; z++)
         for (int y = -1; y <= 1; y++)
             for (int x = -1; x <= 1; x++)
             {
                 int3 m = clamp(c + int3(x, y, z), int3(0), n - 1);
-                float w = float((2 - abs(x)) * (2 - abs(y)) * (2 - abs(z)));
-                sum += w * float(from[cell_index(v, m)]);
+                uint i = cell_index(v, m);
+                float w = solid_weight(v, i, x, y, z);
+                sum += w * float(from[i]);
+                weight += w;
             }
-    return sum / 64.0 * scale;
+    return weight > 0.0 ? sum / weight * scale : 0.0;
 }
 
 int3 cell_of(LiquidView* v, uint i)
@@ -141,14 +157,18 @@ void smooth2_main(uint3 id : SV_DispatchThreadID)
         return;
     int3 c = cell_of(v, id.x);
     float sum = 0.0;
+    float weight = 0.0;
     for (int z = -1; z <= 1; z++)
         for (int y = -1; y <= 1; y++)
             for (int x = -1; x <= 1; x++)
             {
                 int3 m = clamp(c + int3(x, y, z), int3(0), int3(n) - 1);
-                sum += float((2 - abs(x)) * (2 - abs(y)) * (2 - abs(z))) * v[0].blur[cell_index(v, m)];
+                uint i = cell_index(v, m);
+                float w = solid_weight(v, i, x, y, z);
+                sum += w * v[0].blur[i];
+                weight += w;
             }
-    v[0].render[id.x] = sum / 64.0;
+    v[0].render[id.x] = weight > 0.0 ? sum / weight : 0.0;
 }
 
 [shader("compute")]
@@ -257,17 +277,38 @@ float density_at(LiquidView* v, float3 p)
     return r;
 }
 
+// Whether `p` (tank coordinates) stands in a solid cell: the gate's, a block's.
+bool solid_at(LiquidView* v, float3 p)
+{
+    int3 c = clamp(int3(floor(p / v[0].tank.w)), int3(0), int3(v[0].cells.xyz) - 1);
+    return v[0].kind[cell_index(v, c)] == SOLID;
+}
+
+// The density's slope at `p` along `step`, over both sides, or over the one not in a solid cell:
+// a solid's cells hold the field the smoothing carries in, then none (#156: the normal turned
+// into the gate, and its waterline mirrored the sky in a white band).
+float slope(LiquidView* v, float3 p, float here, float3 step)
+{
+    bool ahead = !solid_at(v, p + step);
+    bool behind = !solid_at(v, p - step);
+    float hi = ahead ? density_at(v, p + step) : here;
+    float lo = behind ? density_at(v, p - step) : here;
+    float span = float(ahead) + float(behind);
+    return span > 0.0 ? (hi - lo) / span : 0.0;
+}
+
 // The surface's normal at `p`, out of the water: the density's gradient over two cells either way,
 // smoother than the particles' noise (over one, a still surface seen from below at a grazing
 // angle flipped between mirroring and letting through from pixel to pixel).
 float3 normal_at(LiquidView* v, float3 p)
 {
     float e = 2.0 * v[0].tank.w;
-    float3 g = float3(density_at(v, p + float3(e, 0, 0)) - density_at(v, p - float3(e, 0, 0)),
-                      density_at(v, p + float3(0, e, 0)) - density_at(v, p - float3(0, e, 0)),
-                      density_at(v, p + float3(0, 0, e)) - density_at(v, p - float3(0, 0, e)));
+    float here = density_at(v, p);
+    float3 g = float3(slope(v, p, here, float3(e, 0, 0)),
+                      slope(v, p, here, float3(0, e, 0)),
+                      slope(v, p, here, float3(0, 0, e)));
     float l = length(g);
-    return l > 1e-6 ? -g / l : float3(0.0, 1.0, 0.0);
+    return l > 0.5e-6 ? -g / l : float3(0.0, 1.0, 0.0);
 }
 
 // Where the ray `p + t d` leaves the box `lo`..`hi` (`p` inside it), and the face's outward normal.
@@ -711,7 +752,14 @@ void march_main(uint3 id : SV_DispatchThreadID)
             // Out through the surface from below, or mirrored whole past the critical angle.
             float3 bent = refract(dir, -n, ior);
             if (dot(bent, bent) == 0.0)
+            {
+                // Back into the water first: the crossing stands just on the air's side, and a
+                // ray mirrored at a grazing angle started there met the surface again at once,
+                // to and fro on the spot until it ran out of crossings (#156: speckles in thin
+                // water round the blocks).
+                p -= dir * (0.05 * v[0].tank.w);
                 dir = reflect(dir, -n);
+            }
             else
             {
                 through *= 1.0 - fresnel(WATER_F0, dot(dir, n));

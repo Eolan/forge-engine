@@ -1942,7 +1942,10 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
     and speckled panes of the owner's report.
   - **Its cost:** nothing measurable (`liquid/draw` 0.20 ms).
   - **The underwater hatching:** that was rounding, and is fixed.
-- **Not yet:** bodies in the water, caustics. A multigrid pressure was tried and stays opt-in
+- **Blocks in the water** (`tank-blocks`): fixed boxes in the solver's cells and particles, the
+  density field smoothed round them; the water goes round and over them and settles 0.6 mm short,
+  as in the plain tank.
+- **Not yet:** bodies that move in the water, caustics. A multigrid pressure was tried and stays opt-in
   (`--liquid-cycles`): at the settings that keep still water still, it saves a fifth of the
   sweeps' time at best, and leaves its worst cell 20 times as far off (`demos/physics-lab.md`).
 
@@ -1963,7 +1966,7 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
 
 ---
 
-## D-045 — An image that stays sharp in motion, and deeper blacks 🟡 (2026-10-03)
+## D-045 — An image that stays sharp in motion, and deeper blacks ✅ (2026-10-03)
 
 The owner's report of 2026-10-03 (#159): "I feel like the image is always a bit blurry of fuzzy,
 never clear and neat as it should". Then, with a summary of Digital Foundry's piece on TAA:
@@ -2026,9 +2029,33 @@ cycles a pixel, an ideal pixel's 0.60; [demos/physics-lab.md](demos/physics-lab.
 - SSAA as an option for captures.
 - The tone curve chosen by the owner's eye from the room's captures under each (G cycles them).
 
-**Questions for the owner:**
+**Questions for the owner** (answered below):
 1. DLAA by default on RTX cards, with TAA where there is none?
 2. A sharpening pass after TAA, and how strong: half a stop or a whole one (shown on the same
    captures)?
 3. Which tone: AgX as it is, AgX with more contrast, neutral or ACES?
 4. SSAA for screenshots and cinematics?
+
+**The owner's answers of 2026-10-03:** "I will follow your recommendation, 'Proposed: 1 and 2
+together'."
+1. "DLAA by default on RTX, and TAA where none."
+2. "Use the best compromise, performance in this case might be weighting a bit more": the
+   sharpening's strength is chosen by measuring, leaning to the cheaper side.
+3. "Keep AgX but it would be nice to have the others as options in engine (maybe in a dev
+   console?)": AgX stays the default, and the other curves become a run-time setting.
+4. "Ok for SSAA for screenshots."
+
+**Taken:**
+- **Where NVIDIA's DLAA runs (RTX cards):** it is the default, through Streamline, loaded only on
+  NVIDIA (the cross-vendor rule).
+- **Everywhere else:** TAA with an RCAS pass after the resolve and a Lanczos-3 history, each
+  measured in the room before and after. RCAS's strength is the lower of the strengths that give
+  back most of the moving edges' contrast (the cost counts).
+- **SSAA for screenshots** (2 × 2), not for play.
+- **The tone curve:** AgX by default; neutral, ACES and AgX with more contrast are selectable at
+  run time, for now by key and flag, later in the settings and the dev console (#160).
+- **Still open:**
+  - bloom's strength;
+  - the exposure's half to whole stop;
+  - a history at twice the resolution;
+  - FSR 3 at native resolution, to measure when the AMD work starts (#67).

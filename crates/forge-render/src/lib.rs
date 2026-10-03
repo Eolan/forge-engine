@@ -50,8 +50,9 @@ pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_fr
 pub use forge_gpu::DlssMode;
 pub use gtao::{Gtao, GtaoParams};
 pub use liquid::{
-    FRESH_FOAM_LIFE, LIQUID_MAX_SUBSTEPS, Liquid, LiquidDrawParams, LiquidHole, LiquidLook,
-    LiquidMode, LiquidSolver, LiquidState, LiquidStats, LiquidStep, LiquidTank,
+    FRESH_FOAM_LIFE, LIQUID_MAX_OBSTACLES, LIQUID_MAX_SUBSTEPS, Liquid, LiquidDrawParams,
+    LiquidHole, LiquidLook, LiquidMode, LiquidObstacle, LiquidSolver, LiquidState, LiquidStats,
+    LiquidStep, LiquidTank,
 };
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,

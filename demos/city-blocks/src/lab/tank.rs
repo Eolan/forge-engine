@@ -20,6 +20,11 @@
 //! and low in its middle (the owner's ask: "the dam open a circular hole"), shut by a shutter on
 //! its dry side. Space (or `--release N`) slides the shutter up: the water jets out through the
 //! hole at about √(2gh) and the reservoir drains until both sides stand level.
+//!
+//! `--lab tank-blocks`: the glass tank's dam break with concrete blocks in the water's way (the
+//! owner's ask: water "correct round the obstacles"): a 10 cm cube in the channel's middle, then
+//! two posts 30 cm tall near the sides. The wave runs over and round the cube, splits on the posts
+//! and settles round them.
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -27,7 +32,7 @@ use std::sync::Arc;
 use forge_geom::city::{Block, Imported, PropKind, PropSpec};
 use forge_geom::procedural::TriMesh;
 use forge_physics::{BodyDesc, BodyId, Motion, Shape, Transform, Velocity, World};
-use forge_render::{LiquidHole, LiquidStep, LiquidTank};
+use forge_render::{LiquidHole, LiquidObstacle, LiquidStep, LiquidTank};
 use glam::{Mat4, UVec3, Vec2, Vec3};
 
 /// The tank's inside, metres, its grid's cell by default (`--liquid-cell`) and its glass's
@@ -56,6 +61,23 @@ const HOLE: [f32; 3] = [0.12, 0.5 * INSIDE.z, 0.04];
 const SHUTTER_HALF: [f32; 3] = [0.005, 0.08, 0.08];
 const SHUTTER_LIFT: f32 = 2.0;
 const SHUTTER_RISE: f32 = 0.65;
+/// `tank-blocks`' blocks, metres from the inside's corner, on whole cells of the default grid: a
+/// 10 cm cube in the channel's middle 25 cm past the gate, then two posts 5 cm square and 30 cm
+/// tall (out of the settled water), 15 cm in from each side.
+const BLOCKS: [LiquidObstacle; 3] = [
+    LiquidObstacle {
+        min: Vec3::new(0.85, 0.0, 0.25),
+        max: Vec3::new(0.95, 0.1, 0.35),
+    },
+    LiquidObstacle {
+        min: Vec3::new(1.15, 0.0, 0.125),
+        max: Vec3::new(1.2, 0.3, 0.175),
+    },
+    LiquidObstacle {
+        min: Vec3::new(1.15, 0.0, 0.425),
+        max: Vec3::new(1.2, 0.3, 0.475),
+    },
+];
 /// The frame's bars round the glass: their half thickness.
 const BAR: f32 = 0.012;
 /// Substeps of the liquid a tick of the lab's (1/240 s each).
@@ -69,7 +91,7 @@ pub(crate) fn corner(bench: bool) -> Vec3 {
 }
 
 /// The scene's props: the table, the frame's bars along x, y and z, the gate, the bench's four
-/// floors, the holed gate and its shutter.
+/// floors, the holed gate and its shutter, `tank-blocks`' cube and post.
 pub(super) fn props() -> Vec<PropSpec> {
     let block = |name: &str, half: [f32; 3], radius: f32| PropSpec {
         name: name.to_owned(),
@@ -108,7 +130,14 @@ pub(super) fn props() -> Vec<PropSpec> {
             }),
         },
         block("lab-tank-shutter", SHUTTER_HALF, 0.002),
+        block("lab-tank-cube", half_of(BLOCKS[0]), 0.004),
+        block("lab-tank-post", half_of(BLOCKS[1]), 0.004),
     ]
+}
+
+/// A block's half size.
+fn half_of(block: LiquidObstacle) -> [f32; 3] {
+    (0.5 * (block.max - block.min)).to_array()
 }
 
 /// A plate of half size `half` (x its thickness) with a round hole through it along x, centred at
@@ -216,8 +245,9 @@ pub(super) struct Built {
 }
 
 /// The tank's liquid on a grid of `cell` metres: its inside, the water and the gate (with `hole`,
-/// the fixed gate's hole), in its own frame (the inside's corner).
-pub(crate) fn liquid(cell: f32, hole: bool) -> LiquidTank {
+/// the fixed gate's hole; with `blocks`, the blocks in the water's way), in its own frame (the
+/// inside's corner).
+pub(crate) fn liquid(cell: f32, hole: bool, blocks: bool) -> LiquidTank {
     LiquidTank {
         // Whole cells: the inside within half a cell of the glass (at 1.5 cm, 1.005 m long).
         size: (INSIDE / cell).round() * cell,
@@ -233,6 +263,7 @@ pub(crate) fn liquid(cell: f32, hole: bool) -> LiquidTank {
             radius: HOLE[2],
         }),
         glass: GLASS,
+        obstacles: if blocks { &BLOCKS } else { &[] },
     }
 }
 
@@ -247,9 +278,15 @@ fn shutter_home(corner: Vec3) -> Vec3 {
 }
 
 /// Builds the table, the frame and the gate, or on the bench the gate and the floors; with `hole`,
-/// the gate fixed with its hole and the shutter over it (`first`: the table's prop, the others
-/// after it as in [`props`]).
-pub(super) fn build(world: &mut World, first: usize, bench: bool, hole: bool) -> Result<Built> {
+/// the gate fixed with its hole and the shutter over it; with `blocks`, the blocks in the tank
+/// (`first`: the table's prop, the others after it as in [`props`]).
+pub(super) fn build(
+    world: &mut World,
+    first: usize,
+    bench: bool,
+    hole: bool,
+    blocks: bool,
+) -> Result<Built> {
     let mut statics = Vec::new();
     let corner = corner(bench);
     let kinematic = |world: &mut World, half: [f32; 3], at: Vec3| -> Result<BodyId> {
@@ -292,6 +329,20 @@ pub(super) fn build(world: &mut World, first: usize, bench: bool, hole: bool) ->
             tank,
             mover,
         });
+    }
+    if blocks {
+        for (k, block) in BLOCKS.iter().enumerate() {
+            let half = Vec3::from_array(half_of(*block));
+            let at = corner + 0.5 * (block.min + block.max);
+            world.add_body(&BodyDesc::fixed(
+                &Shape::cuboid(half, 0.004, 0.0)?,
+                at.as_dvec3(),
+            ))?;
+            statics.push((
+                first + if k == 0 { 11 } else { 12 },
+                Mat4::from_translation(at),
+            ));
+        }
     }
     let table_at = Vec3::new(0.0, TABLE_HALF[1], 0.0);
     let table = Shape::cuboid(Vec3::from_array(TABLE_HALF), 0.01, 0.0)?;
@@ -339,6 +390,16 @@ impl Tank {
             self.risen(world, self.gate, gate_home(self.corner)),
             shutter_rest + self.risen(world, self.shutter, shutter_home(self.corner)),
         ]
+    }
+
+    /// Whether the gate or the shutter still waits for Space.
+    pub(super) fn closed(&self, world: &World) -> bool {
+        [
+            (self.gate, gate_home(self.corner)),
+            (self.shutter, shutter_home(self.corner)),
+        ]
+        .into_iter()
+        .any(|(body, home)| body.is_some() && self.risen(world, body, home) <= 0.0)
     }
 
     /// Lifts the gate, or slides the shutter up.
@@ -410,7 +471,7 @@ mod tests {
 
     #[test]
     fn the_water_fills_the_reservoir_behind_the_gate() {
-        let tank = liquid(CELL, false);
+        let tank = liquid(CELL, false, false);
         assert_eq!(tank.cells(), UVec3::new(128, 48, 48));
         assert_eq!(tank.particles(), 589_824);
         // The block reaches the gate's near face and stands 0.4 m.
@@ -422,10 +483,28 @@ mod tests {
         let level = volume / (INSIDE.x * INSIDE.z);
         assert!((level - 0.15).abs() < 1e-4, "{level}");
         // At 1 cm, 1.15 million; at 1.5 cm, short of the gate (39 cells, 0.585 m).
-        assert_eq!(liquid(0.01, false).particles(), 1_152_000);
-        let coarse = liquid(0.015, false);
+        assert_eq!(liquid(0.01, false, false).particles(), 1_152_000);
+        let coarse = liquid(0.015, false, false);
         assert_eq!(coarse.water, UVec3::new(40, 27, 40));
         assert!(coarse.water.x as f32 * 0.015 <= GATE_X[0] + 1e-6);
+    }
+
+    #[test]
+    fn the_blocks_stand_on_whole_cells_past_the_gate() {
+        let tank = liquid(CELL, false, true);
+        let water = tank.water.as_vec3() * CELL;
+        for block in tank.obstacles {
+            // Past the gate (clear of the water at the start), on the floor, inside the glass.
+            assert!(block.min.x > GATE_X[1] && block.min.x > water.x);
+            assert_eq!(block.min.y, 0.0);
+            assert!(block.max.cmple(tank.size).all() && block.min.cmplt(block.max).all());
+            // On whole cells, so the solid cells are the block.
+            for v in [block.min, block.max] {
+                let cells = v / CELL;
+                assert!((cells - cells.round()).abs().max_element() < 1e-3, "{v}");
+            }
+        }
+        assert!(liquid(CELL, false, false).obstacles.is_empty());
     }
 
     #[test]

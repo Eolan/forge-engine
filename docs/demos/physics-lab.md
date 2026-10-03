@@ -28,7 +28,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn as fresh water, carrying what floats, which pushes it aside | ✅ #144, #151 |
-| `tank`, `tank-bench`, `tank-hole` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate | ✅ #156 |
+| `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
 | `dominoes` | an advanced test: a 300-domino run on a spiral that ends the same, replayed | ✅ #146 |
 | `bridge` | an advanced test: a timber bridge that stands empty and collapses under a convoy of cars, replayed | ✅ #147 |
@@ -562,12 +562,13 @@ A tick: **1.12 ms**, against 0.90 for the same run before (measured the same day
 alone gives 1.00 ms, so much of the rest is the floaters moving differently, more of them
 jostling.
 
-## `tank`, `tank-bench`, `tank-hole`: a dam break in a glass tank (issue #156)
+## `tank`, `tank-bench`, `tank-hole`, `tank-blocks`: a dam break in a glass tank (issue #156)
 
 ```
 cargo run --release -p physics-lab -- --lab tank
 cargo run --release -p physics-lab -- --lab tank-bench
 cargo run --release -p physics-lab -- --lab tank-hole
+cargo run --release -p physics-lab -- --lab tank-blocks
 ```
 
 D-044's first milestone, after the owner's answers of 2026-10-03: the water is particles on a
@@ -600,6 +601,52 @@ The keys **1**, **2** and **3** switch between the water as it looks, its **spee
 low in its middle (its centre 12 cm over the floor), shut by a steel shutter on its dry side.
 **Space** slides the shutter up at 2 m/s and the water jets out through the hole into the empty
 side. The reservoir drains until both sides stand level, 152 mm.
+
+`tank-blocks` puts concrete blocks in the dam break's way: the owner asked for water "correct
+round the obstacles", where the column model of `flood` stuck above the level and glitched.
+- **The blocks:** a 10 cm cube in the channel's middle 25 cm past the gate, then two posts 5 cm
+  square and 30 cm tall, 15 cm in from each side.
+- **What happens:** the wave wraps the cube and runs over it, climbs the posts and splits on
+  them. It comes back off the far wall over all three and settles round them.
+
+![The blocks in the tank: the wave wrapping the cube and climbing the near post, the water coming back off the far wall over the posts, and settled round them](images/physics-lab-tank-blocks.png)
+
+**How the liquid takes a block** (`LiquidTank::obstacles`, up to eight boxes):
+- **In the solver:** the cells whose centres lie inside a block are solid, as the gate's are, and
+  their faces' velocities are 0. A particle that would end inside one stops a hundredth of a cell
+  outside the face it crossed. One already inside leaves by the nearest face that is not against
+  the glass.
+- **In the drawing:** the density field is smoothed with the solids left out (the gate's too). So
+  the water meets a block full, as it meets the glass, rather than thinning into a gutter round
+  it. A ray bent through the water stops at the block's mesh, as it does at the gate. The
+  surface's normal takes its gradient on one side only where the other side's sample falls in a
+  solid.
+  - **The gate it fixed** (the owner's report of 2026-10-03, two screenshots: the red gate
+    shredded into strips with white streaks, "inside the water itself the light should not
+    bend"). The field dropped to nothing in the gate's cells, a false surface a cell in front of
+    it. Rays under the water crossed it as if leaving the water, bent, and mirrored the sky at
+    grazing angles. Now the field reaches the gate whole, and rays meet the gate before any
+    surface.
+  - **The waterline against it:** with the field carried into the gate, the normal's samples on
+    the gate's side read its cells, and the surface tilted into the gate in its last cell or two.
+    That showed as a white band, the sky mirrored, along the gate's waterline.
+  - **What remains:** the floor just behind a block, which the block hides from the camera, is
+    seen through the water by rays bent down steeply. It is shaded plainly (as the hidden
+    landings below are), a smooth fringe a little lighter than the textured floor round it.
+- **The level it settles at:** 151.0 to 151.3 mm, against the 151.8 its volume gives with the
+  blocks taking their share. That is the same 0.6 mm short as the plain tank.
+- **Two faults found on the way:**
+  - **Trapped rays:** a ray mirrored under the surface at a grazing angle started from just
+    above it, met the surface again at once, and went to and fro on the spot until it ran out of
+    crossings. In thin water round the blocks, that showed as dark speckles; it now starts back
+    in the water.
+  - **A lost device:** with a `continue` in the smoothing's loop, the GPU lost the device as the
+    water reached the cube, though nothing read the pass's output. A weight of 0 in its place
+    works; the fault was not pinned down further.
+
+![The gate seen from just over the still water: shredded under the surface before; whole, with a white band along its waterline, once the field reached it; and with the normal taken on the water's side](images/physics-lab-tank-gate.png)
+
+`--lab tank --fixed-step --view=-0.45,1.3,0.05,-90,-20`, frame 60.
 
 **The solver** (APIC on a MAC grid, Jiang et al. 2015):
 - **The particles:** 589 824, eight a cell, on a 1.25 cm grid (128 × 48 × 48 cells). That spends
@@ -655,7 +702,7 @@ side. The reservoir drains until both sides stand level, 152 mm.
     edges, and it could not see what something nearer hid. There it took the last place it saw,
     which gave the gate's red on the floor behind it and speckled panes.
 - **The normal:** the density's gradient over two cells either way, smoother than the particles'
-  noise.
+  noise. Next to the gate or a block, it uses only the water's side.
 - **Under the water:** each ray starts on the near plane, so a camera crossing the surface sees
   the water below the line its near plane cuts and the air above, with a thin dark waterline
   on the lens between them (`--view=-0.6,1.212,0.05,-90,-3` puts the camera's eye at the
@@ -993,6 +1040,7 @@ downrange); and the tug-of-war (#149) through `--net 100`, `lab-tug-net200` (the
 right) with its twin and `lab-tug-net600` (over the line); and the spaceship (#150) at full throttle,
 `lab-space90` (closing on the crates) and `lab-space150` (through them) with its twin;
 and the glass tank (#156), the gate lifted at tick 31, `lab-tank90` (the wave climbing the far
-wall) with its twin and `lab-tank-bench300` (the bench, the water settling), and `lab-tank-hole120`
-(the jet, the far wall white for a moment); and the sharpness room (#159), `lab-room60` (still) and
+wall) with its twin and `lab-tank-bench300` (the bench, the water settling), `lab-tank-hole120`
+(the jet, the far wall white for a moment) and `lab-tank-blocks56` (the wave wrapping the cube);
+and the sharpness room (#159), `lab-room60` (still) and
 `lab-room-pan60` (slid sideways at 2 m/s into the same view).
