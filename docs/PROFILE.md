@@ -1003,6 +1003,10 @@ about three times a pile's; the cracking (the joints' loads and the bricks' tran
 two calls, the strain of each joint) is a few microseconds. Asleep, before the ball and after
 the dust settles, the scene costs nothing.
 
+`--lab creatures` (#143), five ragdolls of eleven parts, balls thrown every 50 ticks, 600
+ticks: **0.11 ms a tick** (p99 0.21, max 0.28). Setting the 50 motors' targets is a few
+microseconds; the ragdolls stay awake while their poses move.
+
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's
 throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that tick, three

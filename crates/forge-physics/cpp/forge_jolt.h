@@ -124,6 +124,7 @@ typedef struct FjLayout {
     uint32_t character_desc;
     uint32_t character_state;
     uint32_t vehicle_desc;
+    uint32_t ragdoll_part;
 } FjLayout;
 
 FjLayout fj_layout(void);
@@ -233,6 +234,43 @@ void fj_joints_set(FjWorld *world, const uint32_t *joints, uint32_t count, const
 // Whether joints hold (1) or are broken (0).
 void fj_joints_holding(const FjWorld *world, const uint32_t *joints, uint32_t count,
                        uint8_t *holding);
+
+// A part of a ragdoll (#143): a body, and the joint that holds it to its parent part. Everything
+// is given in the world as built; the parts come parents first.
+typedef struct FjRagdollPart {
+    const FjShape *shape;
+    double position[3];
+    float rotation[4];
+    // The parent's index among the parts, −1 for the root (which has no joint).
+    int32_t parent;
+    // 0: a swing-twist joint (a shoulder, a hip, a neck); 1: a hinge (a knee, an elbow) about
+    // `plane_axis`.
+    uint32_t kind;
+    double pivot[3];
+    // Along the part from the pivot (unit), and across it (unit, at a right angle to it).
+    float twist_axis[3];
+    float plane_axis[3];
+    // Swing-twist: the swing cone's half angles and the twist's range; a hinge: its range in
+    // `twist_min` and `twist_max`. Radians.
+    float normal_cone;
+    float plane_cone;
+    float twist_min;
+    float twist_max;
+    float friction;
+} FjRagdollPart;
+
+// Adds a ragdoll of `count` parts (Jolt's Ragdoll: its parts' bodies, and their joints; a part
+// does not collide with its parent); writes its parts' bodies into `bodies`, returns its index.
+// Saved and restored with the world.
+uint32_t fj_ragdoll_add(FjWorld *world, const FjRagdollPart *parts, uint32_t count,
+                        uint32_t *bodies);
+// Drives a ragdoll's joints towards `targets`, four floats a part (the root's ignored): for a
+// swing-twist joint the part's turn in its joint's frame (a quaternion, x y z w; identity is
+// the pose as built), for a hinge its angle in the first. Motors of a spring of `stiffness`
+// (N·m a radian) and `damping` (N·m·s a radian), whatever the parts weigh, at most `torque`
+// N·m; a torque of 0 lets the ragdoll go limp.
+void fj_ragdoll_drive(FjWorld *world, uint32_t ragdoll, const float *targets, float stiffness,
+                      float damping, float torque);
 
 // The whole simulation state (bodies, contacts, constraints) into a buffer the world owns,
 // valid until the next call; `size` receives its length.

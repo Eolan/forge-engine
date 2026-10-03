@@ -390,6 +390,63 @@ pub struct VehicleId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct JointId(u32);
 
+/// How a part of a ragdoll turns on its parent (#143).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RagdollJoint {
+    /// A ball joint (a shoulder, a hip, a neck): the part swings within a cone of these half
+    /// angles round its twist axis and twists about it within a range, radians.
+    SwingTwist {
+        /// The cone's half angles: across the normal axis and across the plane axis.
+        cone: (f32, f32),
+        /// The twist's least and most.
+        twist: (f32, f32),
+    },
+    /// A hinge (a knee, an elbow) about the part's plane axis, within a range, radians.
+    Hinge {
+        /// Its least and most angle from the pose as built.
+        range: (f32, f32),
+    },
+}
+
+/// A part of a ragdoll as built: a body and the joint that holds it to its parent.
+#[derive(Clone, Copy, Debug)]
+pub struct RagdollPart<'a> {
+    /// Its shape (with its density).
+    pub shape: &'a Shape,
+    /// Where it is.
+    pub at: Transform,
+    /// Its parent's index among the parts (parents come first), `None` for the root.
+    pub parent: Option<usize>,
+    /// How it turns on its parent (ignored for the root).
+    pub joint: RagdollJoint,
+    /// The joint's point.
+    pub pivot: DVec3,
+    /// Along the part from the pivot (unit), and across it at a right angle (unit): a hinge
+    /// turns about the latter.
+    pub twist_axis: Vec3,
+    /// See `twist_axis`.
+    pub plane_axis: Vec3,
+    /// Its friction.
+    pub friction: f32,
+}
+
+/// A ragdoll of a [`World`]: its index, in the order added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RagdollId(u32);
+
+/// The motors that drive a ragdoll's joints to a pose: a spring of `stiffness` and `damping`
+/// whatever its parts weigh (a spring given by its frequency would scale with each joint's own
+/// light part and let a torso sag), at most `torque` N·m (0: limp).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Motors {
+    /// N·m a radian.
+    pub stiffness: f32,
+    /// N·m·s a radian.
+    pub damping: f32,
+    /// N·m at the most; 0 lets the joints go.
+    pub torque: f32,
+}
+
 /// What a joint carried in the last step.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct JointLoad {
@@ -916,6 +973,71 @@ impl World {
                 joints.as_ptr().cast(),
                 joints.len() as u32,
                 flags.as_ptr(),
+            );
+        }
+    }
+
+    /// Adds a ragdoll (#143): Jolt's ragdoll of `parts`, each a body held to its parent by its
+    /// joint, a part not colliding with its parent. Its bodies, in the parts' order, come back
+    /// with it. Saved and restored with the world.
+    pub fn add_ragdoll(
+        &mut self,
+        parts: &[RagdollPart],
+    ) -> Result<(RagdollId, Vec<BodyId>), PhysicsError> {
+        let raw: Vec<ffi::FjRagdollPart> = parts
+            .iter()
+            .map(|p| {
+                let (kind, normal_cone, plane_cone, twist) = match p.joint {
+                    RagdollJoint::SwingTwist { cone, twist } => (0, cone.0, cone.1, twist),
+                    RagdollJoint::Hinge { range } => (1, 0.0, 0.0, range),
+                };
+                ffi::FjRagdollPart {
+                    shape: p.shape.raw.as_ptr(),
+                    position: p.at.position.to_array(),
+                    rotation: p.at.rotation.to_array(),
+                    parent: p.parent.map_or(-1, |k| k as i32),
+                    kind,
+                    pivot: p.pivot.to_array(),
+                    twist_axis: p.twist_axis.to_array(),
+                    plane_axis: p.plane_axis.to_array(),
+                    normal_cone,
+                    plane_cone,
+                    twist_min: twist.0,
+                    twist_max: twist.1,
+                    friction: p.friction,
+                }
+            })
+            .collect();
+        let mut bodies = vec![0_u32; parts.len()];
+        // SAFETY: the world is live, the parts' shapes outlive the call (Jolt keeps its own
+        // references), and one body id is written a part.
+        let id = unsafe {
+            ffi::fj_ragdoll_add(
+                self.raw.as_ptr(),
+                raw.as_ptr(),
+                raw.len() as u32,
+                bodies.as_mut_ptr(),
+            )
+        };
+        if id == u32::MAX {
+            return Err(PhysicsError::WorldFull);
+        }
+        Ok((RagdollId(id), bodies.into_iter().map(BodyId).collect()))
+    }
+
+    /// Drives a ragdoll's joints towards `targets`, one a part (the root's ignored): for a
+    /// ball joint the part's turn in its joint's frame (x along the twist axis, y along the
+    /// plane axis; identity is the pose as built), for a hinge its angle in `x`.
+    pub fn drive_ragdoll(&mut self, ragdoll: RagdollId, targets: &[[f32; 4]], motors: Motors) {
+        // SAFETY: the world is live, the index one it gave, four floats a part read.
+        unsafe {
+            ffi::fj_ragdoll_drive(
+                self.raw.as_ptr(),
+                ragdoll.0,
+                targets.as_ptr().cast(),
+                motors.stiffness,
+                motors.damping,
+                motors.torque,
             );
         }
     }

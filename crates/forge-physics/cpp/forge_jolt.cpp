@@ -27,6 +27,10 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/StateRecorder.h>
@@ -169,6 +173,9 @@ struct FjWorld {
     std::vector<JPH::Ref<JPH::VehicleCollisionTester>> vehicle_testers;
     // The joints, in the system too (which saves whether each holds, and its impulses).
     std::vector<JPH::Ref<JPH::TwoBodyConstraint>> joints;
+    // The ragdolls and the settings they were made from (which map their joints to parts).
+    std::vector<JPH::Ref<JPH::Ragdoll>> ragdolls;
+    std::vector<JPH::Ref<JPH::RagdollSettings>> ragdoll_settings;
 
     explicit FjWorld(const FjWorldDesc &desc)
         : temp(64 * 1024 * 1024),
@@ -177,6 +184,16 @@ struct FjWorld {
                     broad_layers, layer_vs_broad, layer_pairs);
         system.SetGravity(vec3(desc.gravity));
     }
+
+    // A ragdoll destroys its bodies as it goes, which must be out of the system by then.
+    ~FjWorld() {
+        for (const JPH::Ref<JPH::Ragdoll> &r : ragdolls) {
+            r->RemoveFromPhysicsSystem();
+        }
+    }
+
+    FjWorld(const FjWorld &) = delete;
+    FjWorld &operator=(const FjWorld &) = delete;
 };
 
 namespace {
@@ -202,7 +219,8 @@ FjLayout fj_layout(void) {
                     static_cast<uint32_t>(sizeof(FjRayHit)),
                     static_cast<uint32_t>(sizeof(FjCharacterDesc)),
                     static_cast<uint32_t>(sizeof(FjCharacterState)),
-                    static_cast<uint32_t>(sizeof(FjVehicleDesc))};
+                    static_cast<uint32_t>(sizeof(FjVehicleDesc)),
+                    static_cast<uint32_t>(sizeof(FjRagdollPart))};
 }
 
 void fj_init(void) {
@@ -635,6 +653,111 @@ void fj_joints_holding(const FjWorld *world, const uint32_t *joints, uint32_t co
                        uint8_t *holding) {
     for (uint32_t i = 0; i < count; ++i) {
         holding[i] = world->joints[joints[i]]->GetEnabled() ? 1 : 0;
+    }
+}
+
+uint32_t fj_ragdoll_add(FjWorld *world, const FjRagdollPart *parts, uint32_t count,
+                        uint32_t *bodies) {
+    JPH::Ref<JPH::Skeleton> skeleton = new JPH::Skeleton;
+    JPH::Ref<JPH::RagdollSettings> settings = new JPH::RagdollSettings;
+    settings->mSkeleton = skeleton;
+    settings->mParts.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const FjRagdollPart &p = parts[i];
+        char name[16];
+        std::snprintf(name, sizeof name, "part%u", i);
+        skeleton->AddJoint(name, static_cast<int>(p.parent));
+        JPH::RagdollSettings::Part &part = settings->mParts[i];
+        part.SetShape(shape_of(p.shape));
+        part.mPosition = rvec3(p.position);
+        part.mRotation = quat(p.rotation);
+        part.mMotionType = JPH::EMotionType::Dynamic;
+        part.mObjectLayer = kMoving;
+        part.mFriction = p.friction;
+        part.mAllowSleeping = true;
+        if (p.parent < 0) {
+            continue;
+        }
+        const JPH::RVec3 pivot = rvec3(p.pivot);
+        const JPH::Vec3 twist = vec3(p.twist_axis);
+        const JPH::Vec3 plane = vec3(p.plane_axis);
+        if (p.kind == 1) {
+            auto *hinge = new JPH::HingeConstraintSettings;
+            hinge->mPoint1 = hinge->mPoint2 = pivot;
+            hinge->mHingeAxis1 = hinge->mHingeAxis2 = plane;
+            hinge->mNormalAxis1 = hinge->mNormalAxis2 = twist;
+            hinge->mLimitsMin = p.twist_min;
+            hinge->mLimitsMax = p.twist_max;
+            part.mToParent = hinge;
+        } else {
+            auto *joint = new JPH::SwingTwistConstraintSettings;
+            joint->mPosition1 = joint->mPosition2 = pivot;
+            joint->mTwistAxis1 = joint->mTwistAxis2 = twist;
+            joint->mPlaneAxis1 = joint->mPlaneAxis2 = plane;
+            joint->mNormalHalfConeAngle = p.normal_cone;
+            joint->mPlaneHalfConeAngle = p.plane_cone;
+            joint->mTwistMinAngle = p.twist_min;
+            joint->mTwistMaxAngle = p.twist_max;
+            part.mToParent = joint;
+        }
+    }
+    settings->Stabilize();
+    settings->DisableParentChildCollisions();
+    settings->CalculateBodyIndexToConstraintIndex();
+    settings->CalculateConstraintIndexToBodyIdxPair();
+    const auto group = static_cast<JPH::CollisionGroup::GroupID>(world->ragdolls.size());
+    JPH::Ref<JPH::Ragdoll> ragdoll = settings->CreateRagdoll(group, 0, &world->system);
+    if (ragdoll == nullptr) {
+        return UINT32_MAX;
+    }
+    ragdoll->AddToPhysicsSystem(JPH::EActivation::Activate);
+    for (uint32_t i = 0; i < count; ++i) {
+        bodies[i] = ragdoll->GetBodyID(static_cast<int>(i)).GetIndexAndSequenceNumber();
+    }
+    world->ragdolls.push_back(ragdoll);
+    world->ragdoll_settings.push_back(settings);
+    return static_cast<uint32_t>(world->ragdolls.size() - 1);
+}
+
+void fj_ragdoll_drive(FjWorld *world, uint32_t ragdoll, const float *targets, float stiffness,
+                      float damping, float torque) {
+    JPH::Ragdoll &r = *world->ragdolls[ragdoll];
+    const JPH::RagdollSettings &s = *world->ragdoll_settings[ragdoll];
+    const JPH::EMotorState state =
+        torque > 0.0f ? JPH::EMotorState::Position : JPH::EMotorState::Off;
+    bool woken = false;
+    for (int c = 0; c < static_cast<int>(r.GetConstraintCount()); ++c) {
+        const int part = s.GetBodyIndicesForConstraintIndex(c).second;
+        const float *t = targets + 4 * part;
+        JPH::TwoBodyConstraint *constraint = r.GetConstraint(c);
+        if (constraint->GetSubType() == JPH::EConstraintSubType::Hinge) {
+            auto *hinge = static_cast<JPH::HingeConstraint *>(constraint);
+            JPH::MotorSettings &m = hinge->GetMotorSettings();
+            m.mSpringSettings.mMode = JPH::ESpringMode::StiffnessAndDamping;
+            m.mSpringSettings.mStiffness = stiffness;
+            m.mSpringSettings.mDamping = damping;
+            m.SetTorqueLimit(torque);
+            woken |= hinge->GetMotorState() != state;
+            hinge->SetMotorState(state);
+            hinge->SetTargetAngle(t[0]);
+        } else {
+            auto *joint = static_cast<JPH::SwingTwistConstraint *>(constraint);
+            for (JPH::MotorSettings *m :
+                 {&joint->GetSwingMotorSettings(), &joint->GetTwistMotorSettings()}) {
+                m->mSpringSettings.mMode = JPH::ESpringMode::StiffnessAndDamping;
+                m->mSpringSettings.mStiffness = stiffness;
+                m->mSpringSettings.mDamping = damping;
+                m->SetTorqueLimit(torque);
+            }
+            woken |= joint->GetSwingMotorState() != state;
+            joint->SetSwingMotorState(state);
+            joint->SetTwistMotorState(state);
+            joint->SetTargetOrientationCS(JPH::Quat(t[0], t[1], t[2], t[3]).Normalized());
+        }
+    }
+    // A change of the motors' state wakes the ragdoll (a limp one falls).
+    if (woken) {
+        r.Activate();
     }
 }
 

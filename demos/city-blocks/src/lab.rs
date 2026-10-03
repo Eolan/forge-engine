@@ -33,6 +33,7 @@ use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 
 use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
+mod creatures;
 mod drive;
 mod fly;
 mod sea;
@@ -57,6 +58,8 @@ pub(crate) enum LabScene {
     Fly,
     /// A brick wall held by mortar that breaks, and a wrecking ball (#142).
     Break,
+    /// Creatures as powered ragdolls: mannequins on stands and dogs (#143).
+    Creatures,
 }
 
 /// The floor's half side, metres.
@@ -107,6 +110,9 @@ const CHAIN: usize = 27;
 const COLUMN: usize = 28;
 /// The column's pieces, each its own prop from here.
 const PIECE: usize = 29;
+/// The creatures' parts, a kind's eleven after the other's, then the mannequins' pole.
+const CREATURE: usize = PIECE + wall::PIECES;
+const POLE: usize = CREATURE + 2 * creatures::PARTS;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -114,7 +120,7 @@ const SEA_LOGS: u32 = 16;
 const SEA_BALLS: u32 = 20;
 const SEA_ROCKS: u32 = 18;
 /// Numbers of the players' controls in a saved state ([`LabWorld::words`]).
-const WORDS: usize = 14;
+const WORDS: usize = 15;
 /// Ticks between the digests a recording keeps.
 const RECORD_EVERY: u64 = 60;
 /// `--net`: ticks between the server's snapshots, the share of packets lost, ticks between the
@@ -134,6 +140,7 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(drive::props());
     props.extend(fly::props());
     props.extend(wall::props());
+    props.extend(creatures::props());
     props
 }
 
@@ -247,6 +254,11 @@ pub(crate) enum LabCommand {
     },
     /// The wrecking ball let go (#142).
     Release,
+    /// The creatures' motors let go, or powered again (#143), held until the next.
+    Limp {
+        /// Let go.
+        on: bool,
+    },
 }
 
 impl Codec for LabCommand {
@@ -279,6 +291,7 @@ impl Codec for LabCommand {
                 }
             }
             Self::Release => out.push(7),
+            Self::Limp { on } => out.extend_from_slice(&[8, u8::from(*on)]),
         }
     }
 
@@ -336,6 +349,11 @@ impl Codec for LabCommand {
                 Some(Self::Fly { controls: v })
             }
             7 => Some(Self::Release),
+            8 => {
+                let (&on, rest) = bytes.split_first()?;
+                *bytes = rest;
+                Some(Self::Limp { on: on != 0 })
+            }
             _ => None,
         }
     }
@@ -373,6 +391,9 @@ pub(crate) struct LabWorld {
     pilot: fly::Pilot,
     /// The wall's mortar and the wrecking ball.
     wall: Option<wall::Wall>,
+    /// The creatures, and whether their motors are let go.
+    herd: Option<creatures::Herd>,
+    limp: bool,
     platform: Option<BodyId>,
     /// The workers the waves and the pushes are worked out on.
     pool: Arc<TaskPool>,
@@ -400,7 +421,11 @@ impl LabWorld {
         let floor_y = match kind {
             LabScene::Drop => 0.0,
             LabScene::Sea => sea::FLOOR_Y,
-            LabScene::Walk | LabScene::Drive | LabScene::Fly | LabScene::Break => 0.0,
+            LabScene::Walk
+            | LabScene::Drive
+            | LabScene::Fly
+            | LabScene::Break
+            | LabScene::Creatures => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -477,6 +502,7 @@ impl LabWorld {
         let mut driver = drive::Driver::default();
         let mut pilot = fly::Pilot::default();
         let mut wall = None;
+        let mut herd = None;
         let mut k = 1_000u64;
         let mut balls = Vec::new();
         match kind {
@@ -714,6 +740,14 @@ impl LabWorld {
                 }
                 wall = Some(site.wall);
             }
+            LabScene::Creatures => {
+                let field = creatures::build(&mut world, POLE)?;
+                statics.extend(field.statics);
+                for (k, part) in field.parts.into_iter().enumerate() {
+                    group(CREATURE + k, part, &mut bodies);
+                }
+                herd = Some(field.herd);
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -802,6 +836,8 @@ impl LabWorld {
                 driver,
                 pilot,
                 wall,
+                herd,
+                limp: false,
                 pool,
             },
             Layout { groups, statics },
@@ -847,8 +883,8 @@ impl LabWorld {
 
     /// The players' controls as the state carries them, [`WORDS`] numbers: the boat's
     /// throttle and rudder, the walk, a jump waiting, the player's facing, the car's throttle,
-    /// steering and handbrake, the aeroplane's throttle, elevator, ailerons and rudder (0 where
-    /// there is none).
+    /// steering and handbrake, the aeroplane's throttle, elevator, ailerons and rudder, the
+    /// creatures let go (0 where there is none).
     fn words(&self) -> [f32; WORDS] {
         let (throttle, rudder) = self.boat.map_or((0.0, 0.0), |b| (b.throttle, b.rudder));
         let p = &self.player;
@@ -867,6 +903,7 @@ impl LabWorld {
             self.pilot.elevator,
             self.pilot.aileron,
             self.pilot.rudder,
+            f32::from(u8::from(self.limp)),
         ]
     }
 
@@ -946,6 +983,7 @@ impl Simulation for LabWorld {
                         plane,
                         ..fly::Pilot::default()
                     };
+                    self.limp = false;
                 }
                 LabCommand::Steer { throttle, rudder } => {
                     let (throttle, rudder) = (throttle.clamp(-1.0, 1.0), rudder.clamp(-1.0, 1.0));
@@ -977,6 +1015,7 @@ impl Simulation for LabWorld {
                         wall.release(&mut self.world);
                     }
                 }
+                LabCommand::Limp { on } => self.limp = on,
             }
         }
         // The sea at this tick's start: what floats pushed by it, the boat's motor too.
@@ -999,8 +1038,20 @@ impl Simulation for LabWorld {
         self.driver.tick(&mut self.world);
         self.pilot.tick(&mut self.world);
         let column = self.wall.as_ref().map(|w| w.column_velocity(&self.world));
+        // The creatures' motors driven to their poses at this tick (or let go).
+        if let Some(herd) = &self.herd {
+            herd.drive(
+                &mut self.world,
+                self.tick as f64 * f64::from(TICK),
+                self.limp,
+            );
+        }
         if let Err(e) = self.world.step(TICK, 1) {
             tracing::warn!("physics tick {}: {e}", self.tick);
+        }
+        // A mannequin knocked hard enough comes off its stand.
+        if let Some(herd) = &self.herd {
+            herd.knock(&mut self.world, TICK);
         }
         // The mortar that carried more than it holds in that step breaks, and the column
         // shatters under a blow.
@@ -1052,6 +1103,7 @@ impl Simulation for LabWorld {
         self.pilot.elevator = w[11];
         self.pilot.aileron = w[12];
         self.pilot.rudder = w[13];
+        self.limp = w[14] != 0.0;
         if let Err(e) = self.world.restore_state(world) {
             tracing::warn!("a lab state: {e}");
         }
@@ -1306,6 +1358,15 @@ pub(crate) fn build(
                 .collect(),
         );
     }
+    // The creatures' parts, a kind's rows shared by its parts (#143).
+    for (prop, kind) in creatures::materials() {
+        materials.add_rows(
+            prop,
+            kind.iter()
+                .map(|m| (m.name.clone(), super::model_layer(m)))
+                .collect(),
+        );
+    }
     materials.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
     builder.set_origin(scene_origin(args));
@@ -1449,12 +1510,18 @@ impl Lab {
                         )
                     })
                 };
-                // The wall's mortar: joints still holding, of all.
-                let mortar = {
+                // The wall's mortar: joints still holding, of all; the mannequins still on their
+                // stands.
+                let (mortar, stands) = {
                     let shown = self.shown();
-                    shown.wall.as_ref().map_or(String::from("none"), |w| {
-                        format!("{}/{}", w.holding(&shown.world), w.mortar.len())
-                    })
+                    (
+                        shown.wall.as_ref().map_or(String::from("none"), |w| {
+                            format!("{}/{}", w.holding(&shown.world), w.mortar.len())
+                        }),
+                        shown.herd.as_ref().map_or(String::from("none"), |h| {
+                            h.standing(&shown.world).to_string()
+                        }),
+                    )
                 };
                 tracing::info!(
                     tick = now,
@@ -1464,6 +1531,7 @@ impl Lab {
                     ride_speed = format!("{ride_speed:.2}"),
                     player,
                     mortar,
+                    stands,
                     "physics lab state"
                 );
             }
@@ -1638,6 +1706,17 @@ impl Lab {
     /// Lets the wrecking ball go at the next tick.
     pub(crate) fn release(&mut self) {
         self.queued.push(LabCommand::Release);
+    }
+
+    /// Whether the scene has creatures, and whether their motors are let go.
+    pub(crate) fn creatures(&mut self) -> Option<bool> {
+        let shown = self.shown();
+        shown.herd.as_ref().map(|_| shown.limp)
+    }
+
+    /// The creatures' motors let go (or powered again) from the next tick.
+    pub(crate) fn limp(&mut self, on: bool) {
+        self.queued.push(LabCommand::Limp { on });
     }
 
     /// The title's part: the ticks' time since the last title, the bodies awake, the session.
@@ -1967,6 +2046,48 @@ mod tests {
         );
         // The same two seconds from a fresh world, to the same digests.
         let (mut second, _) = LabWorld::new(LabScene::Break, test_pool()).unwrap();
+        for _ in 0..120 {
+            second.tick(&[]);
+        }
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_creatures_hold_their_poses_go_limp_and_replay() {
+        let (mut first, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
+        let herd = first.herd.clone().unwrap();
+        // Two seconds on their motors: the mannequins on their stands, the dogs on their feet.
+        for _ in 0..120 {
+            first.tick(&[]);
+        }
+        assert_eq!(herd.standing(&first.world), 3);
+        let dogs = |world: &World| -> Vec<f64> {
+            herd.roots(world)
+                .into_iter()
+                .filter(|(kind, _)| *kind == creatures::Kind::Dog)
+                .map(|(_, t)| t.position.y)
+                .collect()
+        };
+        assert!(
+            dogs(&first.world).iter().all(|&y| y > 0.45),
+            "{:?}",
+            dogs(&first.world)
+        );
+        // Let go: the dogs fold to the ground, the mannequins hang on their stands.
+        let commands = vec![Stamped {
+            tick: 120,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Limp { on: true },
+        }];
+        let recording = Recording::record(&mut first, commands, 180, 60);
+        assert!(
+            dogs(&first.world).iter().all(|&y| y < 0.35),
+            "{:?}",
+            dogs(&first.world)
+        );
+        assert_eq!(herd.standing(&first.world), 3);
+        let (mut second, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
         for _ in 0..120 {
             second.tick(&[]);
         }

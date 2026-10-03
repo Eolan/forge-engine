@@ -221,7 +221,9 @@ button turns the view. `--lab drive`: a car on wheels and springs, a ramp, a sla
 crates; the arrows drive, Space holds the handbrake. `--lab fly`: an aeroplane on its flying
 surfaces over a runway and a field; W and S the throttle, the arrows the stick, A and D the
 rudder. `--lab break`: a brick wall held by mortar that breaks, a wrecking ball (Space lets it
-go) and a concrete column that shatters into pieces. It shares `city-blocks`' renderer, keys and options
+go) and a concrete column that shatters into pieces. `--lab creatures`: mannequins on poles and
+dogs from Blender as powered ragdolls, their motors driving moving poses; Space throws balls at
+them, ↓ lets them go limp. It shares `city-blocks`' renderer, keys and options
 (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 

@@ -245,6 +245,12 @@ for path in $paths; do
     capture "$path-lab-break85" 85 "$lab" --lab break --fixed-step --release 1 "${flag[@]}"
     capture "$path-lab-break85-noocc" 85 "$lab" --lab break --fixed-step --release 1 --no-occlusion "${flag[@]}"
     capture "$path-lab-break300" 300 "$lab" --lab break --fixed-step --release 1 "${flag[@]}"
+    # The creatures (#143): posed on their motors at tick 120 and its A/B twin, struck by a
+    # ball every 50 ticks at 240, and let go at tick 60, at 240.
+    capture "$path-lab-creatures120" 120 "$lab" --lab creatures --fixed-step "${flag[@]}"
+    capture "$path-lab-creatures120-noocc" 120 "$lab" --lab creatures --fixed-step --no-occlusion "${flag[@]}"
+    capture "$path-lab-creatures-throw240" 240 "$lab" --lab creatures --fixed-step --throw-every 50 "${flag[@]}"
+    capture "$path-lab-creatures-limp240" 240 "$lab" --lab creatures --fixed-step --limp-at 60 "${flag[@]}"
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

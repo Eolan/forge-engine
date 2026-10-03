@@ -284,6 +284,9 @@ struct Args {
     /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     pilot: Option<Vec<f32>>,
+    /// With `--lab creatures`, let the creatures' motors go at this frame, as ↓ does (#143).
+    #[arg(long)]
+    limp_at: Option<u64>,
     /// With `--lab break`, let the wrecking ball go at this frame, as Space does (#142).
     #[arg(long)]
     release: Option<u64>,
@@ -1051,6 +1054,21 @@ impl Demo for Gallery {
             }
             if self.args.release == Some(self.frame) {
                 lab.release();
+            }
+            // The creatures (#143): ↓ lets their motors go, ↑ powers them again; or
+            // `--limp-at N`.
+            if let Some(limp) = lab.creatures() {
+                let wanted =
+                    if self.args.limp_at == Some(self.frame) || input.is_down(KeyCode::ArrowDown) {
+                        true
+                    } else if input.is_down(KeyCode::ArrowUp) {
+                        false
+                    } else {
+                        limp
+                    };
+                if wanted != limp {
+                    lab.limp(wanted);
+                }
             }
             // The boat's motor (#138): the arrows, or `--steer` from the first frame; a command
             // when they change.
@@ -2149,6 +2167,7 @@ impl CityMaterials {
             ("lab-chain", steel),
             ("lab-column", column),
             ("lab-column-piece", column),
+            ("lab-pole", metal),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -3978,6 +3997,15 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.15,
             speed: 20.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Creatures) {
+        // Before the creatures, at a man's height, the mannequins behind the dogs.
+        FlyCamera {
+            position: Vec3::new(0.0, 1.4, 4.4),
+            yaw: 0.0,
+            pitch: -0.1,
+            speed: 6.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Break) {

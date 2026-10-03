@@ -118,7 +118,10 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   crates. An aeroplane ✅ (#141, `--lab fly`): lift and drag on each flying surface, a take-off
   from a runway and turns over a 5 km field. A brick wall and a column broken ✅
   (#142, `--lab break`): 912 joints of mortar that break on load or strain, a wrecking ball, a
-  concrete column cut into Voronoi pieces ahead of time. Next, creatures (step 7).
+  concrete column cut into Voronoi pieces ahead of time. Creatures as powered ragdolls ✅
+  (#143, `--lab creatures`): a mannequin and a dog from Blender, jointed puppets whose motors
+  drive moving poses, shoved by balls, limp on command. Next, step 7's skinned creatures (GPU
+  skinning, with Phase 7's first step), then fluids (step 8).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map.
@@ -423,9 +426,10 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    mortar that breaks on load or strain, a wrecking ball, a column shattered into Voronoi pieces
    cut ahead of time); left: rocks and asteroids fractured on impact (#24, #12), a ship's hull
    breaking open on its decks (#89).
-7. **Creatures:** a glTF importer and skinning (Phase 7's start), models from Blender (the
-   owner's machine has Blender 5.2): a humanoid, a quadruped, a flyer, a slime as a soft body;
-   then ragdolls.
+7. **Creatures:** powered ragdolls ✅ (#143, `--lab creatures`: a mannequin and a dog modelled
+   in Blender as jointed puppets, Jolt ragdolls whose motors drive moving poses); left: a glTF
+   importer of skins and clips and GPU skinning (Phase 7's start), so creatures bend instead of
+   being jointed, a humanoid, a quadruped, a flyer, a slime as a soft body.
 8. **Fluids:** the shallow-water layer near the player, particles for splashes, the
    authoritative water model (a dam break).
 

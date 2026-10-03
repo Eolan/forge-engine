@@ -54,7 +54,7 @@ in. CI checks the crate list.
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Jorrit Rouwé and the Jolt contributors | rigid bodies (`forge-physics`, D-009, issue #136): v5.6.0's library sources vendored in `third_party/jolt` with its licence, built with `CROSS_PLATFORM_DETERMINISTIC` and double precision | MIT |
 | [JoltC](https://github.com/SecondHalfGames/JoltC) | Second Half Games (Lucien Greathouse and contributors) | the model for `forge-physics`' C layer: opaque shape handles, the layer set-up | MIT OR Apache-2.0 |
 | [gltf](https://github.com/gltf-rs/gltf) | David Harvey-Macaulay and the gltf-rs contributors | reading glTF 2.0 models (`forge_geom::model`, #138) | MIT OR Apache-2.0 |
-| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py` and `plane.py` model the lab's boat, car and aeroplane in it and export them as glTF (#138, #140, #141) | GPL-2.0-or-later (the tool; what it makes is ours) |
+| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `creatures.py` model the lab's boat, car, aeroplane, mannequin and dog in it and export them as glTF (#138, #140, #141, #143) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets
 
@@ -355,3 +355,5 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Time Dynamic Fracture with Volumetric Approximate Convex Decompositions", SIGGRAPH 2013, for
   Voronoi fracture patterns and convex pieces (`forge_geom::fracture`, #142). Joints that break
   past a load or a strain, as engines' breakable constraints do (#142).
+- **Powered ragdolls.** Jolt's `Ragdoll`, `Skeleton` and motorised swing-twist and hinge
+  constraints (Jorrit Rouwé), set up after Jolt's ragdoll samples (#143); D-012's physics layer.

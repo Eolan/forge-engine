@@ -115,6 +115,7 @@ fn the_c_structs_and_their_rust_twins_agree() {
             character_desc: size_of::<ffi::FjCharacterDesc>() as u32,
             character_state: size_of::<ffi::FjCharacterState>() as u32,
             vehicle_desc: size_of::<ffi::FjVehicleDesc>() as u32,
+            ragdoll_part: size_of::<ffi::FjRagdollPart>() as u32,
         }
     );
 }
@@ -558,4 +559,102 @@ fn a_ball_on_a_chain_swings_at_its_length() {
     let mut loads = Vec::new();
     world.joint_loads(&[chain], &mut loads);
     assert!(loads[0].position > 0.0);
+}
+
+/// A shoulder fixed to the world, an upper arm out along +x on a ball joint and a forearm on a
+/// hinge after it, both 40 cm capsules of 4 and 3 kg-ish.
+fn arm() -> (World, RagdollId, Vec<BodyId>) {
+    let mut world = World::new(&WorldDesc::default());
+    let block = Shape::cuboid(Vec3::splat(0.1), 0.02, 500.0).unwrap();
+    let limb = Shape::capsule(0.15, 0.05, 1000.0)
+        .unwrap()
+        .offset(Vec3::ZERO, Quat::from_rotation_arc(Vec3::Y, Vec3::X))
+        .unwrap();
+    let at = |x: f64| Transform {
+        position: DVec3::new(x, 2.0, 0.0),
+        rotation: Quat::IDENTITY,
+    };
+    let part = |at: Transform, parent: Option<usize>, joint, pivot: f64| RagdollPart {
+        shape: if parent.is_none() { &block } else { &limb },
+        at,
+        parent,
+        joint,
+        pivot: DVec3::new(pivot, 2.0, 0.0),
+        twist_axis: Vec3::X,
+        plane_axis: Vec3::Z,
+        friction: 0.5,
+    };
+    let ball = RagdollJoint::SwingTwist {
+        cone: (1.4, 1.4),
+        twist: (-0.5, 0.5),
+    };
+    let hinge = RagdollJoint::Hinge { range: (-2.0, 2.0) };
+    let parts = [
+        part(at(0.0), None, ball, 0.0),
+        part(at(0.3), Some(0), ball, 0.1),
+        part(at(0.7), Some(1), hinge, 0.5),
+    ];
+    let (ragdoll, bodies) = world.add_ragdoll(&parts).unwrap();
+    world.join_fixed(None, bodies[0], (0, 0));
+    (world, ragdoll, bodies)
+}
+
+#[test]
+fn a_ragdoll_holds_its_pose_on_its_motors_and_falls_limp() {
+    let (mut world, ragdoll, bodies) = arm();
+    let still = [[0.0, 0.0, 0.0, 1.0]; 3];
+    let strong = Motors {
+        stiffness: 2000.0,
+        damping: 60.0,
+        torque: 200.0,
+    };
+    let run = |world: &mut World, ticks: u32| {
+        for _ in 0..ticks {
+            world.step(1.0 / 60.0, 1).unwrap();
+        }
+    };
+    world.drive_ragdoll(ragdoll, &still, strong);
+    run(&mut world, 60);
+    let mut t = Vec::new();
+    world.transforms(&bodies, &mut t);
+    // Held out: the hand's end within a few centimetres of where it was built.
+    assert!((t[2].position.y - 2.0).abs() < 0.05, "{}", t[2].position);
+    // Saved, then the motors let go: the arm hangs; restored and run again, the same bits.
+    let saved = world.save_state();
+    world.drive_ragdoll(
+        ragdoll,
+        &still,
+        Motors {
+            torque: 0.0,
+            ..strong
+        },
+    );
+    run(&mut world, 120);
+    world.transforms(&bodies, &mut t);
+    assert!(t[2].position.y < 1.6, "limp: {}", t[2].position);
+    let hung = t.clone();
+    world.restore_state(&saved).unwrap();
+    world.drive_ragdoll(
+        ragdoll,
+        &still,
+        Motors {
+            torque: 0.0,
+            ..strong
+        },
+    );
+    run(&mut world, 120);
+    world.transforms(&bodies, &mut t);
+    assert_eq!(t, hung);
+    // Driven to a bent elbow, the forearm turns up.
+    world.restore_state(&saved).unwrap();
+    let mut bent = still;
+    bent[2] = [1.2, 0.0, 0.0, 0.0];
+    world.drive_ragdoll(ragdoll, &bent, strong);
+    run(&mut world, 60);
+    world.transforms(&bodies, &mut t);
+    assert!(
+        (t[2].position - DVec3::new(0.7, 2.0, 0.0)).length() > 0.1,
+        "{}",
+        t[2].position
+    );
 }

@@ -24,7 +24,8 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `drive` | a car on wheels and springs: a jump ramp, a slalom of barrels, a wall of crates | ✅ #140 |
 | `fly` | an aeroplane on flying surfaces: a take-off from a runway, turns over a wide field | ✅ #141 |
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
-| creatures, fluids | the later steps of the plan | planned |
+| `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
+| skinned creatures, fluids | the later steps of the plan | planned |
 
 ## The binding (`forge-physics`, issue #136)
 
@@ -334,6 +335,45 @@ column without overlap; and the lab's wall stands untouched for two seconds, the
 the ball and replays to the same digests. A tick through the impact (372 bodies, 912 joints):
 **0.99 ms** on average, p99 2.0 ms, at most 2.5 ms; the state is 87 KiB.
 
+## `creatures`: powered ragdolls (issue #143)
+
+```
+cargo run --release -p physics-lab -- --lab creatures
+```
+
+Phase 3's step 7, its first part: D-012's physics layer, creatures as ragdolls whose motors
+drive them to a pose. Two puppets were modelled in Blender from code
+(`assets/blender/creatures.py`, `assets/models/creatures.glb`, 309 KB): a 1.8 m artist's
+mannequin of pale wood with dark joints, and a 1 m dog, eleven rigid parts each, every part a
+mesh and every joint an empty (the glTF loader now keeps the empties' positions,
+`Model::point`). In the lab each is a Jolt ragdoll through `forge-physics`
+(`World::add_ragdoll`): a body per part (the hull of its mesh), held to its parent by a ball
+joint (shoulders, hips, neck, waist, the dog's legs and tail) or a hinge (elbows, knees, the
+dog's lower legs) with its limits, a part not colliding with its parent. Every tick
+`World::drive_ragdoll` sets each joint's motor to a target: the mannequins swing their arms,
+bend their elbows and turn their heads, the dogs wag their tails and nod, each creature at its
+own phase (the angles through `forge_core::dmath`, the same bits everywhere). The motors are
+springs of a stiffness in N·m a radian (800 for the mannequin, 4000 for the dog's legs, which
+carry its 45 kg torso) rather than of a frequency: Jolt scales a frequency spring by the light
+part each joint turns, and the dogs folded under their own weight.
+
+Three mannequins stand on poles, their pelvis held by a joint that lets go past 2 kN or
+400 N·m; two dogs stand on their own legs in front. **Space** throws balls at them: a dog is
+shoved and finds its pose again, a mannequin hit squarely comes off its pole. **↓** lets every
+motor go (a `Limp` command, so it records, replays and goes through `--net`): the dogs fold to
+the ground, the mannequins hang from their poles; **↑** powers them again. `--limp-at N` lets
+them go at frame N (the captures).
+
+![Posed at tick 120; struck by a ball every 50 ticks (the middle mannequin knocked off its pole); limp from tick 60](images/physics-lab-creatures.png)
+
+The tests: an arm on a ball joint and a hinge holds out its pose on its motors to a few
+millimetres, hangs when they let go (from a saved world, to the same bits twice) and bends its
+elbow to a target; the lab's creatures stand for two seconds (the mannequins on their poles,
+the dogs' torsos over 45 cm), fold when let go (under 35 cm) and replay to the same digests. A
+tick (55 parts in five ragdolls, balls thrown): **0.11 ms** on average, p99 0.21 ms. Skinned
+creatures that bend instead of being jointed (GPU skinning, Phase 7's first step) and a slime
+as a soft body are the step's second part.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -345,5 +385,7 @@ its occlusion-off twin, and `lab-sea-steer600` (the boat under way with the rudd
 the playground (#139) `lab-walk150` (halfway up the stairs) with its twin, and
 `lab-walk-crates240` (through the light crates); from the track (#140) `lab-drive300` with its
 twin and `lab-drive-turn600`; from the field (#141) `lab-fly1200` (climbing away) with its
-twin; and from the break scene (#142) `lab-break85` (the ball through the wall) with its twin
-and `lab-break300` (the wall broken, the column in pieces).
+twin; from the break scene (#142) `lab-break85` (the ball through the wall) with its twin and
+`lab-break300` (the wall broken, the column in pieces); and from the creatures (#143)
+`lab-creatures120` (posed) with its twin, `lab-creatures-throw240` (struck by balls) and
+`lab-creatures-limp240` (let go).

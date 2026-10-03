@@ -94,6 +94,24 @@ pub struct FjVehicleDesc {
     pub handbrake_torque: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FjRagdollPart {
+    pub shape: *const FjShape,
+    pub position: [f64; 3],
+    pub rotation: [f32; 4],
+    pub parent: i32,
+    pub kind: u32,
+    pub pivot: [f64; 3],
+    pub twist_axis: [f32; 3],
+    pub plane_axis: [f32; 3],
+    pub normal_cone: f32,
+    pub plane_cone: f32,
+    pub twist_min: f32,
+    pub twist_max: f32,
+    pub friction: f32,
+}
+
 #[cfg(test)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +122,7 @@ pub struct FjLayout {
     pub character_desc: u32,
     pub character_state: u32,
     pub vehicle_desc: u32,
+    pub ragdoll_part: u32,
 }
 
 unsafe extern "C" {
@@ -250,6 +269,20 @@ unsafe extern "C" {
     ) -> u32;
     pub fn fj_joints_load(world: *const FjWorld, joints: *const u32, count: u32, loads: *mut f32);
     pub fn fj_joints_set(world: *mut FjWorld, joints: *const u32, count: u32, holding: *const u8);
+    pub fn fj_ragdoll_add(
+        world: *mut FjWorld,
+        parts: *const FjRagdollPart,
+        count: u32,
+        bodies: *mut u32,
+    ) -> u32;
+    pub fn fj_ragdoll_drive(
+        world: *mut FjWorld,
+        ragdoll: u32,
+        targets: *const f32,
+        stiffness: f32,
+        damping: f32,
+        torque: f32,
+    );
     pub fn fj_joints_holding(
         world: *const FjWorld,
         joints: *const u32,

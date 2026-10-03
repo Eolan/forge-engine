@@ -62,12 +62,20 @@ pub struct ModelMesh {
 pub struct Model {
     /// In the order the scene's nodes list them.
     pub meshes: Vec<ModelMesh>,
+    /// The named nodes that hold no mesh (Blender's empties: a joint's pivot, a socket), with
+    /// where they are in the scene's frame (#143).
+    pub points: Vec<(String, Vec3)>,
 }
 
 impl Model {
     /// The mesh named `name`.
     pub fn mesh(&self, name: &str) -> Option<&ModelMesh> {
         self.meshes.iter().find(|m| m.name == name)
+    }
+
+    /// The point (an empty) named `name`.
+    pub fn point(&self, name: &str) -> Option<Vec3> {
+        self.points.iter().find(|(n, _)| n == name).map(|&(_, p)| p)
     }
 }
 
@@ -104,6 +112,10 @@ fn visit(
     if let Some(mesh) = node.mesh() {
         let name = node.name().or(mesh.name()).unwrap_or_default().to_owned();
         model.meshes.push(read_mesh(&mesh, world, name, blob)?);
+    } else if let Some(name) = node.name() {
+        model
+            .points
+            .push((name.to_owned(), world.transform_point3(Vec3::ZERO)));
     }
     for child in node.children() {
         visit(&child, world, blob, model)?;
