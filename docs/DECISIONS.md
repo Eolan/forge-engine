@@ -1454,7 +1454,8 @@ NVIDIA's notice and terms, unlike the workspace's MIT/Apache.
 
 **The layout:**
 - **Cascades.** Five cascades of 24 × 12 × 24 probes, 4, 8, 16, 32 and 64 m apart, each
-  centred on the camera. A probe keeps its slot while the cascade scrolls: slots are world
+  centred on the camera. The models lab's rooms start at 1 m (#175): in Sponza's narrow
+  courtyard, probes 4 m apart stood in the columns and the arcades and missed its bounced light. A probe keeps its slot while the cascade scrolls: slots are world
   cells modulo the counts, so only the planes entering a cascade are new.
 - **Maps.** Each probe has an octahedral irradiance map (6 × 6 texels, RGBA16F) and a map of
   the mean and mean square of the distance to what it sees (14 × 14, RG16F), each with a

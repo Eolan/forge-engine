@@ -1160,6 +1160,10 @@ In the city SIGMA's blur and post-blur take 0.20–0.22 ms each, against 0.14 on
 classification skips only the tiles with no penumbra; the city's view probably has fewer of
 them (not measured).
 
+A room's probes 1 m apart instead of 4 (#175), the same number of probes, Sponza's first curtain
+view at noon, 1600 × 900, 616 frames: the frame 2.24 → 2.41 ms, `gi/probe rays` 0.90 → 1.02,
+`gi/probe blend` 0.26 → 0.31.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

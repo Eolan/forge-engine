@@ -1305,6 +1305,21 @@ and SHA-256. The script checks each file and keeps those already there. The mode
   - **Shimmer:** indoors, at the high exposure, the probes' 128 rays shimmered: 7.5 % of a
     still view's pixels changed over TAA's 16-frame cycle. A room gets 256 rays (2.6 %, TAA's
     own share on its fine textures).
+  - **Too dark in the shade** (#175; the owner: "everything goes dark" looking at a curtain):
+    the probes were 4 m apart, the city's spacing, in a courtyard a few metres wide. Those
+    around the curtains stood in the columns or deep in the arcades.
+    - **Measured** at a fixed exposure (`--fixed-exposure --show-gi`): the curtain's shaded part
+      got about 12 lux of bounced light, against about 2 200 from the open sky alone. Its
+      sunlit part read 840 cd/m², the shaded part 0.19: 12 stops apart.
+    - **What followed:** the meter brightened the view to show the shade (EV 8.1 at the first
+      curtain view), the sunlit cloth went past white, and only the dark half of the sun's
+      soft edge stayed visible, which made it look hard and unsteady.
+    - **The fix:** a room's probes are 1 m apart (`ROOM_PROBE_SPACING`, `--probe-spacing`);
+      the same number of probes. The first curtain view meters EV 9.9; 16 % of a still view's
+      pixels change over TAA's cycle, against 28 %; 0.17 ms more at 1600 × 900. The owner:
+      "luminosity seems more consistent with the available light at every time of the day."
+    - **Development options** found on the way: `--exposure-compensation`, `--meter-band LOW,HIGH`
+      and `--fixed-exposure` (`--ev100` under `--time-of-day`).
   - **A blue fog at sunrise** (`--time-of-day 0`): the atmosphere's haze. Its volume lights
     the air by the open sky and the sun, even under the arcade, and the exposure metered on the
     shade showed 30 m of it as fog. The haze now starts 100 m from the camera, as Unreal's sky

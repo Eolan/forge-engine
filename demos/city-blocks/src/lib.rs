@@ -118,6 +118,18 @@ struct Args {
     /// Fixed exposure value at ISO 100 (15: sunny 16).
     #[arg(long, default_value_t = 15.0)]
     ev100: f32,
+    /// The metered exposure's compensation in stops: positive brighter, negative darker (the
+    /// sunlit parts of a view metered on its shade then clip less).
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    exposure_compensation: f32,
+    /// The fractions of the sorted pixels the exposure meters, `LOW,HIGH` (0.5,0.98 by default:
+    /// the brighter half without the brightest highlights).
+    #[arg(long, value_parser = parse_pair)]
+    meter_band: Option<(f32, f32)>,
+    /// Keep `--ev100` under `--day` and `--time-of-day` instead of metering the scene (frames
+    /// compared at one exposure).
+    #[arg(long)]
+    fixed_exposure: bool,
     /// Tone curve: agx, aces or neutral (G cycles them).
     #[arg(long, default_value = "agx")]
     tonemap: Tonemap,
@@ -405,6 +417,10 @@ struct Args {
     /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
     #[arg(long, default_value_t = ProbeParams::default().cascades)]
     probe_cascades: u32,
+    /// The finest probe cascade's spacing in metres, the next ones twice as far each: 4, and
+    /// `ROOM_PROBE_SPACING` in the models lab's rooms.
+    #[arg(long)]
+    probe_spacing: Option<f32>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -738,6 +754,13 @@ const SPACE_SUN: Vec3 = Vec3::new(0.75, 0.35, 0.5);
 /// clouds rather than only the haze along its limb (from low orbit, 70°, it was a grey wall).
 const PLANET_DIR: Vec3 = Vec3::new(-0.55, -0.45, -0.7);
 const PLANET_ANGLE_DEG: f32 = 32.0;
+/// The finest probe cascade's spacing in the models lab's rooms, metres (the city's is 4). In
+/// the courtyard room, a few metres wide, probes 4 m apart stood in the columns and deep in the
+/// arcades: a curtain in the shade beside the sunlit courtyard got about 12 lux of bounced
+/// light, and the meter lifted the whole view to show it. At 1 m it gets several times that,
+/// the view meters 1.8 stops darker, and fewer pixels shimmer (16 % against 28 % over TAA's
+/// cycle), for 0.17 ms more at 1600 × 900.
+const ROOM_PROBE_SPACING: f32 = 1.0;
 /// The tank's bench (#156): towards its sun (high, from the left and behind), and its background's
 /// albedo (a dull violet, after Sebastian Lague's fluid renders).
 const BENCH_SUN: Vec3 = Vec3::new(-0.45, 0.8, -0.4);
@@ -810,7 +833,11 @@ impl Gallery {
         let sky_light = !args.no_sky_light;
         let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
         let meter = LuminanceMeter::new(&ctx.device, &ctx.shaders)?;
-        let auto_exposure = AutoExposure::new(args.ev100);
+        let mut auto_exposure = AutoExposure::new(args.ev100);
+        auto_exposure.compensation = args.exposure_compensation;
+        if let Some(band) = args.meter_band {
+            auto_exposure.band = band;
+        }
         let ao_on = !args.no_ao;
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
         let atmosphere_params = AtmosphereParams::earth();
@@ -912,7 +939,6 @@ impl Gallery {
                 .unwrap_or(forge_render::night::NightSettings::default().star_gain),
             ..Default::default()
         };
-        let mut auto_exposure = auto_exposure;
         if night.is_some() {
             // Film's night (D-046): a few stops under what the eye would adapt to.
             auto_exposure.night_stops = args.night_stops;
@@ -1096,6 +1122,13 @@ impl Gallery {
                 rays: probe_rays,
                 cascades: args.probe_cascades,
                 cadence: args.probe_cadence,
+                spacing: args.probe_spacing.unwrap_or(
+                    if args.lab == Some(lab::LabScene::Models) && lab::models::room_shown() {
+                        ROOM_PROBE_SPACING
+                    } else {
+                        ProbeParams::default().spacing
+                    },
+                ),
                 ..ProbeParams::default()
             };
             let probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
@@ -1396,7 +1429,7 @@ impl Gallery {
     /// Whether the exposure follows the scene's metered light (`--day`, `--time-of-day`) rather
     /// than `--ev100`.
     fn metered(&self) -> bool {
-        self.args.day.is_some() || self.args.time_of_day.is_some()
+        (self.args.day.is_some() || self.args.time_of_day.is_some()) && !self.args.fixed_exposure
     }
 
     /// `--day` (issue #57): the sun at `t` of the cycle (0 sunrise, 0.5 noon, 1 sunset, 1.5
@@ -5206,6 +5239,18 @@ fn water_check(
         tracing::warn!(time, worst = %format_args!("{worst:.1e}"), fields = %fields.join(", "), "water check FAILED: a GPU cascade departs from the CPU's surface");
     }
     Ok(())
+}
+
+/// `--meter-band`: two fractions in 0..1, `LOW,HIGH`, the first below the second.
+fn parse_pair(text: &str) -> std::result::Result<(f32, f32), String> {
+    let parts: Vec<f32> = text
+        .split(',')
+        .map(|p| p.trim().parse::<f32>().map_err(|e| e.to_string()))
+        .collect::<std::result::Result<_, _>>()?;
+    match parts[..] {
+        [low, high] if (0.0..high).contains(&low) && high <= 1.0 => Ok((low, high)),
+        _ => Err(format!("`{text}`: two fractions LOW,HIGH with 0 <= LOW < HIGH <= 1")),
+    }
 }
 
 /// Where the camera starts: the island's first view, the gallery's or the city's, or
