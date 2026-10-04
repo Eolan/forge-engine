@@ -2085,3 +2085,41 @@ together'."
 - **SSAA 2 × 2 for screenshots** (`--ssaa`, in the shell for every demo): MTF50 0.60–0.66
   panning at 2 m/s, an ideal pixel's; the city's frame 2.4 → 5.1 ms.
 - That completes what D-045 took. The open points stay open.
+
+## D-046 — A night sky over the ground 🟡 (proposed 2026-10-04)
+
+Phase 4 lists a night sky beside the clouds (`docs/ROADMAP.md`). Today the sun sets into the
+atmosphere's twilight and the sky goes dark. The ballad's stars are art-directed for space,
+and the automatic exposure either leaves the night black or lifts its noise.
+Research: [research/night-sky.md](research/night-sky.md) (Jensen et al. 2001's physical night
+sky, Kirk & O'Brien 2011's low-light tone mapping, the Moon's photometry, measured light levels).
+
+**Proposed:**
+1. **The sky at night:** the atmosphere's tables lit by the Moon as by the sun (a second source
+   through the same transmittance and scattering), over a starfield and a faint Milky Way.
+   Airglow sets the moonless sky's floor.
+2. **The Moon:** a disc shaded by phase (the sun's and the Moon's directions) with a
+   Lommel–Seeliger law, and a second directional light at its illuminance: up to about 0.3 lux
+   full, its shadows traced as the sun's (#45), lighting the probes (#53).
+3. **Seeing it:** the automatic exposure's range reaches night, but stops a few stops short of
+   the eye's full adaptation, so the night reads as night. A Purkinje shift in the tone curve's
+   pass blends towards a desaturated blue as the scene's luminance falls.
+4. **`--day` runs on through the night,** for the demos and the captures.
+
+**Questions for the owner:**
+1. **Stars:** the real sky from the Yale Bright Star Catalogue (9 110 stars; a US government
+   work; a download of a few hundred kilobytes, so your go first), or the procedural stars
+   `Starfield` already draws?
+2. **The Moon's surface:** a plain shaded disc first, or with an albedo map of the real Moon
+   (public NASA imagery, another download)?
+3. **How dark:** night as films show it (blue, readable, the exposure capped about 4 stops
+   under the day's), or darker and closer to the eye's (very little colour, much of the scene
+   near black under a new Moon)?
+4. **The Moon's light:** traced shadows like the sun's (the cost is the sun's, which is down),
+   or a soft unshadowed fill?
+5. **Light pollution and night lights** (the town's windows, street lamps) — later, with the
+   emitters of the `dusk-town` demo (Phase 4, step 4), or now with the sky?
+
+**A first step once answered:** the Moon as a light and a disc, the night through the existing
+atmosphere, the exposure's range and the blue shift, on the island with `--day` running to
+midnight; the stars as answered.
