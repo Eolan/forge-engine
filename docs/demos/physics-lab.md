@@ -1279,8 +1279,13 @@ and SHA-256. The script checks each file and keeps those already there. The mode
 - **Double-sided materials are drawn one-sided.** TextureSettingsTest shows its one red cross
   on that row. Blender marks every material double-sided, so the importer does not warn of it.
 - **Alpha cut-outs are drawn opaque:** Sponza's foliage and chains, logged.
-- **The probes leave Sponza's interior dark**, already at frame 60, while the sky through
-  the open roof is lit. Suspects: probes inside its walls and rays hitting back faces (#171). With `--no-probes` the open sky's light reaches under the
+- **Sponza's interior is dark at the lab's fixed exposure** (EV 15, sunny 16). The arcades
+  are lit only by light that has bounced several times off sandstone with an albedo near 0.2,
+  about 8 stops under the open ground. Metered from the scene (`--time-of-day 0.5`, EV
+  11.8), they read as in a photograph. The probes were measured and work. Two artefacts
+  remain (#171): bright slivers at the pillars' feet, where the 4 m probes leak the
+  courtyard's light, and the first ~50 frames, too bright while the probes start from the
+  open sky's light. With `--no-probes` the open sky's light reaches under the
   arcade, too bright but nothing black.
 
 ![Sponza at frame 60 with the probes and without](images/physics-lab-models-sponza.png)
