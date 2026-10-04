@@ -1769,12 +1769,35 @@ pub(crate) fn build(
                 .collect(),
         );
     }
-    // The creatures' parts, a kind's rows shared by its parts (#143).
-    for (prop, kind) in creatures::materials() {
+    // The creatures' rows, one per material of their model (#143). In their scene the
+    // mannequin's are wood and the dog's fur, projected from the bind pose so the grain and
+    // the coat stay on the bending bodies (#166).
+    let coats = if kind == LabScene::Creatures {
+        let wood = forge_render::textures::wood(21, 512);
+        let fur = forge_render::textures::fur(22, 512);
+        let mut add = |set: &[forge_render::textures::TextureData; 2]| -> Result<_> {
+            Ok((
+                materials.textures.add(&set[0])?,
+                materials.textures.add(&set[1])?,
+            ))
+        };
+        Some([(add(&wood)?, 0.6), (add(&fur)?, 0.35)])
+    } else {
+        None
+    };
+    for (k, (prop, kind)) in creatures::materials().into_iter().enumerate() {
+        let coat = coats.map(|c| c[k]);
         materials.add_rows(
             prop,
             kind.iter()
-                .map(|m| (m.name.clone(), super::model_layer(m)))
+                .map(|m| {
+                    let layer = super::model_layer(m);
+                    let layer = match coat {
+                        Some((set, scale)) => super::coated(layer, set, scale),
+                        None => layer,
+                    };
+                    (m.name.clone(), layer)
+                })
                 .collect(),
         );
     }

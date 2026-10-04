@@ -2727,6 +2727,19 @@ fn model_layer(m: &forge_geom::model::ModelMaterial) -> RenderLayer {
     }
 }
 
+/// `layer` (a model's row) over a texture set, `scale` metres per repeat (#166): its colour,
+/// roughness and highlight kept, the textures multiplying the colour; `--textures` as for
+/// [`textured`].
+fn coated(layer: RenderLayer, (albedo, normal): (TextureId, TextureId), scale: f32) -> RenderLayer {
+    let mode = TEXTURES.get().copied().unwrap_or_default();
+    RenderLayer {
+        albedo_texture: (mode != TextureMode::None).then_some(albedo),
+        normal_texture: (mode == TextureMode::Full).then_some(normal),
+        texture_scale: scale,
+        ..layer
+    }
+}
+
 /// A standard row over a texture set: the textures times a tint each instance mixes from `a`
 /// and `b` by its hash, `scale` metres per repeat, a highlight of Blinn-Phong `power`.
 fn textured(

@@ -233,9 +233,20 @@ impl SceneSkins {
         }
     }
 
-    /// The clusters' records (`SkinCluster`), which the motion vectors read.
+    /// The clusters' records (`SkinCluster`), which the motion vectors and the resolve read.
     pub fn clusters_address(&self) -> u64 {
         self.clusters.address()
+    }
+
+    /// This frame's joints' matrices (the ring slot [`SceneSkins::set`] wrote last).
+    pub fn joints_address(&self) -> u64 {
+        self.ring[self.current.get()].address()
+    }
+
+    /// The cluster vertices in the bind pose (`SkinVertex`), from which the resolve projects the
+    /// skinned meshes' textures (#166).
+    pub fn vertices_address(&self) -> u64 {
+        self.vertices.address()
     }
 }
 

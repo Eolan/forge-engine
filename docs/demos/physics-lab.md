@@ -465,6 +465,22 @@ puppet's parts were, and Blender's bone heat sets the weights. Each kind has a w
 idle clip (1 s and 4 s for the mannequin, 0.75 s and 2 s for the dog). `forge-anim` reads and
 samples those clips, but the lab does not play them yet.
 
+**Their textures** (#166's first step): the mannequin is pale wood, its grain along its limbs,
+and the dog has a coat of short fur. Both are procedural (`forge_render::textures::wood` and
+`fur`, 512 × 512, made only for this scene) and multiply the model's colours. The engine's
+textures are projected along the object's axes (triplanar), not laid by UVs. A projection from
+the bent body would make the grain swim over it as it moves, so the resolve projects a skinned
+mesh's textures from its bind pose:
+- **Position:** the bind-pose position, its change per pixel and its normal come from the skin
+  pass's vertex records, by the pixel's barycentrics.
+- **Relief:** the normal map's detail is turned with the body by the skin's own turn at the
+  pixel (its vertices' joints, blended).
+
+A first try turned the relief by the shortest arc between the bind normal and the bent one.
+The creatures face the camera through a half turn from their bind pose, which made that arc
+undefined on their chests and the backs of their legs, and it drew white streaks there. UVs
+and the models' own textures are the rest of #166.
+
 **The ragdolls** come from the same file, through `forge-physics` (`World::add_ragdoll`):
 - **bodies:** one per bone, the hull of the vertices that bone carries most;
 - **joints:** each held to its parent where its bone starts. Ball joints for the shoulders,

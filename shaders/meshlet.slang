@@ -323,6 +323,20 @@ public struct Frame
     public uint rejects_capacity;   // slots in `rejects`
     public uint rejects_pad;
     public uint64_t tlas_movers;    // the movers' top-level structure, rebuilt every frame (0: none; issue #79)
+    public SkinCluster* skin_clusters; // with skinned meshes (#165): the skin pass's clusters (skin.slang), else null
+    public SkinVertex* skin_vertices;  // their vertices in the bind pose, from which their textures are projected (#166)
+    public float4* skin_joints;        // this frame's joints' matrices, three rows each: they turn the textures' relief with the body
+    public uint64_t skin_pad;
+};
+
+// Mirrors `SkinVertex` in crates/forge-geom/src/skin.rs (32 bytes): a skinned cluster vertex
+// in the bind pose.
+public struct SkinVertex
+{
+    public float3 position;
+    public uint normal;   // octahedral (`decode_normal`)
+    public uint2 joints;
+    public uint2 weights;
 };
 
 // The second half of `Frame::indirect` (issue #38): the pass 2 cluster cull's grid over both
@@ -3380,6 +3394,52 @@ bool wants_mirror_ray<let SHADOWS : int>(Frame* f, Material mat)
         && (f[0].flags & FLAG_SHOW_GI) == 0;
 }
 
+// The turn the skin gives a bind-pose vertex `v` this frame: its joints' matrices (`base` the
+// mesh's first in `Frame::skin_joints`), their 3 × 3 parts weighed as the skin pass weighs them.
+float3x3 skin_turn(Frame* f, uint base, SkinVertex v)
+{
+    uint4 joints = uint4(v.joints.x & 0xFFFFu, v.joints.x >> 16, v.joints.y & 0xFFFFu, v.joints.y >> 16);
+    float4 weights = float4(v.weights.x & 0xFFFFu, v.weights.x >> 16, v.weights.y & 0xFFFFu, v.weights.y >> 16) / 65535.0;
+    float3 r0 = float3(0.0);
+    float3 r1 = float3(0.0);
+    float3 r2 = float3(0.0);
+    for (uint k = 0; k < 4; k++)
+    {
+        if (weights[k] > 0.0)
+        {
+            uint j = 3 * (base + joints[k]);
+            r0 += weights[k] * f[0].skin_joints[j].xyz;
+            r1 += weights[k] * f[0].skin_joints[j + 1].xyz;
+            r2 += weights[k] * f[0].skin_joints[j + 2].xyz;
+        }
+    }
+    return float3x3(r0, r1, r2);
+}
+
+// A skinned mesh's surface as its textures see it (#166): the position, its change per pixel
+// and the normal taken from the bind pose (the cluster's vertices in `Frame::skin_vertices`,
+// by the pixel's barycentrics on triangle `tri`), so the projection stays on the body however
+// it bends. A normal map's detail, worked out about the bind pose's normal, is turned with the
+// body: `s.frame` becomes the skin's turn at the pixel (its vertices' blended joints, by the
+// same barycentrics), then the instance's frame. The shading normal, the position the light
+// and the rays use, and everything else stay the bent body's.
+void bind_pose_surface(Frame* f, Mesh mesh, uint meshlet_index, Meshlet m, uint base, uint tri,
+                       Barycentrics b, inout Surface s)
+{
+    SkinCluster c = f[0].skin_clusters[mesh.skin + meshlet_index - mesh.meshlet_offset];
+    SkinVertex a0 = f[0].skin_vertices[c.first + paged_index(f, base, m, tri, 0)];
+    SkinVertex a1 = f[0].skin_vertices[c.first + paged_index(f, base, m, tri, 1)];
+    SkinVertex a2 = f[0].skin_vertices[c.first + paged_index(f, base, m, tri, 2)];
+    float3x3 turn = b.lambda.x * skin_turn(f, c.joints, a0) + b.lambda.y * skin_turn(f, c.joints, a1)
+                  + b.lambda.z * skin_turn(f, c.joints, a2);
+    s.frame = mul(s.frame, turn);
+    s.object_normal = normalize(b.lambda.x * decode_normal(a0.normal) + b.lambda.y * decode_normal(a1.normal)
+                                + b.lambda.z * decode_normal(a2.normal));
+    s.object_position = b.lambda.x * a0.position + b.lambda.y * a1.position + b.lambda.z * a2.position;
+    s.dpdx = b.ddx.x * a0.position + b.ddx.y * a1.position + b.ddx.z * a2.position;
+    s.dpdy = b.ddy.x * a0.position + b.ddy.y * a1.position + b.ddy.z * a2.position;
+}
+
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
 // of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
 // shadow ray in (devices with ray queries). Returns the class it has.
@@ -3439,6 +3499,11 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
     s.shore = resolve_push.shore;
+    // A skinned mesh's textures are projected from its bind pose, or they swim over the body as
+    // it bends (#166).
+    Mesh mesh = f[0].meshes[inst.mesh];
+    if (mesh.skin != 0xFFFFFFFFu)
+        bind_pose_surface(f, mesh, meshlet_index, m, base, tri, b, s);
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
@@ -4160,14 +4225,14 @@ struct MoverMotion
 };
 
 // Mirrors `SkinCluster` in skin.slang: where a skinned cluster's vertices lie in its tables.
-struct SkinCluster
+public struct SkinCluster
 {
-    uint pool;
-    uint first;          // its first vertex in `skin_previous`
-    uint vertex_count;
-    uint ray;
-    uint joints;
-    uint3 pad;
+    public uint pool;
+    public uint first;          // its first vertex in `skin_previous` and `Frame::skin_vertices`
+    public uint vertex_count;
+    public uint ray;
+    public uint joints;
+    public uint3 pad;
 };
 
 struct MoverMotionPush

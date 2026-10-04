@@ -688,6 +688,62 @@ pub fn scrub(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// Streaks running along `v`: a value per column of `columns` across `u`, smoothed between
+/// neighbouring columns, so each streak is constant along `v` (periodic in both directions).
+fn streaks(seed: u64, u: f32, columns: u32) -> f32 {
+    let x = u * columns as f32;
+    let i = x.floor();
+    let t = x - i;
+    let at = |k: f32| unit_f32(hash_cell2(seed, (k as i32).rem_euclid(columns as i32), 0));
+    let t = t * t * (3.0 - 2.0 * t);
+    at(i) + (at(i + 1.0) - at(i)) * t
+}
+
+/// Pale wood for a multiplied tint (#166, the lab's mannequin): the grain along `v` (which the
+/// triplanar projection's side views lay vertically, along a standing body's limbs), growth
+/// rings across it gently warped, and fine fibres; values about 1 so the row's colour holds.
+pub fn wood(seed: u64, size: u32) -> [TextureData; 2] {
+    let rings = |u: f32, v: f32| {
+        let warp = fbm(seed ^ 0x3A9, u, v, 4, 3);
+        let phase = (u * 12.0 + 0.6 * warp).fract();
+        // Late wood: a narrow darker band in each ring.
+        smoothstep(0.62, 0.78, phase) * (1.0 - smoothstep(0.82, 0.95, phase))
+    };
+    let heights = grid(size, |u, v| {
+        0.6 * streaks(seed ^ 0xF1B, u, 256) - 0.4 * rings(u, v)
+    });
+    let colours = grid(size, |u, v| {
+        let fibre = streaks(seed ^ 0xF1B, u, 256);
+        let figure = fbm(seed ^ 0x51C, u, v, 3, 4);
+        let c = 1.02 - 0.22 * rings(u, v) - 0.08 * (fibre - 0.5) + 0.10 * (figure - 0.5);
+        [c, c * 0.97, c * 0.93]
+    });
+    [
+        albedo_texture("wood albedo", size, colours),
+        normal_texture("wood normal", size, &heights, size as f32 / 1024.0),
+    ]
+}
+
+/// Short fur for a multiplied tint (#166, the lab's dog): fine strands along `v` (down a
+/// standing body's sides and legs), in clumps of lighter and darker hair; values about 1.
+pub fn fur(seed: u64, size: u32) -> [TextureData; 2] {
+    let strands = |u: f32, v: f32| {
+        // Strands broken along their length so the coat does not read as stripes.
+        let length = fbm(seed ^ 0x7E1, u, v, 32, 2);
+        streaks(seed ^ 0x5A2, u, 192) * (0.6 + 0.4 * length)
+    };
+    let heights = grid(size, strands);
+    let colours = grid(size, |u, v| {
+        let clump = fbm(seed ^ 0xC1A, u, v, 6, 4);
+        let c = 0.9 + 0.3 * (strands(u, v) - 0.4) + 0.32 * (clump - 0.5);
+        [c, c * 0.96, c * 0.9]
+    });
+    [
+        albedo_texture("fur albedo", size, colours),
+        normal_texture("fur normal", size, &heights, size as f32 / 512.0),
+    ]
+}
+
 /// A floor to measure by (#156, the tank's bench): ten squares a repeat each way in two greys
 /// (10 cm squares at a metre a repeat), a darker line on the repeat's edges (every metre) and a
 /// fainter one through its middle; flat. Its mips keep it from shimmering at a slant.

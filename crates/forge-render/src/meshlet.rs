@@ -417,6 +417,14 @@ struct GpuFrame {
     rejects_pad: u32,
     /// The movers' top-level acceleration structure, rebuilt every frame (0: none; #79).
     tlas_movers: u64,
+    /// With skinned meshes (#165, #166): the skin pass's clusters and their vertices in the bind
+    /// pose, from which the resolve projects their textures (0: none).
+    skin_clusters: u64,
+    skin_vertices: u64,
+    /// This frame's joints' matrices (three rows each), which turn the textures' relief with the
+    /// body.
+    skin_joints: u64,
+    skin_pad: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -3011,6 +3019,10 @@ impl MeshletRenderer {
             rejects_capacity: self.rejects_target,
             rejects_pad: 0,
             tlas_movers: scene.rays.as_ref().map_or(0, SceneRays::movers_address),
+            skin_clusters: scene.skins.as_ref().map_or(0, SceneSkins::clusters_address),
+            skin_vertices: scene.skins.as_ref().map_or(0, SceneSkins::vertices_address),
+            skin_joints: scene.skins.as_ref().map_or(0, SceneSkins::joints_address),
+            skin_pad: 0,
         }
     }
 
