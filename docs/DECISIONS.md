@@ -2481,7 +2481,7 @@ models scene, and the test models' captures beside their Khronos screenshots.
   - The probes go dark inside Sponza (#171: the lab's fixed exposure, not the probes).
   - The ten models' textures take 534 MiB uncompressed.
 
-## D-049 — Denoising the sun's soft shadows ✅ (proposed and decided 2026-10-04; built in #172)
+## D-049 — Denoising the sun's soft shadows ✅ (proposed and decided 2026-10-04; built in #172 and #173)
 
 **Decided (the owner, 2026-10-04):**
 1. **NVIDIA's NRD, its SIGMA denoiser, used as NRD itself, not rewritten.** Our own filter sized
@@ -2507,7 +2507,7 @@ models scene, and the test models' captures beside their Khronos screenshots.
 4. **AMD's FidelityFX shadow denoiser as the built-in fallback** (the owner, 2026-10-04, #173):
    where NRD is absent (a fresh clone, CI, a build that does not ship it), a Slang port of the
    MIT denoiser takes its place, behind the same trace pass and the same hook in the resolve.
-   NRD stays the first choice when present.
+   NRD stays the first choice when present. Built below.
 
 **Built (#172, 2026-10-04):**
 - **The library.** `tools/fetch-nrd.sh` clones NRD v4.17.3 at its pinned commit and builds
@@ -2542,6 +2542,32 @@ models scene, and the test models' captures beside their Khronos screenshots.
   - Sponza: `shadow/trace` 0.44 ms, SIGMA's passes 0.44 ms; the frame 3.48 → 3.97 ms.
   - The city's south view: 4.03 → 4.72 ms. The island: 3.69 → 3.95 ms.
   - The proposal's estimate was 0.35 to 0.6 ms; Sponza and the city cost more.
+
+**Built (#173, 2026-10-04): AMD's FidelityFX shadow denoiser, the fallback.**
+- **The port.** `shaders/ffx_shadows.slang` is AMD's `ffx-shadows-dnsr` (MIT, commit d7dfecb)
+  in Slang, driven by `forge_render::ffx_shadows`:
+  - `shadow/FFX pack`: the rays' results, a bit a pixel, a word per 8 × 4 tile;
+  - `shadow/FFX classify`: tiles whose surroundings are all lit or all shadowed are skipped;
+    elsewhere the history is reprojected, clamped to a 17 × 17 neighbourhood, and blended;
+  - `shadow/FFX filter 1`, `2`, `3`: edge-avoiding à-trous passes, steps 1, 2 and 4.
+- **Forge's rules.** No wave or quad operation (a groupshared flag, plain reads of the 2 × 2
+  quad), every image access kept inside the image (NRD's lesson above), 32-bit groupshared
+  values, and the output in SIGMA's form, so the resolve reads either alike.
+- **One interface.** `SunShadowDenoiser` holds SIGMA or FFX behind the same trace pass and the
+  same hook in the resolve. FFX needs no distance, so its trace stops at the first hit.
+  `--shadow-denoiser sigma|ffx`; F6 steps through SIGMA, FFX and none. Without NRD, FFX is the
+  default.
+- **On Sponza** (the first curtain view at noon, 1 m probes since #175), the curtains' penumbra
+  over TAA's cycle, mean and 99th percentile of the per-pixel range:
+  - reference 1.3 / 8, SIGMA 1.4 / 9, FFX 1.8 / 20;
+  - moving forward (`--dolly 0.3`), pixels a frame whose change differs from the reference's:
+    SIGMA 7 700, FFX 10 800.
+  - The owner: SIGMA looks right; FFX still shimmers, none is far worse.
+- **FFX's limit.** Its filters reach about 8 pixels; the 1° sun's penumbrae from distant
+  occluders are wider. There it leaves blocky steps along the edge and shimmers in motion.
+  This holds wherever such penumbrae fall, not only in Sponza. To improve later.
+- **Cost at 1440p** (zones; FFX passes / its first-hit trace): Sponza 0.39 / 0.30 ms, the city
+  0.40 / 0.21, the island 0.18 / 0.14 (`docs/PROFILE.md`).
 
 The proposal as written follows. Its trace pass, guide images and checks still hold with NRD
 in place of the in-house passes.

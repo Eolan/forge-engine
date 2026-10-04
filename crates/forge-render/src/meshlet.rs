@@ -542,7 +542,8 @@ struct SunShadowPush {
     width: u32,
     height: u32,
     tan_radius: f32,
-    pad: [u32; 3],
+    closest: u32,
+    pad: [u32; 2],
 }
 
 const _: () = assert!(std::mem::size_of::<SunShadowPush>() == 64);
@@ -3747,10 +3748,11 @@ impl MeshletRenderer {
     }
 
     /// Declares "shadow/trace" (#172, D-049): per pixel of the visibility buffer, one ray to a
-    /// point of the sun's disc of `tan_radius` (tan of its angular radius) that keeps the
-    /// closest occluder, written as NVIDIA's SIGMA reads it ([`SunShadowRays`]). `view_z` is the
-    /// third row of the view matrix SIGMA is given (camera-relative metres to view z). `None` on
-    /// a device without ray queries.
+    /// point of the sun's disc of `tan_radius` (tan of its angular radius), written as NVIDIA's
+    /// SIGMA reads it ([`SunShadowRays`]). With `closest` the ray keeps the closest occluder
+    /// (SIGMA sizes the penumbra from its distance); without, the first hit ends it (AMD's
+    /// FidelityFX denoiser, #173). `view_z` is the third row of the view matrix the denoiser is
+    /// given (camera-relative metres to view z). `None` on a device without ray queries.
     #[allow(clippy::too_many_arguments)]
     pub fn trace_sun_shadow<'f>(
         &'f self,
@@ -3760,6 +3762,7 @@ impl MeshletRenderer {
         extent: vk::Extent2D,
         view_z: Vec4,
         tan_radius: f32,
+        closest: bool,
     ) -> Option<SunShadowRays> {
         let pipeline = self.pipeline_sun_shadow.as_ref()?;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -3805,7 +3808,8 @@ impl MeshletRenderer {
                         width: extent.width,
                         height: extent.height,
                         tan_radius,
-                        pad: [0; 3],
+                        closest: closest as u32,
+                        pad: [0; 2],
                     },
                 );
                 commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);

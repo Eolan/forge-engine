@@ -4060,7 +4060,7 @@ struct SunShadowPush
     uint width;
     uint height;
     float tan_radius;     // tan of the sun's angular radius for the shadows
-    uint pad0;
+    uint closest;         // 1: find the closest occluder (SIGMA); 0: any (FFX, #173)
     uint pad1;
     uint pad2;
 };
@@ -4142,6 +4142,13 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     ray.Direction = normalize(sun + (t * cos(phi) + bt * sin(phi)) * r);
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
+    // AMD's FidelityFX denoiser needs no distance (#173): the first hit ends the ray, as
+    // `sun_shadow`'s, and a blocked ray is a penumbra of 0.
+    if (p.closest == 0)
+    {
+        penumbra[pixel] = ray_blocked(f, ray) ? 0.0 : NRD_MISS;
+        return;
+    }
     ClosestHit hit = trace_closest(f, ray);
     penumbra[pixel] = hit.hit ? min(0.5 * hit.t * p.tan_radius, 32768.0) : NRD_MISS;
 }

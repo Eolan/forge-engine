@@ -50,6 +50,7 @@ in. CI checks the crate list.
 | [Tracy](https://github.com/wolfpld/tracy) | Bartosz Taudul | the profiler behind `--features profiling` | BSD-3-Clause |
 | [tracy-client](https://github.com/nagisa/rust_tracy_client) | Simonas Kazlauskas | Tracy from Rust | MIT OR Apache-2.0 |
 | [Streamline](https://github.com/NVIDIA-RTX/Streamline) and DLSS | NVIDIA | DLSS as an option next to TAA (`dlss` feature, D-024) | Streamline: MIT, parts under NVIDIA's Nsight SDK licences; DLSS: NVIDIA RTX SDKs licence |
+| [FidelityFX Denoiser](https://github.com/GPUOpen-Effects/FidelityFX-Denoiser), its shadow denoiser (commit d7dfecb) | Advanced Micro Devices | the sun's soft shadows denoised where NRD is absent: `shaders/ffx_shadows.slang`, ported to Slang with AMD's notice (D-049, #173) | MIT |
 | [NRD](https://github.com/NVIDIA-RTX/NRD) (Real-time Denoisers) v4.17.3 | NVIDIA | SIGMA, the sun's soft shadows denoised (`nrd` feature, D-049, #172); fetched and built outside git by `tools/fetch-nrd.sh`, loaded at run time | NVIDIA RTX SDKs License |
 | [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |
 | [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff`; decoding the PNG and JPEG images inside glTF models (`forge_render::textures::decode_image`, D-047) | MIT OR Apache-2.0 |

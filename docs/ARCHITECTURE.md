@@ -195,7 +195,9 @@ The resolve is three kinds of pass:
   In the city the rays aim within the sun's disc, and TAA averages them into soft shadows
   (#54). With NVIDIA's NRD installed (D-049, #172), `shadow/trace` traces them before the
   resolve instead, closest hit, and SIGMA (`forge_gpu::nrd`, loaded at run time, never in git)
-  denoises them over a 1° disc; the resolve reads the result.
+  denoises them over a 1° disc; the resolve reads the result. Without NRD, AMD's FidelityFX
+  shadow denoiser, ported to Slang (`shaders/ffx_shadows.slang`, #173), takes SIGMA's place
+  behind the same `SunShadowDenoiser`; its trace stops at the first hit.
 - **Sky light and its occlusion** (issues #47, #48; D-023's note, D-030): under a sky, a
   surface also takes the sky's irradiance for its normal (nine SH coefficients a frame,
   from the sky-view table), scaled by GTAO computed from the depth before the resolve.

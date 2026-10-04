@@ -1160,6 +1160,18 @@ In the city SIGMA's blur and post-blur take 0.20–0.22 ms each, against 0.14 on
 classification skips only the tiles with no penumbra; the city's view probably has fewer of
 them (not measured).
 
+AMD's FidelityFX shadow denoiser in SIGMA's place (#173, `--shadow-denoiser ffx`), 2560 × 1440,
+two runs each (zones; the frames' totals were disturbed by a build running beside them):
+
+| View | `shadow/trace` (first hit) | `shadow/FFX classify` | `filter 1`, `2`, `3` | `pack` |
+|---|---|---|---|---|
+| Sponza (1 m probes) | 0.30 ms | 0.11 | 0.10, 0.08, 0.07 | 0.02 |
+| `city-blocks` (the south view) | 0.21 | 0.11 | 0.10, 0.09, 0.09 | 0.02 |
+| `city-blocks --island 7` | 0.14 | 0.06 | 0.04, 0.04, 0.04 | 0.01 |
+
+FFX costs 0.39 ms in Sponza and the city against SIGMA's 0.44 and 0.55, and its trace stops at
+the first hit: 0.30 ms in Sponza against the closest hit's 0.44.
+
 A room's probes 1 m apart instead of 4 (#175), the same number of probes, Sponza's first curtain
 view at noon, 1600 × 900, 616 frames: the frame 2.24 → 2.41 ms, `gi/probe rays` 0.90 → 1.02,
 `gi/probe blend` 0.26 → 0.31.

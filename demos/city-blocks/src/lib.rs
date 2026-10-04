@@ -494,18 +494,22 @@ struct Args {
     /// Hard sun shadows: one ray to the sun's centre instead of its disc (Z toggles them).
     #[arg(long)]
     hard_shadows: bool,
-    /// The sun's apparent radius for the soft shadows, in degrees (D-049). Where NVIDIA's SIGMA
-    /// denoises them, 1° by default: softer than the real sun's 0.27°, for art's sake. Without
-    /// it, the real sun's. The Moon's shadows at night scale with it.
+    /// The sun's apparent radius for the soft shadows, in degrees (D-049). Where a denoiser
+    /// smooths them, 1° by default: softer than the real sun's 0.27°, for art's sake. Without
+    /// one, the real sun's. The Moon's shadows at night scale with it.
     #[arg(long)]
     sun_size: Option<f32>,
-    /// Keep the resolve's own shadow ray even where NVIDIA's NRD is in `nrd-sdk/bin` (#172):
-    /// the soft shadows as before SIGMA, at the real sun's size unless `--sun-size` says
-    /// otherwise. F6 switches SIGMA at run time, at the size the run started with.
+    /// The denoiser of the sun's soft shadows (D-049): NVIDIA's SIGMA, where NRD is in
+    /// `nrd-sdk/bin` (#172), else AMD's FidelityFX (#173), the default without NRD. F6 steps
+    /// through SIGMA, FFX and none at run time.
+    #[arg(long, value_enum)]
+    shadow_denoiser: Option<ShadowDenoiserArg>,
+    /// Keep the resolve's own shadow ray, no denoiser (#172): the soft shadows as before, at the
+    /// real sun's size unless `--sun-size` says otherwise.
     #[arg(long)]
     no_shadow_denoiser: bool,
-    /// The sun's shadow from 256 rays a pixel and frame, without the denoiser: the reference
-    /// SIGMA is judged by (#172), at SIGMA's sun size. Slow: a development view.
+    /// The sun's shadow from 256 rays a pixel and frame, without a denoiser: the reference the
+    /// denoisers are judged by (#172), at their sun size. Slow: a development view.
     #[arg(long)]
     shadow_reference: bool,
     /// A day over the city: the sun rises in the east, crosses the south and sets in the west in
@@ -657,11 +661,12 @@ struct Gallery {
     /// HDR image to, in place of TAA while `dlaa_on` (T cycles it with TAA).
     dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
     dlaa_on: bool,
-    /// NVIDIA's SIGMA over the sun's soft shadows (#172, D-049), where NRD's library is in
-    /// `nrd-sdk/bin`; on while `sun_shadow_on` (F6).
-    sun_shadow: Option<forge_render::SunShadowDenoiser>,
-    sun_shadow_on: bool,
-    /// The shadows' sun over the real one's size (D-049: softer where SIGMA denoises them,
+    /// The denoisers of the sun's soft shadows (D-049): NVIDIA's SIGMA where NRD's library is in
+    /// `nrd-sdk/bin` (#172), then AMD's FidelityFX (#173); `sun_shadow_on` the one on (F6), or
+    /// none.
+    sun_shadows: Vec<forge_render::SunShadowDenoiser>,
+    sun_shadow_on: Option<usize>,
+    /// The shadows' sun over the real one's size (D-049: softer where a denoiser smooths them,
     /// `--sun-size`); the Moon's at night scales with it.
     sun_scale: f32,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
@@ -766,6 +771,24 @@ const ROOM_PROBE_SPACING: f32 = 1.0;
 const BENCH_SUN: Vec3 = Vec3::new(-0.45, 0.8, -0.4);
 const BENCH_BACKGROUND: Vec3 = Vec3::new(0.09, 0.07, 0.1);
 
+/// `--shadow-denoiser`: which denoiser smooths the sun's soft shadows (D-049).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ShadowDenoiserArg {
+    /// NVIDIA's SIGMA (NRD, #172).
+    Sigma,
+    /// AMD's FidelityFX shadow denoiser (#173).
+    Ffx,
+}
+
+impl ShadowDenoiserArg {
+    fn kind(self) -> forge_render::ShadowDenoiserKind {
+        match self {
+            Self::Sigma => forge_render::ShadowDenoiserKind::Sigma,
+            Self::Ffx => forge_render::ShadowDenoiserKind::Ffx,
+        }
+    }
+}
+
 /// `--liquid-view`: what the tank's drawing shows (#156).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum LiquidView {
@@ -853,32 +876,48 @@ impl Gallery {
             renderer.sun_dir,
             64,
         ));
-        // NVIDIA's SIGMA denoises the sun's soft shadows where NRD's library is there (#172,
-        // D-049); without it the resolve's own ray, as before.
-        let sun_shadow = if args.no_shadow_denoiser || args.shadow_reference {
-            None
-        } else {
+        // The sun's soft shadows denoised (D-049): by NVIDIA's SIGMA where NRD's library is there
+        // (#172), and by AMD's FidelityFX everywhere (#173), the first of them on.
+        let mut sun_shadows = Vec::new();
+        if !args.no_shadow_denoiser && !args.shadow_reference {
             let dir = std::env::var_os("FORGE_NRD_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| {
                     forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("nrd-sdk/bin")
                 });
-            match forge_render::SunShadowDenoiser::load(&ctx.device, &dir, ctx.extent()) {
-                Ok(denoiser) => {
-                    tracing::info!(version = %denoiser.version(), "the sun's shadows denoised by NVIDIA's SIGMA (NRD)");
-                    Some(denoiser)
-                }
-                Err(error) => {
-                    tracing::info!(%error, "no NRD: the sun's shadows keep their own ray");
-                    None
-                }
+            match forge_render::SunShadowDenoiser::sigma(&ctx.device, &dir, ctx.extent()) {
+                Ok(denoiser) => sun_shadows.push(denoiser),
+                Err(error) => tracing::info!(%error, "no NRD: no SIGMA for the sun's shadows"),
             }
+            sun_shadows.push(forge_render::SunShadowDenoiser::ffx(
+                &ctx.device,
+                &ctx.shaders,
+                ctx.extent(),
+            )?);
+        }
+        let sun_shadow_on = match args.shadow_denoiser {
+            _ if sun_shadows.is_empty() => None,
+            None => Some(0),
+            Some(wanted) => match sun_shadows.iter().position(|d| d.kind() == wanted.kind()) {
+                Some(index) => Some(index),
+                None => {
+                    tracing::warn!(
+                        ?wanted,
+                        "that denoiser is not there (no NRD?): the other one"
+                    );
+                    Some(0)
+                }
+            },
         };
-        // The shadows' sun: the real one, or softer where SIGMA denoises them (D-049).
+        if let Some(index) = sun_shadow_on {
+            let denoiser = &sun_shadows[index];
+            tracing::info!(denoiser = denoiser.kind().name(), version = %denoiser.version(), "the sun's shadows denoised (F6 steps through SIGMA, FFX and none)");
+        }
+        // The shadows' sun: the real one, or softer where a denoiser smooths them (D-049).
         let real = forge_render::starfield::SUN_ANGULAR_RADIUS_1AU;
         let sun_scale = match args.sun_size {
             Some(degrees) => degrees.to_radians() / real,
-            None if sun_shadow.is_some() || args.shadow_reference => {
+            None if sun_shadow_on.is_some() || args.shadow_reference => {
                 forge_render::DENOISED_SUN_RADIUS / real
             }
             None => 1.0,
@@ -1380,8 +1419,8 @@ impl Gallery {
             liquid_mode,
             dlaa_on: dlaa.is_some(),
             dlaa,
-            sun_shadow_on: sun_shadow.is_some(),
-            sun_shadow,
+            sun_shadow_on,
+            sun_shadows,
             sun_scale,
             sky_light,
             gtao,
@@ -1491,7 +1530,7 @@ impl Demo for Gallery {
         self.renderer.resize(ctx.extent())?;
         self.taa.resize(ctx.extent())?;
         self.taa.reset_history();
-        if let Some(denoiser) = &mut self.sun_shadow {
+        for denoiser in &mut self.sun_shadows {
             denoiser.resize(ctx.extent())?;
         }
         if let Some(behind) = &mut self.behind_taa {
@@ -1551,15 +1590,22 @@ impl Demo for Gallery {
             }
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             // NVIDIA's SIGMA over the sun's shadows, or the resolve's own ray (#172).
-            KeyCode::F6 if self.sun_shadow.is_some() => {
-                self.sun_shadow_on = !self.sun_shadow_on;
-                if let Some(denoiser) = &mut self.sun_shadow {
-                    denoiser.reset_history();
-                }
-                tracing::info!(
-                    on = self.sun_shadow_on,
-                    "the sun's shadows denoised by SIGMA"
-                );
+            // The sun's shadows' denoiser: SIGMA, FFX, none, then again (#172, #173).
+            KeyCode::F6 if !self.sun_shadows.is_empty() => {
+                self.sun_shadow_on = match self.sun_shadow_on {
+                    None => Some(0),
+                    Some(index) if index + 1 < self.sun_shadows.len() => Some(index + 1),
+                    Some(_) => None,
+                };
+                let name = match self.sun_shadow_on {
+                    Some(index) => {
+                        let denoiser = &mut self.sun_shadows[index];
+                        denoiser.reset_history();
+                        denoiser.kind().name()
+                    }
+                    None => "none",
+                };
+                tracing::info!(denoiser = name, "the sun's shadows' denoiser");
             }
             // DLAA where it runs, TAA sharpened, plain, off (D-045).
             KeyCode::KeyT => {
@@ -2225,16 +2271,19 @@ impl Demo for Gallery {
                 },
             )
         });
-        // The sun's soft shadow denoised by NVIDIA's SIGMA (#172, D-049): a ray a pixel before
-        // the resolve, which then reads the result in place of its own ray. The motion vectors
-        // come first, for SIGMA's reprojection (they are reused below).
+        // The sun's soft shadow denoised by NVIDIA's SIGMA (#172) or AMD's FidelityFX (#173),
+        // D-049: a ray a pixel before the resolve, which then reads the result in place of its
+        // own ray. The motion vectors come first, for the denoiser's reprojection (they are
+        // reused below).
         let mut early_motion = None;
-        let denoise = self.sun_shadow_on
-            && self.flags.has(CullFlags::SHADOWS)
-            && self.renderer.sun_angular_radius > 0.0
-            && self.scene.rays().is_some();
+        let denoising = self.sun_shadow_on.filter(|_| {
+            self.flags.has(CullFlags::SHADOWS)
+                && self.renderer.sun_angular_radius > 0.0
+                && self.scene.rays().is_some()
+        });
         let mut sun_shadow = None;
-        if denoise && let Some(denoiser) = self.sun_shadow.as_mut() {
+        if let Some(index) = denoising {
+            let denoiser = &mut self.sun_shadows[index];
             if taa_frame.reset {
                 denoiser.reset_history();
             }
@@ -2244,12 +2293,13 @@ impl Demo for Gallery {
                 position: camera.position,
                 jitter: taa_frame.jitter,
             };
-            let sigma = denoiser.frame(
+            let shadow_frame = denoiser.frame(
                 shadow_camera,
                 self.renderer.sun_dir,
                 self.renderer.noise_frame,
                 self.step * 1000.0,
             );
+            let closest = denoiser.needs_closest_hit();
             if let Some(rays) = self.renderer.trace_sun_shadow(
                 &mut frame.graph,
                 frame.slot,
@@ -2257,6 +2307,7 @@ impl Demo for Gallery {
                 extent,
                 forge_render::SunShadowDenoiser::view_z_row(&shadow_camera),
                 self.renderer.sun_angular_radius.tan(),
+                closest,
             ) {
                 let motion = self
                     .taa
@@ -2274,10 +2325,14 @@ impl Demo for Gallery {
                     );
                 }
                 early_motion = Some(motion);
-                let denoiser: &'f forge_render::SunShadowDenoiser =
-                    self.sun_shadow.as_ref().expect("checked above");
-                sun_shadow =
-                    Some(denoiser.denoise(&mut frame.graph, frame.slot, rays, motion, &sigma)?);
+                let denoiser: &'f forge_render::SunShadowDenoiser = &self.sun_shadows[index];
+                sun_shadow = Some(denoiser.denoise(
+                    &mut frame.graph,
+                    frame.slot,
+                    rays,
+                    motion,
+                    &shadow_frame,
+                )?);
             }
         }
         self.renderer.resolve(
@@ -5249,7 +5304,9 @@ fn parse_pair(text: &str) -> std::result::Result<(f32, f32), String> {
         .collect::<std::result::Result<_, _>>()?;
     match parts[..] {
         [low, high] if (0.0..high).contains(&low) && high <= 1.0 => Ok((low, high)),
-        _ => Err(format!("`{text}`: two fractions LOW,HIGH with 0 <= LOW < HIGH <= 1")),
+        _ => Err(format!(
+            "`{text}`: two fractions LOW,HIGH with 0 <= LOW < HIGH <= 1"
+        )),
     }
 }
 

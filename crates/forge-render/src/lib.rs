@@ -18,6 +18,7 @@ pub mod debug_hash;
 pub mod display;
 pub mod dust;
 pub mod exposure;
+pub mod ffx_shadows;
 pub mod gtao;
 pub mod liquid;
 pub mod material;
@@ -73,7 +74,9 @@ pub use splashes::{
 };
 pub use starfield::Starfield;
 pub use streaming::{Residency, StartView, StreamingConfig, StreamingStats};
-pub use sun_shadow::{DENOISED_SUN_RADIUS, SunShadowCamera, SunShadowDenoiser};
+pub use sun_shadow::{
+    DENOISED_SUN_RADIUS, ShadowDenoiserKind, SunShadowCamera, SunShadowDenoiser, SunShadowFrame,
+};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
 pub use wakes::{MAX_WAKES, WakeFrame, WaterWake, WaterWakes};

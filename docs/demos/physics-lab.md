@@ -1339,10 +1339,14 @@ and SHA-256. The script checks each file and keeps those already there. The mode
     - **Measured** at frames 600–615, the per-pixel range over TAA's cycle on the curtains'
       penumbra: 5.0 codes before, 1.5 with SIGMA, 1.2 for the reference.
     - **Still shimmering in motion** (the owner, 2026-10-04): walking forward or along the
-      path, the curtains' edge still shimmers with SIGMA. The reference is steady but far
-      too slow for play. To compare with AMD's denoiser in motion (#173).
-    - **Without NRD** the edge is as before. AMD's FidelityFX denoiser is to fill that gap
-      (#173).
+      path, the curtains' edge still shimmered with SIGMA. Most of it was the dark shade
+      (#175, above): with a room's probes 1 m apart, moving forward, 7 700 pixels a frame
+      change differently from the 256-ray reference, against 12 200.
+    - **Without NRD**, AMD's FidelityFX denoiser (#173, `--shadow-denoiser ffx`, F6): still,
+      the per-pixel range 1.8 (99th percentile 20) against SIGMA's 1.4 (9); moving, 10 800
+      pixels a frame. Its filters reach about 8 pixels, short of the 1° sun's widest penumbrae:
+      blocky steps along the curtains' edge, and some shimmer in motion. Better than no
+      denoiser, which leaves the edge hard.
 
 ![Sponza: at the lab's fixed exposure with the probes and without, and metered at noon](images/physics-lab-models-sponza.png)
 
