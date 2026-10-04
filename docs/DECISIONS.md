@@ -2348,3 +2348,96 @@ the material properties the artist gave are kept wherever the file has them.
   - `GpuMaterial` grows from 112 to 176 bytes.
 - **The creatures:** unwrapped and baked in Blender (`docs/demos/physics-lab.md`, "Their
   textures"). The procedural wood and fur of the first step are gone.
+
+## D-048 — Reference models from outside: the Khronos glTF sample assets ✅ (proposed and accepted 2026-10-04)
+
+Our own models are simple: the lab's vehicles and creatures are built from a few shapes in
+Blender. The owner asked for detailed models made by others (2026-10-04), for two reasons:
+renderings to compare with other engines', and loads to measure. Khronos publishes the glTF
+sample assets (<https://github.khronos.org/glTF-Assets/>). Each comes with a screenshot from
+its reference viewer, and most are CC0 or CC-BY 4.0. Licences and sizes below were read from
+the repository on 2026-10-04 and are checked again at download.
+
+**Proposed:**
+1. **Not in git.** `assets/external.toml` lists each model:
+   - name, URL at a pinned commit, licence, authors, size, SHA-256.
+
+   `tools/fetch-assets.sh` (bash and curl) downloads them into `assets/external/`, which git
+   ignores, and checks each hash. Each CC-BY model gets its `CREDITS.md` line in the commit
+   that lists it. Captures that need a missing model are skipped and say so; CI downloads
+   nothing.
+2. **A models scene** (`physics-lab --lab models`): each model on a plinth under the sky, a
+   capture per model from the angle of its Khronos screenshot, and the two shown side by side
+   in its doc page.
+3. **The importer catches up** where the set needs it:
+   - `.gltf` files with their buffers and images beside them (FlightHelmet, SciFiHelmet and
+     TextureTransformTest exist only in that form);
+   - alpha cut-outs (`MASK`), once a model needs them.
+
+**The first set** (CC0 or CC-BY 4.0, about 160 MB):
+
+| Model | Licence | Size | What it checks |
+|---|---|---|---|
+| TextureCoordinateTest | CC0 | 14 KB | UV orientation |
+| TextureTransformTest | CC0 | 31 KB (`.gltf`) | `KHR_texture_transform`, its rotation's sign included |
+| TextureSettingsTest | CC-BY 4.0 | 43 KB | wrapping modes, double-sided faces |
+| NormalTangentTest | CC0 or CC-BY 4.0 (the lists disagree) | 1.8 MB | our derivative tangent frame |
+| NormalTangentMirrorTest | CC-BY 4.0 | 1.6 MB | mirrored UVs |
+| MetalRoughSpheres | CC-BY 4.0 | 11 MB | metalness and roughness, textured |
+| Fox | CC0 or CC-BY 4.0 | 163 KB | a skinned animal with three clips |
+| CesiumMan | CC-BY 4.0 | 438 KB | a textured skinned figure |
+| WaterBottle | CC0 | 9.0 MB | a PBR object, metal and plastic |
+| Lantern | CC0 | 9.6 MB | wood and metal |
+| BoomBox | CC0 | 11 MB | emission |
+| Corset | CC0 | 13 MB | fabric |
+| AntiqueCamera | CC0 | 18 MB | many parts |
+| SciFiHelmet | CC0 | 30 MB (`.gltf`) | dense hard-surface detail |
+| FlightHelmet | CC0 | 53 MB (`.gltf`, 14 PNGs) | many materials, leather, wood, glass |
+
+**Reference only, never shipped** (the owner, 2026-10-04: "include them, just make sure we
+don't use them in the final engine game"). These models' licences restrict use, so they serve
+for tests and comparisons only:
+- **Khronos's Sponza** (about 20 MB, `.gltf` with JPEG textures): under the CryEngine Limited
+  License, not Creative Commons.
+- **DamagedHelmet** (3.8 MB): lists CC-BY-NC 4.0 beside CC-BY 4.0.
+- **BrainStem** (Poser EULA): a skinned figure with many joints.
+- **Duck** (SCEA Shared Source).
+
+How they are kept out of a release:
+- **The manifest marks them** `use = "reference-only"`; every other model is
+  `use = "shippable"`, under CC0 or CC-BY 4.0.
+- **Nothing that ships reads `assets/external/`.** Only the lab's models scene and the tests
+  load from there.
+- **A check enforces it:** `credits --check`, run by CI, fails if any path outside the lab,
+  tools and tests names `assets/external/` or a reference-only model.
+- **The release packaging** (when it exists) copies nothing from `assets/external/`.
+
+**Later:**
+- **A Beautiful Game** (CC-BY 4.0, 43 MB): its glass needs transmission.
+
+**Later, under their own approval:** heavy scenes to measure performance:
+- Intel's new Sponza and the Amazon Lumberyard Bistro (CC-BY 4.0 as published; hundreds of MB
+  to several GB; Bistro is FBX, converted in Blender);
+- a few rigged and animated characters (Quaternius, CC0) beside the creatures.
+
+**Questions for the owner:**
+1. **The set:** all fifteen shippable models and the four reference-only ones (about 185 MB),
+   or a smaller start? A smaller start would be the test models, Fox, CesiumMan, WaterBottle,
+   FlightHelmet and Sponza (about 100 MB).
+2. **The heavy scenes** (Intel's new Sponza, Bistro): a proposal of their own once the first
+   set renders?
+
+**The owner's answers (2026-10-04),** the proposal accepted:
+- **The restricted models are included,** as reference only and never in the final engine or
+  a game (above).
+- **External models are for the labs only:** the physics lab's models scene and the tests
+  load them; no other demo and nothing that ships.
+- **The set:** the smaller start first. All of it, about 185 MB, may be downloaded.
+- **The heavy scenes** (Intel's Sponza, Bistro): a proposal of their own once the first set
+  renders.
+- **The restricted models stay out of git,** as every external model does. The fetch script
+  leaves them out unless asked (`--reference-only`), and the lab's docs say how to download
+  them for anyone who wants to test with them.
+
+**A first step once answered:** the manifest and the fetch script, the `.gltf` reader, the
+models scene, and the test models' captures beside their Khronos screenshots.
