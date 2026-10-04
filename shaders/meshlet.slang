@@ -80,7 +80,8 @@ public struct Mesh
     public float3 center;
     public float radius;
     public uint level_offset[LOD_LEVELS + 1]; // relative to meshlet_offset, plus the end
-    public uint3 pad;
+    public uint skin;              // a skinned mesh's first cluster in the skin pass's table (#165), 0xFFFFFFFF for others
+    public uint2 pad;
     public float self_error_min[LOD_LEVELS];
     public float parent_error_max[LOD_LEVELS];
     public float self_reach_max[LOD_LEVELS];   // max |self_center - center| + self_radius per level
@@ -4152,6 +4153,20 @@ struct MoverMotion
     uint height;
     float jitter_x;                  // this frame's jitter in pixels
     float jitter_y;
+    uint skinned;                    // the scene has skinned meshes (#165)
+    SkinCluster* skin_clusters;      // the skin pass's clusters (skin.slang)
+    float* skin_previous;            // where the frame before's joints put each skinned vertex, three floats each
+    uint2 pad;
+};
+
+// Mirrors `SkinCluster` in skin.slang: where a skinned cluster's vertices lie in its tables.
+struct SkinCluster
+{
+    uint pool;
+    uint first;          // its first vertex in `skin_previous`
+    uint vertex_count;
+    uint ray;
+    uint joints;
     uint3 pad;
 };
 
@@ -4162,6 +4177,55 @@ struct MoverMotionPush
 
 [[vk::push_constant]]
 MoverMotionPush mover_motion_push;
+
+// The weights of `q` on the triangle `a b c` (q projected onto its plane); a degenerate
+// triangle's first corner.
+float3 triangle_weights(float3 q, float3 a, float3 b, float3 c)
+{
+    float3 e0 = b - a;
+    float3 e1 = c - a;
+    float3 e2 = q - a;
+    float d00 = dot(e0, e0);
+    float d01 = dot(e0, e1);
+    float d11 = dot(e1, e1);
+    float d20 = dot(e2, e0);
+    float d21 = dot(e2, e1);
+    float denom = d00 * d11 - d01 * d01;
+    if (abs(denom) <= 1e-20)
+        return float3(1.0, 0.0, 0.0);
+    float v = (d11 * d20 - d01 * d21) / denom;
+    float w = (d00 * d21 - d01 * d20) / denom;
+    return float3(1.0 - v - w, v, w);
+}
+
+// A skinned mesh's point (#165) moves with its triangle's vertices, not rigidly with its
+// mover: `object`, the pixel's point in the mover's frame now, weighed on the triangle the
+// visibility id `vis` names and placed by the same weights between where the frame before's
+// joints put the triangle's vertices (still in the mover's frame, which the caller takes
+// back through the mover's transform before). Other meshes' points come back as they are.
+float3 skinned_before(MoverMotion* p, Frame* f, uint mesh_index, uint vis, float3 object)
+{
+    Mesh mesh = f[0].meshes[mesh_index];
+    if (mesh.skin == 0xFFFFFFFFu)
+        return object;
+    uint meshlet_index = f[0].visible[vis >> VISIBILITY_TRIANGLE_BITS].y & MESHLET_INDEX_MASK;
+    uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
+    Meshlet m = f[0].meshlets[meshlet_index];
+    uint base = payload_base(f, m);
+    uint k0 = paged_index(f, base, m, tri, 0);
+    uint k1 = paged_index(f, base, m, tri, 1);
+    uint k2 = paged_index(f, base, m, tri, 2);
+    float3 w = triangle_weights(object, paged_vertex(f, base, k0).position,
+                                paged_vertex(f, base, k1).position, paged_vertex(f, base, k2).position);
+    SkinCluster c = p[0].skin_clusters[mesh.skin + meshlet_index - mesh.meshlet_offset];
+    float* previous = p[0].skin_previous;
+    uint i0 = 3 * (c.first + k0);
+    uint i1 = 3 * (c.first + k1);
+    uint i2 = 3 * (c.first + k2);
+    return w.x * float3(previous[i0], previous[i0 + 1], previous[i0 + 2])
+         + w.y * float3(previous[i1], previous[i1 + 1], previous[i1 + 2])
+         + w.z * float3(previous[i2], previous[i2 + 1], previous[i2 + 2]);
+}
 
 // A mover's pixel moves with the mover: its point, taken back onto the mover through this
 // frame's transform, is placed where the transform of the frame before held it, then seen by
@@ -4189,6 +4253,8 @@ void mover_motion_main(uint3 id : SV_DispatchThreadID)
     float4 h = mul(p[0].relative_from_clip, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
     float3 point = h.xyz / h.w;
     float3 object = mul(transpose(quat_matrix(now.rotation)), point - instance_relative(f, now)) / now.scale;
+    if (p[0].skinned != 0)
+        object = skinned_before(p, f, now.mesh, vis, object);
     float3 point_before = mul(quat_matrix(before.rotation), object * before.scale) + instance_relative(f, before);
     float4 clip = mul(p[0].previous_from_relative, float4(point_before, 1.0));
     if (clip.w <= 1e-9)

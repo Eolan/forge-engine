@@ -1912,7 +1912,10 @@ impl Demo for Gallery {
         }
         // The lab's bodies between their last two ticks (#136).
         if let Some(lab) = &self.lab {
-            self.scene.set_movers(&lab.movers());
+            let mut skins = Vec::new();
+            self.scene.set_movers(&lab.movers(&mut skins));
+            // The skinned creatures' joints (#165).
+            self.scene.set_skins(&skins);
         }
         // The glass tank's liquid (#156): the statistics a frame in this slot asked for, then the
         // substeps the lab's ticks owe it, on the async compute queue.

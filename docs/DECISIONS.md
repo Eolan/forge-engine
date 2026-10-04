@@ -316,6 +316,20 @@ still fails with E0658 (`portable_simd`, rust-lang/rust#86656), and the crate's 
 at its latest commit (2026-09-05) still starts with `#![feature(portable_simd)]`. Should
 `std::simd` become stable, ozz-animation-rs stays a candidate to compare against, but the C++
 step for its archives would remain.
+*Built* (#165, 2026-10-04):
+- **`forge-anim`:** skeletons and clips (step, linear and cubic-spline keys) from glTF's skins
+  and animations, poses sampled and blended, the model-space pass and the skinning matrices.
+  It uses `+ − × ÷` and `sqrt` only, so the same inputs give the same bits.
+- **`forge-geom`:** skinned meshes are cooked as one level of roots, every cluster bounded by
+  the sphere of every pose.
+- **`forge-render`'s skin pass:** linear blend skinning of four joints a vertex into the pool,
+  each mesh's BLAS refitted in place (`forge_gpu::DynamicBlas`), and the previous positions
+  for the motion vectors.
+- **The lab:** `physics-lab --lab creatures` draws the mannequin and the dog as skinned bodies
+  (Blender, bone-heat weights), their ragdolls' bodies moving the bones.
+
+The clips (a walk and an idle each) are read and sampled but not yet played through the
+motors: that is the procedural layer's work.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 

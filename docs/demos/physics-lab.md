@@ -444,44 +444,97 @@ column without overlap; and the lab's wall stands untouched for two seconds, the
 the ball and replays to the same digests. A tick through the impact (372 bodies, 912 joints):
 **0.99 ms** on average, p99 2.0 ms, at most 2.5 ms; the state is 87 KiB.
 
-## `creatures`: powered ragdolls (issue #143)
+## `creatures`: powered ragdolls, skinned (issues #143, #165)
 
 ```
 cargo run --release -p physics-lab -- --lab creatures
 ```
 
-Phase 3's step 7, its first part: D-012's physics layer, creatures as ragdolls whose motors
-drive them to a pose. Two puppets were modelled in Blender from code
-(`assets/blender/creatures.py`, `assets/models/creatures.glb`, 309 KB): a 1.8 m artist's
-mannequin of pale wood with dark joints, and a 1 m dog, eleven rigid parts each, every part a
-mesh and every joint an empty (the glTF loader now keeps the empties' positions,
-`Model::point`). In the lab each is a Jolt ragdoll through `forge-physics`
-(`World::add_ragdoll`): a body per part (the hull of its mesh), held to its parent by a ball
-joint (shoulders, hips, neck, waist, the dog's legs and tail) or a hinge (elbows, knees, the
-dog's lower legs) with its limits, a part not colliding with its parent. Every tick
-`World::drive_ragdoll` sets each joint's motor to a target: the mannequins swing their arms,
-bend their elbows and turn their heads, the dogs wag their tails and nod, each creature at its
-own phase (the angles through `forge_core::dmath`, the same bits everywhere). The motors are
-springs of a stiffness in N·m a radian (800 for the mannequin, 4000 for the dog's legs, which
-carry its 45 kg torso) rather than of a frequency: Jolt scales a frequency spring by the light
-part each joint turns, and the dogs folded under their own weight.
+Phase 3's step 7: D-012's physics layer, with Phase 7's first step, skinning. The creatures
+are ragdolls whose motors drive them to a pose, drawn as bodies that bend at their joints.
+
+**The bodies** (#165) were modelled and animated in Blender from code
+(`assets/blender/skinned_creatures.py`, `assets/models/skinned-creatures.glb`, 634 KB):
+- a 1.8 m artist's mannequin of pale wood with dark joints, standing in an A-pose (with its arms
+  straight down they melted into its torso);
+- a 1 m dog with a dark nose, ears and paws.
+
+Each is one continuous mesh of 10 000 triangles. Its shapes were joined by a voxel
+remesh, smoothed, then decimated. It sits on an armature of eleven bones, named as the old
+puppet's parts were, and Blender's bone heat sets the weights. Each kind has a walk and an
+idle clip (1 s and 4 s for the mannequin, 0.75 s and 2 s for the dog). `forge-anim` reads and
+samples those clips, but the lab does not play them yet.
+
+**The ragdolls** come from the same file, through `forge-physics` (`World::add_ragdoll`):
+- **bodies:** one per bone, the hull of the vertices that bone carries most;
+- **joints:** each held to its parent where its bone starts. Ball joints for the shoulders,
+  hips, neck, waist, the dog's legs and tail; hinges for the elbows, knees and the dog's lower
+  legs. Each joint has its limits, and a part does not collide with its parent.
+
+Every tick, `World::drive_ragdoll` sets each joint's motor to a target:
+- the mannequins swing their arms, bend their elbows and turn their heads;
+- the dogs wag their tails and nod.
+
+Each creature moves at its own phase, with the angles computed through `forge_core::dmath`, so
+they are the same bits everywhere. The motors are springs with a stiffness in N·m per radian:
+800 for the mannequin, and 4 000 for the dog's legs, which carry its 45 kg torso. They are not
+frequency springs: Jolt scales a frequency spring by the lighter part each joint turns, and
+with those the dogs folded under their own weight.
+
+**The skinning** (`crate::skin` in `forge-render`, `shaders/skin.slang`):
+- **The mesh:** each creature is a mesh of its own, cooked as one level of clusters, all of them
+  roots (`SkinnedMesh::cook`). Every cluster is bounded by the sphere the body stays in
+  whatever its pose (its bones laid end to end from the root), and the normal cones are off.
+- **The mover:** each creature is drawn by one mover at its root body. Every frame, its
+  bodies' transforms, between the last two ticks, become one matrix per joint
+  (`MeshletScene::set_skins`). That replaces the puppets' 55 movers with 5.
+- **`skin/vertices`:** one workgroup per cluster. It bends each vertex by its four joints and
+  writes it into the pool of pages before the culls, so the draws and the shading see the bent
+  body like any other mesh.
+- **Ray tracing:** the same pass writes the ray tracing's copy of the vertices. `skin/blas` then
+  refits each creature's bottom-level structure (`forge_gpu::DynamicBlas`, updated in place)
+  before the movers' top-level structure is rebuilt over it, so the shadows bend too.
+- **Motion vectors:** the pass also writes where the previous frame's joints put each vertex.
+  The movers' motion vectors place a skinned pixel by its weights on its triangle, between
+  those previous positions, so TAA and DLAA do not smear a swinging arm.
 
 Three mannequins stand on poles, their pelvis held by a joint that lets go past 2 kN or
-400 N·m; two dogs stand on their own legs in front. **Space** throws balls at them: a dog is
-shoved and finds its pose again, a mannequin hit squarely comes off its pole. **↓** lets every
-motor go (a `Limp` command, so it records, replays and goes through `--net`): the dogs fold to
-the ground, the mannequins hang from their poles; **↑** powers them again. `--limp-at N` lets
-them go at frame N (the captures).
+400 N·m; two dogs stand on their own legs in front.
+- **Space** throws balls at them: a dog is shoved and finds its pose again; a mannequin hit
+  squarely comes off its pole.
+- **↓** lets every motor go: the dogs fold to the ground, bending at every joint, and the
+  mannequins hang from their poles. It is a `Limp` command, so it records, replays and goes
+  through `--net`.
+- **↑** powers them again.
+- `--limp-at N` lets them go at frame N (the captures).
 
 ![Posed at tick 120; struck by a ball every 50 ticks (the middle mannequin knocked off its pole); limp from tick 60](images/physics-lab-creatures.png)
 
-The tests: an arm on a ball joint and a hinge holds out its pose on its motors to a few
-millimetres, hangs when they let go (from a saved world, to the same bits twice) and bends its
-elbow to a target; the lab's creatures stand for two seconds (the mannequins on their poles,
-the dogs' torsos over 45 cm), fold when let go (under 35 cm) and replay to the same digests. A
-tick (55 parts in five ragdolls, balls thrown): **0.11 ms** on average, p99 0.21 ms. Skinned
-creatures that bend instead of being jointed (GPU skinning, Phase 7's first step) and a slime
-as a soft body are the step's second part.
+![The limp dogs at tick 240: legs, neck and tail bent in one skin](images/physics-lab-creatures-limp.png)
+
+**The tests:**
+- `forge-anim`: a clip sampled at its keys gives the keys, to the bit; two poses blended and a
+  pose blended with itself; the same inputs give the same bits on two threads. The lab's file
+  reads as two rigs of eleven joints whose rest pose skins to the identity, and whose clips
+  loop.
+- `forge-geom`: a skinned glTF keeps its bind pose and its joints; every cluster of a skinned
+  cook is a root under the pose sphere, and each cluster vertex carries its own vertex's skin.
+- `forge-physics`: an arm on a ball joint and a hinge holds its pose on its motors to a few
+  millimetres, hangs when they let go (from a saved world, to the same bits twice), and bends
+  its elbow to a target.
+- The lab: the creatures stand for two seconds (the mannequins on their poles, the dogs'
+  torsos over 45 cm), fold when let go (under 35 cm) and replay to the same digests.
+
+The validation layer, with synchronization validation, reports nothing on either path.
+
+**Costs** with balls thrown (the RTX 5070 Ti at 1080p):
+- a tick (55 bodies in five ragdolls): **0.13 ms** on average, p99 0.27 ms;
+- `skin/vertices`: **0.005 ms** for 34 000 cluster vertices in 535 clusters;
+- `skin/blas`, the five refits: **0.109 ms**;
+- `movers/tlas`: 0.050 ms.
+
+A slime as a soft body is still to come in this step. Playing the clips through the motors
+(the clip layer driving the physics layer) belongs to the procedural layer's step.
 
 ## `flood`: a dam break (issue #144)
 

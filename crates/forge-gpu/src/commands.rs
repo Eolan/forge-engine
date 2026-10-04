@@ -403,6 +403,37 @@ impl<'a> Commands<'a> {
         };
     }
 
+    /// Records the updates in place of `blases` from their positions, which an earlier pass
+    /// rewrote, in one command (each has its own scratch, so the device may run them side by
+    /// side). The pass declares the positions ([`crate::BufferAccess::BuildInput`]), the
+    /// storages and the scratches ([`crate::BufferAccess::BuildWrite`]).
+    pub fn update_dynamic_blases(&self, blases: &[crate::DynamicBlas]) {
+        let Some(loader) = self.device.acceleration_loader() else {
+            return;
+        };
+        if blases.is_empty() {
+            return;
+        }
+        let geometries: Vec<[vk::AccelerationStructureGeometryKHR<'static>; 1]> =
+            blases.iter().map(|b| [b.geometry]).collect();
+        let (infos, ranges): (Vec<_>, Vec<_>) = blases
+            .iter()
+            .zip(&geometries)
+            .map(|(b, g)| {
+                let (info, range) = crate::accel::dynamic_blas_build(self.device, b, true);
+                (info.geometries(g), [range])
+            })
+            .unzip();
+        let range_refs: Vec<&[vk::AccelerationStructureBuildRangeInfoKHR]> =
+            ranges.iter().map(|r| r.as_slice()).collect();
+        self.paranoid_barrier();
+        // SAFETY: recording state; each structure was built with these flags and geometry and
+        // allows updates, has a scratch of its own, and its storage, scratch, positions and
+        // indices outlive the frame (the caller's `DynamicBlas`es and the buffers they were
+        // made over).
+        unsafe { loader.cmd_build_acceleration_structures(self.cb, &infos, &range_refs) };
+    }
+
     /// Copies `size` bytes from the start of `src` to the start of `dst`
     /// (`TRANSFER_SRC` / `TRANSFER_DST` usage).
     pub fn copy_buffer(&self, src: &crate::Buffer, dst: &crate::Buffer, size: u64) {

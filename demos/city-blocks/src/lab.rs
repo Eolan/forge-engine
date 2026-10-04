@@ -19,6 +19,7 @@ use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use forge_app::Context;
+use forge_geom::SkinnedMesh;
 use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_physics::buoyancy::{Fluid, Hull};
 use forge_physics::{BodyDesc, BodyId, Shape, Transform, Velocity, World, WorldDesc};
@@ -148,9 +149,10 @@ const CHAIN: usize = 27;
 const COLUMN: usize = 28;
 /// The column's pieces, each its own prop from here.
 const PIECE: usize = 29;
-/// The creatures' parts, a kind's eleven after the other's, then the mannequins' pole.
-const CREATURE: usize = PIECE + wall::PIECES;
-const POLE: usize = CREATURE + 2 * creatures::PARTS;
+/// The mannequins' pole (the creatures are skinned meshes, #165).
+const POLE: usize = PIECE + wall::PIECES;
+/// The group of bodies the skinned creatures draw ([`Skinned`]), not a prop.
+const SKINNED: usize = usize::MAX;
 /// The flood's walls along x and z, its gate, a block, the hut.
 const FLOOD: usize = POLE + 1;
 /// The dominoes' prop, after the flood's five.
@@ -892,9 +894,7 @@ impl LabWorld {
             LabScene::Creatures => {
                 let field = creatures::build(&mut world, POLE)?;
                 statics.extend(field.statics);
-                for (k, part) in field.parts.into_iter().enumerate() {
-                    group(CREATURE + k, part, &mut bodies);
-                }
+                group(SKINNED, field.bodies, &mut bodies);
                 herd = Some(field.herd);
             }
             LabScene::Flood => {
@@ -1685,6 +1685,15 @@ pub(crate) struct Lab {
     record: Option<PathBuf>,
     /// The glass tank's liquid substeps the ticks since the last frame owe it (#156).
     tank_steps: Vec<forge_render::LiquidStep>,
+    /// The skinned creatures (#165), in the creatures scene.
+    skinned: Option<Skinned>,
+}
+
+/// Where the skinned creatures' bodies lie in the movers' transforms (from `start`, each
+/// creature's parts in a row), and each one's kind (#165).
+struct Skinned {
+    start: usize,
+    kinds: Vec<creatures::Kind>,
 }
 
 /// The sea scene's water (#138): the island's cascades of FFT waves from the same seed as the
@@ -1769,6 +1778,7 @@ pub(crate) fn build(
                 .collect(),
         );
     }
+    let creature_rows = [materials.of("lab-mannequin"), materials.of("lab-dog")];
     materials.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
     builder.set_origin(scene_origin(args));
@@ -1777,11 +1787,36 @@ pub(crate) fn build(
     for &(prop, at) in &layout.statics {
         builder.add_instance(ids[prop], at);
     }
-    let per_mesh: Vec<(MeshId, u32)> = layout
+    let mut per_mesh: Vec<(MeshId, u32)> = layout
         .groups
         .iter()
+        .filter(|g| g.prop != SKINNED)
         .map(|g| (ids[g.prop], g.count))
         .collect();
+    // The skinned creatures (#165): a mesh each (its vertices are its own), cooked once a
+    // kind, bounded by the sphere about its root every pose stays in; their movers last.
+    let skinned = layout
+        .groups
+        .iter()
+        .position(|g| g.prop == SKINNED)
+        .map(|g| {
+            let start = layout.groups[..g].iter().map(|g| g.count as usize).sum();
+            let kinds = world.herd.as_ref().map(|h| h.kinds()).unwrap_or_default();
+            let kinds_cooked = [creatures::Kind::Mannequin, creatures::Kind::Dog].map(|kind| {
+                let body = kind.body();
+                SkinnedMesh::cook(&body.mesh, &body.skin, ([0.0; 3], body.reach))
+            });
+            for &kind in &kinds {
+                let (k, row) = match kind {
+                    creatures::Kind::Mannequin => (0, creature_rows[0]),
+                    creatures::Kind::Dog => (1, creature_rows[1]),
+                };
+                let id = builder.add_skinned_mesh(&kinds_cooked[k], kind.body().joints as u32);
+                builder.set_mesh_material(id, row);
+                per_mesh.push((id, 1));
+            }
+            Skinned { start, kinds }
+        });
     builder.reserve_movers(&per_mesh);
     let mut scene = builder.build(&ctx.device)?;
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
@@ -1858,6 +1893,7 @@ pub(crate) fn build(
             logged: [60, 300, 600, 900, 1200],
             record: args.record.clone(),
             tank_steps: Vec::new(),
+            skinned,
         },
     ))
 }
@@ -2056,10 +2092,13 @@ impl Lab {
         }
     }
 
-    /// The movers' transforms, between the last two ticks by the time not yet ticked.
-    pub(crate) fn movers(&self) -> Vec<MoverTransform> {
+    /// The movers' transforms, between the last two ticks by the time not yet ticked, and the
+    /// skinned creatures' joints' matrices into `skins` (#165): their bodies' transforms become
+    /// a mover each, after the others, and the matrices that bend their meshes.
+    pub(crate) fn movers(&self, skins: &mut Vec<Mat4>) -> Vec<MoverTransform> {
         let t = (self.pending / TICK).clamp(0.0, 1.0);
-        self.previous
+        let mut movers: Vec<MoverTransform> = self
+            .previous
             .iter()
             .zip(&self.current)
             .map(|(a, b)| {
@@ -2076,7 +2115,26 @@ impl Lab {
                     scale: 1.0,
                 }
             })
-            .collect()
+            .collect();
+        skins.clear();
+        if let Some(skinned) = &self.skinned {
+            let end = skinned.start + skinned.kinds.len() * creatures::PARTS;
+            let bodies: Vec<(Vec3, Quat)> = movers
+                .drain(skinned.start..end)
+                .map(|m| (m.position, m.rotation))
+                .collect();
+            let mut matrices = Vec::new();
+            for (&kind, parts) in skinned.kinds.iter().zip(bodies.chunks(creatures::PARTS)) {
+                let position = creatures::skin(kind, parts, &mut matrices);
+                skins.extend_from_slice(&matrices);
+                movers.push(MoverTransform {
+                    position,
+                    rotation: Quat::IDENTITY,
+                    scale: 1.0,
+                });
+            }
+        }
+        movers
     }
 
     /// Throws a ball from `from` along `forward` at the next tick.
@@ -2125,14 +2183,14 @@ impl Lab {
     /// The player as drawn, when the scene has one: its capsule's mover (the last but one).
     pub(crate) fn player(&mut self) -> Option<MoverTransform> {
         self.shown().player()?;
-        let movers = self.movers();
+        let movers = self.movers(&mut Vec::new());
         movers.get(movers.len().checked_sub(2)?).copied()
     }
 
     /// What the camera follows (C) as drawn: the boat or the car, when the scene has one.
     pub(crate) fn ride(&mut self) -> Option<MoverTransform> {
         let k = self.shown().ride()?;
-        self.movers().get(k).copied()
+        self.movers(&mut Vec::new()).get(k).copied()
     }
 
     /// Whether the scene has a car.

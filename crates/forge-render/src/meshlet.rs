@@ -15,12 +15,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE};
+use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE, SkinnedMesh};
 
 use crate::cells::CellPos;
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::probes::ProbeLight;
 use crate::raytrace::{self, SceneRays};
+use crate::skin::{SceneSkins, SkinPush, SkinSource};
 use crate::sky::SkyLight;
 use crate::streaming::{
     self, PageSource, PageStore, PageStreamer, Residency, StartView, StreamingStats,
@@ -250,7 +251,10 @@ struct GpuMesh {
     radius: f32,
     /// Cluster offsets per LOD level relative to `meshlet_offset`, plus the end.
     level_offset: [u32; LOD_LEVELS + 1],
-    pad: [u32; 3],
+    /// A skinned mesh's first cluster in the skin pass's table (#165), `u32::MAX` for others:
+    /// the motion vectors find its vertices' previous positions through it.
+    skin: u32,
+    pad: [u32; 2],
     /// Per level: the smallest `self_error` of its clusters.
     self_error_min: [f32; LOD_LEVELS],
     /// Per level: the largest `parent_error` (infinite when the level holds a root).
@@ -460,10 +464,15 @@ struct GpuMoverMotion {
     width: u32,
     height: u32,
     jitter: [f32; 2],
-    pad: [u32; 3],
+    /// The scene has skinned meshes (#165): their pixels move as their vertices did.
+    skinned: u32,
+    /// The skin pass's clusters (`SkinCluster`) and the frame before's skinned positions.
+    skin_clusters: u64,
+    skin_previous: u64,
+    pad: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuMoverMotion>() == 192);
+const _: () = assert!(std::mem::size_of::<GpuMoverMotion>() == 208);
 
 /// Mirrors `ResolvePush` in `meshlet.slang`.
 #[repr(C)]
@@ -736,11 +745,14 @@ pub struct MoversFrame {
     pub count: u32,
     /// The scene's origin: the frame the probes and the rays work in.
     pub origin: CellPos,
+    /// With skinned meshes and rays (#165): the ray tracing's positions, which this frame's
+    /// skin pass rewrote and the rays' hits read.
+    pub ray_positions: Option<forge_gpu::BufferHandle>,
 }
 
 impl MoversFrame {
     /// Declares what a pass running `stages` reads of them: the table, and with `traces` the
-    /// movers' structure.
+    /// movers' structure and the skinned meshes' positions.
     pub fn declare<'b, 'f>(
         movers: Option<Self>,
         builder: forge_gpu::PassBuilder<'b, 'f>,
@@ -755,6 +767,10 @@ impl MoversFrame {
             .buffer_if(
                 m.tlas.filter(|_| traces),
                 BufferAccess::AccelerationStructureRead(stages),
+            )
+            .buffer_if(
+                m.ray_positions.filter(|_| traces),
+                BufferAccess::ShaderRead(stages),
             )
     }
 }
@@ -827,6 +843,8 @@ pub struct MeshletSceneBuilder {
     /// The first of the movers' instances, the table's last ones
     /// ([`MeshletSceneBuilder::reserve_movers`], #79).
     movers: Option<u32>,
+    /// The skinned meshes ([`MeshletSceneBuilder::add_skinned_mesh`], #165).
+    skins: Vec<SkinSource>,
 }
 
 /// How many of a mesh's instances, the nearest, have their start view's needs worked out
@@ -923,7 +941,8 @@ impl MeshletSceneBuilder {
             center: mesh.center,
             radius: mesh.radius,
             level_offset,
-            pad: [0; 3],
+            skin: u32::MAX,
+            pad: [0; 2],
             self_error_min,
             parent_error_max,
             self_reach_max,
@@ -943,6 +962,24 @@ impl MeshletSceneBuilder {
                 .max()
                 .unwrap_or(0),
         );
+        id
+    }
+
+    /// Appends a skinned mesh of `joints` joints (#165, `crate::skin`): its clusters' vertices
+    /// follow the matrices [`MeshletScene::set_skins`] gives every frame. Show it with a mover
+    /// ([`MeshletSceneBuilder::reserve_movers`]), one instance per skinned mesh: the movers'
+    /// structure is the one rebuilt over its refitted structure every frame, and its vertices
+    /// are its own.
+    pub fn add_skinned_mesh(&mut self, skinned: &SkinnedMesh, joints: u32) -> MeshId {
+        let meshlet_offset = self.meshlets.len() as u32;
+        let id = self.add_mesh(&skinned.mesh);
+        self.skins.push(SkinSource {
+            mesh: id.0,
+            meshlet_offset,
+            meshlet_count: skinned.mesh.meshlets.len() as u32,
+            joints,
+            vertices: skinned.vertices.clone(),
+        });
         id
     }
 
@@ -1112,6 +1149,7 @@ impl MeshletSceneBuilder {
                 let error = raytrace::cut_error(&meshes, *budget);
                 grouped.extend(members.iter().map(|&m| (m as usize, (error, *budget))));
             }
+            let skinned: Vec<usize> = self.skins.iter().map(|s| s.mesh as usize).collect();
             let cuts = self
                 .meshes
                 .iter()
@@ -1133,6 +1171,7 @@ impl MeshletSceneBuilder {
                     if terrain {
                         cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
                     }
+                    cut.dynamic = skinned.contains(&m);
                     Ok(cut)
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1143,7 +1182,7 @@ impl MeshletSceneBuilder {
         };
         // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
         let pool_usage = usage | vk::BufferUsageFlags::INDEX_BUFFER;
-        let (pool, page_table, streamer) = match residency {
+        let (pool, page_table, streamer, page_slot) = match residency {
             Residency::All => {
                 let bytes = self.store.read_pages(0..page_count)?;
                 // The shaders address the pool in 32-bit bytes (`payload_base`).
@@ -1168,6 +1207,7 @@ impl MeshletSceneBuilder {
                         "page table",
                     )?,
                     None,
+                    table,
                 )
             }
             Residency::Streamed(config) => {
@@ -1212,8 +1252,25 @@ impl MeshletSceneBuilder {
                     upload_pages = config.upload_pages,
                     "cluster pages streamed"
                 );
-                (pool, page_table, Some(streamer))
+                (pool, page_table, Some(streamer), table)
             }
+        };
+        // The skinned meshes (#165): their clusters' places in the pool, which their pages, roots
+        // all, keep; their first clusters in the mesh records, for the motion vectors.
+        let skins = if self.skins.is_empty() {
+            None
+        } else {
+            let skins = SceneSkins::new(
+                device,
+                &self.skins,
+                &self.meshlets,
+                |page| page_slot[page as usize],
+                |mesh| rays.as_ref().map(|r| r.first_vertex(mesh)),
+            )?;
+            for &(mesh, first) in &skins.meshes {
+                self.meshes[mesh as usize].skin = first;
+            }
+            Some(skins)
         };
         let streamed = streamer.is_some();
         if self.materials.is_empty() {
@@ -1330,6 +1387,7 @@ impl MeshletSceneBuilder {
                         .map(GraphBuffer::new)
                 })
                 .collect::<Result<Vec<_>>>()?,
+            skins,
             rays,
             materials: device.create_buffer_with_data(
                 &self.materials,
@@ -1481,6 +1539,8 @@ pub struct MeshletScene {
     instances: GraphBuffer,
     /// The movers (#79), when the scene has them.
     movers: Option<SceneMovers>,
+    /// The skinned meshes (#165), when the scene has them.
+    skins: Option<SceneSkins>,
     /// The scene's origin: the frame of the acceleration structure, the probes and the dust
     /// (issue #93).
     origin: CellPos,
@@ -1643,6 +1703,16 @@ impl MeshletScene {
         });
         movers.current.set(slot);
         movers.written.set(movers.written.get() + 1);
+    }
+
+    /// The skinned meshes' joints' matrices for the frame about to be drawn (#165): every
+    /// skinned mesh's in the order they were added ([`MeshletSceneBuilder::add_skinned_mesh`]),
+    /// each taking a vertex from its bind pose into its mover's frame. Call it every frame the
+    /// scene has skinned meshes, before drawing; until the first call they keep their bind pose.
+    pub fn set_skins(&self, matrices: &[Mat4]) {
+        if let Some(skins) = &self.skins {
+            skins.set(matrices);
+        }
     }
 
     /// The instances before the movers': those the static acceleration structure holds.
@@ -2038,6 +2108,8 @@ pub struct MeshletRenderer {
     pipeline_cell_bounds: Pipeline,
     /// The movers' motion vectors, and their per-slot block (`GpuMoverMotion`).
     pipeline_mover_motion: Pipeline,
+    /// The skin pass (#165).
+    pipeline_skin: Pipeline,
     mover_motion_blocks: Vec<Buffer>,
     pipeline_cell_cull_deferred: Pipeline,
     pipeline_cluster_cull: Pipeline,
@@ -2428,6 +2500,20 @@ impl MeshletRenderer {
             std::mem::size_of::<u64>(),
             "mover motion",
         )?;
+        // The skinned meshes (#165): their vertices every frame.
+        let pipeline_skin = {
+            let module = device.create_shader_module(
+                &shaders.compile("skin.slang", "skin_main", ShaderStage::Compute)?,
+                "skin",
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, "skin_main"),
+                push_constant_bytes: std::mem::size_of::<SkinPush>() as u32,
+                name: "skin",
+            });
+            device.destroy_shader_module(module);
+            pipeline?
+        };
         let mover_motion_blocks = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -2505,6 +2591,7 @@ impl MeshletRenderer {
             pipeline_cull_deferred,
             pipeline_cell_bounds,
             pipeline_mover_motion,
+            pipeline_skin,
             mover_motion_blocks,
             pipeline_cell_cull,
             pipeline_cell_cull_deferred,
@@ -3090,6 +3177,37 @@ impl MeshletRenderer {
         };
         let frame_address = self.frame_buffers[slot.index].address();
 
+        // The skinned meshes (#165): their vertices bent by this frame's joints into the pool
+        // and the rays' positions, and their structures refitted, before anything reads them.
+        let mut ray_positions = None;
+        let mut skin_blases = Vec::new();
+        if let Some(skins) = &scene.skins {
+            let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+            let rays = scene.rays.as_ref().filter(|_| skins.has_rays);
+            ray_positions = rays.map(|r| graph.import_buffer(r.hit_positions()));
+            let previous = graph.import_buffer(&skins.previous);
+            let push = skins.push(
+                scene.pool.address(),
+                rays.map_or(0, |r| r.hit_positions().address()),
+            );
+            let pipeline = &self.pipeline_skin;
+            let groups = skins.cluster_count;
+            graph
+                .pass("skin/vertices")
+                .buffer(io.pool, BufferAccess::ShaderWrite(compute))
+                .buffer(previous, BufferAccess::ShaderWrite(compute))
+                .buffer_if(ray_positions, BufferAccess::ShaderWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &push);
+                    commands.dispatch(groups, 1, 1);
+                    Ok(())
+                });
+            if let (Some(rays), Some(positions)) = (rays, ray_positions) {
+                skin_blases = rays.declare_skin_blas(graph, positions);
+            }
+        }
+
         // The movers (#79): this frame's records into the table's last instances, then their
         // cells' bounds and their acceleration structure, before anything reads them.
         let mut movers_tlas = None;
@@ -3141,6 +3259,7 @@ impl MeshletRenderer {
                     movers.first,
                     movers.templates.len() as u32,
                     scene.origin,
+                    &skin_blases,
                 )
             });
         }
@@ -3394,6 +3513,7 @@ impl MeshletRenderer {
                     previous: movers.ring[movers.previous.get()].address(),
                     count: movers.templates.len() as u32,
                     origin: scene.origin,
+                    ray_positions,
                 }),
         })
     }
@@ -3459,6 +3579,11 @@ impl MeshletRenderer {
         let pipeline = &self.pipeline_mover_motion;
         let (visibility, depth) = (targets.visibility, targets.depth);
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        // Skinned meshes (#165): the vertices' positions now (the pool) and before.
+        let skins = scene.skins.as_ref();
+        let skin_previous = skins.map(|s| graph.import_buffer(&s.previous));
+        let (skin_clusters, skin_previous_address) =
+            skins.map_or((0, 0), |s| (s.clusters_address(), s.previous.address()));
         graph
             .pass("movers/motion")
             .image(visibility, ImageAccess::Sampled(compute))
@@ -3466,6 +3591,15 @@ impl MeshletRenderer {
             .image(motion, ImageAccess::StorageReadWrite(compute))
             .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
             .buffer(instances, BufferAccess::ShaderRead(compute))
+            .buffer_if(skin_previous, BufferAccess::ShaderRead(compute))
+            .buffer_if(
+                skins.map(|_| targets.pages),
+                BufferAccess::ShaderRead(compute),
+            )
+            .buffer_if(
+                skins.map(|_| targets.page_table),
+                BufferAccess::ShaderRead(compute),
+            )
             .run(move |resources, commands| {
                 block.write(
                     0,
@@ -3482,7 +3616,10 @@ impl MeshletRenderer {
                         width: extent.width,
                         height: extent.height,
                         jitter: jitter.to_array(),
-                        pad: [0; 3],
+                        skinned: u32::from(skin_clusters != 0),
+                        skin_clusters,
+                        skin_previous: skin_previous_address,
+                        pad: [0; 2],
                     }],
                 );
                 commands.bind_pipeline(pipeline);

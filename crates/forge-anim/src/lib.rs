@@ -26,6 +26,6 @@ mod pose;
 mod skeleton;
 
 pub use clip::{Clip, Interpolation, JointTracks, Track};
-pub use import::{AnimError, Rig, load_rig};
+pub use import::{AnimError, Rig, load_rig, load_rigs};
 pub use pose::{Pose, Transform};
 pub use skeleton::{Skeleton, SkeletonError};

@@ -21,6 +21,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 forge-app = { workspace = true }
 forge-core = { workspace = true }
+forge-anim = { workspace = true }
 forge-geom = { workspace = true }
 forge-physics = { workspace = true }
 forge-sim = { workspace = true }

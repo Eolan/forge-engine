@@ -1054,7 +1054,18 @@ the dust settles, the scene costs nothing.
 
 `--lab creatures` (#143), five ragdolls of eleven parts, balls thrown every 50 ticks, 600
 ticks: **0.11 ms a tick** (p99 0.21, max 0.28). Setting the 50 motors' targets is a few
-microseconds; the ragdolls stay awake while their poses move.
+microseconds; the ragdolls stay awake while their poses move. With the skinned bodies (#165;
+their hulls the vertices each bone carries most): **0.13 ms a tick** (p99 0.27, max 0.38).
+
+The skinned creatures on the GPU (#165), the same run, 1080p:
+| Zone | ms |
+|---|---|
+| `skin/vertices`: 34 000 cluster vertices in 535 clusters, four joints each | 0.005 |
+| `skin/blas`: five bottom-level structures of 10 000 triangles refitted in place | 0.109 |
+| `movers/tlas`: the movers' top-level structure over them | 0.050 |
+
+The frame is 1.41 ms on the GPU. Recording the five refits as one build command or as five
+costs the same: the refit's cost is in the triangles.
 
 `--lab flood` (#144), the gate lifted at tick 31, 600 ticks: **0.86 ms a tick** (p99 1.1, max
 1.4). Most of it is the water: 18 432 cells in two half steps (velocities carried along, the

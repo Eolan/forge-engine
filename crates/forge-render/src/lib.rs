@@ -29,6 +29,7 @@ pub mod precision;
 pub mod probes;
 pub mod raytrace;
 pub mod shallow;
+pub mod skin;
 pub mod sky;
 pub mod splashes;
 pub mod starfield;

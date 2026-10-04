@@ -35,9 +35,11 @@ pub enum AnimError {
 /// A skin's skeleton and the clips that move it.
 #[derive(Clone, Debug)]
 pub struct Rig {
-    /// The first skin's joints.
+    /// The skin's name (Blender's armature's).
+    pub name: String,
+    /// The skin's joints.
     pub skeleton: Skeleton,
-    /// Every animation of the file, keeping the channels on the skeleton's joints.
+    /// The animations that move some of its joints, keeping their channels on them.
     pub clips: Vec<Clip>,
 }
 
@@ -49,8 +51,16 @@ impl Rig {
 }
 
 /// Reads a binary glTF's first skin as a skeleton (joints in the skin's order, which the
-/// vertices' joint indices count in) and its animations as clips.
+/// vertices' joint indices count in) and the animations that move it as clips.
 pub fn load_rig(bytes: &[u8]) -> Result<Rig, AnimError> {
+    load_rigs(bytes)?
+        .into_iter()
+        .next()
+        .ok_or(AnimError::NoSkin)
+}
+
+/// Reads every skin of a binary glTF as [`load_rig`] reads the first, in the file's order.
+pub fn load_rigs(bytes: &[u8]) -> Result<Vec<Rig>, AnimError> {
     let gltf = gltf::Gltf::from_slice(bytes)?;
     let blob = gltf.blob.as_deref();
     for buffer in gltf.buffers() {
@@ -58,18 +68,27 @@ pub fn load_rig(bytes: &[u8]) -> Result<Rig, AnimError> {
             return Err(AnimError::ExternalBuffer(buffer.index()));
         }
     }
-    let skin = gltf.skins().next().ok_or(AnimError::NoSkin)?;
-    let joints: Vec<gltf::Node> = skin.joints().collect();
-    let node_count = gltf.nodes().len();
-    let mut joint_of_node = vec![None; node_count];
-    for (j, node) in joints.iter().enumerate() {
-        joint_of_node[node.index()] = Some(j);
-    }
-    let mut parent_of_node = vec![None; node_count];
+    let mut parent_of_node = vec![None; gltf.nodes().len()];
     for node in gltf.nodes() {
         for child in node.children() {
             parent_of_node[child.index()] = Some(node.index());
         }
+    }
+    gltf.skins()
+        .map(|skin| read_rig(&gltf, &skin, blob, &parent_of_node))
+        .collect()
+}
+
+fn read_rig(
+    gltf: &gltf::Document,
+    skin: &gltf::Skin,
+    blob: Option<&[u8]>,
+    parent_of_node: &[Option<usize>],
+) -> Result<Rig, AnimError> {
+    let joints: Vec<gltf::Node> = skin.joints().collect();
+    let mut joint_of_node = vec![None; parent_of_node.len()];
+    for (j, node) in joints.iter().enumerate() {
+        joint_of_node[node.index()] = Some(j);
     }
     let local = |node: usize| {
         let node = gltf.nodes().nth(node).expect("a node the file lists");
@@ -198,7 +217,11 @@ pub fn load_rig(bytes: &[u8]) -> Result<Rig, AnimError> {
             joints: tracks,
         });
     }
-    Ok(Rig { skeleton, clips })
+    Ok(Rig {
+        name: skin.name().unwrap_or_default().to_owned(),
+        skeleton,
+        clips,
+    })
 }
 
 #[cfg(test)]
@@ -309,6 +332,59 @@ mod tests {
             vertex.abs_diff_eq(Vec3::new(-1.0, 3.0, 0.0), 1e-6),
             "{vertex}"
         );
+    }
+
+    /// The lab's creatures as Blender exports them (`assets/blender/skinned_creatures.py`).
+    #[test]
+    fn the_lab_s_creatures_come_through() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/models/skinned-creatures.glb"
+        );
+        let rigs = load_rigs(&std::fs::read(path).unwrap()).unwrap();
+        let mut names: Vec<&str> = rigs.iter().map(|r| r.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["dog", "mannequin"]);
+        for rig in &rigs {
+            let skeleton = &rig.skeleton;
+            assert_eq!(skeleton.len(), 11, "{}", rig.name);
+            let root = if rig.name == "dog" { "torso" } else { "pelvis" };
+            assert_eq!(skeleton.parent(skeleton.joint(root).unwrap()), None);
+            // Bound at rest: every skinning matrix of the rest pose is the identity.
+            let mut model = vec![Mat4::IDENTITY; 11];
+            let mut skin = vec![Mat4::IDENTITY; 11];
+            skeleton.model_space(skeleton.rest(), &mut model);
+            skeleton.skinning_matrices(&model, &mut skin);
+            for (j, m) in skin.iter().enumerate() {
+                assert!(
+                    m.abs_diff_eq(Mat4::IDENTITY, 1e-4),
+                    "{} joint {j}: {m}",
+                    rig.name
+                );
+            }
+            // Its walk and its idle, which loop: their last pose is their first.
+            let seconds = if rig.name == "dog" {
+                [0.75, 2.0]
+            } else {
+                [1.0, 4.0]
+            };
+            for (clip, seconds) in ["walk", "idle"].into_iter().zip(seconds) {
+                let clip = rig.clip(&format!("{}-{clip}", rig.name)).unwrap();
+                assert!((clip.duration - seconds).abs() < 1e-4, "{}", clip.name);
+                let (mut first, mut last) = (skeleton.rest().clone(), skeleton.rest().clone());
+                clip.sample(skeleton, 0.0, &mut first);
+                clip.sample(skeleton, clip.duration, &mut last);
+                for j in 0..11 {
+                    let (a, b) = (first.transform(j), last.transform(j));
+                    assert!(
+                        a.translation.abs_diff_eq(b.translation, 1e-5),
+                        "{}",
+                        clip.name
+                    );
+                    assert!(a.rotation.abs_diff_eq(b.rotation, 1e-5), "{}", clip.name);
+                }
+            }
+        }
     }
 
     #[test]

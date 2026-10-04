@@ -16,8 +16,8 @@ use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, PAGE_SIZE};
 use forge_gpu::{
     AccelerationStructure, BlasTriangles, Buffer, BufferAccess, BufferDesc, BufferHandle,
-    ComputePipelineDesc, Device, DynamicTlas, FrameGraph, MemoryCategory, MemoryLocation, Pipeline,
-    Result, ShaderCompiler, ShaderStage, vk,
+    ComputePipelineDesc, Device, DynamicBlas, DynamicTlas, FrameGraph, GraphBuffer, MemoryCategory,
+    MemoryLocation, Pipeline, Result, ShaderCompiler, ShaderStage, vk,
 };
 
 use crate::cells::CellPos;
@@ -48,6 +48,9 @@ pub(crate) struct Cut {
     /// How far the shadow rays of the mesh's drawn surfaces start off them, object space; 0
     /// for the shader's `SHADOW_BIAS` (see [`TERRAIN_SHADOW_START`]).
     pub shadow_start: f32,
+    /// A skinned mesh's (#165): its structure is refitted every frame from the positions the
+    /// skin pass writes ([`forge_gpu::DynamicBlas`]).
+    pub dynamic: bool,
 }
 
 /// Triangles of the cut of `meshlets` (one mesh's clusters) at error `e`.
@@ -112,6 +115,7 @@ pub(crate) fn mesh_cut_at(
         sections: Vec::new(),
         error,
         shadow_start: 0.0,
+        dynamic: false,
     };
     for m in clusters {
         let base = at[&m.page] + m.payload as usize;
@@ -179,10 +183,19 @@ struct GpuRtScene {
 
 /// The scene's structures.
 pub struct SceneRays {
+    /// The static meshes' structures.
     blases: Vec<AccelerationStructure>,
-    /// The cuts' geometry for shading hits (held for `hit_record`, which points into it), and
-    /// the record (`GpuRtScene`).
-    _hit_data: [Buffer; 4],
+    /// The skinned meshes', refitted every frame (#165).
+    dynamic: Vec<DynamicBlas>,
+    /// The cuts' positions (three floats a vertex): the skin pass rewrites a skinned mesh's.
+    hit_positions: GraphBuffer,
+    /// Per mesh, its first vertex in `hit_positions`.
+    first_vertices: Vec<u32>,
+    /// The rest of the cuts' geometry for shading hits (held for `hit_record`, which points
+    /// into it: indices, then sections and the per-mesh offsets), and the record
+    /// (`GpuRtScene`).
+    _hit_indices: Buffer,
+    _hit_data: [Buffer; 2],
     hit_record: Buffer,
     /// Bytes of the hit data.
     pub hit_bytes: u64,
@@ -204,24 +217,19 @@ pub struct SceneRays {
 }
 
 impl SceneRays {
-    /// Builds one bottom-level structure per cut.
+    /// Builds one bottom-level structure per cut: a static one, or for a skinned mesh's cut
+    /// ([`Cut::dynamic`]) one refitted every frame over the hit positions.
     pub(crate) fn new(device: &Arc<Device>, cuts: &[Cut], ms: f64) -> Result<Self> {
         let start = std::time::Instant::now();
         let meshes: Vec<BlasTriangles<'_>> = cuts
             .iter()
+            .filter(|c| !c.dynamic)
             .map(|c| BlasTriangles {
                 positions: &c.positions,
                 indices: &c.indices,
             })
             .collect();
         let blases = device.build_blases(&meshes, "mesh BLAS")?;
-        let addresses: Vec<u64> = blases.iter().map(AccelerationStructure::address).collect();
-        let blas_addresses = device.create_buffer_with_data(
-            &addresses,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryCategory::Geometry,
-            "BLAS addresses",
-        )?;
         // The cuts again, for the shaders: one buffer each, the meshes one after another.
         let mut positions: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
@@ -239,19 +247,47 @@ impl SceneRays {
             sections.extend_from_slice(&c.sections);
         }
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        // The skinned meshes' structures are built over the positions and indices themselves.
+        let input =
+            storage | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
+        let hit_positions = GraphBuffer::new(device.create_buffer_with_data(
+            &positions,
+            input,
+            MemoryCategory::Geometry,
+            "ray hit positions",
+        )?);
+        let hit_indices = device.create_buffer_with_data(
+            &indices,
+            input,
+            MemoryCategory::Geometry,
+            "ray hit indices",
+        )?;
+        let mut dynamic = Vec::new();
+        let mut statics = blases.iter();
+        let mut addresses = Vec::with_capacity(cuts.len());
+        for (c, mesh) in cuts.iter().zip(&meshes) {
+            if c.dynamic {
+                let blas = device.create_dynamic_blas(
+                    hit_positions.address() + u64::from(mesh.first_vertex) * 12,
+                    c.positions.len() as u32,
+                    hit_indices.address() + u64::from(mesh.first_triangle) * 12,
+                    (c.indices.len() / 3) as u32,
+                    "skinned mesh BLAS",
+                )?;
+                addresses.push(blas.address());
+                dynamic.push(blas);
+            } else {
+                let blas = statics.next().expect("a static structure per static cut");
+                addresses.push(blas.address());
+            }
+        }
+        let blas_addresses = device.create_buffer_with_data(
+            &addresses,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryCategory::Geometry,
+            "BLAS addresses",
+        )?;
         let hit_data = [
-            device.create_buffer_with_data(
-                &positions,
-                storage,
-                MemoryCategory::Geometry,
-                "ray hit positions",
-            )?,
-            device.create_buffer_with_data(
-                &indices,
-                storage,
-                MemoryCategory::Geometry,
-                "ray hit indices",
-            )?,
             device.create_buffer_with_data(
                 &sections,
                 storage,
@@ -267,22 +303,28 @@ impl SceneRays {
         ];
         let hit_record = device.create_buffer_with_data(
             &[GpuRtScene {
-                positions: hit_data[0].address(),
-                indices: hit_data[1].address(),
-                sections: hit_data[2].address(),
-                meshes: hit_data[3].address(),
+                positions: hit_positions.address(),
+                indices: hit_indices.address(),
+                sections: hit_data[0].address(),
+                meshes: hit_data[1].address(),
             }],
             storage,
             MemoryCategory::Geometry,
             "ray hit record",
         )?;
         Ok(Self {
-            hit_bytes: hit_data.iter().map(Buffer::size).sum(),
+            hit_bytes: hit_positions.size()
+                + hit_indices.size()
+                + hit_data.iter().map(Buffer::size).sum::<u64>(),
+            first_vertices: meshes.iter().map(|m| m.first_vertex).collect(),
+            hit_positions,
             _hit_data: hit_data,
+            _hit_indices: hit_indices,
             hit_record,
             triangles: cuts.iter().map(|c| c.indices.len() as u64 / 3).sum(),
             max_cut_error: cuts.iter().map(|c| c.error).fold(0.0, f32::max),
             blases,
+            dynamic,
             blas_addresses,
             tlas: None,
             blas_ms: ms + start.elapsed().as_secs_f64() * 1e3,
@@ -315,6 +357,54 @@ impl SceneRays {
         Ok(())
     }
 
+    /// The cuts' positions, which the skin pass rewrites for the skinned meshes (#165).
+    pub(crate) fn hit_positions(&self) -> &GraphBuffer {
+        &self.hit_positions
+    }
+
+    /// Mesh `mesh`'s first vertex in [`SceneRays::hit_positions`].
+    pub(crate) fn first_vertex(&self, mesh: u32) -> u32 {
+        self.first_vertices[mesh as usize]
+    }
+
+    /// Declares the pass "skin/blas" that refits the skinned meshes' structures from the
+    /// positions this frame's skin pass wrote (`positions`, the hit positions imported).
+    /// Returns their storages, which the movers' top-level build reads; nothing without
+    /// skinned meshes.
+    pub(crate) fn declare_skin_blas<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        positions: BufferHandle,
+    ) -> Vec<BufferHandle> {
+        if self.dynamic.is_empty() {
+            return Vec::new();
+        }
+        let storages: Vec<BufferHandle> = self
+            .dynamic
+            .iter()
+            .map(|b| graph.import_buffer(b.storage()))
+            .collect();
+        let scratches: Vec<BufferHandle> = self
+            .dynamic
+            .iter()
+            .map(|b| graph.import_buffer(b.scratch()))
+            .collect();
+        let mut pass = graph
+            .pass("skin/blas")
+            .buffer(positions, BufferAccess::BuildInput);
+        for (&storage, &scratch) in storages.iter().zip(&scratches) {
+            pass = pass
+                .buffer(storage, BufferAccess::BuildWrite)
+                .buffer(scratch, BufferAccess::BuildWrite);
+        }
+        let dynamic = &self.dynamic;
+        pass.run(move |_, commands| {
+            commands.update_dynamic_blases(dynamic);
+            Ok(())
+        });
+        storages
+    }
+
     /// The movers' structure's address (0 without movers).
     pub fn movers_address(&self) -> u64 {
         self.movers.as_ref().map_or(0, |(t, _)| t.address())
@@ -322,7 +412,9 @@ impl SceneRays {
 
     /// Declares this frame's movers' structure (#79): their records from the instance table
     /// (`instances`, which this frame wrote; the movers `first..first + count`), then its
-    /// build. Returns its storage, which the passes tracing rays declare; `None` without movers.
+    /// build, which reads `blases` (the skinned meshes' structures refitted this frame, #165).
+    /// Returns its storage, which the passes tracing rays declare; `None` without movers.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn declare_movers<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -331,6 +423,7 @@ impl SceneRays {
         first: u32,
         count: u32,
         origin: CellPos,
+        blases: &[BufferHandle],
     ) -> Option<BufferHandle> {
         let (tlas, pipeline) = self.movers.as_ref()?;
         let records = graph.import_buffer(tlas.records());
@@ -356,15 +449,18 @@ impl SceneRays {
                 commands.dispatch(count.div_ceil(64), 1, 1);
                 Ok(())
             });
-        graph
+        let mut build = graph
             .pass("movers/tlas")
             .buffer(records, BufferAccess::BuildInput)
             .buffer(storage, BufferAccess::BuildWrite)
-            .buffer(scratch, BufferAccess::BuildWrite)
-            .run(move |_, commands| {
-                commands.build_dynamic_tlas(tlas, count);
-                Ok(())
-            });
+            .buffer(scratch, BufferAccess::BuildWrite);
+        for &blas in blases {
+            build = build.buffer(blas, BufferAccess::BuildInput);
+        }
+        build.run(move |_, commands| {
+            commands.build_dynamic_tlas(tlas, count);
+            Ok(())
+        });
         Some(storage)
     }
 
@@ -435,6 +531,7 @@ impl SceneRays {
             .iter()
             .map(AccelerationStructure::size)
             .sum::<u64>()
+            + self.dynamic.iter().map(DynamicBlas::size).sum::<u64>()
             + self.tlas.as_ref().map_or(0, AccelerationStructure::size)
     }
 }

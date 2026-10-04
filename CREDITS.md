@@ -55,7 +55,7 @@ in. CI checks the crate list.
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Jorrit Rouwé and the Jolt contributors | rigid bodies (`forge-physics`, D-009, issue #136): v5.6.0's library sources vendored in `third_party/jolt` with its licence, built with `CROSS_PLATFORM_DETERMINISTIC` and double precision | MIT |
 | [JoltC](https://github.com/SecondHalfGames/JoltC) | Second Half Games (Lucien Greathouse and contributors) | the model for `forge-physics`' C layer: opaque shape handles, the layer set-up | MIT OR Apache-2.0 |
 | [gltf](https://github.com/gltf-rs/gltf) | David Harvey-Macaulay and the gltf-rs contributors | reading glTF 2.0 models (`forge_geom::model`, #138) | MIT OR Apache-2.0 |
-| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py`, `creatures.py` and `ship.py` model the lab's boat, car, aeroplane, mannequin, dog and spaceship in it and export them as glTF (#138, #140, #141, #143, #150) | GPL-2.0-or-later (the tool; what it makes is ours) |
+| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `ship.py` model the lab's boat, car, aeroplane and spaceship in it and export them as glTF (#138, #140, #141, #150); `skinned_creatures.py` the mannequin and the dog as skinned bodies with their armatures, bone-heat weights and clips (#143, #165) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets
 
@@ -64,6 +64,7 @@ in. CI checks the crate list.
 | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | the JetBrains Mono Project Authors | the profiler overlay's text | SIL OFL 1.1 (`assets/fonts/jetbrains-mono/OFL.txt`) |
 | The lab's boat (`assets/models/boat.glb`) | made for Forge by `assets/blender/boat.py` (#138) | `physics-lab --lab sea` | the project's (MIT OR Apache-2.0) |
 | The lab's spaceship (`assets/models/ship.glb`) | made for Forge by `assets/blender/ship.py` (#150, 2026-10-03) | `physics-lab --lab space` | the project's (MIT OR Apache-2.0) |
+| The lab's creatures (`assets/models/skinned-creatures.glb`: the mannequin and the dog, their armatures and clips) | made for Forge by `assets/blender/skinned_creatures.py` (#165, 2026-10-04) | `physics-lab --lab creatures` | the project's (MIT OR Apache-2.0) |
 | [The Yale Bright Star Catalogue](https://heasarc.gsfc.nasa.gov/W3Browse/star-catalog/bsc5p.html), 5th revised edition (`assets/sky/bsc5p.txt`: positions, magnitudes, B − V) | Dorrit Hoffleit and Wayne H. Warren Jr. (1991), NASA HEASARC's copy (BSC5P) | the real night sky (`--real-sky`, #164, D-046) | public: a NASA data product, freely distributed |
 | [NASA's CGI Moon Kit](https://svs.gsfc.nasa.gov/4720) (`assets/sky/moon-albedo-512x256.r8`, its 2025 colour map's luminance, by `assets/blender/moon_albedo.py`) | NASA's Scientific Visualization Studio, from the Lunar Reconnaissance Orbiter Camera's data | the real Moon (`--real-sky`) | NASA imagery, credit "NASA's Scientific Visualization Studio" |
 
@@ -368,6 +369,15 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   past a load or a strain, as engines' breakable constraints do (#142).
 - **Powered ragdolls.** Jolt's `Ragdoll`, `Skeleton` and motorised swing-twist and hinge
   constraints (Jorrit Rouwé), set up after Jolt's ragdoll samples (#143); D-012's physics layer.
+- **Skinning** (`forge_render::skin`, `forge-anim`, #165):
+  - **Linear blend skinning:** Nadia Magnenat-Thalmann, Richard Laperrière and Daniel Thalmann,
+    "Joint-dependent Local Deformations for Hand Animation and Object Grasping", Graphics
+    Interface 1988. Four joints a vertex, as glTF 2.0's skins give them; the keys' cubic
+    splines are glTF's (Khronos, the specification's appendix C).
+  - **Normalised lerp between rotation keys:** as ozz-animation does between dense keys
+    (Guillaume Blanc).
+  - **The creatures' weights:** Blender's bone heat, after Ilya Baran and Jovan Popović,
+    "Automatic Rigging and Animation of 3D Characters", SIGGRAPH 2007.
 - **Clouds.** Andrew Schneider and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon:
   Zero Dawn", SIGGRAPH 2015 Advances in Real-Time Rendering: a layer from a weather map,
   Perlin–Worley shapes eroded by Worley noise, Beer's law with the powder term, temporal
