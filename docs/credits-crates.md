@@ -51,8 +51,8 @@ Where Forge uses them:
 - `crossbeam-channel`: forge-task
 - `crossbeam-deque`: forge-task
 - `crossbeam-utils`: forge-task
-- `glam`: asteroids, city-blocks, forge-app, forge-core, forge-geom, forge-physics, forge-procgen, forge-render, forge-world, meshlets
-- `gltf`: forge-geom
+- `glam`: asteroids, city-blocks, forge-anim, forge-app, forge-core, forge-geom, forge-physics, forge-procgen, forge-render, forge-world, meshlets
+- `gltf`: forge-anim, forge-geom
 - `gpu-allocator`: forge-gpu
 - `image`: contact-sheet, forge-app, forge-procgen, imgdiff, sharpness
 - `libloading`: forge-gpu
@@ -64,7 +64,7 @@ Where Forge uses them:
 - `rayon`: task-bench
 - `serde`: forge-core
 - `serde_json`: credits
-- `thiserror`: forge-geom, forge-gpu, forge-physics, forge-sim
+- `thiserror`: forge-anim, forge-geom, forge-gpu, forge-physics, forge-sim
 - `tracing`: asteroids, city-blocks, forge-app, forge-gpu, forge-render, forge-task, meshlets
 - `tracing-subscriber`: forge-app
 - `tracy-client`: forge-app, forge-task

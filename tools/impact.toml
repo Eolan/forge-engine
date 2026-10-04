@@ -36,6 +36,8 @@
 "assets/blender/**" = []
 "crates/forge-physics/**" = ["lab"]
 "crates/forge-sim/**" = ["lab"]
+# The clip runtime (#165): the lab's skinned creatures.
+"crates/forge-anim/**" = ["lab"]
 "third_party/jolt/**" = ["lab"]
 "demos/city-blocks/**" = ["island", "city", "lab"]
 "crates/forge-geom/src/stone.rs" = ["island"]
