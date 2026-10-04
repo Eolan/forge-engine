@@ -110,6 +110,11 @@ pub struct UvMapping {
     pub occlusion_strength: f32,
     /// The emitted colour, multiplying the row's `emissive`.
     pub emissive_texture: Option<TextureId>,
+    /// Where the surface is cut out: pixels whose base colour alpha (`alpha` times the base
+    /// colour map's) falls under it are not drawn, and rays pass them (glTF's `MASK`, #171).
+    pub alpha_cutoff: Option<f32>,
+    /// The base colour factor's alpha.
+    pub alpha: f32,
 }
 
 /// How much more a metal's highlight weighs than a dielectric's ([`UvMapping::metallic`]).
@@ -125,6 +130,8 @@ impl Default for UvMapping {
             occlusion_texture: None,
             occlusion_strength: 1.0,
             emissive_texture: None,
+            alpha_cutoff: None,
+            alpha: 1.0,
         }
     }
 }
@@ -184,6 +191,9 @@ pub struct RenderLayer {
     /// Standard: the textures read by the mesh's texture coordinates, with a model's
     /// metalness, occlusion and emission (D-047); `None` projects them.
     pub uv: Option<UvMapping>,
+    /// Seen from both sides (glTF's `doubleSided`, #171): its back faces are drawn, with the
+    /// normal turned towards the viewer, and rays meet them as fronts.
+    pub double_sided: bool,
 }
 
 /// A layer of a [`ShadingClass::Layered`] row drawn by the ground's height under each pixel: the
@@ -256,6 +266,7 @@ impl Default for RenderLayer {
             bubbles: 0.0,
             contour: None,
             uv: None,
+            double_sided: false,
         }
     }
 }

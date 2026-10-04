@@ -63,10 +63,20 @@ pub struct GpuMaterial {
     uv_v: [f32; 3],
     roughness: f32,
     occlusion_strength: f32,
-    pad: [u32; 3],
+    /// Cut out under this base colour alpha ([`MATERIAL_MASKED`]), and the factor's alpha.
+    alpha_cutoff: f32,
+    alpha: f32,
+    pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 176);
+
+impl GpuMaterial {
+    /// Whether its clusters take the cut-outs' raster (#171): cut out or double-sided.
+    pub fn cut_out(&self) -> bool {
+        self.flags & (MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED) != 0
+    }
+}
 
 /// [`GpuMaterial`] flag: the textures are hex-tiled and offset per instance
 /// ([`forge_core::material::RenderLayer::hex_tiling`]).
@@ -74,6 +84,13 @@ pub const MATERIAL_HEX_TILING: u32 = 1;
 
 /// [`GpuMaterial`] flag: the textures read the mesh's UVs ([`forge_core::material::UvMapping`]).
 pub const MATERIAL_UV: u32 = 2;
+
+/// [`GpuMaterial`] flag: cut out where the base colour's alpha falls under `alpha_cutoff`
+/// ([`forge_core::material::UvMapping::alpha_cutoff`], #171).
+pub const MATERIAL_MASKED: u32 = 4;
+
+/// [`GpuMaterial`] flag: drawn from both sides ([`forge_core::material::RenderLayer::double_sided`]).
+pub const MATERIAL_DOUBLE_SIDED: u32 = 8;
 
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
@@ -219,6 +236,7 @@ impl<'a> ModelTextures<'a> {
             roughness: m.roughness.clamp(0.05, 1.0),
             specular: 0.05 + METAL_SPECULAR * m.metallic,
             emissive: m.emissive,
+            double_sided: m.double_sided,
             ..RenderLayer::default()
         };
         let mapped = [
@@ -250,6 +268,8 @@ impl<'a> ModelTextures<'a> {
             occlusion_texture: texture(m.occlusion_texture, ImageUse::Data),
             occlusion_strength: m.occlusion_strength,
             emissive_texture: texture(m.emissive_texture, ImageUse::Color),
+            alpha_cutoff: m.alpha_cutoff,
+            alpha: m.base_color[3],
         });
         layer
     }
@@ -332,7 +352,17 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 reflectance: r.reflectance,
                 scattering: bubble_scattering(r.bubbles),
                 flags: if r.hex_tiling { MATERIAL_HEX_TILING } else { 0 }
-                    | if r.uv.is_some() { MATERIAL_UV } else { 0 },
+                    | if r.uv.is_some() { MATERIAL_UV } else { 0 }
+                    | if uv.alpha_cutoff.is_some() {
+                        MATERIAL_MASKED
+                    } else {
+                        0
+                    }
+                    | if r.double_sided {
+                        MATERIAL_DOUBLE_SIDED
+                    } else {
+                        0
+                    },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
                 contour_height: r.contour.map_or(0.0, |c| c.height),
@@ -349,7 +379,9 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 uv_v: [uv.transform[3], uv.transform[4], uv.transform[5]],
                 roughness: r.roughness,
                 occlusion_strength: uv.occlusion_strength,
-                pad: [0; 3],
+                alpha_cutoff: uv.alpha_cutoff.unwrap_or(0.0),
+                alpha: uv.alpha,
+                pad: 0,
             }
         })
         .collect()

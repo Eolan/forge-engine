@@ -81,6 +81,13 @@ pub struct ModelMaterial {
     pub occlusion_strength: f32,
     /// The emitted colour (sRGB), multiplied by `emissive`.
     pub emissive_texture: Option<TextureRef>,
+    /// Where the base colour's alpha (its factor times its texture's) cuts the surface out:
+    /// glTF's `MASK` with its `alphaCutoff`; `None` for an opaque one (and a blended one, which
+    /// Forge draws opaque, #171).
+    pub alpha_cutoff: Option<f32>,
+    /// Seen from both sides (glTF's `doubleSided`): not culled from behind, its normal turned
+    /// towards the viewer.
+    pub double_sided: bool,
 }
 
 pub use forge_core::material::Wrap;
@@ -136,7 +143,7 @@ pub struct Model {
     pub points: Vec<(String, Vec3)>,
     /// The images its materials sample.
     pub images: Vec<ModelImage>,
-    /// What the file asks for that Forge does not draw yet (alpha cut-outs, a second UV set),
+    /// What the file asks for that Forge does not draw yet (blended alpha, a second UV set),
     /// one line each, for the caller to log.
     pub unsupported: Vec<String>,
 }
@@ -391,12 +398,13 @@ fn read_material(
     let pbr = material.pbr_metallic_roughness();
     let strength = material.emissive_strength().unwrap_or(1.0);
     let label = material.name().unwrap_or("unnamed").to_owned();
-    if material.alpha_mode() != gltf::material::AlphaMode::Opaque {
+    if material.alpha_mode() == gltf::material::AlphaMode::Blend {
         unsupported.push(format!(
-            "material {label} of mesh {mesh}: alpha {:?} is drawn opaque",
-            material.alpha_mode()
+            "material {label} of mesh {mesh}: alpha Blend is drawn opaque"
         ));
     }
+    let alpha_cutoff = (material.alpha_mode() == gltf::material::AlphaMode::Mask)
+        .then(|| material.alpha_cutoff().unwrap_or(0.5));
     let mut texture = |slot: Option<Slot>, what: &str| {
         let (texture, tex_coord, transform) = slot?;
         if tex_coord != 0 {
@@ -468,6 +476,8 @@ fn read_material(
         occlusion_texture,
         occlusion_strength,
         emissive_texture,
+        alpha_cutoff,
+        double_sided: material.double_sided(),
     }
 }
 
@@ -692,8 +702,10 @@ mod tests {
         assert!(m.occlusion_texture.is_some());
         assert!(m.metallic_roughness_texture.is_none());
         assert!(m.emissive_texture.is_none());
-        assert_eq!(model.unsupported.len(), 2, "{:?}", model.unsupported);
-        assert!(model.unsupported.iter().any(|u| u.contains("alpha Mask")));
+        // MASK without a cutoff cuts at glTF's default, 0.5; one side only, glTF's default.
+        assert_eq!(m.alpha_cutoff, Some(0.5));
+        assert!(!m.double_sided);
+        assert_eq!(model.unsupported.len(), 1, "{:?}", model.unsupported);
         assert!(model.unsupported.iter().any(|u| u.contains("UV set 1")));
         // A file without UVs gives a mesh without them.
         let plain = load_glb(&triangle_glb()).unwrap();

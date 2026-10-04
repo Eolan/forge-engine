@@ -31,6 +31,11 @@ const MIN_LOG2: f32 = -16.0;
 /// holds everything above.
 const MAX_LOG2: f32 = 8.0;
 
+/// Metered frames the automatic exposure snaps to before it adapts at its speeds: the light
+/// probes converge over their first updates (#171), and a snap to the first frame alone left
+/// a third of a stop to adapt away over two seconds.
+const START_READINGS: u32 = 10;
+
 /// Exposure multiplier for an exposure value at ISO 100: the luminance `1.2 · 2^EV100`
 /// (cd/m²) saturates the sensor and maps to 1.
 pub fn exposure_from_ev100(ev100: f32) -> f32 {
@@ -144,11 +149,13 @@ pub struct AutoExposure {
     pub night_stops: f32,
     /// The metered EV100s where the night's darkening starts and where it is full.
     pub night_ev: (f32, f32),
-    started: bool,
+    /// Metered frames so far: the first [`START_READINGS`] snap to their target.
+    readings: u32,
 }
 
 impl AutoExposure {
-    /// Automatic exposure starting at `ev100`; the first metered frame snaps to its target.
+    /// Automatic exposure starting at `ev100`; the first [`START_READINGS`] metered frames
+    /// snap to their target.
     pub fn new(ev100: f32) -> Self {
         Self {
             ev100,
@@ -161,7 +168,7 @@ impl AutoExposure {
             speed_brighten: 0.8,
             night_stops: 0.0,
             night_ev: (8.0, -2.0),
-            started: false,
+            readings: 0,
         }
     }
 
@@ -189,7 +196,7 @@ impl AutoExposure {
             });
         if under {
             self.target_ev100 = (self.ev100 - 12.0).clamp(self.range.0, self.range.1);
-            if !self.started {
+            if self.readings == 0 {
                 self.ev100 = self.target_ev100;
             }
         } else if let Some(luminance) =
@@ -200,10 +207,10 @@ impl AutoExposure {
             let night = ((from - metered) / (from - full)).clamp(0.0, 1.0);
             self.target_ev100 =
                 (metered + night * self.night_stops).clamp(self.range.0, self.range.1);
-            if !self.started {
-                self.started = true;
+            if self.readings < START_READINGS {
                 self.ev100 = self.target_ev100;
             }
+            self.readings = self.readings.saturating_add(1);
         }
         let speed = if self.target_ev100 > self.ev100 {
             self.speed_darken
@@ -433,6 +440,12 @@ mod tests {
     #[test]
     fn adaptation_snaps_first_then_converges_without_overshoot() {
         let mut auto = AutoExposure::new(10.0);
+        // The first readings each snap: the scene's light is still settling (#171).
+        let settling = LuminanceHistogram::from_samples([(1000.0, 100)], 1.0e-4);
+        for _ in 1..START_READINGS {
+            auto.update(Some(&settling), 1.0 / 60.0);
+        }
+        assert!((auto.ev100 - ev100_from_luminance(1000.0)).abs() < 0.05);
         let bright = LuminanceHistogram::from_samples([(4000.0, 100)], 1.0e-4);
         auto.update(Some(&bright), 1.0 / 60.0);
         let target = ev100_from_luminance(4000.0);

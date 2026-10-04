@@ -396,9 +396,12 @@ struct Args {
     /// devices without ray queries have none).
     #[arg(long)]
     no_probes: bool,
-    /// Rays per probe and frame (64 to 256).
-    #[arg(long, default_value_t = ProbeParams::default().rays)]
-    probe_rays: u32,
+    /// Rays per probe and frame (64 to 256): 128, and 256 in the models lab's rooms,
+    /// whose probes, lit through a few openings and seen at an indoor exposure, shimmered with
+    /// 128 (#171: 7.5 % of a still view's pixels changed over the jitter's cycle, 2.6 % with
+    /// 256, as many as with no probes at all).
+    #[arg(long)]
+    probe_rays: Option<u32>,
     /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
     #[arg(long, default_value_t = ProbeParams::default().cascades)]
     probe_cascades: u32,
@@ -1014,8 +1017,15 @@ impl Gallery {
         }
         // The probes trace the scene's TLAS (issue #53).
         let probes_on = !args.no_probes;
+        let probe_rays = args.probe_rays.unwrap_or(
+            if args.lab == Some(lab::LabScene::Models) && lab::models::room_shown() {
+                256
+            } else {
+                ProbeParams::default().rays
+            },
+        );
         anyhow::ensure!(
-            (64..=256).contains(&args.probe_rays),
+            (64..=256).contains(&probe_rays),
             "--probe-rays takes 64 to 256"
         );
         anyhow::ensure!(
@@ -1029,7 +1039,7 @@ impl Gallery {
         );
         let probes = if ctx.device.features().ray_query && scene.rays().is_some() {
             let params = ProbeParams {
-                rays: args.probe_rays,
+                rays: probe_rays,
                 cascades: args.probe_cascades,
                 cadence: args.probe_cadence,
                 ..ProbeParams::default()
@@ -1414,6 +1424,18 @@ impl Demo for Gallery {
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::KeyI => self.sky_light = !self.sky_light,
+            // Where the camera is, as `--view` takes it: to start a run where something was seen.
+            KeyCode::F9 => {
+                let (p, c) = (self.camera.position, &self.camera);
+                tracing::info!(
+                    "the view: --view={:.2},{:.2},{:.2},{:.1},{:.1}",
+                    p.x,
+                    p.y,
+                    p.z,
+                    c.yaw.to_degrees(),
+                    c.pitch.to_degrees()
+                );
+            }
             // The real sky (D-046): the catalogue's stars and the Moon's albedo, or not.
             KeyCode::Period => {
                 if let Some(night) = self.night.as_mut().filter(|n| n.has_real()) {

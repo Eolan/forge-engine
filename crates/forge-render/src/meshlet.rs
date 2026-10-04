@@ -94,6 +94,9 @@ impl CullFlags {
 /// `FLAG_SW_RASTER` in the shader: set by the renderer, from [`DrawParams::sw_raster`], in both
 /// passes' frame blocks.
 const FLAG_SW_RASTER: u32 = 512;
+/// `FLAG_CUTOUTS` in the shader: set by the renderer when the scene has cut-out or double-sided
+/// rows ([`MeshletScene::cutouts`], #171).
+const FLAG_CUTOUTS: u32 = 1 << 22;
 /// `FLAG_PREV_PYRAMID` in the shader: set by the renderer when pass 1 has a previous pyramid.
 const FLAG_PREV_PYRAMID: u32 = 2048;
 /// `FLAG_STREAMING` in the shader: set by the renderer for a streamed scene (the LOD cut
@@ -1167,6 +1170,7 @@ impl MeshletSceneBuilder {
                 .enumerate()
                 .map(|(m, mesh)| {
                     let meshlets = clusters(mesh);
+                    let uvs = mesh.uvs != 0;
                     let terrain = mesh.radius > 1000.0;
                     let budget = if terrain {
                         raytrace::TERRAIN_BUDGET
@@ -1175,9 +1179,9 @@ impl MeshletSceneBuilder {
                     };
                     let mut cut = match grouped.get(&m) {
                         Some(&(error, budget)) => {
-                            raytrace::mesh_cut_at(meshlets, &self.store, error, budget)?
+                            raytrace::mesh_cut_at(meshlets, &self.store, error, budget, uvs)?
                         }
-                        None => raytrace::mesh_cut(meshlets, &self.store, budget)?,
+                        None => raytrace::mesh_cut(meshlets, &self.store, budget, uvs)?,
                     };
                     if terrain {
                         cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
@@ -1407,6 +1411,7 @@ impl MeshletSceneBuilder {
                 "materials",
             )?,
             material_count: self.materials.len() as u32,
+            cutouts: self.materials.iter().any(GpuMaterial::cut_out),
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -1581,6 +1586,9 @@ pub struct MeshletScene {
     materials: Buffer,
     /// Rows in `materials`.
     pub material_count: u32,
+    /// Whether a row is cut out or double-sided: its clusters then take their own raster
+    /// (#171), which a scene without any skips.
+    pub cutouts: bool,
     textures: Option<TextureSet>,
     /// Instances.
     pub instance_count: u32,
@@ -2108,6 +2116,8 @@ pub struct MeshletRenderer {
     /// The draw pipelines: mesh shaders, or vertex + fragment on the fallback path.
     pipeline_solid: Pipeline,
     pipeline_wire: Pipeline,
+    /// The cut-out and double-sided clusters' draw (#171): no face culled, fragments tested.
+    pipeline_cutouts: Pipeline,
     pipeline_hzb: Pipeline,
     pipeline_cull: Pipeline,
     /// Instance cull 2: the instances pass 1 deferred, against this frame's pyramid (issue #38).
@@ -2342,34 +2352,51 @@ impl MeshletRenderer {
             )?,
             "cluster cull (streamed)",
         )?;
-        let make_pipeline = |wireframe: bool| {
-            let name = if wireframe {
-                "meshlets wire"
-            } else {
-                "meshlets"
-            };
+        // The cut-outs' raster (#171): the clusters of cut-out or double-sided rows, no face
+        // culled, their fragments tested (`cutout_kept` in the shader).
+        let (cutout_geometry_entry, cutout_fragment_entry) = match path {
+            GeometryPath::MeshShader => ("mesh_cutout_main", "frag_cutout_main"),
+            GeometryPath::IndirectCount => ("vertex_cutout_main", "frag_fallback_cutout_main"),
+        };
+        let cutout_geometry = device.create_shader_module(
+            &shaders.compile("meshlet.slang", cutout_geometry_entry, geometry_stage)?,
+            cutout_geometry_entry,
+        )?;
+        let cutout_frag = device.create_shader_module(
+            &shaders.compile(
+                "meshlet.slang",
+                cutout_fragment_entry,
+                ShaderStage::Fragment,
+            )?,
+            cutout_fragment_entry,
+        )?;
+        let make_pipeline = |stages: [(vk::ShaderModule, &str); 2],
+                             cull_mode: vk::CullModeFlags,
+                             wireframe: bool,
+                             name: &str| {
+            let [geometry, fragment] = stages;
             let color_formats = &[vk::Format::R32_UINT];
             let push_constant_bytes = std::mem::size_of::<Push>() as u32;
             match path {
                 GeometryPath::MeshShader => device.create_mesh_pipeline(&MeshPipelineDesc {
                     task: None,
-                    mesh: (geometry, geometry_entry),
-                    fragment: (frag, fragment_entry),
+                    mesh: geometry,
+                    fragment,
                     color_formats,
                     depth_format: Some(vk::Format::D32_SFLOAT),
                     push_constant_bytes,
-                    cull_mode: vk::CullModeFlags::BACK,
+                    cull_mode,
                     wireframe,
                     depth_test: true,
                     name,
                 }),
                 GeometryPath::IndirectCount => device.create_vertex_pipeline(&VertexPipelineDesc {
-                    vertex: (geometry, geometry_entry),
-                    fragment: (frag, fragment_entry),
+                    vertex: geometry,
+                    fragment,
                     color_formats,
                     depth_format: Some(vk::Format::D32_SFLOAT),
                     push_constant_bytes,
-                    cull_mode: vk::CullModeFlags::BACK,
+                    cull_mode,
                     wireframe,
                     depth_test: true,
                     alpha_blend: false,
@@ -2377,8 +2404,18 @@ impl MeshletRenderer {
                 }),
             }
         };
-        let pipeline_solid = make_pipeline(false)?;
-        let pipeline_wire = make_pipeline(true)?;
+        let stages = [(geometry, geometry_entry), (frag, fragment_entry)];
+        let pipeline_solid = make_pipeline(stages, vk::CullModeFlags::BACK, false, "meshlets")?;
+        let pipeline_wire = make_pipeline(stages, vk::CullModeFlags::BACK, true, "meshlets wire")?;
+        let pipeline_cutouts = make_pipeline(
+            [
+                (cutout_geometry, cutout_geometry_entry),
+                (cutout_frag, cutout_fragment_entry),
+            ],
+            vk::CullModeFlags::NONE,
+            false,
+            "meshlet cut-outs",
+        )?;
         let pipeline_hzb = device.create_compute_pipeline(&ComputePipelineDesc {
             shader: (hzb, "hzb_main"),
             push_constant_bytes: std::mem::size_of::<HzbPush>() as u32,
@@ -2477,6 +2514,8 @@ impl MeshletRenderer {
         for module in [
             geometry,
             frag,
+            cutout_geometry,
+            cutout_frag,
             hzb,
             cull,
             cull_deferred,
@@ -2597,6 +2636,7 @@ impl MeshletRenderer {
             path,
             pipeline_solid,
             pipeline_wire,
+            pipeline_cutouts,
             pipeline_hzb,
             pipeline_cull,
             pipeline_cull_deferred,
@@ -2916,6 +2956,10 @@ impl MeshletRenderer {
         flags.0 &= !FLAG_SW_RASTER;
         if self.software_raster(params) {
             flags.0 |= FLAG_SW_RASTER;
+        }
+        flags.0 &= !FLAG_CUTOUTS;
+        if scene.cutouts {
+            flags.0 |= FLAG_CUTOUTS;
         }
         flags.0 &= !FLAG_PREV_PYRAMID;
         if prev.is_some() {
@@ -4103,6 +4147,14 @@ impl MeshletRenderer {
         let capacity = self.visible_target;
         let extent = params.extent;
         let push = self.push(pass.frame_address);
+        // The cut-out clusters' draw (#171), when the scene has any: their fragments read the
+        // visible list and the instances too.
+        let cutouts = params.scene.cutouts.then_some(&self.pipeline_cutouts);
+        let fragment = if cutouts.is_some() {
+            S::FRAGMENT_SHADER
+        } else {
+            S::NONE
+        };
         let MeshPass {
             io,
             args_offset,
@@ -4117,17 +4169,29 @@ impl MeshletRenderer {
                     BufferAccess::IndirectArgsAndShaderRead(S::MESH_SHADER_EXT),
                 )
                 .buffer(io.raster, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
-                .buffer(io.visible, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
+                .buffer(
+                    io.visible,
+                    BufferAccess::ShaderRead(S::MESH_SHADER_EXT | fragment),
+                )
                 .buffer(io.pool, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
                 .buffer(io.page_table, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
-                .buffer_if(io.instances, BufferAccess::ShaderRead(S::MESH_SHADER_EXT)),
+                .buffer_if(
+                    io.instances,
+                    BufferAccess::ShaderRead(S::MESH_SHADER_EXT | fragment),
+                ),
             // The fallback's draws carry the pool offsets: no page-table read.
             Some(draws) => builder
                 .buffer(io.clusters, BufferAccess::IndirectArgs)
                 .buffer(draws, BufferAccess::IndirectArgs)
-                .buffer(io.visible, BufferAccess::ShaderRead(S::VERTEX_SHADER))
+                .buffer(
+                    io.visible,
+                    BufferAccess::ShaderRead(S::VERTEX_SHADER | fragment),
+                )
                 .buffer(io.pool, BufferAccess::IndexAndShaderRead(S::VERTEX_SHADER))
-                .buffer_if(io.instances, BufferAccess::ShaderRead(S::VERTEX_SHADER)),
+                .buffer_if(
+                    io.instances,
+                    BufferAccess::ShaderRead(S::VERTEX_SHADER | fragment),
+                ),
         };
         builder
             .image(io.visibility, ImageAccess::ColorAttachment)
@@ -4168,25 +4232,30 @@ impl MeshletRenderer {
                     .color_attachments(&color)
                     .depth_attachment(&depth);
                 commands.begin_rendering(&info);
-                commands.bind_pipeline(pipeline);
                 commands.set_viewport_full(extent);
-                commands.push_constants(pipeline, &push);
-                let result = match io.draws {
-                    None => commands.draw_mesh_tasks_indirect(clusters, args_offset),
-                    Some(draws) => {
-                        let draws = resources.buffer(draws);
-                        commands.bind_index_buffer(triangles, 0, vk::IndexType::UINT8_KHR);
-                        commands.draw_indexed_indirect_count(
-                            draws,
-                            0,
-                            clusters,
-                            args_offset + 12,
-                            capacity,
-                            DRAW_COMMAND_BYTES,
-                        );
-                        Ok(())
-                    }
-                };
+                let mut result = Ok(());
+                // The clusters, then over the same list the cut-out ones (each pipeline's
+                // shaders skip the other's clusters).
+                for pipeline in std::iter::once(pipeline).chain(cutouts) {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &push);
+                    result = result.and(match io.draws {
+                        None => commands.draw_mesh_tasks_indirect(clusters, args_offset),
+                        Some(draws) => {
+                            let draws = resources.buffer(draws);
+                            commands.bind_index_buffer(triangles, 0, vk::IndexType::UINT8_KHR);
+                            commands.draw_indexed_indirect_count(
+                                draws,
+                                0,
+                                clusters,
+                                args_offset + 12,
+                                capacity,
+                                DRAW_COMMAND_BYTES,
+                            );
+                            Ok(())
+                        }
+                    });
+                }
                 commands.end_rendering();
                 result
             });

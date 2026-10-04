@@ -566,7 +566,8 @@ device-local memory, copied to a cached readback buffer per frame slot and read 
 frames later, no stall): the black bin is ignored, the key is the log-average of the
 samples between the 50th and 98th percentiles of the rest, EV100 follows it at 1.5 per
 second towards darker and 0.8 per second towards brighter (Narkowicz 2016), with
-compensation and a clamp, and snaps on the first metered frame. The adaptation runs on
+compensation and a clamp, and snaps over the first ten metered frames (one until #171, while
+the light probes converge). The adaptation runs on
 the CPU (unit-tested, deterministic under `--fixed-step`); a GPU-resident loop is the
 option if the two-frame latency ever matters. Temporal filters rescale their history by
 the ratio of exposures. **The display transform is data** chosen at run time: AgX (engine
@@ -2348,6 +2349,20 @@ the material properties the artist gave are kept wherever the file has them.
   - `GpuMaterial` grows from 112 to 176 bytes.
 - **The creatures:** unwrapped and baked in Blender (`docs/demos/physics-lab.md`, "Their
   textures"). The procedural wood and fur of the first step are gone.
+
+**Built, cut-outs and double-sided rows (#171, 2026-10-04):** the owner asked for Sponza
+fixed fully, and its foliage and chains are glTF `MASK`.
+- **Rows:** a row with `alphaCutoff` (`MATERIAL_FLAG_MASKED`) or `doubleSided`
+  (`MATERIAL_FLAG_DOUBLE_SIDED`) keeps both in `GpuMaterial`'s padding, so the size is
+  unchanged.
+- **Raster:** their clusters take a hardware raster of their own: no face culled, the
+  fragments tested (`docs/ARCHITECTURE.md`).
+- **Rays:** the rays test the same texels at the ray-traced copy's UVs.
+- **Our own models:** Blender exports every material double-sided, and our closed models are
+  now exported, and their files set, one-sided.
+- **Still drawn opaque, and logged:** blending (`BLEND`).
+- **Mip coverage:** a cut-out's mips average its alpha, so it thins with distance.
+  Coverage-preserving mips wait until a model shows it.
 
 ## D-048 — Reference models from outside: the Khronos glTF sample assets ✅ (proposed and accepted 2026-10-04)
 

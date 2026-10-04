@@ -131,8 +131,15 @@ public struct Material
     public float3 uv_v;             // v' = dot(uv_v, (u, v, 1))
     public float roughness;
     public float occlusion_strength;
-    public uint3 pad;
+    public float alpha_cutoff; // MATERIAL_FLAG_MASKED: cut out under this base colour alpha (#171)
+    public float alpha;        // the base colour factor's alpha
+    public uint pad;
 };
+
+static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render::material
+static const uint MATERIAL_FLAG_UV = 2;         // the textures read the mesh's UVs (D-047)
+static const uint MATERIAL_FLAG_MASKED = 4;     // cut out by the base colour's alpha (#171)
+static const uint MATERIAL_FLAG_DOUBLE_SIDED = 8; // drawn from both sides (#171)
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
 public static const uint MATERIAL_CLASS_ICE = 1;
@@ -215,6 +222,8 @@ public static const uint FLAG_INSTANCE_OCCLUSION = 524288;
 public static const uint FLAG_HIDDEN_INSTANCES = 1048576;
 // A cell cull tests the instances 64 at a time before instance cull 1 (issue #38).
 public static const uint FLAG_INSTANCE_CELLS = 2097152;
+// The scene has cut-out or double-sided rows: their clusters take the cut-outs' raster (#171).
+public static const uint FLAG_CUTOUTS = 4194304;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -259,7 +268,13 @@ public struct RtMesh
     public uint first_triangle;
     public float cut_error;  // how far the cut may stand from the drawn surface, object space
     public float shadow_start; // how far its surfaces' shadow rays start, object space (0: SHADOW_BIAS; terrain, #96)
+    public uint first_uv;      // its first vertex's UV in `RtScene::uvs`, RT_NO_UVS without them (#171)
+    public uint pad0;
+    public uint pad1;
+    public uint pad2;
 };
+
+static const uint RT_NO_UVS = 0xFFFFFFFFu;
 
 public struct RtScene
 {
@@ -267,6 +282,8 @@ public struct RtScene
     public uint* indices;     // three a triangle, local to the mesh
     public uint* sections;    // one a triangle: the row after the instance's first it takes
     public RtMesh* meshes;
+    public float2* uvs;       // the meshes with UVs' (#171)
+    public uint64_t pad;
 };
 
 // Every matrix is camera-relative (D-004, issue #93): the camera stands at the origin of the
@@ -433,6 +450,20 @@ float2 paged_uv(Frame* f, uint stream, uint i)
 uint triangle_section(Meshlet m, uint t)
 {
     return t < ((m.section >> 16) & 0xFFu) ? (m.section & 0xFFu) : ((m.section >> 8) & 0xFFu);
+}
+
+// What of MATERIAL_FLAG_MASKED and MATERIAL_FLAG_DOUBLE_SIDED the rows of cluster `m` of
+// instance `inst` set (#171): its two sections' (the second only when some triangle takes it).
+// Such a cluster takes the cut-outs' raster, never the software one, and is not cone-culled.
+uint cluster_cutouts(Frame* f, Instance inst, Meshlet m)
+{
+    if ((f[0].flags & FLAG_CUTOUTS) == 0)
+        return 0u;
+    const uint cut = MATERIAL_FLAG_MASKED | MATERIAL_FLAG_DOUBLE_SIDED;
+    uint flags = f[0].materials[inst.material + (m.section & 0xFFu)].flags & cut;
+    if (((m.section >> 16) & 0xFFu) < m.triangle_count)
+        flags |= f[0].materials[inst.material + ((m.section >> 8) & 0xFFu)].flags & cut;
+    return flags;
 }
 
 // The 16-bit octahedral normal of a paged vertex (forge_geom::page::decode_normal).
@@ -817,6 +848,7 @@ struct ClusterVerdict
     uint vertex_count;
     uint payload;      // where its payload lies in the pool, in bytes (`payload_base`)
     uint lod_level;
+    uint cutouts;      // its rows' MATERIAL_FLAG_MASKED and MATERIAL_FLAG_DOUBLE_SIDED (`cluster_cutouts`)
 };
 
 // Largest cluster the software rasteriser takes, in pixels across its bounding rectangle
@@ -850,6 +882,7 @@ void describe_cluster(Frame* f, inout ClusterVerdict v, Meshlet m)
     v.vertex_count = m.vertex_count;
     v.payload = payload_base(f, m);
     v.lod_level = m.lod_level;
+    v.cutouts = cluster_cutouts(f, f[0].instances[v.instance], m);
 }
 
 // Pass 2's test of a cluster pass 1 did not draw: this frame's pyramid. With
@@ -869,7 +902,8 @@ void test_this_frame(Frame* f, inout ClusterVerdict v, float3 center, float radi
 void test_density(Frame* f, inout ClusterVerdict v, float3 center, float radius)
 {
     v.dense = v.draw && dense_cluster(f, center, radius, v.triangle_count);
-    v.software = v.dense && (f[0].flags & FLAG_SW_RASTER) != 0;
+    // A cut-out cluster takes the hardware raster's cut-outs pipeline (#171).
+    v.software = v.dense && (f[0].flags & FLAG_SW_RASTER) != 0 && v.cutouts == 0;
 }
 
 // Pass 2's cull of the `entry`-th cluster pass 1 left to it (issue #92): pass 1 selected it
@@ -970,7 +1004,9 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     // cutoff. A cutoff of 1 marks a cone wider than a hemisphere; meshoptimizer then leaves
     // the axis at zero, whose normalisation is NaN and would (silently) cull the meshlet:
     // skip the test. The apex is camera-relative: the camera is the origin.
-    if (visible && (f[0].flags & FLAG_CONE_CULLING) != 0 && m.cone_cutoff < 1.0)
+    // A double-sided cluster shows its back faces: no cone hides it (#171).
+    if (visible && (f[0].flags & FLAG_CONE_CULLING) != 0 && m.cone_cutoff < 1.0
+        && (v.cutouts & MATERIAL_FLAG_DOUBLE_SIDED) == 0)
     {
         float3 apex = pose_point(pose, m.cone_apex);
         float3 axis = normalize(mul(pose.frame, m.cone_axis));
@@ -1937,6 +1973,11 @@ void mesh_main(
     uint2 record = f[0].visible[slot];
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
     Instance inst = f[0].instances[record.x];
+    if (cluster_cutouts(f, inst, m) != 0)
+    {
+        SetMeshOutputCounts(0, 0); // drawn by `mesh_cutout_main` (#171)
+        return;
+    }
 
     SetMeshOutputCounts(m.vertex_count, m.triangle_count);
     uint base = payload_base(f, m);
@@ -1946,6 +1987,62 @@ void mesh_main(
         PagedVertex v = paged_vertex(f, base, thread);
         float3 relative = instance_point(f, inst, v.position);
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
+    }
+
+    for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
+    {
+        tris[t] = uint3(paged_index(f, base, m, t, 0), paged_index(f, base, m, t, 1), paged_index(f, base, m, t, 2));
+        prims[t].id = (slot << VISIBILITY_TRIANGLE_BITS) | t;
+    }
+}
+
+// The cut-outs' raster (#171): the clusters whose rows are cut out or double-sided, drawn by a
+// second pipeline over the same list with no face culling, its fragments tested by
+// `cutout_kept`. Kept apart so that the other clusters' fragment shader has no discard, which
+// would cost them the early depth test.
+struct CutoutVertexOut
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0; // the mesh's UV (0 without them)
+};
+
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(MESH_GROUP_SIZE, 1, 1)]
+void mesh_cutout_main(
+    uint thread : SV_GroupThreadID,
+    uint3 group : SV_GroupID,
+    out vertices CutoutVertexOut verts[MAX_VERTICES],
+    out indices uint3 tris[MAX_TRIANGLES],
+    out primitives PrimitiveOut prims[MAX_TRIANGLES])
+{
+    Frame* f = push.frame;
+    uint index = grid_index(group);
+    if (index >= pass_args(f)[3])
+    {
+        SetMeshOutputCounts(0, 0);
+        return;
+    }
+    uint slot = f[0].raster[index];
+    uint2 record = f[0].visible[slot];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    Instance inst = f[0].instances[record.x];
+    if (cluster_cutouts(f, inst, m) == 0)
+    {
+        SetMeshOutputCounts(0, 0); // drawn by `mesh_main`
+        return;
+    }
+
+    SetMeshOutputCounts(m.vertex_count, m.triangle_count);
+    uint base = payload_base(f, m);
+    bool uvs = f[0].meshes[inst.mesh].uvs != 0;
+
+    if (thread < m.vertex_count)
+    {
+        PagedVertex v = paged_vertex(f, base, thread);
+        float3 relative = instance_point(f, inst, v.position);
+        verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
+        verts[thread].uv = uvs ? paged_uv(f, uv_stream(base, m), thread) : float2(0.0);
     }
 
     for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
@@ -1980,6 +2077,39 @@ FallbackVertex vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV
     FallbackVertex o;
     o.position = mul(f[0].view_proj, float4(relative, 1));
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
+    // A cut-out cluster is drawn by `vertex_cutout_main` (#171): its triangles collapse here.
+    if ((f[0].flags & FLAG_CUTOUTS) != 0
+        && cluster_cutouts(f, inst, f[0].meshlets[record.y & MESHLET_INDEX_MASK]) != 0)
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+    return o;
+}
+
+struct FallbackCutoutVertex
+{
+    float4 position : SV_Position;
+    nointerpolation uint id_base : VISIBILITY_ID;
+    float2 uv : TEXCOORD0;
+};
+
+// `mesh_cutout_main` on the fallback path: the cut-out clusters' triangles, the others' collapsed.
+[shader("vertex")]
+FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV_VulkanInstanceID)
+{
+    Frame* f = push.frame;
+    uint2 record = f[0].visible[slot];
+    Instance inst = f[0].instances[record.x];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    PagedVertex v = paged_vertex(f, 0, vertex_index);
+    float3 relative = instance_point(f, inst, v.position);
+    FallbackCutoutVertex o;
+    o.position = mul(f[0].view_proj, float4(relative, 1));
+    o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
+    o.uv = float2(0.0);
+    uint base = payload_base(f, m);
+    if (f[0].meshes[inst.mesh].uvs != 0)
+        o.uv = paged_uv(f, uv_stream(base, m), vertex_index - base / PAGED_VERTEX_BYTES);
+    if (cluster_cutouts(f, inst, m) == 0)
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
     return o;
 }
 
@@ -1998,6 +2128,46 @@ uint frag_main(uint id : SV_PrimitiveID) : SV_Target
 uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint triangle : SV_PrimitiveID) : SV_Target
 {
     return id_base | triangle;
+}
+
+// Whether a fragment of the cut-outs' raster stays (#171): a single-sided row's back faces go
+// (the cut-outs' pipeline culls no face), and a cut-out row's pixels whose base colour alpha,
+// the factor's times its map's at the pixel's UV, falls under its cutoff.
+bool cutout_kept(Frame* f, uint id, float2 uv, bool front)
+{
+    uint slot = id >> VISIBILITY_TRIANGLE_BITS;
+    uint2 record = f[0].visible[slot];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    Instance inst = f[0].instances[record.x];
+    Material mat = f[0].materials[inst.material + triangle_section(m, id & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u))];
+    if (!front && (mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) == 0)
+        return false;
+    if ((mat.flags & MATERIAL_FLAG_MASKED) == 0)
+        return true;
+    float alpha = mat.alpha;
+    if (mat.albedo_texture != TEXTURE_NONE)
+    {
+        float2 t = float2(dot(mat.uv_u, float3(uv, 1.0)), dot(mat.uv_v, float3(uv, 1.0)));
+        alpha *= g_sampled_images[NonUniformResourceIndex(mat.albedo_texture)].Sample(g_samplers[NonUniformResourceIndex(mat.sampler)], t).a;
+    }
+    return alpha >= mat.alpha_cutoff;
+}
+
+[shader("fragment")]
+uint frag_cutout_main(float2 uv : TEXCOORD0, uint id : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
+{
+    if (!cutout_kept(push.frame, id, uv, front))
+        discard;
+    return id;
+}
+
+[shader("fragment")]
+uint frag_fallback_cutout_main(nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, uint triangle : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
+{
+    uint id = id_base | triangle;
+    if (!cutout_kept(push.frame, id, uv, front))
+        discard;
+    return id;
 }
 
 // ------------------------------------------------------------------- merge ---
@@ -2380,8 +2550,6 @@ float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p
 // shared by the normal map (colour and relief stay together), and the normals blended as
 // tangent-space vectors in the triplanar projection's convention.
 
-static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render::material
-static const uint MATERIAL_FLAG_UV = 2;         // the textures read the mesh's UVs (D-047)
 // How much more a metal's highlight weighs (forge_core::material::METAL_SPECULAR).
 static const float METAL_SPECULAR = 0.35;
 
@@ -3192,19 +3360,60 @@ float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter, float bias)
 
 // The rays trace the static structure, then the movers' (#79), rebuilt every frame.
 
-// Whether an opaque ray meets anything (a shadow ray: the first hit ends it).
+// The rays' flags: opaque, unless the scene has cut-out rows (#171). Then every triangle is a
+// candidate the query's loop keeps or passes (`ray_candidate_kept`), as an any-hit shader would.
+uint ray_opacity(Frame* f)
+{
+    return (f[0].flags & FLAG_CUTOUTS) != 0 ? RAY_FLAG_FORCE_NON_OPAQUE : RAY_FLAG_FORCE_OPAQUE;
+}
+
+// Whether a ray's candidate hit (barycentrics `b` on triangle `primitive` of instance `instance`)
+// stands: anywhere but on a cut-out row's texels whose base colour alpha falls under its cutoff,
+// read at the cut's UVs (#171). The finest level: a ray has no footprint to filter over.
+bool ray_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
+{
+    RtScene* rs = f[0].rt_scene;
+    Instance inst = f[0].instances[instance];
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    uint tri = mesh.first_triangle + primitive;
+    Material mat = f[0].materials[inst.material + rs[0].sections[tri]];
+    if ((mat.flags & MATERIAL_FLAG_MASKED) == 0)
+        return true;
+    float alpha = mat.alpha;
+    if (mat.albedo_texture != TEXTURE_NONE && mesh.first_uv != RT_NO_UVS)
+    {
+        float2 uv[3];
+        [unroll]
+        for (uint k = 0; k < 3; k++)
+            uv[k] = rs[0].uvs[mesh.first_uv + rs[0].indices[tri * 3 + k]];
+        float2 at = uv[0] + b.x * (uv[1] - uv[0]) + b.y * (uv[2] - uv[0]);
+        float2 t = float2(dot(mat.uv_u, float3(at, 1.0)), dot(mat.uv_v, float3(at, 1.0)));
+        alpha *= sample_image_level(mat.albedo_texture, mat.sampler, t, 0.0).a;
+    }
+    return alpha >= mat.alpha_cutoff;
+}
+
+// Whether a ray meets anything (a shadow ray: the first hit it keeps ends it).
 bool ray_blocked(Frame* f, RayDesc ray)
 {
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
-    q.Proceed();
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
+    while (q.Proceed())
+    {
+        if (ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         return true;
     if (f[0].tlas_movers == 0)
         return false;
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> m;
-    m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), RAY_FLAG_NONE, 0xFF, ray);
-    m.Proceed();
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> m;
+    m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), ray_opacity(f), 0xFF, ray);
+    while (m.Proceed())
+    {
+        if (ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
+            m.CommitNonOpaqueTriangleHit();
+    }
     return m.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
 
@@ -3226,10 +3435,12 @@ ClosestHit trace_closest(Frame* f, RayDesc ray)
     o.primitive = 0;
     o.barycentrics = 0.0;
     o.t = ray.TMax;
-    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    RayQuery<RAY_FLAG_NONE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
     while (q.Proceed())
     {
+        if (ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
@@ -3243,10 +3454,12 @@ ClosestHit trace_closest(Frame* f, RayDesc ray)
     {
         // Only what stands nearer than the static hit.
         ray.TMax = o.t;
-        RayQuery<RAY_FLAG_FORCE_OPAQUE> m;
-        m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), RAY_FLAG_NONE, 0xFF, ray);
+        RayQuery<RAY_FLAG_NONE> m;
+        m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), ray_opacity(f), 0xFF, ray);
         while (m.Proceed())
         {
+            if (ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
+                m.CommitNonOpaqueTriangleHit();
         }
         if (m.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
@@ -3298,7 +3511,9 @@ bool ray_back_face(Frame* f, uint instance, uint primitive, float3 direction)
         p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
     }
     float3 face = instance_vector(inst, cross(p[1] - p[0], p[2] - p[0]));
-    return dot(face, direction) > 0.0;
+    // A double-sided row has no back: its leaves are not the inside of anything (#171).
+    return dot(face, direction) > 0.0
+        && (f[0].materials[inst.material + rs[0].sections[tri]].flags & MATERIAL_FLAG_DOUBLE_SIDED) == 0;
 }
 
 RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin, float3 direction, float t)
@@ -3324,6 +3539,8 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
     hit.position = origin + direction * t;
     uint row = inst.material + rs[0].sections[tri];
     Material mat = f[0].materials[row];
+    if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0)
+        hit.back = false; // seen from either side, its normal facing the ray (#171)
     uint tint = inst.id;
     if (mat.class_index == MATERIAL_CLASS_LAYERED)
     {
@@ -3349,19 +3566,24 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
     return hit;
 }
 
+// The light `hit` sends back from the sun alone (and its own emission), in the resolve's units.
+float3 hit_sunlight(Frame* f, RayHit hit)
+{
+    float3 sun = normalize(f[0].sun_dir);
+    float ndl = max(dot(hit.n, sun), 0.0);
+    float shadow = ndl > 0.0 ? sun_shadow(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS) : 0.0;
+    return hit.albedo * ndl * shadow * f[0].sun_color.rgb + hit.emissive;
+}
+
 // The light `hit` sends back along the ray that met it (travelling along `direction`), in the
 // resolve's units: the sun through a shadow ray, and the sky's irradiance or, with probes,
 // what they measured there (issue #53: the light bounces again, one bounce a frame).
 float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 direction)
 {
-    float3 sun = normalize(f[0].sun_dir);
-    float ndl = max(dot(hit.n, sun), 0.0);
-    float shadow = ndl > 0.0 ? sun_shadow(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS) : 0.0;
     float3 ambient = sh_irradiance(sky, hit.n);
     if (probes != nullptr)
         ambient = probe_irradiance(probes, hit.position, hit.n, -direction, ambient);
-    float3 light = ndl * shadow * f[0].sun_color.rgb + ambient;
-    return hit.albedo * light + hit.emissive;
+    return hit_sunlight(f, hit) + hit.albedo * ambient;
 }
 
 // What the mirror ray from `origin` along `direction` meets (issue #50): the light leaving the
@@ -3594,6 +3816,14 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
         : -1.0;
     s.view = normalize(-surface_relative);
+    // A double-sided row seen from behind (#171): its normals turn to the viewer, and a normal
+    // map's frame with them (`shade_uv_mapped` builds it about `object_normal`).
+    if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0
+        && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), s.view) < 0.0)
+    {
+        s.n = -s.n;
+        s.object_normal = -s.object_normal;
+    }
     s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
     s.shore = resolve_push.shore;
@@ -3867,7 +4097,7 @@ struct ProbeTracePush
     ProbeField* field;
     float4* sky;      // the sky's irradiance and its table (sky.slang)
     uint probe_count; // probes of every cascade
-    uint pad;
+    uint first_update; // 1 on the first update after a reset (`Probes::update`)
 };
 
 [[vk::push_constant]]
@@ -3913,8 +4143,12 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         {
             RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, t);
             distance = hit.back ? -t : t;
+            // On the first update after a reset no probe has measured anything, and a hit's
+            // light would fall back to the open sky's, too bright indoors: the probes started
+            // in a white flash that took five frames to fade (#171). The sun alone instead:
+            // they start a little dark, and the next updates add the bounces.
             if (!hit.back)
-                radiance = hit_radiance(f, sky, field, hit, direction);
+                radiance = probe_push.first_update != 0 ? hit_sunlight(f, hit) : hit_radiance(f, sky, field, hit, direction);
         }
     }
     else if (!fixed)

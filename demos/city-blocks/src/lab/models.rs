@@ -28,9 +28,19 @@ const PLINTH_HALF: f32 = 0.6;
 const PLINTH_HEIGHT: f32 = 0.3;
 /// Models drawn at their own size, only alone (`--model`): scenes the camera stands in.
 const ROOMS: [&str; 1] = ["Sponza"];
+/// The triangles a room's meshes are cut to for the rays together: Sponza's 262 000 in full (#171).
+pub(crate) const ROOM_RAY_BUDGET: u32 = 300_000;
 
 /// The model `--model` shows alone, set once from the arguments.
 pub(crate) static FOCUS: OnceLock<Option<String>> = OnceLock::new();
+
+/// Whether `--model` shows a room ([`ROOMS`]): the camera indoors.
+pub(crate) fn room_shown() -> bool {
+    FOCUS
+        .get()
+        .and_then(Option::as_deref)
+        .is_some_and(|name| ROOMS.contains(&name))
+}
 
 /// A model found in `assets/external/`.
 pub(super) struct External {
@@ -47,6 +57,11 @@ pub(super) struct External {
 }
 
 impl External {
+    /// Whether it is a room ([`ROOMS`]): drawn at its own size, the camera inside.
+    pub(crate) fn is_room(&self) -> bool {
+        ROOMS.contains(&self.name.as_str())
+    }
+
     /// Where it stands and how large: scaled to fit [`FIT`] (rooms at their own size), its
     /// bounds' bottom middle at `at`.
     fn placed(&self, at: Vec3) -> Mat4 {

@@ -150,6 +150,10 @@ def main(out):
     buoyancy.data.materials.append(paint)
 
     bpy.ops.object.select_all(action="SELECT")
+    # Closed meshes: one-sided in the glTF (Forge draws a double-sided material's back faces, and
+    # gives it no inside for the light probes, #171); Blender's default exports them double-sided.
+    for m in bpy.data.materials:
+        m.use_backface_culling = True
     bpy.ops.export_scene.gltf(
         filepath=out,
         export_format="GLB",

@@ -206,6 +206,11 @@ The resolve is three kinds of pass:
   probes' own light for one more bounce, the sky-view table for misses), replace the sky's
   irradiance on the diffuse side. They bring the street's occlusion and the city's bounce
   light; beyond them the sky's irradiance takes over, and GTAO still marks the contacts.
+  **Their start** (#171): the first update after a reset lights its rays' hits by the sun
+  alone, since no probe has measured anything yet and a hit would otherwise borrow the open
+  sky's light, far too bright indoors. A young probe, in its first eight updates, keeps a
+  quarter of its maps per update, not the settled 0.97, so the bounces settle within ten
+  frames. The automatic exposure snaps to its first ten readings while they do.
 - **Ground in layers** (issue #42, D-028): a `layered` row names a layer map, a byte a texel,
   and each layer is the standard row after it; the layered pass blends the two heaviest
   layers around each pixel. A row's contour (`RenderLayer::contour`, #106) draws one layer by
@@ -231,6 +236,25 @@ pyramid to TAA, sees one image. The renderer runs it (`SwRaster::Auto`) when the
 frames held 1.5 M dense triangles or more, until they fall below 0.75 M: the raster pass and
 the merge cost about 0.02 ms, which a million dense triangles repay. It needs 64-bit buffer
 atomics; without them every cluster is drawn in hardware.
+
+**Cut-out and double-sided rows take a raster of their own** (#171, as Nanite bins its masked
+materials). A cluster whose two sections' rows include one (`MATERIAL_FLAG_MASKED`,
+`MATERIAL_FLAG_DOUBLE_SIDED`; found at cull time, so cooking knows nothing of materials) is
+never cone-culled and never goes to the software rasteriser. Each hardware pass draws its list
+twice:
+- The usual pipeline skips such clusters: the mesh shader emits no triangle for them, and
+  the fallback's vertex shader collapses theirs.
+- A second pipeline with no face culling draws only them, the UVs interpolated. Its fragment
+  shader discards a single-sided row's back faces and a cut-out row's texels whose base colour
+  alpha falls under the row's cutoff.
+
+The other clusters keep a fragment shader without `discard`, and with it the early depth test.
+A scene without such rows records no second draw. The rays meet the same surface:
+- With such rows, queries run with `FORCE_NON_OPAQUE`, and their loops keep a candidate unless
+  its row is cut out there. That reads the alpha at the cut's UVs (`RtScene::uvs`), as an
+  any-hit shader would.
+- A double-sided row's back is a front for the probes, not the inside of anything.
+- The resolve turns a double-sided row's normal towards the viewer.
 
 **Colour is physical and pre-exposed** (issue #7, D-022). Lights carry photometric units
 (the sun in lux, its disc in cd/m² from its solid angle) and every pass writes luminance

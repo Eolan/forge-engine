@@ -1276,17 +1276,37 @@ and SHA-256. The script checks each file and keeps those already there. The mode
   the UV row.
 - **`KHR_texture_transform`'s rotation had the wrong sign.** TextureTransformTest's arrows
   pointed at its red crosses. They now point at its green checks, as in Khronos's screenshot.
-- **Double-sided materials are drawn one-sided.** TextureSettingsTest shows its one red cross
-  on that row. Blender marks every material double-sided, so the importer does not warn of it.
-- **Alpha cut-outs are drawn opaque:** Sponza's foliage and chains, logged.
-- **Sponza's interior is dark at the lab's fixed exposure** (EV 15, sunny 16). The arcades
-  are lit only by light that has bounced several times off sandstone with an albedo near 0.2,
-  about 8 stops under the open ground. Metered from the scene (`--time-of-day 0.5`, EV
-  11.8), they read as in a photograph. The probes were measured and work. Two artefacts
-  remain (#171): bright slivers at the pillars' feet, where the 4 m probes leak the
-  courtyard's light, and the first ~50 frames, too bright while the probes start from the
-  open sky's light. With `--no-probes` the open sky's light reaches under the
-  arcade, too bright but nothing black.
+- **Double-sided materials and alpha cut-outs, drawn since #171.**
+  - TextureSettingsTest's double-sided row now shows its check, and Sponza's foliage and
+    chains are cut out.
+  - **Raster:** a cluster with a cut-out or double-sided row takes a second hardware pipeline
+    over the same list. It culls no face, and its fragments are tested: a single-sided row's
+    back faces and a cut-out row's texels under its `alphaCutoff` are discarded. The other
+    clusters keep a fragment shader without `discard`, and with it the early depth test.
+  - **Rays:** the shadow, probe and reflection rays test the same texels, as an any-hit
+    shader would. A double-sided row has no inside for the probes.
+  - **Our own models:** Blender exports every material double-sided, and our models are
+    closed. `assets/blender/*.py` now export them one-sided, and the five `.glb` files' flags
+    were set so; their geometry is unchanged.
+- **Sponza (#171).**
+  - **Dark at the lab's fixed exposure** (EV 15, sunny 16). The arcades are lit by light that
+    bounced several times off sandstone with an albedo near 0.2, about 8 stops under the open
+    ground. Metered from the scene (`--time-of-day 0.5`, EV 11.8), they read as in a
+    photograph.
+  - **Its traced copy is the drawn model.** Cut to the default 40 000 triangles, Sponza's
+    262 000 stood up to 0.7 m off. That left a dark band over a vault, and the probes saw gaps
+    in its walls. A room (`ROOMS`) is now cut to 300 000 triangles for the rays: all of it.
+  - **A glow along the curtains' hems:** probes under the lab's floor, lit by the void's sky,
+    leaked into everything within 4 m above it. The drawn floor is now 20 m deep, out of
+    their reach; its physics is unchanged.
+  - **The start:** the first ~50 frames were too bright, then dimmed over 200, 8 times
+    brighter at the first frame. See the probes' start in `docs/ARCHITECTURE.md`; the mean
+    brightness now holds within 1.5 % from the tenth frame.
+  - **Shimmer:** indoors, at the high exposure, the probes' 128 rays shimmered: 7.5 % of a
+    still view's pixels changed over TAA's 16-frame cycle. A room gets 256 rays (2.6 %, TAA's
+    own share on its fine textures).
+  - **Left as they are:** thin streaks of sun on the floor through the gaps beside the curtains
+    are sunlight; the dark iron braziers' bright rims are the sky they reflect at grazing angles.
 
 ![Sponza at frame 60 with the probes and without](images/physics-lab-models-sponza.png)
 

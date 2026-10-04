@@ -41,7 +41,7 @@ cargo run --release -p city-blocks
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
 what it drew, **[** / **]** LOD threshold, **T** anti-aliasing (DLAA where it runs, the default of an interactive run; TAA sharpened, plain, off: `--no-dlaa`, `--dlaa` in a scripted run, `--rcas STOPS`, half a stop by default, `--no-rcas`, `--taa-catmull-rom` for the history filter before Lanczos-3; D-045), **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass and the water, **Z** soft or hard shadows, **P** the probes' light, **U** that
-light alone, **Tab** wireframe, **G** tone curve, **.** the real night sky (`--real-sky`, D-046).
+light alone, **Tab** wireframe, **G** tone curve, **.** the real night sky (`--real-sky`, D-046), **F9** logs the view as `--view` takes it (to start a run where something was seen).
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.

@@ -108,6 +108,11 @@ pub(crate) enum LabScene {
 
 /// The floor's half side, metres.
 const FLOOR_HALF: f32 = 400.0;
+/// The drawn floor's half depth, metres (its physics stays a slab a metre thick): deep enough that
+/// the light probes under it, lit by the void's sky and meeting its underside, stand out of reach
+/// of the points above it. A metre down, they leaked that light into everything within 4 m of
+/// the floor: in Sponza a glow along the curtains' hems (#171).
+const FLOOR_DRAWN_HALF: f32 = 10.0;
 /// The pyramid's blocks: half their side, and the layers (the bottom one this many a side).
 const BLOCK_HALF: f32 = 0.4;
 const PYRAMID_LAYERS: u32 = 8;
@@ -238,7 +243,7 @@ fn drop_props() -> Vec<PropSpec> {
         PropSpec {
             name: "lab-floor".to_owned(),
             kind: PropKind::Block(Block {
-                half: [FLOOR_HALF, 0.5, FLOOR_HALF],
+                half: [FLOOR_HALF, FLOOR_DRAWN_HALF, FLOOR_HALF],
                 radius: 0.05,
                 segments: 64,
             }),
@@ -578,9 +583,9 @@ impl LabWorld {
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
-        let (floor, floor_half) = match kind {
-            LabScene::Fly | LabScene::Rocket => (FIELD, fly::FIELD_HALF),
-            _ => (FLOOR, FLOOR_HALF),
+        let (floor, floor_half, drawn_half) = match kind {
+            LabScene::Fly | LabScene::Rocket => (FIELD, fly::FIELD_HALF, 0.5),
+            _ => (FLOOR, FLOOR_HALF, FLOOR_DRAWN_HALF),
         };
         let floor_at = Vec3::new(0.0, floor_y - 0.5, 0.0);
         // None in space: the ship flies over a planet far below; none on the tank's bench nor in the
@@ -589,7 +594,10 @@ impl LabWorld {
         if !matches!(kind, LabScene::Space | LabScene::TankBench | LabScene::Room) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
-            statics.push((floor, Mat4::from_translation(floor_at)));
+            statics.push((
+                floor,
+                Mat4::from_translation(Vec3::new(0.0, floor_y - drawn_half, 0.0)),
+            ));
         }
         // The shapes, each with its origin where its mesh has its own: the barrel's and the
         // ball's at their bottom, the rocks' hulls from their meshes' vertices.
@@ -1802,6 +1810,18 @@ pub(crate) fn build(
             let mut textures = ModelTextures::new(&e.model, &e.name);
             for (k, mesh) in e.model.meshes.iter().enumerate() {
                 model_rows(&mut materials, &mut textures, e.props[k], mesh, true);
+            }
+            // A room is walked inside: its shadows and bounced light need its walls where they
+            // are drawn. Cut to the default 40 000 triangles, Sponza's 262 000 stood up to
+            // 0.7 m off, which left a dark band over a vault and let the probes see gaps (#171).
+            if e.is_room() {
+                let meshes: Vec<MeshId> = e
+                    .props
+                    .iter()
+                    .filter_map(|name| props.iter().position(|p| p.name == *name))
+                    .map(|i| ids[i])
+                    .collect();
+                builder.set_ray_group(&meshes, models::ROOM_RAY_BUDGET);
             }
         }
     }

@@ -94,7 +94,8 @@ struct TracePush {
     field: u64,
     sky: u64,
     probe_count: u32,
-    pad: u32,
+    /// 1 on the first update after a reset: no probe has measured anything yet.
+    first_update: u32,
 }
 
 /// Mirrors `WakePush` in `probe_update.slang` (#79).
@@ -431,7 +432,8 @@ impl Probes {
                 pad: 0,
             };
         }
-        self.reset = false;
+        // The first update after a reset lights its rays' hits by the sun alone (#171).
+        let first_update = std::mem::take(&mut self.reset);
         // One rotation per round of turns: each probe meets every rotation of the cycle.
         let rotation = frame_rotation(noise_frame / u64::from(p.cadence));
         let row = |r: usize| {
@@ -518,7 +520,7 @@ impl Probes {
                         field: address,
                         sky: sky.address,
                         probe_count: count,
-                        pad: 0,
+                        first_update: u32::from(first_update),
                     },
                 );
                 commands.dispatch(p.rays.div_ceil(TRACE_GROUP), spread[0], spread[1]);

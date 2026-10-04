@@ -109,6 +109,9 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
 // map keeps the shape of what surrounds the probe.
 static const uint BLEND_GROUP = DISTANCE_TILE * DISTANCE_TILE; // 256 threads
 static const float DISTANCE_SHARPNESS = 50.0;
+// The share of its maps a young probe's update keeps: after its eight young updates, its first
+// keeps 0.5^8, 0.4 %.
+static const float YOUNG_HYSTERESIS = 0.25;
 
 groupshared float3 s_dir[PROBE_MAX_RAYS];
 groupshared float4 s_ray[PROBE_MAX_RAYS];
@@ -133,8 +136,11 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
         return; // not its turn: its rays were not traced (issue #103)
     bool reset = slot.fresh || state == PROBE_RESET;
     // A settled probe's update comes every `cadence` frames and keeps hysteresis^cadence, so
-    // a change settles in the same time.
-    float h = reset ? 0.0 : (age > PROBE_SETTLE_UPDATES ? field[0].settled_hysteresis : field[0].hysteresis);
+    // a change settles in the same time. A young one keeps less (#171): its first updates
+    // measured surfaces whose own probes were not measured yet and lent them the open sky's
+    // light, too bright indoors, and at the settled hysteresis that start took 200 frames to
+    // wear off.
+    float h = reset ? 0.0 : (age > PROBE_SETTLE_UPDATES ? field[0].settled_hysteresis : min(field[0].hysteresis, YOUNG_HYSTERESIS));
     uint random = field[0].rays - PROBE_FIXED_RAYS;
     uint first = probe * field[0].rays + PROBE_FIXED_RAYS;
     for (uint i = thread; i < random; i += BLEND_GROUP)

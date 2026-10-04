@@ -391,6 +391,10 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **UVs quantised per cluster:** Brian Karis, Rune Stubbe and Graham Wihlidal, "Nanite: A Deep
     Dive", SIGGRAPH 2021 Advances in Real-Time Rendering: attributes stored per cluster in
     a few bits over the cluster's range.
+  - **Cut-outs in their own raster** (#171): the same talk's programmable raster bins.
+    Masked materials' clusters are drawn by a pipeline of their own, so the others keep the
+    early depth test. Their alpha is tested in the ray queries' candidate loops, as Vulkan's
+    `VK_KHR_ray_query` lets an inline query stand in for an any-hit shader.
 - **Clouds.** Andrew Schneider and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon:
   Zero Dawn", SIGGRAPH 2015 Advances in Real-Time Rendering: a layer from a weather map,
   Perlin–Worley shapes eroded by Worley noise, Beer's law with the powder term, temporal

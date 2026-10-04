@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use forge_geom::page::{UV_RANGE_BYTES, decode_uv, uv_offset};
 use forge_geom::{GpuMeshlet, PAGE_SIZE};
 use forge_gpu::{
     AccelerationStructure, BlasTriangles, Buffer, BufferAccess, BufferDesc, BufferHandle,
@@ -43,6 +44,9 @@ pub(crate) struct Cut {
     pub indices: Vec<u32>,
     /// Per triangle, its section (issue #41): the row after the instance's first it takes.
     pub sections: Vec<u32>,
+    /// Per vertex, its UV, when the mesh has them (D-047; empty otherwise): where a ray meets a
+    /// cut-out row, its alpha is read there (#171).
+    pub uvs: Vec<[f32; 2]>,
     /// The cut's object-space error.
     pub error: f32,
     /// How far the shadow rays of the mesh's drawn surfaces start off them, object space; 0
@@ -79,16 +83,23 @@ pub(crate) fn cut_error(meshes: &[&[GpuMeshlet]], budget: u32) -> f32 {
 }
 
 /// The finest cut of `meshlets` with at most `budget` triangles, read from `store`.
-pub(crate) fn mesh_cut(meshlets: &[GpuMeshlet], store: &PageStore, budget: u32) -> Result<Cut> {
-    mesh_cut_at(meshlets, store, cut_error(&[meshlets], budget), budget)
+pub(crate) fn mesh_cut(
+    meshlets: &[GpuMeshlet],
+    store: &PageStore,
+    budget: u32,
+    uvs: bool,
+) -> Result<Cut> {
+    mesh_cut_at(meshlets, store, cut_error(&[meshlets], budget), budget, uvs)
 }
 
-/// The cut of `meshlets` at `error`, read from `store` (`budget` only for the log).
+/// The cut of `meshlets` at `error`, read from `store` (`budget` only for the log), with its
+/// UVs when `uvs` (the mesh's pages carry them).
 pub(crate) fn mesh_cut_at(
     meshlets: &[GpuMeshlet],
     store: &PageStore,
     error: f32,
     budget: u32,
+    uvs: bool,
 ) -> Result<Cut> {
     let clusters: Vec<&GpuMeshlet> = meshlets
         .iter()
@@ -113,6 +124,7 @@ pub(crate) fn mesh_cut_at(
         positions: Vec::new(),
         indices: Vec::new(),
         sections: Vec::new(),
+        uvs: Vec::new(),
         error,
         shadow_start: 0.0,
         dynamic: false,
@@ -140,6 +152,16 @@ pub(crate) fn mesh_cut_at(
         );
         cut.sections
             .extend((0..m.triangle_count).map(|t| if t < split { a } else { b }));
+        if uvs {
+            let stream = base + uv_offset(m.vertex_count, m.triangle_count);
+            let word =
+                |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("4 bytes"));
+            let range = [0, 1, 2, 3].map(|k| f32::from_bits(word(stream + 4 * k)));
+            cut.uvs.extend(
+                (0..m.vertex_count as usize)
+                    .map(|v| decode_uv(word(stream + UV_RANGE_BYTES + 4 * v), range)),
+            );
+        }
     }
     Ok(cut)
 }
@@ -167,11 +189,17 @@ struct GpuRtMesh {
     first_triangle: u32,
     cut_error: f32,
     shadow_start: f32,
+    /// Its first vertex's UV in the UVs, [`NO_UVS`] without them (#171).
+    first_uv: u32,
+    pad: [u32; 3],
 }
+
+/// [`GpuRtMesh::first_uv`] of a mesh without UVs (`RT_NO_UVS` in the shader).
+const NO_UVS: u32 = u32::MAX;
 
 /// Mirrors `RtScene` in `meshlet.slang`: what a ray's hit reads to shade its triangle (issue
 /// #50): every cut's positions (three floats a vertex), indices (local to the mesh), sections
-/// (one per triangle) and the per-mesh offsets.
+/// (one per triangle), the per-mesh offsets and the UVs of the meshes with them (#171).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuRtScene {
@@ -179,6 +207,9 @@ struct GpuRtScene {
     indices: u64,
     sections: u64,
     meshes: u64,
+    /// Two floats a vertex, for the meshes with UVs (#171).
+    uvs: u64,
+    pad: u64,
 }
 
 /// The scene's structures.
@@ -192,10 +223,10 @@ pub struct SceneRays {
     /// Per mesh, its first vertex in `hit_positions`.
     first_vertices: Vec<u32>,
     /// The rest of the cuts' geometry for shading hits (held for `hit_record`, which points
-    /// into it: indices, then sections and the per-mesh offsets), and the record
+    /// into it: indices, then sections, the per-mesh offsets and the UVs), and the record
     /// (`GpuRtScene`).
     _hit_indices: Buffer,
-    _hit_data: [Buffer; 2],
+    _hit_data: [Buffer; 3],
     hit_record: Buffer,
     /// Bytes of the hit data.
     pub hit_bytes: u64,
@@ -234,6 +265,7 @@ impl SceneRays {
         let mut positions: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut sections: Vec<u32> = Vec::new();
+        let mut uvs: Vec<[f32; 2]> = Vec::new();
         let mut meshes = Vec::with_capacity(cuts.len());
         for c in cuts {
             meshes.push(GpuRtMesh {
@@ -241,7 +273,14 @@ impl SceneRays {
                 first_triangle: sections.len() as u32,
                 cut_error: c.error,
                 shadow_start: c.shadow_start,
+                first_uv: if c.uvs.is_empty() {
+                    NO_UVS
+                } else {
+                    uvs.len() as u32
+                },
+                pad: [0; 3],
             });
+            uvs.extend_from_slice(&c.uvs);
             positions.extend(c.positions.iter().flatten());
             indices.extend_from_slice(&c.indices);
             sections.extend_from_slice(&c.sections);
@@ -300,6 +339,13 @@ impl SceneRays {
                 MemoryCategory::Geometry,
                 "ray hit meshes",
             )?,
+            // At least one: an empty buffer has no address.
+            device.create_buffer_with_data(
+                if uvs.is_empty() { &[[0.0; 2]] } else { &uvs },
+                storage,
+                MemoryCategory::Geometry,
+                "ray hit UVs",
+            )?,
         ];
         let hit_record = device.create_buffer_with_data(
             &[GpuRtScene {
@@ -307,6 +353,8 @@ impl SceneRays {
                 indices: hit_indices.address(),
                 sections: hit_data[0].address(),
                 meshes: hit_data[1].address(),
+                uvs: hit_data[2].address(),
+                pad: 0,
             }],
             storage,
             MemoryCategory::Geometry,
