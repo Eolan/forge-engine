@@ -241,6 +241,10 @@ runs are 3000 frames of the loop). Its worst frames take 3.94 ms. On the static 
 probes cost 0.77 ms at 1600 × 900 (1.83 → 2.60) and 1.05 ms at 1440p (3.06 → 4.10), of which
 0.46 ms is the sampling. A pass of its own saves only 0.09 ms of it (#70, measured after #68):
 the lookup's cost is its own work, not the resolve's registers.
+Skipping the probes whose trilinear weight is under 5 % before their fetches, those up to 10 %
+fading in (#70, 2026-10-04): the south view at 1440p 3.58 → 3.44–3.49 ms (`shading/standard`
+0.805 → 0.71, 300 frames, alternating runs), the capture's ꟻLIP mean 0.008. At 2 % it saved
+0.05 ms.
 With the sky's reflection dimmed by the probes (#68: a second direction in their lookup,
 `shading/standard` 0.67 → 0.80 ms) it takes 3.81 ms, against 3.66 ms in the same runs before;
 the south view at 1440p 4.13 → 4.24 ms.

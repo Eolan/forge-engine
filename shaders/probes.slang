@@ -56,6 +56,9 @@ public float probe_age(float w)
 
 // Distances a ray stores for a miss and at most (halves).
 public static const float PROBE_MISS_DISTANCE = 60000.0;
+// The trilinear weight under which a probe is left out of a lookup (#70), fading in up to twice
+// it: its fetches cost as much as a heavy probe's for a share of the light under 5 %.
+static const float PROBE_LEAST_WEIGHT = 0.05;
 
 // Mirrors `GpuCascade` in crates/forge-render/src/probes.rs.
 public struct ProbeCascade
@@ -297,6 +300,12 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     for (uint k = 0; k < 8; k++)
     {
         int3 corner = int3(int(k & 1u), int((k >> 1) & 1u), int(k >> 2));
+        // A probe whose trilinear weight is negligible is skipped before its fetches (#70), and one
+        // just over it fades in, so its light does not switch on along a line.
+        float3 tri = max(lerp(1.0 - alpha, alpha, float3(corner)), 0.001);
+        float trilinear = tri.x * tri.y * tri.z;
+        if (trilinear < PROBE_LEAST_WEIGHT)
+            continue;
         int3 cell = base + corner;
         int3 slot = base_slot + corner;
         slot = select(slot >= counts, slot - counts, slot);
@@ -307,7 +316,6 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
             continue;
         found = true;
         float3 position = (float3(cell) + 0.5) * s + data.xyz;
-        float3 tri = max(lerp(1.0 - alpha, alpha, float3(corner)), 0.001);
         // Probes behind the surface count less, smoothly.
         float3 to_probe = normalize(position - p);
         float facing = (dot(to_probe, n) + 1.0) * 0.5;
@@ -330,7 +338,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         // Weights that are already small shrink further: a faint leak reads as light in the dark.
         if (w < 0.2)
             w *= w * w / (0.2 * 0.2);
-        w *= tri.x * tri.y * tri.z;
+        w *= trilinear * saturate(trilinear / PROBE_LEAST_WEIGHT - 1.0);
         float2 corner_texel = float2(tile * IRRADIANCE_TILE);
         float3 e = sample_image_level(field[0].irradiance_image, SAMPLER_LINEAR_CLAMP,
             (corner_texel + 1.0 + texel_n) * field[0].irradiance_texel, 0.0).rgb;

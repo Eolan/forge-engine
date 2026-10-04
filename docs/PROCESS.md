@@ -338,7 +338,9 @@ offset's rounding inside a cell, turned into pixels by the traced shadows' edges
 2026-10-02 (Tier 2 at `ec4e626`) it was 2 307–2 428 px in the city (ꟻLIP mean ≤ 0.0016, largest
 0.093) and 1 518–1 519 px in the ballad (≤ 0.0005, 0.29), as in #98 (2 486–2 730 and 1 519).
 TAA's sharpening (D-045) raised the city's to 4 013–4 193 px (≤ 0.0019, 0.106) on 2026-10-03,
-and it stood there after #161 (4 020–4 191; the ballad 1 513–1 514). A change of these numbers is what to look at. Run it for a change that touches how positions
+and it stood there after #161 (4 020–4 191; the ballad 1 513–1 514). The clouded sky's light
+(#163) took it to 4 467–4 747 px (≤ 0.0019, 0.101): brighter shade, the same residue. A change
+of these numbers is what to look at. Run it for a change that touches how positions
 reach the GPU, and in Tier 2, and put its lines in the report.
 
 **Debugging aids:**

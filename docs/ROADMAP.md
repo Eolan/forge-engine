@@ -145,7 +145,7 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
 - #39 waits for the RTX 3080, #67 and #28 for an AMD card: set aside by the owner for now
   (2026-10-02).
 - #71 closed by the owner (2026-10-02), not reported upstream.
-- #70 is parked.
+- #70: a cheaper lookup ✅ (2026-10-04, 0.14 ms at 1440p).
 - #124 stays unbuilt below its gate (recording 0.12 ms against 0.5).
 
 **Ideas for later** (the owner's inbox, `docs/TODO.md`, filed 2026-09-25 under the milestone
@@ -480,8 +480,8 @@ The items below are the phase's original outline; the plan above orders them.
    light: sky occlusion at street scale and bounce light that follow the sun through `--day`,
    1.05 ms at 1440p. The sky's reflection dims with them ✅ (#68: the probes' light towards
    the mirror direction over the open sky's, 0.11 ms at 1440p). Woken where movers pass ✅ (#69,
-   2026-10-02, with #79). Next for them: a cheaper lookup (#70: a pass of its own saved only
-   0.09 ms).
+   2026-10-02, with #79). A cheaper lookup ✅ (#70: the probes of under 5 % of the weight
+   skipped, 0.14 ms at 1440p; a pass of its own had saved only 0.09 ms).
 2. Shadows: the sun's by ray query ✅ (issue #45, 2026-09-25, D-029: a BLAS per mesh from a cut
    of its DAG, a TLAS over the city's million instances, 0.14 ms of rays at 1440p; the
    ballad's rocks in #46, 0.03 ms); soft shadows ✅ (issue #54: the sun's disc over TAA's
