@@ -722,7 +722,9 @@ the same tables:
   depth, a 1024 × 32 atlas): the light gathered and the mean transmittance from the camera
   to each slice.
 - **A compose pass:** the sky and the sun's disc where the depth is empty; elsewhere
-  `colour × T + L`, from the pixel's distance.
+  `colour × T + L`, from the pixel's distance. Since #171, `L` and `T` count only the air
+  beyond 100 m, Unreal's default aerial perspective start depth: the volume's unshadowed air
+  hazed Sponza's arcade into a fog at sunrise.
 
 The scene's sunlight takes the sun's colour through the air (`MeshletRenderer::sun_color`;
 the ballad keeps its space white). City-blocks stands on the Earth's surface: at 1600×900

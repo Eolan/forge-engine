@@ -1305,10 +1305,24 @@ and SHA-256. The script checks each file and keeps those already there. The mode
   - **Shimmer:** indoors, at the high exposure, the probes' 128 rays shimmered: 7.5 % of a
     still view's pixels changed over TAA's 16-frame cycle. A room gets 256 rays (2.6 %, TAA's
     own share on its fine textures).
-  - **Left as they are:** thin streaks of sun on the floor through the gaps beside the curtains
-    are sunlight; the dark iron braziers' bright rims are the sky they reflect at grazing angles.
+  - **A blue fog at sunrise** (`--time-of-day 0`): the atmosphere's haze. Its volume lights
+    the air by the open sky and the sun, even under the arcade, and the exposure metered on the
+    shade showed 30 m of it as fog. The haze now starts 100 m from the camera, as Unreal's sky
+    atmosphere does by default. It also took a blue cast off the noon view.
+  - **Left as they are:**
+    - Thin streaks of sun on the floor through the gaps beside the curtains are sunlight.
+    - The dark iron braziers' bright rims are the sky they reflect at grazing angles.
+    - The glow round the courtyard's opening at sunrise is bloom (B).
+  - **The sun's shadow edges on the curtains** are hard and shimmer (#172). The shape is
+    right: a ledge across the courtyard over the curtains' folds. The penumbra is not.
+    - **Its width:** about 15 cm on the cloth.
+    - **How it is drawn:** one ray per pixel and frame, to one of eight points on the sun's
+      disc.
+    - **Why it fails here:** under an exposure 8 stops below the sun, one point in eight is
+      already white.
+    - **The fix:** a shadow denoiser, after research and a decision.
 
-![Sponza at frame 60 with the probes and without](images/physics-lab-models-sponza.png)
+![Sponza: at the lab's fixed exposure with the probes and without, and metered at noon](images/physics-lab-models-sponza.png)
 
 ## Captures
 

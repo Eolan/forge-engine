@@ -69,9 +69,31 @@ public float slice_distance(Sky* s, float k)
     return s[0].scale.z * t * t;
 }
 
-// The aerial perspective at screen `uv` and `distance` km: bilinear within the two nearest
-// slices, linear between them.
+// The air nearer than this (km) hazes nothing (#171). The volume lights every froxel by the
+// open sky and the sun, unshadowed: indoors, under an exposure metered on the shade, the air of
+// a 30 m arcade read as a blue fog at sunrise. The atmosphere's haze starts beyond, as Unreal's
+// sky atmosphere does by default (its aerial perspective start depth, 0.1 km); the first
+// 100 m of a clear day's air at sea level dim what lies beyond by about 0.2 %.
+static const float AERIAL_START_KM = 0.1;
+
+// The aerial perspective at screen `uv` and `distance` km, over the air beyond
+// `AERIAL_START_KM`: the volume's light and transmittance from there, so the haze grows from
+// nothing at that depth with no edge.
 public float4 aerial_at(Sky* s, float2 uv, float distance)
+{
+    if (distance <= AERIAL_START_KM)
+        return float4(0.0, 0.0, 0.0, 1.0);
+    // Along a ray, the light to d is the light to the start plus what the rest gathers, dimmed
+    // by the start's transmittance; the transmittances multiply.
+    float4 start = aerial_volume(s, uv, AERIAL_START_KM);
+    float4 whole = aerial_volume(s, uv, distance);
+    float through = max(start.a, 1e-4);
+    return float4(max(whole.rgb - start.rgb, 0.0) / through, saturate(whole.a / through));
+}
+
+// The aerial-perspective volume at screen `uv` and `distance` km, from the camera: bilinear
+// within the two nearest slices, linear between them.
+float4 aerial_volume(Sky* s, float2 uv, float distance)
 {
     float w = sqrt(saturate(distance / s[0].scale.z)) * float(SLICES) - 1.0;
     float2 inside = clamp(uv * float(SLICE), 0.5, float(SLICE) - 0.5);

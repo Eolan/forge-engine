@@ -278,7 +278,9 @@ the ground is lit through the air, and the stars and the sun seen through it are
 and reddened by its transmittance. Empty space has no medium. Cameras inside an atmosphere
 (issue #43) add a sky-view table around the camera, an aerial-perspective volume to 8 km, and
 a compose pass that draws the sky and the sun behind the scene and hazes the scene by distance;
-the sunlight on the scene takes the sun's colour through the air.
+the sunlight on the scene takes the sun's colour through the air. The haze starts 100 m from
+the camera (#171). The volume lights its air by the open sky and the sun, unshadowed, so the
+air of an arcade read as fog under an exposure metered on its shade.
 
 **The night is the same machinery with the Moon as the key** (D-046, #164, `forge_render::night`).
 With a time of day (`--day`, `--time-of-day`), the renderer's sun fields carry the key light:
