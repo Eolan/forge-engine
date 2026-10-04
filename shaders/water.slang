@@ -265,7 +265,7 @@ struct RiverPoint
     float4 c; // how much of the river is drawn (0..1), the half width drawn whole where a segment starts (m; 0 at a river's last point: none starts), the ground under the last vertex across, the water's level (m)
     float4 d; // the ground under the first four vertices across: the highest the drawn ground stands under the quads around each (m)
     float4 e; // the ribbon's half width (m, under the banks), the lowest bank before the channel was carved (m), the first stone past the point, the metres along the river from its head
-    float4 f; // the white water a step's fall leaves (0..1, #122), how far its line bows downstream in the middle and towards the left bank (m; negative: the right), one unused
+    float4 f; // the white water a step's fall leaves (0..1, #122), how far its line bows downstream in the middle and towards the left bank (m; negative: the right), the standing waves' phase along the river (radians: their wavenumber g / v² summed)
     float4 g; // where its mouth's bars stand over the water across it (#127): two spans, each from and to (m from the middle, positive to the left; equal ends where none)
 };
 
@@ -1016,7 +1016,7 @@ struct RiverOut
     float4 edge : TEXCOORD3;      // the half width at the water's edge (m), the ribbon's (m), how far it has risen onto the ground (0..1), the metres along the river
     nointerpolation uint segment : TEXCOORD4; // the segment's first point
     float cover : TEXCOORD5;      // the half width drawn whole (m): the water's edge's, more in a confluence's rounded corner (#119)
-    float foam : TEXCOORD6;       // the white water a step's fall leaves (0..1, #122)
+    float2 foam : TEXCOORD6;      // the white water a step's fall leaves (0..1, #122), the standing waves' phase
     float4 bars : TEXCOORD7;      // where its mouth's bars stand over the water across it: two spans, each from and to (m from the middle, #127)
 };
 
@@ -1093,7 +1093,7 @@ RiverOut river_vert_main(uint vertex : SV_VertexID)
     o.segment = segment;
     // At a river's last point (its `c.y` 0: no segment starts there), its half width.
     o.cover = max(p.c.y, p.a.z);
-    o.foam = p.f.x;
+    o.foam = float2(p.f.x, p.f.w);
     o.bars = p.g;
     return o;
 }
@@ -1565,7 +1565,7 @@ FreshWater river_water(WaterSurface* w, RiverOut input)
     // across the river it pours in chutes, some glassy, some white, so the lip is no straight
     // white line.
     float chutes = smoothstep(0.2, 0.8, value_noise(world / RIVER_CHUTE + 17.3));
-    float fall_white = input.foam * lerp(RIVER_CHUTE_GLASS, 1.0, chutes);
+    float fall_white = input.foam.x * lerp(RIVER_CHUTE_GLASS, 1.0, chutes);
     s.white = max(max(rapids, stones.white), fall_white);
     s.froth = fall_white * fall_white;
     s.streak = float2(input.edge.w, across);
@@ -1575,6 +1575,28 @@ FreshWater river_water(WaterSurface* w, RiverOut input)
     s.bed = RIVER_BED;
     s.deepest = input.river.z + RIVER_DEEPEST;
     s.ripples = 1.0;
+    // Standing waves on the rapids (#122's polish): where the water runs faster than its own
+    // waves, a train of crests holds still across the flow, 2π v² / g apart (the waves whose
+    // speed is the water's: about 4 m at 2.5 m/s). Stronger in the middle, in patches along the
+    // river. Shading only: the ribbon's vertices are metres apart. (White crests drew through
+    // the foam's streaks as lines across the river: left out.)
+    float speed = input.river.w;
+    float standing = smoothstep(0.012, 0.02, input.flow.z) * (1.0 - smoothstep(0.045, 0.07, input.flow.z))
+        * smoothstep(1.2, 2.0, speed);
+    if (standing > 0.0)
+    {
+        float k = 9.81 / (speed * speed);
+        // Fixed scales for the noises: `world` over the wavelength, which changes with the
+        // interpolated speed, would shear them into stripes as the phase was.
+        float patches = smoothstep(0.25, 0.65, value_noise(world / 12.0 + 41.7));
+        // Crests a few centimetres high, more in deeper water, gone by the banks.
+        float height = standing * patches * (1.0 - u * u) * clamp(0.15 * input.river.z, 0.03, 0.1);
+        // The phase summed along the river on the CPU (water.rs): k times the metres along it
+        // would shear the crests into stripes where the interpolated speed changes. Their line
+        // wanders across the river a little.
+        float phase = input.foam.y + 2.0 * value_noise(world / 4.0 + 7.1);
+        s.fall += down * (height * k * cos(phase));
+    }
     return s;
 }
 

@@ -1448,7 +1448,8 @@ Before (left, `--no-steps`) and now (right), frame 60 (`reports/2026-10-01-122/`
   - the floor 4 m out runs on past every lip without a cliff.
 
 **Left for later:**
-- Standing waves on the 2–4 % rapids as displacement, which need a finer ribbon near the camera.
+- Standing waves on the 2–4 % rapids as displacement, which need a finer ribbon near the camera
+  (as shading since 2026-10-04: "Standing waves on the rapids" below).
 - The falls follow each step's bowed line between the boulders, not each boulder's shape.
 - Deep pools could darken further than the river's water over its gravel.
 - If the steep reaches still look too busy, the knobs are `StepParams` (spacing, jitter, bow)
@@ -2822,3 +2823,25 @@ The cost: 0.12 ms, both passes on the async compute queue behind the sky's table
 frame 1.81 → 1.91 ms). The serial frame and the async one give the same image.
 
 ![The island at a cover of 0.5, lit by the clear sky (left) and by the sky with its clouds (right)](images/island-cloud-light.png)
+
+## Standing waves on the rapids (#122's polish, 2026-10-04)
+
+The rapids at 2–4 % no longer run smooth.
+- **The crests:** where the water runs faster than its own waves, a train of crests holds still
+  across the flow, 2π v² / g apart: about 4 m at 2.5 m/s.
+- **Where:** from a slope of 1.2–2 % up to 4.5–7 %, at speeds over 1.2–2 m/s. Strongest in the
+  middle, in patches 12 m across along the river. A few centimetres high: 15 % of the depth,
+  between 3 and 10 cm.
+- **The phase:** their wavenumber g / v² is summed along each river on the CPU (`water.rs`,
+  the river point's `f.w`), so the crests stay still and evenly spaced where the speed changes.
+  Two first tries failed. The metres along the river, or `world` along the interpolated flow,
+  times a wavenumber that changes with the interpolated speed, sheared the crests into stripes
+  a few centimetres apart.
+- **Shading only**, through the surface's slope: the ribbon's vertices are metres apart.
+  Displacing the surface (the note above) still needs a finer ribbon near the camera. White
+  crests drew through the foam's streaks as lines across the river, so they are left out.
+
+`city-blocks --island 7` logs a view of the fastest water on a 2–4 % slope (`rapids_view`). Here
+it is, before and after:
+
+![The island's fastest 2–4 % rapids, smooth (left) and with standing waves (right)](images/island-standing-waves.png)

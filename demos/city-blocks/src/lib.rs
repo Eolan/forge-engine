@@ -4526,11 +4526,29 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
                 s.position[1] - 10.0 * dz
             )
         });
+    // A view of the fastest water on a 2–4 % slope, where the standing waves are: 12 m upstream
+    // and 3 m over the water, looking down the river.
+    let rapids_view = points
+        .iter()
+        .filter(|p| (0.02..=0.04).contains(&p.slope) && p.fade > 0.99)
+        .max_by(|a, b| a.speed.total_cmp(&b.speed))
+        .map_or_else(String::new, |p| {
+            let (dx, dz) = (p.direction[0], p.direction[1]);
+            let yaw = (-dx).atan2(-dz).to_degrees();
+            format!(
+                "{:.0},{:.1},{:.0},{yaw:.1},-14 ({:.1} m/s)",
+                p.position[0] - 12.0 * dx,
+                p.level + 3.0,
+                p.position[1] - 12.0 * dz,
+                p.speed
+            )
+        });
     tracing::info!(
         stones = stones.len(),
         breaking_the_water = stones.iter().filter(|s| s.waterline > 0.0).count(),
         mouths = mouths.len(),
         stone_view = %stone_view,
+        rapids_view = %rapids_view,
         "the rivers' stones and mouths"
     );
     IslandRivers {

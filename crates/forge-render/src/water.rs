@@ -843,7 +843,7 @@ struct GpuRiverPoint {
     /// stone past the point, the metres along the river from its head.
     e: [f32; 4],
     /// The white water a step's fall leaves, and how far its line bows downstream in the middle
-    /// and towards the left bank (#122); one unused.
+    /// and towards the left bank (#122); the standing waves' phase along the river (radians).
     f: [f32; 4],
     /// Where its mouth's bars stand over the water across it (#127): two spans, each from and
     /// to, metres from the middle.
@@ -1583,10 +1583,18 @@ impl WaterSurface {
                 let mut points: Vec<GpuRiverPoint> = Vec::with_capacity(total);
                 for river in s.rivers {
                     let mut along = 0.0_f32;
+                    // The standing waves' phase (#122's polish): their wavenumber g / v² (the waves
+                    // as fast as the water) summed along the river, so their crests stay still and
+                    // evenly spaced where the speed changes.
+                    let mut phase = 0.0_f32;
                     for (k, p) in river.iter().enumerate() {
                         if k > 0 {
                             let q = river[k - 1].position;
-                            along += (p.position[0] - q[0]).hypot(p.position[1] - q[1]);
+                            let step = (p.position[0] - q[0]).hypot(p.position[1] - q[1]);
+                            let wavenumber = |v: f32| 9.81 / v.max(1.0).powi(2);
+                            phase +=
+                                0.5 * (wavenumber(river[k - 1].speed) + wavenumber(p.speed)) * step;
+                            along += step;
                         }
                         points.push(GpuRiverPoint {
                             a: [p.position[0], p.position[1], p.half_width, p.depth],
@@ -1603,7 +1611,7 @@ impl WaterSurface {
                             ],
                             d: [p.ground[0], p.ground[1], p.ground[2], p.ground[3]],
                             e: [p.reach, p.bank, first[points.len()] as f32, along],
-                            f: [p.foam, p.lip[0], p.lip[1], 0.0],
+                            f: [p.foam, p.lip[0], p.lip[1], phase],
                             g: p.bars,
                         });
                     }
