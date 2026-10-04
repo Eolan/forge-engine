@@ -2211,3 +2211,76 @@ display pass; `docs/demos/island.md`, "The night".
   downloaded with the owner's go and kept as small derived files in `assets/sky`. A telephoto
   (`--fov`) shows the maria: past 8 pixels across, the disc is scaled towards the scene's
   adaptation (the eye's local adaptation), since the night's exposure burns it white.
+
+## D-047 — Texture coordinates in the cluster pages, and textures from glTF 🟡 (proposed 2026-10-04)
+
+#166. A cluster vertex (`PagedVertex`, 16 bytes) holds a position and a normal, but no texture
+coordinate. Every surface is textured by projection (triplanar), and the glTF importer reads
+no `TEXCOORD_0` and no images. So an imported model shows only its material's flat colours,
+and a skinned body cannot carry a painted texture. #166's first step projects the creatures'
+textures from their bind pose so they stay on the body. That works for wood or fur, not for
+a face, a label or a baked normal map. Unreal and Unity store UVs with the vertex. Nanite
+stores them per cluster, quantised to each cluster's range.
+
+**Proposed:**
+1. **An optional UV stream in the cluster's payload.** After the vertices, a mesh with UVs
+   adds:
+   - its range (16 bytes: the cluster's UV minimum and extent as `float2`s);
+   - per vertex, two 16-bit unorms within that range (4 bytes).
+
+   Then come the triangles as now. A mesh without UVs is unchanged and pays nothing: the
+   island, the city and the procedural props keep their 16-byte vertices. A textured
+   vertex costs 20 bytes, plus 16 per cluster. A flag in `Mesh` (its `pad`) says whether
+   the stream is there.
+
+   The range per cluster rather than per mesh keeps the precision when UVs tile far past
+   0–1 (a wall repeated 100 times). 16 bits over one cluster's range is well under a texel.
+2. **No tangents stored.** The pixel's tangent frame comes from the derivatives of its
+   position and UV, which the resolve already computes (`dpdx`, `dpdy`).
+
+   Caveat: a normal map baked by a tool against MikkTSpace tangents can differ slightly
+   from that frame, most visibly on low-polygon bakes. If it shows, a stored tangent would
+   add 4 bytes per vertex (an angle and a sign).
+3. **The cook keeps UV seams.**
+   - glTF already splits vertices at seams, and the clusters copy their vertices.
+   - The simplifier gets the UVs as attributes beside the normals.
+   - A seam's vertices are locked as section borders are, so coarse levels don't smear a
+     texture across a seam.
+4. **The importer:**
+   - `TEXCOORD_0`;
+   - from the `.glb`'s embedded images: base colour, normal, metallic-roughness and
+     occlusion, with emissive optional;
+   - decoded at load to RGBA8 with mips made as `textures.rs` makes them (albedo averaged
+     in linear light), into the bindless set.
+
+   Compression (BC7 and BC5) comes later, measured.
+5. **Shading:** a material row that samples by UV, beside the triplanar rows; the material
+   table picks one per section. Skinned meshes with UVs need no bind-pose projection:
+   their UVs travel with the vertices. The projection stays for triplanar materials on
+   skinned meshes.
+6. **Measured:** the island's page count and bandwidth must not move (no UVs there).
+   Textured meshes report their page bytes against the same mesh without UVs.
+
+**Not chosen:**
+- **A wider vertex for every mesh** (24 bytes): 50 % more page bytes on the island for no
+  gain.
+- **Half floats:** a 10-bit mantissa steps half a texel of a 4K texture near 1.0.
+- **A UV buffer outside the pages:** pages would no longer stand alone (D-018), and streaming
+  would track two things.
+
+**Questions for the owner:**
+1. **The format:** the optional per-cluster stream above (recommended), or one of the
+   rejected options?
+2. **JPEG:** many `.glb` files embed JPEG images. Turning on the `image` crate's `jpeg`
+   feature fetches one more crate (`zune-jpeg`, MIT/Apache/Zlib). Your go to add it, or PNG
+   only for now?
+3. **Texture compression:** RGBA8 first and BC7/BC5 later (recommended), or compressed from
+   the start? The latter needs an encoder crate, another download, and a slower cook.
+4. **The first textured model:** our creatures UV-unwrapped in
+   `assets/blender/skinned_creatures.py` with our own painted or procedural textures
+   (recommended, nothing downloaded). Or a free reference model, chosen under the separate
+   proposal about third-party models?
+
+**A first step once answered:** the stream in the cook and the pages, `TEXCOORD_0` and PNG
+images in the importer, the UV material row, and the creatures unwrapped and textured, with a
+capture and the page bytes measured.
