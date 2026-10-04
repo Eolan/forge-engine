@@ -41,7 +41,7 @@ cargo run --release -p city-blocks
 Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
 **M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
 what it drew, **[** / **]** LOD threshold, **T** anti-aliasing (DLAA where it runs, the default of an interactive run; TAA sharpened, plain, off: `--no-dlaa`, `--dlaa` in a scripted run, `--rcas STOPS`, half a stop by default, `--no-rcas`, `--taa-catmull-rom` for the history filter before Lanczos-3; D-045), **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass and the water, **Z** soft or hard shadows, **P** the probes' light, **U** that
-light alone, **Tab** wireframe, **G** tone curve.
+light alone, **Tab** wireframe, **G** tone curve, **.** the real night sky (`--real-sky`, D-046).
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -459,7 +459,8 @@ paths.
 under the Moon and the stars; `--time-of-day` takes 0–2 (1.5 midnight). The night's options:
 `--moon-age` (lunations, 0.4), `--moon-fill` (the Moon's light as a soft fill instead of a key
 light with traced shadows), `--night-stops` (how far under the eye's adaptation the night is
-shown, 2), `--star-gain` (16) and `--no-purkinje`. `docs/demos/island.md`, "The night", has the
+shown, 2), `--star-gain` (16), `--no-purkinje`, and `--real-sky` (the catalogue's stars and the
+real Moon; **.** switches it) with `--fov` for a telephoto. `docs/demos/island.md`, "The night", has the
 details and the images.
 
 ## Coated glass (issue #56, 2026-09-25)

@@ -272,15 +272,29 @@ float3 night_sky(Sky* s, Planet p, float3 direction, float elevation)
         float3 n = x * east + y * north + z * toward;
         float mu0 = dot(n, s[0].sun_disc.xyz);
         float albedo = 1.0;
+        // The disc's diameter in pixels.
+        float across = 2.0 * sin_radius / max(s[0].stars_x.w, 1e-9);
         if (s[0].moon_albedo != 0xFFFFFFFFu)
         {
             // The near side's longitude and latitude, the map's centre facing the Earth.
             float2 uv = float2(0.5 + atan2(x, z) / (2.0 * PI), 0.5 - asin(clamp(y, -1.0, 1.0)) / PI);
-            albedo = sample_image_level(s[0].moon_albedo, SAMPLER_LINEAR_CLAMP, uv, 0.0).r;
+            // The level the disc's size asks for: its diameter spans half the map's 512 texels
+            // of longitude.
+            float level = max(log2(256.0 / max(across, 1e-3)), 0.0);
+            albedo = sample_image_level(s[0].moon_albedo, SAMPLER_LINEAR_CLAMP, uv, level).r;
         }
         // Light from the Earth on its dark side, a little: the earthshine.
         float lit = mu0 > 0.0 ? mu0 / (mu0 + z) : 0.0;
-        return through * (k * albedo * (lit + 0.0015));
+        // Once the disc fills enough of the view (from 8 to 64 pixels across: a telephoto), the
+        // eye adapts to it on its own (local adaptation), so its maria still read under a
+        // night's exposure that would burn it white: the whole disc scaled by its mean
+        // pre-exposed luminance's ratio to mid grey, raised to 0.3, which keeps the contrast
+        // inside it. Smaller, it stays the bright point that glows. By day the Moon is about
+        // as bright as the sky round it and stays as it is.
+        float mean = dot(through, float3(0.2126, 0.7152, 0.0722)) * k * 0.5 * s[0].scale.x;
+        float power = lerp(1.0, 0.3, smoothstep(8.0, 64.0, across));
+        float local = mean > 0.18 ? 0.18 * pow(mean / 0.18, power) / mean : 1.0;
+        return through * (k * albedo * (lit + 0.0015) * local);
     }
     if (gain <= 0.0)
         return 0.0;

@@ -496,6 +496,14 @@ struct Args {
     /// No Purkinje shift at night (the colours kept as the cones see them), to compare.
     #[arg(long)]
     no_purkinje: bool,
+    /// The real sky at night (D-046): the Yale Bright Star Catalogue's stars and the Moon's
+    /// albedo map, in place of the procedural stars and a plain Moon. `.` switches it.
+    #[arg(long)]
+    real_sky: bool,
+    /// The camera's vertical field of view, degrees (70 by default): narrow for a telephoto
+    /// look at the Moon.
+    #[arg(long)]
+    fov: Option<f32>,
     /// The island's golden shot of this name (`island --shot NAME`; the log lists them): its view
     /// and its time of day, unless `--view` or `--time-of-day` is given.
     #[arg(long)]
@@ -820,7 +828,16 @@ impl Gallery {
             && space.is_none()
             && !bench
             && !room)
-            .then(|| forge_render::night::NightSky::new(&ctx.device, renderer.sun_illuminance))
+            .then(|| {
+                let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+                let mut night = forge_render::night::NightSky::new(
+                    &ctx.device,
+                    renderer.sun_illuminance,
+                    Some(&root),
+                )?;
+                night.show_real = args.real_sky;
+                Ok::<_, forge_gpu::GpuError>(night)
+            })
             .transpose()?;
         let mut celestial = forge_render::night::Celestial::default();
         if let Some(age) = args.moon_age {
@@ -918,6 +935,9 @@ impl Gallery {
         };
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args)?;
+        if let Some(fov) = args.fov {
+            camera.fov_y = fov.clamp(0.5, 120.0).to_radians();
+        }
         let tour = if args.tour {
             Some(island_demo::Tour::new(&args)?)
         } else {
@@ -1386,6 +1406,13 @@ impl Demo for Gallery {
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
             KeyCode::KeyI => self.sky_light = !self.sky_light,
+            // The real sky (D-046): the catalogue's stars and the Moon's albedo, or not.
+            KeyCode::Period => {
+                if let Some(night) = self.night.as_mut().filter(|n| n.has_real()) {
+                    night.show_real = !night.show_real;
+                    tracing::info!(real = night.show_real, "the real sky");
+                }
+            }
             KeyCode::KeyN => self.ao_on = !self.ao_on,
             KeyCode::KeyP => self.probes_on = !self.probes_on,
             KeyCode::KeyV => self.flags.toggle(CullFlags::SHOW_AO),

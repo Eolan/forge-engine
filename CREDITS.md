@@ -64,6 +64,8 @@ in. CI checks the crate list.
 | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | the JetBrains Mono Project Authors | the profiler overlay's text | SIL OFL 1.1 (`assets/fonts/jetbrains-mono/OFL.txt`) |
 | The lab's boat (`assets/models/boat.glb`) | made for Forge by `assets/blender/boat.py` (#138) | `physics-lab --lab sea` | the project's (MIT OR Apache-2.0) |
 | The lab's spaceship (`assets/models/ship.glb`) | made for Forge by `assets/blender/ship.py` (#150, 2026-10-03) | `physics-lab --lab space` | the project's (MIT OR Apache-2.0) |
+| [The Yale Bright Star Catalogue](https://heasarc.gsfc.nasa.gov/W3Browse/star-catalog/bsc5p.html), 5th revised edition (`assets/sky/bsc5p.txt`: positions, magnitudes, B − V) | Dorrit Hoffleit and Wayne H. Warren Jr. (1991), NASA HEASARC's copy (BSC5P) | the real night sky (`--real-sky`, #164, D-046) | public: a NASA data product, freely distributed |
+| [NASA's CGI Moon Kit](https://svs.gsfc.nasa.gov/4720) (`assets/sky/moon-albedo-512x256.r8`, its 2025 colour map's luminance, by `assets/blender/moon_albedo.py`) | NASA's Scientific Visualization Studio, from the Lunar Reconnaissance Orbiter Camera's data | the real Moon (`--real-sky`) | NASA imagery, credit "NASA's Scientific Visualization Studio" |
 
 ## Techniques
 

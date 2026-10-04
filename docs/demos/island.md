@@ -2948,3 +2948,35 @@ does not read, so the default is 2, where the moonlit land is about 4 stops unde
 brightness.
 
 ![The night at 4, 3 and 2 stops under the eye's adaptation](images/island-night-stops.png)
+
+## The real sky (D-046's second step, #164, 2026-10-04)
+
+`--real-sky`, or **.** while it runs, swaps the procedural stars and the plain Moon for the real
+ones, together (the owner's answer).
+- **The stars:** the Yale Bright Star Catalogue's 9 096 stars with a position, to magnitude 6.5
+  (`assets/sky/bsc5p.txt`), binned and drawn as the procedural ones are. The catalogue is NASA
+  HEASARC's copy (`heasarc_bsc5p.tdat.gz`, 914 KB, downloaded with the owner's go), cut down to
+  four columns: right ascension, declination, V and B − V (0.65 where it has none):
+
+  ```
+  awk -F'|' '/^<DATA>/{f=1;next} /^<END>/{f=0} f && $35!="" && $12!="" && $51!="" { bv=($5=="")?"0.65":$5; printf "%.4f %.4f %.2f %.2f\n", $35, $12, $51, bv }' heasarc_bsc5p.tdat
+  ```
+
+  A test checks Sirius is the brightest, where it should be, and that the stars crowd the
+  galactic plane.
+- **The Moon:** NASA's CGI Moon Kit's 2025 colour map (`lroc_color_2k.jpg`, downloaded with the
+  owner's go), reduced by `assets/blender/moon_albedo.py` to its linear luminance at 512 × 256
+  (`assets/sky/moon-albedo-512x256.r8`, 128 KB). It is scaled so its mean is 1, so the disc keeps
+  the Moon's measured illuminance, and mipmapped; the compose picks the level the disc's size
+  asks for.
+- **Local adaptation on the disc:** under a night's exposure the Moon is 18 stops brighter than
+  the moonlit land and burns white. Once its disc is more than 8 pixels across (a telephoto,
+  `--fov`), the eye's local adaptation is modelled: the whole disc is scaled by its mean's ratio to
+  mid grey raised to 0.3 at 64 pixels, so its maria read. Smaller, it stays the glowing point.
+  By day it is as bright as the sky round it and nothing changes.
+- **`--fov DEGREES`:** the camera's vertical field of view (70 by default), for the telephoto.
+
+The procedural sky (left) and the real one (right), wide and through a 1.5° telephoto at the
+Moon (`--view=6800,300,0,108.1,18.9 --fov 1.5`):
+
+![The procedural sky and plain Moon (left), the real stars and the real Moon (right)](images/island-real-sky.png)

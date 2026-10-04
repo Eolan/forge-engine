@@ -2192,5 +2192,8 @@ display pass; `docs/demos/island.md`, "The night".
 - **Stars:** procedural, 8 912 of them to magnitude 6.5 with the sky's counts per magnitude,
   twice as dense on the galactic plane, drawn about a pixel wide and 16 times brighter than
   physical (`--star-gain`), as an eye sees them rather than a camera.
-- **Left for the second step:** the Yale catalogue and the Moon's albedo map behind
-  `--real-sky` and a key.
+- **The second step, built the same day:** `--real-sky` and **.** draw the Yale catalogue's
+  9 096 stars (NASA HEASARC's copy) and the Moon with NASA's CGI Moon Kit albedo map, both
+  downloaded with the owner's go and kept as small derived files in `assets/sky`. A telephoto
+  (`--fov`) shows the maria: past 8 pixels across, the disc is scaled towards the scene's
+  adaptation (the eye's local adaptation), since the night's exposure burns it white.

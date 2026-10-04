@@ -17,9 +17,10 @@
 //!   a catalogue's) binned on a cube of cells round the sky; the compose looks up its pixel's
 //!   cell and draws each star there as a Gaussian about a pixel wide, keeping its energy.
 
+use std::path::Path;
 use std::sync::Arc;
 
-use forge_gpu::{Buffer, Device, MemoryCategory, Result, vk};
+use forge_gpu::{Buffer, Device, Image, ImageDesc, MemoryCategory, Result, SampledImageId, vk};
 use glam::{Mat3, Vec3};
 
 use crate::sky::SkyNight;
@@ -427,25 +428,139 @@ impl Default for NightSettings {
     }
 }
 
-/// The night's GPU data: the stars, binned (`bin_stars`).
+/// The real sky's files under the workspace (D-046's second step): the Yale catalogue's stars
+/// and the Moon's albedo (`assets/sky`, made as `docs/demos/island.md`, "The night", says).
+pub const CATALOGUE_PATH: &str = "assets/sky/bsc5p.txt";
+/// See [`CATALOGUE_PATH`]: 512 × 256 bytes, linear, the top row first.
+pub const MOON_ALBEDO_PATH: &str = "assets/sky/moon-albedo-512x256.r8";
+const MOON_ALBEDO_SIZE: [u32; 2] = [512, 256];
+
+/// The catalogue's stars from its text: one a line, right ascension and declination (J2000,
+/// degrees), V magnitude and B − V; `#` starts a comment line.
+pub fn catalogue_stars(text: &str) -> Vec<Star> {
+    text.lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut f = l.split_whitespace().map(str::parse::<f32>);
+            let mut next = || f.next()?.ok();
+            let (ra, dec, v, bv) = (next()?, next()?, next()?, next()?);
+            Some(Star {
+                right_ascension: ra.to_radians(),
+                declination: dec.to_radians(),
+                magnitude: v,
+                b_v: bv,
+            })
+        })
+        .collect()
+}
+
+/// The Moon's albedo map down to one texel, each level the mean of four of the one above (the
+/// disc is a few dozen pixels across: the compose picks the level its size asks for).
+fn albedo_mips(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let [mut w, mut h] = MOON_ALBEDO_SIZE.map(|v| v as usize);
+    let mut levels = vec![bytes.to_vec()];
+    while w > 1 || h > 1 {
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let above = levels.last().expect("level 0");
+        let mut level = Vec::with_capacity(nw * nh);
+        for y in 0..nh {
+            for x in 0..nw {
+                let at = |dx: usize, dy: usize| {
+                    u32::from(above[(2 * y + dy).min(h - 1) * w + (2 * x + dx).min(w - 1)])
+                };
+                level.push(((at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1) + 2) / 4) as u8);
+            }
+        }
+        levels.push(level);
+        (w, h) = (nw, nh);
+    }
+    levels
+}
+
+/// The real sky on the GPU: the catalogue's stars, binned, and the Moon's albedo.
+struct RealSky {
+    stars: (Buffer, Buffer),
+    _albedo: Image,
+    albedo: SampledImageId,
+    /// What turns the map's values into albedo over its mean (the disc keeps its illuminance).
+    albedo_gain: f32,
+}
+
+/// The night's GPU data: the procedural sky's stars, binned (`bin_stars`), and the real sky's
+/// when its files are there.
 pub struct NightSky {
+    device: Arc<Device>,
     procedural: (Buffer, Buffer),
+    real: Option<RealSky>,
+    /// Draw the real sky (the catalogue's stars and the Moon's albedo) rather than the
+    /// procedural stars and a plain Moon, when it is loaded (`--real-sky`).
+    pub show_real: bool,
 }
 
 impl NightSky {
-    /// Bins and uploads the procedural sky's stars for a sun of `sun_illuminance` lux.
-    pub fn new(device: &Arc<Device>, sun_illuminance: f32) -> Result<Self> {
-        let (stars, cells) = bin_stars(&procedural_stars(0x5747_4152), sun_illuminance);
-        let upload = |stars: &[GpuStar], cells: &[u32], name: &str| -> Result<(Buffer, Buffer)> {
+    /// Bins and uploads the procedural sky's stars for a sun of `sun_illuminance` lux, and the
+    /// real sky's from the workspace at `root` when its files are there.
+    pub fn new(device: &Arc<Device>, sun_illuminance: f32, root: Option<&Path>) -> Result<Self> {
+        let upload = |stars: &[Star], name: &str| -> Result<(Buffer, Buffer)> {
+            let (stars, cells) = bin_stars(stars, sun_illuminance);
             let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
             Ok((
-                device.create_buffer_with_data(stars, usage, MemoryCategory::Frame, name)?,
-                device.create_buffer_with_data(cells, usage, MemoryCategory::Frame, name)?,
+                device.create_buffer_with_data(&stars, usage, MemoryCategory::Frame, name)?,
+                device.create_buffer_with_data(&cells, usage, MemoryCategory::Frame, name)?,
             ))
         };
+        let procedural = upload(&procedural_stars(0x5747_4152), "night stars")?;
+        let files = root.and_then(|root| {
+            let text = std::fs::read_to_string(root.join(CATALOGUE_PATH)).ok()?;
+            let albedo = std::fs::read(root.join(MOON_ALBEDO_PATH)).ok()?;
+            let [w, h] = MOON_ALBEDO_SIZE;
+            (albedo.len() == (w * h) as usize).then_some((text, albedo))
+        });
+        let real = match files {
+            Some((text, albedo)) => {
+                let stars = upload(&catalogue_stars(&text), "catalogue stars")?;
+                let mean =
+                    albedo.iter().map(|&v| f64::from(v)).sum::<f64>() / albedo.len() as f64 / 255.0;
+                let levels = albedo_mips(&albedo);
+                let image = device.create_image_with_mips(
+                    ImageDesc {
+                        width: MOON_ALBEDO_SIZE[0],
+                        height: MOON_ALBEDO_SIZE[1],
+                        format: vk::Format::R8_UNORM,
+                        usage: vk::ImageUsageFlags::SAMPLED,
+                        aspect: vk::ImageAspectFlags::COLOR,
+                        mip_levels: levels.len() as u32,
+                        name: "Moon albedo",
+                    },
+                    &levels.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )?;
+                let albedo = device.register_sampled_image(
+                    image.view(),
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                );
+                Some(RealSky {
+                    stars,
+                    _albedo: image,
+                    albedo,
+                    albedo_gain: (1.0 / mean.max(1e-3)) as f32,
+                })
+            }
+            None => {
+                tracing::warn!("the real sky's files are missing: the procedural sky only");
+                None
+            }
+        };
         Ok(Self {
-            procedural: upload(&stars, &cells, "night stars")?,
+            device: Arc::clone(device),
+            procedural,
+            real,
+            show_real: false,
         })
+    }
+
+    /// The real sky is loaded.
+    pub fn has_real(&self) -> bool {
+        self.real.is_some()
     }
 
     /// The sky's night for `sky` and its `lights`, with a pixel of `pixel_angle` radians at
@@ -458,18 +573,22 @@ impl NightSky {
         settings: NightSettings,
     ) -> SkyNight {
         let reference = lights.reference;
+        let real = self.real.as_ref().filter(|_| self.show_real);
         // The Moon's disc: its luminance per unit Lommel–Seeliger share such that the disc
-        // gives the Moon's measured illuminance (night.rs's `moon_illuminance`).
+        // gives the Moon's measured illuminance (night.rs's `moon_illuminance`); with the
+        // albedo map, per unit of the map's mean.
         let phase = std::f32::consts::PI - sky.sun.dot(sky.moon).clamp(-1.0, 1.0).acos();
         let solid_angle = std::f32::consts::PI * MOON_ANGULAR_RADIUS * MOON_ANGULAR_RADIUS;
         let share = lommel_seeliger_mean(phase);
         let moon_disc = if share > 1e-5 {
             sky.moon_illuminance / (solid_angle * share) / reference
+                * real.map_or(1.0, |r| r.albedo_gain)
         } else {
             0.0
         };
         // Stars and airglow only once the sun is down: by day they add nothing visible.
         let dark = sky.sun.y < 0.0;
+        let stars = real.map_or(&self.procedural, |r| &r.stars);
         SkyNight {
             key_weight: lights.key_weight,
             sun: sky.sun,
@@ -495,9 +614,17 @@ impl NightSky {
             },
             stars_from_world: sky.stars_from_world,
             pixel_angle,
-            stars: (self.procedural.0.address(), self.procedural.1.address()),
+            stars: (stars.0.address(), stars.1.address()),
             milky_way: settings.milky_way,
-            moon_albedo: None,
+            moon_albedo: real.map(|r| r.albedo.0),
+        }
+    }
+}
+
+impl Drop for NightSky {
+    fn drop(&mut self) {
+        if let Some(real) = &self.real {
+            self.device.release_sampled_image(real.albedo);
         }
     }
 }
@@ -601,6 +728,34 @@ mod tests {
         assert!(hot.z > hot.x && cool.x > cool.z, "{hot} {cool}");
         let sun = star_color(0.65);
         assert!((sun.dot(Vec3::new(0.2126, 0.7152, 0.0722)) - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_catalogue_reads_the_real_sky() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let text = std::fs::read_to_string(root.join(CATALOGUE_PATH)).expect("the catalogue");
+        let stars = catalogue_stars(&text);
+        assert_eq!(stars.len(), 9096);
+        // Sirius, the brightest: in Canis Major, south of the celestial equator.
+        let sirius = stars
+            .iter()
+            .min_by(|a, b| a.magnitude.total_cmp(&b.magnitude))
+            .expect("stars");
+        assert_eq!(sirius.magnitude, -1.46);
+        assert!((sirius.right_ascension.to_degrees() - 101.287).abs() < 0.01);
+        assert!((sirius.declination.to_degrees() + 16.716).abs() < 0.01);
+        // The Milky Way's stars crowd the galactic plane: more within 15° of it than the 26 % a
+        // uniform sky would put there.
+        let near = stars
+            .iter()
+            .filter(|s| galactic_latitude(s.direction()).abs() < 15f32.to_radians())
+            .count();
+        assert!(near as f32 / stars.len() as f32 > 0.3, "{near}");
+        let albedo = std::fs::read(root.join(MOON_ALBEDO_PATH)).expect("the Moon's albedo");
+        assert_eq!(albedo.len(), 512 * 256);
+        let levels = albedo_mips(&albedo);
+        assert_eq!(levels.len(), 10);
+        assert_eq!(levels.last().map(Vec::len), Some(1));
     }
 
     #[test]
