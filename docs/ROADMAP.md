@@ -445,9 +445,10 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    cut ahead of time); left: rocks and asteroids fractured on impact (#24, #12), a ship's hull
    breaking open on its decks (#89).
 7. **Creatures:** powered ragdolls ✅ (#143, `--lab creatures`: a mannequin and a dog modelled
-   in Blender as jointed puppets, Jolt ragdolls whose motors drive moving poses); left: a glTF
-   importer of skins and clips and GPU skinning (Phase 7's start), so creatures bend instead of
-   being jointed, a humanoid, a quadruped, a flyer, a slime as a soft body.
+   in Blender, Jolt ragdolls whose motors drive moving poses); skinned ✅ (#165, Phase 7's
+   start: glTF skins and clips read by `forge-anim`, GPU skinning, the bodies' BLASes refitted,
+   so the creatures bend instead of being jointed). Left: a flyer, a slime as a soft body, and
+   the clips through the motors (the procedural layer).
 8. **Fluids:** the authoritative water model, a dam break ✅ (#144, `--lab flood`:
    `forge_physics::shallow`, a staggered grid of columns, drawn as a pool by the water pass),
    two-way coupling ✅ (#151: what floats pushes the water aside, its volume under it a thickness
@@ -523,7 +524,9 @@ The items below are the phase's original outline; the plan above orders them.
 
 ## Phase 7 — Animation
 
-1. `forge-anim`: clips, blend graph, compression, GPU skinning, IK (feet, hands, look-at).
+1. `forge-anim`: clips ✅ and GPU skinning ✅ (#165: glTF skins and clips, poses sampled and
+   blended, the skin pass and refitted BLASes); left: the blend graph, compression, IK (feet,
+   hands, look-at).
 2. Motion matching for the player; powered ragdolls tracking poses; hit reactions;
    contact events to the material layer.
 3. Generated creatures: gait synthesis for procedurally generated bodies.
