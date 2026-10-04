@@ -2480,7 +2480,7 @@ models scene, and the test models' captures beside their Khronos screenshots.
   - The probes go dark inside Sponza (#171: the lab's fixed exposure, not the probes).
   - The ten models' textures take 534 MiB uncompressed.
 
-## D-049 — Denoising the sun's soft shadows ✅ (proposed and decided 2026-10-04; to build in #172)
+## D-049 — Denoising the sun's soft shadows ✅ (proposed and decided 2026-10-04; built in #172)
 
 **Decided (the owner, 2026-10-04):**
 1. **NVIDIA's NRD, its SIGMA denoiser, used as NRD itself, not rewritten.** Our own filter sized
@@ -2503,6 +2503,44 @@ models scene, and the test models' captures beside their Khronos screenshots.
    penumbra. The sun's apparent size for the shadows becomes a setting, with a softer default
    than the real 0.27°, to judge on Sponza.
 3. **NRD may be downloaded:** to build with, and to compare against a 256-ray reference.
+4. **AMD's FidelityFX shadow denoiser as the built-in fallback** (the owner, 2026-10-04, #173):
+   where NRD is absent (a fresh clone, CI, a build that does not ship it), a Slang port of the
+   MIT denoiser takes its place, behind the same trace pass and the same hook in the resolve.
+   NRD stays the first choice when present.
+
+**Built (#172, 2026-10-04):**
+- **The library.** `tools/fetch-nrd.sh` clones NRD v4.17.3 at its pinned commit and builds
+  `NRD.dll` into the git-ignored `nrd-sdk/bin` (Visual Studio's C++ tools, the Vulkan SDK's
+  DXC, SPIR-V only). `forge_gpu::nrd` loads it at run time through a hand-written FFI whose
+  structures were checked against MSVC's layout, behind the `nrd` cargo feature (on in the
+  demos). `FORGE_NRD_DIR` points elsewhere; an empty folder runs without it.
+- **The passes.** `shadow/trace` (`sun_shadow_trace_main`, `shaders/meshlet.slang`) traces one
+  ray a pixel to a point of the sun's disc, keeps the closest hit and writes NRD's inputs: the
+  penumbra's radius, the normal and roughness, the view depth. Each of NRD's dispatches is a
+  graph pass (`shadow/SIGMA …`), its images bound with push descriptors. The resolve multiplies
+  in the denoised visibility instead of its own ray; without NRD it keeps the ray, pixel for
+  pixel as before.
+- **NRD's kernels assume D3D12.** Several (its clears, SIGMA's history copy, the tile smoothing)
+  run their last workgroup past the image's edge unchecked: D3D12 drops those writes, Vulkan
+  leaves them undefined. On the 5070 Ti the clears' stray writes landed in the shadow ray's
+  inputs, and `FORGE_ASYNC=0` differed from the async frame by 80 000 pixels. NRD's pipelines
+  alone are created robust (`VK_EXT_pipeline_robustness`, robust image access), and its clears
+  became `vkCmdClearColorImage`. Forge's own pipelines keep the device's default.
+- **The look.** The sun's disc for the denoised shadows is 1° in radius
+  (`DENOISED_SUN_RADIUS`), against the real 0.27°: `--sun-size DEG` changes it,
+  `--no-shadow-denoiser` and F6 turn SIGMA off, `--shadow-reference` traces 256 rays a pixel.
+- **On Sponza** (the #172 view at noon, 1600 × 900, frames 600–615):
+  - The curtains' penumbra, the per-pixel range over TAA's 16-frame cycle: 5.0 codes (99th
+    percentile 78) with the one ray and TAA, 1.5 (14) with SIGMA, 1.2 (8) for the 256-ray
+    reference. On the floor SIGMA's 0.68 equals the reference's.
+  - Frames 600 and 616 differ in 0.019 % of their pixels.
+  - In motion (the owner, walking forward or along the path) the curtains' edge still
+    shimmers. The 256-ray reference does not, but it is far too slow to play. Measured in
+    motion against AMD's denoiser in #173.
+- **Cost at 1440p** on the 5070 Ti (`docs/PROFILE.md`, the physics lab):
+  - Sponza: `shadow/trace` 0.44 ms, SIGMA's passes 0.44 ms; the frame 3.48 → 3.97 ms.
+  - The city's south view: 4.03 → 4.72 ms. The island: 3.69 → 3.95 ms.
+  - The proposal's estimate was 0.35 to 0.6 ms; Sponza and the city cost more.
 
 The proposal as written follows. Its trace pass, guide images and checks still hold with NRD
 in place of the in-house passes.

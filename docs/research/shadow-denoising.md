@@ -7,6 +7,10 @@ owner chose a shadow denoiser (2026-10-04): a filter whose width follows the pen
 from the blocker distance, plus temporal accumulation. This file is step 1 of the issue; the
 🟡 decision entry is step 2.
 
+**Status (2026-10-04):** decided as D-049 (NRD's SIGMA itself, not a rewrite) and built in #172.
+The measurements are in D-049. AMD's FidelityFX denoiser (§2) is the fallback without NRD
+(#173).
+
 Today:
 - **The ray.** `sun_shadow` (`shaders/meshlet.slang`, issue #54, D-029) traces one shadow ray per
   sun-facing pixel inside the resolve, as an inline ray query that stops at the first hit

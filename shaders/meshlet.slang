@@ -224,6 +224,8 @@ public static const uint FLAG_HIDDEN_INSTANCES = 1048576;
 public static const uint FLAG_INSTANCE_CELLS = 2097152;
 // The scene has cut-out or double-sided rows: their clusters take the cut-outs' raster (#171).
 public static const uint FLAG_CUTOUTS = 4194304;
+// The sun's shadow from 256 rays a pixel, no denoiser: the reference SIGMA is judged by (#172).
+public static const uint FLAG_SHADOW_REFERENCE = 8388608;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -3259,7 +3261,7 @@ struct ResolvePush
     ShoreGround* shore;  // the shore whose swash wets the sand (issue #105), or null
     float4 cloud_frame;  // the clouds' shadow map (#145): its first corner (world x, z), 1 / the metres it spans
     uint cloud_shadow;   // its sampled index (r32f: the sun's share through the clouds), or 0xFFFFFFFF
-    uint cloud_pad;
+    uint sun_shadow;     // sampled index of SIGMA's denoised shadow (r16f, its square root; #172), or 0xFFFFFFFF: the resolve's own ray
 };
 
 [[vk::push_constant]]
@@ -3356,6 +3358,34 @@ float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter, float bias)
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
     return ray_blocked(f, ray) ? 0.0 : 1.0;
+}
+
+// The share of the sun's disc `world` sees, from SUN_REFERENCE_RAYS rays a frame aimed at the
+// points of a Vogel disc, turned by an angle of the pixel's and frame's own: the reference the
+// denoised shadow is judged by (`FLAG_SHADOW_REFERENCE`, #172). A development view: 256 times
+// the soft shadow's cost.
+static const uint SUN_REFERENCE_RAYS = 256;
+float sun_shadow_reference(Frame* f, float3 world, float3 n, uint2 pixel, float bias)
+{
+    float turn = spatio_temporal_noise(pixel, f[0].noise_frame).x;
+    float lit = 0.0;
+    for (uint k = 0; k < SUN_REFERENCE_RAYS; k++)
+    {
+        float2 point = float2((float(k) + 0.5) / float(SUN_REFERENCE_RAYS), frac(turn + float(k) * 0.381966011));
+        lit += sun_shadow(f, world, n, point, bias);
+    }
+    return lit / float(SUN_REFERENCE_RAYS);
+}
+
+// The sun's shadow NVIDIA's SIGMA denoised from `sun_shadow_trace_main`'s rays (#172, D-049):
+// its output is the visibility's square root. A surface facing away keeps its 0, as
+// `sun_shadow`'s does.
+float denoised_sun_shadow(Frame* f, float3 n, uint2 pixel)
+{
+    if (dot(n, normalize(f[0].sun_dir)) <= 0.0)
+        return 0.0;
+    float stored = g_sampled_images_r[NonUniformResourceIndex(resolve_push.sun_shadow)].Load(int3(pixel, 0));
+    return saturate(stored * stored);
 }
 
 // The rays trace the static structure, then the movers' (#79), rebuilt every frame.
@@ -3850,7 +3880,16 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
-        s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
+    {
+        // NVIDIA's SIGMA denoised the sun's shadow before the resolve (#172), or the reference
+        // traces 256 rays here; else one ray a frame and TAA's average (#54).
+        if (resolve_push.sun_shadow != 0xFFFFFFFFu)
+            s.shadow = denoised_sun_shadow(f, s.n, pixel);
+        else if ((f[0].flags & FLAG_SHADOW_REFERENCE) != 0)
+            s.shadow = sun_shadow_reference(f, surface_scene, s.n, pixel, shadow_bias(f, inst, m));
+        else
+            s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
+    }
     // Under the clouds (#145).
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
         s.shadow *= cloud_light(surface_scene, normalize(f[0].sun_dir));
@@ -3999,6 +4038,112 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];
     float3 added = request.w * (hit.xyz - mirror) * (f[0].sun_illuminance * f[0].exposure / 3.14159265);
     color[pixel] = float4(color[pixel].rgb + added, 1.0);
+}
+
+// ------------------------------------------------------- the sun's shadow for SIGMA ---
+
+// The sun's shadow ray for NVIDIA's SIGMA denoiser (#172, D-049), before the resolve: per pixel,
+// the surface the visibility buffer holds, rebuilt as `shade_pixel` does, and one ray to a point
+// of the sun's disc that finds the *closest* occluder (SIGMA sizes the penumbra from its
+// distance; the first hit could be any). It writes SIGMA's inputs as NRD's interface describes
+// them (`forge_gpu::nrd`): the penumbra's radius, the normal and the view depth. The disc's
+// points come from the Hilbert curve's R2 (`spatio_temporal_noise`): distinct over every pixel
+// block and the frames, and repeating with TAA's jitter.
+struct SunShadowPush
+{
+    float4 view_z;        // the view matrix's third row NRD is given: camera-relative metres → view z
+    Frame* frame;
+    uint vis_image;       // sampled (u32): the visibility buffer
+    uint penumbra_image;  // storage (r32f): the penumbra's radius in metres, NRD_MISS lit, 0 facing away
+    uint normal_image;    // storage (rgba16f): the normal (xyz) and the linear roughness (w)
+    uint view_z_image;    // storage (r32f): the view depth, NOTHING_DRAWN_Z where nothing was drawn
+    uint width;
+    uint height;
+    float tan_radius;     // tan of the sun's angular radius for the shadows
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+[[vk::push_constant]]
+SunShadowPush sun_shadow_push;
+
+// The penumbra of a ray that reached the sun: half precision's largest value, NRD's mark.
+static const float NRD_MISS = 65504.0;
+// The view depth of a pixel without a surface: past any denoising range.
+static const float NOTHING_DRAWN_Z = 1.0e7;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
+{
+    SunShadowPush p = sun_shadow_push;
+    if (id.x >= p.width || id.y >= p.height)
+        return;
+    uint2 pixel = id.xy;
+    RWTexture2D<float> penumbra = g_storage_images_r32f[NonUniformResourceIndex(p.penumbra_image)];
+    RWTexture2D<float4> normal = g_storage_images_rgba16f[NonUniformResourceIndex(p.normal_image)];
+    RWTexture2D<float> view_z = g_storage_images_r32f[NonUniformResourceIndex(p.view_z_image)];
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
+    if (vis == VISIBILITY_EMPTY)
+    {
+        penumbra[pixel] = NRD_MISS;
+        normal[pixel] = float4(0.0, 1.0, 0.0, 1.0);
+        view_z[pixel] = NOTHING_DRAWN_Z;
+        return;
+    }
+    Frame* f = p.frame;
+    uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
+    uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
+    uint2 record = f[0].visible[slot];
+    Instance inst = f[0].instances[record.x];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
+    // The surface at the pixel centre, as `shade_pixel` rebuilds it.
+    uint base = payload_base(f, m);
+    PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
+    PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
+    PagedVertex v2 = paged_vertex(f, base, paged_index(f, base, m, tri, 2));
+    float3x3 frame = instance_frame(inst);
+    float3 relative = instance_relative(f, inst);
+    float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
+    float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
+    float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
+    float2 size = float2(float(p.width), float(p.height));
+    float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
+    Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
+    float3 n = normalize(b.lambda.x * normalize(mul(frame, decode_normal(v0.normal)))
+        + b.lambda.y * normalize(mul(frame, decode_normal(v1.normal)))
+        + b.lambda.z * normalize(mul(frame, decode_normal(v2.normal))));
+    float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
+    float3 surface_relative = mul(frame, object_position) + relative;
+    // A double-sided row seen from behind turns its normal to the viewer (#171).
+    if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0
+        && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), -surface_relative) < 0.0)
+        n = -n;
+    normal[pixel] = float4(n, 1.0);
+    view_z[pixel] = dot(p.view_z.xyz, surface_relative) + p.view_z.w;
+    float3 sun = normalize(f[0].sun_dir);
+    if (dot(n, sun) <= 0.0 || f[0].tlas == 0)
+    {
+        // Facing away: in its own shade, a penumbra of 0 (a hard shadow). Without a structure
+        // to trace, lit.
+        penumbra[pixel] = dot(n, sun) <= 0.0 ? 0.0 : NRD_MISS;
+        return;
+    }
+    // A point of the disc, uniform in area, as `sun_shadow` aims.
+    float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
+    float3 t = normalize(cross(sun, abs(sun.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
+    float3 bt = cross(sun, t);
+    float r = p.tan_radius * sqrt(u.x);
+    float phi = 6.2831853 * u.y;
+    RayDesc ray;
+    ray.Origin = to_scene(f, surface_relative) + (n + sun) * shadow_bias(f, inst, m);
+    ray.Direction = normalize(sun + (t * cos(phi) + bt * sin(phi)) * r);
+    ray.TMin = 0.0;
+    ray.TMax = 50000.0;
+    ClosestHit hit = trace_closest(f, ray);
+    penumbra[pixel] = hit.hit ? min(0.5 * hit.t * p.tan_radius, 32768.0) : NRD_MISS;
 }
 
 // The rays a pass drawn after the resolve asks for (the sea's surface, issue #105): per pixel,

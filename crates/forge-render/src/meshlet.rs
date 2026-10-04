@@ -78,6 +78,9 @@ impl CullFlags {
     /// Under a sky, show the diffuse light alone on white surfaces instead of the shading:
     /// the probes' where they reach, else the open sky's (issue #53; debug view).
     pub const SHOW_GI: u32 = 262144;
+    /// The sun's shadow from 256 rays a pixel and frame, without the denoiser: the reference
+    /// it is judged by (#172; a development view, `--shadow-reference`).
+    pub const SHADOW_REFERENCE: u32 = 1 << 23;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -518,10 +521,43 @@ struct ResolvePush {
     cloud_frame: [f32; 4],
     /// Its sampled index (r32f: the sun's share through the clouds), or `u32::MAX`.
     cloud_shadow: u32,
-    cloud_pad: u32,
+    /// Sampled index of SIGMA's denoised sun shadow (#172, [`AmbientLight::sun_shadow`]), or
+    /// `u32::MAX`: the resolve traces its own ray.
+    sun_shadow: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<ResolvePush>() == 120);
+
+/// Mirrors `SunShadowPush` in `meshlet.slang` (#172).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SunShadowPush {
+    /// The view matrix's third row: camera-relative metres to view z.
+    view_z: [f32; 4],
+    frame: u64,
+    vis_image: u32,
+    penumbra_image: u32,
+    normal_image: u32,
+    view_z_image: u32,
+    width: u32,
+    height: u32,
+    tan_radius: f32,
+    pad: [u32; 3],
+}
+
+const _: () = assert!(std::mem::size_of::<SunShadowPush>() == 64);
+
+/// SIGMA's inputs, which [`MeshletRenderer::trace_sun_shadow`] writes (#172): transients of the
+/// frame in the formats `forge_gpu::nrd` names.
+#[derive(Clone, Copy, Debug)]
+pub struct SunShadowRays {
+    /// The penumbra's radius where the ray met an occluder ([`forge_gpu::nrd::PENUMBRA_FORMAT`]).
+    pub penumbra: ImageHandle,
+    /// The surface's normal ([`forge_gpu::nrd::NORMAL_ROUGHNESS_FORMAT`]).
+    pub normal_roughness: ImageHandle,
+    /// The view depth ([`forge_gpu::nrd::VIEW_Z_FORMAT`]).
+    pub view_z: ImageHandle,
+}
 
 /// Mirrors `RequestedRaysPush` in `meshlet.slang`.
 #[repr(C)]
@@ -575,6 +611,9 @@ pub struct AmbientLight {
     pub movers: Option<MoversFrame>,
     /// The clouds' shadow on the sun's light (#145, [`crate::Clouds::shadow`]); `None`: none.
     pub clouds: Option<crate::CloudShadow>,
+    /// The sun's shadow NVIDIA's SIGMA denoised (#172, [`crate::SunShadowDenoiser`]), read in
+    /// place of the resolve's own ray; `None`: the ray, as before.
+    pub sun_shadow: Option<ImageHandle>,
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -2144,6 +2183,8 @@ pub struct MeshletRenderer {
     pipeline_resolve: [Pipeline; MATERIAL_CLASSES],
     /// The mirror rays of the smooth rows (issue #52): devices with ray queries only.
     pipeline_reflections: Option<Pipeline>,
+    /// The sun's shadow rays for SIGMA (#172): devices with ray queries only.
+    pipeline_sun_shadow: Option<Pipeline>,
     /// The mirror and shadow rays another pass asks for (issue #105): devices with ray queries
     /// only.
     pipeline_requested: Option<Pipeline>,
@@ -2495,6 +2536,22 @@ impl MeshletRenderer {
         } else {
             None
         };
+        let pipeline_sun_shadow = if rt {
+            let entry = "sun_shadow_trace_main";
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                "sun shadow rays",
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: std::mem::size_of::<SunShadowPush>() as u32,
+                name: "sun shadow rays",
+            });
+            device.destroy_shader_module(module);
+            Some(pipeline?)
+        } else {
+            None
+        };
         let pipeline_requested = if rt {
             let entry = "requested_rays_main";
             let module = device.create_shader_module(
@@ -2652,6 +2709,7 @@ impl MeshletRenderer {
             pipeline_merge,
             pipeline_resolve,
             pipeline_reflections,
+            pipeline_sun_shadow,
             pipeline_requested,
             shading_tiles: create_shading_tiles(device, extent)?,
             hzb,
@@ -3688,6 +3746,74 @@ impl MeshletRenderer {
             });
     }
 
+    /// Declares "shadow/trace" (#172, D-049): per pixel of the visibility buffer, one ray to a
+    /// point of the sun's disc of `tan_radius` (tan of its angular radius) that keeps the
+    /// closest occluder, written as NVIDIA's SIGMA reads it ([`SunShadowRays`]). `view_z` is the
+    /// third row of the view matrix SIGMA is given (camera-relative metres to view z). `None` on
+    /// a device without ray queries.
+    #[allow(clippy::too_many_arguments)]
+    pub fn trace_sun_shadow<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        targets: DrawTargets,
+        extent: vk::Extent2D,
+        view_z: Vec4,
+        tan_radius: f32,
+    ) -> Option<SunShadowRays> {
+        let pipeline = self.pipeline_sun_shadow.as_ref()?;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let image = |name: &'static str, format: vk::Format| TransientDesc {
+            name,
+            width: extent.width,
+            height: extent.height,
+            format,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        };
+        let rays = SunShadowRays {
+            penumbra: graph.transient(image("sun penumbra", forge_gpu::nrd::PENUMBRA_FORMAT)),
+            normal_roughness: graph.transient(image(
+                "sun shadow normals",
+                forge_gpu::nrd::NORMAL_ROUGHNESS_FORMAT,
+            )),
+            view_z: graph.transient(image("sun shadow view z", forge_gpu::nrd::VIEW_Z_FORMAT)),
+        };
+        let frame = self.frame_buffers[slot.index].address();
+        graph
+            .pass("shadow/trace")
+            .image(targets.visibility, ImageAccess::Sampled(compute))
+            .image(rays.penumbra, ImageAccess::StorageWrite(compute))
+            .image(rays.normal_roughness, ImageAccess::StorageWrite(compute))
+            .image(rays.view_z, ImageAccess::StorageWrite(compute))
+            .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+            .buffer(targets.pages, BufferAccess::ShaderRead(compute))
+            .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+            .with(|b| MoversFrame::declare(targets.movers, b, compute, true))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(
+                    pipeline,
+                    &SunShadowPush {
+                        view_z: view_z.to_array(),
+                        frame,
+                        vis_image: resources.sampled(targets.visibility).0,
+                        penumbra_image: resources.storage(rays.penumbra, 0).0,
+                        normal_image: resources.storage(rays.normal_roughness, 0).0,
+                        view_z_image: resources.storage(rays.view_z, 0).0,
+                        width: extent.width,
+                        height: extent.height,
+                        tan_radius,
+                        pad: [0; 3],
+                    },
+                );
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
+        Some(rays)
+    }
+
     /// Declares the passes that shade the visibility buffer once per pixel into `color` (a
     /// storage-capable colour image of `extent`, at most the renderer's size), one per
     /// material class. The standard pass covers the target: it shades the standard pixels,
@@ -3754,7 +3880,9 @@ impl MeshletRenderer {
             cloud_shadow: ambient
                 .clouds
                 .map_or(u32::MAX, |c| resources.sampled(c.image).0),
-            cloud_pad: 0,
+            sun_shadow: ambient
+                .sun_shadow
+                .map_or(u32::MAX, |s| resources.sampled(s).0),
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -3794,6 +3922,9 @@ impl MeshletRenderer {
         }
         if let Some(clouds) = ambient.clouds {
             builder = builder.image(clouds.image, ImageAccess::Sampled(compute));
+        }
+        if let Some(shadow) = ambient.sun_shadow {
+            builder = builder.image(shadow, ImageAccess::Sampled(compute));
         }
         if let Some(g) = ambient.wet_ground {
             builder = g.images().fold(builder, |b, image| {
@@ -3843,6 +3974,9 @@ impl MeshletRenderer {
             if let Some(clouds) = ambient.clouds {
                 builder = builder.image(clouds.image, ImageAccess::Sampled(compute));
             }
+            if let Some(shadow) = ambient.sun_shadow {
+                builder = builder.image(shadow, ImageAccess::Sampled(compute));
+            }
             if let Some(g) = ambient.wet_ground {
                 builder = g.images().fold(builder, |b, image| {
                     b.image(image, ImageAccess::Sampled(compute))
@@ -3881,6 +4015,9 @@ impl MeshletRenderer {
             }
             if let Some(clouds) = ambient.clouds {
                 builder = builder.image(clouds.image, ImageAccess::Sampled(compute));
+            }
+            if let Some(shadow) = ambient.sun_shadow {
+                builder = builder.image(shadow, ImageAccess::Sampled(compute));
             }
             if let Some(g) = ambient.wet_ground {
                 builder = g.images().fold(builder, |b, image| {

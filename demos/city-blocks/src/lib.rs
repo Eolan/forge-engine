@@ -478,6 +478,20 @@ struct Args {
     /// Hard sun shadows: one ray to the sun's centre instead of its disc (Z toggles them).
     #[arg(long)]
     hard_shadows: bool,
+    /// The sun's apparent radius for the soft shadows, in degrees (D-049). Where NVIDIA's SIGMA
+    /// denoises them, 1° by default: softer than the real sun's 0.27°, for art's sake. Without
+    /// it, the real sun's. The Moon's shadows at night scale with it.
+    #[arg(long)]
+    sun_size: Option<f32>,
+    /// Keep the resolve's own shadow ray even where NVIDIA's NRD is in `nrd-sdk/bin` (#172):
+    /// the soft shadows as before SIGMA, at the real sun's size unless `--sun-size` says
+    /// otherwise. F6 switches SIGMA at run time, at the size the run started with.
+    #[arg(long)]
+    no_shadow_denoiser: bool,
+    /// The sun's shadow from 256 rays a pixel and frame, without the denoiser: the reference
+    /// SIGMA is judged by (#172), at SIGMA's sun size. Slow: a development view.
+    #[arg(long)]
+    shadow_reference: bool,
     /// A day over the city: the sun rises in the east, crosses the south and sets in the west in
     /// this many seconds, and the exposure follows it (issue #57); then the night as long, under
     /// the Moon and the stars (D-046, issue #164), and again.
@@ -627,6 +641,13 @@ struct Gallery {
     /// HDR image to, in place of TAA while `dlaa_on` (T cycles it with TAA).
     dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
     dlaa_on: bool,
+    /// NVIDIA's SIGMA over the sun's soft shadows (#172, D-049), where NRD's library is in
+    /// `nrd-sdk/bin`; on while `sun_shadow_on` (F6).
+    sun_shadow: Option<forge_render::SunShadowDenoiser>,
+    sun_shadow_on: bool,
+    /// The shadows' sun over the real one's size (D-049: softer where SIGMA denoises them,
+    /// `--sun-size`); the Moon's at night scales with it.
+    sun_scale: f32,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
@@ -805,9 +826,39 @@ impl Gallery {
             renderer.sun_dir,
             64,
         ));
+        // NVIDIA's SIGMA denoises the sun's soft shadows where NRD's library is there (#172,
+        // D-049); without it the resolve's own ray, as before.
+        let sun_shadow = if args.no_shadow_denoiser || args.shadow_reference {
+            None
+        } else {
+            let dir = std::env::var_os("FORGE_NRD_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("nrd-sdk/bin")
+                });
+            match forge_render::SunShadowDenoiser::load(&ctx.device, &dir, ctx.extent()) {
+                Ok(denoiser) => {
+                    tracing::info!(version = %denoiser.version(), "the sun's shadows denoised by NVIDIA's SIGMA (NRD)");
+                    Some(denoiser)
+                }
+                Err(error) => {
+                    tracing::info!(%error, "no NRD: the sun's shadows keep their own ray");
+                    None
+                }
+            }
+        };
+        // The shadows' sun: the real one, or softer where SIGMA denoises them (D-049).
+        let real = forge_render::starfield::SUN_ANGULAR_RADIUS_1AU;
+        let sun_scale = match args.sun_size {
+            Some(degrees) => degrees.to_radians() / real,
+            None if sun_shadow.is_some() || args.shadow_reference => {
+                forge_render::DENOISED_SUN_RADIUS / real
+            }
+            None => 1.0,
+        };
         // The sun's disc softens the shadows (issue #54).
         if !args.hard_shadows {
-            renderer.sun_angular_radius = forge_render::starfield::SUN_ANGULAR_RADIUS_1AU;
+            renderer.sun_angular_radius = real * sun_scale;
         }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
@@ -1014,6 +1065,9 @@ impl Gallery {
         }
         if args.show_culled {
             flags.0 |= CullFlags::SHOW_CULLED;
+        }
+        if args.shadow_reference {
+            flags.0 |= CullFlags::SHADOW_REFERENCE;
         }
         // The probes trace the scene's TLAS (issue #53).
         let probes_on = !args.no_probes;
@@ -1293,6 +1347,9 @@ impl Gallery {
             liquid_mode,
             dlaa_on: dlaa.is_some(),
             dlaa,
+            sun_shadow_on: sun_shadow.is_some(),
+            sun_shadow,
+            sun_scale,
             sky_light,
             gtao,
             ao_on,
@@ -1375,7 +1432,7 @@ impl Gallery {
         self.renderer.sun_color = through(lights.key) * direct;
         // The disc's softness, unless Z made the shadows hard.
         if self.renderer.sun_angular_radius > 0.0 {
-            self.renderer.sun_angular_radius = lights.key_radius;
+            self.renderer.sun_angular_radius = lights.key_radius * self.sun_scale;
         }
         self.night_now = Some((sky, lights));
     }
@@ -1401,6 +1458,9 @@ impl Demo for Gallery {
         self.renderer.resize(ctx.extent())?;
         self.taa.resize(ctx.extent())?;
         self.taa.reset_history();
+        if let Some(denoiser) = &mut self.sun_shadow {
+            denoiser.resize(ctx.extent())?;
+        }
         if let Some(behind) = &mut self.behind_taa {
             behind.resize(ctx.extent())?;
         }
@@ -1453,10 +1513,21 @@ impl Demo for Gallery {
                 self.renderer.sun_angular_radius = if self.renderer.sun_angular_radius > 0.0 {
                     0.0
                 } else {
-                    forge_render::starfield::SUN_ANGULAR_RADIUS_1AU
+                    forge_render::starfield::SUN_ANGULAR_RADIUS_1AU * self.sun_scale
                 };
             }
             KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
+            // NVIDIA's SIGMA over the sun's shadows, or the resolve's own ray (#172).
+            KeyCode::F6 if self.sun_shadow.is_some() => {
+                self.sun_shadow_on = !self.sun_shadow_on;
+                if let Some(denoiser) = &mut self.sun_shadow {
+                    denoiser.reset_history();
+                }
+                tracing::info!(
+                    on = self.sun_shadow_on,
+                    "the sun's shadows denoised by SIGMA"
+                );
+            }
             // DLAA where it runs, TAA sharpened, plain, off (D-045).
             KeyCode::KeyT => {
                 let dlaa = self.dlaa.is_some();
@@ -2121,6 +2192,61 @@ impl Demo for Gallery {
                 },
             )
         });
+        // The sun's soft shadow denoised by NVIDIA's SIGMA (#172, D-049): a ray a pixel before
+        // the resolve, which then reads the result in place of its own ray. The motion vectors
+        // come first, for SIGMA's reprojection (they are reused below).
+        let mut early_motion = None;
+        let denoise = self.sun_shadow_on
+            && self.flags.has(CullFlags::SHADOWS)
+            && self.renderer.sun_angular_radius > 0.0
+            && self.scene.rays().is_some();
+        let mut sun_shadow = None;
+        if denoise && let Some(denoiser) = self.sun_shadow.as_mut() {
+            if taa_frame.reset {
+                denoiser.reset_history();
+            }
+            let shadow_camera = forge_render::SunShadowCamera {
+                view: self.camera.view_rotation(),
+                projection: self.camera.projection(ctx.aspect()),
+                position: camera.position,
+                jitter: taa_frame.jitter,
+            };
+            let sigma = denoiser.frame(
+                shadow_camera,
+                self.renderer.sun_dir,
+                self.renderer.noise_frame,
+                self.step * 1000.0,
+            );
+            if let Some(rays) = self.renderer.trace_sun_shadow(
+                &mut frame.graph,
+                frame.slot,
+                targets,
+                extent,
+                forge_render::SunShadowDenoiser::view_z_row(&shadow_camera),
+                self.renderer.sun_angular_radius.tan(),
+            ) {
+                let motion = self
+                    .taa
+                    .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+                if !self.args.no_mover_motion {
+                    self.renderer.mover_motion(
+                        &mut frame.graph,
+                        frame.slot,
+                        &self.scene,
+                        &targets,
+                        motion,
+                        camera.view_proj,
+                        taa_frame.previous_from_current,
+                        taa_frame.jitter,
+                    );
+                }
+                early_motion = Some(motion);
+                let denoiser: &'f forge_render::SunShadowDenoiser =
+                    self.sun_shadow.as_ref().expect("checked above");
+                sun_shadow =
+                    Some(denoiser.denoise(&mut frame.graph, frame.slot, rays, motion, &sigma)?);
+            }
+        }
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
@@ -2135,6 +2261,7 @@ impl Demo for Gallery {
                 wet_ground,
                 movers: targets.movers,
                 clouds: cloud_shadow,
+                sun_shadow,
             },
         );
         if let Some(space) = self.space.as_mut() {
@@ -2336,6 +2463,7 @@ impl Demo for Gallery {
                         wet_ground: None,
                         movers: targets.movers,
                         clouds: None,
+                        sun_shadow: None,
                     },
                 );
             }
@@ -2379,10 +2507,14 @@ impl Demo for Gallery {
             }
         }
         // The motion vectors, before the tank's water, whose scene behind them a TAA takes. They
-        // need only the depth and the cameras.
-        let motion = self
-            .taa
-            .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        // need only the depth and the cameras. Before the resolve when SIGMA denoised the sun's
+        // shadow, which reprojects through them (#172).
+        let motion = match early_motion {
+            Some(motion) => motion,
+            None => self
+                .taa
+                .motion_vectors(&mut frame.graph, &taa_frame, targets.depth),
+        };
         if let Some(h) = hasher {
             h.add(
                 &mut frame.graph,
@@ -2392,7 +2524,7 @@ impl Demo for Gallery {
             );
         }
         // The movers' own motion over the camera's (#79).
-        if !self.args.no_mover_motion {
+        if early_motion.is_none() && !self.args.no_mover_motion {
             self.renderer.mover_motion(
                 &mut frame.graph,
                 frame.slot,

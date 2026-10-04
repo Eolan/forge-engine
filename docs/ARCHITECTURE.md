@@ -193,7 +193,9 @@ The resolve is three kinds of pass:
   sun-facing pixel against a TLAS over the scene's instances, whose BLASes are cuts of the
   meshes' DAGs. The city and the ballad (#46) build theirs once at start.
   In the city the rays aim within the sun's disc, and TAA averages them into soft shadows
-  (#54).
+  (#54). With NVIDIA's NRD installed (D-049, #172), `shadow/trace` traces them before the
+  resolve instead, closest hit, and SIGMA (`forge_gpu::nrd`, loaded at run time, never in git)
+  denoises them over a 1° disc; the resolve reads the result.
 - **Sky light and its occlusion** (issues #47, #48; D-023's note, D-030): under a sky, a
   surface also takes the sky's irradiance for its normal (nine SH coefficients a frame,
   from the sky-view table), scaled by GTAO computed from the depth before the resolve.

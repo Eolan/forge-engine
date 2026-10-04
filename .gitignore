@@ -12,6 +12,7 @@
 # never committed (126 MB and 486 MB).
 /tracy/
 /streamline-sdk/
+/nrd-sdk/
 
 # Compiled shaders are rebuilt from shaders/*.slang
 *.spv

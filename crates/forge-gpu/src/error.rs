@@ -26,6 +26,9 @@ pub enum GpuError {
     /// NVIDIA Streamline (DLSS) failed to load or refused a call.
     #[error("Streamline: {0}")]
     Streamline(String),
+    /// NVIDIA's NRD (the sun's shadow denoiser, issue #172) failed to load or refused a call.
+    #[error("NRD: {0}")]
+    Nrd(String),
 }
 
 /// Result alias for the GPU layer.

@@ -15,6 +15,8 @@ workspace = true
 profiling = ["dep:tracy-client"]
 # DLSS through NVIDIA Streamline (`AppConfig::streamline`; Windows, SDK in `streamline-sdk/`).
 dlss = ["forge-gpu/dlss"]
+# NVIDIA NRD's SIGMA for the sun's soft shadows (D-049; the library in `nrd-sdk/bin`).
+nrd = ["forge-gpu/nrd"]
 
 [dependencies]
 anyhow = { workspace = true }

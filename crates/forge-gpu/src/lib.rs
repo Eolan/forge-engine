@@ -24,6 +24,7 @@ pub mod graph;
 mod instance;
 mod memory;
 mod memory_report;
+pub mod nrd;
 mod pipeline;
 mod shader;
 #[cfg(all(feature = "dlss", windows))]

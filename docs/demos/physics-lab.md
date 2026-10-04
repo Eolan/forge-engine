@@ -1313,14 +1313,21 @@ and SHA-256. The script checks each file and keeps those already there. The mode
     - Thin streaks of sun on the floor through the gaps beside the curtains are sunlight.
     - The dark iron braziers' bright rims are the sky they reflect at grazing angles.
     - The glow round the courtyard's opening at sunrise is bloom (B).
-  - **The sun's shadow edges on the curtains** are hard and shimmer (#172). The shape is
-    right: a ledge across the courtyard over the curtains' folds. The penumbra is not.
-    - **Its width:** about 15 cm on the cloth.
-    - **How it is drawn:** one ray per pixel and frame, to one of eight points on the sun's
-      disc.
-    - **Why it fails here:** under an exposure 8 stops below the sun, one point in eight is
-      already white.
-    - **The fix:** a shadow denoiser, after research and a decision.
+  - **The sun's shadow edges on the curtains** were hard and shimmered (#172). The shape was
+    right: a ledge across the courtyard over the curtains' folds. The penumbra was not.
+    - **Why:** one ray per pixel and frame, to one of eight points on the sun's disc, left to
+      TAA. Under an exposure 8 stops below the sun, one point in eight is already white.
+    - **The fix (D-049):** NVIDIA's SIGMA denoises the shadow when NRD is installed
+      (`tools/fetch-nrd.sh`), with the sun's disc widened to 1° for the shadows
+      (`--sun-size DEG`). F6 or `--no-shadow-denoiser` turns it off, and
+      `--shadow-reference` traces 256 rays a pixel to compare with.
+    - **Measured** at frames 600–615, the per-pixel range over TAA's cycle on the curtains'
+      penumbra: 5.0 codes before, 1.5 with SIGMA, 1.2 for the reference.
+    - **Still shimmering in motion** (the owner, 2026-10-04): walking forward or along the
+      path, the curtains' edge still shimmers with SIGMA. The reference is steady but far
+      too slow for play. To compare with AMD's denoiser in motion (#173).
+    - **Without NRD** the edge is as before. AMD's FidelityFX denoiser is to fill that gap
+      (#173).
 
 ![Sponza: at the lab's fixed exposure with the probes and without, and metered at noon](images/physics-lab-models-sponza.png)
 

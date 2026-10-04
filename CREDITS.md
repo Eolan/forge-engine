@@ -24,6 +24,10 @@ in. CI checks the crate list.
   SDK (`bin/x64/nvngx_dlss.license.txt`).
   Development builds show none of it (owner, 2026-09-25): the splash and the about box come
   with the first public release, with the other tools and frameworks that ask for the same.
+- **NVIDIA NRD** (the `nrd` feature, D-049): a game that ships NRD's SIGMA ships `NRD.dll` as
+  object code only, under terms at least as protective of NVIDIA as the NVIDIA RTX SDKs License
+  (`nrd-sdk/src/LICENSE.txt`), and never under an open-source licence. NRD never enters this
+  repository; `tools/fetch-nrd.sh` builds it. This is not a legal reading.
 - **Permissive licences** (MIT, Apache-2.0, BSD, Zlib, ISC, BSL-1.0): the notices and licence
   texts go with the binaries. A tool such as `cargo-about` builds that file from the same
   metadata as the crate list.
@@ -46,6 +50,7 @@ in. CI checks the crate list.
 | [Tracy](https://github.com/wolfpld/tracy) | Bartosz Taudul | the profiler behind `--features profiling` | BSD-3-Clause |
 | [tracy-client](https://github.com/nagisa/rust_tracy_client) | Simonas Kazlauskas | Tracy from Rust | MIT OR Apache-2.0 |
 | [Streamline](https://github.com/NVIDIA-RTX/Streamline) and DLSS | NVIDIA | DLSS as an option next to TAA (`dlss` feature, D-024) | Streamline: MIT, parts under NVIDIA's Nsight SDK licences; DLSS: NVIDIA RTX SDKs licence |
+| [NRD](https://github.com/NVIDIA-RTX/NRD) (Real-time Denoisers) v4.17.3 | NVIDIA | SIGMA, the sun's soft shadows denoised (`nrd` feature, D-049, #172); fetched and built outside git by `tools/fetch-nrd.sh`, loaded at run time | NVIDIA RTX SDKs License |
 | [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |
 | [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff`; decoding the PNG and JPEG images inside glTF models (`forge_render::textures::decode_image`, D-047) | MIT OR Apache-2.0 |
 | [OpenColorIO](https://github.com/AcademySoftwareFoundation/OpenColorIO) | Contributors to the OpenColorIO Project (Academy Software Foundation) | ACES 2.0's output transform, ported from its ACES2 code, v2.5.2, with its notice kept (`crates/forge-render/src/aces2.rs`, `shaders/aces2.slang`, issue #76) | BSD-3-Clause |

@@ -34,6 +34,7 @@ pub mod sky;
 pub mod splashes;
 pub mod starfield;
 pub mod streaming;
+pub mod sun_shadow;
 pub mod taa;
 pub mod textures;
 pub mod tonecheck;
@@ -60,7 +61,7 @@ pub use liquid::{
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,
     MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame,
-    RayRequests, SwRaster,
+    RayRequests, SunShadowRays, SwRaster,
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use shallow::{
@@ -72,6 +73,7 @@ pub use splashes::{
 };
 pub use starfield::Starfield;
 pub use streaming::{Residency, StartView, StreamingConfig, StreamingStats};
+pub use sun_shadow::{DENOISED_SUN_RADIUS, SunShadowCamera, SunShadowDenoiser};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
 pub use wakes::{MAX_WAKES, WakeFrame, WaterWake, WaterWakes};

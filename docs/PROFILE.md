@@ -1131,6 +1131,35 @@ throw) restores the server's state and runs 14 ticks again: up to 9.9 ms in that
 times in 600 ticks. The clients digest their world every tick (two batched reads and a hash of
 496 bodies, inside the tick's time).
 
+`--lab models --model Sponza`, the sun's soft shadows denoised by NVIDIA's SIGMA (#172, D-049),
+at noon from the courtyard (`--time-of-day 0.5 --view=8.84,1.83,0.39,66.2,8.3`), 2560 × 1440,
+1 500 frames, two runs each, alternating:
+
+| Zone | ms |
+|---|---|
+| `shadow/trace`: one ray a pixel to the sun's disc, the closest hit, NRD's inputs written | 0.44 |
+| `shadow/SIGMA blur` | 0.14 |
+| `shadow/SIGMA post-blur` | 0.14 |
+| `shadow/SIGMA temporal stabilization` | 0.10 |
+| `shadow/SIGMA copy` | 0.04 |
+| `shadow/SIGMA classify tiles` | 0.02 |
+| `shadow/SIGMA smooth tiles`, the two clears | under 0.01 |
+
+The frame takes 3.48 ms without SIGMA (`--no-shadow-denoiser`) and 3.96–3.99 ms with it.
+`shading/standard` drops 0.93 → 0.84 ms, the resolve's own ray gone. The trace costs more than
+four times that ray: it looks for the closest hit, not the first.
+
+The same denoiser in the other demos, 2560 × 1440, 3 000 frames, two runs each, alternating:
+
+| View | without SIGMA | with SIGMA | `shadow/trace` | SIGMA's passes |
+|---|---|---|---|---|
+| `city-blocks` (the south view) | 4.01–4.05 ms | 4.69–4.75 ms | 0.22 | 0.55 |
+| `city-blocks --island 7` | 3.66–3.72 ms | 3.95–3.96 ms | 0.14 | 0.19 |
+
+In the city SIGMA's blur and post-blur take 0.20–0.22 ms each, against 0.14 on Sponza. Its tile
+classification skips only the tiles with no penumbra; the city's view probably has fewer of
+them (not measured).
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

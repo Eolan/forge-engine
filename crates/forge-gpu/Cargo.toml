@@ -14,6 +14,9 @@ workspace = true
 # DLSS Super Resolution through NVIDIA Streamline (Windows; the SDK stays outside the
 # repository, in `streamline-sdk/`). Without it `Device::dlss` is always `None`.
 dlss = ["dep:libloading"]
+# NVIDIA NRD's SIGMA shadow denoiser (issue #172, D-049), loaded at run time from `nrd-sdk/bin`
+# (git-ignored; `tools/fetch-nrd.sh` builds it). Without it the shadows keep their own ray.
+nrd = ["dep:libloading"]
 
 [dependencies]
 ash = { workspace = true }

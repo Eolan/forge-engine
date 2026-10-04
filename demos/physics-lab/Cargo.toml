@@ -13,6 +13,8 @@ workspace = true
 [features]
 # DLAA through NVIDIA Streamline for `--dlaa` (Windows, the SDK in `streamline-sdk/`, an RTX GPU).
 dlss = ["city-blocks/dlss"]
+# NVIDIA NRD's SIGMA for the sun's soft shadows (D-049; city-blocks turns it on by default).
+nrd = ["city-blocks/nrd"]
 
 [dependencies]
 anyhow = { workspace = true }

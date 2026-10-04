@@ -29,6 +29,15 @@ pub struct DeviceFeatures {
     /// `VK_EXT_hdr_metadata`: an HDR swapchain can carry the mastering display's description
     /// (issue #94).
     pub hdr_metadata: bool,
+    /// `VK_KHR_push_descriptor`: descriptor sets recorded into the command buffer, for compute
+    /// shaders that bind their own resources (NVIDIA's NRD, issue #172).
+    pub push_descriptor: bool,
+    /// `shaderStorageImageWriteWithoutFormat`: storage images written without a declared
+    /// format (NRD's shaders, issue #172).
+    pub storage_write_without_format: bool,
+    /// `VK_EXT_pipeline_robustness` with `robustImageAccess` supported: a pipeline may ask
+    /// that its writes outside an image be dropped, as D3D12 does (NRD's shaders, #172).
+    pub pipeline_robustness: bool,
 }
 
 /// The queues a render-graph pass can run on (issue #77).
@@ -126,6 +135,8 @@ pub struct Device {
     /// RX 9070 XT), with ray queries; 1 without.
     scratch_alignment: u64,
     debug_utils: Option<ext::debug_utils::Device>,
+    /// Push descriptors, when the device offers them (NRD's passes, issue #172).
+    push_descriptor_loader: Option<khr::push_descriptor::Device>,
     allocator: Mutex<Option<Allocator>>,
     bindless: Mutex<Option<Bindless>>,
     bindless_layout: vk::DescriptorSetLayout,
@@ -207,6 +218,12 @@ impl Device {
         if let Some(name) = best.index_type_uint8 {
             extensions.push(name.as_ptr());
         }
+        if best.features.push_descriptor {
+            extensions.push(khr::push_descriptor::NAME.as_ptr());
+        }
+        if best.features.pipeline_robustness {
+            extensions.push(ext::pipeline_robustness::NAME.as_ptr());
+        }
         if best.features.ray_query {
             extensions.push(khr::acceleration_structure::NAME.as_ptr());
             extensions.push(khr::ray_query::NAME.as_ptr());
@@ -232,6 +249,7 @@ impl Device {
             // The meshlet fallback's indirect draws carry the visible-list slot in firstInstance.
             .draw_indirect_first_instance(true)
             .fill_mode_non_solid(true)
+            .shader_storage_image_write_without_format(best.features.storage_write_without_format)
             .fragment_stores_and_atomics(best.features.int64_atomics)
             // No geometry shaders are ever used (D-003), but a fragment shader that reads
             // `SV_PrimitiveID` (the visibility buffer's) declares the SPIR-V `Geometry`
@@ -299,6 +317,13 @@ impl Device {
             .pipeline_executable_info(true);
         if stats_filter.is_some() {
             features2 = features2.push_next(&mut executable);
+        }
+        // Only pipelines that ask for it are robust (NRD's, #172); every other keeps the
+        // device's default behaviour.
+        let mut robustness =
+            vk::PhysicalDevicePipelineRobustnessFeaturesEXT::default().pipeline_robustness(true);
+        if best.features.pipeline_robustness {
+            features2 = features2.push_next(&mut robustness);
         }
         // Async compute and copies (issue #77): a compute-only family and a transfer-only one,
         // never the video or optical-flow engines. `FORGE_ASYNC=0` keeps the single queue.
@@ -417,6 +442,10 @@ impl Device {
         let debug_utils = instance
             .validation_enabled()
             .then(|| ext::debug_utils::Device::new(raw_instance, &raw));
+        let push_descriptor_loader = best
+            .features
+            .push_descriptor
+            .then(|| khr::push_descriptor::Device::new(raw_instance, &raw));
         let shader_stats = stats_filter.map(|filter| {
             let loader = khr::pipeline_executable_properties::Device::new(raw_instance, &raw);
             (loader, filter)
@@ -460,6 +489,7 @@ impl Device {
             acceleration_loader,
             scratch_alignment,
             debug_utils,
+            push_descriptor_loader,
             allocator: Mutex::new(Some(allocator)),
             bindless: Mutex::new(Some(bindless)),
             bindless_layout,
@@ -582,6 +612,11 @@ impl Device {
         let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default();
         if executable_ext {
             features2 = features2.push_next(&mut executable);
+        }
+        let robustness_ext = has(ext::pipeline_robustness::NAME);
+        let mut robustness = vk::PhysicalDevicePipelineRobustnessFeaturesEXT::default();
+        if robustness_ext {
+            features2 = features2.push_next(&mut robustness);
         }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
@@ -708,6 +743,11 @@ impl Device {
             int64_atomics: v12.shader_buffer_int64_atomics == vk::TRUE
                 && fragment_stores_and_atomics == vk::TRUE,
             hdr_metadata: has(ext::hdr_metadata::NAME),
+            push_descriptor: has(khr::push_descriptor::NAME),
+            storage_write_without_format: on(base.shader_storage_image_write_without_format),
+            pipeline_robustness: robustness_ext
+                && on(robustness.pipeline_robustness)
+                && on(v13.robust_image_access),
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
@@ -854,6 +894,12 @@ impl Device {
     /// The acceleration-structure functions, on a device with ray queries.
     pub fn acceleration_loader(&self) -> Option<&khr::acceleration_structure::Device> {
         self.acceleration_loader.as_ref()
+    }
+
+    /// The push-descriptor functions, when the device offers them (issue #172).
+    #[cfg_attr(not(feature = "nrd"), allow(dead_code))]
+    pub(crate) fn push_descriptor_loader(&self) -> Option<&khr::push_descriptor::Device> {
+        self.push_descriptor_loader.as_ref()
     }
 
     pub(crate) fn memory_counters(&self) -> &crate::memory_report::MemoryCounters {
