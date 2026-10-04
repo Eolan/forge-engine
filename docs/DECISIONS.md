@@ -2628,3 +2628,76 @@ The research is `docs/research/shadow-denoising.md`. The owner chose a denoiser 
 - The slow change between frames 600 and 616 back to the hard shadows' 0.035 %.
 - ꟻLIP against the reference and the other scenes.
 - The motion check with `imgdiff --then`.
+
+## D-050 — Steadying the glass's mirror reflections 🟡 (proposed 2026-10-04)
+
+The owner, 2026-10-04: "in the city, towers with reflection were shimmering" (#176).
+
+**Measured** (the city's default view, 1600 × 900; the share of the glass's pixels that move by
+8 codes or more):
+- **Held still,** over TAA's cycle (frames 200–214): 9.1 % and 11.2 % on the left and right
+  towers' glass. Without the mirror rays (`--no-ray-reflections`): 2.4 % and 4.5 %. The frame as a
+  whole: 3.0 %.
+- **Dollying in at 3 m/s,** each frame step compared with the same run supersampled 2 × 2
+  (`imgdiff --then`): 3.2 % and 2.7 % of the glass changes unlike the supersampled run; 1.1 % and
+  0.7 % without the mirror rays.
+- **Not the cause:** the sun-shadow denoiser (identical without it), the probes and the bloom.
+
+**The cause.** Every row at Blinn-Phong power 60 and above traces one exact mirror ray a pixel
+(#50, #52). The towers' glass is power 300 (GGX roughness 0.285, α ≈ 0.08), yet its reflection
+keeps every window bay of the towers across the street: a few pixels each, met by a ray that
+TAA's jitter moves every frame. TAA cannot settle it:
+- **Still,** its clip (the 3 × 3 neighbourhood's mean ± 1.25 σ) keeps most of the jitter's
+  variation where the reflected grid makes the variance high.
+- **In motion,** it follows the glass's motion, not the reflected image's, so the history falls
+  outside the clip and the raw frame shows.
+
+**What the libraries offer** (their sources read: NRD v4.17.3 in `nrd-sdk/src`, AMD's
+FidelityFX-Denoiser at d7dfecb):
+- **The reprojection a mirror needs is published and the same in both:** a *virtual* point on the
+  pixel's view ray, as far from the camera as the surface plus the ray's length to its hit, moved
+  with the camera (NRD's README, "Primary Surface Replacement"; AMD's
+  `GetHitPositionReprojection`). On a flat pane it is exact. Not searched for patents.
+- **AMD's reflection denoiser (MIT) skips mirrors:** it denoises only rows between its glossy and
+  mirror thresholds (`prefilter.h`: `IsGlossyReflection && !IsMirrorReflection`). It treats a
+  mirror as noise-free, and here the mirror's trouble is aliasing, not noise.
+- **NRD's REBLUR_SPECULAR handles mirrors** through that virtual point. NVIDIA's own figure for
+  REBLUR's diffuse and specular together is 2.50 ms at 1440p on an RTX 4080; specular alone,
+  perhaps half. Only where NRD is installed, so it would need a fallback anyway.
+
+**Proposed:**
+1. **A history for the mirror rays alone, of Forge's own** (`shading/reflection history`, after
+   `shading/reflections`):
+   - `reflections_main` writes what it adds (the hit's light minus the sky it replaces, weighted)
+     and the ray's length to two images, instead of adding into the colour.
+   - The new pass reprojects the previous frame's reflection to the virtual point, rejects the
+     history where the glass's own depth or normal differ (a disocclusion), clips it to the
+     current reflection's 3 × 3 neighbourhood, blends about a tenth of the new frame in, and adds
+     the result into the colour. TAA then meets a reflection that no longer moves with its jitter.
+   - Two rgba16f images and a ray-length image, a compute pass over the reflection tiles: about
+     0.05–0.15 ms at 1600 × 900, to measure.
+   - It keeps the mirror as sharp as it is.
+2. **No third-party code.** FidelityFX would not touch a mirror; NRD's specular, by NVIDIA's
+   figure, costs about ten times the history's estimate, and needs a fallback anyway.
+
+**For the owner to decide:**
+1. **The look of the glass.**
+   - **(a) A sharp mirror, as today**, steadied by the history (proposed). Finest in the far
+     reflection; a mirror's detail can still crawl a little where the history is rejected (the
+     glass's edges, fast turns).
+   - **(b) Glossy, as the row says:** each pixel's ray aims inside the GGX lobe of roughness
+     0.285, and a denoiser averages them; AMD's reflection denoiser (MIT) then fits as it was
+     made. The window grids blur away at a distance, and with them the aliasing; near
+     reflections soften too. A larger port (its four headers, about 850 lines); its cost is
+     unmeasured, likely several times the history's.
+   - **(c) Both:** a smoother row for a sharp mirror where wanted (power 2000 and above), the
+     lobe below it.
+2. **The water.** The sea's and the rivers' mirror rays (`water/reflections`, #105) have the same
+   pattern on their own pass. Include them now or after the glass?
+
+**How it would be checked:**
+- The still view: the glass at 8 codes or more back to about the `--no-ray-reflections` numbers
+  (2.4 % and 4.5 %).
+- The dolly against the supersampled run: the glass's 3.2 % and 2.7 % down to about 1 %.
+- The mesh path and the fallback 0 px apart, `FORGE_ASYNC=0` the same, and the cost in
+  `docs/PROFILE.md`.
