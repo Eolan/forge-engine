@@ -798,7 +798,9 @@ is the ground truth the golden-image tests compare T0–T2 against. Radiance cas
 if the 2026 3D preprint holds up in a prototype, they replace the T0 probe update and possibly the T1
 far field, because they are noise-free and cascade like the terrain.
 
-**Adopt, not write:** Streamline (have it; MIT), NRD (MIT), the shader side of RTXDI (reservoir and
+**Adopt, not write:** Streamline (have it; MIT), NRD (NVIDIA RTX SDKs License, not MIT: free
+and royalty-free as object code, but its source may not go into an open-source licence; see
+`shadow-denoising.md`), the shader side of RTXDI (reservoir and
 resampling headers — check its licence for redistribution), RTXGI 2's SHaRC and NRC (check licence),
 NVIDIA's OMM SDK for alpha-tested foliage, XeGTAO ported to Slang, Bruneton's reference atmosphere and
 pdiff as test oracles. **Write:** the probe clipmaps and their SDF/ray-query updaters, clustered

@@ -2475,7 +2475,66 @@ models scene, and the test models' captures beside their Khronos screenshots.
   - `KHR_texture_transform`'s rotation had the wrong sign. The README's matrix as read here was
     wrong; TextureTransformTest settled it.
 - **Found and left:**
-  - Double-sided materials are drawn one-sided.
-  - Alpha cut-outs are drawn opaque.
-  - The probes go dark inside Sponza (#171).
+  - Double-sided materials are drawn one-sided, and alpha cut-outs opaque (both drawn since
+    #171).
+  - The probes go dark inside Sponza (#171: the lab's fixed exposure, not the probes).
   - The ten models' textures take 534 MiB uncompressed.
+
+## D-049 — Denoising the sun's soft shadows 🟡 (proposed 2026-10-04)
+
+On Sponza at noon (#172), the shadow of a ledge across the courtyard falls on the curtains with
+a hard, stepped edge that crawls in motion.
+- **The cause.** One ray a pixel and frame aims at one of 8 points of the sun's disc, and TAA is
+  left to average them (#54).
+- **Why it shows here.** The exposure is metered for the arcade, 8 stops under the sun.
+  - One point in eight is already white.
+  - TAA averages Karis-compressed colour, not visibility. Its result is biased dark and ripples
+    with the 8-point cycle at the penumbra's lit rim.
+
+The research is `docs/research/shadow-denoising.md`. The owner chose a denoiser over more rays
+(2026-10-04).
+
+**Proposed:**
+1. **A sun-shadow denoiser of Forge's own, in Slang, with the structure of NVIDIA's SIGMA,**
+   written from the published techniques: SVGF, Boksansky et al. (Ray Tracing Gems ch. 13),
+   Heitz et al.'s ratio estimator, PCSS's penumbra width, and NRD's documented interface. It is
+   not translated from NRD's code, whose licence (NVIDIA RTX SDKs License, not MIT) forbids
+   that.
+2. **`shadow/trace`:** a compute pass before the resolve.
+   - It traces the closest hit, from more disc points: about 128, stratified over a 4×4 pixel
+     block and 8 frames, still repeating with the jitter.
+   - It writes the visibility and the penumbra's radius (hit distance × tan θ) in 16-bit floats,
+     never 8-bit.
+3. **`shadow/classify`:** 16×16 tiles skip what is fully lit, fully shadowed or hard. The ballad's
+   hard shadows keep their pixels.
+4. **`shadow/blur`, then `shadow/post-blur`:**
+   - The penumbra is estimated from the 5×5 neighbours' distances; lit pixels borrow them.
+   - The radius in pixels is 1 to 32.
+   - 12 to 16 rotated taps, weighted by plane and normal.
+5. **`shadow/temporal`:** up to 16 frames of history, clamped to the blurred neighbourhood's mean
+   ± 1 to 1.5σ.
+6. **The resolve's sun term is unchanged.** It multiplies in the denoised visibility instead of
+   its own ray.
+7. **Cost:** about 0.35 to 0.6 ms at 1440p on the 5070 Ti, to measure (SIGMA: 0.40 ms on an RTX
+   4080).
+8. **Cross-vendor and deterministic:** no wave intrinsics, about 2 KB of groupshared memory,
+   compute passes only, the mesh path and the fallback 0 px apart.
+
+**For the owner to decide:**
+1. **The filter's width.**
+   - **From the blocker's distance:** what was sketched, and the better result.
+   - **The patent:** NVIDIA's US 10,740,954 B2 (active, to 2039) claims a shadow filter whose
+     footprint comes from the occluder's distance. This is not a legal reading.
+   - **The alternative:** a width from the variation over frames, as AMD's MIT-licensed FidelityFX
+     denoiser has it. It needs no distance and is weaker on wide penumbrae (about 15 px at most).
+2. **The look.** At 8 stops under the sun, a correct penumbra is narrow: only its darkest eighth
+   is not white, about 3 of Sponza's 16 pixels. Is that the look wanted, or a softer one (a larger
+   disc for art's sake)?
+3. **A yardstick.** May NRD be downloaded to compare with, never shipped?
+
+**How it would be checked:**
+- A 256-ray reference.
+- On the Sponza view, the per-pixel range over TAA's 16-frame cycle under 2 codes.
+- The slow change between frames 600 and 616 back to the hard shadows' 0.035 %.
+- ꟻLIP against the reference and the other scenes.
+- The motion check with `imgdiff --then`.
