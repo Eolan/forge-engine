@@ -2086,7 +2086,7 @@ together'."
   panning at 2 m/s, an ideal pixel's; the city's frame 2.4 → 5.1 ms.
 - That completes what D-045 took. The open points stay open.
 
-## D-046 — A night sky over the ground 🟡 (proposed 2026-10-04)
+## D-046 — A night sky over the ground ✅ (proposed and accepted 2026-10-04)
 
 Phase 4 lists a night sky beside the clouds (`docs/ROADMAP.md`). Today the sun sets into the
 atmosphere's twilight and the sky goes dark. The ballad's stars are art-directed for space,
@@ -2123,3 +2123,16 @@ sky, Kirk & O'Brien 2011's low-light tone mapping, the Moon's photometry, measur
 **A first step once answered:** the Moon as a light and a disc, the night through the existing
 atmosphere, the exposure's range and the blue shift, on the island with `--day` running to
 midnight; the stars as answered.
+
+**The owner's answers (2026-10-04),** the proposal accepted as written:
+1. **Stars:** both. The procedural stars stay the default; the Yale Bright Star Catalogue is
+   downloaded too, to see the real sky in the engine.
+2. **The Moon:** a plain shaded disc by default, and the real Moon's albedo map (NASA imagery,
+   downloaded) to compare. One switch, a flag and a key, turns on the real sky and the real
+   Moon together.
+3. **How dark:** night as films show it: blue, readable, the exposure capped about 4 stops
+   under the day's.
+4. **The Moon's light:** the recommendation, traced shadows as the sun's, with the soft
+   unshadowed fill kept behind a flag so both can be seen side by side.
+5. **Light pollution and night lights:** later, with the emitters of the `dusk-town` demo
+   (Phase 4, step 4).

@@ -77,4 +77,4 @@ and a blue shift, not the eye's full adaptation.
 
 ## 5. Proposal
 
-See D-046 in `docs/DECISIONS.md`: the questions for the owner, and a first step.
+See D-046 in `docs/DECISIONS.md`: the proposal, the owner's answers and a first step.
