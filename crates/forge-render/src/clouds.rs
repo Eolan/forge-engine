@@ -16,12 +16,12 @@ use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, GraphImage, Image, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
-    MemoryLocation, Pipeline, Result, SampledImageId, ShaderCompiler, ShaderStage, TransientDesc,
-    vk,
+    MemoryLocation, Pipeline, QueueKind, Result, SampledImageId, ShaderCompiler, ShaderStage,
+    TransientDesc, vk,
 };
 use glam::Mat4;
 
-use crate::sky::SkyFrame;
+use crate::sky::{SKY_VIEW_SIZE, SkyFrame};
 
 /// The noises' atlases (`SHAPE_*` and `DETAIL_*` in `clouds.slang`): texels a side of the
 /// volume, tiles a side of the atlas.
@@ -47,7 +47,9 @@ struct GpuClouds {
     height: u32,
     frame: u32,
     sky: u64,
-    pad: [u32; 2],
+    /// The sky-view table with the clouds over it (storage; #163).
+    table: u32,
+    pad: u32,
     /// The shadow map's first corner (world x, z), metres a texel, 0 (its pass only).
     shadow: [f32; 4],
 }
@@ -109,6 +111,9 @@ pub struct Clouds {
     weather: SampledImageId,
     history: [GraphImage; 2],
     size: [u32; 2],
+    /// The sky-view table with the clouds laid over it (#163), and its pass.
+    table: GraphImage,
+    table_pipeline: Pipeline,
     frame: Cell<u32>,
     blocks: Vec<Buffer>,
 }
@@ -136,6 +141,7 @@ impl Clouds {
         };
         let pipeline = compute("march_main", "clouds");
         let shadow_pipeline = compute("shadow_main", "cloud shadow");
+        let table_pipeline = compute("sky_table_main", "clouds over the sky");
         let upload = |side: u32, texels: Vec<u8>, name: &str| -> Result<(Image, SampledImageId)> {
             let image = device.create_image_with_data(
                 ImageDesc {
@@ -191,6 +197,18 @@ impl Clouds {
             )
         });
         let [a, b] = history;
+        let table = GraphImage::new(
+            device,
+            ImageDesc {
+                width: SKY_VIEW_SIZE[0],
+                height: SKY_VIEW_SIZE[1],
+                format: vk::Format::R16G16B16A16_SFLOAT,
+                usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+                name: "sky-view table with clouds",
+            },
+        )?;
         // A block per frame slot for the march, and one for the shadow's pass.
         let blocks = (0..2 * FRAMES_IN_FLIGHT)
             .map(|i| {
@@ -211,6 +229,8 @@ impl Clouds {
             detail,
             weather,
             history: [a?, b?],
+            table,
+            table_pipeline: table_pipeline?,
             size,
             frame: Cell::new(0),
             blocks,
@@ -275,7 +295,8 @@ impl Clouds {
                         height: SHADOW_TEXELS,
                         frame: 0,
                         sky: sky_address,
-                        pad: [0; 2],
+                        table: 0,
+                        pad: 0,
                         shadow: [corner[0], corner[1], texel, 0.0],
                     }],
                 );
@@ -321,6 +342,7 @@ impl Clouds {
         let pipeline = &self.pipeline;
         let sky_address = sky.address();
         let (shape, detail, weather, size) = (self.shape, self.detail, self.weather, self.size);
+        let table_storage = self.table.storage(0).0;
         let mut pass = graph
             .pass("sky/clouds")
             .image(sky.transmittance(), ImageAccess::Sampled(compute))
@@ -355,7 +377,8 @@ impl Clouds {
                     height: size[1],
                     frame,
                     sky: sky_address,
-                    pad: [0; 2],
+                    table: table_storage,
+                    pad: 0,
                     shadow: [0.0; 4],
                 }],
             );
@@ -364,6 +387,37 @@ impl Clouds {
             commands.dispatch(size[0].div_ceil(GROUP), size[1].div_ceil(GROUP), 1);
             Ok(())
         });
+    }
+
+    /// Declares `sky/clouds over the sky` (#163), after [`Clouds::march`] (whose block it
+    /// reads): the clouds along each of the sky-view table's directions, laid over the clear
+    /// table, and returns that table. [`crate::GroundSky::light_with`] projects it into the sky's
+    /// light with the clouds in it.
+    pub fn sky_table<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        sky: &SkyFrame,
+    ) -> ImageHandle {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let address = self.blocks[slot.index].address();
+        let pipeline = &self.table_pipeline;
+        let table = graph.import(&self.table);
+        graph
+            .pass("sky/clouds over the sky")
+            .queue(QueueKind::Compute)
+            .image(sky.transmittance(), ImageAccess::Sampled(compute))
+            .image(sky.sky_view(), ImageAccess::Sampled(compute))
+            .buffer(sky.light.buffer, BufferAccess::ShaderRead(compute))
+            .image(table, ImageAccess::StorageWrite(compute))
+            .run(move |_, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &address);
+                let [w, h] = SKY_VIEW_SIZE;
+                commands.dispatch(w.div_ceil(GROUP), h.div_ceil(GROUP), 1);
+                Ok(())
+            });
+        table
     }
 }
 

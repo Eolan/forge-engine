@@ -13,6 +13,7 @@ import atmosphere;
 import skyframe;
 import noise;
 import sh;
+import skyview;
 
 // Mirrors `GpuClouds` in clouds.rs.
 struct Clouds
@@ -29,7 +30,8 @@ struct Clouds
     uint height;
     uint frame;
     Sky* sky;
-    uint2 pad;
+    uint table;            // storage: the sky-view table with the clouds over it (#163; its pass only)
+    uint pad;
     float4 shadow;         // the shadow map's first corner (world x, z), metres a texel, 0 (its pass only)
 };
 
@@ -155,9 +157,88 @@ void march_main(uint3 id : SV_DispatchThreadID)
     if (id.x >= c[0].width || id.y >= c[0].height)
         return;
     Sky* s = c[0].sky;
-    Planet p = s[0].planet[0];
     float2 uv = (float2(id.xy) + 0.5) / float2(c[0].width, c[0].height);
     float3 d = view_direction(s, uv);
+    float4 result = march(c, d, spatio_temporal_noise(id.xy, c[0].frame));
+    // With the clouds as they were where this direction looked last frame.
+    if (c[0].history != 0xFFFFFFFFu)
+    {
+        float4 clip = mul(c[0].previous, float4(d, 0.0));
+        float2 last = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+        if (clip.w > 0.0 && all(last >= 0.0) && all(last <= 1.0))
+        {
+            float4 before = sample_image_level(c[0].history, SAMPLER_LINEAR_CLAMP, last, 0.0);
+            result = lerp(result, before, KEEP);
+        }
+    }
+    g_storage_images_rgba16f[NonUniformResourceIndex(c[0].target)][id.xy] = result;
+}
+
+// The clouds over the sky-view table (#163): along each of its directions, the clear table's
+// light through the clouds plus their own, in the table's units (per unit of sun illuminance):
+// what `irradiance_main` projects for the sky's light with the clouds in it. Marched once from
+// each texel's middle, with no history: the projection smooths what a jitter would.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void sky_table_main(uint3 id : SV_DispatchThreadID)
+{
+    Clouds* c = clouds_push.clouds;
+    if (id.x >= SKY_VIEW_WIDTH || id.y >= SKY_VIEW_HEIGHT)
+        return;
+    Sky* s = c[0].sky;
+    float3 up = normalize(s[0].planet[0].view_position.xyz);
+    float3 forward, right;
+    sky_view_frame(up, s[0].sun.xyz, forward, right);
+    float2 uv = (float2(id.xy) + 0.5) / float2(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
+    float4 clouds = march(c, sky_view_direction(uv, up, forward, right), float2(0.5, 0.5));
+    float3 sky = g_sampled_images[NonUniformResourceIndex(s[0].sky_view)].Load(int3(id.xy, 0)).rgb;
+    float3 seen = sky * clouds.a + clouds.rgb / max(s[0].scale.x, 1e-20);
+    g_storage_images_rgba16f[NonUniformResourceIndex(c[0].table)][id.xy] = float4(seen, 1.0);
+}
+
+// The clouds' shadow (#145): for the ground under each texel of a square round the camera, the
+// sun's share through the layer along its direction, the clouds sampled without their fine
+// detail. Softened as the octaves soften the clouds' own light, and never quite dark (light
+// still reaches the ground round and through a cloud).
+static const uint SHADOW_STEPS = 16;
+static const float SHADOW_SOFTEN = 0.3;
+static const float SHADOW_STRENGTH = 0.85;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void shadow_main(uint3 id : SV_DispatchThreadID)
+{
+    Clouds* c = clouds_push.clouds;
+    if (id.x >= c[0].width || id.y >= c[0].height)
+        return;
+    float3 sun = c[0].sky[0].sun.xyz;
+    float lit = 1.0;
+    if (sun.y > 0.03)
+    {
+        float2 ground = c[0].shadow.xy + (float2(id.xy) + 0.5) * c[0].shadow.z;
+        float t0 = c[0].layer.x / sun.y;
+        float t1 = c[0].layer.y / sun.y;
+        float step = (t1 - t0) / float(SHADOW_STEPS);
+        float optical = 0.0;
+        for (uint i = 0; i < SHADOW_STEPS; i++)
+        {
+            float t = t0 + (float(i) + 0.5) * step;
+            float3 p = float3(ground.x + sun.x * t, sun.y * t, ground.y + sun.z * t);
+            float h = saturate((p.y - c[0].layer.x) / (c[0].layer.y - c[0].layer.x));
+            optical += density_at(c, p, h, false) * step;
+        }
+        lit = lerp(1.0, exp(-c[0].layer.w * optical * SHADOW_SOFTEN), SHADOW_STRENGTH);
+    }
+    g_storage_images_r32f[NonUniformResourceIndex(c[0].target)][id.xy] = lit;
+}
+
+// The clouds along `d` from the camera: their light (pre-exposed: the sky's units times its
+// `scale.x`) and the share of what lies behind them that gets through, the march's start
+// jittered by `jitter` (in [0, 1)).
+float4 march(Clouds* c, float3 d, float2 jitter)
+{
+    Sky* s = c[0].sky;
+    Planet p = s[0].planet[0];
     float3 sun = s[0].sun.xyz;
     // The planet's frame in metres: the camera over its centre.
     float ground = p.radii.x * 1000.0;
@@ -177,7 +258,6 @@ void march_main(uint3 id : SV_DispatchThreadID)
     end = min(end, start + FARTHEST);
     if (!blocked && end > start && start >= 0.0)
     {
-        float2 jitter = spatio_temporal_noise(id.xy, c[0].frame);
         float step = (end - start) / float(STEPS);
         float cos_theta = dot(d, sun);
         // The light on the layer: the sun through the air at its middle, the sky's from above.
@@ -241,52 +321,5 @@ void march_main(uint3 id : SV_DispatchThreadID)
         float haze = exp(-start / 30000.0);
         result = float4(luminance * haze, lerp(1.0, transmittance, haze));
     }
-    // With the clouds as they were where this direction looked last frame.
-    if (c[0].history != 0xFFFFFFFFu)
-    {
-        float4 clip = mul(c[0].previous, float4(d, 0.0));
-        float2 last = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
-        if (clip.w > 0.0 && all(last >= 0.0) && all(last <= 1.0))
-        {
-            float4 before = sample_image_level(c[0].history, SAMPLER_LINEAR_CLAMP, last, 0.0);
-            result = lerp(result, before, KEEP);
-        }
-    }
-    g_storage_images_rgba16f[NonUniformResourceIndex(c[0].target)][id.xy] = result;
-}
-
-// The clouds' shadow (#145): for the ground under each texel of a square round the camera, the
-// sun's share through the layer along its direction, the clouds sampled without their fine
-// detail. Softened as the octaves soften the clouds' own light, and never quite dark (light
-// still reaches the ground round and through a cloud).
-static const uint SHADOW_STEPS = 16;
-static const float SHADOW_SOFTEN = 0.3;
-static const float SHADOW_STRENGTH = 0.85;
-
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void shadow_main(uint3 id : SV_DispatchThreadID)
-{
-    Clouds* c = clouds_push.clouds;
-    if (id.x >= c[0].width || id.y >= c[0].height)
-        return;
-    float3 sun = c[0].sky[0].sun.xyz;
-    float lit = 1.0;
-    if (sun.y > 0.03)
-    {
-        float2 ground = c[0].shadow.xy + (float2(id.xy) + 0.5) * c[0].shadow.z;
-        float t0 = c[0].layer.x / sun.y;
-        float t1 = c[0].layer.y / sun.y;
-        float step = (t1 - t0) / float(SHADOW_STEPS);
-        float optical = 0.0;
-        for (uint i = 0; i < SHADOW_STEPS; i++)
-        {
-            float t = t0 + (float(i) + 0.5) * step;
-            float3 p = float3(ground.x + sun.x * t, sun.y * t, ground.y + sun.z * t);
-            float h = saturate((p.y - c[0].layer.x) / (c[0].layer.y - c[0].layer.x));
-            optical += density_at(c, p, h, false) * step;
-        }
-        lit = lerp(1.0, exp(-c[0].layer.w * optical * SHADOW_SOFTEN), SHADOW_STRENGTH);
-    }
-    g_storage_images_r32f[NonUniformResourceIndex(c[0].target)][id.xy] = lit;
+    return result;
 }

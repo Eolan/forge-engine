@@ -14,6 +14,11 @@ import skyframe;
 struct Push
 {
     Sky* sky;
+    // `irradiance_main` only (#163): the table to project and where to write, in place of the
+    // frame's (`sky_view`, `irradiance`) when `out` is set: the sky with the clouds in it.
+    float4* out;
+    uint table;
+    uint pad;
 };
 
 [[vk::push_constant]]
@@ -25,19 +30,7 @@ static const float PI = 3.14159265;
 void local_frame(Planet p, float3 sun, out float3 up, out float3 forward, out float3 right)
 {
     up = normalize(p.view_position.xyz);
-    float3 flat_sun = sun - up * dot(sun, up);
-    forward = dot(flat_sun, flat_sun) > 1e-8 ? normalize(flat_sun) : (abs(up.x) < 0.9 ? normalize(cross(up, float3(1, 0, 0))) : normalize(cross(up, float3(0, 0, 1))));
-    right = cross(up, forward);
-}
-
-float3 sky_view_direction(float2 uv, float3 up, float3 forward, float3 right)
-{
-    float2 size = float2(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
-    float2 t = (uv * size - 0.5) / (size - 1.0);
-    float e = (t.y - 0.5) * 2.0;
-    float elevation = sign(e) * e * e * 0.5 * PI;
-    float azimuth = t.x * PI;
-    return up * sin(elevation) + (forward * cos(azimuth) + right * sin(azimuth)) * cos(elevation);
+    sky_view_frame(up, sun, forward, right);
 }
 
 // What the air shows along `direction` from the camera, per unit of sun illuminance: the
@@ -173,6 +166,9 @@ groupshared float3 g_irradiance[IRRADIANCE_THREADS];
 void irradiance_main(uint3 id : SV_GroupThreadID)
 {
     Sky* s = push.sky;
+    bool clouded = push.out != nullptr;
+    uint table = clouded ? push.table : s[0].sky_view;
+    float4* irradiance = clouded ? push.out : s[0].irradiance;
     Planet p = s[0].planet[0];
     float3 up, forward, right;
     local_frame(p, s[0].sun.xyz, up, forward, right);
@@ -191,7 +187,7 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
         float elevation = asin(clamp(dot(d, up), -1.0, 1.0));
         float3 flat = d - up * dot(d, up);
         float azimuth = dot(flat, flat) > 1e-10 ? acos(clamp(dot(normalize(flat), forward), -1.0, 1.0)) : 0.0;
-        float3 luminance = sample_image_level(s[0].sky_view, SAMPLER_LINEAR_CLAMP, sky_view_uv(elevation, azimuth), 0.0).rgb;
+        float3 luminance = sample_image_level(table, SAMPLER_LINEAR_CLAMP, sky_view_uv(elevation, azimuth), 0.0).rgb;
         float b[9];
         sh_basis(d, b);
         [unroll]
@@ -209,7 +205,7 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
             GroupMemoryBarrierWithGroupSync();
         }
         if (id.x == 0)
-            s[0].irradiance[k] = float4(g_irradiance[0] * (4.0 * PI / float(count)) * sh_cosine_band(k), 0.0);
+            irradiance[k] = float4(g_irradiance[0] * (4.0 * PI / float(count)) * sh_cosine_band(k), 0.0);
         GroupMemoryBarrierWithGroupSync();
     }
     // After the coefficients, what the resolve needs to look the table up for reflections
@@ -218,7 +214,7 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
     {
         // The index as a float value (exact below 2^24): its bits would be a denormal, which
         // the GPU may flush to zero.
-        s[0].irradiance[SH_COEFFICIENTS] = float4(up, float(s[0].sky_view));
-        s[0].irradiance[SH_COEFFICIENTS + 1] = float4(forward, 0.0);
+        irradiance[SH_COEFFICIENTS] = float4(up, float(table));
+        irradiance[SH_COEFFICIENTS + 1] = float4(forward, 0.0);
     }
 }

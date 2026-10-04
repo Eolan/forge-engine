@@ -2794,3 +2794,31 @@ image's edges, so the waves' faces take the clouds' grey and white.
     strong: the light the clouds round them and the ground send back.
   - Towards a coverage of 0.75 the clouds go back to the greyer look of before, for an overcast
     or a storm.
+
+**In the sky's light** (#163, 2026-10-04): the light the scene takes from the sky has the clouds
+in it.
+- **The table:** `sky/clouds over the sky` marches the clouds along each of the sky-view table's
+  192 × 108 directions. It lays them over the clear table: the sky's light through the cloud,
+  plus the cloud's own.
+- **The light:** `sky/irradiance with clouds` projects that table as the clear one is projected.
+- **Its users:** the resolve's light on the shaded sides, its rough reflections and the
+  probes' missed rays.
+- **What keeps the clear sky's:** the clouds themselves, so nothing lights itself; the water,
+  whose reflections take the clouds from the screen; and the rays the water traces, whose hits
+  replace the sky the water drew there (with the clouded sky subtracted instead they went black
+  where the clouds were bright). The sky drawn on screen still comes from the clear table
+  under the half-resolution clouds, so nothing is drawn twice.
+
+Per unit of sun illuminance, in the city at a cover of 0.45:
+- a roof receives 0.075 → 0.154 from the sky;
+- a wall facing the sun 0.204 → 0.282;
+- a wall facing away 0.195 → 0.199, and a floor 0.286 → 0.283.
+
+Sunlit cumulus is brighter than the blue sky it hides, so fair-weather cloud raises the diffuse
+light. The scene looks whiter and a little flatter, and the exposure follows it down.
+`--no-cloud-light` gives the clear sky's light.
+
+The cost: 0.12 ms, both passes on the async compute queue behind the sky's tables (the island's
+frame 1.81 → 1.91 ms). The serial frame and the async one give the same image.
+
+![The island at a cover of 0.5, lit by the clear sky (left) and by the sky with its clouds (right)](images/island-cloud-light.png)

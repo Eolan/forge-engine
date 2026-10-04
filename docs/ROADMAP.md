@@ -130,8 +130,8 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of
   cumulus ✅ (#145, on by default at 0.45 since 2026-10-03, the owner's choice; `--clouds`), their
-  shadows on the ground and the water, their reflection in it where the view sees them ✅;
-  next for them: the sky's irradiance under them, the weather map from the climate.
+  shadows on the ground and the water, their reflection in it where the view sees them ✅, the
+  sky's light with them in it ✅ (#163); next for them: the weather map from the climate.
 - **The rivers' and the water's polish, from their issues' "left for later":**
   - standing waves on the 2–4 % rapids (#122);
   - a bar and a scour hole at confluences (#119);

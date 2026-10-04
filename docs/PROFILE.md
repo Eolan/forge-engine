@@ -1004,6 +1004,12 @@ Since 2026-10-03 the clouds are on by default at 0.45 (the owner's choice), so e
 measured before that date, quoted elsewhere in this file, are without them; `--clouds 0` gives
 those frames again.
 
+The sky's light with the clouds in it (#163): `sky/clouds over the sky` (the clouds marched along
+the sky-view table's 192 × 108 directions) **0.11–0.12 ms** and `sky/irradiance with clouds`
+0.016 ms, both on the async compute queue behind the sky's tables. The island's start view at
+0.5: the frame 1.80–1.82 → 1.90–1.91 ms (300 frames, alternating runs). On the graphics queue
+after the march they cost 0.31–0.41 ms in all: the probes on the compute queue waited for them.
+
 ## `physics-lab` — the physics tick (#136, 2026-10-02)
 
 The tick is CPU work: Jolt's step on its own threads (5 workers and the caller on the 9800X3D's

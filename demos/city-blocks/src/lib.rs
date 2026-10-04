@@ -415,6 +415,9 @@ struct Args {
     /// No waves from the movers in the lakes and the sea (#107's A/B for the wakes).
     #[arg(long)]
     no_wakes: bool,
+    /// Light the scene by the clear sky even under clouds (#163's A/B).
+    #[arg(long)]
+    no_cloud_light: bool,
     /// Draw the flood's columns themselves, not the GPU's finer layer that shadows them (#162's
     /// A/B).
     #[arg(long)]
@@ -1678,6 +1681,18 @@ impl Demo for Gallery {
                 sun_on_roof = %format_args!("{:.3}", luma(self.renderer.sun_color) * sun.y),
                 "sky light, per unit of sun illuminance"
             );
+            if self.clouds.is_some() && !self.args.no_cloud_light {
+                // The same with the clouds in the sky (#163).
+                let c = self.sky.read_irradiance_with_clouds(&ctx.device)?;
+                let e = |n: Vec3| luma(sh_irradiance(&c, n));
+                tracing::info!(
+                    roof = %format_args!("{:.3}", e(Vec3::Y)),
+                    floor = %format_args!("{:.3}", e(-Vec3::Y)),
+                    wall_to_sun = %format_args!("{:.3}", e(flat)),
+                    wall_away = %format_args!("{:.3}", e(-flat)),
+                    "sky light with the clouds, per unit of sun illuminance"
+                );
+            }
         }
         if self.frame == 120
             && let Some((water, _, oceans)) = &self.water
@@ -1847,6 +1862,11 @@ impl Demo for Gallery {
         // before the compose lays them over the sky; the weather drifting on a 10 m/s wind.
         // Their shadow on the sun's light for the resolve.
         let mut cloud_shadow = None;
+        // The sky's light for the resolve, its reflections and the probes: with the clouds in it
+        // when there are clouds (#163). The clouds themselves and the water keep the clear sky's
+        // (the water's reflections take the clouds from the screen), and so do the rays the
+        // water traces.
+        let mut scene_light = sky.light;
         if let (Some(clouds), Some(images)) = (&self.clouds, cloud_images) {
             let time = self.sea_time as f32;
             let params = CloudParams {
@@ -1857,6 +1877,10 @@ impl Demo for Gallery {
             };
             clouds.march(&mut frame.graph, frame.slot, &sky, params, images);
             cloud_shadow = Some(clouds.shadow(&mut frame.graph, frame.slot, &sky, params));
+            if !self.args.no_cloud_light {
+                let table = clouds.sky_table(&mut frame.graph, frame.slot, &sky);
+                scene_light = self.sky.light_with(&mut frame.graph, &sky, table);
+            }
             self.clouds_previous = sky_view_proj;
         }
         // The sea's waves (issue #105), on the async compute queue; the surface drawn from
@@ -1900,7 +1924,7 @@ impl Demo for Gallery {
                     &mut frame.graph,
                     frame.slot,
                     self.renderer.frame_address(frame.slot),
-                    sky.light,
+                    scene_light,
                     camera_in_scene,
                     self.taa.frame_index() % cycle,
                     targets.movers,
@@ -1933,7 +1957,7 @@ impl Demo for Gallery {
             extent,
             None,
             AmbientLight {
-                sky: (self.sky_light && !in_space).then_some(sky.light),
+                sky: (self.sky_light && !in_space).then_some(scene_light),
                 occlusion,
                 probes,
                 wet_ground,
@@ -2124,6 +2148,9 @@ impl Demo for Gallery {
                     taa_frame.color,
                     extent,
                     AmbientLight {
+                        // The water's own sky (#163): a hit replaces the sky the water drew
+                        // there (the clear table under the screen's clouds), which this
+                        // subtracts; the clouded table's brighter sky took more than was there.
                         sky: (self.sky_light && !in_space).then_some(sky.light),
                         occlusion: None,
                         probes,

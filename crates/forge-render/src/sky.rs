@@ -26,7 +26,8 @@ use glam::{Mat4, Vec3};
 
 use crate::atmosphere::AtmosphereFrame;
 
-const SKY_VIEW_SIZE: [u32; 2] = [192, 108];
+/// The sky-view table's texels (`SKY_VIEW_WIDTH` and `SKY_VIEW_HEIGHT` in `skyview.slang`).
+pub(crate) const SKY_VIEW_SIZE: [u32; 2] = [192, 108];
 /// Froxels per side of an aerial-perspective slice, and slices (`SLICE`, `SLICES`).
 const SLICE: u32 = 32;
 const SLICES: u32 = 32;
@@ -125,6 +126,11 @@ impl SkyFrame {
     pub fn transmittance(&self) -> ImageHandle {
         self.transmittance
     }
+
+    /// The clear sky-view table, for the clouds laid over it (#163).
+    pub fn sky_view(&self) -> ImageHandle {
+        self.sky_view
+    }
 }
 
 /// The ground view's tables, their passes and the per-frame parameters.
@@ -136,7 +142,20 @@ pub struct GroundSky {
     sky_view: GraphImage,
     aerial: GraphImage,
     irradiance: GraphBuffer,
+    /// The sky's irradiance with the clouds in it (#163, [`GroundSky::light_with`]).
+    clouded: GraphBuffer,
     params: Vec<Buffer>,
+}
+
+/// Mirrors `Push` in `sky.slang`: the frame's block, and for `irradiance_main` the table to
+/// project and where to write in place of the frame's (0: the frame's).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SkyPush {
+    sky: u64,
+    out: u64,
+    table: u32,
+    pad: u32,
 }
 
 impl GroundSky {
@@ -149,7 +168,7 @@ impl GroundSky {
             )?;
             let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
                 shader: (module, entry),
-                push_constant_bytes: 8,
+                push_constant_bytes: std::mem::size_of::<SkyPush>() as u32,
                 name,
             });
             device.destroy_shader_module(module);
@@ -187,6 +206,13 @@ impl GroundSky {
             category: MemoryCategory::Frame,
             name: "sky irradiance",
         })?);
+        let clouded = GraphBuffer::new(device.create_buffer(BufferDesc {
+            size: SKY_LIGHT_BYTES,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Frame,
+            name: "sky irradiance with clouds",
+        })?);
         Ok(Self {
             sky_view_pipeline: compute("sky_view_main", "sky-view table")?,
             irradiance_pipeline: compute("irradiance_main", "sky irradiance")?,
@@ -195,6 +221,7 @@ impl GroundSky {
             sky_view: image(SKY_VIEW_SIZE, "sky-view table")?,
             aerial: image([SLICE * SLICES, SLICE], "aerial perspective")?,
             irradiance,
+            clouded,
             params,
         })
     }
@@ -280,7 +307,15 @@ impl GroundSky {
             .buffer(irradiance, BufferAccess::ShaderWrite(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(pipeline);
-                commands.push_constants(pipeline, &address);
+                commands.push_constants(
+                    pipeline,
+                    &SkyPush {
+                        sky: address,
+                        out: 0,
+                        table: 0,
+                        pad: 0,
+                    },
+                );
                 commands.dispatch(1, 1, 1);
                 Ok(())
             });
@@ -308,6 +343,47 @@ impl GroundSky {
                 address: irradiance_address,
                 table: sky_view,
             },
+        }
+    }
+
+    /// Declares `sky/irradiance with clouds` (#163): `table`, the sky-view table with the clouds
+    /// laid over it ([`crate::Clouds::sky_table`]), projected as the clear table is, into a
+    /// buffer of its own. Returns the sky's light with the clouds in it, for the resolve, its
+    /// reflections and the probes; the clouds themselves keep the clear sky's (`sky.light`).
+    pub fn light_with<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        sky: &SkyFrame,
+        table: ImageHandle,
+    ) -> SkyLight {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let buffer = graph.import_buffer(&self.clouded);
+        let out = self.clouded.address();
+        let address = sky.address;
+        let pipeline = &self.irradiance_pipeline;
+        graph
+            .pass("sky/irradiance with clouds")
+            .queue(QueueKind::Compute)
+            .image(table, ImageAccess::Sampled(compute))
+            .buffer(buffer, BufferAccess::ShaderWrite(compute))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(
+                    pipeline,
+                    &SkyPush {
+                        sky: address,
+                        out,
+                        table: resources.sampled(table).0,
+                        pad: 0,
+                    },
+                );
+                commands.dispatch(1, 1, 1);
+                Ok(())
+            });
+        SkyLight {
+            buffer,
+            address: out,
+            table,
         }
     }
 
@@ -351,7 +427,16 @@ impl GroundSky {
     /// The sky's irradiance coefficients as the last submitted frame wrote them (rgb per
     /// coefficient). Waits for the device: for logs and tests, not every frame.
     pub fn read_irradiance(&self, device: &Arc<Device>) -> Result<[Vec3; 9]> {
-        let bytes = device.read_back(&self.irradiance, 0, IRRADIANCE_BYTES)?;
+        Self::read_coefficients(device, &self.irradiance)
+    }
+
+    /// The same for the sky's light with the clouds in it (#163), zero before any.
+    pub fn read_irradiance_with_clouds(&self, device: &Arc<Device>) -> Result<[Vec3; 9]> {
+        Self::read_coefficients(device, &self.clouded)
+    }
+
+    fn read_coefficients(device: &Arc<Device>, buffer: &GraphBuffer) -> Result<[Vec3; 9]> {
+        let bytes = device.read_back(buffer, 0, IRRADIANCE_BYTES)?;
         let values: &[[f32; 4]] = bytemuck::cast_slice(&bytes[..IRRADIANCE_BYTES as usize]);
         Ok(std::array::from_fn(|k| Vec3::from_slice(&values[k][..3])))
     }
