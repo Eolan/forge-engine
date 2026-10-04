@@ -164,6 +164,13 @@ public struct Crossing
 // segment's source is integrated exactly under its own attenuation (Hillaire 2020, §5).
 public Crossing cross_atmosphere(Planet p, uint transmittance, uint multiple_scattering, float3 direction, float3 sun, uint steps)
 {
+    return cross_atmosphere_lit(p, transmittance, multiple_scattering, direction, sun, 1.0, sun, 0.0, steps);
+}
+
+// The same lit by two lights (the night sky, D-046): `sun` (the key) and `other`, each weighed by its
+// illuminance over the one the luminance is per unit of (`other_weight` 0: none).
+public Crossing cross_atmosphere_lit(Planet p, uint transmittance, uint multiple_scattering, float3 direction, float3 sun, float key_weight, float3 other, float other_weight, uint steps)
+{
     Crossing c;
     c.luminance = 0.0;
     c.transmittance = 1.0;
@@ -189,6 +196,9 @@ public Crossing cross_atmosphere(Planet p, uint transmittance, uint multiple_sca
     float cos_theta = dot(direction, sun);
     float rayleigh_p = rayleigh_phase(cos_theta);
     float mie_p = mie_phase(p.mie_absorption.w, cos_theta);
+    float other_cos = dot(direction, other);
+    float other_rayleigh = rayleigh_phase(other_cos);
+    float other_mie = mie_phase(p.mie_absorption.w, other_cos);
     float3 throughput = 1.0;
     float previous = 0.0;
     for (uint i = 1; i <= steps; i++)
@@ -211,7 +221,13 @@ public Crossing cross_atmosphere(Planet p, uint transmittance, uint multiple_sca
         Medium m = sample_medium(p, r - p.radii.x);
         float3 sunlight = sunlight_at(p, transmittance, position, sun);
         float3 multiple = sample_table(multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, sun)));
-        float3 source = sunlight * (m.rayleigh * rayleigh_p + m.mie * mie_p) + multiple * m.scattering;
+        float3 source = (sunlight * (m.rayleigh * rayleigh_p + m.mie * mie_p) + multiple * m.scattering) * key_weight;
+        if (other_weight > 0.0)
+        {
+            float3 light = sunlight_at(p, transmittance, position, other);
+            float3 other_multiple = sample_table(multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, other)));
+            source += (light * (m.rayleigh * other_rayleigh + m.mie * other_mie) + other_multiple * m.scattering) * other_weight;
+        }
         float3 segment = exp(-m.extinction * dt);
         c.luminance += throughput * (source - source * segment) / max(m.extinction, 1e-9);
         throughput *= segment;

@@ -2,8 +2,9 @@
 //! 2020: the ground-view half of D-023, whose tables ([`crate::Atmosphere`]) it reads.
 //!
 //! Four graph passes a frame, the first three ([`GroundSky::tables`]) before the resolve:
-//! - `sky/sky-view table`: the light the air scatters towards the camera, 192 × 108
-//!   directions around it (elevation squashed towards the horizon, azimuth from the sun's);
+//! - `sky/sky-view table`: the light the air scatters towards the camera, 384 × 108
+//!   directions around it (elevation squashed towards the horizon, azimuth round the whole
+//!   circle from the key light's: the sun's, or at night the Moon's, D-046);
 //! - `sky/irradiance`: that table projected on nine spherical harmonics, the light a surface
 //!   receives from the sky and the ground for its normal ([`SkyLight`], issue #47);
 //! - `sky/aerial perspective`: the light gathered and the transmittance from the camera to 32
@@ -22,12 +23,12 @@ use forge_gpu::{
     FrameGraph, FrameSlot, GraphBuffer, GraphImage, ImageAccess, ImageDesc, ImageHandle,
     MemoryCategory, MemoryLocation, Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, vk,
 };
-use glam::{Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec3};
 
 use crate::atmosphere::AtmosphereFrame;
 
 /// The sky-view table's texels (`SKY_VIEW_WIDTH` and `SKY_VIEW_HEIGHT` in `skyview.slang`).
-pub(crate) const SKY_VIEW_SIZE: [u32; 2] = [192, 108];
+pub(crate) const SKY_VIEW_SIZE: [u32; 2] = [384, 108];
 /// Froxels per side of an aerial-perspective slice, and slices (`SLICE`, `SLICES`).
 const SLICE: u32 = 32;
 const SLICES: u32 = 32;
@@ -47,6 +48,13 @@ struct GpuSky {
     camera: [f32; 4],
     sun: [f32; 4],
     scale: [f32; 4],
+    sun_disc: [f32; 4],
+    second: [f32; 4],
+    moon: [f32; 4],
+    moon_light: [f32; 4],
+    stars_x: [f32; 4],
+    stars_y: [f32; 4],
+    stars_z: [f32; 4],
     transmittance: u32,
     multiple_scattering: u32,
     sky_view: u32,
@@ -61,9 +69,52 @@ struct GpuSky {
     pad: u32,
     planet: u64,
     irradiance: u64,
+    stars: u64,
+    star_cells: u64,
+    moon_albedo: u32,
+    pad1: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuSky>() == 176);
+const _: () = assert!(std::mem::size_of::<GpuSky>() == 320);
+const _: () = assert!(std::mem::offset_of!(GpuSky, transmittance) == 224);
+
+/// The night's part of a frame's sky (D-046, issue #164; [`crate::night`]): the second light,
+/// the Moon, the airglow and the stars. Without it the sky is the sun's alone, as it was.
+#[derive(Clone, Copy, Debug)]
+pub struct SkyNight {
+    /// The key light's illuminance over the reference (`SkyParams::luminance_scale` is per unit
+    /// of the reference).
+    pub key_weight: f32,
+    /// Towards the sun, for its disc (the key may be the Moon).
+    pub sun: Vec3,
+    /// The sun's illuminance over the reference.
+    pub sun_weight: f32,
+    /// Towards the other light, and its weight (0: none).
+    pub second: Vec3,
+    /// See `second`.
+    pub second_weight: f32,
+    /// Towards the Moon.
+    pub moon: Vec3,
+    /// The Moon's disc luminance per unit Lommel–Seeliger share, over the reference (0: no
+    /// disc).
+    pub moon_disc: f32,
+    /// The Moon's soft fill's weight (`--moon-fill`, 0: none).
+    pub moon_fill: f32,
+    /// Airglow at the zenith, over the reference.
+    pub airglow: f32,
+    /// The stars' and the Milky Way's gain over the reference (0: none).
+    pub star_gain: f32,
+    /// The stars' frame from world.
+    pub stars_from_world: Mat3,
+    /// A pixel's angle at the centre of the view, radians (the stars' width).
+    pub pixel_angle: f32,
+    /// The stars' and their cells' device addresses ([`crate::night::NightSky`]), 0: none.
+    pub stars: (u64, u64),
+    /// Draw the Milky Way.
+    pub milky_way: bool,
+    /// The Moon's albedo map (sampled index), if any.
+    pub moon_albedo: Option<u32>,
+}
 
 /// What a frame's sky needs besides the atmosphere.
 #[derive(Clone, Copy, Debug)]
@@ -82,6 +133,9 @@ pub struct SkyParams {
     pub luminance_scale: f32,
     /// How far the aerial-perspective volume reaches, km (farther pixels take its last slice).
     pub aerial_far_km: f32,
+    /// The night's lights and sky (D-046): `sun_dir` is then the key light's and
+    /// `luminance_scale` per unit of the reference illuminance.
+    pub night: Option<SkyNight>,
 }
 
 /// The sky's irradiance for the resolve (issue #47): nine spherical-harmonic coefficients,
@@ -145,6 +199,64 @@ pub struct GroundSky {
     /// The sky's irradiance with the clouds in it (#163, [`GroundSky::light_with`]).
     clouded: GraphBuffer,
     params: Vec<Buffer>,
+}
+
+/// The night's part of the `Sky` block, as `GpuSky` lays it out.
+struct NightBlock {
+    key_weight: f32,
+    sun_disc: [f32; 4],
+    second: [f32; 4],
+    moon: [f32; 4],
+    moon_light: [f32; 4],
+    stars: [[f32; 4]; 3],
+    addresses: (u64, u64),
+    moon_albedo: u32,
+}
+
+/// `params.night`'s block, or the sun's sky alone: the key the sun at full weight, its disc,
+/// no other light, no Moon and no stars.
+fn night_block(params: &SkyParams, sun: Vec3) -> NightBlock {
+    let Some(n) = params.night else {
+        return NightBlock {
+            key_weight: 1.0,
+            sun_disc: sun.extend(1.0).to_array(),
+            second: [0.0; 4],
+            moon: [0.0; 4],
+            moon_light: [0.0; 4],
+            stars: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+            addresses: (0, 0),
+            moon_albedo: u32::MAX,
+        };
+    };
+    let rows = n.stars_from_world.transpose();
+    NightBlock {
+        key_weight: n.key_weight,
+        sun_disc: n.sun.normalize_or(Vec3::Y).extend(n.sun_weight).to_array(),
+        second: n
+            .second
+            .normalize_or(Vec3::Y)
+            .extend(n.second_weight)
+            .to_array(),
+        moon: n
+            .moon
+            .normalize_or(Vec3::NEG_Y)
+            .extend(crate::night::MOON_ANGULAR_RADIUS.cos())
+            .to_array(),
+        moon_light: [n.moon_disc, n.moon_fill, n.airglow, n.star_gain],
+        stars: [
+            rows.x_axis.extend(n.pixel_angle).to_array(),
+            rows.y_axis
+                .extend(if n.milky_way { 1.0 } else { 0.0 })
+                .to_array(),
+            rows.z_axis.extend(0.0).to_array(),
+        ],
+        addresses: n.stars,
+        moon_albedo: n.moon_albedo.unwrap_or(u32::MAX),
+    }
 }
 
 /// Mirrors `Push` in `sky.slang`: the frame's block, and for `irradiance_main` the table to
@@ -253,6 +365,7 @@ impl GroundSky {
             (atmosphere.transmittance, atmosphere.multiple_scattering);
         let planet = atmosphere.planet;
         let sun = params.sun_dir.normalize_or(Vec3::Y);
+        let night = night_block(&params, sun);
         let inverse = params.view_proj.inverse();
         let pipeline = &self.sky_view_pipeline;
         graph
@@ -275,8 +388,15 @@ impl GroundSky {
                                 * params.sun_angular_radius
                                 * params.sun_angular_radius),
                             params.aerial_far_km,
-                            0.0,
+                            night.key_weight,
                         ],
+                        sun_disc: night.sun_disc,
+                        second: night.second,
+                        moon: night.moon,
+                        moon_light: night.moon_light,
+                        stars_x: night.stars[0],
+                        stars_y: night.stars[1],
+                        stars_z: night.stars[2],
                         transmittance: resources.sampled(transmittance).0,
                         multiple_scattering: resources.sampled(multiple_scattering).0,
                         sky_view: resources.sampled(sky_view).0,
@@ -291,6 +411,10 @@ impl GroundSky {
                         pad: 0,
                         planet,
                         irradiance: irradiance_address,
+                        stars: night.addresses.0,
+                        star_cells: night.addresses.1,
+                        moon_albedo: night.moon_albedo,
+                        pad1: [0; 3],
                     }],
                 );
                 commands.bind_pipeline(pipeline);

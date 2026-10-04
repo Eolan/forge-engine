@@ -11,10 +11,23 @@ public struct Sky
 {
     public float4x4 inv_view_proj;   // clip → world (the drawing camera, jitter included)
     public float4 camera;            // xyz: the camera in world metres; w: metres per world unit (1)
-    public float4 sun;               // xyz: towards the sun (world); w: cos of the sun disc's radius
-    public float4 scale;             // x: pre-exposed luminance of a unit of sun illuminance; y: the
-                                     // sun disc's luminance per unit illuminance (1 / solid angle);
-                                     // z: the aerial perspective's far distance, km; w: unused
+    public float4 sun;               // xyz: towards the key light, the sun or at night the Moon
+                                     // (world, D-046); w: cos of the sun disc's radius
+    public float4 scale;             // x: pre-exposed luminance of a unit of the reference
+                                     // illuminance (the sun's by day); y: the sun disc's luminance
+                                     // per unit illuminance (1 / solid angle); z: the aerial
+                                     // perspective's far distance, km; w: the key's illuminance
+                                     // over the reference
+    public float4 sun_disc;          // xyz: towards the sun; w: its illuminance over the reference
+    public float4 second;            // xyz: towards the other light; w: its weight (0: none)
+    public float4 moon;              // xyz: towards the Moon; w: cos of its disc's radius
+    public float4 moon_light;        // x: the Moon's disc luminance per unit Lommel-Seeliger
+                                     // share, over the reference (0: no disc); y: its soft fill's
+                                     // weight (`--moon-fill`, 0: none); z: airglow at the zenith
+                                     // over the reference; w: the stars' gain over the reference
+    public float4 stars_x;           // rows of the stars' frame from world; stars_x.w: the
+    public float4 stars_y;           // pixel's angle (radians), stars_y.w: 1 to draw the Milky
+    public float4 stars_z;           // Way, stars_z.w: unused
     public uint transmittance;       // sampled-image indices of the atmosphere's tables
     public uint multiple_scattering;
     public uint sky_view;            // sky-view table: sampled index (compose) / storage index (its pass)
@@ -29,6 +42,12 @@ public struct Sky
     public uint pad;
     public Planet* planet;
     public float4* irradiance;       // the sky's irradiance, SH_COEFFICIENTS coefficients, then up and forward (irradiance_main)
+    public float4* stars;            // the night's stars, two float4 each (`Star` in sky.slang), or null
+    public uint* star_cells;         // their cells (crates/forge-render/src/night.rs, `bin_stars`)
+    public uint moon_albedo;         // sampled: the Moon's albedo map, or ~0: a plain disc
+    public uint pad1;
+    public uint pad2;
+    public uint pad3;
 };
 
 // The aerial-perspective volume: SLICES depth slices of SLICE × SLICE froxels, laid side by

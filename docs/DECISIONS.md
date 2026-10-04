@@ -2167,3 +2167,30 @@ midnight; the stars as answered.
    unshadowed fill kept behind a flag so both can be seen side by side.
 5. **Light pollution and night lights:** later, with the emitters of the `dusk-town` demo
    (Phase 4, step 4).
+
+**Built, the first step (#164, 2026-10-04):** `forge_render::night`, the sky's passes and the
+display pass; `docs/demos/island.md`, "The night".
+- **The day's cycle:** `--day` runs on through a night as long as the day; `--time-of-day`
+  takes 0–2 (1.5 midnight). The Moon's age is `--moon-age`, 0.4 by default (a waxing gibbous).
+- **The key light:** the sun until 3° under the horizon, then the Moon. The sky's tables are
+  per unit of a reference illuminance that follows the scene's light, and the sun's twilight
+  stays as a second light until 20° under the horizon.
+- **The sky-view table runs round the whole circle of azimuth (384 × 108),** not the half the
+  sun's symmetry allowed: with two lights the sky is not symmetric. Every ground-sky image
+  moved slightly.
+- **How dark: 2 stops under the eye's adaptation, not 4.** At 4 the moonlit frames were near
+  black and the blue did not read. The meter takes the scene's brighter half (the sky and the
+  clouds), so at 2 the moonlit land shows about 4 stops under its day's brightness, which was
+  the answer's intent. `--night-stops` sets it; the doc shows 4, 3 and 2 side by side.
+- **The Purkinje shift in two halves:** the colour fades towards the rods' luminance before the
+  tone curve, and the display's colour is tinted blue after it. A blue given before the curve
+  was washed out by ACES 2.0's chroma compression in the darks. The HDR path takes the fade
+  alone for now (#94).
+- **The exposure at a night's first frame:** metered at the day's EV, only the Moon's disc
+  stood above the histogram, and the exposure snapped to it. With a night, a frame where under
+  5 % of the pixels are metered now looks 12 stops brighter.
+- **Stars:** procedural, 8 912 of them to magnitude 6.5 with the sky's counts per magnitude,
+  twice as dense on the galactic plane, drawn about a pixel wide and 16 times brighter than
+  physical (`--star-gain`), as an eye sees them rather than a camera.
+- **Left for the second step:** the Yale catalogue and the Moon's albedo map behind
+  `--real-sky` and a key.

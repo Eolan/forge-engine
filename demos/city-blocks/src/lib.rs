@@ -468,13 +468,34 @@ struct Args {
     #[arg(long)]
     hard_shadows: bool,
     /// A day over the city: the sun rises in the east, crosses the south and sets in the west in
-    /// this many seconds, then again, and the exposure follows it (issue #57).
+    /// this many seconds, and the exposure follows it (issue #57); then the night as long, under
+    /// the Moon and the stars (D-046, issue #164), and again.
     #[arg(long)]
     day: Option<f32>,
-    /// The sun held where `--day` has it this far through the day (0 sunrise, 0.5 noon, 1
-    /// sunset), the exposure metered from the scene as `--day`'s.
+    /// The sun held where `--day` has it this far through the cycle (0 sunrise, 0.5 noon, 1
+    /// sunset, 1.5 midnight), the exposure metered from the scene as `--day`'s.
     #[arg(long, conflicts_with = "day")]
     time_of_day: Option<f32>,
+    /// The Moon's age with `--day` and `--time-of-day`, in lunations: 0 new, 0.25 first
+    /// quarter, 0.5 full (D-046; default 0.4, a waxing gibbous).
+    #[arg(long)]
+    moon_age: Option<f32>,
+    /// The Moon's light as a soft unshadowed fill in the sky's light, instead of a key light
+    /// with traced shadows like the sun's (D-046's other answer, to compare).
+    #[arg(long)]
+    moon_fill: bool,
+    /// How much brighter than their physical luminance the night's stars and Milky Way are
+    /// drawn (default 16: as a dark-adapted eye sees them rather than a camera).
+    #[arg(long)]
+    star_gain: Option<f32>,
+    /// How many stops under what the eye would adapt to the night is shown (D-046, film's
+    /// night): 2 by default, which leaves the moonlit land about 4 stops under its day's
+    /// brightness, the scene metered on its brighter half (the sky and the clouds).
+    #[arg(long, default_value_t = 2.0)]
+    night_stops: f32,
+    /// No Purkinje shift at night (the colours kept as the cones see them), to compare.
+    #[arg(long)]
+    no_purkinje: bool,
     /// The island's golden shot of this name (`island --shot NAME`; the log lists them): its view
     /// and its time of day, unless `--view` or `--time-of-day` is given.
     #[arg(long)]
@@ -631,6 +652,12 @@ struct Gallery {
     splash_born: u64,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
+    /// The night (D-046, issue #164) with `--day` and `--time-of-day`: where the Moon and the
+    /// stars are, the stars on the GPU, and this frame's sky and lights.
+    night: Option<forge_render::night::NightSky>,
+    celestial: forge_render::night::Celestial,
+    night_settings: forge_render::night::NightSettings,
+    night_now: Option<(forge_render::night::SkyAt, forge_render::night::NightLights)>,
     meter: LuminanceMeter,
     auto_exposure: AutoExposure,
     /// Seconds the last update advanced.
@@ -787,6 +814,29 @@ impl Gallery {
         if room {
             renderer.sun_dir = lab::room::SUN.normalize();
             renderer.sun_color = Vec3::ONE;
+        }
+        // The night under the ground's sky (D-046) wherever the day turns: `--day`, `--time-of-day`.
+        let night = ((args.day.is_some() || args.time_of_day.is_some())
+            && space.is_none()
+            && !bench
+            && !room)
+            .then(|| forge_render::night::NightSky::new(&ctx.device, renderer.sun_illuminance))
+            .transpose()?;
+        let mut celestial = forge_render::night::Celestial::default();
+        if let Some(age) = args.moon_age {
+            celestial.moon_age = age;
+        }
+        let night_settings = forge_render::night::NightSettings {
+            moon_fill: args.moon_fill,
+            star_gain: args
+                .star_gain
+                .unwrap_or(forge_render::night::NightSettings::default().star_gain),
+            ..Default::default()
+        };
+        let mut auto_exposure = auto_exposure;
+        if night.is_some() {
+            // Film's night (D-046): a few stops under what the eye would adapt to.
+            auto_exposure.night_stops = args.night_stops;
         }
         let liquid = matches!(
             args.lab,
@@ -1215,6 +1265,10 @@ impl Gallery {
             sea_time: 0.0,
             sea_time_submitted: 0.0,
             day_time: 0.0,
+            night,
+            celestial,
+            night_settings,
+            night_now: None,
             meter,
             auto_exposure,
             step: 1.0 / 60.0,
@@ -1238,7 +1292,8 @@ impl Gallery {
             settled: false,
         };
         if let Some(t) = gallery.args.time_of_day {
-            gallery.set_sun_of_day(t.clamp(0.0, 1.0));
+            let last = if gallery.night.is_some() { 2.0 } else { 1.0 };
+            gallery.set_sun_of_day(t.clamp(0.0, last));
         }
         Ok(gallery)
     }
@@ -1249,24 +1304,42 @@ impl Gallery {
         self.args.day.is_some() || self.args.time_of_day.is_some()
     }
 
-    /// `--day` (issue #57): the sun at `t` of the day (0 sunrise, 0.5 noon, 1 sunset). It rises from
-    /// 4° below the eastern horizon to 70° in the south and sets in the west, and its colour is
-    /// the sunlight through the air.
+    /// `--day` (issue #57): the sun at `t` of the cycle (0 sunrise, 0.5 noon, 1 sunset, 1.5
+    /// midnight). It rises from 4° below the eastern horizon to 70° in the south and sets in the
+    /// west, and its colour is the sunlight through the air. With the night (D-046), the key
+    /// light goes to the Moon once the sun is down: its direction, colour and illuminance take
+    /// the sun's fields, which are then per unit of the frame's reference illuminance.
     fn set_sun_of_day(&mut self, t: f32) {
-        let pi = std::f32::consts::PI;
-        let elevation = (-4.0_f32 + 74.0 * (pi * t).sin()).to_radians();
-        let azimuth = pi * t;
-        self.renderer.sun_dir = Vec3::new(
-            elevation.cos() * azimuth.cos(),
-            elevation.sin(),
-            elevation.cos() * azimuth.sin(),
-        );
+        let sun_illuminance = forge_render::starfield::SUN_ILLUMINANCE_1AU;
+        let sky = self.celestial.at(t, sun_illuminance);
         let params = &self.atmosphere.params;
-        self.renderer.sun_color = Vec3::from(params.transmittance(
-            Vec3::new(0.0, params.bottom_radius + 0.05, 0.0),
-            self.renderer.sun_dir,
-            64,
-        ));
+        let through = |direction: Vec3| {
+            Vec3::from(params.transmittance(
+                Vec3::new(0.0, params.bottom_radius + 0.05, 0.0),
+                direction,
+                64,
+            ))
+        };
+        if self.night.is_none() {
+            self.renderer.sun_dir = sky.sun;
+            self.renderer.sun_color = through(sky.sun);
+            return;
+        }
+        let lights = forge_render::night::NightLights::new(&sky, sun_illuminance);
+        self.renderer.sun_dir = lights.key;
+        self.renderer.sun_illuminance = lights.reference;
+        // `--moon-fill`: no direct moonlight (the fill is in the sky's light instead).
+        let direct = if self.night_settings.moon_fill && !lights.key_is_sun {
+            0.0
+        } else {
+            lights.key_weight
+        };
+        self.renderer.sun_color = through(lights.key) * direct;
+        // The disc's softness, unless Z made the shadows hard.
+        if self.renderer.sun_angular_radius > 0.0 {
+            self.renderer.sun_angular_radius = lights.key_radius;
+        }
+        self.night_now = Some((sky, lights));
     }
 
     /// Where the camera stands in the world: the scene's origin (`--origin`, issue #93) and its
@@ -1522,7 +1595,9 @@ impl Demo for Gallery {
         }
         if let Some(length) = self.args.day {
             self.day_time += self.step;
-            self.set_sun_of_day((self.day_time / length.max(1.0)).fract());
+            // A day, then with the night (D-046) a night as long.
+            let cycle = if self.night.is_some() { 2.0 } else { 1.0 };
+            self.set_sun_of_day((self.day_time / length.max(1.0)).rem_euclid(cycle));
         }
         if let Some(tour) = &self.tour {
             self.tour_time += if self.args.fixed_step { 1.0 / 60.0 } else { dt };
@@ -1685,6 +1760,20 @@ impl Demo for Gallery {
                 sun_on_roof = %format_args!("{:.3}", luma(self.renderer.sun_color) * sun.y),
                 "sky light, per unit of sun illuminance"
             );
+            if let Some((at, lights)) = &self.night_now {
+                // The night (D-046): which light is the key, what the sky is per unit of, the
+                // exposure it is seen at.
+                tracing::info!(
+                    key = if lights.key_is_sun { "sun" } else { "moon" },
+                    sun_elevation = %format_args!("{:.1}", at.sun.y.asin().to_degrees()),
+                    moon_elevation = %format_args!("{:.1}", at.moon.y.asin().to_degrees()),
+                    moon_lux = %format_args!("{:.3}", at.moon_illuminance),
+                    reference_lux = %format_args!("{:.4}", lights.reference),
+                    second_weight = %format_args!("{:.3e}", lights.second_weight),
+                    ev100 = %format_args!("{:.2}", self.auto_exposure.ev100),
+                    "night"
+                );
+            }
             if self.clouds.is_some() && !self.args.no_cloud_light {
                 // The same with the clouds in the sky (#163).
                 let c = self.sky.read_irradiance_with_clouds(&ctx.device)?;
@@ -1749,6 +1838,12 @@ impl Demo for Gallery {
         } else {
             exposure_from_ev100(self.args.ev100)
         };
+        // The night's Purkinje shift (D-046) in whichever pass shows the image.
+        let night_on = self.night.is_some() && !self.args.no_purkinje;
+        self.taa.purkinje = night_on;
+        if let Some((_, display)) = self.dlaa.as_mut() {
+            display.scotopic = if night_on { 1.0 / exposure } else { 0.0 };
+        }
         // Draw jittered into TAA's HDR target, cull with the unjittered camera, resolve
         // through the history and the tone curve into the swapchain.
         let taa_frame = self.taa.begin(
@@ -1845,6 +1940,14 @@ impl Demo for Gallery {
         // (issue #47). The cloud layer's images, this frame's and last (#145).
         let cloud_images = self.clouds.as_ref().map(|c| c.images(&mut frame.graph));
         let sky_view_proj = taa_frame.jittered_projection * self.camera.view_rotation();
+        // The night's sky (D-046): the Moon, the second light, the airglow and the stars, a
+        // star about a pixel wide.
+        let pixel_angle = 2.0 * (0.5 * self.camera.fov_y).tan() / extent.height.max(1) as f32;
+        let night = self
+            .night
+            .as_ref()
+            .zip(self.night_now)
+            .map(|(night, (at, lights))| night.sky(&at, &lights, pixel_angle, self.night_settings));
         let sky = self.sky.tables(
             &mut frame.graph,
             frame.slot,
@@ -1856,6 +1959,7 @@ impl Demo for Gallery {
                 sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
                 luminance_scale: self.renderer.sun_illuminance * exposure,
                 aerial_far_km: 8.0,
+                night,
             },
             targets.depth,
             taa_frame.color,

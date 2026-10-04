@@ -2811,7 +2811,8 @@ in it.
   under the half-resolution clouds, so nothing is drawn twice.
 
 Per unit of sun illuminance, in the city at a cover of 0.45:
-- a roof receives 0.075 → 0.154 from the sky;
+- a roof receives 0.075 → 0.154 from the sky (0.199 since the clouds are marched round the whole
+  sky, "The night" below);
 - a wall facing the sun 0.204 → 0.282;
 - a wall facing away 0.195 → 0.199, and a floor 0.286 → 0.283.
 
@@ -2870,3 +2871,80 @@ The logged confluence (`--view=4262,8.5,-2834,-134.8,-20`) without (left) and wi
 scour: shallow and near the coast, it shows as a slightly darker patch.
 
 ![The logged confluence without (left) and with (right) the scour hole](images/island-confluence-scour.png)
+
+## The night (D-046, #164, 2026-10-04)
+
+`--day` now runs on through a night as long as the day, and `--time-of-day` takes 0–2: 0
+sunrise, 0.5 noon, 1 sunset, 1.5 midnight. The sun keeps its path and goes on under the
+northern horizon. The Moon follows the same path, `2 × age` behind the sun (`--moon-age`, 0.4
+by default: a waxing gibbous, high in the evening).
+
+- **The key light:** the sun until it is 3° under the horizon (the clouds still see it), then
+  the Moon. Its direction, colour and illuminance take the sun's fields, so its shadows are
+  traced as the sun's, the probes see it, and the sea glitters under it. The Moon's
+  illuminance follows its measured phase law: 0.32 lux full above the air, 0.17 lux at the
+  default age at midnight.
+- **`--moon-fill`:** D-046's other answer, to compare: no direct moonlight, its light added to
+  the sky's light as a broad lobe round it. Soft and shadowless, and no glitter on the water.
+- **The tables at night:** the sky's tables are per unit of a reference illuminance that
+  follows the scene's light, 128 klux at noon, a few tenths of a lux under the Moon. Each light
+  is weighed against it, so a night keeps fp16's precision. The sun's twilight stays as a
+  second light, faded out between 12° and 20° under the horizon. Deeper, the
+  multiple-scattering table's residue at such angles, weighed by a million against the Moon,
+  made the sky glow. The sky-view table now runs round the whole circle of azimuth (384 × 108):
+  with two lights the sky is not symmetric about the key's vertical plane.
+- **The sky:** the Moon's disc lit by phase (Lommel–Seeliger, scaled so the disc gives the
+  Moon's measured illuminance), with a little earthshine on its dark side. 8 912 procedural
+  stars to magnitude 6.5, with the real sky's counts per magnitude, twice as dense on the
+  galactic plane, colours from a black body at their B − V. A faint Milky Way along the
+  galactic plane, with a dark rift towards its centre. Airglow, the moonless sky's floor (0.2
+  mcd/m² at the zenith, more towards the horizon). The stars are binned on a cube of 6 × 64²
+  cells round the sky; the compose reads its pixel's cell and draws each star there as a
+  Gaussian 0.75 pixel wide that keeps its illuminance, so they neither shimmer nor vanish as
+  the view turns. They turn about the celestial pole (43.5° N) once a cycle.
+- **Seeing it:** the exposure is held 2 stops under the eye's adaptation (`--night-stops`). The
+  meter takes the scene's brighter half, the sky and the clouds, so the moonlit land then shows
+  about 4 stops under its day's brightness. The stars are drawn 16 times brighter than
+  physical (`--star-gain`), as an eye sees them rather than a camera.
+- **The Purkinje shift,** in two halves: below 3 cd/m² the colours fade towards the rods'
+  luminance before the tone curve, and the display's colour is tinted blue after it. A blue
+  given before the curve came out grey, washed out by ACES 2.0's chroma compression in the
+  darks. `--no-purkinje` turns it off.
+- **The exposure at a night's first frame:** metered at the day's EV, only the Moon's disc stood
+  above the histogram, and the exposure snapped to it (EV 7.7 instead of −0.5: a black frame).
+  With a night, a frame where under 5 % of the pixels are metered now looks 12 stops brighter.
+- **A fix to #163 on the way:** with the table round the whole circle, `sky/clouds over the sky`
+  marches the clouds on both sides of the key's plane. Before, it marched one side and the
+  projection read it mirrored onto the other, but clouds are not symmetric. In the city at 0.45,
+  a roof now receives 0.199 of the sun from the clouded sky, not 0.154. The walls and the floor
+  are about as before (0.282, 0.205, 0.283). Marched one-sided again, the city's capture comes
+  back within a ꟻLIP mean of 0.008 of the accepted one, against 0.079 as it is.
+
+**Cost** (the island's start view, 300 frames, `--time-of-day 1.7` against the day): the frame
+1.90–1.93 → 1.97–1.99 ms. `sky/compose` takes 0.025 → 0.044 ms with the Moon and the stars, the
+display pass 0.088 → 0.097 ms with the Purkinje shift. By day nothing changes: the sky-view
+table at twice the width takes 0.028 ms, the clouds over it 0.109 ms as before (both on the async
+compute queue).
+
+**Checks:** Tier 2 passes. The ground-sky images all moved, since the table's texels moved (the
+island's start view: a ꟻLIP mean of 0.020, the lab's scenes 0.02–0.03, the city 0.079 as
+above). The ballad, the meshlets and the bench did not change; the serial frame matches the async
+one; mesh against fallback and the culling A/B are at 0 px.
+
+From the top left: dusk, the sun 6° under the horizon (`--time-of-day 1.01`); midnight over the
+largest mouth; the Moon setting over the sea, its glitter on the water; and the same without the
+Purkinje shift (`--no-purkinje`), the clouds warm grey.
+
+![Dusk, midnight over the mouth, moonset over the sea, and moonset without the Purkinje shift](images/island-night.png)
+
+The Moon's light traced as the sun's (left) and as a soft fill (`--moon-fill`, right): the fill
+has no glitter on the sea and flatter clouds.
+
+![The Moon as a key light with traced shadows (left) and as a soft fill (right)](images/island-night-moonlight.png)
+
+How dark: `--night-stops` 4, 3 and 2 (left to right), the Moon ahead (top) and behind (bottom).
+D-046's answer was "about 4 stops under the day's". At 4 the frames are near black and the blue
+does not read, so the default is 2, where the moonlit land is about 4 stops under its day's
+brightness.
+
+![The night at 4, 3 and 2 stops under the eye's adaptation](images/island-night-stops.png)

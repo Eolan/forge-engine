@@ -138,6 +138,12 @@ pub struct AutoExposure {
     pub speed_darken: f32,
     /// Adaptation rate per second towards a brighter image (the scene got darker).
     pub speed_brighten: f32,
+    /// How many stops darker than the metered scene the night is shown (D-046: film's night,
+    /// blue and readable, not the eye's full adaptation): none above `night_ev.0`, all of
+    /// them below `night_ev.1`, linear in between. 0, the default, adapts fully.
+    pub night_stops: f32,
+    /// The metered EV100s where the night's darkening starts and where it is full.
+    pub night_ev: (f32, f32),
     started: bool,
 }
 
@@ -153,6 +159,8 @@ impl AutoExposure {
             band: (0.5, 0.98),
             speed_darken: 1.5,
             speed_brighten: 0.8,
+            night_stops: 0.0,
+            night_ev: (8.0, -2.0),
             started: false,
         }
     }
@@ -171,11 +179,27 @@ impl AutoExposure {
             self.target_ev100 = self.ev100;
             return;
         }
-        if let Some(luminance) =
+        // With a night (D-046), almost everything under the histogram's 24 stops: a scene far
+        // darker than the exposure (the Moon's light seen at the day's), where the few pixels
+        // metered (the Moon's disc) would set it. Look 12 stops brighter, at once before the
+        // first reading. Without one, black is space (the ballad) and is left out.
+        let under = self.night_stops > 0.0
+            && histogram.is_some_and(|h| {
+                h.samples() > 0 && (h.metered_samples() as f64) < 0.05 * h.samples() as f64
+            });
+        if under {
+            self.target_ev100 = (self.ev100 - 12.0).clamp(self.range.0, self.range.1);
+            if !self.started {
+                self.ev100 = self.target_ev100;
+            }
+        } else if let Some(luminance) =
             histogram.and_then(|h| h.average_luminance(self.band.0, self.band.1))
         {
-            self.target_ev100 = (ev100_from_luminance(luminance) - self.compensation)
-                .clamp(self.range.0, self.range.1);
+            let metered = ev100_from_luminance(luminance) - self.compensation;
+            let (from, full) = self.night_ev;
+            let night = ((from - metered) / (from - full)).clamp(0.0, 1.0);
+            self.target_ev100 =
+                (metered + night * self.night_stops).clamp(self.range.0, self.range.1);
             if !self.started {
                 self.started = true;
                 self.ev100 = self.target_ev100;
@@ -432,6 +456,37 @@ mod tests {
         auto.range = (0.0, 12.0);
         auto.update(Some(&bright), 1.0 / 60.0);
         assert!((auto.target_ev100 - (target - 1.0).min(12.0)).abs() < 0.05);
+    }
+
+    #[test]
+    fn the_night_is_shown_darker_than_the_eye_would_adapt() {
+        let mut auto = AutoExposure::new(15.0);
+        auto.night_stops = 2.0;
+        // A day's scene: no darkening.
+        let day = LuminanceHistogram::from_samples([(4000.0, 100)], exposure_from_ev100(15.0));
+        auto.update(Some(&day), 1.0 / 60.0);
+        assert!((auto.target_ev100 - ev100_from_luminance(4000.0)).abs() < 0.05);
+        // A moonlit one, seen first at the day's exposure: under the histogram but for the Moon's
+        // disc, so the exposure looks 12 stops brighter at once instead of metering the disc.
+        let mut auto = AutoExposure::new(15.0);
+        auto.night_stops = 2.0;
+        let moonlit =
+            |exposure| LuminanceHistogram::from_samples([(0.005, 10_000), (3000.0, 10)], exposure);
+        auto.update(Some(&moonlit(exposure_from_ev100(15.0))), 1.0 / 60.0);
+        assert_eq!(auto.ev100, 3.0);
+        // Metered, it settles two stops above the moonlit scene's EV (a darker image).
+        auto.update(Some(&moonlit(auto.exposure())), 1.0 / 60.0);
+        let eye = ev100_from_luminance(0.005);
+        assert!(
+            (auto.target_ev100 - (eye + 2.0)).abs() < 0.1,
+            "{}",
+            auto.target_ev100
+        );
+        // Without a night (space), black around a rock stays out of the meter.
+        let mut space = AutoExposure::new(15.0);
+        let rock = LuminanceHistogram::from_samples([(0.0, 10_000), (4000.0, 10)], 1e-4);
+        space.update(Some(&rock), 1.0 / 60.0);
+        assert!((space.ev100 - ev100_from_luminance(4000.0)).abs() < 0.05);
     }
 
     #[test]

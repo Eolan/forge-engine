@@ -1009,10 +1009,17 @@ measured before that date, quoted elsewhere in this file, are without them; `--c
 those frames again.
 
 The sky's light with the clouds in it (#163): `sky/clouds over the sky` (the clouds marched along
-the sky-view table's 192 × 108 directions) **0.11–0.12 ms** and `sky/irradiance with clouds`
+the sky-view table's 192 × 108 directions, 384 × 108 since #164) **0.11–0.12 ms** and `sky/irradiance with clouds`
 0.016 ms, both on the async compute queue behind the sky's tables. The island's start view at
 0.5: the frame 1.80–1.82 → 1.90–1.91 ms (300 frames, alternating runs). On the graphics queue
 after the march they cost 0.31–0.41 ms in all: the probes on the compute queue waited for them.
+
+The night (D-046, #164; the island's start view, 300 frames, `--time-of-day 1.7` against the
+day): the frame 1.90–1.93 → 1.97–1.99 ms. `sky/compose` 0.025 → 0.044 ms (the Moon's disc, the
+stars from their cells, the Milky Way), the display pass 0.088 → 0.097 ms (the Purkinje shift).
+The sky-view table now runs round the whole circle at 384 × 108: `sky/sky-view table` 0.028 ms
+and `sky/clouds over the sky` 0.109 ms by day, both on the async compute queue and no slower
+than at 192 × 108.
 
 ## `physics-lab` — the physics tick (#136, 2026-10-02)
 

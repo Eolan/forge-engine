@@ -41,7 +41,50 @@ public struct Output
     public float scene_gain;  // HDR: the paper-white offset (2^stops), before ACES 2.0
     public float sdr_white;   // HDR: the nits of an SDR curve's white (the UI's paper white)
     public uint frame;        // the dither's frame
+    public float scotopic;    // the night's Purkinje shift (D-046): what turns a pre-exposed colour
+                              // into cd/m² (1 / exposure), 0: off
+    public uint pad0;
+    public uint pad1;
+    public uint pad2;
 };
+
+// The Purkinje shift (D-046; Kirk & O'Brien 2011's effect, cheaply): as the scene's luminance
+// falls from 3 to 0.003 cd/m² the eye's rods take over from its cones, colours fade and the
+// night turns blue. In two halves: before the tone curve the pixel's colour fades towards its
+// scotopic luminance (Durand & Dorsey 2000's estimate from XYZ, normalised so white keeps its
+// luminance); after it the display's colour is tinted a moonlight blue, as a grade, since a
+// curve's chroma compression in the darks (ACES 2.0's) would wash out a blue given before it.
+
+// The rods' share of the pixel's vision (0 cones alone, 1 rods alone): `scotopic` turns the
+// pre-exposed colour into cd/m², 0 for no shift.
+float night_rods(float3 color, float scotopic)
+{
+    if (scotopic <= 0.0)
+        return 0.0;
+    float y = dot(max(color, 0.0), float3(0.2126, 0.7152, 0.0722)) * scotopic;
+    return saturate((log2(3.0) - log2(max(y, 1e-9))) / (log2(3.0) - log2(0.003)));
+}
+
+// The first half: the colour faded towards its scotopic luminance.
+float3 purkinje(float3 color, float rods)
+{
+    if (rods <= 0.0)
+        return color;
+    float3 c = max(color, 0.0);
+    float x = dot(c, float3(0.4124, 0.3576, 0.1805));
+    float y = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float z = dot(c, float3(0.0193, 0.1192, 0.9505));
+    float v = max(y * (1.33 * (1.0 + (y + z) / max(x, 1e-9)) - 1.68), 0.0) / 2.573;
+    return lerp(color, float3(v, v, v), rods * 0.85);
+}
+
+// The second half: the tint a linear display colour takes, a blue of unit luminance at full
+// night.
+float3 night_tint(float rods)
+{
+    const float3 BLUE = float3(0.63, 1.0, 2.1);
+    return lerp(float3(1.0, 1.0, 1.0), BLUE, rods * 0.9);
+}
 
 // AgX (Sobotka; Blender 4.0's default view), in the minimal real-time form of Wrensch 2023:
 // inset matrix, log2 encoding over [-12.47, +4.03] stops (0.18 · 2^-10 to 0.18 · 2^6.5), the
@@ -197,9 +240,13 @@ float3 hdr_signal(float3 color, uint curve, Output output, ToneTables tables)
 // dither, so smooth gradients do not band. scRGB: PQ's luminance back in linear Rec.709.
 public float3 display_output(float3 color, uint curve, Output output, ToneTables tables, uint2 pixel)
 {
+    float rods = night_rods(color, output.scotopic);
+    color = purkinje(color, rods);
     if (output.encoding < OUTPUT_PQ)
     {
         float3 display = saturate(tonemap(color, curve, tables));
+        if (rods > 0.0)
+            display = saturate(display * night_tint(rods));
         return output.encoding == OUTPUT_SRGB ? encode_srgb(display) : display;
     }
     float3 signal = hdr_signal(color, curve, output, tables);
@@ -223,8 +270,16 @@ public float3 decode_srgb(float3 encoded)
 // `display_from_signal` finishes it as `display_output` would.
 public float3 display_signal(float3 color, uint curve, Output output, ToneTables tables)
 {
+    float rods = night_rods(color, output.scotopic);
+    color = purkinje(color, rods);
     if (output.encoding < OUTPUT_PQ)
-        return encode_srgb(saturate(tonemap(color, curve, tables)));
+    {
+        float3 display = saturate(tonemap(color, curve, tables));
+        if (rods > 0.0)
+            display = saturate(display * night_tint(rods));
+        return encode_srgb(display);
+    }
+    // HDR: the colour's fade alone (the tint as a grade waits for the HDR path's own, #94).
     return hdr_signal(color, curve, output, tables);
 }
 

@@ -33,18 +33,38 @@ void local_frame(Planet p, float3 sun, out float3 up, out float3 forward, out fl
     sky_view_frame(up, sun, forward, right);
 }
 
-// What the air shows along `direction` from the camera, per unit of sun illuminance: the
-// in-scattered light, and the planet's ground (lit by the sun and the sky, seen through the
-// air) where the ray meets it.
-float3 view_luminance(Planet p, uint transmittance, uint multiple_scattering, float3 direction, float3 sun, uint steps)
+// The airglow's luminance seen at `elevation` (radians) over its zenith value: a thin layer
+// about 90 km up, longer to see through towards the horizon (van Rhijn's factor).
+float airglow(Planet p, float elevation)
 {
-    Crossing c = cross_atmosphere(p, transmittance, multiple_scattering, direction, sun, steps);
+    float ratio = p.radii.x / (p.radii.x + 90.0);
+    float c = cos(max(elevation, 0.0));
+    return 1.0 / sqrt(max(1.0 - ratio * ratio * c * c, 1e-3));
+}
+
+// What the air shows along `direction` from the camera, per unit of the reference
+// illuminance: the light it scatters from the key light and the other (the night's two,
+// D-046), the airglow above the horizon, and the planet's ground (lit by both and the sky,
+// seen through the air) where the ray meets it.
+float3 view_luminance(Sky* s, Planet p, float3 direction, float elevation, uint steps)
+{
+    float3 key = s[0].sun.xyz;
+    float key_weight = s[0].scale.w;
+    float4 other = s[0].second;
+    Crossing c = cross_atmosphere_lit(p, s[0].transmittance, s[0].multiple_scattering, direction, key, key_weight, other.xyz, other.w, steps);
     float3 luminance = c.luminance;
     if (c.hits_ground)
     {
         float3 n = normalize(c.ground);
-        float3 light = ground_illuminance(p, transmittance, multiple_scattering, c.ground, n, sun);
+        float3 light = ground_illuminance(p, s[0].transmittance, s[0].multiple_scattering, c.ground, n, key) * key_weight;
+        if (other.w > 0.0)
+            light += ground_illuminance(p, s[0].transmittance, s[0].multiple_scattering, c.ground, n, other.xyz) * other.w;
         luminance += c.transmittance * light * (p.radii.z / PI);
+    }
+    else if (s[0].moon_light.z > 0.0)
+    {
+        // Airglow, a little green as the night sky's oxygen line makes it.
+        luminance += c.transmittance * float3(0.85, 1.05, 0.9) * (s[0].moon_light.z * airglow(p, elevation));
     }
     return luminance;
 }
@@ -62,7 +82,8 @@ void sky_view_main(uint3 id : SV_DispatchThreadID)
     local_frame(p, s[0].sun.xyz, up, forward, right);
     float2 uv = (float2(id.xy) + 0.5) / float2(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
     float3 direction = sky_view_direction(uv, up, forward, right);
-    float3 luminance = view_luminance(p, s[0].transmittance, s[0].multiple_scattering, direction, s[0].sun.xyz, 32);
+    float elevation = asin(clamp(dot(direction, up), -1.0, 1.0));
+    float3 luminance = view_luminance(s, p, direction, elevation, 32);
     g_storage_images_rgba16f[NonUniformResourceIndex(s[0].sky_view_storage)][id.xy] = float4(luminance, 1.0);
 }
 
@@ -81,6 +102,11 @@ void aerial_main(uint3 id : SV_DispatchThreadID)
     float cos_theta = dot(direction, sun);
     float rayleigh_p = rayleigh_phase(cos_theta);
     float mie_p = mie_phase(p.mie_absorption.w, cos_theta);
+    // The night's other light (D-046): the sun's twilight under the Moon.
+    float4 other = s[0].second;
+    float other_cos = dot(direction, other.xyz);
+    float other_rayleigh = rayleigh_phase(other_cos);
+    float other_mie = mie_phase(p.mie_absorption.w, other_cos);
     float3 origin = p.view_position.xyz;
     float3 luminance = 0.0;
     float3 throughput = 1.0;
@@ -95,13 +121,174 @@ void aerial_main(uint3 id : SV_DispatchThreadID)
         Medium m = sample_medium(p, r - p.radii.x);
         float3 sunlight = sunlight_at(p, s[0].transmittance, position, sun);
         float3 multiple = sample_table(s[0].multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, sun)));
-        float3 source = sunlight * (m.rayleigh * rayleigh_p + m.mie * mie_p) + multiple * m.scattering;
+        float3 source = (sunlight * (m.rayleigh * rayleigh_p + m.mie * mie_p) + multiple * m.scattering) * s[0].scale.w;
+        if (other.w > 0.0)
+        {
+            float3 light = sunlight_at(p, s[0].transmittance, position, other.xyz);
+            float3 other_multiple = sample_table(s[0].multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, other.xyz)));
+            source += (light * (m.rayleigh * other_rayleigh + m.mie * other_mie) + other_multiple * m.scattering) * other.w;
+        }
         float3 segment = exp(-m.extinction * dt);
         luminance += throughput * (source - source * segment) / max(m.extinction, 1e-9);
         throughput *= segment;
         uint2 texel = uint2((k - 1) * SLICE + id.x, id.y);
         g_storage_images_rgba16f[NonUniformResourceIndex(s[0].aerial_storage)][texel] = float4(luminance, dot(throughput, float3(1.0 / 3.0)));
     }
+}
+
+// ---- The night's sky (D-046, issue #164; crates/forge-render/src/night.rs) -------------------
+
+// One star of the night's list: its direction (celestial frame) and illuminance above the
+// air (lux), its colour of unit luminance.
+struct Star
+{
+    float4 direction;
+    float4 color;
+};
+
+// The star cells' side per face of the cube round the sky (`STAR_CELLS` in night.rs).
+static const uint STAR_CELLS = 64;
+// How far round a star its cells reach, radians (`STAR_REACH`).
+static const float STAR_REACH = 0.008;
+
+// The cube cell of a direction, as night.rs's `star_cell`.
+uint star_cell(float3 d)
+{
+    float3 a = abs(d);
+    uint face;
+    float u, v;
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        face = d.x > 0.0 ? 0u : 1u;
+        u = d.y / a.x;
+        v = d.z / a.x;
+    }
+    else if (a.y >= a.z)
+    {
+        face = d.y > 0.0 ? 2u : 3u;
+        u = d.x / a.y;
+        v = d.z / a.y;
+    }
+    else
+    {
+        face = d.z > 0.0 ? 4u : 5u;
+        u = d.x / a.z;
+        v = d.y / a.z;
+    }
+    uint n = STAR_CELLS;
+    uint x = min(uint((u + 1.0) * 0.5 * float(n)), n - 1);
+    uint y = min(uint((v + 1.0) * 0.5 * float(n)), n - 1);
+    return face * n * n + y * n + x;
+}
+
+float hash3(int3 c)
+{
+    uint h = uint(c.x) * 73856093u ^ uint(c.y) * 19349663u ^ uint(c.z) * 83492791u;
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15;
+    return float(h & 0xFFFFFFu) / 16777216.0;
+}
+
+float value_noise(float3 x)
+{
+    float3 i = floor(x);
+    float3 f = x - i;
+    f = f * f * (3.0 - 2.0 * f);
+    int3 c = int3(i);
+    float a = lerp(lerp(hash3(c), hash3(c + int3(1, 0, 0)), f.x), lerp(hash3(c + int3(0, 1, 0)), hash3(c + int3(1, 1, 0)), f.x), f.y);
+    float b = lerp(lerp(hash3(c + int3(0, 0, 1)), hash3(c + int3(1, 0, 1)), f.x), lerp(hash3(c + int3(0, 1, 1)), hash3(c + int3(1, 1, 1)), f.x), f.y);
+    return lerp(a, b, f.z);
+}
+
+// The Milky Way's luminance (cd/m²) towards the celestial direction `c`: a band about the
+// galactic plane, brighter towards its centre, mottled, split by a dark rift (its dust).
+float3 milky_way(float3 c)
+{
+    // J2000 equatorial to galactic (the IAU rotation), rows.
+    float3 g = float3(dot(float3(-0.0548756, -0.8734371, -0.4838350), c),
+                      dot(float3(0.4941094, -0.4448296, 0.7469822), c),
+                      dot(float3(-0.8676661, -0.1980764, 0.4559838), c));
+    float b = asin(clamp(g.z, -1.0, 1.0));
+    float l = atan2(g.y, g.x);
+    float band = exp(-(b * b) / (0.14 * 0.14));
+    float centre = 0.35 + 0.65 * exp(-(l * l) / (0.9 * 0.9));
+    float mottle = 0.45 + 0.7 * value_noise(g * 9.0) + 0.35 * value_noise(g * 23.0);
+    float rift = 1.0 - 0.7 * exp(-(b - 0.02) * (b - 0.02) / (0.035 * 0.035)) * exp(-(l * l) / (1.4 * 1.4)) * value_noise(g * 15.0 + 4.0) * 1.6;
+    return float3(1.0, 0.94, 0.84) * (3e-4 * band * centre * mottle * saturate(rift));
+}
+
+// The stars towards the world `direction` (cd/m²): each star of the pixel's cell a Gaussian
+// about a pixel wide (`pixel` radians) that keeps its illuminance.
+float3 stars_toward(Sky* s, float3 direction, float pixel, out float3 celestial)
+{
+    celestial = float3(dot(s[0].stars_x.xyz, direction), dot(s[0].stars_y.xyz, direction), dot(s[0].stars_z.xyz, direction));
+    if (s[0].stars == nullptr)
+        return 0.0;
+    float sigma = clamp(pixel * 0.75, 1e-6, STAR_REACH / 3.0);
+    float inverse = 0.5 / (sigma * sigma);
+    float norm = 1.0 / (2.0 * PI * sigma * sigma);
+    uint cell = star_cell(celestial);
+    uint begin = s[0].star_cells[cell];
+    uint end = s[0].star_cells[cell + 1];
+    uint list = 6u * STAR_CELLS * STAR_CELLS + 1u;
+    float3 sum = 0.0;
+    for (uint i = begin; i < end; i++)
+    {
+        uint k = s[0].star_cells[list + i];
+        float4 d = s[0].stars[2 * k];
+        float3 offset = celestial - d.xyz;
+        float g = exp(-dot(offset, offset) * inverse);
+        if (g > 1e-4)
+            sum += s[0].stars[2 * k + 1].rgb * (d.w * g * norm);
+    }
+    return sum;
+}
+
+// The night's sky beyond the air at `direction` (`elevation` over the horizon), per unit of
+// the reference illuminance: the Moon's disc lit by phase (Lommel-Seeliger, normalised to its
+// measured illuminance in night.rs), the stars and the Milky Way, all through the air.
+float3 night_sky(Sky* s, Planet p, float3 direction, float elevation)
+{
+    float k = s[0].moon_light.x;
+    float gain = s[0].moon_light.w;
+    if (elevation < -0.01 || (k <= 0.0 && gain <= 0.0))
+        return 0.0;
+    float3 through = sunlight_at(p, s[0].transmittance, p.view_position.xyz, direction);
+    float3 moon = s[0].moon.xyz;
+    float cos_radius = s[0].moon.w;
+    if (k > 0.0 && dot(direction, moon) > cos_radius)
+    {
+        // The disc's frame: towards us, its north up the celestial pole, across.
+        float sin_radius = sqrt(max(1.0 - cos_radius * cos_radius, 1e-12));
+        float3 pole = s[0].stars_z.xyz;
+        float3 toward = -moon;
+        float3 north = normalize(pole - moon * dot(pole, moon));
+        float3 east = cross(north, toward);
+        float3 offset = direction - moon * dot(direction, moon);
+        float x = dot(offset, east) / sin_radius;
+        float y = dot(offset, north) / sin_radius;
+        float z = sqrt(max(1.0 - x * x - y * y, 0.0));
+        float3 n = x * east + y * north + z * toward;
+        float mu0 = dot(n, s[0].sun_disc.xyz);
+        float albedo = 1.0;
+        if (s[0].moon_albedo != 0xFFFFFFFFu)
+        {
+            // The near side's longitude and latitude, the map's centre facing the Earth.
+            float2 uv = float2(0.5 + atan2(x, z) / (2.0 * PI), 0.5 - asin(clamp(y, -1.0, 1.0)) / PI);
+            albedo = sample_image_level(s[0].moon_albedo, SAMPLER_LINEAR_CLAMP, uv, 0.0).r;
+        }
+        // Light from the Earth on its dark side, a little: the earthshine.
+        float lit = mu0 > 0.0 ? mu0 / (mu0 + z) : 0.0;
+        return through * (k * albedo * (lit + 0.0015));
+    }
+    if (gain <= 0.0)
+        return 0.0;
+    float3 celestial;
+    float3 light = stars_toward(s, direction, s[0].stars_x.w, celestial);
+    if (s[0].stars_y.w > 0.0)
+        light += milky_way(celestial);
+    return through * light * gain;
 }
 
 // The compose pass, a thread per pixel: the sky and the sun where the depth is empty, the
@@ -124,12 +311,13 @@ void compose_main(uint3 id : SV_DispatchThreadID)
         float3 up, forward, right;
         local_frame(p, sun, up, forward, right);
         float elevation = asin(clamp(dot(direction, up), -1.0, 1.0));
-        float3 flat = direction - up * dot(direction, up);
-        float azimuth = dot(flat, flat) > 1e-10 ? acos(clamp(dot(normalize(flat), forward), -1.0, 1.0)) : 0.0;
-        float3 luminance = sample_image_level(s[0].sky_view, SAMPLER_LINEAR_CLAMP, sky_view_uv(elevation, azimuth), 0.0).rgb;
+        float3 luminance = sky_view_luminance(s[0].sky_view, up, forward, direction);
         // The sun's disc, through the air (when the ground does not hide it).
-        if (dot(direction, sun) > s[0].sun.w && elevation > -0.01)
-            luminance += sunlight_at(p, s[0].transmittance, p.view_position.xyz, sun) * s[0].scale.y;
+        float3 sun_disc = s[0].sun_disc.xyz;
+        if (dot(direction, sun_disc) > s[0].sun.w && elevation > -0.01)
+            luminance += sunlight_at(p, s[0].transmittance, p.view_position.xyz, sun_disc) * (s[0].scale.y * s[0].sun_disc.w);
+        // The Moon and the stars (D-046).
+        luminance += night_sky(s, p, direction, elevation);
         float3 seen = luminance * s[0].scale.x;
         // The cloud layer over the sky and the sun (#145): what they let through, and their
         // own light (pre-exposed).
@@ -173,6 +361,8 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
     float3 up, forward, right;
     local_frame(p, s[0].sun.xyz, up, forward, right);
     const uint count = IRRADIANCE_THREADS * IRRADIANCE_SAMPLES;
+    float fill = s[0].moon_light.y;
+    float3 moon_fill = fill > 0.0 ? sunlight_at(p, s[0].transmittance, p.view_position.xyz, s[0].moon.xyz) : 0.0;
     float3 sum[SH_COEFFICIENTS];
     [unroll]
     for (uint k = 0; k < SH_COEFFICIENTS; k++)
@@ -184,10 +374,11 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
         float r = sqrt(max(1.0 - z * z, 0.0));
         float phi = float(i) * 2.39996323; // the golden angle
         float3 d = float3(r * cos(phi), z, r * sin(phi));
-        float elevation = asin(clamp(dot(d, up), -1.0, 1.0));
-        float3 flat = d - up * dot(d, up);
-        float azimuth = dot(flat, flat) > 1e-10 ? acos(clamp(dot(normalize(flat), forward), -1.0, 1.0)) : 0.0;
-        float3 luminance = sample_image_level(table, SAMPLER_LINEAR_CLAMP, sky_view_uv(elevation, azimuth), 0.0).rgb;
+        float3 luminance = sky_view_luminance(table, up, forward, d);
+        // `--moon-fill` (D-046): the Moon's light as a broad lobe round it, (n + 1) / 2π cosⁿ
+        // carrying its illuminance, in the sky's light only (not drawn, not reflected).
+        if (fill > 0.0)
+            luminance += moon_fill * (fill * 5.0 / (2.0 * PI) * pow(max(dot(d, s[0].moon.xyz), 0.0), 4.0));
         float b[9];
         sh_basis(d, b);
         [unroll]

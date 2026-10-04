@@ -433,7 +433,7 @@ city-blocks --view=-8,1.7,1135,-50,10
 
 ## A day over the city (issue #57, 2026-09-25)
 
-`--day S` runs a day in S seconds, then again. The sun rises 4° below the eastern horizon,
+`--day S` runs a day in S seconds, then a night (below), then again. The sun rises 4° below the eastern horizon,
 crosses the south at 70° and sets in the west. Everything that follows the sun runs per frame
 already:
 - the sky-view table and the aerial perspective (#43);
@@ -454,6 +454,13 @@ city-blocks --day 60
 **Cost:** the luminance histogram, 0.016 ms. **Checks:** without `--day` the city's captures
 are identical to the previous build; with it, synchronization validation is silent on both
 paths.
+
+**And the night** (D-046, #164, 2026-10-04): `--day S` now runs on through a night as long,
+under the Moon and the stars; `--time-of-day` takes 0–2 (1.5 midnight). The night's options:
+`--moon-age` (lunations, 0.4), `--moon-fill` (the Moon's light as a soft fill instead of a key
+light with traced shadows), `--night-stops` (how far under the eye's adaptation the night is
+shown, 2), `--star-gain` (16) and `--no-purkinje`. `docs/demos/island.md`, "The night", has the
+details and the images.
 
 ## Coated glass (issue #56, 2026-09-25)
 

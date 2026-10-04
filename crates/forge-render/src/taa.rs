@@ -266,6 +266,9 @@ pub struct Taa {
     /// The display image sharpened by RCAS this many stops below its strongest (D-045), while
     /// TAA is on; `None` shows the resolve as it is.
     pub sharpen: Option<f32>,
+    /// The night's Purkinje shift in the display pass (D-046): on when true, from this frame's
+    /// exposure.
+    pub purkinje: bool,
     /// The history resampled through Lanczos-3 (36 texels) rather than Catmull-Rom (5 bilinear
     /// fetches), D-045: on by default.
     pub lanczos: bool,
@@ -316,6 +319,7 @@ impl Taa {
             jitter_phases: JITTER_PHASES,
             sharpen: None,
             lanczos: true,
+            purkinje: false,
         })
     }
 
@@ -607,6 +611,11 @@ impl Taa {
             OutputEncoding::for_format(self.output_format),
             &self.hdr,
             self.frame_index as u32,
+            if self.purkinje {
+                1.0 / self.previous_exposure.max(1e-30)
+            } else {
+                0.0
+            },
         );
         let bloom_strength = self.bloom_strength;
         let tables = self.tables.push();
@@ -735,8 +744,8 @@ mod tests {
     fn the_sharpening_push_matches_the_shader() {
         // `SharpenPush` in taa.slang: eight words, `Output`, then `ToneTables` (its pointers on
         // 8 bytes).
-        assert_eq!(std::mem::size_of::<SharpenPush>(), 32 + 16 + 32);
-        assert_eq!(std::mem::offset_of!(SharpenPush, tables), 48);
+        assert_eq!(std::mem::size_of::<SharpenPush>(), 32 + 32 + 32);
+        assert_eq!(std::mem::offset_of!(SharpenPush, tables), 64);
         // `ResolvePush`: fourteen words, the history written (a storage index) the last but one.
         assert_eq!(std::mem::offset_of!(ResolvePush, written), 48);
         assert_eq!(std::mem::size_of::<ResolvePush>(), 56);

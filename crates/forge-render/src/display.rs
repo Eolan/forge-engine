@@ -352,16 +352,21 @@ pub struct OutputPush {
     scene_gain: f32,
     sdr_white: f32,
     frame: u32,
+    scotopic: f32,
+    pad: [u32; 3],
 }
 
 impl OutputPush {
-    /// The block for `encoding` with `hdr`'s settings, dithered for `frame`.
-    pub fn new(encoding: OutputEncoding, hdr: &HdrOutput, frame: u32) -> Self {
+    /// The block for `encoding` with `hdr`'s settings, dithered for `frame`, with the night's
+    /// Purkinje shift when `scotopic` (1 / exposure, D-046) is above 0.
+    pub fn new(encoding: OutputEncoding, hdr: &HdrOutput, frame: u32, scotopic: f32) -> Self {
         Self {
             encoding: encoding.index(),
             scene_gain: hdr.scene_stops.exp2(),
             sdr_white: hdr.sdr_white,
             frame,
+            scotopic,
+            pad: [0; 3],
         }
     }
 }
@@ -512,6 +517,8 @@ pub struct Display {
     hdr: HdrOutput,
     frame: Cell<u32>,
     tables: ToneTables,
+    /// The night's Purkinje shift (D-046): 1 / the frame's exposure, 0 (the default): off.
+    pub scotopic: f32,
 }
 
 impl Display {
@@ -533,6 +540,7 @@ impl Display {
             hdr,
             frame: Cell::new(0),
             tables,
+            scotopic: 0.0,
         })
     }
 
@@ -599,7 +607,12 @@ impl Display {
         let pipeline = &self.pipeline;
         let frame = self.frame.get();
         self.frame.set(frame.wrapping_add(1));
-        let output = OutputPush::new(OutputEncoding::for_format(self.format), &self.hdr, frame);
+        let output = OutputPush::new(
+            OutputEncoding::for_format(self.format),
+            &self.hdr,
+            frame,
+            self.scotopic,
+        );
         let tables = self.tables.push();
         let sampled = ImageAccess::Sampled(vk::PipelineStageFlags2::FRAGMENT_SHADER);
         let mut pass = graph
@@ -756,9 +769,9 @@ mod tests {
         assert_eq!(E::for_format(vk::Format::R16G16B16A16_SFLOAT), E::ScRgb);
         assert!(E::Pq.is_hdr() && !E::Srgb.is_hdr());
         // The blocks the shaders mirror.
-        assert_eq!(std::mem::size_of::<OutputPush>(), 16);
+        assert_eq!(std::mem::size_of::<OutputPush>(), 32);
         assert_eq!(std::mem::size_of::<ToneTablesPush>(), 32);
-        assert_eq!(std::mem::size_of::<DisplayPush>(), 64);
+        assert_eq!(std::mem::size_of::<DisplayPush>(), 80);
     }
 
     #[test]

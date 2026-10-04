@@ -23,6 +23,7 @@ pub mod liquid;
 pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
+pub mod night;
 pub mod placement;
 pub mod precision;
 pub mod probes;
@@ -64,7 +65,7 @@ pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
 };
-pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
+pub use sky::{GroundSky, SkyFrame, SkyLight, SkyNight, SkyParams, sh_irradiance};
 pub use splashes::{
     SPLASH_CAPACITY, SplashFoam, SplashParams, SplashSource, SplashStats, WaterSplashes,
 };

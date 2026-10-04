@@ -393,3 +393,16 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **The bench:** a floor of squares in four tints, a plain background and tinted water to tune
     by, after Sebastian Lague's fluid simulation videos (the owner's pointer, 2026-10-03; nothing
     taken but the idea).
+- **The night sky** (`forge_render::night`, #164, D-046):
+  - **The night's layers:** Henrik Wann Jensen, Frédo Durand, Julie Dorsey, Michael M. Stark,
+    Peter Shirley and Simon Premože, "A Physically-Based Night Sky Model", SIGGRAPH 2001: the
+    Moon lit by the sun, the stars by magnitude and colour, airglow and the Milky Way.
+  - **The Moon:** its phase law after C. W. Allen, *Astrophysical Quantities* (the magnitude
+    `-12.73 + 0.026 α + 4e-9 α⁴`); its disc shaded with the Lommel–Seeliger law.
+  - **The stars' colours:** F. J. Ballesteros, "New insights into black bodies", EPL 97 (2012),
+    for a temperature from B − V; Chris Wyman, Peter-Pike Sloan and Peter Shirley, "Simple
+    Analytic Approximations to the CIE XYZ Color Matching Functions", JCGT 2(2), 2013.
+  - **The Purkinje shift:** Adam G. Kirk and James F. O'Brien, "Perceptually Based Tone Mapping
+    for Low-Light Conditions", SIGGRAPH 2011 (the effect); the scotopic luminance after Frédo
+    Durand and Julie Dorsey, "Interactive Tone Mapping", EGWR 2000.
+  - **Galactic coordinates:** the IAU's J2000 equatorial-to-galactic rotation.
