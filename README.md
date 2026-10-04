@@ -244,6 +244,28 @@ against the bot over a lossy link; ← pulls, → eases. It shares `city-blocks`
 options (`city-blocks --lab drop` draws the same). Numbers:
 [docs/demos/physics-lab.md](docs/demos/physics-lab.md).
 
+`--lab models` shows models made by others, the Khronos glTF sample assets, to compare Forge's
+renderings with Khronos's. They are not in the repository; download them first:
+
+```
+tools/fetch-assets.sh
+```
+
+The script fetches the open models (CC0 or CC-BY 4.0, about 72 MB) into `assets/external/`,
+which git ignores, and checks every file's hash against `assets/external.tsv`.
+`--model NAME` shows one model alone, e.g. `--model WaterBottle`.
+
+Some reference models are under restricted licences: Khronos's Sponza is under the CryEngine
+Limited License. They are never in this repository, and to test the lab with them you download
+them yourself:
+
+```
+tools/fetch-assets.sh --reference-only
+```
+
+Read each one's `LICENSE.md` in `assets/external/<model>/` first. These models are for the labs
+only: the engine and its games never use them.
+
 ### `task-bench` — job system
 
 ```

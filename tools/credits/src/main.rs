@@ -59,6 +59,19 @@ fn main() -> Result<ExitCode> {
     let metadata: Value = serde_json::from_slice(&output.stdout).context("parsing metadata")?;
     let text = render(&collect(&metadata)?);
 
+    // The labs' external models stay in the labs (D-048).
+    let leaks = external_uses(&root)?;
+    for leak in &leaks {
+        eprintln!("{leak}");
+    }
+    if !leaks.is_empty() {
+        eprintln!(
+            "the external models (assets/external/, D-048) are for the labs, the tools and the \
+             tests only: nothing that ships may read them"
+        );
+        return Ok(ExitCode::from(1));
+    }
+
     let path = root.join("docs/credits-crates.md");
     if args.check {
         let current = std::fs::read_to_string(&path).unwrap_or_default();
@@ -75,6 +88,65 @@ fn main() -> Result<ExitCode> {
         println!("wrote docs/credits-crates.md");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Where the source that ships names the labs' external models (D-048): `assets/external`, or a
+/// reference model (restricted licence, `assets/external.tsv`), in any file under `crates/`,
+/// `demos/` or `shaders/` but the labs (`demos/*/src/lab/`) and the tests (`tests/` folders).
+/// `tools/` is not shipped. One line per use, `path:line: text`.
+fn external_uses(root: &std::path::Path) -> Result<Vec<String>> {
+    let manifest = std::fs::read_to_string(root.join("assets/external.tsv"))
+        .context("reading assets/external.tsv")?;
+    let mut names = vec!["assets/external".to_owned()];
+    for line in manifest.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() > 2 && fields[0] == "@" && fields[2] == "reference" {
+            names.push(fields[1].to_owned());
+        }
+    }
+    let mut uses = Vec::new();
+    let mut stack: Vec<PathBuf> = ["crates", "demos", "shaders"]
+        .iter()
+        .map(|d| root.join(d))
+        .collect();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let allowed = relative.contains("/src/lab/")
+                || relative.ends_with("/src/lab.rs")
+                || relative.contains("/tests/")
+                || relative.contains("/target/");
+            if path.is_dir() {
+                if !allowed {
+                    stack.push(path);
+                }
+                continue;
+            }
+            let source = matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("rs" | "slang" | "toml")
+            );
+            if allowed || !source {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            for (n, line) in text.lines().enumerate() {
+                if names.iter().any(|name| line.contains(name.as_str())) {
+                    uses.push(format!("{relative}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+    }
+    uses.sort();
+    Ok(uses)
 }
 
 /// The external crates reachable from the workspace, by name.

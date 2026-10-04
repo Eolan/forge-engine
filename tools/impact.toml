@@ -33,6 +33,9 @@
 "crates/forge-geom/src/model.rs" = ["lab"]
 "crates/forge-geom/src/fracture.rs" = ["lab"]
 "assets/models/**" = ["lab"]
+# The labs' external models (#170, D-048): their manifest; the fetch script draws nothing.
+"assets/external.tsv" = ["lab"]
+"tools/fetch-assets.sh" = []
 "assets/blender/**" = []
 "crates/forge-physics/**" = ["lab"]
 "crates/forge-sim/**" = ["lab"]

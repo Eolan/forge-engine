@@ -23,6 +23,7 @@ use forge_geom::SkinnedMesh;
 use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_physics::buoyancy::{Fluid, Hull};
 use forge_physics::{BodyDesc, BodyId, Shape, Transform, Velocity, World, WorldDesc};
+use forge_render::material::ModelTextures;
 use forge_render::meshlet::MeshId;
 use forge_render::{MeshletScene, MeshletSceneBuilder, MoverTransform};
 use forge_sim::{
@@ -41,6 +42,7 @@ mod dominoes;
 mod drive;
 mod flood;
 mod fly;
+pub(crate) mod models;
 mod rocket;
 pub(crate) mod room;
 mod sea;
@@ -99,6 +101,9 @@ pub(crate) enum LabScene {
     /// A plain room to measure sharpness by: white walls, a floor of black and white squares, black
     /// squares turned 5° on the back wall and on a board, the sun alone (#159).
     Room,
+    /// Models made by others, the Khronos glTF sample assets fetched by `tools/fetch-assets.sh`
+    /// (#170, D-048): each on a plinth, or one alone with `--model`.
+    Models,
 }
 
 /// The floor's half side, metres.
@@ -171,6 +176,8 @@ const TANK: usize = SHIP + 2;
 /// The sharpness room's floor, back wall, side wall, target, board and the board's target, after the
 /// tank's thirteen.
 const ROOM: usize = TANK + 13;
+/// The models scene's plinth, then its models' meshes, after the room's six (only in that scene).
+const MODELS: usize = ROOM + 6;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -202,7 +209,7 @@ const BOT_PULL_EVERY: u64 = 90;
 /// ball, then the sea's: the crate, the log, the pillar, the deck, the boat; then the
 /// playground's: the stairs' slab, the ramp, the platform, the player and its visor; then the
 /// car's body and wheel; then the aeroplane, its propeller, the runway and the field.
-pub(crate) fn props() -> Vec<PropSpec> {
+pub(crate) fn props(scene: LabScene) -> Vec<PropSpec> {
     let mut props = drop_props();
     props.extend(sea::props());
     props.extend(walk::props());
@@ -218,6 +225,10 @@ pub(crate) fn props() -> Vec<PropSpec> {
     props.extend(ship::props());
     props.extend(tank::props());
     props.extend(room::props());
+    // Only their scene reads and cooks the external models.
+    if scene == LabScene::Models {
+        props.extend(models::props());
+    }
     props
 }
 
@@ -563,7 +574,8 @@ impl LabWorld {
             | LabScene::TankBench
             | LabScene::TankHole
             | LabScene::TankBlocks
-            | LabScene::Room => 0.0,
+            | LabScene::Room
+            | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
         let (floor, floor_half) = match kind {
@@ -588,7 +600,7 @@ impl LabWorld {
             .offset(up(half_length), Quat::IDENTITY)?;
         let ball_shape =
             Shape::sphere(BALL_RADIUS, 500.0)?.offset(up(BALL_RADIUS), Quat::IDENTITY)?;
-        let props = props();
+        let props = props(kind);
         let rock_shapes = ROCKS
             .iter()
             .map(|&k| {
@@ -1005,6 +1017,7 @@ impl LabWorld {
                 tank = Some(built.tank);
             }
             LabScene::Room => statics.extend(room::build(ROOM)),
+            LabScene::Models => statics.extend(models::build(MODELS)),
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -1733,37 +1746,64 @@ pub(crate) fn build(
     kind: LabScene,
 ) -> Result<(MeshletScene, Lab)> {
     let start = Instant::now();
-    let props = props();
+    let props = props(kind);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<MeshId> = cooked.meshes.iter().map(|m| builder.add_mesh(m)).collect();
     let mut materials = CityMaterials::new(&ctx.device)?;
     // Each model's rows, one per material of its mesh in order (its sections), as the file
     // gives them: the boat, the car's body and its wheel, the aeroplane and its propeller, the
     // spaceship and its flame (#138, #140, #141; the ship's glowing parts emissive).
-    for (model, label, prop, mesh) in [
-        (sea::boat_model(), "boat", "lab-boat", "boat"),
-        (drive::car_model(), "car", "lab-car", "car"),
-        (drive::car_model(), "car", "lab-wheel", "car-wheel"),
-        (fly::plane_model(), "plane", "lab-plane", "plane"),
-        (fly::plane_model(), "plane", "lab-propeller", "plane-prop"),
-        (ship::ship_model(), "ship", "lab-ship", "ship"),
-        (ship::ship_model(), "ship", "lab-ship-flame", "ship-flame"),
+    for (model, label, meshes) in [
+        (sea::boat_model(), "boat", &[("lab-boat", "boat")][..]),
+        (
+            drive::car_model(),
+            "car",
+            &[("lab-car", "car"), ("lab-wheel", "car-wheel")],
+        ),
+        (
+            fly::plane_model(),
+            "plane",
+            &[("lab-plane", "plane"), ("lab-propeller", "plane-prop")],
+        ),
+        (
+            ship::ship_model(),
+            "ship",
+            &[("lab-ship", "ship"), ("lab-ship-flame", "ship-flame")],
+        ),
     ] {
-        model_rows(&mut materials, &model.0, label, prop, mesh, true)?;
+        let mut textures = ModelTextures::new(&model.0, label);
+        for &(prop, mesh) in meshes {
+            let mesh = model
+                .0
+                .mesh(mesh)
+                .with_context(|| format!("the {label} model's {mesh}"))?;
+            model_rows(&mut materials, &mut textures, prop, mesh, true);
+        }
     }
     // The creatures' (#143), their wood and fur painted on their UVs (#166, D-047): the
     // textures stay on the bending bodies. Only their scene decodes the images.
     let (creatures_model, _) = creatures::model();
+    let mut textures = ModelTextures::new(creatures_model, "skinned-creatures");
     for (prop, mesh) in [("lab-mannequin", "mannequin-body"), ("lab-dog", "dog-body")] {
-        let textured = kind == LabScene::Creatures;
+        let mesh = creatures_model
+            .mesh(mesh)
+            .with_context(|| format!("the creatures' model's {mesh}"))?;
         model_rows(
             &mut materials,
-            creatures_model,
-            "skinned-creatures",
+            &mut textures,
             prop,
             mesh,
-            textured,
-        )?;
+            kind == LabScene::Creatures,
+        );
+    }
+    // The external models' (#170, D-048), in their scene only.
+    if kind == LabScene::Models {
+        for e in models::externals() {
+            let mut textures = ModelTextures::new(&e.model, &e.name);
+            for (k, mesh) in e.model.meshes.iter().enumerate() {
+                model_rows(&mut materials, &mut textures, e.props[k], mesh, true);
+            }
+        }
     }
     let creature_rows = [materials.of("lab-mannequin"), materials.of("lab-dog")];
     materials.apply(&mut builder, &props, &ids);
@@ -2388,20 +2428,16 @@ impl Drop for Lab {
     }
 }
 
-/// The rows of `model`'s mesh `mesh` for `prop`, one per material (its sections), as the file
-/// gives them; with `textured` and UVs on the mesh, its maps too (D-047).
+/// The rows of a model's mesh `mesh` for `prop`, one per material (its sections), as the file
+/// gives them, through the model's `textures`; with `textured` and UVs on the mesh, its maps too
+/// (D-047).
 fn model_rows(
     materials: &mut CityMaterials,
-    model: &forge_geom::model::Model,
-    label: &str,
+    textures: &mut ModelTextures,
     prop: &'static str,
-    mesh: &str,
+    mesh: &forge_geom::model::ModelMesh,
     textured: bool,
-) -> Result<()> {
-    let mesh = model
-        .mesh(mesh)
-        .with_context(|| format!("the {label} model's {mesh}"))?;
-    let mut textures = forge_render::material::ModelTextures::new(model, label);
+) {
     let uvs = textured && !mesh.mesh.uvs.is_empty();
     let rows = mesh
         .materials
@@ -2414,7 +2450,6 @@ fn model_rows(
         })
         .collect();
     materials.add_rows(prop, rows);
-    Ok(())
 }
 
 #[cfg(test)]

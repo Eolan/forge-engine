@@ -2670,7 +2670,9 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     }
     float alpha = clamp(roughness, 0.02, 1.0);
     alpha *= alpha;
-    float power = 2.0 / (alpha * alpha) - 2.0; // RenderLayer::specular_power
+    // RenderLayer::specular_power, kept over 0: at roughness 1 the exponent is 0, and pow(0, 0) is NaN
+    // where the surface turns from the light.
+    float power = max(2.0 / (alpha * alpha) - 2.0, 0.001);
     float3 diffuse = base * (1.0 - metal);
     float reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
     float specular = mat.specular + METAL_SPECULAR * metal;

@@ -200,7 +200,11 @@ main() {
     lab-drive300 lab-drive-turn600 lab-fly1200 lab-break85 lab-break300 lab-creatures120 \
     lab-creatures-throw240 lab-creatures-limp240 lab-flood150 lab-flood300 lab-flood150-columns lab-dominoes900 \
     lab-bridge360 lab-bridge600 lab-rocket120 lab-rocket600 lab-tug-net200 lab-tug-net600 lab-space90 lab-space150 \
-    lab-tank90 lab-tank-bench300 lab-tank-hole120 lab-tank-blocks56 lab-room60 lab-room-pan60 lab-room-pan60-ssaa; do
+    lab-tank90 lab-tank-bench300 lab-tank-hole120 lab-tank-blocks56 lab-room60 lab-room-pan60 lab-room-pan60-ssaa \
+    lab-models60 lab-model-CesiumMan lab-model-FlightHelmet lab-model-Fox lab-model-MetalRoughSpheres \
+    lab-model-NormalTangentMirrorTest lab-model-NormalTangentTest lab-model-TextureCoordinateTest \
+    lab-model-TextureSettingsTest lab-model-TextureTransformTest lab-model-WaterBottle lab-model-Sponza \
+    lab-model-Sponza-noprobes; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   local others=""

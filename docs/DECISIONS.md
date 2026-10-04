@@ -2441,3 +2441,24 @@ How they are kept out of a release:
 
 **A first step once answered:** the manifest and the fetch script, the `.gltf` reader, the
 models scene, and the test models' captures beside their Khronos screenshots.
+
+**Built, the first step (#170, 2026-10-04):** `docs/demos/physics-lab.md`, "`models`".
+- **Fetching:** `assets/external.tsv` and `tools/fetch-assets.sh`.
+  - Every file is pinned to the Khronos repository's commit `edc7c9e`, with its size and
+    SHA-256, and each model's `LICENSE.md` comes with it.
+  - The ten open models are 72 MB; Sponza, reference only, is 53 MB.
+- **The guard:** `credits --check` (CI) fails if any source outside the labs, the tools and
+  the tests names `assets/external` or a reference model.
+- **The importer:** reads `.gltf` files with their buffers and images beside them
+  (`forge_geom::model::load_gltf`).
+- **The scene:** `physics-lab --lab models`, each model alone with `--model`. Skinned models
+  stand in their rest pose. Its captures enter the batch where the models are there.
+- **Found and fixed:**
+  - NaN at roughness 1: the highlight exponent of 0 and `pow(0, 0)`.
+  - `KHR_texture_transform`'s rotation had the wrong sign. The README's matrix as read here was
+    wrong; TextureTransformTest settled it.
+- **Found and left:**
+  - Double-sided materials are drawn one-sided.
+  - Alpha cut-outs are drawn opaque.
+  - The probes go dark inside Sponza (#171).
+  - The ten models' textures take 534 MiB uncompressed.

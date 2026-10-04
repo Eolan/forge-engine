@@ -262,11 +262,12 @@ impl Default for RenderLayer {
 
 impl RenderLayer {
     /// The Blinn-Phong exponent of `roughness` (α = roughness², exponent = 2 / α² − 2),
-    /// rounded to a thousandth so that rows written from an exponent give it back exactly.
+    /// rounded to a thousandth so that rows written from an exponent give it back exactly. At least a
+    /// thousandth: at roughness 1 the exponent is 0, and the shaders' `pow(0, 0)` is NaN.
     pub fn specular_power(&self) -> f32 {
         let alpha = f64::from(self.roughness.clamp(0.02, 1.0)).powi(2);
         let power = 2.0 / (alpha * alpha) - 2.0;
-        ((power * 1000.0).round() / 1000.0) as f32
+        ((power * 1000.0).round() / 1000.0).max(0.001) as f32
     }
 
     /// The roughness whose [`RenderLayer::specular_power`] is `power`.

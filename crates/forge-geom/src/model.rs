@@ -8,6 +8,8 @@
 //! glTF is +Y up, metres, and a model's front faces `+Z`; Blender's exporter turns its +Y
 //! (forward) into glTF's `−Z`, which is Forge's forward too.
 
+use std::path::{Path, PathBuf};
+
 use glam::{Mat3, Mat4, Vec3};
 
 use crate::procedural::TriMesh;
@@ -34,9 +36,13 @@ pub enum GltfError {
         /// The mesh's name.
         mesh: String,
     },
-    /// The file refers to an image outside itself.
+    /// The file refers to an image outside itself (and was read from memory, or by a `data:`
+    /// URI, which Forge does not read).
     #[error("the model's image {0} is not in the file")]
     ExternalImage(usize),
+    /// A file the model names (or the model) could not be read.
+    #[error("{path}: {source}", path = .0.display(), source = .1)]
+    Io(PathBuf, #[source] std::io::Error),
     /// A skinned primitive's joints or weights are not one per vertex.
     #[error("mesh {mesh}: not one joint set and one weight set per vertex")]
     BadSkin {
@@ -148,26 +154,73 @@ impl Model {
 }
 
 /// Reads a binary glTF (`.glb`): every mesh the default scene's nodes hold, with their nodes'
-/// transforms applied.
+/// transforms applied. Its buffers and images must be inside it.
 pub fn load_glb(bytes: &[u8]) -> Result<Model, GltfError> {
-    let gltf = gltf::Gltf::from_slice(bytes)?;
-    let blob = gltf.blob.as_deref();
-    for buffer in gltf.buffers() {
-        if !matches!(buffer.source(), gltf::buffer::Source::Bin) {
-            return Err(GltfError::ExternalBuffer(buffer.index()));
+    load(bytes, None)
+}
+
+/// Reads a glTF file, binary (`.glb`) or JSON (`.gltf`), with the buffers and images it names
+/// beside it (D-048: the Khronos sample models' `.gltf` folders).
+pub fn load_gltf(path: &Path) -> Result<Model, GltfError> {
+    let bytes = std::fs::read(path).map_err(|e| GltfError::Io(path.to_owned(), e))?;
+    load(&bytes, Some(path.parent().unwrap_or(Path::new("."))))
+}
+
+/// The file at `uri` beside the model in `dir` (`%XX` escapes decoded); a `data:` URI or a
+/// model read from memory has none.
+fn beside(dir: Option<&Path>, uri: &str) -> Option<PathBuf> {
+    if uri.starts_with("data:") {
+        return None;
+    }
+    let bytes = uri.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                decoded.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                decoded.push(b);
+                i += 1;
+            }
         }
+    }
+    Some(dir?.join(String::from_utf8_lossy(&decoded).as_ref()))
+}
+
+fn load(bytes: &[u8], dir: Option<&Path>) -> Result<Model, GltfError> {
+    let gltf = gltf::Gltf::from_slice(bytes)?;
+    let mut buffers = Vec::new();
+    for buffer in gltf.buffers() {
+        buffers.push(match buffer.source() {
+            gltf::buffer::Source::Bin => gltf
+                .blob
+                .clone()
+                .ok_or(GltfError::ExternalBuffer(buffer.index()))?,
+            gltf::buffer::Source::Uri(uri) => {
+                let path = beside(dir, uri).ok_or(GltfError::ExternalBuffer(buffer.index()))?;
+                std::fs::read(&path).map_err(|e| GltfError::Io(path, e))?
+            }
+        });
     }
     let mut model = Model::default();
     for image in gltf.images() {
-        model.images.push(read_image(&image, blob)?);
+        model.images.push(read_image(&image, &buffers, dir)?);
     }
+    let buffers = buffers.as_slice();
     let scene = gltf
         .default_scene()
         .or_else(|| gltf.scenes().next())
         .into_iter();
     for scene in scene {
         for node in scene.nodes() {
-            visit(&node, Mat4::IDENTITY, blob, &mut model)?;
+            visit(&node, Mat4::IDENTITY, buffers, &mut model)?;
         }
     }
     model.unsupported.sort();
@@ -178,7 +231,7 @@ pub fn load_glb(bytes: &[u8]) -> Result<Model, GltfError> {
 fn visit(
     node: &gltf::Node,
     parent: Mat4,
-    blob: Option<&[u8]>,
+    buffers: &[Vec<u8>],
     model: &mut Model,
 ) -> Result<(), GltfError> {
     let world = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
@@ -192,7 +245,7 @@ fn visit(
             frame,
             name,
             skinned,
-            blob,
+            buffers,
             &mut model.unsupported,
         )?);
     } else if let Some(name) = node.name() {
@@ -201,7 +254,7 @@ fn visit(
             .push((name.to_owned(), world.transform_point3(Vec3::ZERO)));
     }
     for child in node.children() {
-        visit(&child, world, blob, model)?;
+        visit(&child, world, buffers, model)?;
     }
     Ok(())
 }
@@ -211,7 +264,7 @@ fn read_mesh(
     world: Mat4,
     name: String,
     skinned: bool,
-    blob: Option<&[u8]>,
+    buffers: &[Vec<u8>],
     unsupported: &mut Vec<String>,
 ) -> Result<ModelMesh, GltfError> {
     let normal_matrix = Mat3::from_mat4(world).inverse().transpose();
@@ -227,7 +280,7 @@ fn read_mesh(
         if primitive.mode() != gltf::mesh::Mode::Triangles {
             return Err(GltfError::NotTriangles { mesh: name });
         }
-        let reader = primitive.reader(|_| blob);
+        let reader = primitive.reader(|b| buffers.get(b.index()).map(Vec::as_slice));
         let positions: Vec<Vec3> = reader
             .read_positions()
             .ok_or_else(|| GltfError::NotTriangles { mesh: name.clone() })?
@@ -369,14 +422,15 @@ fn read_material(
             transform: transform.unwrap_or(UV_IDENTITY),
         })
     };
-    // KHR_texture_transform: translation × rotation × scale, the rotation's matrix as the
-    // extension's sample code builds it.
+    // KHR_texture_transform: translation × rotation × scale. The rotation turns the UVs from +u
+    // towards −v (u' = cos u + sin v), as Khronos's TextureTransformTest checks (#170: the
+    // opposite sign pointed its arrows at the red crosses).
     fn info(i: gltf::texture::Info<'_>) -> Slot<'_> {
         let transform = i.texture_transform().map(|t| {
             let (s, c) = t.rotation().sin_cos();
             let [sx, sy] = t.scale();
             let [ox, oy] = t.offset();
-            [c * sx, -s * sy, ox, s * sx, c * sy, oy]
+            [c * sx, s * sy, ox, -s * sx, c * sy, oy]
         });
         (i.texture(), i.tex_coord(), transform)
     }
@@ -418,20 +472,47 @@ fn read_material(
 }
 
 /// Image `image`'s encoded bytes, from the file's buffer.
-fn read_image(image: &gltf::Image, blob: Option<&[u8]>) -> Result<ModelImage, GltfError> {
+fn read_image(
+    image: &gltf::Image,
+    buffers: &[Vec<u8>],
+    dir: Option<&Path>,
+) -> Result<ModelImage, GltfError> {
+    let name = image.name().unwrap_or_default().to_owned();
     match image.source() {
         gltf::image::Source::View { view, mime_type } => {
             let missing = GltfError::ExternalBuffer(view.buffer().index());
-            let bytes = blob
+            let bytes = buffers
+                .get(view.buffer().index())
                 .and_then(|b| b.get(view.offset()..view.offset() + view.length()))
                 .ok_or(missing)?;
             Ok(ModelImage {
-                name: image.name().unwrap_or_default().to_owned(),
+                name,
                 mime: mime_type.to_owned(),
                 bytes: bytes.to_vec(),
             })
         }
-        gltf::image::Source::Uri { .. } => Err(GltfError::ExternalImage(image.index())),
+        gltf::image::Source::Uri { uri, mime_type } => {
+            let path = beside(dir, uri).ok_or(GltfError::ExternalImage(image.index()))?;
+            let bytes = std::fs::read(&path).map_err(|e| GltfError::Io(path.clone(), e))?;
+            let extension = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+            let mime = mime_type.map(str::to_owned).unwrap_or_else(|| {
+                match extension.to_ascii_lowercase().as_str() {
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "png" => "image/png",
+                    _ => "",
+                }
+                .to_owned()
+            });
+            let name = if name.is_empty() {
+                uri.to_owned()
+            } else {
+                name
+            };
+            Ok(ModelImage { name, mime, bytes })
+        }
     }
 }
 
@@ -589,18 +670,18 @@ mod tests {
         let base = m.base_color_texture.unwrap();
         assert_eq!(base.image, 0);
         assert_eq!(base.wrap, [Wrap::Clamp, Wrap::Mirror]);
-        // Scale (2, 4), a quarter turn, then the offset: (1, 0) goes to (0.5, 2.25), (0, 1)
-        // to (−3.5, 0.25).
+        // Scale (2, 4), a quarter turn, then the offset: (1, 0) goes to (0.5, −1.75), (0, 1)
+        // to (4.5, 0.25).
         let apply =
             |t: [f32; 6], u: f32, v: f32| [t[0] * u + t[1] * v + t[2], t[3] * u + t[4] * v + t[5]];
         let a = apply(base.transform, 1.0, 0.0);
         let b = apply(base.transform, 0.0, 1.0);
         assert!(
-            (a[0] - 0.5).abs() < 1e-5 && (a[1] - 2.25).abs() < 1e-5,
+            (a[0] - 0.5).abs() < 1e-5 && (a[1] + 1.75).abs() < 1e-5,
             "{a:?}"
         );
         assert!(
-            (b[0] + 3.5).abs() < 1e-5 && (b[1] - 0.25).abs() < 1e-5,
+            (b[0] - 4.5).abs() < 1e-5 && (b[1] - 0.25).abs() < 1e-5,
             "{b:?}"
         );
         // The normal and occlusion maps share the base colour's transform; the metallic-
@@ -618,6 +699,41 @@ mod tests {
         let plain = load_glb(&triangle_glb()).unwrap();
         assert!(plain.mesh("tri").unwrap().mesh.uvs.is_empty());
         assert!(plain.images.is_empty() && plain.unsupported.is_empty());
+    }
+
+    /// A `.gltf` with its buffer and its image in files beside it, their names escaped.
+    #[test]
+    fn a_gltf_reads_the_files_beside_it() {
+        let dir = std::env::temp_dir().join(format!("forge-gltf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let positions: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0];
+        let bin: Vec<u8> = positions.iter().flat_map(|v| v.to_le_bytes()).collect();
+        std::fs::write(dir.join("the tri.bin"), &bin).unwrap();
+        std::fs::write(dir.join("paint.jpg"), b"\xFF\xD8 not really").unwrap();
+        let json = r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+            "nodes":[{"name":"tri","mesh":0}],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+            "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+            "textures":[{"source":0}],
+            "images":[{"uri":"paint.jpg"}],
+            "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,-1],"max":[1,0,0]}],
+            "bufferViews":[{"buffer":0,"byteLength":36}],
+            "buffers":[{"uri":"the%20tri.bin","byteLength":36}]}"#;
+        std::fs::write(dir.join("tri.gltf"), json).unwrap();
+        let model = load_gltf(&dir.join("tri.gltf")).unwrap();
+        assert_eq!(
+            model.mesh("tri").unwrap().mesh.positions[1],
+            [1.0, 0.0, 0.0]
+        );
+        assert_eq!(model.images[0].mime, "image/jpeg");
+        assert_eq!(model.images[0].name, "paint.jpg");
+        // From memory, the same file has nothing beside it.
+        assert!(matches!(
+            load_glb(json.as_bytes()),
+            Err(GltfError::ExternalBuffer(0))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

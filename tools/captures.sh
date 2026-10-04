@@ -57,6 +57,8 @@ asteroids=$bin/asteroids$exe
 city=$bin/city-blocks$exe
 # The island demo (#96), which a baseline from before it lacks: its shots are then skipped.
 island_demo=$bin/island$exe
+# The labs' external models captured alone (#170), those of them tools/fetch-assets.sh fetched.
+external="CesiumMan FlightHelmet Fox MetalRoughSpheres NormalTangentMirrorTest NormalTangentTest TextureCoordinateTest TextureSettingsTest TextureTransformTest WaterBottle"
 # The physics lab (#136), which a baseline from before it lacks: its captures are then skipped.
 lab=$bin/physics-lab$exe
 for demo in "$meshlets" "$asteroids" "$city"; do
@@ -305,6 +307,20 @@ for path in $paths; do
     capture "$path-lab-room-pan60" 60 "$lab" --lab room --fixed-step --pan 2 --view=-2,1.5,3,0,0 "${flag[@]}"
     # The same, supersampled 2 × 2 (D-045: SSAA for screenshots).
     capture "$path-lab-room-pan60-ssaa" 60 "$lab" --lab room --fixed-step --pan 2 --view=-2,1.5,3,0,0 --ssaa "${flag[@]}"
+    # The labs' external models (#170, D-048), when tools/fetch-assets.sh has fetched them (never
+    # in CI): the row at frame 60, then each alone, framed as its Khronos screenshot; Sponza, a
+    # reference model (--reference-only), with and without the probes (#171).
+    if [ -d "$root/assets/external" ]; then
+      capture "$path-lab-models60" 60 "$lab" --lab models --fixed-step "${flag[@]}"
+      for model in $external; do
+        [ -d "$root/assets/external/$model" ] || continue
+        capture "$path-lab-model-$model" 60 "$lab" --lab models --model "$model" --fixed-step "${flag[@]}"
+      done
+      if [ -d "$root/assets/external/Sponza" ]; then
+        capture "$path-lab-model-Sponza" 60 "$lab" --lab models --model Sponza --fixed-step "${flag[@]}"
+        capture "$path-lab-model-Sponza-noprobes" 60 "$lab" --lab models --model Sponza --fixed-step --no-probes "${flag[@]}"
+      fi
+    fi
   fi
 done
 closing="captures in $out: $(ls "$out"/*.png 2>/dev/null | wc -l) images"

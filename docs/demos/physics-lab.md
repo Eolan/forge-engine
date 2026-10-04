@@ -1220,6 +1220,71 @@ The lab's tests:
   six times. The server takes all eight commands in time, the client corrects at least six times,
   and it ends where the server is, to the bit.
 
+## `models`: models made by others (issue #170, D-048)
+
+The Khronos glTF sample assets, to compare Forge's renderings with Khronos's and to test the
+importer and the materials on models Forge did not make. They are not in the repository:
+
+```
+tools/fetch-assets.sh                    # the open models, CC0 or CC-BY 4.0, 72 MB
+tools/fetch-assets.sh --reference-only   # also Sponza (CryEngine Limited License), 53 MB
+physics-lab --lab models                 # each on a plinth
+physics-lab --lab models --model Fox     # one alone, framed as its Khronos screenshot
+```
+
+`assets/external.tsv` pins every file to one commit of the Khronos repository, with its size
+and SHA-256. The script checks each file and keeps those already there. The models land in
+`assets/external/`, which git ignores, with each one's `LICENSE.md`.
+
+**For the labs only:**
+- Nothing that ships reads `assets/external/`: `credits --check`, which CI runs, fails if any
+  source outside the labs, the tools and the tests names it, or names a reference model.
+- The reference models (restricted licences) are fetched only on request, are never
+  committed, and never go into the engine or a game.
+- Captures of them are ours and may be shown.
+
+**The scene:**
+- **The row:** each model on a plinth, scaled to fit a metre, its meshes placed as its file
+  places them.
+- **`--model NAME`:** one model alone, the camera framing its bounds, for a capture beside its
+  Khronos screenshot.
+- **Sponza** shows only alone, at its own size, the camera at a person's height under its
+  arcade.
+- **Skinned models** (Fox, CesiumMan) stand in their rest pose: the lab bends their vertices
+  by their skin's matrices at rest (`forge-anim`). glTF keeps a skinned mesh in its bind pose,
+  and CesiumMan's is turned on its back.
+- **Missing models** are skipped, logged, and named in the log line. The batch captures the
+  scene only where they are there, so CI and a fresh clone capture nothing of it.
+
+![The row, and each test model alone](images/physics-lab-models.png)
+
+**The first set:**
+- **The test models:** TextureCoordinateTest, TextureTransformTest, TextureSettingsTest,
+  NormalTangentTest, NormalTangentMirrorTest and MetalRoughSpheres.
+- **The objects:** WaterBottle and FlightHelmet.
+- **The animated figures:** Fox and CesiumMan.
+- **Sponza,** reference only: 262 000 triangles and 69 JPEG textures.
+- **Size:** the ten open models are 619 000 triangles and 38 images. Their textures take
+  534 MiB of video memory as RGBA8 with mips: FlightHelmet's fifteen 2048² maps are most of
+  it. That is the case for block compression (D-047's table).
+
+**What they found:**
+- **Highlight NaN at roughness 1.** A material at roughness 1, glTF's default, gave a highlight
+  exponent of 0. The shader's `pow(0, 0)` then produced NaN where the surface turns from the
+  light, and bloom and TAA spread it into black squares (MetalRoughSpheres' roughest column,
+  CesiumMan). The exponent now stays at least 0.001, in `RenderLayer::specular_power` and in
+  the UV row.
+- **`KHR_texture_transform`'s rotation had the wrong sign.** TextureTransformTest's arrows
+  pointed at its red crosses. They now point at its green checks, as in Khronos's screenshot.
+- **Double-sided materials are drawn one-sided.** TextureSettingsTest shows its one red cross
+  on that row. Blender marks every material double-sided, so the importer does not warn of it.
+- **Alpha cut-outs are drawn opaque:** Sponza's foliage and chains, logged.
+- **The probes go dark inside Sponza** over a few hundred frames: probes in its walls and
+  rays hitting back faces (#171). With `--no-probes` the open sky's light reaches under the
+  arcade, too bright but nothing black.
+
+![Sponza at frame 60 with the probes and without](images/physics-lab-models-sponza.png)
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B

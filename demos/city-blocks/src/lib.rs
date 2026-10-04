@@ -268,6 +268,10 @@ struct Args {
     /// flat floor through `forge-physics`.
     #[arg(long, value_enum)]
     lab: Option<lab::LabScene>,
+    /// `--lab models`: show this model alone (its name as `tools/fetch-assets.sh` lists it, e.g.
+    /// `WaterBottle`), framed for a capture beside Khronos's screenshot (#170, D-048).
+    #[arg(long)]
+    model: Option<String>,
     /// With `--lab`, write the session's commands and digests to this file at exit (#137).
     #[arg(long)]
     record: Option<PathBuf>,
@@ -3663,8 +3667,8 @@ struct Cooked {
 /// Cooks (or loads) the props of this run: the start-up's CPU work, which runs behind the
 /// loading screen (issue #25).
 fn cook(args: &Args) -> Cooked {
-    let props = if args.lab.is_some() {
-        lab::props()
+    let props = if let Some(scene) = args.lab {
+        lab::props(scene)
     } else if args.island.is_some() {
         // The island, the sea around it and the rocks on it (`docs/demos/island.md`).
         island_props(args)
@@ -5098,6 +5102,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.0,
             pitch: -0.55,
             speed: 6.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Models) {
+        // Before the models' row, or framing the one `--model` names (inside a room model).
+        let (position, yaw, pitch) = lab::models::camera();
+        FlyCamera {
+            position,
+            yaw,
+            pitch,
+            speed: 2.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Room) {
@@ -6812,6 +6826,9 @@ fn run(args: Args, title: &'static str) -> Result<()> {
     TEXTURES
         .set(args.textures)
         .expect("the textures' mode, set once");
+    lab::models::FOCUS
+        .set(args.model.clone())
+        .expect("the models scene's model, set once");
     let config = AppConfig {
         title: title.into(),
         vsync: args.vsync,
