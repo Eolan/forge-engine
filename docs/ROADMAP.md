@@ -125,8 +125,8 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   barrels and logs. A dam break in a glass tank ✅ (#156, D-044, `--lab tank` and
   `--lab tank-bench`): the GPU's particle liquid, 590 000 particles on a 1.25 cm grid, drawn
   through the glass, settling 1 mm off its level. The GPU's shallow-water layer over the flood and its splashes ✅ (#162). Next:
-  step 7's skinned creatures (GPU skinning, with Phase 7's first step; the clip runtime waits on
-  D-012's amendment 🟡), and Phase 4's night sky (D-046 ✅).
+  step 7's skinned creatures (GPU skinning, with Phase 7's first step; the clip runtime in-house,
+  D-012's amendment ✅), and Phase 4's night sky (D-046 ✅).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of

@@ -286,7 +286,8 @@ ground. Tiers: full stack near, clips only mid, texture-animated instances far. 
 replicates parameters and hit events, never poses.
 *(research: animation.md)* Accepted by the owner 2026-09-24.
 
-**Amendment 🟡 (proposed 2026-10-04): the clip runtime in-house, from glTF.**
+**Amendment ✅ (proposed and accepted 2026-10-04, option 1): the clip runtime in-house, from
+glTF.**
 The owner approved downloading `ozz-animation-rs` for step 7's skinned creatures (2026-10-04),
 and two things came up when checking it before adding it:
 - **It needs nightly Rust.** Its README says so, and its manifest turns on glam's `core-simd`
@@ -309,7 +310,12 @@ The choices:
 3. **A fork of ozz-animation-rs on stable** (glam's SSE2 path instead of `core-simd`), with the
    C++ tools built from source. A fork to maintain, and still the C++ step.
 
-**Question for the owner:** option 1 (no download), or one of the others?
+**The owner's answer (2026-10-04):** option 1, after checking that the README (a year old)
+is not stale. It is not: on this machine's stable rustc 1.99 (2026-09-28) `use std::simd`
+still fails with E0658 (`portable_simd`, rust-lang/rust#86656), and the crate's `src/lib.rs`
+at its latest commit (2026-09-05) still starts with `#![feature(portable_simd)]`. Should
+`std::simd` become stable, ozz-animation-rs stays a candidate to compare against, but the C++
+step for its archives would remain.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 
