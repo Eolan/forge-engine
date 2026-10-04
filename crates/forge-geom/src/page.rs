@@ -4,7 +4,9 @@
 //! A page is [`PAGE_SIZE`] bytes of cluster payloads packed back to back. A cluster's
 //! payload lies at a 16-byte offset of its page (`GpuMeshlet::payload`): its vertices
 //! ([`PagedVertex`], 16 bytes each), then its triangles (three one-byte local indices each),
-//! padded to 16 bytes. Every cluster carries its own copy of its vertices, so a page needs
+//! padded to 16 bytes. A mesh with texture coordinates (D-047) adds its UV stream after them
+//! ([`uv_offset`]): the cluster's UV range (its minimum and extent, four `f32`), then each
+//! vertex's UV as two 16-bit unorms within that range, padded to 16 bytes. Every cluster carries its own copy of its vertices, so a page needs
 //! nothing outside itself.
 //!
 //! Packing keeps together what the LOD cut decides together:
@@ -89,10 +91,60 @@ impl Pages {
     }
 }
 
-/// Bytes of a cluster's payload with `vertices` and `triangles`.
-pub fn payload_bytes(vertices: u32, triangles: u32) -> usize {
+/// Bytes of a cluster's payload with `vertices` and `triangles`, and its UV stream when `uvs`.
+pub fn payload_bytes(vertices: u32, triangles: u32, uvs: bool) -> usize {
+    let stream = if uvs {
+        UV_RANGE_BYTES + (vertices as usize * 4).next_multiple_of(PAYLOAD_ALIGN)
+    } else {
+        0
+    };
+    uv_offset(vertices, triangles) + stream
+}
+
+/// Where a cluster's UV stream starts in its payload (D-047): after its vertices and its
+/// triangles.
+pub fn uv_offset(vertices: u32, triangles: u32) -> usize {
     (vertices as usize * size_of::<PagedVertex>() + triangles as usize * 3)
         .next_multiple_of(PAYLOAD_ALIGN)
+}
+
+/// Bytes of a UV stream's range: the cluster's UV minimum and extent, two `f32` each.
+pub const UV_RANGE_BYTES: usize = 16;
+
+/// The UV range of a cluster whose vertices have `uvs`: their minimum and extent.
+pub fn uv_range(uvs: impl IntoIterator<Item = [f32; 2]>) -> [f32; 4] {
+    let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for uv in uvs {
+        for i in 0..2 {
+            min[i] = min[i].min(uv[i]);
+            max[i] = max[i].max(uv[i]);
+        }
+    }
+    if min[0] > max[0] {
+        return [0.0; 4];
+    }
+    [min[0], min[1], max[0] - min[0], max[1] - min[1]]
+}
+
+/// `uv` as two 16-bit unorms within `range` (x in the low 16 bits, y in the high).
+pub fn encode_uv(uv: [f32; 2], range: [f32; 4]) -> u32 {
+    let q = |i: usize| {
+        let extent = range[2 + i];
+        if extent > 0.0 {
+            (((uv[i] - range[i]) / extent).clamp(0.0, 1.0) * 65535.0).round() as u32
+        } else {
+            0
+        }
+    };
+    q(0) | (q(1) << 16)
+}
+
+/// The UV [`encode_uv`] packed within `range`.
+pub fn decode_uv(e: u32, range: [f32; 4]) -> [f32; 2] {
+    [
+        range[0] + (e & 0xFFFF) as f32 / 65535.0 * range[2],
+        range[1] + (e >> 16) as f32 / 65535.0 * range[3],
+    ]
 }
 
 /// Appends payloads to pages, opening a new page when one does not fit.
@@ -125,6 +177,7 @@ impl Packer {
 fn write_payload(
     dag: &mut ClusterDag,
     vertices: &[GpuVertex],
+    uvs: bool,
     bytes: &mut [u8],
     c: usize,
     page: u32,
@@ -146,6 +199,20 @@ fn write_payload(
     let t = range.triangle_offset as usize;
     let n = m.triangle_count as usize * 3;
     bytes[at..at + n].copy_from_slice(&dag.meshlet_triangles[t..t + n]);
+    if uvs {
+        let local =
+            |i: usize| vertices[dag.meshlet_vertices[range.vertex_offset as usize + i] as usize];
+        let count = m.vertex_count as usize;
+        let uv_range = uv_range((0..count).map(|i| local(i).uv));
+        let mut at = base + uv_offset(m.vertex_count, m.triangle_count);
+        bytes[at..at + UV_RANGE_BYTES].copy_from_slice(bytemuck::bytes_of(&uv_range));
+        at += UV_RANGE_BYTES;
+        for i in 0..count {
+            let e = encode_uv(local(i).uv, uv_range);
+            bytes[at..at + 4].copy_from_slice(&e.to_le_bytes());
+            at += 4;
+        }
+    }
     dag.meshlets[c].page = page;
     dag.meshlets[c].payload = offset as u32;
 }
@@ -167,11 +234,15 @@ fn morton(p: [f32; 3], min: [f32; 3], max: [f32; 3]) -> u32 {
 }
 
 /// Packs the DAG's clusters into pages (see the module notes) and fills every record's
-/// `page`, `payload` and `child_page`.
-pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex]) -> Pages {
+/// `page`, `payload` and `child_page`. With `uvs` every payload carries its UV stream.
+pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex], uvs: bool) -> Pages {
     let n = dag.meshlets.len();
     let size = |dag: &ClusterDag, c: usize| {
-        payload_bytes(dag.meshlets[c].vertex_count, dag.meshlets[c].triangle_count)
+        payload_bytes(
+            dag.meshlets[c].vertex_count,
+            dag.meshlets[c].triangle_count,
+            uvs,
+        )
     };
     let mut packer = Packer {
         bytes: Vec::new(),
@@ -182,7 +253,7 @@ pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex]) -> Pages {
     for c in 0..n {
         if dag.meshlets[c].parent_error.is_infinite() {
             let (page, offset) = packer.reserve(size(dag, c));
-            write_payload(dag, vertices, &mut packer.bytes, c, page, offset);
+            write_payload(dag, vertices, uvs, &mut packer.bytes, c, page, offset);
         }
     }
     let root_pages = packer.page_count();
@@ -228,7 +299,7 @@ pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex]) -> Pages {
         let total: usize = members[g].iter().map(|&c| size(dag, c)).sum();
         let (page, mut offset) = packer.reserve(total);
         for &c in &members[g] {
-            write_payload(dag, vertices, &mut packer.bytes, c, page, offset);
+            write_payload(dag, vertices, uvs, &mut packer.bytes, c, page, offset);
             offset += size(dag, c);
         }
         group_page[g] = page;

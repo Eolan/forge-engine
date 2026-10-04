@@ -127,7 +127,8 @@ impl SkinnedMesh {
             m.cone_axis = [0.0; 3];
             m.cone_cutoff = 1.0;
         }
-        let pages = page::pack(&mut dag, &vertices);
+        let uvs = !mesh.uvs.is_empty();
+        let pages = page::pack(&mut dag, &vertices, uvs);
         let mut skinned = Vec::with_capacity(dag.meshlet_vertices.len());
         for (m, range) in dag.meshlets.iter().zip(&dag.ranges) {
             let first = range.vertex_offset as usize;
@@ -148,6 +149,7 @@ impl SkinnedMesh {
                 clusters_per_level: dag.clusters_per_level,
                 center,
                 radius,
+                uvs,
             },
             vertices: skinned,
         }

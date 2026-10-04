@@ -28,6 +28,9 @@ public static const uint SAMPLER_LINEAR_REPEAT = 2;
 public static const uint SAMPLER_ANISOTROPIC_REPEAT = 3;
 public static const uint SAMPLER_MIN_REDUCTION_CLAMP = 4;
 public static const uint SAMPLER_LINEAR_CLAMP_NEAREST_MIP = 5;
+// Anisotropic with a model's wrapping (D-047): the sampler for wrap modes (u, v), 0 repeat, 1 clamp
+// and 2 mirror, is SAMPLER_ANISOTROPIC_WRAP + 3 u + v (forge_gpu::SamplerKind::AnisotropicWrap).
+public static const uint SAMPLER_ANISOTROPIC_WRAP = 6;
 
 public float4 sample_image(uint image, uint sampler, float2 uv)
 {

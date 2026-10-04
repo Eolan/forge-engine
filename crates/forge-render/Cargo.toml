@@ -17,4 +17,5 @@ forge-geom = { workspace = true }
 forge-gpu = { workspace = true }
 forge-world = { workspace = true }
 glam = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tracing = { workspace = true }

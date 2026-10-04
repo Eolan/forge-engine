@@ -47,9 +47,13 @@ pub enum SamplerKind {
     /// while the same dispatch writes another level of the image (a linear mip filter may
     /// fetch the next level even at weight 0, and a weight of 0 does not hide a NaN).
     LinearClampNearestMip = 5,
+    /// Anisotropic 16× with a model's wrapping (D-047): the first of nine, the sampler for
+    /// wrap modes `(u, v)` (0 repeat, 1 clamp, 2 mirror) is `3 u + v` after it.
+    AnisotropicWrap = 6,
 }
 
-const SAMPLER_COUNT: u32 = 6;
+/// Samplers in the table: the six above, then the nine of [`SamplerKind::AnisotropicWrap`].
+const SAMPLER_COUNT: u32 = 15;
 
 /// Handle of a registered sampled image (an index into binding 0).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -180,6 +184,19 @@ impl Bindless {
                 }
                 5 => {
                     info = info.mipmap_mode(vk::SamplerMipmapMode::NEAREST);
+                }
+                6.. => {
+                    let mode = |m: u32| match m {
+                        0 => vk::SamplerAddressMode::REPEAT,
+                        1 => vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                        _ => vk::SamplerAddressMode::MIRRORED_REPEAT,
+                    };
+                    let wrap = kind - 6;
+                    info = info
+                        .address_mode_u(mode(wrap / 3))
+                        .address_mode_v(mode(wrap % 3))
+                        .anisotropy_enable(anisotropy > 1.0)
+                        .max_anisotropy(anisotropy.max(1.0));
                 }
                 _ => {}
             }

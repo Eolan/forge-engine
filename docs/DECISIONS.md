@@ -2212,7 +2212,7 @@ display pass; `docs/demos/island.md`, "The night".
   (`--fov`) shows the maria: past 8 pixels across, the disc is scaled towards the scene's
   adaptation (the eye's local adaptation), since the night's exposure burns it white.
 
-## D-047 — Texture coordinates in the cluster pages, and textures from glTF 🟡 (proposed 2026-10-04)
+## D-047 — Texture coordinates in the cluster pages, and textures from glTF ✅ (proposed and accepted 2026-10-04)
 
 #166. A cluster vertex (`PagedVertex`, 16 bytes) holds a position and a normal, but no texture
 coordinate. Every surface is textured by projection (triplanar), and the glTF importer reads
@@ -2284,3 +2284,67 @@ stores them per cluster, quantised to each cluster's range.
 **A first step once answered:** the stream in the cook and the pages, `TEXCOORD_0` and PNG
 images in the importer, the UV material row, and the creatures unwrapped and textured, with a
 capture and the page bytes measured.
+
+**The owner's answers (2026-10-04),** the proposal accepted as written, with one addition:
+the material properties the artist gave are kept wherever the file has them.
+- That means:
+  - each texture's sampler (repeat, clamp or mirror on each axis);
+  - its transform (`KHR_texture_transform`);
+  - the factors that scale each texture (base colour, metalness and roughness, the normal
+    map's scale, the occlusion's strength, the emissive colour and strength).
+- What Forge cannot draw yet is logged when the model loads, not dropped silently: alpha
+  cut-outs and blending, a second UV set, and nearest filtering.
+1. **The format:** the optional per-cluster stream.
+2. **JPEG:** yes. PNG is preferred: our own models embed PNG, and JPEG is read when a file
+   has only that.
+3. **Compression:** RGBA8 first, block compression later and measured. The options:
+
+   | Approach | For | Against |
+   |---|---|---|
+   | RGBA8, decoded at load (first) | No new dependency beyond the decoders. Exactly as authored. Simple. | 4 bytes per texel. A 2048² map with its mips is 22 MB, and a material of four maps is about 90 MB. The most bandwidth. |
+   | BC7 for colour, BC5 for normals, at cook time, cached | A quarter of the memory and bandwidth. The PC standard. BC7 is near lossless. | An encoder crate. The cook takes minutes for large sets. Cache files to keep. |
+   | KTX2 with Basis Universal, transcoded at load | Smallest on disk and to download. One file for every GPU. | Below BC7's quality. A C++ transcoder. Transcoding time at load. |
+   | The model's own compressed textures (`KHR_texture_basisu`, DDS) | Nothing to encode. | Few free models ship them. Needs a KTX2 reader. |
+4. **The first textured model:** our creatures. Advanced third-party models follow soon,
+   under their own proposal, because ours are simple.
+
+**Built, the first step (#166, 2026-10-04):**
+- **The stream** (`forge_geom::page`): after a cluster's triangles, not right after its
+  vertices as proposed. The triangles keep their offset, so the skin pass, the index fallback
+  and the software rasteriser are unchanged, and only the resolve finds the stream
+  (`uv_stream` in `meshlet.slang`). A flag in `Mesh` says it is there, and the mesh cache
+  stores it (format 3: every cached mesh cooks again once).
+  - **Precision:** within half a step of 1/65535 of the cluster's UV extent (the test tiles
+    UVs well past 0–1).
+  - **Cost on the creatures:** 21 % more payload bytes (181 KB against 149 KB for the
+    mannequin), two pages each as before. A static cook of the same mesh grows 22 %, from 4
+    pages to 5. Meshes without UVs are unchanged.
+  - **UVs do not steer the simplifier:** a cook with UVs makes the same clusters. Seams hold
+    because glTF splits their vertices. Weighing the UVs in the simplifier's error waits for
+    models with many LOD levels.
+- **The importer** (`forge_geom::model`) reads:
+  - `TEXCOORD_0`, the images in the `.glb`, and each texture's wrapping and
+    `KHR_texture_transform`;
+  - every factor the material gives.
+
+  The normal and occlusion maps take the base colour's transform, because the `gltf` crate
+  gives theirs only through raw extensions. What Forge cannot draw is listed in
+  `Model::unsupported` and logged once per model: alpha cut-outs and blending (drawn
+  opaque), a second UV set, nearest filtering.
+- **The textures** (`forge_render::textures::decode_image`): PNG or JPEG decoded to RGBA8,
+  resampled to powers of two in linear light. Mips are made by use: colour averaged in
+  linear light, normals renormalised, data as stored. Each image is decoded once per use
+  (`ModelTextures`). Nine anisotropic samplers cover glTF's wrapping on each axis
+  (`SamplerKind::AnisotropicWrap`).
+- **The UV row** (`MATERIAL_FLAG_UV`, `shade_uv_mapped`):
+  - glTF's metallic-roughness model on Forge's highlight. A metal keeps no diffuse colour, its
+    reflectance at normal incidence is its base colour's brightest channel, and its highlight
+    weighs `METAL_SPECULAR` (0.35) more. The highlight and the reflection are not tinted by a
+    metal's colour yet.
+  - Occlusion darkens the sky's and the probes' light only.
+  - The tangent frame is Schüler's cotangent frame of the position's and the transformed UVs'
+    derivatives; glTF's +y points towards −v. On a skinned mesh it is taken in the bind pose
+    and turned with the body.
+  - `GpuMaterial` grows from 112 to 176 bytes.
+- **The creatures:** unwrapped and baked in Blender (`docs/demos/physics-lab.md`, "Their
+  textures"). The procedural wood and fur of the first step are gone.

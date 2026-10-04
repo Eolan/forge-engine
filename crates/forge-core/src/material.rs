@@ -60,6 +60,75 @@ impl ShadingClass {
     }
 }
 
+/// How a texture repeats past 0–1 along one axis (glTF's wrapping modes, D-047).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Wrap {
+    /// Tiles.
+    #[default]
+    Repeat,
+    /// Holds the edge texel.
+    Clamp,
+    /// Tiles, every other repeat mirrored.
+    Mirror,
+}
+
+impl Wrap {
+    /// Its index in the GPU's table of wrapping samplers (`SAMPLER_ANISOTROPIC_WRAP` in
+    /// `bindless.slang`: the sampler for `(u, v)` is `3 u + v` after it).
+    pub fn index(self) -> u32 {
+        match self {
+            Wrap::Repeat => 0,
+            Wrap::Clamp => 1,
+            Wrap::Mirror => 2,
+        }
+    }
+}
+
+/// A standard row whose textures are read by the mesh's texture coordinates (D-047) instead of
+/// projected along the object's axes: a model's material as glTF's metallic-roughness model
+/// gives it. The row's `albedo_texture` is the base colour map (times `color_a`), its
+/// `normal_texture` the tangent-space normal map (its x and y times `normal_strength`), its
+/// `roughness` the roughness factor; a mesh without UVs draws the row's factors alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UvMapping {
+    /// The UV transform (`KHR_texture_transform`): `u' = t[0] u + t[1] v + t[2]`,
+    /// `v' = t[3] u + t[4] v + t[5]`.
+    pub transform: [f32; 6],
+    /// How the textures repeat along u and v.
+    pub wrap: [Wrap; 2],
+    /// Metalness, 0 for a dielectric to 1 for a metal. A metal keeps no diffuse colour,
+    /// reflects as much as its base colour's brightest channel at normal incidence, and its
+    /// highlight weighs [`METAL_SPECULAR`] more than the row's `specular`.
+    pub metallic: f32,
+    /// Roughness in its green channel and metalness in its blue, multiplying the row's
+    /// `roughness` and `metallic`.
+    pub metallic_roughness_texture: Option<TextureId>,
+    /// Ambient occlusion in its red channel: it darkens the sky's and the probes' light, not
+    /// the sun's.
+    pub occlusion_texture: Option<TextureId>,
+    /// How much of the occlusion applies: `1 + strength × (occlusion − 1)`.
+    pub occlusion_strength: f32,
+    /// The emitted colour, multiplying the row's `emissive`.
+    pub emissive_texture: Option<TextureId>,
+}
+
+/// How much more a metal's highlight weighs than a dielectric's ([`UvMapping::metallic`]).
+pub const METAL_SPECULAR: f32 = 0.35;
+
+impl Default for UvMapping {
+    fn default() -> Self {
+        Self {
+            transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            wrap: [Wrap::Repeat; 2],
+            metallic: 0.0,
+            metallic_roughness_texture: None,
+            occlusion_texture: None,
+            occlusion_strength: 1.0,
+            emissive_texture: None,
+        }
+    }
+}
+
 /// What the renderer needs of a material. Colours are linear, in units of the light a white
 /// Lambertian surface facing the sun returns (the resolve scales them to luminance).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,6 +181,9 @@ pub struct RenderLayer {
     /// Layered: a layer whose edge follows a height of the drawn ground instead of the map's
     /// texels (the island's sand, #106).
     pub contour: Option<LayerContour>,
+    /// Standard: the textures read by the mesh's texture coordinates, with a model's
+    /// metalness, occlusion and emission (D-047); `None` projects them.
+    pub uv: Option<UvMapping>,
 }
 
 /// A layer of a [`ShadingClass::Layered`] row drawn by the ground's height under each pixel: the
@@ -183,6 +255,7 @@ impl Default for RenderLayer {
             reflectance: 0.04,
             bubbles: 0.0,
             contour: None,
+            uv: None,
         }
     }
 }

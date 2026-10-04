@@ -54,7 +54,7 @@ Where Forge uses them:
 - `glam`: asteroids, city-blocks, forge-anim, forge-app, forge-core, forge-geom, forge-physics, forge-procgen, forge-render, forge-world, meshlets
 - `gltf`: forge-anim, forge-geom
 - `gpu-allocator`: forge-gpu
-- `image`: contact-sheet, forge-app, forge-procgen, imgdiff, sharpness
+- `image`: contact-sheet, forge-app, forge-procgen, forge-render, imgdiff, sharpness
 - `libloading`: forge-gpu
 - `libm`: forge-core
 - `meshopt`: forge-geom
@@ -72,7 +72,7 @@ Where Forge uses them:
 - `winit`: asteroids, city-blocks, forge-app, meshlets
 - `xxhash-rust`: forge-core, forge-gpu, forge-physics
 
-## Their dependencies (225)
+## Their dependencies (227)
 
 | Crate | Version | Licence | Authors | Repository |
 |---|---|---|---|---|
@@ -301,3 +301,5 @@ Where Forge uses them:
 | zerocopy-derive | 0.8.57 | BSD-2-Clause OR Apache-2.0 OR MIT |  | <https://github.com/google/zerocopy> |
 | zlib-rs | 0.6.8 | Zlib |  | <https://github.com/trifectatechfoundation/zlib-rs> |
 | zmij | 1.0.23 | MIT | David Tolnay | <https://github.com/dtolnay/zmij> |
+| zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib |  | <https://github.com/etemesi254/zune-image> |
+| zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib | caleb | <https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg> |

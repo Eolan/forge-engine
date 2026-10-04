@@ -454,7 +454,8 @@ Phase 3's step 7: D-012's physics layer, with Phase 7's first step, skinning. Th
 are ragdolls whose motors drive them to a pose, drawn as bodies that bend at their joints.
 
 **The bodies** (#165) were modelled and animated in Blender from code
-(`assets/blender/skinned_creatures.py`, `assets/models/skinned-creatures.glb`, 634 KB):
+(`assets/blender/skinned_creatures.py`, `assets/models/skinned-creatures.glb`, 2.3 MB, of
+which 1.4 MB are its textures):
 - a 1.8 m artist's mannequin of pale wood with dark joints, standing in an A-pose (with its arms
   straight down they melted into its torso);
 - a 1 m dog with a dark nose, ears and paws.
@@ -465,21 +466,32 @@ puppet's parts were, and Blender's bone heat sets the weights. Each kind has a w
 idle clip (1 s and 4 s for the mannequin, 0.75 s and 2 s for the dog). `forge-anim` reads and
 samples those clips, but the lab does not play them yet.
 
-**Their textures** (#166's first step): the mannequin is pale wood, its grain along its limbs,
-and the dog has a coat of short fur. Both are procedural (`forge_render::textures::wood` and
-`fur`, 512 × 512, made only for this scene) and multiply the model's colours. The engine's
-textures are projected along the object's axes (triplanar), not laid by UVs. A projection from
-the bent body would make the grain swim over it as it moves, so the resolve projects a skinned
-mesh's textures from its bind pose:
-- **Position:** the bind-pose position, its change per pixel and its normal come from the skin
-  pass's vertex records, by the pixel's barycentrics.
-- **Relief:** the normal map's detail is turned with the body by the skin's own turn at the
-  pixel (its vertices' joints, blended).
+**Their textures** (#166, D-047) are the model's own, laid by its UVs, so they stay on the
+bending bodies:
+- **The mannequin** is pale wood, its grain running along each limb, its joints darker and
+  varnished (glossier).
+- **The dog** has a tan coat whose strands follow its bones, a darker saddle along its back, a
+  cream chest, belly and front legs, a dark nose, ears and paws, and glossy black eyes.
 
-A first try turned the relief by the shortest arc between the bind normal and the bent one.
-The creatures face the camera through a half turn from their bind pose, which made that arc
-undefined on their chests and the backs of their legs, and it drew white streaks there. UVs
-and the models' own textures are the rest of #166.
+They were painted in Blender from code, as procedural materials (the grain and the strands
+follow each vertex's nearest bone), and baked by Cycles on the model's smart-projected UVs,
+each creature alone. Each has three 512 × 512 PNGs: its base colour, a tangent-space normal
+map, and occlusion, roughness and metalness packed in one image, as glTF packs them. The
+exporter writes them as the material's glTF textures, and Forge reads them as they are
+(`forge_render::material::ModelTextures`):
+- **the base colour** times the material's factor;
+- **roughness and metalness** per pixel;
+- **the occlusion,** which darkens the sky's and the probes' light, not the sun's;
+- **the normal map,** whose tangent frame comes from the pixel's derivatives (no tangents are
+  stored). On a skinned mesh it is taken in the bind pose and turned with the body by the
+  skin's turn at the pixel.
+
+The first step of #166 (b9058b0) projected procedural wood and fur from the bind pose. UVs
+replace it. The bind-pose projection stays for projected materials on skinned meshes.
+
+A first bake laid a dark band and a black blob on the dogs' sides: Blender baked the dog's
+occlusion with the mannequin standing inside it at the same origin. Each creature now bakes
+alone.
 
 **The ragdolls** come from the same file, through `forge-physics` (`World::add_ragdoll`):
 - **bodies:** one per bone, the hull of the vertices that bone carries most;

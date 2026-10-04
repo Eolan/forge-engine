@@ -5,8 +5,8 @@
 //!
 //! File format (`<name>-<key>.fmesh`, little-endian hosts): a header of
 //! `"FGMS"`, the format version, the key, the cook version, the element counts, the root
-//! pages, the triangle counts and the bounding sphere; then the meshlet records and the
-//! clusters per level as raw `Pod` bytes; then, from the next multiple of [`PAGE_ALIGN`],
+//! pages, the triangle counts, the bounding sphere and the flags (1: the payloads carry UVs,
+//! D-047); then the meshlet records and the clusters per level as raw `Pod` bytes; then, from the next multiple of [`PAGE_ALIGN`],
 //! the pages (issue #36), so a page can be read on its own at
 //! `pages_offset + page * PAGE_SIZE`. A file that does not match (another key, version or
 //! size) is ignored and cooked again; a new file is written beside the old name and renamed
@@ -27,7 +27,7 @@ use crate::procedural::TriMesh;
 /// meshoptimizer changes the output, so every cached mesh is cooked again.
 pub const COOK_VERSION: u32 = 4;
 const MAGIC: [u8; 4] = *b"FGMS";
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 3;
 /// The pages start at a multiple of this in the file: a page read is then aligned for
 /// unbuffered I/O (sector and page sizes divide it).
 pub const PAGE_ALIGN: usize = 4096;
@@ -58,7 +58,7 @@ fn push_u64(out: &mut Vec<u8>, v: u64) {
 }
 
 /// Bytes of the header, before the meshlet records.
-const HEADER_BYTES: usize = 68;
+const HEADER_BYTES: usize = 72;
 
 /// Where the pages start in a file of `meshlets` records and `levels` levels.
 fn pages_offset(meshlets: u32, levels: u32) -> u64 {
@@ -88,6 +88,7 @@ fn encode(mesh: &MeshletMesh, key: u64) -> Vec<u8> {
         out.extend_from_slice(&c.to_le_bytes());
     }
     out.extend_from_slice(&mesh.radius.to_le_bytes());
+    push_u32(&mut out, u32::from(mesh.uvs));
     assert_eq!(out.len(), HEADER_BYTES);
     out.extend_from_slice(bytemuck::cast_slice(&mesh.meshlets));
     out.extend_from_slice(bytemuck::cast_slice(&mesh.clusters_per_level));
@@ -146,6 +147,7 @@ fn decode_hierarchy(bytes: &[u8], key: u64) -> Option<(MeshletMesh, u64)> {
     let dag_triangle_count = r.u64()? as usize;
     let center = [r.f32()?, r.f32()?, r.f32()?];
     let radius = r.f32()?;
+    let uvs = r.u32()? & 1 != 0;
     let offset = pages_offset(meshlets, levels);
     let mesh = MeshletMesh {
         meshlets: r.array::<GpuMeshlet>(meshlets)?,
@@ -158,6 +160,7 @@ fn decode_hierarchy(bytes: &[u8], key: u64) -> Option<(MeshletMesh, u64)> {
         dag_triangle_count,
         center,
         radius,
+        uvs,
     };
     Some((mesh, offset + u64::from(pages) * PAGE_SIZE as u64))
 }
@@ -341,6 +344,14 @@ mod tests {
         assert_eq!(back.dag_triangle_count, mesh.dag_triangle_count);
         assert_eq!(back.center, mesh.center);
         assert_eq!(back.radius, mesh.radius);
+        assert!(!back.uvs);
+        // A mesh with UVs keeps its flag.
+        let mut textured = asteroid(Seed::new(3), 12, 1.0, 0.3);
+        textured.uvs = textured.positions.iter().map(|p| [p[0], p[1]]).collect();
+        let mesh = MeshletMesh::build(&textured);
+        let back = decode(&encode(&mesh, 7), 7).expect("decodes");
+        assert!(back.uvs);
+        assert_eq!(back.pages, mesh.pages);
     }
 
     #[test]

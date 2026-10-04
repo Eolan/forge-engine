@@ -16,7 +16,7 @@ pub const MESHLET_MAX_VERTICES: usize = 64;
 /// Maximum triangles per meshlet.
 pub const MESHLET_MAX_TRIANGLES: usize = 124;
 
-/// A cooking vertex (32 bytes): what the DAG builder simplifies. The GPU reads the 16-byte
+/// A cooking vertex (40 bytes): what the DAG builder simplifies. The GPU reads the 16-byte
 /// [`PagedVertex`] of the cluster pages instead.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -30,6 +30,8 @@ pub struct GpuVertex {
     /// The vertex's material section as a number (issue #41): an attribute the simplifier
     /// weighs, so a section dissolves into its neighbour only once that is cheap.
     pub section: f32,
+    /// Texture coordinates (zero for a mesh without them).
+    pub uv: [f32; 2],
 }
 
 /// Meshlet record shared with the shaders (112 bytes, natural layout).
@@ -131,6 +133,8 @@ pub struct MeshletMesh {
     pub center: [f32; 3],
     /// Bounding sphere radius of the whole mesh.
     pub radius: f32,
+    /// Whether the payloads carry a UV stream (D-047, [`crate::page::uv_offset`]).
+    pub uvs: bool,
 }
 
 impl MeshletMesh {
@@ -151,7 +155,8 @@ impl MeshletMesh {
             options.normal_weight,
             lod::MAX_LEVELS,
         );
-        let pages = page::pack(&mut dag, &vertices);
+        let uvs = !mesh.uvs.is_empty();
+        let pages = page::pack(&mut dag, &vertices, uvs);
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
             meshlets: dag.meshlets,
@@ -164,6 +169,7 @@ impl MeshletMesh {
             clusters_per_level: dag.clusters_per_level,
             center,
             radius,
+            uvs,
         }
     }
 
@@ -176,6 +182,21 @@ impl MeshletMesh {
     pub fn vertex(&self, m: &GpuMeshlet, i: usize) -> PagedVertex {
         let at = m.page as usize * PAGE_SIZE + m.payload as usize + i * size_of::<PagedVertex>();
         bytemuck::pod_read_unaligned(&self.pages[at..at + size_of::<PagedVertex>()])
+    }
+
+    /// The texture coordinates of vertex `i` of cluster `m`, from its UV stream (the pages must
+    /// be in memory and the mesh have [`MeshletMesh::uvs`]).
+    pub fn uv(&self, m: &GpuMeshlet, i: usize) -> [f32; 2] {
+        let at = m.page as usize * PAGE_SIZE
+            + m.payload as usize
+            + page::uv_offset(m.vertex_count, m.triangle_count);
+        let range: [f32; 4] =
+            bytemuck::pod_read_unaligned(&self.pages[at..at + page::UV_RANGE_BYTES]);
+        let e = at + page::UV_RANGE_BYTES + i * 4;
+        page::decode_uv(
+            u32::from_le_bytes(self.pages[e..e + 4].try_into().unwrap()),
+            range,
+        )
     }
 
     /// The three local vertex indices of triangle `t` of cluster `m` (pages in memory).
@@ -229,11 +250,13 @@ pub(crate) fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u
         .positions
         .iter()
         .zip(&mesh.normals)
-        .map(|(p, n)| GpuVertex {
+        .enumerate()
+        .map(|(i, (p, n))| GpuVertex {
             position: *p,
             pad0: 0.0,
             normal: *n,
             section: 0.0,
+            uv: mesh.uvs.get(i).copied().unwrap_or_default(),
         })
         .collect();
     let mut vertex_section = vec![u8::MAX; vertices.len()];
@@ -329,7 +352,8 @@ mod tests {
             assert!(m.radius > 0.0);
             assert!(m.page < built.page_count);
             assert_eq!(m.payload as usize % page::PAYLOAD_ALIGN, 0);
-            let end = m.payload as usize + page::payload_bytes(m.vertex_count, m.triangle_count);
+            let end =
+                m.payload as usize + page::payload_bytes(m.vertex_count, m.triangle_count, false);
             assert!(end <= PAGE_SIZE);
             for t in 0..m.triangle_count as usize {
                 for local in built.triangle(m, t) {
@@ -357,7 +381,7 @@ mod tests {
                 let start = m.page as usize * PAGE_SIZE + m.payload as usize;
                 (
                     start,
-                    start + page::payload_bytes(m.vertex_count, m.triangle_count),
+                    start + page::payload_bytes(m.vertex_count, m.triangle_count, false),
                 )
             })
             .collect();
@@ -421,6 +445,63 @@ mod tests {
             }
         }
         assert!(matched > 0);
+    }
+
+    /// A mesh with UVs carries them in every cluster of every level (D-047), within 1/65535
+    /// of the cluster's UV extent; one without carries none, and its payloads do not grow.
+    #[test]
+    fn uvs_ride_in_the_pages_of_every_level() {
+        let mut mesh = crate::procedural::asteroid(Seed::new(700), 48, 1.0, 0.45);
+        let plain = MeshletMesh::build(&mesh);
+        assert!(!plain.uvs);
+        // UVs from the position, tiling well past 0–1, so a vertex's own UV is known.
+        let uv_of = |p: [f32; 3]| [p[0] * 7.0 + 3.0, p[2] * -5.0 + p[1]];
+        mesh.uvs = mesh.positions.iter().map(|&p| uv_of(p)).collect();
+        let built = MeshletMesh::build(&mesh);
+        assert!(built.uvs);
+        assert!(built.levels() > 1);
+        assert_eq!(
+            built.meshlets.len(),
+            plain.meshlets.len(),
+            "UVs do not steer the cook"
+        );
+        let mut worst = 0.0_f32;
+        for m in &built.meshlets {
+            let uvs: Vec<[f32; 2]> = (0..m.vertex_count as usize)
+                .map(|i| uv_of(built.vertex(m, i).position))
+                .collect();
+            let range = page::uv_range(uvs.iter().copied());
+            for (i, want) in uvs.iter().enumerate() {
+                let got = built.uv(m, i);
+                for k in 0..2 {
+                    let step = range[2 + k] / 65535.0;
+                    let off = (got[k] - want[k]).abs();
+                    assert!(off <= step * 0.5 + 1e-5, "uv {k} off by {off}, step {step}");
+                    worst = worst.max(off / step.max(f32::MIN_POSITIVE));
+                }
+            }
+        }
+        eprintln!("worst UV error {worst} steps");
+        // The stream costs 4 bytes a vertex and 16 a cluster, and pages hold whole groups.
+        assert!(built.page_count >= plain.page_count);
+    }
+
+    #[test]
+    fn uv_ranges_cover_their_coordinates() {
+        let uvs = [[0.25, -1.0], [4.0, 2.0], [1.0, 0.5]];
+        let range = page::uv_range(uvs);
+        assert_eq!(range, [0.25, -1.0, 3.75, 3.0]);
+        for uv in uvs {
+            let back = page::decode_uv(page::encode_uv(uv, range), range);
+            assert!((back[0] - uv[0]).abs() < 1e-4 && (back[1] - uv[1]).abs() < 1e-4);
+        }
+        // A cluster whose vertices share one UV: no extent, every UV is its minimum.
+        let flat = page::uv_range([[0.5, 0.5]; 3]);
+        assert_eq!(
+            page::decode_uv(page::encode_uv([0.5, 0.5], flat), flat),
+            [0.5, 0.5]
+        );
+        assert_eq!(page::uv_range(std::iter::empty()), [0.0; 4]);
     }
 
     /// The DAG reaches a root, halves per level, and its errors and spheres are monotonic

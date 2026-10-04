@@ -12,9 +12,11 @@ use forge_core::hash::{hash_cell2, unit_f32};
 #[derive(Clone, Debug)]
 pub struct TextureData {
     /// A name for the debugger and the logs.
-    pub name: &'static str,
-    /// Level 0's side in pixels.
+    pub name: std::borrow::Cow<'static, str>,
+    /// Level 0's width in pixels.
     pub size: u32,
+    /// Level 0's height in pixels (`size` but for a model's images, #166).
+    pub height: u32,
     /// sRGB-encoded colour (albedo), else linear data (normals).
     pub srgb: bool,
     /// Every level's RGBA8 pixels, rows top to bottom.
@@ -55,7 +57,6 @@ fn fbm(seed: u64, u: f32, v: f32, period: u32, octaves: u32) -> f32 {
     sum / norm
 }
 
-#[cfg(test)]
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
@@ -116,8 +117,9 @@ fn albedo_texture(name: &'static str, size: u32, linear: Vec<[f32; 3]>) -> Textu
         levels.push(encode(&current));
     }
     TextureData {
-        name,
+        name: name.into(),
         size,
+        height: size,
         srgb: true,
         levels,
     }
@@ -163,8 +165,9 @@ fn normal_texture(name: &'static str, size: u32, heights: &[f32], strength: f32)
         levels.push(encode(&current));
     }
     TextureData {
-        name,
+        name: name.into(),
         size,
+        height: size,
         srgb: false,
         levels,
     }
@@ -688,62 +691,6 @@ pub fn scrub(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
-/// Streaks running along `v`: a value per column of `columns` across `u`, smoothed between
-/// neighbouring columns, so each streak is constant along `v` (periodic in both directions).
-fn streaks(seed: u64, u: f32, columns: u32) -> f32 {
-    let x = u * columns as f32;
-    let i = x.floor();
-    let t = x - i;
-    let at = |k: f32| unit_f32(hash_cell2(seed, (k as i32).rem_euclid(columns as i32), 0));
-    let t = t * t * (3.0 - 2.0 * t);
-    at(i) + (at(i + 1.0) - at(i)) * t
-}
-
-/// Pale wood for a multiplied tint (#166, the lab's mannequin): the grain along `v` (which the
-/// triplanar projection's side views lay vertically, along a standing body's limbs), growth
-/// rings across it gently warped, and fine fibres; values about 1 so the row's colour holds.
-pub fn wood(seed: u64, size: u32) -> [TextureData; 2] {
-    let rings = |u: f32, v: f32| {
-        let warp = fbm(seed ^ 0x3A9, u, v, 4, 3);
-        let phase = (u * 12.0 + 0.6 * warp).fract();
-        // Late wood: a narrow darker band in each ring.
-        smoothstep(0.62, 0.78, phase) * (1.0 - smoothstep(0.82, 0.95, phase))
-    };
-    let heights = grid(size, |u, v| {
-        0.6 * streaks(seed ^ 0xF1B, u, 256) - 0.4 * rings(u, v)
-    });
-    let colours = grid(size, |u, v| {
-        let fibre = streaks(seed ^ 0xF1B, u, 256);
-        let figure = fbm(seed ^ 0x51C, u, v, 3, 4);
-        let c = 1.02 - 0.22 * rings(u, v) - 0.08 * (fibre - 0.5) + 0.10 * (figure - 0.5);
-        [c, c * 0.97, c * 0.93]
-    });
-    [
-        albedo_texture("wood albedo", size, colours),
-        normal_texture("wood normal", size, &heights, size as f32 / 1024.0),
-    ]
-}
-
-/// Short fur for a multiplied tint (#166, the lab's dog): fine strands along `v` (down a
-/// standing body's sides and legs), in clumps of lighter and darker hair; values about 1.
-pub fn fur(seed: u64, size: u32) -> [TextureData; 2] {
-    let strands = |u: f32, v: f32| {
-        // Strands broken along their length so the coat does not read as stripes.
-        let length = fbm(seed ^ 0x7E1, u, v, 32, 2);
-        streaks(seed ^ 0x5A2, u, 192) * (0.6 + 0.4 * length)
-    };
-    let heights = grid(size, strands);
-    let colours = grid(size, |u, v| {
-        let clump = fbm(seed ^ 0xC1A, u, v, 6, 4);
-        let c = 0.9 + 0.3 * (strands(u, v) - 0.4) + 0.32 * (clump - 0.5);
-        [c, c * 0.96, c * 0.9]
-    });
-    [
-        albedo_texture("fur albedo", size, colours),
-        normal_texture("fur normal", size, &heights, size as f32 / 512.0),
-    ]
-}
-
 /// A floor to measure by (#156, the tank's bench): ten squares a repeat each way in two greys
 /// (10 cm squares at a metre a repeat), a darker line on the repeat's edges (every metre) and a
 /// fainter one through its middle; flat. Its mips keep it from shimmering at a slant.
@@ -786,6 +733,111 @@ pub fn black_and_white(size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// What a model's image holds, which decides how its mips are made (#166, D-047).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ImageUse {
+    /// sRGB colour (base colour, emissive): averaged in linear light.
+    Color,
+    /// A tangent-space normal map: the vectors averaged and renormalised.
+    Normal,
+    /// Linear data (metalness, roughness, occlusion): averaged as stored.
+    Data,
+}
+
+/// A model's encoded image (PNG or JPEG) as a texture with its mips, for `use`. A side that is
+/// not a power of two is resampled up to the next one first, so every level halves exactly.
+pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageResult<TextureData> {
+    let rgba = image::load_from_memory(bytes)?.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let (pw, ph) = (w.next_power_of_two(), h.next_power_of_two());
+    let mut texels: Vec<[f32; 4]> = rgba
+        .pixels()
+        .map(|p| {
+            let c = p.0.map(|b| f32::from(b) / 255.0);
+            match usage {
+                ImageUse::Color => [
+                    srgb_to_linear(c[0]),
+                    srgb_to_linear(c[1]),
+                    srgb_to_linear(c[2]),
+                    c[3],
+                ],
+                ImageUse::Normal => {
+                    let n = normalize([0, 1, 2].map(|k| c[k] * 2.0 - 1.0));
+                    [n[0], n[1], n[2], c[3]]
+                }
+                ImageUse::Data => c,
+            }
+        })
+        .collect();
+    // Resampled in linear light (or as vectors), as the mips are averaged.
+    if (pw, ph) != (w, h) {
+        let linear =
+            image::Rgba32FImage::from_raw(w, h, texels.concat()).expect("one texel per pixel");
+        let resized =
+            image::imageops::resize(&linear, pw, ph, image::imageops::FilterType::Triangle);
+        texels = resized
+            .pixels()
+            .map(|p| match usage {
+                ImageUse::Normal => {
+                    let n = normalize([p.0[0], p.0[1], p.0[2]]);
+                    [n[0], n[1], n[2], p.0[3]]
+                }
+                _ => p.0,
+            })
+            .collect();
+    }
+    let encode = |level: &[[f32; 4]]| -> Vec<u8> {
+        level
+            .iter()
+            .flat_map(|c| match usage {
+                ImageUse::Color => [
+                    to_byte(linear_to_srgb(c[0])),
+                    to_byte(linear_to_srgb(c[1])),
+                    to_byte(linear_to_srgb(c[2])),
+                    to_byte(c[3]),
+                ],
+                ImageUse::Normal => [
+                    to_byte(c[0] * 0.5 + 0.5),
+                    to_byte(c[1] * 0.5 + 0.5),
+                    to_byte(c[2] * 0.5 + 0.5),
+                    to_byte(c[3]),
+                ],
+                ImageUse::Data => c.map(to_byte),
+            })
+            .collect()
+    };
+    let mut levels = vec![encode(&texels)];
+    let (mut current, mut width, mut height) = (texels, pw, ph);
+    while width > 1 || height > 1 {
+        let (nw, nh) = ((width / 2).max(1), (height / 2).max(1));
+        let mut next = Vec::with_capacity((nw * nh) as usize);
+        for y in 0..nh {
+            for x in 0..nw {
+                let at = |dx: u32, dy: u32| {
+                    let (sx, sy) = ((2 * x + dx).min(width - 1), (2 * y + dy).min(height - 1));
+                    current[(sy * width + sx) as usize]
+                };
+                let (a, b, c, d) = (at(0, 0), at(1, 0), at(0, 1), at(1, 1));
+                let mut mean = [0, 1, 2, 3].map(|k| (a[k] + b[k] + c[k] + d[k]) * 0.25);
+                if usage == ImageUse::Normal {
+                    let n = normalize([mean[0], mean[1], mean[2]]);
+                    mean = [n[0], n[1], n[2], mean[3]];
+                }
+                next.push(mean);
+            }
+        }
+        (current, width, height) = (next, nw, nh);
+        levels.push(encode(&current));
+    }
+    Ok(TextureData {
+        name: name.to_owned().into(),
+        size: pw,
+        height: ph,
+        srgb: usage == ImageUse::Color,
+        levels,
+    })
+}
+
 /// A test texture for the mip check (`--mip-check`): level `k` is filled with `k / 16`, so a
 /// trilinear sample returns the level of detail the sampler chose, over 16.
 pub fn mip_ramp(size: u32) -> TextureData {
@@ -806,8 +858,9 @@ pub fn mip_ramp(size: u32) -> TextureData {
         level += 1;
     }
     TextureData {
-        name: "mip ramp",
+        name: "mip ramp".into(),
         size,
+        height: size,
         srgb: false,
         levels,
     }
@@ -878,6 +931,52 @@ mod tests {
         let top = mean(&albedo.levels[0]);
         let last = mean(albedo.levels.last().unwrap());
         assert!((top - last).abs() < 0.01, "{top} vs {last}");
+    }
+
+    /// `width × height` RGBA texels from `f(x, y)`, encoded as a PNG.
+    fn png(width: u32, height: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
+        let image = image::RgbaImage::from_fn(width, height, |x, y| image::Rgba(f(x, y)));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        bytes.into_inner()
+    }
+
+    /// A model's image of any size: resampled to powers of two, every level down to 1 × 1 on
+    /// both sides, a colour's mean kept in linear light, normals unit.
+    #[test]
+    fn a_model_s_image_gets_its_whole_chain() {
+        // 100 × 30: 128 × 32, eight levels (the last 1 × 1).
+        let checker = png(100, 30, |x, y| {
+            let v = if (x / 5 + y / 5) % 2 == 0 { 255 } else { 0 };
+            [v, v, v, 255]
+        });
+        let color = decode_image("checker", &checker, ImageUse::Color).unwrap();
+        assert_eq!((color.size, color.height), (128, 32));
+        assert!(color.srgb);
+        assert_eq!(color.levels.len(), 8);
+        for (k, level) in color.levels.iter().enumerate() {
+            let (w, h) = ((128 >> k).max(1), (32 >> k).max(1));
+            assert_eq!(level.len(), w * h * 4, "level {k}");
+        }
+        // Black and white in equal parts: half the light, so about 188 in sRGB, not 128.
+        let last = color.levels.last().unwrap()[0];
+        assert!((180..=196).contains(&last), "{last}");
+        let data = decode_image("checker", &checker, ImageUse::Data).unwrap();
+        assert!(!data.srgb);
+        let last = data.levels.last().unwrap()[0];
+        assert!((120..=136).contains(&last), "{last}");
+        // Normals tilting either way average to straight up, unit.
+        let bumps = png(8, 8, |x, _| {
+            if x % 2 == 0 {
+                [218, 128, 218, 255]
+            } else {
+                [38, 128, 218, 255]
+            }
+        });
+        let normal = decode_image("bumps", &bumps, ImageUse::Normal).unwrap();
+        let n = &normal.levels.last().unwrap()[..3];
+        assert!((n[0] as i32 - 128).abs() <= 1 && n[2] >= 254, "{n:?}");
+        assert!(decode_image("garbage", b"not an image", ImageUse::Color).is_err());
     }
 
     #[test]

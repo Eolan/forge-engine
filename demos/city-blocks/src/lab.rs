@@ -1737,69 +1737,33 @@ pub(crate) fn build(
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<MeshId> = cooked.meshes.iter().map(|m| builder.add_mesh(m)).collect();
     let mut materials = CityMaterials::new(&ctx.device)?;
-    // The boat's rows, one per material of its model in order: its mesh's sections.
-    let (model, _) = sea::boat_model();
-    let boat = model.mesh("boat").context("the model's boat")?;
-    materials.add_rows(
-        "lab-boat",
-        boat.materials
-            .iter()
-            .map(|m| (m.name.clone(), super::model_layer(m)))
-            .collect(),
-    );
-    // The car's body and its wheel, the aeroplane and its propeller, the spaceship and its flame,
-    // the same way (#140, #141; the ship's glowing parts emissive).
-    let (car, _) = drive::car_model();
-    let (plane, _) = fly::plane_model();
-    let (ship, _) = ship::ship_model();
-    for (model, prop, mesh) in [
-        (car, "lab-car", "car"),
-        (car, "lab-wheel", "car-wheel"),
-        (plane, "lab-plane", "plane"),
-        (plane, "lab-propeller", "plane-prop"),
-        (ship, "lab-ship", "ship"),
-        (ship, "lab-ship-flame", "ship-flame"),
+    // Each model's rows, one per material of its mesh in order (its sections), as the file
+    // gives them: the boat, the car's body and its wheel, the aeroplane and its propeller, the
+    // spaceship and its flame (#138, #140, #141; the ship's glowing parts emissive).
+    for (model, label, prop, mesh) in [
+        (sea::boat_model(), "boat", "lab-boat", "boat"),
+        (drive::car_model(), "car", "lab-car", "car"),
+        (drive::car_model(), "car", "lab-wheel", "car-wheel"),
+        (fly::plane_model(), "plane", "lab-plane", "plane"),
+        (fly::plane_model(), "plane", "lab-propeller", "plane-prop"),
+        (ship::ship_model(), "ship", "lab-ship", "ship"),
+        (ship::ship_model(), "ship", "lab-ship-flame", "ship-flame"),
     ] {
-        let mesh = model.mesh(mesh).context("a model's mesh")?;
-        materials.add_rows(
-            prop,
-            mesh.materials
-                .iter()
-                .map(|m| (m.name.clone(), super::model_layer(m)))
-                .collect(),
-        );
+        model_rows(&mut materials, &model.0, label, prop, mesh, true)?;
     }
-    // The creatures' rows, one per material of their model (#143). In their scene the
-    // mannequin's are wood and the dog's fur, projected from the bind pose so the grain and
-    // the coat stay on the bending bodies (#166).
-    let coats = if kind == LabScene::Creatures {
-        let wood = forge_render::textures::wood(21, 512);
-        let fur = forge_render::textures::fur(22, 512);
-        let mut add = |set: &[forge_render::textures::TextureData; 2]| -> Result<_> {
-            Ok((
-                materials.textures.add(&set[0])?,
-                materials.textures.add(&set[1])?,
-            ))
-        };
-        Some([(add(&wood)?, 0.6), (add(&fur)?, 0.35)])
-    } else {
-        None
-    };
-    for (k, (prop, kind)) in creatures::materials().into_iter().enumerate() {
-        let coat = coats.map(|c| c[k]);
-        materials.add_rows(
+    // The creatures' (#143), their wood and fur painted on their UVs (#166, D-047): the
+    // textures stay on the bending bodies. Only their scene decodes the images.
+    let (creatures_model, _) = creatures::model();
+    for (prop, mesh) in [("lab-mannequin", "mannequin-body"), ("lab-dog", "dog-body")] {
+        let textured = kind == LabScene::Creatures;
+        model_rows(
+            &mut materials,
+            creatures_model,
+            "skinned-creatures",
             prop,
-            kind.iter()
-                .map(|m| {
-                    let layer = super::model_layer(m);
-                    let layer = match coat {
-                        Some((set, scale)) => super::coated(layer, set, scale),
-                        None => layer,
-                    };
-                    (m.name.clone(), layer)
-                })
-                .collect(),
-        );
+            mesh,
+            textured,
+        )?;
     }
     let creature_rows = [materials.of("lab-mannequin"), materials.of("lab-dog")];
     materials.apply(&mut builder, &props, &ids);
@@ -2422,6 +2386,35 @@ impl Drop for Lab {
             }
         }
     }
+}
+
+/// The rows of `model`'s mesh `mesh` for `prop`, one per material (its sections), as the file
+/// gives them; with `textured` and UVs on the mesh, its maps too (D-047).
+fn model_rows(
+    materials: &mut CityMaterials,
+    model: &forge_geom::model::Model,
+    label: &str,
+    prop: &'static str,
+    mesh: &str,
+    textured: bool,
+) -> Result<()> {
+    let mesh = model
+        .mesh(mesh)
+        .with_context(|| format!("the {label} model's {mesh}"))?;
+    let mut textures = forge_render::material::ModelTextures::new(model, label);
+    let uvs = textured && !mesh.mesh.uvs.is_empty();
+    let rows = mesh
+        .materials
+        .iter()
+        .map(|m| {
+            (
+                m.name.clone(),
+                textures.layer(m, uvs, &mut materials.textures),
+            )
+        })
+        .collect();
+    materials.add_rows(prop, rows);
+    Ok(())
 }
 
 #[cfg(test)]

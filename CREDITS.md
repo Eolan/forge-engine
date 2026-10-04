@@ -47,7 +47,7 @@ in. CI checks the crate list.
 | [tracy-client](https://github.com/nagisa/rust_tracy_client) | Simonas Kazlauskas | Tracy from Rust | MIT OR Apache-2.0 |
 | [Streamline](https://github.com/NVIDIA-RTX/Streamline) and DLSS | NVIDIA | DLSS as an option next to TAA (`dlss` feature, D-024) | Streamline: MIT, parts under NVIDIA's Nsight SDK licences; DLSS: NVIDIA RTX SDKs licence |
 | [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |
-| [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff` | MIT OR Apache-2.0 |
+| [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff`; decoding the PNG and JPEG images inside glTF models (`forge_render::textures::decode_image`, D-047) | MIT OR Apache-2.0 |
 | [OpenColorIO](https://github.com/AcademySoftwareFoundation/OpenColorIO) | Contributors to the OpenColorIO Project (Academy Software Foundation) | ACES 2.0's output transform, ported from its ACES2 code, v2.5.2, with its notice kept (`crates/forge-render/src/aces2.rs`, `shaders/aces2.slang`, issue #76) | BSD-3-Clause |
 | [ꟻLIP](https://github.com/NVlabs/flip) | Pontus Ebelin (formerly Andersson), Jim Nilsson, Tomas Akenine-Möller, Magnus Oskarsson, Kalle Åström and Mark D. Fairchild (NVIDIA, Lund University, RIT) | LDR-ꟻLIP in `imgdiff`, ported from `FLIP.h` v1.7 with its notice kept (issue #75), and HDR-ꟻLIP (Pontus Andersson, Jim Nilsson, Peter Shirley and Tomas Akenine-Möller, Eurographics 2021) for the HDR captures (issue #126); its magma colour map is matplotlib's, by Nathaniel J. Smith and Stéfan van der Walt (CC0) | BSD-3-Clause |
 | [FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) | AMD | its RCAS (robust contrast-adaptive sharpening), ported to `tools/sharpness --rcas` to preview a sharpening pass on a capture (issue #159), then to TAA's sharpening pass, `sharpen_main` in `shaders/taa.slang` (D-045) | MIT |
@@ -55,7 +55,8 @@ in. CI checks the crate list.
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Jorrit Rouwé and the Jolt contributors | rigid bodies (`forge-physics`, D-009, issue #136): v5.6.0's library sources vendored in `third_party/jolt` with its licence, built with `CROSS_PLATFORM_DETERMINISTIC` and double precision | MIT |
 | [JoltC](https://github.com/SecondHalfGames/JoltC) | Second Half Games (Lucien Greathouse and contributors) | the model for `forge-physics`' C layer: opaque shape handles, the layer set-up | MIT OR Apache-2.0 |
 | [gltf](https://github.com/gltf-rs/gltf) | David Harvey-Macaulay and the gltf-rs contributors | reading glTF 2.0 models (`forge_geom::model`, #138) | MIT OR Apache-2.0 |
-| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `ship.py` model the lab's boat, car, aeroplane and spaceship in it and export them as glTF (#138, #140, #141, #150); `skinned_creatures.py` the mannequin and the dog as skinned bodies with their armatures, bone-heat weights and clips (#143, #165) | GPL-2.0-or-later (the tool; what it makes is ours) |
+| [zune-jpeg](https://github.com/etemesi254/zune-image) | Caleb Etemesi | the JPEG decoder under `image`, for the JPEG images models embed (D-047) | MIT OR Apache-2.0 OR Zlib |
+| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `ship.py` model the lab's boat, car, aeroplane and spaceship in it and export them as glTF (#138, #140, #141, #150); `skinned_creatures.py` the mannequin and the dog as skinned bodies with their armatures, bone-heat weights and clips (#143, #165), unwrapped by its smart UV projection and their textures baked by Cycles (#166) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets
 
@@ -64,7 +65,7 @@ in. CI checks the crate list.
 | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | the JetBrains Mono Project Authors | the profiler overlay's text | SIL OFL 1.1 (`assets/fonts/jetbrains-mono/OFL.txt`) |
 | The lab's boat (`assets/models/boat.glb`) | made for Forge by `assets/blender/boat.py` (#138) | `physics-lab --lab sea` | the project's (MIT OR Apache-2.0) |
 | The lab's spaceship (`assets/models/ship.glb`) | made for Forge by `assets/blender/ship.py` (#150, 2026-10-03) | `physics-lab --lab space` | the project's (MIT OR Apache-2.0) |
-| The lab's creatures (`assets/models/skinned-creatures.glb`: the mannequin and the dog, their armatures and clips) | made for Forge by `assets/blender/skinned_creatures.py` (#165, 2026-10-04) | `physics-lab --lab creatures` | the project's (MIT OR Apache-2.0) |
+| The lab's creatures (`assets/models/skinned-creatures.glb`: the mannequin and the dog, their armatures and clips, their wood and fur textures) | made for Forge by `assets/blender/skinned_creatures.py` (#165, #166, 2026-10-04) | `physics-lab --lab creatures` | the project's (MIT OR Apache-2.0) |
 | [The Yale Bright Star Catalogue](https://heasarc.gsfc.nasa.gov/W3Browse/star-catalog/bsc5p.html), 5th revised edition (`assets/sky/bsc5p.txt`: positions, magnitudes, B − V) | Dorrit Hoffleit and Wayne H. Warren Jr. (1991), NASA HEASARC's copy (BSC5P) | the real night sky (`--real-sky`, #164, D-046) | public: a NASA data product, freely distributed |
 | [NASA's CGI Moon Kit](https://svs.gsfc.nasa.gov/4720) (`assets/sky/moon-albedo-512x256.r8`, its 2025 colour map's luminance, by `assets/blender/moon_albedo.py`) | NASA's Scientific Visualization Studio, from the Lunar Reconnaissance Orbiter Camera's data | the real Moon (`--real-sky`) | NASA imagery, credit "NASA's Scientific Visualization Studio" |
 
@@ -378,6 +379,16 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     (Guillaume Blanc).
   - **The creatures' weights:** Blender's bone heat, after Ilya Baran and Jovan Popović,
     "Automatic Rigging and Animation of 3D Characters", SIGGRAPH 2007.
+- **Models' textures** (D-047, #166):
+  - **Their materials:** glTF 2.0's metallic-roughness model and its `KHR_texture_transform`
+    (Khronos, the specification and the extension's sample code).
+  - **The tangent frame from derivatives:** Christian Schüler, "Followup: Normal Mapping
+    Without Precomputed Tangents", 2013 (after his "Normal Mapping without Precomputed
+    Tangents", ShaderX5, 2006): the cotangent frame of the position's and the UVs' screen
+    derivatives, so no tangents are stored.
+  - **UVs quantised per cluster:** Brian Karis, Rune Stubbe and Graham Wihlidal, "Nanite: A Deep
+    Dive", SIGGRAPH 2021 Advances in Real-Time Rendering: attributes stored per cluster in
+    a few bits over the cluster's range.
 - **Clouds.** Andrew Schneider and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon:
   Zero Dawn", SIGGRAPH 2015 Advances in Real-Time Rendering: a layer from a weather map,
   Perlin–Worley shapes eroded by Worley noise, Beer's law with the powder term, temporal

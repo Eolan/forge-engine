@@ -81,7 +81,8 @@ public struct Mesh
     public float radius;
     public uint level_offset[LOD_LEVELS + 1]; // relative to meshlet_offset, plus the end
     public uint skin;              // a skinned mesh's first cluster in the skin pass's table (#165), 0xFFFFFFFF for others
-    public uint2 pad;
+    public uint uvs;               // 1: its payloads carry a UV stream after their triangles (D-047)
+    public uint pad;
     public float self_error_min[LOD_LEVELS];
     public float parent_error_max[LOD_LEVELS];
     public float self_reach_max[LOD_LEVELS];   // max |self_center - center| + self_radius per level
@@ -120,6 +121,17 @@ public struct Material
     public float contour_height;    // its height, object space, and how far it wanders (metres)
     public float contour_wander;
     public uint contour_below;      // its other layers under the height, one bit each (#128)
+    // UV-mapped rows (MATERIAL_FLAG_UV, D-047): a model's material as glTF gives it.
+    public uint metal_rough_texture; // roughness in green, metalness in blue
+    public uint occlusion_texture;  // occlusion in red
+    public uint emissive_texture;
+    public uint sampler;            // SAMPLER_ANISOTROPIC_WRAP plus its wrapping
+    public float3 uv_u;             // the UV transform: u' = dot(uv_u, (u, v, 1))
+    public float metallic;
+    public float3 uv_v;             // v' = dot(uv_v, (u, v, 1))
+    public float roughness;
+    public float occlusion_strength;
+    public uint3 pad;
 };
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
@@ -398,6 +410,22 @@ PagedVertex paged_vertex(Frame* f, uint base, uint i)
 uint paged_index(Frame* f, uint base, Meshlet m, uint t, uint k)
 {
     return load_byte(f[0].pool, base + m.vertex_count * PAGED_VERTEX_BYTES + t * 3 + k);
+}
+
+// Where the UV stream of cluster `m`, whose payload is at `base`, starts (a mesh with UVs,
+// D-047; forge_geom::page::uv_offset): after its vertices and triangles, 16-byte aligned. It
+// holds the cluster's UV minimum and extent, then a 16-bit unorm pair per vertex.
+uint uv_stream(uint base, Meshlet m)
+{
+    return base + ((m.vertex_count * PAGED_VERTEX_BYTES + m.triangle_count * 3 + 15) & ~15u);
+}
+
+// The UV of vertex `i` in the stream at `stream`.
+float2 paged_uv(Frame* f, uint stream, uint i)
+{
+    float4 range = ((float4*)f[0].pool)[stream / 16];
+    uint e = f[0].pool[(stream + 16) / 4 + i];
+    return range.xy + float2(float(e & 0xFFFFu), float(e >> 16)) * (1.0 / 65535.0) * range.zw;
 }
 
 // The material section of triangle `t` of cluster `m`: before the split its first section,
@@ -2353,6 +2381,9 @@ float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p
 // tangent-space vectors in the triplanar projection's convention.
 
 static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render::material
+static const uint MATERIAL_FLAG_UV = 2;         // the textures read the mesh's UVs (D-047)
+// How much more a metal's highlight weighs (forge_core::material::METAL_SPECULAR).
+static const float METAL_SPECULAR = 0.35;
 
 // Size of the hex tiles, in the paper's (about a third of a repeat across). Three times that,
 // about a repeat across, crosses fewer seams, where the blend softens the texture: on the
@@ -2514,6 +2545,10 @@ struct Surface
     ProbeField* probes;     // the diffuse light's probes (probes.slang, issue #53), or null: the sky's irradiance unoccluded
     bool traced;            // a mirror ray replaces the sky's reflection where it meets something (issues #50, #52)
     ShoreGround* shore;     // the shore whose swash wets the layered ground (issue #105), or null
+    bool has_uv;            // the mesh carries texture coordinates (D-047)
+    float2 uv;              // they, interpolated
+    float2 duvdx;           // their change per pixel to the right and down
+    float2 duvdy;
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -2586,12 +2621,73 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
     }
 }
 
+// A UV-mapped row (D-047): a model's material as glTF's metallic-roughness model gives it, its
+// maps read by the mesh's texture coordinates through the row's transform and wrapping, each
+// map times its factor. A metal keeps no diffuse colour and reflects as much as its base
+// colour's brightest channel at normal incidence (the reflection is not tinted); the
+// occlusion map darkens the sky's and the probes' light only.
+float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
+{
+    float2 uv = float2(dot(mat.uv_u, float3(s.uv, 1.0)), dot(mat.uv_v, float3(s.uv, 1.0)));
+    float2 gx = float2(dot(mat.uv_u.xy, s.duvdx), dot(mat.uv_v.xy, s.duvdx));
+    float2 gy = float2(dot(mat.uv_u.xy, s.duvdy), dot(mat.uv_v.xy, s.duvdy));
+    float3 base = mat.color_a;
+    if (mat.albedo_texture != TEXTURE_NONE)
+        base *= sample_image_grad(mat.albedo_texture, mat.sampler, uv, gx, gy).rgb;
+    float roughness = mat.roughness;
+    float metal = mat.metallic;
+    if (mat.metal_rough_texture != TEXTURE_NONE)
+    {
+        float4 mr = sample_image_grad(mat.metal_rough_texture, mat.sampler, uv, gx, gy);
+        roughness *= mr.g;
+        metal *= mr.b;
+    }
+    float ao = s.ao;
+    if (mat.occlusion_texture != TEXTURE_NONE)
+    {
+        float occlusion = 1.0 + mat.occlusion_strength * (sample_image_grad(mat.occlusion_texture, mat.sampler, uv, gx, gy).r - 1.0);
+        ao = ao >= 0.0 ? ao * occlusion : occlusion;
+    }
+    float3 emissive = mat.emissive;
+    if (mat.emissive_texture != TEXTURE_NONE)
+        emissive *= sample_image_grad(mat.emissive_texture, mat.sampler, uv, gx, gy).rgb;
+    float3 n = s.n;
+    if (mat.normal_texture != TEXTURE_NONE)
+    {
+        // The tangent frame from the derivatives of the position and of the transformed UVs
+        // (Schüler 2013's cotangent frame), in object space: T along +u, B along +v. glTF's
+        // maps point their +y up the image, towards −v.
+        float3 N = s.object_normal;
+        float3 dp1perp = cross(N, s.dpdx);
+        float3 dp2perp = cross(s.dpdy, N);
+        float3 T = dp2perp * gx.x + dp1perp * gy.x;
+        float3 B = dp2perp * gx.y + dp1perp * gy.y;
+        float scale = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-30));
+        float3 t = sample_image_grad(mat.normal_texture, mat.sampler, uv, gx, gy).xyz * 2.0 - 1.0;
+        t.xy *= mat.normal_strength;
+        float3 bent = (t.x * T - t.y * B) * scale + t.z * N;
+        n = normalize(mul(s.frame, bent));
+    }
+    float alpha = clamp(roughness, 0.02, 1.0);
+    alpha *= alpha;
+    float power = 2.0 / (alpha * alpha) - 2.0; // RenderLayer::specular_power
+    float3 diffuse = base * (1.0 - metal);
+    float reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
+    float specular = mat.specular + METAL_SPECULAR * metal;
+    float ndl;
+    return sun_light(f, diffuse, n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+}
+
 float3 shade_standard(Frame* f, Material mat, Surface s)
 {
     float3 albedo;
     float3 n = s.n;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
+    {
+        if ((mat.flags & MATERIAL_FLAG_UV) != 0 && s.has_uv)
+            return shade_uv_mapped(f, mat, s);
         standard_surface(mat, s, albedo, n);
+    }
     float ndl;
     return sun_light(f, albedo, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + mat.emissive;
 }
@@ -3499,9 +3595,24 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
     s.shore = resolve_push.shore;
-    // A skinned mesh's textures are projected from its bind pose, or they swim over the body as
-    // it bends (#166).
+    // A mesh with texture coordinates (D-047): interpolated as the position is.
     Mesh mesh = f[0].meshes[inst.mesh];
+    s.has_uv = mesh.uvs != 0;
+    s.uv = float2(0.0);
+    s.duvdx = float2(0.0);
+    s.duvdy = float2(0.0);
+    if (s.has_uv)
+    {
+        uint stream = uv_stream(base, m);
+        float2 t0 = paged_uv(f, stream, paged_index(f, base, m, tri, 0));
+        float2 t1 = paged_uv(f, stream, paged_index(f, base, m, tri, 1));
+        float2 t2 = paged_uv(f, stream, paged_index(f, base, m, tri, 2));
+        s.uv = b.lambda.x * t0 + b.lambda.y * t1 + b.lambda.z * t2;
+        s.duvdx = b.ddx.x * t0 + b.ddx.y * t1 + b.ddx.z * t2;
+        s.duvdy = b.ddy.x * t0 + b.ddy.y * t1 + b.ddy.z * t2;
+    }
+    // A skinned mesh's projected textures are projected from its bind pose, or they swim over
+    // the body as it bends (#166); its UV-mapped ones take their tangent frame from it.
     if (mesh.skin != 0xFFFFFFFFu)
         bind_pose_surface(f, mesh, meshlet_index, m, base, tri, b, s);
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);

@@ -12,10 +12,10 @@
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use forge_anim::{Skeleton, load_rigs};
+use forge_anim::{Rig, Skeleton, load_rigs};
 use forge_core::dmath::sin_cos;
 use forge_geom::city::{Block, PropKind, PropSpec};
-use forge_geom::model::{ModelMaterial, ModelMesh, load_glb};
+use forge_geom::model::{Model, ModelMesh, load_glb};
 use forge_geom::{TriMesh, VertexSkin};
 use forge_physics::{
     BodyDesc, BodyId, JointId, JointLoad, Motors, RagdollId, RagdollJoint, RagdollPart, Shape,
@@ -149,14 +149,12 @@ const STAND_FORCE: f32 = 2000.0;
 const STAND_TORQUE: f32 = 400.0;
 
 /// A kind's body as the skinned model gives it (#165): its mesh in the bind pose, each vertex's
-/// joints, its materials, and what the ragdoll and the skinning take from them.
+/// joints, and what the ragdoll and the skinning take from them.
 pub(super) struct Body {
     /// The bind pose, in the creature's frame (glTF's: +y up, facing −z).
     pub mesh: TriMesh,
     /// Per vertex, its joints in the skin's order.
     pub skin: Vec<VertexSkin>,
-    /// Its materials: the mesh's sections.
-    pub materials: Vec<ModelMaterial>,
     /// Joints in the skin.
     pub joints: usize,
     /// Per part (the kind's order), its joint in the skin's order.
@@ -172,17 +170,26 @@ pub(super) struct Body {
     pub reach: f32,
 }
 
-/// The two kinds' bodies, read once from `assets/models/skinned-creatures.glb`
-/// (`assets/blender/skinned_creatures.py`).
-pub(super) fn bodies() -> &'static [Body; 2] {
-    static BODIES: OnceLock<[Body; 2]> = OnceLock::new();
-    BODIES.get_or_init(|| {
+/// The creatures' model and their rigs, read once from `assets/models/skinned-creatures.glb`
+/// (`assets/blender/skinned_creatures.py`): the meshes, their textures (#166) and the clips.
+pub(super) fn model() -> &'static (Model, Vec<Rig>) {
+    static MODEL: OnceLock<(Model, Vec<Rig>)> = OnceLock::new();
+    MODEL.get_or_init(|| {
         let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
         let path = root.join("assets/models/skinned-creatures.glb");
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|e| panic!("the creatures' model {}: {e}", path.display()));
         let model = load_glb(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let rigs = load_rigs(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        (model, rigs)
+    })
+}
+
+/// The two kinds' bodies, from [`model`].
+pub(super) fn bodies() -> &'static [Body; 2] {
+    static BODIES: OnceLock<[Body; 2]> = OnceLock::new();
+    BODIES.get_or_init(|| {
+        let (model, rigs) = model();
         [Kind::Mannequin, Kind::Dog].map(|kind| {
             let prefix = kind.prefix();
             let mesh = model
@@ -258,7 +265,6 @@ fn body(kind: Kind, model: &ModelMesh, skeleton: &Skeleton) -> Body {
     Body {
         mesh: model.mesh.clone(),
         skin,
-        materials: model.materials.clone(),
         joints: skeleton.len(),
         joint,
         middle,
@@ -279,15 +285,6 @@ pub(super) fn props() -> Vec<PropSpec> {
             segments: 2,
         }),
     }]
-}
-
-/// Each kind's materials, for its rows.
-pub(super) fn materials() -> [(&'static str, Vec<ModelMaterial>); 2] {
-    let [mannequin, dog] = bodies();
-    [
-        ("lab-mannequin", mannequin.materials.clone()),
-        ("lab-dog", dog.materials.clone()),
-    ]
 }
 
 /// One creature: its ragdoll and kind, its phase, and its stand's joint (a mannequin's).

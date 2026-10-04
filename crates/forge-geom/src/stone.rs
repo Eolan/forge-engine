@@ -192,6 +192,7 @@ fn cube_sphere(segments: u32, mut at: impl FnMut(Vec3) -> Vec3) -> TriMesh {
         normals: Vec::new(),
         indices,
         sections: Vec::new(),
+        uvs: Vec::new(),
     }
 }
 

@@ -2713,33 +2713,6 @@ struct CityMaterials {
     sets: [(TextureId, TextureId); 4],
 }
 
-/// A row for a model's material (#138): its base colour, its roughness, and a highlight that
-/// grows with its metalness (no textures: the model's colours are flat).
-fn model_layer(m: &forge_geom::model::ModelMaterial) -> RenderLayer {
-    let color = [m.base_color[0], m.base_color[1], m.base_color[2]];
-    RenderLayer {
-        color_a: color,
-        color_b: color,
-        roughness: m.roughness.clamp(0.05, 1.0),
-        specular: 0.05 + 0.35 * m.metallic,
-        emissive: m.emissive,
-        ..RenderLayer::default()
-    }
-}
-
-/// `layer` (a model's row) over a texture set, `scale` metres per repeat (#166): its colour,
-/// roughness and highlight kept, the textures multiplying the colour; `--textures` as for
-/// [`textured`].
-fn coated(layer: RenderLayer, (albedo, normal): (TextureId, TextureId), scale: f32) -> RenderLayer {
-    let mode = TEXTURES.get().copied().unwrap_or_default();
-    RenderLayer {
-        albedo_texture: (mode != TextureMode::None).then_some(albedo),
-        normal_texture: (mode == TextureMode::Full).then_some(normal),
-        texture_scale: scale,
-        ..layer
-    }
-}
-
 /// A standard row over a texture set: the textures times a tint each instance mixes from `a`
 /// and `b` by its hash, `scale` metres per repeat, a highlight of Blinn-Phong `power`.
 fn textured(

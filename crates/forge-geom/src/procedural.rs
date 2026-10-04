@@ -19,6 +19,9 @@ pub struct TriMesh {
     /// Per triangle, its material section (issue #41): the mesh's instances draw section `s`
     /// with the material row after theirs by `s`. Empty: every triangle is section 0.
     pub sections: Vec<u8>,
+    /// Texture coordinates, one per vertex (#166, D-047), or empty for a mesh textured by
+    /// projection. A mesh with them cooks a UV stream into its cluster pages.
+    pub uvs: Vec<[f32; 2]>,
 }
 
 impl TriMesh {
@@ -200,6 +203,7 @@ pub fn asteroid(seed: Seed, segments: u32, radius: f32, roughness: f32) -> TriMe
         normals: Vec::new(),
         indices,
         sections: Vec::new(),
+        uvs: Vec::new(),
     };
     mesh.recompute_normals();
     mesh

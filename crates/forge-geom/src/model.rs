@@ -1,7 +1,9 @@
 //! glTF 2.0 models into Forge's meshes (issue #138): the binary form (`.glb`) that Blender and
 //! most tools export, read through the `gltf` crate. Each mesh of the scene comes out as a
 //! [`TriMesh`] in the scene's frame (its nodes' transforms applied), its primitives as material
-//! sections, with the materials' base colour, roughness and metalness to make rows of.
+//! sections, with the materials' base colour, roughness and metalness to make rows of, and
+//! (D-047) the texture coordinates, the embedded images and the textures each material
+//! samples, with their samplers and transforms as the artist set them.
 //!
 //! glTF is +Y up, metres, and a model's front faces `+Z`; Blender's exporter turns its +Y
 //! (forward) into glTF's `−Z`, which is Forge's forward too.
@@ -32,6 +34,9 @@ pub enum GltfError {
         /// The mesh's name.
         mesh: String,
     },
+    /// The file refers to an image outside itself.
+    #[error("the model's image {0} is not in the file")]
+    ExternalImage(usize),
     /// A skinned primitive's joints or weights are not one per vertex.
     #[error("mesh {mesh}: not one joint set and one weight set per vertex")]
     BadSkin {
@@ -55,6 +60,49 @@ pub struct ModelMaterial {
     /// (`KHR_materials_emissive_strength`, Blender's emission strength). Forge reads it in units
     /// of the light a white surface facing the sun returns.
     pub emissive: [f32; 3],
+    /// The base colour texture (sRGB), multiplied by `base_color`.
+    pub base_color_texture: Option<TextureRef>,
+    /// Roughness in its green channel and metalness in its blue (linear), multiplied by
+    /// `roughness` and `metallic`.
+    pub metallic_roughness_texture: Option<TextureRef>,
+    /// A tangent-space normal map (linear).
+    pub normal_texture: Option<TextureRef>,
+    /// How far the normal map bends the normal (its x and y are scaled by this).
+    pub normal_scale: f32,
+    /// Ambient occlusion in its red channel (linear).
+    pub occlusion_texture: Option<TextureRef>,
+    /// How much of the occlusion applies: `1 + strength × (occlusion − 1)`.
+    pub occlusion_strength: f32,
+    /// The emitted colour (sRGB), multiplied by `emissive`.
+    pub emissive_texture: Option<TextureRef>,
+}
+
+pub use forge_core::material::Wrap;
+
+/// A material's use of one of the model's images.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextureRef {
+    /// Its image in [`Model::images`].
+    pub image: usize,
+    /// How it repeats along u and v.
+    pub wrap: [Wrap; 2],
+    /// Its UV transform (`KHR_texture_transform`): `u' = t[0] u + t[1] v + t[2]`,
+    /// `v' = t[3] u + t[4] v + t[5]`; [`UV_IDENTITY`] when the file gives none.
+    pub transform: [f32; 6],
+}
+
+/// The identity UV transform of a [`TextureRef`].
+pub const UV_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+/// An image embedded in the model, still encoded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelImage {
+    /// Its name, or "" when unnamed.
+    pub name: String,
+    /// Its MIME type (`image/png`, `image/jpeg`).
+    pub mime: String,
+    /// The encoded bytes.
+    pub bytes: Vec<u8>,
 }
 
 /// One mesh of a model, in the scene's frame.
@@ -80,6 +128,11 @@ pub struct Model {
     /// The named nodes that hold no mesh (Blender's empties: a joint's pivot, a socket), with
     /// where they are in the scene's frame (#143).
     pub points: Vec<(String, Vec3)>,
+    /// The images its materials sample.
+    pub images: Vec<ModelImage>,
+    /// What the file asks for that Forge does not draw yet (alpha cut-outs, a second UV set),
+    /// one line each, for the caller to log.
+    pub unsupported: Vec<String>,
 }
 
 impl Model {
@@ -105,6 +158,9 @@ pub fn load_glb(bytes: &[u8]) -> Result<Model, GltfError> {
         }
     }
     let mut model = Model::default();
+    for image in gltf.images() {
+        model.images.push(read_image(&image, blob)?);
+    }
     let scene = gltf
         .default_scene()
         .or_else(|| gltf.scenes().next())
@@ -114,6 +170,8 @@ pub fn load_glb(bytes: &[u8]) -> Result<Model, GltfError> {
             visit(&node, Mat4::IDENTITY, blob, &mut model)?;
         }
     }
+    model.unsupported.sort();
+    model.unsupported.dedup();
     Ok(model)
 }
 
@@ -129,9 +187,14 @@ fn visit(
         // A skinned mesh stays in its bind pose: its joints place it.
         let skinned = node.skin().is_some();
         let frame = if skinned { Mat4::IDENTITY } else { world };
-        model
-            .meshes
-            .push(read_mesh(&mesh, frame, name, skinned, blob)?);
+        model.meshes.push(read_mesh(
+            &mesh,
+            frame,
+            name,
+            skinned,
+            blob,
+            &mut model.unsupported,
+        )?);
     } else if let Some(name) = node.name() {
         model
             .points
@@ -149,6 +212,7 @@ fn read_mesh(
     name: String,
     skinned: bool,
     blob: Option<&[u8]>,
+    unsupported: &mut Vec<String>,
 ) -> Result<ModelMesh, GltfError> {
     let normal_matrix = Mat3::from_mat4(world).inverse().transpose();
     // Mirrored transforms turn the triangles inside out: wind them back.
@@ -157,6 +221,8 @@ fn read_mesh(
     let mut materials: Vec<ModelMaterial> = Vec::new();
     let mut skin: Vec<VertexSkin> = Vec::new();
     let mut needs_normals = false;
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut any_uvs = false;
     for primitive in mesh.primitives() {
         if primitive.mode() != gltf::mesh::Mode::Triangles {
             return Err(GltfError::NotTriangles { mesh: name });
@@ -176,15 +242,7 @@ fn read_mesh(
             None => (0..positions.len() as u32).collect(),
         };
         let material = primitive.material();
-        let pbr = material.pbr_metallic_roughness();
-        let strength = material.emissive_strength().unwrap_or(1.0);
-        let this = ModelMaterial {
-            name: material.name().unwrap_or_default().to_owned(),
-            base_color: pbr.base_color_factor(),
-            roughness: pbr.roughness_factor(),
-            metallic: pbr.metallic_factor(),
-            emissive: material.emissive_factor().map(|c| c * strength),
-        };
+        let this = read_material(&material, &name, unsupported);
         let section = match materials.iter().position(|m| *m == this) {
             Some(s) => s,
             None => {
@@ -214,6 +272,18 @@ fn read_mesh(
                     .map(|(joints, weights)| VertexSkin { joints, weights }),
             );
         }
+        match reader.read_tex_coords(0) {
+            Some(t) => {
+                any_uvs = true;
+                uvs.extend(t.into_f32());
+            }
+            None => uvs.extend(std::iter::repeat_n([0.0, 0.0], positions.len())),
+        }
+        if reader.read_tex_coords(1).is_some() {
+            unsupported.push(format!(
+                "mesh {name}: a second UV set (TEXCOORD_1) is ignored"
+            ));
+        }
         let first = out.positions.len() as u32;
         out.positions.extend(positions.iter().map(|p| p.to_array()));
         match &normals {
@@ -237,6 +307,12 @@ fn read_mesh(
     if needs_normals {
         out.recompute_normals();
     }
+    if any_uvs {
+        if uvs.len() != out.positions.len() {
+            return Err(GltfError::NotTriangles { mesh: name });
+        }
+        out.uvs = uvs;
+    }
     // One material: no sections needed.
     if materials.len() <= 1 {
         out.sections.clear();
@@ -247,6 +323,116 @@ fn read_mesh(
         materials,
         skin: skinned.then_some(skin),
     })
+}
+
+/// What a texture slot of a material refers to: its texture, UV set and transform.
+type Slot<'a> = (gltf::texture::Texture<'a>, u32, Option<[f32; 6]>);
+
+/// The material `material` of mesh `mesh` as Forge reads it; what it cannot draw yet goes to
+/// `unsupported`.
+fn read_material(
+    material: &gltf::Material,
+    mesh: &str,
+    unsupported: &mut Vec<String>,
+) -> ModelMaterial {
+    let pbr = material.pbr_metallic_roughness();
+    let strength = material.emissive_strength().unwrap_or(1.0);
+    let label = material.name().unwrap_or("unnamed").to_owned();
+    if material.alpha_mode() != gltf::material::AlphaMode::Opaque {
+        unsupported.push(format!(
+            "material {label} of mesh {mesh}: alpha {:?} is drawn opaque",
+            material.alpha_mode()
+        ));
+    }
+    let mut texture = |slot: Option<Slot>, what: &str| {
+        let (texture, tex_coord, transform) = slot?;
+        if tex_coord != 0 {
+            unsupported.push(format!(
+                "material {label} of mesh {mesh}: its {what} texture reads UV set {tex_coord}, not drawn"
+            ));
+            return None;
+        }
+        let sampler = texture.sampler();
+        if sampler.mag_filter() == Some(gltf::texture::MagFilter::Nearest) {
+            unsupported.push(format!(
+                "material {label} of mesh {mesh}: its {what} texture's nearest filtering is drawn linear"
+            ));
+        }
+        let wrap = |w: gltf::texture::WrappingMode| match w {
+            gltf::texture::WrappingMode::Repeat => Wrap::Repeat,
+            gltf::texture::WrappingMode::ClampToEdge => Wrap::Clamp,
+            gltf::texture::WrappingMode::MirroredRepeat => Wrap::Mirror,
+        };
+        Some(TextureRef {
+            image: texture.source().index(),
+            wrap: [wrap(sampler.wrap_s()), wrap(sampler.wrap_t())],
+            transform: transform.unwrap_or(UV_IDENTITY),
+        })
+    };
+    // KHR_texture_transform: translation × rotation × scale, the rotation's matrix as the
+    // extension's sample code builds it.
+    fn info(i: gltf::texture::Info<'_>) -> Slot<'_> {
+        let transform = i.texture_transform().map(|t| {
+            let (s, c) = t.rotation().sin_cos();
+            let [sx, sy] = t.scale();
+            let [ox, oy] = t.offset();
+            [c * sx, -s * sy, ox, s * sx, c * sy, oy]
+        });
+        (i.texture(), i.tex_coord(), transform)
+    }
+    let base_color_texture = texture(pbr.base_color_texture().map(info), "base colour");
+    let metallic_roughness_texture = texture(
+        pbr.metallic_roughness_texture().map(info),
+        "metallic-roughness",
+    );
+    let emissive_texture = texture(material.emissive_texture().map(info), "emissive");
+    // The normal and occlusion textures take the base colour's transform: the `gltf` crate
+    // gives theirs only through the raw extensions.
+    let shared = base_color_texture.map(|t| t.transform);
+    let normal = material.normal_texture();
+    let normal_scale = normal.as_ref().map_or(1.0, |n| n.scale());
+    let normal_texture = texture(
+        normal.map(|n| (n.texture(), n.tex_coord(), shared)),
+        "normal",
+    );
+    let occlusion = material.occlusion_texture();
+    let occlusion_strength = occlusion.as_ref().map_or(1.0, |o| o.strength());
+    let occlusion_texture = texture(
+        occlusion.map(|o| (o.texture(), o.tex_coord(), shared)),
+        "occlusion",
+    );
+    ModelMaterial {
+        name: material.name().unwrap_or_default().to_owned(),
+        base_color: pbr.base_color_factor(),
+        roughness: pbr.roughness_factor(),
+        metallic: pbr.metallic_factor(),
+        emissive: material.emissive_factor().map(|c| c * strength),
+        base_color_texture,
+        metallic_roughness_texture,
+        normal_texture,
+        normal_scale,
+        occlusion_texture,
+        occlusion_strength,
+        emissive_texture,
+    }
+}
+
+/// Image `image`'s encoded bytes, from the file's buffer.
+fn read_image(image: &gltf::Image, blob: Option<&[u8]>) -> Result<ModelImage, GltfError> {
+    match image.source() {
+        gltf::image::Source::View { view, mime_type } => {
+            let missing = GltfError::ExternalBuffer(view.buffer().index());
+            let bytes = blob
+                .and_then(|b| b.get(view.offset()..view.offset() + view.length()))
+                .ok_or(missing)?;
+            Ok(ModelImage {
+                name: image.name().unwrap_or_default().to_owned(),
+                mime: mime_type.to_owned(),
+                bytes: bytes.to_vec(),
+            })
+        }
+        gltf::image::Source::Uri { .. } => Err(GltfError::ExternalImage(image.index())),
+    }
 }
 
 #[cfg(test)]
@@ -351,6 +537,87 @@ mod tests {
         assert!(model.point("tip").is_some());
         let model = load_glb(&triangle_glb()).unwrap();
         assert!(model.mesh("tri").unwrap().skin.is_none());
+    }
+
+    /// A textured triangle: UVs, an embedded image, a sampler that clamps u and mirrors v, a
+    /// transform on the base colour, and the factors the artist set.
+    #[test]
+    fn a_textured_material_keeps_what_the_artist_set() {
+        let positions: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0];
+        let uvs: [f32; 6] = [0.0, 0.0, 2.0, 0.0, 0.0, 3.0];
+        let mut bin: Vec<u8> = positions.iter().flat_map(|v| v.to_le_bytes()).collect();
+        bin.extend(uvs.iter().flat_map(|v| v.to_le_bytes()));
+        let image = b"\x89PNG not really".to_vec();
+        bin.extend_from_slice(&image);
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
+            "extensionsUsed":["KHR_texture_transform"],
+            "nodes":[{{"name":"tri","mesh":0}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"TEXCOORD_0":1}},"material":0}}]}}],
+            "materials":[{{"name":"painted","alphaMode":"MASK",
+              "pbrMetallicRoughness":{{"baseColorFactor":[1,0.5,0.25,1],"roughnessFactor":0.7,"metallicFactor":0.2,
+                "baseColorTexture":{{"index":0,"extensions":{{"KHR_texture_transform":{{"offset":[0.5,0.25],"rotation":{half_pi},"scale":[2,4]}}}}}},
+                "metallicRoughnessTexture":{{"index":0,"texCoord":1}}}},
+              "normalTexture":{{"index":0,"scale":0.5}},
+              "occlusionTexture":{{"index":0,"strength":0.3}}}}],
+            "textures":[{{"source":0,"sampler":0}}],
+            "samplers":[{{"wrapS":33071,"wrapT":33648}}],
+            "images":[{{"name":"paint","bufferView":2,"mimeType":"image/png"}}],
+            "accessors":[
+              {{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,-1],"max":[1,0,0]}},
+              {{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}}],
+            "bufferViews":[{{"buffer":0,"byteLength":36}},
+                           {{"buffer":0,"byteOffset":36,"byteLength":24}},
+                           {{"buffer":0,"byteOffset":60,"byteLength":{}}}],
+            "buffers":[{{"byteLength":{}}}]}}"#,
+            image.len(),
+            bin.len()
+        );
+        let model = load_glb(&pack(json, bin)).unwrap();
+        let tri = model.mesh("tri").unwrap();
+        assert_eq!(tri.mesh.uvs, vec![[0.0, 0.0], [2.0, 0.0], [0.0, 3.0]]);
+        assert_eq!(model.images.len(), 1);
+        assert_eq!(model.images[0].name, "paint");
+        assert_eq!(model.images[0].mime, "image/png");
+        assert_eq!(model.images[0].bytes, image);
+        let m = &tri.materials[0];
+        assert_eq!(m.base_color, [1.0, 0.5, 0.25, 1.0]);
+        let base = m.base_color_texture.unwrap();
+        assert_eq!(base.image, 0);
+        assert_eq!(base.wrap, [Wrap::Clamp, Wrap::Mirror]);
+        // Scale (2, 4), a quarter turn, then the offset: (1, 0) goes to (0.5, 2.25), (0, 1)
+        // to (−3.5, 0.25).
+        let apply =
+            |t: [f32; 6], u: f32, v: f32| [t[0] * u + t[1] * v + t[2], t[3] * u + t[4] * v + t[5]];
+        let a = apply(base.transform, 1.0, 0.0);
+        let b = apply(base.transform, 0.0, 1.0);
+        assert!(
+            (a[0] - 0.5).abs() < 1e-5 && (a[1] - 2.25).abs() < 1e-5,
+            "{a:?}"
+        );
+        assert!(
+            (b[0] + 3.5).abs() < 1e-5 && (b[1] - 0.25).abs() < 1e-5,
+            "{b:?}"
+        );
+        // The normal and occlusion maps share the base colour's transform; the metallic-
+        // roughness map reads a second UV set, which Forge does not draw, and says so.
+        assert_eq!(m.normal_texture.unwrap().transform, base.transform);
+        assert_eq!(m.normal_scale, 0.5);
+        assert_eq!(m.occlusion_strength, 0.3);
+        assert!(m.occlusion_texture.is_some());
+        assert!(m.metallic_roughness_texture.is_none());
+        assert!(m.emissive_texture.is_none());
+        assert_eq!(model.unsupported.len(), 2, "{:?}", model.unsupported);
+        assert!(model.unsupported.iter().any(|u| u.contains("alpha Mask")));
+        assert!(model.unsupported.iter().any(|u| u.contains("UV set 1")));
+        // A file without UVs gives a mesh without them.
+        let plain = load_glb(&triangle_glb()).unwrap();
+        assert!(plain.mesh("tri").unwrap().mesh.uvs.is_empty());
+        assert!(plain.images.is_empty() && plain.unsupported.is_empty());
     }
 
     #[test]

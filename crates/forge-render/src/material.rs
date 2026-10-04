@@ -6,18 +6,20 @@
 //! target and lists the 8×8 tiles that show each other shading class, whose own dispatches
 //! then shade them.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use forge_core::material::{MaterialTable, TextureId};
+use forge_core::material::{METAL_SPECULAR, MaterialTable, RenderLayer, TextureId, UvMapping};
+use forge_geom::model::{Model, ModelMaterial, TextureRef};
 use forge_gpu::{Device, Image, ImageDesc, Result, SampledImageId, vk};
 
-use crate::textures::TextureData;
+use crate::textures::{ImageUse, TextureData, decode_image};
 
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
 pub const TEXTURE_NONE: u32 = u32::MAX;
 
-/// Mirrors `Material` in `meshlet.slang` (112 bytes).
+/// Mirrors `Material` in `meshlet.slang` (176 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMaterial {
@@ -48,13 +50,30 @@ pub struct GpuMaterial {
     contour_wander: f32,
     /// Its other layers under the height, one bit each (#128).
     contour_below: u32,
+    /// UV-mapped (D-047): the metallic-roughness, occlusion and emissive maps.
+    metal_rough_texture: u32,
+    occlusion_texture: u32,
+    emissive_texture: u32,
+    /// Its sampler: `SAMPLER_ANISOTROPIC_WRAP` plus its wrapping.
+    sampler: u32,
+    /// The UV transform's first row (u') and the metalness.
+    uv_u: [f32; 3],
+    metallic: f32,
+    /// Its second row (v') and the roughness.
+    uv_v: [f32; 3],
+    roughness: f32,
+    occlusion_strength: f32,
+    pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 112);
+const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 176);
 
 /// [`GpuMaterial`] flag: the textures are hex-tiled and offset per instance
 /// ([`forge_core::material::RenderLayer::hex_tiling`]).
 pub const MATERIAL_HEX_TILING: u32 = 1;
+
+/// [`GpuMaterial`] flag: the textures read the mesh's UVs ([`forge_core::material::UvMapping`]).
+pub const MATERIAL_UV: u32 = 2;
 
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
@@ -80,7 +99,7 @@ impl TextureSet {
         let image = self.device.create_image_with_mips(
             ImageDesc {
                 width: data.size,
-                height: data.size,
+                height: data.height,
                 format: if data.srgb {
                     vk::Format::R8G8B8A8_SRGB
                 } else {
@@ -89,7 +108,7 @@ impl TextureSet {
                 usage: vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
                 mip_levels: levels.len() as u32,
-                name: data.name,
+                name: &data.name,
             },
             &levels,
         )?;
@@ -163,6 +182,116 @@ impl Drop for TextureSet {
     }
 }
 
+/// A model's materials as rows (#138, D-047), its images decoded into a [`TextureSet`] once
+/// each for the use its materials make of them.
+pub struct ModelTextures<'a> {
+    model: &'a Model,
+    decoded: HashMap<(usize, ImageUse), Option<TextureId>>,
+}
+
+impl<'a> ModelTextures<'a> {
+    /// For `model`, called `name` in the logs: what it asks for that Forge does not draw yet
+    /// is logged here, once.
+    pub fn new(model: &'a Model, name: &str) -> Self {
+        for line in &model.unsupported {
+            tracing::warn!(model = name, "{line}");
+        }
+        Self {
+            model,
+            decoded: HashMap::new(),
+        }
+    }
+
+    /// The row of material `m` of a mesh that has texture coordinates when `uvs`: its base
+    /// colour, roughness and emission, a highlight that grows with its metalness and, when it
+    /// has textures and the mesh UVs, its maps as the file sets them ([`UvMapping`]). Without
+    /// textures, or on a mesh without UVs, the factors alone (flat colours).
+    pub fn layer(
+        &mut self,
+        m: &ModelMaterial,
+        uvs: bool,
+        textures: &mut TextureSet,
+    ) -> RenderLayer {
+        let color = [m.base_color[0], m.base_color[1], m.base_color[2]];
+        let mut layer = RenderLayer {
+            color_a: color,
+            color_b: color,
+            roughness: m.roughness.clamp(0.05, 1.0),
+            specular: 0.05 + METAL_SPECULAR * m.metallic,
+            emissive: m.emissive,
+            ..RenderLayer::default()
+        };
+        let mapped = [
+            m.base_color_texture,
+            m.metallic_roughness_texture,
+            m.normal_texture,
+            m.occlusion_texture,
+            m.emissive_texture,
+        ];
+        let Some(first) = mapped.iter().flatten().next().copied() else {
+            return layer;
+        };
+        if !uvs {
+            return layer;
+        }
+        let mut texture = |t: Option<TextureRef>, usage: ImageUse| {
+            t.and_then(|t| self.decode(t.image, usage, textures))
+        };
+        layer.albedo_texture = texture(m.base_color_texture, ImageUse::Color);
+        layer.normal_texture = texture(m.normal_texture, ImageUse::Normal);
+        layer.normal_strength = m.normal_scale;
+        // A metal's highlight weight is added per pixel by its metalness.
+        layer.specular = 0.05;
+        layer.uv = Some(UvMapping {
+            transform: first.transform,
+            wrap: first.wrap,
+            metallic: m.metallic,
+            metallic_roughness_texture: texture(m.metallic_roughness_texture, ImageUse::Data),
+            occlusion_texture: texture(m.occlusion_texture, ImageUse::Data),
+            occlusion_strength: m.occlusion_strength,
+            emissive_texture: texture(m.emissive_texture, ImageUse::Color),
+        });
+        layer
+    }
+
+    /// Image `image` decoded for `usage` and uploaded once; `None` when it does not decode
+    /// (logged; the material then draws its factor).
+    fn decode(
+        &mut self,
+        image: usize,
+        usage: ImageUse,
+        textures: &mut TextureSet,
+    ) -> Option<TextureId> {
+        let model = self.model;
+        *self.decoded.entry((image, usage)).or_insert_with(|| {
+            let source = model.images.get(image)?;
+            let name = if source.name.is_empty() {
+                format!("model image {image}")
+            } else {
+                source.name.clone()
+            };
+            let data = match decode_image(&name, &source.bytes, usage) {
+                Ok(data) => data,
+                Err(e) => {
+                    tracing::warn!(
+                        image = name,
+                        mime = source.mime,
+                        "a model's image does not decode: {e}"
+                    );
+                    return None;
+                }
+            };
+            match textures.add(&data) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::warn!(image = name, "a model's image does not upload: {e}");
+                    None
+                }
+            }
+        })
+    }
+}
+
 /// Radius of the air bubbles in ice, metres: lake and glacier ice hold bubbles of a tenth of a
 /// millimetre to a few millimetres (issue #61).
 pub const BUBBLE_RADIUS: f32 = 0.001;
@@ -186,6 +315,7 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
         .iter()
         .map(|m| {
             let r = &m.render;
+            let uv = r.uv.unwrap_or_default();
             GpuMaterial {
                 color_a: r.color_a,
                 class_index: r.class.index(),
@@ -201,12 +331,25 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 normal_strength: r.normal_strength,
                 reflectance: r.reflectance,
                 scattering: bubble_scattering(r.bubbles),
-                flags: if r.hex_tiling { MATERIAL_HEX_TILING } else { 0 },
+                flags: if r.hex_tiling { MATERIAL_HEX_TILING } else { 0 }
+                    | if r.uv.is_some() { MATERIAL_UV } else { 0 },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
                 contour_height: r.contour.map_or(0.0, |c| c.height),
                 contour_wander: r.contour.map_or(0.0, |c| c.wander),
                 contour_below: r.contour.map_or(0, |c| c.others),
+                metal_rough_texture: texture(uv.metallic_roughness_texture),
+                occlusion_texture: texture(uv.occlusion_texture),
+                emissive_texture: texture(uv.emissive_texture),
+                sampler: forge_gpu::SamplerKind::AnisotropicWrap as u32
+                    + 3 * uv.wrap[0].index()
+                    + uv.wrap[1].index(),
+                uv_u: [uv.transform[0], uv.transform[1], uv.transform[2]],
+                metallic: uv.metallic,
+                uv_v: [uv.transform[3], uv.transform[4], uv.transform[5]],
+                roughness: r.roughness,
+                occlusion_strength: uv.occlusion_strength,
+                pad: [0; 3],
             }
         })
         .collect()

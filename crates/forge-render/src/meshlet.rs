@@ -254,7 +254,9 @@ struct GpuMesh {
     /// A skinned mesh's first cluster in the skin pass's table (#165), `u32::MAX` for others:
     /// the motion vectors find its vertices' previous positions through it.
     skin: u32,
-    pad: [u32; 2],
+    /// 1 when its payloads carry a UV stream (D-047, `forge_geom::page::uv_offset`).
+    uvs: u32,
+    pad: u32,
     /// Per level: the smallest `self_error` of its clusters.
     self_error_min: [f32; LOD_LEVELS],
     /// Per level: the largest `parent_error` (infinite when the level holds a root).
@@ -950,7 +952,8 @@ impl MeshletSceneBuilder {
             radius: mesh.radius,
             level_offset,
             skin: u32::MAX,
-            pad: [0; 2],
+            uvs: u32::from(mesh.uvs),
+            pad: 0,
             self_error_min,
             parent_error_max,
             self_reach_max,
