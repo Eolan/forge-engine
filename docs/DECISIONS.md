@@ -2480,7 +2480,32 @@ models scene, and the test models' captures beside their Khronos screenshots.
   - The probes go dark inside Sponza (#171: the lab's fixed exposure, not the probes).
   - The ten models' textures take 534 MiB uncompressed.
 
-## D-049 — Denoising the sun's soft shadows 🟡 (proposed 2026-10-04)
+## D-049 — Denoising the sun's soft shadows ✅ (proposed and decided 2026-10-04; to build in #172)
+
+**Decided (the owner, 2026-10-04):**
+1. **NVIDIA's NRD, its SIGMA denoiser, used as NRD itself, not rewritten.** Our own filter sized
+   from the occluder's distance stays unwritten: it would sit close to US 10,740,954 B2.
+   - **Its licence** (NVIDIA RTX SDKs License): free and royalty-free.
+     - An application may ship it in object code, under terms at least as protective as
+       NVIDIA's.
+     - It may never be put under an open-source licence.
+     - It grants no patent right in so many words. As NVIDIA's own implementation, used as it
+       licenses it, it stays clear of rewriting the patented technique. This is not a legal
+       reading.
+   - **Like the Streamline SDK:** never in git. `tools/fetch-assets.sh` or a sibling fetches it
+     into an ignored folder at a pinned release, and Forge loads it when present.
+   - **Without it** (CI, a fresh clone): the shadows stay as they are today.
+   - **The fallback:** if NRD cannot run on AMD's RDNA 4 or within Forge's rules (its HLSL
+     outside `slangc`, its dispatches as graph passes, the FFI's `unsafe` kept in `forge-gpu`),
+     the next choice is a port of AMD's FidelityFX shadow denoiser (MIT), whose filter width
+     follows the variation, not the distance.
+2. **The softer look, for art's sake.** It costs the same: the blur's taps do not grow with the
+   penumbra. The sun's apparent size for the shadows becomes a setting, with a softer default
+   than the real 0.27°, to judge on Sponza.
+3. **NRD may be downloaded:** to build with, and to compare against a 256-ray reference.
+
+The proposal as written follows. Its trace pass, guide images and checks still hold with NRD
+in place of the in-house passes.
 
 On Sponza at noon (#172), the shadow of a ledge across the courtyard falls on the curtains with
 a hard, stepped edge that crawls in motion.

@@ -20,7 +20,7 @@ the system you are about to touch.
 | [research/physics-fluids.md](research/physics-fluids.md) | rigid bodies, engines compared, characters, destruction, water | 45 | done |
 | [research/particle-fluids.md](research/particle-fluids.md) | real-time particle liquids: SPH, PBF, FLIP/APIC, MLS-MPM and PB-MPM compared; GPU sort, scan and fixed-point atomics on Vulkan; drawing the liquid (screen-space, grid ray-march, underwater, the medium transition, glass, caustics); engines' fluids; Jolt coupling; determinism | 67 | done (#155, 2026-10-03; the decision taken in D-044 on the same day) |
 | [research/night-sky.md](research/night-sky.md) | a night sky over the ground: the Moon and its light, stars (catalogue or procedural), airglow, measured light levels, low-light tone mapping (Purkinje) | 8 | short, D-046 ✅ (2026-10-04) |
-| [research/shadow-denoising.md](research/shadow-denoising.md) | denoising the sun's ray-traced soft shadows: why one ray and TAA fail 8 stops under the sun, NVIDIA's SIGMA, AMD's FidelityFX denoiser, penumbra filters, licences and a patent | 15 | short, D-049 🟡 (2026-10-04) |
+| [research/shadow-denoising.md](research/shadow-denoising.md) | denoising the sun's ray-traced soft shadows: why one ray and TAA fail 8 stops under the sun, NVIDIA's SIGMA, AMD's FidelityFX denoiser, penumbra filters, licences and a patent | 15 | short, D-049 ✅ (2026-10-04) |
 | [research/netcode.md](research/netcode.md) | transport, replication, prediction, server topology | 48 | done |
 | [research/audio.md](research/audio.md) | mixer, spatialisation, propagation, synthesis, middleware | 46 | done |
 | [research/vegetation-materials.md](research/vegetation-materials.md) | trees, impostors, grass, trim sheets, unified materials, deformation | 50 | done |
