@@ -11,6 +11,7 @@ pub mod meshlet;
 pub mod model;
 pub mod page;
 pub mod procedural;
+pub mod skin;
 pub mod stone;
 
 pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag};
@@ -20,3 +21,4 @@ pub use meshlet::{
 };
 pub use page::{PAGE_NONE, PAGE_SIZE, PagedVertex};
 pub use procedural::TriMesh;
+pub use skin::{SkinVertex, SkinnedMesh, VertexSkin};

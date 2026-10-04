@@ -9,6 +9,7 @@
 use glam::{Mat3, Mat4, Vec3};
 
 use crate::procedural::TriMesh;
+use crate::skin::VertexSkin;
 
 /// Why a model did not load.
 #[derive(Debug, thiserror::Error)]
@@ -28,6 +29,12 @@ pub enum GltfError {
     /// More materials in one mesh than a section number holds.
     #[error("mesh {mesh}: more than 256 materials")]
     TooManyMaterials {
+        /// The mesh's name.
+        mesh: String,
+    },
+    /// A skinned primitive's joints or weights are not one per vertex.
+    #[error("mesh {mesh}: not one joint set and one weight set per vertex")]
+    BadSkin {
         /// The mesh's name.
         mesh: String,
     },
@@ -59,6 +66,10 @@ pub struct ModelMesh {
     pub mesh: TriMesh,
     /// Its materials, one per section.
     pub materials: Vec<ModelMaterial>,
+    /// For a skinned mesh (#165), each vertex's joints in its node's skin. Its vertices
+    /// are then in the bind pose as the file gives them: glTF moves a skinned mesh by its
+    /// joints alone, not by its node.
+    pub skin: Option<Vec<VertexSkin>>,
 }
 
 /// The meshes of a model.
@@ -115,7 +126,12 @@ fn visit(
     let world = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
     if let Some(mesh) = node.mesh() {
         let name = node.name().or(mesh.name()).unwrap_or_default().to_owned();
-        model.meshes.push(read_mesh(&mesh, world, name, blob)?);
+        // A skinned mesh stays in its bind pose: its joints place it.
+        let skinned = node.skin().is_some();
+        let frame = if skinned { Mat4::IDENTITY } else { world };
+        model
+            .meshes
+            .push(read_mesh(&mesh, frame, name, skinned, blob)?);
     } else if let Some(name) = node.name() {
         model
             .points
@@ -131,6 +147,7 @@ fn read_mesh(
     mesh: &gltf::Mesh,
     world: Mat4,
     name: String,
+    skinned: bool,
     blob: Option<&[u8]>,
 ) -> Result<ModelMesh, GltfError> {
     let normal_matrix = Mat3::from_mat4(world).inverse().transpose();
@@ -138,6 +155,7 @@ fn read_mesh(
     let flip = world.determinant() < 0.0;
     let mut out = TriMesh::default();
     let mut materials: Vec<ModelMaterial> = Vec::new();
+    let mut skin: Vec<VertexSkin> = Vec::new();
     let mut needs_normals = false;
     for primitive in mesh.primitives() {
         if primitive.mode() != gltf::mesh::Mode::Triangles {
@@ -176,6 +194,26 @@ fn read_mesh(
         };
         let section = u8::try_from(section)
             .map_err(|_| GltfError::TooManyMaterials { mesh: name.clone() })?;
+        if skinned {
+            // A primitive without joints follows the skin's first joint.
+            let joints: Vec<[u16; 4]> = match reader.read_joints(0) {
+                Some(j) => j.into_u16().collect(),
+                None => vec![[0; 4]; positions.len()],
+            };
+            let weights: Vec<[f32; 4]> = match reader.read_weights(0) {
+                Some(w) => w.into_f32().collect(),
+                None => vec![[1.0, 0.0, 0.0, 0.0]; positions.len()],
+            };
+            if joints.len() != positions.len() || weights.len() != positions.len() {
+                return Err(GltfError::BadSkin { mesh: name });
+            }
+            skin.extend(
+                joints
+                    .into_iter()
+                    .zip(weights)
+                    .map(|(joints, weights)| VertexSkin { joints, weights }),
+            );
+        }
         let first = out.positions.len() as u32;
         out.positions.extend(positions.iter().map(|p| p.to_array()));
         match &normals {
@@ -207,6 +245,7 @@ fn read_mesh(
         name,
         mesh: out,
         materials,
+        skin: skinned.then_some(skin),
     })
 }
 
@@ -237,6 +276,11 @@ mod tests {
             "buffers":[{{"byteLength":{}}}]}}"#,
             bin.len()
         );
+        pack(json, bin)
+    }
+
+    /// `json` and `bin` (padded to 4 bytes) as a `.glb`.
+    fn pack(json: String, bin: Vec<u8>) -> Vec<u8> {
         let mut json = json.into_bytes();
         while !json.len().is_multiple_of(4) {
             json.push(b' ');
@@ -269,6 +313,44 @@ mod tests {
         assert_eq!(tri.materials[0].name, "red");
         assert_eq!(tri.materials[0].base_color, [1.0, 0.0, 0.0, 1.0]);
         assert!((tri.materials[0].roughness - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_skinned_mesh_keeps_its_bind_pose_and_its_joints() {
+        // One triangle on a node moved 5 m up (which glTF ignores for a skinned mesh), its
+        // corners on joints 0, 1 and half of each, the joints as bytes.
+        let positions: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let mut bin: Vec<u8> = positions.iter().flat_map(|v| v.to_le_bytes()).collect();
+        bin.extend_from_slice(&[0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0]);
+        let weights: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0];
+        bin.extend(weights.iter().flat_map(|v| v.to_le_bytes()));
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0,1]}}],
+            "nodes":[{{"name":"body","mesh":0,"skin":0,"translation":[0,5,0]}},
+                     {{"name":"root","children":[2]}},{{"name":"tip","translation":[1,0,0]}}],
+            "skins":[{{"joints":[1,2]}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}}}]}}],
+            "accessors":[
+              {{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},
+              {{"bufferView":1,"componentType":5121,"count":3,"type":"VEC4"}},
+              {{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"}}],
+            "bufferViews":[{{"buffer":0,"byteLength":36}},
+                           {{"buffer":0,"byteOffset":36,"byteLength":12}},
+                           {{"buffer":0,"byteOffset":48,"byteLength":48}}],
+            "buffers":[{{"byteLength":{}}}]}}"#,
+            bin.len()
+        );
+        let model = load_glb(&pack(json, bin)).unwrap();
+        let body = model.mesh("body").unwrap();
+        assert_eq!(body.mesh.positions[1], [1.0, 0.0, 0.0]);
+        let skin = body.skin.as_ref().unwrap();
+        assert_eq!(skin.len(), 3);
+        assert_eq!(skin[1].joints, [1, 0, 0, 0]);
+        assert_eq!(skin[2].weights, [0.5, 0.5, 0.0, 0.0]);
+        // The joints are points too, and an unskinned mesh has no skin.
+        assert!(model.point("tip").is_some());
+        let model = load_glb(&triangle_glb()).unwrap();
+        assert!(model.mesh("tri").unwrap().skin.is_none());
     }
 
     #[test]

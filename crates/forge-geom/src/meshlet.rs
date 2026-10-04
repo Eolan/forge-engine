@@ -142,9 +142,15 @@ impl MeshletMesh {
 
     /// [`MeshletMesh::build`] with explicit options.
     pub fn build_with(mesh: &TriMesh, options: CookOptions) -> Self {
-        let (vertices, indices, vertex_section) = split_sections(mesh);
+        let (vertices, indices, vertex_section, _) = split_sections(mesh);
         let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
-        let mut dag = lod::build_dag(&indices, &vertices, &vertex_section, options.normal_weight);
+        let mut dag = lod::build_dag(
+            &indices,
+            &vertices,
+            &vertex_section,
+            options.normal_weight,
+            lod::MAX_LEVELS,
+        );
         let pages = page::pack(&mut dag, &vertices);
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
@@ -216,8 +222,9 @@ pub struct PageFile {
 /// triangles lie in several sections is split into one copy per section (same position and
 /// normal): no edge then joins two sections, meshoptimizer treats the copies as a seam and
 /// keeps the border while it simplifies, and every triangle the DAG makes lies in the
-/// section of its vertices.
-fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u8>) {
+/// section of its vertices. The last array gives each cooking vertex's vertex in `mesh` (a
+/// copy's original).
+pub(crate) fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u8>, Vec<u32>) {
     let mut vertices: Vec<GpuVertex> = mesh
         .positions
         .iter()
@@ -231,6 +238,7 @@ fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u8>) {
         .collect();
     let mut vertex_section = vec![u8::MAX; vertices.len()];
     let mut copies: std::collections::HashMap<(u32, u8), u32> = std::collections::HashMap::new();
+    let mut source: Vec<u32> = (0..vertices.len() as u32).collect();
     let mut indices = mesh.indices.clone();
     for (t, tri) in indices.as_chunks_mut::<3>().0.iter_mut().enumerate() {
         let section = mesh.section(t);
@@ -246,6 +254,7 @@ fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u8>) {
                         ..vertices[original as usize]
                     });
                     vertex_section.push(section);
+                    source.push(original);
                     (vertices.len() - 1) as u32
                 });
             }
@@ -258,7 +267,7 @@ fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u8>) {
         }
         vertices[v].section = f32::from(*s);
     }
-    (vertices, indices, vertex_section)
+    (vertices, indices, vertex_section, source)
 }
 
 /// The section of triangle `t` of a cluster whose packed sections are `packed`

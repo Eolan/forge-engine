@@ -85,12 +85,15 @@ struct Record {
 /// `vertex_section` gives every vertex's material section; no triangle may join two sections
 /// (`crate::meshlet` splits the vertices on section borders), and every cluster holds one.
 /// `normal_weight` adds the vertex normals to the simplification error (metres per unit of
-/// normal change; 0: geometry only, see `crate::meshlet::CookOptions`).
+/// normal change; 0: geometry only, see `crate::meshlet::CookOptions`). It stops at `levels`
+/// levels (at most [`MAX_LEVELS`]): 1 leaves every cluster of level 0 a root, as a skinned
+/// mesh needs (`crate::skin`).
 pub fn build_dag(
     indices: &[u32],
     vertices: &[GpuVertex],
     vertex_section: &[u8],
     normal_weight: f32,
+    levels: u32,
 ) -> ClusterDag {
     let mut dag = ClusterDag {
         meshlets: Vec::new(),
@@ -139,7 +142,7 @@ pub fn build_dag(
 
     let mut level = 1;
     let mut group_id = 0_u32;
-    while current.len() > 1 && level < MAX_LEVELS {
+    while current.len() > 1 && level < levels.min(MAX_LEVELS) {
         // Partition the level's clusters into spatial groups.
         let cluster_indices: Vec<u32> = current
             .iter()
