@@ -1952,8 +1952,10 @@ particles for that." Research: [research/particle-fluids.md](research/particle-f
 **Built, item 5's first step (#162, 2026-10-04):** the GPU's shallow-water layer over the lab's
 flood (`forge_render::ShallowLayer`, `docs/demos/physics-lab.md`). It is the column model's scheme
 at four times the resolution (6.25 cm over the whole basin), pulled a quarter of the way to the
-columns each frame, never read back; +0.30 ms at 1600 × 900. Left: the ballistic particles, and a
-window round the player for the island.
+columns each frame, never read back; +0.30 ms at 1600 × 900. The ballistic particles: the
+splashes' drops (#107), sprayed where a column's water runs fast over the dry floor or into a wall
+or a block, found from the columns; they take no water from them (a few litres against the
+basin's 468 m³). Left: a window round the player for the island.
 
 **The questions put to the owner** (answered above):
 1. Does a particle–grid hybrid count as the "particle simulation" asked for, or must it be

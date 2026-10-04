@@ -592,8 +592,23 @@ adds detail near the player. `--no-gpu-water` draws the columns themselves.
 for sixteen times the quads; the rest is the passes' latency. Four steps a tick cost
 0.78 ms in all for the same gaps.
 
-**Next (#162's step 2):** splashes where the layer fails, ballistic particles spawned at a steep
-front or an impact and given back where they land.
+**Splashes where the columns fail (#162's step 2).** Each column whose water runs at 1.5 m/s or
+more is a source of the splashes' ballistic drops (`forge_render::WaterSplashes`, #107):
+- **its front:** the column ahead along the flow is dry; a bow moving with the water;
+- **an obstacle:** the column ahead is a wall, the gate's foot, a block or the hut, or the
+  basin's edge; a bow moving against the water, so its spray goes up and back.
+
+Each is a column wide and long, and its spray follows its Froude number (1.1–2.3 at the dam
+break's front: a fringe, and fans past 1.5). They are found on the CPU from the authoritative
+columns, each column's seed its own, so a replay splashes alike; their drops are visual only
+and take no water from the columns (D-044 had them take and give it back; at a few litres
+against the basin's 468 m³ it is left out). The dam break keeps up to about a hundred sources,
+2 652 drops over its first four seconds, 972 alive at most. Three runs and the serial frame
+give the same image. The drops are millimetres across, so a few metres off they read as a veil
+over the front and where it strikes a block.
+
+**Left:** a window round the player for the island, and the run-up against a block (a thin
+sheet of water up its face, in the columns too) to look at.
 
 ## `tank`, `tank-bench`, `tank-hole`, `tank-blocks`: a dam break in a glass tank (issue #156)
 

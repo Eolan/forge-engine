@@ -7,14 +7,16 @@
 //! pushes it aside in turn (#151: its volume under the water raises the surface the water's
 //! slopes see).
 //! Space (or `--release N`) lifts the gate: the water runs out down the basin, round the
-//! blocks, carrying what floats.
+//! blocks, carrying what floats. It splashes where the columns fail (#162): spray off its front
+//! running over the dry floor and where it runs into a wall or a block ([`splashes`]).
 
 use anyhow::Result;
 use forge_geom::city::{Block, PropKind, PropSpec};
 use forge_physics::buoyancy::Hull;
 use forge_physics::shallow::{DRY, Pool};
 use forge_physics::{BodyDesc, BodyId, Motion, Shape, Transform, Velocity, World};
-use glam::{DVec3, Mat4, Vec3};
+use forge_render::SplashSource;
+use glam::{DVec3, Mat4, Vec2, Vec3};
 
 /// The pool: cells along x and z, metres apart, the first cell's centre.
 const CELLS: [usize; 2] = [192, 96];
@@ -288,4 +290,113 @@ pub(super) fn displace(
         })
         .collect();
     pool.displace(&items);
+}
+/// The slowest water that splashes, m/s.
+const SPLASH_SPEED: f32 = 1.5;
+
+/// Where the flood's water splashes as it stands (#162's step 2): its front running over the dry
+/// floor, and its water running into a wall, the gate's foot, a block or the hut. Each such
+/// column is a bow pushing through the water (`SplashSource::Bow`, a column wide and long): the
+/// front moving with the water, an obstacle moving against it, so the spray goes up and back.
+/// From the authoritative columns, in their order, each column's seed its own: a replay splashes
+/// alike.
+pub(super) fn splashes(pool: &Pool, out: &mut Vec<SplashSource>) {
+    let [nx, nz] = pool.size;
+    let h = pool.spacing;
+    for z in 0..nz {
+        for x in 0..nx {
+            let i = pool.index(x, z);
+            if pool.depth[i] < DRY {
+                continue;
+            }
+            let [u, w] = pool.velocity_at(x, z);
+            let v = Vec2::new(u, w);
+            if v.length() < SPLASH_SPEED {
+                continue;
+            }
+            // The column ahead, along the flow's larger component.
+            let (dx, dz) = if u.abs() >= w.abs() {
+                (u.signum() as i64, 0)
+            } else {
+                (0, w.signum() as i64)
+            };
+            let (ax, az) = (x as i64 + dx, z as i64 + dz);
+            let surface = pool.surface(i);
+            let obstacle = if ax < 0 || az < 0 || ax >= nx as i64 || az >= nz as i64 {
+                true
+            } else {
+                let j = pool.index(ax as usize, az as usize);
+                if pool.bed[j] > surface {
+                    true
+                } else if pool.depth[j] < DRY {
+                    false
+                } else {
+                    continue;
+                }
+            };
+            // On the face between the two columns.
+            let bow = Vec3::new(
+                (pool.origin[0] + x as f64 * f64::from(h)) as f32 + 0.5 * h * dx as f32,
+                surface,
+                (pool.origin[1] + z as f64 * f64::from(h)) as f32 + 0.5 * h * dz as f32,
+            );
+            out.push(SplashSource::Bow {
+                bow,
+                velocity: if obstacle { -v } else { v },
+                beam: h,
+                length: h,
+                seed: (i as u32 * 2 + u32::from(obstacle)) ^ 0x5eed_f100,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A channel 8 m long, water 1.5 m deep in its first half.
+    fn channel(filled: usize) -> Pool {
+        let mut pool = Pool::new([32, 4], 0.25, [0.0, 0.0]);
+        for z in 0..4 {
+            for x in 0..filled {
+                let i = pool.index(x, z);
+                pool.depth[i] = 1.5;
+            }
+        }
+        pool
+    }
+
+    #[test]
+    fn still_water_does_not_splash() {
+        let pool = channel(32);
+        let mut out = Vec::new();
+        splashes(&pool, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_dam_break_sprays_off_its_front_then_off_the_wall() {
+        let mut pool = channel(16);
+        let mut front = false;
+        let mut wall = false;
+        for _ in 0..240 {
+            pool.step(1.0 / 60.0);
+            let mut out = Vec::new();
+            splashes(&pool, &mut out);
+            for s in out {
+                let SplashSource::Bow { bow, velocity, .. } = s else {
+                    panic!("only bows");
+                };
+                // The front runs down the channel; the water striking the far wall (x = 8 m)
+                // sprays back up it.
+                if velocity.x > 0.0 {
+                    front = true;
+                } else if bow.x > 7.5 {
+                    wall = true;
+                }
+            }
+        }
+        assert!(front && wall, "front {front}, wall {wall}");
+    }
 }

@@ -2217,6 +2217,13 @@ impl Lab {
         shown.water.as_ref().map(|water| (now, water))
     }
 
+    /// Where the flood's water splashes as the shown world holds it (#162), added to `out`.
+    pub(crate) fn splashes(&mut self, out: &mut Vec<forge_render::SplashSource>) {
+        if let Some(water) = self.shown().water.as_ref() {
+            flood::splashes(water, out);
+        }
+    }
+
     /// The flood's water as the shown world holds it, for its drawing.
     pub(crate) fn pool(&mut self) -> Option<PoolView> {
         let water = self.shown().water.as_ref()?;

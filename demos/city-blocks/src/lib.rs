@@ -2139,6 +2139,10 @@ impl Demo for Gallery {
                 if let Some(barrels) = &self.barrels {
                     barrels.splashes(self.sea_time, &mut sources);
                 }
+                // The flood's front and its water striking the walls (#162).
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.splashes(&mut sources);
+                }
                 let projection = taa_frame.jittered_projection;
                 reactive = splashes.update(
                     &mut frame.graph,
