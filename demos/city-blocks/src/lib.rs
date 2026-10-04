@@ -365,6 +365,10 @@ struct Args {
     /// captures; with `--vsync` at 60 Hz, still 300 m/s).
     #[arg(long)]
     fixed_step: bool,
+    /// With `--fixed-step`, the rate the day, the exposure and the water advance at, steps a
+    /// second (60): a high rate reproduces what a fast frame rate does in a scripted run.
+    #[arg(long, default_value_t = 60.0)]
+    step_hz: f32,
     /// The sun's elevation over the horizon, degrees (63.4 over the city, the renderer's default
     /// sun; 30 over the island, where a high sun flattens the relief).
     #[arg(long)]
@@ -1495,7 +1499,11 @@ impl Demo for Gallery {
             self.frame_ms.push(ms);
             self.run_frame_ms.push(ms);
         }
-        self.step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+        self.step = if self.args.fixed_step {
+            1.0 / self.args.step_hz
+        } else {
+            dt
+        };
         self.sea_time = match self.args.sea_time {
             Some(still) => still,
             None => self.sea_time + f64::from(self.step),

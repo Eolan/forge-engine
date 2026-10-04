@@ -146,7 +146,11 @@ impl DlssUpscaler {
             // Relative to a fixed EV100: DLSS divides the colour by it on the way in and
             // multiplies it back on the way out (checked: the output keeps the input's level), so
             // its history stays in one space while the exposure adapts, as the TAA's rescale does.
-            exposure / exposure_from_ev100(REFERENCE_EV100),
+            // Within 4 stops of it only (#164): a night under the Moon is 17 stops from EV 15,
+            // and the colour divided by 2^17 fell under fp16's normal range inside DLSS, which
+            // posterized it and smeared the stars. Past that, its history follows the slow
+            // adaptation as it is.
+            (exposure / exposure_from_ev100(REFERENCE_EV100)).clamp(1.0 / 16.0, 16.0),
         )?;
         let output = graph.import(&this.output);
         let exposure_image = graph.import(&this.exposure);

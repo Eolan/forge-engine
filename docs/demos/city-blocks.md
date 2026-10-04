@@ -433,7 +433,8 @@ city-blocks --view=-8,1.7,1135,-50,10
 
 ## A day over the city (issue #57, 2026-09-25)
 
-`--day S` runs a day in S seconds, then a night (below), then again. The sun rises 4° below the eastern horizon,
+`--day S` runs a day in S seconds, then a night (below), then again (`--fixed-step --step-hz N` steps
+it at N Hz, to script what a fast frame rate does). The sun rises 4° below the eastern horizon,
 crosses the south at 70° and sets in the west. Everything that follows the sun runs per frame
 already:
 - the sky-view table and the aerial perspective (#43);
