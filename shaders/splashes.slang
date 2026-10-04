@@ -39,6 +39,11 @@ static const float MAX_SPAN = 0.1;
 static const float FADE_IN = 0.04;
 // The most a splash asks of TAA's current frame (FSR 2's cap for its reactive mask).
 static const float REACTIVE = 0.9;
+// The foam a landing drop leaves in its cell, in the field's units (`FOAM_FULL` in water.slang
+// whitens a cell fully).
+static const uint FOAM_PER_DROP = 128;
+// How far over its water a drop that ends still lands there, metres.
+static const float FOAM_REACH = 0.3;
 // A drop's scattering: Henyey–Greenstein forwards, plus an even part for the light it
 // scatters more than once inside a splash.
 static const float FORWARD = 0.75;
@@ -100,6 +105,11 @@ struct SplashFrame
     Sky* sky;
     SplashParticle* ring;
     SplashBlock* blocks;
+    uint* foam;          // the foam field (#107's polish, splash_foam.slang), or null
+    int2 foam_origin;    // its window's first world cell
+    float foam_cell;     // metres a cell
+    uint foam_cells;     // cells a side
+    uint2 pad_foam;
 };
 
 struct SplashPush
@@ -191,6 +201,22 @@ void emit_main(uint3 id : SV_DispatchThreadID)
     f[0].ring[(b.first + j) % f[0].capacity] = q;
 }
 
+// A drop's foam where it lands (#107's polish): a whole number of units into its cell of the
+// foam field, the field's slot the world cell modulo its size.
+void deposit_foam(SplashFrame* f, SplashParticle q)
+{
+    if (f[0].foam == nullptr)
+        return;
+    int n = int(f[0].foam_cells);
+    int2 cell = int2(floor(q.position.xz / f[0].foam_cell));
+    int2 within = cell - f[0].foam_origin;
+    if (any(within < 0) || any(within >= n))
+        return;
+    int2 slot = int2(((cell.x % n) + n) % n, ((cell.y % n) + n) % n);
+    uint ignored;
+    InterlockedAdd(f[0].foam[slot.y * n + slot.x], FOAM_PER_DROP, ignored);
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void advance_main(uint3 id : SV_DispatchThreadID)
@@ -205,6 +231,9 @@ void advance_main(uint3 id : SV_DispatchThreadID)
     float now = f[0].now;
     if (now - q.birth > q.life)
     {
+        // A drop ending just over its water lands there.
+        if ((q.flags & SPLASH_MIST) == 0u && q.position.y < q.level + FOAM_REACH)
+            deposit_foam(f, q);
         f[0].ring[slot].life = 0.0;
         return;
     }
@@ -238,6 +267,7 @@ void advance_main(uint3 id : SV_DispatchThreadID)
     {
         // Back in its water.
         q.life = 0.0;
+        deposit_foam(f, q);
     }
     f[0].ring[slot] = q;
 }

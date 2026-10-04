@@ -551,9 +551,15 @@ struct GpuWaterSurface {
     /// the sky's reflection looks up in the mirror direction where it is in view, or `u32::MAX`.
     cloud_image: u32,
     pad_cloud: [u32; 2],
+    /// The splashes' foam field (#107's polish), or 0: none.
+    splash_foam: u64,
+    /// Its window's first world cell.
+    foam_origin: [i32; 2],
+    /// Metres a cell, cells a side, 0, 0.
+    foam_frame: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 896);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 928);
 
 /// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
 /// its absorption and its scattering, then `water/under`'s dispatch.
@@ -1177,6 +1183,9 @@ pub struct WaterSurfaceParams {
     /// The cloud layer as this frame sees it (#145, [`crate::Clouds::images`]): the sky's
     /// reflection takes the clouds in view.
     pub cloud_image: Option<ImageHandle>,
+    /// The foam the splashes leave where their drops land (#107's polish), which whitens the
+    /// fresh water: [`crate::WaterSplashes::foam`].
+    pub splash_foam: Option<crate::splashes::SplashFoam>,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -2192,6 +2201,9 @@ impl WaterSurface {
         if let Some(gpu) = pool_on_gpu {
             pass = pass.buffer(gpu.buffer, BufferAccess::ShaderRead(vertex));
         }
+        if let Some(foam) = params.splash_foam {
+            pass = pass.buffer(foam.buffer, BufferAccess::ShaderRead(fragment));
+        }
         if let Some(wakes) = params.wakes {
             pass = pass.image(wakes.slopes, ImageAccess::Sampled(fragment));
         }
@@ -2280,6 +2292,11 @@ impl WaterSurface {
                         .cloud_image
                         .map_or(u32::MAX, |c| resources.sampled(c).0),
                     pad_cloud: [0; 2],
+                    splash_foam: params.splash_foam.map_or(0, |f| f.address),
+                    foam_origin: params.splash_foam.map_or([0; 2], |f| f.origin),
+                    foam_frame: params
+                        .splash_foam
+                        .map_or([0.0; 4], |f| [f.cell, f.cells as f32, 0.0, 0.0]),
                 }],
             );
             // The requests start at zero: no ray where the water is not drawn.

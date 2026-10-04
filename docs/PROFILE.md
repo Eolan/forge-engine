@@ -1103,6 +1103,9 @@ passes take 0.15 ms (`shallow/front` 0.041, `shallow/apply` 0.039, `shallow/adve
 for sixteen times the quads, and the rest is latency between 18 small dependent passes. Four
 steps a tick took 0.78 ms in all. The frame's timestamps went from 96 to 256 a frame slot: the
 layer's passes had pushed the water's zones past the end.
+The splashes' foam where their drops land (#107's polish): `splashes/foam` 0.002 ms (256² cells
+faded), the water's lookup `water/surface` 0.124 → 0.152 ms on the flood's layer; the frame with
+the spray and its foam 1.78 → 1.86 ms.
 
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's

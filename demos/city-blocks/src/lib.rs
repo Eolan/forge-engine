@@ -2116,6 +2116,12 @@ impl Demo for Gallery {
                         self.sea_time_submitted,
                     )
                 });
+            // The foam the splashes left where their drops landed (#107's polish), faded, for the
+            // water to whiten by; this frame's landings add to it after.
+            let splash_foam = self
+                .splashes
+                .as_ref()
+                .map(|s| s.foam(&mut frame.graph, camera_in_scene, self.sea_time_submitted));
             let requests = surface.draw(
                 &mut frame.graph,
                 frame.slot,
@@ -2134,6 +2140,7 @@ impl Demo for Gallery {
                     wakes,
                     clouds: cloud_shadow,
                     cloud_image: cloud_shadow.and(cloud_images).map(|(this, _)| this),
+                    splash_foam,
                 },
                 taa_frame.color,
                 targets.depth,

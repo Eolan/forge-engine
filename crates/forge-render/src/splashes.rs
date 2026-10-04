@@ -22,9 +22,10 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
-    FrameSlot, GraphBuffer, ImageAccess, ImageHandle, MemoryCategory, MemoryLocation, Pipeline,
-    QueueKind, Result, ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc, vk,
+    Buffer, BufferAccess, BufferDesc, BufferHandle, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT,
+    FrameGraph, FrameSlot, GraphBuffer, ImageAccess, ImageHandle, MemoryCategory, MemoryLocation,
+    Pipeline, QueueKind, Result, ShaderCompiler, ShaderStage, TransientDesc, VertexPipelineDesc,
+    vk,
 };
 use glam::{Mat4, Vec2, Vec3};
 
@@ -210,9 +211,51 @@ struct GpuSplashFrame {
     sky: u64,
     ring: u64,
     blocks: u64,
+    foam: u64,
+    foam_origin: [i32; 2],
+    foam_cell: f32,
+    foam_cells: u32,
+    pad_foam: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuSplashFrame>() == 208);
+const _: () = assert!(std::mem::size_of::<GpuSplashFrame>() == 240);
+
+/// The foam field's cells a side, metres a cell, and the seconds its foam takes to fall by e
+/// (#107's polish): 64 m round the camera.
+const FOAM_CELLS: u32 = 256;
+const FOAM_CELL: f32 = 0.25;
+const FOAM_LIFE: f32 = 3.0;
+
+/// Mirrors `FoamPush` in `splash_foam.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct FoamPush {
+    foam: u64,
+    origin: [i32; 2],
+    previous: [i32; 2],
+    keep: f32,
+    cells: u32,
+    fresh: u32,
+    pad: u32,
+}
+
+/// The foam the splashes leave where their drops land on the water (#107's polish), this
+/// frame: a field of cells round the camera that the water's shading whitens by
+/// ([`crate::WaterSurfaceParams::splash_foam`]). Its units are whole: `FOAM_FULL` in
+/// `water.slang` whitens a cell fully.
+#[derive(Clone, Copy, Debug)]
+pub struct SplashFoam {
+    /// The field in this frame's graph.
+    pub buffer: BufferHandle,
+    /// Its device address: `cells × cells` units, a world cell at its index modulo `cells`.
+    pub address: u64,
+    /// The window's first world cell (x, z).
+    pub origin: [i32; 2],
+    /// Metres a cell.
+    pub cell: f32,
+    /// Cells a side.
+    pub cells: u32,
+}
 
 /// One block of drops before it has its slots.
 #[derive(Clone, Copy, Debug)]
@@ -253,6 +296,13 @@ pub struct WaterSplashes {
     blocks: Vec<Buffer>,
     state: RefCell<Ring>,
     stats: std::cell::Cell<SplashStats>,
+    /// The foam field (#107's polish) and its fade.
+    foam: GraphBuffer,
+    fade: Pipeline,
+    /// The last frame's window and time, for the fade.
+    foam_last: std::cell::Cell<Option<([i32; 2], f32)>>,
+    /// This frame's field, from [`WaterSplashes::foam`], for [`WaterSplashes::update`].
+    foam_now: std::cell::Cell<Option<SplashFoam>>,
 }
 
 impl WaterSplashes {
@@ -326,6 +376,28 @@ impl WaterSplashes {
             )?,
             state: RefCell::new(Ring::default()),
             stats: std::cell::Cell::new(SplashStats::default()),
+            foam: GraphBuffer::new(device.create_buffer(BufferDesc {
+                size: u64::from(FOAM_CELLS * FOAM_CELLS) * 4,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Work,
+                name: "splash foam",
+            })?),
+            fade: {
+                let module = device.create_shader_module(
+                    &shaders.compile("splash_foam.slang", "fade_main", ShaderStage::Compute)?,
+                    "splash foam fade",
+                )?;
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                    shader: (module, "fade_main"),
+                    push_constant_bytes: std::mem::size_of::<FoamPush>() as u32,
+                    name: "splash foam fade",
+                });
+                device.destroy_shader_module(module);
+                pipeline?
+            },
+            foam_last: std::cell::Cell::new(None),
+            foam_now: std::cell::Cell::new(None),
         })
     }
 
@@ -337,6 +409,56 @@ impl WaterSplashes {
     /// The last frame's counters.
     pub fn stats(&self) -> SplashStats {
         self.stats.get()
+    }
+
+    /// The foam field this frame (#107's polish), round `camera` (the sea's frame) at the sea's
+    /// `time`: declares `splashes/foam`, the last frames' foam faded and the cells that came
+    /// into the window cleared. Call it once a frame before the water's draw, which reads it,
+    /// and before [`WaterSplashes::update`], which adds the drops that land.
+    pub fn foam<'f>(&'f self, graph: &mut FrameGraph<'f>, camera: Vec3, time: f32) -> SplashFoam {
+        let n = FOAM_CELLS as i32;
+        let origin = [camera.x, camera.z].map(|c| (c / FOAM_CELL).floor() as i32 - n / 2);
+        let last = self.foam_last.replace(Some((origin, time)));
+        // A clock that jumped or went back clears the field, as the ring starts over.
+        let (previous, fresh, keep) = match last {
+            Some((previous, then)) if (0.0..=0.25).contains(&(time - then)) => {
+                (previous, 0, (-(time - then) / FOAM_LIFE).exp())
+            }
+            _ => (origin, 1, 0.0),
+        };
+        let buffer = graph.import_buffer(&self.foam);
+        let address = self.foam.address();
+        let fade = &self.fade;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        graph
+            .pass("splashes/foam")
+            .buffer(buffer, BufferAccess::ShaderReadWrite(compute))
+            .run(move |_, commands| {
+                commands.bind_pipeline(fade);
+                commands.push_constants(
+                    fade,
+                    &FoamPush {
+                        foam: address,
+                        origin,
+                        previous,
+                        keep,
+                        cells: FOAM_CELLS,
+                        fresh,
+                        pad: 0,
+                    },
+                );
+                commands.dispatch(FOAM_CELLS.div_ceil(8), FOAM_CELLS.div_ceil(8), 1);
+                Ok(())
+            });
+        let foam = SplashFoam {
+            buffer,
+            address,
+            origin,
+            cell: FOAM_CELL,
+            cells: FOAM_CELLS,
+        };
+        self.foam_now.set(Some(foam));
+        foam
     }
 
     /// Emits this frame's drops from `sources` and declares the passes: the emission and the
@@ -356,6 +478,8 @@ impl WaterSplashes {
         extent: vk::Extent2D,
     ) -> Option<ImageHandle> {
         let now = params.time;
+        // The foam field, when [`WaterSplashes::foam`] made it this frame.
+        let foam = self.foam_now.take();
         let mut ring = self.state.borrow_mut();
         // A clock that jumped or went back starts the ring over.
         let previous = match ring.previous {
@@ -439,6 +563,11 @@ impl WaterSplashes {
                 sky: sky.address(),
                 ring: self.ring.address(),
                 blocks: blocks_buffer.address(),
+                foam: foam.map_or(0, |f| f.address),
+                foam_origin: foam.map_or([0; 2], |f| f.origin),
+                foam_cell: FOAM_CELL,
+                foam_cells: FOAM_CELLS,
+                pad_foam: [0; 2],
             }],
         );
         let address = frame_buffer.address();
@@ -458,16 +587,19 @@ impl WaterSplashes {
                 });
         }
         let advance = &self.advance;
-        graph
+        let mut pass = graph
             .pass("splashes/advance")
             .queue(QueueKind::Compute)
-            .buffer(ring_handle, BufferAccess::ShaderReadWrite(compute))
-            .run(move |_, commands| {
-                commands.bind_pipeline(advance);
-                commands.push_constants(advance, &address);
-                commands.dispatch(live.div_ceil(64), 1, 1);
-                Ok(())
-            });
+            .buffer(ring_handle, BufferAccess::ShaderReadWrite(compute));
+        if let Some(foam) = foam {
+            pass = pass.buffer(foam.buffer, BufferAccess::ShaderReadWrite(compute));
+        }
+        pass.run(move |_, commands| {
+            commands.bind_pipeline(advance);
+            commands.push_constants(advance, &address);
+            commands.dispatch(live.div_ceil(64), 1, 1);
+            Ok(())
+        });
         let reactive = graph.transient(TransientDesc {
             name: "splash reactive mask",
             width: extent.width,

@@ -366,6 +366,9 @@ struct WaterSurface
     uint cloud_shadow;    // its sampled index (r32f: the sun's share through the clouds), or 0xFFFFFFFF
     uint cloud_image;     // the cloud layer as this frame sees it (sampled, rgba16f: their light, what they let through), or 0xFFFFFFFF
     uint2 pad_cloud;
+    uint* splash_foam;    // the splashes' foam field (#107's polish, splash_foam.slang): cells × cells of units, a world cell at its index modulo cells; null: none
+    int2 foam_origin;     // its window's first world cell (x, z)
+    float4 foam_frame;    // metres a cell, cells a side, 0, 0
 };
 
 // The sun's share through the clouds (#145) at `world` (the scene's frame), from their shadow map
@@ -1408,9 +1411,40 @@ struct FreshWater
 // pattern carried down with the flow (finer than two pixels, its mean), and the air; blended by
 // its coverage, the edge fading where the water thins to nothing against the ground, a stone or
 // anything in it.
+// The foam field's units that whiten the water fully (`FOAM_PER_DROP` in splashes.slang: 16 drops
+// landed in a cell), and the most of the water it whitens.
+static const float FOAM_FULL = 256.0;
+static const float FOAM_MOST = 0.8;
+
+// The splashes' foam at `world` (#107's polish): the field's cells round it, bilinearly, 0 outside
+// its window or with none.
+float splash_foam_at(WaterSurface* w, float2 world)
+{
+    if (w[0].splash_foam == nullptr)
+        return 0.0;
+    int n = int(w[0].foam_frame.y);
+    float2 p = world / w[0].foam_frame.x - 0.5;
+    int2 c0 = int2(floor(p));
+    float2 t = p - float2(c0);
+    float sum = 0.0;
+    for (int k = 0; k < 4; k++)
+    {
+        int2 c = c0 + int2(k & 1, k >> 1);
+        int2 within = c - w[0].foam_origin;
+        if (any(within < 0) || any(within >= n))
+            continue;
+        int2 slot = int2(((c.x % n) + n) % n, ((c.y % n) + n) % n);
+        float weight = ((k & 1) != 0 ? t.x : 1.0 - t.x) * ((k >> 1) != 0 ? t.y : 1.0 - t.y);
+        sum += weight * float(w[0].splash_foam[slot.y * n + slot.x]);
+    }
+    return FOAM_MOST * saturate(sum / FOAM_FULL);
+}
+
 SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
 {
     float2 world = s.flat + w[0].camera.xz;
+    // Where the splashes' drops landed (#107's polish).
+    s.white = max(s.white, splash_foam_at(w, world));
     float footprint = max(max(length(ddx(s.flat)), length(ddy(s.flat))), 1e-3);
     RiverRipples ripples = river_ripples(w, s.flat, s.velocity);
     float variance = ripples.variance * (s.ripples * s.ripples) + s.rough;

@@ -607,6 +607,19 @@ against the basin's 468 m³ it is left out). The dam break keeps up to about a h
 give the same image. The drops are millimetres across, so a few metres off they read as a veil
 over the front and where it strikes a block.
 
+**Foam where the drops land** (#107's polish, the same night): a drop that falls back into its
+water, or ends within 30 cm over it, adds foam to its cell of a field round the camera
+(`splashes/foam`, 256 × 256 cells of 25 cm, `shaders/splash_foam.slang`).
+- **The field:** whole units added atomically, so the sum is the same in any order. Each cell
+  fades by e every 3 s and is cleared as it comes into the window, which scrolls with the camera
+  without a copy.
+- **The look:** the fresh water (the pool, the lakes, the rivers) whitens by it through its own
+  foam's look, fully at four drops a cell, 80 % at most.
+- **At the dam break:** a soft white along the front and round what it carries, 21 000 px apart
+  from `--no-splashes` at the close view. Repeatable on the serial frame as on the async one.
+- **The cost:** the fade 0.002 ms, and `water/surface` 0.124 → 0.152 ms on the GPU's layer
+  (four loads a fragment).
+
 **Left:** a window round the player for the island, and the run-up against a block (a thin
 sheet of water up its face, in the columns too) to look at.
 

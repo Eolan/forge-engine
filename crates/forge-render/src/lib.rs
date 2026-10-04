@@ -65,7 +65,9 @@ pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
 };
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyParams, sh_irradiance};
-pub use splashes::{SPLASH_CAPACITY, SplashParams, SplashSource, SplashStats, WaterSplashes};
+pub use splashes::{
+    SPLASH_CAPACITY, SplashFoam, SplashParams, SplashSource, SplashStats, WaterSplashes,
+};
 pub use starfield::Starfield;
 pub use streaming::{Residency, StartView, StreamingConfig, StreamingStats};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
