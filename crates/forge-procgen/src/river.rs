@@ -498,6 +498,11 @@ pub struct RibbonParams {
     pub delta: Option<DeltaParams>,
     /// The bars in the large rivers' mouths at the sea (#127); `None` leaves them one channel.
     pub bars: Option<BarParams>,
+    /// How much deeper a river runs below where a tributary joins it (#119's polish): the share
+    /// of its depth added at the deepest, a width downstream, for a tributary as wide as it (less
+    /// as the tributary is narrower), easing back over the next two widths; `None` leaves the
+    /// bed as it was.
+    pub confluence_scour: Option<f64>,
 }
 
 impl Default for RibbonParams {
@@ -507,7 +512,7 @@ impl Default for RibbonParams {
     /// of the half width under the banks, the water 0.05 m + 4 % of the width under them, a fall
     /// of 60 % at most, rising to its banks over 8 m and three widths into a lake, the lakes of a
     /// hectare, twice as wide at the sea from 1.5 m over it, a confluence's corners rounded over
-    /// 2 m and a tributary's width along each edge, no steps, no deltas, no bars.
+    /// 2 m and a tributary's width along each edge, no steps, no deltas, no bars, no scour.
     fn default() -> Self {
         Self {
             step: 4.0,
@@ -532,6 +537,7 @@ impl Default for RibbonParams {
             steps: None,
             delta: None,
             bars: None,
+            confluence_scour: None,
         }
     }
 }
@@ -541,7 +547,7 @@ impl RibbonParams {
     /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01)
     /// from 3 km² of catchment, brooks of nature's size at 0.5 km² (#123), in steps and pools
     /// on their steep reaches, a delta where they run into a lake (#120), bars in their large
-    /// mouths at the sea (#127).
+    /// mouths at the sea (#127), and running 60 % deeper below where a tributary as wide joins.
     pub fn island() -> Self {
         Self {
             regional: Some((3.0, 1.5)),
@@ -549,6 +555,7 @@ impl RibbonParams {
             steps: Some(StepParams::default()),
             delta: Some(DeltaParams::default()),
             bars: Some(BarParams::default()),
+            confluence_scour: Some(0.6),
             ..Self::default()
         }
     }
@@ -937,6 +944,40 @@ pub fn ribbons(
         for ribbon in &mut ribbons {
             let seed = hash_cell3(BAR_SEED, ribbon.river as i32, 0, 0);
             ribbon.bars = mouth_bars(&mut ribbon.points, bars, params, seed);
+        }
+    }
+    // Below each confluence the river runs deeper for a few widths (#119's polish): the two
+    // flows meeting scour a hole, deepest about a width downstream. The level stays.
+    if let Some(scour) = params.confluence_scour {
+        for r in 0..ribbons.len() {
+            let Mouth::Junction { river: into, .. } =
+                rivers.rivers[ribbons[r].river as usize].mouth
+            else {
+                continue;
+            };
+            let (Some(m), Some(last)) = (done[into as usize], ribbons[r].points.last()) else {
+                continue;
+            };
+            let (at, half) = (last.position.map(f64::from), f64::from(last.half_width));
+            let main = &mut ribbons[m].points;
+            let n = nearest(main, at);
+            let main_half = f64::from(main[n].half_width).max(0.25);
+            let share = scour * (half / main_half).min(1.0);
+            // Its width, or two of the points' spacings on a brook, so the hole spans a few points.
+            let width = (2.0 * main_half).max(2.0 * params.step);
+            let mut along = 0.0;
+            for k in n..main.len() {
+                if k > n {
+                    let (a, b) = (main[k - 1].position, main[k].position);
+                    along += f64::from((b[0] - a[0]).hypot(b[1] - a[1]));
+                }
+                if along > 3.0 * width {
+                    break;
+                }
+                let bump =
+                    smoothstep(0.0, width, along) * (1.0 - smoothstep(width, 3.0 * width, along));
+                main[k].depth = (f64::from(main[k].depth) * (1.0 + share * bump)) as f32;
+            }
         }
     }
     // The confluences' rounded corners, on the final widths, and the water drawn over them: each

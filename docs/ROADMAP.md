@@ -134,7 +134,7 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   sky's light with them in it ✅ (#163); next for them: the weather map from the climate.
 - **The rivers' and the water's polish, from their issues' "left for later":**
   - standing waves on the 2–4 % rapids (#122) ✅ as shading (2026-10-04);
-  - a bar and a scour hole at confluences (#119);
+  - a bar and a scour hole at confluences (#119): the scour hole ✅ (2026-10-04), the bar left;
   - true distributaries and bars on the lake fans (#127);
   - splashes landing as foam and rings (#107);
   - a clearer or bluer underwater look (#108).

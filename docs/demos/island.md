@@ -2845,3 +2845,28 @@ The rapids at 2–4 % no longer run smooth.
 it is, before and after:
 
 ![The island's fastest 2–4 % rapids, smooth (left) and with standing waves (right)](images/island-standing-waves.png)
+
+## A scour hole below each confluence (#119's polish, 2026-10-04)
+
+Where a tributary joins, the two flows meeting dig the bed. Below each confluence the river now
+runs deeper for a few widths; its level stays.
+- **Shape:** the depth rises over one of the river's widths past the junction and eases back
+  over the next two.
+- **Size:** at the deepest, 60 % more for a tributary as wide as the river, less as it is
+  narrower (`RibbonParams::confluence_scour`, the island's `Some(0.6)`). Studies put confluence
+  scour at 1.5 to 3 times the depth upstream; this stays at the low end, since the channel's
+  bed is one parabola across.
+- **Floor:** on a brook, the hole spans at least two of the points' spacings (8 m), so it holds
+  a few points.
+- **Where it shows:** the bed and the water drawn over it both take the deeper depth, so the hole
+  shows as darker water past the junction. `--no-scour` leaves the bed as it was.
+- **Left:** the bar the slack water lays on the inner bank past the junction's corner. It does
+  not fit the channel's one-parabola cross-section.
+
+A test runs the fork of the confluences' test with and without it: the levels are the same, no
+point is shallower, and the river is over 20 % deeper somewhere past the junction.
+
+The logged confluence (`--view=4262,8.5,-2834,-134.8,-20`) without (left) and with (right) the
+scour: shallow and near the coast, it shows as a slightly darker patch.
+
+![The logged confluence without (left) and with (right) the scour hole](images/island-confluence-scour.png)

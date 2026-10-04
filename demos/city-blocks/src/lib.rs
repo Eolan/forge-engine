@@ -244,6 +244,10 @@ struct Args {
     /// water splits around in their mouths (#127, D-041).
     #[arg(long)]
     no_bars: bool,
+    /// Leave the rivers' beds below their confluences as they were: no deeper scour hole
+    /// (#119's polish).
+    #[arg(long)]
+    no_scour: bool,
     /// Leave every beach of the island pale sand: no shingle on the headlands and under steep
     /// land (#128).
     #[arg(long)]
@@ -6665,6 +6669,7 @@ fn run(args: Args, title: &'static str) -> Result<()> {
             brooks: island.brooks.filter(|_| !args.no_brooks),
             delta: island.delta.filter(|_| !args.no_deltas),
             bars: island.bars.filter(|_| !args.no_bars),
+            confluence_scour: island.confluence_scour.filter(|_| !args.no_scour),
             ..island
         })
         .expect("the rivers' parameters, set once");

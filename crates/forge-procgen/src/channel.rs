@@ -1793,6 +1793,42 @@ mod tests {
     }
 
     #[test]
+    fn a_river_runs_deeper_below_a_confluence_and_its_level_stays() {
+        // The Y of the test below (#119's polish): the scour deepens the river past the junction,
+        // nowhere shallower, its level everywhere the same.
+        let fork = Field2::from_fn(41, 10.0, |x, y| {
+            let (fx, fy) = (x as f32, y as f32);
+            let spread = (fy - 20.0).max(0.0) * 0.5;
+            let branch = (fx - (20.0 - spread))
+                .abs()
+                .min((fx - (20.0 + spread)).abs());
+            2.0 * branch + fy + 1.0
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&fork, 0.0, &pool);
+        let rivers = trace_rivers(&fork, &flow, 30);
+        let with = |scour| RibbonParams {
+            steps: None,
+            confluence_scour: scour,
+            ..RibbonParams::island()
+        };
+        let (plain, scoured) = (
+            ribbons(&fork, &rivers, &[], &with(None)),
+            ribbons(&fork, &rivers, &[], &with(Some(0.6))),
+        );
+        let mut deepest = 1.0_f32;
+        for (a, b) in plain.iter().zip(&scoured) {
+            assert_eq!(a.points.len(), b.points.len());
+            for (p, q) in a.points.iter().zip(&b.points) {
+                assert_eq!(p.level, q.level);
+                assert!(q.depth >= p.depth - 1e-6, "{} {}", q.depth, p.depth);
+                deepest = deepest.max(q.depth / p.depth.max(1e-6));
+            }
+        }
+        assert!(deepest > 1.2, "{deepest}");
+    }
+
+    #[test]
     fn a_confluence_s_corners_are_rounded_under_water_without_a_step() {
         // Two valleys meeting in a Y (as `river`'s test), its rivers the island's width.
         let fork = Field2::from_fn(41, 10.0, |x, y| {
