@@ -286,6 +286,31 @@ ground. Tiers: full stack near, clips only mid, texture-animated instances far. 
 replicates parameters and hit events, never poses.
 *(research: animation.md)* Accepted by the owner 2026-09-24.
 
+**Amendment 🟡 (proposed 2026-10-04): the clip runtime in-house, from glTF.**
+The owner approved downloading `ozz-animation-rs` for step 7's skinned creatures (2026-10-04),
+and two things came up when checking it before adding it:
+- **It needs nightly Rust.** Its README says so, and its manifest turns on glam's `core-simd`
+  feature, which uses `std::simd`. The workspace and CI are on stable (`rust-toolchain.toml`).
+- **It reads only `.ozz` archives,** which ozz's C++ tools (`gltf2ozz`) make from glTF. Its
+  README says it implements only ozz's runtime and has no plans for the offline part. The C++
+  releases (0.15–0.17) ship no prebuilt tools, so they would have to be built from source with
+  CMake: a second download and a C++ build in the asset pipeline.
+
+The choices:
+1. **Recommended: an in-house clip runtime in ozz's shape** (the research's "or an in-house
+   copy", animation.md's recommendation, layer 2). A `forge-anim` crate reads skins and clips
+   from glTF with the `gltf` crate already in the workspace. It samples them into SoA local
+   transforms with `forge_core::dmath`, so the determinism D-012 chose ozz for holds. Then it
+   blends, takes the model-space pass and the skinning matrices, and skins in a compute pass.
+   It is a few hundred lines to start, with no C++ step and no new dependency. Compression
+   stays deferred until measured, its format ACL-compatible, as the research says.
+2. **ozz-animation-rs on nightly:** the whole workspace and CI on a nightly toolchain, plus
+   ozz's C++ tools built from source. Not recommended: nightly for one dependency.
+3. **A fork of ozz-animation-rs on stable** (glam's SSE2 path instead of `core-simd`), with the
+   C++ tools built from source. A fork to maintain, and still the C++ step.
+
+**Question for the owner:** option 1 (no download), or one of the others?
+
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 
 Trees are grown, not modelled: Weber–Penn parameter files per species, space colonisation
