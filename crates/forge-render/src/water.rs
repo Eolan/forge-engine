@@ -1157,6 +1157,86 @@ struct UnderPush {
     height: u32,
 }
 
+/// The sea's water (#108): how fast it takes each channel away and the light it scatters back.
+/// The absorption sets how far one sees through it, under it and down into the shallows; the
+/// scattering is the colour it shows deep from above and glows with under it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeaWater {
+    /// Its absorption, m⁻¹ per channel.
+    pub absorption: [f32; 3],
+    /// The light it scatters back per unit of irradiance: its colour seen straight down.
+    pub scatter: [f32; 3],
+}
+
+impl SeaWater {
+    /// The sea since #105: a dark teal, the floor fading over 15 to 20 metres.
+    pub const TEAL: SeaWater = SeaWater {
+        absorption: [0.35, 0.07, 0.05],
+        scatter: [0.003, 0.013, 0.016],
+    };
+
+    /// The choices of the sea's water by name, the default first (`--sea-water`, #108's sheet):
+    /// - `teal`, [`SeaWater::TEAL`];
+    /// - `clear`: the same colour, seen half again as far;
+    /// - `blue`: as far as the teal, glowing blue;
+    /// - `clear-blue`: both;
+    /// - `turquoise`: clearer still and brighter, green and blue, a lagoon's;
+    /// - `ocean`: close to pure sea water, which takes the blue least and scatters it most:
+    ///   the open ocean's deep blue.
+    pub const NAMED: [(&'static str, SeaWater); 6] = [
+        ("teal", SeaWater::TEAL),
+        (
+            "clear",
+            SeaWater {
+                absorption: [0.30, 0.045, 0.032],
+                scatter: [0.003, 0.013, 0.016],
+            },
+        ),
+        (
+            "blue",
+            SeaWater {
+                absorption: [0.35, 0.07, 0.035],
+                scatter: [0.0015, 0.008, 0.018],
+            },
+        ),
+        (
+            "clear-blue",
+            SeaWater {
+                absorption: [0.32, 0.05, 0.022],
+                scatter: [0.0015, 0.008, 0.018],
+            },
+        ),
+        (
+            "turquoise",
+            SeaWater {
+                absorption: [0.30, 0.04, 0.03],
+                scatter: [0.002, 0.016, 0.019],
+            },
+        ),
+        (
+            "ocean",
+            SeaWater {
+                absorption: [0.34, 0.06, 0.017],
+                scatter: [0.0007, 0.004, 0.017],
+            },
+        ),
+    ];
+
+    /// The water of this name in [`SeaWater::NAMED`].
+    pub fn named(name: &str) -> Option<SeaWater> {
+        Self::NAMED
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, water)| *water)
+    }
+}
+
+impl Default for SeaWater {
+    fn default() -> Self {
+        Self::TEAL
+    }
+}
+
 /// What a frame's sea surface needs besides the cascades and the sky.
 #[derive(Clone, Copy, Debug)]
 pub struct WaterSurfaceParams {
@@ -1186,6 +1266,8 @@ pub struct WaterSurfaceParams {
     /// The foam the splashes leave where their drops land (#107's polish), which whitens the
     /// fresh water: [`crate::WaterSplashes::foam`].
     pub splash_foam: Option<crate::splashes::SplashFoam>,
+    /// The sea's water ([`SeaWater`], #108).
+    pub sea_water: SeaWater,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -2222,8 +2304,10 @@ impl WaterSurface {
                     ],
                     sun: params.sun_dir.normalize_or(Vec3::Y).extend(0.0).to_array(),
                     sun_radiance: params.sun_radiance.extend(params.sky_scale).to_array(),
-                    absorption: [0.35, 0.07, 0.05, 0.0],
-                    scatter: [0.003, 0.013, 0.016, 0.0],
+                    absorption: Vec3::from(params.sea_water.absorption)
+                        .extend(0.0)
+                        .to_array(),
+                    scatter: Vec3::from(params.sea_water.scatter).extend(0.0).to_array(),
                     shore_frame: shore.map_or([0.0; 4], |s| s.frame),
                     trains: shore.map_or([[0.0; 4]; MAX_TRAINS], |s| s.trains),
                     cascades: cascade_views,

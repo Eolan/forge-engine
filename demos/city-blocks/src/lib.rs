@@ -437,6 +437,10 @@ struct Args {
     /// Light the sea floor without the waves' caustics (#108).
     #[arg(long)]
     no_caustics: bool,
+    /// The sea's water, by name (#108's sheet, `SeaWater::NAMED`): teal (the default), clear,
+    /// blue, clear-blue, turquoise or ocean.
+    #[arg(long, default_value = "teal", value_parser = parse_sea_water)]
+    sea_water: forge_render::SeaWater,
     /// Moving geometry (#79): this many barrels drifting down the island's largest rivers,
     /// their transforms written every frame. None by default, so the reference captures stay
     /// put.
@@ -2571,6 +2575,7 @@ impl Demo for Gallery {
                     clouds: cloud_shadow,
                     cloud_image: cloud_shadow.and(cloud_images).map(|(this, _)| this),
                     splash_foam,
+                    sea_water: self.args.sea_water,
                 },
                 taa_frame.color,
                 targets.depth,
@@ -5415,6 +5420,16 @@ fn water_check(
 }
 
 /// `--meter-band`: two fractions in 0..1, `LOW,HIGH`, the first below the second.
+fn parse_sea_water(text: &str) -> std::result::Result<forge_render::SeaWater, String> {
+    forge_render::SeaWater::named(text).ok_or_else(|| {
+        let names: Vec<&str> = forge_render::SeaWater::NAMED
+            .iter()
+            .map(|(n, _)| *n)
+            .collect();
+        format!("`{text}`: one of {}", names.join(", "))
+    })
+}
+
 fn parse_pair(text: &str) -> std::result::Result<(f32, f32), String> {
     let parts: Vec<f32> = text
         .split(',')

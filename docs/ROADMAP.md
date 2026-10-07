@@ -146,7 +146,8 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   - true distributaries ✅ (2026-10-07) and bars on the lake fans (#127), the bars if the owner
     wants them;
   - splashes landing as foam and rings (#107): the foam ✅ (2026-10-04), the rings ✅ (2026-10-07);
-  - a clearer or bluer underwater look (#108).
+  - a clearer or bluer underwater look (#108): six waters to choose from (`--sea-water`, the
+    sheet in `reports/2026-10-07-108/`), the owner's pick to come.
 
   Each is small; none blocks anything.
 

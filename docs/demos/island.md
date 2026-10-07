@@ -1620,6 +1620,23 @@ rivers' water seen from below comes next.
   of the nearest waves, in patches. That predates this work: four views compared to the pixel
   with the previous commit.
 
+**The sea's water, to choose** (#108's look, 2026-10-07; `forge_render::SeaWater`,
+`--sea-water NAME`; `reports/2026-10-07-108/`). The sea's absorption and the light it scatters
+back were constants in `water.rs`; they are now a `SeaWater` the frame passes, with six by name
+for the owner to choose from:
+- `teal`, the default and the sea until now;
+- `clear`, the same colour seen half again as far;
+- `blue`, as clear, glowing blue;
+- `clear-blue`, both;
+- `turquoise`, clearer and brighter, a lagoon's green and blue;
+- `ocean`, close to pure sea water: it takes the blue least and scatters it most, the open
+  ocean's deep blue.
+
+The report's table has their numbers. `under.png` shows each from four views under the sea and
+`above.png` from two above it. From above, the shallows change little, since the sand shows
+through whichever the water; the deep water past them takes the water's colour. `teal` draws
+what the constants drew, so no capture changes.
+
 **Caustics** (#108, 2026-10-02; `shore_caustics` in `shaders/meshlet.slang`, `--no-caustics`).
 The waves bend the sun's light into the water and focus it under their crests. The floor under
 the sea now takes that light, seen from above through the water as from under it.
