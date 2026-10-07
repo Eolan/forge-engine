@@ -1131,6 +1131,10 @@ layer's passes had pushed the water's zones past the end.
 The splashes' foam where their drops land (#107's polish): `splashes/foam` 0.002 ms (256² cells
 faded), the water's lookup `water/surface` 0.124 → 0.152 ms on the flood's layer; the frame with
 the spray and its foam 1.78 → 1.86 ms.
+The rings where the drops land on still water (#107's polish, 2026-10-07): `wakes/rings`
+0.030–0.032 ms on the compute queue (256² cells read, at most 256 rings of 8 particles); from
+the dropped barrel's view with 1 000 barrels at 2560 × 1440, the frame 4.251–4.257 →
+4.275–4.279 ms against `--no-drop-rings`, two rounds of 1 500 frames.
 
 With `--net 100` (#137) a tick runs three worlds, the server's and two clients', so it costs
 three times as much: a mean of 2.0 ms. A client taken back by a snapshot (the other player's

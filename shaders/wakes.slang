@@ -11,6 +11,9 @@
 // - `wakes/advance` moves last frame's particles on, splitting and dropping them;
 // - `wakes/emit` adds new ones around the outline of each thing moving through the water: a
 //   crest where it pushes the water out, a trough where it leaves it;
+// - `wakes/rings` adds a small ring where the splashes' drops landed on still water last frame
+//   (`docs/research/water.md` §7.5): a cell whose drops brought enough impulse sends one out,
+//   so a shower of spray becomes a field of ripples without a ring a drop;
 // - each particle adds its packet to a field of heights around the camera as it is written;
 // - `wakes/slopes` turns the field into the slopes the water's shading adds (`wake_slope` in
 //   `water.slang`).
@@ -33,6 +36,15 @@ static const float WAKE_LEAST = 2e-4;
 static const float WAKE_GAIN = 0.05;
 // The field's heights are whole numbers of this many metres, added atomically.
 static const float WAKE_UNIT = 1e-6;
+// The drops' rings: a cell rings once its impulse (`IMPULSE_UNIT` in splashes.slang: a drop's
+// radius cubed times its speed) reaches RING_LEAST, as a 1 cm drop at 2 m/s brings; under that
+// it keeps half of it a frame. A ring's height is RING_GAIN metres a unit, at most RING_MOST,
+// on RING_AROUND particles starting RING_START out from a point in the cell.
+static const uint RING_LEAST = 200u;
+static const float RING_GAIN = 0.6e-6;
+static const float RING_MOST = 1e-3;
+static const uint RING_AROUND = 8u;
+static const float RING_START = 0.05;
 
 struct WakeParticle
 {
@@ -54,7 +66,7 @@ struct WakePush
 {
     WakeParticle* from;   // last frame's particles
     WakeParticle* to;     // this frame's
-    uint* counts;         // the particles in each of the two buffers
+    uint* counts;         // the particles in each of the two buffers, then this frame's rings
     int* heights;         // the field, row-major, `cells` a side
     WakeEmitter* emitters;
     float time;           // the sea's seconds
@@ -67,7 +79,12 @@ struct WakePush
     uint around;          // particles around each emitter's outline
     float step;           // seconds of emission: since the last, or 0 for none this frame
     uint slopes;          // storage index (rg16f): the field's slopes
-    uint pad;
+    // The drops' impulses (splash_foam.slang's second half):
+    uint ring_cells;      // cells a side
+    uint* impulses;       // the cells, a world cell at its index modulo ring_cells
+    int2 ring_origin;     // this frame's window: its first world cell
+    float ring_cell;      // metres a cell
+    uint ring_most;       // the most cells that ring in a frame
 };
 
 [[vk::push_constant]]
@@ -174,6 +191,63 @@ void emit_main(uint3 id : SV_DispatchThreadID)
     q.height = height;
     q.pad = 0.0;
     keep(p, q, q.origin, height);
+}
+
+// Two numbers in 0..1 from a world cell (a PCG step each way).
+float2 cell_random(int2 c)
+{
+    uint2 v = uint2(c) * 1664525u + 1013904223u;
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    return float2(v >> 8u) * (1.0 / 16777216.0);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void rings_main(uint3 id : SV_DispatchThreadID)
+{
+    WakePush p = wake_push;
+    int n = int(p.ring_cells);
+    if (int(id.x) >= n || int(id.y) >= n)
+        return;
+    uint i = id.y * uint(n) + id.x;
+    uint impulse = p.impulses[i];
+    if (impulse == 0u)
+        return;
+    uint ring = p.ring_most;
+    if (impulse >= RING_LEAST)
+        InterlockedAdd(p.counts[2], 1u, ring);
+    if (ring >= p.ring_most)
+    {
+        // Too little yet, or too many rings this frame: it keeps half for the next.
+        p.impulses[i] = impulse / 2u;
+        return;
+    }
+    p.impulses[i] = 0u;
+    // The world cell this slot holds, and a point in it of its own.
+    int2 slot = int2(id.xy);
+    int2 rel = slot - p.ring_origin;
+    int2 cell = p.ring_origin + int2(((rel.x % n) + n) % n, ((rel.y % n) + n) % n);
+    float2 r = cell_random(cell);
+    float2 centre = (float2(cell) + 0.2 + 0.6 * r) * p.ring_cell;
+    float height = min(RING_GAIN * float(impulse), RING_MOST);
+    float spread = 2.0 * PI / float(RING_AROUND);
+    for (uint k = 0u; k < RING_AROUND; k++)
+    {
+        float angle = (float(k) + r.y) * spread;
+        WakeParticle q;
+        q.origin = centre + heading(angle) * RING_START;
+        q.birth = p.time;
+        q.angle = angle;
+        q.spread = spread;
+        q.height = height;
+        q.pad = 0.0;
+        keep(p, q, q.origin, height);
+    }
 }
 
 float field_height(WakePush p, int2 c)

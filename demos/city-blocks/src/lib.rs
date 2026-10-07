@@ -470,6 +470,9 @@ struct Args {
     /// A/B, #107).
     #[arg(long, hide = true)]
     no_reactive: bool,
+    /// No rings where the splashes' drops land on still water (#107's A/B for them).
+    #[arg(long)]
+    no_drop_rings: bool,
     /// Holds the waves still at this many seconds (the shimmer's measure: what changes
     /// between frames of a still camera is then the aliasing alone).
     #[arg(long)]
@@ -2522,6 +2525,13 @@ impl Demo for Gallery {
                     samples: &pool.samples,
                 });
             }
+            // The foam the splashes left where their drops landed (#107's polish), faded, for the
+            // water to whiten by and the wakes to ring from; this frame's landings add to it
+            // after.
+            let splash_foam = self
+                .splashes
+                .as_ref()
+                .map(|s| s.foam(&mut frame.graph, camera_in_scene, self.sea_time_submitted));
             let wakes = self
                 .wakes
                 .as_ref()
@@ -2531,16 +2541,11 @@ impl Demo for Gallery {
                         &mut frame.graph,
                         frame.slot,
                         &barrels.wakes(self.sea_time, camera),
+                        splash_foam.filter(|_| !self.args.no_drop_rings),
                         camera_in_scene.as_dvec3(),
                         self.sea_time_submitted,
                     )
                 });
-            // The foam the splashes left where their drops landed (#107's polish), faded, for the
-            // water to whiten by; this frame's landings add to it after.
-            let splash_foam = self
-                .splashes
-                .as_ref()
-                .map(|s| s.foam(&mut frame.graph, camera_in_scene, self.sea_time_submitted));
             let requests = surface.draw(
                 &mut frame.graph,
                 frame.slot,

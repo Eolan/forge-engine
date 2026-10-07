@@ -2259,9 +2259,34 @@ shipped games the research found uses one for splashes.
 - The capture batch is unchanged (0 px): no fall lies within 150 m of its views.
 - `validate.sh` is silent, with a run across the drop on both paths.
 
+**Rings where the drops land** (#107's polish, 2026-10-07; the foam came first, on 2026-10-04,
+`docs/demos/physics-lab.md`). `docs/research/water.md` §7.5's coupling: a drop landing on still
+water leaves an impulse, and the wakes turn the impulses into rings.
+- **The impulse:** a drop from an impact, a bow or a drip (not a fall's, whose river the wakes
+  do not shade) adds its radius cubed times its speed, in whole units, to its cell of the foam's
+  field (`splash_foam.slang`'s second half, the same 25 cm cells round the camera).
+- **The rings** (`wakes/rings`, on the compute queue, the next frame): a cell rings once it
+  holds what a 1 cm drop at 2 m/s brings, and keeps half of less for the frame after. Its ring is
+  eight wave particles from a point in the cell of its own, 0.6 µm high a unit and 1 mm at most,
+  256 cells a frame at most.
+- **Their size:** the field's waves are 0.5 m long, as the wakes', where a real drop's ripples
+  are centimetres. Four times higher, the rings broke the impact's into lumps; at this height
+  they roughen it where the spray rains back.
+- `--no-drop-rings` is the A/B.
+
+`reports/2026-10-07-107/drop-rings.png`: the dropped barrel at frames 220 and 240, without the
+drop rings and with them.
+
+| Frame | Pixels changed | ꟻLIP mean | ꟻLIP max |
+|---|---|---|---|
+| 220 | 20 817 | 0.0029 | 0.66 |
+| 240 | 31 798 | 0.0047 | 0.63 |
+
+- **Cost** (2560 × 1440, 1 000 barrels, the drop's view, two rounds of 1 500 frames):
+  `wakes/rings` 0.030–0.032 ms on the compute queue; the frame 4.251–4.257 → 4.275–4.279 ms.
+- **Repeatable:** the same capture twice, and on the serial frame, is the same to the pixel.
+
 **Left for later:**
-- **Landing:** drops falling back leave no foam and no ripples yet (the research's second step:
-  a foam deposit, rings from the wakes).
 - **The crown's curtain:** the crown is drops alone, not a sheet that tears into them.
 - **Shore spray:** the shore's breaking crests throw none.
 - **Mist:** it is sprites, not density in a froxel volume.

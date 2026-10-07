@@ -52,6 +52,8 @@ const CROWN_THRESHOLD: f32 = 2.0;
 const RING: u32 = 0;
 const CONE: u32 = 1;
 const MIST: u32 = 2;
+/// A flag: the block's drops land on still water, where they make rings through the wakes.
+const STILL: u32 = 4;
 
 /// Where the water splashes this frame (#107), in the sea's frame (metres, the sea's mean level
 /// at y = 0).
@@ -249,6 +251,10 @@ pub struct SplashFoam {
     pub buffer: BufferHandle,
     /// Its device address: `cells × cells` units, a world cell at its index modulo `cells`.
     pub address: u64,
+    /// The address of its second half: in the same cells, the impulse of the drops that landed
+    /// on still water, which the wakes turn into rings and take
+    /// ([`crate::WaterWakes::update`]).
+    pub impulses: u64,
     /// The window's first world cell (x, z).
     pub origin: [i32; 2],
     /// Metres a cell.
@@ -377,7 +383,7 @@ impl WaterSplashes {
             state: RefCell::new(Ring::default()),
             stats: std::cell::Cell::new(SplashStats::default()),
             foam: GraphBuffer::new(device.create_buffer(BufferDesc {
-                size: u64::from(FOAM_CELLS * FOAM_CELLS) * 4,
+                size: u64::from(FOAM_CELLS * FOAM_CELLS) * 8,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                 location: MemoryLocation::GpuOnly,
                 category: MemoryCategory::Work,
@@ -413,8 +419,9 @@ impl WaterSplashes {
 
     /// The foam field this frame (#107's polish), round `camera` (the sea's frame) at the sea's
     /// `time`: declares `splashes/foam`, the last frames' foam faded and the cells that came
-    /// into the window cleared. Call it once a frame before the water's draw, which reads it,
-    /// and before [`WaterSplashes::update`], which adds the drops that land.
+    /// into the window cleared. Call it once a frame before the wakes, which ring from its
+    /// impulses, and the water's draw, which reads it, and before [`WaterSplashes::update`],
+    /// which adds the drops that land.
     pub fn foam<'f>(&'f self, graph: &mut FrameGraph<'f>, camera: Vec3, time: f32) -> SplashFoam {
         let n = FOAM_CELLS as i32;
         let origin = [camera.x, camera.z].map(|c| (c / FOAM_CELL).floor() as i32 - n / 2);
@@ -453,6 +460,7 @@ impl WaterSplashes {
         let foam = SplashFoam {
             buffer,
             address,
+            impulses: address + u64::from(FOAM_CELLS * FOAM_CELLS) * 4,
             origin,
             cell: FOAM_CELL,
             cells: FOAM_CELLS,
@@ -741,7 +749,7 @@ fn sprays_of(source: &SplashSource, camera: Vec3, previous: f32, now: f32, out: 
                 };
                 if count > 0 {
                     let mut b = block(
-                        RING,
+                        RING | STILL,
                         position,
                         position.y,
                         seed,
@@ -770,7 +778,7 @@ fn sprays_of(source: &SplashSource, camera: Vec3, previous: f32, now: f32, out: 
                 let count = (30.0 + 120.0 * strength) as u32;
                 let rise = speed * strength.sqrt();
                 let mut b = block(
-                    CONE,
+                    CONE | STILL,
                     position,
                     position.y,
                     reseed(seed, 1),
@@ -876,7 +884,16 @@ fn sprays_of(source: &SplashSource, camera: Vec3, previous: f32, now: f32, out: 
             // A fringe off the bow wave from 0.7, spilling; fans either side from 1.5.
             let fringe = 50.0 * length * (froude - 0.7);
             if let Some((index, count, first)) = stream(fringe, seed, previous, now) {
-                let mut b = block(CONE, bow, bow.y, seed, index, count, first, 1.0 / fringe);
+                let mut b = block(
+                    CONE | STILL,
+                    bow,
+                    bow.y,
+                    seed,
+                    index,
+                    count,
+                    first,
+                    1.0 / fringe,
+                );
                 b.spread = (0.5 * beam * across).extend(0.0).to_array();
                 b.axis = (ahead + Vec3::Y)
                     .normalize()
@@ -903,7 +920,7 @@ fn sprays_of(source: &SplashSource, camera: Vec3, previous: f32, now: f32, out: 
                     .normalize();
                     let axis = (out_of + 0.6 * Vec3::Y).normalize();
                     let mut b = block(
-                        CONE,
+                        CONE | STILL,
                         bow + side * 0.5 * beam * across,
                         bow.y,
                         seed,
@@ -934,7 +951,16 @@ fn sprays_of(source: &SplashSource, camera: Vec3, previous: f32, now: f32, out: 
         } => {
             let Some(fade) = near(position) else { return };
             if let Some((index, count, first)) = stream(rate, seed, previous, now) {
-                let mut b = block(CONE, position, level, seed, index, count, first, 1.0 / rate);
+                let mut b = block(
+                    CONE | STILL,
+                    position,
+                    level,
+                    seed,
+                    index,
+                    count,
+                    first,
+                    1.0 / rate,
+                );
                 b.spread = spread.extend(0.0).to_array();
                 b.axis = (-Vec3::Y).extend(0.3).to_array();
                 b.speed = [0.0, 0.2, 0.003, 0.006];
@@ -1005,12 +1031,12 @@ mod tests {
         assert_eq!(crown.len(), 1);
         let expected = 100.0 * (7.3 - CROWN_THRESHOLD) * 2.0 * PI * 0.41;
         assert!((crown[0].block.count as f32 - expected).abs() <= 1.0);
-        assert_eq!(crown[0].block.kind, RING);
+        assert_eq!(crown[0].block.kind, RING | STILL);
         // The jet 2 √(R / g) later, once.
         let closes = 5.0 + 2.0 * (0.41_f32 / GRAVITY).sqrt();
         let jet = sprays(closes - 0.01, closes + 0.01);
         assert_eq!(jet.len(), 1);
-        assert_eq!(jet[0].block.kind, CONE);
+        assert_eq!(jet[0].block.kind, CONE | STILL);
         assert!(sprays(closes + 0.01, closes + 0.5).is_empty());
         // Too far away: nothing.
         let mut far = Vec::new();

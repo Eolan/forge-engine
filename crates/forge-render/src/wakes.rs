@@ -8,6 +8,8 @@
 //! - `wakes/clear`: the field of heights around the camera, and this frame's count, to zero;
 //! - `wakes/advance`: last frame's particles moved on, split or dropped, into the other buffer;
 //! - `wakes/emit`: the new ones;
+//! - `wakes/rings`: small rings where the splashes' drops landed on still water
+//!   ([`crate::SplashFoam`]'s impulses);
 //! - (each particle adds its bump to the field as it is written);
 //! - `wakes/slopes`: the field's slopes, which the water's shading adds ([`WakeFrame`]).
 //!
@@ -25,6 +27,8 @@ use forge_gpu::{
 };
 use glam::DVec3;
 
+use crate::splashes::SplashFoam;
+
 /// Particles a buffer holds; past that, new ones are dropped.
 const CAPACITY: u32 = 1 << 17;
 /// Bytes of a particle (`WakeParticle` in `wakes.slang`).
@@ -38,6 +42,8 @@ pub const MAX_WAKES: usize = 32;
 const AROUND: u32 = 16;
 /// Seconds between emissions: 30 a second.
 const EMIT_STEP: f32 = 1.0 / 30.0;
+/// The most cells of the splashes' impulses that ring in a frame; the others wait.
+const RING_MOST: u32 = 256;
 
 /// Something moving through still water or the sea this frame (#107): it makes waves.
 #[derive(Clone, Copy, Debug)]
@@ -79,10 +85,14 @@ struct WakePush {
     around: u32,
     step: f32,
     slopes: u32,
-    pad: u32,
+    ring_cells: u32,
+    impulses: u64,
+    ring_origin: [i32; 2],
+    ring_cell: f32,
+    ring_most: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<WakePush>() == 88);
+const _: () = assert!(std::mem::size_of::<WakePush>() == 112);
 
 /// This frame's wakes as the water's shading reads them.
 #[derive(Clone, Copy, Debug)]
@@ -97,6 +107,7 @@ pub struct WakeFrame {
 pub struct WaterWakes {
     advance: Pipeline,
     emit: Pipeline,
+    rings: Pipeline,
     slopes_pass: Pipeline,
     particles: [GraphBuffer; 2],
     counts: GraphBuffer,
@@ -167,6 +178,7 @@ impl WaterWakes {
         Ok(Self {
             advance: compute("advance_main", "wakes advance")?,
             emit: compute("emit_main", "wakes emit")?,
+            rings: compute("rings_main", "wakes rings")?,
             slopes_pass: compute("slopes_main", "wakes slopes")?,
             particles,
             counts,
@@ -184,13 +196,16 @@ impl WaterWakes {
     }
 
     /// Declares this frame's passes on the async compute queue: the particles at the sea's
-    /// `time`, the things in `wakes` (at most [`MAX_WAKES`]) adding new ones, and the field
-    /// around `camera` (the sea's frame). Returns the slopes the water's shading reads.
+    /// `time`, the things in `wakes` (at most [`MAX_WAKES`]) adding new ones, the splashes'
+    /// drops that landed on still water ringing from `rings` (this frame's
+    /// [`crate::WaterSplashes::foam`]), and the field around `camera` (the sea's frame).
+    /// Returns the slopes the water's shading reads.
     pub fn update<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
         slot: FrameSlot,
         wakes: &[WaterWake],
+        rings: Option<SplashFoam>,
         camera: DVec3,
         time: f32,
     ) -> WakeFrame {
@@ -247,7 +262,11 @@ impl WaterWakes {
             around: AROUND,
             step,
             slopes: self.slopes.storage(0).0,
-            pad: 0,
+            ring_cells: rings.map_or(0, |r| r.cells),
+            impulses: rings.map_or(0, |r| r.impulses),
+            ring_origin: rings.map_or([0; 2], |r| r.origin),
+            ring_cell: rings.map_or(0.0, |r| r.cell),
+            ring_most: RING_MOST,
         };
         let particles = [graph.import_buffer(from), graph.import_buffer(to)];
         let counts = graph.import_buffer(&self.counts);
@@ -261,6 +280,7 @@ impl WaterWakes {
             .buffer(heights, BufferAccess::TransferDst)
             .run(move |_, commands| {
                 commands.fill_buffer(counts_buffer, u64::from(1 - from_index) * 4, 4, 0);
+                commands.fill_buffer(counts_buffer, 8, 4, 0);
                 commands.fill_buffer(heights_buffer, 0, heights_buffer.size(), 0);
                 Ok(())
             });
@@ -290,6 +310,22 @@ impl WaterWakes {
                     commands.bind_pipeline(emit);
                     commands.push_constants(emit, &push);
                     commands.dispatch((emitter_count * AROUND).div_ceil(64), 1, 1);
+                    Ok(())
+                });
+        }
+        if let Some(rings) = rings {
+            let pipeline = &self.rings;
+            graph
+                .pass("wakes/rings")
+                .queue(QueueKind::Compute)
+                .buffer(rings.buffer, BufferAccess::ShaderReadWrite(compute))
+                .buffer(particles[1], BufferAccess::ShaderReadWrite(compute))
+                .buffer(counts, BufferAccess::ShaderReadWrite(compute))
+                .buffer(heights, BufferAccess::ShaderReadWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &push);
+                    commands.dispatch(rings.cells.div_ceil(8), rings.cells.div_ceil(8), 1);
                     Ok(())
                 });
         }

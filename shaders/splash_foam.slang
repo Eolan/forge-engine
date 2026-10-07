@@ -5,11 +5,15 @@
 // modulo the field's size, so it scrolls with the camera without a copy; a cell that has just
 // come into the window is cleared. The water's shading whitens by it (`splash_foam_at` in
 // water.slang).
+//
+// The field's second half holds, in the same cells, the impulse of the drops that landed on
+// still water. The wakes turn it into rings and take it (`rings_main` in wakes.slang); here a
+// cell that has just come into the window is cleared.
 import bindless;
 
 struct FoamPush
 {
-    uint* foam;     // cells × cells of units
+    uint* foam;     // cells × cells of units, then cells × cells of impulses
     int2 origin;    // this frame's window: its first world cell
     int2 previous;  // last frame's
     float keep;     // the share of its foam a cell keeps this frame
@@ -40,4 +44,6 @@ void fade_main(uint3 id : SV_DispatchThreadID)
     uint i = id.y * uint(n) + id.x;
     bool held = push.fresh == 0u && all(cell >= push.previous) && all(cell < push.previous + n);
     push.foam[i] = held ? uint(float(push.foam[i]) * push.keep) : 0u;
+    if (!held)
+        push.foam[uint(n * n) + i] = 0u;
 }

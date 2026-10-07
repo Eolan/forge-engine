@@ -23,10 +23,12 @@ import sh;
 static const float PI = 3.14159265358979;
 static const float GRAVITY = 9.81;
 // The kinds of block: drops on a ring round the origin (an impact's crown), or in a cone round
-// an axis from a line through the origin (a fall's foot, a bow, a jet, drips). MIST is a flag.
+// an axis from a line through the origin (a fall's foot, a bow, a jet, drips). MIST and STILL
+// are flags; STILL: its drops land on still water, where they make rings.
 static const uint SPLASH_RING = 0u;
 static const uint SPLASH_CONE = 1u;
 static const uint SPLASH_MIST = 2u;
+static const uint SPLASH_STILL = 4u;
 // Terminal speeds, m/s: the drag k = g / v_t² pulls a particle towards the air's velocity.
 static const float DROP_TERMINAL = 8.0;
 static const float MIST_TERMINAL = 0.6;
@@ -44,6 +46,9 @@ static const float REACTIVE = 0.9;
 static const uint FOAM_PER_DROP = 128;
 // How far over its water a drop that ends still lands there, metres.
 static const float FOAM_REACH = 0.3;
+// The impulse a drop landing on still water leaves in its cell, for the rings the wakes draw
+// from it (`rings_main` in wakes.slang): its radius cubed times its speed, in these units.
+static const float IMPULSE_UNIT = 1e-8;
 // A drop's scattering: Henyey–Greenstein forwards, plus an even part for the light it
 // scatters more than once inside a splash.
 static const float FORWARD = 0.75;
@@ -58,7 +63,7 @@ struct SplashParticle
     float radius;    // drawn radius, metres
     float level;     // the water it falls back into, metres
     uint seed;
-    uint flags;      // bit 1: mist; bits 8–15: its alpha (unorm8)
+    uint flags;      // bit 1: mist; bit 2: still water; bits 8–15: its alpha (unorm8)
 };
 
 // Must match GpuSplashBlock in splashes.rs.
@@ -74,7 +79,7 @@ struct SplashBlock
     uint first;      // its first slot
     uint count;
     uint seed;       // its emitter's
-    uint kind;       // SPLASH_RING or SPLASH_CONE, | SPLASH_MIST
+    uint kind;       // SPLASH_RING or SPLASH_CONE, | SPLASH_MIST, | SPLASH_STILL
     uint start;      // its first particle among the frame's new ones
     uint index;      // its first particle's index in its emitter's stream
     float alpha;
@@ -105,7 +110,8 @@ struct SplashFrame
     Sky* sky;
     SplashParticle* ring;
     SplashBlock* blocks;
-    uint* foam;          // the foam field (#107's polish, splash_foam.slang), or null
+    uint* foam;          // the foam field (#107's polish, splash_foam.slang), then its
+                         // impulses, or null
     int2 foam_origin;    // its window's first world cell
     float foam_cell;     // metres a cell
     uint foam_cells;     // cells a side
@@ -197,12 +203,13 @@ void emit_main(uint3 id : SV_DispatchThreadID)
     q.radius = lerp(b.speed.z, b.speed.w, w.y * w.y);
     q.level = b.origin.w;
     q.seed = pcg3d(uint3(b.seed, k, 2u)).x;
-    q.flags = (b.kind & SPLASH_MIST) | (uint(saturate(b.alpha) * 255.0 + 0.5) << 8u);
+    q.flags = (b.kind & (SPLASH_MIST | SPLASH_STILL)) | (uint(saturate(b.alpha) * 255.0 + 0.5) << 8u);
     f[0].ring[(b.first + j) % f[0].capacity] = q;
 }
 
 // A drop's foam where it lands (#107's polish): a whole number of units into its cell of the
-// foam field, the field's slot the world cell modulo its size.
+// foam field, the field's slot the world cell modulo its size. On still water, its impulse
+// too, into the same cell of the field's second half.
 void deposit_foam(SplashFrame* f, SplashParticle q)
 {
     if (f[0].foam == nullptr)
@@ -213,8 +220,15 @@ void deposit_foam(SplashFrame* f, SplashParticle q)
     if (any(within < 0) || any(within >= n))
         return;
     int2 slot = int2(((cell.x % n) + n) % n, ((cell.y % n) + n) % n);
+    uint i = uint(slot.y * n + slot.x);
     uint ignored;
-    InterlockedAdd(f[0].foam[slot.y * n + slot.x], FOAM_PER_DROP, ignored);
+    InterlockedAdd(f[0].foam[i], FOAM_PER_DROP, ignored);
+    if ((q.flags & SPLASH_STILL) != 0u)
+    {
+        uint impulse = uint(round(q.radius * q.radius * q.radius * length(q.velocity) / IMPULSE_UNIT));
+        if (impulse > 0u)
+            InterlockedAdd(f[0].foam[uint(n * n) + i], impulse, ignored);
+    }
 }
 
 [shader("compute")]
