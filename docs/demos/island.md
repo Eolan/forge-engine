@@ -2886,8 +2886,8 @@ runs deeper for a few widths; its level stays.
   a few points.
 - **Where it shows:** the bed and the water drawn over it both take the deeper depth, so the hole
   shows as darker water past the junction. `--no-scour` leaves the bed as it was.
-- **Left:** the bar the slack water lays on the inner bank past the junction's corner. It does
-  not fit the channel's one-parabola cross-section.
+- **The bar** the slack water lays on the inner bank past the junction's corner does not fit the
+  channel's one-parabola cross-section; it came later as a bar over it (below).
 
 A test runs the fork of the confluences' test with and without it: the levels are the same, no
 point is shallower, and the river is over 20 % deeper somewhere past the junction.
@@ -2896,6 +2896,45 @@ The logged confluence (`--view=4262,8.5,-2834,-134.8,-20`) without (left) and wi
 scour: shallow and near the coast, it shows as a slightly darker patch.
 
 ![The logged confluence without (left) and with (right) the scour hole](images/island-confluence-scour.png)
+
+**The bar past the corner** (2026-10-07). Past a junction's downstream corner the water parts
+from the bank on the tributary's side, and the river drops sand in that slack water. Field and
+flume studies call it the separation zone (Best & Reid 1984; Best 1987).
+- **What it is:** a bar of the mouths' teardrop shape (#127's `Bar`), laid against that bank.
+  The one-parabola channel could not hold it; a bar raises the ground over it instead
+  (`RibbonParams::confluence_bars`, `ConfluenceBarParams`, `Ribbon::confluence_bars`).
+- **Where:** in rivers of 8 m and more, past tributaries of three tenths of their width and more.
+  None where the tributary meets the river along it, or where the bar would reach a lake, the sea,
+  the river's end or a step.
+- **Size:** about two of the river's widths long and three tenths of a width broad, three
+  quarters of that past the narrowest tributaries, each its own within 15 %. Its widest stands a
+  width past the junction, its crest 0.2 m over the water, on the mouths' slopes and wander.
+- **The river:** it does not widen for the bar. The channel narrows there, as the flow does, and
+  the scour hole deepens beside it.
+- **The sand:** the beach's, as on the mouths' bars, painted only where the bar is the ground.
+  The deltas' sand, made to lie under water, read as a dark stain in the sun. Painted over its
+  whole outline, it cut straight-edged notches into the grass where the bank stands higher.
+- **The water:** far away the river's water is cut out over the two bars nearest each point,
+  the mouths' or the confluences' (`bar_spans`).
+- `--no-confluence-bars` is the A/B. The log lists the three largest with views ("the bars past
+  the confluences").
+
+On seed 7, 11 confluences get a bar, the longest 81, 38 and 34 m. A test runs the fork of the
+tests above, falling 1 % rather than 10 %: one bar is laid, the river's points are unchanged,
+and the ground at the bar's middle stands over the water with it and under it without. The bar
+lies on the side the tributary came from.
+
+`reports/2026-10-07-119/confluence-bars.png`, frame 60, without the bars (left) and with them:
+
+| View | Pixels changed | ꟻLIP mean |
+|---|---|---|
+| the largest from 25 m back up the river, 10 m over the water (`4275,10.1,-2860,-78.9,-20`) | 45 924 | 0.010 |
+| the second from 25 m back (`26,11.9,4420,-153.6,-20`) | 37 058 | 0.009 |
+| the largest from straight above (`4323,162.8,-2869,0,-89`) | 109 643 | 0.021 |
+| the second from straight above (`42,77.5,4453,0,-89`) | 27 349 | 0.011 |
+| the logged confluence (`4262,8.5,-2834,-134.8,-20`) | 16 568 | 0.006 |
+
+![The largest two confluences' bars and the largest from above, without (left) and with (right)](../../reports/2026-10-07-119/confluence-bars.png)
 
 ## The night (D-046, #164, 2026-10-04)
 

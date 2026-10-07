@@ -72,6 +72,9 @@ const DELTA_SEED: u64 = 0x4445_4c54_4146_414e;
 /// The seed of the mouths' bars (#127).
 const BAR_SEED: u64 = 0x4241_5253_4d4f_5554;
 
+/// The seed of the confluences' bars (#119's polish).
+const CONFLUENCE_BAR_SEED: u64 = 0x434f_4e46_4241_5253;
+
 /// Steps and pools on a river's steep reaches (#122, D-041's type A): where its water falls
 /// faster than `from`, it stands in pools and drops from each into the next over a step, as a
 /// mountain stream does. Montgomery & Buffington (1997) find step-pools from 3 % and cascades
@@ -298,6 +301,46 @@ impl Default for BarParams {
     }
 }
 
+/// The bar a confluence lays (#119's polish). Past the junction's downstream corner the water
+/// parts from the bank on the tributary's side, and in that slack water (the separation zone of
+/// Best & Reid 1984 and Best 1987) the river drops sand along the bank. It is a [`Bar`] of the
+/// mouths' shape against that bank, its head just past the corner. The river does not widen for
+/// it: its channel narrows there, as the flow does, and the scour hole
+/// ([`RibbonParams::confluence_scour`]) deepens beside it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ConfluenceBarParams {
+    /// The narrowest river that lays one, metres, and its narrowest tributary, a share of its
+    /// width.
+    pub least: (f64, f64),
+    /// Its half length and half breadth, in the river's widths, for a tributary as wide as it;
+    /// from three quarters of that for the narrowest.
+    pub half: (f64, f64),
+    /// How far past the junction its widest point stands, in the river's widths.
+    pub past: f64,
+    /// Metres its crest stands over the water.
+    pub top: f64,
+    /// Its slopes, m/m: out of the water to its crest, and under the water down to the bed.
+    pub slopes: (f64, f64),
+    /// How far its outline wanders, a share of its half breadth.
+    pub wander: f64,
+}
+
+impl Default for ConfluenceBarParams {
+    /// Rivers of 8 m and more, tributaries of three tenths of their width and more; two widths
+    /// long and three tenths of a width broad, its widest a width past the junction, its crest
+    /// 0.2 m over the water on the mouths' slopes and wander.
+    fn default() -> Self {
+        Self {
+            least: (8.0, 0.3),
+            half: (1.0, 0.15),
+            past: 1.0,
+            top: 0.2,
+            slopes: (1.0 / 12.0, 1.0 / 3.0),
+            wander: 0.25,
+        }
+    }
+}
+
 /// The share of a bar's half length its blunt head takes upstream of its widest ([`Bar`]); its
 /// tail takes the rest, `2 −` this.
 const BAR_HEAD: f64 = 0.6;
@@ -396,7 +439,8 @@ impl Bar {
 /// Metres between the samples across a ribbon point that [`bar_spans`] looks for the bars at.
 const BAR_SPAN_STEP: f64 = 0.25;
 
-/// Where the first two of a ribbon's [`Bar`]s stand over its water across each of its points:
+/// Where two of a ribbon's [`Bar`]s (the mouth's and the confluences', the two whose outlines come
+/// nearest the point) stand over its water across each of its points:
 /// from and to, metres from the middle along `(−direction.y, direction.x)` (positive to the
 /// left seen downstream), the span inside each bar's outline over the ribbon's width. Where a
 /// bar does not cross a point, both ends lie where its widest point projects onto the line
@@ -411,7 +455,13 @@ pub fn bar_spans(ribbon: &Ribbon) -> Vec<[f32; 4]> {
             let side = [-f64::from(p.direction[1]), f64::from(p.direction[0])];
             let reach = f64::from(p.reach);
             let mut out = [0.0f32; 4];
-            for (slot, bar) in ribbon.bars.iter().take(2).enumerate() {
+            // The two whose outlines come nearest the point: a long bar's tail may be nearer than
+            // another bar's middle.
+            let mut near: Vec<&Bar> = ribbon.all_bars().collect();
+            if near.len() > 2 {
+                near.sort_by(|a, b| a.outside(at).total_cmp(&b.outside(at)));
+            }
+            for (slot, bar) in near.into_iter().take(2).enumerate() {
                 let (dx, dy) = (bar.centre[0] - at[0], bar.centre[1] - at[1]);
                 let middle = (dx * side[0] + dy * side[1]).clamp(-reach, reach);
                 let mut span = [middle; 2];
@@ -503,6 +553,9 @@ pub struct RibbonParams {
     /// as the tributary is narrower), easing back over the next two widths; `None` leaves the
     /// bed as it was.
     pub confluence_scour: Option<f64>,
+    /// The bar a confluence lays against the bank past its downstream corner (#119's polish);
+    /// `None` lays none.
+    pub confluence_bars: Option<ConfluenceBarParams>,
 }
 
 impl Default for RibbonParams {
@@ -538,6 +591,7 @@ impl Default for RibbonParams {
             delta: None,
             bars: None,
             confluence_scour: None,
+            confluence_bars: None,
         }
     }
 }
@@ -547,7 +601,8 @@ impl RibbonParams {
     /// wide and one and a half times as deep as nature's (the owner's pick of `k`, 2026-10-01)
     /// from 3 km² of catchment, brooks of nature's size at 0.5 km² (#123), in steps and pools
     /// on their steep reaches, a delta where they run into a lake (#120), bars in their large
-    /// mouths at the sea (#127), and running 60 % deeper below where a tributary as wide joins.
+    /// mouths at the sea (#127), and running 60 % deeper below where a tributary as wide joins,
+    /// a bar of sand along the bank past the junction.
     pub fn island() -> Self {
         Self {
             regional: Some((3.0, 1.5)),
@@ -556,6 +611,7 @@ impl RibbonParams {
             delta: Some(DeltaParams::default()),
             bars: Some(BarParams::default()),
             confluence_scour: Some(0.6),
+            confluence_bars: Some(ConfluenceBarParams::default()),
             ..Self::default()
         }
     }
@@ -655,6 +711,8 @@ pub struct Ribbon {
     pub outlets: Vec<Outlet>,
     /// The bars in its mouth at the sea (#127).
     pub bars: Vec<Bar>,
+    /// The bars its tributaries' confluences lay against its banks (#119's polish).
+    pub confluence_bars: Vec<Bar>,
 }
 
 /// Where a river leaves a lake (#120): the last point of a run in it, where the lake's water still
@@ -722,6 +780,11 @@ impl Ribbon {
         self.lake_runs
             .iter()
             .any(|r| (r[0] as usize..=r[1] as usize).contains(&k))
+    }
+
+    /// Its bars: the mouth's, then the confluences'.
+    pub fn all_bars(&self) -> impl Iterator<Item = &Bar> {
+        self.bars.iter().chain(&self.confluence_bars)
     }
 }
 
@@ -802,6 +865,7 @@ pub fn ribbons(
                 deltas: Vec::new(),
                 outlets: Vec::new(),
                 bars: Vec::new(),
+                confluence_bars: Vec::new(),
             })
         })
         .collect();
@@ -978,6 +1042,26 @@ pub fn ribbons(
                     smoothstep(0.0, width, along) * (1.0 - smoothstep(width, 3.0 * width, along));
                 main[k].depth = (f64::from(main[k].depth) * (1.0 + share * bump)) as f32;
             }
+        }
+    }
+    // The bar each confluence lays against the bank past its downstream corner (#119's polish).
+    if let Some(bars) = &params.confluence_bars {
+        let mut laid: Vec<(usize, Bar)> = Vec::new();
+        for ribbon in &ribbons {
+            let Mouth::Junction { river: into, .. } = rivers.rivers[ribbon.river as usize].mouth
+            else {
+                continue;
+            };
+            let Some(m) = done[into as usize] else {
+                continue;
+            };
+            let seed = hash_cell3(CONFLUENCE_BAR_SEED, ribbon.river as i32, 0, 0);
+            if let Some(bar) = confluence_bar(ribbon, &ribbons[m], bars, seed) {
+                laid.push((m, bar));
+            }
+        }
+        for (m, bar) in laid {
+            ribbons[m].confluence_bars.push(bar);
         }
     }
     // The confluences' rounded corners, on the final widths, and the water drawn over them: each
@@ -1692,6 +1776,94 @@ fn mouth_bars(
             }
         })
         .collect()
+}
+
+/// With [`ConfluenceBarParams`], the bar where `tributary` joins `main`: against `main`'s bank on
+/// the tributary's side, its widest [`ConfluenceBarParams::past`] widths past the junction. None
+/// where either river is too narrow, the tributary meets the river along it, or the bar would
+/// reach a lake, the sea, the river's end or a step.
+fn confluence_bar(
+    tributary: &Ribbon,
+    main: &Ribbon,
+    bars: &ConfluenceBarParams,
+    seed: u64,
+) -> Option<Bar> {
+    let last = tributary.points.last()?;
+    let points = &main.points;
+    let n = nearest(points, position(last));
+    let width = 2.0 * f64::from(points[n].half_width);
+    let share = 2.0 * f64::from(last.half_width) / width.max(1e-3);
+    if width < bars.least.0 || share < bars.least.1 {
+        return None;
+    }
+    // The bank the tributary comes from: it runs in across the river's way, away from it.
+    let d = points[n].direction.map(f64::from);
+    let t = last.direction.map(f64::from);
+    let across = t[0] * -d[1] + t[1] * d[0];
+    if across.abs() < 0.2 {
+        return None;
+    }
+    if main.in_lake(n) {
+        return None;
+    }
+    let bank = -across.signum();
+    // Its size: from three quarters for the narrowest tributary to the whole for one as wide.
+    let size = 0.75 + 0.25 * ((share - bars.least.1) / (1.0 - bars.least.1)).clamp(0.0, 1.0);
+    let hash = |j: i32| f64::from(unit_f32(hash_cell3(seed, j, 0, 0)));
+    let half_length = bars.half.0 * width * size * (0.85 + 0.3 * hash(0));
+    let half_breadth = bars.half.1 * width * size * (0.85 + 0.3 * hash(1));
+    let middle = bars.past * width;
+    let (head, tail) = (
+        middle - BAR_HEAD * half_length,
+        middle + (2.0 - BAR_HEAD) * half_length,
+    );
+    // The river from the junction on, as far as the bar's tail and its flank past it.
+    let mut arc = vec![0.0];
+    let mut k = n;
+    while *arc.last()? < tail + half_breadth {
+        if k + 1 >= points.len() || main.in_lake(k + 1) || points[k + 1].level <= 0.05 {
+            return None;
+        }
+        let (a, b) = (position(&points[k]), position(&points[k + 1]));
+        arc.push(arc.last()? + (b[0] - a[0]).hypot(b[1] - a[1]));
+        k += 1;
+    }
+    // The course's point, the water's level and its half width at `s` metres past the junction.
+    let at = |s: f64| -> ([f64; 2], f64, f64) {
+        let j = arc.partition_point(|&a| a < s).clamp(1, arc.len() - 1);
+        let f = ((s - arc[j - 1]) / (arc[j] - arc[j - 1]).max(1e-9)).clamp(0.0, 1.0);
+        let (p, q) = (&points[n + j - 1], &points[n + j]);
+        let (a, b) = (position(p), position(q));
+        let lerp = |x: f32, y: f32| f64::from(x) + f64::from(y - x) * f;
+        (
+            [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f],
+            lerp(p.level, q.level),
+            lerp(p.half_width, q.half_width),
+        )
+    };
+    let ((up, level_up, _), (down_tip, level_down, _)) = (at(head), at(tail));
+    // No step under it: its crest follows the water's level from head to tail.
+    if level_up - level_down > bars.top {
+        return None;
+    }
+    let chord = [down_tip[0] - up[0], down_tip[1] - up[1]];
+    let chord_length = chord[0].hypot(chord[1]).max(1e-9);
+    let down = [chord[0] / chord_length, chord[1] / chord_length];
+    let side = [-down[1], down[0]];
+    // Against the bank: the bar takes the bank's quarter or so of the river's width, its outer
+    // flank in the bank.
+    let (on, _, half_there) = at(middle);
+    let off = bank * (half_there - 0.7 * half_breadth);
+    Some(Bar {
+        centre: [on[0] + side[0] * off, on[1] + side[1] * off],
+        down,
+        half: [half_length, half_breadth],
+        level: [level_up, level_down],
+        top: bars.top,
+        slopes: bars.slopes,
+        wander: bars.wander * half_breadth,
+        seed: hash_cell3(seed, 2, 0, 0),
+    })
 }
 
 fn deltas(

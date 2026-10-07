@@ -441,12 +441,9 @@ impl Channels {
         };
         let (sill_start, sill_list) =
             bucket(side, &sills.iter().map(sill_cells).collect::<Vec<_>>());
-        // The mouths' bars: the cells within their reach of their middles, their flanks falling
-        // as deep as a channel's bed can be.
-        let bars: Vec<Bar> = ribbons
-            .iter()
-            .flat_map(|r| r.bars.iter().copied())
-            .collect();
+        // The mouths' and the confluences' bars: the cells within their reach of their middles,
+        // their flanks falling as deep as a channel's bed can be.
+        let bars: Vec<Bar> = ribbons.iter().flat_map(|r| r.all_bars().copied()).collect();
         let bar_cells = |b: &Bar| {
             let grow = b.reach(BAR_DEEPEST);
             let last = i64::from(side) - 1;
@@ -1294,17 +1291,53 @@ pub fn paint_fans(
 /// their sand: every texel whose centre lies inside a bar's outline, or within its flank's first
 /// metre under the water. Returns the texels painted.
 pub fn paint_bars(layers: &mut Field2<u8>, ribbons: &[Ribbon], layer: u8) -> usize {
+    paint_bar_sand(
+        layers,
+        ribbons.iter().flat_map(|r| r.bars.iter()),
+        None,
+        layer,
+    )
+}
+
+/// Paints the confluences' bars ([`crate::ConfluenceBarParams`], #119's polish) into `layers` as
+/// `layer`, as [`paint_bars`] does the mouths', but only where a bar is the `ground` (the carved
+/// height): against the bank its outline runs into ground standing higher, which stays as it
+/// was. Returns the texels painted.
+pub fn paint_confluence_bars(
+    layers: &mut Field2<u8>,
+    ribbons: &[Ribbon],
+    ground: &dyn Fn(f64, f64) -> f64,
+    layer: u8,
+) -> usize {
+    paint_bar_sand(
+        layers,
+        ribbons.iter().flat_map(|r| r.confluence_bars.iter()),
+        Some(ground),
+        layer,
+    )
+}
+
+fn paint_bar_sand<'a>(
+    layers: &mut Field2<u8>,
+    bars: impl Iterator<Item = &'a Bar>,
+    ground: Option<&dyn Fn(f64, f64) -> f64>,
+    layer: u8,
+) -> usize {
     let cell = layers.spacing;
     let last = i64::from(layers.size) - 1;
     let mut painted = 0;
-    for b in ribbons.iter().flat_map(|r| r.bars.iter()) {
+    for b in bars {
         let grow = b.reach(0.0) + 1.0;
         let lo = |v: f64| (((v - grow) / cell).floor() as i64).clamp(0, last);
         let hi = |v: f64| (((v + grow) / cell).ceil() as i64).clamp(0, last);
         for ty in lo(b.centre[1])..=hi(b.centre[1]) {
             for tx in lo(b.centre[0])..=hi(b.centre[0]) {
                 let q = [(tx as f64 + 0.5) * cell, (ty as f64 + 0.5) * cell];
-                if b.outside(q) < 1.0 / b.slopes.1.max(1e-3) {
+                // Within its outline or its flank's first metre under the water, and where it
+                // is the ground.
+                if b.outside(q) < 1.0 / b.slopes.1.max(1e-3)
+                    && ground.is_none_or(|g| g(q[0], q[1]) <= b.surface(q) + 0.05)
+                {
                     let texel = &mut layers.data[(ty as u32 * layers.size + tx as u32) as usize];
                     if *texel != layer {
                         *texel = layer;
@@ -1367,7 +1400,7 @@ mod tests {
     use super::*;
     use crate::flow::drain;
     use crate::hydrology::trace_rivers;
-    use crate::river::{RibbonParams, ribbons};
+    use crate::river::{RibbonParams, RibbonPoint, ribbons};
     use forge_task::PoolConfig;
 
     #[test]
@@ -1826,6 +1859,82 @@ mod tests {
             }
         }
         assert!(deepest > 1.2, "{deepest}");
+    }
+
+    #[test]
+    fn a_confluence_lays_a_bar_along_the_bank_on_its_tributary_s_side() {
+        // The Y of the tests around, falling 1 % rather than 10 % (a bar stands on no step), its
+        // rivers any width (#119's polish): past the junction, against the bank the tributary
+        // came from, the ground stands over the water with the bar and under it without.
+        let fork = Field2::from_fn(41, 10.0, |x, y| {
+            let (fx, fy) = (x as f32, y as f32);
+            let spread = (fy - 20.0).max(0.0) * 0.5;
+            let branch = (fx - (20.0 - spread))
+                .abs()
+                .min((fx - (20.0 + spread)).abs());
+            2.0 * branch + 0.1 * fy + 1.0
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&fork, 0.0, &pool);
+        let rivers = trace_rivers(&fork, &flow, 30);
+        let with = |bars| RibbonParams {
+            steps: None,
+            confluence_bars: bars,
+            ..RibbonParams::island()
+        };
+        let bars = crate::river::ConfluenceBarParams {
+            least: (0.0, 0.0),
+            ..crate::river::ConfluenceBarParams::default()
+        };
+        let (plain, barred) = (
+            ribbons(&fork, &rivers, &[], &with(None)),
+            ribbons(&fork, &rivers, &[], &with(Some(bars))),
+        );
+        assert!(plain.iter().all(|r| r.confluence_bars.is_empty()));
+        let laid: Vec<&Bar> = barred.iter().flat_map(|r| &r.confluence_bars).collect();
+        assert_eq!(laid.len(), 1);
+        let bar = laid[0];
+        // The river carries on as it did: the same points, levels and widths.
+        for (a, b) in plain.iter().zip(&barred) {
+            assert_eq!(a.points, b.points);
+        }
+        let (without, with) = (
+            Channels::new(&fork, &plain, &[], &ChannelParams::default()),
+            Channels::new(&fork, &barred, &[], &ChannelParams::default()),
+        );
+        let level = bar.level_at(bar.centre);
+        let at = bar.centre;
+        assert!(with.height_at(&fork, at[0], at[1]) > level, "{bar:?}");
+        assert!(without.height_at(&fork, at[0], at[1]) < level, "{bar:?}");
+        // Against the bank the tributary came from: its middle is off the river's middle on the
+        // side the tributary's last points lie, seen from the junction.
+        let main = barred
+            .iter()
+            .find(|r| !r.confluence_bars.is_empty())
+            .expect("the river");
+        let tributary = barred
+            .iter()
+            .find(|r| !std::ptr::eq(*r, main) && r.points.len() > 4)
+            .expect("the tributary");
+        let k = tributary.points.len() - 4;
+        let p = main
+            .points
+            .iter()
+            .min_by(|a, b| {
+                let d = |q: &RibbonPoint| {
+                    (f64::from(q.position[0]) - at[0]).hypot(f64::from(q.position[1]) - at[1])
+                };
+                d(a).total_cmp(&d(b))
+            })
+            .expect("a point");
+        let side = [-f64::from(p.direction[1]), f64::from(p.direction[0])];
+        let off = |q: [f64; 2]| {
+            (q[0] - f64::from(p.position[0])) * side[0]
+                + (q[1] - f64::from(p.position[1])) * side[1]
+        };
+        let came = tributary.points[k].position.map(f64::from);
+        assert!(off(at) * off(came) > 0.0, "{} {}", off(at), off(came));
+        assert!(off(at).abs() > 0.3 * f64::from(p.half_width), "{}", off(at));
     }
 
     #[test]

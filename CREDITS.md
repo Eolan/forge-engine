@@ -310,7 +310,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   mouths as turbulent plane jets, whose width grows linearly and whose centre speed falls as the
   root of the distance (Stephen B. Pope, *Turbulent Flows*, Cambridge University Press, 2000,
   chapter 5); the water around a stone as the potential flow past a cylinder (G. K. Batchelor,
-  *An Introduction to Fluid Dynamics*, Cambridge University Press, 1967).
+  *An Introduction to Fluid Dynamics*, Cambridge University Press, 1967). The bar of sand past a
+  confluence's downstream corner (#119's polish) lies in its separation zone: James L. Best and
+  Ian Reid, "Separation Zone at Open-Channel Junctions", *Journal of Hydraulic Engineering*
+  110(11), 1984; James L. Best, "Flow dynamics at river channel confluences: implications for
+  sediment transport and bed morphology", in *Recent Developments in Fluvial Sedimentology*, SEPM
+  Special Publication 39, 1987, 27–35.
 - **Wakes** (`shaders/wakes.slang`, `forge_render::wakes`, issue #107). Cem Yuksel, Donald H.
   House and John Keyser, "Wave Particles", *ACM Transactions on Graphics* 26(3), SIGGRAPH 2007
   (DOI 10.1145/1276377.1276501): particles that carry a piece of a wave front out from what

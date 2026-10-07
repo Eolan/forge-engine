@@ -260,6 +260,9 @@ struct Args {
     /// (#119's polish).
     #[arg(long)]
     no_scour: bool,
+    /// Lay no bar of sand along the bank past each confluence (#119's polish).
+    #[arg(long)]
+    no_confluence_bars: bool,
     /// Leave every beach of the island pale sand: no shingle on the headlands and under steep
     /// land (#128).
     #[arg(long)]
@@ -4822,6 +4825,40 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
         views = %bar_views.join("  "),
         "the bars in the large mouths (--view)"
     );
+    // The confluences' bars (#119's polish): how many, and the three largest from 25 m back up
+    // the river from their head, 10 m over the water, and from straight over them.
+    let mut confluence_bars: Vec<forge_procgen::Bar> = ribbons
+        .iter()
+        .flat_map(|r| r.confluence_bars.iter().copied())
+        .collect();
+    confluence_bars.sort_by(|a, b| (b.half[0] * b.half[1]).total_cmp(&(a.half[0] * a.half[1])));
+    let confluence_views: Vec<String> = confluence_bars
+        .iter()
+        .take(3)
+        .map(|b| {
+            let back = 0.6 * b.half[0] + 25.0;
+            let at = [
+                b.centre[0] - back * b.down[0],
+                b.centre[1] - back * b.down[1],
+            ];
+            let yaw = (-b.down[0]).atan2(-b.down[1]).to_degrees();
+            format!(
+                "{:.0}m:{:.0},{:.1},{:.0},{yaw:.1},-20  {:.0},{:.1},{:.0},0,-89",
+                2.0 * b.half[0],
+                at[0] - half_m,
+                b.level[0] + 10.0,
+                at[1] - half_m,
+                b.centre[0] - half_m,
+                b.level[1] + 4.0 * b.half[0],
+                b.centre[1] - half_m,
+            )
+        })
+        .collect();
+    tracing::info!(
+        bars = confluence_bars.len(),
+        views = %confluence_views.join("  "),
+        "the bars past the confluences (--view)"
+    );
     let lakes: Vec<WaterLake> = lakes
         .iter()
         .map(|l| WaterLake {
@@ -6386,6 +6423,19 @@ fn build_island(
     } else {
         0
     };
+    // The bars the confluences lay along the bank past their corner (#119's polish): the sand of
+    // the mouths' bars (the deltas' sand, made to lie under water, reads as a dark stain in the
+    // sun).
+    let confluence_bar_texels = if args.water() {
+        forge_procgen::paint_confluence_bars(
+            &mut layers,
+            &ribbons,
+            &|x, y| channels.height_at(&height, x, y),
+            island_layer::SAND,
+        )
+    } else {
+        0
+    };
     // The steep ground's scrub (#118): plants on the wetter rock, the hollows and the valleys'
     // sides, in patches; the dry spurs and the cliffs stay bare.
     let scrubbed = forge_procgen::paint_scrub(
@@ -6432,6 +6482,7 @@ fn build_island(
         lake_texels,
         fan_texels,
         bar_texels,
+        confluence_bar_texels,
         dry_texels = dried,
         lush_texels = greened,
         ms = rivers_start.elapsed().as_millis(),
@@ -7117,6 +7168,7 @@ fn run(args: Args, title: &'static str) -> Result<()> {
             delta: island.delta.filter(|_| !args.no_deltas),
             bars: island.bars.filter(|_| !args.no_bars),
             confluence_scour: island.confluence_scour.filter(|_| !args.no_scour),
+            confluence_bars: island.confluence_bars.filter(|_| !args.no_confluence_bars),
             ..island
         })
         .expect("the rivers' parameters, set once");

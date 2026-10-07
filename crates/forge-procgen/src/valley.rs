@@ -729,6 +729,7 @@ mod tests {
             deltas: Vec::new(),
             outlets: Vec::new(),
             bars: Vec::new(),
+            confluence_bars: Vec::new(),
         };
         (height, ribbon)
     }

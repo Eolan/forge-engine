@@ -67,7 +67,7 @@ pub use amplify::{AmplifyParams, amplify};
 pub use beach::{BeachLayers, BeachRule, BeachStats, paint_beaches};
 pub use channel::{
     ChannelParams, Channels, FineGround, Stone, bank_stones, paint_banks, paint_bars, paint_beds,
-    paint_fans, stones,
+    paint_confluence_bars, paint_fans, stones,
 };
 pub use coast::{coast_distance, sea_floor, site_distance, smooth_shore};
 pub use erosion::{Erosion, ErosionParams, erode};
@@ -88,8 +88,9 @@ pub use layers::{
 };
 pub use ocean::{Ocean, OceanParams, OceanSurface, SeaCascade, SeaHeights, tma};
 pub use river::{
-    Bar, BarParams, Corner, Delta, DeltaParams, Outlet, Ribbon, RibbonParams, RibbonPoint, Step,
-    StepParams, bar_spans, drawn_height, lip_shift, rest_on, ribbons, sea_mouth, smooth_height,
+    Bar, BarParams, ConfluenceBarParams, Corner, Delta, DeltaParams, Outlet, Ribbon, RibbonParams,
+    RibbonPoint, Step, StepParams, bar_spans, drawn_height, lip_shift, rest_on, ribbons, sea_mouth,
+    smooth_height,
 };
 pub use shore::{BREAKER_INDEX, ShoreProfile, ShoreTrain, wave_number};
 pub use sites::{RockSiteRule, RockSiteStats, SITE_NAMES, SiteLayers, SiteWeights, rock_sites};
