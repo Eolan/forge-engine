@@ -111,8 +111,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   every digest, and over a 100 ms link losing 2 % a client predicts 96 snapshots in 99 to the
   bit. Things float on the sea we render ✅ (#138, `--lab sea`): the GPU's waves on the CPU each
   tick, buoyancy by submerged triangles, a boat modelled in Blender read through glTF and driven
-  by its outboard. Next, the island's rivers and lakes for what floats (its barrels, #107,
-  still drift at the water's speed, without physics). Walking ✅ (#139, `--lab walk`): a
+  by its outboard. The island's barrels afloat ✅ (#177, 2026-10-08): Jolt bodies on the
+  rivers' current, the lakes and the sea, stopped by the ground's height fields, 1.1 ms a tick
+  for 1 000. Walking ✅ (#139, `--lab walk`): a
   character up stairs, stopped by steep ramps, carried by a platform, shoving crates. A car ✅
   (#140, `--lab drive`): Jolt's wheeled vehicle, a Blender model, a ramp, a slalom and a wall of
   crates. An aeroplane ✅ (#141, `--lab fly`): lift and drag on each flying surface, a take-off
@@ -426,7 +427,8 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    predicting (D-010). `physics-lab --record`, `--replay` and `--net MS`: a server, this
    player's client and a bot's over in-process links that delay and lose packets.
 3. **Water** (✅ on the sea, #138: `physics-lab --lab sea`, the boat from Blender through glTF,
-   driven with the arrow keys; the island's rivers and lakes next): buoyancy from the submerged
+   driven with the arrow keys; ✅ on the island's rivers and lakes, #177: its barrels as Jolt
+   bodies on the rivers' current, the ground as height fields): buoyancy from the submerged
    part of each hull (Kerner's triangles, D-009) on the water we render: barrels, logs, crates,
    then a boat with a propeller and a rudder; then the
    island's rivers and sea. The same pool tests caustics, light shafts under the water and the

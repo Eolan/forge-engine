@@ -787,6 +787,20 @@ With the movers' acceleration structure (the second step), the same views and ro
 - The probes' wake (#69, the third step), `gi/probe wake` on the compute queue: 0.010 ms with
   1 000 movers and 0.008 with 10 000 (600 frames from the largest mouth).
 
+**The barrels afloat** (#177, 2026-10-08): the movers are now Jolt bodies on the island's
+water, ticked on the CPU at 60 Hz (`docs/demos/island.md`, "Barrels afloat"). The GPU passes
+above draw them as before (not measured again); this is the tick, with the fixed step:
+
+| Barrels | Mean a tick | p99 |
+|---|---|---|
+| 41 | 0.17 ms | 0.26 ms |
+| 101 | 0.23 ms | 0.37 ms |
+| 1 001 | 1.10 ms | 1.49 ms |
+| 10 001 | 13.6 ms | 28.9 ms |
+
+With 10 000 the frame waits on the CPU (13–14 ms), so the GPU rows' 10 000 above are the
+scripted barrels'. The ground's 71 height-field tiles are made in 54 ms at the start.
+
 **A refit of the movers' structure against its rebuild** (#79's measure, 2026-10-02;
 `FORGE_TLAS_REFIT=1`: built once with `ALLOW_UPDATE`, then updated in place). The same views,
 two rounds of 1 500 frames, 2560 × 1440:

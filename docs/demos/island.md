@@ -1982,7 +1982,8 @@ The first thing Forge draws that moves: `--movers N` sets N barrels drifting dow
 four largest rivers, half under the water's level, rolling and bobbing, each river's barrels
 spread along its course and starting over at its head (`reports/2026-10-02-79/`). They drifted
 at 1.5 m/s here; since #107 the water carries them at its own speed and one in ten is moored
-("Objects in the water"), so the views below are no longer the log's. It
+("Objects in the water"), so the views below are no longer the log's. Since #177 they are Jolt
+bodies afloat on the island's water ("Barrels afloat", below). It
 follows `docs/research/dynamic-scenes.md` ("Recommendation for Forge"), in three steps: the
 movers drawn with their motion vectors, their own acceleration structure (their shadows and
 reflections), and the probes woken where they pass (#69).
@@ -3000,6 +3001,94 @@ narrower one.
 **Left:** the rounded corners where it leaves the river (a confluence's corners, the other way
 round), and bars on the large lake fans if wanted. Where its channel cuts the step from the
 coastal plain to the beach, its banks stand as the river's own do there.
+
+## Barrels afloat (#177, Phase 3's step 3 on the island, 2026-10-08)
+
+`--movers N` (#79, #107) put barrels on the island's four largest rivers, scripted as a function
+of time: they followed each course at the water's speed, one in ten moored, the towed one on its
+circle, the dropped one on a written fall. Nothing touched them. They are now Jolt bodies on the
+island's water (`demos/city-blocks/src/afloat.rs`), pushed by it as the sea lab's are (#138,
+`forge_physics::buoyancy`; `reports/2026-10-08-177/`).
+
+**The water under each barrel** (`Waters::at`), a plane fitted at its middle every tick:
+- **In a river:** the river segments are filed in 32 m cells, and the barrel takes the one whose
+  middle it is nearest, in half widths. The plane carries:
+  - the river's level along its course, falling as its points' levels fall;
+  - its current down the course: 1.2 times the drawn speed mid-channel and 0.6 times at the banks,
+    a parabola whose mean across is the speed;
+  - a current that fades where the river fades into a lake, the river it joins or the sea.
+- **On a lake** whose mask holds the point: still water at its level.
+- **Past the mouths,** where the ground lies under 0 m: the sea, still at its level, at the sea's
+  density.
+- **Elsewhere,** nothing floats them.
+
+**The ground** near the water is the island's 2 m field cut into Jolt height fields
+(`Shape::height_field`, new in `forge-physics`). The tiles are 64 × 64 samples, and cover:
+- every river as wide as the narrowest that carries barrels (the rivers a barrel can float down
+  into), 8 m past its reach;
+- every lake.
+
+Seed 7 needs 71 tiles, made in 54 ms.
+
+**The barrels** weigh 100 kg, 40 % of them under the water:
+- **Carried:** they start spread along their river, moving with its current. They drift, turn,
+  catch on the banks and the bars, and go down the steps. A barrel starts again at its river's
+  head after 10 s stranded, 30 s out at sea or 30 s barely moving.
+- **Moored** (one in ten): a rope from the bed under where it starts holds it, the water's depth
+  and 1.5 m long. It drifts until the rope holds, then the stream parts round it.
+- **Towed:** a line pulls it towards its place on its circle on the largest lake (600 N/m,
+  500 N·s/m). It follows within a metre, drawn end on.
+- **Dropped:** held 3 m over the lake, let go, then lifted out along a smooth step. The water
+  pushes it only while it is let go.
+
+**What the water draws** now comes from the bodies:
+- the floaters that part the rivers' flow and the wakes in still water take their velocities;
+- a splash comes wherever a barrel meets the water at 2 m/s or more downwards: the dropped one,
+  and any going over a step's fall;
+- the towed barrel's bow spray takes its own velocity.
+
+**The tick:** 60 Hz on the sea's clock, drawn between the last two ticks; `--fixed-step` makes a
+frame a tick. A frame catches up 8 ticks at most, and skips ahead past that. The window's title
+shows the tick's time, and the log the run's (`the barrels' physics ticks (ms) over the run`,
+with the digest and how many started again).
+
+**What it costs** (the CPU, the fixed step, 600 frames or 60 s):
+
+| Barrels | Mean a tick | p99 | Started again in 60 s |
+|---|---|---|---|
+| 41 | 0.17 ms | 0.26 ms | 0 |
+| 101 | 0.23 ms | 0.37 ms | 0 |
+| 1 001 | 1.10 ms | 1.49 ms | 22 |
+| 10 001 | 13.6 ms | 28.9 ms | (600 frames) |
+
+At 10 000 the frame is the CPU's: 13–14 ms. Packed along four rivers, those barrels also
+overflowed Jolt's default contacts, so the world's capacities now grow with the count.
+
+**Pictures** (`reports/2026-10-08-177/barrels.png`, `--movers 40`, the log's views, by rows):
+- the first barrel at frame 60 by a step;
+- the moored barrel at 1 s, carried with the stream, and at 20 s, held, the stream parting round
+  it;
+- the towed barrel at frame 300 (`towed.png` enlarged, against the low sun);
+- the dropped barrel meeting the lake at frame 164, and bobbing in its rings at frame 200.
+
+**Checks:**
+- Three tests on a made-up river 15 m wide running at 1 m/s:
+  - over 10 s, twelve barrels float at their level and drift 6 to 13 m, while the moored one
+    moves 0.3 to 3.2 m;
+  - two runs give the same digest;
+  - a frame before the first tick draws them where they start. Validation's first run without
+    the fixed step found that case: a frame came before any tick and found no water under the
+    barrels.
+- A test of the height field: a ray meets it where it should, and a box stays on its slope.
+- `tools/validate.sh`'s thousand barrels now look at the new first barrel.
+- Tier 1 verify: the captures, which draw no movers, are unchanged on both paths; validation is
+  clean; 379 tests pass.
+
+**Left for later:**
+- The sea's waves under barrels past the mouths: the sea there is still at its level, where
+  the sea lab's barrels ride `SeaHeights`.
+- A physics level of detail for many barrels: far ones could sleep or follow their course.
+- Logs and crates on the rivers, and the boat of `--lab sea` on the island.
 
 ## The night (D-046, #164, 2026-10-04)
 

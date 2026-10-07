@@ -115,8 +115,8 @@ for path in $paths; do
   validate "under-sea$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=4770,-3.0,-2847,91.1,-10 $path
   # And under the largest lake (the log's `under` view of the island's lakes).
   validate "under-lake$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --view=2248,20.2,-1184,0,25 $path
-  # Moving geometry (#79): a thousand barrels on the rivers, the first one in view.
-  validate "movers$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --movers 1000 --view=-238.2,318.14,-1843.9,135.2,-18.1 $path
+  # Moving geometry (#79): a thousand barrels afloat on the rivers (#177), the first one in view.
+  validate "movers$tag" "$bin/city-blocks$exe" --island 7 --frames 60 --movers 1000 --view=245.8,277.34,-2033.9,-29.5,-20.6 $path
   # Splashes (#107): the dropped barrel meets its lake at frame 164, the crown and the jet after.
   validate "splashes$tag" "$bin/city-blocks$exe" --island 7 --frames 200 --fixed-step --movers 1000 --view=2160.0,30.55,-1234.0,0.0,-8.5 $path
   # The island demo (#96): its tour's first 10 s, out of the steep valley, at a time of day
