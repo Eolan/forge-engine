@@ -196,6 +196,50 @@ fn a_ray_down_meets_the_ground() {
 }
 
 #[test]
+fn a_height_field_meets_a_ray_and_holds_a_box() {
+    // 64 × 64 samples 2 m apart, rising 1 m in 10 along x, the field's corner at (-63, 5, -63):
+    // the ground stands at y = 5 + 0.1 (x + 63).
+    let n = 64_u32;
+    let samples: Vec<f32> = (0..n * n).map(|i| 0.2 * (i % n) as f32).collect();
+    let field = Shape::height_field(
+        &samples,
+        n,
+        Vec3::new(-63.0, 5.0, -63.0),
+        Vec3::new(2.0, 1.0, 2.0),
+    )
+    .expect("a height field");
+    let mut world = World::new(&WorldDesc::default());
+    world
+        .add_body(&BodyDesc::fixed(&field, DVec3::ZERO))
+        .expect("the ground");
+    let hit = world
+        .cast_ray(DVec3::new(7.0, 30.0, 3.0), Vec3::new(0.0, -30.0, 0.0))
+        .expect("the field");
+    let ground = 5.0 + 0.1 * (7.0 + 63.0);
+    assert!(
+        (30.0 - 30.0 * f64::from(hit.fraction) - ground).abs() < 0.02,
+        "met at {}",
+        30.0 - 30.0 * f64::from(hit.fraction)
+    );
+    // A box set down on it stays there, on a slope a tenth steep.
+    let block = Shape::cuboid(Vec3::splat(0.5), 0.05, 500.0).expect("a box");
+    let body = world
+        .add_body(&BodyDesc::dynamic(&block, DVec3::new(-20.0, 10.0, 0.0)))
+        .expect("the box");
+    for _ in 0..240 {
+        world.step(1.0 / 60.0, 1).expect("a step");
+    }
+    let mut at = Vec::new();
+    world.transforms(&[body], &mut at);
+    let p = at[0].position;
+    let under = 5.0 + 0.1 * (p.x + 63.0);
+    assert!(
+        p.y > under && p.y < under + 1.0,
+        "the box at {p}, the ground at {under}"
+    );
+}
+
+#[test]
 fn a_hull_of_one_point_is_refused() {
     let point = [Vec3::ONE; 4];
     assert_eq!(

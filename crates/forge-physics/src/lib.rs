@@ -134,6 +134,30 @@ impl Shape {
         })
     }
 
+    /// A static height field (for still bodies only) of `count` × `count` `samples`, row-major
+    /// along +z: the grid's point (x, z) stands at `offset + scale * (x, sample, z)` in its
+    /// body's frame. Jolt asks for at least four samples a side and works best with a power of
+    /// two.
+    pub fn height_field(
+        samples: &[f32],
+        count: u32,
+        offset: Vec3,
+        scale: Vec3,
+    ) -> Result<Self, PhysicsError> {
+        init();
+        assert_eq!(
+            samples.len(),
+            (count as usize) * (count as usize),
+            "a height field's samples: count × count"
+        );
+        let (o, s) = (offset.to_array(), scale.to_array());
+        // SAFETY: `samples` holds `count²` floats, `o` and `s` three each, all read during the
+        // call (Jolt copies the samples into its own compressed blocks).
+        Self::wrap(unsafe {
+            ffi::fj_shape_height_field(samples.as_ptr(), count, o.as_ptr(), s.as_ptr())
+        })
+    }
+
     /// This shape moved by `position` and turned by `rotation` in its body's frame: a mesh whose
     /// origin is not its centre (a barrel's at its bottom) gets a body whose origin is the
     /// mesh's.

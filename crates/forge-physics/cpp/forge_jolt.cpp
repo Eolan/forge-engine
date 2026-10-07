@@ -21,6 +21,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
@@ -283,6 +284,13 @@ FjShape *fj_shape_mesh(const float *vertices, uint32_t vertex_count, const uint3
             JPH::IndexedTriangle(indices[3 * t], indices[3 * t + 1], indices[3 * t + 2], 0));
     }
     JPH::MeshShapeSettings settings(std::move(points), std::move(triangles));
+    settings.SetEmbedded();
+    return hand_out(settings.Create());
+}
+
+FjShape *fj_shape_height_field(const float *samples, uint32_t count, const float offset[3],
+                               const float scale[3]) {
+    JPH::HeightFieldShapeSettings settings(samples, vec3(offset), vec3(scale), count);
     settings.SetEmbedded();
     return hand_out(settings.Create());
 }

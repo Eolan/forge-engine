@@ -143,6 +143,10 @@ FjShape *fj_shape_convex_hull(const float *points, uint32_t count, float max_con
 // A static triangle mesh: `count` triangles of three indices each.
 FjShape *fj_shape_mesh(const float *vertices, uint32_t vertex_count, const uint32_t *indices,
                        uint32_t triangle_count);
+// A static height field of `count` × `count` samples, row-major along +z: the point (x, z) of
+// the grid stands at `offset` + `scale` × (x, samples[z * count + x], z).
+FjShape *fj_shape_height_field(const float *samples, uint32_t count, const float offset[3],
+                               const float scale[3]);
 // `inner` moved by `position` and turned by `rotation` (x, y, z, w) in its body's frame.
 FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const float rotation[4]);
 // A shape's centre of mass in its frame (three floats).

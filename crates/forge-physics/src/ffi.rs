@@ -151,6 +151,12 @@ unsafe extern "C" {
         indices: *const u32,
         triangle_count: u32,
     ) -> *mut FjShape;
+    pub fn fj_shape_height_field(
+        samples: *const f32,
+        count: u32,
+        offset: *const f32,
+        scale: *const f32,
+    ) -> *mut FjShape;
     pub fn fj_shape_offset(
         inner: *const FjShape,
         position: *const f32,
