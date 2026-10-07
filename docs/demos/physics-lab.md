@@ -865,8 +865,17 @@ round the obstacles", where the column model of `flood` stuck above the level an
     and its own history, so the water bends an anti-aliased scene. Through moving water, the
     posts' sides and the shadows' edges were hatched and jagged; they are now smooth.
     `--no-behind-taa` shows the old way.
+  - **The fine comb left after that** on the gate's shadow through the water (frame 90 of
+    `lab-tank90`) is gone since the sun's shadows are denoised (D-049): the edge is now a smooth
+    penumbra in each frame, not eight points of the sun's disc for TAA to average. At four
+    times the size it matches a 2 × 2 supersampled frame (2026-10-07).
 - **The floor:** the floor's glass lies on the table and mirrors nothing.
-- **For TAA:** a reactive mask where the surface moves (at most half, at 3 m/s).
+- **For TAA:** a reactive mask where the surface moves (at most half, at 3 m/s), zero elsewhere.
+  Until 2026-10-07 the mask's clear read its width from the wrong push constant and cleared
+  nothing. Outside the water TAA then took whatever the transient memory held as its reactive
+  weight. With the default layout that memory held zeros, so the captures did not change.
+  With `--no-behind-taa` and SIGMA, the mask landed on the sun's penumbra instead, and the
+  whole frame outside the water turned to noise.
 - **At the glass:** the field goes on into the glass and the floor as it stands beside them (air
   only over the open top). Ending it at the glass turned the surface's normal into the pane, and
   rays through a pane into thin water came out speckled.

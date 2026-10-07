@@ -388,11 +388,11 @@ struct SolverPush {
 /// Mirrors `ClearPush` in `liquid_draw.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct ImagePush {
-    a: u32,
-    b: u32,
+struct ClearPush {
+    image: u32,
     width: u32,
     height: u32,
+    pad: u32,
 }
 
 /// Mirrors `CopyPush` in `liquid_draw.slang`.
@@ -1254,11 +1254,11 @@ impl Liquid {
                 commands.bind_pipeline(clear);
                 commands.push_constants(
                     clear,
-                    &ImagePush {
-                        a: resources.storage(reactive, 0).0,
-                        b: 0,
+                    &ClearPush {
+                        image: resources.storage(reactive, 0).0,
                         width: extent.width,
                         height: extent.height,
+                        pad: 0,
                     },
                 );
                 commands.dispatch(groups.0, groups.1, 1);
