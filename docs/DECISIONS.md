@@ -2639,6 +2639,12 @@ The owner, 2026-10-04: "in the city, towers with reflection were shimmering" (#1
 
 2. **The water after the glass** (asked again the same day, with "I'd do them after": "yes").
    The sea's and the rivers' mirror rays get the same history in a later change.
+3. **The water left as it is** (the owner, 2026-10-07, "yes, record it", once measured): its
+   mirror rays add no measurable shimmer. On the island's lake shot with the waves held still
+   (`--sea-time 10`, frames 200–214, the lake's pixels moving by 8 codes or more): 1.22 % with
+   them and 1.12 % without under TAA, 0.001 % and 0 % under DLAA. On the mouth's glare at dawn
+   the sea's are no different (#174). Item 2 is dropped; a history for the water would come
+   back only with a view where its reflections shimmer.
 
 **Measured** (the city's default view, 1600 × 900; the share of the glass's pixels that move by
 8 codes or more):
