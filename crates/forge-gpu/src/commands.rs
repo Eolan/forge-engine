@@ -324,6 +324,26 @@ impl<'a> Commands<'a> {
         }
     }
 
+    /// Clears the first mip of the colour image `image` to zero (`vkCmdClearColorImage`; the
+    /// image needs `TRANSFER_DST` usage and the pass declares it `ImageAccess::TransferDst`).
+    pub fn clear_color_image(&self, image: vk::Image) {
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+        // SAFETY: recording state; the graph put the image in the transfer-destination layout
+        // the pass declared, and the caller keeps it alive until the frame completes.
+        unsafe {
+            self.device.raw().cmd_clear_color_image(
+                self.cb,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &vk::ClearColorValue { uint32: [0; 4] },
+                &[range],
+            );
+        }
+    }
+
     /// Fills `size` bytes of `buffer` from `offset` with the 32-bit `value`
     /// (`vkCmdFillBuffer`; the buffer needs `TRANSFER_DST` usage, offset and size are
     /// multiples of 4).

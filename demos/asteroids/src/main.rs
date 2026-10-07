@@ -1060,6 +1060,7 @@ impl Demo for Ballad {
                 movers: None,
                 clouds: None,
                 sun_shadow: None,
+                reflection_history: None,
             },
         );
         if let Some(h) = hasher {

@@ -3262,6 +3262,21 @@ struct ResolvePush
     float4 cloud_frame;  // the clouds' shadow map (#145): its first corner (world x, z), 1 / the metres it spans
     uint cloud_shadow;   // its sampled index (r32f: the sun's share through the clouds), or 0xFFFFFFFF
     uint sun_shadow;     // sampled index of SIGMA's denoised shadow (r16f, its square root; #172), or 0xFFFFFFFF: the resolve's own ray
+    ReflectionHistory* reflection_history; // the mirror rays' history (#176), or null: each frame's ray alone
+};
+
+// The mirror rays' history (#176, D-050), which `reflections_main` blends each frame's ray into.
+// Mirrors `ReflectionHistoryBlock` in reflection_history.rs.
+struct ReflectionHistory
+{
+    float4x4 previous_from_current; // the previous frame's unjittered clip from this frame's (TAA's)
+    float2 jitter;                  // this frame's jitter, pixels
+    uint previous;                  // sampled (rgba16f): what the rays added so far, before the exposure (rgb); the view depth of the virtual point they showed (a; negative: a mover's; 0: none)
+    uint next;                      // storage: the same for this frame, cleared before the pass
+    uint first_mover;               // the movers' first instance (#79), or 0xFFFFFFFF: none
+    float blend;                    // the new ray's share of a pixel with a whole history
+    uint reset;                     // 1: no history yet (the first frame, a new size)
+    float near;                     // the reversed-Z projection's near plane: depth = near / view depth
 };
 
 [[vk::push_constant]]
@@ -3455,6 +3470,7 @@ struct ClosestHit
     uint primitive;  // its triangle in the instance's cut
     float2 barycentrics;
     float t;
+    bool mover;      // met in the movers' structure (#79)
 };
 
 ClosestHit trace_closest(Frame* f, RayDesc ray)
@@ -3465,6 +3481,7 @@ ClosestHit trace_closest(Frame* f, RayDesc ray)
     o.primitive = 0;
     o.barycentrics = 0.0;
     o.t = ray.TMax;
+    o.mover = false;
     RayQuery<RAY_FLAG_NONE> q;
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
     while (q.Proceed())
@@ -3498,6 +3515,7 @@ ClosestHit trace_closest(Frame* f, RayDesc ray)
             o.primitive = m.CommittedPrimitiveIndex();
             o.barycentrics = m.CommittedTriangleBarycentrics();
             o.t = m.CommittedRayT();
+            o.mover = true;
         }
     }
     return o;
@@ -3617,8 +3635,9 @@ float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float
 }
 
 // What the mirror ray from `origin` along `direction` meets (issue #50): the light leaving the
-// cut's triangle towards the ray, in the resolve's units, with w = 1; w = 0 on a miss.
-float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction)
+// cut's triangle towards the ray, in the resolve's units, with w = 1; w = 0 on a miss. `distance`:
+// how far the ray went, metres (its TMax on a miss); `mover`: whether it met a mover (#79).
+float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, out float distance, out bool mover)
 {
     RayDesc ray;
     ray.Origin = origin;
@@ -3626,10 +3645,19 @@ float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin
     ray.TMin = REFLECTION_START;
     ray.TMax = 50000.0;
     ClosestHit c = trace_closest(f, ray);
+    distance = c.t;
+    mover = c.mover;
     if (!c.hit)
         return float4(0.0);
     RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
     return float4(hit_radiance(f, sky, probes, hit, direction), 1.0);
+}
+
+float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction)
+{
+    float distance;
+    bool mover;
+    return trace_reflection(f, sky, probes, origin, direction, distance, mover);
 }
 
 // For the passes outside this file that trace the scene (#156: where the tank's bent rays land):
@@ -3996,7 +4024,10 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         return;
     uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(pixel, 0));
     if (vis == VISIBILITY_EMPTY)
+    {
+        carry_reflection(pixel);
         return;
+    }
     Frame* f = resolve_push.frame;
     uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
     uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
@@ -4005,10 +4036,16 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
     Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
     if (!wants_mirror_ray<1>(f, mat))
+    {
+        carry_reflection(pixel);
         return;
+    }
     float4 request = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel];
     if (request.w <= 0.0)
+    {
+        carry_reflection(pixel);
         return;
+    }
     // The surface at the pixel centre, as `shade_pixel` rebuilt it: its world position and
     // interpolated normal start the ray.
     uint base = payload_base(f, m);
@@ -4030,14 +4067,116 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     // In the scene frame: the ray's.
     float3 world = to_scene(f, mul(frame, object_position) + relative);
     float4* sky = resolve_push.sky;
-    float4 hit = trace_reflection(f, sky, resolve_push.probes, world + n * 0.05, request.xyz);
-    if (hit.w <= 0.0)
+    float distance;
+    bool mover;
+    float4 hit = trace_reflection(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, distance, mover);
+    ReflectionHistory* history = resolve_push.reflection_history;
+    if (hit.w <= 0.0 && history == nullptr)
         return;
-    float4 up_table = sky[SH_COEFFICIENTS];
-    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
+    // What the ray adds, before the exposure: nothing on a miss (the sky is already there).
+    float3 added = float3(0.0);
+    if (hit.w > 0.0)
+    {
+        float4 up_table = sky[SH_COEFFICIENTS];
+        float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
+        added = request.w * (hit.xyz - mirror);
+    }
+    if (history != nullptr)
+        added = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, added, hit.w > 0.0 ? distance : -1.0, mover);
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];
-    float3 added = request.w * (hit.xyz - mirror) * (f[0].sun_illuminance * f[0].exposure / 3.14159265);
-    color[pixel] = float4(color[pixel].rgb + added, 1.0);
+    color[pixel] = float4(color[pixel].rgb + added * (f[0].sun_illuminance * f[0].exposure / 3.14159265), 1.0);
+}
+
+// A pixel of a glass tile that asks no ray this frame (a mullion, the sky beside the pane; with
+// TAA's jitter, the pane's edge pixels every other frame) keeps the history it held, moved as the
+// reflection moves, for the frames in which it shows glass again.
+void carry_reflection(uint2 pixel)
+{
+    ReflectionHistory* h = resolve_push.reflection_history;
+    if (h == nullptr || h[0].reset != 0)
+        return;
+    float2 size = float2(float(resolve_push.width), float(resolve_push.height));
+    Texture2D<float4> previous = g_sampled_images[NonUniformResourceIndex(h[0].previous)];
+    // The depth of what the history showed here, from the same pixel: close enough to find it.
+    float4 here = previous.Load(int3(pixel, 0));
+    if (here.a <= 0.0)
+        return;
+    float2 uv = (float2(pixel) + 0.5 - h[0].jitter) / size;
+    float w;
+    float2 previous_uv = previous_uv_of(h, float3(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, h[0].near / here.a), w);
+    int2 tap = int2(floor(float2(pixel) + 0.5 + (previous_uv - uv) * size));
+    if (w <= 1e-9 || any(tap < int2(0, 0)) || any(tap >= int2(size)))
+        return;
+    float4 stored = previous.Load(int3(tap, 0));
+    if (stored.a <= 0.0)
+        return;
+    g_storage_images_rgba16f[NonUniformResourceIndex(h[0].next)][pixel] = float4(stored.rgb, min(stored.a / w, 60000.0));
+}
+
+// Where the previous frame's unjittered view showed the clip-space point `at` (xy, depth).
+float2 previous_uv_of(ReflectionHistory* h, float3 at, out float w)
+{
+    float4 previous = mul(h[0].previous_from_current, float4(at, 1.0));
+    w = previous.w;
+    float2 ndc = previous.xy / max(previous.w, 1e-9);
+    return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+// The mirror ray's light `added` at `pixel`, blended into its history and stored for the next
+// frame (#176, D-050). One exact ray a pixel lands somewhere else in the reflected scene with
+// every jitter of TAA, and TAA, which follows the glass and not its reflection, cannot settle
+// it. The history follows the reflection: a flat mirror shows what the ray met as a *virtual*
+// point behind it, on the pixel's view ray, as far from the eye as the surface plus the ray's
+// length (`distance`; negative on a miss: the sky, at infinity). That point is reprojected with
+// the camera's motion, as TAA reprojects a surface. `position` is the surface's,
+// camera-relative. A history texel counts while the virtual point it showed would have moved
+// to within a pixel of this one's. A mover's reflection (`mover`), and a reflection in a
+// mover (`instance` in the movers' trailing range of the table, #79), keep the frame's ray alone:
+// the camera's motion does not explain them.
+float3 steadied_reflection(ReflectionHistory* h, Frame* f, uint2 pixel, float2 size, float3 position, uint instance, float3 added, float distance, bool mover)
+{
+    float stretch = distance >= 0.0 ? 1.0 + distance / max(length(position), 1e-3) : 1e5;
+    float4 virtual_point = mul(f[0].view_proj, float4(position * stretch, 1.0));
+    float depth = virtual_point.z / virtual_point.w;
+    float2 uv = (float2(pixel) + 0.5 - h[0].jitter) / size;
+    float2 at = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    bool own = mover || (instance & ~INSTANCE_HIDDEN_BIT) >= h[0].first_mover;
+    float3 result = added;
+    float w;
+    float2 previous_uv = previous_uv_of(h, float3(at, depth), w);
+    if (!own && h[0].reset == 0 && w > 1e-9)
+    {
+        // The view depth the virtual point had in the previous frame.
+        float expected = w * virtual_point.w;
+        float2 texel = ((float2(pixel) + 0.5) / size + previous_uv - uv) * size - 0.5;
+        int2 base = int2(floor(texel));
+        float2 fraction = texel - float2(base);
+        Texture2D<float4> previous = g_sampled_images[NonUniformResourceIndex(h[0].previous)];
+        float3 sum = float3(0.0);
+        float weight = 0.0;
+        for (int k = 0; k < 4; k++)
+        {
+            int2 tap = base + int2(k & 1, k >> 1);
+            if (any(tap < int2(0, 0)) || any(tap >= int2(size)))
+                continue;
+            float4 stored = previous.Load(int3(tap, 0));
+            if (stored.a <= 0.0)
+                continue; // no reflection there, or a mover's
+            // Where this pixel's history would be had its point stood at the texel's depth.
+            float unused;
+            float2 other = previous_uv_of(h, float3(at, depth * expected / stored.a), unused);
+            float apart = length((other - previous_uv) * size);
+            float2 share = lerp(1.0 - fraction, fraction, float2(k & 1, k >> 1));
+            float tap_weight = share.x * share.y * saturate(1.5 - apart);
+            sum += stored.rgb * tap_weight;
+            weight += tap_weight;
+        }
+        if (weight > 1e-3)
+            result = lerp(sum / weight, added, lerp(1.0, h[0].blend, saturate(weight)));
+    }
+    float stored_depth = min(virtual_point.w, 60000.0);
+    g_storage_images_rgba16f[NonUniformResourceIndex(h[0].next)][pixel] = float4(result, own ? -stored_depth : stored_depth);
+    return result;
 }
 
 // ------------------------------------------------------- the sun's shadow for SIGMA ---

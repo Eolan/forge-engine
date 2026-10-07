@@ -341,6 +341,13 @@ against cadence 1 and 4 on one build, three rounds alternating (medians):
 - **The default is 2:** most of the gain for a small rise in the slow change;
   `--probe-cadence 4` is there for a slower GPU.
 
+With the mirror rays' history (#176, D-050, 2026-10-07): the default view at 1600 × 900, 600
+frames, three runs each alternating with `--no-reflection-history`:
+- `shading/reflections` 0.164 → 0.186–0.189 ms: the reprojection and the history's reads and
+  write beside each ray;
+- `shading/reflection history` (the clear of the image the rays write) 0.003 ms;
+- the frame 2.67–2.69 → 2.69 ms (one run 2.78).
+
 **Where it stands (2026-09-25, after #77 and #92):** the flight at 1440p takes 3.38 ms of GPU
 (three runs of 3000 frames: 3.37–3.39), its p99 frame 3.8 ms against the 8.33 of the 120 fps
 target; 2.6 ms without the probes. It was 3.81 ms after #68.

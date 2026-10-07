@@ -203,7 +203,9 @@ The resolve is three kinds of pass:
   from the sky-view table), scaled by GTAO computed from the depth before the resolve.
   It also reflects the sky: Schlick's Fresnel over the sky-view table in the mirror
   direction (issue #49, D-031), and on the smooth rows the city itself: a mirror ray against
-  the TLAS, the hit shaded from the BLAS cut kept on the GPU (issue #50).
+  the TLAS, the hit shaded from the BLAS cut kept on the GPU (issue #50). The rays' light keeps
+  a history of its own, reprojected through the reflection's virtual point, so TAA's jitter no
+  longer makes the glass shimmer (`forge_render::ReflectionHistory`, issue #176, D-050).
   A row's reflectance (F0, issue #56) sets how much it mirrors: coated glass 0.3.
 - **Diffuse light from probes** (issue #53, D-036): in the city, cascades of DDGI probes
   around the camera, traced by ray queries every frame (the sun through a shadow ray, the

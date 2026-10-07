@@ -491,6 +491,10 @@ struct Args {
     /// scene (Y toggles them; devices without ray queries have none).
     #[arg(long)]
     no_ray_reflections: bool,
+    /// Leave each frame's mirror ray to TAA alone, without the reflections' history (#176,
+    /// D-050): to compare with.
+    #[arg(long)]
+    no_reflection_history: bool,
     /// Hard sun shadows: one ray to the sun's centre instead of its disc (Z toggles them).
     #[arg(long)]
     hard_shadows: bool,
@@ -666,6 +670,8 @@ struct Gallery {
     /// none.
     sun_shadows: Vec<forge_render::SunShadowDenoiser>,
     sun_shadow_on: Option<usize>,
+    /// The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
+    reflection_history: forge_render::ReflectionHistory,
     /// The shadows' sun over the real one's size (D-049: softer where a denoiser smooths them,
     /// `--sun-size`); the Moon's at night scales with it.
     sun_scale: f32,
@@ -895,6 +901,7 @@ impl Gallery {
                 ctx.extent(),
             )?);
         }
+        let reflection_history = forge_render::ReflectionHistory::new(&ctx.device, ctx.extent())?;
         let sun_shadow_on = match args.shadow_denoiser {
             _ if sun_shadows.is_empty() => None,
             None => Some(0),
@@ -1421,6 +1428,7 @@ impl Gallery {
             dlaa,
             sun_shadow_on,
             sun_shadows,
+            reflection_history,
             sun_scale,
             sky_light,
             gtao,
@@ -1533,6 +1541,7 @@ impl Demo for Gallery {
         for denoiser in &mut self.sun_shadows {
             denoiser.resize(ctx.extent())?;
         }
+        self.reflection_history.resize(ctx.extent())?;
         if let Some(behind) = &mut self.behind_taa {
             behind.resize(ctx.extent())?;
         }
@@ -2335,6 +2344,32 @@ impl Demo for Gallery {
                 )?);
             }
         }
+        // The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
+        let steadied = !self.args.no_reflection_history
+            && self.sky_light
+            && !in_space
+            && self.flags.has(CullFlags::SKY_REFLECTIONS)
+            && self.flags.has(CullFlags::RAY_REFLECTIONS)
+            && self.scene.rays().is_some();
+        let mut reflection_history = None;
+        if steadied {
+            if taa_frame.reset {
+                self.reflection_history.reset_history();
+            }
+            self.reflection_history.advance();
+            let history: &'f forge_render::ReflectionHistory = &self.reflection_history;
+            reflection_history = Some(history.frame(
+                &mut frame.graph,
+                frame.slot,
+                taa_frame.previous_from_current,
+                taa_frame.jitter,
+                // Reversed-Z, infinite: clip z is the near plane.
+                self.camera.projection(ctx.aspect()).w_axis.z,
+                self.scene.first_mover(),
+            ));
+        } else {
+            self.reflection_history.reset_history();
+        }
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
@@ -2350,6 +2385,7 @@ impl Demo for Gallery {
                 movers: targets.movers,
                 clouds: cloud_shadow,
                 sun_shadow,
+                reflection_history,
             },
         );
         if let Some(space) = self.space.as_mut() {
@@ -2552,6 +2588,7 @@ impl Demo for Gallery {
                         movers: targets.movers,
                         clouds: None,
                         sun_shadow: None,
+                        reflection_history: None,
                     },
                 );
             }

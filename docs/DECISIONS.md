@@ -2629,9 +2629,16 @@ The research is `docs/research/shadow-denoising.md`. The owner chose a denoiser 
 - ꟻLIP against the reference and the other scenes.
 - The motion check with `imgdiff --then`.
 
-## D-050 — Steadying the glass's mirror reflections 🟡 (proposed 2026-10-04)
+## D-050 — Steadying the glass's mirror reflections ✅ (proposed and decided 2026-10-04)
 
 The owner, 2026-10-04: "in the city, towers with reflection were shimmering" (#176).
+
+**Decided (the owner, 2026-10-04: "I will follow your recommendations"):**
+1. **(a) A sharp mirror, as today,** steadied by a history of Forge's own for the mirror rays
+   (proposed item 1 below). No third-party code.
+
+2. **The water after the glass** (asked again the same day, with "I'd do them after": "yes").
+   The sea's and the rivers' mirror rays get the same history in a later change.
 
 **Measured** (the city's default view, 1600 × 900; the share of the glass's pixels that move by
 8 codes or more):
@@ -2701,3 +2708,24 @@ FidelityFX-Denoiser at d7dfecb):
 - The dolly against the supersampled run: the glass's 3.2 % and 2.7 % down to about 1 %.
 - The mesh path and the fallback 0 px apart, `FORGE_ASYNC=0` the same, and the cost in
   `docs/PROFILE.md`.
+
+**Built (#176, 2026-10-07):**
+- **Where.** `steadied_reflection` and `carry_reflection` in `shaders/meshlet.slang`, inside
+  `reflections_main`: no pass of its own beside the rays. `forge_render::ReflectionHistory` holds
+  the two rgba16f images (what the rays add before the exposure, and the view depth of the
+  virtual point), written and read in turn, and declares `shading/reflection history`, which
+  clears the one about to be written. `--no-reflection-history` turns it off.
+- **Departure from item 1: no clip to the neighbourhood.** The history is kept or dropped by the
+  virtual point's depth instead: each of the four texels around the reprojected point counts
+  while its own virtual point would land within about a pixel of it. A clip to the current 3 × 3
+  would have kept the jitter's variation it is there to remove; the glass's window grids make
+  that neighbourhood's variance large. What the depth test cannot see, a reflected object whose
+  light changes in place, lags about ten frames. Movers seen in the glass, and glass on movers,
+  keep each frame's ray.
+- **Blend:** a tenth. A twentieth or a thirtieth measured the same.
+- **Measured** (`docs/demos/city-blocks.md`, "The city in the glass"): held still, the glass at
+  8 codes or more 9.1 % / 11.2 % → 3.2 % / 6.2 % under TAA; under DLAA 0 % either way. Dollying,
+  against a supersampled run: TAA 3.2 % / 2.7 % → 1.9 % / 1.4 %, DLAA 0.95 % / 0.31 % → 0.45 % /
+  0.13 %. Interactive runs use DLAA, scripted ones TAA; the shimmer the owner reported was seen
+  live.
+- **Cost:** 0.023 ms beside the rays and 0.003 ms of clear at 1600 × 900 (`docs/PROFILE.md`).

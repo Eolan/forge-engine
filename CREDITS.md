@@ -128,6 +128,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Reflections.** Christophe Schlick, "An Inexpensive BRDF Model for Physically-based
   Rendering", Eurographics 1994: the Fresnel approximation. The specular occlusion follows
   Lagarde and de Rousiers (2014, above).
+- **The mirror rays' history** (`steadied_reflection` in `shaders/meshlet.slang`, D-050, #176):
+  a flat mirror's reflection reprojected through its *virtual* point, the hit seen behind the
+  mirror on the view ray. Forge writes it from the description in NVIDIA's NRD README ("Primary
+  Surface Replacement", v4.17.3) and the idea of AMD's FidelityFX reflection denoiser
+  (`FFX_DNSR_Reflections_GetHitPositionReprojection`, MIT); neither's code is used.
 - **Translucent ice.** Colin Barré-Brisebois, Marc Bouchard, "Approximating Translucency for a
   Fast, Cheap and Convincing Subsurface Scattering Look", GDC 2011: thickness-driven
   translucency, here measured by rays.

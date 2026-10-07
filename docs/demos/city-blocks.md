@@ -70,6 +70,7 @@ Options:
   `--probe-cadence N` how many frames a settled probe waits between updates (2).
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (**Y** toggles the mirror rays).
+- `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).
 - `--hard-shadows` aims every shadow ray at the sun's centre (**Z** toggles soft and hard).
 - `--day S` runs a day in S seconds, sunrise to sunset and again, with automatic exposure.
 - `--view x,y,z,yaw,pitch` starts the camera there (metres, then degrees; yaw 0 looks north,
@@ -527,7 +528,8 @@ coherent.
 
 The smooth rows now trace their mirror ray against the shadows' TLAS (D-031's step): the
 windows and the dark glass, Blinn-Phong exponent 60 and above. Glass is flat, so one ray per
-pixel is the whole reflection: no noise and no denoiser. A miss keeps the sky of #49.
+pixel is the whole reflection: no noise and no denoiser (but aliasing under TAA's jitter, which
+#176 settles below). A miss keeps the sky of #49.
 - **The hit data:** the BLAS cuts stay on the GPU after the build (34 MiB), with each
   triangle's section. A hit reads its instance (the TLAS record's custom index), the cut
   triangle and its row.
@@ -577,6 +579,39 @@ more than two levels (at most 21, on glass), and bloom spreads ±1 over 5 %.
   and without ray queries (`FORGE_NO_RAY_QUERY=1`) the switch changes nothing.
 - The ballad and the bench are identical, and mesh against fallback is at 0.
 - Synchronization validation is silent.
+
+*Since #176 (2026-10-07, D-050)* the rays' light has a history of its own. One exact ray a pixel
+lands somewhere else on the towers across the street with every jitter, and TAA, which follows
+the glass and not what it reflects, could not settle it: the towers' glass shimmered.
+- **What the pass keeps:** per pixel, what the ray adds before the exposure, and the view depth
+  of the *virtual point* it showed. That point is the hit seen behind the mirror, on the pixel's
+  view ray, as far as the surface plus the ray's length.
+- **How it reprojects:** the virtual point is moved with the camera, as TAA moves a surface. The
+  previous frame's four texels around it count while their own virtual points would land within
+  about a pixel of it (a disocclusion in the reflection drops them). Each frame's ray is blended
+  in at a tenth.
+- **What keeps the frame's ray alone:** a mover in the reflection, glass on a mover, a cut, a new
+  window size, and the reflections switched off. Glass pixels that ask no ray this frame (a pane's
+  edge under the jitter) carry their history over.
+- `--no-reflection-history` leaves each ray to TAA, as before.
+
+**The glass's shimmer** (the default view, frames 200–214 held still; pixels moving by 8 codes or
+more, left and right towers):
+
+| | TAA | DLAA (`--dlaa`) |
+|---|---|---|
+| each ray alone | 9.1 % / 11.2 % | 0 % / 0 % (at most 5 codes) |
+| with the history | 3.2 % / 6.2 % | 0 % / 0 % |
+| no mirror rays | 2.4 % / 4.5 % | 0 % / 0 % |
+
+Dollying in at 3 m/s, the glass's pixels per frame step that change unlike a 2 × 2 supersampled
+run: with TAA 3.2 % / 2.7 % → 1.9 % / 1.4 %; with DLAA 0.95 % / 0.31 % → 0.45 % / 0.13 % (0.64 %
+/ 0.20 % without the mirror rays). Blending in a twentieth or a thirtieth instead of a tenth
+changes nothing measurable. Interactive runs use DLAA where the device has it and scripted ones
+TAA, so these measurements are taken both ways. The owner, trying it live on 2026-10-07: "I
+don't see it shimmering".
+
+**Cost:** 0.023 ms beside the rays and 0.003 ms of clear ([PROFILE.md](../PROFILE.md)).
 
 ## The sky's reflection (issue #49, 2026-09-25)
 

@@ -29,6 +29,7 @@ pub mod placement;
 pub mod precision;
 pub mod probes;
 pub mod raytrace;
+pub mod reflection_history;
 pub mod shallow;
 pub mod skin;
 pub mod sky;
@@ -65,6 +66,7 @@ pub use meshlet::{
     RayRequests, SunShadowRays, SwRaster,
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
+pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
 pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
 };

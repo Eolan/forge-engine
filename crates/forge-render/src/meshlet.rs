@@ -524,9 +524,12 @@ struct ResolvePush {
     /// Sampled index of SIGMA's denoised sun shadow (#172, [`AmbientLight::sun_shadow`]), or
     /// `u32::MAX`: the resolve traces its own ray.
     sun_shadow: u32,
+    /// The mirror rays' `ReflectionHistory` block (#176, [`AmbientLight::reflection_history`]),
+    /// or 0: each frame's ray alone.
+    reflection_history: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<ResolvePush>() == 120);
+const _: () = assert!(std::mem::size_of::<ResolvePush>() == 128);
 
 /// Mirrors `SunShadowPush` in `meshlet.slang` (#172).
 #[repr(C)]
@@ -615,6 +618,9 @@ pub struct AmbientLight {
     /// The sun's shadow NVIDIA's SIGMA denoised (#172, [`crate::SunShadowDenoiser`]), read in
     /// place of the resolve's own ray; `None`: the ray, as before.
     pub sun_shadow: Option<ImageHandle>,
+    /// The mirror rays' history (#176, D-050, [`crate::ReflectionHistory::frame`]): the rays'
+    /// light settled over the frames; `None`: each frame's ray alone, as before.
+    pub reflection_history: Option<crate::ReflectionHistoryFrame>,
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -1841,6 +1847,12 @@ impl MeshletScene {
     /// The acceleration structures, when the scene has them.
     pub fn rays(&self) -> Option<&SceneRays> {
         self.rays.as_ref()
+    }
+
+    /// The first mover's instance (#79): the movers are the table's trailing range. `None`
+    /// without movers.
+    pub fn first_mover(&self) -> Option<u32> {
+        self.movers.as_ref().map(|m| m.first)
     }
 
     /// Bytes of texture the materials sample (every mip level).
@@ -3887,6 +3899,7 @@ impl MeshletRenderer {
             sun_shadow: ambient
                 .sun_shadow
                 .map_or(u32::MAX, |s| resources.sampled(s).0),
+            reflection_history: ambient.reflection_history.map_or(0, |h| h.address),
         };
 
         // Every class starts with no tiles and a dispatch TILE_GROUPS_X wide, 0 rows deep.
@@ -3980,6 +3993,11 @@ impl MeshletRenderer {
             }
             if let Some(shadow) = ambient.sun_shadow {
                 builder = builder.image(shadow, ImageAccess::Sampled(compute));
+            }
+            if let Some(h) = ambient.reflection_history {
+                builder = builder
+                    .image(h.previous, ImageAccess::Sampled(compute))
+                    .image(h.next, ImageAccess::StorageWrite(compute));
             }
             if let Some(g) = ambient.wet_ground {
                 builder = g.images().fold(builder, |b, image| {
