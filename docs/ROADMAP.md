@@ -143,7 +143,8 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
 - **The rivers' and the water's polish, from their issues' "left for later":**
   - standing waves on the 2–4 % rapids (#122) ✅ as shading (2026-10-04);
   - a bar and a scour hole at confluences (#119): the scour hole ✅ (2026-10-04), the bar ✅ (2026-10-07);
-  - true distributaries and bars on the lake fans (#127);
+  - true distributaries ✅ (2026-10-07) and bars on the lake fans (#127), the bars if the owner
+    wants them;
   - splashes landing as foam and rings (#107): the foam ✅ (2026-10-04), the rings ✅ (2026-10-07);
   - a clearer or bluer underwater look (#108).
 

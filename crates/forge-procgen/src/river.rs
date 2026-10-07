@@ -341,6 +341,46 @@ impl Default for ConfluenceBarParams {
     }
 }
 
+/// A large river's distributary (D-041's mouths, #127): a channel that leaves it a few widths up
+/// from its mouth at the sea and reaches the sea on its own, a few widths along the coast, over
+/// the low ground beside the river. It takes a share of the river's water, so both are sized by
+/// their shares of the catchment, and its water starts at the river's level where it leaves it,
+/// fading in out of the river's as a tributary's fades into it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DistributaryParams {
+    /// The narrowest river at its mouth, metres, before the estuary widens it, that has one.
+    pub least: f64,
+    /// How far up the river from its mouth it leaves, in the river's widths there.
+    pub split: f64,
+    /// How far along the coast from the river's mouth its own mouth may lie, in widths: the
+    /// nearest and the farthest tried.
+    pub along: (f64, f64),
+    /// How far it may turn off the river where it leaves, degrees.
+    pub turn: f64,
+    /// Its share of the river's catchment.
+    pub share: f64,
+    /// The most the ground along its course may stand over the river's level where it leaves,
+    /// metres: past that it has none.
+    pub rise: f64,
+}
+
+impl Default for DistributaryParams {
+    /// Rivers 20 m wide at their mouth and more (before the estuary widens them: the island's
+    /// two-bar mouths), leaving seven widths up from the mouth, reaching the sea five to ten
+    /// widths along the coast, turning off by 40° at most, a third of the catchment, over
+    /// ground 3 m over the river at most.
+    fn default() -> Self {
+        Self {
+            least: 20.0,
+            split: 7.0,
+            along: (5.0, 10.0),
+            turn: 40.0,
+            share: 1.0 / 3.0,
+            rise: 3.0,
+        }
+    }
+}
+
 /// The share of a bar's half length its blunt head takes upstream of its widest ([`Bar`]); its
 /// tail takes the rest, `2 −` this.
 const BAR_HEAD: f64 = 0.6;
@@ -556,6 +596,8 @@ pub struct RibbonParams {
     /// The bar a confluence lays against the bank past its downstream corner (#119's polish);
     /// `None` lays none.
     pub confluence_bars: Option<ConfluenceBarParams>,
+    /// The large rivers' distributaries to the sea (#127); `None` gives them none.
+    pub distributaries: Option<DistributaryParams>,
 }
 
 impl Default for RibbonParams {
@@ -592,6 +634,7 @@ impl Default for RibbonParams {
             bars: None,
             confluence_scour: None,
             confluence_bars: None,
+            distributaries: None,
         }
     }
 }
@@ -602,7 +645,8 @@ impl RibbonParams {
     /// from 3 km² of catchment, brooks of nature's size at 0.5 km² (#123), in steps and pools
     /// on their steep reaches, a delta where they run into a lake (#120), bars in their large
     /// mouths at the sea (#127), and running 60 % deeper below where a tributary as wide joins,
-    /// a bar of sand along the bank past the junction.
+    /// a bar of sand along the bank past the junction, and a distributary from the largest
+    /// mouths to the sea.
     pub fn island() -> Self {
         Self {
             regional: Some((3.0, 1.5)),
@@ -612,6 +656,7 @@ impl RibbonParams {
             bars: Some(BarParams::default()),
             confluence_scour: Some(0.6),
             confluence_bars: Some(ConfluenceBarParams::default()),
+            distributaries: Some(DistributaryParams::default()),
             ..Self::default()
         }
     }
@@ -713,6 +758,9 @@ pub struct Ribbon {
     pub bars: Vec<Bar>,
     /// The bars its tributaries' confluences lay against its banks (#119's polish).
     pub confluence_bars: Vec<Bar>,
+    /// For a distributary (#127), the point of its river's ribbon (the river's own, of the
+    /// same [`Ribbon::river`]) where it leaves it; none for a river.
+    pub split: Option<u32>,
 }
 
 /// Where a river leaves a lake (#120): the last point of a run in it, where the lake's water still
@@ -866,6 +914,7 @@ pub fn ribbons(
                 outlets: Vec::new(),
                 bars: Vec::new(),
                 confluence_bars: Vec::new(),
+                split: None,
             })
         })
         .collect();
@@ -944,6 +993,7 @@ pub fn ribbons(
             &lake_level,
             &lake_drawn,
             main,
+            None,
             params,
         );
         let mut runs: Vec<[u32; 2]> = Vec::new();
@@ -989,6 +1039,69 @@ pub fn ribbons(
         }
         done[ribbons[r].river as usize] = Some(r);
     }
+    // The large rivers' distributaries to the sea (#127): each a river of its share of the
+    // catchment over its own course, its levels under its river's where it leaves it; past that
+    // point the river carries the rest, narrower and shallower.
+    if let Some(d) = &params.distributaries {
+        let branch_params = RibbonParams {
+            spring: (1.0, 1.0),
+            head_fade: 1e-3,
+            ..*params
+        };
+        for r in 0..ribbons.len() {
+            let Some((s, course)) = distributary_course(&ribbons[r], &ribbons, height, d, params)
+            else {
+                continue;
+            };
+            let area = ribbons[r].mouth_area;
+            let samples: Vec<[f64; 4]> = resample(&course, params.step)
+                .into_iter()
+                .map(|q| [q[0], q[1], q[2], d.share * area])
+                .collect();
+            if samples.len() < 2 {
+                continue;
+            }
+            let points = ribbon_points(&samples, &branch_params);
+            let (points, _, _) = levels(
+                &points,
+                height,
+                &lake_level,
+                &lake_drawn,
+                None,
+                Some((&ribbons[r].points, s)),
+                params,
+            );
+            // The river past it: sized by the rest of its catchment, eased in over two widths.
+            let (whole, rest) = (size(area, params), size((1.0 - d.share) * area, params));
+            let width = 2.0 * f64::from(ribbons[r].points[s].half_width);
+            let mut along = 0.0;
+            let main = &mut ribbons[r].points;
+            for k in s + 1..main.len() {
+                let (a, b) = (position(&main[k - 1]), position(&main[k]));
+                along += (b[0] - a[0]).hypot(b[1] - a[1]);
+                let t = smoothstep(0.0, 2.0 * width, along);
+                let p = &mut main[k];
+                let half = f64::from(p.half_width) * (1.0 + (rest.0 / whole.0 - 1.0) * t);
+                p.half_width = half as f32;
+                p.cover = half as f32;
+                p.reach = (half + affine(params.tuck, half)) as f32;
+                p.depth = (f64::from(p.depth) * (1.0 + (rest.1 / whole.1 - 1.0) * t)) as f32;
+            }
+            ribbons.push(Ribbon {
+                river: ribbons[r].river,
+                mouth_area: d.share * area,
+                points,
+                lake_runs: Vec::new(),
+                corners: Vec::new(),
+                steps: Vec::new(),
+                deltas: Vec::new(),
+                outlets: Vec::new(),
+                bars: Vec::new(),
+                confluence_bars: Vec::new(),
+                split: Some(s as u32),
+            });
+        }
+    }
     // The estuaries: under `estuary.0` metres over the sea the rivers widen and shallow
     // towards their mouths (after the levels, which the narrower course set).
     let (over, widen) = params.estuary;
@@ -1003,9 +1116,10 @@ pub fn ribbons(
             }
         }
     }
-    // The large mouths' bars, on the estuaries' widths (#127).
+    // The large mouths' bars, on the estuaries' widths (#127); none in a distributary's mouth,
+    // whose narrower channel they bulged into an arch.
     if let Some(bars) = &params.bars {
-        for ribbon in &mut ribbons {
+        for ribbon in ribbons.iter_mut().filter(|r| r.split.is_none()) {
             let seed = hash_cell3(BAR_SEED, ribbon.river as i32, 0, 0);
             ribbon.bars = mouth_bars(&mut ribbon.points, bars, params, seed);
         }
@@ -1356,13 +1470,15 @@ pub(crate) fn segment_distance(q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f
 /// The points with their levels, banks, speeds, slopes and fades, whether each is in a lake, and
 /// with [`RibbonParams::delta`], the points where it runs into one (the first where the lake's
 /// water stands, before a run in it); `main` is the river this one joins (its points, with their
-/// levels, and the junction). `lake_drawn` tells where a lake's water is drawn at all.
+/// levels, and the junction), and `leaves` for a distributary the river it leaves (its points and
+/// the one where it leaves it). `lake_drawn` tells where a lake's water is drawn at all.
 fn levels(
     points: &[RibbonPoint],
     height: &Field2<f32>,
     lake_level: &dyn Fn(f64, f64) -> Option<(f64, f64)>,
     lake_drawn: &dyn Fn(f64, f64, Option<FromLake>) -> bool,
     main: Option<(&Vec<RibbonPoint>, [f64; 2])>,
+    leaves: Option<(&[RibbonPoint], usize)>,
     params: &RibbonParams,
 ) -> (Vec<RibbonPoint>, Vec<bool>, Vec<usize>) {
     let n = points.len();
@@ -1459,6 +1575,16 @@ fn levels(
             Some(level) => (level + LAKE_LIFT, level),
             None => (lowest - freeboard, lowest_bank),
         };
+    }
+    // A distributary never stands over its river's level where it leaves it, and falls evenly
+    // from it to the sea's over its course: kept at the river's level over the coastal plain, it
+    // dropped where the plain meets the beach, and its water ended there against a step.
+    if let Some((river, s)) = leaves {
+        let top = f64::from(river[s].level);
+        let length = arc[n - 1].max(1e-9);
+        for (k, t) in target.iter_mut().enumerate() {
+            *t = t.min(top * (1.0 - arc[k] / length));
+        }
     }
     // The level: under its target, falling only, the steep steps spread upstream; twice, with
     // a smoothing between.
@@ -1586,8 +1712,10 @@ fn levels(
     // main river's water, which is drawn before it (the larger river first). Measured from the
     // main's reach under its banks and drawn first itself, it stopped metres short and its
     // thinning water blended with the dry bed: a band across the junction (#115).
-    let into_main: Vec<f64> = match joined {
-        Some((main, m, _)) => points
+    // A distributary's water fades in out of its river's the same way, from where it leaves it.
+    let near_main = joined.map(|(main, m, _)| (main.as_slice(), m)).or(leaves);
+    let into_main: Vec<f64> = match near_main {
+        Some((main, m)) => points
             .iter()
             .map(|p| {
                 let q = [f64::from(p.position[0]), f64::from(p.position[1])];
@@ -1864,6 +1992,171 @@ fn confluence_bar(
         wander: bars.wander * half_breadth,
         seed: hash_cell3(seed, 2, 0, 0),
     })
+}
+
+/// With [`DistributaryParams`], where a distributary leaves `river` (its point) and its course to
+/// the sea, as (x, y, ground, 0): from that point, turned off the river by up to
+/// [`DistributaryParams::turn`], to half a width past the coast, on either side of the river's
+/// mouth and as far along the coast as [`DistributaryParams::along`] allows. The course whose
+/// ground stands lowest wins, if it stands no more than [`DistributaryParams::rise`] over the
+/// river's level there and keeps clear of the river and of `others`. None for a river that does
+/// not reach the sea or is narrower than [`DistributaryParams::least`] at its mouth, a
+/// distributary, or a river in a lake over its last reach.
+fn distributary_course(
+    river: &Ribbon,
+    others: &[Ribbon],
+    height: &Field2<f32>,
+    d: &DistributaryParams,
+    params: &RibbonParams,
+) -> Option<(usize, Vec<[f64; 4]>)> {
+    if river.split.is_some() {
+        return None;
+    }
+    let points = &river.points;
+    let m = sea_mouth(points)?;
+    let width = 2.0 * f64::from(points[m].half_width);
+    if width < d.least {
+        return None;
+    }
+    let mut arc = vec![0.0; points.len()];
+    for k in 1..points.len() {
+        let (a, b) = (position(&points[k - 1]), position(&points[k]));
+        arc[k] = arc[k - 1] + (b[0] - a[0]).hypot(b[1] - a[1]);
+    }
+    let up = arc[m] - d.split * width;
+    if up <= 0.0 {
+        return None;
+    }
+    let s = arc.partition_point(|&a| a < up);
+    if (s..=m).any(|k| river.in_lake(k)) {
+        return None;
+    }
+    let start = position(&points[s]);
+    let top = f64::from(points[s].level);
+    let leave = points[s].direction.map(f64::from);
+    let down = points[m].direction.map(f64::from);
+    let side = [-down[1], down[0]];
+    let mouth = position(&points[m]);
+    let ground = |q: [f64; 2]| smooth_height(height, q[0], q[1]);
+    // What it must keep clear of past where it leaves, by its own half width: every river under
+    // its banks, as wide as the estuary will make it, and 4 m of bank more; its own river's water
+    // only, the two sharing a bank as they part.
+    let (over, widen) = params.estuary;
+    let reach = (d.split + d.along.1 + 6.0) * width;
+    let own_half = 0.5 * width * d.share.sqrt();
+    let near: Vec<(bool, [f64; 2], f64)> = others
+        .iter()
+        .flat_map(|o| {
+            let own = std::ptr::eq(o, river);
+            o.points.iter().map(move |p| (own, p))
+        })
+        .filter(|(_, p)| {
+            let q = position(p);
+            (q[0] - mouth[0]).hypot(q[1] - mouth[1]) < reach
+        })
+        .map(|(own, p)| {
+            let e = 1.0 - smoothstep(0.0, over, f64::from(p.level));
+            let (edge, bank) = if own {
+                (p.half_width, 0.0)
+            } else {
+                (p.reach, 4.0)
+            };
+            (
+                own,
+                position(p),
+                f64::from(edge) * (1.0 + widen * e) + own_half + bank,
+            )
+        })
+        .collect();
+    let mut best: Option<(f64, Vec<[f64; 2]>)> = None;
+    const TRIES: u32 = 5;
+    for sign in [1.0, -1.0] {
+        let turn = sign * d.turn.to_radians();
+        let out = [
+            leave[0] * turn.cos() - leave[1] * turn.sin(),
+            leave[0] * turn.sin() + leave[1] * turn.cos(),
+        ];
+        for j in 0..=TRIES {
+            let along =
+                width * (d.along.0 + (d.along.1 - d.along.0) * f64::from(j) / f64::from(TRIES));
+            // Its mouth: where the line down the river's way this far along the coast crosses from
+            // the land into the sea, then half a width on.
+            let base = [
+                mouth[0] + side[0] * sign * along,
+                mouth[1] + side[1] * sign * along,
+            ];
+            let at = |t: f64| [base[0] + down[0] * t, base[1] + down[1] * t];
+            let mut t = -6.0 * width;
+            let mut was_land = false;
+            let mut coast = None;
+            while t < 6.0 * width {
+                let land = ground(at(t)) >= 0.0;
+                if was_land && !land {
+                    coast = Some(t);
+                    break;
+                }
+                was_land |= land;
+                t += 1.0;
+            }
+            let Some(coast) = coast else {
+                continue;
+            };
+            let end = at(coast + 0.5 * width);
+            let span = (end[0] - start[0]).hypot(end[1] - start[1]);
+            let (c1, c2) = (
+                [
+                    start[0] + out[0] * span / 3.0,
+                    start[1] + out[1] * span / 3.0,
+                ],
+                [end[0] - down[0] * span / 3.0, end[1] - down[1] * span / 3.0],
+            );
+            let steps = (span / 1.0).ceil().max(2.0) as u32;
+            let course: Vec<[f64; 2]> = (0..=steps)
+                .map(|i| {
+                    let u = f64::from(i) / f64::from(steps);
+                    let v = 1.0 - u;
+                    let w = [v * v * v, 3.0 * v * v * u, 3.0 * v * u * u, u * u * u];
+                    [
+                        w[0] * start[0] + w[1] * c1[0] + w[2] * c2[0] + w[3] * end[0],
+                        w[0] * start[1] + w[1] * c1[1] + w[2] * c2[1] + w[3] * end[1],
+                    ]
+                })
+                .collect();
+            // Its ground and its clearance: from where it has parted from its river's water (the
+            // first point clear of it), never back into it nor near another river.
+            let mut highest = f64::MIN;
+            let mut parted = false;
+            let mut clear = true;
+            for &q in &course {
+                let hits = |own: bool| {
+                    near.iter()
+                        .any(|&(o, p, half)| o == own && (p[0] - q[0]).hypot(p[1] - q[1]) < half)
+                };
+                if !parted {
+                    parted = !hits(true);
+                }
+                if parted {
+                    highest = highest.max(ground(q));
+                    if hits(true) || hits(false) {
+                        clear = false;
+                        break;
+                    }
+                }
+            }
+            let rise = highest - top;
+            if clear && parted && rise <= d.rise && best.as_ref().is_none_or(|b| rise < b.0) {
+                best = Some((rise, course));
+            }
+        }
+    }
+    let (_, course) = best?;
+    Some((
+        s,
+        course
+            .into_iter()
+            .map(|q| [q[0], q[1], ground(q), 0.0])
+            .collect(),
+    ))
 }
 
 fn deltas(

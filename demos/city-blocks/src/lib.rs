@@ -263,6 +263,9 @@ struct Args {
     /// Lay no bar of sand along the bank past each confluence (#119's polish).
     #[arg(long)]
     no_confluence_bars: bool,
+    /// No distributaries: the large rivers reach the sea in one channel (#127).
+    #[arg(long)]
+    no_distributaries: bool,
     /// Leave every beach of the island pale sand: no shingle on the headlands and under steep
     /// land (#128).
     #[arg(long)]
@@ -4787,7 +4790,7 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
     let barred: Vec<&forge_procgen::Ribbon> = ribbons
         .iter()
         .rev()
-        .filter(|r| !r.bars.is_empty())
+        .filter(|r| !r.bars.is_empty() && r.split.is_none())
         .collect();
     let bar_views: Vec<String> = barred
         .iter()
@@ -4858,6 +4861,42 @@ fn island_ribbons(height: &Field2<f32>) -> IslandRivers {
         bars = confluence_bars.len(),
         views = %confluence_views.join("  "),
         "the bars past the confluences (--view)"
+    );
+    // The distributaries (#127): each one's length and width at its mouth, and views of each from
+    // 30 m over where it leaves its river, looking down it, and from straight over its middle.
+    let branches: Vec<String> = ribbons
+        .iter()
+        .filter(|r| r.split.is_some())
+        .map(|r| {
+            let (first, last) = (&r.points[0], &r.points[r.points.len() - 1]);
+            let mid = &r.points[r.points.len() / 2];
+            let length = r.points.len() as f64 * forge_procgen::RibbonParams::island().step;
+            let yaw = (-f64::from(first.direction[0]))
+                .atan2(-f64::from(first.direction[1]))
+                .to_degrees();
+            let back = 40.0;
+            let (lx, ly) = (f64::from(last.direction[0]), f64::from(last.direction[1]));
+            format!(
+                "{length:.0}m x {:.0}m: {:.0},{:.1},{:.0},{yaw:.1},-25  {:.0},{:.1},{:.0},0,-89  \
+                 {:.0},{:.1},{:.0},{:.1},-20",
+                2.0 * last.half_width,
+                f64::from(first.position[0]) - back * f64::from(first.direction[0]) - half_m,
+                first.level + 30.0,
+                f64::from(first.position[1]) - back * f64::from(first.direction[1]) - half_m,
+                f64::from(mid.position[0]) - half_m,
+                mid.level + 0.8 * length as f32,
+                f64::from(mid.position[1]) - half_m,
+                f64::from(last.position[0]) + 50.0 * lx - half_m,
+                12.0,
+                f64::from(last.position[1]) + 50.0 * ly - half_m,
+                lx.atan2(ly).to_degrees(),
+            )
+        })
+        .collect();
+    tracing::info!(
+        distributaries = branches.len(),
+        views = %branches.join("  "),
+        "the large rivers' distributaries (--view)"
     );
     let lakes: Vec<WaterLake> = lakes
         .iter()
@@ -7169,6 +7208,7 @@ fn run(args: Args, title: &'static str) -> Result<()> {
             bars: island.bars.filter(|_| !args.no_bars),
             confluence_scour: island.confluence_scour.filter(|_| !args.no_scour),
             confluence_bars: island.confluence_bars.filter(|_| !args.no_confluence_bars),
+            distributaries: island.distributaries.filter(|_| !args.no_distributaries),
             ..island
         })
         .expect("the rivers' parameters, set once");

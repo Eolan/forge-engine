@@ -1072,14 +1072,24 @@ pub fn stones(
             let (p, next) = (pair[0], pair[1]);
             while let Some(step) = steps.next_if(|s| s.lip as usize <= k) {
                 if step.lip as usize == k {
-                    out.extend(lip_stones(r, k, step, ribbon, channels, height, seed));
+                    let hashed = stone_key(ribbons, r);
+                    out.extend(lip_stones(
+                        (r, hashed),
+                        k,
+                        step,
+                        ribbon,
+                        channels,
+                        height,
+                        seed,
+                    ));
                 }
             }
             if p.fade < 0.9 || next.fade < 0.9 || p.key == u32::MAX {
                 continue;
             }
             let key = p.key as i32;
-            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, key, salt)));
+            let hashed = stone_key(ribbons, r);
+            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, hashed, key, salt)));
             let fall = f64::from(p.grade);
             if draw(0) >= 0.06 + 0.3 * smoothstep(0.03, 0.15, fall) {
                 continue;
@@ -1120,8 +1130,18 @@ pub fn stones(
 /// was far too many rocks in the water, the owner's look). Each is 0.8 to 1.1 of the step's
 /// height across (its drop and its pool's scour; Forge's choice), half a metre at least and 0.9
 /// of the half width at most, somewhere across the middle 80 % of the water on the bowed lip.
+/// What the stones of ribbon `r` hash by: a river's index among the rivers alone, as it was before
+/// distributaries (#127), so one added moves no river's stones; a distributary's past them all.
+fn stone_key(ribbons: &[Ribbon], r: usize) -> i32 {
+    if ribbons[r].split.is_some() {
+        (ribbons.len() + r) as i32
+    } else {
+        ribbons[..r].iter().filter(|o| o.split.is_none()).count() as i32
+    }
+}
+
 fn lip_stones(
-    r: usize,
+    (r, hashed): (usize, i32),
     k: usize,
     step: &Step,
     ribbon: &Ribbon,
@@ -1131,7 +1151,7 @@ fn lip_stones(
 ) -> Vec<Stone> {
     let p = ribbon.points[k];
     let foot = ribbon.points[step.foot as usize];
-    let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, -1 - k as i32, salt)));
+    let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, hashed, -1 - k as i32, salt)));
     let (half, reach) = (f64::from(p.half_width), f64::from(p.reach));
     let tall = step.drop + f64::from(foot.depth - p.depth).max(0.0);
     let across_each = (tall * (0.8 + 0.3 * draw(0))).max(0.5).min(0.9 * half);
@@ -1184,7 +1204,8 @@ pub fn bank_stones(
                 continue;
             }
             let key = p.key as i32;
-            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, r as i32, key, salt)));
+            let hashed = stone_key(ribbons, r);
+            let draw = |salt: i32| f64::from(unit_f32(hash_cell3(seed, hashed, key, salt)));
             if draw(0) >= 0.4 * smoothstep(0.025, 0.06, f64::from(p.grade)) {
                 continue;
             }
@@ -2135,6 +2156,80 @@ mod tests {
                 "{n} points over {b:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_large_river_sends_a_distributary_to_the_sea_over_its_low_side() {
+        // The broad valley of the test above, its west side rising a tenth as fast as its east:
+        // the distributary leaves the river three widths up from its mouth and reaches the sea
+        // two to four widths along the coast to the west, its water never over the river's
+        // where it leaves it, falling to the sea's; past that point the river is narrower.
+        let valley = Field2::from_fn(41, 10.0, |x, y| {
+            let across = x as f32 - 20.0;
+            0.1 * y as f32 - 0.5
+                + if across < 0.0 {
+                    -0.05 * across
+                } else {
+                    0.5 * across
+                }
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&valley, 0.0, &pool);
+        // Only the trunk: the gentle west side drains to the sea in short streams of its own.
+        let rivers = trace_rivers(&valley, &flow, 60);
+        let plain = RibbonParams {
+            regional: Some((30.0, 1.0)),
+            ..RibbonParams::default()
+        };
+        let d = crate::river::DistributaryParams {
+            least: 10.0,
+            split: 3.0,
+            along: (2.0, 4.0),
+            ..crate::river::DistributaryParams::default()
+        };
+        let branched = RibbonParams {
+            distributaries: Some(d),
+            ..plain
+        };
+        let without = ribbons(&valley, &rivers, &[], &plain);
+        let with = ribbons(&valley, &rivers, &[], &branched);
+        assert_eq!(with, ribbons(&valley, &rivers, &[], &branched));
+        assert!(without.iter().all(|r| r.split.is_none()));
+        let branches: Vec<&Ribbon> = with.iter().filter(|r| r.split.is_some()).collect();
+        assert_eq!(branches.len(), 1);
+        let branch = branches[0];
+        let river = with
+            .iter()
+            .find(|r| r.river == branch.river && r.split.is_none())
+            .expect("its river");
+        let before = without
+            .iter()
+            .find(|r| r.river == branch.river)
+            .expect("the river without it");
+        let s = branch.split.expect("where it leaves") as usize;
+        // It starts in the river's water, never stands over its level there, only falls, and
+        // reaches the sea to the west of the river's mouth.
+        let first = branch.points[0].position;
+        let at = river.points[s].position;
+        assert!(
+            (first[0] - at[0]).hypot(first[1] - at[1]) < river.points[s].half_width,
+            "{first:?} {at:?}"
+        );
+        let top = river.points[s].level;
+        for w in branch.points.windows(2) {
+            assert!(w[0].level <= top + 1e-6 && w[1].level <= w[0].level + 1e-6);
+        }
+        let last = branch.points.last().expect("its mouth");
+        assert!(last.level <= 0.05, "{}", last.level);
+        let mouth =
+            river.points[crate::river::sea_mouth(&river.points).expect("the mouth")].position;
+        assert!(last.position[0] < mouth[0] - 15.0, "{last:?} {mouth:?}");
+        // The river past it narrower, as it was before it.
+        for k in 0..s {
+            assert_eq!(river.points[k].half_width, before.points[k].half_width);
+        }
+        let k = (s + 12).min(river.points.len() - 1);
+        assert!(river.points[k].half_width < 0.95 * before.points[k].half_width);
     }
 }
 

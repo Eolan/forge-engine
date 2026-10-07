@@ -93,7 +93,11 @@ impl Island {
     /// the sea. Without bars, the largest river's mouth.
     fn mouth(&self) -> Option<Shot> {
         let ribbons = &self.water.ribbons;
-        let (back, down, level) = match ribbons.iter().rev().find(|r| !r.bars.is_empty()) {
+        let (back, down, level) = match ribbons
+            .iter()
+            .rev()
+            .find(|r| !r.bars.is_empty() && r.split.is_none())
+        {
             Some(r) => {
                 let n = r.bars.len() as f64;
                 let mid = r.bars.iter().fold([0.0; 2], |m, b| {

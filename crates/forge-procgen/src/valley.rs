@@ -730,6 +730,7 @@ mod tests {
             outlets: Vec::new(),
             bars: Vec::new(),
             confluence_bars: Vec::new(),
+            split: None,
         };
         (height, ribbon)
     }

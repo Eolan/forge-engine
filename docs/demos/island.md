@@ -1950,7 +1950,8 @@ Before (`--no-bars`) and now, frame 60 (`reports/2026-10-02-127/`):
 
 **Left for later:**
 - The bars only stand in the mouths' widened reach. True distributaries, channels leaving the
-  river to reach the sea apart, would need a ribbon each.
+  river to reach the sea apart, would need a ribbon each (built on 2026-10-07, "A distributary
+  to the sea", below).
 - Bars on the large lake fans (the trunk's 48 m fan into the north-east lake), if the owner
   wants them.
 - Past the widened mouth's banks, the steep sand face (`--view 4354,14,-2830,180,-25`) stands a
@@ -2935,6 +2936,53 @@ lies on the side the tributary came from.
 | the logged confluence (`4262,8.5,-2834,-134.8,-20`) | 16 568 | 0.006 |
 
 ![The largest two confluences' bars and the largest from above, without (left) and with (right)](../../reports/2026-10-07-119/confluence-bars.png)
+
+## A distributary to the sea (#127, 2026-10-07)
+
+D-041's mouths split where the catchment is large. The bars (#127, 2026-10-02) split the water
+inside the widened mouth; now a large river also sends a channel of its own to the sea
+(`RibbonParams::distributaries`, `DistributaryParams`, `Ribbon::split`).
+- **Which rivers:** those 20 m wide or more at their mouth before the estuary widens them (the
+  island's two-bar mouths).
+- **Its course:** it leaves the river seven widths up from the mouth, turned off by 40°, and
+  curves to half a width past the coast, five to ten widths along it, on either side. Twelve
+  courses are tried; the one over the lowest ground wins.
+- **Where it may run:** over ground no more than 3 m above the river's level where it leaves it.
+  Once parted from the river's water it never comes back into it, and it keeps 4 m of bank from
+  every other river, all as wide as the estuaries will make them.
+- **Its water:** a third of the catchment, so it is sized like a river of that share, at its
+  full width from the start. Its level starts at the river's where it leaves it and falls evenly
+  to the sea's: held at the river's level over the coastal plain, it had dropped where the plain
+  meets the beach, and its water ended there against a half circle (`mouth-step.png`). Its water
+  fades in out of the river's as a tributary's fades into it, and is drawn after it.
+- **The river past it** carries the other two thirds, narrower and shallower over two widths.
+  Its mouth now holds one bar where it held two; the distributary has none, since its narrower
+  channel bulged round one.
+- `--no-distributaries` is the A/B. The log gives each one's length, its width at its mouth and
+  three views ("the large rivers' distributaries").
+
+On seed 7 one river gets one: 248 m long, 27 m wide at its mouth. The largest river's low side
+would cross the tributary that joins it near the coast, and the third's banks stand over 3 m
+higher. A test runs a broad valley into the sea, its west side low: the distributary leaves in
+the river's water, never stands over its level there, only falls, reaches the sea west of the
+river's mouth, and the river past it is narrower and unchanged before it.
+
+`reports/2026-10-07-127/distributary.png`, frame 60, without it (left) and with it:
+
+| View | Pixels changed | ꟻLIP mean |
+|---|---|---|
+| from 40 m back of where it leaves, 30 m up (`112,30.7,4785,-108.3,-25`) | 200 638 | 0.035 |
+| from straight above (`253,198.7,4864,0,-89`) | 332 446 | 0.064 |
+| its mouth from the sea, 12 m up (`294,12.0,5020,-3.7,-20`) | 640 529 | 0.080 |
+
+From the sea most of the change is the sea's own shading: a second mouth's plume, and the river's
+narrower one.
+
+![A distributary from where it leaves, from above and from the sea, without (left) and with (right)](../../reports/2026-10-07-127/distributary.png)
+
+**Left:** the rounded corners where it leaves the river (a confluence's corners, the other way
+round), and bars on the large lake fans if wanted. Where its channel cuts the step from the
+coastal plain to the beach, its banks stand as the river's own do there.
 
 ## The night (D-046, #164, 2026-10-04)
 
