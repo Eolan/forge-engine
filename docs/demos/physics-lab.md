@@ -615,8 +615,33 @@ What the clips found:
 **Cost:** a tick 0.13 ms (p99 0.22) over 35 s, the clips sampled and the targets made included
 (0.12 ms before, without clips, the mannequins asleep).
 
-**Left in #167:** IK for the feet and the head's look-at, with foot-down events (its step 4),
-and clip compression (step 5).
+**Packed clips** (#167's step 5, 2026-10-08; `forge_anim::PackedClip`). ACL's approach (Nicholas
+Frechette's Animation Compression Library, Unreal's default) in its simplest form:
+- each track's values are reduced to their range and stored on as few bits as keep the skeleton
+  within a tolerance: no joint, nor any point 10 cm out along its axes (ACL's virtual vertices),
+  strays more than it from where the clip puts it, at the keys, half way between and every
+  60th of a second;
+- the bits are chosen track by track (3 to 16), each by a binary search against that error;
+- a constant track keeps its one value, evenly spaced keys their first time, their step and
+  their count;
+- a packed track interpolates its keys with the clip's own arithmetic (`sample_keys`, shared),
+  so it samples to the same bits every time (D-016).
+
+The lab's four clips at a tenth of a millimetre:
+
+| Clip | Bytes | Packed | Worst error | Bits of the moving tracks | A pose sampled |
+|---|---|---|---|---|---|
+| mannequin idle | 8 744 | 2 193 (25 %) | 99 µm | 8, 8, 8, 9 | 0.14 → 0.46 µs |
+| mannequin walk | 6 112 | 2 264 (37 %) | 99 µm | 7–13 (11 tracks) | 0.18 → 0.61 µs |
+| dog idle | 3 964 | 1 204 (30 %) | 71 µm | 7, 9, 10 | 0.12 → 0.38 µs |
+| dog walk | 4 816 | 1 780 (37 %) | 97 µm | 7–10 (11 tracks) | 0.18 → 0.53 µs |
+
+Packing takes 17–62 ms a clip. Sampling unpacks two keys a component, three times slower but
+under a microsecond a pose. Not yet done: resampling every track evenly (ACL's), packing a
+rotation on three components, and the lab playing its clips packed. The tests: the lab's clips
+within the tolerance in under half their bytes, a constant track on no bits, the same bits twice.
+
+**Left in #167:** IK for the feet and the head's look-at, with foot-down events (its step 4).
 
 ## `flood`: a dam break (issue #144)
 

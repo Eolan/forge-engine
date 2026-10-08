@@ -11,6 +11,10 @@
 //! 4. [`Skeleton::skinning_matrices`] multiplies each by its inverse bind matrix: what the
 //!    GPU's skinning moves the vertices by.
 //!
+//! Above the clips (#167): a [`Player`] runs a clip or a [`BlendSpace`] on, its switches
+//! inertialized ([`Inertializer`]); a [`PackedClip`] holds a clip on as few bits a track as keep
+//! the skeleton within a tolerance, a quarter to a third of its bytes.
+//!
 //! **Determinism** (D-016): nothing here calls a transcendental function. Keys are
 //! interpolated linearly (normalised for rotations, as ozz does between dense keys), by steps
 //! or by glTF's cubic splines, all with `+ − × ÷` and `sqrt`, which IEEE 754 rounds exactly;
@@ -22,12 +26,14 @@
 
 mod clip;
 mod import;
+mod pack;
 mod play;
 mod pose;
 mod skeleton;
 
 pub use clip::{Clip, Interpolation, JointTracks, Track};
 pub use import::{AnimError, Rig, load_rig, load_rigs};
+pub use pack::PackedClip;
 pub use play::{BlendSpace, Inertializer, Player, Source, decay};
 pub use pose::{Pose, Transform};
 pub use skeleton::{Skeleton, SkeletonError};

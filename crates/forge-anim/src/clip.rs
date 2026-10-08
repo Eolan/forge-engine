@@ -31,7 +31,9 @@ pub struct Track<T> {
 }
 
 /// What a track's values need: a vector space, and a last step (normalising a rotation).
-trait Key: Copy + Add<Output = Self> + Sub<Output = Self> + Mul<f32, Output = Self> {
+pub(crate) trait Key:
+    Copy + Add<Output = Self> + Sub<Output = Self> + Mul<f32, Output = Self>
+{
     fn lerp(a: Self, b: Self, s: f32) -> Self;
     fn finish(self) -> Self;
 }
@@ -58,44 +60,77 @@ impl Key for Quat {
 impl<T: Key> Track<T> {
     /// The value at `time`: the first key's before it, the last key's after.
     pub fn sample(&self, time: f32) -> T {
-        let cubic = self.interpolation == Interpolation::CubicSpline;
-        let value = |k: usize| {
-            if cubic {
-                self.values[3 * k + 1]
-            } else {
-                self.values[k]
-            }
-        };
-        // The first key after `time`.
-        let next = self.times.partition_point(|&t| t <= time);
-        if next == 0 {
-            return value(0);
-        }
-        if next == self.times.len() {
-            return value(next - 1);
-        }
-        let k = next - 1;
-        let span = self.times[next] - self.times[k];
-        let s = (time - self.times[k]) / span;
-        // At a key, that key, to the bit.
-        if s == 0.0 {
-            return value(k);
-        }
-        match self.interpolation {
-            Interpolation::Step => value(k),
-            Interpolation::Linear => T::lerp(value(k), value(next), s),
-            Interpolation::CubicSpline => {
-                // glTF 2.0's appendix C: p0 + its out tangent, p1 + its in tangent, both
-                // scaled by the span.
-                let (p0, m0) = (value(k), self.values[3 * k + 2] * span);
-                let (p1, m1) = (value(next), self.values[3 * next] * span);
-                let (s2, s3) = (s * s, s * s * s);
-                (p0 * (2.0 * s3 - 3.0 * s2 + 1.0)
-                    + m0 * (s3 - 2.0 * s2 + s)
-                    + p1 * (-2.0 * s3 + 3.0 * s2)
-                    + m1 * (s3 - s2))
-                    .finish()
-            }
+        sample_keys(
+            self.times.as_slice(),
+            self.interpolation,
+            |k| self.values[k],
+            time,
+        )
+    }
+}
+
+/// A track's key times as [`sample_keys`] reads them: a list, or a packed track's even steps.
+pub(crate) trait KeyTimes {
+    /// How many keys.
+    fn count(&self) -> usize;
+    /// Key `k`'s time.
+    fn at(&self, k: usize) -> f32;
+    /// The first key after `time` (`count` when none is).
+    fn after(&self, time: f32) -> usize;
+}
+
+impl KeyTimes for [f32] {
+    fn count(&self) -> usize {
+        self.len()
+    }
+    fn at(&self, k: usize) -> f32 {
+        self[k]
+    }
+    fn after(&self, time: f32) -> usize {
+        self.partition_point(|&t| t <= time)
+    }
+}
+
+/// A track's value at `time` from its key `times`, its `interpolation` and `value`, its values
+/// by index (one a key, or in tangent, value and out tangent for a cubic spline): what
+/// [`Track::sample`] and a packed track ([`crate::PackedClip`]) both do, the same arithmetic.
+pub(crate) fn sample_keys<T: Key>(
+    times: &(impl KeyTimes + ?Sized),
+    interpolation: Interpolation,
+    value: impl Fn(usize) -> T,
+    time: f32,
+) -> T {
+    let cubic = interpolation == Interpolation::CubicSpline;
+    let key = |k: usize| if cubic { value(3 * k + 1) } else { value(k) };
+    // The first key after `time`.
+    let next = times.after(time);
+    if next == 0 {
+        return key(0);
+    }
+    if next == times.count() {
+        return key(next - 1);
+    }
+    let k = next - 1;
+    let span = times.at(next) - times.at(k);
+    let s = (time - times.at(k)) / span;
+    // At a key, that key, to the bit.
+    if s == 0.0 {
+        return key(k);
+    }
+    match interpolation {
+        Interpolation::Step => key(k),
+        Interpolation::Linear => T::lerp(key(k), key(next), s),
+        Interpolation::CubicSpline => {
+            // glTF 2.0's appendix C: p0 + its out tangent, p1 + its in tangent, both scaled by
+            // the span.
+            let (p0, m0) = (key(k), value(3 * k + 2) * span);
+            let (p1, m1) = (key(next), value(3 * next) * span);
+            let (s2, s3) = (s * s, s * s * s);
+            (p0 * (2.0 * s3 - 3.0 * s2 + 1.0)
+                + m0 * (s3 - 2.0 * s2 + s)
+                + p1 * (-2.0 * s3 + 3.0 * s2)
+                + m1 * (s3 - s2))
+                .finish()
         }
     }
 }
@@ -126,6 +161,18 @@ pub struct Clip {
 }
 
 impl Clip {
+    /// Its bytes as it holds them: each track's values and times, four bytes a float.
+    pub fn bytes(&self) -> usize {
+        fn track<T>(t: &Option<Track<T>>, components: usize) -> usize {
+            t.as_ref()
+                .map_or(0, |t| (t.values.len() * components + t.times.len()) * 4)
+        }
+        self.joints
+            .iter()
+            .map(|j| track(&j.translation, 3) + track(&j.rotation, 4) + track(&j.scale, 3))
+            .sum()
+    }
+
     /// `time` seconds into the clip played in a loop, folded into `0 .. duration`.
     pub fn wrap(&self, time: f32) -> f32 {
         if self.duration > 0.0 {

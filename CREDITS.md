@@ -397,6 +397,15 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     (Guillaume Blanc).
   - **The creatures' weights:** Blender's bone heat, after Ilya Baran and Jovan Popović,
     "Automatic Rigging and Animation of 3D Characters", SIGGRAPH 2007.
+- **Playing clips** (`forge-anim`, #167):
+  - **Inertialized switches:** David Bollo, "Inertialization: High-Performance Animation
+    Transitions in *Gears of War*", GDC 2016: the offset at a switch dying away along his
+    quintic (`forge_anim::Inertializer`).
+  - **Packed clips:** after Nicholas Frechette's Animation Compression Library (ACL, MIT):
+    per-track range reduction and variable bit rates, the error measured on virtual vertices
+    round the joints (`forge_anim::PackedClip`). The approach only; none of ACL's code.
+  - **Powered ragdolls held upright:** a damped spring on the root towards its stance, as games
+    keep their active ragdolls standing (the lab's dogs).
 - **Models' textures** (D-047, #166):
   - **Their materials:** glTF 2.0's metallic-roughness model and its `KHR_texture_transform`
     (Khronos, the specification and the extension's sample code).
