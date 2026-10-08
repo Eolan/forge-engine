@@ -1077,6 +1077,9 @@ the dust settles, the scene costs nothing.
 ticks: **0.11 ms a tick** (p99 0.21, max 0.28). Setting the 50 motors' targets is a few
 microseconds; the ragdolls stay awake while their poses move. With the skinned bodies (#165;
 their hulls the vertices each bone carries most): **0.13 ms a tick** (p99 0.27, max 0.38).
+With their clips through the motors (#167, 2026-10-08: the clips sampled, the switches
+inertialized, the mannequins' heads turned to the dogs, the dogs' balance; the same run, two
+rounds to the same digest): **0.126 ms a tick** (p99 0.20, max 0.31).
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |
