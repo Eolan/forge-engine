@@ -131,7 +131,7 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   their joints in `--lab creatures`. Their clips through the motors ✅ (#167, 2026-10-08: idle and
   walk, inertialized switches, a blend space; the dogs walk circles; packed clips, two-bone IK
   and look-at). The slime as a soft body ✅ (#179, 2026-10-08: it hops before the dogs), the tropical
-  island's slime in jelly seen through ✅ (#180, D-051).
+  island's slime in jelly seen through, four flavours, its gait and its tinted shadow ✅ (#180, D-051).
   Next: feet on uneven ground for #167. The night sky is built as D-046's answers ask (#164).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034

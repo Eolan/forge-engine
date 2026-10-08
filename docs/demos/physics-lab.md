@@ -642,6 +642,15 @@ face where they go and never roll. Here:
 (`--view=0.0,0.9,3.9,0,-14`). Costs (the same run): the tick **0.324 ms** (p99 0.52–0.55), two
 runs to the same digest; `shading/jelly` 0.106 ms; the frame 1.59 ms.
 
+**The jelly's shadow** (the owner: "make the shadow lighter, like translucent jelly"; D-051). The
+sun's shadow rays see through jelly, and one more ray tints the light by the jelly it crossed:
+a slime's shadow is a light pool of its own colour, with the nucleus's darker core in it.
+`shadow.png`, from above the front pair (`--view=0.0,1.9,4.4,0,-38`), before
+on the left and after on the right: frame 80 (yellow in the air) and frame 60 (pink in the
+air). Costs (600 ticks, balls every 50, two runs each against the build before): the frame
+1.59 → 1.66 ms on the GPU, `shading/standard` 0.194 → 0.234 ms (the tint's ray), `shading/jelly`
+0.106 → 0.110 ms; the tick and its digest unchanged.
+
 **The clips through the motors** (#167's first three steps, 2026-10-08; `forge_anim::Player`,
 `Inertializer`, `BlendSpace`; `reports/2026-10-08-167/`). The creatures now play their Blender
 clips (idle and walk, `assets/blender/skinned_creatures.py`) through their motors, in place of

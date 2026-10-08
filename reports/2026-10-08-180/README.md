@@ -44,3 +44,24 @@ wobble, turn to face their way and keep apart, upright.
 **Checks** (the flavours and the gait): Tier 1: every image 0 px but #71's flake and the
 creatures' scene's eight on both paths (ꟻLIP means 0.044 to 0.051); the A/B pairs 0 px;
 validation clean; 402 tests.
+
+## The jelly's shadow
+
+The owner: "make the shadow lighter, like translucent jelly" (D-051). The sun's shadow rays see
+through jelly; one more ray tints the light by the jelly it crossed (Beer–Lambert, as the eye's
+ray through it), the nucleus still in the way. `shadow.png`, from above the front pair
+(`--view=0.0,1.9,4.4,0,-38`), before on the left and after on the right: frame 80 (yellow in the
+air), frame 60 (pink in the air). A solid dark blot became a light pool of the slime's colour
+with the nucleus's darker core.
+
+**Costs** (600 ticks, balls every 50, two runs each against the build before): the frame
+1.59 → 1.66 ms on the GPU, `shading/standard` 0.194 → 0.234 ms, `shading/jelly` 0.106 → 0.110 ms;
+the tick and its digest (`0xf9e5ac4b0702c98e`) unchanged.
+
+**Checks:** Tier 1: every image 0 px but #71's flake and the creatures' scene's eight on both
+paths (ꟻLIP means: `lab-creatures120` and its no-occlusion twin 0.0127, `lab-creatures-throw240`
+0.0083, `lab-creatures-limp240` 0.0045); the A/B pairs 0 px; validation clean; 402 tests. Only
+a scene with jelly rows (`FLAG_JELLY`) takes the new rays.
+
+**Left for later:** a caustic under the body (#181); what is seen through a jelly lit as the
+screen is (#182).

@@ -227,6 +227,8 @@ public static const uint FLAG_INSTANCE_CELLS = 2097152;
 public static const uint FLAG_CUTOUTS = 4194304;
 // The sun's shadow from 256 rays a pixel, no denoiser: the reference SIGMA is judged by (#172).
 public static const uint FLAG_SHADOW_REFERENCE = 8388608;
+// The scene has jelly rows: the sun's shadow rays see through them, tinted (#180).
+public static const uint FLAG_JELLY = 16777216;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -2426,14 +2428,14 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     return fresnel * occlusion * environment;
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float specular_power, float specular_weight, float shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float specular_power, float specular_weight, float3 shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     ndl = dot(n, light);
-    float diffuse = max(ndl, 0.0) * shadow;
+    float3 diffuse = max(ndl, 0.0) * shadow;
     // The highlight's half vector, from the surface towards the camera (issue #98).
     float3 half_vector = normalize(light + view);
-    float specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : 0.0);
+    float3 specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : float3(0.0));
     float3 sun = f[0].sun_color.rgb;
     // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
     // how much of it the surface sees (issue #48). With probes, what they measured there
@@ -2710,7 +2712,7 @@ struct Surface
     uint instance_id;
     uint meshlet_index;
     uint lod_level;
-    float shadow;           // 1 in the sun, 0 where a shadow ray met something (issue #45)
+    float3 shadow;          // 1 in the sun, 0 where a shadow ray met something (issue #45), the jelly's tint where it crossed jelly (#180)
     float4* sky;            // the sky's irradiance coefficients (sh.slang), null in space (issue #47)
     float ao;               // how much of the sky the surface sees (issue #48); -1: no occlusion computed
     float3 world;           // the position in the scene frame (the rays' and the probes'; `to_scene`)
@@ -3197,7 +3199,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             emissive = lerp(a.emissive, b.emissive, blend);
         }
     }
-    float shadow = s.shadow;
+    float3 shadow = s.shadow;
     if (s.shore != nullptr)
     {
         float wet = shore_wetness(s.shore, s.world);
@@ -3360,6 +3362,13 @@ float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter, float bias)
         // the normal map, and a bump tilted towards the sun then caught it at full strength on
         // a wall in shade, in bright specks that sparkled under TAA's jitter.
         return 0.0;
+    return ray_blocked(f, sun_ray(f, world, n, jitter, bias)) ? 0.0 : 1.0;
+}
+
+// `sun_shadow`'s ray.
+RayDesc sun_ray(Frame* f, float3 world, float3 n, float2 jitter, float bias)
+{
+    float3 sun = normalize(f[0].sun_dir);
     float3 direction = sun;
     if (f[0].sun_angular_radius > 0.0)
     {
@@ -3374,7 +3383,7 @@ float sun_shadow(Frame* f, float3 world, float3 n, float2 jitter, float bias)
     ray.Direction = direction;
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
-    return ray_blocked(f, ray) ? 0.0 : 1.0;
+    return ray;
 }
 
 // The share of the sun's disc `world` sees, from SUN_REFERENCE_RAYS rays a frame aimed at the
@@ -3407,11 +3416,29 @@ float denoised_sun_shadow(Frame* f, float3 n, uint2 pixel)
 
 // The rays trace the static structure, then the movers' (#79), rebuilt every frame.
 
-// The rays' flags: opaque, unless the scene has cut-out rows (#171). Then every triangle is a
-// candidate the query's loop keeps or passes (`ray_candidate_kept`), as an any-hit shader would.
+// The rays' flags: opaque, unless the scene has cut-out rows (#171) or jelly the shadow rays see
+// through (#180). Then every triangle is a candidate the query's loop keeps or passes
+// (`ray_candidate_kept`, `shadow_candidate_kept`), as an any-hit shader would.
 uint ray_opacity(Frame* f)
 {
-    return (f[0].flags & FLAG_CUTOUTS) != 0 ? RAY_FLAG_FORCE_NON_OPAQUE : RAY_FLAG_FORCE_OPAQUE;
+    return (f[0].flags & (FLAG_CUTOUTS | FLAG_JELLY)) != 0 ? RAY_FLAG_FORCE_NON_OPAQUE : RAY_FLAG_FORCE_OPAQUE;
+}
+
+// The row of triangle `primitive` of instance `instance`, as the rays' scene has it.
+Material candidate_row(Frame* f, uint instance, uint primitive)
+{
+    RtScene* rs = f[0].rt_scene;
+    Instance inst = f[0].instances[instance];
+    return f[0].materials[inst.material + rs[0].sections[rs[0].meshes[inst.mesh].first_triangle + primitive]];
+}
+
+// Whether a shadow ray's candidate stands: as any ray's, but the sun passes through jelly, which
+// tints it instead (`jelly_transmittance`).
+bool shadow_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
+{
+    if ((f[0].flags & FLAG_JELLY) != 0 && candidate_row(f, instance, primitive).class_index == MATERIAL_CLASS_JELLY)
+        return false;
+    return ray_candidate_kept(f, instance, primitive, b);
 }
 
 // Whether a ray's candidate hit (barycentrics `b` on triangle `primitive` of instance `instance`)
@@ -3447,7 +3474,7 @@ bool ray_blocked(Frame* f, RayDesc ray)
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
     while (q.Proceed())
     {
-        if (ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+        if (shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
             q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
@@ -3458,13 +3485,49 @@ bool ray_blocked(Frame* f, RayDesc ray)
     m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), ray_opacity(f), 0xFF, ray);
     while (m.Proceed())
     {
-        if (ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
+        if (shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
             m.CommitNonOpaqueTriangleHit();
     }
     return m.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
 
-// The nearest triangle an opaque ray meets in either structure.
+// The share of the sun's light, per channel, that the jelly along a shadow ray lets through
+// (#180): Beer–Lambert, as the eye's ray through it (`jelly_through`), over the length the ray
+// runs inside jelly. Every crossing of a jelly row counts (none committed): its distance negative
+// into a body, positive out of it, so their sum is that length (of either sign, the triangles'
+// facing aside), and a ray that starts inside one (the ground under its rim) counts only its way
+// out. 1 in a scene without jelly. What else the ray meets is `ray_blocked`'s.
+float3 jelly_transmittance(Frame* f, RayDesc ray)
+{
+    if ((f[0].flags & FLAG_JELLY) == 0 || f[0].rt_scene == nullptr)
+        return float3(1.0);
+    float3 depth = float3(0.0);
+    jelly_depth_in(f, f[0].tlas, ray, depth);
+    jelly_depth_in(f, f[0].tlas_movers, ray, depth);
+    return exp(-abs(depth));
+}
+
+void jelly_depth_in(Frame* f, uint64_t tlas, RayDesc ray, inout float3 depth)
+{
+    if (tlas == 0)
+        return;
+    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed())
+    {
+        if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE)
+            continue;
+        Material mat = candidate_row(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex());
+        if (mat.class_index != MATERIAL_CLASS_JELLY)
+            continue;
+        float3 extinction = -log(clamp(mat.color_a, float3(1e-3), float3(1.0))) / JELLY_DEPTH + mat.scattering;
+        float t = q.CandidateTriangleRayT();
+        depth += (q.CandidateTriangleFrontFace() ? -t : t) * extinction;
+    }
+}
+
+// The nearest triangle an opaque ray meets in either structure (a shadow ray, `shadow`, sees
+// through jelly: `shadow_candidate_kept`).
 struct ClosestHit
 {
     bool hit;
@@ -3475,7 +3538,7 @@ struct ClosestHit
     bool mover;      // met in the movers' structure (#79)
 };
 
-ClosestHit trace_closest(Frame* f, RayDesc ray)
+ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false)
 {
     ClosestHit o;
     o.hit = false;
@@ -3488,7 +3551,8 @@ ClosestHit trace_closest(Frame* f, RayDesc ray)
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
     while (q.Proceed())
     {
-        if (ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+        if (shadow ? shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics())
+            : ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
             q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
@@ -3507,7 +3571,8 @@ ClosestHit trace_closest(Frame* f, RayDesc ray)
         m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), ray_opacity(f), 0xFF, ray);
         while (m.Proceed())
         {
-            if (ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
+            if (shadow ? shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics())
+                : ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
                 m.CommitNonOpaqueTriangleHit();
         }
         if (m.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
@@ -3621,7 +3686,9 @@ float3 hit_sunlight(Frame* f, RayHit hit)
 {
     float3 sun = normalize(f[0].sun_dir);
     float ndl = max(dot(hit.n, sun), 0.0);
-    float shadow = ndl > 0.0 ? sun_shadow(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS) : 0.0;
+    float3 shadow = float3(0.0);
+    if (ndl > 0.0 && sun_shadow(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS) > 0.0)
+        shadow = jelly_transmittance(f, sun_ray(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS));
     return hit.albedo * ndl * shadow * f[0].sun_color.rgb + hit.emissive;
 }
 
@@ -3823,7 +3890,7 @@ Crossings own_crossings(Frame* f, uint instance, RayDesc ray)
     return c;
 }
 
-// Whether a shadow ray meets anything but instance `skip`, in either structure.
+// Whether a shadow ray meets anything but instance `skip` (and jelly), in either structure.
 bool blocked_in(Frame* f, uint64_t tlas, RayDesc ray, uint skip)
 {
     if (tlas == 0)
@@ -3833,7 +3900,7 @@ bool blocked_in(Frame* f, uint64_t tlas, RayDesc ray, uint skip)
     while (q.Proceed())
     {
         if (q.CandidateInstanceID() != skip
-            && ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            && shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
             q.CommitNonOpaqueTriangleHit();
     }
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
@@ -4190,6 +4257,11 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
             s.shadow = sun_shadow_reference(f, surface_scene, s.n, pixel, shadow_bias(f, inst, m));
         else
             s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
+        // The jelly the sunlight crossed on its way tints it (#180): the rays above see through
+        // jelly, and one more ray, to a point of the disc that turns with TAA's cycle, measures
+        // how much it crossed (TAA averages the points into the tint's penumbra).
+        if ((f[0].flags & FLAG_JELLY) != 0 && any(s.shadow > 0.0))
+            s.shadow *= jelly_transmittance(f, sun_ray(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m)));
     }
     // Under the clouds (#145).
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
@@ -4568,7 +4640,7 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
         penumbra[pixel] = ray_blocked(f, ray) ? 0.0 : NRD_MISS;
         return;
     }
-    ClosestHit hit = trace_closest(f, ray);
+    ClosestHit hit = trace_closest(f, ray, true);
     penumbra[pixel] = hit.hit ? min(0.5 * hit.t * p.tan_radius, 32768.0) : NRD_MISS;
 }
 

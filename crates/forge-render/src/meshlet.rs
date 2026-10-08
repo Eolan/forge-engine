@@ -100,6 +100,9 @@ const FLAG_SW_RASTER: u32 = 512;
 /// `FLAG_CUTOUTS` in the shader: set by the renderer when the scene has cut-out or double-sided
 /// rows ([`MeshletScene::cutouts`], #171).
 const FLAG_CUTOUTS: u32 = 1 << 22;
+/// `FLAG_JELLY` in the shader: set by the renderer when the scene has jelly rows
+/// ([`MeshletScene::jelly`], #180).
+const FLAG_JELLY: u32 = 1 << 24;
 /// `FLAG_PREV_PYRAMID` in the shader: set by the renderer when pass 1 has a previous pyramid.
 const FLAG_PREV_PYRAMID: u32 = 2048;
 /// `FLAG_STREAMING` in the shader: set by the renderer for a streamed scene (the LOD cut
@@ -1458,6 +1461,7 @@ impl MeshletSceneBuilder {
             )?,
             material_count: self.materials.len() as u32,
             cutouts: self.materials.iter().any(GpuMaterial::cut_out),
+            jelly: self.materials.iter().any(GpuMaterial::jelly),
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -1635,6 +1639,9 @@ pub struct MeshletScene {
     /// Whether a row is cut out or double-sided: its clusters then take their own raster
     /// (#171), which a scene without any skips.
     pub cutouts: bool,
+    /// Whether a row is jelly: the sun's shadow rays then see through it and are tinted by it
+    /// (#180).
+    pub jelly: bool,
     textures: Option<TextureSet>,
     /// Instances.
     pub instance_count: u32,
@@ -3035,6 +3042,10 @@ impl MeshletRenderer {
         flags.0 &= !FLAG_CUTOUTS;
         if scene.cutouts {
             flags.0 |= FLAG_CUTOUTS;
+        }
+        flags.0 &= !FLAG_JELLY;
+        if scene.jelly {
+            flags.0 |= FLAG_JELLY;
         }
         flags.0 &= !FLAG_PREV_PYRAMID;
         if prev.is_some() {

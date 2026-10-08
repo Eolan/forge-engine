@@ -1087,6 +1087,8 @@ island's drop in its place (#180: its bends held by constraints too): **0.237 ms
 lab's view, 0.066 ms from 1 m before it, the frame 1.51 ms. The four flavours (four slimes):
 **0.285 ms** (p99 0.48), `shading/jelly` 0.097 ms, the frame 1.58 ms. With the island's gait (kept
 upright, steered apart): **0.324 ms** (p99 0.52–0.55), `shading/jelly` 0.106 ms, the frame 1.59 ms.
+The jelly's tinted shadow (D-051, one more ray where the sun lights a surface in a scene with
+jelly): the frame 1.66 ms, `shading/standard` 0.194 → 0.234 ms, `shading/jelly` 0.110 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

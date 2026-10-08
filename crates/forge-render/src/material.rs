@@ -76,6 +76,11 @@ impl GpuMaterial {
     pub fn cut_out(&self) -> bool {
         self.flags & (MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED) != 0
     }
+
+    /// Whether it is jelly, which the sun's shadow rays see through (#180, D-051).
+    pub fn jelly(&self) -> bool {
+        self.class_index == forge_core::material::ShadingClass::Jelly.index()
+    }
 }
 
 /// [`GpuMaterial`] flag: the textures are hex-tiled and offset per instance

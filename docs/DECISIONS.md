@@ -2764,14 +2764,28 @@ forward pass (D-038).
   pieces. At gelatine's index (1.35) a ball is a lens showing what lies behind upside down, a
   glass marble. The island's slimes bend it gently by their front alone, and so does this.
 - **Without ray queries or a sky** the jelly shows its cloud's colour, opaque.
+- **Its shadow is tinted light, not a solid body's** (the owner: "make the shadow lighter, like
+  translucent jelly"). In a scene with jelly rows (`FLAG_JELLY`) every shadow ray sees through
+  jelly: the resolve's, SIGMA's and FFX's traces, and the hits' (`shadow_candidate_kept`). What
+  else of the body stands in the way still blocks: the nucleus casts a dark core. The sun's light, now a colour, is tinted by one more ray to a point of the
+  sun's disc (`jelly_transmittance`): Beer–Lambert, as the eye's ray through the jelly, over the
+  length the ray runs inside jelly bodies. That length is the sum of the crossings, none
+  committed, each distance counted negative into a body and positive out of it. The point of
+  the disc turns with TAA's cycle, which softens the tint's edge into a penumbra, as the
+  shadows were before SIGMA (#54).
 
 *Not chosen:* a forward pass after the resolve reading a copy of the scene, as the water and
 the island's slimes do. It needs the body drawn outside the visibility buffer (a forward draw of
-skinned clusters, a new path), and it sees only what the screen shows.
+skinned clusters, a new path), and it sees only what the screen shows. For the shadow, SIGMA's
+translucency variant (`SIGMA_SHADOW_TRANSLUCENCY`) denoises a tint with the visibility. It needs
+another input image and an RGBA output through `forge_gpu::nrd`, and FFX and the undenoised
+path would still need their own tint; the tint is smooth across the body, so one ray and TAA
+are enough.
 
-**Left for later:** a lighter shadow (the sun's shadow rays and SIGMA treat it as opaque); the
-hits seen through it are plain (their rows' colours, the textures' averages); more slimes in the
-island's four flavours.
+**Left for later:** the hits seen through it are plain (their rows' colours, the textures'
+averages), and a hit seen through a jelly is lit through other jellies untinted (#182); no caustic
+focuses the light under the body (#181).
 
 *Measured* (`--lab creatures`, RTX 5070 Ti, 1600 × 900, 600 frames): `shading/jelly`
-0.043 ms in the lab's view, 0.066 ms with the slime filling a sixth of the screen.
+0.043 ms in the lab's view, 0.066 ms with the slime filling a sixth of the screen. The tinted
+shadow, four slimes: the frame 1.59 → 1.66 ms, `shading/standard` 0.194 → 0.234 ms.
