@@ -1,16 +1,20 @@
 //! The loading screen (issue #25). A demo started with [`crate::run_loading`] does its heavy
 //! CPU work (procedural meshes, cluster DAGs) on a thread of its own while the shell keeps the
-//! window alive: this stage draws a ring of dots turning (`shaders/loading.slang`), and the
+//! window alive: this stage draws a hammer striking an anvil in the bottom right corner, and a
+//! bar of the shaders compiled ahead at the bottom centre (#200, `shaders/loading.slang`); the
 //! frames it draws do not count ([`Context::loading`]). When the thread is done, the step it
 //! returns finishes the demo on the main thread (the uploads), and the demo takes over from
 //! frame 0 with a fresh profile, as if it had been built before the first frame.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use forge_gpu::{FullscreenPipelineDesc, ImageAccess, Pipeline, ShaderCompiler, ShaderStage, vk};
+use forge_gpu::{
+    FullscreenPipelineDesc, ImageAccess, Pipeline, ShaderCompiler, ShaderStage, WarmProgress, vk,
+};
 use winit::keyboard::KeyCode;
 
 use crate::{Context, Demo, FrameInfo, Input, Profile};
@@ -35,6 +39,8 @@ pub(crate) enum Stage<D> {
         /// Compiles the shaders the previous run asked for into the cache, while the loading
         /// screen shows: after a shader change, the finishing step finds them there.
         warm_up: Option<JoinHandle<forge_gpu::Result<usize>>>,
+        /// How far it has gone: the bar at the bottom of the screen (#200).
+        progress: Arc<WarmProgress>,
         /// Where the program's shader entries are listed for the next start.
         entries: PathBuf,
     },
@@ -89,15 +95,18 @@ impl<D: Demo> Stage<D> {
         let entries = ctx.shaders.cache_dir().join(format!("{program}.entries"));
         let listed = ShaderCompiler::load_entries(&entries);
         let compiler = ctx.shaders.clone();
+        let progress = Arc::new(WarmProgress::default());
+        let counted = progress.clone();
         let warm_up = std::thread::Builder::new()
             .name("shader warm-up".to_owned())
-            .spawn(move || compiler.warm(&listed, SHADER_THREADS))?;
+            .spawn(move || compiler.warm_counted(&listed, SHADER_THREADS, &counted))?;
         ctx.loading = true;
         Ok(Self::Loading {
             pipeline,
             started: Instant::now(),
             thread: Some(thread),
             warm_up: Some(warm_up),
+            progress,
             entries,
         })
     }
@@ -182,7 +191,10 @@ impl<D: Demo> Demo for Stage<D> {
                 .take()
                 .unwrap_or_else(|| anyhow::anyhow!("the demo failed to start"))),
             Self::Loading {
-                pipeline, started, ..
+                pipeline,
+                started,
+                progress,
+                ..
             } => {
                 // The window's own size: the loading screen is not supersampled.
                 let extent = ctx.swapchain.extent();
@@ -190,7 +202,8 @@ impl<D: Demo> Demo for Stage<D> {
                     extent.width as f32,
                     extent.height as f32,
                     started.elapsed().as_secs_f32(),
-                    0.0,
+                    // The shaders compiled ahead, or none to compile: no bar.
+                    progress.share().unwrap_or(-1.0),
                 ];
                 let pipeline = &*pipeline;
                 let target = frame.target;

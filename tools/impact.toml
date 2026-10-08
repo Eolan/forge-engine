@@ -77,6 +77,11 @@
 "shaders/mipcheck.slang" = ["meshlets"]
 "shaders/tonecheck.slang" = ["meshlets"]
 
+# The loading screen (#200): no capture shows it; every demo opens through it, so the
+# sentinels run it once.
+"crates/forge-app/src/loading.rs" = ["sentinels"]
+"shaders/loading.slang" = ["sentinels"]
+
 # Everything else is shared: forge-gpu, forge-app, forge-render's other passes, forge-geom's
 # other modules, forge-core, forge-task, forge-world, the other shaders, Cargo.toml and
 # Cargo.lock, rust-toolchain.toml, .github/ and the other tools. Tier 1.

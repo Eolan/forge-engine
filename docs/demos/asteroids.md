@@ -566,6 +566,27 @@ ballad:
 - **Not covered yet:** the overlay and loading shaders themselves compile before the loading
   screen can show (four entries).
 
+**The forge (#200, 2026-10-08).** The owner asked for a hammer striking an anvil, stylised, at
+the bottom right, and a bar of the shaders compiling at the bottom centre. Both are in
+`shaders/loading.slang`, every shape a 2-D distance field antialiased over a pixel:
+- **The anvil:** its face, horn, waist and feet joined by smooth unions, dark steel lit from
+  above, its face's edge catching the light.
+- **The bar:** red-hot on the anvil, yellow-white at its middle. Its halo warms the anvil and the
+  dark around it.
+- **The hammer:** it turns about the smith's hand, offscreen right, on a strike every 1.25 s. It
+  rises slowly, falls faster and faster, strikes, bounces a little and rests.
+- **A strike** flashes where the head meets the bar and throws sixteen sparks up and out. They
+  fall under gravity, cooling from yellow-white to red as they fade, different each strike.
+- **The shaders' bar** shows the share of the listed entries the cache lacked that the warm-up
+  has compiled (`ShaderCompiler::warm_counted` counting into a `WarmProgress`). With none to
+  compile, there is no bar. After a shader change, the island's 79 entries fill it in about
+  11 s.
+
+![The loading screen: the bar a third full, the hammer striking](images/loading-forge.png)
+
+The shaders the finishing step still compiles (those no earlier run listed) do not count: that
+step runs on the main thread, after the loading screen.
+
 **Checks:**
 - Every capture is identical to the previous build: both demos, both paths, the culling
   harness.

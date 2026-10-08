@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ash::vk;
 use xxhash_rust::xxh3::Xxh3;
@@ -199,11 +200,23 @@ impl ShaderCompiler {
     /// requests find them there: after a shader change, a loading screen compiles them while
     /// it shows (issue #25). Returns how many were compiled, not found in the cache.
     pub fn warm(&self, entries: &[ShaderEntry], threads: usize) -> Result<usize> {
+        self.warm_counted(entries, threads, &WarmProgress::default())
+    }
+
+    /// [`Self::warm`], counting into `progress` how many entries the cache lacks and how many
+    /// of those are compiled (#200: the loading screen's bar).
+    pub fn warm_counted(
+        &self,
+        entries: &[ShaderEntry],
+        threads: usize,
+        progress: &WarmProgress,
+    ) -> Result<usize> {
         let hash = self.source_hash()?;
         let missing: Vec<&ShaderEntry> = entries
             .iter()
             .filter(|e| !self.cached_path(&e.file, &e.entry, hash).exists())
             .collect();
+        progress.missing.store(missing.len(), Ordering::Relaxed);
         let next = std::sync::atomic::AtomicUsize::new(0);
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..threads.max(1))
@@ -215,6 +228,7 @@ impl ShaderCompiler {
                                 return Ok(());
                             };
                             self.compile(&e.file, &e.entry, e.stage)?;
+                            progress.compiled.fetch_add(1, Ordering::Relaxed);
                         }
                     })
                 })
@@ -340,6 +354,34 @@ impl Device {
     pub fn destroy_shader_module(&self, module: vk::ShaderModule) {
         // SAFETY: modules may be destroyed as soon as the pipelines using them are created.
         unsafe { self.raw().destroy_shader_module(module, None) };
+    }
+}
+
+/// How far a warm-up has gone ([`ShaderCompiler::warm_counted`], #200): the entries it found
+/// the cache lacking (`usize::MAX` until it has looked) and those of them compiled so far.
+#[derive(Debug)]
+pub struct WarmProgress {
+    /// The entries the cache lacks.
+    pub missing: AtomicUsize,
+    /// Those compiled so far.
+    pub compiled: AtomicUsize,
+}
+
+impl Default for WarmProgress {
+    fn default() -> Self {
+        Self {
+            missing: AtomicUsize::new(usize::MAX),
+            compiled: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl WarmProgress {
+    /// The share compiled, 0 to 1, once it has looked and found some to compile; else none.
+    pub fn share(&self) -> Option<f32> {
+        let missing = self.missing.load(Ordering::Relaxed);
+        (missing != usize::MAX && missing > 0)
+            .then(|| self.compiled.load(Ordering::Relaxed) as f32 / missing as f32)
     }
 }
 
