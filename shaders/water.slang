@@ -1169,6 +1169,8 @@ static const float RIVER_PLUME_SPREAD = 0.2;
 // lying over the sea's where the plume leaves the mouth.
 static const float RIVER_PLUME_WANDER = 0.25;
 static const float RIVER_PLUME_LAYER = 1.5;
+// The least a plume fades over behind its mouth: half widths, and metres.
+static const float2 RIVER_PLUME_BEHIND = float2(2.0, 2.0);
 // Half widths out to sea over which the white water a river brings fades.
 static const float RIVER_SPILL = 6.0;
 
@@ -1206,13 +1208,17 @@ Estuary estuary_at(WaterSurface* w, float2 world)
         float reach = RIVER_PLUME_LENGTH * half_width;
         float spread = half_width + RIVER_PLUME_SPREAD * max(along, 0.0);
         // Back up the channel only as far as it runs straight on (#152: a brook's channel
-        // turning away left a straight band of its water across a lake).
-        float back = mouth.b.w;
+        // turning away left a straight band of its water across a lake), fading over two half
+        // widths and 2 m at least: a channel that turns away at its mouth (none straight) cut its
+        // plume's colour and flow off on the mouth's line, a straight edge across the water from
+        // close by (#178).
+        float straight = mouth.b.w;
+        float back = max(straight, RIVER_PLUME_BEHIND.x * half_width + RIVER_PLUME_BEHIND.y);
         if (along > reach || along < -back || across > spread + 3.0)
             continue;
         float fresh = 1.0 - smoothstep(0.5 * spread, spread + 3.0, across);
         if (along < 0.0)
-            fresh *= 1.0 - smoothstep(0.75 * back, back, -along);
+            fresh *= 1.0 - smoothstep(0.75 * straight, back, -along);
         else
         {
             fresh *= sqrt(half_width / spread) * (1.0 - smoothstep(0.4 * reach, reach, along));

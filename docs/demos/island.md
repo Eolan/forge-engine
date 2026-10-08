@@ -3090,6 +3090,34 @@ overflowed Jolt's default contacts, so the world's capacities now grow with the 
 - A physics level of detail for many barrels: far ones could sleep or follow their course.
 - Logs and crates on the rivers, and the boat of `--lab sea` on the island.
 
+## A line across the lake (#178, the owner's report, 2026-10-08)
+
+In a capture 1.3 m over the highest lake (`--view=-238.2,318.14,-1843.9,135.2,-18.1`), the owner
+saw a straight line across the water, its two sides of different colour and ripples
+(`reports/2026-10-08-178/`).
+
+**The cause.** A brook 40 cm wide runs into the lake 4 m from the camera. Its channel turns
+away at its mouth, so none of it runs straight: the mouth's `back` is 0 (#152 keeps a plume up its
+channel only as far as that runs straight). The plume's fade up the channel,
+`smoothstep(0.75 back, back, -along)`, became a step: the river's colour, flow and ripples ended
+on the mouth's line. Seen from close and low, that cut of a few metres crossed the frame.
+
+Ablated first: the line stayed without the ray reflections, the reflections, the shadows and the
+clouds, and with the island cooked again. With the lakes' water drawn white it was the lake's
+own surface on both sides, and no river ribbon drew there.
+
+**The fix.** Behind its mouth a plume now fades over two half widths and 2 m at least
+(`RIVER_PLUME_BEHIND`). Where the channel runs straight for longer, it fades as before.
+
+**Found on the way: a lake traced twice.** The highest lake is two pockets, each deeper than the
+lakes' half-metre threshold, in one sheet of water shallower between them. Each pocket's flood
+took the whole sheet, so its water was drawn twice, and the outlet's trim of the shallow arm
+(#120) cut only one copy. `forge_procgen::lake_waters` now keeps a sheet once, as deep as its
+deepest pocket, and seed 7 has 3 lakes, not 4. A test makes two pockets in one basin. With the
+arm trimmed, the outlet's sill changes the ground there a little, and the rays' simplified ground
+is cut at another error (0.692 → 0.667 m), which moves shadows and probe light slightly over the
+island.
+
 ## The night (D-046, #164, 2026-10-04)
 
 `--day` now runs on through a night as long as the day, and `--time-of-day` takes 0–2: 0
