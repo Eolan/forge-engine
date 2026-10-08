@@ -135,7 +135,8 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   Their feet on uneven ground ✅ (#167, `--lab course`: steps and a ramp, the dogs guided by root
   motion; the walk's crabwise frames and moonwalking clip set right). Their foot-down events ✅
   (#167: where, when, the slope, the material and the pressure of each paw's footfall, a print
-  drawn at each). The night sky is built as D-046's answers ask (#164).
+  drawn at each). A flyer ✅ (#184, `--lab flyer`: gulls on their wings' lift, beating to climb
+  and gliding). The night sky is built as D-046's answers ask (#164).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of
@@ -459,7 +460,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    start: glTF skins and clips read by `forge-anim`, GPU skinning, the bodies' BLASes refitted,
    so the creatures bend instead of being jointed). The clips through the motors ✅ (#167,
    2026-10-08: idle and walk, inertialized switches, the dogs walking circles; two-bone IK and
-   look-at). The slime as a soft body ✅ (#179). Left: a flyer, feet on uneven ground.
+   look-at). The slime as a soft body ✅ (#179). The feet on uneven ground and their
+   foot-down events ✅ (#167, `--lab course`). A flyer ✅ (#184, `--lab flyer`: gulls from Blender
+   on their wings' lift, beating and gliding round a circuit).
 8. **Fluids:** the authoritative water model, a dam break ✅ (#144, `--lab flood`:
    `forge_physics::shallow`, a staggered grid of columns, drawn as a pool by the water pass),
    two-way coupling ✅ (#151: what floats pushes the water aside, its volume under it a thickness

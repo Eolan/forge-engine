@@ -342,6 +342,10 @@ the foot's heading and half sizes, its pressure (its share of the weight over it
 ground's material, as this entry lists them. The lab finds the ground with a ray among the fixed
 bodies, from inside the foot, and draws a print at each. Nothing deforms yet: that is D-007's
 deformable layer (Phase 3's materials step), and the footsteps audio's (D-011).
+**A flyer** (#184, `--lab flyer`): a gull is one body whose wings are flying surfaces posed by
+its clip, the flow over each including its own beat, so the beat gives the thrust. It is guided
+the same way: a balance torque holds it facing its flight, its wings at an angle of attack, and
+banked to turn onto its circuit.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 

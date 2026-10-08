@@ -28,6 +28,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `course` | the dogs on uneven ground: three steps of 5 cm and a 10° ramp, walked up and back, paws planted by IK | ✅ #167 |
+| `flyer` | gulls from Blender flying a circuit on their wings' lift: each wing's arm and hand and the tail as flying surfaces posed by the clip, beating to climb, gliding above | ✅ #184 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn through the GPU's finer layer that shadows it, carrying what floats, which pushes it aside | ✅ #144, #151, #162 |
 | `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
@@ -814,6 +815,39 @@ course every footfall lies on the ground `ground_at` gives, with the stretch's m
 slope (10° on the ramps), its heading along the ground, its pressure within 30 to 250 kPa; two
 runs give the same footfalls; a ray among the fixed bodies passes through a moving one
 (`forge-physics`).
+
+## `flyer`: gulls on their wings (issue #184)
+
+Phase 3's step 7 ends with a flyer. `physics-lab --lab flyer`: three gulls circle the lab 8 m up,
+a third of a turn apart, the camera behind the first (C lets it go).
+
+- **The model:** `assets/blender/bird.py` builds a gull with the creatures' helpers
+  (`skinned_creatures.py`): one continuous body (3 000 vertices) on seven bones (the body, the
+  head, the tail, each wing's arm and hand), 1.3 m across, its feathers baked (white, grey
+  wings, black tips with a white mirror, a yellow bill with its red spot). Two clips: a beat of
+  1/3 s (the wings 0.75 rad up and down, twisting with the beat, the hands most and folding on
+  the way up) and a glide of 2 s.
+- **Flight from the wings:** each gull is one Jolt body of 0.75 kg. Each tick its clip's pose
+  places five flying surfaces (`forge_physics::aero`): each arm and each hand, and the tail. The
+  air past each is the body's motion plus the surface's own beat, from where the pose had it a
+  tick before. So a beating wing pulls the gull on, a held one only carries it, and no thrust is
+  scripted. Over a beat at 10 m/s the wings lift 6 to 7 N and pull 0.2 N; held, they drag.
+- **Guided, as the dogs are** (D-012): a balance torque holds each gull to the attitude of its
+  flight. It faces the way it flies, its wings meeting the air 0.1 rad over their rigging (more
+  when it is low, divided by the bank's cosine), and it banks to turn onto its circuit (25 m
+  round): its lift turns it. Holding a pitch against the horizon instead, it sank until its
+  wings stalled. It beats its wings when low or slow and glides when high and fast; a switch
+  dies away over 0.3 s (inertialized) and waits for the beat's top.
+- **Saved and restored** with the lab's state: each gull's clip and when it started.
+
+Over 60 s each gull keeps 5.5 to 10.6 m up and 21 to 44 m from the middle (its turns are wider
+than its circuit), beating 86 % of the time. The three fly the same flight turned a third of a
+turn apart. **Costs:** a tick 0.048 ms (p99 0.11) for the three; the frame 1.44 ms at 1600 × 900.
+**Tests:** a beat pulls the gull on where the same pose held drags it, and a glide carries
+about its weight; over 60 s the gulls keep their height and circuit, and replay to the bit.
+
+Left: the gulls are as alike as their flights; a turn of the head or the tail that steers,
+landing and taking off, and the wind (`Air::wind`).
 
 ## `flood`: a dam break (issue #144)
 

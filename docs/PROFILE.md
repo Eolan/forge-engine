@@ -1094,6 +1094,8 @@ ms** (p99 0.43–0.49), two runs to the same digest. `--lab course`, the two dog
 and ramp, guided and their paws planted by IK: **0.095 ms a tick** (p99 0.16–0.17), the frame
 1.63 ms. With their foot-down events (eight rays a tick, a print drawn at each of the last 96
 footfalls): **0.100 ms** (p99 0.15), the frame 1.64 ms.
+`--lab flyer` (#184), three gulls each with five flying surfaces posed by its clip: **0.048 ms a
+tick** (p99 0.11), the frame 1.44 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

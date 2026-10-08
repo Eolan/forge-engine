@@ -42,6 +42,7 @@ mod dominoes;
 mod drive;
 mod flood;
 mod fly;
+mod flyer;
 pub(crate) mod models;
 mod rocket;
 pub(crate) mod room;
@@ -78,6 +79,8 @@ pub(crate) enum LabScene {
     /// The dogs alone on a course: three steps of 5 cm up and down, a ramp of 10° up and down
     /// (#167's feet on uneven ground).
     Course,
+    /// Gulls circling over the floor on their wings' lift, beating and gliding (#184).
+    Flyer,
     /// A dam break: a reservoir behind a gate, a basin with blocks and a hut, what floats (#144).
     Flood,
     /// A domino run on a spiral (#146).
@@ -170,6 +173,8 @@ const POLE: usize = PIECE + wall::PIECES;
 const SKINNED: usize = usize::MAX;
 /// The slimes' bodies (`slime`), drawn skinned after the creatures, not a prop.
 const SLIME: usize = usize::MAX - 1;
+/// The gulls' bodies (`flyer`), drawn skinned after the slimes, not a prop.
+const BIRD: usize = usize::MAX - 2;
 /// The flood's walls along x and z, its gate, a block, the hut.
 const FLOOD: usize = POLE + 1;
 /// The dominoes' prop, after the flood's five.
@@ -529,6 +534,8 @@ pub(crate) struct LabWorld {
     feet: creatures::Feet,
     /// The slimes before the creatures, soft bodies (#179, #180).
     slimes: Vec<slime::Slime>,
+    /// The gulls (#184).
+    birds: Vec<flyer::Bird>,
     /// The flood's water (the authoritative column model) and its dam.
     water: Option<forge_physics::shallow::Pool>,
     dam: Option<flood::Dam>,
@@ -586,6 +593,7 @@ impl LabWorld {
             | LabScene::Break
             | LabScene::Creatures
             | LabScene::Course
+            | LabScene::Flyer
             | LabScene::Flood
             | LabScene::Dominoes
             | LabScene::Bridge
@@ -684,6 +692,7 @@ impl LabWorld {
         let mut wall = None;
         let mut herd = None;
         let mut slimes = Vec::new();
+        let mut birds = Vec::new();
         let mut water = None;
         let mut dam = None;
         let mut run = None;
@@ -943,6 +952,12 @@ impl LabWorld {
                 group(SKINNED, field.bodies, &mut bodies);
                 herd = Some(field.herd);
             }
+            LabScene::Flyer => {
+                // Drawn skinned after no creature.
+                group(SKINNED, Vec::new(), &mut bodies);
+                birds = flyer::build(&mut world)?;
+                group(BIRD, birds.iter().map(|b| b.body).collect(), &mut bodies);
+            }
             LabScene::Flood => {
                 let basin = flood::build(
                     &mut world,
@@ -1178,6 +1193,7 @@ impl LabWorld {
                 herd,
                 feet: creatures::Feet::default(),
                 slimes,
+                birds,
                 water_start: water.clone(),
                 water,
                 dam,
@@ -1305,7 +1321,8 @@ impl LabWorld {
             .or(self.driver.car.map(|c| c.0))
             .or(self.pilot.plane)
             .or(self.rocket)
-            .or(self.ship)?;
+            .or(self.ship)
+            .or(self.birds.first().map(|b| b.body))?;
         self.bodies.iter().position(|&b| b == body)
     }
 
@@ -1482,6 +1499,7 @@ impl Simulation for LabWorld {
             );
         }
         slime::drive_all(&mut self.slimes, &mut self.world, self.tick);
+        flyer::drive(&mut self.world, &mut self.birds, self.tick);
         if let Err(e) = self.world.step(TICK, 1) {
             tracing::warn!("physics tick {}: {e}", self.tick);
         }
@@ -1522,6 +1540,12 @@ impl Simulation for LabWorld {
         let (down, falls) = self.feet.state();
         out.extend_from_slice(&down.to_le_bytes());
         out.extend_from_slice(&falls.to_le_bytes());
+        // The gulls' clips.
+        for bird in &self.birds {
+            for word in bird.state() {
+                out.extend_from_slice(&word.to_le_bytes());
+            }
+        }
         for word in self.words() {
             out.extend_from_slice(&word.to_bits().to_le_bytes());
         }
@@ -1537,6 +1561,7 @@ impl Simulation for LabWorld {
         let (tick, rest) = state.split_at(8);
         let (next, rest) = rest.split_at(4);
         let (feet, rest) = rest.split_at(16);
+        let (flock, rest) = rest.split_at(32 * self.birds.len());
         let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
@@ -1545,6 +1570,10 @@ impl Simulation for LabWorld {
             u64::from_le_bytes(down.try_into().expect("8 bytes")),
             u64::from_le_bytes(falls.try_into().expect("8 bytes")),
         ));
+        for (bird, words) in self.birds.iter_mut().zip(flock.as_chunks::<32>().0) {
+            let (words, _) = words.as_chunks::<8>();
+            bird.set_state(std::array::from_fn(|k| u64::from_le_bytes(words[k])));
+        }
         let w: Vec<f32> = words
             .as_chunks::<4>()
             .0
@@ -1783,6 +1812,8 @@ struct Skinned {
     kinds: Vec<creatures::Kind>,
     /// How many slimes' bodies follow theirs.
     slimes: usize,
+    /// How many gulls' bodies follow the slimes'.
+    birds: usize,
 }
 
 /// The sea scene's water (#138): the island's cascades of FFT waves from the same seed as the
@@ -1893,7 +1924,17 @@ pub(crate) fn build(
             }
         }
     }
+    // The gulls' (#184), their feathers baked on their UVs, in their scene only.
+    if kind == LabScene::Flyer {
+        let (bird_model, _) = flyer::model();
+        let mut textures = ModelTextures::new(bird_model, "bird");
+        let mesh = bird_model
+            .mesh("bird-body")
+            .context("the bird's model's body")?;
+        model_rows(&mut materials, &mut textures, "lab-bird", mesh, true);
+    }
     let creature_rows = [materials.of("lab-mannequin"), materials.of("lab-dog")];
+    let bird_row = materials.of("lab-bird");
     let slime_rows = SLIME_FLAVOURS.map(|(name, _)| materials.of(name));
     materials.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
@@ -1906,7 +1947,7 @@ pub(crate) fn build(
     let mut per_mesh: Vec<(MeshId, u32)> = layout
         .groups
         .iter()
-        .filter(|g| g.prop != SKINNED && g.prop != SLIME)
+        .filter(|g| g.prop != SKINNED && g.prop != SLIME && g.prop != BIRD)
         .map(|g| (ids[g.prop], g.count))
         .collect();
     // The skinned creatures (#165): a mesh each (its vertices are its own), cooked once a
@@ -1946,10 +1987,28 @@ pub(crate) fn build(
                     per_mesh.push((id, 1));
                 }
             }
+            // The gulls after them, one mesh each.
+            let birds = layout
+                .groups
+                .iter()
+                .find(|g| g.prop == BIRD)
+                .map_or(0, |g| g.count as usize);
+            if birds > 0 {
+                let (bird_model, rig) = flyer::model();
+                let mesh = bird_model.mesh("bird-body").expect("the bird's body");
+                let skin = mesh.skin.as_ref().expect("a skinned bird");
+                let cooked = SkinnedMesh::cook(&mesh.mesh, skin, ([0.0; 3], flyer::REACH));
+                for _ in 0..birds {
+                    let id = builder.add_skinned_mesh(&cooked, rig.skeleton.len() as u32);
+                    builder.set_mesh_material(id, bird_row);
+                    per_mesh.push((id, 1));
+                }
+            }
             Skinned {
                 start,
                 kinds,
                 slimes,
+                birds,
             }
         });
     builder.reserve_movers(&per_mesh);
@@ -2269,7 +2328,7 @@ impl Lab {
         skins.clear();
         if let Some(skinned) = &self.skinned {
             let parts = skinned.kinds.len() * creatures::PARTS;
-            let end = skinned.start + parts + skinned.slimes;
+            let end = skinned.start + parts + skinned.slimes + skinned.birds;
             let bodies: Vec<(Vec3, Quat)> = movers
                 .drain(skinned.start..end)
                 .map(|m| (m.position, m.rotation))
@@ -2308,6 +2367,21 @@ impl Lab {
                     rotation: Quat::IDENTITY,
                     scale: 1.0,
                 });
+            }
+            // The gulls: their clips' poses between the last two ticks, on their bodies.
+            if skinned.birds > 0 {
+                let mut pose = flyer::model().1.skeleton.rest().clone();
+                for k in 0..skinned.birds {
+                    let (position, rotation) = bodies[parts + skinned.slimes + k];
+                    seen.birds[k].pose_at(ticks, &mut pose);
+                    flyer::skin(&pose, rotation, &mut matrices);
+                    skins.extend_from_slice(&matrices);
+                    movers.push(MoverTransform {
+                        position,
+                        rotation: Quat::IDENTITY,
+                        scale: 1.0,
+                    });
+                }
             }
         }
         movers
@@ -2366,7 +2440,22 @@ impl Lab {
     /// What the camera follows (C) as drawn: the boat or the car, when the scene has one.
     pub(crate) fn ride(&mut self) -> Option<MoverTransform> {
         let k = self.shown().ride()?;
+        // A gull is drawn skinned, its mover unturned: its body's own transform.
+        if self.has_birds() {
+            let t = (self.pending / TICK).clamp(0.0, 1.0);
+            let (a, b) = (self.previous.get(k)?, self.current.get(k)?);
+            return Some(MoverTransform {
+                position: a.position.lerp(b.position, f64::from(t)).as_vec3(),
+                rotation: a.rotation.slerp(b.rotation, t),
+                scale: 1.0,
+            });
+        }
         self.movers(&mut Vec::new()).get(k).copied()
+    }
+
+    /// Whether the scene has gulls (the camera follows the first).
+    pub(crate) fn has_birds(&mut self) -> bool {
+        !self.shown().birds.is_empty()
     }
 
     /// Whether the scene has a car.

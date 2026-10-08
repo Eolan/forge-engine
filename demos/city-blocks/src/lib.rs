@@ -1413,7 +1413,7 @@ impl Gallery {
             barrels,
             lab,
             // The car is followed from the start (C lets it go); the aeroplane always is.
-            chase: args.lab == Some(lab::LabScene::Drive),
+            chase: matches!(args.lab, Some(lab::LabScene::Drive | lab::LabScene::Flyer)),
             steering: (0.0, 0.0),
             walking: [0.0; 2],
             handbrake: false,
@@ -1890,6 +1890,9 @@ impl Demo for Gallery {
         // goes (#138, #140, #141); further back from the aeroplane, 7 m long with a 10 m span.
         let (back, over, pitch) = if self.lab.as_mut().is_some_and(lab::Lab::has_plane) {
             (17.0, 3.5, -0.1)
+        } else if self.lab.as_mut().is_some_and(lab::Lab::has_birds) {
+            // A gull (#184), 1.3 m across, from 3 m behind and a little over it.
+            (3.0, 0.7, -0.12)
         } else {
             (8.0, 2.8, -0.18)
         };
@@ -5654,6 +5657,15 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: std::f32::consts::FRAC_PI_2,
             pitch: -0.52,
             speed: 6.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Flyer) {
+        // Outside the gulls' circuit and under it, looking across it: the near ones pass close.
+        FlyCamera {
+            position: Vec3::new(0.0, 5.0, 45.0),
+            yaw: 0.0,
+            pitch: 0.05,
+            speed: 10.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Break) {
