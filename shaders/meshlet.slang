@@ -4156,6 +4156,24 @@ void bind_pose_surface(Frame* f, Mesh mesh, uint meshlet_index, Meshlet m, uint 
     s.object_position = b.lambda.x * a0.position + b.lambda.y * a1.position + b.lambda.z * a2.position;
     s.dpdx = b.ddx.x * a0.position + b.ddx.y * a1.position + b.ddx.z * a2.position;
     s.dpdy = b.ddy.x * a0.position + b.ddy.y * a1.position + b.ddy.z * a2.position;
+    // A displaced mesh (#185): its field's slopes are in the raised surface's normal, not in its
+    // joint's turn. The frame turns the bind pose's normal onto that normal, so a normal map's
+    // detail lies along the prints' walls as on the flat.
+    if (c.field != 0xFFFFFFFFu)
+        s.frame = mul(turn_onto(normalize(mul(s.frame, s.object_normal)), s.n), s.frame);
+}
+
+// The shortest turn taking unit vector `a` onto unit vector `b` (Rodrigues'), for any two not
+// opposite.
+float3x3 turn_onto(float3 a, float3 b)
+{
+    float3 v = cross(a, b);
+    float c = dot(a, b);
+    float k = 1.0 / max(1.0 + c, 1e-4);
+    return float3x3(
+        float3(v.x * v.x * k + c, v.x * v.y * k - v.z, v.x * v.z * k + v.y),
+        float3(v.y * v.x * k + v.z, v.y * v.y * k + c, v.y * v.z * k - v.x),
+        float3(v.z * v.x * k - v.y, v.z * v.y * k + v.x, v.z * v.z * k + c));
 }
 
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
@@ -5236,7 +5254,8 @@ public struct SkinCluster
     public uint vertex_count;
     public uint ray;
     public uint joints;
-    public uint3 pad;
+    public uint field;          // its height field (#185), which the skin pass reads
+    public uint2 pad;
 };
 
 struct MoverMotionPush

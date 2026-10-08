@@ -198,7 +198,7 @@ main() {
   for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60 clouds60 \
     shot-mouth shot-lake shot-island shot-valley lab-drop90 lab-drop600 lab-net300 lab-sea300 lab-sea-steer600 lab-walk150 lab-walk-crates240 \
     lab-drive300 lab-drive-turn600 lab-fly1200 lab-break85 lab-break300 lab-creatures120 \
-    lab-creatures-throw240 lab-creatures-limp240 lab-course600 lab-course1200 lab-flyer300 lab-flyer600 lab-flood150 lab-flood300 \
+    lab-creatures-throw240 lab-creatures-limp240 lab-course600 lab-course1200 lab-flyer300 lab-flyer600 lab-yard600 lab-yard1200 lab-flood150 lab-flood300 \
     lab-flood150-columns lab-dominoes900 \
     lab-bridge360 lab-bridge600 lab-rocket120 lab-rocket600 lab-tug-net200 lab-tug-net600 lab-space90 lab-space150 \
     lab-tank90 lab-tank-bench300 lab-tank-hole120 lab-tank-blocks56 lab-room60 lab-room-pan60 lab-room-pan60-ssaa \

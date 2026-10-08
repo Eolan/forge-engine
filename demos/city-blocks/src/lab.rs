@@ -55,6 +55,7 @@ pub(crate) mod tank;
 mod tug;
 mod walk;
 mod wall;
+pub(crate) mod yard;
 
 pub(crate) use walk::{RUN_SPEED, WALK_SPEED};
 
@@ -79,6 +80,9 @@ pub(crate) enum LabScene {
     /// The dogs alone on a course: three steps of 5 cm up and down, a ramp of 10° up and down
     /// (#167's feet on uneven ground).
     Course,
+    /// The dogs walking their lanes over a bed of damp sand and a bed of fresh snow, pressing
+    /// their prints into them (#185: the deformable ground, D-007).
+    Yard,
     /// Gulls circling over the floor on their wings' lift, beating and gliding (#184).
     Flyer,
     /// A dam break: a reservoir behind a gate, a basin with blocks and a hut, what floats (#144).
@@ -536,6 +540,8 @@ pub(crate) struct LabWorld {
     slimes: Vec<slime::Slime>,
     /// The gulls (#184).
     birds: Vec<flyer::Bird>,
+    /// The yard's beds of sand and snow, which the dogs' footfalls press (#185).
+    beds: Vec<yard::Bed>,
     /// The flood's water (the authoritative column model) and its dam.
     water: Option<forge_physics::shallow::Pool>,
     dam: Option<flood::Dam>,
@@ -593,6 +599,7 @@ impl LabWorld {
             | LabScene::Break
             | LabScene::Creatures
             | LabScene::Course
+            | LabScene::Yard
             | LabScene::Flyer
             | LabScene::Flood
             | LabScene::Dominoes
@@ -693,6 +700,7 @@ impl LabWorld {
         let mut herd = None;
         let mut slimes = Vec::new();
         let mut birds = Vec::new();
+        let mut beds = Vec::new();
         let mut water = None;
         let mut dam = None;
         let mut run = None;
@@ -952,6 +960,13 @@ impl LabWorld {
                 group(SKINNED, field.bodies, &mut bodies);
                 herd = Some(field.herd);
             }
+            LabScene::Yard => {
+                let field = creatures::build(&mut world, POLE, COURSE, creatures::Ground::Yard)?;
+                statics.extend(field.statics);
+                group(SKINNED, field.bodies, &mut bodies);
+                herd = Some(field.herd);
+                beds = yard::beds();
+            }
             LabScene::Flyer => {
                 // Drawn skinned after no creature.
                 group(SKINNED, Vec::new(), &mut bodies);
@@ -1194,6 +1209,7 @@ impl LabWorld {
                 feet: creatures::Feet::default(),
                 slimes,
                 birds,
+                beds,
                 water_start: water.clone(),
                 water,
                 dam,
@@ -1242,7 +1258,7 @@ impl LabWorld {
         }
         // The dogs' paw prints last.
         if self.herd.is_some() {
-            creatures::prints(&self.feet, DVec3::new(0.0, PARKED_Y, 0.0), out);
+            creatures::prints(&self.feet, &yard::SOFT, DVec3::new(0.0, PARKED_Y, 0.0), out);
         }
     }
 
@@ -1370,6 +1386,9 @@ impl Simulation for LabWorld {
                     self.start = start;
                     self.next_throw = 0;
                     self.feet.clear();
+                    if !self.beds.is_empty() {
+                        self.beds = yard::beds();
+                    }
                     if let Some(boat) = &mut self.boat {
                         (boat.throttle, boat.rudder) = (0.0, 0.0);
                     }
@@ -1507,7 +1526,9 @@ impl Simulation for LabWorld {
         if let Some(herd) = &self.herd {
             herd.knock(&mut self.world, TICK);
             // Its dogs' paws that came down in the step.
-            herd.feel(&self.world, self.tick, &mut self.feet);
+            let came = herd.feel(&self.world, self.tick, &mut self.feet);
+            // Those on the yard's beds pressed into them.
+            yard::press(&mut self.beds, self.feet.last_mut(came));
         }
         // The lifted gate stops at its top.
         if let Some(dam) = &self.dam {
@@ -1546,6 +1567,12 @@ impl Simulation for LabWorld {
                 out.extend_from_slice(&word.to_le_bytes());
             }
         }
+        // The yard's beds' heights.
+        for bed in &self.beds {
+            for h in bed.layer.heights() {
+                out.extend_from_slice(&h.to_bits().to_le_bytes());
+            }
+        }
         for word in self.words() {
             out.extend_from_slice(&word.to_bits().to_le_bytes());
         }
@@ -1561,7 +1588,22 @@ impl Simulation for LabWorld {
         let (tick, rest) = state.split_at(8);
         let (next, rest) = rest.split_at(4);
         let (feet, rest) = rest.split_at(16);
-        let (flock, rest) = rest.split_at(32 * self.birds.len());
+        let (flock, mut rest) = rest.split_at(32 * self.birds.len());
+        let mut heights = Vec::new();
+        for bed in &mut self.beds {
+            let [nx, nz] = bed.layer.size();
+            let (bytes, after) = rest.split_at(4 * (nx * nz) as usize);
+            heights.clear();
+            heights.extend(
+                bytes
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&b| f32::from_bits(u32::from_le_bytes(b))),
+            );
+            bed.layer.set_heights(&heights);
+            rest = after;
+        }
         let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
@@ -1626,6 +1668,14 @@ impl Simulation for LabWorld {
         // The flood's water, every column and pipe to the bit.
         if let Some(water) = &self.water {
             d ^= water.digest().rotate_left(29);
+        }
+        // The yard's beds, every height to the bit (#185).
+        for (b, bed) in self.beds.iter().enumerate() {
+            let mut h = 0xcbf2_9ce4_8422_2325_u64 ^ b as u64;
+            for height in bed.layer.heights() {
+                h = (h ^ u64::from(height.to_bits())).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            d ^= h.rotate_left(31);
         }
         d
     }
@@ -1814,6 +1864,8 @@ struct Skinned {
     slimes: usize,
     /// How many gulls' bodies follow the slimes'.
     birds: usize,
+    /// Where the yard's beds are drawn, after the gulls (#185): no body's, a mover each.
+    beds: Vec<Vec3>,
 }
 
 /// The sea scene's water (#138): the island's cascades of FFT waves from the same seed as the
@@ -1900,7 +1952,10 @@ pub(crate) fn build(
             &mut textures,
             prop,
             mesh,
-            matches!(kind, LabScene::Creatures | LabScene::Course),
+            matches!(
+                kind,
+                LabScene::Creatures | LabScene::Course | LabScene::Yard
+            ),
         );
     }
     // The external models' (#170, D-048), in their scene only.
@@ -1934,6 +1989,7 @@ pub(crate) fn build(
         model_rows(&mut materials, &mut textures, "lab-bird", mesh, true);
     }
     let creature_rows = [materials.of("lab-mannequin"), materials.of("lab-dog")];
+    let soft_rows = yard::SOFT.map(|name| (name, materials.of(name)));
     let bird_row = materials.of("lab-bird");
     let slime_rows = SLIME_FLAVOURS.map(|(name, _)| materials.of(name));
     materials.apply(&mut builder, &props, &ids);
@@ -2004,11 +2060,37 @@ pub(crate) fn build(
                     per_mesh.push((id, 1));
                 }
             }
+            // The yard's beds after them (#185): a ground each that its layer's heights raise,
+            // placed by its mover, its one joint unturned.
+            let beds: Vec<Vec3> = world
+                .beds
+                .iter()
+                .map(|bed| {
+                    let cooked = SkinnedMesh::cook_displaced(&yard::ground(bed), yard::REACH);
+                    let id = builder.add_displaced_mesh(
+                        &cooked,
+                        forge_render::HeightField {
+                            origin: [0.0; 2],
+                            cell: bed.layer.cell(),
+                            size: bed.layer.size(),
+                        },
+                    );
+                    let row = soft_rows
+                        .iter()
+                        .find(|(name, _)| *name == bed.name)
+                        .map(|&(_, row)| row)
+                        .expect("a row for each bed's material");
+                    builder.set_mesh_material(id, row);
+                    per_mesh.push((id, 1));
+                    yard::place(bed)
+                })
+                .collect();
             Skinned {
                 start,
                 kinds,
                 slimes,
                 birds,
+                beds,
             }
         });
     builder.reserve_movers(&per_mesh);
@@ -2383,6 +2465,15 @@ impl Lab {
                     });
                 }
             }
+            // The yard's beds: where they lie, their grounds' one joint unturned.
+            for &position in &skinned.beds {
+                skins.push(Mat4::IDENTITY);
+                movers.push(MoverTransform {
+                    position,
+                    rotation: Quat::IDENTITY,
+                    scale: 1.0,
+                });
+            }
         }
         movers
     }
@@ -2456,6 +2547,12 @@ impl Lab {
     /// Whether the scene has gulls (the camera follows the first).
     pub(crate) fn has_birds(&mut self) -> bool {
         !self.shown().birds.is_empty()
+    }
+
+    /// The yard's beds' heights after the last tick into `out` (#185), every bed's in turn, as
+    /// their grounds' height fields take them; empty without beds.
+    pub(crate) fn fields(&self, out: &mut Vec<f32>) {
+        yard::heights(&self.seen().beds, out);
     }
 
     /// Whether the scene has a car.
@@ -2970,6 +3067,36 @@ mod tests {
         for _ in 0..120 {
             second.tick(&[]);
         }
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_yard_keeps_its_prints_through_a_save_clears_them_on_a_reset_and_replays() {
+        let (mut first, _) = LabWorld::new(LabScene::Yard, test_pool()).unwrap();
+        for _ in 0..900 {
+            first.tick(&[]);
+        }
+        let untouched = yard::beds();
+        assert!(
+            first.beds.iter().zip(&untouched).all(|(a, b)| a != b),
+            "prints in both beds"
+        );
+        // Saved and restored into a fresh yard: the same prints, the same digest.
+        let state = first.save();
+        let (mut second, _) = LabWorld::new(LabScene::Yard, test_pool()).unwrap();
+        second.restore(&state);
+        assert_eq!(second.beds, first.beds);
+        assert_eq!(second.digest(), first.digest());
+        // On for a while, then back to the start: the beds untouched again, and the same run
+        // replayed to the same digests from the restored yard.
+        let commands = vec![Stamped {
+            tick: 1200,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Reset,
+        }];
+        let recording = Recording::record(&mut first, commands, 301, 60);
+        assert_eq!(first.beds, untouched);
         recording.replay(&mut second).expect("the same digests");
     }
 

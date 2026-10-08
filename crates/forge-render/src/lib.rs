@@ -70,6 +70,7 @@ pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
 pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
 };
+pub use skin::HeightField;
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyNight, SkyParams, sh_irradiance};
 pub use splashes::{
     SPLASH_CAPACITY, SplashFoam, SplashParams, SplashSource, SplashStats, WaterSplashes,

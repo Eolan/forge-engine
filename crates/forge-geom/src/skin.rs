@@ -13,7 +13,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use crate::lod;
-use crate::meshlet::{MeshletMesh, split_sections};
+use crate::meshlet::{GpuMeshlet, MeshletMesh, split_sections};
 use crate::page::{self, encode_normal};
 use crate::procedural::TriMesh;
 
@@ -111,17 +111,69 @@ impl SkinnedMesh {
     /// When `skin` does not have one entry per vertex of `mesh`.
     pub fn cook(mesh: &TriMesh, skin: &[VertexSkin], bound: ([f32; 3], f32)) -> Self {
         assert_eq!(skin.len(), mesh.positions.len(), "one skin per vertex");
-        let (vertices, indices, vertex_section, source) = split_sections(mesh);
-        let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
-        let mut dag = lod::build_dag(&indices, &vertices, &vertex_section, 0.0, 1);
         let (center, radius) = bound;
-        for m in &mut dag.meshlets {
+        Self::cook_with(mesh, skin, bound, |m| {
             m.center = center;
             m.radius = radius;
             m.self_center = center;
             m.self_radius = radius;
             m.parent_center = center;
             m.parent_radius = radius;
+        })
+    }
+
+    /// Cuts `mesh`, a surface a height field raises and lowers (#185's deformable ground), into
+    /// clusters the skin pass moves: every vertex on joint 0, which places the mesh, and each
+    /// cluster bounded by its own sphere grown by `reach`, the farthest the field moves a
+    /// vertex, so the culls still cut a large ground to what is seen.
+    pub fn cook_displaced(mesh: &TriMesh, reach: f32) -> Self {
+        let skin = vec![
+            VertexSkin {
+                joints: [0; 4],
+                weights: [1.0, 0.0, 0.0, 0.0],
+            };
+            mesh.positions.len()
+        ];
+        let (mut low, mut high) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for p in &mesh.positions {
+            for k in 0..3 {
+                low[k] = low[k].min(p[k]);
+                high[k] = high[k].max(p[k]);
+            }
+        }
+        let center: [f32; 3] = std::array::from_fn(|k| 0.5 * (low[k] + high[k]));
+        let radius = mesh
+            .positions
+            .iter()
+            .map(|p| {
+                (0..3)
+                    .map(|k| (p[k] - center[k]).powi(2))
+                    .sum::<f32>()
+                    .sqrt()
+            })
+            .fold(0.0, f32::max);
+        Self::cook_with(mesh, &skin, (center, radius + reach), |m| {
+            m.radius += reach;
+            m.self_center = m.center;
+            m.self_radius = m.radius;
+            m.parent_center = m.center;
+            m.parent_radius = m.radius;
+        })
+    }
+
+    /// The cook: `bound` is the mesh's sphere, `cluster` sets each cluster's bounds.
+    fn cook_with(
+        mesh: &TriMesh,
+        skin: &[VertexSkin],
+        bound: ([f32; 3], f32),
+        cluster: impl Fn(&mut GpuMeshlet),
+    ) -> Self {
+        let (vertices, indices, vertex_section, source) = split_sections(mesh);
+        let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
+        let mut dag = lod::build_dag(&indices, &vertices, &vertex_section, 0.0, 1);
+        let (center, radius) = bound;
+        for m in &mut dag.meshlets {
+            cluster(m);
             // No normal cone: the faces turn with the joints.
             m.cone_apex = [0.0; 3];
             m.cone_axis = [0.0; 3];
@@ -226,6 +278,57 @@ mod tests {
             }
         }
         assert_eq!(k, cooked.vertices.len());
+    }
+
+    #[test]
+    fn a_displaced_ground_s_clusters_keep_their_own_spheres_grown_by_its_reach() {
+        // A flat grid of 40 by 30 cells, 5 cm each.
+        let (nx, nz, cell) = (41u32, 31u32, 0.05f32);
+        let mut mesh = TriMesh::default();
+        for z in 0..nz {
+            for x in 0..nx {
+                mesh.positions.push([x as f32 * cell, 0.0, z as f32 * cell]);
+                mesh.normals.push([0.0, 1.0, 0.0]);
+            }
+        }
+        for z in 0..nz - 1 {
+            for x in 0..nx - 1 {
+                let v = z * nx + x;
+                mesh.indices
+                    .extend_from_slice(&[v, v + nx, v + 1, v + 1, v + nx, v + nx + 1]);
+            }
+        }
+        let reach = 0.1;
+        let cooked = SkinnedMesh::cook_displaced(&mesh, reach);
+        let m = &cooked.mesh;
+        assert_eq!(m.levels(), 1);
+        assert!(m.meshlets.len() > 10);
+        let mut k = 0;
+        for c in &m.meshlets {
+            assert_eq!(c.cone_cutoff, 1.0);
+            assert!(
+                c.radius < 0.8 * m.radius,
+                "a cluster's own sphere, not the ground's"
+            );
+            for _ in 0..c.vertex_count {
+                let v = &cooked.vertices[k];
+                assert_eq!((v.joints(), v.weights()), ([0; 4], [65535, 0, 0, 0]));
+                // Raised or lowered by the reach, the vertex stays in its cluster's sphere.
+                for dy in [-reach, reach] {
+                    let d: f32 = (0..3)
+                        .map(|i| {
+                            let p = v.position[i] + if i == 1 { dy } else { 0.0 };
+                            (p - c.center[i]).powi(2)
+                        })
+                        .sum::<f32>()
+                        .sqrt();
+                    assert!(d <= c.radius + 1e-5);
+                }
+                k += 1;
+            }
+        }
+        // The ground's, 2 m by 1.5 m: half its diagonal and the reach.
+        assert!((m.radius - 1.25 - reach).abs() < 1e-4);
     }
 
     #[test]

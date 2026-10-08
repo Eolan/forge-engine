@@ -1096,6 +1096,11 @@ and ramp, guided and their paws planted by IK: **0.095 ms a tick** (p99 0.16–0
 footfalls): **0.100 ms** (p99 0.15), the frame 1.64 ms.
 `--lab flyer` (#184), three gulls each with five flying surfaces posed by its clip: **0.048 ms a
 tick** (p99 0.11), the frame 1.44 ms.
+`--lab yard` (#185), the course's dogs on the plain floor pressing their footfalls into two beds
+of 43 600 heights (sand and snow): **0.113 ms a tick** (p99 0.19), the frame 1.72 ms. On the GPU
+the beds are two displaced meshes of 86 000 triangles each: `skin/vertices` 0.011 ms for 130 000
+vertices (the dogs' and the beds'), `skin/blas` 0.107 ms for the four structures. Their heights
+go up every frame: 349 KB.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

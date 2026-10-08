@@ -17,6 +17,7 @@
 
 pub mod aero;
 pub mod buoyancy;
+pub mod deform;
 mod ffi;
 pub mod shallow;
 

@@ -21,7 +21,7 @@ use crate::cells::CellPos;
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::probes::ProbeLight;
 use crate::raytrace::{self, SceneRays};
-use crate::skin::{SceneSkins, SkinPush, SkinSource};
+use crate::skin::{HeightField, SceneSkins, SkinPush, SkinSource};
 use crate::sky::SkyLight;
 use crate::streaming::{
     self, PageSource, PageStore, PageStreamer, Residency, StartView, StreamingStats,
@@ -1042,7 +1042,19 @@ impl MeshletSceneBuilder {
             meshlet_count: skinned.mesh.meshlets.len() as u32,
             joints,
             vertices: skinned.vertices.clone(),
+            field: None,
         });
+        id
+    }
+
+    /// Appends a displaced mesh (#185's deformable ground, [`SkinnedMesh::cook_displaced`]):
+    /// a skinned mesh of one joint, which places it, whose vertices `field` raises by the
+    /// heights [`MeshletScene::set_fields`] gives every frame, their normals following the
+    /// field's slopes. Its joint's matrix comes with the others' ([`MeshletScene::set_skins`]),
+    /// and it is shown with a mover as they are.
+    pub fn add_displaced_mesh(&mut self, displaced: &SkinnedMesh, field: HeightField) -> MeshId {
+        let id = self.add_skinned_mesh(displaced, 1);
+        self.skins.last_mut().expect("the mesh just added").field = Some(field);
         id
     }
 
@@ -1784,6 +1796,16 @@ impl MeshletScene {
     pub fn set_skins(&self, matrices: &[Mat4]) {
         if let Some(skins) = &self.skins {
             skins.set(matrices);
+        }
+    }
+
+    /// The displaced meshes' heights for the frame about to be drawn (#185): every height
+    /// field's ([`MeshletSceneBuilder::add_displaced_mesh`]) in the order they were added, each
+    /// row by row along x. Call it every frame the scene has displaced meshes, before drawing;
+    /// until the first call they are flat.
+    pub fn set_fields(&self, heights: &[f32]) {
+        if let Some(skins) = &self.skins {
+            skins.set_fields(heights);
         }
     }
 

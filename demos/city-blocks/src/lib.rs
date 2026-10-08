@@ -974,6 +974,10 @@ impl Gallery {
             renderer.sun_dir = lab::room::SUN.normalize();
             renderer.sun_color = Vec3::ONE;
         }
+        // The yard (#185): a low sun across the beds, the prints in raking light.
+        if args.lab == Some(lab::LabScene::Yard) {
+            renderer.sun_dir = lab::yard::SUN.normalize();
+        }
         // The night under the ground's sky (D-046) wherever the day turns: `--day`, `--time-of-day`.
         let night = ((args.day.is_some() || args.time_of_day.is_some())
             && space.is_none()
@@ -2129,6 +2133,12 @@ impl Demo for Gallery {
             self.scene.set_movers(&lab.movers(&mut skins));
             // The skinned creatures' joints (#165).
             self.scene.set_skins(&skins);
+            // The yard's beds' heights (#185).
+            let mut heights = Vec::new();
+            lab.fields(&mut heights);
+            if !heights.is_empty() {
+                self.scene.set_fields(&heights);
+            }
         }
         // The glass tank's liquid (#156): the statistics a frame in this slot asked for, then the
         // substeps the lab's ticks owe it, on the async compute queue.
@@ -3468,6 +3478,37 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
+        // The yard's beds (#185), the prints drawn by their own relief: fresh snow, white with
+        // a faint grain and sheen; damp sand, the island's darkened, its grain faint.
+        let snow = add(
+            "snow (fresh)",
+            RenderLayer {
+                albedo_texture: None,
+                normal_strength: 0.25,
+                ..textured(
+                    concrete,
+                    [0.86, 0.88, 0.92],
+                    [0.84, 0.86, 0.91],
+                    0.5,
+                    6.0,
+                    0.06,
+                )
+            },
+        );
+        let damp_sand = add(
+            "sand (damp)",
+            RenderLayer {
+                normal_strength: 0.3,
+                ..textured(
+                    concrete,
+                    [0.70, 0.60, 0.43],
+                    [0.76, 0.66, 0.48],
+                    2.0,
+                    10.0,
+                    0.04,
+                )
+            },
+        );
         let mut by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -3531,6 +3572,8 @@ impl CityMaterials {
             ("lab-dog-ramp", deck_wood),
             ("lab-landing", sandstone),
             ("lab-print", print),
+            ("lab-snow", snow),
+            ("lab-sand", damp_sand),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -5656,6 +5699,15 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             position: Vec3::new(3.3, 2.1, 0.6),
             yaw: std::f32::consts::FRAC_PI_2,
             pitch: -0.52,
+            speed: 6.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Yard) {
+        // Beside the beds and low over them, looking across both lanes: the prints' relief.
+        FlyCamera {
+            position: Vec3::new(2.4, 1.2, 0.8),
+            yaw: std::f32::consts::FRAC_PI_2,
+            pitch: -0.42,
             speed: 6.0,
             ..FlyCamera::default()
         }

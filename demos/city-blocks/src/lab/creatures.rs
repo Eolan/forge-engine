@@ -166,6 +166,9 @@ const DOGS: [(f64, f64); 2] = [(-1.1, 1.6), (1.1, 1.6)];
 pub(super) enum Ground {
     Flat,
     Course,
+    /// The floor alone, the dogs walking their lanes as on the course (`--lab yard`, #185:
+    /// over beds of sand and snow, which the physics does not see).
+    Yard,
 }
 
 /// A stretch of the course: a lane across x within `COURSE_HALF_WIDTH` of `x`, along z from
@@ -205,7 +208,7 @@ pub(super) const RAMP_THICKNESS: f64 = 0.1;
 
 /// The ground's height at (`x`, `z`) on `ground`: the floor's 0, or a stretch's top over it.
 fn ground_at(ground: Ground, x: f64, z: f64) -> f64 {
-    if ground == Ground::Flat {
+    if ground != Ground::Course {
         return 0.0;
     }
     COURSE
@@ -462,23 +465,31 @@ const PRINT_THICKNESS: f32 = 0.002;
 const PRINT_LIFT: f32 = 0.0005;
 
 /// Where the lab draws its `PRINTS` paw prints, slot by slot, into `out`: flat on the ground
-/// at each footfall, turned to its heading; the slots not filled yet parked out of sight at
+/// at each footfall, turned to its heading; the slots not filled yet, and the footfalls on a
+/// soft ground (`soft`'s materials, which keep their own prints, #185), parked out of sight at
 /// `parked`.
-pub(super) fn prints(feet: &Feet, parked: DVec3, out: &mut Vec<Transform>) {
+pub(super) fn prints(feet: &Feet, soft: &[&str], parked: DVec3, out: &mut Vec<Transform>) {
     for k in 0..PRINTS {
-        out.push(match feet.falls.get(k) {
-            Some(f) => {
-                let across = f.normal.cross(f.heading);
-                Transform {
-                    position: f.position + (f.normal * PRINT_LIFT).as_dvec3(),
-                    rotation: Quat::from_mat3(&Mat3::from_cols(across, f.normal, f.heading)),
+        out.push(
+            match feet
+                .falls
+                .get(k)
+                .and_then(Option::as_ref)
+                .filter(|f| !soft.contains(&f.material))
+            {
+                Some(f) => {
+                    let across = f.normal.cross(f.heading);
+                    Transform {
+                        position: f.position + (f.normal * PRINT_LIFT).as_dvec3(),
+                        rotation: Quat::from_mat3(&Mat3::from_cols(across, f.normal, f.heading)),
+                    }
                 }
-            }
-            None => Transform {
-                position: parked,
-                rotation: Quat::IDENTITY,
+                None => Transform {
+                    position: parked,
+                    rotation: Quat::IDENTITY,
+                },
             },
-        });
+        );
     }
 }
 
@@ -571,12 +582,13 @@ pub(super) struct Herd {
 
 /// The dogs' paws as they come down (#167's foot-down events, [`Herd::feel`]): whether each is
 /// down (the herd's dogs in order, four paws each), how many footfalls there have been, and the
-/// last `PRINTS` of them, the n-th in slot n % `PRINTS` (the lab draws a print in each).
+/// last `PRINTS` of them, the n-th in slot n % `PRINTS` (the lab draws a print in each; a slot no
+/// footfall filled since the start or a restore is empty).
 #[derive(Clone, Debug, Default)]
 pub(super) struct Feet {
     down: Vec<FootDown>,
     count: u64,
-    pub falls: Vec<Footfall<&'static str>>,
+    pub falls: Vec<Option<Footfall<&'static str>>>,
 }
 
 impl Feet {
@@ -605,6 +617,23 @@ impl Feet {
     /// Back to the start: no paw down, no footfall.
     pub(super) fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// The last `n` footfalls (at most `PRINTS`), in their slots' order.
+    pub(super) fn last_mut(
+        &mut self,
+        n: usize,
+    ) -> impl Iterator<Item = &mut Footfall<&'static str>> {
+        let n = n.min(PRINTS) as u64;
+        let first = self.count.saturating_sub(n);
+        let slots: Vec<usize> = (first..self.count)
+            .map(|k| (k % PRINTS as u64) as usize)
+            .collect();
+        self.falls
+            .iter_mut()
+            .enumerate()
+            .filter(move |(k, _)| slots.contains(k))
+            .filter_map(|(_, f)| f.as_mut())
     }
 }
 
@@ -672,6 +701,11 @@ pub(super) fn build(
                 .map(|(i, d)| dog(i, d))
                 .collect()
         }
+        Ground::Yard => DOGS_COURSE
+            .iter()
+            .enumerate()
+            .map(|(i, d)| dog(i, d))
+            .collect(),
     };
     let mannequin = shapes(Kind::Mannequin)?;
     let dog = shapes(Kind::Dog)?;
@@ -1173,7 +1207,7 @@ impl Herd {
             // down (`way`, +1 or −1 along z), turning about between its walks.
             let (yaw, way) = match self.ground {
                 Ground::Flat => (WALK_TURN * motion.walked(time + c.phase), 1.0),
-                Ground::Course => course_heading(time + c.phase),
+                Ground::Course | Ground::Yard => course_heading(time + c.phase),
             };
             let mut lift = 0.0;
             let mut torso = Vec::new();
@@ -1211,7 +1245,7 @@ impl Herd {
                 };
                 let pace = ((end - at.z) * PACE_GAIN).clamp(-WALK_PACE, WALK_PACE);
                 let guide = match self.ground {
-                    Ground::Course => Guide::Lane {
+                    Ground::Course | Ground::Yard => Guide::Lane {
                         x: c.stance.position.x,
                         pace: if walking { pace } else { 0.0 },
                     },
@@ -1314,12 +1348,8 @@ impl Herd {
             for mut fall in falls {
                 let area = std::f32::consts::PI * fall.size.x * fall.size.y;
                 fall.pressure = c.weight / down as f32 / area;
-                let slot = (feet.count % PRINTS as u64) as usize;
-                if slot < feet.falls.len() {
-                    feet.falls[slot] = fall;
-                } else {
-                    feet.falls.push(fall);
-                }
+                feet.falls.resize(PRINTS, None);
+                feet.falls[(feet.count % PRINTS as u64) as usize] = Some(fall);
                 feet.count += 1;
                 came += 1;
             }
@@ -1479,7 +1509,7 @@ mod tests {
             world.step(TICK, 1).expect("a step");
             let came = field.herd.feel(&world, u64::from(tick), &mut feet);
             for n in feet.count - came as u64..feet.count {
-                let fall = feet.falls[(n % PRINTS as u64) as usize];
+                let fall = feet.falls[(n % PRINTS as u64) as usize].expect("a footfall");
                 // The steps' dog walks the lane at x < 0, the ramp's the other.
                 falls.push((usize::from(fall.position.x > 0.0), fall));
             }

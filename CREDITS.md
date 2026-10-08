@@ -430,6 +430,10 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Fields", GDC 2008: depths on a grid, velocities on its faces carried along semi-Lagrangian,
   upwind fluxes kept from overdrawing a cell (`forge_physics::shallow`, #144; on the GPU,
   `forge_render::shallow`, #162). A. Ritter's dam-break solution (1892) for its test.
+- **Deformable snow and sand.** Colin Barré-Brisebois, "Deformable Snow Rendering in Batman:
+  Arkham Origins", GDC 2014: a height map of the snow that what walks through it writes into
+  and the renderer displaces the ground by (D-007; `forge_physics::deform` and the skin pass's
+  height fields, #185). The prints slump by Musgrave, Kolb and Mace's talus rule (above).
 - **The lab's particle liquid** (`forge_render::liquid`, #156, D-044):
   - **APIC:** Chenfanfu Jiang, Craig Schroeder, Andrew Selle, Joseph Teran and Alexey
     Stomakhin, "The Affine Particle-In-Cell Method", ACM SIGGRAPH 2015. The particles carry their

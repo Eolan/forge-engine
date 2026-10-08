@@ -266,6 +266,10 @@ for path in $paths; do
     capture "$path-lab-course1200" 1200 "$lab" --lab course --fixed-step "${flag[@]}"
     capture "$path-lab-flyer300" 300 "$lab" --lab flyer --fixed-step "${flag[@]}"
     capture "$path-lab-flyer600" 600 "$lab" --lab flyer --fixed-step "${flag[@]}"
+    # The dogs over their beds of sand and snow (#185): their prints pressed in on the way up at
+    # tick 600, and both ways at 1200.
+    capture "$path-lab-yard600" 600 "$lab" --lab yard --fixed-step "${flag[@]}"
+    capture "$path-lab-yard1200" 1200 "$lab" --lab yard --fixed-step "${flag[@]}"
     # The flood (#144), the gate lifted at tick 31: the water running down the basin at tick
     # 150 and its A/B twin, and spread round the blocks at tick 300.
     capture "$path-lab-flood150" 150 "$lab" --lab flood --fixed-step --release 31 "${flag[@]}"
