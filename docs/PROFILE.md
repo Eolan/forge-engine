@@ -1084,7 +1084,8 @@ them (#179: a Jolt soft body of 258 points and 512 triangles, five iterations, h
 **0.180 ms a tick** (p99 0.27–0.30, max 0.44), two runs to the same digest. The tropical
 island's drop in its place (#180: its bends held by constraints too): **0.237 ms** (p99
 0.35–0.40, max 0.55), two runs to the same digest; `shading/jelly` (D-051) 0.043 ms in the
-lab's view, 0.066 ms from 1 m before it, the frame 1.51 ms.
+lab's view, 0.066 ms from 1 m before it, the frame 1.51 ms. The four flavours (four slimes):
+**0.285 ms** (p99 0.48), `shading/jelly` 0.097 ms, the frame 1.58 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

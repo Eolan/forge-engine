@@ -608,6 +608,16 @@ mint, a little cloudy, the sun glowing through it.
 the creatures' tick **0.237 ms** (p99 0.35–0.40; the bends cost 0.057 ms), two runs to the same
 digest; `shading/jelly` **0.043 ms** in the lab's view, 0.066 ms from 1 m; the frame 1.51 ms.
 
+**The four flavours** (the owner's ask on #180): four slimes now, one in each of the island's
+flavours (`slime::FLAVOURS`: mint, blue, pink and yellow, its `slime_tint`), each with its rows:
+the jelly (what 0.3 m lets through, 0.25 + 0.75 of the tint, as the island mixed what lies
+behind; its cloud the tint), its eyes, and its nucleus (0.42 of the tint). Mint and blue sit
+before the dogs, pink and yellow between them; each hops in its own square, the left ones'
+turned the other way so each pair keeps apart, every 75 ticks, 19 ticks after the one before
+it. `flavours.png`: frames 60, 100 (mint and blue in the air) and 150. Costs (the same run):
+the tick **0.285 ms** (p99 0.48), two runs to the same digest; `shading/jelly` 0.097 ms; the
+frame 1.58 ms.
+
 **The clips through the motors** (#167's first three steps, 2026-10-08; `forge_anim::Player`,
 `Inertializer`, `BlendSpace`; `reports/2026-10-08-167/`). The creatures now play their Blender
 clips (idle and walk, `assets/blender/skinned_creatures.py`) through their motors, in place of

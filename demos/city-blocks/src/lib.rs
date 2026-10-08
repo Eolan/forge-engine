@@ -3366,43 +3366,46 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
-        // The slime (#179, #180), the tropical island's: mint jelly seen through, a little
-        // cloudy; its eyes (section 1) black and glossy, its nucleus (section 2) the jelly's
-        // colour darkened, as the island's (0.42 of its tint).
-        let slime = add(
-            "slime",
-            RenderLayer {
-                class: ShadingClass::Jelly,
-                // What 0.3 m of it lets through, and its cloud's colour: the island's mint
-                // (0.25, 0.95, 0.55).
-                color_a: [0.5, 0.96, 0.7],
-                color_b: [0.25, 0.95, 0.55],
-                // A cloud scattering 0.8 per metre (`bubbles` of a millimetre, as the ice's).
-                bubbles: 0.00053,
-                roughness: RenderLayer::roughness_for_power(400.0),
-                specular: 0.5,
-                reflectance: 0.025,
-                ..RenderLayer::default()
-            },
-        );
-        add(
-            "slime: eyes",
-            RenderLayer {
-                color_a: [0.02, 0.02, 0.04],
-                color_b: [0.02, 0.02, 0.04],
-                roughness: RenderLayer::roughness_for_power(300.0),
-                specular: 0.6,
-                ..RenderLayer::default()
-            },
-        );
-        add(
-            "slime: nucleus",
-            RenderLayer {
-                color_a: [0.105, 0.4, 0.23],
-                color_b: [0.105, 0.4, 0.23],
-                ..RenderLayer::default()
-            },
-        );
+        // The slimes (#179, #180), the tropical island's in its four flavours: jelly seen
+        // through, a little cloudy, each followed by its eyes' row (section 1, black and glossy)
+        // and its nucleus's (section 2, the jelly's tint darkened as the island's: 0.42 of it).
+        let mut slime_rows = Vec::new();
+        for (name, tint) in lab::SLIME_FLAVOURS {
+            slime_rows.push(add(
+                name,
+                RenderLayer {
+                    class: ShadingClass::Jelly,
+                    // What 0.3 m of it lets through (the island mixed what lies behind with
+                    // three quarters of the tint), and its cloud's colour, the tint.
+                    color_a: tint.map(|t| 0.25 + 0.75 * t),
+                    color_b: tint,
+                    // A cloud scattering 0.8 per metre (`bubbles` of a millimetre, as the ice's).
+                    bubbles: 0.00053,
+                    roughness: RenderLayer::roughness_for_power(400.0),
+                    specular: 0.5,
+                    reflectance: 0.025,
+                    ..RenderLayer::default()
+                },
+            ));
+            add(
+                "slime: eyes",
+                RenderLayer {
+                    color_a: [0.02, 0.02, 0.04],
+                    color_b: [0.02, 0.02, 0.04],
+                    roughness: RenderLayer::roughness_for_power(300.0),
+                    specular: 0.6,
+                    ..RenderLayer::default()
+                },
+            );
+            add(
+                "slime: nucleus",
+                RenderLayer {
+                    color_a: tint.map(|t| 0.42 * t),
+                    color_b: tint.map(|t| 0.42 * t),
+                    ..RenderLayer::default()
+                },
+            );
+        }
         let visor = add(
             "visor",
             RenderLayer {
@@ -3450,7 +3453,7 @@ impl CityMaterials {
             "squares (black and white)",
             textured(squares, [1.0; 3], [1.0; 3], 1.0, 4.0, 0.02),
         );
-        let by_prop = HashMap::from([
+        let mut by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
             ("lab-barrel", red_paint),
@@ -3458,7 +3461,6 @@ impl CityMaterials {
             ("lab-rock-2", rock),
             ("lab-rock-3", rock),
             ("lab-ball", rubber),
-            ("lab-slime", slime),
             ("lab-crate", crate_wood),
             ("lab-log", bark),
             ("lab-pillar", concrete_grey),
@@ -3535,6 +3537,9 @@ impl CityMaterials {
             ("island-log", bark),
             ("island-crate", crate_wood),
         ]);
+        for ((name, _), row) in lab::SLIME_FLAVOURS.into_iter().zip(slime_rows) {
+            by_prop.insert(name, row);
+        }
         Ok(Self {
             table,
             textures,

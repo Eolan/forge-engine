@@ -1,6 +1,7 @@
-//! The slime in `physics-lab --lab creatures` (#179, #180): the tropical island's slime (its
+//! The slimes in `physics-lab --lab creatures` (#179, #180): the tropical island's slime (its
 //! `meshgen::slime`, the owner's pick), a squat drop of mint jelly with a darker nucleus floating
-//! inside and two tall glossy eyes, as a Jolt soft body that hops before the dogs.
+//! inside and two tall glossy eyes, as Jolt soft bodies hopping before the dogs, one in each of
+//! the island's four flavours (mint, blue, pink, yellow; [`FLAVOURS`]).
 //!
 //! - **The body:** 258 points (an octahedron cut three times into four, then shaped into the
 //!   drop: its underside flattened, its sides bulging), held by their edges, their bends and the
@@ -35,8 +36,24 @@ const MASS: f32 = 2.5;
 const COMPLIANCE: f32 = 1.0e-3;
 const BEND_COMPLIANCE: f32 = 5.0e-2;
 const PRESSURE: f32 = 8.0;
-/// Where its middle starts: before the dogs, at the camera's feet, its bottom 2 cm up.
-const AT: DVec3 = DVec3::new(-0.2, (FLAT * HEIGHT) as f64 + 0.02, 2.3);
+/// The island's four flavours (`slime_tint` in its `slime.wgsl`): each slime's prop name (its
+/// rows in the material table: the jelly, its eyes, its nucleus) and its tint.
+pub(crate) const FLAVOURS: [(&str, [f32; 3]); 4] = [
+    ("lab-slime-mint", [0.25, 0.95, 0.55]),
+    ("lab-slime-blue", [0.30, 0.70, 1.00]),
+    ("lab-slime-pink", [1.00, 0.55, 0.80]),
+    ("lab-slime-yellow", [1.00, 0.85, 0.30]),
+];
+/// Where each slime's middle starts (x, z; its bottom 2 cm up): two before the dogs, two
+/// between them. Which way its square of hops turns (1: its first hop towards +x, −1: −x), so
+/// each pair's two keep apart, and how many ticks after the first slime's its hops come, so
+/// they hop out of step.
+const STARTS: [(f64, f64, f32, u64); 4] = [
+    (-0.45, 2.3, -1.0, 0),
+    (0.45, 2.3, 1.0, 19),
+    (-0.35, 1.25, -1.0, 38),
+    (0.35, 1.25, 1.0, 56),
+];
 /// A hop every `HOP` ticks: the speed it takes up, and along its way, m/s, its way turning a
 /// quarter each hop (a square it comes back round).
 const HOP: u64 = 75;
@@ -62,10 +79,12 @@ const NUCLEUS: [f32; 3] = [0.09, 0.072, 0.084];
 /// body's middle is, while the points under it would swing it apart as the bottom flattens.
 const WAIST: [(u32, f32); 4] = [(0, 0.25), (1, 0.25), (4, 0.25), (5, 0.25)];
 
-/// The slime's body.
+/// A slime: its body, which way its square of hops turns, and its hops' delay (`STARTS`).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Slime {
     pub body: BodyId,
+    turn: f32,
+    delay: u64,
 }
 
 /// The slime's surfaces: its points as the soft body takes them, and the finer mesh drawn with
@@ -325,31 +344,40 @@ fn under(points: &[Vec3], faces: &[[u32; 3]], d: Vec3) -> Vec<(u32, f32)> {
     unreachable!("every direction meets the closed drop")
 }
 
-/// Adds the slime to `world`.
-pub(super) fn build(world: &mut World) -> Result<Slime> {
+/// Adds the four slimes to `world`, in the order of [`FLAVOURS`].
+pub(super) fn build(world: &mut World) -> Result<Vec<Slime>> {
     let s = surface();
-    let body = world.add_soft_body(&SoftBodyDesc {
-        points: &s.points,
-        faces: &s.faces,
-        position: AT,
-        inverse_mass: POINTS as f32 / MASS,
-        compliance: COMPLIANCE,
-        bend_compliance: BEND_COMPLIANCE,
-        pressure: PRESSURE,
-        friction: 0.8,
-        restitution: 0.0,
-        iterations: 5,
-        user_data: 0,
-    })?;
-    Ok(Slime { body })
+    STARTS
+        .iter()
+        .map(|&(x, z, turn, delay)| {
+            let body = world.add_soft_body(&SoftBodyDesc {
+                points: &s.points,
+                faces: &s.faces,
+                position: DVec3::new(x, f64::from(FLAT * HEIGHT) + 0.02, z),
+                inverse_mass: POINTS as f32 / MASS,
+                compliance: COMPLIANCE,
+                bend_compliance: BEND_COMPLIANCE,
+                pressure: PRESSURE,
+                friction: 0.8,
+                restitution: 0.0,
+                iterations: 5,
+                user_data: 0,
+            })?;
+            Ok(Slime { body, turn, delay })
+        })
+        .collect()
 }
 
 impl Slime {
-    /// Before the step of tick `tick`: a hop every [`HOP`] ticks.
+    /// Before the step of tick `tick`: a hop every [`HOP`] ticks, `delay` ticks late.
     pub(super) fn drive(self, world: &mut World, tick: u64) {
-        if tick % HOP == HOP - 1 {
-            let [x, z] = WAYS[(tick / HOP % 4) as usize];
-            world.push_soft_body(self.body, Vec3::new(HOP_ALONG * x, HOP_UP, HOP_ALONG * z));
+        let Some(t) = tick.checked_sub(self.delay) else {
+            return;
+        };
+        if t % HOP == HOP - 1 {
+            let [x, z] = WAYS[(t / HOP % 4) as usize];
+            let along = Vec3::new(self.turn * x, 0.0, z) * HOP_ALONG;
+            world.push_soft_body(self.body, along + Vec3::Y * HOP_UP);
         }
     }
 
@@ -462,34 +490,45 @@ mod tests {
     }
 
     #[test]
-    fn the_slime_sits_squat_and_hops() {
+    fn the_slimes_sit_squat_and_hop_in_turn() {
         let mut world = World::new(&WorldDesc::default());
         let floor = Shape::cuboid(Vec3::new(10.0, 0.5, 10.0), 0.05, 1000.0).unwrap();
         world
             .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
             .unwrap();
-        let slime = build(&mut world).unwrap();
+        let slimes = build(&mut world).unwrap();
+        assert_eq!(slimes.len(), FLAVOURS.len());
         let mut points = Vec::new();
         let span = |points: &[Vec3]| {
             points
                 .iter()
                 .fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p.y), h.max(p.y)))
         };
-        let mut highest = f32::MIN;
-        for tick in 0..HOP + 30 {
-            slime.drive(&mut world, tick);
-            world.step(1.0 / 60.0, 1).unwrap();
-            slime.points(&world, &mut points);
-            if tick == HOP - 2 {
-                let (low, high) = span(&points);
-                eprintln!("SLIME sits {low} to {high}");
-                assert!(low > -0.02 && high < 0.45, "sits {low} to {high}");
+        // Each one's bottom at its highest in its first hop, and the tick it was.
+        let mut highest = [(f32::MIN, 0); 4];
+        let last = STARTS.iter().map(|s| s.3).max().unwrap() + HOP + 30;
+        for tick in 0..last {
+            for s in &slimes {
+                s.drive(&mut world, tick);
             }
-            if tick >= HOP {
-                highest = highest.max(span(&points).0);
+            world.step(1.0 / 60.0, 1).unwrap();
+            for (k, s) in slimes.iter().enumerate() {
+                s.points(&world, &mut points);
+                let (low, high) = span(&points);
+                if tick == HOP - 2 {
+                    assert!(low > -0.02 && high < 0.45, "slime {k} sits {low} to {high}");
+                }
+                let first = HOP - 1 + STARTS[k].3;
+                if (first..first + 40).contains(&tick) && low > highest[k].0 {
+                    highest[k] = (low, tick);
+                }
             }
         }
-        eprintln!("SLIME hops {highest}");
-        assert!(highest > 0.2, "its bottom rose to {highest} m");
+        for (k, &(low, tick)) in highest.iter().enumerate() {
+            assert!(low > 0.2, "slime {k}'s bottom rose to {low} m");
+            // At the top of its own hop, its delay after the first's.
+            let top = HOP - 1 + STARTS[k].3 + 17;
+            assert!(tick.abs_diff(top) < 8, "slime {k} highest at tick {tick}");
+        }
     }
 }
