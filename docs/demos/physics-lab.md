@@ -984,7 +984,10 @@ beds.
 - **Saved, digested and reset** with the lab: every height to the bit, and the car's grounds as
   Jolt holds them (#191). They lag their beds by up to a millimetre, so grounds rebuilt from the
   beds on a restore put a car standing on them a fraction off its saved run: a save taken with
-  the car spinning in its sand went its own way within a second.
+  the car spinning in its sand went its own way within a second. The autopilot times its stop
+  in the sand from the run's start, the tick of the last reset, saved and digested with the lab
+  (#195): the clock runs on through a reset (recordings need it), and timed by it the car
+  crossed its sand without stopping on every run after the first.
 
 Over 26 s the dogs press 38 footfalls into their sand, 51 into their mud and 70 into their
 snow (16, 16 and 18 on the floor before #194, which missed most steps). The prints are 1.2 cm deep in the sand, 1.9 cm in the mud (as deep as its 56° walls let a
@@ -1011,7 +1014,8 @@ the mud and sunk 9 cm and more into it, its mud berms low and even and its snow 
 (#188, #189), stopped in its sand and pulled away hard, its front treads running over 5 m/s
 past it and its holes 2 cm and more below its ruts (#191), replayed to the bit; a saved yard
 restores its prints and treads, a reset clears them, and a recording replays to the same
-digests, also from a save taken while the car spins in its sand.
+digests, also from a save taken while the car spins in its sand; after a reset the car stops in
+its sand again and spins out (#195).
 
 Left: the layer clip-mapped round the player on the island (D-007), finer treads on finer
 beds, the weather refilling it, water pooling in the prints, the dogs' beds felt by the physics, a

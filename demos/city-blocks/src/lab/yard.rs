@@ -108,13 +108,14 @@ pub(super) const CAR_START: f64 = 9.0;
 const CRUISE: f32 = 3.0;
 const STOP_Z: f64 = -7.0;
 /// The autopilot's stop in the deep sand (#191): past `HALT` (z) it brakes, standing with all
-/// four wheels in the sand, until tick `LAUNCH` (a second or so after); then it pulls away at full
-/// throttle until past the sand's far end (z), its driven wheels spinning and digging in. (In
+/// four wheels in the sand, until the run's tick `LAUNCH` (a second or so after; the run counts
+/// from the last reset, #195); then it pulls away at full throttle until past the sand's far
+/// end (z), its driven wheels spinning and digging in. (In
 /// the deep mud a standing car would never pull away: its grip moves it less than a quarter of
 /// its weight, which ploughing that mud takes.)
-const HALT: f64 = -2.55;
-const LAUNCH: u64 = 460;
-const SAND_END: f64 = -4.6;
+pub(super) const HALT: f64 = -2.55;
+pub(super) const LAUNCH: u64 = 460;
+pub(super) const SAND_END: f64 = -4.6;
 /// A tyre's footprint, half its width and half its length along the ground (metres), over
 /// which its load presses; and the patch it presses, 2 cm wider each side, so its rut holds the
 /// whole tyre and the berms rise beyond it, not under its edges.
@@ -226,7 +227,7 @@ pub(super) fn press<'a>(
 /// else the autopilot's, which keeps it to its lane (against its offset and its heading) at its
 /// pace, stops it in its sand (`HALT`) and pulls away hard at tick `LAUNCH` (#191), and brakes
 /// it to a stop past the beds. Either way, the soft grounds under its wheels hold it back
-/// (#187).
+/// (#187). `tick` is the run's, counted from the last reset (#195).
 pub(super) fn drive(world: &mut World, driver: &Driver, beds: &[Bed], tick: u64) {
     let Some((chassis, vehicle)) = driver.car else {
         return;
@@ -551,7 +552,7 @@ pub(super) fn settle(world: &mut World, beds: &mut [Bed], grounds: &mut [Ground]
 /// root of its sinkage over its diameter (a rigid wheel's entry angle, `sqrt(z / 2r)`, halved
 /// for a tyre that flattens), and the wheels' radius (the drive lab's car's).
 const ROLLING: f32 = 0.6;
-const WHEEL_RADIUS: f32 = 0.31;
+pub(super) const WHEEL_RADIUS: f32 = 0.31;
 /// Under this pace (m/s) a wheel's hold eases off, so a stopped car is not pushed back.
 const ROLLING_PACE: f32 = 0.5;
 /// How far ahead of a wheel its press reaches at least, metres, and how much rounder than the

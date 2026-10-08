@@ -518,6 +518,9 @@ pub(crate) struct LabWorld {
     thrown: Vec<BodyId>,
     next_throw: u32,
     tick: u64,
+    /// The tick of the last reset (0 before any): the yard's autopilot times its stop in the
+    /// sand from it (#195).
+    started: u64,
     start: Vec<u8>,
     /// The sea scene's: the waves, the bodies they push and their hulls, the boat.
     sea: Option<sea::Sea>,
@@ -1212,6 +1215,7 @@ impl LabWorld {
                 thrown,
                 next_throw: 0,
                 tick: 0,
+                started: 0,
                 start,
                 sea: (kind == LabScene::Sea).then(sea::Sea::new),
                 floaters,
@@ -1404,6 +1408,7 @@ impl Simulation for LabWorld {
                     }
                     self.start = start;
                     self.next_throw = 0;
+                    self.started = self.tick;
                     self.feet.clear();
                     if !self.beds.is_empty() {
                         self.beds = yard::beds();
@@ -1519,7 +1524,12 @@ impl Simulation for LabWorld {
         if self.beds.is_empty() {
             self.driver.tick(&mut self.world);
         } else {
-            yard::drive(&mut self.world, &self.driver, &self.beds, self.tick);
+            yard::drive(
+                &mut self.world,
+                &self.driver,
+                &self.beds,
+                self.tick - self.started,
+            );
         }
         if let Some(convoy) = &self.convoy {
             convoy.tick(&mut self.world);
@@ -1598,6 +1608,7 @@ impl Simulation for LabWorld {
 
     fn save(&mut self) -> Vec<u8> {
         let mut out = self.tick.to_le_bytes().to_vec();
+        out.extend_from_slice(&self.started.to_le_bytes());
         out.extend_from_slice(&self.next_throw.to_le_bytes());
         // The dogs' paws down and their footfalls' count.
         let (down, falls) = self.feet.state();
@@ -1634,6 +1645,7 @@ impl Simulation for LabWorld {
 
     fn restore(&mut self, state: &[u8]) {
         let (tick, rest) = state.split_at(8);
+        let (started, rest) = rest.split_at(8);
         let (next, rest) = rest.split_at(4);
         let (feet, rest) = rest.split_at(16);
         let (flock, mut rest) = rest.split_at(32 * self.birds.len());
@@ -1664,6 +1676,7 @@ impl Simulation for LabWorld {
         let rest = yard::set_grounds(&mut self.world, &mut self.beds, &mut self.grounds, rest);
         let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
+        self.started = u64::from_le_bytes(started.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
         let (down, falls) = feet.split_at(8);
         self.feet.set_state((
@@ -1709,6 +1722,7 @@ impl Simulation for LabWorld {
     fn digest(&mut self) -> u64 {
         let mut d = self.world.digest(&self.bodies)
             ^ self.tick.rotate_left(17)
+            ^ self.started.rotate_left(41)
             ^ u64::from(self.next_throw);
         for (k, word) in self.words().into_iter().enumerate() {
             d ^= u64::from(word.to_bits()).rotate_left(7 * k as u32 + 3);
@@ -3210,6 +3224,51 @@ mod tests {
             "{after:?} points printed after the reset, {before:?} before"
         );
         recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_yard_car_stops_in_its_sand_and_spins_out_again_after_a_reset() {
+        let (mut lab, _) = LabWorld::new(LabScene::Yard, test_pool()).unwrap();
+        // Where the car is along its lane, its pace, and how far its faster driven wheel's tread
+        // runs past it (m/s).
+        let car = |lab: &LabWorld| {
+            let (chassis, vehicle) = lab.driver.car.expect("the yard's car");
+            let (mut t, mut v) = (Vec::new(), Vec::new());
+            lab.world.transforms(&[chassis], &mut t);
+            lab.world.velocities(&[chassis], &mut v);
+            let pace = v[0].linear.length();
+            let spin = lab.world.wheel_spins(vehicle)[..2]
+                .iter()
+                .fold(0.0_f32, |a, s| a.max(s.abs()));
+            (t[0].position.z, pace, spin * yard::WHEEL_RADIUS - pace)
+        };
+        // Its first run, past its sand and stopped beyond the beds; then back to the start.
+        for _ in 0..900 {
+            lab.tick(&[]);
+        }
+        let reset = Stamped {
+            tick: 900,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Reset,
+        };
+        lab.tick(&[reset]);
+        // Its second run, from that tick: it stands in its sand again until `LAUNCH` (#195), then
+        // floored, its driven wheels spin there.
+        for _ in 1..yard::LAUNCH {
+            lab.tick(&[]);
+        }
+        let (z, pace, _) = car(&lab);
+        assert!(
+            (yard::SAND_END..yard::HALT).contains(&z) && pace < 0.05,
+            "{pace} m/s at {z}"
+        );
+        let mut slip = f32::MIN;
+        for _ in 0..60 {
+            lab.tick(&[]);
+            slip = slip.max(car(&lab).2);
+        }
+        assert!(slip > 5.0, "the treads ran {slip} m/s past the car");
     }
 
     #[test]
