@@ -326,6 +326,12 @@ and after, or the F1 overlay's, in the report and in `docs/PROFILE.md`. The nois
 the same build against itself (2026-10-02, all views, 565 s) stayed within 0.04 ms per view.
 That is within 1 % except the island, at 1.400–1.439 ms (3 %).
 
+The baseline's tree needs the SDKs the current one has: the demos load `nrd-sdk/bin` and
+`streamline-sdk` from their own tree, and git ignores both. Without NRD the base draws the sun's
+shadows without SIGMA (D-049), and the city then seemed 0.05–0.07 ms slower in the new build
+(the Tier 2 of 2026-10-08, bisected to the trees, not to a commit). Copy them into the base's
+tree; `timings.sh` warns when the two trees differ.
+
 **Far from the origin (issue #93):** `tools/origins.sh OUT [BIN] [ORIGINS]` captures the
 city's south view and the ballad's frame 240 with the scene moved 10⁴, 10⁵, 10⁶ and 10⁷ m from
 the world's origin along every axis (`--origin`, the camera and everything anchored to the

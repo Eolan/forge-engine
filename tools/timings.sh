@@ -56,6 +56,17 @@ say() {
   [ "$keep" != 0 ] && echo "$@" >> "$summary"
   return 0
 }
+# The demos load NVIDIA's SDKs from their own tree (`nrd-sdk/bin`, `streamline-sdk`, both ignored
+# by git): a base tree without NRD draws the sun's shadows without SIGMA (D-049), and the new
+# build's denoiser showed as 0.05-0.07 ms of regression in the city (2026-10-08). Each build's
+# tree is two levels over its binaries.
+for sdk in nrd-sdk/bin streamline-sdk; do
+  in_base=no in_new=no
+  [ -d "$base/../../$sdk" ] && in_base=yes
+  [ -d "$new/../../$sdk" ] && in_new=yes
+  [ "$in_base" = "$in_new" ] ||
+    say "WARNING: $sdk in the base's tree: $in_base, in the new one's: $in_new; copy it so both draw alike"
+done
 
 # The exit line reads "forge_app: gpu: X ms ... zone Y, ..."; strip colours first.
 gpu() { sed 's/\x1b\[[0-9;]*m//g' "$log" | grep "forge_app: gpu:" | sed 's/.*gpu: \([0-9.]*\) ms.*/\1/'; }
