@@ -3073,6 +3073,16 @@ with the digest and how many started again).
 At 10 000 the frame is the CPU's: 13–14 ms. Packed along four rivers, those barrels also
 overflowed Jolt's default contacts, so the world's capacities now grow with the count.
 
+**Logs and crates** (2026-10-08). One floater in eight is a log (3 m, 0.2 m in radius, 240 kg,
+in bark) and one in eight a crate (0.7 m a side, 120 kg, pale wood), the sea lab's two; the towed
+and the dropped ones stay barrels (`afloat::Float`). Which is which follows from the count
+alone, so the island reserves each prop's movers before it knows its rivers; the table lists the
+barrels, then the logs, then the crates. Each has its own body, hull, mass, waterline for the
+water's floaters and wakes, and splash. Each starts lying across the stream
+(`kinds.png`: the first log and the first crate at frame 60, from the log's
+views `log=` and `crate_view=`). A test counts the kinds: 11 barrels, a log and a crate for
+`--movers 12`; the drift test now carries a log and a crate with the barrels.
+
 **Pictures** (`reports/2026-10-08-177/barrels.png`, `--movers 40`, the log's views, by rows):
 - the first barrel at frame 60 by a step;
 - the moored barrel at 1 s, carried with the stream, and at 20 s, held, the stream parting round
@@ -3097,7 +3107,7 @@ overflowed Jolt's default contacts, so the world's capacities now grow with the 
 - The sea's waves under barrels past the mouths: the sea there is still at its level, where
   the sea lab's barrels ride `SeaHeights`.
 - A physics level of detail for many barrels: far ones could sleep or follow their course.
-- Logs and crates on the rivers, and the boat of `--lab sea` on the island.
+- The boat of `--lab sea` on the island.
 
 ## A line across the lake (#178, the owner's report, 2026-10-08)
 

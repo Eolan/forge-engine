@@ -658,8 +658,16 @@ within the tolerance in under half their bytes, a constant track on no bits, the
   side it was bent and stretches 0.1 m short out of reach; a head turns to a point and stops at
   its limit; a foot comes down once a step.
 
-**Left in #167:** feet on uneven ground in the lab (steps under the dogs' paths, a ray under
-each paw, the legs' IK before the targets), and the foot-down events feeding D-007.
+**Tried, not kept: the dogs' feet on uneven ground** (2026-10-08). Each paw was put on the ground
+under it by `two_bone`, the torso placed where its balance holds it over the paws' mean ground
+(placed where it actually was, a sagging torso folded the legs and sagged further).
+- On 8 cm platforms the paws, which swing a few centimetres high, caught on the edges and the
+  dogs turned away.
+- On 11° slopes the dogs were thrown about 2 m as they walked onto them, the IK fighting the
+  slab's contacts.
+
+**Left in #167:** the feet on uneven ground (lifted swings, or the contacts kept out of the IK's
+way), and the foot-down events feeding D-007.
 
 ## `flood`: a dam break (issue #144)
 

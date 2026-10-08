@@ -22,3 +22,7 @@ the log's views (`barrels afloat on the rivers (--movers)`).
 | 10 001 | 13.6 ms | 28.9 ms | 2 in 10 s |
 
 The ground: 71 height-field tiles of 64 × 64 samples, made in 54 ms.
+
+`kinds.png` (added with the logs and crates, 2026-10-08): the first log
+(`2379.2,11.10,-3393.5,-100.2,-21.8`) and the first crate (`264.1,28.59,3184.2,-100.8,-20.6`) at
+frame 60, `--movers 40`: one floater in eight a log, one in eight a crate.

@@ -1343,6 +1343,17 @@ impl Gallery {
                 // downstream; and of the towed barrel at frame 300, its wake grown, from 10 m
                 // inside its circle and 8 m over it, looking back along its wake (#107).
                 let view = barrels.view_of(0, 1.0, 4.0, 1.5, 0.0);
+                // And of the first log and the first crate (#177), the same way.
+                let log = if args.movers > 4 {
+                    barrels.view_of(3, 1.0, 5.0, 2.0, 0.0)
+                } else {
+                    String::from("none")
+                };
+                let crate_ = if args.movers > 7 {
+                    barrels.view_of(6, 1.0, 4.0, 1.5, 0.0)
+                } else {
+                    String::from("none")
+                };
                 let moored = barrels.moored_in(1.2).map_or(String::from("none"), |k| {
                     barrels.view_of(k, 0.0, 6.0, 7.0, 1.5)
                 });
@@ -1373,6 +1384,8 @@ impl Gallery {
                     tiles = barrels.tiles,
                     ms = start.elapsed().as_millis(),
                     %view,
+                    %log,
+                    crate_view = %crate_,
                     %moored,
                     %towed,
                     %dropped,
@@ -3481,6 +3494,8 @@ impl CityMaterials {
             ("fountain", stone),
             ("lamp-post", metal),
             ("barrel", metal),
+            ("island-log", bark),
+            ("island-crate", crate_wood),
         ]);
         Ok(Self {
             table,
@@ -5711,9 +5726,10 @@ fn island_props(args: &Args) -> Vec<PropSpec> {
         props.extend(island_stone_props(args.stone_normals));
         props.extend(island_cobble_props(args.stone_normals));
     }
-    // The movers' barrel last (#79), after the rocks.
+    // The movers' barrel, log and crate last (#79, #177), after the rocks.
     if args.movers > 0 {
         props.push(barrel_prop());
+        props.extend(afloat::props());
     }
     props
 }
@@ -6454,8 +6470,9 @@ fn build_island(
     let first = builder.reserve_instances(&placement::mesh_counts(&layout, &meshes));
     // The movers (#79), the table's last instances: their transforms come every frame.
     if args.movers > 0 {
-        let barrel = *ids.last().expect("the barrel");
-        builder.reserve_movers(&[(barrel, Barrels::movers(args.movers))]);
+        let [barrel, log, crate_] = [3, 2, 1].map(|from_end| ids[ids.len() - from_end]);
+        let [barrels, logs, crates] = Barrels::movers(args.movers);
+        builder.reserve_movers(&[(barrel, barrels), (log, logs), (crate_, crates)]);
     }
     // No rock on the cells the channels are carved in or the lakes' shores smoothed (the
     // placement reads the 8 m samples, which those cells no longer follow), nor under a lake:

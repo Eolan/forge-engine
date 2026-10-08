@@ -17,6 +17,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use anyhow::Result;
+use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_physics::buoyancy::{Fluid, Hull, Water, push};
 use forge_physics::{BodyDesc, BodyId, Shape, Transform, Velocity, World, WorldDesc};
 use forge_procgen::Field2;
@@ -408,10 +409,146 @@ enum Role {
     Dropped,
 }
 
-/// A barrel: its body, what it does, and how long it has been stranded, at sea or stuck, and
-/// how many times it started again.
+/// What floats (#177's logs and crates beside the barrels): a metal drum, a log, a wooden crate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Float {
+    Barrel,
+    Log,
+    Crate,
+}
+
+/// A log's radius and length, and a crate's half side, metres (the sea lab's, #138).
+pub(crate) const LOG_RADIUS: f32 = 0.2;
+pub(crate) const LOG_LENGTH: f32 = 3.0;
+pub(crate) const CRATE_HALF: f32 = 0.35;
+
+impl Float {
+    /// Which of `count` (`--movers`) floater `k` is: one in eight a log, one in eight a crate,
+    /// the rest barrels, the towed one and the dropped one barrels too. By the count alone, so
+    /// the scene reserves each prop's movers before the rivers are known.
+    pub(crate) fn of(k: u32, count: u32) -> Self {
+        if count > 1 && k >= count - 1 {
+            return Self::Barrel;
+        }
+        match k % 8 {
+            3 => Self::Log,
+            6 => Self::Crate,
+            _ => Self::Barrel,
+        }
+    }
+
+    /// The order the movers' props come in the table.
+    const ALL: [Float; 3] = [Float::Barrel, Float::Log, Float::Crate];
+
+    /// Its body's origin to its middle, in its frame: a barrel's and a log's origin is the
+    /// middle of their bottom (their lathe's axis +y), a crate's its middle.
+    fn up(self) -> Vec3 {
+        match self {
+            Self::Barrel => Vec3::Y * (0.5 * BARREL_LENGTH),
+            Self::Log => Vec3::Y * (0.5 * LOG_LENGTH),
+            Self::Crate => Vec3::ZERO,
+        }
+    }
+
+    /// Half its length lying across its way (the water's floater and wake waterline), and half
+    /// its height lying there, metres.
+    fn half_length(self) -> f32 {
+        match self {
+            Self::Barrel => 0.5 * BARREL_LENGTH,
+            Self::Log => 0.5 * LOG_LENGTH,
+            Self::Crate => CRATE_HALF,
+        }
+    }
+
+    fn half_height(self) -> f32 {
+        match self {
+            Self::Barrel => BARREL_RADIUS,
+            Self::Log => LOG_RADIUS,
+            Self::Crate => CRATE_HALF,
+        }
+    }
+
+    /// Kilograms: the drum partly full (40 % under), wood (64 % under), a crate's planks and
+    /// air (35 % under).
+    fn mass(self) -> f32 {
+        match self {
+            Self::Barrel => BARREL_MASS,
+            Self::Log => 240.0,
+            Self::Crate => 120.0,
+        }
+    }
+
+    /// Its volume, m³.
+    fn volume(self) -> f32 {
+        let pi = std::f32::consts::PI;
+        match self {
+            Self::Barrel => pi * BARREL_RADIUS * BARREL_RADIUS * BARREL_LENGTH,
+            Self::Log => pi * LOG_RADIUS * LOG_RADIUS * LOG_LENGTH,
+            Self::Crate => 8.0 * CRATE_HALF * CRATE_HALF * CRATE_HALF,
+        }
+    }
+
+    /// Its body's shape, its origin as [`Float::up`] has it.
+    fn shape(self) -> Result<Shape> {
+        let up = |h: f32| Vec3::new(0.0, h, 0.0);
+        Ok(match self {
+            Self::Barrel => Shape::cylinder(0.5 * BARREL_LENGTH, BARREL_RADIUS, 0.03, 300.0)?
+                .offset(up(0.5 * BARREL_LENGTH), Quat::IDENTITY)?,
+            Self::Log => Shape::cylinder(0.5 * LOG_LENGTH, LOG_RADIUS, 0.03, 600.0)?
+                .offset(up(0.5 * LOG_LENGTH), Quat::IDENTITY)?,
+            Self::Crate => Shape::cuboid(Vec3::splat(CRATE_HALF), 0.02, 400.0)?,
+        })
+    }
+
+    /// Its hull as the water pushes it, in its body's frame.
+    fn hull(self) -> Hull {
+        match self {
+            Self::Barrel => Hull::cylinder(BARREL_RADIUS, BARREL_LENGTH, 0.0, 12, 2),
+            Self::Log => Hull::cylinder(LOG_RADIUS, LOG_LENGTH, 0.0, 12, 6),
+            Self::Crate => Hull::cuboid(Vec3::splat(CRATE_HALF), 2),
+        }
+    }
+}
+
+/// The island's log and crate (#177's), after the barrel ([`super::barrel_prop`]): the sea
+/// lab's, a log a lathe along +y from its bottom, a crate a block about its middle.
+pub(crate) fn props() -> [PropSpec; 2] {
+    [
+        PropSpec {
+            name: "island-log".to_owned(),
+            kind: PropKind::Lathe(Lathe {
+                profile: vec![
+                    (0.0, 0.0),
+                    (LOG_RADIUS - 0.03, 0.0),
+                    (LOG_RADIUS, 0.03),
+                    (LOG_RADIUS * 0.97, LOG_LENGTH * 0.5),
+                    (LOG_RADIUS, LOG_LENGTH - 0.03),
+                    (LOG_RADIUS - 0.03, LOG_LENGTH),
+                    (0.0, LOG_LENGTH),
+                ],
+                around: 40,
+                along: 48,
+                flutes: 0,
+                flute_depth: 0.0,
+                flute_span: (0.0, 0.0),
+            }),
+        },
+        PropSpec {
+            name: "island-crate".to_owned(),
+            kind: PropKind::Block(Block {
+                half: [CRATE_HALF; 3],
+                radius: 0.025,
+                segments: 4,
+            }),
+        },
+    ]
+}
+
+/// A barrel (or a log, or a crate): its body, what it is and does, and how long it has been
+/// stranded, at sea or stuck, and how many times it started again.
 struct Barrel {
     body: BodyId,
+    float: Float,
     role: Role,
     dry: f32,
     sea: f32,
@@ -422,6 +559,7 @@ struct Barrel {
 /// A barrel meeting the water fast: what [`SplashSource::Impact`] takes, for a second after.
 #[derive(Clone, Copy, Debug)]
 struct Meeting {
+    float: Float,
     position: Vec3,
     velocity: Vec3,
     time: f64,
@@ -432,8 +570,11 @@ struct Meeting {
 pub(crate) struct Barrels {
     world: World,
     waters: Waters,
-    hull: Hull,
-    shape: Shape,
+    /// Per [`Float`] (its `ALL` order): the hull the water pushes and the body's shape.
+    hulls: [Hull; 3],
+    shapes: [Shape; 3],
+    /// The floaters as the movers' table lists them: the barrels, then the logs, then the crates.
+    order: Vec<usize>,
     courses: Vec<Course>,
     barrels: Vec<Barrel>,
     /// `--movers`: the barrels on the rivers and the towed one, without the dropped one.
@@ -524,7 +665,7 @@ impl Barrels {
         let dropped = (count > 1)
             .then(|| towed.map_or((Vec2::ZERO, -1000.0), |(centre, _, level)| (centre, level)));
         let waters = Waters::new(height, rivers, lakes);
-        let movers = Self::movers(count);
+        let movers: u32 = Self::movers(count).iter().sum();
         // Room for every barrel touching a few others and the ground: 10 000 packed along four
         // rivers overflowed Jolt's default 32 768 contacts.
         let defaults = WorldDesc::default();
@@ -542,15 +683,19 @@ impl Barrels {
             })?;
         }
         world.optimize_broad_phase();
-        let half_length = 0.5 * BARREL_LENGTH;
-        let shape = Shape::cylinder(half_length, BARREL_RADIUS, 0.03, 300.0)?
-            .offset(Vec3::new(0.0, half_length, 0.0), Quat::IDENTITY)?;
-        let hull = Hull::cylinder(BARREL_RADIUS, BARREL_LENGTH, 0.0, 12, 2);
+        let floats: Vec<Float> = (0..movers).map(|k| Float::of(k, count)).collect();
+        let mut order: Vec<usize> = (0..floats.len()).collect();
+        order.sort_by_key(|&n| Float::ALL.iter().position(|&f| f == floats[n]));
         let mut this = Self {
             world,
             waters,
-            hull,
-            shape,
+            hulls: Float::ALL.map(Float::hull),
+            shapes: [
+                Float::Barrel.shape()?,
+                Float::Log.shape()?,
+                Float::Crate.shape()?,
+            ],
+            order,
             courses,
             barrels: Vec::with_capacity(movers as usize),
             count,
@@ -570,18 +715,19 @@ impl Barrels {
             pool: Arc::new(TaskPool::client()),
         };
         for k in 0..movers {
-            let role = this.role(k);
-            let (transform, velocity) = this.start(k, role, 0);
+            let (role, float) = (this.role(k), floats[k as usize]);
+            let (transform, velocity) = this.start(k, role, float, 0);
+            let shape = &this.shapes[float as usize];
             let body = this.world.add_body(&BodyDesc {
                 rotation: transform.rotation,
                 linear_velocity: velocity,
                 friction: 0.5,
                 restitution: 0.1,
-                mass: Some(BARREL_MASS),
-                ..BodyDesc::dynamic(&this.shape, transform.position)
+                mass: Some(float.mass()),
+                ..BodyDesc::dynamic(shape, transform.position)
             })?;
             if let Role::Moored { course } = role {
-                let centre = middle(transform);
+                let centre = middle(transform, float);
                 let points = &this.waters.rivers[this.courses[course].river];
                 let i = this.start_point(k, course);
                 let bed = f64::from(points[i].level - points[i].depth);
@@ -592,6 +738,7 @@ impl Barrels {
             }
             this.barrels.push(Barrel {
                 body,
+                float,
                 role,
                 dry: 0.0,
                 sea: 0.0,
@@ -605,17 +752,20 @@ impl Barrels {
         this.water = this
             .current
             .iter()
-            .map(|&t| {
-                let m = middle(t);
+            .zip(&this.barrels)
+            .map(|(&t, b)| {
+                let m = middle(t, b.float);
                 this.waters.at(m.x, m.z)
             })
             .collect();
         Ok(this)
     }
 
-    /// The movers the barrels take in the table: `--movers`, and the dropped barrel.
-    pub(crate) fn movers(count: u32) -> u32 {
-        count + u32::from(count > 1)
+    /// The movers the floaters take in the table, a prop each in [`Float`]'s order: the
+    /// `--movers` count and the dropped barrel, as [`Float::of`] makes them.
+    pub(crate) fn movers(count: u32) -> [u32; 3] {
+        let total = count + u32::from(count > 1);
+        Float::ALL.map(|f| (0..total).filter(|&k| Float::of(k, count) == f).count() as u32)
     }
 
     /// The rivers that carry barrels.
@@ -657,8 +807,8 @@ impl Barrels {
         c.point(&self.waters.rivers[c.river], share)
     }
 
-    /// Where barrel `k` of `role` starts for the `starts`-th time, and its velocity.
-    fn start(&self, k: u32, role: Role, starts: u32) -> (Transform, Vec3) {
+    /// Where floater `k` of `role`, a `float`, starts for the `starts`-th time, and its velocity.
+    fn start(&self, k: u32, role: Role, float: Float, starts: u32) -> (Transform, Vec3) {
         match role {
             Role::Carried { course } | Role::Moored { course } => {
                 let c = &self.courses[course];
@@ -683,6 +833,7 @@ impl Barrels {
                     lying(
                         Vec3::new(flat.x, p.level - 0.05, flat.y),
                         Vec3::new(across.x, 0.0, across.y),
+                        float,
                     ),
                     velocity,
                 )
@@ -695,6 +846,7 @@ impl Barrels {
                     lying(
                         Vec3::new(at.x, level - 0.05, at.y),
                         Vec3::new(-ahead.y, 0.0, ahead.x),
+                        float,
                     ),
                     Vec3::new(velocity.x, 0.0, velocity.y),
                 )
@@ -709,6 +861,7 @@ impl Barrels {
         lying(
             Vec3::new(centre.x, level - 0.05 + DROP_HEIGHT, centre.y),
             Vec3::X,
+            Float::Barrel,
         )
     }
 
@@ -739,8 +892,8 @@ impl Barrels {
         let held = self.drop_control(time);
         let mut pushes = vec![None; bodies.len()];
         {
-            let (hull, current, velocities, water, barrels) = (
-                &self.hull,
+            let (hulls, current, velocities, water, barrels) = (
+                &self.hulls,
                 &self.current,
                 &self.velocities,
                 &self.water,
@@ -756,7 +909,7 @@ impl Barrels {
                                 continue;
                             }
                             let p = push(
-                                hull,
+                                &hulls[barrels[n].float as usize],
                                 current[n],
                                 velocities[n],
                                 centres[n],
@@ -864,17 +1017,22 @@ impl Barrels {
         self.meetings.retain(|m| time - m.time <= 1.0);
         let dt = TICK as f32;
         for n in 0..self.barrels.len() {
-            let (before, now) = (middle(self.previous[n]), middle(self.current[n]));
+            let float = self.barrels[n].float;
+            let (before, now) = (
+                middle(self.previous[n], float),
+                middle(self.current[n], float),
+            );
             let water = self.water[n];
             let level = water.height(now.x, now.z);
             let v = self.velocities[n].linear;
-            let r = f64::from(BARREL_RADIUS);
+            let r = f64::from(float.half_height());
             if water.kind != Kind::Dry
                 && before.y - r > level
                 && now.y - r <= level
                 && v.y <= -SPLASH_SPEED
             {
                 self.meetings.push(Meeting {
+                    float,
                     position: Vec3::new(now.x as f32, level as f32, now.z as f32),
                     velocity: v,
                     time,
@@ -907,7 +1065,7 @@ impl Barrels {
                 barrel.starts += 1;
                 (barrel.dry, barrel.sea, barrel.slow) = (0.0, 0.0, 0.0);
                 let (role, starts, body) = (barrel.role, barrel.starts, barrel.body);
-                let (transform, velocity) = self.start(k, role, starts);
+                let (transform, velocity) = self.start(k, role, float, starts);
                 self.world.set_transform(body, transform);
                 self.world.set_velocity(
                     body,
@@ -932,10 +1090,12 @@ impl Barrels {
         }
     }
 
-    /// Their transforms as drawn, relative to the scene's origin (the sea's frame).
+    /// Their transforms as drawn, relative to the scene's origin (the sea's frame), in the
+    /// movers' table's order: the barrels, then the logs, then the crates.
     pub(crate) fn transforms(&self) -> Vec<MoverTransform> {
-        (0..self.barrels.len())
-            .map(|n| {
+        self.order
+            .iter()
+            .map(|&n| {
                 let t = self.drawn(n);
                 MoverTransform {
                     position: t.position.as_vec3(),
@@ -953,12 +1113,13 @@ impl Barrels {
         let mut near: Vec<(f32, WaterFloater)> = (0..self.barrels.len())
             .filter(|&n| self.water[n].kind != Kind::Dry)
             .map(|n| {
-                let centre = middle(self.drawn(n)).as_vec3();
+                let float = self.barrels[n].float;
+                let centre = middle(self.drawn(n), float).as_vec3();
                 let flat = Vec2::new(centre.x, centre.z);
                 let v = self.velocities[n].linear;
                 let floater = WaterFloater {
                     position: flat.to_array(),
-                    waterline: 0.5 * BARREL_LENGTH,
+                    waterline: float.half_length(),
                     velocity: [v.x, v.z],
                 };
                 (flat.distance_squared(camera), floater)
@@ -977,21 +1138,24 @@ impl Barrels {
         let mut near: Vec<(f32, WaterWake)> = (0..self.barrels.len())
             .filter(|&n| self.water[n].is_still())
             .filter_map(|n| {
-                let centre = middle(self.drawn(n));
+                let float = self.barrels[n].float;
+                let centre = middle(self.drawn(n), float);
                 let level = self.water[n].height(centre.x, centre.z);
                 // In the water, or just over it.
                 let over = (centre.y - level) as f32;
-                (-1.0..=BARREL_RADIUS + 0.05).contains(&over).then(|| {
-                    let flat = Vec2::new(centre.x as f32, centre.z as f32);
-                    let v = self.velocities[n].linear;
-                    let wake = WaterWake {
-                        position: flat.to_array(),
-                        waterline: 0.5 * BARREL_LENGTH,
-                        velocity: [v.x, v.z],
-                        rise: v.y,
-                    };
-                    (flat.distance_squared(camera), wake)
-                })
+                (-1.0..=float.half_height() + 0.05)
+                    .contains(&over)
+                    .then(|| {
+                        let flat = Vec2::new(centre.x as f32, centre.z as f32);
+                        let v = self.velocities[n].linear;
+                        let wake = WaterWake {
+                            position: flat.to_array(),
+                            waterline: float.half_length(),
+                            velocity: [v.x, v.z],
+                            rise: v.y,
+                        };
+                        (flat.distance_squared(camera), wake)
+                    })
             })
             .collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1002,15 +1166,14 @@ impl Barrels {
     /// fast in the last second, the drops running off the dropped barrel as it is lifted out,
     /// and the towed barrel's bow.
     pub(crate) fn splashes(&self, out: &mut Vec<SplashSource>) {
-        // Lying across its fall: the circle of its outline's area.
-        let radius = (2.0 * BARREL_RADIUS * BARREL_LENGTH / std::f32::consts::PI).sqrt();
-        let volume = std::f32::consts::PI * BARREL_RADIUS * BARREL_RADIUS * BARREL_LENGTH;
         for m in &self.meetings {
+            // Lying across its fall: the circle of its outline's area.
+            let (along, up) = (m.float.half_length(), m.float.half_height());
             out.push(SplashSource::Impact {
                 position: m.position,
                 velocity: m.velocity,
-                radius,
-                density: BARREL_MASS / (volume * FRESH.density),
+                radius: (4.0 * along * up / std::f32::consts::PI).sqrt(),
+                density: m.float.mass() / (m.float.volume() * FRESH.density),
                 time: m.time as f32,
                 seed: m.seed,
             });
@@ -1020,7 +1183,7 @@ impl Barrels {
                 Role::Dropped => {
                     // Out of the water and rising: drops run off its underside, fewer as it
                     // climbs.
-                    let centre = middle(self.drawn(n)).as_vec3();
+                    let centre = middle(self.drawn(n), barrel.float).as_vec3();
                     let level = self.water[n].level as f32;
                     let above = centre.y - BARREL_RADIUS - level;
                     let rise = self.velocities[n].linear.y;
@@ -1037,7 +1200,7 @@ impl Barrels {
                     }
                 }
                 Role::Towed => {
-                    let centre = middle(self.drawn(n)).as_vec3();
+                    let centre = middle(self.drawn(n), barrel.float).as_vec3();
                     let v = self.velocities[n].linear;
                     let ahead = Vec2::new(v.x, v.z).normalize_or_zero();
                     out.push(SplashSource::Bow {
@@ -1073,8 +1236,9 @@ impl Barrels {
                 (Vec3::new(at.x, level, at.y), Vec3::new(v.x, 0.0, v.y))
             }
             _ => {
-                let (t, v) = self.start(k, role, 0);
-                (middle(t).as_vec3(), v)
+                let float = Float::of(k, self.count);
+                let (t, v) = self.start(k, role, float, 0);
+                (middle(t, float).as_vec3(), v)
             }
         };
         if role != Role::Towed {
@@ -1122,19 +1286,23 @@ impl Barrels {
     }
 }
 
-/// A barrel lying with its middle at `centre` and its axis along `axis`: its body's transform
-/// (the body's origin at the middle of its bottom, its axis +y).
-fn lying(centre: Vec3, axis: Vec3) -> Transform {
-    let rotation = Quat::from_rotation_arc(Vec3::Y, axis.normalize_or(Vec3::X));
+/// A `float` lying with its middle at `centre` and its length along `axis` (a crate with a side
+/// along it, upright): its body's transform.
+fn lying(centre: Vec3, axis: Vec3, float: Float) -> Transform {
+    let axis = axis.normalize_or(Vec3::X);
+    let rotation = match float {
+        Float::Crate => Quat::from_rotation_arc(Vec3::X, axis),
+        _ => Quat::from_rotation_arc(Vec3::Y, axis),
+    };
     Transform {
-        position: (centre - rotation * Vec3::new(0.0, 0.5 * BARREL_LENGTH, 0.0)).as_dvec3(),
+        position: (centre - rotation * float.up()).as_dvec3(),
         rotation,
     }
 }
 
-/// The middle of a barrel whose body stands at `t`.
-fn middle(t: Transform) -> DVec3 {
-    t.position + (t.rotation * Vec3::new(0.0, 0.5 * BARREL_LENGTH, 0.0)).as_dvec3()
+/// The middle of a `float` whose body stands at `t`.
+fn middle(t: Transform, float: Float) -> DVec3 {
+    t.position + (t.rotation * float.up()).as_dvec3()
 }
 
 /// Where the towed barrel's line pulls towards at `time` seconds on its circle, and that
@@ -1261,10 +1429,11 @@ mod tests {
     fn barrels_drift_down_a_river_afloat_and_a_moored_one_holds() {
         let (start, end, _) = run();
         for k in 0..12 {
-            let (a, b) = (middle(start[k]), middle(end[k]));
+            let float = Float::of(k as u32, 12);
+            let (a, b) = (middle(start[k], float), middle(end[k], float));
             assert!(
                 (b.y - f64::from(LEVEL)).abs() < 0.25,
-                "barrel {k} afloat: its middle at {:.3}",
+                "{float:?} {k} afloat: its middle at {:.3}",
                 b.y
             );
             let moved = b.x - a.x;
@@ -1297,6 +1466,15 @@ mod tests {
         assert!(barrels.floaters(Vec2::ZERO).len() >= 12);
         barrels.wakes(Vec2::ZERO);
         barrels.splashes(&mut Vec::new());
+    }
+
+    #[test]
+    fn one_floater_in_eight_is_a_log_and_one_a_crate_the_towed_and_dropped_barrels() {
+        // Twelve, and the dropped one: logs at 3, crates at 6; 11 is the towed barrel.
+        assert_eq!(Barrels::movers(12), [11, 1, 1]);
+        assert_eq!(Barrels::movers(1), [1, 0, 0]);
+        assert_eq!(Barrels::movers(100), [77, 12, 12]);
+        assert_eq!(Float::of(99, 100), Float::Barrel);
     }
 
     #[test]

@@ -113,7 +113,7 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   tick, buoyancy by submerged triangles, a boat modelled in Blender read through glTF and driven
   by its outboard. The island's barrels afloat ✅ (#177, 2026-10-08): Jolt bodies on the
   rivers' current, the lakes and the sea, stopped by the ground's height fields, 1.1 ms a tick
-  for 1 000. Walking ✅ (#139, `--lab walk`): a
+  for 1 000, with logs and crates among them. Walking ✅ (#139, `--lab walk`): a
   character up stairs, stopped by steep ramps, carried by a platform, shoving crates. A car ✅
   (#140, `--lab drive`): Jolt's wheeled vehicle, a Blender model, a ramp, a slalom and a wall of
   crates. An aeroplane ✅ (#141, `--lab fly`): lift and drag on each flying surface, a take-off
