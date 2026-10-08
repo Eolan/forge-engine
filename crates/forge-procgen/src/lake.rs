@@ -121,71 +121,87 @@ pub fn lake_waters(
     min_area: f64,
 ) -> Vec<LakeWater> {
     let n = height.size as usize;
-    lakes
+    // Which water each sample is already part of: two lakes can be pockets of one sheet of water,
+    // apart where it stands shallower than the lakes' depth, and each traced the whole sheet.
+    // It was drawn twice, and an outlet trimmed one copy only, which left a straight line across
+    // the water (#178). The sheet is kept once, as deep as its deepest pocket.
+    let mut waters: Vec<LakeWater> = Vec::new();
+    let mut regions: Vec<HashSet<usize>> = Vec::new();
+    for (index, lake) in lakes
         .lakes
         .iter()
         .enumerate()
         .filter(|(_, lake)| lake.area(height.spacing) >= min_area)
-        .map(|(index, lake)| {
-            let level = lake.level;
-            let at_level = |i: usize| (filled.data[i] - level).abs() <= LEVEL_TOLERANCE;
-            let mut region: HashSet<usize> = lake.cells.iter().map(|&c| c as usize).collect();
-            let mut queue: VecDeque<usize> = lake.cells.iter().map(|&c| c as usize).collect();
-            while let Some(i) = queue.pop_front() {
-                let (x, y) = (i % n, i / n);
-                let neighbours = [
-                    (x > 0).then(|| i - 1),
-                    (x + 1 < n).then(|| i + 1),
-                    (y > 0).then(|| i - n),
-                    (y + 1 < n).then(|| i + n),
-                ];
-                for j in neighbours.into_iter().flatten() {
-                    if !region.contains(&j) && at_level(j) {
-                        region.insert(j);
-                        queue.push_back(j);
+    {
+        if let Some(w) = lake
+            .cells
+            .first()
+            .and_then(|&c| regions.iter().position(|r| r.contains(&(c as usize))))
+            && (waters[w].level - lake.level).abs() <= LEVEL_TOLERANCE
+        {
+            waters[w].depth = waters[w].depth.max(lake.depth);
+            continue;
+        }
+        let level = lake.level;
+        let at_level = |i: usize| (filled.data[i] - level).abs() <= LEVEL_TOLERANCE;
+        let mut region: HashSet<usize> = lake.cells.iter().map(|&c| c as usize).collect();
+        let mut queue: VecDeque<usize> = lake.cells.iter().map(|&c| c as usize).collect();
+        while let Some(i) = queue.pop_front() {
+            let (x, y) = (i % n, i / n);
+            let neighbours = [
+                (x > 0).then(|| i - 1),
+                (x + 1 < n).then(|| i + 1),
+                (y > 0).then(|| i - n),
+                (y + 1 < n).then(|| i + n),
+            ];
+            for j in neighbours.into_iter().flatten() {
+                if !region.contains(&j) && at_level(j) {
+                    region.insert(j);
+                    queue.push_back(j);
+                }
+            }
+        }
+        // The box of the region and a sample more all round, clamped to the field.
+        let (mut lo, mut hi) = ([usize::MAX; 2], [0usize; 2]);
+        for &i in &region {
+            let (x, y) = (i % n, i / n);
+            lo = [lo[0].min(x), lo[1].min(y)];
+            hi = [hi[0].max(x), hi[1].max(y)];
+        }
+        let lo = [lo[0].saturating_sub(1), lo[1].saturating_sub(1)];
+        let hi = [(hi[0] + 1).min(n - 1), (hi[1] + 1).min(n - 1)];
+        let size = [hi[0] - lo[0] + 1, hi[1] - lo[1] + 1];
+        let mut mask = vec![false; size[0] * size[1]];
+        for &i in &region {
+            let (x, y) = (i % n, i / n);
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    let (mx, my) = ((x + dx).wrapping_sub(1), (y + dy).wrapping_sub(1));
+                    if !(lo[0]..=hi[0]).contains(&mx) || !(lo[1]..=hi[1]).contains(&my) {
+                        continue;
+                    }
+                    let m = my * n + mx;
+                    if region.contains(&m) || height.data[m] >= level {
+                        mask[(my - lo[1]) * size[0] + (mx - lo[0])] = true;
                     }
                 }
             }
-            // The box of the region and a sample more all round, clamped to the field.
-            let (mut lo, mut hi) = ([usize::MAX; 2], [0usize; 2]);
-            for &i in &region {
-                let (x, y) = (i % n, i / n);
-                lo = [lo[0].min(x), lo[1].min(y)];
-                hi = [hi[0].max(x), hi[1].max(y)];
-            }
-            let lo = [lo[0].saturating_sub(1), lo[1].saturating_sub(1)];
-            let hi = [(hi[0] + 1).min(n - 1), (hi[1] + 1).min(n - 1)];
-            let size = [hi[0] - lo[0] + 1, hi[1] - lo[1] + 1];
-            let mut mask = vec![false; size[0] * size[1]];
-            for &i in &region {
-                let (x, y) = (i % n, i / n);
-                for dy in 0..3 {
-                    for dx in 0..3 {
-                        let (mx, my) = ((x + dx).wrapping_sub(1), (y + dy).wrapping_sub(1));
-                        if !(lo[0]..=hi[0]).contains(&mx) || !(lo[1]..=hi[1]).contains(&my) {
-                            continue;
-                        }
-                        let m = my * n + mx;
-                        if region.contains(&m) || height.data[m] >= level {
-                            mask[(my - lo[1]) * size[0] + (mx - lo[0])] = true;
-                        }
-                    }
-                }
-            }
-            LakeWater {
-                lake: index as u32,
-                level,
-                depth: lake.depth,
-                outlet: {
-                    let (x, y) = height.coords(lake.outlet as usize);
-                    [x, y]
-                },
-                first: [lo[0] as u32, lo[1] as u32],
-                size: [size[0] as u32, size[1] as u32],
-                mask,
-            }
-        })
-        .collect()
+        }
+        waters.push(LakeWater {
+            lake: index as u32,
+            level,
+            depth: lake.depth,
+            outlet: {
+                let (x, y) = height.coords(lake.outlet as usize);
+                [x, y]
+            },
+            first: [lo[0] as u32, lo[1] as u32],
+            size: [size[0] as u32, size[1] as u32],
+            mask,
+        });
+        regions.push(region);
+    }
+    waters
 }
 
 /// Paints the lakes' beds into `layers` (over the same square as `height`) as `layer`: every
@@ -229,6 +245,46 @@ mod tests {
     use crate::flow::{drain, priority_flood};
     use crate::hydrology::trace_lakes;
     use forge_task::{PoolConfig, TaskPool};
+
+    #[test]
+    fn two_pockets_of_one_sheet_of_water_are_one_water() {
+        // A plane rising east, a basin cut in it 0.3 m under its lowest rim, and two pockets 2 m
+        // deep in the basin's floor: two lakes deeper than half a metre, one sheet of water.
+        let field = Field2::from_fn(32, 10.0, |x, y| {
+            let plane = 10.0 + 0.1 * x as f32;
+            if !(8..=24).contains(&x) || !(8..=16).contains(&y) {
+                return plane;
+            }
+            let pocket = |cx: f32| {
+                let r = ((x as f32 - cx).powi(2) + (y as f32 - 12.0).powi(2)).sqrt();
+                2.0 * (1.0 - r / 2.5).max(0.0)
+            };
+            10.4 - pocket(12.0) - pocket(20.0)
+        });
+        let pool = TaskPool::new(PoolConfig::with_workers(0));
+        let flow = drain(&field, 0.0, &pool);
+        let filled = priority_flood(&field, 0.0);
+        let lakes = trace_lakes(&field, &filled, &flow, 0.5);
+        assert_eq!(
+            lakes.lakes.len(),
+            2,
+            "two pockets deeper than the threshold"
+        );
+        let waters = lake_waters(&field, &filled, &lakes, 0.0);
+        assert_eq!(waters.len(), 1, "one sheet of water, drawn once");
+        let water = &waters[0];
+        assert!(
+            (water.depth - 2.3).abs() < 0.1,
+            "as deep as its deepest pocket: {}",
+            water.depth
+        );
+        for lake in &lakes.lakes {
+            for &c in &lake.cells {
+                let (x, y) = field.coords(c as usize);
+                assert!(water.covers(x, y));
+            }
+        }
+    }
 
     #[test]
     fn a_basin_s_water_covers_its_depression_and_its_shore_but_not_past_its_outlet() {
