@@ -1,10 +1,11 @@
 //! Inverse kinematics (#167's step 4): a chain of two bones reaching a target (a leg putting
-//! its foot on the ground), a joint turned to look at a point, and when a foot comes down.
+//! its foot on the ground), a joint turned to look at a point, and when a foot comes down
+//! ([`FootDown`], and the event it makes, [`Footfall`]).
 //! Like the rest of the crate, without transcendental functions (D-016): the middle joint is
 //! placed by the law of cosines with a square root, and the joints turned by the arcs between
 //! directions (`Quat::from_rotation_arc`).
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 
 use crate::{Pose, Skeleton};
 
@@ -193,6 +194,33 @@ impl FootDown {
     pub fn is_down(&self) -> bool {
         self.down
     }
+
+    /// A foot down (`true`) or up, as a saved state gives it back (a rollback, a replay).
+    pub fn set_down(&mut self, down: bool) {
+        self.down = down;
+    }
+}
+
+/// A foot come down (D-012's foot-down event, #167), what D-007's deformation will print in
+/// snow, sand or mud and audio will sound: where and when, the ground's slope and material, the
+/// foot's shape on it and how hard it presses. `M` is how the caller names the ground's
+/// material (D-007's row, or a scene's own names).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Footfall<M> {
+    /// The simulation's tick.
+    pub tick: u64,
+    /// Where the foot's sole met the ground, in the world.
+    pub position: DVec3,
+    /// The ground's normal there.
+    pub normal: Vec3,
+    /// Which way the foot points, along the ground.
+    pub heading: Vec3,
+    /// The sole's half sizes on the ground, metres: across and along the heading.
+    pub size: Vec2,
+    /// How hard it presses, pascals: its share of the weight over the sole's area.
+    pub pressure: f32,
+    /// What it came down on.
+    pub material: M,
 }
 
 #[cfg(test)]

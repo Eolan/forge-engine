@@ -14,10 +14,11 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 use forge_anim::{
-    Chain, Clip, Inertializer, Pose, Rig, Skeleton, load_rigs, look_at, two_bone_toward,
+    Chain, Clip, FootDown, Footfall, Inertializer, Pose, Rig, Skeleton, load_rigs, look_at,
+    two_bone_toward,
 };
 use forge_core::dmath::{atan2, sin_cos};
-use forge_geom::city::{Block, PropKind, PropSpec};
+use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_geom::model::{Model, ModelMesh, load_glb};
 use forge_geom::{TriMesh, VertexSkin};
 use forge_physics::{
@@ -25,7 +26,7 @@ use forge_physics::{
     Transform, World,
 };
 use forge_sim::TICK;
-use glam::{DVec3, Mat3, Mat4, Quat, Vec3};
+use glam::{DVec3, Mat3, Mat4, Quat, Vec2, Vec3};
 
 /// A part of a kind of creature: its name in the model, its parent's index (parents first),
 /// how it turns on it.
@@ -263,10 +264,25 @@ pub(super) struct Body {
     points: Vec<Vec<Vec3>>,
     /// Per part, where its bone starts: its joint with its parent.
     pivot: [Vec3; PARTS],
+    /// A dog's paws, front left, front right, hind left, hind right; none for a mannequin.
+    paws: Vec<Paw>,
     /// How far from the root's middle any vertex can be, whatever the pose: the skinned mesh's
     /// bounds (the chain of bones to the vertex's joints, plus the vertex's distance from them).
     pub reach: f32,
 }
+
+/// A dog's paw as its footfalls see it (#167's foot-down events): its lower leg's part, its pad
+/// (the part's vertices within `PAD_HEIGHT` of its lowest, about the part's middle, in the bind
+/// pose), the pad's middle there and its half sizes across (x) and along (z, the dog faces −z).
+struct Paw {
+    part: usize,
+    pad: Vec<Vec3>,
+    middle: Vec3,
+    size: Vec2,
+}
+
+/// How high over a lower leg's lowest vertex its pad's reach, metres.
+const PAD_HEIGHT: f32 = 0.015;
 
 /// The creatures' model and their rigs, read once from `assets/models/skinned-creatures.glb`
 /// (`assets/blender/skinned_creatures.py`): the meshes, their textures (#166) and the clips.
@@ -360,6 +376,30 @@ fn body(kind: Kind, model: &ModelMesh, skeleton: &Skeleton) -> Body {
             })
         })
         .fold(0.0_f32, f32::max);
+    // A dog's paws: each lower leg's vertices within `PAD_HEIGHT` of its lowest.
+    let paws = match kind {
+        Kind::Dog => [4, 6, 8, 10]
+            .map(|part| {
+                let lowest = points[part].iter().map(|p| p.y).fold(f32::MAX, f32::min);
+                let pad: Vec<Vec3> = points[part]
+                    .iter()
+                    .copied()
+                    .filter(|p| p.y <= lowest + PAD_HEIGHT)
+                    .collect();
+                let (low, high) = pad.iter().fold(
+                    (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+                    |(lo, hi), &p| (lo.min(p), hi.max(p)),
+                );
+                Paw {
+                    part,
+                    middle: 0.5 * (low + high),
+                    size: 0.5 * Vec2::new(high.x - low.x, high.z - low.z),
+                    pad,
+                }
+            })
+            .into(),
+        Kind::Mannequin => Vec::new(),
+    };
     Body {
         mesh: model.mesh.clone(),
         skin,
@@ -368,13 +408,14 @@ fn body(kind: Kind, model: &ModelMesh, skeleton: &Skeleton) -> Body {
         middle,
         points,
         pivot,
+        paws,
         // A ragdoll's joints give a little under load.
         reach: reach * 1.1 + 0.05,
     }
 }
 
 /// The course's props (#167), after every other scene's in the lab's list: a step's slab (the
-/// steps are stacks of them), a ramp's slab and the ramps' landing.
+/// steps are stacks of them), a ramp's slab and the ramps' landing; then the dogs' paw print.
 pub(super) fn course_props() -> Vec<PropSpec> {
     let ramp = slab(&COURSE[6]).2;
     let landing = slab(&COURSE[7]).2;
@@ -395,22 +436,77 @@ pub(super) fn course_props() -> Vec<PropSpec> {
             segments: 2,
         }),
     })
+    .chain(std::iter::once(PropSpec {
+        // A paw print: a disc as wide as a pad (3 by 4 cm in half sizes), 2 mm thick.
+        name: "lab-print".to_owned(),
+        kind: PropKind::Lathe(Lathe {
+            profile: vec![
+                (0.0, 0.0),
+                (PRINT_RADIUS, 0.0),
+                (PRINT_RADIUS, PRINT_THICKNESS),
+                (0.0, PRINT_THICKNESS),
+            ],
+            around: 20,
+            along: 12,
+            flutes: 0,
+            flute_depth: 0.0,
+            flute_span: (0.0, 0.0),
+        }),
+    }))
     .collect()
 }
 
+/// A drawn paw print's radius and thickness, metres, and how far over the ground it lies.
+const PRINT_RADIUS: f32 = 0.035;
+const PRINT_THICKNESS: f32 = 0.002;
+const PRINT_LIFT: f32 = 0.0005;
+
+/// Where the lab draws its `PRINTS` paw prints, slot by slot, into `out`: flat on the ground
+/// at each footfall, turned to its heading; the slots not filled yet parked out of sight at
+/// `parked`.
+pub(super) fn prints(feet: &Feet, parked: DVec3, out: &mut Vec<Transform>) {
+    for k in 0..PRINTS {
+        out.push(match feet.falls.get(k) {
+            Some(f) => {
+                let across = f.normal.cross(f.heading);
+                Transform {
+                    position: f.position + (f.normal * PRINT_LIFT).as_dvec3(),
+                    rotation: Quat::from_mat3(&Mat3::from_cols(across, f.normal, f.heading)),
+                }
+            }
+            None => Transform {
+                position: parked,
+                rotation: Quat::IDENTITY,
+            },
+        });
+    }
+}
+
 /// Builds the course into `world` (a body a stretch) and returns its drawn slabs, from the props
-/// at `props` ([`course_props`]' order).
-fn build_course(world: &mut World, props: usize) -> Result<Vec<(usize, Mat4)>> {
+/// at `props` ([`course_props`]' order), and its bodies with their props' names.
+type Course = (Vec<(usize, Mat4)>, Vec<(BodyId, &'static str)>);
+fn build_course(world: &mut World, props: usize) -> Result<Course> {
     let mut drawn = Vec::new();
+    let mut grounds = Vec::new();
     for s in &COURSE {
         let (turn, middle, half) = slab(s);
         let shape = Shape::cuboid(half.as_vec3(), 0.005, 0.0)?;
-        world.add_body(&BodyDesc {
+        let body = world.add_body(&BodyDesc {
             rotation: turn,
             friction: 0.8,
             ..BodyDesc::fixed(&shape, middle)
         })?;
         let slabs = s.h.0 / STEP_RISE;
+        grounds.push((
+            body,
+            if s.h.0 != s.h.1 {
+                "lab-dog-ramp"
+            } else if (slabs - slabs.round()).abs() < 1e-6 {
+                "lab-step"
+            } else {
+                "lab-landing"
+            },
+        ));
         if s.h.0 != s.h.1 {
             drawn.push((
                 props + 1,
@@ -433,7 +529,7 @@ fn build_course(world: &mut World, props: usize) -> Result<Vec<(usize, Mat4)>> {
             drawn.push((props + 2, Mat4::from_translation(middle.as_vec3())));
         }
     }
-    Ok(drawn)
+    Ok((drawn, grounds))
 }
 
 /// The scene's props: the stand's pole (the creatures are skinned meshes, not props).
@@ -448,12 +544,15 @@ pub(super) fn props() -> Vec<PropSpec> {
     }]
 }
 
-/// One creature: its ragdoll, its root's body and where that stood as built, its kind, its
-/// phase, and its stand's joint (a mannequin's).
+/// One creature: its ragdoll, its root's body and where that stood as built, its parts' bodies
+/// (its kind's order) and its weight (N), its kind, its phase, and its stand's joint (a
+/// mannequin's).
 #[derive(Clone, Copy, Debug)]
 struct Creature {
     ragdoll: RagdollId,
     root: BodyId,
+    parts: [BodyId; PARTS],
+    weight: f32,
     stance: Transform,
     kind: Kind,
     phase: f64,
@@ -465,7 +564,58 @@ struct Creature {
 pub(super) struct Herd {
     creatures: Vec<Creature>,
     ground: Ground,
+    /// The course's slabs and their materials' names (the props'); anything else fixed is the
+    /// floor.
+    grounds: Vec<(BodyId, &'static str)>,
 }
+
+/// The dogs' paws as they come down (#167's foot-down events, [`Herd::feel`]): whether each is
+/// down (the herd's dogs in order, four paws each), how many footfalls there have been, and the
+/// last `PRINTS` of them, the n-th in slot n % `PRINTS` (the lab draws a print in each).
+#[derive(Clone, Debug, Default)]
+pub(super) struct Feet {
+    down: Vec<FootDown>,
+    count: u64,
+    pub falls: Vec<Footfall<&'static str>>,
+}
+
+impl Feet {
+    /// What a saved state keeps: the paws down, a bit each, and the footfalls' count.
+    pub(super) fn state(&self) -> (u64, u64) {
+        let down = self
+            .down
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.is_down())
+            .fold(0, |bits, (k, _)| bits | 1 << k);
+        (down, self.count)
+    }
+
+    /// Back to a saved state: the slots a later footfall filled stay until the same ticks fill
+    /// them again.
+    pub(super) fn set_state(&mut self, (down, count): (u64, u64)) {
+        // As many paws as the bits hold, before a first step has counted them.
+        self.down.resize(64, FootDown::new(FOOT_DOWN));
+        for (k, f) in self.down.iter_mut().enumerate() {
+            f.set_down(down & 1 << k != 0);
+        }
+        self.count = count;
+    }
+
+    /// Back to the start: no paw down, no footfall.
+    pub(super) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// A paw is down within `FOOT_DOWN` metres of the ground (and comes down again once it has been
+/// twice as high); the ray finding the ground under it starts `FOOT_RAY.0` over its pad and
+/// reaches `FOOT_RAY.1` down. The lab keeps the last `PRINTS` footfalls.
+const FOOT_DOWN: f32 = 0.02;
+const FOOT_RAY: (f64, f32) = (0.1, 0.5);
+pub(super) const PRINTS: usize = 96;
+/// The world's pull, m/s² (`WorldDesc`'s).
+const GRAVITY: f32 = 9.81;
 
 /// What the scene puts in the world: the poles drawn, the creatures' bodies (each creature's
 /// parts in its kind's order, the creatures in the herd's), and the herd.
@@ -489,6 +639,7 @@ pub(super) fn build(
     let mut statics = Vec::new();
     let mut all = Vec::new();
     let mut creatures = Vec::new();
+    let mut grounds = Vec::new();
     let pole_shape = Shape::cuboid(Vec3::from_array(POLE_HALF), 0.01, 0.0)?;
     // The parts' shapes, a kind's at a time: hulls of the vertices each carries most (every
     // few).
@@ -512,7 +663,9 @@ pub(super) fn build(
             .chain(DOGS.iter().enumerate().map(|(i, d)| dog(i, d)))
             .collect(),
         Ground::Course => {
-            statics.extend(build_course(world, course)?);
+            let (drawn, slabs) = build_course(world, course)?;
+            statics.extend(drawn);
+            grounds = slabs;
             DOGS_COURSE
                 .iter()
                 .enumerate()
@@ -564,8 +717,11 @@ pub(super) fn build(
             let middle = at + DVec3::new(0.0, f64::from(POLE_HALF[1]), 0.0);
             world.add_body(&BodyDesc::fixed(&pole_shape, middle))?;
         }
+        let weight = GRAVITY * shapes.iter().map(|(_, _, s)| s.mass()).sum::<f32>();
         creatures.push(Creature {
             root: bodies[0],
+            parts: bodies.as_slice().try_into().expect("a part a body"),
+            weight,
             stance: ragdoll_parts[0].at,
             ragdoll,
             kind,
@@ -576,7 +732,11 @@ pub(super) fn build(
     Ok(Field {
         statics,
         bodies: all,
-        herd: Herd { creatures, ground },
+        herd: Herd {
+            creatures,
+            ground,
+            grounds,
+        },
     })
 }
 
@@ -1095,6 +1255,78 @@ impl Herd {
         self.creatures.iter().map(|c| c.kind).collect()
     }
 
+    /// After a step, at tick `tick`: the dogs' paws that came down in it, as footfalls into
+    /// `feet` (#167's foot-down events). A paw is as high over the ground as its pad's lowest
+    /// point over what a ray finds under the pad's middle, among the fixed bodies (the paw's own
+    /// leg is in the way of any other). It presses with its dog's weight shared among the paws
+    /// down after this step, over its pad (an ellipse of its half sizes). How many came down.
+    pub(super) fn feel(&self, world: &World, tick: u64, feet: &mut Feet) -> usize {
+        let dogs = self.creatures.iter().filter(|c| c.kind == Kind::Dog);
+        feet.down
+            .resize(4 * dogs.clone().count(), FootDown::new(FOOT_DOWN));
+        let mut at = Vec::new();
+        let mut came = 0;
+        for (d, c) in dogs.enumerate() {
+            let body = c.kind.body();
+            let parts: Vec<BodyId> = body.paws.iter().map(|p| c.parts[p.part]).collect();
+            world.transforms(&parts, &mut at);
+            let mut falls = Vec::new();
+            for (k, (paw, t)) in body.paws.iter().zip(&at).enumerate() {
+                let rotation = t.rotation;
+                let lowest = paw
+                    .pad
+                    .iter()
+                    .map(|&p| t.position.y + f64::from((rotation * p).y))
+                    .fold(f64::MAX, f64::min);
+                let middle = t.position + (rotation * paw.middle).as_dvec3();
+                let from = middle + DVec3::new(0.0, FOOT_RAY.0, 0.0);
+                let Some(hit) = world.cast_ray_still(from, Vec3::new(0.0, -FOOT_RAY.1, 0.0)) else {
+                    continue;
+                };
+                let ground = from.y - FOOT_RAY.1 as f64 * f64::from(hit.fraction);
+                if feet.down[4 * d + k].update((lowest - ground) as f32) {
+                    let material = self
+                        .grounds
+                        .iter()
+                        .find(|(b, _)| *b == hit.body)
+                        .map_or("lab-floor", |&(_, name)| name);
+                    // Where the paw points, along the ground.
+                    let forward = rotation * Vec3::NEG_Z;
+                    let heading =
+                        (forward - hit.normal * forward.dot(hit.normal)).normalize_or(Vec3::NEG_Z);
+                    falls.push(Footfall {
+                        tick,
+                        position: DVec3::new(middle.x, ground, middle.z),
+                        normal: hit.normal,
+                        heading,
+                        size: paw.size,
+                        pressure: 0.0,
+                        material,
+                    });
+                }
+            }
+            // The weight on the paws down now, over each one's pad.
+            let down = feet.down[4 * d..4 * d + 4]
+                .iter()
+                .filter(|f| f.is_down())
+                .count()
+                .max(1);
+            for mut fall in falls {
+                let area = std::f32::consts::PI * fall.size.x * fall.size.y;
+                fall.pressure = c.weight / down as f32 / area;
+                let slot = (feet.count % PRINTS as u64) as usize;
+                if slot < feet.falls.len() {
+                    feet.falls[slot] = fall;
+                } else {
+                    feet.falls.push(fall);
+                }
+                feet.count += 1;
+                came += 1;
+            }
+        }
+        came
+    }
+
     /// The mannequins still on their stands.
     pub(super) fn standing(&self, world: &World) -> usize {
         let stands: Vec<JointId> = self.creatures.iter().filter_map(|c| c.stand).collect();
@@ -1223,10 +1455,14 @@ mod tests {
         assert_eq!(ground_at(Ground::Flat, -0.7, 1.5), 0.0);
     }
 
+    /// A footfall and its dog.
+    type Fall = (usize, Footfall<&'static str>);
+
     /// The course's dogs over `seconds`: per dog, its torso's highest tilt (degrees), lowest
     /// height over the ground under it, the highest ground it stood over, its last z after
-    /// walking up and the lowest z it came back to after that; and the final transforms.
-    fn walk_the_course(seconds: u32) -> (Vec<[f64; 5]>, Vec<Transform>) {
+    /// walking up and the lowest z it came back to after that; the final transforms; and every
+    /// footfall, with its dog.
+    fn walk_the_course(seconds: u32) -> (Vec<[f64; 5]>, Vec<Transform>, Vec<Fall>) {
         let mut world = World::new(&forge_physics::WorldDesc::default());
         let floor = Shape::cuboid(Vec3::new(20.0, 0.5, 20.0), 0.05, 0.0).expect("a floor");
         world
@@ -1236,10 +1472,17 @@ mod tests {
         let roots: Vec<BodyId> = field.herd.creatures.iter().map(|c| c.root).collect();
         let mut seen = vec![[0.0, f64::MAX, 0.0, 0.0, f64::MAX]; roots.len()];
         let mut at = Vec::new();
+        let (mut feet, mut falls) = (Feet::default(), Vec::new());
         for tick in 0..seconds * 60 {
             let time = f64::from(tick) * f64::from(TICK);
             field.herd.drive(&mut world, time, false);
             world.step(TICK, 1).expect("a step");
+            let came = field.herd.feel(&world, u64::from(tick), &mut feet);
+            for n in feet.count - came as u64..feet.count {
+                let fall = feet.falls[(n % PRINTS as u64) as usize];
+                // The steps' dog walks the lane at x < 0, the ramp's the other.
+                falls.push((usize::from(fall.position.x > 0.0), fall));
+            }
             world.transforms(&roots, &mut at);
             for (s, t) in seen.iter_mut().zip(&at) {
                 let up = f64::from((t.rotation * Vec3::Y).y.clamp(-1.0, 1.0));
@@ -1255,12 +1498,12 @@ mod tests {
                 }
             }
         }
-        (seen, at)
+        (seen, at, falls)
     }
 
     #[test]
     fn the_dogs_walk_the_course_there_and_back_upright_and_replay() {
-        let (seen, last) = walk_the_course(26);
+        let (seen, last, falls) = walk_the_course(26);
         for (dog, [tilt, low, high, up, back]) in seen.iter().enumerate() {
             assert!(*tilt < 8.0, "dog {dog} tilted {tilt}°");
             assert!(*low > 0.5, "dog {dog} sank to {low} m over the ground");
@@ -1269,8 +1512,55 @@ mod tests {
             assert!(*up > 1.5, "dog {dog} walked up to {up}");
             assert!(*back < -1.0, "dog {dog} came back to {back}");
         }
-        let (_, again) = walk_the_course(26);
+        // Their paws came down (#167's foot-down events): on the ground where the course has
+        // it, on its slope and its material, a few times a second while they walk.
+        for dog in 0..2 {
+            let theirs: Vec<&Footfall<&str>> = falls
+                .iter()
+                .filter(|(d, _)| *d == dog)
+                .map(|(_, f)| f)
+                .collect();
+            assert!(theirs.len() > 40, "dog {dog}: {} footfalls", theirs.len());
+            for f in theirs {
+                let (x, z) = (f.position.x, f.position.z);
+                let under = COURSE
+                    .iter()
+                    .filter(|s| (x - s.x).abs() < COURSE_HALF_WIDTH && (s.z.0..s.z.1).contains(&z))
+                    .max_by(|a, b| a.h.0.max(a.h.1).total_cmp(&b.h.0.max(b.h.1)));
+                let (material, slope) = match under {
+                    Some(s) if s.h.0 != s.h.1 => {
+                        ("lab-dog-ramp", (s.h.1 - s.h.0) / (s.z.1 - s.z.0))
+                    }
+                    Some(s) if ((s.h.0 / STEP_RISE) - (s.h.0 / STEP_RISE).round()).abs() < 1e-6 => {
+                        ("lab-step", 0.0)
+                    }
+                    Some(_) => ("lab-landing", 0.0),
+                    None => ("lab-floor", 0.0),
+                };
+                let ground = ground_at(Ground::Course, x, z);
+                // Off the edge of a step, a ray under the pad's middle may find the step's side.
+                if (f.position.y - ground).abs() > 0.005 {
+                    continue;
+                }
+                assert_eq!(f.material, material, "dog {dog} at {x} {z}");
+                let tilt = Vec3::new(0.0, 1.0, -slope as f32).normalize();
+                assert!(
+                    f.normal.abs_diff_eq(tilt, 0.01),
+                    "dog {dog} at {x} {z}: {}",
+                    f.normal
+                );
+                assert!(f.heading.dot(f.normal).abs() < 1e-4, "{}", f.heading);
+                // A dog of 72 kg on pads of about 3 by 4 cm: 40 to 190 kPa.
+                assert!(
+                    (30e3..250e3).contains(&f.pressure),
+                    "dog {dog}: {} Pa",
+                    f.pressure
+                );
+            }
+        }
+        let (_, again, falls_again) = walk_the_course(26);
         assert_eq!(last, again);
+        assert_eq!(falls, falls_again);
     }
 
     #[test]

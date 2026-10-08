@@ -47,3 +47,27 @@ creatures 0.285–0.291 ms (0.324 before).
 **Tier 1** (`captures/verify/20261008-093954-4a4515e`, 406 tests): the creatures' images change
 as expected (ꟻLIP mean 0.0098 at 120, 0.0101 thrown, 0.0303 limp, both paths); the course's
 four are new, mesh against fallback 0 px; everything else 0 px but the #71 flake.
+
+## Foot-down events
+
+`prints.png`: `--lab course` at tick 1 200 from the default view, a dark disc where each of the
+last 96 footfalls was: up the steps (one dog) and the ramp (the other), over the landings, and
+piled where they turned about.
+
+Each step, every dog's paw is down within 2 cm of the ground under its pad (found by a ray among
+the fixed bodies alone, `World::cast_ray_still`, from inside the paw). A paw coming down makes a
+`forge_anim::Footfall`: the tick, where, the ground's normal, the paw's heading along the ground,
+the pad's half sizes (3 by 4 cm), the ground's material and the pressure (the dog's 72 kg shared
+among its paws down, over the pad: 43 to 190 kPa). They are saved and restored with the lab's
+state.
+
+Over 26 s on the course each dog's paws come down 58 to 69 times. The test checks every footfall
+lies on the course's ground with its stretch's material and slope (the ramps' 10°), and that two
+runs give the same footfalls.
+
+**Tick** (600): the course 0.100 ms (p99 0.15), 0.095 before: eight rays a tick.
+
+**Tier 1** (`captures/verify/20261008-101650-7853fac`, 407 tests): only the prints change the
+images, both paths alike: the course ꟻLIP mean 0.0024 at 600 and 0.0056 at 1 200 (4 946 and
+9 774 px), the creatures 0.0012 at 120 and thrown, 0.0016 limp (961 to 1 796 px, the prints
+under the dogs' paws); everything else 0 px but the #71 flake.

@@ -337,6 +337,11 @@ upright and at its height over the ground under its paws, over its way's line an
 pace by damped springs, the IK putting each paw on the ground under it, a swinging one onto the
 rise ahead. On its legs alone the dog walked the floor but stalled at a 5 cm step and a 10°
 ramp. A ball still shoves it, and the springs let go when it goes limp.
+**Foot-down events** (`forge_anim::Footfall`) carry the tick, the position, the ground's normal,
+the foot's heading and half sizes, its pressure (its share of the weight over its sole) and the
+ground's material, as this entry lists them. The lab finds the ground with a ray among the fixed
+bodies, from inside the foot, and draws a print at each. Nothing deforms yet: that is D-007's
+deformable layer (Phase 3's materials step), and the footsteps audio's (D-011).
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 

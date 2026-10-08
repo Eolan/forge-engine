@@ -197,6 +197,27 @@ fn a_ray_down_meets_the_ground() {
 }
 
 #[test]
+fn a_ray_among_the_still_bodies_passes_through_a_moving_one() {
+    // A box of 2 000 kg/m³, 1 m on a side, its middle 1 m over the ground; a ray from inside it.
+    let mut world = World::new(&WorldDesc::default());
+    let ground = Shape::cuboid(Vec3::new(5.0, 0.5, 5.0), 0.05, 0.0).expect("the ground");
+    let floor = world
+        .add_body(&BodyDesc::fixed(&ground, DVec3::new(0.0, -0.5, 0.0)))
+        .expect("the ground");
+    let block = Shape::cuboid(Vec3::splat(0.5), 0.05, 2000.0).expect("a box");
+    assert!((block.mass() - 2000.0).abs() < 1.0, "{}", block.mass());
+    let body = world
+        .add_body(&BodyDesc::dynamic(&block, DVec3::new(0.0, 1.0, 0.0)))
+        .expect("the box");
+    let (from, down) = (DVec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, -2.0, 0.0));
+    assert_eq!(world.cast_ray(from, down).map(|h| h.body), Some(body));
+    let hit = world.cast_ray_still(from, down).expect("the ground");
+    assert_eq!(hit.body, floor);
+    assert!((hit.fraction - 0.5).abs() < 1e-4, "{}", hit.fraction);
+    assert!(hit.normal.abs_diff_eq(Vec3::Y, 1e-4), "{}", hit.normal);
+}
+
+#[test]
 fn a_height_field_meets_a_ray_and_holds_a_box() {
     // 64 × 64 samples 2 m apart, rising 1 m in 10 along x, the field's corner at (-63, 5, -63):
     // the ground stands at y = 5 + 0.1 (x + 63).

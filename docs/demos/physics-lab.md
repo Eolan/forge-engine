@@ -789,7 +789,31 @@ before: the dogs held on their spots). **Tests:** the course stands where `groun
 landing and back, never tilting 8° nor sinking, and replay to the same bits; a pole bends a
 knee its way (`forge-anim`).
 
-**Left in #167:** the foot-down events feeding D-007.
+**Foot-down events** (#167's last part, 2026-10-08; `forge_anim::Footfall`,
+`creatures::Herd::feel`). D-012's procedural layer emits an event each time a foot comes down,
+for D-007's deformation (prints in snow, sand and mud) and for audio's footsteps (D-011). After
+each step the lab looks at every dog's paws:
+- **A paw's pad:** its lower leg's vertices within 1.5 cm of its lowest, in the bind pose: 64 to
+  68 of them, 6 by 8 cm across.
+- **Down or up:** the pad's lowest point over the ground. A ray finds the ground under the pad's
+  middle among the fixed bodies alone (`World::cast_ray_still`: any other ray from there meets the
+  paw's own leg first). `FootDown` calls it down within 2 cm, and up again past 4 cm.
+- **The event:** the tick; where the pad met the ground and the ground's normal; which way the
+  paw points along the ground; the pad's half sizes (3 by 4 cm); the ground's material (the
+  props' names: `lab-floor`, `lab-step`, `lab-dog-ramp`, `lab-landing`); and how hard it presses.
+  That is the dog's weight (72 kg, from its parts' hulls, `Shape::mass`) shared among its paws
+  down, over the pad's ellipse: 43 to 190 kPa.
+- **Drawn:** a dark disc where each of the last 96 footfalls was, flat on the ground's slope
+  (`lab-print`): a trail behind each dog in `--lab course` and `--lab creatures`.
+- **Saved and restored** with the lab's state (the paws down and the footfalls' count), so a
+  rollback or a replay comes down at the same ticks.
+
+Over 26 s on the course each dog's paws come down 58 to 69 times, about four a second while it
+walks. **Cost:** the course's tick 0.100 ms (0.095 before: eight rays a tick). **Tests:** on the
+course every footfall lies on the ground `ground_at` gives, with the stretch's material and
+slope (10° on the ramps), its heading along the ground, its pressure within 30 to 250 kPa; two
+runs give the same footfalls; a ray among the fixed bodies passes through a moving one
+(`forge-physics`).
 
 ## `flood`: a dam break (issue #144)
 

@@ -190,9 +190,10 @@ const TANK: usize = SHIP + 2;
 const ROOM: usize = TANK + 13;
 /// The dogs' course's step, ramp and landing (#167), after the room's six.
 const COURSE: usize = ROOM + 6;
-/// The models scene's plinth, then its models' meshes, after the course's three (only in that
-/// scene).
-const MODELS: usize = COURSE + 3;
+/// A dog's paw print (#167's foot-down events), after the course's three.
+const PRINT: usize = COURSE + 3;
+/// The models scene's plinth, then its models' meshes, after the print (only in that scene).
+const MODELS: usize = PRINT + 1;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -524,6 +525,8 @@ pub(crate) struct LabWorld {
     wall: Option<wall::Wall>,
     /// The creatures, and whether their motors are let go.
     herd: Option<creatures::Herd>,
+    /// Their dogs' paws coming down (#167's foot-down events).
+    feet: creatures::Feet,
     /// The slimes before the creatures, soft bodies (#179, #180).
     slimes: Vec<slime::Slime>,
     /// The flood's water (the authoritative column model) and its dam.
@@ -1146,6 +1149,13 @@ impl LabWorld {
                 count: 1,
             });
         }
+        // The dogs' paw prints after everything.
+        if herd.is_some() {
+            groups.push(Group {
+                prop: PRINT,
+                count: creatures::PRINTS as u32,
+            });
+        }
         world.optimize_broad_phase();
         let start = world.save_state();
         Ok((
@@ -1166,6 +1176,7 @@ impl LabWorld {
                 pilot,
                 wall,
                 herd,
+                feet: creatures::Feet::default(),
                 slimes,
                 water_start: water.clone(),
                 water,
@@ -1212,6 +1223,10 @@ impl LabWorld {
                 rotation: self.player.rotation(),
             };
             out.extend([at, at]);
+        }
+        // The dogs' paw prints last.
+        if self.herd.is_some() {
+            creatures::prints(&self.feet, DVec3::new(0.0, PARKED_Y, 0.0), out);
         }
     }
 
@@ -1337,6 +1352,7 @@ impl Simulation for LabWorld {
                     }
                     self.start = start;
                     self.next_throw = 0;
+                    self.feet.clear();
                     if let Some(boat) = &mut self.boat {
                         (boat.throttle, boat.rudder) = (0.0, 0.0);
                     }
@@ -1472,6 +1488,8 @@ impl Simulation for LabWorld {
         // A mannequin knocked hard enough comes off its stand.
         if let Some(herd) = &self.herd {
             herd.knock(&mut self.world, TICK);
+            // Its dogs' paws that came down in the step.
+            herd.feel(&self.world, self.tick, &mut self.feet);
         }
         // The lifted gate stops at its top.
         if let Some(dam) = &self.dam {
@@ -1500,6 +1518,10 @@ impl Simulation for LabWorld {
     fn save(&mut self) -> Vec<u8> {
         let mut out = self.tick.to_le_bytes().to_vec();
         out.extend_from_slice(&self.next_throw.to_le_bytes());
+        // The dogs' paws down and their footfalls' count.
+        let (down, falls) = self.feet.state();
+        out.extend_from_slice(&down.to_le_bytes());
+        out.extend_from_slice(&falls.to_le_bytes());
         for word in self.words() {
             out.extend_from_slice(&word.to_bits().to_le_bytes());
         }
@@ -1514,9 +1536,15 @@ impl Simulation for LabWorld {
     fn restore(&mut self, state: &[u8]) {
         let (tick, rest) = state.split_at(8);
         let (next, rest) = rest.split_at(4);
+        let (feet, rest) = rest.split_at(16);
         let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
+        let (down, falls) = feet.split_at(8);
+        self.feet.set_state((
+            u64::from_le_bytes(down.try_into().expect("8 bytes")),
+            u64::from_le_bytes(falls.try_into().expect("8 bytes")),
+        ));
         let w: Vec<f32> = words
             .as_chunks::<4>()
             .0

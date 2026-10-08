@@ -309,6 +309,8 @@ void fj_shape_center_of_mass(const FjShape *shape, float out[3]) {
     shape_of(shape)->GetCenterOfMass().StoreFloat3(reinterpret_cast<JPH::Float3 *>(out));
 }
 
+float fj_shape_mass(const FjShape *shape) { return shape_of(shape)->GetMassProperties().mMass; }
+
 FjShape *fj_shape_offset_center_of_mass(const FjShape *inner, const float offset[3]) {
     JPH::OffsetCenterOfMassShapeSettings settings(vec3(offset), shape_of(inner));
     settings.SetEmbedded();
@@ -566,10 +568,17 @@ void fj_body_set_transform(FjWorld *world, uint32_t body, const double position[
 }
 
 int32_t fj_world_cast_ray(const FjWorld *world, const double origin[3], const float direction[3],
-                          FjRayHit *hit) {
+                          int32_t still_only, FjRayHit *hit) {
     const JPH::RRayCast ray{rvec3(origin), vec3(direction)};
     JPH::RayCastResult result;
-    if (!world->system.GetNarrowPhaseQuery().CastRay(ray, result)) {
+    // Only what never moves when asked: the ground under a foot, cast from inside the foot.
+    const JPH::SpecifiedBroadPhaseLayerFilter still_broad(broad::kStill);
+    const JPH::SpecifiedObjectLayerFilter still(kStill);
+    const JPH::BroadPhaseLayerFilter any_broad;
+    const JPH::ObjectLayerFilter any;
+    const JPH::BroadPhaseLayerFilter &broad_filter = still_only ? still_broad : any_broad;
+    const JPH::ObjectLayerFilter &layer_filter = still_only ? still : any;
+    if (!world->system.GetNarrowPhaseQuery().CastRay(ray, result, broad_filter, layer_filter)) {
         return 0;
     }
     hit->body = result.mBodyID.GetIndexAndSequenceNumber();

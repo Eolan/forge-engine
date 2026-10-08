@@ -3453,6 +3453,18 @@ impl CityMaterials {
             "squares (black and white)",
             textured(squares, [1.0; 3], [1.0; 3], 1.0, 4.0, 0.02),
         );
+        // The dogs' paw prints (#167's foot-down events): damp earth, darker than any ground
+        // they walk.
+        let print = add(
+            "paw print (damp earth)",
+            RenderLayer {
+                color_a: [0.10, 0.075, 0.055],
+                color_b: [0.08, 0.06, 0.045],
+                roughness: RenderLayer::roughness_for_power(8.0),
+                specular: 0.03,
+                ..RenderLayer::default()
+            },
+        );
         let mut by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -3515,6 +3527,7 @@ impl CityMaterials {
             ("lab-step", sandstone),
             ("lab-dog-ramp", deck_wood),
             ("lab-landing", sandstone),
+            ("lab-print", print),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),

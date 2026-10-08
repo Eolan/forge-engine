@@ -203,6 +203,7 @@ unsafe extern "C" {
         offset: *const f32,
     ) -> *mut FjShape;
     pub fn fj_shape_center_of_mass(shape: *const FjShape, out: *mut f32);
+    pub fn fj_shape_mass(shape: *const FjShape) -> f32;
     pub fn fj_shape_release(shape: *const FjShape);
 
     pub fn fj_world_new(desc: *const FjWorldDesc) -> *mut FjWorld;
@@ -269,6 +270,7 @@ unsafe extern "C" {
         world: *const FjWorld,
         origin: *const f64,
         direction: *const f32,
+        still_only: i32,
         hit: *mut FjRayHit,
     ) -> i32;
 

@@ -1092,7 +1092,8 @@ jelly): the frame 1.66 ms, `shading/standard` 0.194 → 0.234 ms, `shading/jelly
 The dogs held on their spots (#167's course; their walk set right, 0.7 m/s on their legs): **0.285–0.291
 ms** (p99 0.43–0.49), two runs to the same digest. `--lab course`, the two dogs on their steps
 and ramp, guided and their paws planted by IK: **0.095 ms a tick** (p99 0.16–0.17), the frame
-1.63 ms.
+1.63 ms. With their foot-down events (eight rays a tick, a print drawn at each of the last 96
+footfalls): **0.100 ms** (p99 0.15), the frame 1.64 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

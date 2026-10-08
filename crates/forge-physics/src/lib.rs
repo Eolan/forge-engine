@@ -179,6 +179,12 @@ impl Shape {
         Vec3::from_array(c)
     }
 
+    /// Its mass, kg: its volume times its density.
+    pub fn mass(&self) -> f32 {
+        // SAFETY: `self.raw` is a live shape, read during the call.
+        unsafe { ffi::fj_shape_mass(self.raw.as_ptr()) }
+    }
+
     /// This shape with its centre of mass at `at` in its body's frame (an aeroplane's, ahead
     /// of its wing's lift and over its wheels).
     pub fn with_center_of_mass_at(&self, at: Vec3) -> Result<Self, PhysicsError> {
@@ -896,11 +902,28 @@ impl World {
 
     /// The nearest body along `direction` from `origin`, within the direction's length.
     pub fn cast_ray(&self, origin: DVec3, direction: Vec3) -> Option<RayHit> {
+        self.ray(origin, direction, false)
+    }
+
+    /// [`World::cast_ray`] among the fixed bodies alone: the ground under a foot, cast from
+    /// inside the foot (#167's foot-down events).
+    pub fn cast_ray_still(&self, origin: DVec3, direction: Vec3) -> Option<RayHit> {
+        self.ray(origin, direction, true)
+    }
+
+    fn ray(&self, origin: DVec3, direction: Vec3, still_only: bool) -> Option<RayHit> {
         let (o, d) = (origin.to_array(), direction.to_array());
         let mut hit = ffi::FjRayHit::default();
         // SAFETY: the world is live; `o` and `d` are read and `hit` written during the call.
-        let found =
-            unsafe { ffi::fj_world_cast_ray(self.raw.as_ptr(), o.as_ptr(), d.as_ptr(), &mut hit) };
+        let found = unsafe {
+            ffi::fj_world_cast_ray(
+                self.raw.as_ptr(),
+                o.as_ptr(),
+                d.as_ptr(),
+                i32::from(still_only),
+                &mut hit,
+            )
+        };
         (found != 0).then(|| RayHit {
             body: BodyId(hit.body),
             fraction: hit.fraction,

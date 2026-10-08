@@ -133,8 +133,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   and look-at). The slime as a soft body ✅ (#179, 2026-10-08: it hops before the dogs), the tropical
   island's slime in jelly seen through, four flavours, its gait and its tinted shadow ✅ (#180, D-051).
   Their feet on uneven ground ✅ (#167, `--lab course`: steps and a ramp, the dogs guided by root
-  motion; the walk's crabwise frames and moonwalking clip set right). Next for #167: the foot-down
-  events for D-007. The night sky is built as D-046's answers ask (#164).
+  motion; the walk's crabwise frames and moonwalking clip set right). Their foot-down events ✅
+  (#167: where, when, the slope, the material and the pressure of each paw's footfall, a print
+  drawn at each). The night sky is built as D-046's answers ask (#164).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of
@@ -537,8 +538,8 @@ The items below are the phase's original outline; the plan above orders them.
 1. `forge-anim`: clips ✅ and GPU skinning ✅ (#165: glTF skins and clips, poses sampled and
    blended, the skin pass and refitted BLASes); playback with inertialized switches and a blend
    space ✅ (#167, 2026-10-08), packed clips ✅ (#167, a quarter to a third of their bytes);
-   two-bone IK, a look-at and foot-down events ✅ (#167; the lab's mannequins watch the dogs);
-   left: the feet on uneven ground.
+   two-bone IK and a look-at ✅ (#167; the lab's mannequins watch the dogs); the feet on uneven
+   ground and foot-down events ✅ (#167, `--lab course`).
 2. Motion matching for the player; powered ragdolls tracking poses; hit reactions;
    contact events to the material layer.
 3. Generated creatures: gait synthesis for procedurally generated bodies.

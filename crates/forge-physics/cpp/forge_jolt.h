@@ -173,6 +173,8 @@ FjShape *fj_shape_height_field(const float *samples, uint32_t count, const float
 FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const float rotation[4]);
 // A shape's centre of mass in its frame (three floats).
 void fj_shape_center_of_mass(const FjShape *shape, float out[3]);
+// Its mass, kg, from its volume and density.
+float fj_shape_mass(const FjShape *shape);
 // `inner` with its centre of mass moved by `offset` (a boat's weight low in its hull).
 FjShape *fj_shape_offset_center_of_mass(const FjShape *inner, const float offset[3]);
 void fj_shape_release(const FjShape *shape);
@@ -229,9 +231,10 @@ void fj_body_set_velocity(FjWorld *world, uint32_t body, const float linear[3],
 void fj_body_set_transform(FjWorld *world, uint32_t body, const double position[3],
                            const float rotation[4]);
 
-// The nearest hit along `direction` (its length is the ray's) from `origin`; 0 when none.
+// The nearest hit along `direction` (its length is the ray's) from `origin`, among the still
+// bodies alone when `still_only`; 0 when none.
 int32_t fj_world_cast_ray(const FjWorld *world, const double origin[3], const float direction[3],
-                          FjRayHit *hit);
+                          int32_t still_only, FjRayHit *hit);
 
 // Adds a character; its index. The world's characters are numbered from 1 in the order added
 // (Jolt's own numbering runs across every world of the process), and saved and restored with it.
