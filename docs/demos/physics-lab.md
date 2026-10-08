@@ -27,6 +27,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `space` | a sci-fi spaceship in zero g over a planet under the stars: momentum kept through a crash into floating crates | ✅ #150 |
 | `break` | destruction: a brick wall held by mortar that breaks, a wrecking ball, a concrete column that shatters | ✅ #142 |
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
+| `course` | the dogs on uneven ground: three steps of 5 cm and a 10° ramp, walked up and back, paws planted by IK | ✅ #167 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn through the GPU's finer layer that shadows it, carrying what floats, which pushes it aside | ✅ #144, #151, #162 |
 | `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
@@ -444,7 +445,7 @@ column without overlap; and the lab's wall stands untouched for two seconds, the
 the ball and replays to the same digests. A tick through the impact (372 bodies, 912 joints):
 **0.99 ms** on average, p99 2.0 ms, at most 2.5 ms; the state is 87 KiB.
 
-## `creatures`: powered ragdolls, skinned (issues #143, #165)
+## `creatures` and `course`: powered ragdolls, skinned (issues #143, #165, #167)
 
 ```
 cargo run --release -p physics-lab -- --lab creatures
@@ -665,7 +666,8 @@ the waves of sines they swayed with.
   of their cycles, at the blended rate.
 - **The clip layer through the physics layer** (`creatures::Motion`): each joint's turn from
   rest, in its parent's frame, re-expressed in the frame its ragdoll joint was built with (the
-  twist axis, the plane axis, their normal), is a ball joint's target; a hinge takes its angle
+  twist axis, the plane axis × the twist axis, the plane axis: Jolt's constraint space, set right
+  with the course below), is a ball joint's target; a hinge takes its angle
   about the plane axis (`dmath::atan2`). The rest pose gives the pose the ragdoll was built in.
 - **The schedule:** each creature idles 6 s, walks 6 s, and so on, at its own phase; each
   switch dies away over 0.4 s. The pose is a function of the tick alone (the switch evaluated
@@ -673,7 +675,8 @@ the waves of sines they swayed with.
 - **The dogs walk:** on their motors alone they tipped over two feet at a time, so their torsos
   are held upright and at height by springs with damping (3 000 N·m a radian, 4 000 N a metre),
   as games hold up powered ragdolls, off when limp. Where a dog faces turns at 0.4 rad a second
-  while it walks, so it walks a circle about its spot. The mannequins walk on their stands.
+  while it walks, so it walked a circle about its spot (now it is held on it, see the course
+  below). The mannequins walk on their stands.
 
 What the clips found:
 - **The dog's hind legs** fold forward at their lower joint, as hocks do. Their hinges had the
@@ -746,16 +749,47 @@ within the tolerance in under half their bytes, a constant track on no bits, the
   side it was bent and stretches 0.1 m short out of reach; a head turns to a point and stops at
   its limit; a foot comes down once a step.
 
-**Tried, not kept: the dogs' feet on uneven ground** (2026-10-08). Each paw was put on the ground
-under it by `two_bone`, the torso placed where its balance holds it over the paws' mean ground
-(placed where it actually was, a sagging torso folded the legs and sagged further).
-- On 8 cm platforms the paws, which swing a few centimetres high, caught on the edges and the
-  dogs turned away.
-- On 11° slopes the dogs were thrown about 2 m as they walked onto them, the IK fighting the
-  slab's contacts.
+**The dogs' feet on uneven ground: `--lab course`** (#167, 2026-10-08). A course of two lanes,
+0.8 m wide: on the left three steps of 5 cm up (0.5 m runs, drawn as stacked slabs), a landing
+at 15 cm and three down; on the right a ramp of 10° (0.175 m over a metre), a landing and a ramp
+down. A dog walks each lane up, turns about in its idle, and walks it back, again and again.
+The first take (dropped earlier the same day: paws caught on 8 cm edges, dogs thrown on 11°
+slopes) turned out to stand on two bugs under it:
+- **The dogs walked crabwise.** A joint's frame was laid out as twist, plane, normal; Jolt's
+  swing-twist and hinge constraints use twist, plane × twist, plane. A leg's swing fore and aft
+  came out sideways, and the dogs walked to their side (their circles on the floor hid it). Set
+  right, a hinge takes its angle about z; the test swings a leg forward and finds its target
+  about z.
+- **The walk clip moonwalked.** The paws were lifted (the lower leg folded) while the swing
+  carried them back, and planted while it brought them forward: set right in
+  `skinned_creatures.py` (folded while `cos a < 0`), re-exported with Blender 5.2.
+- **Knees on their side:** `forge_anim::two_bone_toward` bends the middle joint towards a pole,
+  whatever side the pose had it: a nearly straight leg left `two_bone` to pick, and a front knee
+  flipped past its hinge's limit (0.3 rad) and the paw never lifted.
 
-**Left in #167:** the feet on uneven ground (lifted swings, or the contacts kept out of the IK's
-way), and the foot-down events feeding D-007.
+Then the course, each tick (`Motion::plant`): each paw is put as high over the ground under it
+as the clip has it over the floor, by two-bone IK, the torso held over the paws' mean ground.
+A paw the clip moves forward (from 0.05 s before) is swinging: it is put over the highest
+ground within 25 cm ahead, and 5 cm higher before a rise, so it comes onto a step from above.
+Told swinging by its height, the paw slid into the riser before the clip lifted it; with less
+clearance the motors' lag brought it to the edge under the step's top. The torso is guided as
+games carry a ragdoll by root motion: held over its lane's line and pushed to the walk's pace
+(800 N a metre a second, up to 0.7 m/s, easing to a stop at either end): on its legs alone a
+dog walks the floor at that pace but stalled at the first step and on the ramp, its paws on
+them without the grip to climb.
+
+On the floor the frames' fix lets the dogs walk 0.7 m/s, 4 m a walk: in `--lab creatures` each
+is now held on its spot, which it walks about as it turns.
+
+`course.png`: ticks 375 to 1425 from beside the course (the default view): the ramp's dog on its
+landing, the steps' dog climbing, at the top, coming down. **Costs** (600 ticks): the course's
+tick 0.095 ms (p99 0.16–0.17), two runs to the same digest; the creatures' 0.285–0.291 ms (0.324
+before: the dogs held on their spots). **Tests:** the course stands where `ground_at` says
+(rays); a leg swung forward is turned about the plane axis; over 26 s both dogs walk over the
+landing and back, never tilting 8° nor sinking, and replay to the same bits; a pole bends a
+knee its way (`forge-anim`).
+
+**Left in #167:** the foot-down events feeding D-007.
 
 ## `flood`: a dam break (issue #144)
 

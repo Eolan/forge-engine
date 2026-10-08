@@ -260,6 +260,10 @@ for path in $paths; do
     capture "$path-lab-creatures120-noocc" 120 "$lab" --lab creatures --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-lab-creatures-throw240" 240 "$lab" --lab creatures --fixed-step --throw-every 50 "${flag[@]}"
     capture "$path-lab-creatures-limp240" 240 "$lab" --lab creatures --fixed-step --limp-at 60 "${flag[@]}"
+    # The dogs on their course (#167): up the steps and the ramp at tick 600, coming back down at
+    # 1200.
+    capture "$path-lab-course600" 600 "$lab" --lab course --fixed-step "${flag[@]}"
+    capture "$path-lab-course1200" 1200 "$lab" --lab course --fixed-step "${flag[@]}"
     # The flood (#144), the gate lifted at tick 31: the water running down the basin at tick
     # 150 and its A/B twin, and spread round the blocks at tick 300.
     capture "$path-lab-flood150" 150 "$lab" --lab flood --fixed-step --release 31 "${flag[@]}"

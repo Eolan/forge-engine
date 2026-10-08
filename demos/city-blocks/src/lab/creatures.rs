@@ -13,7 +13,9 @@
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use forge_anim::{Clip, Inertializer, Pose, Rig, Skeleton, load_rigs, look_at};
+use forge_anim::{
+    Chain, Clip, Inertializer, Pose, Rig, Skeleton, load_rigs, look_at, two_bone_toward,
+};
 use forge_core::dmath::{atan2, sin_cos};
 use forge_geom::city::{Block, PropKind, PropSpec};
 use forge_geom::model::{Model, ModelMesh, load_glb};
@@ -155,6 +157,88 @@ pub(super) const PARTS: usize = 11;
 /// camera), each with its own phase in its moves.
 const MANNEQUINS_X: [f64; 3] = [-2.2, 0.0, 2.2];
 const DOGS: [(f64, f64); 2] = [(-1.1, 1.6), (1.1, 1.6)];
+
+/// Where the creatures stand: the floor, the mannequins on their stands and the dogs before them
+/// (#143), or a course of steps and ramps the dogs walk along alone (`--lab course`, #167's
+/// feet on uneven ground).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Ground {
+    Flat,
+    Course,
+}
+
+/// A stretch of the course: a lane across x within `COURSE_HALF_WIDTH` of `x`, along z from
+/// `z.0` to `z.1`, its top rising from `h.0` to `h.1` (a step where they are equal, a ramp).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Stretch {
+    x: f64,
+    z: (f64, f64),
+    h: (f64, f64),
+}
+
+const fn stretch(x: f64, z: (f64, f64), h: (f64, f64)) -> Stretch {
+    Stretch { x, z, h }
+}
+
+/// The course's lanes, 0.8 m wide: on the left three steps of 5 cm up, a landing and down again;
+/// on the right a ramp rising 10° (0.175 m over a metre), a landing and down again.
+pub(super) const COURSE_HALF_WIDTH: f64 = 0.4;
+pub(super) const STEP_RISE: f64 = 0.05;
+pub(super) const STEP_RUN: f64 = 0.5;
+pub(super) const RAMP_RISE: f64 = 0.175;
+const COURSE: [Stretch; 9] = [
+    stretch(-0.7, (-0.4, 0.1), (0.05, 0.05)),
+    stretch(-0.7, (0.1, 0.6), (0.1, 0.1)),
+    stretch(-0.7, (0.6, 1.1), (0.15, 0.15)),
+    stretch(-0.7, (1.1, 2.1), (0.15, 0.15)),
+    stretch(-0.7, (2.1, 2.6), (0.1, 0.1)),
+    stretch(-0.7, (2.6, 3.1), (0.05, 0.05)),
+    stretch(0.7, (-0.4, 0.6), (0.0, RAMP_RISE)),
+    stretch(0.7, (0.6, 1.6), (RAMP_RISE, RAMP_RISE)),
+    stretch(0.7, (1.6, 2.6), (RAMP_RISE, 0.0)),
+];
+/// The dogs at the course's foot, one a lane, facing up it (+z).
+const DOGS_COURSE: [(f64, f64); 2] = [(-0.7, -1.6), (0.7, -1.6)];
+/// How thick a ramp's slab is, metres.
+pub(super) const RAMP_THICKNESS: f64 = 0.1;
+
+/// The ground's height at (`x`, `z`) on `ground`: the floor's 0, or a stretch's top over it.
+fn ground_at(ground: Ground, x: f64, z: f64) -> f64 {
+    if ground == Ground::Flat {
+        return 0.0;
+    }
+    COURSE
+        .iter()
+        .filter(|s| (x - s.x).abs() <= COURSE_HALF_WIDTH && (s.z.0..=s.z.1).contains(&z))
+        .map(|s| s.h.0 + (s.h.1 - s.h.0) * (z - s.z.0) / (s.z.1 - s.z.0))
+        .fold(0.0, f64::max)
+}
+
+/// A stretch's slab: its turn (a ramp's about x, from the slope's rise over its run: square
+/// roots alone), its middle and its half sizes. A step's stands on the floor; a ramp's top is
+/// the slope, the rest of it under the floor or the landing.
+fn slab(s: &Stretch) -> (Quat, DVec3, DVec3) {
+    let run = s.z.1 - s.z.0;
+    let rise = s.h.1 - s.h.0;
+    if rise == 0.0 {
+        let half = DVec3::new(COURSE_HALF_WIDTH, 0.5 * s.h.0, 0.5 * run);
+        return (
+            Quat::IDENTITY,
+            DVec3::new(s.x, half.y, s.z.0 + half.z),
+            half,
+        );
+    }
+    let along = DVec3::new(0.0, rise, run).normalize();
+    let turn = Quat::from_rotation_arc(Vec3::Z, along.as_vec3());
+    let up = DVec3::new(0.0, along.z, -along.y);
+    let top = DVec3::new(s.x, 0.5 * (s.h.0 + s.h.1), 0.5 * (s.z.0 + s.z.1));
+    let half = DVec3::new(
+        COURSE_HALF_WIDTH,
+        0.5 * RAMP_THICKNESS,
+        0.5 * (run * run + rise * rise).sqrt(),
+    );
+    (turn, top - up * half.y, half)
+}
 /// A mannequin's stand: its pole's half sizes; it breaks off past this force (N) or torque
 /// (N·m). Walking on it loads it with up to 2.9 kN and 400 N·m, its legs brushing the pole; a
 /// thrown ball with ten times that (#167: at 2 kN and 400 N·m, walking threw them all off).
@@ -289,6 +373,69 @@ fn body(kind: Kind, model: &ModelMesh, skeleton: &Skeleton) -> Body {
     }
 }
 
+/// The course's props (#167), after every other scene's in the lab's list: a step's slab (the
+/// steps are stacks of them), a ramp's slab and the ramps' landing.
+pub(super) fn course_props() -> Vec<PropSpec> {
+    let ramp = slab(&COURSE[6]).2;
+    let landing = slab(&COURSE[7]).2;
+    [
+        (
+            "lab-step",
+            [COURSE_HALF_WIDTH, 0.5 * STEP_RISE, 0.5 * STEP_RUN],
+        ),
+        ("lab-dog-ramp", ramp.to_array()),
+        ("lab-landing", landing.to_array()),
+    ]
+    .into_iter()
+    .map(|(name, half)| PropSpec {
+        name: name.to_owned(),
+        kind: PropKind::Block(Block {
+            half: half.map(|h| h as f32),
+            radius: 0.008,
+            segments: 2,
+        }),
+    })
+    .collect()
+}
+
+/// Builds the course into `world` (a body a stretch) and returns its drawn slabs, from the props
+/// at `props` ([`course_props`]' order).
+fn build_course(world: &mut World, props: usize) -> Result<Vec<(usize, Mat4)>> {
+    let mut drawn = Vec::new();
+    for s in &COURSE {
+        let (turn, middle, half) = slab(s);
+        let shape = Shape::cuboid(half.as_vec3(), 0.005, 0.0)?;
+        world.add_body(&BodyDesc {
+            rotation: turn,
+            friction: 0.8,
+            ..BodyDesc::fixed(&shape, middle)
+        })?;
+        let slabs = s.h.0 / STEP_RISE;
+        if s.h.0 != s.h.1 {
+            drawn.push((
+                props + 1,
+                Mat4::from_rotation_translation(turn, middle.as_vec3()),
+            ));
+        } else if (slabs - slabs.round()).abs() < 1e-6 {
+            // A step: stacks of slabs, a stack every run.
+            let columns = ((s.z.1 - s.z.0) / STEP_RUN).round() as u32;
+            for column in 0..columns {
+                for level in 0..slabs.round() as u32 {
+                    let at = DVec3::new(
+                        s.x,
+                        STEP_RISE * (f64::from(level) + 0.5),
+                        s.z.0 + STEP_RUN * (f64::from(column) + 0.5),
+                    );
+                    drawn.push((props, Mat4::from_translation(at.as_vec3())));
+                }
+            }
+        } else {
+            drawn.push((props + 2, Mat4::from_translation(middle.as_vec3())));
+        }
+    }
+    Ok(drawn)
+}
+
 /// The scene's props: the stand's pole (the creatures are skinned meshes, not props).
 pub(super) fn props() -> Vec<PropSpec> {
     vec![PropSpec {
@@ -317,6 +464,7 @@ struct Creature {
 #[derive(Clone, Debug)]
 pub(super) struct Herd {
     creatures: Vec<Creature>,
+    ground: Ground,
 }
 
 /// What the scene puts in the world: the poles drawn, the creatures' bodies (each creature's
@@ -330,8 +478,14 @@ pub(super) struct Field {
 /// Turned to face +z: a half turn about y, exactly.
 const FACING: Quat = Quat::from_xyzw(0.0, 1.0, 0.0, 0.0);
 
-/// Builds the creatures into `world`, the poles drawn with `pole`.
-pub(super) fn build(world: &mut World, pole: usize) -> Result<Field> {
+/// Builds the creatures into `world` on `ground`, the poles drawn with `pole` and the course with
+/// the props from `course` ([`course_props`]).
+pub(super) fn build(
+    world: &mut World,
+    pole: usize,
+    course: usize,
+    ground: Ground,
+) -> Result<Field> {
     let mut statics = Vec::new();
     let mut all = Vec::new();
     let mut creatures = Vec::new();
@@ -349,16 +503,23 @@ pub(super) fn build(world: &mut World, pole: usize) -> Result<Field> {
             })
             .collect()
     };
-    let placed: Vec<(Kind, DVec3, f64)> = MANNEQUINS_X
-        .iter()
-        .enumerate()
-        .map(|(i, &x)| (Kind::Mannequin, DVec3::new(x, 0.0, 0.0), 0.7 * i as f64))
-        .chain(
-            DOGS.iter()
+    let dog = |i: usize, &(x, z): &(f64, f64)| (Kind::Dog, DVec3::new(x, 0.0, z), 1.3 * i as f64);
+    let placed: Vec<(Kind, DVec3, f64)> = match ground {
+        Ground::Flat => MANNEQUINS_X
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| (Kind::Mannequin, DVec3::new(x, 0.0, 0.0), 0.7 * i as f64))
+            .chain(DOGS.iter().enumerate().map(|(i, d)| dog(i, d)))
+            .collect(),
+        Ground::Course => {
+            statics.extend(build_course(world, course)?);
+            DOGS_COURSE
+                .iter()
                 .enumerate()
-                .map(|(i, &(x, z))| (Kind::Dog, DVec3::new(x, 0.0, z), 1.3 * i as f64)),
-        )
-        .collect();
+                .map(|(i, d)| dog(i, d))
+                .collect()
+        }
+    };
     let mannequin = shapes(Kind::Mannequin)?;
     let dog = shapes(Kind::Dog)?;
     for (kind, at, phase) in placed {
@@ -415,7 +576,7 @@ pub(super) fn build(world: &mut World, pole: usize) -> Result<Field> {
     Ok(Field {
         statics,
         bodies: all,
-        herd: Herd { creatures },
+        herd: Herd { creatures, ground },
     })
 }
 
@@ -452,8 +613,9 @@ pub(super) struct Motion {
     rig: &'static Rig,
     /// Its idle and its walk, indices into the rig's clips.
     clips: [usize; 2],
-    /// Per part: its joint's frame (the twist axis, the plane axis and their normal as x, y and
-    /// z) in its parent joint's frame at rest, and its joint's turn there at rest.
+    /// Per part: its joint's frame (Jolt's constraint space: the twist axis, the plane axis ×
+    /// the twist axis and the plane axis as x, y and z) in its parent joint's frame at rest, and its
+    /// joint's turn there at rest.
     frame: [Quat; PARTS],
     rest: [Quat; PARTS],
     hinge: [bool; PARTS],
@@ -461,6 +623,9 @@ pub(super) struct Motion {
     /// −z).
     head: usize,
     face: Vec3,
+    /// A dog's legs as two-bone chains, each to its paw's sole (in its lower leg's joint frame);
+    /// none for a mannequin.
+    legs: Vec<Chain>,
 }
 
 impl Motion {
@@ -486,11 +651,33 @@ impl Motion {
             };
             // The axes the ragdoll's joint was built with (`build`), in the model's frame.
             let (twist, plane) = axes(body.middle[k], body.pivot[k]);
-            let basis = Quat::from_mat3(&Mat3::from_cols(twist, plane, twist.cross(plane)));
+            // Jolt's constraint space: the twist axis, the plane axis × the twist axis, the plane
+            // axis (`SwingTwistConstraint`'s and the hinge's). Laid out as twist, plane, normal
+            // (#167's first take), a leg's swing fore and aft came out sideways: the dogs walked
+            // crabwise.
+            let basis = Quat::from_mat3(&Mat3::from_cols(twist, plane.cross(twist), plane));
             frame[k] = turn(body.joint[parent]).inverse() * basis;
             rest[k] = skeleton.rest().rotations[body.joint[k]];
         }
         let head = body.joint[parts.iter().position(|p| p.name == "head").expect("a head")];
+        // A dog's legs, each to its paw's sole: the lowest vertex its lower leg carries.
+        let legs = match kind {
+            Kind::Dog => [(3, 4), (5, 6), (7, 8), (9, 10)]
+                .map(|(upper, lower)| {
+                    let sole = body.points[lower]
+                        .iter()
+                        .map(|&p| body.middle[lower] + p)
+                        .min_by(|a, b| a.y.total_cmp(&b.y))
+                        .expect("a lower leg's vertices");
+                    Chain {
+                        root: body.joint[upper],
+                        middle: body.joint[lower],
+                        tip: model[body.joint[lower]].inverse().transform_point3(sole),
+                    }
+                })
+                .to_vec(),
+            Kind::Mannequin => Vec::new(),
+        };
         Self {
             rig,
             clips: [clip("idle"), clip("walk")],
@@ -499,6 +686,7 @@ impl Motion {
             hinge: std::array::from_fn(|k| matches!(parts[k].joint, RagdollJoint::Hinge { .. })),
             head,
             face: turn(head).inverse() * Vec3::NEG_Z,
+            legs,
         }
     }
 
@@ -514,7 +702,7 @@ impl Motion {
                 q = -q;
             }
             *target = if self.hinge[k] {
-                [2.0 * atan2(q.y, q.w), 0.0, 0.0, 0.0]
+                [2.0 * atan2(q.z, q.w), 0.0, 0.0, 0.0]
             } else {
                 q.to_array()
             };
@@ -539,6 +727,80 @@ impl Motion {
             HEAD_TURN,
             &mut model,
         );
+    }
+
+    /// Puts a dog's paws in `pose` on `ground` under them (#167's feet on uneven ground), its
+    /// torso where its balance holds it: over (`x`, `z`), facing `facing` (the stance turned),
+    /// at its stance's height over the ground's mean height under the paws. Each paw is as high
+    /// over the ground as the clip has it over the floor, its leg bent to it by two-bone IK; the
+    /// ground a paw is put on is the highest within `PAW_AHEAD` before it along the way it
+    /// faces, so it is lifted onto a step before it meets its edge. On the floor the clip's pose
+    /// is left as it is. Returns the mean height, which the torso is held over.
+    fn plant(
+        &self,
+        c: &Creature,
+        ground: Ground,
+        (x, z): (f64, f64),
+        facing: Quat,
+        before: &Pose,
+        pose: &mut Pose,
+    ) -> f64 {
+        if self.legs.is_empty() || ground == Ground::Flat {
+            return 0.0;
+        }
+        let body = c.kind.body();
+        let skeleton = &self.rig.skeleton;
+        let mut model = vec![Mat4::IDENTITY; skeleton.len()];
+        skeleton.model_space(pose, &mut model);
+        let rotation = facing * c.stance.rotation;
+        // Where it heads: from its torso to its head.
+        let head = body.middle[1] - body.middle[0];
+        let forward = Vec3::new(head.x, 0.0, head.z).normalize();
+        let ahead = (rotation * forward).as_dvec3();
+        let mut position = DVec3::new(x, c.stance.position.y, z);
+        // The creature's frame to the world's, through the torso.
+        let to_world =
+            |position: DVec3, p: Vec3| position + (rotation * (p - body.middle[0])).as_dvec3();
+        let paws: Vec<Vec3> = self
+            .legs
+            .iter()
+            .map(|chain| model[chain.middle].transform_point3(chain.tip))
+            .collect();
+        let under = |at: DVec3| ground_at(ground, at.x, at.z);
+        skeleton.model_space(before, &mut model);
+        let paws_before: Vec<Vec3> = self
+            .legs
+            .iter()
+            .map(|chain| model[chain.middle].transform_point3(chain.tip))
+            .collect();
+        let lift = paws
+            .iter()
+            .map(|&p| under(to_world(position, p)))
+            .sum::<f64>()
+            / paws.len() as f64;
+        position.y += lift;
+        for (k, (&chain, &paw)) in self.legs.iter().zip(&paws).enumerate() {
+            // A front leg's lower joint bends forward of the line from its top to its paw
+            // (its paw folds back), a hind leg's back (its hock).
+            let pole = if k < 2 { forward } else { -forward };
+            let at = to_world(position, paw);
+            // Swinging: going forward in the clip, from where it was `PAW_BEFORE` earlier.
+            let swinging = (paw - paws_before[k]).dot(forward) > 0.0;
+            let reach = if swinging { PAW_AHEAD } else { 0.0 };
+            let floor = (0..=PAW_SAMPLES)
+                .map(|k| under(at + ahead * (reach * f64::from(k) / f64::from(PAW_SAMPLES))))
+                .fold(f64::MIN, f64::max);
+            // Before a rise, a little higher still: the paw comes onto it from above.
+            let clear = if swinging && floor > under(at) + 0.01 {
+                PAW_CLEARANCE
+            } else {
+                0.0
+            };
+            let target = DVec3::new(at.x, floor + clear + f64::from(paw.y), at.z);
+            let target = rotation.inverse() * (target - position).as_vec3() + body.middle[0];
+            two_bone_toward(skeleton, pose, chain, target, pole, &mut model);
+        }
+        lift
     }
 
     /// Seconds spent walking `time` seconds into a creature's schedule (its odd segments).
@@ -596,23 +858,49 @@ fn motions() -> &'static [Motion; 2] {
 /// A dog's balance (#167): its torso pulled towards where it stood as built, upright and at its
 /// height, by springs with damping (N·m a radian and N·m·s a radian; N a metre and N·s a metre),
 /// as games hold up their powered ragdolls. On its motors alone a walk, two feet down at a time,
-/// tipped it over. Off when it goes limp; a ball still shoves it. While it walks, where it faces
-/// turns at `WALK_TURN` radians a second, so it walks a circle about its spot and stays in view.
+/// tipped it over. Off when it goes limp; a ball still shoves it. On the floor, while it walks,
+/// where it faces turns at `WALK_TURN` radians a second, and it is held on its spot: it walks
+/// 0.7 m/s on its legs since #167's frames were set right, 4 m in a walk.
 const BALANCE_TURN: (f32, f32) = (3000.0, 300.0);
 const BALANCE_HEIGHT: (f32, f32) = (4000.0, 400.0);
 const WALK_TURN: f64 = 0.4;
+/// The pull towards its lane's line on the course, or its spot on the floor (N a metre, N·s a
+/// metre): a walk on the ragdoll's legs alone drifts sideways. And the push to its walk's pace
+/// along the course (N a metre a second, up to `WALK_PACE` while it walks, 0 else), as games
+/// carry a ragdoll along by its clip's root motion: on its legs alone it walks the floor at
+/// about that pace but stalls at a 5 cm step or a 10° ramp, its paws on them without the grip
+/// to climb.
+const BALANCE_LANE: (f32, f32) = (1500.0, 300.0);
+const BALANCE_PACE: f32 = 800.0;
+const WALK_PACE: f64 = 0.7;
+/// A swinging paw (one the clip moves forward, from where it had it `PAW_BEFORE` seconds
+/// earlier) is put over the highest ground within `PAW_AHEAD` before it along the way it faces,
+/// in so many samples, and `PAW_CLEARANCE` higher before a rise (#167): lifted onto a step
+/// before it meets the edge. The clip starts a swing a few millimetres up and lifts a paw at
+/// most 5 cm; told swinging by its height, the paw slid into the riser before it rose, and with
+/// less clearance the motors' lag brought it to the edge under the step's top. A paw on the
+/// ground is put on the ground under it.
+const PAW_BEFORE: f64 = 0.05;
+const PAW_AHEAD: f64 = 0.25;
+const PAW_SAMPLES: u32 = 6;
+/// How much higher than a rise ahead a paw is carried, metres.
+const PAW_CLEARANCE: f64 = 0.05;
+
+/// A turn of `yaw` radians about the vertical (`sin_cos`, the same on every machine).
+fn facing(yaw: f64) -> Quat {
+    let (s, k) = sin_cos(0.5 * yaw);
+    Quat::from_xyzw(0.0, s as f32, 0.0, k as f32)
+}
 
 /// Pushes creature `c`'s root towards its stance (`BALANCE_TURN`, `BALANCE_HEIGHT`), turned by
-/// `yaw` radians about the vertical.
-fn balance(world: &mut World, c: &Creature, yaw: f64) {
+/// `yaw` radians about the vertical and raised by `lift` metres (the ground under its paws).
+fn balance(world: &mut World, c: &Creature, yaw: f64, lift: f64, guide: Guide) {
     let (mut at, mut moving) = (Vec::new(), Vec::new());
     world.transforms(&[c.root], &mut at);
     world.velocities(&[c.root], &mut moving);
     let (at, moving) = (at[0], moving[0]);
     // The turn back to upright, as an axis times its angle.
-    let (s, k) = sin_cos(0.5 * yaw);
-    let facing = Quat::from_xyzw(0.0, s as f32, 0.0, k as f32);
-    let mut q = facing * c.stance.rotation * at.rotation.inverse();
+    let mut q = facing(yaw) * c.stance.rotation * at.rotation.inverse();
     if q.w < 0.0 {
         q = -q;
     }
@@ -624,12 +912,32 @@ fn balance(world: &mut World, c: &Creature, yaw: f64) {
         Vec3::ZERO
     };
     let torque = BALANCE_TURN.0 * back - BALANCE_TURN.1 * moving.angular;
-    let lift = BALANCE_HEIGHT.0 * (c.stance.position.y - at.position.y) as f32
+    let lift = BALANCE_HEIGHT.0 * (c.stance.position.y + lift - at.position.y) as f32
         - BALANCE_HEIGHT.1 * moving.linear.y;
+    let hold =
+        |to: f64, now: f64, speed: f32| BALANCE_LANE.0 * (to - now) as f32 - BALANCE_LANE.1 * speed;
+    let (side, along) = match guide {
+        Guide::Lane { x, pace } => (
+            hold(x, at.position.x, moving.linear.x),
+            BALANCE_PACE * (pace as f32 - moving.linear.z),
+        ),
+        Guide::Spot(spot) => (
+            hold(spot.x, at.position.x, moving.linear.x),
+            hold(spot.z, at.position.z, moving.linear.z),
+        ),
+    };
     world.push(
         &[c.root],
-        &[(Vec3::new(0.0, lift, 0.0), at.position, torque)],
+        &[(Vec3::new(side, lift, along), at.position, torque)],
     );
+}
+
+/// Where a dog's balance takes it across the ground: over a lane's line (x) at a pace up it
+/// (+z, metres a second), or onto its spot.
+#[derive(Clone, Copy, Debug)]
+enum Guide {
+    Lane { x: f64, pace: f64 },
+    Spot(DVec3),
 }
 
 /// A part's joint axes from its middle and its pivot, in the creature's frame: along the part
@@ -638,6 +946,36 @@ fn axes(middle: Vec3, pivot: Vec3) -> (Vec3, Vec3) {
     let twist = (middle - pivot).normalize_or(Vec3::NEG_Y);
     let plane = (Vec3::X - twist * twist.x).normalize_or(Vec3::Z);
     (twist, plane)
+}
+
+/// How long a dog on the course takes to turn about, seconds, at the start of the idle between
+/// two walks.
+const TURN_ABOUT: f64 = 3.0;
+/// Where a course dog's torso turns about (z, metres: before the course and past its end), and
+/// how its pace eases into each (metres a second a metre).
+const COURSE_ENDS: (f64, f64) = (-1.6, 2.8);
+const PACE_GAIN: f64 = 2.0;
+
+/// A course dog's heading `time` seconds into its schedule: its yaw (radians about the vertical,
+/// half a turn more after each walk, eased over `TURN_ABOUT`, always the same way round) and
+/// which way along z it walks (+1 up the course, −1 back down). A walk of `SEGMENT` takes it
+/// over the course, the next one back.
+fn course_heading(time: f64) -> (f64, f64) {
+    let segment = (time / SEGMENT).floor().max(0.0);
+    let into = time - segment * SEGMENT;
+    let walks = (segment / 2.0).floor();
+    let turned = if (segment as u64).is_multiple_of(2) && segment >= 2.0 {
+        let s = (into / TURN_ABOUT).min(1.0);
+        walks - 1.0 + s * s * (3.0 - 2.0 * s)
+    } else {
+        walks
+    };
+    let way = if (walks as u64).is_multiple_of(2) {
+        1.0
+    } else {
+        -1.0
+    };
+    (std::f64::consts::PI * turned, way)
 }
 
 impl Herd {
@@ -670,6 +1008,29 @@ impl Herd {
                     motion.look(c, dog.position + DVec3::new(0.0, DOG_HEAD, 0.0), &mut pose);
                 }
             }
+            // A dog on the course: its paws on the ground under them, its torso held over it.
+            // Where it faces: on the floor turning as it walks; on the course up it or back
+            // down (`way`, +1 or −1 along z), turning about between its walks.
+            let (yaw, way) = match self.ground {
+                Ground::Flat => (WALK_TURN * motion.walked(time + c.phase), 1.0),
+                Ground::Course => course_heading(time + c.phase),
+            };
+            let mut lift = 0.0;
+            let mut torso = Vec::new();
+            world.transforms(&[c.root], &mut torso);
+            let at = torso[0].position;
+            if c.stand.is_none() && !limp {
+                let mut before = motion.rig.skeleton.rest().clone();
+                motion.pose_at(time + c.phase - PAW_BEFORE, &mut before);
+                lift = motion.plant(
+                    c,
+                    self.ground,
+                    (at.x, at.z),
+                    facing(yaw),
+                    &before,
+                    &mut pose,
+                );
+            }
             let targets = motion.targets(c.kind.body(), &pose);
             let motors = Motors {
                 torque: if limp { 0.0 } else { c.kind.motors().torque },
@@ -677,7 +1038,26 @@ impl Herd {
             };
             world.drive_ragdoll(c.ragdoll, &targets, motors);
             if c.stand.is_none() && !limp {
-                balance(world, c, WALK_TURN * motion.walked(time + c.phase));
+                // On the course: over its lane, at its walk's pace while it walks. On the floor:
+                // on its spot, which it walks about as it turns.
+                let walking =
+                    motion.walked(time + c.phase) > motion.walked(time + c.phase - f64::from(TICK));
+                // Easing to a stop at the end it heads for, so its walks back and forth keep to
+                // the course.
+                let end = if way > 0.0 {
+                    COURSE_ENDS.1
+                } else {
+                    COURSE_ENDS.0
+                };
+                let pace = ((end - at.z) * PACE_GAIN).clamp(-WALK_PACE, WALK_PACE);
+                let guide = match self.ground {
+                    Ground::Course => Guide::Lane {
+                        x: c.stance.position.x,
+                        pace: if walking { pace } else { 0.0 },
+                    },
+                    Ground::Flat => Guide::Spot(c.stance.position),
+                };
+                balance(world, c, yaw, lift, guide);
             }
         }
     }
@@ -793,6 +1173,104 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_leg_swung_fore_and_aft_turns_its_joint_about_the_plane_axis() {
+        // A dog's front leg swung forward 0.4 rad about the model's x, as the walk swings it: in
+        // Jolt's constraint space (twist, plane × twist, plane) that is a turn about z. Laid out
+        // as twist, plane, normal it came out about y, a swing sideways: the dogs walked
+        // crabwise (#167).
+        let (motion, body) = (Kind::Dog.motion(), Kind::Dog.body());
+        let skeleton = &motion.rig.skeleton;
+        let mut pose = skeleton.rest().clone();
+        let mut model = vec![Mat4::IDENTITY; skeleton.len()];
+        skeleton.model_space(&pose, &mut model);
+        let k = 3; // upper-front-l, on the torso
+        let parent = model[body.joint[0]].to_scale_rotation_translation().1;
+        let j = body.joint[k];
+        pose.rotations[j] =
+            parent.inverse() * Quat::from_rotation_x(0.4) * parent * pose.rotations[j];
+        let q = Quat::from_array(motion.targets(body, &pose)[k]);
+        // Nothing about y (sideways); most of the half angle's sine (0.199) about z, the rest a
+        // twist (x: the leg's axis leans a little from the vertical).
+        assert!(
+            q.y.abs() < 1e-3 && q.z.abs() > 0.18 && q.x.abs() < 0.07,
+            "{q:?}"
+        );
+    }
+
+    #[test]
+    fn the_course_stands_where_the_paws_think_the_ground_is() {
+        // The slabs as built, and rays down onto them: their tops are `ground_at`'s heights.
+        let mut world = World::new(&forge_physics::WorldDesc::default());
+        build(&mut world, 0, 0, Ground::Course).expect("the course");
+        for s in &COURSE {
+            for (dx, f) in [(0.3, 0.1), (-0.2, 0.5), (0.1, 0.9)] {
+                let (x, z) = (s.x + dx, s.z.0 + f * (s.z.1 - s.z.0));
+                let hit = world
+                    .cast_ray(DVec3::new(x, 2.0, z), Vec3::new(0.0, -3.0, 0.0))
+                    .expect("the course");
+                let top = 2.0 - 3.0 * f64::from(hit.fraction);
+                let ground = ground_at(Ground::Course, x, z);
+                assert!(
+                    (top - ground).abs() < 0.005,
+                    "at {x} {z}: {top} against {ground}"
+                );
+            }
+        }
+        assert_eq!(ground_at(Ground::Course, 0.0, 0.0), 0.0);
+        assert_eq!(ground_at(Ground::Flat, -0.7, 1.5), 0.0);
+    }
+
+    /// The course's dogs over `seconds`: per dog, its torso's highest tilt (degrees), lowest
+    /// height over the ground under it, the highest ground it stood over, its last z after
+    /// walking up and the lowest z it came back to after that; and the final transforms.
+    fn walk_the_course(seconds: u32) -> (Vec<[f64; 5]>, Vec<Transform>) {
+        let mut world = World::new(&forge_physics::WorldDesc::default());
+        let floor = Shape::cuboid(Vec3::new(20.0, 0.5, 20.0), 0.05, 0.0).expect("a floor");
+        world
+            .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
+            .expect("the floor");
+        let field = build(&mut world, 0, 0, Ground::Course).expect("the course");
+        let roots: Vec<BodyId> = field.herd.creatures.iter().map(|c| c.root).collect();
+        let mut seen = vec![[0.0, f64::MAX, 0.0, 0.0, f64::MAX]; roots.len()];
+        let mut at = Vec::new();
+        for tick in 0..seconds * 60 {
+            let time = f64::from(tick) * f64::from(TICK);
+            field.herd.drive(&mut world, time, false);
+            world.step(TICK, 1).expect("a step");
+            world.transforms(&roots, &mut at);
+            for (s, t) in seen.iter_mut().zip(&at) {
+                let up = f64::from((t.rotation * Vec3::Y).y.clamp(-1.0, 1.0));
+                let ground = ground_at(Ground::Course, t.position.x, t.position.z);
+                s[0] = s[0].max(up.acos().to_degrees());
+                s[1] = s[1].min(t.position.y - ground);
+                s[2] = s[2].max(ground);
+                // Its first walk up ends by 13 s for either phase, the walk back by 25 s.
+                if time < 13.0 {
+                    s[3] = t.position.z;
+                } else {
+                    s[4] = s[4].min(t.position.z);
+                }
+            }
+        }
+        (seen, at)
+    }
+
+    #[test]
+    fn the_dogs_walk_the_course_there_and_back_upright_and_replay() {
+        let (seen, last) = walk_the_course(26);
+        for (dog, [tilt, low, high, up, back]) in seen.iter().enumerate() {
+            assert!(*tilt < 8.0, "dog {dog} tilted {tilt}°");
+            assert!(*low > 0.5, "dog {dog} sank to {low} m over the ground");
+            // Over the landing (15 cm of steps, the ramp's 17.5), past it, and back before it.
+            assert!(*high > 0.14, "dog {dog} stood over {high} m at most");
+            assert!(*up > 1.5, "dog {dog} walked up to {up}");
+            assert!(*back < -1.0, "dog {dog} came back to {back}");
+        }
+        let (_, again) = walk_the_course(26);
+        assert_eq!(last, again);
     }
 
     #[test]

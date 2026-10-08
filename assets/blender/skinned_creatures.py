@@ -564,10 +564,13 @@ def dog(folder):
 
     def walk(t):
         # Diagonal pairs a half cycle apart, each leg's lower part folding as it swings
-        # forward.
+        # forward. The upper leg turns by -swing, its paw going forward while the swing
+        # falls (cos a < 0): the fold lifts it then. Folded while the swing rose (#167's first
+        # take), each paw was carried back in the air and pushed forward on the ground: the
+        # dog walked backwards.
         def leg(phase):
             a = 2.0 * math.pi * t + phase
-            return 0.38 * math.sin(a), -0.55 * max(0.0, math.cos(a))
+            return 0.38 * math.sin(a), -0.55 * max(0.0, -math.cos(a))
 
         pose = {}
         for name, phase in (("front-l", 0.0), ("hind-r", 0.0), ("front-r", math.pi), ("hind-l", math.pi)):

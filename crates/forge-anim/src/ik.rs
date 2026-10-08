@@ -49,6 +49,36 @@ pub fn two_bone(
     target: Vec3,
     model: &mut [Mat4],
 ) -> f32 {
+    reach(skeleton, pose, chain, target, None, model)
+}
+
+/// [`two_bone`], its middle bent towards `pole` (a direction in the model's frame) whatever
+/// side it is posed on: a joint that bends one way only (a knee, a dog's hock), whose side a
+/// nearly straight pose leaves to chance. Across the line from the root to the target, its
+/// middle goes where `pole` points.
+///
+/// # Panics
+///
+/// When `pose` or `model` does not have one entry per joint of `skeleton`.
+pub fn two_bone_toward(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    chain: Chain,
+    target: Vec3,
+    pole: Vec3,
+    model: &mut [Mat4],
+) -> f32 {
+    reach(skeleton, pose, chain, target, Some(pole), model)
+}
+
+fn reach(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    chain: Chain,
+    target: Vec3,
+    pole: Option<Vec3>,
+    model: &mut [Mat4],
+) -> f32 {
     skeleton.model_space(pose, model);
     let (hip, hip_turn) = place(&model[chain.root]);
     let (knee, _) = place(&model[chain.middle]);
@@ -62,9 +92,10 @@ pub fn two_bone(
     let along = to_target / reach;
     // Within what the two bones can span.
     let d = reach.clamp((thigh - shin).abs() + 1e-5, thigh + shin - 1e-5);
-    // The knee's side: across the line from the hip to the target, where it is now (any side
-    // across when the leg is straight).
-    let mut side = (knee - hip) - along * (knee - hip).dot(along);
+    // The knee's side: across the line from the hip to the target, where the pole points, or
+    // where it is now (any side across when the leg is straight).
+    let towards = pole.unwrap_or(knee - hip);
+    let mut side = towards - along * towards.dot(along);
     if side.length_squared() <= 1e-12 {
         side = along.any_orthonormal_vector();
     }
@@ -257,6 +288,23 @@ mod tests {
         let [_, hip, knee, ankle] = ends(&skeleton, &pose);
         assert!((left - 0.1).abs() < 1e-3, "{left}");
         assert!(knee.z.abs() < 1e-2 && (ankle - hip).normalize().abs_diff_eq(Vec3::NEG_Y, 1e-3));
+    }
+
+    #[test]
+    fn a_pole_bends_the_knee_its_way_whatever_side_it_was_on() {
+        let (skeleton, mut pose) = leg();
+        let mut model = vec![Mat4::IDENTITY; 4];
+        // Posed bent forward (+z), pulled up with a pole behind: the knee goes back.
+        let target = Vec3::new(0.0, -0.5, 0.0);
+        let left = two_bone_toward(&skeleton, &mut pose, CHAIN, target, Vec3::NEG_Z, &mut model);
+        let [_, hip, knee, ankle] = ends(&skeleton, &pose);
+        assert!(left < 1e-4 && ankle.distance(target) < 1e-4, "{ankle}");
+        assert!(knee.z < -0.2, "{knee}");
+        assert!((knee.distance(hip) - 0.45).abs() < 1e-4);
+        // And forward again with a pole ahead.
+        two_bone_toward(&skeleton, &mut pose, CHAIN, target, Vec3::Z, &mut model);
+        let [_, _, knee, _] = ends(&skeleton, &pose);
+        assert!(knee.z > 0.2, "{knee}");
     }
 
     #[test]

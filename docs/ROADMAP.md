@@ -132,7 +132,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   walk, inertialized switches, a blend space; the dogs walk circles; packed clips, two-bone IK
   and look-at). The slime as a soft body ✅ (#179, 2026-10-08: it hops before the dogs), the tropical
   island's slime in jelly seen through, four flavours, its gait and its tinted shadow ✅ (#180, D-051).
-  Next: feet on uneven ground for #167. The night sky is built as D-046's answers ask (#164).
+  Their feet on uneven ground ✅ (#167, `--lab course`: steps and a ramp, the dogs guided by root
+  motion; the walk's crabwise frames and moonwalking clip set right). Next for #167: the foot-down
+  events for D-007. The night sky is built as D-046's answers ask (#164).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of

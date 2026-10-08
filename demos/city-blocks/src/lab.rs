@@ -75,6 +75,9 @@ pub(crate) enum LabScene {
     Break,
     /// Creatures as powered ragdolls: mannequins on stands and dogs (#143).
     Creatures,
+    /// The dogs alone on a course: three steps of 5 cm up and down, a ramp of 10° up and down
+    /// (#167's feet on uneven ground).
+    Course,
     /// A dam break: a reservoir behind a gate, a basin with blocks and a hut, what floats (#144).
     Flood,
     /// A domino run on a spiral (#146).
@@ -185,8 +188,11 @@ const TANK: usize = SHIP + 2;
 /// The sharpness room's floor, back wall, side wall, target, board and the board's target, after the
 /// tank's thirteen.
 const ROOM: usize = TANK + 13;
-/// The models scene's plinth, then its models' meshes, after the room's six (only in that scene).
-const MODELS: usize = ROOM + 6;
+/// The dogs' course's step, ramp and landing (#167), after the room's six.
+const COURSE: usize = ROOM + 6;
+/// The models scene's plinth, then its models' meshes, after the course's three (only in that
+/// scene).
+const MODELS: usize = COURSE + 3;
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -234,6 +240,7 @@ pub(crate) fn props(scene: LabScene) -> Vec<PropSpec> {
     props.extend(ship::props());
     props.extend(tank::props());
     props.extend(room::props());
+    props.extend(creatures::course_props());
     // Only their scene reads and cooks the external models.
     if scene == LabScene::Models {
         props.extend(models::props());
@@ -575,6 +582,7 @@ impl LabWorld {
             | LabScene::Fly
             | LabScene::Break
             | LabScene::Creatures
+            | LabScene::Course
             | LabScene::Flood
             | LabScene::Dominoes
             | LabScene::Bridge
@@ -919,12 +927,18 @@ impl LabWorld {
                 wall = Some(site.wall);
             }
             LabScene::Creatures => {
-                let field = creatures::build(&mut world, POLE)?;
+                let field = creatures::build(&mut world, POLE, COURSE, creatures::Ground::Flat)?;
                 statics.extend(field.statics);
                 group(SKINNED, field.bodies, &mut bodies);
                 herd = Some(field.herd);
                 slimes = slime::build(&mut world)?;
                 group(SLIME, slimes.iter().map(|s| s.body).collect(), &mut bodies);
+            }
+            LabScene::Course => {
+                let field = creatures::build(&mut world, POLE, COURSE, creatures::Ground::Course)?;
+                statics.extend(field.statics);
+                group(SKINNED, field.bodies, &mut bodies);
+                herd = Some(field.herd);
             }
             LabScene::Flood => {
                 let basin = flood::build(
@@ -1827,7 +1841,7 @@ pub(crate) fn build(
             &mut textures,
             prop,
             mesh,
-            kind == LabScene::Creatures,
+            matches!(kind, LabScene::Creatures | LabScene::Course),
         );
     }
     // The external models' (#170, D-048), in their scene only.

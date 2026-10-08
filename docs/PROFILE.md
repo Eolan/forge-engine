@@ -1089,6 +1089,10 @@ lab's view, 0.066 ms from 1 m before it, the frame 1.51 ms. The four flavours (f
 upright, steered apart): **0.324 ms** (p99 0.52–0.55), `shading/jelly` 0.106 ms, the frame 1.59 ms.
 The jelly's tinted shadow (D-051, one more ray where the sun lights a surface in a scene with
 jelly): the frame 1.66 ms, `shading/standard` 0.194 → 0.234 ms, `shading/jelly` 0.110 ms.
+The dogs held on their spots (#167's course; their walk set right, 0.7 m/s on their legs): **0.285–0.291
+ms** (p99 0.43–0.49), two runs to the same digest. `--lab course`, the two dogs on their steps
+and ramp, guided and their paws planted by IK: **0.095 ms a tick** (p99 0.16–0.17), the frame
+1.63 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

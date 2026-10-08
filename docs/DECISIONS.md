@@ -330,6 +330,13 @@ step for its archives would remain.
 
 The clips (a walk and an idle each) are read and sampled but not yet played through the
 motors: that is the procedural layer's work.
+*Built* (#167, 2026-10-08): the clips play through the motors (inertialized switches, a blend
+space), two-bone IK and a look-at, packed clips. On uneven ground (`physics-lab --lab course`)
+a walking ragdoll is **guided as games carry one by its clip's root motion**: its torso held
+upright and at its height over the ground under its paws, over its way's line and at its walk's
+pace by damped springs, the IK putting each paw on the ground under it, a swinging one onto the
+rise ahead. On its legs alone the dog walked the floor but stalled at a 5 cm step and a 10°
+ramp. A ball still shoves it, and the springs let go when it goes limp.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 

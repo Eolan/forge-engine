@@ -3512,6 +3512,9 @@ impl CityMaterials {
             ("lab-room-target", room_black),
             ("lab-room-board", room_white),
             ("lab-room-board-target", room_black),
+            ("lab-step", sandstone),
+            ("lab-dog-ramp", deck_wood),
+            ("lab-landing", sandstone),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -5628,6 +5631,15 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             position: Vec3::new(0.0, 1.4, 4.4),
             yaw: 0.0,
             pitch: -0.1,
+            speed: 6.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Course) {
+        // Beside the course and over it, looking down across both lanes: the ramps nearer.
+        FlyCamera {
+            position: Vec3::new(3.3, 2.1, 0.6),
+            yaw: std::f32::consts::FRAC_PI_2,
+            pitch: -0.52,
             speed: 6.0,
             ..FlyCamera::default()
         }
