@@ -2998,9 +2998,18 @@ narrower one.
 
 ![A distributary from where it leaves, from above and from the sea, without (left) and with (right)](../../reports/2026-10-07-127/distributary.png)
 
-**Left:** the rounded corners where it leaves the river (a confluence's corners, the other way
-round), and bars on the large lake fans if wanted. Where its channel cuts the step from the
-coastal plain to the beach, its banks stand as the river's own do there.
+**Its corners rounded** (2026-10-08). Where it leaves the river, the two corners its banks make
+with the river's are rounded as a confluence's are (#119): the branch is taken as a tributary
+running backwards into its river, so the same circles touch both rivers' edges, the bed under
+them blends into theirs, and their water is drawn by the nearer river (`corner_covers`, shared
+with the confluences). Seed 7's split gets both corners: 48 corners at 26 junctions, from 46 at
+25. Its water stands wide there, the estuary widening it, so from above the change is small
+(`reports/2026-10-07-127/corners.png`, from 41 m over the corners, before and after). The test
+of the distributary now asks for its corners, each touching both rivers' edges, and for its
+water drawn over them.
+
+**Left:** bars on the large lake fans, if wanted. Where its channel cuts the step from the coastal
+plain to the beach, its banks stand as the river's own do there.
 
 ## Barrels afloat (#177, Phase 3's step 3 on the island, 2026-10-08)
 

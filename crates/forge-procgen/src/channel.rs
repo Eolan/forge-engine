@@ -2230,6 +2230,22 @@ mod tests {
         }
         let k = (s + 12).min(river.points.len() - 1);
         assert!(river.points[k].half_width < 0.95 * before.points[k].half_width);
+        // Its corners where it leaves the river rounded, as a confluence's: each circle clear of
+        // both rivers' water, touching their edges, its water drawn over its arc.
+        assert!(!branch.corners.is_empty(), "no corner where it leaves");
+        for c in &branch.corners {
+            for (ribbon, touch) in [(branch, c.touches[0]), (river, c.touches[1])] {
+                let p = &ribbon.points[crate::river::nearest(&ribbon.points, touch)];
+                let off = (touch[0] - f64::from(p.position[0]))
+                    .hypot(touch[1] - f64::from(p.position[1]));
+                assert!(
+                    (off - f64::from(p.half_width)).abs() < 0.25 * f64::from(p.half_width) + 1.0,
+                    "a corner touching {touch:?} {off:.1} m off a river {} m wide",
+                    2.0 * p.half_width
+                );
+            }
+        }
+        assert!(branch.points.iter().take(8).any(|p| p.cover > p.half_width));
     }
 }
 

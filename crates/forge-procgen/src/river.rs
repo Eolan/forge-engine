@@ -1192,38 +1192,36 @@ pub fn ribbons(
         let Some(m) = done[into as usize] else {
             continue;
         };
+        if ribbons[r].split.is_some() {
+            continue;
+        }
         let corners = confluence(&ribbons[r], &ribbons[m], params);
-        let mut covers: Vec<(usize, usize, f64)> = Vec::new();
-        for corner in &corners {
-            for q in corner_samples(corner) {
-                let (tributary, main) = (&ribbons[r].points, &ribbons[m].points);
-                let t = edge_distance(
-                    tributary,
-                    tributary.len().saturating_sub(64)..tributary.len(),
-                    q,
-                );
-                let n = nearest(main, q);
-                let j = edge_distance(main, n.saturating_sub(48)..(n + 49).min(main.len()), q);
-                let fading = tributary[t.segment].fade.min(tributary[t.segment + 1].fade) < 0.9;
-                for (ribbon, e, near) in [
-                    (r, t, t.out <= j.out + 1.0),
-                    (m, j, j.out <= t.out + 1.0 || fading),
-                ] {
-                    if near {
-                        let across = e.out + e.half + 0.5;
-                        covers.push((ribbon, e.segment, across));
-                        covers.push((ribbon, e.segment + 1, across));
-                    }
-                }
-            }
-        }
-        for (ribbon, k, across) in covers {
-            let p = &mut ribbons[ribbon].points[k];
-            let cover = f64::from(p.cover).max(across);
-            p.cover = cover as f32;
-            p.reach = p.reach.max((cover + affine(params.tuck, cover)) as f32);
-        }
+        let covers = corner_covers(&ribbons[r].points, &ribbons[m].points, &corners);
+        widen_covers(&mut ribbons, (r, m), covers, |k| k, params);
         ribbons[r].corners = corners;
+    }
+    // A distributary's corners where it leaves its river (#127): the same circles, the branch
+    // taken as a tributary running backwards into its river.
+    for b in 0..ribbons.len() {
+        if ribbons[b].split.is_none() {
+            continue;
+        }
+        let river = ribbons[b].river;
+        let Some(m) =
+            (0..ribbons.len()).find(|&m| ribbons[m].river == river && ribbons[m].split.is_none())
+        else {
+            continue;
+        };
+        let mut backwards = ribbons[b].clone();
+        backwards.points.reverse();
+        for p in &mut backwards.points {
+            p.direction = [-p.direction[0], -p.direction[1]];
+        }
+        let corners = confluence(&backwards, &ribbons[m], params);
+        let covers = corner_covers(&backwards.points, &ribbons[m].points, &corners);
+        let last = ribbons[b].points.len() - 1;
+        widen_covers(&mut ribbons, (b, m), covers, |k| last - k, params);
+        ribbons[b].corners = corners;
     }
     // Where each river leaves a lake: the last point of each run in one that the river runs on
     // past.
@@ -2595,7 +2593,7 @@ pub fn sea_mouth(points: &[RibbonPoint]) -> Option<usize> {
 }
 
 /// The index of the point of `points` nearest `at`.
-fn nearest(points: &[RibbonPoint], at: [f64; 2]) -> usize {
+pub(crate) fn nearest(points: &[RibbonPoint], at: [f64; 2]) -> usize {
     let mut best = (f64::MAX, 0);
     for (k, p) in points.iter().enumerate() {
         let (dx, dy) = (
@@ -2838,6 +2836,62 @@ fn confluence(tributary: &Ribbon, main: &Ribbon, params: &RibbonParams) -> Vec<C
         });
     }
     corners
+}
+
+/// The water drawn over `corners` where `tributary` meets `main` (#119): each sample of a corner
+/// by the river whose edge is nearer, and by the river joined too where the tributary's water is
+/// fading into it. Per sample: whether on the tributary, its segment, and the half width to
+/// cover there.
+fn corner_covers(
+    tributary: &[RibbonPoint],
+    main: &[RibbonPoint],
+    corners: &[Corner],
+) -> Vec<(bool, usize, f64)> {
+    let mut covers = Vec::new();
+    for corner in corners {
+        for q in corner_samples(corner) {
+            let t = edge_distance(
+                tributary,
+                tributary.len().saturating_sub(64)..tributary.len(),
+                q,
+            );
+            let n = nearest(main, q);
+            let j = edge_distance(main, n.saturating_sub(48)..(n + 49).min(main.len()), q);
+            let fading = tributary[t.segment].fade.min(tributary[t.segment + 1].fade) < 0.9;
+            for (on_tributary, e, near) in [
+                (true, t, t.out <= j.out + 1.0),
+                (false, j, j.out <= t.out + 1.0 || fading),
+            ] {
+                if near {
+                    let across = e.out + e.half + 0.5;
+                    covers.push((on_tributary, e.segment, across));
+                    covers.push((on_tributary, e.segment + 1, across));
+                }
+            }
+        }
+    }
+    covers
+}
+
+/// Widens the water drawn at `covers` ([`corner_covers`]) over ribbon `t` (the tributary, its
+/// point `k` at `index(k)`) and ribbon `m`, and their reach with it.
+fn widen_covers(
+    ribbons: &mut [Ribbon],
+    (t, m): (usize, usize),
+    covers: Vec<(bool, usize, f64)>,
+    index: impl Fn(usize) -> usize,
+    params: &RibbonParams,
+) {
+    for (on_tributary, k, across) in covers {
+        let p = if on_tributary {
+            &mut ribbons[t].points[index(k)]
+        } else {
+            &mut ribbons[m].points[k]
+        };
+        let cover = f64::from(p.cover).max(across);
+        p.cover = cover as f32;
+        p.reach = p.reach.max((cover + affine(params.tuck, cover)) as f32);
+    }
 }
 
 /// Points over a corner's water ([`Corner`]), which the rivers' water must cover: its tip, its
