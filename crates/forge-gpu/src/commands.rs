@@ -425,9 +425,11 @@ impl<'a> Commands<'a> {
 
     /// Records the updates in place of `blases` from their positions, which an earlier pass
     /// rewrote, in one command (each has its own scratch, so the device may run them side by
-    /// side). The pass declares the positions ([`crate::BufferAccess::BuildInput`]), the
-    /// storages and the scratches ([`crate::BufferAccess::BuildWrite`]).
-    pub fn update_dynamic_blases(&self, blases: &[crate::DynamicBlas]) {
+    /// side): a refit, or a full build for those whose `rebuild` is set (a tree fitted to the
+    /// pose they are in). The pass declares the positions
+    /// ([`crate::BufferAccess::BuildInput`]), the storages and the scratches
+    /// ([`crate::BufferAccess::BuildWrite`]).
+    pub fn update_dynamic_blases(&self, blases: &[crate::DynamicBlas], rebuild: &[bool]) {
         let Some(loader) = self.device.acceleration_loader() else {
             return;
         };
@@ -439,8 +441,10 @@ impl<'a> Commands<'a> {
         let (infos, ranges): (Vec<_>, Vec<_>) = blases
             .iter()
             .zip(&geometries)
-            .map(|(b, g)| {
-                let (info, range) = crate::accel::dynamic_blas_build(self.device, b, true);
+            .enumerate()
+            .map(|(k, (b, g))| {
+                let refit = !rebuild.get(k).copied().unwrap_or(false);
+                let (info, range) = crate::accel::dynamic_blas_build(self.device, b, refit);
                 (info.geometries(g), [range])
             })
             .unzip();
@@ -448,7 +452,8 @@ impl<'a> Commands<'a> {
             ranges.iter().map(|r| r.as_slice()).collect();
         self.paranoid_barrier();
         // SAFETY: recording state; each structure was built with these flags and geometry and
-        // allows updates, has a scratch of its own, and its storage, scratch, positions and
+        // allows updates, has a scratch of its own large enough for a build or an update (the
+        // two never share a structure in one command), and its storage, scratch, positions and
         // indices outlive the frame (the caller's `DynamicBlas`es and the buffers they were
         // made over).
         unsafe { loader.cmd_build_acceleration_structures(self.cb, &infos, &range_refs) };

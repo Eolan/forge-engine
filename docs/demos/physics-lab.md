@@ -521,7 +521,13 @@ with those the dogs folded under their own weight.
   body like any other mesh.
 - **Ray tracing:** the same pass writes the ray tracing's copy of the vertices. `skin/blas` then
   refits each creature's bottom-level structure (`forge_gpu::DynamicBlas`, updated in place)
-  before the movers' top-level structure is rebuilt over it, so the shadows bend too.
+  before the movers' top-level structure is rebuilt over it, so the shadows bend too. A refit
+  keeps the tree built for the rest pose; `FORGE_BLAS_REBUILD=N` builds each mesh's afresh every
+  N frames, one mesh a frame in turn (#169). With the creatures fallen in heaps and the camera
+  on them (`--limp-at 60 --view=0.0,1.0,3.2,0,-25`, 600 frames) the traces cost the same either
+  way (`shadow/trace` 0.123 ms, `gi/probe rays` 0.35–0.37 ms), and the rebuilds add to
+  `skin/blas` (0.104 ms refitted; 0.170 ms rebuilding every 16 frames, 0.345 ms every frame), so
+  refits only stay the default.
 - **Motion vectors:** the pass also writes where the previous frame's joints put each vertex.
   The movers' motion vectors place a skinned pixel by its weights on its triangle, between
   those previous positions, so TAA and DLAA do not smear a swinging arm.

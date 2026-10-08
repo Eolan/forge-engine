@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use forge_geom::page::{UV_RANGE_BYTES, decode_uv, uv_offset};
@@ -37,6 +38,21 @@ pub const TERRAIN_BUDGET: u32 = 600_000;
 /// adds twice the drawn cluster's own error (its `TERRAIN_SHADOW_START`, #106): far away a
 /// coarser level than the cut is drawn, and stood under it.
 pub const TERRAIN_SHADOW_START: f32 = 2.0;
+
+/// Frames between two full builds of a skinned mesh's structure, refitted in between (#169);
+/// 0: refits only. Measured in `--lab creatures` with the creatures fallen in heaps and the
+/// camera on them, the refitted trees traced as fast as rebuilt ones (`shadow/trace` 0.123 ms
+/// both ways) while rebuilding cost 0.07 ms a frame every 16 frames: refits only, until a body
+/// deforms more than these.
+const BLAS_REBUILD_EVERY: u64 = 0;
+
+/// [`BLAS_REBUILD_EVERY`], or `FORGE_BLAS_REBUILD` when set (frames; 0 for refits only).
+fn rebuild_every() -> u64 {
+    std::env::var("FORGE_BLAS_REBUILD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(BLAS_REBUILD_EVERY)
+}
 
 /// A mesh's DAG cut: the positions and triangle list of its clusters.
 pub(crate) struct Cut {
@@ -216,8 +232,12 @@ struct GpuRtScene {
 pub struct SceneRays {
     /// The static meshes' structures.
     blases: Vec<AccelerationStructure>,
-    /// The skinned meshes', refitted every frame (#165).
+    /// The skinned meshes', refitted every frame (#165) and rebuilt every `rebuild_every`
+    /// frames, one mesh a frame in turn (#169).
     dynamic: Vec<DynamicBlas>,
+    rebuild_every: u64,
+    /// Frames the skinned structures were updated in (their rebuilds' turn).
+    skin_frames: AtomicU64,
     /// The cuts' positions (three floats a vertex): the skin pass rewrites a skinned mesh's.
     hit_positions: GraphBuffer,
     /// Per mesh, its first vertex in `hit_positions`.
@@ -373,6 +393,8 @@ impl SceneRays {
             max_cut_error: cuts.iter().map(|c| c.error).fold(0.0, f32::max),
             blases,
             dynamic,
+            rebuild_every: rebuild_every(),
+            skin_frames: AtomicU64::new(0),
             blas_addresses,
             tlas: None,
             blas_ms: ms + start.elapsed().as_secs_f64() * 1e3,
@@ -445,9 +467,17 @@ impl SceneRays {
                 .buffer(storage, BufferAccess::BuildWrite)
                 .buffer(scratch, BufferAccess::BuildWrite);
         }
+        // A refit keeps the tree built for the rest pose, whose boxes swell as the body leaves
+        // it (a ragdoll fallen in a heap, a squashed slime) and slow the traces: each mesh is
+        // built afresh every `rebuild_every` frames, in turn, so that most frames rebuild one.
+        let frame = self.skin_frames.fetch_add(1, Ordering::Relaxed);
+        let every = self.rebuild_every;
+        let rebuild: Vec<bool> = (0..self.dynamic.len() as u64)
+            .map(|k| every > 0 && (frame + k).is_multiple_of(every))
+            .collect();
         let dynamic = &self.dynamic;
         pass.run(move |_, commands| {
-            commands.update_dynamic_blases(dynamic);
+            commands.update_dynamic_blases(dynamic, &rebuild);
             Ok(())
         });
         storages

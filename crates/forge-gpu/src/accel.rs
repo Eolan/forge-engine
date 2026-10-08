@@ -293,7 +293,8 @@ fn triangle_geometry(
 /// A bottom-level structure over triangles whose positions a pass rewrites every frame (a
 /// skinned mesh, #165): built once from positions and indices already on the device, then
 /// updated in place ([`crate::Commands::update_dynamic_blases`]) after each rewrite. An update
-/// keeps the triangles and refits the boxes, which suits a body that bends without tearing.
+/// keeps the triangles and refits the boxes, which suits a body that bends without tearing; a
+/// rebuild now and then fits the tree to the pose the body has come to (#169).
 /// The positions and indices belong to the caller and must outlive it.
 pub struct DynamicBlas {
     device: Arc<Device>,

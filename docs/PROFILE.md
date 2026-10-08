@@ -1091,8 +1091,21 @@ The skinned creatures on the GPU (#165), the same run, 1080p:
 | `movers/tlas`: the movers' top-level structure over them | 0.050 |
 
 The frame is 1.41 ms on the GPU (1.44 ms with the slime, a sixth skinned mesh of 4 098 vertices
-and 258 joints: `skin/vertices` 0.006 ms, `skin/blas` 0.105 ms). Recording the five refits as one build command or as five
-costs the same: the refit's cost is in the triangles.
+and 258 joints: `skin/vertices` 0.006 ms, `skin/blas` 0.105 ms). Recording the five refits as
+one build command or as five costs the same: the refit's cost is in the triangles.
+
+Rebuilding the skinned structures instead of refitting them (#169, `FORGE_BLAS_REBUILD=N`: each
+mesh's every N frames, in turn), the creatures limp from tick 60, 600 frames, two runs each:
+
+| | `skin/blas` | `shadow/trace` | frame |
+|---|---|---|---|
+| the lab's view, refits only | 0.104 | 0.088 | 1.44 |
+| the lab's view, a rebuild every 16 frames | 0.170 | 0.088 | 1.51 |
+| the lab's view, all six every frame | 0.345 | 0.090 | 1.68 |
+| on the heap (`--view=0.0,1.0,3.2,0,-25`), refits only | 0.105 | 0.123 | 1.58 |
+| on the heap, all six every frame | 0.343 | 0.123 | 1.82 |
+
+The refitted trees trace as fast as fresh ones here, so the default is refits only.
 
 `--lab flood` (#144), the gate lifted at tick 31, 600 ticks: **0.86 ms a tick** (p99 1.1, max
 1.4). Most of it is the water: 18 432 cells in two half steps (velocities carried along, the
