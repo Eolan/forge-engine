@@ -1110,7 +1110,9 @@ rolling resistance): **0.236 ms a tick** over 1 200 (p99 0.71), 0.37 ms over the
 the car crosses; the frame 1.90 ms. The steps the car is on its beds: its four presses 0.2–0.3
 ms, the height fields set again 0.1 ms (a box per wheel, only samples moved over a millimetre:
 0.2 ms as one box of all four), the step 0.2–0.26 ms (0.4–0.6 ms with the grounds at the
-layer's 2 cm, its wheels' cylinders cast against 2 500 triangles a step).
+layer's 2 cm, its wheels' cylinders cast against 2 500 triangles a step). Its mud berms smoothed
+(#189: three passes over each wheel press's box before the slump, a rim three half widths wide):
+**0.271 ms a tick** over 1 200 (p99 0.95), the frame 1.90 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

@@ -72,6 +72,7 @@ const DEEP_MUD: Soft = Soft {
     depth: 0.15,
     stiffness: 1.0e6,
     repose: 0.85,
+    packing: 0.5,
     ..Soft::MUD
 };
 /// The beds.
@@ -247,14 +248,18 @@ pub(super) fn roll(
         // From where it was at the step's start to where it will be at the next one's end: the
         // material gives way before a wheel pushing into it, which would otherwise climb the
         // front of its own rut every step, lifted and held back by it.
-        let step = travel * dt;
+        let step = travel.length() * dt;
+        // At least `LEAD` ahead even when slow: a wheel left in a trough of its own round, still,
+        // rests on its front wall, which the suspension pushes back from, and never climbs out
+        // (#189).
+        let ahead = step.max(LEAD);
         bed.layer.press(Pad {
-            at: at + step.as_dvec2(),
+            at: at + (heading * ahead).as_dvec2(),
             heading,
             size: PATCH,
             pressure: c.load / (4.0 * TYRE.x * TYRE.y),
-            sweep: 2.0 * step.length(),
-            wheel: WHEEL_RADIUS,
+            sweep: step + ahead,
+            wheel: TROUGH * WHEEL_RADIUS,
         });
         pressed += 1;
     }
@@ -393,6 +398,11 @@ const ROLLING: f32 = 0.45;
 const WHEEL_RADIUS: f32 = 0.31;
 /// Under this pace (m/s) a wheel's hold eases off, so a stopped car is not pushed back.
 const ROLLING_PACE: f32 = 0.5;
+/// How far ahead of a wheel its press reaches at least, metres, and how much rounder than the
+/// wheel the trough it presses is: so the tyre rests on the trough's floor, not on its front
+/// wall (#189).
+const LEAD: f32 = 0.04;
+const TROUGH: f32 = 1.3;
 
 /// For the coming step: each of the car's wheels sunk into a ground is held back by the soft
 /// material it ploughs (#187), against its travel at its contact, by its load times
@@ -588,6 +598,35 @@ mod tests {
             .fold(f32::MAX, f32::min);
 
         assert!(under < DEEP_MUD.depth - 0.09, "{under} under a wheel");
+        // The outer berm of the left wheels' rut: its crest at each z across the mud's middle.
+        let crests: Vec<f32> = (0..100)
+            .map(|k| {
+                let z = -1.0 + 0.02 * f64::from(k);
+                (0..40)
+                    .map(|j| deep.height_at(DVec2::new(2.45 + 0.01 * f64::from(j), z)))
+                    .fold(f32::MIN, f32::max)
+            })
+            .collect();
+        let (lo, hi) = crests
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), &c| (l.min(c), h.max(c)));
+        let wiggle: f32 =
+            crests.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (crests.len() - 1) as f32;
+        for x in [2.47, 2.52, 2.57, 2.62, 2.67, 2.72] {
+            let line: Vec<f32> = (0..100)
+                .map(|k| deep.height_at(DVec2::new(x, -1.0 + 0.02 * f64::from(k))))
+                .collect();
+            let step: f32 = line.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / 99.0;
+            // Its flank as even (#189): it stepped 2.4 mm a point, striped by a low sun.
+            assert!(step < 0.001, "the flank at {x}: {step} a point");
+        }
+        // Low and even (#189): a few centimetres over the mud, its crest stepping under
+        // 2 mm a point (it stood 12 cm over it, ridged a step apart).
+        assert!(hi < DEEP_MUD.depth + 0.05, "a berm {hi} high");
+        assert!(
+            hi - lo < 0.03 && wiggle < 0.002,
+            "a crest from {lo} to {hi}, {wiggle} a point"
+        );
         // The same run presses the same bits.
         let (again, taken_again, rolled_again, _) = walk_the_yard(26);
         assert_eq!((taken, rolled), (taken_again, rolled_again));

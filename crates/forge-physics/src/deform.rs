@@ -90,13 +90,18 @@ const ROUND: f32 = 0.4;
 const RIM: f32 = 1.2;
 /// A wheel's rim reaches farther, as a share of its half width: it moves a long stretch of
 /// material at once, which would otherwise stand in walls beside its rut (#187).
-const WHEEL_RIM: f32 = 2.0;
+const WHEEL_RIM: f32 = 3.0;
 /// How far from its border the layer thins to nothing, metres (a bed's edge).
 const BEVEL: f32 = 0.06;
 /// Passes of the slump after each press at most (it stops once settled: no move over
 /// `SETTLED` metres), and the share of a slope's excess each moves.
 const SLUMP_PASSES: u32 = 32;
 const SETTLED: f32 = 1e-4;
+/// Passes of the smoothing after the slump, and the share of a difference between neighbours
+/// each moves: the millimetres a rim heaped a step at a time leaves, which a low sun stripes
+/// (#189).
+const SMOOTH_PASSES: u32 = 3;
+const SMOOTH_RATE: f32 = 0.12;
 const SLUMP_RATE: f32 = 0.25;
 
 /// A layer of soft material over a hard base: its thickness at the points of a grid.
@@ -291,14 +296,22 @@ impl Layer {
         );
         let (low, high) = self.span(pad.at, reach);
         // At point (x, z): the pad's elliptic distance, 1 on its edge, the stretch it swept
-        // over counted as its middle; whether the point is beside that stretch, along it (all
+        // over counted as its middle; how much of a rim it takes beside that stretch (all
         // points for a pad that did not sweep); and how far it is before or behind the stretch.
         let shape = |x: u32, z: u32| {
             let d = (self.origin + DVec2::new(f64::from(x), f64::from(z)) * f64::from(self.cell)
                 - pad.at)
                 .as_vec2();
             let along = d.dot(heading);
-            let beside = sweep == 0.0 || (-sweep..=0.0).contains(&along);
+            // How much of a rim the point takes along the stretch: all of it beside the stretch,
+            // fading over a stretch's length past either end, so the rims of a wheel's steps
+            // blend into one berm rather than a ridge a step (#189).
+            let beside = if sweep == 0.0 {
+                1.0
+            } else {
+                let past = (-along - sweep).max(along).max(0.0);
+                (1.0 - past / sweep).max(0.0)
+            };
             let along = if along > 0.0 {
                 along
             } else {
@@ -341,14 +354,11 @@ impl Layer {
         }
         // The rim: what is not packed, heaped in a ring past the pad's edge, highest halfway
         // out.
-        let bump = |(r2, beside): (f32, bool)| {
-            if !beside {
-                return 0.0;
-            }
+        let bump = |(r2, beside): (f32, f32)| {
             let t = (r2.sqrt() - 1.0) / rim_reach;
             if (0.0..1.0).contains(&t) {
                 let w = t * (1.0 - t);
-                w * w
+                w * w * beside
             } else {
                 0.0
             }
@@ -371,6 +381,19 @@ impl Layer {
                 }
             }
         }
+        // A wheel's rim, heaped a step at a time, smoothed but for the print itself (a foot's
+        // rims are of one press, and stay as they are).
+        if wheel > 0.0 {
+            let width = (high[0] - low[0] + 1) as usize;
+            let print: Vec<bool> = (low[1]..=high[1])
+                .flat_map(|z| (low[0]..=high[0]).map(move |x| (x, z)))
+                .map(|(x, z)| r2(x, z).0 < 1.0)
+                .collect();
+            self.smooth(low, high, |x, z| {
+                print[(z - low[1]) as usize * width + (x - low[0]) as usize]
+            });
+        }
+        // Then the slump: the smoothing heaps against the print's walls, which it leaves alone.
         self.slump(low, high);
         self.mark(low, high);
         pushed * self.cell * self.cell
@@ -395,6 +418,37 @@ impl Layer {
 
     fn index(&self, x: u32, z: u32) -> usize {
         (z * self.size[0] + x) as usize
+    }
+
+    /// Smooths the points from `low` to `high` but those of the print (`print`): each pass, a
+    /// share of the difference between each point and its next along x and along z moves
+    /// across, worked out from the heights before the pass, so no material is made or lost.
+    fn smooth(&mut self, low: [u32; 2], high: [u32; 2], print: impl Fn(u32, u32) -> bool) {
+        for _ in 0..SMOOTH_PASSES {
+            for z in low[1]..=high[1] {
+                let row = self.index(low[0], z);
+                let end = self.index(high[0], z);
+                self.scratch[row..=end].copy_from_slice(&self.heights[row..=end]);
+            }
+            for z in low[1]..=high[1] {
+                for x in low[0]..=high[0] {
+                    if print(x, z) {
+                        continue;
+                    }
+                    let k = self.index(x, z);
+                    for (next, inside) in [
+                        (k + 1, x < high[0] && !print(x + 1, z)),
+                        (k + self.size[0] as usize, z < high[1] && !print(x, z + 1)),
+                    ] {
+                        if inside {
+                            let flow = SMOOTH_RATE * (self.scratch[k] - self.scratch[next]);
+                            self.heights[k] -= flow;
+                            self.heights[next] += flow;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Slumps the points from `low` to `high`: each pass, between each point and its next

@@ -900,16 +900,23 @@ beds.
   its tread (2 cm wider than the tyre each side, so the tyre's edges rest in the rut, not on its
   berms) and along its heading follows the wheel's round, as far ahead as the round meets the
   material; it reaches from where the wheel was at the step's start to where it will be at the
-  next one's end. Pressed only to where the wheel was, the wheel climbed the front of its own
-  rut every step, lifted and held back until it stuck at the mud's edge. Its rim spreads twice
-  as wide as a foot's.
+  next one's end, and at least 4 cm ahead. Pressed only to where the wheel was, the wheel
+  climbed the front of its own rut every step, lifted and held back until it stuck at the mud's
+  edge; and pressed to the wheel's own round, a wheel that slowed to a crawl rested on its
+  trough's front wall, which the suspension pushed back from, and never climbed out (#189): the
+  trough is 30 % rounder than the wheel. Its rim spreads three half widths beside the rut, each
+  step's fading past its stretch's ends so the steps blend into one berm, smoothed (three passes
+  moving an eighth of each difference between neighbours, the print itself left as pressed)
+  before the slump: heaped a step at a time, it stood in ridges a step apart that a low sun
+  striped.
 - **Slowed:** each wheel in a ground is held back against its travel, at its contact, by its
   load times 0.45 · √(z / 2r), z how far it sank below the untouched layer (a rigid wheel's
   entry angle, softened for a tyre); and each ground grips as its material does against the
   floor's 0.2 (damp sand 0.4, snow 0.2, mud 0.15). The car's mud is a deep puddle: 15 cm of soft
-  mud (1 MPa/m, walls at 40°), thinning over its last 25 cm, which a wheel's 105 kPa sinks 10.5
-  cm. On the autopilot (3 m/s, throttle at most 0.6) the car keeps its pace through the snow,
-  slows to 1.3 m/s in the mud, and is back over 2.4 m/s past the sand.
+  mud (1 MPa/m, walls at 40°, half of what a tyre pushes out water squeezed away), thinning over
+  its last 25 cm, which a wheel's 105 kPa sinks 10.5 cm. On the autopilot (3 m/s, throttle at
+  most 0.6) the car keeps its pace through the snow, slows to 1.3 m/s in the mud, and is back
+  over 2.4 m/s past the sand.
 - **The dogs walk on the floor** under their beds, so their paws go through the snow to it.
   Their beds stay drawn only.
 - **Drawn by displacement:** a bed is a flat grid mesh cooked as a skinned mesh of one joint
@@ -928,10 +935,11 @@ Over 26 s the dogs press 16 footfalls into their sand, 16 into their mud and 18 
 snow. The prints are 1.2 cm deep in the sand, 1.9 cm in the mud (as deep as its 56° walls let a
 3 cm pad's print be), and through to the 4 mm left over the floor in the snow. The car's ruts
 reach the floor in its sand and snow (and in places in its mud, where its wheels' load swung
-high as it rolled); their berms stand 3.1 cm over the sand, 1.2 cm over the snow and 12 cm over
-the deep mud. It crosses at 2.9 m/s on the floor and 1.2 m/s at its slowest in the mud.
-**Costs:** a tick 0.236 ms over 1 200 (p99 0.71), 0.37 ms over the first 600 while the car
-crosses, against the course's 0.100: its four presses (0.2–0.3 ms a tick while it is on its
+high as it rolled); the berms beside them in its deep mud stand 2 to 3 cm over it, their crests
+stepping 1 mm a point and their flanks under 1 mm (12 cm walls, ridged at 2.4 mm a point, before
+#189). It crosses at 2.9 m/s on the floor and 1.3 m/s at its slowest in the mud.
+**Costs:** a tick 0.271 ms over 1 200 (p99 0.95; 0.236 before #189's smoothing), most of it while
+the car crosses, against the course's 0.100: its four presses (0.2–0.3 ms a tick while it is on its
 beds), Jolt's height fields set again (0.1 ms) and its wheels cast against them;
 `skin/vertices` 0.022 ms for 206 000 vertices, `skin/blas` 0.127 ms for the dogs', the car's and
 the beds' structures; the frame 1.90 ms at 1600 × 900. **Tests:** a pad sinks by its pressure
@@ -941,7 +949,7 @@ and snow holds steeper walls; a rolling wheel ploughs one unbroken rut with berm
 same pads leave the same bits; a car's wheels carry its weight where they touch and roll ahead;
 a crate sinks where its height field is lowered under it; a displaced ground's clusters keep
 their own spheres; the yard's dogs print their three beds and the car ruts its three, slowed in
-the mud and sunk 9 cm and more into it, replayed to the bit; a saved yard restores its prints,
+the mud and sunk 9 cm and more into it, its mud berms low and even (#189), replayed to the bit; a saved yard restores its prints,
 a reset clears them, and a recording replays to the same digests.
 
 Left: the layer clip-mapped round the player on the island (D-007), tread patterns, the
