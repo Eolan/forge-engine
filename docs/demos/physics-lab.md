@@ -641,7 +641,25 @@ under a microsecond a pose. Not yet done: resampling every track evenly (ACL's),
 rotation on three components, and the lab playing its clips packed. The tests: the lab's clips
 within the tolerance in under half their bytes, a constant track on no bits, the same bits twice.
 
-**Left in #167:** IK for the feet and the head's look-at, with foot-down events (its step 4).
+**IK and a look-at** (#167's step 4, 2026-10-08; `forge_anim::two_bone`, `look_at`,
+`FootDown`):
+- **Two bones** reaching a target: a hip, a knee and the shin's tip (a point in the knee's frame,
+  for skeletons like the lab's without foot joints). The knee is placed by the law of cosines,
+  on the side it is bent on, and the two joints are turned by the arcs between their old and new
+  directions: square roots only (D-016). Out of reach the leg stretches straight towards the
+  target; too near, it folds as far as its bones allow.
+- **A look-at:** a joint's forward axis turned towards a point, by at most a given turn.
+- **Foot-down:** a foot is down within a height of the ground and comes down again only once it
+  has been twice as high: the event D-007's prints will take.
+- **In the lab:** each mannequin turns its head towards the nearest dog walking by, by at most
+  the turn whose cosine is 0.85 (its neck's cone is 0.6 rad), the look-at applied to the clip's
+  pose before it becomes the motors' targets.
+- **Tests:** a leg reaches targets in reach, its bones kept to 0.1 mm; it bends its knee on the
+  side it was bent and stretches 0.1 m short out of reach; a head turns to a point and stops at
+  its limit; a foot comes down once a step.
+
+**Left in #167:** feet on uneven ground in the lab (steps under the dogs' paths, a ray under
+each paw, the legs' IK before the targets), and the foot-down events feeding D-007.
 
 ## `flood`: a dam break (issue #144)
 

@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 mod clip;
+mod ik;
 mod import;
 mod pack;
 mod play;
@@ -32,6 +33,7 @@ mod pose;
 mod skeleton;
 
 pub use clip::{Clip, Interpolation, JointTracks, Track};
+pub use ik::{Chain, FootDown, look_at, two_bone};
 pub use import::{AnimError, Rig, load_rig, load_rigs};
 pub use pack::PackedClip;
 pub use play::{BlendSpace, Inertializer, Player, Source, decay};

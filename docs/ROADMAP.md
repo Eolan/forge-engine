@@ -533,8 +533,8 @@ The items below are the phase's original outline; the plan above orders them.
 1. `forge-anim`: clips ✅ and GPU skinning ✅ (#165: glTF skins and clips, poses sampled and
    blended, the skin pass and refitted BLASes); playback with inertialized switches and a blend
    space ✅ (#167, 2026-10-08), packed clips ✅ (#167, a quarter to a third of their bytes);
-   left: IK (feet,
-   hands, look-at).
+   two-bone IK, a look-at and foot-down events ✅ (#167; the lab's mannequins watch the dogs);
+   left: the feet on uneven ground.
 2. Motion matching for the player; powered ragdolls tracking poses; hit reactions;
    contact events to the material layer.
 3. Generated creatures: gait synthesis for procedurally generated bodies.

@@ -4,15 +4,16 @@
 //! eleven bones: an artist's mannequin on a stand and a dog. Each is a Jolt ragdoll of eleven
 //! bodies, one a bone (its hull the vertices the bone carries most, its joint where the bone
 //! starts), held by ball joints and hinges whose motors drive it to the pose of its clips (#167:
-//! idle and walk in turns, each switch inertialized, [`Motion`]), with a strength that lets a
-//! thrown ball shove them; a dog's torso is held upright by a spring ([`balance`]). The bodies
-//! move the bones ([`skin`]), and the mesh bends at the joints. The ↓ key lets them go limp, ↑
-//! powers them again; a hard enough blow knocks a mannequin off its stand.
+//! idle and walk in turns, each switch inertialized, the mannequins' heads turned to watch the
+//! dogs, [`Motion`]), with a strength that lets a thrown ball shove them; a dog's torso is held
+//! upright by a spring ([`balance`]). The bodies move the bones ([`skin`]), and the mesh bends at
+//! the joints. The ↓ key lets them go limp, ↑ powers them again; a hard enough blow knocks a
+//! mannequin off its stand.
 
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use forge_anim::{Clip, Inertializer, Pose, Rig, Skeleton, load_rigs};
+use forge_anim::{Clip, Inertializer, Pose, Rig, Skeleton, load_rigs, look_at};
 use forge_core::dmath::{atan2, sin_cos};
 use forge_geom::city::{Block, PropKind, PropSpec};
 use forge_geom::model::{Model, ModelMesh, load_glb};
@@ -440,6 +441,10 @@ pub(super) fn skin(kind: Kind, parts: &[(Vec3, Quat)], out: &mut Vec<Mat4>) -> V
 /// a switch takes to die away (#167).
 const SEGMENT: f64 = 6.0;
 const SWITCH: f32 = 0.4;
+/// How far a mannequin turns its head to watch a dog: the cosine of the largest turn (the neck's
+/// cone is 0.6 rad), and how far over a dog's torso it looks, metres.
+const HEAD_TURN: f32 = 0.85;
+const DOG_HEAD: f64 = 0.25;
 
 /// A kind's clips and its parts' joint frames as the motors take them (#167's step 3): what
 /// turns a pose of its skeleton into its ragdoll's targets.
@@ -452,6 +457,10 @@ pub(super) struct Motion {
     frame: [Quat; PARTS],
     rest: [Quat; PARTS],
     hinge: [bool; PARTS],
+    /// Its head's joint, and which way its face looks in that joint's frame (the creature faces
+    /// −z).
+    head: usize,
+    face: Vec3,
 }
 
 impl Motion {
@@ -481,12 +490,15 @@ impl Motion {
             frame[k] = turn(body.joint[parent]).inverse() * basis;
             rest[k] = skeleton.rest().rotations[body.joint[k]];
         }
+        let head = body.joint[parts.iter().position(|p| p.name == "head").expect("a head")];
         Self {
             rig,
             clips: [clip("idle"), clip("walk")],
             frame,
             rest,
             hinge: std::array::from_fn(|k| matches!(parts[k].joint, RagdollJoint::Hinge { .. })),
+            head,
+            face: turn(head).inverse() * Vec3::NEG_Z,
         }
     }
 
@@ -508,6 +520,25 @@ impl Motion {
             };
         }
         targets
+    }
+
+    /// Turns `pose`'s head to look at `target` (in the world) as far as `HEAD_TURN` allows, for
+    /// creature `c` standing as built (#167's look-at).
+    fn look(&self, c: &Creature, target: DVec3, pose: &mut Pose) {
+        let body = c.kind.body();
+        // The world's point in the creature's frame: its root stands at its middle, turned.
+        let at =
+            c.stance.rotation.inverse() * (target - c.stance.position).as_vec3() + body.middle[0];
+        let mut model = vec![Mat4::IDENTITY; self.rig.skeleton.len()];
+        look_at(
+            &self.rig.skeleton,
+            pose,
+            self.head,
+            self.face,
+            at,
+            HEAD_TURN,
+            &mut model,
+        );
     }
 
     /// Seconds spent walking `time` seconds into a creature's schedule (its odd segments).
@@ -613,10 +644,32 @@ impl Herd {
     /// Before a step at `time` seconds: every creature's motors driven to its pose then (its
     /// clips, #167), or let go when `limp`.
     pub(super) fn drive(&self, world: &mut World, time: f64, limp: bool) {
+        // The mannequins watch the nearest dog walk by.
+        let dogs: Vec<BodyId> = self
+            .creatures
+            .iter()
+            .filter(|c| c.kind == Kind::Dog)
+            .map(|c| c.root)
+            .collect();
+        let mut dogs_at = Vec::new();
+        world.transforms(&dogs, &mut dogs_at);
         for c in &self.creatures {
             let motion = c.kind.motion();
             let mut pose = motion.rig.skeleton.rest().clone();
             motion.pose_at(time + c.phase, &mut pose);
+            if c.stand.is_some() && !limp {
+                let flat = |p: DVec3| DVec3::new(p.x, 0.0, p.z);
+                let nearest = dogs_at.iter().min_by(|a, b| {
+                    let (da, db) = (
+                        flat(a.position).distance_squared(flat(c.stance.position)),
+                        flat(b.position).distance_squared(flat(c.stance.position)),
+                    );
+                    da.total_cmp(&db)
+                });
+                if let Some(dog) = nearest {
+                    motion.look(c, dog.position + DVec3::new(0.0, DOG_HEAD, 0.0), &mut pose);
+                }
+            }
             let targets = motion.targets(c.kind.body(), &pose);
             let motors = Motors {
                 torque: if limp { 0.0 } else { c.kind.motors().torque },
