@@ -93,6 +93,7 @@ pub struct FjVehicleDesc {
     pub max_rpm: f32,
     pub brake_torque: f32,
     pub handbrake_torque: f32,
+    pub ray_wheels: u32,
 }
 
 #[repr(C)]

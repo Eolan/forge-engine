@@ -192,8 +192,11 @@ field of every other point, edited in place where it changed, in an object layer
 feel (no other body tests its small triangles); a press sinks to the depth less pressure over
 stiffness, so a standing load finds its level; a wheel's press follows its round ahead of its
 travel, so it rests in its rut; a rolling resistance from its sinkage and the material's grip
-slow it. Not yet: the clip-map round the player (a lab bed is a fixed grid), feet on soft
-ground in the physics, audio reading it, and the weather refilling it.
+slow it. Detail that is seen but not stood on, a tyre's tread, goes in a relief drawn over the
+layer and no part of its thickness (#188), and a vehicle on soft ground finds it with rays down
+from its wheels, which its ruts' walls cannot catch. Not yet: the clip-map round the player (a
+lab bed is a fixed grid), feet on soft ground in the physics, audio reading it, and the weather
+refilling it.
 
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
 

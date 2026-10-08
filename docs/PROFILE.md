@@ -1112,7 +1112,9 @@ ms, the height fields set again 0.1 ms (a box per wheel, only samples moved over
 0.2 ms as one box of all four), the step 0.2–0.26 ms (0.4–0.6 ms with the grounds at the
 layer's 2 cm, its wheels' cylinders cast against 2 500 triangles a step). Its mud berms smoothed
 (#189: three passes over each wheel press's box before the slump, a rim three half widths wide):
-**0.271 ms a tick** over 1 200 (p99 0.95), the frame 1.90 ms.
+**0.271 ms a tick** over 1 200 (p99 0.95), the frame 1.90 ms. Its wheels on rays and its tread
+(#188): **0.211 ms a tick** (p99 0.65; a ray a wheel costs less than a cylinder cast against
+the ground's triangles), the frame 1.90 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

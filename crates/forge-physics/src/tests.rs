@@ -466,6 +466,7 @@ fn car() -> (World, BodyId, VehicleId) {
                 max_steer: 0.6,
                 engine: (300.0, 6000.0),
                 brakes: (1500.0, 4000.0),
+                ray_wheels: false,
             },
         )
         .unwrap();

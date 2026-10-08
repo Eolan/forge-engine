@@ -14,12 +14,12 @@
 use anyhow::Result;
 use forge_anim::Footfall;
 use forge_geom::TriMesh;
-use forge_physics::deform::{Layer, Pad, Soft};
+use forge_physics::deform::{Layer, Pad, Soft, Tread};
 use forge_physics::{BodyDesc, BodyId, Shape, VehicleId, World};
 use forge_sim::TICK;
 use glam::{DVec2, Vec2, Vec3};
 
-use super::drive::Driver;
+use super::drive::{self, Driver};
 
 /// A bed: its layer, its material's name (the lab's rows'), and its grip when the physics
 /// stands on it (the car's, #187: a height field kept to the layer, `Ground`).
@@ -103,6 +103,14 @@ const STOP_Z: f64 = -7.0;
 /// whole tyre and the berms rise beyond it, not under its edges.
 const TYRE: Vec2 = Vec2::new(0.1, 0.07);
 const PATCH: Vec2 = Vec2::new(0.12, 0.07);
+/// The car's tyres' tread (#188): lugs 9 mm deep every 8 cm (four of the car's beds' points
+/// a lug, coarse enough not to shimmer), across its 20 cm, in chevrons swept back 0.6 m a metre.
+const TREAD: Tread = Tread {
+    depth: 0.009,
+    half_width: 0.1,
+    pitch: 0.08,
+    sweep_back: 0.6,
+};
 /// The yard's sun: low (26°) from beyond the beds and the sand's side, across the dogs' lanes,
 /// so the prints' walls and rims stand out in light and shadow.
 pub(crate) const SUN: Vec3 = Vec3::new(-0.5, 0.45, -0.75);
@@ -176,6 +184,7 @@ pub(super) fn press<'a>(
             pressure: fall.pressure,
             sweep: 0.0,
             wheel: 0.0,
+            tread: None,
         });
         fall.material = bed.name;
         pressed += 1;
@@ -231,6 +240,10 @@ pub(super) fn roll(
     // width, 18 cm from one step to the next.
     let mut wheels = Vec::new();
     world.wheels(vehicle, &mut wheels);
+    // Each wheel presses with its share of the car's weight, not the load on it this step: that
+    // swings as the car rocks, and its ruts and their berms rose and fell with it in waves
+    // (#188).
+    let share = drive::CAR_MASS * 9.81 / contacts.iter().flatten().count().max(1) as f32;
     for (c, wheel) in contacts.iter().zip(&wheels) {
         let Some(c) = c else {
             continue;
@@ -257,9 +270,10 @@ pub(super) fn roll(
             at: at + (heading * ahead).as_dvec2(),
             heading,
             size: PATCH,
-            pressure: c.load / (4.0 * TYRE.x * TYRE.y),
+            pressure: share / (4.0 * TYRE.x * TYRE.y),
             sweep: step + ahead,
             wheel: TROUGH * WHEEL_RADIUS,
+            tread: Some(TREAD),
         });
         pressed += 1;
     }
@@ -394,7 +408,7 @@ pub(super) fn settle(world: &mut World, beds: &mut [Bed], grounds: &mut [Ground]
 /// How hard the soft ground holds a wheel back, as a share of its load, for each metre of
 /// root of its sinkage over its diameter (a rigid wheel's entry angle, `sqrt(z / 2r)`, halved
 /// for a tyre that flattens), and the wheels' radius (the drive lab's car's).
-const ROLLING: f32 = 0.45;
+const ROLLING: f32 = 0.6;
 const WHEEL_RADIUS: f32 = 0.31;
 /// Under this pace (m/s) a wheel's hold eases off, so a stopped car is not pushed back.
 const ROLLING_PACE: f32 = 0.5;
@@ -437,11 +451,14 @@ fn hold_back(world: &mut World, (chassis, vehicle): (BodyId, VehicleId), beds: &
     world.push(&bodies, &pushes);
 }
 
-/// Every bed's heights in turn, as the renderer's height fields take them.
+/// Every bed's surface as drawn (its thickness and its treads' relief) in turn, as the
+/// renderer's height fields take them.
 pub(super) fn heights(beds: &[Bed], out: &mut Vec<f32>) {
     out.clear();
+    let mut drawn = Vec::new();
     for bed in beds {
-        out.extend_from_slice(bed.layer.heights());
+        bed.layer.drawn(&mut drawn);
+        out.extend_from_slice(&drawn);
     }
 }
 
@@ -475,7 +492,8 @@ mod tests {
         let field = build(&mut world, 0, 0, creatures::Ground::Yard).expect("the yard");
         let mut beds = beds();
         let mut grounds = grounds(&mut world, &beds).expect("the car's grounds");
-        let car = drive::car(&mut world, DVec3::new(LANE, 0.15, CAR_START)).expect("the car");
+        let car =
+            drive::car_on(&mut world, DVec3::new(LANE, 0.15, CAR_START), true).expect("the car");
         let driver = Driver {
             car: Some(car),
             ..Driver::default()
@@ -612,12 +630,16 @@ mod tests {
             .fold((f32::MAX, f32::MIN), |(l, h), &c| (l.min(c), h.max(c)));
         let wiggle: f32 =
             crests.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (crests.len() - 1) as f32;
-        for x in [2.47, 2.52, 2.57, 2.62, 2.67, 2.72] {
+        // Across both ruts' berms proper, outside the ruts' walls and their tops.
+        for x in [
+            2.42, 2.47, 2.52, 2.57, 2.62, 3.10, 3.15, 3.20, 3.25, 3.30, 3.90, 3.95, 4.00, 4.05,
+            4.10, 4.58, 4.63, 4.68, 4.73,
+        ] {
             let line: Vec<f32> = (0..100)
                 .map(|k| deep.height_at(DVec2::new(x, -1.0 + 0.02 * f64::from(k))))
                 .collect();
             let step: f32 = line.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / 99.0;
-            // Its flank as even (#189): it stepped 2.4 mm a point, striped by a low sun.
+            // Its flanks as even (#189): they stepped 2.4 mm a point, striped by a low sun.
             assert!(step < 0.001, "the flank at {x}: {step} a point");
         }
         // Low and even (#189): a few centimetres over the mud, its crest stepping under
@@ -627,6 +649,18 @@ mod tests {
             hi - lo < 0.03 && wiggle < 0.002,
             "a crest from {lo} to {hi}, {wiggle} a point"
         );
+        // The car's snow ruts' walls even along them (#188): the smoothing heaped against their
+        // tops once, and the slump poured it into their feet in a sawtooth a low sun dashed.
+        let snow = &beds[5].layer;
+        for x in [2.73, 2.75, 2.77] {
+            let wall: Vec<f32> = (0..100)
+                .map(|k| snow.height_at(DVec2::new(x, 2.0 + 0.02 * f64::from(k))))
+                .collect();
+            let (lo, hi) = wall
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(l, h), &w| (l.min(w), h.max(w)));
+            assert!(hi - lo < 0.004, "the snow rut's wall at {x}: {lo} to {hi}");
+        }
         // The same run presses the same bits.
         let (again, taken_again, rolled_again, _) = walk_the_yard(26);
         assert_eq!((taken, rolled), (taken_again, rolled_again));

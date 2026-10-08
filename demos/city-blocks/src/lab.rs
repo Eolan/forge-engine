@@ -975,7 +975,12 @@ impl LabWorld {
                 // The car's beds as ground (#187).
                 grounds = yard::grounds(&mut world, &beds)?;
                 // The car beside the dogs, on its own beds (#186).
-                let car = drive::car(&mut world, DVec3::new(yard::LANE, 0.15, yard::CAR_START))?;
+                // Its wheels finding its soft ground with rays (#189).
+                let car = drive::car_on(
+                    &mut world,
+                    DVec3::new(yard::LANE, 0.15, yard::CAR_START),
+                    true,
+                )?;
                 group(CAR, vec![car.0], &mut bodies);
                 driver.car = Some(car);
             }
@@ -1598,9 +1603,9 @@ impl Simulation for LabWorld {
                 out.extend_from_slice(&word.to_le_bytes());
             }
         }
-        // The yard's beds' heights.
+        // The yard's beds' heights, then their treads' relief (#188).
         for bed in &self.beds {
-            for h in bed.layer.heights() {
+            for h in bed.layer.heights().iter().chain(bed.layer.relief()) {
                 out.extend_from_slice(&h.to_bits().to_le_bytes());
             }
         }
@@ -1620,20 +1625,26 @@ impl Simulation for LabWorld {
         let (next, rest) = rest.split_at(4);
         let (feet, rest) = rest.split_at(16);
         let (flock, mut rest) = rest.split_at(32 * self.birds.len());
-        let mut heights = Vec::new();
+        let mut values = Vec::new();
         for bed in &mut self.beds {
             let [nx, nz] = bed.layer.size();
-            let (bytes, after) = rest.split_at(4 * (nx * nz) as usize);
-            heights.clear();
-            heights.extend(
-                bytes
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|&b| f32::from_bits(u32::from_le_bytes(b))),
-            );
-            bed.layer.set_heights(&heights);
-            rest = after;
+            for relief in [false, true] {
+                let (bytes, after) = rest.split_at(4 * (nx * nz) as usize);
+                values.clear();
+                values.extend(
+                    bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|&b| f32::from_bits(u32::from_le_bytes(b))),
+                );
+                if relief {
+                    bed.layer.set_relief(&values);
+                } else {
+                    bed.layer.set_heights(&values);
+                }
+                rest = after;
+            }
         }
         self.beds_changed += 1;
         // The car's grounds to their beds again: Jolt's saved state holds no shape (#187).
@@ -1703,10 +1714,10 @@ impl Simulation for LabWorld {
         if let Some(water) = &self.water {
             d ^= water.digest().rotate_left(29);
         }
-        // The yard's beds, every height to the bit (#185).
+        // The yard's beds, every height and its relief to the bit (#185, #188).
         for (b, bed) in self.beds.iter().enumerate() {
             let mut h = 0xcbf2_9ce4_8422_2325_u64 ^ b as u64;
-            for height in bed.layer.heights() {
+            for height in bed.layer.heights().iter().chain(bed.layer.relief()) {
                 h = (h ^ u64::from(height.to_bits())).wrapping_mul(0x0000_0100_0000_01b3);
             }
             d ^= h.rotate_left(31);

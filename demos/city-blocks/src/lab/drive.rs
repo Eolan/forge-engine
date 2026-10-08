@@ -15,7 +15,7 @@ use glam::{DVec3, Mat4, Quat, Vec3};
 
 /// The car: its mass, kg, how far under the chassis' centre its weight sits, metres, and its
 /// running gear (the model's wheelbase and track).
-const CAR_MASS: f32 = 1200.0;
+pub(super) const CAR_MASS: f32 = 1200.0;
 const CAR_WEIGHT_LOW: f32 = 0.25;
 const VEHICLE: VehicleDesc = VehicleDesc {
     half_track: 0.74,
@@ -27,6 +27,7 @@ const VEHICLE: VehicleDesc = VehicleDesc {
     max_steer: 0.55,
     engine: (320.0, 6500.0),
     brakes: (1600.0, 4000.0),
+    ray_wheels: false,
 };
 /// Faster than this ahead, m/s, a throttle astern brakes first.
 const BRAKE_ABOVE: f32 = 1.0;
@@ -159,6 +160,15 @@ pub(super) fn build(
 
 /// Adds a car at `at`, facing −z, its chassis the model's shell: its body and its vehicle.
 pub(super) fn car(world: &mut World, at: DVec3) -> Result<(BodyId, VehicleId)> {
+    car_on(world, at, false)
+}
+
+/// As [`car`], its wheels finding the ground with rays when `ray_wheels` (soft ground, #189).
+pub(super) fn car_on(
+    world: &mut World,
+    at: DVec3,
+    ray_wheels: bool,
+) -> Result<(BodyId, VehicleId)> {
     let (model, _) = car_model();
     let shell = model.mesh("car-shell").context("the model's shell")?;
     let points: Vec<Vec3> = shell
@@ -176,7 +186,13 @@ pub(super) fn car(world: &mut World, at: DVec3) -> Result<(BodyId, VehicleId)> {
         allow_sleep: false,
         ..BodyDesc::dynamic(&body_shape, at)
     })?;
-    let vehicle = world.add_vehicle(chassis, &VEHICLE)?;
+    let vehicle = world.add_vehicle(
+        chassis,
+        &VehicleDesc {
+            ray_wheels,
+            ..VEHICLE
+        },
+    )?;
     Ok((chassis, vehicle))
 }
 

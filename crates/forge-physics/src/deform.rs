@@ -81,8 +81,42 @@ pub struct Pad {
     /// reaching ahead as far as the wheel meets the material, so the wheel rests in its rut
     /// rather than on the lip before it (#187). 0 for a foot.
     pub wheel: f32,
+    /// The tread it presses into the floor of its print, if any (#188): a tyre's lugs.
+    pub tread: Option<Tread>,
 }
 
+/// A tyre's tread as its print takes it (#188): lugs across it, angled back from its middle in
+/// chevrons, pressed `depth` deeper than its rut's floor. Laid where it rolled, fixed to the
+/// ground (a tyre that does not slip leaves its lugs where they touched), so a wheel's presses
+/// step after step, and the wheel after it in the same rut, press the same lugs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tread {
+    /// How much deeper a lug presses, metres.
+    pub depth: f32,
+    /// Half the tread's width, metres: the lugs lie within it.
+    pub half_width: f32,
+    /// Metres from one lug to the next along the path.
+    pub pitch: f32,
+    /// How far back a lug's arm reaches for each metre from the tread's middle (the chevron).
+    pub sweep_back: f32,
+}
+
+impl Tread {
+    /// How deep the tread presses at a point `along` metres along the path (in the world: the
+    /// point's position along the heading) and `across` metres from the tread's middle: a lug's
+    /// smooth profile, full depth over its middle, nothing between two lugs; 0 off the tread.
+    pub fn depth_at(&self, along: f32, across: f32) -> f32 {
+        if across.abs() > self.half_width {
+            return 0.0;
+        }
+        let phase = (along + self.sweep_back * across.abs()) / self.pitch;
+        let t = phase - phase.floor();
+        // A triangle over the pitch, eased: a lug half the pitch wide, no step on a coarse grid.
+        let tri = 1.0 - (2.0 * t - 1.0).abs();
+        let s = ((tri - 0.3) / 0.4).clamp(0.0, 1.0);
+        self.depth * s * s * (3.0 - 2.0 * s)
+    }
+}
 /// How much higher a pad's sole is at its edge than at its middle, as a share of its smaller
 /// half size: a paw's or a boot's rounded sole.
 const ROUND: f32 = 0.4;
@@ -100,8 +134,12 @@ const SETTLED: f32 = 1e-4;
 /// Passes of the smoothing after the slump, and the share of a difference between neighbours
 /// each moves: the millimetres a rim heaped a step at a time leaves, which a low sun stripes
 /// (#189).
-const SMOOTH_PASSES: u32 = 3;
+const SMOOTH_PASSES: u32 = 5;
 const SMOOTH_RATE: f32 = 0.12;
+/// The smoothing keeps off the rim's inner edge (this share of its width next to the print):
+/// heaped against the top of the print's wall, it steepened it, and the slump poured it into
+/// the rut's foot behind the wheel, in a sawtooth a low sun dashed (#188).
+const SMOOTH_EDGE: f32 = 0.2;
 const SLUMP_RATE: f32 = 0.25;
 
 /// A layer of soft material over a hard base: its thickness at the points of a grid.
@@ -116,6 +154,9 @@ pub struct Layer {
     size: [u32; 2],
     /// The thickness at each point, metres over the base, row by row along x.
     heights: Vec<f32>,
+    /// What a tread pressed into the thickness's surface (#188), metres (0 or less), drawn with
+    /// it but no part of it: the ground a wheel rolls on stays smooth, and the slump leaves it.
+    relief: Vec<f32>,
     /// The slump's copy of the heights.
     scratch: Vec<f32>,
     /// The points changed since [`Layer::take_changed`], as boxes (lowest and highest x, z).
@@ -130,6 +171,7 @@ impl PartialEq for Layer {
             && self.cell == other.cell
             && self.size == other.size
             && self.heights == other.heights
+            && self.relief == other.relief
     }
 }
 
@@ -159,6 +201,7 @@ impl Layer {
             scratch: heights.clone(),
             heights,
             changed: Vec::new(),
+            relief: vec![0.0; (size[0] * size[1]) as usize],
         }
     }
 
@@ -197,6 +240,32 @@ impl Layer {
         self.mark([0, 0], [self.size[0] - 1, self.size[1] - 1]);
     }
 
+    /// What treads pressed into the surface at each point (0 or less), row by row along x
+    /// (#188): drawn with the thickness, no part of it.
+    pub fn relief(&self) -> &[f32] {
+        &self.relief
+    }
+
+    /// Back to a saved relief ([`Layer::relief`]).
+    ///
+    /// # Panics
+    ///
+    /// When `relief` is not a value per point.
+    pub fn set_relief(&mut self, relief: &[f32]) {
+        self.relief.copy_from_slice(relief);
+    }
+
+    /// The surface as drawn, each point's thickness and relief, into `out` (cleared first).
+    pub fn drawn(&self, out: &mut Vec<f32>) {
+        out.clear();
+        out.extend(self.heights.iter().zip(&self.relief).map(|(h, r)| h + r));
+    }
+
+    /// The surface as drawn under (`x`, `z`), as [`Layer::height_at`] its thickness.
+    pub fn drawn_at(&self, at: DVec2) -> f32 {
+        self.sample(&self.relief, at) + self.height_at(at)
+    }
+
     /// The points changed since the last call (by a press or [`Layer::set_heights`]), as boxes
     /// from their lowest to their highest (x, z): one for the presses that touch each other (a
     /// wheel's, step after step), so far apart ones (a car's four wheels) stay apart. What a
@@ -232,6 +301,11 @@ impl Layer {
     /// The thickness under (`x`, `z`), between the four nearest points (the border's beyond
     /// the layer).
     pub fn height_at(&self, at: DVec2) -> f32 {
+        self.sample(&self.heights, at)
+    }
+
+    /// `values` (one a point) under (`x`, `z`), between the four nearest points.
+    fn sample(&self, values: &[f32], at: DVec2) -> f32 {
         let g = ((at - self.origin) / f64::from(self.cell)).as_vec2();
         let max = Vec2::new((self.size[0] - 1) as f32, (self.size[1] - 1) as f32);
         let g = g.clamp(Vec2::ZERO, max);
@@ -239,8 +313,8 @@ impl Layer {
         let t = g - g0;
         let (x, z) = (g0.x as u32, g0.y as u32);
         let h = |dx: u32, dz: u32| {
-            self.heights[((z + dz).min(self.size[1] - 1) * self.size[0]
-                + (x + dx).min(self.size[0] - 1)) as usize]
+            values[((z + dz).min(self.size[1] - 1) * self.size[0] + (x + dx).min(self.size[0] - 1))
+                as usize]
         };
         let a = h(0, 0) + (h(1, 0) - h(0, 0)) * t.x;
         let b = h(0, 1) + (h(1, 1) - h(0, 1)) * t.x;
@@ -349,6 +423,18 @@ impl Layer {
                         pushed += self.heights[k] - sole;
                         self.heights[k] = sole;
                     }
+                    // The tread's lugs into the relief, not the thickness (#188): the ground a
+                    // wheel rolls on stays smooth (the lugs in it snagged the car's wheels) and
+                    // the slump leaves them. Never under half the least: at the floor (snow,
+                    // sand) a lug would cut through, the floor showing beneath in patches. A
+                    // press without a tread wipes what one left.
+                    let lugs = pad.tread.map_or(0.0, |t| {
+                        let p = self.origin
+                            + DVec2::new(f64::from(x), f64::from(z)) * f64::from(self.cell);
+                        let d = (p - pad.at).as_vec2();
+                        t.depth_at(p.dot(heading.as_dvec2()) as f32, d.dot(across))
+                    });
+                    self.relief[k] = -lugs.min((self.heights[k] - 0.5 * soft.least).max(0.0));
                 }
             }
         }
@@ -381,19 +467,25 @@ impl Layer {
                 }
             }
         }
-        // A wheel's rim, heaped a step at a time, smoothed but for the print itself (a foot's
-        // rims are of one press, and stay as they are).
+        // A wheel's rim, heaped a step at a time, smoothed where this press heaps it alone: the
+        // rut beside it, its walls and the tread's lugs pressed into it (#188) stay as pressed
+        // (smoothing all but this press's print wore down the lugs behind it). A foot's rims are
+        // of one press, and stay as they are.
         if wheel > 0.0 {
             let width = (high[0] - low[0] + 1) as usize;
-            let print: Vec<bool> = (low[1]..=high[1])
+            let kept: Vec<bool> = (low[1]..=high[1])
                 .flat_map(|z| (low[0]..=high[0]).map(move |x| (x, z)))
-                .map(|(x, z)| r2(x, z).0 < 1.0)
+                .map(|(x, z)| {
+                    let (r2, beside) = r2(x, z);
+                    let t = (r2.sqrt() - 1.0) / rim_reach;
+                    bump((r2, beside)) == 0.0 || t < SMOOTH_EDGE
+                })
                 .collect();
             self.smooth(low, high, |x, z| {
-                print[(z - low[1]) as usize * width + (x - low[0]) as usize]
+                kept[(z - low[1]) as usize * width + (x - low[0]) as usize]
             });
         }
-        // Then the slump: the smoothing heaps against the print's walls, which it leaves alone.
+        // Then the slump: the smoothing heaps against the rut's walls, which it leaves alone.
         self.slump(low, high);
         self.mark(low, high);
         pushed * self.cell * self.cell
@@ -420,10 +512,10 @@ impl Layer {
         (z * self.size[0] + x) as usize
     }
 
-    /// Smooths the points from `low` to `high` but those of the print (`print`): each pass, a
+    /// Smooths the points from `low` to `high` but those `kept` as they are: each pass, a
     /// share of the difference between each point and its next along x and along z moves
     /// across, worked out from the heights before the pass, so no material is made or lost.
-    fn smooth(&mut self, low: [u32; 2], high: [u32; 2], print: impl Fn(u32, u32) -> bool) {
+    fn smooth(&mut self, low: [u32; 2], high: [u32; 2], kept: impl Fn(u32, u32) -> bool) {
         for _ in 0..SMOOTH_PASSES {
             for z in low[1]..=high[1] {
                 let row = self.index(low[0], z);
@@ -432,13 +524,13 @@ impl Layer {
             }
             for z in low[1]..=high[1] {
                 for x in low[0]..=high[0] {
-                    if print(x, z) {
+                    if kept(x, z) {
                         continue;
                     }
                     let k = self.index(x, z);
                     for (next, inside) in [
-                        (k + 1, x < high[0] && !print(x + 1, z)),
-                        (k + self.size[0] as usize, z < high[1] && !print(x, z + 1)),
+                        (k + 1, x < high[0] && !kept(x + 1, z)),
+                        (k + self.size[0] as usize, z < high[1] && !kept(x, z + 1)),
                     ] {
                         if inside {
                             let flow = SMOOTH_RATE * (self.scratch[k] - self.scratch[next]);
@@ -509,6 +601,7 @@ mod tests {
             pressure: 1.0e5,
             sweep: 0.0,
             wheel: 0.0,
+            tread: None,
         }
     }
 
@@ -617,6 +710,7 @@ mod tests {
             pressure: 1.35e5,
             sweep: 0.0,
             wheel: 0.0,
+            tread: None,
         };
         layer.press(wheel);
         let once = layer.height_at(DVec2::ZERO);
@@ -649,6 +743,7 @@ mod tests {
                 pressure: 1.5e5,
                 sweep: 0.05,
                 wheel: 0.31,
+                tread: None,
             });
         }
         // Along its middle the rut keeps one depth: no ridge left between two steps.
@@ -665,6 +760,68 @@ mod tests {
             .map(|k| mud.height_at(DVec2::new(0.01 * f64::from(k), 0.0)))
             .fold(f32::MIN, f32::max);
         assert!(berm > Soft::MUD.depth + 0.005, "{berm}");
+    }
+
+    #[test]
+    fn a_treaded_wheel_leaves_its_lugs_a_pitch_apart_where_they_touched() {
+        let tread = Tread {
+            depth: 0.006,
+            half_width: 0.1,
+            pitch: 0.08,
+            sweep_back: 0.6,
+        };
+        let roll = |layer: &mut Layer| {
+            for k in 0..14 {
+                layer.press(Pad {
+                    at: DVec2::new(0.0, -0.3 + 0.05 * f64::from(k)),
+                    heading: Vec2::Y,
+                    size: Vec2::new(0.12, 0.07),
+                    pressure: 1.0e5,
+                    sweep: 0.1,
+                    wheel: 0.4,
+                    tread: Some(tread),
+                });
+            }
+        };
+        let mut mud = bed(Soft::MUD);
+        roll(&mut mud);
+        // Along the rut's middle as drawn: lugs pressed 6 mm into its floor every 8 cm, the
+        // ground under them smooth.
+        let floor = |layer: &Layer| -> Vec<f32> {
+            (0..32)
+                .map(|k| layer.drawn_at(DVec2::new(0.0, -0.16 + 0.01 * f64::from(k))))
+                .collect()
+        };
+        let along = floor(&mud);
+        let (low, high) = along
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), &x| (l.min(x), h.max(x)));
+        assert!((high - low - 0.006).abs() < 0.0015, "{along:?}");
+        let deepest: Vec<usize> = (1..31)
+            .filter(|&k| along[k] < along[k - 1] && along[k] <= along[k + 1])
+            .collect();
+        // A point either way where the rut starts on a slope.
+        assert!(deepest.len() >= 3, "{deepest:?}");
+        assert!(
+            deepest.windows(2).all(|w| (7..=9).contains(&(w[1] - w[0]))),
+            "{deepest:?}"
+        );
+        // The thickness under them, which a wheel rolls on, smooth.
+        let ground: Vec<f32> = (0..32)
+            .map(|k| mud.height_at(DVec2::new(0.0, -0.16 + 0.01 * f64::from(k))))
+            .collect();
+        let (gl, gh) = ground
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), &x| (l.min(x), h.max(x)));
+        assert!(gh - gl < 0.001, "{ground:?}");
+        // A second pass in the same rut presses the same lugs.
+        roll(&mut mud);
+        let moved = along
+            .iter()
+            .zip(floor(&mud))
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        assert!(moved < 0.001, "{moved}");
     }
 
     #[test]

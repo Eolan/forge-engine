@@ -490,6 +490,9 @@ pub struct VehicleDesc {
     pub engine: (f32, f32),
     /// The brakes' torque on each wheel and the handbrake's on the rear ones, N·m.
     pub brakes: (f32, f32),
+    /// Each wheel finds the ground with a ray down from its middle rather than a cylinder cast
+    /// (#189): on soft ground whose ruts' walls and lips a cylinder would catch on.
+    pub ray_wheels: bool,
 }
 
 /// A car of a [`World`]: its index, in the order added.
@@ -1092,6 +1095,7 @@ impl World {
             max_rpm: desc.engine.1,
             brake_torque: desc.brakes.0,
             handbrake_torque: desc.brakes.1,
+            ray_wheels: u32::from(desc.ray_wheels),
         };
         // SAFETY: the world is live and `raw` read during the call; the constraint lives as
         // long as the world.

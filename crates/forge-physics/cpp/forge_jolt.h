@@ -116,6 +116,9 @@ typedef struct FjVehicleDesc {
     float max_rpm;
     float brake_torque;
     float handbrake_torque;
+    // 1: each wheel finds the ground with a ray down from its middle, not a cylinder cast
+    // (#189: soft ground, whose ruts' walls and lips a cylinder catches on).
+    uint32_t ray_wheels;
 } FjVehicleDesc;
 
 // A soft body to add: a closed surface of `vertex_count` points (three floats each, about its

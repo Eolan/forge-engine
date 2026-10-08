@@ -725,8 +725,11 @@ uint32_t fj_vehicle_add(FjWorld *world, uint32_t chassis, const FjVehicleDesc *d
         }
         vehicle = new JPH::VehicleConstraint(lock.GetBody(), settings);
     }
-    JPH::Ref<JPH::VehicleCollisionTester> tester =
-        new JPH::VehicleCollisionTesterCastCylinder(kWheel);
+    JPH::Ref<JPH::VehicleCollisionTester> tester;
+    if (desc->ray_wheels != 0)
+        tester = new JPH::VehicleCollisionTesterRay(kWheel);
+    else
+        tester = new JPH::VehicleCollisionTesterCastCylinder(kWheel);
     vehicle->SetVehicleCollisionTester(tester);
     world->system.AddConstraint(vehicle);
     world->system.AddStepListener(vehicle);
