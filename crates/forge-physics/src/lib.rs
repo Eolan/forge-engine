@@ -8,9 +8,10 @@
 //! `unsafe`.
 //!
 //! A [`World`] owns its bodies and its worker threads; [`Shape`]s are shared between the bodies
-//! made of them. [`World::save_state`] and [`World::restore_state`] take the whole simulation
-//! back to an earlier step, and [`state_hash`] digests the bodies' transforms for the
-//! determinism checks (`docs/research/physics-fluids.md` §6).
+//! made of them, and soft bodies ([`World::add_soft_body`]) are closed surfaces of points held by
+//! their edges and the pressure inside. [`World::save_state`] and [`World::restore_state`] take
+//! the whole simulation back to an earlier step, and [`state_hash`] digests the bodies'
+//! transforms for the determinism checks (`docs/research/physics-fluids.md` §6).
 
 #![allow(unsafe_code)]
 
@@ -276,6 +277,34 @@ impl<'a> BodyDesc<'a> {
             ..Self::dynamic(shape, position)
         }
     }
+}
+
+/// A soft body to add ([`World::add_soft_body`]): a closed surface of points, its edges made
+/// from its triangles, the pressure inside it holding its volume.
+#[derive(Clone, Copy, Debug)]
+pub struct SoftBodyDesc<'a> {
+    /// Its vertices about its middle, metres.
+    pub points: &'a [Vec3],
+    /// Its triangles, three vertices each, wound outwards.
+    pub faces: &'a [[u32; 3]],
+    /// Its middle in the world.
+    pub position: DVec3,
+    /// Each vertex's inverse mass, 1/kg.
+    pub inverse_mass: f32,
+    /// How far its edges give under a force (Jolt's compliance, m/N: 0 for stiff ones).
+    pub compliance: f32,
+    /// Its bends' compliance (`f32::MAX` for none).
+    pub bend_compliance: f32,
+    /// The pressure inside it, n R T: what holds a closed body's volume.
+    pub pressure: f32,
+    /// Coulomb friction, and bounciness.
+    pub friction: f32,
+    /// See `friction`.
+    pub restitution: f32,
+    /// Its solver's iterations a step.
+    pub iterations: u32,
+    /// A number of the caller's, carried with the body.
+    pub user_data: u64,
 }
 
 /// A body of a [`World`]: Jolt's index and sequence number.
@@ -590,6 +619,71 @@ impl World {
         } else {
             Ok(BodyId(id))
         }
+    }
+
+    /// Adds a soft body ([`SoftBodyDesc`]): a closed surface of points held by its edges and
+    /// the pressure inside it, as Jolt's soft bodies are (a slime, a ball of jelly). A body with
+    /// no triangle, or one naming a vertex it does not have, is refused (`ShapeRefused`).
+    pub fn add_soft_body(&mut self, desc: &SoftBodyDesc) -> Result<BodyId, PhysicsError> {
+        let n = desc.points.len();
+        if desc.faces.is_empty() || desc.faces.iter().flatten().any(|&v| v as usize >= n) {
+            return Err(PhysicsError::ShapeRefused);
+        }
+        let points: Vec<f32> = desc.points.iter().flat_map(|p| p.to_array()).collect();
+        let raw = ffi::FjSoftBodyDesc {
+            points: points.as_ptr(),
+            faces: desc.faces.as_ptr().cast(),
+            position: desc.position.to_array(),
+            vertex_count: desc.points.len() as u32,
+            face_count: desc.faces.len() as u32,
+            inverse_mass: desc.inverse_mass,
+            compliance: desc.compliance,
+            bend_compliance: desc.bend_compliance,
+            pressure: desc.pressure,
+            friction: desc.friction,
+            restitution: desc.restitution,
+            iterations: desc.iterations,
+            pad: 0,
+            user_data: desc.user_data,
+        };
+        // SAFETY: the world is live; `points` holds three floats a vertex and `faces` three
+        // indices a triangle (`[u32; 3]` is laid out as three `u32`), read during the call.
+        let id = unsafe { ffi::fj_soft_body_add(self.raw.as_ptr(), &raw) };
+        if id == u32::MAX {
+            Err(PhysicsError::WorldFull)
+        } else {
+            Ok(BodyId(id))
+        }
+    }
+
+    /// A soft body's vertices after the last step into `out` (cleared first, in the order they
+    /// were given), about its middle in the world, which it returns (none for a body that is no
+    /// soft body).
+    pub fn soft_body_vertices(&self, body: BodyId, out: &mut Vec<Vec3>) -> DVec3 {
+        let mut points = vec![0.0_f32; 3 * out.len()];
+        let mut origin = [0.0_f64; 3];
+        loop {
+            let capacity = points.len() / 3;
+            // SAFETY: the world is live; `points` holds three floats for `capacity` vertices and
+            // `origin` three doubles, written during the call and no further.
+            let count = unsafe {
+                ffi::fj_soft_body_vertices(
+                    self.raw.as_ptr(),
+                    body.0,
+                    points.as_mut_ptr(),
+                    capacity as u32,
+                    origin.as_mut_ptr(),
+                )
+            } as usize;
+            if count <= capacity {
+                points.truncate(3 * count);
+                break;
+            }
+            points.resize(3 * count, 0.0);
+        }
+        out.clear();
+        out.extend(points.chunks(3).map(|c| Vec3::new(c[0], c[1], c[2])));
+        DVec3::from_array(origin)
     }
 
     /// Removes a body for good.

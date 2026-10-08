@@ -129,8 +129,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   creatures ✅ (#165, with Phase 7's first step): `forge-anim`, the in-house clip runtime
   (D-012's amendment); the skin pass and refitted BLASes; the mannequin and the dog bend at
   their joints in `--lab creatures`. Their clips through the motors ✅ (#167, 2026-10-08: idle and
-  walk, inertialized switches, a blend space; the dogs walk circles). Next: the slime as a soft
-  body, IK for #167. The night sky is built as D-046's answers ask (#164).
+  walk, inertialized switches, a blend space; the dogs walk circles; packed clips, two-bone IK
+  and look-at). Jolt's soft bodies bound (2026-10-08). Next: the slime in the lab, feet on
+  uneven ground for #167. The night sky is built as D-046's answers ask (#164).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of

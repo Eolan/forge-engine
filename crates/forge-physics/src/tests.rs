@@ -116,6 +116,7 @@ fn the_c_structs_and_their_rust_twins_agree() {
             character_state: size_of::<ffi::FjCharacterState>() as u32,
             vehicle_desc: size_of::<ffi::FjVehicleDesc>() as u32,
             ragdoll_part: size_of::<ffi::FjRagdollPart>() as u32,
+            soft_body_desc: size_of::<ffi::FjSoftBodyDesc>() as u32,
         }
     );
 }
@@ -700,5 +701,134 @@ fn a_ragdoll_holds_its_pose_on_its_motors_and_falls_limp() {
         (t[2].position - DVec3::new(0.7, 2.0, 0.0)).length() > 0.1,
         "{}",
         t[2].position
+    );
+}
+
+/// A ball of `radius`: an octahedron cut twice into four (66 vertices, 128 triangles), wound
+/// outwards, its points pushed onto the sphere.
+fn ball(radius: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+    let mut points = vec![Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z];
+    let mut faces = vec![
+        [0, 2, 4],
+        [4, 2, 1],
+        [1, 2, 5],
+        [5, 2, 0],
+        [0, 4, 3],
+        [4, 1, 3],
+        [1, 5, 3],
+        [5, 0, 3],
+    ];
+    for _ in 0..2 {
+        let mut middles = std::collections::HashMap::new();
+        let mut middle = |a: u32, b: u32, points: &mut Vec<Vec3>| {
+            *middles.entry((a.min(b), a.max(b))).or_insert_with(|| {
+                points.push((points[a as usize] + points[b as usize]).normalize());
+                points.len() as u32 - 1
+            })
+        };
+        let mut cut = Vec::with_capacity(4 * faces.len());
+        for [a, b, c] in faces {
+            let ab = middle(a, b, &mut points);
+            let bc = middle(b, c, &mut points);
+            let ca = middle(c, a, &mut points);
+            cut.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
+        }
+        faces = cut;
+    }
+    (points.iter().map(|p| radius * *p).collect(), faces)
+}
+
+/// The volume a closed surface holds (its triangles' signed cones from the origin).
+fn volume(points: &[Vec3], faces: &[[u32; 3]]) -> f32 {
+    faces
+        .iter()
+        .map(|&[a, b, c]| {
+            let [a, b, c] = [a, b, c].map(|v| points[v as usize]);
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum()
+}
+
+/// A ball of jelly 0.4 m across dropped from 1 m onto a box; its vertices after 3 s.
+fn jelly() -> (Vec<Vec3>, DVec3, f32) {
+    let (points, faces) = ball(0.4);
+    let mut world = World::new(&WorldDesc::default());
+    let floor = Shape::cuboid(Vec3::new(10.0, 0.5, 10.0), 0.05, 1000.0).expect("a box");
+    world
+        .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
+        .expect("the floor");
+    let body = world
+        .add_soft_body(&SoftBodyDesc {
+            points: &points,
+            faces: &faces,
+            position: DVec3::new(0.0, 1.0, 0.0),
+            inverse_mass: points.len() as f32 / 2.0,
+            compliance: 1.0e-4,
+            bend_compliance: f32::MAX,
+            pressure: 400.0,
+            friction: 0.5,
+            restitution: 0.0,
+            iterations: 5,
+            user_data: 7,
+        })
+        .expect("the jelly");
+    for _ in 0..180 {
+        world.step(1.0 / 60.0, 1).expect("a step");
+    }
+    let mut out = Vec::new();
+    let origin = world.soft_body_vertices(body, &mut out);
+    (out, origin, volume(&points, &faces))
+}
+
+#[test]
+fn a_ball_of_jelly_lands_keeps_its_volume_and_replays() {
+    let (points, origin, rest) = jelly();
+    assert_eq!(points.len(), 66);
+    let lowest = points
+        .iter()
+        .map(|p| origin.y + f64::from(p.y))
+        .fold(f64::MAX, f64::min);
+    let highest = points
+        .iter()
+        .map(|p| origin.y + f64::from(p.y))
+        .fold(f64::MIN, f64::max);
+    assert!(lowest > -0.02, "a vertex under the floor: {lowest}");
+    assert!(highest < 1.0, "not landed: its top at {highest}");
+    let (_, faces) = ball(0.4);
+    let held = volume(&points, &faces);
+    assert!(
+        held > 0.7 * rest && held < 1.3 * rest,
+        "its volume {held} m3, {rest} m3 at rest"
+    );
+    let (again, origin_again, _) = jelly();
+    assert_eq!(origin, origin_again);
+    assert!(
+        points
+            .iter()
+            .zip(&again)
+            .all(|(a, b)| a.to_array() == b.to_array())
+    );
+}
+
+#[test]
+fn a_soft_body_naming_a_missing_vertex_is_refused() {
+    let mut world = World::new(&WorldDesc::default());
+    let points = [Vec3::ZERO, Vec3::X, Vec3::Y];
+    let desc = SoftBodyDesc {
+        points: &points,
+        faces: &[[0, 1, 3]],
+        position: DVec3::ZERO,
+        inverse_mass: 1.0,
+        compliance: 0.0,
+        bend_compliance: f32::MAX,
+        pressure: 0.0,
+        friction: 0.5,
+        restitution: 0.0,
+        iterations: 5,
+        user_data: 0,
+    };
+    assert_eq!(
+        world.add_soft_body(&desc).err(),
+        Some(PhysicsError::ShapeRefused)
     );
 }

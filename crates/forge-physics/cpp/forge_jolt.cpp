@@ -31,6 +31,9 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -221,7 +224,8 @@ FjLayout fj_layout(void) {
                     static_cast<uint32_t>(sizeof(FjCharacterDesc)),
                     static_cast<uint32_t>(sizeof(FjCharacterState)),
                     static_cast<uint32_t>(sizeof(FjVehicleDesc)),
-                    static_cast<uint32_t>(sizeof(FjRagdollPart))};
+                    static_cast<uint32_t>(sizeof(FjRagdollPart)),
+                    static_cast<uint32_t>(sizeof(FjSoftBodyDesc))};
 }
 
 void fj_init(void) {
@@ -358,6 +362,52 @@ uint32_t fj_body_add(FjWorld *world, const FjBodyDesc *desc) {
         settings, desc->activate != 0 ? JPH::EActivation::Activate
                                       : JPH::EActivation::DontActivate);
     return id.GetIndexAndSequenceNumber();
+}
+
+uint32_t fj_soft_body_add(FjWorld *world, const FjSoftBodyDesc *desc) {
+    JPH::Ref<JPH::SoftBodySharedSettings> shared = new JPH::SoftBodySharedSettings;
+    for (uint32_t i = 0; i < desc->vertex_count; ++i) {
+        const float *p = desc->points + 3 * i;
+        shared->mVertices.push_back(JPH::SoftBodySharedSettings::Vertex(
+            JPH::Float3(p[0], p[1], p[2]), JPH::Float3(0.0f, 0.0f, 0.0f), desc->inverse_mass));
+    }
+    for (uint32_t f = 0; f < desc->face_count; ++f) {
+        const uint32_t *t = desc->faces + 3 * f;
+        shared->AddFace(JPH::SoftBodySharedSettings::Face(t[0], t[1], t[2]));
+    }
+    const JPH::SoftBodySharedSettings::VertexAttributes attributes(
+        desc->compliance, desc->compliance, desc->bend_compliance);
+    shared->CreateConstraints(&attributes, 1, JPH::SoftBodySharedSettings::EBendType::Distance);
+    shared->Optimize();
+    JPH::SoftBodyCreationSettings settings(shared, rvec3(desc->position), JPH::Quat::sIdentity(),
+                                           kMoving);
+    settings.mPressure = desc->pressure;
+    settings.mFriction = desc->friction;
+    settings.mRestitution = desc->restitution;
+    settings.mNumIterations = desc->iterations;
+    settings.mUserData = desc->user_data;
+    const JPH::BodyID id = world->system.GetBodyInterface().CreateAndAddSoftBody(
+        settings, JPH::EActivation::Activate);
+    return id.IsInvalid() ? UINT32_MAX : id.GetIndexAndSequenceNumber();
+}
+
+uint32_t fj_soft_body_vertices(const FjWorld *world, uint32_t body, float *points, uint32_t capacity,
+                               double origin[3]) {
+    JPH::BodyLockRead lock(world->system.GetBodyLockInterface(), id_of(body));
+    if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) {
+        return 0;
+    }
+    const JPH::Body &b = lock.GetBody();
+    const auto *motion = static_cast<const JPH::SoftBodyMotionProperties *>(b.GetMotionProperties());
+    const JPH::RVec3 at = b.GetCenterOfMassPosition();
+    origin[0] = at.GetX();
+    origin[1] = at.GetY();
+    origin[2] = at.GetZ();
+    const JPH::Array<JPH::SoftBodyVertex> &vertices = motion->GetVertices();
+    for (size_t i = 0; i < vertices.size() && i < capacity; ++i) {
+        vertices[i].mPosition.StoreFloat3(reinterpret_cast<JPH::Float3 *>(points + 3 * i));
+    }
+    return static_cast<uint32_t>(vertices.size());
 }
 
 void fj_body_remove(FjWorld *world, uint32_t body) {

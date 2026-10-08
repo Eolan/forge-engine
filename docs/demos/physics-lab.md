@@ -561,7 +561,13 @@ The validation layer, with synchronization validation, reports nothing on either
 - `skin/blas`, the five refits: **0.109 ms**;
 - `movers/tlas`: 0.050 ms.
 
-A slime as a soft body is still to come in this step.
+**Soft bodies** are bound (2026-10-08): `World::add_soft_body` takes a closed surface of points
+and its triangles, makes its edges and bends with Jolt's `CreateConstraints`, and holds its
+volume by the pressure inside; `World::soft_body_vertices` reads its points back after a step.
+`forge-physics`'s test drops a ball of jelly 0.4 m in radius (66 vertices, 128 triangles, 2 kg,
+pressure 400) from 1 m onto a box: after 3 s its lowest vertex is on the floor (0.00 m), its top
+at 0.80 m, its volume 1.17 times the one at rest, and a second run gives the same bits. The slime
+itself, drawn and in the lab, is still to come in this step.
 
 **The clips through the motors** (#167's first three steps, 2026-10-08; `forge_anim::Player`,
 `Inertializer`, `BlendSpace`; `reports/2026-10-08-167/`). The creatures now play their Blender

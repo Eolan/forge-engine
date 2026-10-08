@@ -116,6 +116,27 @@ typedef struct FjVehicleDesc {
     float handbrake_torque;
 } FjVehicleDesc;
 
+// A soft body to add: a closed surface of `vertex_count` points (three floats each, about its
+// middle) and `face_count` triangles (three indices each), every vertex of `inverse_mass`; its
+// edges' and shear edges' `compliance` and its bends' (FLT_MAX for none) made from the faces, the
+// `pressure` inside it (n R T), `iterations` of the solver a step, at `position`.
+typedef struct FjSoftBodyDesc {
+    const float *points;
+    const uint32_t *faces;
+    double position[3];
+    uint32_t vertex_count;
+    uint32_t face_count;
+    float inverse_mass;
+    float compliance;
+    float bend_compliance;
+    float pressure;
+    float friction;
+    float restitution;
+    uint32_t iterations;
+    uint32_t pad;
+    uint64_t user_data;
+} FjSoftBodyDesc;
+
 // The sizes of the structs above, for the layout test.
 typedef struct FjLayout {
     uint32_t world_desc;
@@ -125,6 +146,7 @@ typedef struct FjLayout {
     uint32_t character_state;
     uint32_t vehicle_desc;
     uint32_t ragdoll_part;
+    uint32_t soft_body_desc;
 } FjLayout;
 
 FjLayout fj_layout(void);
@@ -165,6 +187,14 @@ uint32_t fj_world_active_bodies(const FjWorld *world);
 
 // The body's id; 0xFFFFFFFF when the world is full.
 uint32_t fj_body_add(FjWorld *world, const FjBodyDesc *desc);
+// A soft body (FjSoftBodyDesc): its index and sequence number as a body's, UINT32_MAX when the
+// world is full.
+uint32_t fj_soft_body_add(FjWorld *world, const FjSoftBodyDesc *desc);
+// A soft body's vertices after the last step: three floats each into `points` (at most `capacity`),
+// about `origin` (three doubles), its middle in the world. Returns their number (0 for a body that
+// is no soft body).
+uint32_t fj_soft_body_vertices(const FjWorld *world, uint32_t body, float *points, uint32_t capacity,
+                               double origin[3]);
 void fj_body_remove(FjWorld *world, uint32_t body);
 
 // Positions (three doubles each) and rotations (four floats each) of `count` bodies.

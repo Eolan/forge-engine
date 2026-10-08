@@ -123,6 +123,26 @@ pub struct FjLayout {
     pub character_state: u32,
     pub vehicle_desc: u32,
     pub ragdoll_part: u32,
+    pub soft_body_desc: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FjSoftBodyDesc {
+    pub points: *const f32,
+    pub faces: *const u32,
+    pub position: [f64; 3],
+    pub vertex_count: u32,
+    pub face_count: u32,
+    pub inverse_mass: f32,
+    pub compliance: f32,
+    pub bend_compliance: f32,
+    pub pressure: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub iterations: u32,
+    pub pad: u32,
+    pub user_data: u64,
 }
 
 unsafe extern "C" {
@@ -151,6 +171,14 @@ unsafe extern "C" {
         indices: *const u32,
         triangle_count: u32,
     ) -> *mut FjShape;
+    pub fn fj_soft_body_add(world: *mut FjWorld, desc: *const FjSoftBodyDesc) -> u32;
+    pub fn fj_soft_body_vertices(
+        world: *const FjWorld,
+        body: u32,
+        points: *mut f32,
+        capacity: u32,
+        origin: *mut f64,
+    ) -> u32;
     pub fn fj_shape_height_field(
         samples: *const f32,
         count: u32,
