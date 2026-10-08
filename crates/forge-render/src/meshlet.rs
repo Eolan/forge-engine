@@ -1372,6 +1372,18 @@ impl MeshletSceneBuilder {
             .max()
             .unwrap_or(0);
         let cell_count = (self.instances.len() as u64).div_ceil(64);
+        // The rows the instances draw with: their own and their meshes' sections after it. A
+        // table shared by several scenes holds rows a scene never shows, and the flags they
+        // raise must not cost it anything: the slimes' jelly, in every scene of the city
+        // demo's table, made the city's rays non-opaque and traced a jelly ray a pixel (#190).
+        let mut used = vec![false; self.materials.len()];
+        for i in &self.instances {
+            let first = i.material as usize;
+            used[first..=first + self.mesh_sections[i.mesh as usize] as usize].fill(true);
+        }
+        let shown =
+            |f: fn(&GpuMaterial) -> bool| self.materials.iter().zip(&used).any(|(m, &u)| u && f(m));
+        let (cutouts, jelly) = (shown(GpuMaterial::cut_out), shown(GpuMaterial::jelly));
         Ok(MeshletScene {
             pool: GraphBuffer::new(pool),
             meshlets: device.create_buffer_with_data(
@@ -1472,8 +1484,8 @@ impl MeshletSceneBuilder {
                 "materials",
             )?,
             material_count: self.materials.len() as u32,
-            cutouts: self.materials.iter().any(GpuMaterial::cut_out),
-            jelly: self.materials.iter().any(GpuMaterial::jelly),
+            cutouts,
+            jelly,
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -1648,11 +1660,11 @@ pub struct MeshletScene {
     materials: Buffer,
     /// Rows in `materials`.
     pub material_count: u32,
-    /// Whether a row is cut out or double-sided: its clusters then take their own raster
-    /// (#171), which a scene without any skips.
+    /// Whether a row an instance draws with is cut out or double-sided: its clusters then take
+    /// their own raster (#171), which a scene without any skips.
     pub cutouts: bool,
-    /// Whether a row is jelly: the sun's shadow rays then see through it and are tinted by it
-    /// (#180).
+    /// Whether a row an instance draws with is jelly: the sun's shadow rays then see through it
+    /// and are tinted by it (#180).
     pub jelly: bool,
     textures: Option<TextureSet>,
     /// Instances.
