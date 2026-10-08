@@ -277,6 +277,12 @@ for path in $paths; do
     capture "$path-lab-yard240" 240 "$lab" --lab yard --fixed-step "${flag[@]}"
     capture "$path-lab-yard600" 600 "$lab" --lab yard --fixed-step "${flag[@]}"
     capture "$path-lab-yard1200" 1200 "$lab" --lab yard --fixed-step "${flag[@]}"
+    # The materials' patches (#203): the crates sliding off the snow's and the ice's ramps and
+    # the balls bouncing at tick 60, and its A/B twin; the walker at rest where it slid on the
+    # ice at tick 800.
+    capture "$path-lab-materials60" 60 "$lab" --lab materials --fixed-step "${flag[@]}"
+    capture "$path-lab-materials60-noocc" 60 "$lab" --lab materials --fixed-step --no-occlusion "${flag[@]}"
+    capture "$path-lab-materials800" 800 "$lab" --lab materials --fixed-step "${flag[@]}"
     # The flood (#144), the gate lifted at tick 31: the water running down the basin at tick
     # 150 and its A/B twin, and spread round the blocks at tick 300.
     capture "$path-lab-flood150" 150 "$lab" --lab flood --fixed-step --release 31 "${flag[@]}"

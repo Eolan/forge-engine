@@ -148,7 +148,7 @@ impl Walker {
         let start = Instant::now();
         let feet = self.world.character(self.character).position;
         self.keep_tiles(feet)?;
-        self.player.tick(&mut self.world, None, 0, TICK);
+        self.player.tick(&mut self.world, None, 0, TICK, |_| None);
         let s = self.world.character(self.character);
         if s.ground == forge_physics::Ground::Firm {
             let off = s.position.y - self.ground_at(s.position.x, s.position.z);

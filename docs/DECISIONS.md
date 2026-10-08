@@ -207,6 +207,14 @@ slopes it adds give it their smooth normals untouched; a step with no motion of 
 feet on soft ground in the physics (a ragdoll let go falls through), audio reading it, and
 the weather refilling it.
 
+**Physics reads the row ✅ (#203, 2026-10-09, `--lab materials`).** The lab's material table
+(`lab/materials.rs`) gives a row's physical layer and tags to the bodies made of it (friction,
+the dynamic coefficient, and restitution) and to its drawn row, one record for both. Pairs
+combine as Jolt combines them: friction by the geometric mean, restitution by the larger. A
+walker's grip on a ground with a row is its sole's pair friction times g, so it slides on ice.
+Not yet: a hit's material from Jolt itself (per-triangle materials, a body's user data read
+back), the static coefficient, combine rules per row.
+
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
 
 Four tiers on one renderer: **T0 raster** (SDF-updated probe clipmaps, screen-space

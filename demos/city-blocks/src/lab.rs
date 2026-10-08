@@ -43,6 +43,8 @@ mod drive;
 mod flood;
 mod fly;
 mod flyer;
+mod materials;
+pub(crate) use materials::ROWS as MATERIAL_ROWS;
 pub(crate) mod models;
 mod rocket;
 pub(crate) mod room;
@@ -113,6 +115,10 @@ pub(crate) enum LabScene {
     /// A plain room to measure sharpness by: white walls, a floor of black and white squares, black
     /// squares turned 5° on the back wall and on a board, the sun alone (#159).
     Room,
+    /// Patches of brick, wood, sand, snow and ice along the walker's way, a crate on a ramp and
+    /// a falling ball on each, every body's friction and restitution from its material's row
+    /// (#203, D-007).
+    Materials,
     /// Models made by others, the Khronos glTF sample assets fetched by `tools/fetch-assets.sh`
     /// (#170, D-048): each on a plinth, or one alone with `--model`.
     Models,
@@ -201,8 +207,10 @@ const ROOM: usize = TANK + 13;
 const COURSE: usize = ROOM + 6;
 /// A dog's paw print (#167's foot-down events), after the course's three.
 const PRINT: usize = COURSE + 3;
-/// The models scene's plinth, then its models' meshes, after the print (only in that scene).
-const MODELS: usize = PRINT + 1;
+/// The materials' patches, a prop per row (#203), after the print.
+const MATERIALS: usize = PRINT + 1;
+/// The models scene's plinth, then its models' meshes, after the patches (only in that scene).
+const MODELS: usize = MATERIALS + materials::ROWS.len();
 /// What the sea scene sets afloat: crates, barrels, logs, balls, and rocks that sink.
 const SEA_CRATES: u32 = 30;
 const SEA_BARRELS: u32 = 30;
@@ -251,6 +259,7 @@ pub(crate) fn props(scene: LabScene) -> Vec<PropSpec> {
     props.extend(tank::props());
     props.extend(room::props());
     props.extend(creatures::course_props());
+    props.extend(materials::props());
     // Only their scene reads and cooks the external models.
     if scene == LabScene::Models {
         props.extend(models::props());
@@ -569,6 +578,8 @@ pub(crate) struct LabWorld {
     tank: Option<tank::Tank>,
     limp: bool,
     platform: Option<BodyId>,
+    /// The materials' patches, the rows their bodies took, and what is measured (#203).
+    materials: Option<materials::Yard>,
     /// The workers the waves and the pushes are worked out on.
     pool: Arc<TaskPool>,
 }
@@ -620,6 +631,7 @@ impl LabWorld {
             | LabScene::TankHole
             | LabScene::TankBlocks
             | LabScene::Room
+            | LabScene::Materials
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -702,6 +714,7 @@ impl LabWorld {
         let mut boat = None;
         let mut player = walk::Player::default();
         let mut platform = None;
+        let mut yard = None;
         let mut driver = drive::Driver::default();
         let mut pilot = fly::Pilot::default();
         let mut wall = None;
@@ -921,6 +934,21 @@ impl LabWorld {
                 group(PLATFORM, vec![ground.platform], &mut bodies);
                 platform = Some(ground.platform);
                 player.character = Some(ground.player);
+            }
+            LabScene::Materials => {
+                let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 150.0)?;
+                let field = materials::build(
+                    &mut world,
+                    MATERIALS,
+                    &crate_shape,
+                    sea::CRATE_HALF,
+                    &ball_shape,
+                )?;
+                statics.extend(field.statics);
+                group(CRATE, field.crates, &mut bodies);
+                group(BALL, field.balls, &mut bodies);
+                player.character = Some(field.player);
+                yard = Some(field.yard);
             }
             LabScene::Drive => {
                 let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 150.0)?;
@@ -1244,6 +1272,7 @@ impl LabWorld {
                 ship,
                 tank,
                 limp: false,
+                materials: yard,
                 pool,
             },
             Layout { groups, statics },
@@ -1517,9 +1546,18 @@ impl Simulation for LabWorld {
             flood::displace(water, &self.world, &self.floaters, &self.hulls, &volumes);
             water.step(TICK);
         }
-        // The playground's platform and player, before the bodies move.
+        // The materials' walker on its autopilot (#203).
+        if let (Some(yard), Some(c)) = (&self.materials, self.player.character) {
+            self.player.walk = yard.walk(self.world.character(c).position.z);
+        }
+        // The playground's platform and player, before the bodies move: on the materials'
+        // patches its feet grip as their rows do (#203).
+        let yard = self.materials.as_ref();
         self.player
-            .tick(&mut self.world, self.platform, self.tick, TICK);
+            .tick(&mut self.world, self.platform, self.tick, TICK, |body| {
+                yard.and_then(|y| y.row(body))
+                    .map(|row| materials::traction(&row.physics, TICK))
+            });
         // The yard's car on its autopilot unless the player drives it (#186).
         if self.beds.is_empty() {
             self.driver.tick(&mut self.world);
@@ -1598,6 +1636,10 @@ impl Simulation for LabWorld {
         // The deck's joints that carried more than they hold break.
         if let Some(convoy) = &self.convoy {
             convoy.deck.crack(&mut self.world, TICK);
+        }
+        // The materials' crates, balls and walker, measured against their rows (#203).
+        if let Some(yard) = &mut self.materials {
+            yard.watch(&self.world, self.tick + 1);
         }
         self.tick += 1;
     }
@@ -3005,6 +3047,27 @@ mod tests {
         let end = first.player().unwrap().position;
         assert!(end.x > 4.0 && end.z > 2.0, "the player ended at {end}");
         let (mut second, _) = LabWorld::new(LabScene::Walk, test_pool()).unwrap();
+        recording.replay(&mut second).expect("the same digests");
+    }
+
+    #[test]
+    fn the_materials_rows_hold_and_slide_the_crates_and_the_walker_slides_on_ice() {
+        // Along its way on the autopilot, stopping on the ice: 900 ticks see it rest.
+        let (mut first, _) = LabWorld::new(LabScene::Materials, test_pool()).unwrap();
+        let recording = Recording::record(&mut first, Vec::new(), 900, 60);
+        let yard = first.materials.as_ref().unwrap();
+        let (slid, predicted) = yard.slide().expect("the walker at rest on the ice");
+        assert!(
+            (slid - predicted).abs() < 0.05 * predicted,
+            "slid {slid:.2} m against {predicted:.2}"
+        );
+        // The crates hold on brick, wood and sand (their pairs' friction over tan 20°), slide
+        // off the snow's ramp and the ice's.
+        let travel = yard.crate_travel(&first.world);
+        assert!(travel[..3].iter().all(|&d| d < 0.02), "{travel:?}");
+        assert!(travel[3] > 1.0 && travel[4] > 1.0, "{travel:?}");
+        // A grip changes no walk where the ground has no row: the playground's replay, above.
+        let (mut second, _) = LabWorld::new(LabScene::Materials, test_pool()).unwrap();
         recording.replay(&mut second).expect("the same digests");
     }
 

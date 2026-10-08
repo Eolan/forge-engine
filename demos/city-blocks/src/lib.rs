@@ -3754,6 +3754,28 @@ impl CityMaterials {
         for ((name, _), row) in lab::SLIME_FLAVOURS.into_iter().zip(slime_rows) {
             by_prop.insert(name, row);
         }
+        // The materials' patches (#203): each row as physics reads it, drawn as the lab draws
+        // its brick, its planks, its sand (dry: paler), its snow and ice. One record for both
+        // (D-007).
+        for row in &lab::MATERIAL_ROWS {
+            let look = match &row.name["lab-mat-".len()..] {
+                "brick" => table.get(clay).render,
+                "wood" => table.get(deck_wood).render,
+                "sand" => RenderLayer {
+                    color_a: [0.80, 0.70, 0.52],
+                    color_b: [0.86, 0.76, 0.57],
+                    ..table.get(damp_sand).render
+                },
+                "snow" => table.get(snow).render,
+                _ => forge_render::material::stock::ice().render,
+            };
+            let id = table.add(Material {
+                physics: row.physics,
+                tags: row.tags,
+                ..Material::new(row.name, look)
+            });
+            by_prop.insert(row.name, id);
+        }
         Ok(Self {
             table,
             textures,
@@ -6001,6 +6023,16 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             yaw: 0.35,
             pitch: -0.15,
             speed: 10.0,
+            ..FlyCamera::default()
+        }
+    } else if args.lab == Some(lab::LabScene::Materials) {
+        // Behind the walker's start and to its left, high enough to see the patches along its
+        // way, their ramps beyond and the ice at the end (#203).
+        FlyCamera {
+            position: Vec3::new(-9.0, 7.0, -24.0),
+            yaw: -2.79,
+            pitch: -0.21,
+            speed: 8.0,
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Walk) {

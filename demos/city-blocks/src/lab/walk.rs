@@ -253,8 +253,17 @@ pub(crate) struct Player {
 
 impl Player {
     /// One tick: the platform's way, then the player moved as a game moves it (on firm ground
-    /// it takes the ground's velocity and may jump; in the air it keeps its fall).
-    pub(crate) fn tick(&mut self, world: &mut World, platform: Option<BodyId>, tick: u64, dt: f32) {
+    /// it takes the ground's velocity and may jump; in the air it keeps its fall). `traction`
+    /// gives a ground body's grip (#203): the most the feet change the speed on it in the tick,
+    /// m/s; a ground without one is gripped at once.
+    pub(crate) fn tick(
+        &mut self,
+        world: &mut World,
+        platform: Option<BodyId>,
+        tick: u64,
+        dt: f32,
+        traction: impl Fn(BodyId) -> Option<f32>,
+    ) {
         if let Some(platform) = platform {
             let way = if (tick / PLATFORM_TICKS).is_multiple_of(2) {
                 1.0
@@ -276,6 +285,14 @@ impl Player {
         let mut v = Vec3::new(self.walk[0], 0.0, self.walk[1]);
         if s.ground == Ground::Firm {
             v += s.ground_velocity;
+            // On a ground with a material row, the feet push as hard as it grips: on ice the
+            // player starts slowly and slides when it stops (#203).
+            if let Some(most) = s.ground_body.and_then(&traction) {
+                let now = Vec3::new(s.velocity.x, 0.0, s.velocity.z);
+                let wished = Vec3::new(v.x, 0.0, v.z);
+                let flat = now + (wished - now).clamp_length_max(most);
+                v = Vec3::new(flat.x, v.y, flat.z);
+            }
             if self.jump {
                 v.y = JUMP_SPEED;
             }

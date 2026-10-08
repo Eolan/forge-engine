@@ -30,6 +30,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `course` | the dogs on uneven ground: three steps of 5 cm and a 10° ramp, walked up and back, paws planted by IK | ✅ #167 |
 | `flyer` | gulls from Blender flying a circuit on their wings' lift: each wing's arm and hand and the tail as flying surfaces posed by the clip, beating to climb, gliding above | ✅ #184 |
 | `yard` | the dogs over beds of damp sand, mud and fresh snow pressing their prints in, a car ploughing treaded ruts through its own, sinking and slowing in the mud, spinning its wheels, digging in and throwing a spray of sand where it pulls away in the sand: a deformable layer each, drawn by displacement through the skin pass, the car's as ground | ✅ #185 to #189, #191, #192 |
+| `materials` | the material row in physics: patches of brick, wood, sand, snow and ice, every body's friction and restitution from one table; a wooden crate on a 20° ramp and a falling ball on each; the walker crossing them and sliding to a stop on the ice | ✅ #203 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn through the GPU's finer layer that shadows it, carrying what floats, which pushes it aside | ✅ #144, #151, #162 |
 | `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
@@ -1022,6 +1023,70 @@ the walker"). Left: finer treads on finer beds, the weather refilling it, water 
 spray's grains landing on the beds as material, the sound of each, and a print shaped as the paw
 is.
 
+## `materials`: physics reads the material row (issue #203)
+
+Phase 3's materials (D-007's one record): the first step of the `materials-yard` demo ("walk
+from brick to wood to sand to snow to an ice lake; footprints, slipping, sound and wetness change
+from one table"). Until now every body's friction and restitution were set by hand in each
+scene, nothing read `forge_core::material::PhysicsLayer`, and the walker set its velocity outright,
+so it could not slip.
+
+**The table** (`lab/materials.rs`, `ROWS`): a row per material, its physical layer and its
+tags. Friction is each material's against itself.
+
+| Row | Static | Dynamic | Restitution | Density | Tags |
+|---|---|---|---|---|---|
+| brick | 0.7 | 0.6 | 0.4 | 1 900 | |
+| wood | 0.5 | 0.4 | 0.45 | 600 | flammable |
+| sand (dry) | 0.6 | 0.5 | 0.05 | 1 600 | deformable |
+| snow (packed) | 0.3 | 0.2 | 0.1 | 400 | deformable, slippery |
+| ice (wet, near melting) | 0.05 | 0.02 | 0.6 | 917 | slippery |
+| the walker's sole (rubber) | 0.9 | 0.8 | 0.5 | 1 100 | |
+
+- **Pairs combine as Jolt combines them:** friction by the geometric mean, restitution by the
+  larger.
+- **Jolt holds one friction coefficient a body,** so the bodies take the dynamic one.
+- **The drawn rows carry the same physics and tags:** `CityMaterials` builds the patches' rows
+  from the table, looking like the lab's brick, planks, sand (paler), snow and the stock ice.
+
+**The scene.** Five patches 4 m by 6 m lie along +z: brick, wood, sand, snow, then three of ice.
+- **A ramp** of each patch's material stands beside it at 20°, a wooden crate resting on it.
+- **A ball** with no bounce of its own falls from 2 m onto each patch, so the patch's
+  restitution is the pair's.
+- **The walker** crosses on its autopilot at 3 m/s and stops walking once on the ice.
+- **Its grip:** on a ground with a row, its feet change its speed by at most the pair friction
+  of its sole and the ground times g each second (`materials::traction`, `Player::tick`'s
+  `traction`). A ground without a row is gripped at once as before, so `walk` and the island's
+  walker are unchanged.
+
+![The patches at tick 60: the crates holding on brick, wood and sand, sliding off the snow's and the ice's ramps, the balls bouncing; at tick 800 the walker at rest where it slid on the ice](images/lab-materials.png)
+
+**Measured against the rows** (the log's "the materials, measured against their rows"):
+
+| Patch | Crate's pair μ | Crate down the ramp, m/s² (rows: g (sin 20° − μ cos 20°)) | Ball's bounce, m (rows: e² × 2 m) |
+|---|---|---|---|
+| brick | 0.490 | 0.01 (0, holds) | 0.325 (0.320) |
+| wood | 0.400 | 0.01 (0, holds) | 0.408 (0.405) |
+| sand | 0.447 | 0.01 (0, holds) | 0.010 (0.005) |
+| snow | 0.283 | 0.78 (0.75) | 0.027 (0.020) |
+| ice | 0.089 | 2.60 (2.53) | 0.710 (0.720) |
+
+- **The crates:** measured over the first half second, down the slope only. The sliding ones run
+  3–4 % ahead of the textbook value, which is Jolt's friction model.
+- **The walker:** from 3 m/s on the ice (its sole's pair μ 0.126) it slides 3.60 m, against
+  v² / (2 μ g) = 3.63 m.
+- **The test** (`the_materials_rows_hold_and_slide_the_crates_and_the_walker_slides_on_ice`): the
+  slide within 5 %, the crates on brick, wood and sand still, those on snow and ice more than a
+  metre down, and a recording of 900 ticks replayed to the same digests.
+
+**Not yet:**
+- footprints on the sand and snow (the yard's layer);
+- the walker's first step at the static friction;
+- the rows' sounds (Phase 6 has no mixer yet);
+- wetness and frost from the weather;
+- a per-triangle material on the island's ground (Jolt's materials on height fields), so the
+  island's walker reads the beach's sand and the grass's grip.
+
 ## `flood`: a dam break (issue #144)
 
 ```
@@ -1845,4 +1910,6 @@ and the glass tank (#156), the gate lifted at tick 31, `lab-tank90` (the wave cl
 wall) with its twin and `lab-tank-bench300` (the bench, the water settling), `lab-tank-hole120`
 (the jet, the far wall white for a moment) and `lab-tank-blocks56` (the wave wrapping the cube);
 and the sharpness room (#159), `lab-room60` (still) and
-`lab-room-pan60` (slid sideways at 2 m/s into the same view).
+`lab-room-pan60` (slid sideways at 2 m/s into the same view); and the materials' patches (#203),
+`lab-materials60` (the crates sliding off the snow's and the ice's ramps, the balls bouncing)
+with its twin and `lab-materials800` (the walker at rest where it slid on the ice).

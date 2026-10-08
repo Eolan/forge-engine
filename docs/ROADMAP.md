@@ -488,7 +488,12 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    lumps); the dogs' beds as ground ✅ (#194: their paws planted on them by their IK, their
    footfalls found on them); the layer round the player on the island ✅ (#197: the beach's sand in a
    window 12 m square at 2 cm that follows the walker, drawn as the ground in its place, its
-   footprints pressed). Left: the weather refilling it, sound from the material row, the `materials-yard` demo.
+   footprints pressed). The material row in physics ✅ (#203, `--lab materials`, the
+   `materials-yard` demo's first step: brick, wood, sand, snow and ice patches whose bodies take
+   their friction and restitution from one table, crates holding or sliding on ramps of each,
+   balls bouncing, the walker's grip from its sole and the ground's row, sliding 3.6 m to a stop
+   on the ice). Left: the weather refilling the layer, sound from the material row, the
+   footprints and the island's ground in `materials-yard`.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a
