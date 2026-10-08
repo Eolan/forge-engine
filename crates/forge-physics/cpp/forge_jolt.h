@@ -50,6 +50,8 @@ typedef struct FjBodyDesc {
     uint8_t ccd;
     uint8_t allow_sleep;
     uint8_t activate;
+    // 1: felt by vehicles' wheels alone, no other body (a still body: soft ground, #187).
+    uint8_t wheels_only;
 } FjBodyDesc;
 
 // The nearest hit of a ray.
@@ -169,6 +171,11 @@ FjShape *fj_shape_mesh(const float *vertices, uint32_t vertex_count, const uint3
 // the grid stands at `offset` + `scale` × (x, samples[z * count + x], z).
 FjShape *fj_shape_height_field(const float *samples, uint32_t count, const float offset[3],
                                const float scale[3]);
+// A height field whose heights can be set again after (#187, fj_body_set_heights): as
+// fj_shape_height_field, its samples' range fixed at [low, high] (FLT_MAX for a hole).
+FjShape *fj_shape_height_field_editable(const float *samples, uint32_t count,
+                                        const float offset[3], const float scale[3], float low,
+                                        float high);
 // `inner` moved by `position` and turned by `rotation` (x, y, z, w) in its body's frame.
 FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const float rotation[4]);
 // A shape's centre of mass in its frame (three floats).
@@ -219,6 +226,10 @@ void fj_body_add_impulse(FjWorld *world, uint32_t body, const float impulse[3]);
 void fj_body_add_impulse_at(FjWorld *world, uint32_t body, const float impulse[3],
                             const double point[3]);
 void fj_body_add_force(FjWorld *world, uint32_t body, const float force[3]);
+// Sets a still body's editable height field's samples from (x, y), size_x by size_y of them
+// (each a multiple of 2), `stride` floats between rows (#187); the body's bounds follow.
+void fj_body_set_heights(FjWorld *world, uint32_t body, uint32_t x, uint32_t y, uint32_t size_x,
+                         uint32_t size_y, const float *heights, uint32_t stride);
 // For the next step, per body: a force (three floats) through a point of the world (three
 // doubles) and a torque (three floats), waking the body.
 void fj_bodies_push(FjWorld *world, const uint32_t *bodies, uint32_t count, const float *forces,

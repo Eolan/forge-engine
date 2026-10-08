@@ -475,9 +475,11 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    dogs' footfalls press, packed or heaped in a rim and slumped to the material's slope; drawn by
    the skin pass raising a ground mesh by it, so the prints take shadows); mud and wheel tracks ✅
    (#186: mud that heaps nearly all it moves; a car's wheels pressing their patches swept along
-   their travel each tick, unbroken ruts with berms beside them). Left: the layer clip-mapped
-   round the player on the island, tread patterns, the weather refilling it, friction, sinking,
-   slipping and sound from the material row, the `materials-yard` demo.
+   their travel each tick, unbroken ruts with berms beside them); the car sinking and slowing in
+   mud ✅ (#187: its beds as Jolt height fields edited in place, felt by wheels alone; a rolling
+   resistance from each wheel's sinkage, each material's grip). Left: the layer clip-mapped
+   round the player on the island, tread patterns, the weather refilling it, the dogs' beds as
+   ground, wheels spinning and digging in, sound from the material row, the `materials-yard` demo.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a

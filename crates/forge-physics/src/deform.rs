@@ -77,6 +77,10 @@ pub struct Pad {
     /// How far behind it along its heading it was at the step's start, metres: a rolling wheel's
     /// travel, all of which it presses; 0 for a footfall.
     pub sweep: f32,
+    /// The radius of the wheel it is, metres: its sole along its heading is the wheel's round,
+    /// reaching ahead as far as the wheel meets the material, so the wheel rests in its rut
+    /// rather than on the lip before it (#187). 0 for a foot.
+    pub wheel: f32,
 }
 
 /// How much higher a pad's sole is at its edge than at its middle, as a share of its smaller
@@ -84,11 +88,14 @@ pub struct Pad {
 const ROUND: f32 = 0.4;
 /// How far the rim reaches past the pad's edge, as a share of its half sizes.
 const RIM: f32 = 1.2;
+/// A wheel's rim reaches farther, as a share of its half width: it moves a long stretch of
+/// material at once, which would otherwise stand in walls beside its rut (#187).
+const WHEEL_RIM: f32 = 2.0;
 /// How far from its border the layer thins to nothing, metres (a bed's edge).
 const BEVEL: f32 = 0.06;
 /// Passes of the slump after each press at most (it stops once settled: no move over
 /// `SETTLED` metres), and the share of a slope's excess each moves.
-const SLUMP_PASSES: u32 = 64;
+const SLUMP_PASSES: u32 = 32;
 const SETTLED: f32 = 1e-4;
 const SLUMP_RATE: f32 = 0.25;
 
@@ -106,6 +113,8 @@ pub struct Layer {
     heights: Vec<f32>,
     /// The slump's copy of the heights.
     scratch: Vec<f32>,
+    /// The points changed since [`Layer::take_changed`], as boxes (lowest and highest x, z).
+    changed: Vec<([u32; 2], [u32; 2])>,
 }
 
 /// Two layers are equal when their material, grid and heights are (the slump's copy aside).
@@ -123,11 +132,17 @@ impl Layer {
     /// An untouched layer of `soft` over `size` points `cell` metres apart from `origin`: its
     /// depth everywhere but within `BEVEL` of its border, where it thins smoothly to nothing.
     pub fn new(soft: Soft, origin: DVec2, cell: f32, size: [u32; 2]) -> Self {
+        Self::with_bevel(soft, origin, cell, size, BEVEL)
+    }
+
+    /// As [`Layer::new`], thinning to nothing over the last `bevel` metres to its border
+    /// instead (a deep puddle's gentle edge, #187).
+    pub fn with_bevel(soft: Soft, origin: DVec2, cell: f32, size: [u32; 2], bevel: f32) -> Self {
         let mut heights = Vec::with_capacity((size[0] * size[1]) as usize);
         for z in 0..size[1] {
             for x in 0..size[0] {
                 let edge = x.min(z).min(size[0] - 1 - x).min(size[1] - 1 - z) as f32 * cell;
-                let t = (edge / BEVEL).min(1.0);
+                let t = (edge / bevel.max(1e-6)).min(1.0);
                 heights.push(soft.depth * t * t * (3.0 - 2.0 * t));
             }
         }
@@ -138,6 +153,7 @@ impl Layer {
             size,
             scratch: heights.clone(),
             heights,
+            changed: Vec::new(),
         }
     }
 
@@ -173,6 +189,30 @@ impl Layer {
     /// When `heights` is not a height per point.
     pub fn set_heights(&mut self, heights: &[f32]) {
         self.heights.copy_from_slice(heights);
+        self.mark([0, 0], [self.size[0] - 1, self.size[1] - 1]);
+    }
+
+    /// The points changed since the last call (by a press or [`Layer::set_heights`]), as boxes
+    /// from their lowest to their highest (x, z): one for the presses that touch each other (a
+    /// wheel's, step after step), so far apart ones (a car's four wheels) stay apart. What a
+    /// collision shape made of the layer needs again (#187).
+    pub fn take_changed(&mut self) -> Vec<([u32; 2], [u32; 2])> {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Adds the points from `low` to `high` to those changed: into a box it touches, else as a
+    /// box of its own.
+    fn mark(&mut self, low: [u32; 2], high: [u32; 2]) {
+        let touches = |(l, h): &([u32; 2], [u32; 2])| {
+            (0..2).all(|k| low[k] <= h[k] + 1 && l[k] <= high[k] + 1)
+        };
+        match self.changed.iter_mut().find(|b| touches(b)) {
+            Some((l, h)) => {
+                *l = [l[0].min(low[0]), l[1].min(low[1])];
+                *h = [h[0].max(high[0]), h[1].max(high[1])];
+            }
+            None => self.changed.push((low, high)),
+        }
     }
 
     /// Whether (`x`, `z`) is over the layer.
@@ -208,7 +248,7 @@ impl Layer {
         self.heights.iter().map(|&h| f64::from(h)).sum::<f64>() * area
     }
     /// Presses `pad` into the layer: under it the ground sinks to the pad's sole (as deep as
-    /// its pressure sinks it below the surface under its middle, rounded up towards its edge,
+    /// its pressure sinks it below the untouched layer, rounded up towards its edge,
     /// never closer to the base than the material's least); the rim takes what is not packed;
     /// then the print and its rim slump. A pad that swept (a rolling wheel) presses the whole
     /// stretch it rolled over, and heaps its rim beside it only. The volume it pushed out, m³
@@ -218,20 +258,42 @@ impl Layer {
             return 0.0;
         }
         let soft = self.soft;
-        let surface = self.height_at(pad.at);
-        let level = (surface - pad.pressure / soft.stiffness).max(soft.least);
+        // As deep as the pressure sinks it below the untouched layer, wherever it lands: a pad
+        // pressing again where it stands sinks no further (#187).
+        let level = (soft.depth - pad.pressure / soft.stiffness).max(soft.least);
         let heading = pad.heading.normalize_or(Vec2::Y);
         let across = Vec2::new(-heading.y, heading.x);
-        let (a, b) = (pad.size.x.max(1e-4), pad.size.y.max(1e-4));
+        let wheel = pad.wheel.max(0.0);
+        // A wheel meets the material along its round as far ahead as the round rises to the
+        // untouched layer.
+        let sunk = soft.depth - level;
+        let arc = if wheel > 0.0 {
+            (2.0 * wheel * sunk - sunk * sunk).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+        let (a, b) = (pad.size.x.max(1e-4), pad.size.y.max(arc).max(1e-4));
         let sweep = pad.sweep.max(0.0);
-        let round = ROUND * a.min(b);
-        // The points the rim reaches, and a cell more for the slump.
-        let reach = (1.0 + RIM) * a.max(b) + sweep + 2.0 * self.cell;
+        let round = ROUND * a.min(pad.size.y.max(1e-4));
+        let rim_reach = if wheel > 0.0 { WHEEL_RIM } else { RIM };
+        // The points the rim reaches, and a cell more for the slump: across the pad and along it
+        // (a wheel heaps beside its stretch only), turned onto x and z.
+        let across_reach = (1.0 + rim_reach) * a + 2.0 * self.cell;
+        let along_reach = if wheel > 0.0 {
+            b
+        } else {
+            (1.0 + rim_reach) * b
+        } + sweep
+            + 2.0 * self.cell;
+        let reach = Vec2::new(
+            heading.x.abs() * along_reach + heading.y.abs() * across_reach,
+            heading.y.abs() * along_reach + heading.x.abs() * across_reach,
+        );
         let (low, high) = self.span(pad.at, reach);
-        // The pad's elliptic distance at point (x, z), 1 on its edge, the stretch it swept over
-        // counted as its middle; and whether the point is beside that stretch, along it (all
-        // points for a pad that did not sweep).
-        let r2 = |x: u32, z: u32| {
+        // At point (x, z): the pad's elliptic distance, 1 on its edge, the stretch it swept
+        // over counted as its middle; whether the point is beside that stretch, along it (all
+        // points for a pad that did not sweep); and how far it is before or behind the stretch.
+        let shape = |x: u32, z: u32| {
             let d = (self.origin + DVec2::new(f64::from(x), f64::from(z)) * f64::from(self.cell)
                 - pad.at)
                 .as_vec2();
@@ -242,15 +304,33 @@ impl Layer {
             } else {
                 (along + sweep).min(0.0)
             };
-            let (u, v) = (d.dot(across) / a, along / b);
-            (u * u + v * v, beside)
+            let u = d.dot(across) / a;
+            let v = along / b;
+            // A wheel's patch is a rectangle, as wide as its tread all along; a foot's an ellipse.
+            let r2 = if wheel > 0.0 {
+                (u * u).max(v * v)
+            } else {
+                u * u + v * v
+            };
+            (r2, beside, along)
+        };
+        let r2 = |x: u32, z: u32| {
+            let (r2, beside, _) = shape(x, z);
+            (r2, beside)
         };
         let mut pushed = 0.0f32;
         for z in low[1]..=high[1] {
             for x in low[0]..=high[0] {
-                let (r2, _) = r2(x, z);
+                let (r2, _, along) = shape(x, z);
                 if r2 < 1.0 {
-                    let sole = level + round * r2;
+                    // A foot's sole rounded towards its edge; a wheel's flat across its tread
+                    // (the tyre's cylinder rests on all of it) and along its heading its round.
+                    let sole = if wheel > 0.0 {
+                        let off = along.abs().min(wheel);
+                        level + wheel - (wheel * wheel - off * off).sqrt()
+                    } else {
+                        level + round * r2
+                    };
                     let k = self.index(x, z);
                     if self.heights[k] > sole {
                         pushed += self.heights[k] - sole;
@@ -265,7 +345,7 @@ impl Layer {
             if !beside {
                 return 0.0;
             }
-            let t = (r2.sqrt() - 1.0) / RIM;
+            let t = (r2.sqrt() - 1.0) / rim_reach;
             if (0.0..1.0).contains(&t) {
                 let w = t * (1.0 - t);
                 w * w
@@ -292,22 +372,23 @@ impl Layer {
             }
         }
         self.slump(low, high);
+        self.mark(low, high);
         pushed * self.cell * self.cell
     }
 
     /// The points within `reach` metres of `at` (x and z), clamped to the layer.
-    fn span(&self, at: DVec2, reach: f32) -> ([u32; 2], [u32; 2]) {
+    fn span(&self, at: DVec2, reach: Vec2) -> ([u32; 2], [u32; 2]) {
         let g = (at - self.origin) / f64::from(self.cell);
-        let r = f64::from(reach / self.cell);
+        let r = (reach / self.cell).as_dvec2();
         let clamp = |v: f64, n: u32| v.clamp(0.0, f64::from(n - 1)) as u32;
         (
             [
-                clamp((g.x - r).floor(), self.size[0]),
-                clamp((g.y - r).floor(), self.size[1]),
+                clamp((g.x - r.x).floor(), self.size[0]),
+                clamp((g.y - r.y).floor(), self.size[1]),
             ],
             [
-                clamp((g.x + r).ceil(), self.size[0]),
-                clamp((g.y + r).ceil(), self.size[1]),
+                clamp((g.x + r.x).ceil(), self.size[0]),
+                clamp((g.y + r.y).ceil(), self.size[1]),
             ],
         )
     }
@@ -373,6 +454,7 @@ mod tests {
             size: Vec2::new(0.015, 0.02),
             pressure: 1.0e5,
             sweep: 0.0,
+            wheel: 0.0,
         }
     }
 
@@ -465,6 +547,43 @@ mod tests {
     }
 
     #[test]
+    fn a_pad_pressing_again_where_it_stands_sinks_no_further_and_marks_what_changed() {
+        // Deep soft mud: a wheel's 135 kPa sinks 13.5 cm into 15 cm.
+        let deep = Soft {
+            depth: 0.15,
+            stiffness: 1.0e6,
+            ..Soft::MUD
+        };
+        let mut layer = Layer::with_bevel(deep, DVec2::new(-0.5, -0.5), 0.01, [101, 101], 0.3);
+        assert!(layer.take_changed().is_empty());
+        let wheel = Pad {
+            at: DVec2::ZERO,
+            heading: Vec2::Y,
+            size: Vec2::new(0.1, 0.07),
+            pressure: 1.35e5,
+            sweep: 0.0,
+            wheel: 0.0,
+        };
+        layer.press(wheel);
+        let once = layer.height_at(DVec2::ZERO);
+        assert!((once - 0.015).abs() < 0.002, "{once}");
+        let [(low, high)] = layer.take_changed()[..] else {
+            panic!("one box changed");
+        };
+        assert!(
+            low[0] < 40 && high[0] > 60 && low[1] < 40 && high[1] > 60,
+            "{low:?} {high:?}"
+        );
+        for _ in 0..60 {
+            layer.press(wheel);
+        }
+        assert!((layer.height_at(DVec2::ZERO) - once).abs() < 0.001);
+        // Its gentle edge: 30 cm to its full depth.
+        assert!(layer.height_at(DVec2::new(-0.35, 0.0)) < 0.5 * deep.depth);
+        assert_eq!(layer.height_at(DVec2::new(-0.19, -0.19)), deep.depth);
+    }
+
+    #[test]
     fn a_rolling_wheel_ploughs_one_unbroken_rut_with_berms_beside_it() {
         // A tyre's patch, 20 by 14 cm at 150 kPa, rolling 5 cm a step along +z through mud.
         let mut mud = bed(Soft::MUD);
@@ -475,6 +594,7 @@ mod tests {
                 size: Vec2::new(0.1, 0.07),
                 pressure: 1.5e5,
                 sweep: 0.05,
+                wheel: 0.31,
             });
         }
         // Along its middle the rut keeps one depth: no ridge left between two steps.

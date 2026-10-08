@@ -50,9 +50,12 @@
 
 namespace {
 
-// Object layers: what never moves, and what does.
+// Object layers: what never moves, and what does; the soft ground that only vehicles' wheels
+// feel (#187), and the layer the wheels query as.
 constexpr JPH::ObjectLayer kStill = 0;
 constexpr JPH::ObjectLayer kMoving = 1;
+constexpr JPH::ObjectLayer kGround = 2;
+constexpr JPH::ObjectLayer kWheel = 3;
 
 namespace broad {
 constexpr JPH::BroadPhaseLayer kStill(0);
@@ -60,11 +63,14 @@ constexpr JPH::BroadPhaseLayer kMoving(1);
 constexpr JPH::uint kCount = 2;
 } // namespace broad
 
-// Still bodies meet only moving ones; moving ones meet everything.
+// Still bodies meet only moving ones; moving ones meet everything; the ground meets the wheels
+// alone, which meet what moving bodies do and the ground.
 class LayerPairs final : public JPH::ObjectLayerPairFilter {
 public:
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
-        return a == kMoving || b == kMoving;
+        if (a == kGround || b == kGround)
+            return a == kWheel || b == kWheel;
+        return a == kMoving || b == kMoving || a == kWheel || b == kWheel;
     }
 };
 
@@ -72,7 +78,7 @@ class BroadLayers final : public JPH::BroadPhaseLayerInterface {
 public:
     JPH::uint GetNumBroadPhaseLayers() const override { return broad::kCount; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-        return layer == kStill ? broad::kStill : broad::kMoving;
+        return layer == kStill || layer == kGround ? broad::kStill : broad::kMoving;
     }
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
     const char *GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
@@ -84,7 +90,7 @@ public:
 class LayerVsBroad final : public JPH::ObjectVsBroadPhaseLayerFilter {
 public:
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad_layer) const override {
-        return layer == kMoving || broad_layer == broad::kMoving;
+        return layer == kMoving || layer == kWheel || broad_layer == broad::kMoving;
     }
 };
 
@@ -299,6 +305,16 @@ FjShape *fj_shape_height_field(const float *samples, uint32_t count, const float
     return hand_out(settings.Create());
 }
 
+FjShape *fj_shape_height_field_editable(const float *samples, uint32_t count,
+                                        const float offset[3], const float scale[3], float low,
+                                        float high) {
+    JPH::HeightFieldShapeSettings settings(samples, vec3(offset), vec3(scale), count);
+    settings.mMinHeightValue = low;
+    settings.mMaxHeightValue = high;
+    settings.SetEmbedded();
+    return hand_out(settings.Create());
+}
+
 FjShape *fj_shape_offset(const FjShape *inner, const float position[3], const float rotation[4]) {
     JPH::RotatedTranslatedShapeSettings settings(vec3(position), quat(rotation), shape_of(inner));
     settings.SetEmbedded();
@@ -344,7 +360,9 @@ uint32_t fj_body_add(FjWorld *world, const FjBodyDesc *desc) {
                                                         : JPH::EMotionType::Dynamic;
     JPH::BodyCreationSettings settings(shape_of(desc->shape), rvec3(desc->position),
                                        quat(desc->rotation), motion,
-                                       desc->motion == 0 ? kStill : kMoving);
+                                       desc->motion != 0 ? kMoving
+                                       : desc->wheels_only != 0 ? kGround
+                                                                : kStill);
     settings.mLinearVelocity = vec3(desc->linear_velocity);
     settings.mAngularVelocity = vec3(desc->angular_velocity);
     settings.mFriction = desc->friction;
@@ -535,6 +553,21 @@ void fj_body_add_force(FjWorld *world, uint32_t body, const float force[3]) {
     world->system.GetBodyInterface().AddForce(id_of(body), vec3(force));
 }
 
+void fj_body_set_heights(FjWorld *world, uint32_t body, uint32_t x, uint32_t y, uint32_t size_x,
+                         uint32_t size_y, const float *heights, uint32_t stride) {
+    JPH::BodyInterface &bodies = world->system.GetBodyInterface();
+    const JPH::BodyID id = id_of(body);
+    // The shape is the body's own, made by fj_shape_height_field_editable: edited in place.
+    // Anything else is left alone.
+    const JPH::Shape *shape = bodies.GetShape(id).GetPtr();
+    if (shape->GetSubType() != JPH::EShapeSubType::HeightField)
+        return;
+    auto *field =
+        const_cast<JPH::HeightFieldShape *>(static_cast<const JPH::HeightFieldShape *>(shape));
+    field->SetHeights(x, y, size_x, size_y, heights, static_cast<intptr_t>(stride), world->temp);
+    bodies.NotifyShapeChanged(id, JPH::Vec3::sZero(), false, JPH::EActivation::DontActivate);
+}
+
 void fj_bodies_push(FjWorld *world, const uint32_t *bodies, uint32_t count, const float *forces,
                     const double *points, const float *torques) {
     JPH::BodyInterface &all = world->system.GetBodyInterface();
@@ -693,7 +726,7 @@ uint32_t fj_vehicle_add(FjWorld *world, uint32_t chassis, const FjVehicleDesc *d
         vehicle = new JPH::VehicleConstraint(lock.GetBody(), settings);
     }
     JPH::Ref<JPH::VehicleCollisionTester> tester =
-        new JPH::VehicleCollisionTesterCastCylinder(kMoving);
+        new JPH::VehicleCollisionTesterCastCylinder(kWheel);
     vehicle->SetVehicleCollisionTester(tester);
     world->system.AddConstraint(vehicle);
     world->system.AddStepListener(vehicle);

@@ -566,6 +566,44 @@ fn a_car_s_wheels_carry_its_weight_where_they_touch_and_roll_ahead() {
     assert!(contacts.iter().all(Option::is_none), "{contacts:?}");
 }
 
+#[test]
+fn a_crate_sinks_where_its_height_field_is_lowered_under_it() {
+    let mut world = World::new(&WorldDesc::default());
+    // 16 by 16 samples 10 cm apart, all 20 cm up, from (−0.75, 0, −0.75).
+    let count = 16;
+    let field = Shape::height_field_editable(
+        &vec![0.2; count * count],
+        count as u32,
+        Vec3::new(-0.75, 0.0, -0.75),
+        Vec3::new(0.1, 1.0, 0.1),
+        (0.0, 0.5),
+    )
+    .unwrap();
+    let ground = world
+        .add_body(&BodyDesc::fixed(&field, DVec3::ZERO))
+        .unwrap();
+    let block = Shape::cuboid(Vec3::splat(0.1), 0.02, 500.0).unwrap();
+    let crate_ = world
+        .add_body(&BodyDesc::dynamic(&block, DVec3::new(0.0, 0.35, 0.0)))
+        .unwrap();
+    let settle = |world: &mut World| {
+        for _ in 0..90 {
+            world.step(1.0 / 60.0, 1).unwrap();
+        }
+        let mut t = Vec::new();
+        world.transforms(&[crate_], &mut t);
+        t[0].position.y
+    };
+    let resting = settle(&mut world);
+    assert!((resting - 0.3).abs() < 0.01, "{resting}");
+    // Lowered to 5 cm under it (samples 4 to 11 each way, even): it falls onto the new ground,
+    // once woken.
+    world.set_heights(ground, [4, 4], [8, 8], &[0.05; 64], 8);
+    world.add_impulse(crate_, Vec3::ZERO);
+    let sunk = settle(&mut world);
+    assert!((sunk - 0.15).abs() < 0.01, "{sunk}");
+}
+
 /// Two boxes side by side over the ground, the left one held to the world and the right one
 /// to the left one, like a beam out of a wall.
 fn beam() -> (World, [BodyId; 2], [JointId; 2]) {

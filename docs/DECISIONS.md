@@ -187,8 +187,13 @@ saved, digested and replayed with the world. It is drawn by displacement through
 a ground mesh of one joint that a height field raises, its normals the field's slopes, its
 structure refitted for the rays. Mud and wheels ✅ (#186): a rolling wheel presses its patch
 swept back along its travel over the step, its rim beside it only, from the vehicle's wheel
-contacts and loads. Not yet: the clip-map round the player (a lab bed is a fixed grid), the
-row's physics and audio reading it, and the weather refilling it.
+contacts and loads. The physics reads it ✅ (#187): a layer a vehicle drives on is a Jolt height
+field of every other point, edited in place where it changed, in an object layer only wheels
+feel (no other body tests its small triangles); a press sinks to the depth less pressure over
+stiffness, so a standing load finds its level; a wheel's press follows its round ahead of its
+travel, so it rests in its rut; a rolling resistance from its sinkage and the material's grip
+slow it. Not yet: the clip-map round the player (a lab bed is a fixed grid), feet on soft
+ground in the physics, audio reading it, and the weather refilling it.
 
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
 

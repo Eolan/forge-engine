@@ -160,6 +160,37 @@ impl Shape {
         })
     }
 
+    /// A height field as [`Shape::height_field`] whose heights a still body made of it can set
+    /// again ([`World::set_heights`], #187): `range` is the lowest and highest sample it will
+    /// hold, fixed now; `f32::MAX` is a hole. Give each body its own: an edit changes the shape.
+    pub fn height_field_editable(
+        samples: &[f32],
+        count: u32,
+        offset: Vec3,
+        scale: Vec3,
+        range: (f32, f32),
+    ) -> Result<Self, PhysicsError> {
+        init();
+        assert_eq!(
+            samples.len(),
+            (count as usize) * (count as usize),
+            "a height field's samples: count × count"
+        );
+        let (o, s) = (offset.to_array(), scale.to_array());
+        // SAFETY: `samples` holds `count²` floats, `o` and `s` three each, all read during the
+        // call.
+        Self::wrap(unsafe {
+            ffi::fj_shape_height_field_editable(
+                samples.as_ptr(),
+                count,
+                o.as_ptr(),
+                s.as_ptr(),
+                range.0,
+                range.1,
+            )
+        })
+    }
+
     /// This shape moved by `position` and turned by `rotation` in its body's frame: a mesh whose
     /// origin is not its centre (a barrel's at its bottom) gets a body whose origin is the
     /// mesh's.
@@ -253,6 +284,9 @@ pub struct BodyDesc<'a> {
     pub allow_sleep: bool,
     /// Whether it starts asleep (until something wakes it: a contact, an impulse, a move).
     pub asleep: bool,
+    /// A still body felt by vehicles' wheels alone (#187): soft ground, whose many small
+    /// triangles no other body collides with or tests.
+    pub wheels_only: bool,
 }
 
 impl<'a> BodyDesc<'a> {
@@ -274,6 +308,7 @@ impl<'a> BodyDesc<'a> {
             ccd: false,
             allow_sleep: true,
             asleep: false,
+            wheels_only: false,
         }
     }
 
@@ -632,6 +667,7 @@ impl World {
             ccd: u8::from(desc.ccd),
             allow_sleep: u8::from(desc.allow_sleep),
             activate: u8::from(desc.motion != Motion::Static && !desc.asleep),
+            wheels_only: u8::from(desc.wheels_only),
         };
         // SAFETY: the world is live and `raw` (and the shape it points at, which the body
         // takes a reference to) is read during the call.
@@ -861,6 +897,49 @@ impl World {
         let f = force.to_array();
         // SAFETY: the world is live; `f` is read during the call.
         unsafe { ffi::fj_body_add_force(self.raw.as_ptr(), body.0, f.as_ptr()) };
+    }
+
+    /// Sets the samples of `body`'s height field ([`Shape::height_field_editable`], #187) from
+    /// sample `at` (x, z), `size` of them, from `heights` row by row along x, `stride` floats
+    /// apart; clamped to the shape's range. The body's bounds follow; what rests on it is not
+    /// woken.
+    ///
+    /// # Panics
+    ///
+    /// When `at` or `size` is not even (Jolt's blocks of two samples), or `heights` is short.
+    pub fn set_heights(
+        &mut self,
+        body: BodyId,
+        at: [u32; 2],
+        size: [u32; 2],
+        heights: &[f32],
+        stride: u32,
+    ) {
+        assert!(
+            at.iter().chain(&size).all(|v| v % 2 == 0),
+            "a height field is edited in blocks of two samples: {at:?} {size:?}"
+        );
+        if size[0] == 0 || size[1] == 0 {
+            return;
+        }
+        assert!(
+            heights.len() >= ((size[1] - 1) * stride + size[0]) as usize,
+            "heights for every sample set"
+        );
+        // SAFETY: the world is live and `body` one it gave (the C layer leaves a body that is no
+        // height field alone); `heights` holds the samples read, as checked above.
+        unsafe {
+            ffi::fj_body_set_heights(
+                self.raw.as_ptr(),
+                body.0,
+                at[0],
+                at[1],
+                size[0],
+                size[1],
+                heights.as_ptr(),
+                stride,
+            );
+        }
     }
 
     /// For the next step, pushes each of `bodies` by its force through its point of the world

@@ -545,6 +545,8 @@ pub(crate) struct LabWorld {
     /// How many times the beds changed: the renderer sends their heights up when it moves (not
     /// part of the state).
     beds_changed: u64,
+    /// The car's beds as the physics stands on them (#187).
+    grounds: Vec<yard::Ground>,
     /// The flood's water (the authoritative column model) and its dam.
     water: Option<forge_physics::shallow::Pool>,
     dam: Option<flood::Dam>,
@@ -704,6 +706,7 @@ impl LabWorld {
         let mut slimes = Vec::new();
         let mut birds = Vec::new();
         let mut beds = Vec::new();
+        let mut grounds = Vec::new();
         let mut water = None;
         let mut dam = None;
         let mut run = None;
@@ -969,6 +972,8 @@ impl LabWorld {
                 group(SKINNED, field.bodies, &mut bodies);
                 herd = Some(field.herd);
                 beds = yard::beds();
+                // The car's beds as ground (#187).
+                grounds = yard::grounds(&mut world, &beds)?;
                 // The car beside the dogs, on its own beds (#186).
                 let car = drive::car(&mut world, DVec3::new(yard::LANE, 0.15, yard::CAR_START))?;
                 group(CAR, vec![car.0], &mut bodies);
@@ -1217,6 +1222,7 @@ impl LabWorld {
                 slimes,
                 birds,
                 beds,
+                grounds,
                 beds_changed: 0,
                 water_start: water.clone(),
                 water,
@@ -1397,6 +1403,7 @@ impl Simulation for LabWorld {
                     if !self.beds.is_empty() {
                         self.beds = yard::beds();
                         self.beds_changed += 1;
+                        yard::settle(&mut self.world, &mut self.beds, &mut self.grounds, true);
                     }
                     if let Some(boat) = &mut self.boat {
                         (boat.throttle, boat.rudder) = (0.0, 0.0);
@@ -1507,7 +1514,7 @@ impl Simulation for LabWorld {
         if self.beds.is_empty() {
             self.driver.tick(&mut self.world);
         } else {
-            yard::drive(&mut self.world, &self.driver);
+            yard::drive(&mut self.world, &self.driver, &self.beds);
         }
         if let Some(convoy) = &self.convoy {
             convoy.tick(&mut self.world);
@@ -1551,6 +1558,8 @@ impl Simulation for LabWorld {
             && yard::roll(&mut self.beds, &self.world, car, TICK) > 0
         {
             self.beds_changed += 1;
+            // What its wheels pressed, under them for the next step (#187).
+            yard::settle(&mut self.world, &mut self.beds, &mut self.grounds, false);
         }
         // The lifted gate stops at its top.
         if let Some(dam) = &self.dam {
@@ -1627,6 +1636,8 @@ impl Simulation for LabWorld {
             rest = after;
         }
         self.beds_changed += 1;
+        // The car's grounds to their beds again: Jolt's saved state holds no shape (#187).
+        yard::settle(&mut self.world, &mut self.beds, &mut self.grounds, true);
         let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));

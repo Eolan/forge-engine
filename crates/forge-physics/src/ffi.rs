@@ -41,6 +41,7 @@ pub struct FjBodyDesc {
     pub ccd: u8,
     pub allow_sleep: u8,
     pub activate: u8,
+    pub wheels_only: u8,
 }
 
 #[repr(C)]
@@ -193,6 +194,14 @@ unsafe extern "C" {
         offset: *const f32,
         scale: *const f32,
     ) -> *mut FjShape;
+    pub fn fj_shape_height_field_editable(
+        samples: *const f32,
+        count: u32,
+        offset: *const f32,
+        scale: *const f32,
+        low: f32,
+        high: f32,
+    ) -> *mut FjShape;
     pub fn fj_shape_offset(
         inner: *const FjShape,
         position: *const f32,
@@ -239,6 +248,16 @@ unsafe extern "C" {
         point: *const f64,
     );
     pub fn fj_body_add_force(world: *mut FjWorld, body: u32, force: *const f32);
+    pub fn fj_body_set_heights(
+        world: *mut FjWorld,
+        body: u32,
+        x: u32,
+        y: u32,
+        size_x: u32,
+        size_y: u32,
+        heights: *const f32,
+        stride: u32,
+    );
     pub fn fj_bodies_push(
         world: *mut FjWorld,
         bodies: *const u32,
