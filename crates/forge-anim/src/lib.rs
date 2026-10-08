@@ -22,10 +22,12 @@
 
 mod clip;
 mod import;
+mod play;
 mod pose;
 mod skeleton;
 
 pub use clip::{Clip, Interpolation, JointTracks, Track};
 pub use import::{AnimError, Rig, load_rig, load_rigs};
+pub use play::{BlendSpace, Inertializer, Player, Source, decay};
 pub use pose::{Pose, Transform};
 pub use skeleton::{Skeleton, SkeletonError};

@@ -67,6 +67,21 @@ impl Pose {
         }
     }
 
+    /// Mixes `other` into this pose by `weight`: [`Pose::blend`] of this pose and `other`, in
+    /// place.
+    ///
+    /// # Panics
+    ///
+    /// When the two poses do not have the same number of joints.
+    pub fn mix(&mut self, other: &Pose, weight: f32) {
+        assert!(self.len() == other.len());
+        for j in 0..self.len() {
+            self.translations[j] = lerp3(self.translations[j], other.translations[j], weight);
+            self.rotations[j] = nlerp(self.rotations[j], other.rotations[j], weight);
+            self.scales[j] = lerp3(self.scales[j], other.scales[j], weight);
+        }
+    }
+
     /// Writes `a` mixed with `b` into `out`: `a` at weight 0, `b` at 1. Translations and scales
     /// are lerped, rotations taken the short way round and normalised; a pose mixed with
     /// itself is that pose.
