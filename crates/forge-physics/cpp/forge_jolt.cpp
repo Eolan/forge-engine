@@ -391,6 +391,25 @@ uint32_t fj_soft_body_add(FjWorld *world, const FjSoftBodyDesc *desc) {
     return id.IsInvalid() ? UINT32_MAX : id.GetIndexAndSequenceNumber();
 }
 
+void fj_soft_body_push(FjWorld *world, uint32_t body, const float velocity[3]) {
+    const JPH::BodyID id = id_of(body);
+    {
+        JPH::BodyLockWrite lock(world->system.GetBodyLockInterface(), id);
+        if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) {
+            return;
+        }
+        auto *motion =
+            static_cast<JPH::SoftBodyMotionProperties *>(lock.GetBody().GetMotionProperties());
+        const JPH::Vec3 dv(velocity[0], velocity[1], velocity[2]);
+        for (JPH::SoftBodyVertex &v : motion->GetVertices()) {
+            if (v.mInvMass > 0.0f) {
+                v.mVelocity += dv;
+            }
+        }
+    }
+    world->system.GetBodyInterface().ActivateBody(id);
+}
+
 uint32_t fj_soft_body_vertices(const FjWorld *world, uint32_t body, float *points, uint32_t capacity,
                                double origin[3]) {
     JPH::BodyLockRead lock(world->system.GetBodyLockInterface(), id_of(body));

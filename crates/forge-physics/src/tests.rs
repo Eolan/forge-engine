@@ -832,3 +832,45 @@ fn a_soft_body_naming_a_missing_vertex_is_refused() {
         Some(PhysicsError::ShapeRefused)
     );
 }
+
+#[test]
+fn a_pushed_soft_body_hops() {
+    let (points, faces) = ball(0.4);
+    let mut world = World::new(&WorldDesc::default());
+    let floor = Shape::cuboid(Vec3::new(10.0, 0.5, 10.0), 0.05, 1000.0).expect("a box");
+    world
+        .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
+        .expect("the floor");
+    let body = world
+        .add_soft_body(&SoftBodyDesc {
+            points: &points,
+            faces: &faces,
+            position: DVec3::new(0.0, 0.45, 0.0),
+            inverse_mass: points.len() as f32 / 2.0,
+            compliance: 1.0e-4,
+            bend_compliance: f32::MAX,
+            pressure: 400.0,
+            friction: 0.5,
+            restitution: 0.0,
+            iterations: 5,
+            user_data: 0,
+        })
+        .expect("the jelly");
+    let mut out = Vec::new();
+    for _ in 0..60 {
+        world.step(1.0 / 60.0, 1).expect("a step");
+    }
+    let resting = world.soft_body_vertices(body, &mut out);
+    // 3 m/s up rises 0.46 m in 0.3 s less what the floor's push took (none: it leaves it).
+    world.push_soft_body(body, Vec3::new(1.0, 3.0, 0.0));
+    for _ in 0..18 {
+        world.step(1.0 / 60.0, 1).expect("a step");
+    }
+    let up = world.soft_body_vertices(body, &mut out);
+    assert!(up.y - resting.y > 0.3, "risen {} m", up.y - resting.y);
+    assert!(
+        (up.x - resting.x - 0.3).abs() < 0.1,
+        "along {} m",
+        up.x - resting.x
+    );
+}

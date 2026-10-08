@@ -172,6 +172,7 @@ unsafe extern "C" {
         triangle_count: u32,
     ) -> *mut FjShape;
     pub fn fj_soft_body_add(world: *mut FjWorld, desc: *const FjSoftBodyDesc) -> u32;
+    pub fn fj_soft_body_push(world: *mut FjWorld, body: u32, velocity: *const f32);
     pub fn fj_soft_body_vertices(
         world: *const FjWorld,
         body: u32,

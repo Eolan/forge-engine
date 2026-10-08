@@ -566,8 +566,24 @@ and its triangles, makes its edges and bends with Jolt's `CreateConstraints`, an
 volume by the pressure inside; `World::soft_body_vertices` reads its points back after a step.
 `forge-physics`'s test drops a ball of jelly 0.4 m in radius (66 vertices, 128 triangles, 2 kg,
 pressure 400) from 1 m onto a box: after 3 s its lowest vertex is on the floor (0.00 m), its top
-at 0.80 m, its volume 1.17 times the one at rest, and a second run gives the same bits. The slime
-itself, drawn and in the lab, is still to come in this step.
+at 0.80 m, its volume 1.17 times the one at rest, and a second run gives the same bits.
+
+**The slime** (#179, 2026-10-08; `lab/slime.rs`, `reports/2026-10-08-179/`) sits before the dogs
+and hops every 1.25 s, its way turning a quarter each hop. It is a Jolt soft body: a ball 0.3 m
+in radius of 258 points and 512 triangles (an octahedron cut three times into four), 2.5 kg,
+its edges giving 5·10⁻⁴ m/N and the pressure inside 15 (n R T). It sags to 0.49 m of its
+0.6 m where it sits, and squashes and stretches as it lands and leaves. A hop is a velocity
+given to all its points (`World::push_soft_body`: 2.8 m/s up, 0.8 m/s along), which lifts its
+bottom 0.35 m. It is drawn through the skinned creatures' path with no new pass: its points
+are a skinned mesh's 258 joints, the drawn ball is finer (4 098 vertices, the same octahedron
+cut twice more), each of its vertices weighted between the three points of the triangle it lies
+on, and each point's matrix takes it from its place at rest to where it is between the last two
+ticks, turned as the surface's normal there turned. The lab's digest is the same over two runs.
+
+`slime.png`: frames 60 (sitting), 91 (the top of its first hop), 109 (landed) and 166 (its second
+hop, away from the camera). With it, the creatures' tick (600 ticks, balls every 50) is
+**0.180 ms** (p99 0.27–0.30) against 0.126 ms; on the GPU `skin/vertices` takes 0.006 ms,
+`skin/blas` 0.105 ms for the six refits, and the frame 1.44 ms against 1.41 ms.
 
 **The clips through the motors** (#167's first three steps, 2026-10-08; `forge_anim::Player`,
 `Inertializer`, `BlendSpace`; `reports/2026-10-08-167/`). The creatures now play their Blender

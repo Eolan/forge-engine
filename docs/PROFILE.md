@@ -1079,7 +1079,9 @@ microseconds; the ragdolls stay awake while their poses move. With the skinned b
 their hulls the vertices each bone carries most): **0.13 ms a tick** (p99 0.27, max 0.38).
 With their clips through the motors (#167, 2026-10-08: the clips sampled, the switches
 inertialized, the mannequins' heads turned to the dogs, the dogs' balance; the same run, two
-rounds to the same digest): **0.126 ms a tick** (p99 0.20, max 0.31).
+rounds to the same digest): **0.126 ms a tick** (p99 0.20, max 0.31). With the slime before
+them (#179: a Jolt soft body of 258 points and 512 triangles, five iterations, hopping):
+**0.180 ms a tick** (p99 0.27–0.30, max 0.44), two runs to the same digest.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |
@@ -1088,7 +1090,8 @@ The skinned creatures on the GPU (#165), the same run, 1080p:
 | `skin/blas`: five bottom-level structures of 10 000 triangles refitted in place | 0.109 |
 | `movers/tlas`: the movers' top-level structure over them | 0.050 |
 
-The frame is 1.41 ms on the GPU. Recording the five refits as one build command or as five
+The frame is 1.41 ms on the GPU (1.44 ms with the slime, a sixth skinned mesh of 4 098 vertices
+and 258 joints: `skin/vertices` 0.006 ms, `skin/blas` 0.105 ms). Recording the five refits as one build command or as five
 costs the same: the refit's cost is in the triangles.
 
 `--lab flood` (#144), the gate lifted at tick 31, 600 ticks: **0.86 ms a tick** (p99 1.1, max

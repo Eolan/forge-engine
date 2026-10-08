@@ -47,6 +47,7 @@ mod rocket;
 pub(crate) mod room;
 mod sea;
 mod ship;
+mod slime;
 mod space;
 pub(crate) mod tank;
 mod tug;
@@ -163,6 +164,8 @@ const PIECE: usize = 29;
 const POLE: usize = PIECE + wall::PIECES;
 /// The group of bodies the skinned creatures draw ([`Skinned`]), not a prop.
 const SKINNED: usize = usize::MAX;
+/// The slime's body (`slime`), drawn skinned after the creatures, not a prop.
+const SLIME: usize = usize::MAX - 1;
 /// The flood's walls along x and z, its gate, a block, the hut.
 const FLOOD: usize = POLE + 1;
 /// The dominoes' prop, after the flood's five.
@@ -513,6 +516,8 @@ pub(crate) struct LabWorld {
     wall: Option<wall::Wall>,
     /// The creatures, and whether their motors are let go.
     herd: Option<creatures::Herd>,
+    /// The slime before the creatures, a soft body.
+    slime: Option<slime::Slime>,
     /// The flood's water (the authoritative column model) and its dam.
     water: Option<forge_physics::shallow::Pool>,
     dam: Option<flood::Dam>,
@@ -666,6 +671,7 @@ impl LabWorld {
         let mut pilot = fly::Pilot::default();
         let mut wall = None;
         let mut herd = None;
+        let mut slime = None;
         let mut water = None;
         let mut dam = None;
         let mut run = None;
@@ -916,6 +922,9 @@ impl LabWorld {
                 statics.extend(field.statics);
                 group(SKINNED, field.bodies, &mut bodies);
                 herd = Some(field.herd);
+                let s = slime::build(&mut world)?;
+                group(SLIME, vec![s.body], &mut bodies);
+                slime = Some(s);
             }
             LabScene::Flood => {
                 let basin = flood::build(
@@ -1143,6 +1152,7 @@ impl LabWorld {
                 pilot,
                 wall,
                 herd,
+                slime,
                 water_start: water.clone(),
                 water,
                 dam,
@@ -1188,6 +1198,14 @@ impl LabWorld {
                 rotation: self.player.rotation(),
             };
             out.extend([at, at]);
+        }
+    }
+
+    /// The slime's points in the world after the last step into `out` (none without it).
+    pub(crate) fn slime_points(&self, out: &mut Vec<Vec3>) {
+        out.clear();
+        if let Some(s) = self.slime {
+            s.points(&self.world, out);
         }
     }
 
@@ -1429,6 +1447,9 @@ impl Simulation for LabWorld {
                 self.tick as f64 * f64::from(TICK),
                 self.limp,
             );
+        }
+        if let Some(s) = self.slime {
+            s.drive(&mut self.world, self.tick);
         }
         if let Err(e) = self.world.step(TICK, 1) {
             tracing::warn!("physics tick {}: {e}", self.tick);
@@ -1708,13 +1729,17 @@ pub(crate) struct Lab {
     tank_steps: Vec<forge_render::LiquidStep>,
     /// The skinned creatures (#165), in the creatures scene.
     skinned: Option<Skinned>,
+    /// The slime's points in the world at the last two ticks, when there is one.
+    slime_points: [Vec<Vec3>; 2],
 }
 
 /// Where the skinned creatures' bodies lie in the movers' transforms (from `start`, each
-/// creature's parts in a row), and each one's kind (#165).
+/// creature's parts in a row, the slime's body after them), and each one's kind (#165).
 struct Skinned {
     start: usize,
     kinds: Vec<creatures::Kind>,
+    /// Whether the slime's body follows theirs.
+    slime: bool,
 }
 
 /// The sea scene's water (#138): the island's cascades of FFT waves from the same seed as the
@@ -1826,6 +1851,7 @@ pub(crate) fn build(
         }
     }
     let creature_rows = [materials.of("lab-mannequin"), materials.of("lab-dog")];
+    let slime_row = materials.of("lab-slime");
     materials.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
     builder.set_origin(scene_origin(args));
@@ -1837,7 +1863,7 @@ pub(crate) fn build(
     let mut per_mesh: Vec<(MeshId, u32)> = layout
         .groups
         .iter()
-        .filter(|g| g.prop != SKINNED)
+        .filter(|g| g.prop != SKINNED && g.prop != SLIME)
         .map(|g| (ids[g.prop], g.count))
         .collect();
     // The skinned creatures (#165): a mesh each (its vertices are its own), cooked once a
@@ -1862,7 +1888,20 @@ pub(crate) fn build(
                 builder.set_mesh_material(id, row);
                 per_mesh.push((id, 1));
             }
-            Skinned { start, kinds }
+            // The slime after them: its points are its joints.
+            let slime = layout.groups.get(g + 1).is_some_and(|g| g.prop == SLIME);
+            if slime {
+                let s = slime::surface();
+                let cooked = SkinnedMesh::cook(&s.mesh, &s.skin, ([0.0; 3], slime::BOUND));
+                let id = builder.add_skinned_mesh(&cooked, slime::POINTS as u32);
+                builder.set_mesh_material(id, slime_row);
+                per_mesh.push((id, 1));
+            }
+            Skinned {
+                start,
+                kinds,
+                slime,
+            }
         });
     builder.reserve_movers(&per_mesh);
     let mut scene = builder.build(&ctx.device)?;
@@ -1870,6 +1909,8 @@ pub(crate) fn build(
 
     let mut current = Vec::new();
     world.transforms(&mut current);
+    let mut points = Vec::new();
+    world.slime_points(&mut points);
     tracing::info!(
         scene = ?kind,
         bodies = world.bodies(),
@@ -1941,6 +1982,7 @@ pub(crate) fn build(
             record: args.record.clone(),
             tank_steps: Vec::new(),
             skinned,
+            slime_points: [points.clone(), points],
         },
     ))
 }
@@ -1981,6 +2023,10 @@ impl Lab {
             shown.transforms(&mut current);
             let (now, awake) = (shown.now(), shown.awake());
             self.current = current;
+            self.slime_points.swap(0, 1);
+            let mut points = std::mem::take(&mut self.slime_points[1]);
+            self.shown().slime_points(&mut points);
+            self.slime_points[1] = points;
             self.awake = awake;
             if self.logged.contains(&now) {
                 let digest = self.shown().digest();
@@ -2165,14 +2211,36 @@ impl Lab {
             .collect();
         skins.clear();
         if let Some(skinned) = &self.skinned {
-            let end = skinned.start + skinned.kinds.len() * creatures::PARTS;
+            let parts = skinned.kinds.len() * creatures::PARTS;
+            let end = skinned.start + parts + usize::from(skinned.slime);
             let bodies: Vec<(Vec3, Quat)> = movers
                 .drain(skinned.start..end)
                 .map(|m| (m.position, m.rotation))
                 .collect();
             let mut matrices = Vec::new();
-            for (&kind, parts) in skinned.kinds.iter().zip(bodies.chunks(creatures::PARTS)) {
+            for (&kind, parts) in skinned
+                .kinds
+                .iter()
+                .zip(bodies[..parts].chunks(creatures::PARTS))
+            {
                 let position = creatures::skin(kind, parts, &mut matrices);
+                skins.extend_from_slice(&matrices);
+                movers.push(MoverTransform {
+                    position,
+                    rotation: Quat::IDENTITY,
+                    scale: 1.0,
+                });
+            }
+            // The slime: its points between the last two ticks, about its body's place.
+            if skinned.slime {
+                let position = bodies[parts].0;
+                let [was, now] = &self.slime_points;
+                let points: Vec<Vec3> = was
+                    .iter()
+                    .zip(now)
+                    .map(|(a, b)| a.lerp(*b, t) - position)
+                    .collect();
+                slime::skin(&points, &mut matrices);
                 skins.extend_from_slice(&matrices);
                 movers.push(MoverTransform {
                     position,

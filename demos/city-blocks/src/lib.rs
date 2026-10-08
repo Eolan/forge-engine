@@ -3366,6 +3366,17 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
+        // The slime (Phase 3 step 7): a wet green jelly.
+        let slime = add(
+            "slime",
+            RenderLayer {
+                color_a: [0.16, 0.55, 0.12],
+                color_b: [0.2, 0.62, 0.16],
+                roughness: RenderLayer::roughness_for_power(400.0),
+                specular: 0.3,
+                ..RenderLayer::default()
+            },
+        );
         let visor = add(
             "visor",
             RenderLayer {
@@ -3421,6 +3432,7 @@ impl CityMaterials {
             ("lab-rock-2", rock),
             ("lab-rock-3", rock),
             ("lab-ball", rubber),
+            ("lab-slime", slime),
             ("lab-crate", crate_wood),
             ("lab-log", bark),
             ("lab-pillar", concrete_grey),

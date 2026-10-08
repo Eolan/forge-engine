@@ -656,6 +656,14 @@ impl World {
         }
     }
 
+    /// Adds `velocity` to every vertex of a soft body (a hop, a shove) and wakes it; nothing for
+    /// a body that is no soft body.
+    pub fn push_soft_body(&mut self, body: BodyId, velocity: Vec3) {
+        let v = velocity.to_array();
+        // SAFETY: the world is live and `v` holds three floats, read during the call.
+        unsafe { ffi::fj_soft_body_push(self.raw.as_ptr(), body.0, v.as_ptr()) };
+    }
+
     /// A soft body's vertices after the last step into `out` (cleared first, in the order they
     /// were given), about its middle in the world, which it returns (none for a body that is no
     /// soft body).

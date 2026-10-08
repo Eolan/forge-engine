@@ -190,6 +190,8 @@ uint32_t fj_body_add(FjWorld *world, const FjBodyDesc *desc);
 // A soft body (FjSoftBodyDesc): its index and sequence number as a body's, UINT32_MAX when the
 // world is full.
 uint32_t fj_soft_body_add(FjWorld *world, const FjSoftBodyDesc *desc);
+// Adds `velocity` (three floats) to every free vertex of a soft body and wakes it.
+void fj_soft_body_push(FjWorld *world, uint32_t body, const float velocity[3]);
 // A soft body's vertices after the last step: three floats each into `points` (at most `capacity`),
 // about `origin` (three doubles), its middle in the world. Returns their number (0 for a body that
 // is no soft body).
