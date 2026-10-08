@@ -29,7 +29,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `course` | the dogs on uneven ground: three steps of 5 cm and a 10° ramp, walked up and back, paws planted by IK | ✅ #167 |
 | `flyer` | gulls from Blender flying a circuit on their wings' lift: each wing's arm and hand and the tail as flying surfaces posed by the clip, beating to climb, gliding above | ✅ #184 |
-| `yard` | the dogs over beds of damp sand, mud and fresh snow pressing their prints in, a car ploughing treaded ruts through its own, sinking and slowing in the mud, spinning its wheels and digging in where it pulls away in the sand: a deformable layer each, drawn by displacement through the skin pass, the car's as ground | ✅ #185 to #189, #191 |
+| `yard` | the dogs over beds of damp sand, mud and fresh snow pressing their prints in, a car ploughing treaded ruts through its own, sinking and slowing in the mud, spinning its wheels, digging in and throwing a spray of sand where it pulls away in the sand: a deformable layer each, drawn by displacement through the skin pass, the car's as ground | ✅ #185 to #189, #191, #192 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn through the GPU's finer layer that shadows it, carrying what floats, which pushes it aside | ✅ #144, #151, #162 |
 | `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
@@ -850,7 +850,7 @@ about its weight; over 60 s the gulls keep their height and circuit, and replay 
 Left: the gulls are as alike as their flights; a turn of the head or the tail that steers,
 landing and taking off, and the wind (`Air::wind`).
 
-## `yard`: footprints and wheel tracks in sand, mud and snow (issues #185 to #189, #191)
+## `yard`: footprints and wheel tracks in sand, mud and snow (issues #185 to #189, #191, #192)
 
 Phase 3's materials step starts here: D-007's deformable layer, which what touches the ground
 writes into and the renderer draws. `physics-lab --lab yard`: the course's two dogs walk their
@@ -936,6 +936,18 @@ beds.
   the ruts and throw the sand back, then claws out and is at 2.3 m/s past the sand. In the deep
   mud a standing car would never pull away (its grip moves it less than a quarter of its
   weight, which ploughing that mud takes), so it stops in the sand.
+- **Spray** (#192): each wheel slipping past 0.3 m/s on a bed throws grains of it (#107's splash
+  particles, a new kind: `SplashSource::Thrown`), 300 a second for each m/s it slips, from behind
+  its contact, back the way its tread slides, rising at 34° and leaning out of its arch (under
+  the body they would go through it), at 15 to 50 % of its slip and at most 6 m/s (3.4 m and 60 cm
+  up at the most), with the wheel's own velocity. A grain is a lump of 4 to 12 mm (mud's clods 6
+  to 18, snow's 5 to 14), coloured as its bed (5:6:5 bits of the colour's square root in its
+  flags), lit as a Lambertian sphere (two thirds of a surface facing the sun times the sphere's
+  phase law, from the angle between the sun and the camera seen from it, through the shadow ray,
+  and the sky's light), falling with little drag (a terminal speed of 15 m/s), gone where it
+  lands on its bed's top; no foam, no rings. Visual only: what a wheel moves is its dig's. The
+  yard's car floored in its sand throws some 3 000 grains at once; the splashes' passes take
+  0.013 ms of the frame. The yard makes the splashes without water, on the sea's clock.
 - **Slowed:** each wheel in a ground is held back against its travel, at its contact, by its
   load times 0.6 · √(z / 2r), z how far it sank below the untouched layer (a rigid wheel's entry
   angle, softened for a tyre); and each ground grips as its material does against the floor's
@@ -989,9 +1001,9 @@ restores its prints and treads, a reset clears them, and a recording replays to 
 digests, also from a save taken while the car spins in its sand.
 
 Left: the layer clip-mapped round the player on the island (D-007), finer treads on finer
-beds, the weather refilling it, water pooling in the prints, the dogs' beds as ground, sand and
-mud thrown in the air by a spinning wheel (a spray of particles), the sound of each, and a print
-shaped as the paw is.
+beds, the weather refilling it, water pooling in the prints, the dogs' beds as ground, a
+spray's grains landing on the beds as material, the sound of each, and a print shaped as the paw
+is.
 
 ## `flood`: a dam break (issue #144)
 

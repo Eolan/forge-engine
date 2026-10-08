@@ -1131,7 +1131,9 @@ layer's 2 cm, its wheels' cylinders cast against 2 500 triangles a step). Its mu
 the ground's triangles), the frame 1.90 ms. Its stop in its deep sand and its pull-away, its
 front wheels spinning and digging in (#191, a dig a slipping wheel a tick over a box 2 m along
 by 40 cm, slumped): **0.266–0.273 ms a tick** (p99 0.79–0.85) against 0.216–0.236 (p99 0.70–0.73)
-for a56c474 timed alike, two runs each.
+for a56c474 timed alike, two runs each. The spray its slipping wheels throw (#192, the splashes'
+particles without water): `splashes/emit` 0.002 ms, `splashes/advance` 0.003, `splashes/draw`
+0.008 with some 3 000 grains in the air; nothing on the tick (visual only).
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

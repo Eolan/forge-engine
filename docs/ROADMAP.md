@@ -480,10 +480,10 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    resistance from each wheel's sinkage, each material's grip); low, even berms and tyre treads
    ✅ (#189, #188: the lugs in a relief drawn over the layer, the wheels on rays); wheels spinning
    and digging in ✅ (#191: a wheel's slip from its spin tears the ground from under it along its
-   round and throws it behind; the car stops in deep sand and pulls away hard). Left: the layer
-   clip-mapped round the player on the island, the weather refilling it, the dogs' beds as
-   ground, the spray a spinning wheel throws, sound from the material row, the `materials-yard`
-   demo.
+   round and throws it behind; the car stops in deep sand and pulls away hard); the spray a
+   spinning wheel throws ✅ (#192: grains of its bed as #107's splash particles, coloured, lit as
+   lumps). Left: the layer clip-mapped round the player on the island, the weather refilling it,
+   the dogs' beds as ground, sound from the material row, the `materials-yard` demo.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a

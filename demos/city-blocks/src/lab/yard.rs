@@ -16,6 +16,7 @@ use forge_anim::Footfall;
 use forge_geom::TriMesh;
 use forge_physics::deform::{Dig, Layer, Pad, Soft, Tread};
 use forge_physics::{BodyDesc, BodyId, Shape, VehicleId, World};
+use forge_render::SplashSource;
 use forge_sim::TICK;
 use glam::{DVec2, Vec2, Vec3};
 
@@ -321,6 +322,66 @@ pub(super) fn roll(
     pressed
 }
 
+/// The spray each of the car's wheels slipping on a bed throws as the world stands (#192):
+/// grains of the bed's material flung off its tread the way it slides, back and up from behind
+/// its contact, at up to `FLUNG` of its slip (at most `FLUNG_MOST`), `GRAINS` a second for each
+/// m/s it slips, with the wheel's own velocity; falling back to the bed's top. Visual only: what
+/// the wheel moves is `Layer::dig`'s.
+pub(super) fn sprays(
+    world: &World,
+    beds: &[Bed],
+    (chassis, vehicle): (BodyId, VehicleId),
+    out: &mut Vec<SplashSource>,
+) {
+    let (mut contacts, mut wheels, mut v, mut t) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    world.wheel_contacts(vehicle, TICK, &mut contacts);
+    world.wheels(vehicle, &mut wheels);
+    world.velocities(&[chassis], &mut v);
+    world.transforms(&[chassis], &mut t);
+    let spins = world.wheel_spins(vehicle);
+    for (k, ((c, wheel), spin)) in contacts.iter().zip(&wheels).zip(spins).enumerate() {
+        let Some(c) = c else {
+            continue;
+        };
+        let at = DVec2::new(wheel.position.x, wheel.position.z);
+        let Some(bed) = beds.iter().find(|b| b.grip.is_some() && b.layer.covers(at)) else {
+            continue;
+        };
+        let r = (wheel.position - t[0].position).as_vec3();
+        let moving = v[0].linear + v[0].angular.cross(r);
+        let forward = Vec3::new(c.forward.x, 0.0, c.forward.z).normalize_or(Vec3::NEG_Z);
+        let slip = spin * WHEEL_RADIUS - moving.dot(forward);
+        if slip.abs() <= SLIP {
+            continue;
+        }
+        // Back from under the wheel the way its tread slides, a little up its round.
+        let back = -forward * slip.signum();
+        let (albedo, radius) = match bed.name {
+            "lab-mud" => (Vec3::new(0.34, 0.25, 0.17), [0.006, 0.018]),
+            "lab-snow" => (Vec3::new(0.86, 0.88, 0.92), [0.005, 0.014]),
+            _ => (Vec3::new(0.70, 0.60, 0.43), [0.004, 0.012]),
+        };
+        let fastest = (FLUNG * slip.abs()).min(FLUNG_MOST);
+        let place = place(bed);
+        // Out of the wheel's arch, away from the car's middle: under the body it would hit.
+        let across = Vec3::new(-forward.z, 0.0, forward.x);
+        let outward = across * across.dot(r).signum();
+        out.push(SplashSource::Thrown {
+            position: c.position.as_vec3() + back * (0.6 * WHEEL_RADIUS) + Vec3::Y * 0.06,
+            spread: across * (0.8 * TYRE.x),
+            axis: back * THROWN_RISE.cos() + Vec3::Y * THROWN_RISE.sin() + outward * THROWN_OUT,
+            half_angle: 0.35,
+            speed: [0.3 * fastest, fastest],
+            carry: moving,
+            radius,
+            albedo,
+            level: place.y + bed.layer.soft().depth,
+            rate: GRAINS * slip.abs(),
+            seed: 0x5eed_0000 + k as u32,
+        });
+    }
+}
+
 /// A bed the physics stands on (#187): its index in the beds, its body (a Jolt height field
 /// of `count` × `count` samples, the layer's points and holes past them), and its samples as
 /// Jolt was last given them.
@@ -494,6 +555,15 @@ const SLIP: f32 = 0.3;
 const DIG: f32 = 0.004;
 const THROWN: f32 = 0.6;
 const SMEAR: f32 = 1.0;
+/// A slipping wheel's spray (#192): its grains leave its tread at up to `FLUNG` of its slip, at
+/// most `FLUNG_MOST` m/s (6 m/s flies 3.4 m and rises 60 cm), rising at `THROWN_RISE` radians
+/// and leaning `THROWN_OUT` (of the way back) out from the car; `GRAINS` a second for each m/s
+/// it slips.
+const FLUNG: f32 = 0.5;
+const FLUNG_MOST: f32 = 6.0;
+const THROWN_RISE: f32 = 0.6;
+const THROWN_OUT: f32 = 0.4;
+const GRAINS: f32 = 300.0;
 
 /// For the coming step: each of the car's wheels sunk into a ground is held back by the soft
 /// material it ploughs (#187), against its travel at its contact, by its load times
@@ -554,8 +624,9 @@ mod tests {
     use glam::DVec3;
 
     /// The car at a tick: where its chassis is along its lane (z) and how high (y), its pace
-    /// (m/s), and how fast the faster of its driven wheels' treads runs (m/s, #191).
-    type Trip = Vec<(f64, f64, f32, f32)>;
+    /// (m/s), how fast the faster of its driven wheels' treads runs (m/s, #191), and how many
+    /// of its wheels throw a spray (#192).
+    type Trip = Vec<(f64, f64, f32, f32, usize)>;
 
     /// The yard over `seconds`: the dogs pressing their footfalls into the beds and the car on
     /// its autopilot rolling over its own, which it stands on. The beds after, how many
@@ -577,7 +648,7 @@ mod tests {
         };
         let mut feet = Feet::default();
         let (mut taken, mut rolled, mut trip) = ([0; 3], 0, Vec::new());
-        let (mut t, mut v) = (Vec::new(), Vec::new());
+        let (mut t, mut v, mut sprays) = (Vec::new(), Vec::new(), Vec::new());
         for tick in 0..seconds * 60 {
             let time = f64::from(tick) * f64::from(TICK);
             field.herd.drive(&mut world, time, false);
@@ -596,11 +667,14 @@ mod tests {
             world.velocities(&[car.0], &mut v);
             let spins = world.wheel_spins(car.1);
             let tread = spins[0].max(spins[1]) * WHEEL_RADIUS;
+            sprays.clear();
+            super::sprays(&world, &beds, car, &mut sprays);
             trip.push((
                 t[0].position.z,
                 t[0].position.y,
                 v[0].linear.length(),
                 tread,
+                sprays.len(),
             ));
         }
         (beds, taken, rolled, trip)
@@ -684,7 +758,7 @@ mod tests {
         let pace = |from: f64, to: f64| {
             trip.iter()
                 .filter(|(z, ..)| (from..to).contains(z))
-                .map(|&(_, _, p, _)| p)
+                .map(|&(_, _, p, ..)| p)
                 .fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p), h.max(p)))
         };
         let floor = pace(5.6, 6.6).0;
@@ -695,19 +769,25 @@ mod tests {
         assert!(after > 2.4, "{after} m/s past the beds");
         assert!(
             trip.last()
-                .is_some_and(|&(z, _, p, _)| z < STOP_Z && p < 0.1)
+                .is_some_and(|&(z, _, p, ..)| z < STOP_Z && p < 0.1)
         );
         // Its stop in the deep sand (#191): standing there, all four wheels on it, then floored,
         // its driven wheels spinning far faster than it goes (21 m/s past it), and digging 2.4 cm
         // below the ruts their share of its weight presses (8 cm deep) where it bogged down.
-        let (z, _, p, _) = trip[LAUNCH as usize - 1];
+        let (z, _, p, ..) = trip[LAUNCH as usize - 1];
         assert!(p < 0.05 && (-3.3..-2.8).contains(&z), "{p} m/s at {z}");
         let slip = trip[LAUNCH as usize..]
             .iter()
             .filter(|(z, ..)| *z > SAND_END)
-            .map(|&(_, _, p, tread)| tread - p)
+            .map(|&(_, _, p, tread, _)| tread - p)
             .fold(f32::MIN, f32::max);
         assert!(slip > 5.0, "the treads ran {slip} m/s past the car");
+        // Its spray (#192): none while it stands braked, from both front wheels once floored.
+        let sprayed =
+            |ticks: std::ops::Range<usize>| trip[ticks].iter().map(|s| s.4).max().unwrap_or(0);
+        let launch = LAUNCH as usize;
+        assert_eq!(sprayed(launch - 30..launch), 0);
+        assert_eq!(sprayed(launch..launch + 60), 2);
         let sand = &beds[3].layer;
         let pressed = DEEP_SAND.depth
             - drive::CAR_MASS * 9.81 / 4.0 / (4.0 * TYRE.x * TYRE.y) / DEEP_SAND.stiffness;

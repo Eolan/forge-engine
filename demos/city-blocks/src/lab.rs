@@ -2703,10 +2703,15 @@ impl Lab {
         shown.water.as_ref().map(|water| (now, water))
     }
 
-    /// Where the flood's water splashes as the shown world holds it (#162), added to `out`.
+    /// Where the flood's water splashes as the shown world holds it (#162), and the spray the
+    /// yard's car's slipping wheels throw (#192), added to `out`.
     pub(crate) fn splashes(&mut self, out: &mut Vec<forge_render::SplashSource>) {
-        if let Some(water) = self.shown().water.as_ref() {
+        let shown = self.shown();
+        if let Some(water) = shown.water.as_ref() {
             flood::splashes(water, out);
+        }
+        if let (false, Some(car)) = (shown.beds.is_empty(), shown.driver.car) {
+            yard::sprays(&shown.world, &shown.beds, car, out);
         }
     }
 

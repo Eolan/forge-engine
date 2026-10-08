@@ -29,6 +29,12 @@ static const uint SPLASH_RING = 0u;
 static const uint SPLASH_CONE = 1u;
 static const uint SPLASH_MIST = 2u;
 static const uint SPLASH_STILL = 4u;
+// A flag: grains of the ground a slipping wheel throws (#192), their colour in their flags'
+// bits 16–31 (5:6:5, of its square root); lit as solid lumps, gone where they land.
+static const uint SPLASH_GRAIN = 8u;
+// A grain's terminal speed, m/s: a clump of sand or a clod of mud falls nearly as in a vacuum
+// over the metre or two it flies.
+static const float GRAIN_TERMINAL = 15.0;
 // Terminal speeds, m/s: the drag k = g / v_t² pulls a particle towards the air's velocity.
 static const float DROP_TERMINAL = 8.0;
 static const float MIST_TERMINAL = 0.6;
@@ -83,7 +89,7 @@ struct SplashBlock
     uint start;      // its first particle among the frame's new ones
     uint index;      // its first particle's index in its emitter's stream
     float alpha;
-    uint pad;
+    uint albedo;     // a grain's colour, 5:6:5 bits (SPLASH_GRAIN, #192)
 };
 
 // Must match GpuSplashFrame in splashes.rs.
@@ -203,7 +209,8 @@ void emit_main(uint3 id : SV_DispatchThreadID)
     q.radius = lerp(b.speed.z, b.speed.w, w.y * w.y);
     q.level = b.origin.w;
     q.seed = pcg3d(uint3(b.seed, k, 2u)).x;
-    q.flags = (b.kind & (SPLASH_MIST | SPLASH_STILL)) | (uint(saturate(b.alpha) * 255.0 + 0.5) << 8u);
+    q.flags = (b.kind & (SPLASH_MIST | SPLASH_STILL | SPLASH_GRAIN)) | (uint(saturate(b.alpha) * 255.0 + 0.5) << 8u)
+        | ((b.albedo & 0xFFFFu) << 16u);
     f[0].ring[(b.first + j) % f[0].capacity] = q;
 }
 
@@ -245,8 +252,8 @@ void advance_main(uint3 id : SV_DispatchThreadID)
     float now = f[0].now;
     if (now - q.birth > q.life)
     {
-        // A drop ending just over its water lands there.
-        if ((q.flags & SPLASH_MIST) == 0u && q.position.y < q.level + FOAM_REACH)
+        // A drop ending just over its water lands there (a grain leaves no foam).
+        if ((q.flags & (SPLASH_MIST | SPLASH_GRAIN)) == 0u && q.position.y < q.level + FOAM_REACH)
             deposit_foam(f, q);
         f[0].ring[slot].life = 0.0;
         return;
@@ -255,7 +262,8 @@ void advance_main(uint3 id : SV_DispatchThreadID)
     if (span <= 0.0)
         return;
     bool mist = (q.flags & SPLASH_MIST) != 0u;
-    float terminal = mist ? MIST_TERMINAL : DROP_TERMINAL;
+    bool grain = (q.flags & SPLASH_GRAIN) != 0u;
+    float terminal = mist ? MIST_TERMINAL : grain ? GRAIN_TERMINAL : DROP_TERMINAL;
     float k = GRAVITY / (terminal * terminal);
     float3 air = f[0].wind.xyz + (mist ? float3(0.0, MIST_LIFT, 0.0) : float3(0.0));
     uint steps = uint(ceil(span / MAX_STEP));
@@ -279,9 +287,10 @@ void advance_main(uint3 id : SV_DispatchThreadID)
     }
     else if (q.position.y < q.level && q.velocity.y < 0.0)
     {
-        // Back in its water.
+        // Back in its water, or a grain back on the ground.
         q.life = 0.0;
-        deposit_foam(f, q);
+        if (!grain)
+            deposit_foam(f, q);
     }
     f[0].ring[slot] = q;
 }
@@ -393,6 +402,18 @@ SplashVaryings vert_main(uint vertex : SV_VertexID)
     float3 sky_light = 0.5 * (sh_irradiance(sky[0].irradiance, float3(0.0, 1.0, 0.0)) +
                               sh_irradiance(sky[0].irradiance, float3(0.0, -1.0, 0.0))) * scale / PI;
     float3 color = f[0].sun_radiance.rgb * (4.0 * phase * sun) + sky_light;
+    if ((q.flags & SPLASH_GRAIN) != 0u)
+    {
+        // A grain (#192): a Lambertian lump, its disc's mean radiance two thirds of a surface
+        // facing the sun's times the Lambert sphere's phase law at the angle between the sun and
+        // the camera seen from it (full towards the sun, dark against it), and the sky's.
+        uint c = q.flags >> 16u;
+        float3 root = float3(float((c >> 11u) & 31u) / 31.0, float((c >> 5u) & 63u) / 63.0, float(c & 31u) / 31.0);
+        float3 albedo = root * root;
+        float a = acos(clamp(-cos_theta, -1.0, 1.0));
+        float law = (sin(a) + (PI - a) * cos(a)) / PI;
+        color = albedo * (f[0].sun_radiance.rgb * (2.0 / (3.0 * PI)) * law * sun + sky_light);
+    }
     float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
     color *= min(1.0, f[0].sun.w / max(luminance, 1e-6));
     // The air between the camera and the drop, as the compose hazes everything else.

@@ -54,6 +54,9 @@ const CONE: u32 = 1;
 const MIST: u32 = 2;
 /// A flag: the block's drops land on still water, where they make rings through the wakes.
 const STILL: u32 = 4;
+/// A flag: the block's particles are grains of the ground a wheel throws (#192): coloured,
+/// lit as solid lumps, heavier through the air, gone where they land.
+const GRAIN: u32 = 8;
 
 /// Where the water splashes this frame (#107), in the sea's frame (metres, the sea's mean level
 /// at y = 0).
@@ -125,6 +128,32 @@ pub enum SplashSource {
         /// This drip's own.
         seed: u32,
     },
+    /// The ground a slipping wheel throws (#192): grains of sand, clods of mud or snow, flung
+    /// off its tread in a cone, falling back to the ground.
+    Thrown {
+        /// Where they leave the tread.
+        position: Vec3,
+        /// They leave along `position ± spread`.
+        spread: Vec3,
+        /// The way they are flung (unit), and how far from it they scatter, radians.
+        axis: Vec3,
+        /// How far from `axis` they scatter, radians.
+        half_angle: f32,
+        /// Their speeds off the tread, m/s, the slowest and the fastest.
+        speed: [f32; 2],
+        /// The wheel's velocity, m/s, which every grain also carries.
+        carry: Vec3,
+        /// Their drawn radii, metres: more small ones than large.
+        radius: [f32; 2],
+        /// Their colour, linear.
+        albedo: Vec3,
+        /// The ground's level they fall back to.
+        level: f32,
+        /// Grains a second.
+        rate: f32,
+        /// This spray's own.
+        seed: u32,
+    },
 }
 
 /// What a frame's splashes need besides their sources.
@@ -183,7 +212,8 @@ struct GpuSplashBlock {
     start: u32,
     index: u32,
     alpha: f32,
-    pad: u32,
+    /// A grain's colour (`rgb565`), 0 for water's drops.
+    albedo: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuSplashBlock>() == 128);
@@ -973,7 +1003,55 @@ fn sprays_of(source: &SplashSource, camera: Vec3, previous: f32, now: f32, out: 
                 });
             }
         }
+        SplashSource::Thrown {
+            position,
+            spread,
+            axis,
+            half_angle,
+            speed,
+            carry,
+            radius,
+            albedo,
+            level,
+            rate,
+            seed,
+        } => {
+            let Some(fade) = near(position) else { return };
+            if let Some((index, count, first)) = stream(rate, seed, previous, now) {
+                let mut b = block(
+                    CONE | GRAIN,
+                    position,
+                    level,
+                    seed,
+                    index,
+                    count,
+                    first,
+                    1.0 / rate,
+                );
+                b.spread = spread.extend(0.0).to_array();
+                b.axis = axis.normalize_or(Vec3::Y).extend(half_angle).to_array();
+                b.speed = [speed[0], speed[1], radius[0], radius[1]];
+                // Long enough to land: they die where they fall back to the ground.
+                b.life = [1.5, 2.0, first, 1.0 / rate];
+                b.carry = carry.extend(0.0).to_array();
+                b.alpha = fade;
+                b.albedo = rgb565(albedo);
+                out.push(Spray {
+                    block: b,
+                    expires: now + 2.0,
+                });
+            }
+        }
     }
+}
+
+/// `albedo` (linear, 0 to 1) in 16 bits, 5 red, 6 green, 5 blue, of its square root (so the
+/// darks, a mud's, keep their steps fine): a grain's colour as its particle's flags carry it
+/// (#192).
+fn rgb565(albedo: Vec3) -> u32 {
+    let c = albedo.clamp(Vec3::ZERO, Vec3::ONE).map(f32::sqrt);
+    let q = |v: f32, max: f32| (v * max + 0.5) as u32;
+    (q(c.x, 31.0) << 11) | (q(c.y, 63.0) << 5) | q(c.z, 31.0)
 }
 
 #[cfg(test)]
@@ -1006,6 +1084,37 @@ mod tests {
         }
         // Consecutive indices, every birth inside its window.
         assert!(a.windows(2).all(|w| w[1].0 == w[0].0 + 1));
+    }
+
+    #[test]
+    fn a_wheel_throws_coloured_grains_at_its_rate() {
+        let thrown = SplashSource::Thrown {
+            position: Vec3::new(0.0, 0.1, 0.0),
+            spread: Vec3::new(0.1, 0.0, 0.0),
+            axis: Vec3::new(0.0, 0.5, 1.0),
+            half_angle: 0.3,
+            speed: [2.0, 6.0],
+            carry: Vec3::new(0.0, 0.0, -1.0),
+            radius: [0.002, 0.006],
+            albedo: Vec3::new(0.4, 0.3, 0.2),
+            level: 0.1,
+            rate: 600.0,
+            seed: 7,
+        };
+        let mut out = Vec::new();
+        sprays_of(&thrown, Vec3::new(0.0, 2.0, 5.0), 1.0, 1.1, &mut out);
+        assert_eq!(out.len(), 1);
+        let b = out[0].block;
+        // Sixty grains in a tenth of a second, in a cone, as grains, falling back to the ground.
+        assert!((59..=61).contains(&b.count), "{}", b.count);
+        assert_eq!(b.kind, CONE | GRAIN);
+        assert_eq!(b.origin[3], 0.1);
+        // Its colour from the square roots: 0.632, 0.548, 0.447 of 31, 63, 31.
+        assert_eq!(b.albedo, (20 << 11) | (35 << 5) | 14);
+        // None from a wheel out of reach.
+        out.clear();
+        sprays_of(&thrown, Vec3::new(0.0, 0.0, 500.0), 1.0, 1.1, &mut out);
+        assert!(out.is_empty());
     }
 
     #[test]

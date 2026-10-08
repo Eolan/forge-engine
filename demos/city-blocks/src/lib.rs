@@ -1406,7 +1406,9 @@ impl Gallery {
         let wakes = (barrels.is_some() && water.is_some() && !args.no_wakes)
             .then(|| WaterWakes::new(&ctx.device, &ctx.shaders))
             .transpose()?;
-        let splashes = (water.is_some() && !args.no_splashes)
+        // With the water, or the yard's spray (#192).
+        let splashes = ((water.is_some() || args.lab == Some(lab::LabScene::Yard))
+            && !args.no_splashes)
             .then(|| WaterSplashes::new(&ctx.device, &ctx.shaders))
             .transpose()?;
         if splashes.is_some() {
@@ -2646,44 +2648,51 @@ impl Demo for Gallery {
                     },
                 );
             }
-            // The spray where it splashes (#107), over the water and its reflections.
-            if let Some(splashes) = &self.splashes {
-                let mut sources = self.falls.clone();
-                if let Some(barrels) = &self.barrels {
-                    barrels.splashes(&mut sources);
-                }
-                // The flood's front and its water striking the walls (#162).
-                if let Some(lab) = self.lab.as_mut() {
-                    lab.splashes(&mut sources);
-                }
-                let projection = taa_frame.jittered_projection;
-                reactive = splashes.update(
-                    &mut frame.graph,
-                    frame.slot,
-                    &sources,
-                    &sky,
-                    SplashParams {
-                        view_proj: projection * self.camera.view_rotation(),
-                        camera: camera_in_scene,
-                        near: projection.w_axis.z,
-                        focal: 0.5 * projection.y_axis.y * extent.height as f32,
-                        sun_dir: self.renderer.sun_dir,
-                        sun_radiance: self.renderer.sun_color
-                            * (self.renderer.sun_illuminance * exposure),
-                        sky_scale: self.renderer.sun_illuminance * exposure,
-                        wind: self.wind,
-                        time: self.sea_time_submitted,
-                        shutter: 0.5 * self.step,
-                        tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
-                    },
-                    taa_frame.color,
-                    targets.depth,
-                    extent,
-                );
-                let stats = splashes.stats();
-                self.splash_peak = self.splash_peak.max(stats.live);
-                self.splash_born += u64::from(stats.fresh);
+        }
+        // The spray where it splashes (#107), over the water and its reflections; and the ground a
+        // slipping wheel throws, with or without water (#192: the yard's).
+        if let Some(splashes) = &self.splashes {
+            let mut sources = self.falls.clone();
+            if let Some(barrels) = &self.barrels {
+                barrels.splashes(&mut sources);
             }
+            // The flood's front and its water striking the walls (#162), the yard's slipping
+            // wheels' spray (#192).
+            if let Some(lab) = self.lab.as_mut() {
+                lab.splashes(&mut sources);
+            }
+            let projection = taa_frame.jittered_projection;
+            reactive = splashes.update(
+                &mut frame.graph,
+                frame.slot,
+                &sources,
+                &sky,
+                SplashParams {
+                    view_proj: projection * self.camera.view_rotation(),
+                    camera: camera_in_scene,
+                    near: projection.w_axis.z,
+                    focal: 0.5 * projection.y_axis.y * extent.height as f32,
+                    sun_dir: self.renderer.sun_dir,
+                    sun_radiance: self.renderer.sun_color
+                        * (self.renderer.sun_illuminance * exposure),
+                    sky_scale: self.renderer.sun_illuminance * exposure,
+                    wind: self.wind,
+                    // The sea's clock, as its waves were given it; without a sea, the same.
+                    time: if self.water.is_some() {
+                        self.sea_time_submitted
+                    } else {
+                        self.sea_time as f32
+                    },
+                    shutter: 0.5 * self.step,
+                    tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                },
+                taa_frame.color,
+                targets.depth,
+                extent,
+            );
+            let stats = splashes.stats();
+            self.splash_peak = self.splash_peak.max(stats.live);
+            self.splash_born += u64::from(stats.fresh);
         }
         // The motion vectors, before the tank's water, whose scene behind them a TAA takes. They
         // need only the depth and the cameras. Before the resolve when SIGMA denoised the sun's
