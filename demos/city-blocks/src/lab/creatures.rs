@@ -1,19 +1,19 @@
-//! `physics-lab --lab creatures` (issues #143 and #165, Phase 3's step 7): creatures as powered
-//! ragdolls (D-012's physics layer) drawn as skinned meshes. Two bodies modelled in Blender
-//! (`assets/blender/skinned_creatures.py`), each one continuous mesh on an armature of eleven
-//! bones: an artist's mannequin on a stand and a dog. Each is a Jolt ragdoll of eleven bodies,
-//! one a bone (its hull the vertices the bone carries most, its joint where the bone starts),
-//! held by ball joints and hinges whose motors drive it to a pose that moves with the clock (the
-//! mannequins swing their arms and turn their heads, the dogs wag their tails and nod), with a
-//! strength that lets a thrown ball shove them. The bodies move the bones ([`skin`]), and the
-//! mesh bends at the joints. The ↓ key lets them go limp, ↑ powers them again; a hard enough
-//! blow knocks a mannequin off its stand.
+//! `physics-lab --lab creatures` (issues #143, #165 and #167, Phase 3's step 7): creatures as
+//! powered ragdolls (D-012's physics layer) drawn as skinned meshes. Two bodies modelled in
+//! Blender (`assets/blender/skinned_creatures.py`), each one continuous mesh on an armature of
+//! eleven bones: an artist's mannequin on a stand and a dog. Each is a Jolt ragdoll of eleven
+//! bodies, one a bone (its hull the vertices the bone carries most, its joint where the bone
+//! starts), held by ball joints and hinges whose motors drive it to the pose of its clips (#167:
+//! idle and walk in turns, each switch inertialized, [`Motion`]), with a strength that lets a
+//! thrown ball shove them; a dog's torso is held upright by a spring ([`balance`]). The bodies
+//! move the bones ([`skin`]), and the mesh bends at the joints. The ↓ key lets them go limp, ↑
+//! powers them again; a hard enough blow knocks a mannequin off its stand.
 
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use forge_anim::{Rig, Skeleton, load_rigs};
-use forge_core::dmath::sin_cos;
+use forge_anim::{Clip, Inertializer, Pose, Rig, Skeleton, load_rigs};
+use forge_core::dmath::{atan2, sin_cos};
 use forge_geom::city::{Block, PropKind, PropSpec};
 use forge_geom::model::{Model, ModelMesh, load_glb};
 use forge_geom::{TriMesh, VertexSkin};
@@ -21,7 +21,8 @@ use forge_physics::{
     BodyDesc, BodyId, JointId, JointLoad, Motors, RagdollId, RagdollJoint, RagdollPart, Shape,
     Transform, World,
 };
-use glam::{DVec3, Mat4, Quat, Vec3};
+use forge_sim::TICK;
+use glam::{DVec3, Mat3, Mat4, Quat, Vec3};
 
 /// A part of a kind of creature: its name in the model, its parent's index (parents first),
 /// how it turns on it.
@@ -51,7 +52,9 @@ const fn part(name: &'static str, parent: Option<usize>, joint: RagdollJoint) ->
 }
 
 /// The kinds: their parts' names after `mannequin-` or `dog-`, in order. An elbow bends the
-/// forearm forward, a knee the shin back (the hinge turns about +x, the creature facing −z).
+/// forearm forward, a knee the shin back (the hinge turns about +x, the creature facing −z). A
+/// dog's front legs fold back at their lower joint and its hind legs forward, as hocks do (its
+/// walk clip bends them so, #167).
 const MANNEQUIN: [Part; 11] = [
     part("pelvis", None, ball(0.0, 0.0)),
     part("chest", Some(0), ball(0.45, 0.5)),
@@ -74,9 +77,9 @@ const DOG: [Part; 11] = [
     part("upper-front-r", Some(0), ball(0.6, 0.2)),
     part("lower-front-r", Some(5), hinge(-1.4, 0.3)),
     part("upper-hind-l", Some(0), ball(0.6, 0.2)),
-    part("lower-hind-l", Some(7), hinge(-1.4, 0.3)),
+    part("lower-hind-l", Some(7), hinge(-0.3, 1.4)),
     part("upper-hind-r", Some(0), ball(0.6, 0.2)),
-    part("lower-hind-r", Some(9), hinge(-1.4, 0.3)),
+    part("lower-hind-r", Some(9), hinge(-0.3, 1.4)),
 ];
 
 /// The two kinds, by their names in the model.
@@ -97,6 +100,15 @@ impl Kind {
     /// Its body.
     pub(super) fn body(self) -> &'static Body {
         let [mannequin, dog] = bodies();
+        match self {
+            Self::Mannequin => mannequin,
+            Self::Dog => dog,
+        }
+    }
+
+    /// Its clips and how a pose drives its motors (#167).
+    pub(super) fn motion(self) -> &'static Motion {
+        let [mannequin, dog] = motions();
         match self {
             Self::Mannequin => mannequin,
             Self::Dog => dog,
@@ -143,10 +155,11 @@ pub(super) const PARTS: usize = 11;
 const MANNEQUINS_X: [f64; 3] = [-2.2, 0.0, 2.2];
 const DOGS: [(f64, f64); 2] = [(-1.1, 1.6), (1.1, 1.6)];
 /// A mannequin's stand: its pole's half sizes; it breaks off past this force (N) or torque
-/// (N·m).
+/// (N·m). Walking on it loads it with up to 2.9 kN and 400 N·m, its legs brushing the pole; a
+/// thrown ball with ten times that (#167: at 2 kN and 400 N·m, walking threw them all off).
 const POLE_HALF: [f32; 3] = [0.025, 0.44, 0.025];
-const STAND_FORCE: f32 = 2000.0;
-const STAND_TORQUE: f32 = 400.0;
+const STAND_FORCE: f32 = 5000.0;
+const STAND_TORQUE: f32 = 1000.0;
 
 /// A kind's body as the skinned model gives it (#165): its mesh in the bind pose, each vertex's
 /// joints, and what the ragdoll and the skinning take from them.
@@ -287,12 +300,13 @@ pub(super) fn props() -> Vec<PropSpec> {
     }]
 }
 
-/// One creature: its ragdoll and kind, its phase, and its stand's joint (a mannequin's).
+/// One creature: its ragdoll, its root's body and where that stood as built, its kind, its
+/// phase, and its stand's joint (a mannequin's).
 #[derive(Clone, Copy, Debug)]
 struct Creature {
     ragdoll: RagdollId,
-    #[cfg(test)]
     root: BodyId,
+    stance: Transform,
     kind: Kind,
     phase: f64,
     stand: Option<JointId>,
@@ -359,9 +373,7 @@ pub(super) fn build(world: &mut World, pole: usize) -> Result<Field> {
             .zip(shapes)
             .map(|(p, (middle, pivot, shape))| -> Result<RagdollPart> {
                 let pivot = *pivot;
-                // Along the part from its joint, and across it about the creature's x.
-                let twist = (*middle - pivot).normalize_or(Vec3::NEG_Y);
-                let plane = (Vec3::X - twist * twist.x).normalize_or(Vec3::Z);
+                let (twist, plane) = axes(*middle, pivot);
                 Ok(RagdollPart {
                     shape,
                     at: Transform {
@@ -391,8 +403,8 @@ pub(super) fn build(world: &mut World, pole: usize) -> Result<Field> {
             world.add_body(&BodyDesc::fixed(&pole_shape, middle))?;
         }
         creatures.push(Creature {
-            #[cfg(test)]
             root: bodies[0],
+            stance: ragdoll_parts[0].at,
             ragdoll,
             kind,
             phase,
@@ -424,43 +436,196 @@ pub(super) fn skin(kind: Kind, parts: &[(Vec3, Quat)], out: &mut Vec<Mat4>) -> V
     root
 }
 
-/// A turn of `angle` about one of a joint frame's axes (0 x, 1 y, 2 z), as the motors take it.
-fn about(axis: usize, angle: f64) -> [f32; 4] {
-    let (s, c) = sin_cos(0.5 * angle);
-    let mut q = [0.0, 0.0, 0.0, c as f32];
-    q[axis] = s as f32;
-    q
+/// How long a creature plays a clip before the other (idle, walk, idle…), seconds, and how long
+/// a switch takes to die away (#167).
+const SEGMENT: f64 = 6.0;
+const SWITCH: f32 = 0.4;
+
+/// A kind's clips and its parts' joint frames as the motors take them (#167's step 3): what
+/// turns a pose of its skeleton into its ragdoll's targets.
+pub(super) struct Motion {
+    rig: &'static Rig,
+    /// Its idle and its walk, indices into the rig's clips.
+    clips: [usize; 2],
+    /// Per part: its joint's frame (the twist axis, the plane axis and their normal as x, y and
+    /// z) in its parent joint's frame at rest, and its joint's turn there at rest.
+    frame: [Quat; PARTS],
+    rest: [Quat; PARTS],
+    hinge: [bool; PARTS],
+}
+
+impl Motion {
+    fn new(kind: Kind, rig: &'static Rig) -> Self {
+        let body = kind.body();
+        let parts = kind.parts();
+        let skeleton = &rig.skeleton;
+        let clip = |name: &str| {
+            let name = format!("{}-{name}", kind.prefix());
+            rig.clips
+                .iter()
+                .position(|c| c.name == name)
+                .unwrap_or_else(|| panic!("the creatures' model has no clip {name}"))
+        };
+        let mut model = vec![Mat4::IDENTITY; skeleton.len()];
+        skeleton.model_space(skeleton.rest(), &mut model);
+        let turn = |j: usize| model[j].to_scale_rotation_translation().1;
+        let mut frame = [Quat::IDENTITY; PARTS];
+        let mut rest = [Quat::IDENTITY; PARTS];
+        for k in 0..PARTS {
+            let Some(parent) = parts[k].parent else {
+                continue;
+            };
+            // The axes the ragdoll's joint was built with (`build`), in the model's frame.
+            let (twist, plane) = axes(body.middle[k], body.pivot[k]);
+            let basis = Quat::from_mat3(&Mat3::from_cols(twist, plane, twist.cross(plane)));
+            frame[k] = turn(body.joint[parent]).inverse() * basis;
+            rest[k] = skeleton.rest().rotations[body.joint[k]];
+        }
+        Self {
+            rig,
+            clips: [clip("idle"), clip("walk")],
+            frame,
+            rest,
+            hinge: std::array::from_fn(|k| matches!(parts[k].joint, RagdollJoint::Hinge { .. })),
+        }
+    }
+
+    /// The motors' targets for `pose`, a part each (the root's unused): a ball joint's turn in
+    /// its frame, a hinge's angle in x. The rest pose gives the pose the ragdoll was built in.
+    fn targets(&self, body: &Body, pose: &Pose) -> [[f32; 4]; PARTS] {
+        let mut targets = [[0.0, 0.0, 0.0, 1.0]; PARTS];
+        for (k, target) in targets.iter_mut().enumerate().skip(1) {
+            // The joint's turn from rest, in its parent's frame, then in the joint's.
+            let change = pose.rotations[body.joint[k]] * self.rest[k].inverse();
+            let mut q = (self.frame[k].inverse() * change * self.frame[k]).normalize();
+            if q.w < 0.0 {
+                q = -q;
+            }
+            *target = if self.hinge[k] {
+                [2.0 * atan2(q.y, q.w), 0.0, 0.0, 0.0]
+            } else {
+                q.to_array()
+            };
+        }
+        targets
+    }
+
+    /// Seconds spent walking `time` seconds into a creature's schedule (its odd segments).
+    fn walked(&self, time: f64) -> f64 {
+        let segment = (time / SEGMENT).floor().max(0.0);
+        let walks = (segment / 2.0).floor() * SEGMENT;
+        if segment as u64 % 2 == 1 {
+            walks + (time - segment * SEGMENT)
+        } else {
+            walks
+        }
+    }
+
+    /// The pose `time` seconds into a creature's schedule: idle and walk in turns of `SEGMENT`,
+    /// each switch dying away over `SWITCH` (inertialized, evaluated afresh from the clock, so a
+    /// replay or a rollback gets the same).
+    fn pose_at(&self, time: f64, out: &mut Pose) {
+        let skeleton = &self.rig.skeleton;
+        let segment = (time / SEGMENT).floor().max(0.0);
+        let into = (time - segment * SEGMENT) as f32;
+        let clip = |segment: f64| &self.rig.clips[self.clips[segment as usize % 2]];
+        let sample = |c: &Clip, t: f32, out: &mut Pose| c.sample(skeleton, c.wrap(t), out);
+        sample(clip(segment), into, out);
+        if segment >= 1.0 && into < SWITCH {
+            let (before, now) = (clip(segment - 1.0), clip(segment));
+            let ran = SEGMENT as f32;
+            let [mut from, mut from_before, mut to, mut to_before] =
+                std::array::from_fn(|_| out.clone());
+            sample(before, ran, &mut from);
+            sample(before, ran - TICK, &mut from_before);
+            sample(now, 0.0, &mut to);
+            sample(now, -TICK, &mut to_before);
+            let mut inertia = Inertializer::default();
+            inertia.start((&from, &from_before), (&to, &to_before), TICK, SWITCH);
+            inertia.apply_at(out, into);
+        }
+    }
+}
+
+/// The two kinds' motions, from [`model`].
+fn motions() -> &'static [Motion; 2] {
+    static MOTIONS: OnceLock<[Motion; 2]> = OnceLock::new();
+    MOTIONS.get_or_init(|| {
+        let (_, rigs) = model();
+        [Kind::Mannequin, Kind::Dog].map(|kind| {
+            let rig = rigs
+                .iter()
+                .find(|r| r.name == kind.prefix())
+                .unwrap_or_else(|| panic!("the creatures' model has no {} rig", kind.prefix()));
+            Motion::new(kind, rig)
+        })
+    })
+}
+
+/// A dog's balance (#167): its torso pulled towards where it stood as built, upright and at its
+/// height, by springs with damping (N·m a radian and N·m·s a radian; N a metre and N·s a metre),
+/// as games hold up their powered ragdolls. On its motors alone a walk, two feet down at a time,
+/// tipped it over. Off when it goes limp; a ball still shoves it. While it walks, where it faces
+/// turns at `WALK_TURN` radians a second, so it walks a circle about its spot and stays in view.
+const BALANCE_TURN: (f32, f32) = (3000.0, 300.0);
+const BALANCE_HEIGHT: (f32, f32) = (4000.0, 400.0);
+const WALK_TURN: f64 = 0.4;
+
+/// Pushes creature `c`'s root towards its stance (`BALANCE_TURN`, `BALANCE_HEIGHT`), turned by
+/// `yaw` radians about the vertical.
+fn balance(world: &mut World, c: &Creature, yaw: f64) {
+    let (mut at, mut moving) = (Vec::new(), Vec::new());
+    world.transforms(&[c.root], &mut at);
+    world.velocities(&[c.root], &mut moving);
+    let (at, moving) = (at[0], moving[0]);
+    // The turn back to upright, as an axis times its angle.
+    let (s, k) = sin_cos(0.5 * yaw);
+    let facing = Quat::from_xyzw(0.0, s as f32, 0.0, k as f32);
+    let mut q = facing * c.stance.rotation * at.rotation.inverse();
+    if q.w < 0.0 {
+        q = -q;
+    }
+    let v = Vec3::new(q.x, q.y, q.z);
+    let sine = v.length();
+    let back = if sine > 1e-6 {
+        v * (2.0 * atan2(sine, q.w) / sine)
+    } else {
+        Vec3::ZERO
+    };
+    let torque = BALANCE_TURN.0 * back - BALANCE_TURN.1 * moving.angular;
+    let lift = BALANCE_HEIGHT.0 * (c.stance.position.y - at.position.y) as f32
+        - BALANCE_HEIGHT.1 * moving.linear.y;
+    world.push(
+        &[c.root],
+        &[(Vec3::new(0.0, lift, 0.0), at.position, torque)],
+    );
+}
+
+/// A part's joint axes from its middle and its pivot, in the creature's frame: along the part
+/// from its joint, and across it about the creature's x (as [`build`] makes the joints).
+fn axes(middle: Vec3, pivot: Vec3) -> (Vec3, Vec3) {
+    let twist = (middle - pivot).normalize_or(Vec3::NEG_Y);
+    let plane = (Vec3::X - twist * twist.x).normalize_or(Vec3::Z);
+    (twist, plane)
 }
 
 impl Herd {
-    /// Before a step at `time` seconds: every creature's motors driven to its pose then, or let
-    /// go when `limp`.
+    /// Before a step at `time` seconds: every creature's motors driven to its pose then (its
+    /// clips, #167), or let go when `limp`.
     pub(super) fn drive(&self, world: &mut World, time: f64, limp: bool) {
         for c in &self.creatures {
-            let t = time + c.phase;
-            let wave = |rate: f64| sin_cos(rate * t).0;
-            let mut targets = [[0.0_f32, 0.0, 0.0, 1.0]; PARTS];
-            match c.kind {
-                // Arms swinging about the shoulders' plane axis, elbows bending, the head
-                // turning about its neck.
-                Kind::Mannequin => {
-                    targets[2] = about(0, 0.6 * wave(0.9));
-                    targets[3] = about(1, 0.5 * wave(1.6));
-                    targets[5] = about(1, -0.5 * wave(1.6));
-                    targets[4] = [(0.5 + 0.3 * wave(1.6)) as f32, 0.0, 0.0, 0.0];
-                    targets[6] = [(0.5 - 0.3 * wave(1.6)) as f32, 0.0, 0.0, 0.0];
-                }
-                // The tail wagging about its normal axis, the head nodding.
-                Kind::Dog => {
-                    targets[2] = about(2, 0.6 * wave(9.0));
-                    targets[1] = about(1, 0.25 * wave(1.2));
-                }
-            }
+            let motion = c.kind.motion();
+            let mut pose = motion.rig.skeleton.rest().clone();
+            motion.pose_at(time + c.phase, &mut pose);
+            let targets = motion.targets(c.kind.body(), &pose);
             let motors = Motors {
                 torque: if limp { 0.0 } else { c.kind.motors().torque },
                 ..c.kind.motors()
             };
             world.drive_ragdoll(c.ragdoll, &targets, motors);
+            if c.stand.is_none() && !limp {
+                balance(world, c, WALK_TURN * motion.walked(time + c.phase));
+            }
         }
     }
 
@@ -503,5 +668,103 @@ impl Herd {
         let mut holding = Vec::new();
         world.holding(&stands, &mut holding);
         holding.iter().filter(|&&h| h).count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_rest_pose_drives_the_ragdolls_to_the_pose_they_were_built_in() {
+        for kind in [Kind::Mannequin, Kind::Dog] {
+            let (motion, body) = (kind.motion(), kind.body());
+            // Each part's joint hangs from its parent's in the skeleton too.
+            for (k, part) in kind.parts().iter().enumerate() {
+                if let Some(parent) = part.parent {
+                    assert_eq!(
+                        motion.rig.skeleton.parent(body.joint[k]),
+                        Some(body.joint[parent]),
+                        "{:?}'s {}",
+                        kind,
+                        part.name
+                    );
+                }
+            }
+            let targets = motion.targets(body, motion.rig.skeleton.rest());
+            for (k, t) in targets.iter().enumerate().skip(1) {
+                let identity = if motion.hinge[k] {
+                    t[0].abs() < 1e-5
+                } else {
+                    Quat::from_array(*t).abs_diff_eq(Quat::IDENTITY, 1e-5)
+                };
+                assert!(identity, "{kind:?}'s part {k}: {t:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_walks_bend_the_hinges_within_their_limits() {
+        for kind in [Kind::Mannequin, Kind::Dog] {
+            let (motion, body) = (kind.motion(), kind.body());
+            let walk = &motion.rig.clips[motion.clips[1]];
+            let mut pose = motion.rig.skeleton.rest().clone();
+            let (mut lowest, mut highest) = ([f32::MAX; PARTS], [f32::MIN; PARTS]);
+            for step in 0..60 {
+                walk.sample(
+                    &motion.rig.skeleton,
+                    walk.duration * step as f32 / 60.0,
+                    &mut pose,
+                );
+                let targets = motion.targets(body, &pose);
+                for k in 0..PARTS {
+                    lowest[k] = lowest[k].min(targets[k][0]);
+                    highest[k] = highest[k].max(targets[k][0]);
+                }
+            }
+            for (k, part) in kind.parts().iter().enumerate() {
+                if let RagdollJoint::Hinge { range } = part.joint {
+                    // Bent the way the hinge bends, and bent at some point of the walk.
+                    assert!(
+                        lowest[k] >= range.0 - 0.1 && highest[k] <= range.1 + 0.1,
+                        "{kind:?}'s {}: {}..{} against {range:?}",
+                        part.name,
+                        lowest[k],
+                        highest[k]
+                    );
+                    assert!(
+                        highest[k] - lowest[k] > 0.1,
+                        "{kind:?}'s {} still",
+                        part.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_switch_between_clips_carries_the_pose_on_without_a_jump() {
+        let motion = Kind::Mannequin.motion();
+        let mut pose = motion.rig.skeleton.rest().clone();
+        let mut previous = pose.clone();
+        let mut biggest = 0.0_f32;
+        // Across the first switch, idle to walk, a tick at a time.
+        let ticks = (2.0 / f64::from(TICK)) as usize;
+        let start = SEGMENT - 1.0;
+        for t in 0..ticks {
+            previous.clone_from(&pose);
+            motion.pose_at(start + t as f64 * f64::from(TICK), &mut pose);
+            if t > 0 {
+                let change = pose
+                    .rotations
+                    .iter()
+                    .zip(&previous.rotations)
+                    .map(|(a, b)| a.angle_between(*b))
+                    .fold(0.0, f32::max);
+                biggest = biggest.max(change);
+            }
+        }
+        // The walk alone turns a joint by under 0.1 rad a tick; the switch adds no jump.
+        assert!(biggest < 0.12, "a joint turned {biggest} rad in a tick");
     }
 }

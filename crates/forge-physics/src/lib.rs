@@ -1052,7 +1052,8 @@ impl World {
 
     /// Drives a ragdoll's joints towards `targets`, one a part (the root's ignored): for a
     /// ball joint the part's turn in its joint's frame (x along the twist axis, y along the
-    /// plane axis; identity is the pose as built), for a hinge its angle in `x`.
+    /// plane axis; identity is the pose as built), for a hinge its angle in `x`. A powered ragdoll
+    /// is kept awake, so its targets move it however still it was; a limp one may sleep.
     pub fn drive_ragdoll(&mut self, ragdoll: RagdollId, targets: &[[f32; 4]], motors: Motors) {
         // SAFETY: the world is live, the index one it gave, four floats a part read.
         unsafe {

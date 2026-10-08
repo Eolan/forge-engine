@@ -561,8 +561,62 @@ The validation layer, with synchronization validation, reports nothing on either
 - `skin/blas`, the five refits: **0.109 ms**;
 - `movers/tlas`: 0.050 ms.
 
-A slime as a soft body is still to come in this step. Playing the clips through the motors
-(the clip layer driving the physics layer) belongs to the procedural layer's step.
+A slime as a soft body is still to come in this step.
+
+**The clips through the motors** (#167's first three steps, 2026-10-08; `forge_anim::Player`,
+`Inertializer`, `BlendSpace`; `reports/2026-10-08-167/`). The creatures now play their Blender
+clips (idle and walk, `assets/blender/skinned_creatures.py`) through their motors, in place of
+the waves of sines they swayed with.
+- **Playback and switches** (`forge-anim`): a player keeps a clip's phase. A switch between
+  clips is inertialized (Bollo, GDC 2016): the difference between where the old clip had each
+  joint and where the new one has it, and how fast it was changing, dies away along a quintic
+  that ends with no speed and no acceleration. Only the new clip is sampled, never two in a
+  cross-fade. A rotation's offset decays as the sine of its half angle, so nothing calls a
+  transcendental function (D-016).
+- **A blend space** of clips along one parameter: the two around it blended at the same share
+  of their cycles, at the blended rate.
+- **The clip layer through the physics layer** (`creatures::Motion`): each joint's turn from
+  rest, in its parent's frame, re-expressed in the frame its ragdoll joint was built with (the
+  twist axis, the plane axis, their normal), is a ball joint's target; a hinge takes its angle
+  about the plane axis (`dmath::atan2`). The rest pose gives the pose the ragdoll was built in.
+- **The schedule:** each creature idles 6 s, walks 6 s, and so on, at its own phase; each
+  switch dies away over 0.4 s. The pose is a function of the tick alone (the switch evaluated
+  afresh), so recordings, replays and `--net` rollbacks get the same.
+- **The dogs walk:** on their motors alone they tipped over two feet at a time, so their torsos
+  are held upright and at height by springs with damping (3 000 N·m a radian, 4 000 N a metre),
+  as games hold up powered ragdolls, off when limp. Where a dog faces turns at 0.4 rad a second
+  while it walks, so it walks a circle about its spot. The mannequins walk on their stands.
+
+What the clips found:
+- **The dog's hind legs** fold forward at their lower joint, as hocks do. Their hinges had the
+  front legs' range (−1.4 to 0.3 rad), and the walk asked for 0.55; they are now −0.3 to 1.4.
+- **Asleep, a powered ragdoll ignored its targets:** through an idle on their stands the
+  mannequins went to sleep, and setting targets does not wake a Jolt body. `drive_ragdoll` now
+  keeps a powered ragdoll awake (a limp one may still sleep).
+- **The stands' limits:** walking loads a stand with up to 2.9 kN and 400 N·m (the legs brush
+  the pole), and at 2 kN and 400 N·m every mannequin came off within 20 s. They now break at
+  5 kN and 1 kN·m. A thrown ball loads them with about ten times that, and still knocks the
+  middle mannequin off in the throw capture.
+
+**Pictures:** `walk.png`, the first mannequin on its stand from the side at 9.25, 9.5, 9.75 and
+10 s (a quarter of its walk apart); `dogs.png`, the lab at 2 s (idle), 9.25 s, 21.7 s and
+35 s, the dogs walking their circles.
+
+**Tests:**
+- `forge-anim`: the decay starts at the offset, ends at rest and never overshoots; a switch
+  carries on from the old clip (no frame changes by more than three of the old clip's steps)
+  and ends exactly on the new one; a blend space mixes its two clips at one phase, at the blended
+  rate; the same playing gives the same bits.
+- The lab: the rest pose drives every joint to identity, and the skeleton's parents are the
+  ragdoll's; the walks keep each hinge within its limits and bend it; the switch from idle to
+  walk turns no joint by more than 0.12 rad a tick; the creatures still stand, fold when limp
+  and replay to the same digests.
+
+**Cost:** a tick 0.13 ms (p99 0.22) over 35 s, the clips sampled and the targets made included
+(0.12 ms before, without clips, the mannequins asleep).
+
+**Left in #167:** IK for the feet and the head's look-at, with foot-down events (its step 4),
+and clip compression (step 5).
 
 ## `flood`: a dam break (issue #144)
 

@@ -128,8 +128,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   through the glass, settling 1 mm off its level. The GPU's shallow-water layer over the flood and its splashes ✅ (#162). Step 7's skinned
   creatures ✅ (#165, with Phase 7's first step): `forge-anim`, the in-house clip runtime
   (D-012's amendment); the skin pass and refitted BLASes; the mannequin and the dog bend at
-  their joints in `--lab creatures`. Next: the slime as a soft body, and the clips through the
-  motors with the procedural layer. The night sky is built as D-046's answers ask (#164).
+  their joints in `--lab creatures`. Their clips through the motors ✅ (#167, 2026-10-08: idle and
+  walk, inertialized switches, a blend space; the dogs walk circles). Next: the slime as a soft
+  body, IK for #167. The night sky is built as D-046's answers ask (#164).
 - **Phase 4's sky:** clouds in the Nubis style and a night sky (the owner's inbox asks for
   clouds like Ace Combat 8's or Flight Simulator 2024's). Weather stays low priority. D-034
   already settles the clouds' rendering from a camera-centred weather map. A first layer of
@@ -451,8 +452,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 7. **Creatures:** powered ragdolls ✅ (#143, `--lab creatures`: a mannequin and a dog modelled
    in Blender, Jolt ragdolls whose motors drive moving poses); skinned ✅ (#165, Phase 7's
    start: glTF skins and clips read by `forge-anim`, GPU skinning, the bodies' BLASes refitted,
-   so the creatures bend instead of being jointed). Left: a flyer, a slime as a soft body, and
-   the clips through the motors (the procedural layer).
+   so the creatures bend instead of being jointed). The clips through the motors ✅ (#167,
+   2026-10-08: idle and walk, inertialized switches, the dogs walking circles). Left: a flyer, a
+   slime as a soft body, IK.
 8. **Fluids:** the authoritative water model, a dam break ✅ (#144, `--lab flood`:
    `forge_physics::shallow`, a staggered grid of columns, drawn as a pool by the water pass),
    two-way coupling ✅ (#151: what floats pushes the water aside, its volume under it a thickness
@@ -529,7 +531,8 @@ The items below are the phase's original outline; the plan above orders them.
 ## Phase 7 — Animation
 
 1. `forge-anim`: clips ✅ and GPU skinning ✅ (#165: glTF skins and clips, poses sampled and
-   blended, the skin pass and refitted BLASes); left: the blend graph, compression, IK (feet,
+   blended, the skin pass and refitted BLASes); playback with inertialized switches and a blend
+   space ✅ (#167, 2026-10-08); left: compression, IK (feet,
    hands, look-at).
 2. Motion matching for the player; powered ragdolls tracking poses; hit reactions;
    contact events to the material layer.

@@ -763,8 +763,10 @@ void fj_ragdoll_drive(FjWorld *world, uint32_t ragdoll, const float *targets, fl
             joint->SetTargetOrientationCS(JPH::Quat(t[0], t[1], t[2], t[3]).Normalized());
         }
     }
-    // A change of the motors' state wakes the ragdoll (a limp one falls).
-    if (woken) {
+    // A change of the motors' state wakes the ragdoll (a limp one falls), and a powered one is
+    // kept awake, its targets moving it: asleep on their stands through an idle, the lab's
+    // mannequins never took up their walk (#167). A limp one may sleep.
+    if (woken || state == JPH::EMotorState::Position) {
         r.Activate();
     }
 }
