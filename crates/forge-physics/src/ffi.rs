@@ -322,6 +322,7 @@ unsafe extern "C" {
         forwards: *mut f32,
         impulses: *mut f32,
     );
+    pub fn fj_vehicle_spins(world: *const FjWorld, vehicle: u32, spins: *mut f32);
     pub fn fj_vehicle_engine(world: *const FjWorld, vehicle: u32, rpm: *mut f32, gear: *mut i32);
 
     pub fn fj_joint_fixed(

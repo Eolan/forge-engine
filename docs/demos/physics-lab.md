@@ -29,7 +29,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `course` | the dogs on uneven ground: three steps of 5 cm and a 10° ramp, walked up and back, paws planted by IK | ✅ #167 |
 | `flyer` | gulls from Blender flying a circuit on their wings' lift: each wing's arm and hand and the tail as flying surfaces posed by the clip, beating to climb, gliding above | ✅ #184 |
-| `yard` | the dogs over beds of damp sand, mud and fresh snow pressing their prints in, a car ploughing treaded ruts through its own, sinking and slowing in the mud: a deformable layer each, drawn by displacement through the skin pass, the car's as ground | ✅ #185 to #189 |
+| `yard` | the dogs over beds of damp sand, mud and fresh snow pressing their prints in, a car ploughing treaded ruts through its own, sinking and slowing in the mud, spinning its wheels and digging in where it pulls away in the sand: a deformable layer each, drawn by displacement through the skin pass, the car's as ground | ✅ #185 to #189, #191 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn through the GPU's finer layer that shadows it, carrying what floats, which pushes it aside | ✅ #144, #151, #162 |
 | `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
@@ -850,14 +850,15 @@ about its weight; over 60 s the gulls keep their height and circuit, and replay 
 Left: the gulls are as alike as their flights; a turn of the head or the tail that steers,
 landing and taking off, and the wind (`Air::wind`).
 
-## `yard`: footprints and wheel tracks in sand, mud and snow (issues #185 to #189)
+## `yard`: footprints and wheel tracks in sand, mud and snow (issues #185 to #189, #191)
 
 Phase 3's materials step starts here: D-007's deformable layer, which what touches the ground
 writes into and the renderer draws. `physics-lab --lab yard`: the course's two dogs walk their
 lanes on the plain floor, over beds of damp sand, mud and fresh snow (2.4 m by 1.25 m each),
 turn about past the snow and come back, pressing their paws in. Beside them the drive lab's car
 crosses its own beds of the three (2.4 m by 3 m each) from the snow on an autopilot, 3 m/s down
-its lane, and stops past the sand. The arrow keys take the car over as in `--lab drive` (the
+its lane, stops in its sand, pulls away hard, its front wheels spinning and digging in, and
+stops past the sand. The arrow keys take the car over as in `--lab drive` (the
 autopilot drives again when they are let go), C follows it. A low sun (26°) lies across the
 beds.
 
@@ -916,14 +917,33 @@ beds.
   thickness the wheels caught on them and the slump wore them away. Never under half the least:
   in the snow and the sand the ruts reach the floor, and a lug cut through it in patches, so the
   lugs show there 2 mm deep, in the mud in full.
+- **Spinning and digging in** (#191): `World::wheel_spins` gives each wheel's spin (Jolt's), and
+  its slip is how much faster its tread runs over the ground than it travels along it. Past
+  0.3 m/s a wheel digs (`Layer::dig`): it tears 4 mm from under its patch's middle for each
+  metre it slips, down to the material's least, its hole's floor following its round along its
+  travel (30 % wider than the wheel, as its press), and throws all of it the way its tread slides,
+  a heap from the hole's end out to 60 cm, highest a third of the way, then slumped. Its lugs fade
+  as its slip nears 1 m/s and are smeared past it. A flat hole slumped to 45° walls, which a wheel
+  on a ray meets as a 45° slope under its middle: it needed a grip of 1 to climb out and stayed
+  in, digging. Faster digging (7 mm a metre slipped and more) leaves the car in its holes for
+  good: from 5–8 cm down, a round's climb asks more grip than the sand's 0.63. The car's front
+  wheels drive through an open differential, so the one with less grip spins: at the start on
+  the floor, and in the mud and the sand as it crosses (to 7 m/s past its 1.9). The car's sand
+  is deep for it: 12 cm, a wheel's 105 kPa sinking 4 cm (2.6 MPa/m), so a spinning wheel has
+  sand to dig (in 3 cm, pressed to its least, there was none). The autopilot stops there, all
+  four wheels on it, and pulls away at full throttle after a second: the front treads run up to
+  21 m/s past the car, which bogs down at 0.3 m/s for most of a second as they dig 2.4 cm below
+  the ruts and throw the sand back, then claws out and is at 2.3 m/s past the sand. In the deep
+  mud a standing car would never pull away (its grip moves it less than a quarter of its
+  weight, which ploughing that mud takes), so it stops in the sand.
 - **Slowed:** each wheel in a ground is held back against its travel, at its contact, by its
   load times 0.6 · √(z / 2r), z how far it sank below the untouched layer (a rigid wheel's entry
   angle, softened for a tyre); and each ground grips as its material does against the floor's
   0.2 (damp sand 0.4, snow 0.2, mud 0.15). The car's mud is a deep puddle: 15 cm of soft mud
   (1 MPa/m, walls at 40°, half of what a tyre pushes out water squeezed away), thinning over its
   last 25 cm, which a wheel's 105 kPa sinks 10.5 cm. On the autopilot (3 m/s, throttle at most
-  0.6) the car keeps its pace through the snow, slows from 2.9 to 1.5 m/s in the mud, and is back
-  to 2.8 m/s past the sand.
+  0.6) the car keeps its pace through the snow and slows from 2.9 to 1.25 m/s in the mud (1.5
+  before its spinning front wheel tore at it, #191).
 - **The dogs walk on the floor** under their beds, so their paws go through the snow to it.
   Their beds stay drawn only.
 - **Drawn by displacement:** a bed is a flat grid mesh cooked as a skinned mesh of one joint
@@ -936,33 +956,42 @@ beds.
   then match): 584 KB, 160 KB a frame on average over the run. The resolve turns a displaced
   mesh's normal map onto the raised surface's normal: built about the bind pose's normal, flat
   up, the relief was lost under it.
-- **Saved, digested and reset** with the lab: every height to the bit.
+- **Saved, digested and reset** with the lab: every height to the bit, and the car's grounds as
+  Jolt holds them (#191). They lag their beds by up to a millimetre, so grounds rebuilt from the
+  beds on a restore put a car standing on them a fraction off its saved run: a save taken with
+  the car spinning in its sand went its own way within a second.
 
 Over 26 s the dogs press 16 footfalls into their sand, 16 into their mud and 18 into their
 snow. The prints are 1.2 cm deep in the sand, 1.9 cm in the mud (as deep as its 56° walls let a
 3 cm pad's print be), and through to the 4 mm left over the floor in the snow. The car's ruts
-reach the floor in its sand and snow; in its deep mud they sink 10.5 cm, their berms 2 to 3 cm
-over it, their flanks stepping under 1 mm a point (12 cm walls, ridged at 2.4 mm a point, before
-#189), its tread's chevrons in their floors. It crosses at 2.9 m/s on the floor and 1.5 m/s at
-its slowest in the mud. **Costs:** a tick 0.211 ms over 1 200 (p99 0.65), most of it while the
-car crosses, against the course's 0.100: its four presses (0.2–0.3 ms a tick while it is on its
-beds), Jolt's height fields set again (0.1 ms) and its wheels' rays; `skin/vertices` 0.022 ms
+reach the floor in its snow; in its deep sand they sink 4 cm, 6.4 cm where it spun; in its deep
+mud 10.5 cm, their berms 2 to 3 cm over it, their flanks stepping under 1 mm a point (12 cm
+walls, ridged at 2.4 mm a point, before #189), its tread's chevrons in their floors. It crosses
+at 2.9 m/s on the floor and 1.25 m/s at its slowest in the mud. **Costs:** a tick 0.27 ms over
+1 200 (p99 0.79–0.85; 0.22 before #191's stop and spin in the sand), most of it while the car
+is on its beds, against the course's 0.100: its four presses (0.2–0.3 ms a tick while it is on
+its beds), its spinning wheels' digs, Jolt's height fields set again (0.1 ms) and its wheels'
+rays; `skin/vertices` 0.022 ms
 for 206 000 vertices, `skin/blas` 0.128 ms for the dogs', the car's and the beds' structures;
 the frame 1.90 ms at 1600 × 900. **Tests:** a pad sinks by its pressure and never through the
 base, and pressing again where it stands sinks no further; sand heaps what it does not pack,
 snow packs most, and mud heaps the highest rim; sand slumps to its slope and snow holds steeper
 walls; a rolling wheel ploughs one unbroken rut with berms beside it; a treaded wheel leaves its
-lugs a pitch apart where they touched, the ground under them smooth; the same pads leave the
-same bits; a car's wheels carry its weight where they touch and roll ahead; a crate sinks where
-its height field is lowered under it; a displaced ground's clusters keep their own spheres; the
-yard's dogs print their three beds and the car ruts its three, slowed in the mud and sunk 9 cm
-and more into it, its mud berms low and even and its snow ruts' walls even (#188, #189),
-replayed to the bit; a saved yard restores its prints and treads, a reset clears them, and a
-recording replays to the same digests.
+lugs a pitch apart where they touched, the ground under them smooth; a spinning wheel digs its
+hole and throws it behind, nothing made or lost, a wheel's hole round along its travel; the
+same pads leave the same bits; a car's wheels carry its weight where they touch and roll ahead;
+a crate sinks where its height field is lowered under it; a displaced ground's clusters keep
+their own spheres; the yard's dogs print their three beds and the car ruts its three, slowed in
+the mud and sunk 9 cm and more into it, its mud berms low and even and its snow ruts' walls even
+(#188, #189), stopped in its sand and pulled away hard, its front treads running over 5 m/s
+past it and its holes 2 cm and more below its ruts (#191), replayed to the bit; a saved yard
+restores its prints and treads, a reset clears them, and a recording replays to the same
+digests, also from a save taken while the car spins in its sand.
 
 Left: the layer clip-mapped round the player on the island (D-007), finer treads on finer
-beds, the weather refilling it, water pooling in the prints, the dogs' beds as ground, wheels
-spinning and digging in, the sound of each, and a print shaped as the paw is.
+beds, the weather refilling it, water pooling in the prints, the dogs' beds as ground, sand and
+mud thrown in the air by a spinning wheel (a spray of particles), the sound of each, and a print
+shaped as the paw is.
 
 ## `flood`: a dam break (issue #144)
 

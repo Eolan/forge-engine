@@ -117,6 +117,32 @@ impl Tread {
         self.depth * s * s * (3.0 - 2.0 * s)
     }
 }
+/// What digs (#191): a wheel's patch spinning on the layer, its tread running faster than it
+/// travels (or slower: a locked wheel sliding), which tears the material from under it and
+/// throws it the way its tread slides.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dig {
+    /// The patch's middle, (x, z), metres.
+    pub at: DVec2,
+    /// The way the material goes, (x, z), unit: behind a wheel spinning forward.
+    pub throw: Vec2,
+    /// The patch's half sizes across and along `throw`, metres.
+    pub size: Vec2,
+    /// How much it tears from under the patch's middle, metres (never closer to the base than
+    /// the material's least).
+    pub depth: f32,
+    /// How far past the patch's edge what it tears lands, metres: a heap highest a third of the
+    /// way out, nothing past it.
+    pub reach: f32,
+    /// The radius of the wheel it is, metres: its hole's floor along `throw` is the wheel's
+    /// round, deepest under the patch's middle, so the wheel climbs out of it gradually as from
+    /// its trough (#189), not up the 45° walls a flat hole slumps to. 0: flat under the patch.
+    pub wheel: f32,
+}
+
+/// How much wider than the patch the heap a dig throws spreads, as a share of its half width.
+const SPREAD: f32 = 1.5;
+
 /// How much higher a pad's sole is at its edge than at its middle, as a share of its smaller
 /// half size: a paw's or a boot's rounded sole.
 const ROUND: f32 = 0.4;
@@ -491,6 +517,93 @@ impl Layer {
         pushed * self.cell * self.cell
     }
 
+    /// Digs `dig` into the layer (#191): under its patch's middle the ground sinks by its depth
+    /// (to the material's least at most), along it to the wheel's round from there (flat for no
+    /// wheel), and all it tears is heaped beyond that the way it is thrown, spread a little wider
+    /// than the patch; then the hole and the heap slump. The relief under the patch is left to the press that follows (a spinning
+    /// tread smears its lugs). The volume it moved, m³ (none off the layer).
+    pub fn dig(&mut self, dig: Dig) -> f32 {
+        if !self.covers(dig.at) || dig.depth <= 0.0 {
+            return 0.0;
+        }
+        let throw = dig.throw.normalize_or(Vec2::Y);
+        let across = Vec2::new(-throw.y, throw.x);
+        let (a, b) = (dig.size.x.max(1e-4), dig.size.y.max(1e-4));
+        let reach = dig.reach.max(self.cell);
+        // How far along it the hole reaches: the patch, or the wheel's round.
+        let wheel = dig.wheel.max(0.0);
+        let b = b.max(wheel);
+        // Behind the patch as far as the heap lands, before it a cell; across, the heap's spread;
+        // and a cell more for the slump. A box about the patch's middle, turned onto x and z.
+        let along_reach = b + reach + 2.0 * self.cell;
+        let across_reach = SPREAD * a + 2.0 * self.cell;
+        let half = Vec2::new(
+            throw.x.abs() * along_reach + throw.y.abs() * across_reach,
+            throw.y.abs() * along_reach + throw.x.abs() * across_reach,
+        );
+        let (low, high) = self.span(dig.at, half);
+        let local = |x: u32, z: u32| {
+            let d = (self.origin + DVec2::new(f64::from(x), f64::from(z)) * f64::from(self.cell)
+                - dig.at)
+                .as_vec2();
+            (d.dot(across), d.dot(throw))
+        };
+        // The heap: rising from the patch's edge, highest a third of the way out, thinning to
+        // nothing `reach` beyond it (thrown clear of the hole, not slumping back into it); and
+        // across, from its middle to its spread.
+        let heap = |(u, v): (f32, f32)| {
+            let t = (v - b) / reach;
+            let s = u.abs() / (SPREAD * a);
+            if (0.0..1.0).contains(&t) && s < 1.0 {
+                t * (1.0 - t) * (1.0 - t) * (1.0 - s * s)
+            } else {
+                0.0
+            }
+        };
+        let mut weights = 0.0f32;
+        for z in low[1]..=high[1] {
+            for x in low[0]..=high[0] {
+                weights += heap(local(x, z));
+            }
+        }
+        // Nowhere on the layer for it to land (the patch at its border): it stays.
+        if weights == 0.0 {
+            return 0.0;
+        }
+        let least = self.soft.least;
+        // The hole's floor: its depth under the ground at the patch's middle, and from there the
+        // wheel's round along it.
+        let floor = (self.height_at(dig.at) - dig.depth).max(least);
+        let sole = |v: f32| {
+            let off = v.abs().min(wheel);
+            floor + wheel - (wheel * wheel - off * off).sqrt()
+        };
+        let mut torn = 0.0f32;
+        for z in low[1]..=high[1] {
+            for x in low[0]..=high[0] {
+                let (u, v) = local(x, z);
+                if u.abs() < a && v.abs() < b {
+                    let k = self.index(x, z);
+                    let take = (self.heights[k] - sole(v).max(least)).max(0.0);
+                    self.heights[k] -= take;
+                    torn += take;
+                }
+            }
+        }
+        for z in low[1]..=high[1] {
+            for x in low[0]..=high[0] {
+                let w = heap(local(x, z));
+                if w > 0.0 {
+                    let k = self.index(x, z);
+                    self.heights[k] += torn * w / weights;
+                }
+            }
+        }
+        self.slump(low, high);
+        self.mark(low, high);
+        torn * self.cell * self.cell
+    }
+
     /// The points within `reach` metres of `at` (x and z), clamped to the layer.
     fn span(&self, at: DVec2, reach: Vec2) -> ([u32; 2], [u32; 2]) {
         let g = (at - self.origin) / f64::from(self.cell);
@@ -853,5 +966,78 @@ mod tests {
         let mut c = bed(Soft::SAND);
         c.set_heights(a.heights());
         assert_eq!(c, a);
+    }
+
+    #[test]
+    fn a_spinning_wheel_digs_its_hole_and_throws_it_behind() {
+        // A wheel standing in deep mud, spinning forward (+z) for a second: 2 mm torn a step
+        // from under its 20 cm by 14 cm patch, thrown back over 40 cm.
+        let mud = Soft {
+            depth: 0.15,
+            stiffness: 1.0e6,
+            repose: 0.85,
+            ..Soft::MUD
+        };
+        let spin = Dig {
+            at: DVec2::ZERO,
+            throw: Vec2::NEG_Y,
+            size: Vec2::new(0.1, 0.07),
+            depth: 0.002,
+            reach: 0.4,
+            wheel: 0.0,
+        };
+        let mut layer = bed(mud);
+        let before = layer.volume();
+        let mut moved = 0.0;
+        for _ in 0..60 {
+            moved += layer.dig(spin);
+        }
+        assert!(moved > 0.0);
+        // Nothing made or lost: it only moved.
+        assert!(
+            (layer.volume() - before).abs() < 1e-6,
+            "{} {before}",
+            layer.volume()
+        );
+        // A hole under it, deeper the longer it spins, its walls slumping in, never through
+        // the base.
+        let hole = layer.height_at(DVec2::ZERO);
+        assert!(hole < mud.depth - 0.05, "{hole}");
+        assert!(hole >= mud.least - 1e-6, "{hole}");
+        // The heap behind it, none before it.
+        let behind = (10..40)
+            .map(|k| layer.height_at(DVec2::new(0.0, -0.01 * f64::from(k))))
+            .fold(f32::MIN, f32::max);
+        assert!(behind > mud.depth + 0.02, "{behind}");
+        let ahead = (10..40)
+            .map(|k| layer.height_at(DVec2::new(0.0, 0.01 * f64::from(k))))
+            .fold(f32::MIN, f32::max);
+        assert!(ahead <= mud.depth + 1e-4, "{ahead}");
+        // Off the layer, or not digging, nothing.
+        let mut still = bed(mud);
+        assert_eq!(still.dig(Dig { depth: 0.0, ..spin }), 0.0);
+        assert_eq!(
+            still.dig(Dig {
+                at: DVec2::new(2.0, 0.0),
+                ..spin
+            }),
+            0.0
+        );
+        assert_eq!(still, bed(mud));
+        // A wheel's (40 cm round): its hole's floor is its round, gentle under its middle, so it
+        // can roll out; a flat hole's ends slump to the mud's slope.
+        let mut round = bed(mud);
+        for _ in 0..30 {
+            round.dig(Dig { wheel: 0.4, ..spin });
+        }
+        let floor = |l: &Layer, v: f64| l.height_at(DVec2::new(0.0, v));
+        let rise = floor(&round, 0.06) - floor(&round, 0.0);
+        assert!(rise > 0.0 && rise / 0.06 < 0.25, "{rise} over 6 cm");
+        let mut flat = bed(mud);
+        for _ in 0..30 {
+            flat.dig(spin);
+        }
+        let wall = (floor(&flat, 0.1) - floor(&flat, 0.08)) / 0.02;
+        assert!(wall > 0.5, "{wall}");
     }
 }

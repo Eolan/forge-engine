@@ -272,6 +272,8 @@ void fj_vehicle_wheels(const FjWorld *world, uint32_t vehicle, double *positions
 // floats each), and the suspension's impulse in the step (N·s).
 void fj_vehicle_contacts(const FjWorld *world, uint32_t vehicle, int32_t *touching,
                          double *positions, float *normals, float *forwards, float *impulses);
+// The four wheels' spin about their axles, rad/s, positive rolling forward (#191).
+void fj_vehicle_spins(const FjWorld *world, uint32_t vehicle, float *spins);
 // The engine's revs (rpm) and the gear engaged (0 neutral, −1 reverse).
 void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32_t *gear);
 

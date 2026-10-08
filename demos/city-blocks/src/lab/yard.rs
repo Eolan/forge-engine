@@ -14,7 +14,7 @@
 use anyhow::Result;
 use forge_anim::Footfall;
 use forge_geom::TriMesh;
-use forge_physics::deform::{Layer, Pad, Soft, Tread};
+use forge_physics::deform::{Dig, Layer, Pad, Soft, Tread};
 use forge_physics::{BodyDesc, BodyId, Shape, VehicleId, World};
 use forge_sim::TICK;
 use glam::{DVec2, Vec2, Vec3};
@@ -75,6 +75,13 @@ const DEEP_MUD: Soft = Soft {
     packing: 0.5,
     ..Soft::MUD
 };
+/// The car's sand (#191): a deep bed of it, 12 cm a wheel's 105 kPa sinks 4 cm into, so a
+/// wheel spinning there has sand to dig (the dogs' 3 cm, pressed to its least, had none).
+const DEEP_SAND: Soft = Soft {
+    depth: 0.12,
+    stiffness: 2.6e6,
+    ..Soft::SAND
+};
 /// The beds.
 /// - The dogs': across both their lanes (x ±0.7) between where they turn about (z −1.6 and
 ///   2.8), sand, then mud, then snow, the floor showing between them; a point every centimetre,
@@ -88,7 +95,7 @@ const BEDS: [BedSpec; 6] = [
     spec(Soft::SAND, SOFT[0], [-1.2, -1.3], [1.2, -0.05]),
     spec(Soft::MUD, SOFT[1], [-1.2, 0.05], [1.2, 1.3]),
     spec(Soft::SNOW, SOFT[2], [-1.2, 1.4], [1.2, 2.65]),
-    as_ground(spec(Soft::SAND, SOFT[0], [2.4, -4.6], [4.8, -1.6]), 0.4),
+    as_ground(spec(DEEP_SAND, SOFT[0], [2.4, -4.6], [4.8, -1.6]), 0.4),
     as_ground(spec(DEEP_MUD, SOFT[1], [2.4, -1.5], [4.8, 1.5]), 0.15),
     as_ground(spec(Soft::SNOW, SOFT[2], [2.4, 1.6], [4.8, 4.6]), 0.2),
 ];
@@ -98,6 +105,14 @@ pub(super) const LANE: f64 = 3.6;
 pub(super) const CAR_START: f64 = 9.0;
 const CRUISE: f32 = 3.0;
 const STOP_Z: f64 = -7.0;
+/// The autopilot's stop in the deep sand (#191): past `HALT` (z) it brakes, standing with all
+/// four wheels in the sand, until tick `LAUNCH` (a second or so after); then it pulls away at full
+/// throttle until past the sand's far end (z), its driven wheels spinning and digging in. (In
+/// the deep mud a standing car would never pull away: its grip moves it less than a quarter of
+/// its weight, which ploughing that mud takes.)
+const HALT: f64 = -2.55;
+const LAUNCH: u64 = 460;
+const SAND_END: f64 = -4.6;
 /// A tyre's footprint, half its width and half its length along the ground (metres), over
 /// which its load presses; and the patch it presses, 2 cm wider each side, so its rut holds the
 /// whole tyre and the berms rise beyond it, not under its edges.
@@ -194,9 +209,10 @@ pub(super) fn press<'a>(
 
 /// Hands the yard's car its controls for the coming step: the player's while they hold any;
 /// else the autopilot's, which keeps it to its lane (against its offset and its heading) at its
-/// pace, and brakes it to a stop past the beds. Either way, the soft grounds under its wheels
-/// hold it back (#187).
-pub(super) fn drive(world: &mut World, driver: &Driver, beds: &[Bed]) {
+/// pace, stops it in its sand (`HALT`) and pulls away hard at tick `LAUNCH` (#191), and brakes
+/// it to a stop past the beds. Either way, the soft grounds under its wheels hold it back
+/// (#187).
+pub(super) fn drive(world: &mut World, driver: &Driver, beds: &[Bed], tick: u64) {
     let Some((chassis, vehicle)) = driver.car else {
         return;
     };
@@ -212,8 +228,12 @@ pub(super) fn drive(world: &mut World, driver: &Driver, beds: &[Bed]) {
     let ahead = v[0].linear.dot(forward);
     let off = (t[0].position.x - LANE) as f32;
     let steer = (-0.3 * off - 1.5 * forward.x).clamp(-1.0, 1.0);
-    if t[0].position.z < STOP_Z {
+    let z = t[0].position.z;
+    if z < STOP_Z || (z < HALT && tick < LAUNCH) {
         world.drive(vehicle, 0.0, steer, 1.0, 0.0);
+    } else if tick >= LAUNCH && z > SAND_END {
+        // Floored in the mud: its driven wheels spin and dig in (#191).
+        world.drive(vehicle, 1.0, steer, 0.0, 0.0);
     } else {
         let throttle = (0.3 * (CRUISE - ahead)).clamp(0.0, 0.6);
         world.drive(vehicle, throttle, steer, 0.0, 0.0);
@@ -244,7 +264,8 @@ pub(super) fn roll(
     // swings as the car rocks, and its ruts and their berms rose and fell with it in waves
     // (#188).
     let share = drive::CAR_MASS * 9.81 / contacts.iter().flatten().count().max(1) as f32;
-    for (c, wheel) in contacts.iter().zip(&wheels) {
+    let spins = world.wheel_spins(vehicle);
+    for ((c, wheel), spin) in contacts.iter().zip(&wheels).zip(spins) {
         let Some(c) = c else {
             continue;
         };
@@ -266,6 +287,23 @@ pub(super) fn roll(
         // rests on its front wall, which the suspension pushes back from, and never climbs out
         // (#189).
         let ahead = step.max(LEAD);
+        // Its slip (#191): how much faster its tread runs over the ground than it travels along
+        // it (slower, a locked wheel sliding: negative). A slipping tread tears the material from
+        // under it and throws it the way it slides, by the distance it slipped, so a wheel
+        // spinning where it stands digs itself in; and it smears its lugs, gone past `SMEAR`.
+        let forward = Vec2::new(c.forward.x, c.forward.z).normalize_or(heading);
+        let slip = spin * WHEEL_RADIUS - travel.dot(forward);
+        if slip.abs() > SLIP {
+            bed.layer.dig(Dig {
+                at,
+                throw: -forward * slip.signum(),
+                size: TYRE,
+                depth: DIG * slip.abs() * dt,
+                reach: THROWN,
+                wheel: TROUGH * WHEEL_RADIUS,
+            });
+        }
+        let lugs = TREAD.depth * (1.0 - slip.abs() / SMEAR).max(0.0);
         bed.layer.press(Pad {
             at: at + (heading * ahead).as_dvec2(),
             heading,
@@ -273,7 +311,10 @@ pub(super) fn roll(
             pressure: share / (4.0 * TYRE.x * TYRE.y),
             sweep: step + ahead,
             wheel: TROUGH * WHEEL_RADIUS,
-            tread: Some(TREAD),
+            tread: (lugs > 0.0).then_some(Tread {
+                depth: lugs,
+                ..TREAD
+            }),
         });
         pressed += 1;
     }
@@ -289,6 +330,35 @@ pub(super) struct Ground {
     body: BodyId,
     count: u32,
     samples: Vec<f32>,
+}
+
+impl Ground {
+    /// Its samples as Jolt holds them, which lag its layer by up to `SETTLE`: what a save keeps,
+    /// so a restored car stands on the same ground to the bit (#191).
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+}
+
+/// Back to saved grounds: each one's samples ([`Ground::samples`], in turn from `saved`, four
+/// little-endian bytes each), given to Jolt whole; their beds' changes are theirs already. What
+/// of `saved` is left.
+pub(super) fn set_grounds<'a>(
+    world: &mut World,
+    beds: &mut [Bed],
+    grounds: &mut [Ground],
+    mut saved: &'a [u8],
+) -> &'a [u8] {
+    for g in grounds {
+        beds[g.bed].layer.take_changed();
+        let (bytes, rest) = saved.split_at(4 * g.samples.len());
+        for (s, b) in g.samples.iter_mut().zip(bytes.as_chunks::<4>().0) {
+            *s = f32::from_bits(u32::from_le_bytes(*b));
+        }
+        world.set_heights(g.body, [0, 0], [g.count, g.count], &g.samples, g.count);
+        saved = rest;
+    }
+    saved
 }
 
 /// The highest a ground's samples go, metres: its height field's range, fixed when made.
@@ -417,6 +487,13 @@ const ROLLING_PACE: f32 = 0.5;
 /// wall (#189).
 const LEAD: f32 = 0.04;
 const TROUGH: f32 = 1.3;
+/// A wheel's slip (#191): under `SLIP` (m/s) it grips and digs nothing; past it, its tread
+/// tears `DIG` metres of material from under it for each metre it slips and throws it as far as
+/// `THROWN` past its patch; its lugs fade as its slip nears `SMEAR` (m/s), smeared past it.
+const SLIP: f32 = 0.3;
+const DIG: f32 = 0.004;
+const THROWN: f32 = 0.6;
+const SMEAR: f32 = 1.0;
 
 /// For the coming step: each of the car's wheels sunk into a ground is held back by the soft
 /// material it ploughs (#187), against its travel at its contact, by its load times
@@ -476,9 +553,9 @@ mod tests {
     use forge_sim::TICK;
     use glam::DVec3;
 
-    /// The car at a tick: where its chassis is along its lane (z) and how high (y), and its
-    /// pace (m/s).
-    type Trip = Vec<(f64, f64, f32)>;
+    /// The car at a tick: where its chassis is along its lane (z) and how high (y), its pace
+    /// (m/s), and how fast the faster of its driven wheels' treads runs (m/s, #191).
+    type Trip = Vec<(f64, f64, f32, f32)>;
 
     /// The yard over `seconds`: the dogs pressing their footfalls into the beds and the car on
     /// its autopilot rolling over its own, which it stands on. The beds after, how many
@@ -504,7 +581,7 @@ mod tests {
         for tick in 0..seconds * 60 {
             let time = f64::from(tick) * f64::from(TICK);
             field.herd.drive(&mut world, time, false);
-            drive(&mut world, &driver, &beds);
+            drive(&mut world, &driver, &beds, u64::from(tick));
             world.step(TICK, 1).expect("a step");
             let came = field.herd.feel(&world, u64::from(tick), &mut feet);
             press(&mut beds, feet.last_mut(came));
@@ -517,7 +594,14 @@ mod tests {
             settle(&mut world, &mut beds, &mut grounds, false);
             world.transforms(&[car.0], &mut t);
             world.velocities(&[car.0], &mut v);
-            trip.push((t[0].position.z, t[0].position.y, v[0].linear.length()));
+            let spins = world.wheel_spins(car.1);
+            let tread = spins[0].max(spins[1]) * WHEEL_RADIUS;
+            trip.push((
+                t[0].position.z,
+                t[0].position.y,
+                v[0].linear.length(),
+                tread,
+            ));
         }
         (beds, taken, rolled, trip)
     }
@@ -594,13 +678,13 @@ mod tests {
             );
         }
         // The car stands on its beds (#187): at its pace on the floor before them, slowed in the
-        // deep mud (its middle over the mud's), up to pace again past it, stopped past its
-        // sand. Its wheels sank 10.5 cm into the mud under their share of its weight, more where
-        // their load swung higher as it rolled.
+        // deep mud (its middle over the mud's; 1.25 m/s, its spinning front wheel tearing at it),
+        // up to pace again past its sand, stopped beyond. Its wheels sank 10.5 cm into the mud
+        // under their share of its weight.
         let pace = |from: f64, to: f64| {
             trip.iter()
-                .filter(|(z, _, _)| (from..to).contains(z))
-                .map(|&(_, _, p)| p)
+                .filter(|(z, ..)| (from..to).contains(z))
+                .map(|&(_, _, p, _)| p)
                 .fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p), h.max(p)))
         };
         let floor = pace(5.6, 6.6).0;
@@ -609,7 +693,40 @@ mod tests {
         assert!(floor > 2.8, "{floor} m/s on the floor");
         assert!(mud < 0.6 * floor, "{mud} m/s in the mud against {floor}");
         assert!(after > 2.4, "{after} m/s past the beds");
-        assert!(trip.last().is_some_and(|&(z, _, p)| z < STOP_Z && p < 0.1));
+        assert!(
+            trip.last()
+                .is_some_and(|&(z, _, p, _)| z < STOP_Z && p < 0.1)
+        );
+        // Its stop in the deep sand (#191): standing there, all four wheels on it, then floored,
+        // its driven wheels spinning far faster than it goes (21 m/s past it), and digging 2.4 cm
+        // below the ruts their share of its weight presses (8 cm deep) where it bogged down.
+        let (z, _, p, _) = trip[LAUNCH as usize - 1];
+        assert!(p < 0.05 && (-3.3..-2.8).contains(&z), "{p} m/s at {z}");
+        let slip = trip[LAUNCH as usize..]
+            .iter()
+            .filter(|(z, ..)| *z > SAND_END)
+            .map(|&(_, _, p, tread)| tread - p)
+            .fold(f32::MIN, f32::max);
+        assert!(slip > 5.0, "the treads ran {slip} m/s past the car");
+        let sand = &beds[3].layer;
+        let pressed = DEEP_SAND.depth
+            - drive::CAR_MASS * 9.81 / 4.0 / (4.0 * TYRE.x * TYRE.y) / DEEP_SAND.stiffness;
+        for side in [-0.74, 0.74] {
+            let dug = (0..250)
+                .flat_map(|k| (-8..=8).map(move |j| (k, j)))
+                .map(|(k, j)| {
+                    let at = DVec2::new(
+                        LANE + side + 0.01 * f64::from(j),
+                        -4.35 + 0.01 * f64::from(k),
+                    );
+                    sand.height_at(at)
+                })
+                .fold(f32::MAX, f32::min);
+            assert!(
+                dug < pressed - 0.02,
+                "{dug} under the {side} wheels, pressed to {pressed}"
+            );
+        }
         let deep = &beds[4].layer;
         let under = (-30..=30)
             .map(|k| deep.height_at(DVec2::new(LANE - 0.74 + 0.01 * f64::from(k), 0.0)))

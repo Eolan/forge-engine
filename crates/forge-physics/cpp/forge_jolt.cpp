@@ -791,6 +791,13 @@ void fj_vehicle_contacts(const FjWorld *world, uint32_t vehicle, int32_t *touchi
     }
 }
 
+void fj_vehicle_spins(const FjWorld *world, uint32_t vehicle, float *spins) {
+    const JPH::VehicleConstraint &v = *world->vehicles[vehicle];
+    for (uint32_t w = 0; w < 4; ++w) {
+        spins[w] = v.GetWheel(w)->GetAngularVelocity();
+    }
+}
+
 void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32_t *gear) {
     const auto *c = static_cast<const JPH::WheeledVehicleController *>(
         world->vehicles[vehicle]->GetController());

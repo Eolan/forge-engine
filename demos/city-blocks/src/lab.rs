@@ -1519,7 +1519,7 @@ impl Simulation for LabWorld {
         if self.beds.is_empty() {
             self.driver.tick(&mut self.world);
         } else {
-            yard::drive(&mut self.world, &self.driver, &self.beds);
+            yard::drive(&mut self.world, &self.driver, &self.beds, self.tick);
         }
         if let Some(convoy) = &self.convoy {
             convoy.tick(&mut self.world);
@@ -1609,6 +1609,12 @@ impl Simulation for LabWorld {
                 out.extend_from_slice(&h.to_bits().to_le_bytes());
             }
         }
+        // The car's grounds as Jolt holds them, a millimetre from their beds at most (#191).
+        for ground in &self.grounds {
+            for s in ground.samples() {
+                out.extend_from_slice(&s.to_bits().to_le_bytes());
+            }
+        }
         for word in self.words() {
             out.extend_from_slice(&word.to_bits().to_le_bytes());
         }
@@ -1647,8 +1653,9 @@ impl Simulation for LabWorld {
             }
         }
         self.beds_changed += 1;
-        // The car's grounds to their beds again: Jolt's saved state holds no shape (#187).
-        yard::settle(&mut self.world, &mut self.beds, &mut self.grounds, true);
+        // The car's grounds as they were saved, not their beds: Jolt's saved state holds no
+        // shape (#187), and the grounds lag their beds (#191).
+        let rest = yard::set_grounds(&mut self.world, &mut self.beds, &mut self.grounds, rest);
         let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
@@ -1721,6 +1728,14 @@ impl Simulation for LabWorld {
                 h = (h ^ u64::from(height.to_bits())).wrapping_mul(0x0000_0100_0000_01b3);
             }
             d ^= h.rotate_left(31);
+        }
+        // The car's grounds as Jolt holds them (#191).
+        for (g, ground) in self.grounds.iter().enumerate() {
+            let mut h = 0x8422_2325_cbf2_9ce4_u64 ^ g as u64;
+            for s in ground.samples() {
+                h = (h ^ u64::from(s.to_bits())).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            d ^= h.rotate_left(37);
         }
         d
     }
@@ -3124,7 +3139,21 @@ mod tests {
     #[test]
     fn the_yard_keeps_its_prints_through_a_save_clears_them_on_a_reset_and_replays() {
         let (mut first, _) = LabWorld::new(LabScene::Yard, test_pool()).unwrap();
-        for _ in 0..900 {
+        for _ in 0..500 {
+            first.tick(&[]);
+        }
+        // Saved and restored with the car spinning its wheels in its sand (#191): a second on,
+        // the same digest, its grounds as Jolt held them (rebuilt from the beds, which they lag
+        // by up to a millimetre, it went its own way).
+        let spinning = first.save();
+        let (mut third, _) = LabWorld::new(LabScene::Yard, test_pool()).unwrap();
+        third.restore(&spinning);
+        for _ in 0..60 {
+            first.tick(&[]);
+            third.tick(&[]);
+        }
+        assert_eq!(third.digest(), first.digest(), "on from a save mid-spin");
+        for _ in 0..340 {
             first.tick(&[]);
         }
         let untouched = yard::beds();

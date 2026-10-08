@@ -1182,6 +1182,16 @@ impl World {
         }));
     }
 
+    /// A car's wheels' spin about their axles, rad/s, positive rolling forward, in
+    /// [`World::wheels`]' order (#191): times the wheel's radius, the speed its tread runs at,
+    /// which past the ground's under it is its slip.
+    pub fn wheel_spins(&self, vehicle: VehicleId) -> [f32; 4] {
+        let mut spins = [0.0_f32; 4];
+        // SAFETY: the world is live, the index one it gave; four floats written.
+        unsafe { ffi::fj_vehicle_spins(self.raw.as_ptr(), vehicle.0, spins.as_mut_ptr()) };
+        spins
+    }
+
     /// A car's engine: its revs (rpm) and the gear engaged (0 neutral, −1 reverse).
     pub fn engine(&self, vehicle: VehicleId) -> (f32, i32) {
         let (mut rpm, mut gear) = (0.0, 0);
