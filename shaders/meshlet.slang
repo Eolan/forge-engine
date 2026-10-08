@@ -2999,14 +2999,13 @@ float shore_caustics(ShoreGround* g, float3 world, float footprint)
 }
 
 // A layered row's contour (`RenderLayer::contour`, the island's sand, #106): the rule that made
-// the layer map, at the drawn mesh's resolution. Where the map shows one of the contour's layers
-// (its layers under the height and those over it), the ground's height under the pixel picks
-// between a layer under and one over: under it, the map's own if it is one of the layers under,
-// or the heaviest of them among the four texels (none: the contour's first, the beaches' sand,
-// #128); over it, the map's own if it is one over, or the heaviest over among the four texels
-// (none: it stays). Its edge then follows the mesh, not the map's texels. The height wanders
-// over two octaves of noise 7 m and 2.3 m wide, and the layers blend over CONTOUR_BAND metres
-// of it, or the height a pixel spans.
+// the layer map, at the drawn mesh's resolution. Where the four texels around a pixel mix its
+// layers under the height and those over it, the ground's height under the pixel shares their
+// weight between their texels under and their texels over (#199): its edge then
+// follows the mesh, not the map's texels, and stays within the texels that mix. The height
+// wanders over two octaves of noise 7 m and 2.3 m wide, the layers blend over CONTOUR_BAND
+// metres of it, or the height a pixel spans, and the share is sharpened to an edge broken up by
+// finer noise (`contour_edge`).
 static const float CONTOUR_BAND = 0.08;
 static const uint NO_LAYER = 0xFFFFFFFFu;
 
@@ -3039,6 +3038,25 @@ float contour_under(Material mat, float3 object_position, float span)
     float wander = (0.7 * value_noise(q / 7.0) + 0.3 * value_noise(q / 2.3 + 17.0) - 0.5) * 2.0 * mat.contour_wander;
     float band = max(CONTOUR_BAND, span);
     return 1.0 - smoothstep(-band, band, over - wander);
+}
+
+// How far into the four texels' weight from a set of one side only the height decides wholly
+// (#199).
+static const float CONTOUR_MIXED = 0.25;
+// The edge's breakup: how far a share moves over noise 1.7 m and 0.6 m wide, and the least
+// half width of its step.
+static const float CONTOUR_BREAKUP = 0.3;
+static const float CONTOUR_STEP = 0.06;
+
+// How much of a pixel lies under the contour, `under`, sharpened to an edge broken up by fine
+// noise (tufts of grass into the sand, #199) instead of a smooth ramp metres wide. The step
+// widens with the pixel's `footprint` (metres), so far away it is a blend, not an aliased edge.
+float contour_edge(float under, float2 at, float footprint)
+{
+    float breakup = (0.6 * value_noise(at / 1.7 + 41.0) + 0.4 * value_noise(at / 0.6 + 7.3) - 0.5)
+        * 2.0 * CONTOUR_BREAKUP;
+    float step = clamp(0.5 * footprint, CONTOUR_STEP, 0.5);
+    return smoothstep(0.5 - step, 0.5 + step, under + breakup);
 }
 
 // Adds `weight` of layer `id` to the up to three layers `layer` holds (NO_LAYER where free).
@@ -3090,11 +3108,15 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         map.GetDimensions(size.x, size.y);
         float2 texel = (s.object_position.xz * mat.inv_texture_scale + 0.5) * float2(size) - 0.5;
         // The lookup wanders by `cavity` texels over a noise three texels wide, so the layers'
-        // edges do not follow the map's grid in steps (the island's coast, #106).
+        // edges do not follow the map's grid in steps (the island's coast, #106), and by a
+        // third of that over a noise a texel wide, which breaks the bilinear blend's straight
+        // runs between the steps (#199).
         if (mat.cavity > 0.0)
         {
             float2 q = texel / 3.0;
-            texel += (float2(value_noise(q), value_noise(q + 31.7)) - 0.5) * (2.0 * mat.cavity);
+            float2 r = texel * 1.1 + 5.3;
+            texel += (float2(value_noise(q), value_noise(q + 31.7)) - 0.5) * (2.0 * mat.cavity)
+                + (float2(value_noise(r), value_noise(r + 13.1)) - 0.5) * (0.67 * mat.cavity);
         }
         int2 i0 = int2(floor(texel));
         float2 t = texel - float2(i0);
@@ -3132,56 +3154,56 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
                 w_second = total[k];
             }
         }
-        // The contour splits the pair's layers that are its own by the height: up to three
-        // layers, the heaviest first. Over its reach, a pair without its layer under it stays,
-        // and a pair without any of its layers (the sea floor, the rock) stays everywhere.
-        // Two are shaded: the lightest of three fades out, its weight taken off the other two,
-        // so the blend stays continuous where the two lightest change places (#111). A third
-        // layer shaded, even flat, made NVIDIA's driver give the whole pass 128 registers
-        // instead of 96 with a spill to shared memory (`FORGE_SHADER_STATS`), and cost up to
-        // 0.06 ms at 1440p on every pixel of ground.
+        // The contour shares the weight of the texels that are its own between its layer under
+        // the height and its layer over, by the height where the four texels mix the two (#199):
+        // a continuous function of the pixel's place, so its edge never jumps where the four
+        // texels change (the old rule switched whole texels' worth of sand to grass there, in
+        // straight lines and corners along the map's grid). Up to three layers, the heaviest
+        // first; the texels not its own (the sea floor, the rock) keep theirs. Two are shaded:
+        // the lightest of three fades out, its weight taken off the other two, so the blend
+        // stays continuous where the two lightest change places (#111). A third layer shaded,
+        // even flat, made NVIDIA's driver give the whole pass 128 registers instead of 96 with a
+        // spill to shared memory (`FORGE_SHADER_STATS`), and cost up to 0.06 ms at 1440p on every
+        // pixel of ground.
         float span = abs(s.dpdx.y) + abs(s.dpdy.y);
-        if (mat.contour != 0u && (contour_own(mat, first) || contour_own(mat, second))
-            && (s.object_position.y - mat.contour_height < contour_reach(mat, span)
-            || contour_low(mat, first) || contour_low(mat, second)))
+        float footprint = length(s.dpdx.xz) + length(s.dpdy.xz);
+        // The texels' bilinear weights under and over.
+        float w_under = 0.0, w_above = 0.0;
+        if (mat.contour != 0u)
         {
-            // The heaviest layer under the height among the four texels and the heaviest over.
-            uint low = mat.contour - 1u;
-            uint over = NO_LAYER;
-            float w_low = 0.0, w_over = 0.0;
             [unroll]
             for (uint k = 0; k < 4; k++)
             {
-                bool is_low = contour_low(mat, ids[k]);
-                if (is_low && total[k] > w_low)
-                {
-                    low = ids[k];
-                    w_low = total[k];
-                }
-                else if (!is_low && contour_own(mat, ids[k]) && total[k] > w_over)
-                {
-                    over = ids[k];
-                    w_over = total[k];
-                }
+                if (contour_low(mat, ids[k]))
+                    w_under += weights[k];
+                else if (contour_own(mat, ids[k]))
+                    w_above += weights[k];
             }
-            float under = contour_under(mat, s.object_position, span);
+        }
+        if (w_under > 0.0 && w_above > 0.0)
+        {
+            // Near the contour's height the height decides, farther from it the texels do (the
+            // sand the salt water keeps over it, #199), each edge broken up, between bounds the
+            // texels set: none of the layer under where its texels end, all of it where the
+            // others' end.
+            float share = w_under / (w_under + w_above);
+            float reach = contour_reach(mat, span);
+            float far = smoothstep(reach, 2.0 * reach, abs(s.object_position.y - mat.contour_height));
+            float under = lerp(contour_under(mat, s.object_position, span), share, far);
+            under = contour_edge(under, s.object_position.xz, footprint);
+            float low_share = clamp(under, smoothstep(1.0 - CONTOUR_MIXED, 1.0, share), smoothstep(0.0, CONTOUR_MIXED, share));
+            // Each side's share goes to its texels by their weights, each to its own layer, so no
+            // layer stands in for another (one that did changed where the texels' heaviest did).
+            float own = w_under + w_above;
+            float to_under = own * low_share / w_under;
+            float to_above = own * (1.0 - low_share) / w_above;
             uint layer[3] = { NO_LAYER, NO_LAYER, NO_LAYER };
             float weight[3] = { 0.0, 0.0, 0.0 };
-            uint pair[2] = { first, second };
-            float pair_weight[2] = { w_first, second != first ? w_second : 0.0 };
             [unroll]
-            for (uint k = 0; k < 2; k++)
+            for (uint k = 0; k < 4; k++)
             {
-                uint id = pair[k];
-                bool is_low = contour_low(mat, id);
-                uint up = is_low ? over : id;
-                if (!contour_own(mat, id) || up == NO_LAYER)
-                    add_layer(layer, weight, id, pair_weight[k]);
-                else
-                {
-                    add_layer(layer, weight, is_low ? id : low, pair_weight[k] * under);
-                    add_layer(layer, weight, up, pair_weight[k] * (1.0 - under));
-                }
+                float scale = contour_low(mat, ids[k]) ? to_under : contour_own(mat, ids[k]) ? to_above : 1.0;
+                add_layer(layer, weight, ids[k], weights[k] * scale);
             }
             [unroll]
             for (uint i = 0; i < 2; i++)

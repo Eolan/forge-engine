@@ -64,7 +64,7 @@ pub mod sites;
 pub mod valley;
 
 pub use amplify::{AmplifyParams, amplify};
-pub use beach::{BeachLayers, BeachRule, BeachStats, paint_beaches};
+pub use beach::{BeachLayers, BeachRule, BeachStats, SaltRule, paint_beaches, paint_salt};
 pub use channel::{
     ChannelParams, Channels, FineGround, Stone, bank_stones, paint_banks, paint_bars, paint_beds,
     paint_confluence_bars, paint_fans, stones,

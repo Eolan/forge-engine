@@ -821,6 +821,12 @@ at a fixed step, against `--no-sand-window`:
 About 0.10 ms a frame in all. On the CPU, a step every 2 m costs 3.4–3.9 ms, and a field built on
 each change 1.0–1.5 ms, twice.
 
+**Where the areas meet** (#199, 2026-10-08, `docs/demos/island.md`): the contour's continuous
+share, its edge's breakup and the wander's second octave. `shading/layered` 0.318 → 0.319 ms on
+the island's view, 0.340 → 0.343 ms on its tour (`tools/timings.sh`, three runs each,
+alternating, against `ecd826f`): within the noise. The salt water's sand costs the start 283 ms
+(seed 7, 16.7 M texels).
+
 **The barrels afloat** (#177, 2026-10-08): the movers are now Jolt bodies on the island's
 water, ticked on the CPU at 60 Hz (`docs/demos/island.md`, "Barrels afloat"). The GPU passes
 above draw them as before (not measured again); this is the tick, with the fixed step:

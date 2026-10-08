@@ -6,7 +6,7 @@
 # passes.
 #
 #   tools/verify.sh [--tier gate|0|1|2] [--base COMMIT] [--committed] [--expect PATTERNS]
-#                   [--timings BASE_BIN] [--no-accept] [--dry-run]
+#                   [--sets SETS] [--timings BASE_BIN] [--no-accept] [--dry-run]
 #   tools/verify.sh --accept DIR [COMMIT]
 #
 # The tiers:
@@ -20,6 +20,9 @@
 #   2     a milestone, asked for with --tier 2: Tier 1, plus the batch again with FORGE_ASYNC=0
 #         (it must match), tools/origins.sh, and the real-time tour for the owner to watch.
 #
+# --sets SETS: the sets the change reaches (for example `island`), Tier 0 on them and the
+# sentinels whatever the paths map to: a change to a shared file whose code only one demo runs
+# (#199), which the full batch would check for 20 minutes. Say why in the report.
 # --base COMMIT: the change since COMMIT, compared with COMMIT's accepted set (default: the
 # newest commit of HEAD's history with one). --committed: only BASE..HEAD's paths, not the
 # working tree's (to check a commit again). --expect PATTERNS: the images the change is meant to
@@ -56,10 +59,11 @@ usage() {
   exit 2
 }
 
-forced="" base_arg="" committed=0 expect="" timings_bin="" no_accept=0 dry=0 accept_dir="" accept_commit=""
+forced="" base_arg="" only_sets="" committed=0 expect="" timings_bin="" no_accept=0 dry=0 accept_dir="" accept_commit=""
 while [ $# -gt 0 ]; do
   case $1 in
     --tier) forced=${2:?--tier gate, 0, 1 or 2}; shift 2 ;;
+    --sets) only_sets=${2:?--sets SETS}; shift 2 ;;
     --base) base_arg=${2:?--base COMMIT}; shift 2 ;;
     --committed) committed=1; shift ;;
     --expect) expect=${2:?--expect PATTERNS}; shift 2 ;;
@@ -323,9 +327,22 @@ for path in "${changed[@]}"; do
 done
 selected=$(echo $selected)
 
+if [ -n "$only_sets" ]; then
+  for set in ${only_sets//,/ }; do
+    case $set in
+      sentinels | meshlets | ballad | city | island | lab) ;;
+      *) echo "--sets: unknown set $set: sentinels, meshlets, ballad, city, island or lab" >&2; exit 2 ;;
+    esac
+  done
+  selected=$(echo ${only_sets//,/ })
+fi
+
 if [ -n "$forced" ]; then
   tier=$forced
   why="asked for with --tier"
+elif [ -n "$only_sets" ]; then
+  tier=0
+  why="--sets names the sets the change reaches: $selected"
 elif [ -z "$base" ]; then
   tier=1
   why="no accepted set in HEAD's history ($accepted_dir): the full batch makes the first"

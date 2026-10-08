@@ -309,6 +309,130 @@ pub fn paint_beaches(
     stats
 }
 
+/// How far the salt water keeps the grass off the land beside it ([`paint_salt`], #199): the
+/// spray and the floods of the sea and of the rivers' tidal reaches, where only sand and the
+/// plants that bear salt hold.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SaltRule {
+    /// Metres from the salt water within which it reaches.
+    pub reach: f64,
+    /// Metres over the sea the sand rises to at the water, falling to the beach's own top
+    /// (`sand_below` of [`paint_salt`]) at the reach.
+    pub above: f64,
+    /// How much of that rise wanders, over noise 30 m wide, so its line does not keep to one
+    /// height.
+    pub wander: f64,
+    /// The seed of that noise.
+    pub seed: u64,
+}
+
+impl Default for SaltRule {
+    /// Within 40 m of the salt water, the sand up to 5 m over the sea at the water, the rise
+    /// wandering by a third.
+    fn default() -> Self {
+        Self {
+            reach: 40.0,
+            above: 5.0,
+            wander: 0.35,
+            seed: 0x7361_6c74_2d6b_6565,
+        }
+    }
+}
+
+/// Turns the grasses of `layers` (any of `grasses`) beside the salt water to `sand` (#199): the
+/// texels within `rule.reach` of salt water whose ground (`ground` at their centre, metres over
+/// the sea, the rivers' channels carved) lies under the sand's rise there. The salt water is the
+/// ground under the sea's level: the sea and the rivers' reaches it fills (`sea` texels, or
+/// ground at or under 0 m). Over the reach the rise falls from `rule.above` to `sand_below`, the
+/// beach's own top. Returns the texels turned.
+pub fn paint_salt(
+    layers: &mut Field2<u8>,
+    ground: &dyn Fn(f64, f64) -> f64,
+    grasses: &[u8],
+    sea: u8,
+    sand: u8,
+    sand_below: f64,
+    rule: &SaltRule,
+) -> usize {
+    let size = layers.size as usize;
+    let texel = layers.spacing;
+    let centre = |t: usize| {
+        (
+            ((t % size) as f64 + 0.5) * texel,
+            ((t / size) as f64 + 0.5) * texel,
+        )
+    };
+    // The distance to the salt water, in texels, by a two-pass chamfer (3-4) up to the reach.
+    let far = (rule.reach / texel).ceil() as u32 * 3 + 3;
+    let mut distance: Vec<u32> = (0..size * size)
+        .map(|t| {
+            let (x, y) = centre(t);
+            if layers.data[t] == sea || ground(x, y) <= 0.0 {
+                0
+            } else {
+                far
+            }
+        })
+        .collect();
+    for y in 0..size {
+        for x in 0..size {
+            let t = y * size + x;
+            let mut d = distance[t];
+            if x > 0 {
+                d = d.min(distance[t - 1] + 3);
+            }
+            if y > 0 {
+                d = d.min(distance[t - size] + 3);
+                if x > 0 {
+                    d = d.min(distance[t - size - 1] + 4);
+                }
+                if x + 1 < size {
+                    d = d.min(distance[t - size + 1] + 4);
+                }
+            }
+            distance[t] = d.min(far);
+        }
+    }
+    for y in (0..size).rev() {
+        for x in (0..size).rev() {
+            let t = y * size + x;
+            let mut d = distance[t];
+            if x + 1 < size {
+                d = d.min(distance[t + 1] + 3);
+            }
+            if y + 1 < size {
+                d = d.min(distance[t + size] + 3);
+                if x + 1 < size {
+                    d = d.min(distance[t + size + 1] + 4);
+                }
+                if x > 0 {
+                    d = d.min(distance[t + size - 1] + 4);
+                }
+            }
+            distance[t] = d;
+        }
+    }
+    let mut turned = 0;
+    for (t, &d) in distance.iter().enumerate() {
+        if d >= far || !grasses.contains(&layers.data[t]) {
+            continue;
+        }
+        let metres = f64::from(d) / 3.0 * texel;
+        if metres > rule.reach {
+            continue;
+        }
+        let (x, y) = centre(t);
+        let near = 1.0 - metres / rule.reach;
+        let wander = 1.0 + rule.wander * noise::fbm(rule.seed, x / 30.0, y / 30.0, 2, 2.0, 0.5);
+        let top = sand_below + (rule.above - sand_below).max(0.0) * near * near * wander;
+        if ground(x, y) < top {
+            layers.data[t] = sand;
+            turned += 1;
+        }
+    }
+    turned
+}
+
 /// `values` blurred by a box `reach` cells either way, along the rows then the columns (an
 /// `n × n` grid; the box shrinks at the edges).
 pub(crate) fn blur(values: &[f64], n: usize, reach: usize) -> Vec<f64> {
@@ -349,6 +473,40 @@ fn quantile(mut values: Vec<f64>, share: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_salt_water_keeps_the_grass_off_its_banks_but_not_off_the_land_above() {
+        // The sea under y = 400 m of a 1 km square at 4 m; the land rising 1 in 10 from it, and
+        // a plateau at 6 m from x = 600 m. Grass (0) on the land, the sea floor (2) under it.
+        let ground = |x: f64, y: f64| {
+            if y < 400.0 {
+                -1.0
+            } else if x >= 600.0 {
+                6.0
+            } else {
+                0.1 * (y - 400.0)
+            }
+        };
+        let mut layers = Field2::from_fn(256, 4.0, |i, j| {
+            let (x, y) = ((f64::from(i) + 0.5) * 4.0, (f64::from(j) + 0.5) * 4.0);
+            if ground(x, y) <= 0.0 { 2 } else { 0 }
+        });
+        let rule = SaltRule {
+            wander: 0.0,
+            ..SaltRule::default()
+        };
+        let turned = paint_salt(&mut layers, &ground, &[0], 2, 1, 2.0, &rule);
+        assert!(turned > 0);
+        let at = |x: f64, y: f64| layers.get((x / 4.0) as u32, (y / 4.0) as u32);
+        // On the slope: sand 12 m from the water (1 m up, under the rise's 3.5 m), grass 28 m
+        // from it (2.6 m up, over its 2.3 m) and beyond the reach.
+        assert_eq!(at(300.0, 410.0), 1);
+        assert_eq!(at(300.0, 426.0), 0);
+        assert_eq!(at(300.0, 470.0), 0);
+        // The plateau at 6 m stays grass even beside the water, and the sea stays the sea.
+        assert_eq!(at(800.0, 402.0), 0);
+        assert_eq!(at(300.0, 300.0), 2);
+    }
 
     /// The type of the beach at `x` (layers 1, 3 or 4): the most texels of its column's band.
     fn kind_in(layers: &Field2<u8>, x: f64) -> usize {

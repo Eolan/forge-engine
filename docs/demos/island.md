@@ -3175,6 +3175,7 @@ what it pushes in a rim, slumped to 35°. The yard's damp sand, 4 MPa/m, took 8 
 island's light barely showed. A footfall presses only where the island's row draws sand:
 - a texel of the contour's layers (sand, or the grasses and the riverbank) under its 2.5 m
   contour;
+- a sand texel far over it (the salt water's, #199);
 - or the lakes' sand;
 - in both cases, above the sea.
 
@@ -3264,6 +3265,67 @@ deepest pocket, and seed 7 has 3 lakes, not 4. A test makes two pockets in one b
 arm trimmed, the outlet's sill changes the ground there a little, and the rays' simplified ground
 is cut at another error (0.692 → 0.667 m), which moves shadows and probe light slightly over the
 island.
+
+## Where the areas meet (#199, the owner's note, 2026-10-08)
+
+The owner saw straight lines where the sand meets the grass, and in the river near the sea:
+"Globally we have to be careful about the transitions between mediums or biomes or areas"
+(`reports/2026-10-08-199/`, each image before above, after below).
+
+**The sand's edge.** Ablated first: the edges stayed the same without the beach types (#128),
+the bars and the water. Close up they were of two kinds:
+- **Cut**: straight lines and corners. The contour (#106) took the sand from a texel over its
+  height only where one of the four texels around the pixel was grass. Where the four changed,
+  a texel's worth of sand turned to grass at once, along the map's 4 m grid. `walker.png` is the
+  walker's view at 7 m: the cuts run straight out from the camera.
+- **Smeared**: the bilinear blend between the texels, a ramp several metres wide.
+
+The contour now shares the weight of the four texels between the sand and the grass:
+- **Continuous.** Where the texels mix the two, the height decides the share, between bounds the
+  texels set: no sand where the sand's texels end, all sand where the grass's end. Each side's
+  share goes to its own texels by their weights, so no grass stands in for another (one that did
+  left a faint seam where the heaviest changed).
+- **Broken up.** The share is sharpened to an edge broken by noise 1.7 m and 0.6 m wide, tufts of
+  grass into the sand (`contour_edge`). The step widens with the pixel's footprint, so far away
+  it is a blend, not an aliased edge.
+- **Off the contour,** more than twice its reach (0.76 m) over or under its 2.5 m, the texels
+  decide instead of the height, their edge broken up the same way.
+- **The lookup's wander** gains an octave a texel wide, a third as strong, which breaks the
+  bilinear blend's straight runs between the steps.
+
+![The bank at the mouth from 22 m: the sand's edge cut and smeared before (above), broken up now (below)](../../reports/2026-10-08-199/edges.png)
+
+**Grass by the salt water.** On the mouth's banks the grass ran down the slope to the water. The
+owner: "the sea or river should have removed it, grass don't like the salted water much".
+`forge_procgen::paint_salt` now turns the grasses beside the salt water to sand:
+- **The salt water:** the sea floor's texels, and the ground at or under the sea's level with
+  the rivers' channels carved, which the sea fills.
+- **Where:** within 40 m of it, wherever the ground lies under a rise: 5 m over the sea at the
+  water, falling (squared) to the beach's 2.5 m at 40 m, wandering by a third over noise 30 m
+  wide.
+- **What it leaves:** a cliff's top over 5 m. The rule runs before the beaches are split
+  (#128), so a shingle coast's band widens as shingle.
+- **Seed 7:** 1 392 texels in 283 ms. `--no-salt` leaves the grass to the water.
+
+![The mouth: the grass down the banks before (above), sand to the bank's top now (below)](../../reports/2026-10-08-199/salt.png)
+
+The sand window's prints (#197) follow: a sand texel far over the contour takes prints.
+
+**Not yet: the river's banks.** Where the owner boxed lines in the water at the mouth, the
+ground under it shows through: a straight steep face along the river and angular notches in
+the bank. That is the channel's carve (`Channels::carved`): near the sea the bank rises at only
+0.3 of its slope and never meets the ground, so the carve ends in its 3 m fade at a constant
+distance from the centreline. The banks are combined by a hard `min`, which creases. The next
+step.
+
+- **Cost:** `shading/layered` 0.318 → 0.319 ms on the island's view, 0.340 → 0.343 ms on its
+  tour (three runs each, alternating, against `ecd826f`), within the noise.
+- **Checks:** Tier 0 on the sentinels and the island (`tools/verify.sh --sets island`, 730 s,
+  `captures/verify/20261008-212847-ecd826f`): only the island's images change (ꟻLIP means
+  0.001–0.025, the mouth 0.016 and the valley 0.025), the sentinels at 0 px (the city's layered
+  ground has no contour and no wander), the A/B harness and mesh against fallback at 0 px,
+  validation clean. Its gate failed on a clippy lint in `paint_salt`'s last loop; after the fix
+  the gate passed alone (430 tests, clippy, fmt, credits).
 
 ## The night (D-046, #164, 2026-10-04)
 

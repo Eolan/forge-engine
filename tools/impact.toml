@@ -36,6 +36,9 @@
 # The labs' external models (#170, D-048): their manifest; the fetch script draws nothing.
 "assets/external.tsv" = ["lab"]
 "tools/fetch-assets.sh" = []
+# The tiers themselves (#199): what they run, not what the demos draw.
+"tools/verify.sh" = []
+"tools/impact.toml" = []
 "assets/blender/**" = []
 "crates/forge-physics/**" = ["lab"]
 "crates/forge-sim/**" = ["lab"]

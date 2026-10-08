@@ -103,6 +103,9 @@ runs it:
   accepted set keeps the base's image.
 - **Options:** `--tier gate|0|1|2` forces a tier. `--base COMMIT` checks the change since
   COMMIT, and `--committed` leaves the working tree out (to check a commit again).
+  `--sets SETS` runs Tier 0 on the sentinels and the sets named, whatever the paths map to: a
+  change to a shared file whose code only one demo runs (#199's island ground in
+  `meshlet.slang`), which the full batch would check for 20 minutes. Say why in the report.
   `--no-accept` keeps the run without accepting it, and `--dry-run` only prints the tier.
 - **One GPU, shared:** before any demo runs, the script takes the lock directory
   `%TEMP%/forge-gpu.lock` (`FORGE_GPU_LOCK`). It retries every 30 s while another job holds

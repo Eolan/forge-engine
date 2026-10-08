@@ -20,7 +20,7 @@ use forge_task::TaskPool;
 use glam::{DVec2, Quat, Vec2, Vec3};
 
 use crate::island_walk::Footfall;
-use crate::{DrawnGround, SAND_BELOW, island_layer};
+use crate::{DrawnGround, SAND_BELOW, SAND_WANDER, island_layer};
 
 /// Points along each side: 12 m at 2 cm.
 pub(crate) const POINTS: u32 = 601;
@@ -295,9 +295,13 @@ impl SandWindow {
         };
         let layer = l.get(texel(at.x), texel(at.y));
         // The contour's own layers are sand under it and grass over it, the sand's texels too;
-        // the lakes' sand is sand at any height.
+        // the lakes' sand is sand at any height, and the sand's texels far over the contour
+        // (the salt water's, #199), where the shader lets the texels decide: its reach twice,
+        // the wander and the band (`contour_reach` in meshlet.slang).
+        let far = SAND_BELOW + 2.0 * (SAND_WANDER + 0.08);
         height > -0.2
             && (layer == island_layer::LAKE_SAND
+                || (layer == island_layer::SAND && height > far)
                 || (matches!(
                     layer,
                     island_layer::SAND

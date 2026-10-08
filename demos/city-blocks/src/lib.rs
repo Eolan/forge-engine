@@ -276,6 +276,10 @@ struct Args {
     /// land (#128).
     #[arg(long)]
     no_beach_types: bool,
+    /// Let the grass grow down to the salt water: no sand on the banks beside the sea and the
+    /// rivers' tidal reaches over the beach's own top (#199).
+    #[arg(long)]
+    no_salt: bool,
     /// Leave the island's rock one dark grey: no granite in the hills, no limestone on the low
     /// ground and the sea cliffs, no karst (#129, D-042).
     #[arg(long)]
@@ -6284,6 +6288,30 @@ fn build_island(
         channels,
         lakes: lake_waters,
     } = island_water(&height);
+    // The salt water keeps the grass off the banks beside it (#199, the owner's note: "grass
+    // don't like the salted water much"): sand up to 5 m over the sea at the water, falling to
+    // the beach's top 40 m from it, on the sea's slopes and the rivers' reaches it fills.
+    if !args.no_salt {
+        let salt_start = Instant::now();
+        let salted = forge_procgen::paint_salt(
+            &mut layers,
+            &|x, y| channels.height_at(&height, x, y),
+            &[
+                island_layer::GRASS,
+                island_layer::DRY_GRASS,
+                island_layer::LUSH_GRASS,
+            ],
+            island_layer::SEABED,
+            island_layer::SAND,
+            f64::from(SAND_BELOW),
+            &forge_procgen::SaltRule::default(),
+        );
+        tracing::info!(
+            salted,
+            ms = salt_start.elapsed().as_millis(),
+            "the salt water's sand (#199, --no-salt)"
+        );
+    }
     // The beaches by the coast (#128): shingle on the headlands and under steep land, pale
     // sand in the bays and by the rivers' mouths.
     if !args.no_beach_types {
