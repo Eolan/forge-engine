@@ -348,6 +348,17 @@ frames, three runs each alternating with `--no-reflection-history`:
 - `shading/reflection history` (the clear of the image the rays write) 0.003 ms;
 - the frame 2.67–2.69 → 2.69 ms (one run 2.78).
 
+**The slimes' jelly in every scene (#190, 2026-10-08).** The Tier 2 check at 4589dbb timed the
+city 0.2–0.35 ms slower than the last milestone (4110732): the south view 2.63 → 2.84 ms, the
+orbit 3.03 → 3.31, the flight 2.48 → 2.83, and the island 0.04 slower. The zones put it all in
+the shading resolve (`shading/standard` 0.32 → 0.42 ms, `layered` 0.07 → 0.12, `reflections`
+0.19 → 0.23), and builds in side trees in the jelly's tinted shadow (4a4515e, #180). The scene's
+jelly flag read the whole material table, which the demo shares between its scenes and which
+holds the slimes' rows. So every ray in the city was non-opaque and every lit pixel traced one
+more for jelly. The jelly and cut-out flags now read only the rows the instances draw with: the
+south view 2.59 ms, the orbit 3.01, the flight 2.47, the island 2.03 (the milestone's 2.61,
+3.00, 2.45, 2.03), every image unchanged.
+
 **Where it stands (2026-09-25, after #77 and #92):** the flight at 1440p takes 3.38 ms of GPU
 (three runs of 3000 frames: 3.37–3.39), its p99 frame 3.8 ms against the 8.33 of the 120 fps
 target; 2.6 ms without the probes. It was 3.81 ms after #68.
@@ -1089,6 +1100,9 @@ lab's view, 0.066 ms from 1 m before it, the frame 1.51 ms. The four flavours (f
 upright, steered apart): **0.324 ms** (p99 0.52–0.55), `shading/jelly` 0.106 ms, the frame 1.59 ms.
 The jelly's tinted shadow (D-051, one more ray where the sun lights a surface in a scene with
 jelly): the frame 1.66 ms, `shading/standard` 0.194 → 0.234 ms, `shading/jelly` 0.110 ms.
+"A scene with jelly" was at first any scene of the city demo, whose shared material table holds
+the slimes' rows: the city paid that ray and non-opaque rays everywhere, 0.2–0.35 ms, until the
+flags read only the rows the instances draw with (#190, under the city below).
 The dogs held on their spots (#167's course; their walk set right, 0.7 m/s on their legs): **0.285–0.291
 ms** (p99 0.43–0.49), two runs to the same digest. `--lab course`, the two dogs on their steps
 and ramp, guided and their paws planted by IK: **0.095 ms a tick** (p99 0.16–0.17), the frame
