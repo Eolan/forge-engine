@@ -542,6 +542,9 @@ pub(crate) struct LabWorld {
     birds: Vec<flyer::Bird>,
     /// The yard's beds of sand and snow, which the dogs' footfalls press (#185).
     beds: Vec<yard::Bed>,
+    /// How many times the beds changed: the renderer sends their heights up when it moves (not
+    /// part of the state).
+    beds_changed: u64,
     /// The flood's water (the authoritative column model) and its dam.
     water: Option<forge_physics::shallow::Pool>,
     dam: Option<flood::Dam>,
@@ -966,6 +969,10 @@ impl LabWorld {
                 group(SKINNED, field.bodies, &mut bodies);
                 herd = Some(field.herd);
                 beds = yard::beds();
+                // The car beside the dogs, on its own beds (#186).
+                let car = drive::car(&mut world, DVec3::new(yard::LANE, 0.15, yard::CAR_START))?;
+                group(CAR, vec![car.0], &mut bodies);
+                driver.car = Some(car);
             }
             LabScene::Flyer => {
                 // Drawn skinned after no creature.
@@ -1210,6 +1217,7 @@ impl LabWorld {
                 slimes,
                 birds,
                 beds,
+                beds_changed: 0,
                 water_start: water.clone(),
                 water,
                 dam,
@@ -1388,6 +1396,7 @@ impl Simulation for LabWorld {
                     self.feet.clear();
                     if !self.beds.is_empty() {
                         self.beds = yard::beds();
+                        self.beds_changed += 1;
                     }
                     if let Some(boat) = &mut self.boat {
                         (boat.throttle, boat.rudder) = (0.0, 0.0);
@@ -1494,7 +1503,12 @@ impl Simulation for LabWorld {
         // The playground's platform and player, before the bodies move.
         self.player
             .tick(&mut self.world, self.platform, self.tick, TICK);
-        self.driver.tick(&mut self.world);
+        // The yard's car on its autopilot unless the player drives it (#186).
+        if self.beds.is_empty() {
+            self.driver.tick(&mut self.world);
+        } else {
+            yard::drive(&mut self.world, &self.driver);
+        }
         if let Some(convoy) = &self.convoy {
             convoy.tick(&mut self.world);
         }
@@ -1528,7 +1542,15 @@ impl Simulation for LabWorld {
             // Its dogs' paws that came down in the step.
             let came = herd.feel(&self.world, self.tick, &mut self.feet);
             // Those on the yard's beds pressed into them.
-            yard::press(&mut self.beds, self.feet.last_mut(came));
+            if yard::press(&mut self.beds, self.feet.last_mut(came)) > 0 {
+                self.beds_changed += 1;
+            }
+        }
+        // The yard's car's wheels on its beds press their patches in (#186).
+        if let (false, Some(car)) = (self.beds.is_empty(), self.driver.car)
+            && yard::roll(&mut self.beds, &self.world, car, TICK) > 0
+        {
+            self.beds_changed += 1;
         }
         // The lifted gate stops at its top.
         if let Some(dam) = &self.dam {
@@ -1604,6 +1626,7 @@ impl Simulation for LabWorld {
             bed.layer.set_heights(&heights);
             rest = after;
         }
+        self.beds_changed += 1;
         let (words, world) = rest.split_at(4 * WORDS);
         self.tick = u64::from_le_bytes(tick.try_into().expect("8 bytes"));
         self.next_throw = u32::from_le_bytes(next.try_into().expect("4 bytes"));
@@ -2550,9 +2573,15 @@ impl Lab {
     }
 
     /// The yard's beds' heights after the last tick into `out` (#185), every bed's in turn, as
-    /// their grounds' height fields take them; empty without beds.
-    pub(crate) fn fields(&self, out: &mut Vec<f32>) {
-        yard::heights(&self.seen().beds, out);
+    /// their grounds' height fields take them, when they changed since `since` (a count this
+    /// returns); `out` empty without beds or a change.
+    pub(crate) fn fields(&self, since: u64, out: &mut Vec<f32>) -> u64 {
+        let seen = self.seen();
+        out.clear();
+        if seen.beds_changed != since {
+            yard::heights(&seen.beds, out);
+        }
+        seen.beds_changed
     }
 
     /// Whether the scene has a car.

@@ -328,6 +328,19 @@ impl BodyId {
     }
 }
 
+/// Where a car's wheel touches the ground (#186, [`World::wheel_contacts`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WheelContact {
+    /// The contact point, metres.
+    pub position: DVec3,
+    /// The ground's normal there (unit).
+    pub normal: Vec3,
+    /// The way the wheel rolls along the ground (unit).
+    pub forward: Vec3,
+    /// The load the suspension carried onto it over the last step, N.
+    pub load: f32,
+}
+
 /// Where a body is: its origin, metres, and its rotation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
@@ -1052,6 +1065,37 @@ impl World {
         out.extend(positions.iter().zip(&rotations).map(|(&p, &r)| Transform {
             position: DVec3::from_array(p),
             rotation: Quat::from_array(r),
+        }));
+    }
+
+    /// A car's wheels' contacts after the last step of `dt` seconds (#186), in [`World::wheels`]'
+    /// order, into `out` (cleared first): `None` for a wheel touching nothing.
+    pub fn wheel_contacts(&self, vehicle: VehicleId, dt: f32, out: &mut Vec<Option<WheelContact>>) {
+        let mut touching = [0_i32; 4];
+        let mut positions = [[0.0_f64; 3]; 4];
+        let mut normals = [[0.0_f32; 3]; 4];
+        let mut forwards = [[0.0_f32; 3]; 4];
+        let mut impulses = [0.0_f32; 4];
+        // SAFETY: the world is live, the index one it gave; four of each written.
+        unsafe {
+            ffi::fj_vehicle_contacts(
+                self.raw.as_ptr(),
+                vehicle.0,
+                touching.as_mut_ptr(),
+                positions.as_mut_ptr().cast(),
+                normals.as_mut_ptr().cast(),
+                forwards.as_mut_ptr().cast(),
+                impulses.as_mut_ptr(),
+            );
+        }
+        out.clear();
+        out.extend((0..4).map(|w| {
+            (touching[w] != 0).then(|| WheelContact {
+                position: DVec3::from_array(positions[w]),
+                normal: Vec3::from_array(normals[w]),
+                forward: Vec3::from_array(forwards[w]),
+                load: impulses[w].max(0.0) / dt,
+            })
         }));
     }
 

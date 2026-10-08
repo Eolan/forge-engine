@@ -293,6 +293,15 @@ unsafe extern "C" {
         positions: *mut f64,
         rotations: *mut f32,
     );
+    pub fn fj_vehicle_contacts(
+        world: *const FjWorld,
+        vehicle: u32,
+        touching: *mut i32,
+        positions: *mut f64,
+        normals: *mut f32,
+        forwards: *mut f32,
+        impulses: *mut f32,
+    );
     pub fn fj_vehicle_engine(world: *const FjWorld, vehicle: u32, rpm: *mut f32, gear: *mut i32);
 
     pub fn fj_joint_fixed(

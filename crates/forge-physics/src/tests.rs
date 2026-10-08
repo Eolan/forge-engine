@@ -519,6 +519,53 @@ fn a_car_drives_off_turns_and_replays() {
     assert_eq!(t[0], turned);
 }
 
+#[test]
+fn a_car_s_wheels_carry_its_weight_where_they_touch_and_roll_ahead() {
+    let (mut world, _, car) = car();
+    let dt = 1.0 / 60.0;
+    for _ in 0..90 {
+        world.step(dt, 1).unwrap();
+    }
+    let mut contacts = Vec::new();
+    world.wheel_contacts(car, dt, &mut contacts);
+    let touching: Vec<WheelContact> = contacts.iter().flatten().copied().collect();
+    assert_eq!(touching.len(), 4, "{contacts:?}");
+    // At rest on the floor: its weight shared among the four, each on the floor under its wheel.
+    let load: f32 = touching.iter().map(|c| c.load).sum();
+    assert!(
+        (load - 1200.0 * 9.81).abs() < 0.05 * 1200.0 * 9.81,
+        "{load} N"
+    );
+    let mut wheels = Vec::new();
+    world.wheels(car, &mut wheels);
+    for (c, w) in touching.iter().zip(&wheels) {
+        assert!(c.position.y.abs() < 0.01, "{}", c.position);
+        assert!(
+            (c.position.x - w.position.x).abs() < 0.12,
+            "{} {}",
+            c.position,
+            w.position
+        );
+        assert!(c.normal.abs_diff_eq(Vec3::Y, 1e-3));
+        // Rolling along the car, which faces −z.
+        assert!(c.forward.z.abs() > 0.99, "{}", c.forward);
+    }
+    // Thrown up off the ground, none.
+    let (mut lifted, chassis, car) = self::car();
+    lifted.set_velocity(
+        chassis,
+        Velocity {
+            linear: Vec3::new(0.0, 20.0, 0.0),
+            angular: Vec3::ZERO,
+        },
+    );
+    for _ in 0..30 {
+        lifted.step(dt, 1).unwrap();
+    }
+    lifted.wheel_contacts(car, dt, &mut contacts);
+    assert!(contacts.iter().all(Option::is_none), "{contacts:?}");
+}
+
 /// Two boxes side by side over the ground, the left one held to the world and the right one
 /// to the left one, like a beam out of a wall.
 fn beam() -> (World, [BodyId; 2], [JointId; 2]) {

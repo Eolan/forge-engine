@@ -253,6 +253,11 @@ void fj_vehicle_drive(FjWorld *world, uint32_t vehicle, float forward, float rig
 // along their x.
 void fj_vehicle_wheels(const FjWorld *world, uint32_t vehicle, double *positions,
                        float *rotations);
+// The four wheels' contacts after the last step (#186): per wheel whether it touches something
+// (1 or 0), where (three doubles), the contact's normal and the way it rolls along it (three
+// floats each), and the suspension's impulse in the step (N·s).
+void fj_vehicle_contacts(const FjWorld *world, uint32_t vehicle, int32_t *touching,
+                         double *positions, float *normals, float *forwards, float *impulses);
 // The engine's revs (rpm) and the gear engaged (0 neutral, −1 reverse).
 void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32_t *gear);
 

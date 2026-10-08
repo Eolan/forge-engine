@@ -185,8 +185,10 @@ packed, and the steepest slope it stands at. Footfalls press their pads into it:
 their pressure sinks them, the rest heaped in a rim, then slumped. It is simulation state:
 saved, digested and replayed with the world. It is drawn by displacement through the skin pass:
 a ground mesh of one joint that a height field raises, its normals the field's slopes, its
-structure refitted for the rays. Not yet: the clip-map round the player (a lab bed is a fixed
-grid), the row's physics and audio reading it, and the weather refilling it.
+structure refitted for the rays. Mud and wheels ✅ (#186): a rolling wheel presses its patch
+swept back along its travel over the step, its rim beside it only, from the vehicle's wheel
+contacts and loads. Not yet: the clip-map round the player (a lab bed is a fixed grid), the
+row's physics and audio reading it, and the weather refilling it.
 
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
 

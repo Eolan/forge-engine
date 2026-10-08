@@ -40,6 +40,17 @@ impl Soft {
         repose: 3.0,
     };
 
+    /// Mud (#186): 5 cm of wet soil over firm ground, a dog's paw sinking 4 cm under its 100
+    /// kPa. The water in it does not compress, so nearly all a pad pushes out rises round the
+    /// print; sticky, it holds its walls at 56°.
+    pub const MUD: Self = Self {
+        depth: 0.05,
+        least: 0.004,
+        stiffness: 2.5e6,
+        packing: 0.05,
+        repose: 1.5,
+    };
+
     /// Sand a little damp, as on a beach over the swash: 3 cm loose over firm sand, a dog's paw
     /// sinking 2.5 cm under its 100 kPa, most of what it moves heaped round the print, the water
     /// between its grains holding its walls at 45° where dry sand would slump to 33°.
@@ -63,17 +74,22 @@ pub struct Pad {
     pub size: Vec2,
     /// Its pressure, Pa.
     pub pressure: f32,
+    /// How far behind it along its heading it was at the step's start, metres: a rolling wheel's
+    /// travel, all of which it presses; 0 for a footfall.
+    pub sweep: f32,
 }
 
 /// How much higher a pad's sole is at its edge than at its middle, as a share of its smaller
 /// half size: a paw's or a boot's rounded sole.
 const ROUND: f32 = 0.4;
 /// How far the rim reaches past the pad's edge, as a share of its half sizes.
-const RIM: f32 = 0.8;
+const RIM: f32 = 1.2;
 /// How far from its border the layer thins to nothing, metres (a bed's edge).
 const BEVEL: f32 = 0.06;
-/// Passes of the slump after each press, and the share of a slope's excess each moves.
-const SLUMP_PASSES: u32 = 12;
+/// Passes of the slump after each press at most (it stops once settled: no move over
+/// `SETTLED` metres), and the share of a slope's excess each moves.
+const SLUMP_PASSES: u32 = 64;
+const SETTLED: f32 = 1e-4;
 const SLUMP_RATE: f32 = 0.25;
 
 /// A layer of soft material over a hard base: its thickness at the points of a grid.
@@ -191,11 +207,12 @@ impl Layer {
         let area = f64::from(self.cell) * f64::from(self.cell);
         self.heights.iter().map(|&h| f64::from(h)).sum::<f64>() * area
     }
-
     /// Presses `pad` into the layer: under it the ground sinks to the pad's sole (as deep as
     /// its pressure sinks it below the surface under its middle, rounded up towards its edge,
     /// never closer to the base than the material's least); the rim takes what is not packed;
-    /// then the print and its rim slump. The volume it pushed out, m³ (none off the layer).
+    /// then the print and its rim slump. A pad that swept (a rolling wheel) presses the whole
+    /// stretch it rolled over, and heaps its rim beside it only. The volume it pushed out, m³
+    /// (none off the layer).
     pub fn press(&mut self, pad: Pad) -> f32 {
         if !self.covers(pad.at) {
             return 0.0;
@@ -206,22 +223,32 @@ impl Layer {
         let heading = pad.heading.normalize_or(Vec2::Y);
         let across = Vec2::new(-heading.y, heading.x);
         let (a, b) = (pad.size.x.max(1e-4), pad.size.y.max(1e-4));
+        let sweep = pad.sweep.max(0.0);
         let round = ROUND * a.min(b);
         // The points the rim reaches, and a cell more for the slump.
-        let reach = (1.0 + RIM) * a.max(b) + 2.0 * self.cell;
+        let reach = (1.0 + RIM) * a.max(b) + sweep + 2.0 * self.cell;
         let (low, high) = self.span(pad.at, reach);
-        // The pad's elliptic distance at point (x, z): 1 on its edge.
+        // The pad's elliptic distance at point (x, z), 1 on its edge, the stretch it swept over
+        // counted as its middle; and whether the point is beside that stretch, along it (all
+        // points for a pad that did not sweep).
         let r2 = |x: u32, z: u32| {
             let d = (self.origin + DVec2::new(f64::from(x), f64::from(z)) * f64::from(self.cell)
                 - pad.at)
                 .as_vec2();
-            let (u, v) = (d.dot(across) / a, d.dot(heading) / b);
-            u * u + v * v
+            let along = d.dot(heading);
+            let beside = sweep == 0.0 || (-sweep..=0.0).contains(&along);
+            let along = if along > 0.0 {
+                along
+            } else {
+                (along + sweep).min(0.0)
+            };
+            let (u, v) = (d.dot(across) / a, along / b);
+            (u * u + v * v, beside)
         };
         let mut pushed = 0.0f32;
         for z in low[1]..=high[1] {
             for x in low[0]..=high[0] {
-                let r2 = r2(x, z);
+                let (r2, _) = r2(x, z);
                 if r2 < 1.0 {
                     let sole = level + round * r2;
                     let k = self.index(x, z);
@@ -234,7 +261,10 @@ impl Layer {
         }
         // The rim: what is not packed, heaped in a ring past the pad's edge, highest halfway
         // out.
-        let bump = |r2: f32| {
+        let bump = |(r2, beside): (f32, bool)| {
+            if !beside {
+                return 0.0;
+            }
             let t = (r2.sqrt() - 1.0) / RIM;
             if (0.0..1.0).contains(&t) {
                 let w = t * (1.0 - t);
@@ -288,10 +318,11 @@ impl Layer {
 
     /// Slumps the points from `low` to `high`: each pass, between each point and its next
     /// along x and along z, a share of the drop past the material's repose moves down, every
-    /// move worked out from the heights before the pass.
+    /// move worked out from the heights before the pass; until no move is over `SETTLED`.
     fn slump(&mut self, low: [u32; 2], high: [u32; 2]) {
         let limit = self.soft.repose * self.cell;
         for _ in 0..SLUMP_PASSES {
+            let mut largest = 0.0f32;
             for z in low[1]..=high[1] {
                 let row = self.index(low[0], z);
                 let end = self.index(high[0], z);
@@ -313,9 +344,13 @@ impl Layer {
                             let flow = SLUMP_RATE * excess * drop.signum();
                             self.heights[k] -= flow;
                             self.heights[next] += flow;
+                            largest = largest.max(flow.abs());
                         }
                     }
                 }
+            }
+            if largest <= SETTLED {
+                break;
             }
         }
     }
@@ -337,6 +372,7 @@ mod tests {
             heading: Vec2::Y,
             size: Vec2::new(0.015, 0.02),
             pressure: 1.0e5,
+            sweep: 0.0,
         }
     }
 
@@ -370,7 +406,7 @@ mod tests {
     #[test]
     fn sand_heaps_what_it_does_not_pack_and_snow_packs_most() {
         let mut rims = Vec::new();
-        for soft in [Soft::SAND, Soft::SNOW] {
+        for soft in [Soft::SAND, Soft::SNOW, Soft::MUD] {
             let mut layer = bed(soft);
             let before = layer.volume();
             let pushed = layer.press(paw(DVec2::ZERO));
@@ -396,6 +432,8 @@ mod tests {
         // against 1.5).
         assert!(rims[0] > 0.002, "{rims:?}");
         assert!(rims[1] / 0.056 < 0.5 * rims[0] / 0.015, "{rims:?}");
+        // Mud, which packs nearly nothing, heaps the highest rim.
+        assert!(rims[2] > rims[0], "{rims:?}");
     }
 
     #[test]
@@ -424,6 +462,35 @@ mod tests {
         let (sand_slope, snow_slope) = (steepest(&sand), steepest(&snow));
         assert!(sand_slope < 1.2 * Soft::SAND.repose, "{sand_slope}");
         assert!(snow_slope > 1.5 * sand_slope, "{snow_slope} {sand_slope}");
+    }
+
+    #[test]
+    fn a_rolling_wheel_ploughs_one_unbroken_rut_with_berms_beside_it() {
+        // A tyre's patch, 20 by 14 cm at 150 kPa, rolling 5 cm a step along +z through mud.
+        let mut mud = bed(Soft::MUD);
+        for k in 0..12 {
+            mud.press(Pad {
+                at: DVec2::new(0.0, -0.25 + 0.05 * f64::from(k)),
+                heading: Vec2::Y,
+                size: Vec2::new(0.1, 0.07),
+                pressure: 1.5e5,
+                sweep: 0.05,
+            });
+        }
+        // Along its middle the rut keeps one depth: no ridge left between two steps.
+        let along: Vec<f32> = (0..30)
+            .map(|k| mud.height_at(DVec2::new(0.0, -0.2 + 0.01 * f64::from(k))))
+            .collect();
+        let (low, high) = along
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), &x| (l.min(x), h.max(x)));
+        assert!(high < Soft::MUD.depth - 0.02, "{along:?}");
+        assert!(high - low < 0.004, "{along:?}");
+        // Its berms stand beside it, over the untouched mud.
+        let berm = (10..20)
+            .map(|k| mud.height_at(DVec2::new(0.01 * f64::from(k), 0.0)))
+            .fold(f32::MIN, f32::max);
+        assert!(berm > Soft::MUD.depth + 0.005, "{berm}");
     }
 
     #[test]

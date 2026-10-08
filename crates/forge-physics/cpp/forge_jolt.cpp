@@ -730,6 +730,31 @@ void fj_vehicle_wheels(const FjWorld *world, uint32_t vehicle, double *positions
     }
 }
 
+void fj_vehicle_contacts(const FjWorld *world, uint32_t vehicle, int32_t *touching,
+                         double *positions, float *normals, float *forwards, float *impulses) {
+    const JPH::VehicleConstraint &v = *world->vehicles[vehicle];
+    for (uint32_t w = 0; w < 4; ++w) {
+        const JPH::Wheel *wheel = v.GetWheel(w);
+        touching[w] = wheel->HasContact() ? 1 : 0;
+        impulses[w] = wheel->GetSuspensionLambda();
+        JPH::RVec3 p = JPH::RVec3::sZero();
+        JPH::Vec3 n = JPH::Vec3::sAxisY();
+        JPH::Vec3 f = JPH::Vec3::sAxisZ();
+        if (wheel->HasContact()) {
+            p = wheel->GetContactPosition();
+            n = wheel->GetContactNormal();
+            f = wheel->GetContactLongitudinal();
+        }
+        positions[3 * w] = p.GetX();
+        positions[3 * w + 1] = p.GetY();
+        positions[3 * w + 2] = p.GetZ();
+        for (int k = 0; k < 3; ++k) {
+            normals[3 * w + k] = n[k];
+            forwards[3 * w + k] = f[k];
+        }
+    }
+}
+
 void fj_vehicle_engine(const FjWorld *world, uint32_t vehicle, float *rpm, int32_t *gear) {
     const auto *c = static_cast<const JPH::WheeledVehicleController *>(
         world->vehicles[vehicle]->GetController());

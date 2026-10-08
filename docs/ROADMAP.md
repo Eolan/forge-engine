@@ -473,9 +473,11 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 9. **Materials:** footprints in sand and snow ✅ (#185, 2026-10-08, `--lab yard`: D-007's
    deformable layer, `forge_physics::deform`, a grid of the soft material's thickness that the
    dogs' footfalls press, packed or heaped in a rim and slumped to the material's slope; drawn by
-   the skin pass raising a ground mesh by it, so the prints take shadows). Left: the layer
-   clip-mapped round the player on the island, mud, wheel tracks, the weather refilling it,
-   friction, slipping and sound from the material row, the `materials-yard` demo.
+   the skin pass raising a ground mesh by it, so the prints take shadows); mud and wheel tracks ✅
+   (#186: mud that heaps nearly all it moves; a car's wheels pressing their patches swept along
+   their travel each tick, unbroken ruts with berms beside them). Left: the layer clip-mapped
+   round the player on the island, tread patterns, the weather refilling it, friction, sinking,
+   slipping and sound from the material row, the `materials-yard` demo.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a
@@ -493,7 +495,8 @@ The items below are the phase's original outline; the plan above orders them.
    cluster collision from the same data, character controller, vehicles, buoyancy.
 3. Materials in practice: friction/restitution/sound/tags from the material row; deformable
    layer for snow, sand, mud (footprints, wheel tracks) written by contacts and rendered by
-   displacement (first step ✅ #185: sand and snow beds the dogs' footfalls press, `--lab yard`);
+   displacement (first steps ✅ #185, #186: sand, mud and snow beds the dogs' footfalls and a
+   car's wheels press, `--lab yard`);
    weather state mutating wetness/frost/snow.
 4. Fluids: shallow-water heightfield near the player coupled to rigid bodies; particles
    for splashes; the mid/far tiers from Phase 2.

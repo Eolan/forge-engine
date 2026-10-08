@@ -29,7 +29,7 @@ ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
 | `creatures` | powered ragdolls: mannequins on stands and dogs modelled in Blender, their motors driving moving poses | ✅ #143 |
 | `course` | the dogs on uneven ground: three steps of 5 cm and a 10° ramp, walked up and back, paws planted by IK | ✅ #167 |
 | `flyer` | gulls from Blender flying a circuit on their wings' lift: each wing's arm and hand and the tail as flying surfaces posed by the clip, beating to climb, gliding above | ✅ #184 |
-| `yard` | the dogs over a bed of damp sand and a bed of fresh snow, pressing their prints in: a deformable layer each, drawn by displacement through the skin pass | ✅ #185 |
+| `yard` | the dogs over beds of damp sand, mud and fresh snow pressing their prints in, a car ploughing its ruts through its own: a deformable layer each, drawn by displacement through the skin pass | ✅ #185, #186 |
 | `flood` | a dam break: the authoritative shallow-water model, drawn through the GPU's finer layer that shadows it, carrying what floats, which pushes it aside | ✅ #144, #151, #162 |
 | `tank`, `tank-bench`, `tank-hole`, `tank-blocks` | a dam break in a glass tank: the GPU's particle liquid (D-044), drawn through the glass; the same tank as a bench to tune by; a jet through a round hole in the gate; the water round concrete blocks | ✅ #156 |
 | `room` | a plain room to measure sharpness by: white walls, black squares turned 5°, a floor of squares, the sun alone; `--pan` and `--dlaa` to compare (the owner's report of a blurry image) | ✅ #159 |
@@ -850,60 +850,79 @@ about its weight; over 60 s the gulls keep their height and circuit, and replay 
 Left: the gulls are as alike as their flights; a turn of the head or the tail that steers,
 landing and taking off, and the wind (`Air::wind`).
 
-## `yard`: footprints in sand and snow (issue #185)
+## `yard`: footprints and wheel tracks in sand, mud and snow (issues #185, #186)
 
 Phase 3's materials step starts here: D-007's deformable layer, which what touches the ground
 writes into and the renderer draws. `physics-lab --lab yard`: the course's two dogs walk their
-lanes on the plain floor, over a bed of damp sand and then a bed of fresh snow (2.4 m by 1.8 m
-each), turn about past the snow and come back, pressing their paws in, under a low sun (26°)
-across the beds.
+lanes on the plain floor, over beds of damp sand, mud and fresh snow (2.4 m by 1.25 m each),
+turn about past the snow and come back, pressing their paws in. Beside them the drive lab's car
+crosses its own beds of the three (2.4 m by 3 m each) from the snow on an autopilot, 3 m/s down
+its lane, and stops past the sand. The arrow keys take the car over as in `--lab drive` (the
+autopilot drives again when they are let go), C follows it. A low sun (26°) lies across the
+beds.
 
 - **The layer** (`forge_physics::deform`): a bed is a grid of its material's thickness over the
-  floor, a point every centimetre (43 600 a bed), thinning to nothing over its last 6 cm. A
-  material's rules: its depth, the least a press leaves, how firm it is (the pressure that would
-  sink a pad a metre), the share of what a pad pushes out that is packed under it, and the
-  steepest slope it stands at.
+  floor, a point every centimetre under the dogs (30 000 a bed) and every 2 cm under the car
+  (18 000), thinning to nothing over its last 6 cm. A material's rules: its depth, the least a
+  press leaves, how firm it is (the pressure that would sink a pad a metre), the share of what a
+  pad pushes out that is packed under it, and the steepest slope it stands at.
 
   | | depth | sinks under 100 kPa | packed | stands at |
   |---|---|---|---|---|
   | damp sand | 3 cm | 2.5 cm (4 MPa/m) | 25 % | 45° |
+  | mud | 5 cm | 4 cm (2.5 MPa/m) | 5 %: its water does not compress | 56° |
   | fresh snow | 6 cm | 50 cm (0.2 MPa/m): through to the floor, 4 mm left | 85 % | 72° |
 
-- **A press:** each footfall (#167's foot-down events: where, the pad's size and heading, the
-  pressure) that lands on a bed presses its pad, an ellipse with a rounded sole, as deep as its
-  pressure sinks it below the surface under its middle. What is not packed is heaped in a ring
-  past the pad's edge, highest halfway out. Then the print and its rim slump: twelve passes
-  moving a quarter of each drop past the material's slope down to the lower neighbour, worked out
-  from a copy so the order does not matter. No transcendental function, so the same footfalls
-  leave the same bits everywhere. The disc prints of #167 are drawn only where a footfall is not
-  on a bed.
-- **The physics does not see the beds:** the dogs stand on the floor under them, so their paws
-  go through the snow to it, and the sand's 3 cm is about what they sink. Sinking, slipping and
-  the sound of each are for later.
-- **Drawn by displacement:** a bed is a flat grid mesh (86 000 triangles) cooked as a skinned mesh
-  of one joint whose clusters keep their own bounds, grown by 12 cm
-  (`SkinnedMesh::cook_displaced`). The skin pass gained height fields
-  (`MeshletSceneBuilder::add_displaced_mesh`, `MeshletScene::set_fields`): it raises each vertex
-  by the layer under it and turns its normal to the layer's slopes, this frame's heights and the
-  frame before's (for the motion vectors), into the pool and the ray tracing's copy, whose
-  structure is refitted. So the prints take the sun's shadows. The heights go up every frame as
-  the joints do, 349 KB. The resolve turns a displaced mesh's normal map onto the raised
-  surface's normal: built about the bind pose's normal, flat up, the relief was lost under it.
+- **A press:** a pad, an ellipse with a rounded sole, sinks as deep as its pressure sinks it
+  below the surface under its middle. What is not packed is heaped in a ring past the pad's
+  edge, highest halfway out. Then the print and its rim slump: passes moving a quarter of each
+  drop past the material's slope down to the lower neighbour, worked out from a copy so the
+  order does not matter, until nothing moves more than 0.1 mm (64 passes at most). No
+  transcendental function, so the same presses leave the same bits everywhere.
+- **Footfalls:** each of #167's foot-down events (where, the pad's size and heading, the
+  pressure) that lands on a bed presses its pad. The disc prints of #167 are drawn only where a
+  footfall is not on a bed.
+- **Wheels** (#186): `World::wheel_contacts` gives each wheel touching the ground its contact,
+  its normal, the way it rolls and its load (the suspension's impulse over the step). Each tick
+  each wheel on a bed presses its tyre's patch (20 cm by 14 cm) at its load's pressure (some 135
+  kPa), swept back along its own travel over the step, so the rut runs on unbroken and its
+  berms rise beside it only. A press per tick at the contact alone left a chain of separate
+  stamps with lumps heaped between them; and the contact Jolt finds may lie anywhere across a
+  flat tyre's width, 18 cm from one tick to the next, so the patch is pressed under the wheel's
+  middle.
+- **The physics does not see the beds:** the dogs and the car stand on the floor under them, so
+  paws and tyres go through the snow to it. Sinking, slipping and the sound of each are for
+  later.
+- **Drawn by displacement:** a bed is a flat grid mesh cooked as a skinned mesh of one joint
+  whose clusters keep their own bounds, grown by 25 cm (`SkinnedMesh::cook_displaced`). The skin
+  pass gained height fields (`MeshletSceneBuilder::add_displaced_mesh`,
+  `MeshletScene::set_fields`): it raises each vertex by the layer under it and turns its normal
+  to the layer's slopes, this frame's heights and the frame before's (for the motion vectors),
+  into the pool and the ray tracing's copy, whose structure is refitted. So the prints take the
+  sun's shadows. The heights go up when a bed changed, and once more after (the frame before's
+  then match): 584 KB, 160 KB a frame on average over the run. The resolve turns a displaced
+  mesh's normal map onto the raised surface's normal: built about the bind pose's normal, flat
+  up, the relief was lost under it.
 - **Saved, digested and reset** with the lab: every height to the bit.
 
-Over 26 s both dogs press 24 footfalls into the sand and 26 into the snow. The sand's prints are
-1.2 cm deep, the walls pouring back in to 45°, with rims up to 4 mm; in the snow the paws go
-through to the 4 mm left over the floor, with rims up to 6 mm, and 3.8 litres are packed.
-**Costs:** a tick 0.113 ms (p99 0.19) against the course's 0.100; `skin/vertices` 0.011 ms for
-130 000 vertices, the beds' 87 000 among them; `skin/blas` 0.107 ms for four structures; the
-frame 1.72 ms at 1600 × 900. **Tests:** a pad sinks by its pressure and never through the base,
-sand heaps what it does not pack and snow packs most, sand slumps to its slope and snow holds
-steeper walls, the same pads leave the same bits; a displaced ground's clusters keep their own
-spheres; the yard's dogs print both beds and replay to the bit; a saved yard restores its
-prints, a reset clears them, and a recording replays to the same digests.
+Over 26 s the dogs press 16 footfalls into their sand, 16 into their mud and 18 into their
+snow. The prints are 1.2 cm deep in the sand, 1.9 cm in the mud (as deep as its 56° walls let a
+3 cm pad's print be), and through to the 4 mm left over the floor in the snow. The car's ruts
+reach the floor in all three; their berms stand 3.9 cm over the sand, 2.2 cm over the snow and
+9.4 cm over the mud. **Costs:** a tick 0.134 ms (p99 0.26) against the course's 0.100;
+`skin/vertices` 0.021 ms for 206 000 vertices, `skin/blas` 0.130 ms for the dogs', the car's
+and the beds' structures; the frame 1.81 ms at 1600 × 900. **Tests:** a pad sinks by its
+pressure and never through the base; sand heaps what it does not pack, snow packs most, and mud
+heaps the highest rim; sand slumps to its slope and snow holds steeper walls; a rolling wheel
+ploughs one unbroken rut with berms beside it; the same pads leave the same bits; a car's
+wheels carry its weight where they touch and roll ahead; a displaced ground's clusters keep
+their own spheres; the yard's dogs print their three beds and the car ruts its three, replayed
+to the bit; a saved yard restores its prints, a reset clears them, and a recording replays to
+the same digests.
 
-Left: the layer clip-mapped round the player on the island (D-007), mud, wheel tracks, the
-weather refilling it, the physics and the sound reading it, and a print shaped as the paw is.
+Left: the layer clip-mapped round the player on the island (D-007), tread patterns, the
+weather refilling it, water pooling in the prints, the physics and the sound reading it, a
+print shaped as the paw is, and a bound on what a car driven back and forth heaps in the mud.
 
 ## `flood`: a dam break (issue #144)
 

@@ -1100,7 +1100,11 @@ tick** (p99 0.11), the frame 1.44 ms.
 of 43 600 heights (sand and snow): **0.113 ms a tick** (p99 0.19), the frame 1.72 ms. On the GPU
 the beds are two displaced meshes of 86 000 triangles each: `skin/vertices` 0.011 ms for 130 000
 vertices (the dogs' and the beds'), `skin/blas` 0.107 ms for the four structures. Their heights
-go up every frame: 349 KB.
+go up every frame: 349 KB. With mud and the car (#186: six beds, 146 000 heights, the car
+crossing its three on its autopilot, each wheel on a bed pressing every tick): **0.134 ms a
+tick** (p99 0.26), the frame 1.81 ms; `skin/vertices` 0.021 ms for 206 000 vertices,
+`skin/blas` 0.130 ms. The heights now go up only when a bed changed (and once more after):
+584 KB at a time, 160 KB a frame on average over 1 200 frames.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

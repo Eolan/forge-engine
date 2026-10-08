@@ -717,6 +717,10 @@ struct Gallery {
     walking: [f32; 2],
     /// The car's handbrake last sent (#140).
     handbrake: bool,
+    /// The yard's beds' change count whose heights went up last, and whether they go up once
+    /// more, so the frame before's heights match this frame's again (#186).
+    beds_seen: u64,
+    beds_again: bool,
     /// The aeroplane's controls last sent (#141).
     flying: [f32; 4],
     /// The tug-of-war's pull last sent (#149).
@@ -1421,6 +1425,8 @@ impl Gallery {
             steering: (0.0, 0.0),
             walking: [0.0; 2],
             handbrake: false,
+            beds_seen: u64::MAX,
+            beds_again: false,
             flying: [0.0; 4],
             pulling: 0.5,
             wakes,
@@ -2133,12 +2139,19 @@ impl Demo for Gallery {
             self.scene.set_movers(&lab.movers(&mut skins));
             // The skinned creatures' joints (#165).
             self.scene.set_skins(&skins);
-            // The yard's beds' heights (#185).
+            // The yard's beds' heights (#185) when they changed, and once more after (#186).
             let mut heights = Vec::new();
-            lab.fields(&mut heights);
+            let changed = lab.fields(self.beds_seen, &mut heights);
+            if heights.is_empty() && self.beds_again {
+                lab.fields(changed.wrapping_add(1), &mut heights);
+                self.beds_again = false;
+            } else if !heights.is_empty() {
+                self.beds_again = true;
+            }
             if !heights.is_empty() {
                 self.scene.set_fields(&heights);
             }
+            self.beds_seen = changed;
         }
         // The glass tank's liquid (#156): the statistics a frame in this slot asked for, then the
         // substeps the lab's ticks owe it, on the async compute queue.
@@ -3509,6 +3522,21 @@ impl CityMaterials {
                 )
             },
         );
+        // Mud (#186): dark wet soil with a sheen, its grain faint.
+        let mud = add(
+            "mud (wet)",
+            RenderLayer {
+                normal_strength: 0.2,
+                ..textured(
+                    concrete,
+                    [0.34, 0.25, 0.17],
+                    [0.38, 0.28, 0.19],
+                    1.5,
+                    60.0,
+                    0.3,
+                )
+            },
+        );
         let mut by_prop = HashMap::from([
             ("lab-floor", concrete_grey),
             ("lab-block", sandstone),
@@ -3574,6 +3602,7 @@ impl CityMaterials {
             ("lab-print", print),
             ("lab-snow", snow),
             ("lab-sand", damp_sand),
+            ("lab-mud", mud),
             ("terrain", grass),
             ("house-narrow", brick_red),
             ("house-wide", plaster_ochre),
@@ -5703,11 +5732,11 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
             ..FlyCamera::default()
         }
     } else if args.lab == Some(lab::LabScene::Yard) {
-        // Beside the beds and low over them, looking across both lanes: the prints' relief.
+        // Over the end of the car's snow, looking down across its ruts to the dogs' beds (#186).
         FlyCamera {
-            position: Vec3::new(2.4, 1.2, 0.8),
-            yaw: std::f32::consts::FRAC_PI_2,
-            pitch: -0.42,
+            position: Vec3::new(5.6, 2.2, 2.6),
+            yaw: 60f32.to_radians(),
+            pitch: -40f32.to_radians(),
             speed: 6.0,
             ..FlyCamera::default()
         }
