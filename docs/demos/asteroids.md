@@ -587,6 +587,42 @@ the bottom right, and a bar of the shaders compiling at the bottom centre. Both 
 The shaders the finishing step still compiles (those no earlier run listed) do not count: that
 step runs on the main thread, after the loading screen.
 
+**The island's frozen seconds (#201, 2026-10-09).** The owner saw the loading screen freeze before
+the island showed. The island's preparation only loaded its cooked tiles (65 ms with the cache
+warm). The finishing step then made everything else on the main thread, which draws no
+loading frame:
+
+| Part (cache warm) | Time |
+|---|---|
+| The heights, the valleys carved | 0.8 s |
+| The water: rivers, ribbons, channels, lakes | 3.0 s |
+| The layer map and its painters, the rock sites | 2.3 s |
+| The drawn ground, its amplified detail 3.5 s of it | 5.8 s |
+| The textures | 0.5 s |
+| The device work: pages, BLAS, probes, the sea | 1.3 s |
+
+Now the preparation does the island's CPU work (`warm_island`), and the finishing step finds
+it made:
+- **The pieces:**
+  - the heights and the water, already made once a process;
+  - the layers and rock sites (`island_layers`, moved out of `build_island`);
+  - the drawn ground;
+  - the rivers' and banks' stones;
+  - the sand window's cooked mesh (#197).
+- **In parallel:** the amplified detail runs beside the water, since it needs only the heights
+  (`amplify_ahead`, handed over once, not kept). The drawn ground, the stones and the layers
+  then run side by side.
+
+| Island start (`island --frames 5`) | Before | After |
+|---|---|---|
+| Cache warm: prepared / frozen / total | 0.07 / 14.85 / 14.9 s | 7.7 / 2.4 / 10.1 s |
+| After a shader change | 11.2 / 14.0 / 25.2 s | 11.1 / 2.3 / 13.4 s |
+
+The frozen 2.4 s left are the finishing step's device work. The renderer and its passes take
+0.3 s, the textures 0.7 s (generated and uploaded), the scene's pages 0.7 s, the rocks' placement,
+the start view and the BLAS 0.5 s, the probes and the sea 0.25 s. Drawing loading frames
+through them needs the finishing step split into stages.
+
 **Checks:**
 - Every capture is identical to the previous build: both demos, both paths, the culling
   harness.

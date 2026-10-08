@@ -8,11 +8,11 @@
 //! it stands, the terrain's fragments under it not drawn. With each height go the ground's
 //! smooth slopes less the ones its facets give, so that untouched it shades as the terrain does.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use forge_geom::TriMesh;
 use forge_geom::city::{CellWindow, heightfield_window_mesh};
+use forge_geom::{SkinnedMesh, TriMesh};
 use forge_physics::deform::{Layer, Pad, Soft, shifted};
 use forge_procgen::Field2;
 use forge_render::{HeightField, MoverTransform};
@@ -102,6 +102,13 @@ impl SandWindow {
             field_ms: Vec::new(),
             pressed: 0,
         }
+    }
+
+    /// [`Self::mesh`] cooked for the skin pass, which the height field raises: made once a
+    /// process, on the loading thread (#201).
+    pub(crate) fn cooked_mesh() -> &'static SkinnedMesh {
+        static COOKED: OnceLock<SkinnedMesh> = OnceLock::new();
+        COOKED.get_or_init(|| SkinnedMesh::cook_displaced(&Self::mesh(), REACH))
     }
 
     /// The mesh the window is drawn with: a vertex per point, flat, from its first point.

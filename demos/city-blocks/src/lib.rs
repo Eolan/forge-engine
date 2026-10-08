@@ -28,7 +28,6 @@ use forge_core::material::{
     LayerContour, Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
 };
 use forge_geom::MeshletMesh;
-use forge_geom::SkinnedMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{
     CellWindow, Heightfield, HeightfieldDetail, Lathe, PropKind, PropSpec, Terrain, city_props,
@@ -4546,13 +4545,45 @@ const RIVER_STONES: u64 = 0x5705_e105;
 const SCREE_RUBBLE: u64 = 0x5c2e_e2ab;
 
 /// The stones in the island's rivers (#105): boulders on the carved beds, which the water flows
-/// around.
+/// around. Made once a process for the island's heights (the loading thread makes them, #201).
 fn island_stones(
     height: &Field2<f32>,
     ribbons: &[forge_procgen::Ribbon],
     channels: &forge_procgen::Channels,
 ) -> Vec<forge_procgen::Stone> {
-    forge_procgen::stones(ribbons, channels, height, RIVER_STONES)
+    static MADE: std::sync::Mutex<Option<(u64, Vec<forge_procgen::Stone>)>> =
+        std::sync::Mutex::new(None);
+    let key = height.digest() ^ u64::from(height.size);
+    let mut made = MADE.lock().expect("the island's river stones");
+    if let Some((made_for, stones)) = made.as_ref()
+        && *made_for == key
+    {
+        return stones.clone();
+    }
+    let stones = forge_procgen::stones(ribbons, channels, height, RIVER_STONES);
+    *made = Some((key, stones.clone()));
+    stones
+}
+
+/// The stones beside the steeper rivers' water, on their gravel (#118), made once a process for
+/// the island's heights (#201).
+fn island_bank_stones(
+    height: &Field2<f32>,
+    ribbons: &[forge_procgen::Ribbon],
+    channels: &forge_procgen::Channels,
+) -> Vec<forge_procgen::Stone> {
+    static MADE: std::sync::Mutex<Option<(u64, Vec<forge_procgen::Stone>)>> =
+        std::sync::Mutex::new(None);
+    let key = height.digest() ^ u64::from(height.size);
+    let mut made = MADE.lock().expect("the island's bank stones");
+    if let Some((made_for, stones)) = made.as_ref()
+        && *made_for == key
+    {
+        return stones.clone();
+    }
+    let stones = forge_procgen::bank_stones(ribbons, channels, height, RIVER_STONES ^ 0xba);
+    *made = Some((key, stones.clone()));
+    stones
 }
 
 /// The island's rivers as the water draws them ([`island_ribbons`]), in the sea's frame.
@@ -5549,7 +5580,46 @@ impl DrawnGround {
 
 /// The island's field amplified `factor` times finer (stage 5): `forge_procgen::amplify` at
 /// each halving of the spacing, over the drainage traced at that spacing.
+/// The field [`amplify_ahead`] made, for [`island_amplified`] to take (#201): kept until then
+/// only, it is 268 MB at 2 m.
+static AMPLIFIED: std::sync::Mutex<Option<(u64, Field2<f32>)>> = std::sync::Mutex::new(None);
+
+fn amplified_key(height: &Field2<f32>, factor: u32, seed: u64) -> u64 {
+    height.digest()
+        ^ u64::from(height.size)
+        ^ u64::from(factor).rotate_left(40)
+        ^ seed.rotate_left(20)
+}
+
+/// Takes the field [`amplify_ahead`] made for these arguments, or makes it.
 fn island_amplified(height: &Field2<f32>, factor: u32, seed: u64, pool: &TaskPool) -> Field2<f32> {
+    let key = amplified_key(height, factor, seed);
+    let mut ready = AMPLIFIED.lock().expect("the amplified field");
+    if ready.as_ref().is_some_and(|(made_for, _)| *made_for == key) {
+        return ready.take().expect("the field made ahead").1;
+    }
+    drop(ready);
+    make_island_amplified(height, factor, seed, pool)
+}
+
+/// Makes [`island_amplified`]'s field ahead, on the loading thread beside the water, which it
+/// does not need (#201). It holds the lock while it works, so a caller waits for it rather than
+/// making the field twice.
+fn amplify_ahead(height: &Field2<f32>, factor: u32, seed: u64, pool: &TaskPool) {
+    let key = amplified_key(height, factor, seed);
+    let mut ready = AMPLIFIED.lock().expect("the amplified field");
+    if !ready.as_ref().is_some_and(|(made_for, _)| *made_for == key) {
+        *ready = Some((key, make_island_amplified(height, factor, seed, pool)));
+    }
+}
+
+/// [`island_amplified`], made.
+fn make_island_amplified(
+    height: &Field2<f32>,
+    factor: u32,
+    seed: u64,
+    pool: &TaskPool,
+) -> Field2<f32> {
     let mut field = height.clone();
     for level in 0..factor.trailing_zeros() {
         let flow = forge_procgen::drain(&field, 0.0, pool);
@@ -5628,9 +5698,11 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
             let distance = forge_procgen::site_distance(size, spacing, |i| near[i], &pool);
             let (fine_size, fine_spacing) = (ground.size as usize, ground.spacing);
             let strength = args.island_detail;
-            // What the detail adds where it is whole: its root mean square and its largest.
-            let (mut sum, mut count, mut largest) = (0.0f64, 0u64, 0.0f32);
-            for j in 0..fine_size {
+            // What the detail adds where it is whole: its root mean square and its largest, a
+            // row a task (one thread took a second over the 67 M samples, #201).
+            let mut rows = vec![(0.0f64, 0u64, 0.0f32); fine_size];
+            pool.par_map_into(&mut rows, 64, |j| {
+                let (mut sum, mut count, mut largest) = (0.0f64, 0u64, 0.0f32);
                 for i in 0..fine_size {
                     let d = distance.sample(i as f64 * fine_spacing, j as f64 * fine_spacing);
                     if d >= DETAIL_FADE.1 {
@@ -5641,7 +5713,11 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
                         largest = largest.max(r.abs());
                     }
                 }
-            }
+                (sum, count, largest)
+            });
+            let (sum, count, largest) = rows.iter().fold((0.0f64, 0u64, 0.0f32), |a, r| {
+                (a.0 + r.0, a.1 + r.1, a.2.max(r.2))
+            });
             tracing::info!(
                 rms_m = %format_args!("{:.3}", (sum / count.max(1) as f64).sqrt()),
                 largest_m = %format_args!("{largest:.2}"),
@@ -6236,402 +6312,19 @@ fn build_island(
     let (meshes, cook_ms) = (cooked.meshes, cooked.ms);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
-    // The layers from the field: a texel every 4 m over the 16 km (stage 6's first rule).
+    // The layers from the field: a texel every 4 m over the 16 km (stage 6's first rule), and
+    // the rock sites, painted on the CPU: on the loading thread first (#201).
     let height = island_heights(args);
     let extent = height.extent() as f32;
-    let texels = 4096;
-    let layers_start = Instant::now();
-    let mut layers = forge_procgen::slope_layers(
-        &height,
-        &forge_procgen::LayerRule {
-            grass: island_layer::GRASS,
-            rock: island_layer::ROCK,
-            rock_slope: 0.45,
-            // Green to the peaks, as on a tropical island: rock where it is steep.
-            rock_above: f32::INFINITY,
-            // The slope over 8 m whatever the spacing, so 4 m draws the rock 8 m draws.
-            slope_over: 8.0,
-            shore: Some(forge_procgen::Shore {
-                sea: island_layer::SEABED,
-                sand: island_layer::SAND,
-                sand_below: SAND_BELOW,
-            }),
-        },
-        texels,
-    );
-    tracing::info!(
-        texels,
-        ms = layers_start.elapsed().as_millis(),
-        "island layer map"
-    );
-    // The moisture, the rivers and the lakes from the drawn field's drainage.
-    let rivers_start = Instant::now();
-    let flow = forge_procgen::drain(&height, 0.0, &TaskPool::client());
-    // First the grass by its moisture (the topographic wetness index, blurred over 32 m): the
-    // driest quarter dry grass on the ridges, the wettest quarter lush in the valley bottoms.
-    let wetness = forge_procgen::wetness(&height, &flow, 4);
-    let (dried, greened) = forge_procgen::paint_moisture(
-        &mut layers,
-        &wetness,
-        island_layer::GRASS,
-        (island_layer::DRY_GRASS, 0.25),
-        (island_layer::LUSH_GRASS, 0.25),
-    );
-    // The rivers run in the channels carved for them, which the island's mesh draws (#105).
-    // With the water the map paints no bed: a pixel blends the four texels around it and the
-    // lookup wanders by one, so a bed's 4 m texels showed up to 8 m onto the banks, wider than
-    // most of the rivers (#114); the water turns the ground it covers into its bed itself, per
-    // pixel (`fresh_water` in `water.slang`). Without it, their stand-in painted at the
-    // water's width.
+    let texels = ISLAND_TEXELS;
     let IslandWater {
         ribbons,
         channels,
         lakes: lake_waters,
     } = island_water(&height);
-    // The salt water keeps the grass off the banks beside it (#199, the owner's note: "grass
-    // don't like the salted water much"): sand up to 5 m over the sea at the water, falling to
-    // the beach's top 40 m from it, on the sea's slopes and the rivers' reaches it fills.
-    if !args.no_salt {
-        let salt_start = Instant::now();
-        let salted = forge_procgen::paint_salt(
-            &mut layers,
-            &|x, y| channels.height_at(&height, x, y),
-            &[
-                island_layer::GRASS,
-                island_layer::DRY_GRASS,
-                island_layer::LUSH_GRASS,
-            ],
-            island_layer::SEABED,
-            island_layer::SAND,
-            f64::from(SAND_BELOW),
-            &forge_procgen::SaltRule::default(),
-        );
-        tracing::info!(
-            salted,
-            ms = salt_start.elapsed().as_millis(),
-            "the salt water's sand (#199, --no-salt)"
-        );
-    }
-    // The beaches by the coast (#128): shingle on the headlands and under steep land, pale
-    // sand in the bays and by the rivers' mouths.
-    if !args.no_beach_types {
-        let beaches_start = Instant::now();
-        let settings = island_settings(args).0;
-        let mouths: Vec<[f64; 2]> = ribbons
-            .iter()
-            .filter_map(|r| {
-                let p = r.points[forge_procgen::sea_mouth(&r.points)?].position;
-                Some([f64::from(p[0]), f64::from(p[1])])
-            })
-            .collect();
-        let beaches = forge_procgen::paint_beaches(
-            &mut layers,
-            &height,
-            &|x, y| forge_procgen::island::island_hardness(&settings, x, y),
-            &mouths,
-            forge_procgen::BeachLayers {
-                sand: island_layer::SAND,
-                sea: island_layer::SEABED,
-                shingle: island_layer::SHINGLE,
-                // No black sand: the island's hard rock is no basalt (the owner, 2026-10-02).
-                black: None,
-            },
-            &forge_procgen::BeachRule::default(),
-        );
-        let km = |k: usize| format!("{:.1}", beaches.coast_m[k] / 1000.0);
-        // A view of each: the block of 256 m with the most of it, from 70 m out at sea and 18 m
-        // up, looking back at its nearest texel to the block's middle.
-        let size = layers.size;
-        let cell = layers.spacing;
-        let half_m = height.extent() * 0.5;
-        let views: Vec<String> = [island_layer::SAND, island_layer::SHINGLE]
-            .iter()
-            .filter_map(|&layer| {
-                let block = 64;
-                let blocks = size / block;
-                let (bx, by) = (0..blocks * blocks)
-                    .map(|b| (b % blocks, b / blocks))
-                    .max_by_key(|&(bx, by)| {
-                        (0..block * block)
-                            .filter(|t| {
-                                layers.get(bx * block + t % block, by * block + t / block) == layer
-                            })
-                            .count()
-                    })?;
-                let middle = [
-                    (bx * block + block / 2) as f64,
-                    (by * block + block / 2) as f64,
-                ];
-                let (tx, ty) = (0..block * block)
-                    .map(|t| (bx * block + t % block, by * block + t / block))
-                    .filter(|&(x, y)| layers.get(x, y) == layer)
-                    .min_by(|a, b| {
-                        let d = |p: (u32, u32)| {
-                            (f64::from(p.0) - middle[0]).hypot(f64::from(p.1) - middle[1])
-                        };
-                        d(*a).total_cmp(&d(*b))
-                    })?;
-                let at = [(f64::from(tx) + 0.5) * cell, (f64::from(ty) + 0.5) * cell];
-                // Out to sea: down the ground's slope there.
-                let step = 8.0;
-                let down = [
-                    height.sample(at[0] - step, at[1]) - height.sample(at[0] + step, at[1]),
-                    height.sample(at[0], at[1] - step) - height.sample(at[0], at[1] + step),
-                ];
-                let len = f64::from(down[0].hypot(down[1])).max(1e-6);
-                let out = [f64::from(down[0]) / len, f64::from(down[1]) / len];
-                let eye = [at[0] + 70.0 * out[0], at[1] + 70.0 * out[1]];
-                let yaw = out[0].atan2(out[1]).to_degrees();
-                let pitch = (-(18.0_f64).atan2(70.0)).to_degrees();
-                Some(format!(
-                    "{:.0},18,{:.0},{yaw:.1},{pitch:.1}",
-                    eye[0] - half_m,
-                    eye[1] - half_m
-                ))
-            })
-            .collect();
-        tracing::info!(
-            sand_km = %km(0),
-            shingle_km = %km(1),
-            texels = ?beaches.texels,
-            under_sea = beaches.under_sea,
-            ms = beaches_start.elapsed().as_millis(),
-            views = %views.join("  "),
-            "the island's beaches: sand, shingle (#128, --view)"
-        );
-    }
-    let painted = if args.water() {
-        0
-    } else {
-        forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::STREAM, 0.5)
-    };
-    // Along them the banks' reeds and shrubs (D-041's riparian strip): the grasses within 6 m
-    // plus two of the river's widths of its water (and under 2.5 m the sand's contour still
-    // takes them, per pixel).
-    let banks = forge_procgen::paint_banks(
-        &mut layers,
-        &ribbons,
-        &[
-            island_layer::GRASS,
-            island_layer::DRY_GRASS,
-            island_layer::LUSH_GRASS,
-        ],
-        island_layer::RIVERBANK,
-        RIPARIAN_STRIP,
-    );
-    // And its lakes of a hectare or more: with the water, their beds of silt wherever the
-    // lakes' planes stand a metre or more over the ground (their shallows, like the rivers,
-    // the ground under the water's own bed); without it, on the stream's layer.
-    let lakes = island_lakes(&height, &flow);
-    let lake_texels = if args.water() {
-        forge_procgen::paint_lake_beds(
-            &mut layers,
-            &height,
-            &|x, y| channels.height_at(&height, x, y) + LAKEBED_UNDER,
-            &lake_waters,
-            island_layer::LAKEBED,
-        )
-    } else {
-        forge_procgen::paint_lakes(
-            &mut layers,
-            &lakes,
-            (height.size, height.spacing),
-            island_layer::STREAM,
-            10_000.0,
-            0.5,
-        )
-    };
-    // The rivers' deltas (#120): the pale sand they lay on the lakes' floors in front of their
-    // mouths, over the mud, under the water.
-    let fan_texels = if args.water() {
-        forge_procgen::paint_fans(
-            &mut layers,
-            &ribbons,
-            &|x, y| channels.height_at(&height, x, y),
-            island_layer::LAKE_SAND,
-        )
-    } else {
-        0
-    };
-    // The bars in the large mouths at the sea (#127): the beach's sand.
-    let bar_texels = if args.water() {
-        forge_procgen::paint_bars(&mut layers, &ribbons, island_layer::SAND)
-    } else {
-        0
-    };
-    // The bars the confluences lay along the bank past their corner (#119's polish): the sand of
-    // the mouths' bars (the deltas' sand, made to lie under water, reads as a dark stain in the
-    // sun).
-    let confluence_bar_texels = if args.water() {
-        forge_procgen::paint_confluence_bars(
-            &mut layers,
-            &ribbons,
-            &|x, y| channels.height_at(&height, x, y),
-            island_layer::SAND,
-        )
-    } else {
-        0
-    };
-    // The steep ground's scrub (#118): plants on the wetter rock, the hollows and the valleys'
-    // sides, in patches; the dry spurs and the cliffs stay bare.
-    let scrubbed = forge_procgen::paint_scrub(
-        &mut layers,
-        &height,
-        &wetness,
-        (island_layer::ROCK, island_layer::SCRUB),
-        &forge_procgen::ScrubRule::default(),
-    );
-    // The steeper rivers' valleys (#118): gravel in their beds and beside their water, scree at
-    // the foot of their walls, scrub on the rock of the walls above.
-    let valleys = forge_procgen::paint_valley_ground(
-        &mut layers,
-        &height,
-        &ribbons,
-        &[
-            island_layer::GRASS,
-            island_layer::DRY_GRASS,
-            island_layer::LUSH_GRASS,
-            island_layer::RIVERBANK,
-            island_layer::ROCK,
-            island_layer::SCRUB,
-        ],
-        &forge_procgen::ValleyGround {
-            gravel: island_layer::GRAVEL,
-            scree: island_layer::SCREE,
-            scrub: island_layer::SCRUB,
-            rock: island_layer::ROCK,
-            ..forge_procgen::ValleyGround::default()
-        },
-    );
-    tracing::info!(
-        rivers = ribbons.len(),
-        texels = painted,
-        bank_texels = banks,
-        scrub_texels = %format_args!("{scrubbed} in hollows, {} on valley walls", valleys.scrub),
-        gravel_texels = valleys.gravel,
-        scree_texels = valleys.scree,
-        lakes = lakes
-            .lakes
-            .iter()
-            .filter(|l| l.area(height.spacing) >= 10_000.0 && l.level > 0.5)
-            .count(),
-        lake_texels,
-        fan_texels,
-        bar_texels,
-        confluence_bar_texels,
-        dry_texels = dried,
-        lush_texels = greened,
-        ms = rivers_start.elapsed().as_millis(),
-        "island moisture, rivers and lakes"
-    );
-    // The rock by the island's geology (D-042, #129), after the rules that read the rock: the
-    // hills' granite, the low ground's limestone, and karst on the limestone's dry ground, grus on
-    // the granite's gentle ground near its bare rock (#135).
-    if !args.no_rock_types {
-        let geology_start = Instant::now();
-        let rocks = forge_procgen::paint_geology(
-            &mut layers,
-            &height,
-            forge_procgen::GeologyLayers {
-                rock: island_layer::ROCK,
-                limestone: island_layer::LIMESTONE,
-                grass: island_layer::GRASS,
-                dry_grass: island_layer::DRY_GRASS,
-                karst: island_layer::KARST,
-                grus: island_layer::GRUS,
-            },
-            &forge_procgen::GeologyRule::default(),
-        );
-        // A view of each: the block of 256 m with the most of it, from 150 m down the ground's
-        // slope from its nearest texel to the block's middle and 50 m over it, looking back.
-        let half_m = height.extent() * 0.5;
-        let view = |layer: u8| -> Option<String> {
-            let (block, cell) = (64, layers.spacing);
-            let blocks = layers.size / block;
-            let mut count = vec![0_u32; (blocks * blocks) as usize];
-            for (t, &l) in layers.data.iter().enumerate() {
-                if l == layer {
-                    let (x, y) = (t as u32 % layers.size, t as u32 / layers.size);
-                    count[((y / block) * blocks + x / block) as usize] += 1;
-                }
-            }
-            let b = (0..count.len()).max_by_key(|&b| count[b])?;
-            let (bx, by) = (b as u32 % blocks, b as u32 / blocks);
-            let middle = (
-                (bx * block + block / 2) as f64,
-                (by * block + block / 2) as f64,
-            );
-            let (tx, ty) = (0..block * block)
-                .map(|t| (bx * block + t % block, by * block + t / block))
-                .filter(|&(x, y)| layers.get(x, y) == layer)
-                .min_by(|a, b| {
-                    let d = |p: (u32, u32)| {
-                        (f64::from(p.0) - middle.0).hypot(f64::from(p.1) - middle.1)
-                    };
-                    d(*a).total_cmp(&d(*b))
-                })?;
-            let at = ((f64::from(tx) + 0.5) * cell, (f64::from(ty) + 0.5) * cell);
-            let ground = f64::from(height.sample(at.0, at.1));
-            let step = 8.0;
-            let down = (
-                f64::from(height.sample(at.0 - step, at.1) - height.sample(at.0 + step, at.1)),
-                f64::from(height.sample(at.0, at.1 - step) - height.sample(at.0, at.1 + step)),
-            );
-            let len = down.0.hypot(down.1).max(1e-6);
-            let out = (down.0 / len, down.1 / len);
-            let yaw = out.0.atan2(out.1).to_degrees();
-            let pitch = (-(50.0_f64).atan2(150.0)).to_degrees();
-            Some(format!(
-                "{:.0},{:.0},{:.0},{yaw:.1},{pitch:.1}",
-                at.0 + 150.0 * out.0 - half_m,
-                ground + 50.0,
-                at.1 + 150.0 * out.1 - half_m
-            ))
-        };
-        let views: Vec<String> = [
-            island_layer::ROCK,
-            island_layer::LIMESTONE,
-            island_layer::KARST,
-            island_layer::GRUS,
-        ]
-        .iter()
-        .filter_map(|&l| view(l))
-        .collect();
-        tracing::info!(
-            granite_texels = rocks.granite,
-            limestone_texels = rocks.limestone,
-            karst_texels = rocks.karst,
-            grus_texels = rocks.grus,
-            ms = geology_start.elapsed().as_millis(),
-            views = %views.join("  "),
-            "the island's rocks: granite, limestone, karst, grus (D-042, #129, #135, --view)"
-        );
-    }
-    // Where the loose rocks lie, and which rock they are (#130): the map the placement draws
-    // them from.
-    let sites = (!args.no_rock_sites).then(|| {
-        let sites_start = Instant::now();
-        let (map, stats) = forge_procgen::rock_sites(
-            &height,
-            &layers,
-            &forge_procgen::SiteLayers {
-                scree: island_layer::SCREE,
-                karst: island_layer::KARST,
-                none: vec![
-                    island_layer::SAND,
-                    island_layer::SEABED,
-                    island_layer::STREAM,
-                    island_layer::LAKEBED,
-                    island_layer::GRAVEL,
-                    island_layer::LAKE_SAND,
-                    island_layer::SHINGLE,
-                ],
-            },
-            &forge_procgen::GeologyRule::default(),
-            &forge_procgen::RockSiteRule::default(),
-        );
-        (map, stats, sites_start.elapsed().as_millis())
-    });
+    let painted = island_layers(args);
+    let layers = painted.layers.clone();
+    let sites = &painted.sites;
     builder.set_ray_traced(!args.no_shadows);
     // The ground's tiles, then the sea, then the rocks (`island_props`).
     let tiles = (ISLAND_TILES * ISLAND_TILES) as usize;
@@ -6651,7 +6344,7 @@ fn build_island(
     // ground's own row where it stands.
     let ground_row = materials.of(&props[0].name);
     let window_mesh = builder.add_displaced_mesh(
-        &SkinnedMesh::cook_displaced(&island_sand::SandWindow::mesh(), island_sand::REACH),
+        island_sand::SandWindow::cooked_mesh(),
         island_sand::SandWindow::height_field(),
     );
     builder.set_mesh_material(window_mesh, ground_row);
@@ -6709,7 +6402,7 @@ fn build_island(
     let geology = forge_procgen::GeologyRule::default();
     let mut stones = island_stones(&height, &ribbons, &channels);
     // And beside the steeper rivers' water, on their gravel (#118), clear of the water.
-    let banked = forge_procgen::bank_stones(&ribbons, &channels, &height, RIVER_STONES ^ 0xba);
+    let banked = island_bank_stones(&height, &ribbons, &channels);
     stones.extend_from_slice(&banked);
     // On the scree at the foot of their walls, the rubble piles scaled down to broken rock: a
     // pile on a third of its texels, 0.2 to 0.4 of its size, sunk a little (with `--no-rock-sites`:
@@ -7263,9 +6956,49 @@ fn run(args: Args, title: &'static str) -> Result<()> {
     // The props cook (or load from the cache) behind the loading screen (issue #25).
     forge_app::run_loading(config, move || {
         let cooked = cook(&args);
+        if args.island.is_some() {
+            warm_island(&args);
+        }
         let finish: Finish<Gallery> = Box::new(move |ctx| Gallery::new(ctx, args, cooked, title));
         Ok(finish)
     })
+}
+
+/// The island's CPU work, done on the loading thread while the loading screen draws (#201): its
+/// heights, its water, then its drawn ground, its rivers' stones and its layers side by side. Each is made once a
+/// process, so the finishing step on the main thread, which needs the device, finds them made;
+/// before, it made them there behind a frozen screen (about 13 s of 15 with a warm cache).
+fn warm_island(args: &Args) {
+    let start = Instant::now();
+    let height = island_heights(args);
+    let factor = island_factor(args);
+    std::thread::scope(|ahead| {
+        // The drawn ground's amplified detail needs the heights alone: beside the water.
+        if factor > 1 && args.island_detail > 0.0 {
+            ahead.spawn(|| {
+                amplify_ahead(
+                    &height,
+                    factor,
+                    args.island.unwrap_or(7),
+                    &TaskPool::client(),
+                );
+            });
+        }
+        let water = island_water(&height);
+        std::thread::scope(|threads| {
+            threads.spawn(|| island_drawn(args));
+            threads.spawn(|| {
+                island_stones(&height, &water.ribbons, &water.channels);
+                island_bank_stones(&height, &water.ribbons, &water.channels);
+                island_sand::SandWindow::cooked_mesh();
+            });
+            island_layers(args);
+        });
+    });
+    tracing::info!(
+        ms = start.elapsed().as_millis(),
+        "the island's heights, water, drawn ground and layers, behind the loading screen (#201)"
+    );
 }
 
 /// The acceleration structures' size, build time and how far their cuts may stand off the
@@ -7300,4 +7033,444 @@ fn parallel_heights(terrain: &Terrain) -> Vec<f32> {
         }
     });
     heights
+}
+
+/// Texels a side of the island's layer map: one every 4 m over the 16 km.
+const ISLAND_TEXELS: u32 = 4096;
+
+/// The island's ground layers and where its loose rocks lie (#130): what the CPU paints for
+/// `build_island`, in `make_island_layers`.
+struct IslandLayers {
+    layers: Field2<u8>,
+    /// The rock sites' map, its numbers and the milliseconds it took (`--no-rock-sites`: none).
+    sites: Option<(Field2<u8>, forge_procgen::RockSiteStats, u128)>,
+}
+
+/// [`IslandLayers`], made once a process for the island and the arguments that change it: the
+/// loading thread makes it (#201), so the finishing step on the main thread finds it.
+fn island_layers(args: &Args) -> Arc<IslandLayers> {
+    static MADE: std::sync::Mutex<Option<(u64, Arc<IslandLayers>)>> = std::sync::Mutex::new(None);
+    let height = island_heights(args);
+    let flags = [
+        args.water(),
+        args.no_salt,
+        args.no_beach_types,
+        args.no_rock_types,
+        args.no_rock_sites,
+    ];
+    let key = flags
+        .iter()
+        .enumerate()
+        .fold(height.digest() ^ u64::from(height.size), |key, (k, &on)| {
+            key ^ (u64::from(on) << (56 + k))
+        });
+    let mut made = MADE.lock().expect("the island's layers");
+    if let Some((made_for, layers)) = made.as_ref()
+        && *made_for == key
+    {
+        return layers.clone();
+    }
+    let layers = Arc::new(make_island_layers(args, &height, ISLAND_TEXELS));
+    *made = Some((key, layers.clone()));
+    layers
+}
+
+/// [`island_layers`], made: the slope rule's layers, then the moisture, the salt water's sand,
+/// the beaches, the rivers' and lakes' layers, the valleys' ground and the geology, and the rock
+/// sites from them.
+fn make_island_layers(args: &Args, height: &Field2<f32>, texels: u32) -> IslandLayers {
+    let height = height.clone();
+    let layers_start = Instant::now();
+    let mut layers = forge_procgen::slope_layers(
+        &height,
+        &forge_procgen::LayerRule {
+            grass: island_layer::GRASS,
+            rock: island_layer::ROCK,
+            rock_slope: 0.45,
+            // Green to the peaks, as on a tropical island: rock where it is steep.
+            rock_above: f32::INFINITY,
+            // The slope over 8 m whatever the spacing, so 4 m draws the rock 8 m draws.
+            slope_over: 8.0,
+            shore: Some(forge_procgen::Shore {
+                sea: island_layer::SEABED,
+                sand: island_layer::SAND,
+                sand_below: SAND_BELOW,
+            }),
+        },
+        texels,
+    );
+    tracing::info!(
+        texels,
+        ms = layers_start.elapsed().as_millis(),
+        "island layer map"
+    );
+    // The moisture, the rivers and the lakes from the drawn field's drainage.
+    let rivers_start = Instant::now();
+    let flow = forge_procgen::drain(&height, 0.0, &TaskPool::client());
+    // First the grass by its moisture (the topographic wetness index, blurred over 32 m): the
+    // driest quarter dry grass on the ridges, the wettest quarter lush in the valley bottoms.
+    let wetness = forge_procgen::wetness(&height, &flow, 4);
+    let (dried, greened) = forge_procgen::paint_moisture(
+        &mut layers,
+        &wetness,
+        island_layer::GRASS,
+        (island_layer::DRY_GRASS, 0.25),
+        (island_layer::LUSH_GRASS, 0.25),
+    );
+    // The rivers run in the channels carved for them, which the island's mesh draws (#105).
+    // With the water the map paints no bed: a pixel blends the four texels around it and the
+    // lookup wanders by one, so a bed's 4 m texels showed up to 8 m onto the banks, wider than
+    // most of the rivers (#114); the water turns the ground it covers into its bed itself, per
+    // pixel (`fresh_water` in `water.slang`). Without it, their stand-in painted at the
+    // water's width.
+    let IslandWater {
+        ribbons,
+        channels,
+        lakes: lake_waters,
+    } = island_water(&height);
+    // The salt water keeps the grass off the banks beside it (#199, the owner's note: "grass
+    // don't like the salted water much"): sand up to 5 m over the sea at the water, falling to
+    // the beach's top 40 m from it, on the sea's slopes and the rivers' reaches it fills.
+    if !args.no_salt {
+        let salt_start = Instant::now();
+        let salted = forge_procgen::paint_salt(
+            &mut layers,
+            &|x, y| channels.height_at(&height, x, y),
+            &[
+                island_layer::GRASS,
+                island_layer::DRY_GRASS,
+                island_layer::LUSH_GRASS,
+            ],
+            island_layer::SEABED,
+            island_layer::SAND,
+            f64::from(SAND_BELOW),
+            &forge_procgen::SaltRule::default(),
+        );
+        tracing::info!(
+            salted,
+            ms = salt_start.elapsed().as_millis(),
+            "the salt water's sand (#199, --no-salt)"
+        );
+    }
+    // The beaches by the coast (#128): shingle on the headlands and under steep land, pale
+    // sand in the bays and by the rivers' mouths.
+    if !args.no_beach_types {
+        let beaches_start = Instant::now();
+        let settings = island_settings(args).0;
+        let mouths: Vec<[f64; 2]> = ribbons
+            .iter()
+            .filter_map(|r| {
+                let p = r.points[forge_procgen::sea_mouth(&r.points)?].position;
+                Some([f64::from(p[0]), f64::from(p[1])])
+            })
+            .collect();
+        let beaches = forge_procgen::paint_beaches(
+            &mut layers,
+            &height,
+            &|x, y| forge_procgen::island::island_hardness(&settings, x, y),
+            &mouths,
+            forge_procgen::BeachLayers {
+                sand: island_layer::SAND,
+                sea: island_layer::SEABED,
+                shingle: island_layer::SHINGLE,
+                // No black sand: the island's hard rock is no basalt (the owner, 2026-10-02).
+                black: None,
+            },
+            &forge_procgen::BeachRule::default(),
+        );
+        let km = |k: usize| format!("{:.1}", beaches.coast_m[k] / 1000.0);
+        // A view of each: the block of 256 m with the most of it, from 70 m out at sea and 18 m
+        // up, looking back at its nearest texel to the block's middle.
+        let size = layers.size;
+        let cell = layers.spacing;
+        let half_m = height.extent() * 0.5;
+        let views: Vec<String> = [island_layer::SAND, island_layer::SHINGLE]
+            .iter()
+            .filter_map(|&layer| {
+                let block = 64;
+                let blocks = size / block;
+                let (bx, by) = (0..blocks * blocks)
+                    .map(|b| (b % blocks, b / blocks))
+                    .max_by_key(|&(bx, by)| {
+                        (0..block * block)
+                            .filter(|t| {
+                                layers.get(bx * block + t % block, by * block + t / block) == layer
+                            })
+                            .count()
+                    })?;
+                let middle = [
+                    (bx * block + block / 2) as f64,
+                    (by * block + block / 2) as f64,
+                ];
+                let (tx, ty) = (0..block * block)
+                    .map(|t| (bx * block + t % block, by * block + t / block))
+                    .filter(|&(x, y)| layers.get(x, y) == layer)
+                    .min_by(|a, b| {
+                        let d = |p: (u32, u32)| {
+                            (f64::from(p.0) - middle[0]).hypot(f64::from(p.1) - middle[1])
+                        };
+                        d(*a).total_cmp(&d(*b))
+                    })?;
+                let at = [(f64::from(tx) + 0.5) * cell, (f64::from(ty) + 0.5) * cell];
+                // Out to sea: down the ground's slope there.
+                let step = 8.0;
+                let down = [
+                    height.sample(at[0] - step, at[1]) - height.sample(at[0] + step, at[1]),
+                    height.sample(at[0], at[1] - step) - height.sample(at[0], at[1] + step),
+                ];
+                let len = f64::from(down[0].hypot(down[1])).max(1e-6);
+                let out = [f64::from(down[0]) / len, f64::from(down[1]) / len];
+                let eye = [at[0] + 70.0 * out[0], at[1] + 70.0 * out[1]];
+                let yaw = out[0].atan2(out[1]).to_degrees();
+                let pitch = (-(18.0_f64).atan2(70.0)).to_degrees();
+                Some(format!(
+                    "{:.0},18,{:.0},{yaw:.1},{pitch:.1}",
+                    eye[0] - half_m,
+                    eye[1] - half_m
+                ))
+            })
+            .collect();
+        tracing::info!(
+            sand_km = %km(0),
+            shingle_km = %km(1),
+            texels = ?beaches.texels,
+            under_sea = beaches.under_sea,
+            ms = beaches_start.elapsed().as_millis(),
+            views = %views.join("  "),
+            "the island's beaches: sand, shingle (#128, --view)"
+        );
+    }
+    let painted = if args.water() {
+        0
+    } else {
+        forge_procgen::paint_beds(&mut layers, &ribbons, island_layer::STREAM, 0.5)
+    };
+    // Along them the banks' reeds and shrubs (D-041's riparian strip): the grasses within 6 m
+    // plus two of the river's widths of its water (and under 2.5 m the sand's contour still
+    // takes them, per pixel).
+    let banks = forge_procgen::paint_banks(
+        &mut layers,
+        &ribbons,
+        &[
+            island_layer::GRASS,
+            island_layer::DRY_GRASS,
+            island_layer::LUSH_GRASS,
+        ],
+        island_layer::RIVERBANK,
+        RIPARIAN_STRIP,
+    );
+    // And its lakes of a hectare or more: with the water, their beds of silt wherever the
+    // lakes' planes stand a metre or more over the ground (their shallows, like the rivers,
+    // the ground under the water's own bed); without it, on the stream's layer.
+    let lakes = island_lakes(&height, &flow);
+    let lake_texels = if args.water() {
+        forge_procgen::paint_lake_beds(
+            &mut layers,
+            &height,
+            &|x, y| channels.height_at(&height, x, y) + LAKEBED_UNDER,
+            &lake_waters,
+            island_layer::LAKEBED,
+        )
+    } else {
+        forge_procgen::paint_lakes(
+            &mut layers,
+            &lakes,
+            (height.size, height.spacing),
+            island_layer::STREAM,
+            10_000.0,
+            0.5,
+        )
+    };
+    // The rivers' deltas (#120): the pale sand they lay on the lakes' floors in front of their
+    // mouths, over the mud, under the water.
+    let fan_texels = if args.water() {
+        forge_procgen::paint_fans(
+            &mut layers,
+            &ribbons,
+            &|x, y| channels.height_at(&height, x, y),
+            island_layer::LAKE_SAND,
+        )
+    } else {
+        0
+    };
+    // The bars in the large mouths at the sea (#127): the beach's sand.
+    let bar_texels = if args.water() {
+        forge_procgen::paint_bars(&mut layers, &ribbons, island_layer::SAND)
+    } else {
+        0
+    };
+    // The bars the confluences lay along the bank past their corner (#119's polish): the sand of
+    // the mouths' bars (the deltas' sand, made to lie under water, reads as a dark stain in the
+    // sun).
+    let confluence_bar_texels = if args.water() {
+        forge_procgen::paint_confluence_bars(
+            &mut layers,
+            &ribbons,
+            &|x, y| channels.height_at(&height, x, y),
+            island_layer::SAND,
+        )
+    } else {
+        0
+    };
+    // The steep ground's scrub (#118): plants on the wetter rock, the hollows and the valleys'
+    // sides, in patches; the dry spurs and the cliffs stay bare.
+    let scrubbed = forge_procgen::paint_scrub(
+        &mut layers,
+        &height,
+        &wetness,
+        (island_layer::ROCK, island_layer::SCRUB),
+        &forge_procgen::ScrubRule::default(),
+    );
+    // The steeper rivers' valleys (#118): gravel in their beds and beside their water, scree at
+    // the foot of their walls, scrub on the rock of the walls above.
+    let valleys = forge_procgen::paint_valley_ground(
+        &mut layers,
+        &height,
+        &ribbons,
+        &[
+            island_layer::GRASS,
+            island_layer::DRY_GRASS,
+            island_layer::LUSH_GRASS,
+            island_layer::RIVERBANK,
+            island_layer::ROCK,
+            island_layer::SCRUB,
+        ],
+        &forge_procgen::ValleyGround {
+            gravel: island_layer::GRAVEL,
+            scree: island_layer::SCREE,
+            scrub: island_layer::SCRUB,
+            rock: island_layer::ROCK,
+            ..forge_procgen::ValleyGround::default()
+        },
+    );
+    tracing::info!(
+        rivers = ribbons.len(),
+        texels = painted,
+        bank_texels = banks,
+        scrub_texels = %format_args!("{scrubbed} in hollows, {} on valley walls", valleys.scrub),
+        gravel_texels = valleys.gravel,
+        scree_texels = valleys.scree,
+        lakes = lakes
+            .lakes
+            .iter()
+            .filter(|l| l.area(height.spacing) >= 10_000.0 && l.level > 0.5)
+            .count(),
+        lake_texels,
+        fan_texels,
+        bar_texels,
+        confluence_bar_texels,
+        dry_texels = dried,
+        lush_texels = greened,
+        ms = rivers_start.elapsed().as_millis(),
+        "island moisture, rivers and lakes"
+    );
+    // The rock by the island's geology (D-042, #129), after the rules that read the rock: the
+    // hills' granite, the low ground's limestone, and karst on the limestone's dry ground, grus on
+    // the granite's gentle ground near its bare rock (#135).
+    if !args.no_rock_types {
+        let geology_start = Instant::now();
+        let rocks = forge_procgen::paint_geology(
+            &mut layers,
+            &height,
+            forge_procgen::GeologyLayers {
+                rock: island_layer::ROCK,
+                limestone: island_layer::LIMESTONE,
+                grass: island_layer::GRASS,
+                dry_grass: island_layer::DRY_GRASS,
+                karst: island_layer::KARST,
+                grus: island_layer::GRUS,
+            },
+            &forge_procgen::GeologyRule::default(),
+        );
+        // A view of each: the block of 256 m with the most of it, from 150 m down the ground's
+        // slope from its nearest texel to the block's middle and 50 m over it, looking back.
+        let half_m = height.extent() * 0.5;
+        let view = |layer: u8| -> Option<String> {
+            let (block, cell) = (64, layers.spacing);
+            let blocks = layers.size / block;
+            let mut count = vec![0_u32; (blocks * blocks) as usize];
+            for (t, &l) in layers.data.iter().enumerate() {
+                if l == layer {
+                    let (x, y) = (t as u32 % layers.size, t as u32 / layers.size);
+                    count[((y / block) * blocks + x / block) as usize] += 1;
+                }
+            }
+            let b = (0..count.len()).max_by_key(|&b| count[b])?;
+            let (bx, by) = (b as u32 % blocks, b as u32 / blocks);
+            let middle = (
+                (bx * block + block / 2) as f64,
+                (by * block + block / 2) as f64,
+            );
+            let (tx, ty) = (0..block * block)
+                .map(|t| (bx * block + t % block, by * block + t / block))
+                .filter(|&(x, y)| layers.get(x, y) == layer)
+                .min_by(|a, b| {
+                    let d = |p: (u32, u32)| {
+                        (f64::from(p.0) - middle.0).hypot(f64::from(p.1) - middle.1)
+                    };
+                    d(*a).total_cmp(&d(*b))
+                })?;
+            let at = ((f64::from(tx) + 0.5) * cell, (f64::from(ty) + 0.5) * cell);
+            let ground = f64::from(height.sample(at.0, at.1));
+            let step = 8.0;
+            let down = (
+                f64::from(height.sample(at.0 - step, at.1) - height.sample(at.0 + step, at.1)),
+                f64::from(height.sample(at.0, at.1 - step) - height.sample(at.0, at.1 + step)),
+            );
+            let len = down.0.hypot(down.1).max(1e-6);
+            let out = (down.0 / len, down.1 / len);
+            let yaw = out.0.atan2(out.1).to_degrees();
+            let pitch = (-(50.0_f64).atan2(150.0)).to_degrees();
+            Some(format!(
+                "{:.0},{:.0},{:.0},{yaw:.1},{pitch:.1}",
+                at.0 + 150.0 * out.0 - half_m,
+                ground + 50.0,
+                at.1 + 150.0 * out.1 - half_m
+            ))
+        };
+        let views: Vec<String> = [
+            island_layer::ROCK,
+            island_layer::LIMESTONE,
+            island_layer::KARST,
+            island_layer::GRUS,
+        ]
+        .iter()
+        .filter_map(|&l| view(l))
+        .collect();
+        tracing::info!(
+            granite_texels = rocks.granite,
+            limestone_texels = rocks.limestone,
+            karst_texels = rocks.karst,
+            grus_texels = rocks.grus,
+            ms = geology_start.elapsed().as_millis(),
+            views = %views.join("  "),
+            "the island's rocks: granite, limestone, karst, grus (D-042, #129, #135, --view)"
+        );
+    }
+    // Where the loose rocks lie, and which rock they are (#130): the map the placement draws
+    // them from.
+    let sites = (!args.no_rock_sites).then(|| {
+        let sites_start = Instant::now();
+        let (map, stats) = forge_procgen::rock_sites(
+            &height,
+            &layers,
+            &forge_procgen::SiteLayers {
+                scree: island_layer::SCREE,
+                karst: island_layer::KARST,
+                none: vec![
+                    island_layer::SAND,
+                    island_layer::SEABED,
+                    island_layer::STREAM,
+                    island_layer::LAKEBED,
+                    island_layer::GRAVEL,
+                    island_layer::LAKE_SAND,
+                    island_layer::SHINGLE,
+                ],
+            },
+            &forge_procgen::GeologyRule::default(),
+            &forge_procgen::RockSiteRule::default(),
+        );
+        (map, stats, sites_start.elapsed().as_millis())
+    });
+    IslandLayers { layers, sites }
 }
