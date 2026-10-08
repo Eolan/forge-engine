@@ -3150,8 +3150,8 @@ coast's, the channels' and the lakes' shores, the 2 m cells are split into quads
 capsule and visor are the island's last two movers, parked 5 km under it while nobody walks. A
 scene with movers rebuilds their TLAS and their motion every frame, so the island's frame grew
 from 2.26–2.30 ms to 2.28–2.36 ms (`movers/tlas` 0.029, `movers/motion` 0.023, the rest 0.008).
-#198 is to skip those passes while the movers stand still. The island's images do not change:
-the batch is 0 px.
+The island's images do not change: the batch is 0 px. Since #198 (2026-10-09) the passes but
+the upload are skipped while the movers stand still (`docs/PROFILE.md`).
 
 **Found on the way.** With `--no-rock-sites --movers N`, the island's boulders were every prop
 after the sea but the last. That took in the barrel and the log as rocks. They now leave out the

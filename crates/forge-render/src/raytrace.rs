@@ -483,6 +483,13 @@ impl SceneRays {
         storages
     }
 
+    /// The movers' structure as an earlier frame built it, for the passes tracing rays to read
+    /// on a frame whose movers stand as they stood (#198); `None` without movers.
+    pub(crate) fn movers_storage<'f>(&'f self, graph: &mut FrameGraph<'f>) -> Option<BufferHandle> {
+        let (tlas, _) = self.movers.as_ref()?;
+        Some(graph.import_buffer(tlas.storage()))
+    }
+
     /// The movers' structure's address (0 without movers).
     pub fn movers_address(&self) -> u64 {
         self.movers.as_ref().map_or(0, |(t, _)| t.address())

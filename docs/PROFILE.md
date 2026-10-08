@@ -806,8 +806,23 @@ so the movers' passes run every frame:
 - `movers/motion` 0.023 ms;
 - `movers/cell bounds`, `upload` and `tlas instances` 0.008 ms.
 
-`tools/timings.sh`, `FORGE_SETS=island`, against 4103a5f: 2.28–2.36 ms against 2.26–2.30. #198
-is to skip those passes while the movers stand still.
+`tools/timings.sh`, `FORGE_SETS=island`, against 4103a5f: 2.28–2.36 ms against 2.26–2.30.
+
+**Movers that stand still** (#198, 2026-10-09). When no mover's record changed since the last
+frame and no skinned mesh was bent, the movers' cell bounds, structure and motion are skipped:
+the table, the cells and the structure hold them already, and their pixels keep the camera's
+motion (`MeshletScene::set_movers_still` compares the records; the structure is imported as
+built for the passes tracing rays).
+- **The upload stays,** a microsecond's copy. The probes on the compute queue read the table, so
+  they wait for it. With it skipped too, they started at once and ran into the culls: the
+  movers' zones went to 0, but the island's frame grew 0.07 ms (the serial frame,
+  `FORGE_ASYNC=0`, shrank 0.04–0.05 ms as it should).
+- **Against `c775ba4`,** three runs each, alternating: the island 2.00–2.08 → 1.97–2.00 ms, its
+  tour 1.86–1.89 → 1.85–1.86 ms. `movers/tlas` 0.034–0.038 → 0, `movers/motion` 0.017–0.019 →
+  0, `movers/cell bounds` and `tlas instances` 0.006 → 0.
+- **The lab's sleeping bodies** take it too. Their pixels' motion is the camera's from their
+  depth, where the movers' pass rounded it through their frame: 1–176 px of the dominoes, the
+  bridge, the tug and the tank's bench differ by at most 12 codes (ꟻLIP means under 0.0003).
 
 **The sand round the walker** (#197, 2026-10-08, `docs/demos/island.md`, "The sand round the
 walker"): a window of 601 × 601 points, 720 000 triangles. Measured over the walk of 1 800 frames

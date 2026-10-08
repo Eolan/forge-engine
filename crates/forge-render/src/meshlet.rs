@@ -10,7 +10,7 @@
 //! keeps 64-bit samples (depth and visibility id, with an atomic maximum) where it beats the
 //! hardware's pixel; a merge pass writes them into the visibility buffer and the depth.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -1768,6 +1768,14 @@ struct SceneMovers {
     previous: Cell<usize>,
     /// Frames written.
     written: Cell<u64>,
+    /// The records written last, to tell the frames whose movers stand as they stood (#198).
+    last: RefCell<Vec<GpuInstance>>,
+    /// Frames since the records last changed. From the first on, the table, the cells and the
+    /// movers' structure already hold them, and the movers have no motion of their own: their
+    /// passes are skipped (#198).
+    steady: Cell<u64>,
+    /// Whether this frame skipped them: its motion pass is skipped too.
+    skipped: Cell<bool>,
 }
 
 impl SceneMovers {
@@ -1803,6 +1811,9 @@ impl SceneMovers {
             current: Cell::new(0),
             previous: Cell::new(0),
             written: Cell::new(0),
+            last: RefCell::new(Vec::new()),
+            steady: Cell::new(0),
+            skipped: Cell::new(false),
         })
     }
 }
@@ -1850,7 +1861,19 @@ impl MeshletScene {
                 }
             })
             .collect();
+        // Standing as they stood (a parked walker, sleeping bodies, #198): the slot written last
+        // holds them, and they move no more than the camera makes them.
+        if movers.written.get() > 0
+            && bytemuck::cast_slice::<GpuInstance, u8>(&records)
+                == bytemuck::cast_slice::<GpuInstance, u8>(&movers.last.borrow())
+        {
+            movers.previous.set(movers.current.get());
+            movers.steady.set(movers.steady.get() + 1);
+            return;
+        }
+        movers.steady.set(0);
         movers.ring[slot].write(0, &records);
+        *movers.last.borrow_mut() = records;
         let first_frame = movers.written.get() == 0;
         movers.previous.set(if first_frame {
             slot
@@ -3442,7 +3465,9 @@ impl MeshletRenderer {
         // only on a frame that brought joints or heights (#197), the others' still there.
         let mut ray_positions = None;
         let mut skin_blases = Vec::new();
+        let mut skins_ran = false;
         if let Some(skins) = scene.skins.as_ref().filter(|s| s.take_fresh()) {
+            skins_ran = true;
             let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
             let rays = scene.rays.as_ref().filter(|_| skins.has_rays);
             ray_positions = rays.map(|r| graph.import_buffer(r.hit_positions()));
@@ -3472,14 +3497,16 @@ impl MeshletRenderer {
         // The movers (#79): this frame's records into the table's last instances, then their
         // cells' bounds and their acceleration structure, before anything reads them.
         let mut movers_tlas = None;
-        if let (Some(movers), Some(instances), Some(cells)) =
-            (&scene.movers, io.instances, io.cells)
-        {
+        if let (Some(movers), Some(instances)) = (&scene.movers, io.instances) {
             let ring: &'f Buffer = &movers.ring[movers.current.get()];
             let table: &'f GraphBuffer = &scene.instances;
             let size = std::mem::size_of::<GpuInstance>() as u64;
             let count = movers.templates.len() as u64;
             let at = u64::from(movers.first) * size;
+            // Every frame, standing or not: the copy is a microsecond, and the compute queue's
+            // probes, which read the table, wait for it. Without it they started at once and ran
+            // into the culls, the island's frame 0.07 ms longer for 0.06 ms of passes saved
+            // (#198).
             graph
                 .pass("movers/upload")
                 .buffer(instances, BufferAccess::TransferDst)
@@ -3487,6 +3514,21 @@ impl MeshletRenderer {
                     commands.copy_buffer_regions(ring, table, &[(0, at, count * size)]);
                     Ok(())
                 });
+            // Standing as they stood, their skinned meshes unbent (#198): the cells and the
+            // structure already hold them; the passes tracing rays read the structure as built.
+            let steady = movers.steady.get() > 0 && !skins_ran;
+            movers.skipped.set(steady);
+            if steady {
+                movers_tlas = scene
+                    .rays
+                    .as_ref()
+                    .and_then(|rays| rays.movers_storage(graph));
+            }
+        }
+        if let (Some(movers), Some(instances), Some(cells)) =
+            (&scene.movers, io.instances, io.cells)
+            && !movers.skipped.get()
+        {
             let pipeline = &self.pipeline_cell_bounds;
             let push = CellBoundsPush {
                 instances: scene.instances.address(),
@@ -3831,6 +3873,10 @@ impl MeshletRenderer {
         else {
             return;
         };
+        // Standing as they stood (#198): the camera's motion is theirs.
+        if movers.skipped.get() {
+            return;
+        }
         let block: &'f Buffer = &self.mover_motion_blocks[slot.index];
         let address = block.address();
         let frame = self.frame_address(slot);
