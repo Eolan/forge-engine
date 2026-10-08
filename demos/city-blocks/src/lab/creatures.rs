@@ -923,27 +923,26 @@ impl Motion {
         );
     }
 
-    /// Puts a dog's paws in `pose` on `ground` under them (#167's feet on uneven ground; on the
-    /// `soft` ground over it where there is some, #194), its
-    /// torso where its balance holds it: over (`x`, `z`), facing `facing` (the stance turned),
-    /// at its stance's height over the ground's mean height under the paws. Each paw is as high
-    /// over the ground as the clip has it over the floor, its leg bent to it by two-bone IK; the
-    /// ground a paw is put on is the highest within `PAW_AHEAD` before it along the way it
-    /// faces, so it is lifted onto a step before it meets its edge. On the floor the clip's pose
-    /// is left as it is. Returns the mean height, which the torso is held over.
+    /// Puts a dog's paws in `pose` on the ground under them, `under` (x, z) high (#167's feet on
+    /// uneven ground; with the soft ground over it, #194), its torso where its balance holds it:
+    /// over (`x`, `z`), facing `facing` (the stance turned), at its stance's height over the
+    /// ground's mean height under the paws. Each paw is as high over the ground as the clip has
+    /// it over the floor, its leg bent to it by two-bone IK; the ground a paw is put on is the
+    /// highest within `PAW_AHEAD` before it along the way it faces, so it is lifted onto a step
+    /// before it meets its edge. On the floor (`under` none) the clip's pose is left as it is.
+    /// Returns the mean height, which the torso is held over.
     fn plant(
         &self,
         c: &Creature,
-        ground: Ground,
-        soft: &dyn Fn(f64, f64) -> Option<f64>,
+        under: Option<&dyn Fn(f64, f64) -> f64>,
         (x, z): (f64, f64),
         facing: Quat,
         before: &Pose,
         pose: &mut Pose,
     ) -> f64 {
-        if self.legs.is_empty() || ground == Ground::Flat {
+        let Some(under) = under.filter(|_| !self.legs.is_empty()) else {
             return 0.0;
-        }
+        };
         let body = c.kind.body();
         let skeleton = &self.rig.skeleton;
         let mut model = vec![Mat4::IDENTITY; skeleton.len()];
@@ -962,10 +961,7 @@ impl Motion {
             .iter()
             .map(|chain| model[chain.middle].transform_point3(chain.tip))
             .collect();
-        let under = |at: DVec3| {
-            let hard = ground_at(ground, at.x, at.z);
-            soft(at.x, at.z).map_or(hard, |top| top.max(hard))
-        };
+        let under = |at: DVec3| under(at.x, at.z);
         skeleton.model_space(before, &mut model);
         let paws_before: Vec<Vec3> = self
             .legs
@@ -1228,10 +1224,15 @@ impl Herd {
             if c.stand.is_none() && !limp {
                 let mut before = motion.rig.skeleton.rest().clone();
                 motion.pose_at(time + c.phase - PAW_BEFORE, &mut before);
+                // The course's ground and the soft ground over it, the higher; none on the floor.
+                let ground = self.ground;
+                let under = |x: f64, z: f64| {
+                    let hard = ground_at(ground, x, z);
+                    soft(x, z).map_or(hard, |top| top.max(hard))
+                };
                 lift = motion.plant(
                     c,
-                    self.ground,
-                    soft,
+                    (ground != Ground::Flat).then_some(&under as &dyn Fn(f64, f64) -> f64),
                     (at.x, at.z),
                     facing(yaw),
                     &before,
