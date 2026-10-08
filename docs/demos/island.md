@@ -56,7 +56,8 @@ with a texel every 4 m, and `forge_procgen::sea_floor`). Around it:
 - the city's sky at a 30° sun, with the sun's shadows, the probes, the mirror rays and TAA.
 
 The camera starts on the south coast looking inland; `--view` and the usual keys apply, and so
-do `--origin`, `--sun-elevation` and `--instances`. The first start costs the erosion (5 s at
+do `--origin`, `--sun-elevation` and `--instances`. Enter puts a walker on the ground under the
+camera and follows it (WASD, Shift, Space; Enter again to fly; "A walker on the island" below). The first start costs the erosion (5 s at
 8 m on the 9800X3D, 13 s on the cloud's four cores) and the cook (11–16 s); the next ones load
 both.
 
@@ -3108,6 +3109,53 @@ views `log=` and `crate_view=`). A test counts the kinds: 11 barrels, a log and 
   the sea lab's barrels ride `SeaHeights`.
 - A physics level of detail for many barrels: far ones could sleep or follow their course.
 - The boat of `--lab sea` on the island.
+
+## A walker on the island (#196, Phase 3's materials step, 2026-10-08)
+
+```
+cargo run --release -p island -- --walker --walk 0,-1.5
+```
+
+Until now the island had only its fly camera. Enter now puts the lab's walking character (#139,
+Jolt's `CharacterVirtual`, a capsule 1.8 m tall with its visor) on the ground under the camera
+and follows it in third person, as `--lab walk` does:
+- the right mouse button turns the view;
+- WASD walks along the view, Shift runs, Space jumps;
+- the camera is kept 30 cm over the ground behind it;
+- Enter again gives the fly camera back.
+
+`--walker X,Z` puts it at the scene's (X, Z) from the first frame (negative values as
+`--walker=-120,40`). A bare `--walker` puts it on the southern beach the camera starts off, at
+(0, 5064) for seed 7. `demos/city-blocks/src/island_walk.rs` holds it.
+
+The walker is the first step of the layer round the player (D-007): its steps will press the
+beach's sand (#197).
+
+**Its ground** is the ground as the tiles draw it, refined cells included. In those cells, the
+coast's, the channels' and the lakes' shores, the 2 m cells are split into quads of a metre.
+- `DrawnGround::surface_at` gives that ground's height at any point.
+- Jolt holds it in height fields of 64 × 64 samples a metre apart (63 m tiles, 32 blocks a side,
+  a power of two), cut from that function (the first two in 0.57 ms together).
+- The tiles within 24 m of the walker are kept, at most four; the next is cut when it comes
+  near.
+- Jolt splits a quad along its (x, y)–(x + 1, y + 1) diagonal and the drawn ground along the
+  other, so each tile is laid a quarter turn about +y. Then its quads split as the ground's do.
+- A coarse 2 m cell's diagonal runs through the 1 m samples' corners, so the tiles are the drawn
+  triangles exactly.
+- A test casts rays onto the tiles of a rough field with refined cells: they meet the drawn ground
+  within 1 cm. Laid unturned, they missed by 6 cm.
+- On the beach, the walker's feet stand within 0.1 cm of the drawn ground.
+
+**Costs.** The walker's world holds no other body: a tick takes 0.014 ms (0.027 at most). Its
+capsule and visor are the island's last two movers, parked 5 km under it while nobody walks. A
+scene with movers rebuilds their TLAS and their motion every frame, so the island's frame grew
+from 2.26–2.30 ms to 2.28–2.36 ms (`movers/tlas` 0.029, `movers/motion` 0.023, the rest 0.008).
+#198 is to skip those passes while the movers stand still. The island's images do not change:
+the batch is 0 px.
+
+**Found on the way.** With `--no-rock-sites --movers N`, the island's boulders were every prop
+after the sea but the last. That took in the barrel and the log as rocks. They now leave out the
+movers' three props and the walker's two.
 
 ## A line across the lake (#178, the owner's report, 2026-10-08)
 

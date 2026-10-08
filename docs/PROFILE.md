@@ -798,6 +798,17 @@ With the movers' acceleration structure (the second step), the same views and ro
 - The probes' wake (#69, the third step), `gi/probe wake` on the compute queue: 0.010 ms with
   1 000 movers and 0.008 with 10 000 (600 frames from the largest mouth).
 
+**The walker** (#196, 2026-10-08, `docs/demos/island.md`, "A walker on the island"). Its tick is
+0.014 ms (0.027 at most): one `CharacterVirtual` on four height fields. Its first two tiles are
+cut in 0.57 ms together. Its capsule and visor are the island's movers even while parked,
+so the movers' passes run every frame:
+- `movers/tlas` 0.029 ms;
+- `movers/motion` 0.023 ms;
+- `movers/cell bounds`, `upload` and `tlas instances` 0.008 ms.
+
+`tools/timings.sh`, `FORGE_SETS=island`, against 4103a5f: 2.28–2.36 ms against 2.26–2.30. #198
+is to skip those passes while the movers stand still.
+
 **The barrels afloat** (#177, 2026-10-08): the movers are now Jolt bodies on the island's
 water, ticked on the CPU at 60 Hz (`docs/demos/island.md`, "Barrels afloat"). The GPU passes
 above draw them as before (not measured again); this is the tick, with the fixed step:

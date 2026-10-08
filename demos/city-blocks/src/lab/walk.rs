@@ -42,17 +42,7 @@ const HEAVY_CRATES: u32 = 3;
 
 /// The playground's props: a stair's slab, a ramp, the platform, the player and its visor.
 pub(super) fn props() -> Vec<PropSpec> {
-    // The visor: a band across the face, so one sees where the player looks.
-    let mut visor = block(&Block {
-        half: [0.16, 0.05, 0.05],
-        radius: 0.02,
-        segments: 2,
-    });
-    for p in &mut visor.positions {
-        p[1] += 1.55;
-        p[2] -= 0.27;
-    }
-    vec![
+    let mut props = vec![
         PropSpec {
             name: "lab-slab".to_owned(),
             kind: PropKind::Block(Block {
@@ -77,6 +67,24 @@ pub(super) fn props() -> Vec<PropSpec> {
                 segments: 6,
             }),
         },
+    ];
+    props.extend(player_props());
+    props
+}
+
+/// The player's props, the island's walker's too (#196): its capsule and its visor.
+pub(crate) fn player_props() -> [PropSpec; 2] {
+    // The visor: a band across the face, so one sees where the player looks.
+    let mut visor = block(&Block {
+        half: [0.16, 0.05, 0.05],
+        radius: 0.02,
+        segments: 2,
+    });
+    for p in &mut visor.positions {
+        p[1] += 1.55;
+        p[2] -= 0.27;
+    }
+    [
         PropSpec {
             name: "lab-player".to_owned(),
             // A capsule 1.8 m tall and 0.3 m round, standing on its feet.
@@ -235,7 +243,7 @@ pub(super) fn build(
 /// The player's input as the world holds it: the walk (m/s along the ground, world x and z)
 /// held until the next command, and a jump waiting for the next tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct Player {
+pub(crate) struct Player {
     pub character: Option<CharacterId>,
     pub walk: [f32; 2],
     pub jump: bool,
@@ -246,7 +254,7 @@ pub(super) struct Player {
 impl Player {
     /// One tick: the platform's way, then the player moved as a game moves it (on firm ground
     /// it takes the ground's velocity and may jump; in the air it keeps its fall).
-    pub(super) fn tick(&mut self, world: &mut World, platform: Option<BodyId>, tick: u64, dt: f32) {
+    pub(crate) fn tick(&mut self, world: &mut World, platform: Option<BodyId>, tick: u64, dt: f32) {
         if let Some(platform) = platform {
             let way = if (tick / PLATFORM_TICKS).is_multiple_of(2) {
                 1.0
@@ -285,7 +293,7 @@ impl Player {
     }
 
     /// Its rotation: −z turned to where it last walked (no trigonometry: the arc between).
-    pub(super) fn rotation(&self) -> Quat {
+    pub(crate) fn rotation(&self) -> Quat {
         let f = Vec3::new(self.facing[0], 0.0, self.facing[1]);
         if f.length_squared() < 0.5 {
             return Quat::IDENTITY;

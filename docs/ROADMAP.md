@@ -442,7 +442,8 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    surface seen from below.
 4. **Walking** ✅ (#139, `physics-lab --lab walk`): a character controller (Jolt's
    `CharacterVirtual`): pushing crates, stairs, ramps, a moving platform; a moving deck with the
-   island's boats.
+   island's boats. ✅ on the island (#196, Enter or `--walker`): the same character on Jolt
+   height fields of the drawn ground, cut in tiles round it as it goes.
 5. **Vehicles and flight:** a car ✅ (#140, `physics-lab --lab drive`: Jolt's
    `VehicleConstraint`, springs, a geared engine, a handbrake; a ramp, a slalom, a wall of
    crates), the boat (step 3), a plane ✅ (#141, `--lab fly`: lift and drag per flying surface,

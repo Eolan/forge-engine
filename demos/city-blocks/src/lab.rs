@@ -53,7 +53,7 @@ pub(crate) use slime::FLAVOURS as SLIME_FLAVOURS;
 mod space;
 pub(crate) mod tank;
 mod tug;
-mod walk;
+pub(crate) mod walk;
 mod wall;
 pub(crate) mod yard;
 

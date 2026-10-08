@@ -56,6 +56,7 @@ use winit::keyboard::KeyCode;
 
 mod afloat;
 mod island_demo;
+mod island_walk;
 mod lab;
 
 use afloat::Barrels;
@@ -310,10 +311,15 @@ struct Args {
     /// in place of the arrow keys (#138).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     steer: Option<Vec<f32>>,
-    /// With `--lab walk`, the player's walk from the first frame, `X,Z` in m/s along the
-    /// ground, in place of the keys (#139).
+    /// With `--lab walk` or `--walker`, the player's walk from the first frame, `X,Z` in m/s
+    /// along the ground, in place of the keys (#139, #196).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     walk: Option<Vec<f32>>,
+    /// With `--island`, the walker on the ground at `X,Z` (the scene's metres) from the first
+    /// frame, as Enter puts it under the camera (#196); bare, on the southern beach the camera
+    /// starts off. (Negative coordinates as `--walker=-120,40`.)
+    #[arg(long, value_delimiter = ',', num_args = 0..)]
+    walker: Option<Vec<f32>>,
     /// With `--lab fly`, the aeroplane's controls from the first frame, `T,E,A,R` (throttle
     /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
@@ -709,6 +715,8 @@ struct Gallery {
     sea_time_submitted: f32,
     /// `--movers` (#79): the barrels drifting down the island's rivers, on the sea's clock.
     barrels: Option<Barrels>,
+    /// The island's walker, while one walks (#196): Enter puts it on the ground under the camera.
+    walker: Option<island_walk::Walker>,
     /// `--lab` (#136): the physics lab's world, whose bodies are the movers.
     /// The camera follows the lab's boat (C), and the throttle and rudder last sent (#138).
     chase: bool,
@@ -1406,6 +1414,17 @@ impl Gallery {
         let wakes = (barrels.is_some() && water.is_some() && !args.no_wakes)
             .then(|| WaterWakes::new(&ctx.device, &ctx.shaders))
             .transpose()?;
+        // `--walker X,Z` (#196): the island's walker on the ground there from the first frame.
+        let walker = match &args.walker {
+            Some(at) if args.lab.is_none() && args.island.is_some() => {
+                let at = match at.as_slice() {
+                    [] => Vec3::new(0.0, 0.0, island_beach(&args) as f32),
+                    [x, rest @ ..] => Vec3::new(*x, 0.0, rest.first().copied().unwrap_or(0.0)),
+                };
+                Some(island_walk::Walker::new(island_drawn(&args), at)?)
+            }
+            _ => None,
+        };
         // With the water, or the yard's spray (#192).
         let splashes = ((water.is_some() || args.lab == Some(lab::LabScene::Yard))
             && !args.no_splashes)
@@ -1421,6 +1440,7 @@ impl Gallery {
         }
         let mut gallery = Self {
             barrels,
+            walker,
             lab,
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(args.lab, Some(lab::LabScene::Drive | lab::LabScene::Flyer)),
@@ -1679,7 +1699,7 @@ impl Demo for Gallery {
             // Space: the player jumps in the playground (#139), the car's handbrake on the track
             // (#140, held: see `update`), what a scene holds back let go (the wrecking ball #142,
             // the flood's gate, the tank's gate or shutter #156: `held`); elsewhere it throws, as
-            // X does.
+            // X does. On the island, the walker jumps (#196).
             KeyCode::Space => {
                 if let Some(lab) = &mut self.lab {
                     if lab.has_player() {
@@ -1689,6 +1709,8 @@ impl Demo for Gallery {
                     } else if !lab.has_car() {
                         lab.throw(self.camera.position, self.camera.forward());
                     }
+                } else if let Some(walker) = &mut self.walker {
+                    walker.jump();
                 }
             }
             KeyCode::KeyX => {
@@ -1701,6 +1723,17 @@ impl Demo for Gallery {
                     lab.reset();
                     // The tank's water too: seeded again, the tick that puts the gate back skipped.
                     self.liquid_reset = true;
+                } else if self.args.island.is_some() {
+                    // The island's walker (#196): on the ground under the camera, or gone and the
+                    // camera free again where it is.
+                    self.walker = match self.walker.take() {
+                        Some(_) => None,
+                        None => {
+                            island_walk::Walker::new(island_drawn(&self.args), self.camera.position)
+                                .inspect_err(|e| tracing::warn!("the walker: {e}"))
+                                .ok()
+                        }
+                    };
                 }
             }
             // The tank's water as it looks, coloured by its speed, or by where its rays land (#156).
@@ -1822,23 +1855,9 @@ impl Demo for Gallery {
                     lab.pull(pulling);
                 }
             }
-            // The playground's player (#139): WASD along the view, Shift to run, or `--walk`;
-            // a command when the walk changes.
+            // The playground's player (#139): a command when the walk changes.
             if lab.has_player() {
-                let (sin, cos) = self.camera.yaw.sin_cos();
-                let (forward, right) = (Vec2::new(-sin, -cos), Vec2::new(cos, -sin));
-                let keys = |k: KeyCode| f32::from(u8::from(input.is_down(k)));
-                let wish = forward * (keys(KeyCode::KeyW) - keys(KeyCode::KeyS))
-                    + right * (keys(KeyCode::KeyD) - keys(KeyCode::KeyA));
-                let speed = if input.is_down(KeyCode::ShiftLeft) {
-                    lab::RUN_SPEED
-                } else {
-                    lab::WALK_SPEED
-                };
-                let mut walk = (wish.normalize_or_zero() * speed).to_array();
-                if let Some(w) = &self.args.walk {
-                    walk = [w[0], w.get(1).copied().unwrap_or(0.0)];
-                }
+                let walk = wished_walk(&self.args, self.camera.yaw, input);
                 if walk != self.walking {
                     self.walking = walk;
                     lab.walk(walk);
@@ -1848,6 +1867,11 @@ impl Demo for Gallery {
             if let Some(time) = lab.sea_time() {
                 self.sea_time = time;
             }
+        }
+        // The island's walker (#196), as the playground's player walks.
+        if let Some(walker) = &mut self.walker {
+            walker.walk(wished_walk(&self.args, self.camera.yaw, input));
+            walker.advance(f64::from(dt), self.args.fixed_step);
         }
         if let Some(length) = self.args.day {
             self.day_time += self.step;
@@ -1885,16 +1909,28 @@ impl Demo for Gallery {
             self.camera.position = Vec3::new(angle.sin() * radius, height, angle.cos() * radius);
             self.camera.yaw = angle;
             self.camera.pitch = pitch;
-        } else if let Some(player) = self.lab.as_mut().and_then(lab::Lab::player) {
-            // The playground (#139): the right mouse button turns the view round the player,
-            // the camera 5 m behind its head along the view.
+        } else if let Some(feet) = self
+            .lab
+            .as_mut()
+            .and_then(lab::Lab::player)
+            .map(|p| p.position)
+            .or_else(|| self.walker.as_ref().map(|w| w.feet().as_vec3()))
+        {
+            // The playground (#139) and the island's walker (#196): the right mouse button turns
+            // the view round the player, the camera 5 m behind its head along the view; on the
+            // island, kept over the ground behind it.
             if input.looking {
                 let s = self.camera.sensitivity;
                 self.camera.yaw -= input.mouse_delta.0 * s;
                 self.camera.pitch = (self.camera.pitch - input.mouse_delta.1 * s).clamp(-1.2, 0.5);
             }
-            let head = player.position + Vec3::new(0.0, 1.6, 0.0);
+            let head = feet + Vec3::new(0.0, 1.6, 0.0);
             self.camera.position = head - self.camera.forward() * 5.0;
+            if let Some(walker) = &self.walker {
+                let p = self.camera.position;
+                let ground = walker.ground_at(f64::from(p.x), f64::from(p.z)) as f32;
+                self.camera.position.y = p.y.max(ground + 0.3);
+            }
         } else {
             self.camera.update(input, dt);
         }
@@ -2130,10 +2166,20 @@ impl Demo for Gallery {
         }
         // The camera in the scene frame, where the probes and the rays live (issue #93).
         let camera_in_scene = camera.position.relative_to(self.scene.origin());
-        // The movers where they stand at the sea's time (#79): the barrels' ticks up to it (#177).
-        if let Some(barrels) = &mut self.barrels {
-            barrels.advance(self.sea_time);
-            self.scene.set_movers(&barrels.transforms());
+        // The movers where they stand at the sea's time (#79): the barrels' ticks up to it (#177);
+        // then the island's walker, or its place under the island while nobody walks (#196).
+        if self.args.island.is_some() && self.lab.is_none() {
+            let mut movers = Vec::new();
+            if let Some(barrels) = &mut self.barrels {
+                barrels.advance(self.sea_time);
+                movers = barrels.transforms();
+            }
+            movers.extend(
+                self.walker
+                    .as_ref()
+                    .map_or_else(island_walk::Walker::parked, island_walk::Walker::transforms),
+            );
+            self.scene.set_movers(&movers);
         }
         // The lab's bodies between their last two ticks (#136).
         if let Some(lab) = &self.lab {
@@ -2889,6 +2935,10 @@ impl Demo for Gallery {
             Some(barrels) => format!("{title} | {}", barrels.title()),
             None => title,
         };
+        let title = match &mut self.walker {
+            Some(walker) => format!("{title} | {}", walker.title()),
+            None => title,
+        };
         self.streaming.clear();
         self.stats.clear();
         self.gpu_ms.clear();
@@ -2922,6 +2972,25 @@ impl Drop for Gallery {
             );
         }
     }
+}
+
+/// The walk the keys ask of a player (#139) or the island's walker (#196): WASD along the view
+/// turned `yaw`, Shift to run; or `--walk`. M/s along the ground, world x and z.
+fn wished_walk(args: &Args, yaw: f32, input: &Input) -> [f32; 2] {
+    if let Some(w) = &args.walk {
+        return [w[0], w.get(1).copied().unwrap_or(0.0)];
+    }
+    let (sin, cos) = yaw.sin_cos();
+    let (forward, right) = (Vec2::new(-sin, -cos), Vec2::new(cos, -sin));
+    let keys = |k: KeyCode| f32::from(u8::from(input.is_down(k)));
+    let wish = forward * (keys(KeyCode::KeyW) - keys(KeyCode::KeyS))
+        + right * (keys(KeyCode::KeyD) - keys(KeyCode::KeyA));
+    let speed = if input.is_down(KeyCode::ShiftLeft) {
+        lab::RUN_SPEED
+    } else {
+        lab::WALK_SPEED
+    };
+    (wish.normalize_or_zero() * speed).to_array()
 }
 
 /// The glass tank's line in the log (#156): what is left of the water, where its surface stands
@@ -5361,6 +5430,9 @@ fn island_factor(args: &Args) -> u32 {
     factor
 }
 
+/// The walker's props, the island's last: its capsule and its visor (#196).
+const ISLAND_WALKER_PROPS: usize = 2;
+
 /// Metres past the water's reach (the refined cells, the lakes, the ground under the shore's
 /// 3.5 m) over which the amplification's detail fades in (#106): the channels, the lakes'
 /// shores and the beaches keep the ground the water was made for.
@@ -5389,6 +5461,38 @@ impl DrawnGround {
         let at = |i: usize, j: usize| f64::from(self.heights[j * n + i]);
         let (i, j) = (cx as usize, cy as usize);
         let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+        if tx + ty <= 1.0 {
+            a + tx * (b - a) + ty * (c - a)
+        } else {
+            d + (1.0 - tx) * (c - d) + (1.0 - ty) * (b - d)
+        }
+    }
+
+    /// [`Self::height_at`] with the refined cells too (#196): in one, its fine quads split
+    /// along the same diagonal, as `forge_geom::city::refined_heightfield_mesh` draws them. (A
+    /// coarse cell beside a refined one is a fan whose triangles are its own two.)
+    fn surface_at(&self, x: f64, y: f64) -> f64 {
+        let side = self.size - 1;
+        let (gx, gy) = (x / self.spacing, y / self.spacing);
+        let last = f64::from(side - 1);
+        let (cx, cy) = (gx.floor().clamp(0.0, last), gy.floor().clamp(0.0, last));
+        let cell = cy as u32 * side + cx as u32;
+        let Ok(s) = self.detail.cells.binary_search(&cell) else {
+            return self.height_at(x, y);
+        };
+        let k = self.detail.split.max(1) as usize;
+        let row = k + 1;
+        let heights = &self.detail.heights[s * row * row..(s + 1) * row * row];
+        let span = k as f64;
+        let (fx, fy) = (
+            ((gx - cx) * span).clamp(0.0, span),
+            ((gy - cy) * span).clamp(0.0, span),
+        );
+        let (u, v) = (fx.floor().min(span - 1.0), fy.floor().min(span - 1.0));
+        let (tx, ty) = (fx - u, fy - v);
+        let at = |u: usize, v: usize| f64::from(heights[v * row + u]);
+        let (u, v) = (u as usize, v as usize);
+        let (a, b, c, d) = (at(u, v), at(u + 1, v), at(u, v + 1), at(u + 1, v + 1));
         if tx + ty <= 1.0 {
             a + tx * (b - a) + ty * (c - a)
         } else {
@@ -5859,13 +5963,7 @@ fn set_start_view(
 /// 1 m walking north from the domain's south edge), so it holds for any seed. From farther out,
 /// the whole island: `--view 0,300,6800,0,-0.08`.
 fn island_camera(args: &Args) -> FlyCamera {
-    let height = island_heights(args);
-    let n = height.size;
-    let half = height.extent() * 0.5;
-    let beach = (0..n)
-        .rev()
-        .find(|&j| height.get(n / 2, j) > 1.0)
-        .map_or(0.0, |j| f64::from(j) * height.spacing - half);
+    let beach = island_beach(args);
     let camera = FlyCamera {
         position: Vec3::new(0.0, 25.0, (beach + 150.0) as f32),
         pitch: 0.03,
@@ -5878,6 +5976,19 @@ fn island_camera(args: &Args) -> FlyCamera {
         "island first view (--view takes x,y,z,yaw,pitch in degrees)"
     );
     camera
+}
+
+/// The island's southern beach on its middle line (x = 0): the scene's z of the southmost sample
+/// there over 1 m, where the land begins (the camera starts 150 m off it; a bare `--walker`
+/// stands on it, #196).
+fn island_beach(args: &Args) -> f64 {
+    let height = island_heights(args);
+    let n = height.size;
+    let half = height.extent() * 0.5;
+    (0..n)
+        .rev()
+        .find(|&j| height.get(n / 2, j) > 1.0)
+        .map_or(0.0, |j| f64::from(j) * height.spacing - half)
 }
 
 /// The island's props, in the order `build_island` reads them: the island's tiles, the sea around
@@ -5901,6 +6012,8 @@ fn island_props(args: &Args) -> Vec<PropSpec> {
         props.push(barrel_prop());
         props.extend(afloat::props());
     }
+    // The walker's capsule and visor after them (#196).
+    props.extend(lab::walk::player_props());
     props
 }
 
@@ -6623,8 +6736,11 @@ fn build_island(
             named(&ISLAND_STONES[GRANITE_STONES..]),
         )
     } else {
+        // The props after the tiles and the sea, less the movers' barrel, log and crate and the
+        // walker's two.
+        let movers_props = if args.movers > 0 { 3 } else { 0 };
         (
-            ids[tiles + 1..ids.len() - usize::from(args.movers > 0)].to_vec(),
+            ids[tiles + 1..ids.len() - ISLAND_WALKER_PROPS - movers_props].to_vec(),
             Vec::new(),
         )
     };
@@ -6638,12 +6754,17 @@ fn build_island(
         column: rocks[0],
     };
     let first = builder.reserve_instances(&placement::mesh_counts(&layout, &meshes));
-    // The movers (#79), the table's last instances: their transforms come every frame.
+    // The movers (#79), the table's last instances: their transforms come every frame. The
+    // barrels', then the walker's capsule and visor (#196).
+    let mut movers = Vec::new();
     if args.movers > 0 {
-        let [barrel, log, crate_] = [3, 2, 1].map(|from_end| ids[ids.len() - from_end]);
+        let [barrel, log, crate_] =
+            [3, 2, 1].map(|from_end| ids[ids.len() - ISLAND_WALKER_PROPS - from_end]);
         let [barrels, logs, crates] = Barrels::movers(args.movers);
-        builder.reserve_movers(&[(barrel, barrels), (log, logs), (crate_, crates)]);
+        movers.extend([(barrel, barrels), (log, logs), (crate_, crates)]);
     }
+    movers.extend([2, 1].map(|from_end| (ids[ids.len() - from_end], 1)));
+    builder.reserve_movers(&movers);
     // No rock on the cells the channels are carved in or the lakes' shores smoothed (the
     // placement reads the 8 m samples, which those cells no longer follow), nor under a lake:
     // their samples are set far under the rocks' 3 m.
