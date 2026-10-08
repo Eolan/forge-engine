@@ -141,7 +141,7 @@ pub struct FjSoftBodyDesc {
     pub friction: f32,
     pub restitution: f32,
     pub iterations: u32,
-    pub pad: u32,
+    pub gravity_factor: f32,
     pub user_data: u64,
 }
 
@@ -173,6 +173,13 @@ unsafe extern "C" {
     ) -> *mut FjShape;
     pub fn fj_soft_body_add(world: *mut FjWorld, desc: *const FjSoftBodyDesc) -> u32;
     pub fn fj_soft_body_push(world: *mut FjWorld, body: u32, velocity: *const f32);
+    pub fn fj_soft_body_upright(
+        world: *mut FjWorld,
+        body: u32,
+        top: u32,
+        spring: f32,
+        damping: f32,
+    );
     pub fn fj_soft_body_vertices(
         world: *const FjWorld,
         body: u32,

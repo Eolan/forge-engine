@@ -618,6 +618,30 @@ it. `flavours.png`: frames 60, 100 (mint and blue in the air) and 150. Costs (th
 the tick **0.285 ms** (p99 0.48), two runs to the same digest; `shading/jelly` 0.097 ms; the
 frame 1.58 ms.
 
+**The island's gait** (the owner: its slimes' animation was better). The island's slimes bounce
+without pause, a cycle of 1.5 s (their phase at 4.2 rad/s), in the air for half of it on a
+gentle arc, squashed wide on the ground and stretched up in the air (1 + 0.2 sin of the phase,
+the width going as its inverse square root), a wobble running up the body, and they turn to
+face where they go and never roll. Here:
+- **The bounce** is the soft body's: at the start of each cycle a hop of 1 m/s up and
+  0.55 m/s along under 0.35 of gravity (`SoftBodyDesc::gravity_factor`): 0.15 m up, 0.59 s in
+  the air. One cycle in four, drawn at random, it sits and only breathes (half the stretch).
+- **Its way** is steered as the island's: a wish drawn at random, pulled home as it strays
+  (wholly at 0.35 m), and pushed from every other slime within 1.5 m, the harder the nearer.
+  Over 10 s none strays 0.47 m from home and no two come within 0.77 m.
+- **Upright**: `World::keep_soft_body_upright` damps its spin as a rigid body's (0.3 a tick)
+  and turns it back by 6 rad/s a sine of its tilt (its top point's). Pushed along, a soft body
+  that lands is caught by the ground at its bottom and tumbles; the first take rolled the mint
+  one onto its back.
+- **The look** is laid over the soft body's own squash where it is drawn (`slime::skin`, from
+  the island's vertex shader): the body turned to its heading (from its last way to this one
+  over the first sixth of the cycle), stretched about its bottom, and each height shifted
+  sideways by a wave running up it (0.025 m a metre of height, 5 rad/s).
+
+`gait.png`: frames 180 to 236, 8 frames apart, from before the front pair
+(`--view=0.0,0.9,3.9,0,-14`). Costs (the same run): the tick **0.324 ms** (p99 0.52–0.55), two
+runs to the same digest; `shading/jelly` 0.106 ms; the frame 1.59 ms.
+
 **The clips through the motors** (#167's first three steps, 2026-10-08; `forge_anim::Player`,
 `Inertializer`, `BlendSpace`; `reports/2026-10-08-167/`). The creatures now play their Blender
 clips (idle and walk, `assets/blender/skinned_creatures.py`) through their motors, in place of

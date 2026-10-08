@@ -769,6 +769,7 @@ fn jelly() -> (Vec<Vec3>, DVec3, f32) {
             friction: 0.5,
             restitution: 0.0,
             iterations: 5,
+            gravity_factor: 1.0,
             user_data: 7,
         })
         .expect("the jelly");
@@ -825,6 +826,7 @@ fn a_soft_body_naming_a_missing_vertex_is_refused() {
         friction: 0.5,
         restitution: 0.0,
         iterations: 5,
+        gravity_factor: 1.0,
         user_data: 0,
     };
     assert_eq!(
@@ -853,6 +855,7 @@ fn a_pushed_soft_body_hops() {
             friction: 0.5,
             restitution: 0.0,
             iterations: 5,
+            gravity_factor: 1.0,
             user_data: 0,
         })
         .expect("the jelly");
@@ -873,4 +876,47 @@ fn a_pushed_soft_body_hops() {
         "along {} m",
         up.x - resting.x
     );
+}
+
+#[test]
+fn a_soft_body_kept_upright_does_not_roll() {
+    // Thrown along the floor, a ball of jelly rolls; kept upright, its top stays up.
+    let tops = [false, true].map(|keep| {
+        let (points, faces) = ball(0.4);
+        let mut world = World::new(&WorldDesc::default());
+        let floor = Shape::cuboid(Vec3::new(20.0, 0.5, 20.0), 0.05, 1000.0).expect("a box");
+        world
+            .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
+            .expect("the floor");
+        let body = world
+            .add_soft_body(&SoftBodyDesc {
+                points: &points,
+                faces: &faces,
+                position: DVec3::new(0.0, 0.42, 0.0),
+                inverse_mass: points.len() as f32 / 2.0,
+                compliance: 1.0e-4,
+                bend_compliance: f32::MAX,
+                pressure: 400.0,
+                friction: 1.0,
+                restitution: 0.0,
+                iterations: 5,
+                gravity_factor: 1.0,
+                user_data: 0,
+            })
+            .expect("the jelly");
+        world.push_soft_body(body, Vec3::new(4.0, 0.0, 0.0));
+        let mut out = Vec::new();
+        for _ in 0..120 {
+            if keep {
+                // The octahedron's +y point.
+                world.keep_soft_body_upright(body, 2, 6.0, 0.3);
+            }
+            world.step(1.0 / 60.0, 1).expect("a step");
+        }
+        world.soft_body_vertices(body, &mut out);
+        let centre = out.iter().sum::<Vec3>() / out.len() as f32;
+        (out[2] - centre).normalize().y
+    });
+    assert!(tops[0] < 0.9, "it did not roll: its top at {}", tops[0]);
+    assert!(tops[1] > 0.95, "kept upright, its top at {}", tops[1]);
 }

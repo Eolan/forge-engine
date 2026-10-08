@@ -31,3 +31,16 @@ in its own square, 19 ticks after the one before it.
 
 **Costs** (the same run): the tick 0.285 ms (p99 0.48 ms), two runs to digest
 `0xc9ef4de997d2d0fe`; `shading/jelly` 0.097 ms; the frame 1.58 ms.
+
+## The island's gait
+
+`gait.png`: frames 180 to 236, 8 frames apart, from before the front pair
+(`--view=0.0,0.9,3.9,0,-14`): the slimes bounce every 1.5 s on a floaty arc, squash and stretch,
+wobble, turn to face their way and keep apart, upright.
+
+**Costs** (the same run): the tick 0.324 ms (p99 0.52–0.55 ms), two runs to digest
+`0xf9e5ac4b0702c98e`; `shading/jelly` 0.106 ms; the frame 1.59 ms.
+
+**Checks** (the flavours and the gait): Tier 1: every image 0 px but #71's flake and the
+creatures' scene's eight on both paths (ꟻLIP means 0.044 to 0.051); the A/B pairs 0 px;
+validation clean; 402 tests.

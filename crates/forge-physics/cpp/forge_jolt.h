@@ -133,7 +133,7 @@ typedef struct FjSoftBodyDesc {
     float friction;
     float restitution;
     uint32_t iterations;
-    uint32_t pad;
+    float gravity_factor; // what share of the world's gravity pulls it
     uint64_t user_data;
 } FjSoftBodyDesc;
 
@@ -192,6 +192,10 @@ uint32_t fj_body_add(FjWorld *world, const FjBodyDesc *desc);
 uint32_t fj_soft_body_add(FjWorld *world, const FjSoftBodyDesc *desc);
 // Adds `velocity` (three floats) to every free vertex of a soft body and wakes it.
 void fj_soft_body_push(FjWorld *world, uint32_t body, const float velocity[3]);
+// Keeps a soft body upright as a whole: its spin (as a rigid body's) damped by `damping`, and an
+// angular velocity of `spring` times the sine of its tilt (its point `top`'s way from its middle
+// against +y) turning it back, both given to its points' velocities.
+void fj_soft_body_upright(FjWorld *world, uint32_t body, uint32_t top, float spring, float damping);
 // A soft body's vertices after the last step: three floats each into `points` (at most `capacity`),
 // about `origin` (three doubles), its middle in the world. Returns their number (0 for a body that
 // is no soft body).

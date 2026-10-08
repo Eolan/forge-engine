@@ -44,22 +44,37 @@ pub(crate) const FLAVOURS: [(&str, [f32; 3]); 4] = [
     ("lab-slime-pink", [1.00, 0.55, 0.80]),
     ("lab-slime-yellow", [1.00, 0.85, 0.30]),
 ];
-/// Where each slime's middle starts (x, z; its bottom 2 cm up): two before the dogs, two
-/// between them. Which way its square of hops turns (1: its first hop towards +x, −1: −x), so
-/// each pair's two keep apart, and how many ticks after the first slime's its hops come, so
-/// they hop out of step.
-const STARTS: [(f64, f64, f32, u64); 4] = [
-    (-0.45, 2.3, -1.0, 0),
-    (0.45, 2.3, 1.0, 19),
-    (-0.35, 1.25, -1.0, 38),
-    (0.35, 1.25, 1.0, 56),
+/// Where each slime's home is (x, z; it starts there, its bottom 2 cm up): two before the dogs,
+/// two between them; and how many ticks after the first slime's its gait starts, so they bounce
+/// out of step.
+const STARTS: [(f64, f64, u64); 4] = [
+    (-0.6, 2.35, 0),
+    (0.6, 2.35, 23),
+    (-0.5, 1.15, 45),
+    (0.5, 1.15, 68),
 ];
-/// A hop every `HOP` ticks: the speed it takes up, and along its way, m/s, its way turning a
-/// quarter each hop (a square it comes back round).
-const HOP: u64 = 75;
-const HOP_UP: f32 = 2.8;
-const HOP_ALONG: f32 = 0.8;
-const WAYS: [[f32; 2]; 4] = [[1.0, 0.0], [0.0, -1.0], [-1.0, 0.0], [0.0, 1.0]];
+/// The island's gait (`ti-sim`: a slime's phase runs at 4.2 rad/s): a bounce every `CYCLE`
+/// ticks (1.5 s). Each starts with a hop, airborne for about half the cycle: it rises `HOP_UP`
+/// m/s under `GRAVITY` of the world's (a floaty bounce, as the island's arc of half a cycle;
+/// 0.15 m up, 0.59 s in the air), and goes `HOP_ALONG` m/s its way, which it picks at random
+/// each hop, back towards home when it has strayed `LEASH` metres. One cycle in `IDLE` it sits
+/// and only breathes.
+pub(super) const CYCLE: u64 = 90;
+const GRAVITY: f32 = 0.35;
+const HOP_UP: f32 = 1.0;
+const HOP_ALONG: f32 = 0.55;
+const LEASH: f32 = 0.35;
+/// How near another slime pushes its way away from it, metres between their middles
+/// (the island's keep their distance; soft bodies pressed together crumple).
+const SPACE: f32 = 1.5;
+const IDLE: u64 = 4;
+/// The wobble running up the body: its sideways shift a metre of height (the island's).
+const WOBBLE: f32 = 0.025;
+/// What keeps it upright (`World::keep_soft_body_upright`): its top point (the octahedron's +y),
+/// the turn back, rad/s a sine of tilt, and the share of its spin damped a tick.
+const TOP: u32 = 2;
+const UPRIGHT_SPRING: f32 = 6.0;
+const UPRIGHT_DAMPING: f32 = 0.3;
 /// The sphere about its middle its points stay in, however it squashes, metres.
 pub(super) const BOUND: f32 = 1.0;
 /// Its points (the skinned mesh's joints).
@@ -79,12 +94,64 @@ const NUCLEUS: [f32; 3] = [0.09, 0.072, 0.084];
 /// body's middle is, while the points under it would swing it apart as the bottom flattens.
 const WAIST: [(u32, f32); 4] = [(0, 0.25), (1, 0.25), (4, 0.25), (5, 0.25)];
 
-/// A slime: its body, which way its square of hops turns, and its hops' delay (`STARTS`).
-#[derive(Clone, Copy, Debug)]
+/// A slime: its body, its home and its gait's delay (`STARTS`), its index (its draws of chance
+/// follow it), and its way this hop and the last (unit x, z) and whether it sits this cycle.
+#[derive(Clone, Debug)]
 pub(super) struct Slime {
     pub body: BodyId,
-    turn: f32,
+    home: [f32; 2],
     delay: u64,
+    index: u64,
+    way: [f32; 2],
+    last_way: [f32; 2],
+    idle: bool,
+}
+
+/// How a slime is drawn at a moment ([`Slime::look`]): which way it faces (radians about +y,
+/// 0 facing +z), how far it stretches up (the island's squash and stretch, its width going as
+/// the inverse square root), and its wobble's clock (seconds, offset per slime).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Look {
+    pub heading: f32,
+    pub stretch: f32,
+    pub clock: f32,
+    /// The wobble's sideways shift a metre of height.
+    pub wobble: f32,
+}
+
+#[cfg(test)]
+impl Look {
+    /// Facing +z, unstretched, still: the body as the soft body has it.
+    pub const REST: Look = Look {
+        heading: 0.0,
+        stretch: 1.0,
+        clock: 0.0,
+        wobble: 0.0,
+    };
+}
+
+/// SplitMix64's finaliser: a draw of chance from `x`.
+fn mix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// A unit direction on the ground drawn from `seed`, without trigonometry (D-016): a point of
+/// the square kept when it falls in the ring between 0.2 and 1 from its middle.
+fn direction(seed: u64) -> [f32; 2] {
+    let unit = |x: u64| (mix(x) >> 40) as f32 / (1u64 << 24) as f32;
+    for k in 0..64 {
+        let x = 2.0 * unit(seed ^ (2 * k)) - 1.0;
+        let z = 2.0 * unit(seed ^ (2 * k + 1)) - 1.0;
+        let r2 = x * x + z * z;
+        if (0.04..=1.0).contains(&r2) {
+            let r = r2.sqrt();
+            return [x / r, z / r];
+        }
+    }
+    [0.0, 1.0]
 }
 
 /// The slime's surfaces: its points as the soft body takes them, and the finer mesh drawn with
@@ -344,12 +411,13 @@ fn under(points: &[Vec3], faces: &[[u32; 3]], d: Vec3) -> Vec<(u32, f32)> {
     unreachable!("every direction meets the closed drop")
 }
 
-/// Adds the four slimes to `world`, in the order of [`FLAVOURS`].
+/// Adds the four slimes to `world`, in the order of [`FLAVOURS`], facing +z (the camera).
 pub(super) fn build(world: &mut World) -> Result<Vec<Slime>> {
     let s = surface();
     STARTS
         .iter()
-        .map(|&(x, z, turn, delay)| {
+        .enumerate()
+        .map(|(index, &(x, z, delay))| {
             let body = world.add_soft_body(&SoftBodyDesc {
                 points: &s.points,
                 faces: &s.faces,
@@ -358,31 +426,123 @@ pub(super) fn build(world: &mut World) -> Result<Vec<Slime>> {
                 compliance: COMPLIANCE,
                 bend_compliance: BEND_COMPLIANCE,
                 pressure: PRESSURE,
-                friction: 0.8,
+                friction: 0.4,
                 restitution: 0.0,
                 iterations: 5,
+                gravity_factor: GRAVITY,
                 user_data: 0,
             })?;
-            Ok(Slime { body, turn, delay })
+            Ok(Slime {
+                body,
+                home: [x as f32, z as f32],
+                delay,
+                index: index as u64,
+                way: [0.0, 1.0],
+                last_way: [0.0, 1.0],
+                idle: false,
+            })
         })
         .collect()
 }
 
+/// Drives every slime before the step of tick `tick` ([`Slime::drive`]), each knowing where the
+/// others are.
+pub(super) fn drive_all(slimes: &mut [Slime], world: &mut World, tick: u64) {
+    let bodies: Vec<BodyId> = slimes.iter().map(|s| s.body).collect();
+    let mut at = Vec::new();
+    world.transforms(&bodies, &mut at);
+    let places: Vec<[f32; 2]> = at
+        .iter()
+        .map(|t| [t.position.x as f32, t.position.z as f32])
+        .collect();
+    for s in slimes {
+        s.drive(world, tick, &places);
+    }
+}
+
 impl Slime {
-    /// Before the step of tick `tick`: a hop every [`HOP`] ticks, `delay` ticks late.
-    pub(super) fn drive(self, world: &mut World, tick: u64) {
+    /// Before the step of tick `tick`: kept upright (the island's slimes never roll; pushed
+    /// along and caught by the ground as it lands, a soft body tumbles), and at the start of
+    /// each cycle of its gait a hop its way (drawn at random, or back home when it has strayed),
+    /// or, one cycle in [`IDLE`], a rest.
+    fn drive(&mut self, world: &mut World, tick: u64, others: &[[f32; 2]]) {
+        world.keep_soft_body_upright(self.body, TOP, UPRIGHT_SPRING, UPRIGHT_DAMPING);
         let Some(t) = tick.checked_sub(self.delay) else {
             return;
         };
-        if t % HOP == HOP - 1 {
-            let [x, z] = WAYS[(t / HOP % 4) as usize];
-            let along = Vec3::new(self.turn * x, 0.0, z) * HOP_ALONG;
-            world.push_soft_body(self.body, along + Vec3::Y * HOP_UP);
+        if !t.is_multiple_of(CYCLE) {
+            return;
+        }
+        let hop = t / CYCLE;
+        let seed = mix(self.index.wrapping_mul(0x1_0000_0001) ^ hop);
+        self.last_way = self.way;
+        self.idle = hop > 0 && seed.is_multiple_of(IDLE);
+        if self.idle {
+            return;
+        }
+        let mut at = Vec::new();
+        world.transforms(&[self.body], &mut at);
+        let p = at[0].position;
+        let home = [self.home[0] - p.x as f32, self.home[1] - p.z as f32];
+        let away = (home[0] * home[0] + home[1] * home[1]).sqrt();
+        // Steered as the island's: a wish drawn at random, pulled home as it strays (fully at
+        // the leash), and pushed from every other within `SPACE`, the harder the nearer.
+        let wish = direction(seed >> 8);
+        let pull = (away / LEASH).min(2.0) / away.max(1e-4);
+        let mut steer = [
+            0.5 * wish[0] + home[0] * pull,
+            0.5 * wish[1] + home[1] * pull,
+        ];
+        for q in others {
+            let d = [p.x as f32 - q[0], p.z as f32 - q[1]];
+            let r = (d[0] * d[0] + d[1] * d[1]).sqrt();
+            if r > 1e-4 && r < SPACE {
+                let push = 3.0 * (SPACE - r) / SPACE / r;
+                steer[0] += d[0] * push;
+                steer[1] += d[1] * push;
+            }
+        }
+        let size = (steer[0] * steer[0] + steer[1] * steer[1]).sqrt();
+        self.way = if size > 1e-4 {
+            [steer[0] / size, steer[1] / size]
+        } else {
+            wish
+        };
+        let [x, z] = self.way;
+        world.push_soft_body(self.body, Vec3::new(x * HOP_ALONG, HOP_UP, z * HOP_ALONG));
+    }
+
+    /// How it is drawn `ticks` ticks from the start (between two ticks): its heading turning
+    /// from its last way to this one over the first sixth of the cycle, and the island's squash
+    /// and stretch, 1 + 0.2 sin of the gait's phase (stretched in the air, squashed on landing;
+    /// half as much while it sits).
+    pub(super) fn look(&self, ticks: f64) -> Look {
+        let t = (ticks - self.delay as f64).max(0.0);
+        let cycle = (t / CYCLE as f64).fract() as f32;
+        let phase = std::f32::consts::TAU * cycle;
+        let angle = |w: [f32; 2]| w[0].atan2(w[1]);
+        let (from, to) = (angle(self.last_way), angle(self.way));
+        let mut turn = to - from;
+        if turn > std::f32::consts::PI {
+            turn -= std::f32::consts::TAU;
+        } else if turn < -std::f32::consts::PI {
+            turn += std::f32::consts::TAU;
+        }
+        let eased = {
+            let s = (cycle * 6.0).min(1.0);
+            s * s * (3.0 - 2.0 * s)
+        };
+        let swing = if self.idle { 0.08 } else { 0.2 };
+        Look {
+            heading: from + turn * eased,
+            stretch: 1.0 + swing * phase.sin(),
+            clock: ticks as f32 / 60.0 + 1.7 * self.index as f32,
+            wobble: WOBBLE,
         }
     }
 
     /// Its points in the world after the last step into `out`.
-    pub(super) fn points(self, world: &World, out: &mut Vec<Vec3>) {
+    pub(super) fn points(&self, world: &World, out: &mut Vec<Vec3>) {
         let origin = world.soft_body_vertices(self.body, out);
         for p in out.iter_mut() {
             *p = (origin + p.as_dvec3()).as_vec3();
@@ -392,9 +552,23 @@ impl Slime {
 
 /// The matrices that bend the slime's mesh, one a point into `out`: each takes the point from
 /// its place at rest to `points[k]` (about the slime's mover), turned as the surface's normal
-/// there turned.
-pub(super) fn skin(points: &[Vec3], out: &mut Vec<Mat4>) {
+/// there turned. Then the island's look (`look`, its vertex shader's): the body turned to its
+/// heading about its middle, stretched up and thinned about its bottom, and wobbling, each
+/// height shifted sideways by a wave running up the body (0.025 m a metre of height, at
+/// 5 rad/s).
+pub(super) fn skin(points: &[Vec3], look: Look, out: &mut Vec<Mat4>) {
     let s = surface();
+    let bottom = points.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+    let turned = Quat::from_rotation_y(look.heading);
+    let shape = Mat4::from_translation(Vec3::Y * bottom)
+        * Mat4::from_quat(turned)
+        * Mat4::from_scale(Vec3::new(
+            1.0 / look.stretch.sqrt(),
+            look.stretch,
+            1.0 / look.stretch.sqrt(),
+        ))
+        * Mat4::from_translation(-Vec3::Y * bottom);
+    let side = turned * Vec3::X;
     out.clear();
     out.extend(
         s.points
@@ -403,7 +577,11 @@ pub(super) fn skin(points: &[Vec3], out: &mut Vec<Mat4>) {
             .zip(s.normals.iter().zip(normals(&s.faces, points)))
             .map(|((&rest, &at), (&was, now))| {
                 let turn = Quat::from_rotation_arc(was, now.normalize_or(was));
-                Mat4::from_rotation_translation(turn, at - turn * rest)
+                let height = at.y - bottom;
+                let wobble = (look.clock * 5.0 + height * 15.0).sin() * look.wobble * height;
+                Mat4::from_translation(side * wobble)
+                    * shape
+                    * Mat4::from_rotation_translation(turn, at - turn * rest)
             }),
     );
 }
@@ -440,7 +618,7 @@ mod tests {
         }
         // At rest, every matrix leaves its vertex where it is.
         let mut m = Vec::new();
-        skin(&s.points, &mut m);
+        skin(&s.points, Look::REST, &mut m);
         for (k, p) in s.mesh.positions.iter().enumerate() {
             let p = Vec3::from_array(*p);
             let w = &s.skin[k];
@@ -490,13 +668,13 @@ mod tests {
     }
 
     #[test]
-    fn the_slimes_sit_squat_and_hop_in_turn() {
+    fn the_slimes_sit_squat_bounce_in_turn_and_stay_home() {
         let mut world = World::new(&WorldDesc::default());
         let floor = Shape::cuboid(Vec3::new(10.0, 0.5, 10.0), 0.05, 1000.0).unwrap();
         world
             .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
             .unwrap();
-        let slimes = build(&mut world).unwrap();
+        let mut slimes = build(&mut world).unwrap();
         assert_eq!(slimes.len(), FLAVOURS.len());
         let mut points = Vec::new();
         let span = |points: &[Vec3]| {
@@ -504,31 +682,50 @@ mod tests {
                 .iter()
                 .fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p.y), h.max(p.y)))
         };
-        // Each one's bottom at its highest in its first hop, and the tick it was.
+        // Each one's bottom at its highest in its first cycle, and the tick it was.
         let mut highest = [(f32::MIN, 0); 4];
-        let last = STARTS.iter().map(|s| s.3).max().unwrap() + HOP + 30;
-        for tick in 0..last {
-            for s in &slimes {
-                s.drive(&mut world, tick);
-            }
+        let mut farthest = [0.0_f32; 4];
+        let mut closest = f32::MAX;
+        for tick in 0..600 {
+            drive_all(&mut slimes, &mut world, tick);
             world.step(1.0 / 60.0, 1).unwrap();
+            let mut middles = Vec::new();
             for (k, s) in slimes.iter().enumerate() {
                 s.points(&world, &mut points);
                 let (low, high) = span(&points);
-                if tick == HOP - 2 {
+                let first = STARTS[k].2;
+                if tick == first {
                     assert!(low > -0.02 && high < 0.45, "slime {k} sits {low} to {high}");
                 }
-                let first = HOP - 1 + STARTS[k].3;
-                if (first..first + 40).contains(&tick) && low > highest[k].0 {
+                if (first..first + CYCLE).contains(&tick) && low > highest[k].0 {
                     highest[k] = (low, tick);
+                }
+                let middle = points.iter().sum::<Vec3>() / points.len() as f32;
+                let away = (middle.x - s.home[0]).hypot(middle.z - s.home[1]);
+                farthest[k] = farthest[k].max(away);
+                middles.push(middle);
+                let look = s.look(tick as f64);
+                assert!((0.79..=1.21).contains(&look.stretch));
+            }
+            for (i, a) in middles.iter().enumerate() {
+                for b in &middles[i + 1..] {
+                    closest = closest.min((a.x - b.x).hypot(a.z - b.z));
                 }
             }
         }
-        for (k, &(low, tick)) in highest.iter().enumerate() {
-            assert!(low > 0.2, "slime {k}'s bottom rose to {low} m");
-            // At the top of its own hop, its delay after the first's.
-            let top = HOP - 1 + STARTS[k].3 + 17;
-            assert!(tick.abs_diff(top) < 8, "slime {k} highest at tick {tick}");
+        for k in 0..4 {
+            let (low, tick) = highest[k];
+            assert!(low > 0.08, "slime {k}'s bottom rose to {low} m");
+            // At the top of its hop, a sixth of a cycle in: a floaty bounce.
+            let top = STARTS[k].2 + CYCLE / 6;
+            assert!(tick.abs_diff(top) < 10, "slime {k} highest at tick {tick}");
+            assert!(
+                farthest[k] < LEASH + 0.6,
+                "slime {k} strayed {} m",
+                farthest[k]
+            );
         }
+        eprintln!("SLIME highest {highest:?} farthest {farthest:?} closest {closest}");
+        assert!(closest > 0.6, "two slimes came within {closest} m");
     }
 }

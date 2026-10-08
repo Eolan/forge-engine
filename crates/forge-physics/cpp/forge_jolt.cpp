@@ -385,6 +385,7 @@ uint32_t fj_soft_body_add(FjWorld *world, const FjSoftBodyDesc *desc) {
     settings.mFriction = desc->friction;
     settings.mRestitution = desc->restitution;
     settings.mNumIterations = desc->iterations;
+    settings.mGravityFactor = desc->gravity_factor;
     settings.mUserData = desc->user_data;
     const JPH::BodyID id = world->system.GetBodyInterface().CreateAndAddSoftBody(
         settings, JPH::EActivation::Activate);
@@ -408,6 +409,53 @@ void fj_soft_body_push(FjWorld *world, uint32_t body, const float velocity[3]) {
         }
     }
     world->system.GetBodyInterface().ActivateBody(id);
+}
+
+void fj_soft_body_upright(FjWorld *world, uint32_t body, uint32_t top, float spring, float damping) {
+    JPH::BodyLockWrite lock(world->system.GetBodyLockInterface(), id_of(body));
+    if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) {
+        return;
+    }
+    auto *motion = static_cast<JPH::SoftBodyMotionProperties *>(lock.GetBody().GetMotionProperties());
+    JPH::Array<JPH::SoftBodyVertex> &vertices = motion->GetVertices();
+    if (top >= vertices.size()) {
+        return;
+    }
+    // The body's middle and its spin, as a rigid body's: L = Σ r × v, I = Σ (|r|² 1 − r rᵀ),
+    // ω = I⁻¹ L (the points weigh alike).
+    JPH::Vec3 middle = JPH::Vec3::sZero();
+    JPH::Vec3 drift = JPH::Vec3::sZero();
+    for (const JPH::SoftBodyVertex &v : vertices) {
+        middle += v.mPosition;
+        drift += v.mVelocity;
+    }
+    const float n = static_cast<float>(vertices.size());
+    middle /= n;
+    drift /= n;
+    JPH::Vec3 momentum = JPH::Vec3::sZero();
+    float xx = 0.0f, yy = 0.0f, zz = 0.0f, xy = 0.0f, xz = 0.0f, yz = 0.0f;
+    for (const JPH::SoftBodyVertex &v : vertices) {
+        const JPH::Vec3 r = v.mPosition - middle;
+        momentum += r.Cross(v.mVelocity - drift);
+        xx += r.GetX() * r.GetX();
+        yy += r.GetY() * r.GetY();
+        zz += r.GetZ() * r.GetZ();
+        xy += r.GetX() * r.GetY();
+        xz += r.GetX() * r.GetZ();
+        yz += r.GetY() * r.GetZ();
+    }
+    const JPH::Mat44 inertia(JPH::Vec4(yy + zz, -xy, -xz, 0.0f), JPH::Vec4(-xy, xx + zz, -yz, 0.0f),
+                             JPH::Vec4(-xz, -yz, xx + yy, 0.0f), JPH::Vec4(0.0f, 0.0f, 0.0f, 1.0f));
+    const JPH::Vec3 spin = inertia.Inversed3x3().Multiply3x3(momentum);
+    // Turned back: the top's way from the middle towards +y (about up × y, as far as the sine
+    // of the tilt), and the spin damped.
+    const JPH::Vec3 up = (vertices[top].mPosition - middle).NormalizedOr(JPH::Vec3::sAxisY());
+    const JPH::Vec3 change = up.Cross(JPH::Vec3::sAxisY()) * spring - spin * damping;
+    for (JPH::SoftBodyVertex &v : vertices) {
+        if (v.mInvMass > 0.0f) {
+            v.mVelocity += change.Cross(v.mPosition - middle);
+        }
+    }
 }
 
 uint32_t fj_soft_body_vertices(const FjWorld *world, uint32_t body, float *points, uint32_t capacity,

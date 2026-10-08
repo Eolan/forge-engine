@@ -1451,9 +1451,7 @@ impl Simulation for LabWorld {
                 self.limp,
             );
         }
-        for s in &self.slimes {
-            s.drive(&mut self.world, self.tick);
-        }
+        slime::drive_all(&mut self.slimes, &mut self.world, self.tick);
         if let Err(e) = self.world.step(TICK, 1) {
             tracing::warn!("physics tick {}: {e}", self.tick);
         }
@@ -2005,6 +2003,14 @@ impl Lab {
         }
     }
 
+    /// [`Lab::shown`], to read.
+    fn seen(&self) -> &LabWorld {
+        match &self.mode {
+            Mode::Local { world, .. } => world,
+            Mode::Net(net) => &net.client.sim,
+        }
+    }
+
     /// Runs the ticks `dt` seconds owe (one a frame with `fixed`), keeping the last two ticks'
     /// transforms.
     pub(crate) fn advance(&mut self, dt: f32, fixed: bool) {
@@ -2242,6 +2248,9 @@ impl Lab {
             }
             // The slimes: their points between the last two ticks, about their bodies' places.
             let [was, now] = &self.slime_points;
+            // Their looks between the last two ticks: the last tick ran as `now() - 1`.
+            let seen = self.seen();
+            let ticks = seen.now() as f64 - 1.0 + f64::from(t);
             for k in 0..skinned.slimes {
                 let position = bodies[parts + k].0;
                 let range = k * slime::POINTS..(k + 1) * slime::POINTS;
@@ -2250,7 +2259,7 @@ impl Lab {
                     .zip(&now[range])
                     .map(|(a, b)| a.lerp(*b, t) - position)
                     .collect();
-                slime::skin(&points, &mut matrices);
+                slime::skin(&points, seen.slimes[k].look(ticks), &mut matrices);
                 skins.extend_from_slice(&matrices);
                 movers.push(MoverTransform {
                     position,

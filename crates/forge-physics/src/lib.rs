@@ -303,6 +303,8 @@ pub struct SoftBodyDesc<'a> {
     pub restitution: f32,
     /// Its solver's iterations a step.
     pub iterations: u32,
+    /// The share of the world's gravity that pulls it (1: all of it).
+    pub gravity_factor: f32,
     /// A number of the caller's, carried with the body.
     pub user_data: u64,
 }
@@ -643,7 +645,7 @@ impl World {
             friction: desc.friction,
             restitution: desc.restitution,
             iterations: desc.iterations,
-            pad: 0,
+            gravity_factor: desc.gravity_factor,
             user_data: desc.user_data,
         };
         // SAFETY: the world is live; `points` holds three floats a vertex and `faces` three
@@ -662,6 +664,17 @@ impl World {
         let v = velocity.to_array();
         // SAFETY: the world is live and `v` holds three floats, read during the call.
         unsafe { ffi::fj_soft_body_push(self.raw.as_ptr(), body.0, v.as_ptr()) };
+    }
+
+    /// Keeps a soft body upright as a whole, as a creature that does not roll: its spin (as a
+    /// rigid body's) damped by the share `damping` a call, and an angular velocity of `spring`
+    /// (rad/s) times the sine of its tilt turning it back, its vertex `top`'s way from its
+    /// middle towards +y; both given to its vertices' velocities. Nothing for a body that is no
+    /// soft body or a vertex it does not have.
+    pub fn keep_soft_body_upright(&mut self, body: BodyId, top: u32, spring: f32, damping: f32) {
+        // SAFETY: the world is live; the call reads and writes the body's vertices under Jolt's
+        // body lock.
+        unsafe { ffi::fj_soft_body_upright(self.raw.as_ptr(), body.0, top, spring, damping) };
     }
 
     /// A soft body's vertices after the last step into `out` (cleared first, in the order they
