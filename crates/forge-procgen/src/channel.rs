@@ -4,6 +4,9 @@
 //!   depth in the middle; past the edge the bank rises `a x + b x²` until it meets the ground,
 //!   which it only ever lowers. The level, the depth and the half width run linearly along each
 //!   segment of the ribbon, and where two rivers' channels meet the lower one wins.
+//! - The bank's steepness wanders along the river, it always meets the ground before the carve
+//!   fades out (where it flattens towards the sea, by a steeper rise), and its top is rounded
+//!   into the ground, so no straight wall or crease runs along a reach (#199).
 //! - Where a tributary meets its river, the corners the two channels' banks make either side are
 //!   rounded ([`crate::Corner`], [`corner_ground`], #119): a bank rising from a circle's arc, a
 //!   shallow bed between the arc and the old corner, which blends into the rivers' beds.
@@ -40,6 +43,41 @@ use crate::river::{
 /// The deepest a channel's bed lies under its water by a bar ([`Bar`], #127), metres: how far
 /// down its flank may raise the ground.
 const BAR_DEEPEST: f64 = 3.0;
+
+/// Metres of height over which a bank's top is rounded into the ground (#199).
+const BANK_ROUND: f64 = 0.8;
+
+/// How far a bank's steepness wanders either way along the rivers, a share, over noise 30 m
+/// wide (#199), and its seed.
+const BANK_WANDER: f64 = 0.4;
+const BANK_WANDER_SEED: u64 = 0x6261_6e6b_2d77_616e;
+
+/// The factor on the distance out of the water a bank rises over at (x, y): 1 ± [`BANK_WANDER`].
+fn bank_wander(x: f64, y: f64) -> f64 {
+    1.0 + BANK_WANDER * crate::noise::fbm(BANK_WANDER_SEED, x / 30.0, y / 30.0, 2, 2.0, 0.5)
+}
+
+/// How far in from the ribbon's the water's edge wanders, at most a share of its half width,
+/// over noise 40 m wide (#199): within the ribbon's tuck under the banks
+/// ([`crate::RibbonParams::tuck`]), which only ever lies past the edge.
+const WATERLINE_WANDER: f64 = 0.12;
+const WATERLINE_SEED: u64 = 0x7761_7465_726c_696e;
+
+/// The factor on a channel's half width at (x, y): 1 − [`WATERLINE_WANDER`] .. 1.
+fn waterline_wander(x: f64, y: f64) -> f64 {
+    let n = crate::noise::fbm(WATERLINE_SEED, x / 40.0, y / 40.0, 2, 2.0, 0.5);
+    1.0 - WATERLINE_WANDER * (0.5 + 0.5 * n.clamp(-1.0, 1.0))
+}
+
+/// The least of `a` and `b`, rounded where they come within `k` of each other (a polynomial
+/// smooth minimum: at most `k / 4` under the least).
+fn smooth_min(a: f64, b: f64, k: f64) -> f64 {
+    if k <= 0.0 {
+        return a.min(b);
+    }
+    let h = (k - (a - b).abs()).max(0.0) / k;
+    a.min(b) - h * h * k * 0.25
+}
 
 /// How the channels are carved.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -790,7 +828,10 @@ impl Channels {
                 [x - b.down[0] * shift, y - b.down[1] * shift]
             });
             let (r, t) = segment_distance([x, y], s.a, s.b);
-            let half = Segment::at(s.half, t);
+            // The water's edge wanders in from the ribbon's (#199), so it does not run at one
+            // distance from the centreline along a straight reach; the ribbon's tuck under the
+            // banks covers it.
+            let half = Segment::at(s.half, t) * waterline_wander(x, y);
             let out = r - half;
             if out >= margin {
                 continue;
@@ -813,12 +854,23 @@ impl Channels {
                 // it rose from, over a metre and as many as it climbs: the banks run on down the
                 // valley evenly past the steps.
                 let lift = (Segment::at(s.banks, t) - level).max(0.0);
-                level
-                    + lift * smoothstep(0.0, lift.max(1.0), out)
-                    + beach * (a * out + b * out * out)
+                // The bank's steepness wanders along the river (#199), so its top does not run
+                // at one distance from the water; at the water's edge it changes nothing.
+                let o = out * bank_wander(x, y);
+                let bank =
+                    level + lift * smoothstep(0.0, lift.max(1.0), o) + beach * (a * o + b * o * o);
+                // It meets the ground before the carve fades out. A bank flattened towards the
+                // sea under higher ground ended in the fade instead: a wall at one distance from
+                // the centreline, straight along a straight reach (#199).
+                let meet = level + (base - level).max(0.0) * smoothstep(0.0, margin - 3.0, o);
+                bank.max(meet)
             };
             let weight = (1.0 - smoothstep(margin - 3.0, margin, out)) * Segment::at(s.keep, t);
-            carved = carved.min(base + (channel.min(base) - base) * weight);
+            // The bank's top rounded into the ground over BANK_ROUND, not a crease (#199), where
+            // the ground stands a metre or more over the water: a beach at the water's level is
+            // not lowered into it.
+            let round = BANK_ROUND * smoothstep(0.0, 1.0, base - level);
+            carved = carved.min(base + (smooth_min(channel, base, round) - base) * weight);
         }
         let corners =
             &self.corner_list[self.corner_start[c] as usize..self.corner_start[c + 1] as usize];
@@ -1449,10 +1501,14 @@ mod tests {
         let bed = channels.height_at(&valley, x, y);
         assert!((bed - (level - f64::from(mid.depth))).abs() < 1e-3, "{bed}");
         for side in [-1.0, 1.0] {
-            let edge = channels.height_at(&valley, x + side * half, y);
-            assert!((edge - level).abs() < 1e-3, "{edge} against {level}");
+            // The water's edge, wandered in from the ribbon's (#199).
+            let wander = waterline_wander(x + side * half, y);
+            let edge = channels.height_at(&valley, x + side * half * wander, y);
+            assert!((edge - level).abs() < 5e-3, "{edge} against {level}");
+            // A metre out the bank rises 0.36 m, its steepness wandering by 40 % (#199): 0.2 m
+            // at the least.
             let bank = channels.height_at(&valley, x + side * (half + 1.0), y);
-            assert!(bank > level + 0.3);
+            assert!(bank > level + 0.19, "{bank} against {level}");
             let far = x + side * 40.0;
             assert_eq!(
                 channels.height_at(&valley, far, y),

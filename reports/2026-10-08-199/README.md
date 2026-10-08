@@ -22,8 +22,17 @@
 - `shading/layered` is 0.318 → 0.319 ms on the island's view and 0.340 → 0.343 ms on its tour,
   against `ecd826f`.
 
-**Not yet**
+**Not in the first commit**
 - **The river's banks at the mouth:** a straight steep face along the river, and angular notches,
   seen through the shallow water. They come from the carve (`Channels::carved`): the bank rises
   at 0.3 of its slope near the sea and ends in the carve's fade at a constant distance, and a
-  hard `min` makes creases.
+  hard `min` makes creases. The second commit, below, takes them.
+
+**The banks (second commit)**
+- `banks.png`: the mouth's right bank before the carve's changes (above) and after (below).
+- The water's edge wanders in by up to 12 % of the half width (within the ribbon's tuck), the
+  bank's steepness by 40 %, the bank meets the ground before the carve fades, and its top is
+  rounded into the ground over 0.8 m.
+- Checked: Tier 0 on the sentinels and the island, passed (`captures/verify/20261008-220731-e569ca9`).
+- Left: the bank still reads as a dark band seen into the sun. It is a real bank, 1.2 m high, and
+  the carve's 8 m margin keeps it narrow (#202).

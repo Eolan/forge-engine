@@ -3311,12 +3311,27 @@ owner: "the sea or river should have removed it, grass don't like the salted wat
 
 The sand window's prints (#197) follow: a sand texel far over the contour takes prints.
 
-**Not yet: the river's banks.** Where the owner boxed lines in the water at the mouth, the
-ground under it shows through: a straight steep face along the river and angular notches in
-the bank. That is the channel's carve (`Channels::carved`): near the sea the bank rises at only
-0.3 of its slope and never meets the ground, so the carve ends in its 3 m fade at a constant
-distance from the centreline. The banks are combined by a hard `min`, which creases. The next
-step.
+**The river's banks.** Where the owner boxed lines in the water at the mouth, the channel's
+carve (`Channels::carved`) drew them: a bank at one distance from the centreline, straight
+along a straight reach, and creases where it met the ground. Now:
+- **The water's edge wanders in** by up to 12 % of the half width over noise 40 m wide. The
+  ribbon reaches past the edge under the banks (0.5 m + 10 % of the half width), so the ground
+  hides it along an irregular line.
+- **The bank's steepness wanders** by 40 % either way over noise 30 m wide.
+- **It meets the ground before the carve fades out:** where it flattens towards the sea (to 0.3
+  of its rise) under higher ground, it now climbs to it over the margin's first 5 m. Before, it
+  ended in the carve's 3 m fade, a wall.
+- **Its top is rounded** into the ground over 0.8 m of height (a smooth minimum), where the
+  ground stands a metre or more over the water, so a beach at the water's level is not lowered
+  into it.
+
+Seen from the mouth's shot, the right bank still reads as a dark band: a real bank 1.2 m high,
+its face turned from the sun ahead. A probe of the ground across it (seed 7, 4281, −2763) found
+the river's edge there 17 m from its centre, the bed rising 0.3 m over 7 m, then 1.2 m over
+4.5 m to the uncarved ground. The carve reaches only 8 m past the water, so the bank cannot
+widen further without refining more cells (#202).
+
+![The mouth's right bank: before the carve's changes (above), after (below)](../../reports/2026-10-08-199/banks.png)
 
 - **Cost:** `shading/layered` 0.318 → 0.319 ms on the island's view, 0.340 → 0.343 ms on its
   tour (three runs each, alternating, against `ecd826f`), within the noise.
@@ -3326,6 +3341,11 @@ step.
   ground has no contour and no wander), the A/B harness and mesh against fallback at 0 px,
   validation clean. Its gate failed on a clippy lint in `paint_salt`'s last loop; after the fix
   the gate passed alone (430 tests, clippy, fmt, credits).
+- **The banks' checks:** the same Tier 0 (853 s, `captures/verify/20261008-220731-e569ca9`),
+  passed: only the island's images change, the harness and mesh against fallback at 0 px,
+  validation clean. Against the edges' run, the valley's shot changes most (the river's edge
+  wandered in, 458 572 px); the others by 437 to 3 168 px. The channel's test now finds the
+  water's edge where it wandered, and a bank a metre out at least 0.2 m over the water.
 
 ## The night (D-046, #164, 2026-10-04)
 
