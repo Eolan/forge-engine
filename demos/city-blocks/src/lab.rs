@@ -2153,6 +2153,7 @@ pub(crate) fn build(
                             origin: [0.0; 2],
                             cell: bed.layer.cell(),
                             size: bed.layer.size(),
+                            slopes: false,
                         },
                     );
                     let row = soft_rows

@@ -199,8 +199,12 @@ distance its tread slid past the ground, along its round (a flat hole's slumped 
 wheel on a ray for good), what it tears thrown the way its tread slides. Feet stand on it ✅
 (#194) through the creature's IK and its footfalls, not the physics: a creature is held over the
 ground under its paws by its balance, and height fields at the point every centimetre a paw
-needs cost 0.6 ms a tick in contacts. Not yet: the clip-map round the player (a lab bed is a fixed
-grid), feet on soft ground in the physics (a ragdoll let go falls through), audio reading it, and
+needs cost 0.6 ms a tick in contacts. Round the player ✅ (#197): on the island a window 12 m square
+at 2 cm follows the walker in steps of the ground's 2 m cells (`Layer::move_to` keeps its prints
+where they lie), drawn as the ground itself: the tiles leave it their fragments there (a ground
+window, through the cut-outs' raster), it is shaded by their layered row where it stands, and the
+slopes it adds give it their smooth normals untouched; a step with no motion of its own. Not yet:
+feet on soft ground in the physics (a ragdoll let go falls through), audio reading it, and
 the weather refilling it.
 
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)

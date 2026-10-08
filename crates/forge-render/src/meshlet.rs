@@ -94,6 +94,20 @@ impl CullFlags {
     }
 }
 
+/// `MESH_WINDOWED_GROUND` in the shader: a mesh's fragments inside the frame's ground window are
+/// not drawn ([`MeshletSceneBuilder::set_windowed_ground`], #197).
+const MESH_WINDOWED_GROUND: u32 = 1;
+/// `MESH_SCENE_SHADED` in the shader: a ground window's mesh, its rows shaded where it stands
+/// in the scene ([`MeshletSceneBuilder::set_ground_window_mesh`], #197).
+const MESH_SCENE_SHADED: u32 = 2;
+
+/// `INSTANCE_STILL` in the shader: a mover with no motion of its own this frame
+/// ([`MeshletScene::set_movers_still`], #197).
+const INSTANCE_STILL: u32 = 1;
+
+/// No ground window: its least corner past its greatest.
+const NO_GROUND_WINDOW: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
+
 /// `FLAG_SW_RASTER` in the shader: set by the renderer, from [`DrawParams::sw_raster`], in both
 /// passes' frame blocks.
 const FLAG_SW_RASTER: u32 = 512;
@@ -265,7 +279,8 @@ struct GpuMesh {
     skin: u32,
     /// 1 when its payloads carry a UV stream (D-047, `forge_geom::page::uv_offset`).
     uvs: u32,
-    pad: u32,
+    /// `MESH_WINDOWED_GROUND` and `MESH_SCENE_SHADED` (#197).
+    flags: u32,
     /// Per level: the smallest `self_error` of its clusters.
     self_error_min: [f32; LOD_LEVELS],
     /// Per level: the largest `parent_error` (infinite when the level holds a root).
@@ -322,7 +337,9 @@ struct GpuInstance {
     id: u32,
     /// Its row in the material table.
     material: u32,
-    pad: [u32; 2],
+    /// `INSTANCE_STILL` (#197).
+    flags: u32,
+    pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuInstance>() == 80);
@@ -436,7 +453,12 @@ struct GpuFrame {
     /// body.
     skin_joints: u64,
     skin_pad: u64,
+    /// The ground window (#197): min x, min z, max x, max z in the scene's frame, where the
+    /// windowed ground draws no fragment (min > max: none).
+    ground_window: [f32; 4],
 }
+
+const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
 // Both passes' blocks share one buffer at this stride.
@@ -1005,7 +1027,7 @@ impl MeshletSceneBuilder {
             level_offset,
             skin: u32::MAX,
             uvs: u32::from(mesh.uvs),
-            pad: 0,
+            flags: 0,
             self_error_min,
             parent_error_max,
             self_reach_max,
@@ -1056,6 +1078,22 @@ impl MeshletSceneBuilder {
         let id = self.add_skinned_mesh(displaced, 1);
         self.skins.last_mut().expect("the mesh just added").field = Some(field);
         id
+    }
+
+    /// Marks `mesh` as ground a ground window cuts (#197): its fragments inside the window
+    /// [`MeshletScene::set_ground_window`] gives are not drawn, the window's mesh drawn there in
+    /// their place. Its instances must stand in the scene's frame unturned (a terrain's tiles).
+    pub fn set_windowed_ground(&mut self, mesh: MeshId) {
+        self.meshes[mesh.0 as usize].flags |= MESH_WINDOWED_GROUND;
+    }
+
+    /// Marks `mesh` as a ground window's (#197): a displaced mesh standing in for the windowed
+    /// ground ([`Self::set_windowed_ground`]). Its rows are shaded where it stands in the scene
+    /// (a layered row looks its layers up there, not in its own frame, which its mover moves),
+    /// and its shadow rays start as the terrain's do, clear of the cut the rays see of the ground
+    /// it replaces.
+    pub fn set_ground_window_mesh(&mut self, mesh: MeshId) {
+        self.meshes[mesh.0 as usize].flags |= MESH_SCENE_SHADED;
     }
 
     /// Sets the material the instances of `mesh` take unless they name their own: those
@@ -1134,7 +1172,8 @@ impl MeshletSceneBuilder {
             radius: info.radius * scale,
             id: self.instances.len() as u32,
             material: material.0,
-            pad: [0; 2],
+            flags: 0,
+            pad: 0,
         });
     }
 
@@ -1171,7 +1210,8 @@ impl MeshletSceneBuilder {
                     radius: 0.0,
                     id: 0,
                     material: info.material,
-                    pad: [0; 2],
+                    flags: 0,
+                    pad: 0,
                 },
                 count as usize,
             ));
@@ -1251,6 +1291,14 @@ impl MeshletSceneBuilder {
                     Ok(cut)
                 })
                 .collect::<Result<Vec<_>>>()?;
+            // A ground window's rays start as the terrain's (#197).
+            let mut cuts = cuts;
+            let terrain_start = cuts.iter().map(|c| c.shadow_start).fold(0.0, f32::max);
+            for (cut, mesh) in cuts.iter_mut().zip(&self.meshes) {
+                if mesh.flags & MESH_SCENE_SHADED != 0 {
+                    cut.shadow_start = terrain_start;
+                }
+            }
             let ms = start.elapsed().as_secs_f64() * 1e3;
             Some(SceneRays::new(device, &cuts, ms)?)
         } else {
@@ -1486,6 +1534,7 @@ impl MeshletSceneBuilder {
             material_count: self.materials.len() as u32,
             cutouts,
             jelly,
+            ground_window: Cell::new(NO_GROUND_WINDOW),
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -1666,6 +1715,8 @@ pub struct MeshletScene {
     /// Whether a row an instance draws with is jelly: the sun's shadow rays then see through it
     /// and are tinted by it (#180).
     pub jelly: bool,
+    /// The ground window (#197, [`Self::set_ground_window`]), as the frame block holds it.
+    ground_window: Cell<[f32; 4]>,
     textures: Option<TextureSet>,
     /// Instances.
     pub instance_count: u32,
@@ -1762,6 +1813,13 @@ impl MeshletScene {
     /// their ring, which the frame copies into the instance table before its culls. Call it
     /// every frame the scene has movers, before drawing.
     pub fn set_movers(&self, transforms: &[MoverTransform]) {
+        self.set_movers_still(transforms, |_| false);
+    }
+
+    /// [`Self::set_movers`], with the movers `still` names given no motion of their own this
+    /// frame (#197): a ground window's mesh moved a step along with the heights it raises, so
+    /// that its surface stands where it stood. Their pixels move as the camera makes them.
+    pub fn set_movers_still(&self, transforms: &[MoverTransform], still: impl Fn(usize) -> bool) {
         let Some(movers) = &self.movers else {
             return;
         };
@@ -1776,7 +1834,8 @@ impl MeshletScene {
             .iter()
             .zip(&movers.bounds)
             .zip(transforms)
-            .map(|((template, bounds), t)| {
+            .enumerate()
+            .map(|(k, ((template, bounds), t))| {
                 let position = self.origin.offset(t.position);
                 let center = t.rotation * (bounds.truncate() * t.scale) + position.local;
                 GpuInstance {
@@ -1786,6 +1845,7 @@ impl MeshletScene {
                     rotation: t.rotation.to_array(),
                     center: center.to_array(),
                     radius: bounds.w * t.scale,
+                    flags: if still(k) { INSTANCE_STILL } else { 0 },
                     ..*template
                 }
             })
@@ -1803,18 +1863,38 @@ impl MeshletScene {
 
     /// The skinned meshes' joints' matrices for the frame about to be drawn (#165): every
     /// skinned mesh's in the order they were added ([`MeshletSceneBuilder::add_skinned_mesh`]),
-    /// each taking a vertex from its bind pose into its mover's frame. Call it every frame the
-    /// scene has skinned meshes, before drawing; until the first call they keep their bind pose.
+    /// each taking a vertex from its bind pose into its mover's frame, before drawing; until the
+    /// first call they keep their bind pose. The skin pass runs only on the frames that bring
+    /// joints or heights (#197): call it when they change and once more the frame after, so the
+    /// previous positions the motion reads catch up (every frame for a body that moves).
     pub fn set_skins(&self, matrices: &[Mat4]) {
         if let Some(skins) = &self.skins {
             skins.set(matrices);
         }
     }
 
+    /// The ground window for the frames drawn from now on (#197): `[min x, min z, max x, max z]`
+    /// in the scene's frame, where the windowed ground draws no fragment
+    /// ([`MeshletSceneBuilder::set_windowed_ground`]) and the window's mesh stands in for it;
+    /// `None` for none. The ground's clusters that reach into it take the cut-outs' raster.
+    pub fn set_ground_window(&self, window: Option<[f32; 4]>) {
+        self.ground_window.set(window.unwrap_or(NO_GROUND_WINDOW));
+    }
+
+    /// Whether the frames take the cut-outs' raster (#171): with cut-out or double-sided rows,
+    /// or a ground window (#197).
+    fn cutout_raster(&self) -> bool {
+        let w = self.ground_window.get();
+        self.cutouts || w[0] <= w[2]
+    }
+
     /// The displaced meshes' heights for the frame about to be drawn (#185): every height
     /// field's ([`MeshletSceneBuilder::add_displaced_mesh`]) in the order they were added, each
-    /// row by row along x. Call it every frame the scene has displaced meshes, before drawing;
-    /// until the first call they are flat.
+    /// row by row along x, then with [`crate::HeightField::slopes`] its slopes, x then z for each point
+    /// in the same order (#197). Until the first call they are flat. The skin pass runs on the
+    /// frames that bring joints or heights ([`Self::set_skins`], this): call it when they
+    /// change and once more the frame after, so the previous positions the motion reads
+    /// catch up.
     pub fn set_fields(&self, heights: &[f32]) {
         if let Some(skins) = &self.skins {
             skins.set_fields(heights);
@@ -3074,7 +3154,7 @@ impl MeshletRenderer {
             flags.0 |= FLAG_SW_RASTER;
         }
         flags.0 &= !FLAG_CUTOUTS;
-        if scene.cutouts {
+        if scene.cutout_raster() {
             flags.0 |= FLAG_CUTOUTS;
         }
         flags.0 &= !FLAG_JELLY;
@@ -3190,6 +3270,7 @@ impl MeshletRenderer {
             skin_vertices: scene.skins.as_ref().map_or(0, SceneSkins::vertices_address),
             skin_joints: scene.skins.as_ref().map_or(0, SceneSkins::joints_address),
             skin_pad: 0,
+            ground_window: scene.ground_window.get(),
         }
     }
 
@@ -3357,10 +3438,11 @@ impl MeshletRenderer {
         let frame_address = self.frame_buffers[slot.index].address();
 
         // The skinned meshes (#165): their vertices bent by this frame's joints into the pool
-        // and the rays' positions, and their structures refitted, before anything reads them.
+        // and the rays' positions, and their structures refitted, before anything reads them;
+        // only on a frame that brought joints or heights (#197), the others' still there.
         let mut ray_positions = None;
         let mut skin_blases = Vec::new();
-        if let Some(skins) = &scene.skins {
+        if let Some(skins) = scene.skins.as_ref().filter(|s| s.take_fresh()) {
             let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
             let rays = scene.rays.as_ref().filter(|_| skins.has_rays);
             ray_positions = rays.map(|r| graph.import_buffer(r.hit_positions()));
@@ -4358,7 +4440,10 @@ impl MeshletRenderer {
         let push = self.push(pass.frame_address);
         // The cut-out clusters' draw (#171), when the scene has any: their fragments read the
         // visible list and the instances too.
-        let cutouts = params.scene.cutouts.then_some(&self.pipeline_cutouts);
+        let cutouts = params
+            .scene
+            .cutout_raster()
+            .then_some(&self.pipeline_cutouts);
         let fragment = if cutouts.is_some() {
             S::FRAGMENT_SHADER
         } else {

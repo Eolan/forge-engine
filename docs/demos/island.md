@@ -3157,6 +3157,86 @@ the batch is 0 px.
 after the sea but the last. That took in the barrel and the log as rocks. They now leave out the
 movers' three props and the walker's two.
 
+## The sand round the walker (#197, D-007's layer round the player, 2026-10-08)
+
+```
+cargo run --release -p island -- --walker --walk 0,-1.5 --view=0,25,5214,0,-50
+```
+
+The walker's steps now print the beach's sand: a footfall every stride, left and right of its
+way in turn. The stride is 0.45 + 0.15 m per m/s of pace: 0.68 m walking at 1.5 m/s, 0.9 m at
+3 m/s, 1.4 m running. The feet land 10 cm either side of the way. They press a deformable layer
+(`forge_physics::deform`, #185) that follows the walker: a window 12 m square, a point every
+2 cm (601 × 601). `demos/city-blocks/src/island_sand.rs` holds it.
+
+**The sand.** The beach's sand is dry and loose: 5 cm deep and 1.5 MPa/m stiff. A foot (an
+ellipse of 5 by 13 cm half sizes at 70 kg, 34 kPa) sinks 2.2 cm into it and heaps a quarter of
+what it pushes in a rim, slumped to 35°. The yard's damp sand, 4 MPa/m, took 8 mm, which the
+island's light barely showed. A footfall presses only where the island's row draws sand:
+- a texel of the contour's layers (sand, or the grasses and the riverbank) under its 2.5 m
+  contour;
+- or the lakes' sand;
+- in both cases, above the sea.
+
+The contour's wander is left out.
+
+**Following the walker.** When the walker strays 2 m from the window's middle, the window steps
+onto the ground's 2 m cells round it.
+- `Layer::move_to` moves its points by whole rows, so a print stays where it lies on the ground.
+  Prints more than 6 m behind fall off the window.
+- The ground under the new points is read on the job system.
+- A step takes 3.4–3.9 ms of CPU (2.6–3.4 ms of it copied point by point before the rows were
+  moved whole).
+
+**Drawn as the ground.** The window is a displaced mesh, a vertex per point (720 000
+triangles), and a mover at the ground's height at its middle. The skin pass raises each vertex
+to the drawn ground plus the layer. It is shaded by the island's own layered row, at the scene's
+position, so its layers are the ground's. Three things in `forge-render` make it the ground:
+- **The hole.** The tiles are windowed ground. Their clusters that reach into the window take
+  the cut-outs' raster (#171), on the mesh path and the fallback alike, and drop their fragments
+  inside it. The window draws the ground there.
+- **The normals.** A field can carry a slope per point that the skin pass adds to its own. The
+  window's is the drawn ground's smooth slope, from the tiles' vertex normals between their
+  triangles' corners, less the slope its 2 cm facets give. Untouched, it shades as the tiles do;
+  pressed, a print's walls bend that normal.
+- **No motion.** The window shows ground that stands still. A step moves its mover along with
+  the heights it raises, so its mover is marked still (`set_movers_still`) and the motion pass
+  leaves its pixels to the camera's motion: 0.024 ms, against 0.054 with it.
+
+The window's heights go up on the frames it changed and the next. The skin pass and the
+structure's refit now run only on frames that bring joints or heights.
+
+**The A/B.** `--no-sand-window` keeps the walker without the window. Untouched, the window
+against the tiles: 607 pixels of 1.44 M differ by more than 2 levels, at most 10, lone pixels
+scattered over the window where the ground's fine relief samples a different mesh. ꟻLIP mean
+0.0047, none at 0.1. No outline.
+
+**Not yet**
+- Its rays start as the terrain's do, clear of the cut the rays see of the ground (0.66 m off it),
+  so a print casts no ray-traced shadow. Its walls darken by their normals alone.
+- The window shows in reflections as the ground's cut.
+- Its heights go up whole on each change, 4.3 MB.
+- Each change builds the window's field (heights and slopes) twice, 1.0–1.5 ms each: the second
+  upload could send the first's again.
+
+**Costs** (the walk above, 1 800 frames at a fixed step, the window against `--no-sand-window`):
+- `geometry/meshlet pass 1`: 0.133–0.145 ms against 0.062. Most of it is the window's 720 000
+  triangles, a little the tiles' clusters that take the cut-outs' raster.
+- `movers/motion`: 0.024 against 0.020.
+- `skin/blas`: 0.022 a frame on average, and `skin/vertices` 0.005, from the frames that
+  changed.
+- About 0.10 ms a frame in all; the whole frame's mean moved 0.08–0.30 ms between runs.
+- On the CPU: a step every 2 m, 3.4–3.9 ms; a field, 1.0–1.5 ms on each change.
+
+The batch's `island-sand300` captures it at tick 300 with its A/B twin (`-noocc`), on both paths
+alike. A test in `island_sand.rs` checks the window on a small field:
+- a footfall prints on sand and not on rock;
+- untouched, the window's heights lie on the drawn ground, and its slopes as the skin pass adds
+  them give the tiles' smooth normals;
+- a step keeps the print where it lies.
+
+`deform`'s test checks `Layer::move_to`.
+
 ## A line across the lake (#178, the owner's report, 2026-10-08)
 
 In a capture 1.3 m over the highest lake (`--view=-238.2,318.14,-1843.9,135.2,-18.1`), the owner

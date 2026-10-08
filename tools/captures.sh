@@ -213,6 +213,11 @@ for path in $paths; do
   # missed pages the cut wants.
   capture "$path-island8-60" 60 "$city" --fixed-step "${island[@]}" --island-drawn 8 --no-water "${flag[@]}"
   capture "$path-island8-60-resident" 60 "$city" --fixed-step "${island[@]}" --island-drawn 8 --no-water --stream-pool 0 "${flag[@]}"
+  # The walker on the southern beach (#196, #197) at tick 300, its footprints in the sand window
+  # round it (the tiles' ground cut there, the window shaded as it), and its A/B twin.
+  walker=(--walker --walk 0,-1.5 "--view=0,25,5214,0,-50")
+  capture "$path-island-sand300" 300 "$city" --fixed-step "${island[@]}" "${walker[@]}" "${flag[@]}"
+  capture "$path-island-sand300-noocc" 300 "$city" --fixed-step "${island[@]}" "${walker[@]}" --no-occlusion "${flag[@]}"
   # The island demo's golden shots (#96), each at its time of day, the exposure metered from the
   # scene: dawn over the largest mouth, the lake in the morning, the island from the sea in the
   # afternoon, dusk up a steep valley.

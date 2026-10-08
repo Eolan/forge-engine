@@ -13,7 +13,7 @@ use anyhow::Result;
 use forge_physics::{BodyDesc, BodyId, CharacterDesc, CharacterId, Shape, World, WorldDesc};
 use forge_render::MoverTransform;
 use forge_sim::TICK;
-use glam::{DVec3, Quat, Vec3};
+use glam::{DVec2, DVec3, Quat, Vec2, Vec3};
 
 use crate::DrawnGround;
 use crate::lab::walk::Player;
@@ -27,6 +27,16 @@ const REACH: f64 = 24.0;
 const PARKED: Vec3 = Vec3::new(0.0, -5000.0, 0.0);
 /// Ticks run at most in a frame; a longer frame's rest is dropped.
 const CATCH_UP: u32 = 4;
+
+/// How far either foot comes down from the walker's way, metres (#197).
+const FOOT_APART: f64 = 0.1;
+
+/// A footfall (#197): where a foot came down, the scene's (x, z), and the way it pointed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Footfall {
+    pub at: DVec2,
+    pub heading: Vec2,
+}
 
 /// The walker, its world and its ground.
 pub(crate) struct Walker {
@@ -49,6 +59,11 @@ pub(crate) struct Walker {
     tick_ms: Vec<f64>,
     cut_ms: Vec<f64>,
     off: f64,
+    /// Its footfalls since they were last taken (#197), metres walked since the last, and
+    /// whether the next is its left foot's.
+    footfalls: Vec<Footfall>,
+    walked: f64,
+    left: bool,
 }
 
 impl Walker {
@@ -80,6 +95,9 @@ impl Walker {
             tick_ms: Vec::new(),
             cut_ms: Vec::new(),
             off: 0.0,
+            footfalls: Vec::new(),
+            walked: 0.0,
+            left: true,
         };
         walker.keep_tiles(feet)?;
         tracing::info!(
@@ -138,9 +156,49 @@ impl Walker {
                 self.off = off;
             }
         }
+        if s.ground == forge_physics::Ground::Firm {
+            self.step(self.feet[1], s.position);
+        }
         self.feet = [self.feet[1], s.position];
         self.tick_ms.push(start.elapsed().as_secs_f64() * 1e3);
         Ok(())
+    }
+
+    /// Its feet's way on firm ground over a tick, from `from` to `to` (#197): a footfall every
+    /// stride, left and right of its way in turn, the stride longer the faster it goes (0.9 m
+    /// walking, 1.4 m running).
+    fn step(&mut self, from: DVec3, to: DVec3) {
+        let way = DVec2::new(to.x - from.x, to.z - from.z);
+        let along = way.length();
+        if along < 1e-6 {
+            return;
+        }
+        self.walked += along;
+        let pace = along / f64::from(TICK);
+        let stride = 0.45 + 0.15 * pace;
+        if self.walked < stride {
+            return;
+        }
+        self.walked -= stride;
+        let heading = way / along;
+        // Its right, along the ground, seen from above (+y): −z ahead, +x right.
+        let right = DVec2::new(-heading.y, heading.x);
+        let side = if self.left { -FOOT_APART } else { FOOT_APART };
+        self.footfalls.push(Footfall {
+            at: DVec2::new(to.x, to.z) + right * side,
+            heading: heading.as_vec2(),
+        });
+        self.left = !self.left;
+    }
+
+    /// Its footfalls since the last call (#197).
+    pub(crate) fn take_footfalls(&mut self) -> Vec<Footfall> {
+        std::mem::take(&mut self.footfalls)
+    }
+
+    /// Its feet as the last tick left them, (x, z).
+    pub(crate) fn feet_xz(&self) -> DVec2 {
+        DVec2::new(self.feet[1].x, self.feet[1].z)
     }
 
     /// Cuts the tiles of ground within `REACH` of `feet` that Jolt lacks, and drops the others.

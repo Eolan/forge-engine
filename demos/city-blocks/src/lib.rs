@@ -28,6 +28,7 @@ use forge_core::material::{
     LayerContour, Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
 };
 use forge_geom::MeshletMesh;
+use forge_geom::SkinnedMesh;
 use forge_geom::cache::cook_cached;
 use forge_geom::city::{
     CellWindow, Heightfield, HeightfieldDetail, Lathe, PropKind, PropSpec, Terrain, city_props,
@@ -56,6 +57,7 @@ use winit::keyboard::KeyCode;
 
 mod afloat;
 mod island_demo;
+mod island_sand;
 mod island_walk;
 mod lab;
 
@@ -320,6 +322,10 @@ struct Args {
     /// starts off. (Negative coordinates as `--walker=-120,40`.)
     #[arg(long, value_delimiter = ',', num_args = 0..)]
     walker: Option<Vec<f32>>,
+    /// With `--island`: the walker without the sand round it (#197), the tiles drawing the ground
+    /// there, for an A/B of the window's untouched ground against theirs.
+    #[arg(long)]
+    no_sand_window: bool,
     /// With `--lab fly`, the aeroplane's controls from the first frame, `T,E,A,R` (throttle
     /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
@@ -717,6 +723,8 @@ struct Gallery {
     barrels: Option<Barrels>,
     /// The island's walker, while one walks (#196): Enter puts it on the ground under the camera.
     walker: Option<island_walk::Walker>,
+    /// The island's sand round the walker (#197).
+    sand: Option<island_sand::SandWindow>,
     /// `--lab` (#136): the physics lab's world, whose bodies are the movers.
     /// The camera follows the lab's boat (C), and the throttle and rudder last sent (#138).
     chase: bool,
@@ -1127,6 +1135,7 @@ impl Gallery {
             tracing::info!(shots = %shots.join("  "), "the island's golden shots (--shot)");
         }
         let mut lab = None;
+        let mut sand = None;
         let (scene, placed) = if let Some(kind) = args.lab {
             let (scene, built) = lab::build(ctx, &args, cooked, kind)?;
             lab = Some(built);
@@ -1134,7 +1143,9 @@ impl Gallery {
         } else if args.gallery {
             build_gallery(ctx, &args, cooked)?
         } else if args.island.is_some() {
-            (build_island(ctx, &args, cooked, &camera)?, Vec::new())
+            let (scene, window) = build_island(ctx, &args, cooked, &camera)?;
+            sand = Some(window);
+            (scene, Vec::new())
         } else {
             (build_city(ctx, &args, cooked, &camera)?, Vec::new())
         };
@@ -1441,6 +1452,7 @@ impl Gallery {
         let mut gallery = Self {
             barrels,
             walker,
+            sand,
             lab,
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(args.lab, Some(lab::LabScene::Drive | lab::LabScene::Flyer)),
@@ -2179,7 +2191,33 @@ impl Demo for Gallery {
                     .as_ref()
                     .map_or_else(island_walk::Walker::parked, island_walk::Walker::transforms),
             );
-            self.scene.set_movers(&movers);
+            // The sand round the walker after them (#197): its footfalls pressed, its heights
+            // sent when they changed, the tiles' ground left to it. It shows the ground, which
+            // stands still (a step moves its mover with what it shows), so it has no motion of
+            // its own: its pixels move as the camera makes them, and the motion pass skips them.
+            let mut still = None;
+            if let Some(sand) = &mut self.sand {
+                let footfalls = self
+                    .walker
+                    .as_mut()
+                    .map(island_walk::Walker::take_footfalls)
+                    .unwrap_or_default();
+                sand.follow(
+                    self.walker
+                        .as_ref()
+                        .filter(|_| !self.args.no_sand_window)
+                        .map(island_walk::Walker::feet_xz),
+                    &footfalls,
+                );
+                if let Some(field) = sand.field() {
+                    self.scene.set_skins(&[Mat4::IDENTITY]);
+                    self.scene.set_fields(field);
+                }
+                self.scene.set_ground_window(sand.rect());
+                still = Some(movers.len());
+                movers.push(sand.transform());
+            }
+            self.scene.set_movers_still(&movers, |k| Some(k) == still);
         }
         // The lab's bodies between their last two ticks (#136).
         if let Some(lab) = &self.lab {
@@ -2937,6 +2975,10 @@ impl Demo for Gallery {
         };
         let title = match &mut self.walker {
             Some(walker) => format!("{title} | {}", walker.title()),
+            None => title,
+        };
+        let title = match self.sand.as_mut().filter(|_| self.walker.is_some()) {
+            Some(sand) => format!("{title} | {}", sand.title()),
             None => title,
         };
         self.streaming.clear();
@@ -6183,7 +6225,7 @@ fn build_island(
     args: &Args,
     cooked: Cooked,
     camera: &FlyCamera,
-) -> Result<MeshletScene> {
+) -> Result<(MeshletScene, island_sand::SandWindow)> {
     let start = Instant::now();
     let props = island_props(args);
     let streamed = args.stream_pool > 0;
@@ -6576,6 +6618,19 @@ fn build_island(
         !args.no_rock_types,
         !args.no_rock_sites,
     )?;
+    // The beach's sand round the walker (#197): a ground window the tiles leave to it, a mesh
+    // of a vertex per point of its layer, raised by the ground and the layer and shaded by the
+    // ground's own row where it stands.
+    let ground_row = materials.of(&props[0].name);
+    let window_mesh = builder.add_displaced_mesh(
+        &SkinnedMesh::cook_displaced(&island_sand::SandWindow::mesh(), island_sand::REACH),
+        island_sand::SandWindow::height_field(),
+    );
+    builder.set_mesh_material(window_mesh, ground_row);
+    builder.set_ground_window_mesh(window_mesh);
+    for &tile in tile_ids {
+        builder.set_windowed_ground(tile);
+    }
     materials.apply(&mut builder, &props, &ids);
     let mut layout = CityLayout::island(args.instances.unwrap_or(if sites.is_some() {
         ISLAND_ROCKS
@@ -6764,6 +6819,8 @@ fn build_island(
         movers.extend([(barrel, barrels), (log, logs), (crate_, crates)]);
     }
     movers.extend([2, 1].map(|from_end| (ids[ids.len() - from_end], 1)));
+    // Then the sand window's (#197).
+    movers.push((window_mesh, 1));
     builder.reserve_movers(&movers);
     // No rock on the cells the channels are carved in or the lakes' shores smoothed (the
     // placement reads the 8 m samples, which those cells no longer follow), nor under a lake:
@@ -6902,7 +6959,8 @@ fn build_island(
         wall_ms = start.elapsed().as_millis(),
         "island ready"
     );
-    Ok(scene)
+    let sand = island_sand::SandWindow::new(island_drawn(args), Arc::new(layers));
+    Ok((scene, sand))
 }
 
 /// The city: the terrain and the twenty props cooked (or loaded), the terrain placed once

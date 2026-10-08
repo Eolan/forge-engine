@@ -38,7 +38,8 @@ struct HeightField
     float cell;     // metres between two heights
     uint first;     // its first height in a frame's heights
     uint2 size;     // heights along x and z
-    uint2 pad;
+    uint slopes;    // its first slope in a frame's heights, x then z a point, added to its own (#197; 0xFFFFFFFF: none)
+    uint pad;
 };
 
 // Mirrors `SkinPush` in crates/forge-render/src/skin.rs.
@@ -143,14 +144,34 @@ float field_height(float* heights, HeightField h, float2 p)
     return lerp(a, b, t.y);
 }
 
+// Field `h`'s added slopes (x, z) at grid point `g`, clamped to the grid (#197).
+float2 slope_at(float* heights, HeightField h, int2 g)
+{
+    uint2 c = uint2(clamp(g, int2(0), int2(h.size) - 1));
+    uint i = h.slopes + 2 * (c.y * h.size.x + c.x);
+    return float2(heights[i], heights[i + 1]);
+}
+
 // The normal of field `h`'s surface at bind-pose (x, z) `p`: its slopes across a cell either
-// side.
+// side, plus its added slopes there when it has them (a ground window's, #197: the ground's
+// smooth normals in place of its facets'), between its four nearest points.
 float3 field_normal(float* heights, HeightField h, float2 p)
 {
     float2 dx = float2(h.cell, 0.0);
     float2 dz = float2(0.0, h.cell);
     float sx = (field_height(heights, h, p + dx) - field_height(heights, h, p - dx)) / (2.0 * h.cell);
     float sz = (field_height(heights, h, p + dz) - field_height(heights, h, p - dz)) / (2.0 * h.cell);
+    if (h.slopes != 0xFFFFFFFFu)
+    {
+        float2 g = (p - h.origin) / h.cell;
+        int2 g0 = int2(floor(g));
+        float2 t = g - float2(g0);
+        float2 a = lerp(slope_at(heights, h, g0), slope_at(heights, h, g0 + int2(1, 0)), t.x);
+        float2 b = lerp(slope_at(heights, h, g0 + int2(0, 1)), slope_at(heights, h, g0 + int2(1, 1)), t.x);
+        float2 added = lerp(a, b, t.y);
+        sx += added.x;
+        sz += added.y;
+    }
     return normalize(float3(-sx, 1.0, -sz));
 }
 

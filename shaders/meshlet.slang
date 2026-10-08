@@ -82,7 +82,7 @@ public struct Mesh
     public uint level_offset[LOD_LEVELS + 1]; // relative to meshlet_offset, plus the end
     public uint skin;              // a skinned mesh's first cluster in the skin pass's table (#165), 0xFFFFFFFF for others
     public uint uvs;               // 1: its payloads carry a UV stream after their triangles (D-047)
-    public uint pad;
+    public uint flags;             // MESH_WINDOWED_GROUND, MESH_SCENE_SHADED (#197)
     public float self_error_min[LOD_LEVELS];
     public float parent_error_max[LOD_LEVELS];
     public float self_reach_max[LOD_LEVELS];   // max |self_center - center| + self_radius per level
@@ -140,6 +140,10 @@ static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render
 static const uint MATERIAL_FLAG_UV = 2;         // the textures read the mesh's UVs (D-047)
 static const uint MATERIAL_FLAG_MASKED = 4;     // cut out by the base colour's alpha (#171)
 static const uint MATERIAL_FLAG_DOUBLE_SIDED = 8; // drawn from both sides (#171)
+static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
+static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
+static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
+static const uint INSTANCE_STILL = 1;          // Instance::flags: a mover with no motion of its own this frame (#197)
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
 public static const uint MATERIAL_CLASS_ICE = 1;
@@ -164,7 +168,8 @@ public struct Instance
     public float radius;
     public uint id;
     public uint material;   // its row in `Frame::materials`
-    public uint2 pad;
+    public uint flags;      // INSTANCE_STILL (#197)
+    public uint pad;
 };
 
 // Side of a cell, metres (forge_render::cells::CELL_SIZE): a power of two, so the product with
@@ -361,6 +366,7 @@ public struct Frame
     public SkinVertex* skin_vertices;  // their vertices in the bind pose, from which their textures are projected (#166)
     public float4* skin_joints;        // this frame's joints' matrices, three rows each: they turn the textures' relief with the body
     public uint64_t skin_pad;
+    public float4 ground_window;    // the ground window (#197): min x, min z, max x, max z in the scene's frame, where MESH_WINDOWED_GROUND meshes draw no fragment (min > max: none)
 };
 
 // Mirrors `SkinVertex` in crates/forge-geom/src/skin.rs (32 bytes): a skinned cluster vertex
@@ -468,7 +474,23 @@ uint cluster_cutouts(Frame* f, Instance inst, Meshlet m)
     uint flags = f[0].materials[inst.material + (m.section & 0xFFu)].flags & cut;
     if (((m.section >> 16) & 0xFFu) < m.triangle_count)
         flags |= f[0].materials[inst.material + ((m.section >> 8) & 0xFFu)].flags & cut;
+    // The windowed ground's clusters that reach into the ground window (#197): their fragments
+    // there go (`cutout_kept`). Its instances stand in the scene's frame, so the cluster's
+    // sphere is where it stands.
+    float4 w = f[0].ground_window;
+    if ((f[0].meshes[inst.mesh].flags & MESH_WINDOWED_GROUND) != 0 && w.x <= w.z
+        && all(m.center.xz + m.radius >= w.xy) && all(m.center.xz - m.radius <= w.zw))
+        flags |= CUTOUT_GROUND_WINDOW;
     return flags;
+}
+
+// Whether `object` (x, z), of an instance of `mesh`, lies in the frame's ground window where the
+// mesh is windowed ground (#197): its fragment there goes, the window's mesh drawn in its place.
+bool in_ground_window(Frame* f, uint mesh, float2 object)
+{
+    float4 w = f[0].ground_window;
+    return (f[0].meshes[mesh].flags & MESH_WINDOWED_GROUND) != 0
+        && all(object >= w.xy) && all(object < w.zw);
 }
 
 // The 16-bit octahedral normal of a paged vertex (forge_geom::page::decode_normal).
@@ -2009,6 +2031,7 @@ struct CutoutVertexOut
 {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0; // the mesh's UV (0 without them)
+    float2 ground : TEXCOORD1; // its (x, z) in its mesh's frame, for the ground window (#197)
 };
 
 [shader("mesh")]
@@ -2048,6 +2071,7 @@ void mesh_cutout_main(
         float3 relative = instance_point(f, inst, v.position);
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
         verts[thread].uv = uvs ? paged_uv(f, uv_stream(base, m), thread) : float2(0.0);
+        verts[thread].ground = v.position.xz;
     }
 
     for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
@@ -2094,6 +2118,7 @@ struct FallbackCutoutVertex
     float4 position : SV_Position;
     nointerpolation uint id_base : VISIBILITY_ID;
     float2 uv : TEXCOORD0;
+    float2 ground : TEXCOORD1; // its (x, z) in its mesh's frame, for the ground window (#197)
 };
 
 // `mesh_cutout_main` on the fallback path: the cut-out clusters' triangles, the others' collapsed.
@@ -2110,6 +2135,7 @@ FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, u
     o.position = mul(f[0].view_proj, float4(relative, 1));
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
     o.uv = float2(0.0);
+    o.ground = v.position.xz;
     uint base = payload_base(f, m);
     if (f[0].meshes[inst.mesh].uvs != 0)
         o.uv = paged_uv(f, uv_stream(base, m), vertex_index - base / PAGED_VERTEX_BYTES);
@@ -2137,13 +2163,16 @@ uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint trian
 
 // Whether a fragment of the cut-outs' raster stays (#171): a single-sided row's back faces go
 // (the cut-outs' pipeline culls no face), and a cut-out row's pixels whose base colour alpha,
-// the factor's times its map's at the pixel's UV, falls under its cutoff.
-bool cutout_kept(Frame* f, uint id, float2 uv, bool front)
+// the factor's times its map's at the pixel's UV, falls under its cutoff; and the windowed
+// ground's in the ground window, at `ground` in its mesh's frame (#197).
+bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground)
 {
     uint slot = id >> VISIBILITY_TRIANGLE_BITS;
     uint2 record = f[0].visible[slot];
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
     Instance inst = f[0].instances[record.x];
+    if (in_ground_window(f, inst.mesh, ground))
+        return false;
     Material mat = f[0].materials[inst.material + triangle_section(m, id & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u))];
     if (!front && (mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) == 0)
         return false;
@@ -2159,18 +2188,18 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front)
 }
 
 [shader("fragment")]
-uint frag_cutout_main(float2 uv : TEXCOORD0, uint id : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
+uint frag_cutout_main(float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, uint id : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
 {
-    if (!cutout_kept(push.frame, id, uv, front))
+    if (!cutout_kept(push.frame, id, uv, front, ground))
         discard;
     return id;
 }
 
 [shader("fragment")]
-uint frag_fallback_cutout_main(nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, uint triangle : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
+uint frag_fallback_cutout_main(nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, uint triangle : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
 {
     uint id = id_base | triangle;
-    if (!cutout_kept(push.frame, id, uv, front))
+    if (!cutout_kept(push.frame, id, uv, front, ground))
         discard;
     return id;
 }
@@ -4260,8 +4289,13 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         s.duvdy = b.ddy.x * t0 + b.ddy.y * t1 + b.ddy.z * t2;
     }
     // A skinned mesh's projected textures are projected from its bind pose, or they swim over
-    // the body as it bends (#166); its UV-mapped ones take their tangent frame from it.
-    if (mesh.skin != 0xFFFFFFFFu)
+    // the body as it bends (#166); its UV-mapped ones take their tangent frame from it. A ground
+    // window's mesh is shaded where it stands in the scene, as the ground it stands in for
+    // (#197): its layered rows look their layers up there (its mover moves its own frame), its
+    // normal the raised surface's.
+    if ((mesh.flags & MESH_SCENE_SHADED) != 0)
+        s.object_position = surface_scene;
+    else if (mesh.skin != 0xFFFFFFFFu)
         bind_pose_surface(f, mesh, meshlet_index, m, base, tri, b, s);
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
@@ -5051,7 +5085,8 @@ void place_turned(Placement* p, uint slot, uint mesh, float3 position, float4 q,
     inst.radius = m[0].radius * scale;
     inst.id = p[0].first + slot;
     inst.material = m[0].material;
-    inst.pad = uint2(0u, 0u);
+    inst.flags = 0u;
+    inst.pad = 0u;
     p[0].instances[p[0].first + slot] = inst;
 }
 
@@ -5334,6 +5369,9 @@ void mover_motion_main(uint3 id : SV_DispatchThreadID)
     if (instance < p[0].first || instance - p[0].first >= p[0].count)
         return;
     Instance now = f[0].instances[instance];
+    // A mover moved with what it shows (a ground window's step, #197): the camera's motion.
+    if ((now.flags & INSTANCE_STILL) != 0)
+        return;
     Instance before = p[0].previous[instance - p[0].first];
     float depth = g_sampled_images_r[p[0].depth].Load(int3(id.xy, 0));
     float2 size = float2(float(p[0].width), float(p[0].height));

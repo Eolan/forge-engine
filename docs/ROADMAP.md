@@ -485,8 +485,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    round and throws it behind; the car stops in deep sand and pulls away hard); the spray a
    spinning wheel throws ✅ (#192: grains of its bed as #107's splash particles, coloured, lit as
    lumps); the dogs' beds as ground ✅ (#194: their paws planted on them by their IK, their
-   footfalls found on them). Left: the layer clip-mapped round the player on the island, the
-   weather refilling it, sound from the material row, the `materials-yard` demo.
+   footfalls found on them); the layer round the player on the island ✅ (#197: the beach's sand in a
+   window 12 m square at 2 cm that follows the walker, drawn as the ground in its place, its
+   footprints pressed). Left: the weather refilling it, sound from the material row, the `materials-yard` demo.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a

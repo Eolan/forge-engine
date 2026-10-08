@@ -53,6 +53,10 @@ pub struct HeightField {
     pub cell: f32,
     /// Heights along x and z.
     pub size: [u32; 2],
+    /// Whether its heights are followed by a slope per point (x then z, as `dy/dx`), added to
+    /// the slope its heights make there (#197): a ground window's, which turns the facets of
+    /// the ground it raises into the ground's own smooth normals.
+    pub slopes: bool,
 }
 
 /// Mirrors `HeightField` in `skin.slang` (32 bytes).
@@ -64,7 +68,9 @@ struct GpuHeightField {
     /// Its first height in a frame's heights.
     first: u32,
     size: [u32; 2],
-    pad: [u32; 2],
+    /// Its first slope in a frame's heights, two a point (`u32::MAX`: none).
+    slopes: u32,
+    pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuHeightField>() == 32);
@@ -136,6 +142,8 @@ pub(crate) struct SceneSkins {
     height_count: u32,
     /// The heights' ring slots.
     heights_turn: Turn,
+    /// Whether joints or heights came since the skin pass last ran (#197): it runs only then.
+    fresh: Cell<bool>,
 }
 
 /// Which slots of a ring this frame's data and the frame before's are in.
@@ -186,14 +194,16 @@ impl SceneSkins {
             let ray = ray_first(source.mesh);
             has_rays |= ray.is_some();
             let field = source.field.map_or(u32::MAX, |f| {
+                let points = f.size[0] * f.size[1];
                 fields.push(GpuHeightField {
                     origin: f.origin,
                     cell: f.cell,
                     first: heights,
                     size: f.size,
-                    pad: [0; 2],
+                    slopes: if f.slopes { heights + points } else { u32::MAX },
+                    pad: 0,
                 });
-                heights += f.size[0] * f.size[1];
+                heights += points * if f.slopes { 3 } else { 1 };
                 fields.len() as u32 - 1
             });
             let mut local = 0;
@@ -300,6 +310,8 @@ impl SceneSkins {
             heights: heights_ring,
             height_count: heights,
             heights_turn: Turn::default(),
+            // The first frame bends the bind pose once, the previous positions with it.
+            fresh: Cell::new(true),
         })
     }
 
@@ -313,6 +325,7 @@ impl SceneSkins {
         );
         let data: Vec<[f32; 12]> = matrices.iter().map(|&m| rows(m)).collect();
         self.ring[self.turn.advance()].write(0, &data);
+        self.fresh.set(true);
     }
 
     /// Writes a frame's heights, every height field's in turn (row by row along x), into the
@@ -324,6 +337,14 @@ impl SceneSkins {
             "a height per point of every height field"
         );
         self.heights[self.heights_turn.advance()].write(0, heights);
+        self.fresh.set(true);
+    }
+
+    /// Whether joints or heights came since the last call (#197): the skin pass and the
+    /// structures' refit run only then. What they wrote stays: the pool's pages of skinned
+    /// clusters are roots, always resident.
+    pub fn take_fresh(&self) -> bool {
+        self.fresh.replace(false)
     }
 
     /// The pass's push constants: the pool at `pool`, the ray tracing's positions at `rays`.

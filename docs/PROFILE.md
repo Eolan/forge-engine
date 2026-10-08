@@ -809,6 +809,18 @@ so the movers' passes run every frame:
 `tools/timings.sh`, `FORGE_SETS=island`, against 4103a5f: 2.28–2.36 ms against 2.26–2.30. #198
 is to skip those passes while the movers stand still.
 
+**The sand round the walker** (#197, 2026-10-08, `docs/demos/island.md`, "The sand round the
+walker"): a window of 601 × 601 points, 720 000 triangles. Measured over the walk of 1 800 frames
+at a fixed step, against `--no-sand-window`:
+- `geometry/meshlet pass 1` 0.133–0.145 ms against 0.062 (the window, and the tiles' clusters in
+  it through the cut-outs' raster);
+- `movers/motion` 0.024 against 0.020 (its mover marked still: 0.054 before);
+- `skin/blas` 0.022 and `skin/vertices` 0.005 a frame on average. The skin pass and its refit now
+  run only on frames that bring joints or heights.
+
+About 0.10 ms a frame in all. On the CPU, a step every 2 m costs 3.4–3.9 ms, and a field built on
+each change 1.0–1.5 ms, twice.
+
 **The barrels afloat** (#177, 2026-10-08): the movers are now Jolt bodies on the island's
 water, ticked on the CPU at 60 Hz (`docs/demos/island.md`, "Barrels afloat"). The GPU passes
 above draw them as before (not measured again); this is the tick, with the fixed step:

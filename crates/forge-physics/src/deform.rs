@@ -334,6 +334,20 @@ impl Layer {
         self.relief.copy_from_slice(relief);
     }
 
+    /// Moves the layer's first point to `origin`, whole points from where it lies (#197, a window
+    /// following a player): what it held where the two places overlap stays where it lies on the
+    /// ground, and the points it takes on are untouched (its depth, no relief).
+    pub fn move_to(&mut self, origin: DVec2) {
+        let d = (origin - self.origin) / f64::from(self.cell);
+        let by = [d.x.round() as i64, d.y.round() as i64];
+        self.origin = origin;
+        self.heights = shifted(&self.heights, self.size, by, self.soft.depth);
+        self.relief = shifted(&self.relief, self.size, by, 0.0);
+        self.scratch.copy_from_slice(&self.heights);
+        self.changed.clear();
+        self.mark([0, 0], [self.size[0] - 1, self.size[1] - 1]);
+    }
+
     /// The surface as drawn, each point's thickness and relief, into `out` (cleared first).
     pub fn drawn(&self, out: &mut Vec<f32>) {
         out.clear();
@@ -749,9 +763,63 @@ impl Layer {
     }
 }
 
+/// A grid of `size` points (row by row along x) moved `by` whole points (#197): each point takes
+/// the value `by` beyond it, or `fill` past the grid's edge. Whole rows copied at a time.
+pub fn shifted<T: Copy>(values: &[T], size: [u32; 2], by: [i64; 2], fill: T) -> Vec<T> {
+    let (nx, nz) = (i64::from(size[0]), i64::from(size[1]));
+    assert_eq!(values.len() as i64, nx * nz, "a value per point");
+    let mut out = vec![fill; values.len()];
+    // The columns that come from the grid: new x in [x0, x1) takes old x + by.
+    let (x0, x1) = ((-by[0]).clamp(0, nx), (nx - by[0]).clamp(0, nx));
+    if x0 >= x1 {
+        return out;
+    }
+    for z in 0..nz {
+        let from = z + by[1];
+        if !(0..nz).contains(&from) {
+            continue;
+        }
+        let (to_row, from_row) = ((z * nx) as usize, (from * nx) as usize);
+        out[to_row + x0 as usize..to_row + x1 as usize].copy_from_slice(
+            &values[from_row + (x0 + by[0]) as usize..from_row + (x1 + by[0]) as usize],
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shifted_layer_keeps_its_prints_where_they_lie() {
+        let mut layer = bed(Soft::SAND);
+        let at = DVec2::new(0.2, -0.1);
+        layer.press(Pad {
+            at,
+            heading: Vec2::Y,
+            size: Vec2::new(0.03, 0.04),
+            pressure: 60_000.0,
+            sweep: 0.0,
+            wheel: 0.0,
+            tread: None,
+        });
+        let (print, rest) = (layer.height_at(at), layer.height_at(DVec2::new(-0.3, 0.3)));
+        assert!(print < rest - 0.005);
+        // A quarter metre along +x and a tenth along −z: the print stays on the ground.
+        layer.move_to(DVec2::new(-0.25, -0.6));
+        assert!((layer.height_at(at) - print).abs() < 1e-6);
+        // What came in at its far edges is untouched.
+        let edge = DVec2::new(0.74, -0.59);
+        assert!(layer.covers(edge));
+        assert_eq!(layer.height_at(edge), Soft::SAND.depth);
+        // Moved by the grid helper the same way, by hand.
+        let grid: Vec<u32> = (0..12).collect();
+        assert_eq!(
+            shifted(&grid, [4, 3], [1, -1], 99),
+            vec![99, 99, 99, 99, 1, 2, 3, 99, 5, 6, 7, 99]
+        );
+    }
 
     /// A layer 1 m square of 1 cm cells about the origin.
     fn bed(soft: Soft) -> Layer {

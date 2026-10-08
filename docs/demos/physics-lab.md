@@ -1017,8 +1017,8 @@ restores its prints and treads, a reset clears them, and a recording replays to 
 digests, also from a save taken while the car spins in its sand; after a reset the car stops in
 its sand again and spins out (#195).
 
-Left: the layer clip-mapped round the player on the island (D-007), finer treads on finer
-beds, the weather refilling it, water pooling in the prints, the dogs' beds felt by the physics, a
+The layer round the player on the island is done (#197, `docs/demos/island.md`, "The sand round
+the walker"). Left: finer treads on finer beds, the weather refilling it, water pooling in the prints, the dogs' beds felt by the physics, a
 spray's grains landing on the beds as material, the sound of each, and a print shaped as the paw
 is.
 
