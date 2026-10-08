@@ -2735,3 +2735,43 @@ FidelityFX-Denoiser at d7dfecb):
   0.13 %. Interactive runs use DLAA, scripted ones TAA; the shimmer the owner reported was seen
   live.
 - **Cost:** 0.023 ms beside the rays and 0.003 ms of clear at 1600 × 900 (`docs/PROFILE.md`).
+
+## D-051 — Jelly: a body seen through by rays ✅ (2026-10-08, the owner's ask on #180)
+
+The owner asked for the slime "more jelly-like, translucent with a face", and then for the
+tropical island's slime itself, with its eyes: a squat drop of mint jelly with a darker nucleus inside and two tall glossy eyes,
+drawn in its forward pass by bending the scene behind it by the surface's normal
+(`tropical-island/crates/ti-engine/src/shaders/slime.wgsl`). Forge had no see-through material:
+ice lets the sun through its thickness (D-033), the water refracts a copy of the scene in a
+forward pass (D-038).
+
+- **A fourth shading class, `Jelly`** (`ShadingClass::Jelly`, `shading/jelly`, `jelly_through`
+  and `shade_jelly` in `meshlet.slang`). The jelly stays in the visibility buffer like any
+  surface; its class traces what lies behind it. At a pixel the view ray bends into the body
+  (index 1.12) and crosses it: every crossing of the pixel's own instance, none committed, in
+  both structures (the slime is a mover), the nearest past the start being where it leaves, as
+  the ice finds its crossings. From there it goes on straight and meets what lies behind,
+  shaded plainly as a mirror ray's hit. Over the path the jelly absorbs (`color_a`: what 0.3 m
+  of it lets through) and its cloud scatters (`bubbles`, as the ice's), in its own colour
+  (`color_b`) lit as a surface. The sun glows through it by the ice's rule. A crossing of
+  another row of its own (the nucleus, an eye from behind) shows that row.
+- **Its rays skip itself where it would wrongly hide light.** The hits behind it reach the sun
+  through it (it lets most light by), and its mirror ray starts at its surface and skips its
+  body. The mirror rays' pass starts theirs 1.5 m out for the city's cuts; for a small body
+  lying on the ground that start is under the ground.
+- **One bend, at the front.** Bent again at the far side, the ray followed that side's wobbles
+  and the cut's facets (it has no smooth normals) and broke the horizon behind into hard-edged
+  pieces. At gelatine's index (1.35) a ball is a lens showing what lies behind upside down, a
+  glass marble. The island's slimes bend it gently by their front alone, and so does this.
+- **Without ray queries or a sky** the jelly shows its cloud's colour, opaque.
+
+*Not chosen:* a forward pass after the resolve reading a copy of the scene, as the water and
+the island's slimes do. It needs the body drawn outside the visibility buffer (a forward draw of
+skinned clusters, a new path), and it sees only what the screen shows.
+
+**Left for later:** a lighter shadow (the sun's shadow rays and SIGMA treat it as opaque); the
+hits seen through it are plain (their rows' colours, the textures' averages); more slimes in the
+island's four flavours.
+
+*Measured* (`--lab creatures`, RTX 5070 Ti, 1600 × 900, 600 frames): `shading/jelly`
+0.043 ms in the lab's view, 0.066 ms with the slime filling a sixth of the screen.

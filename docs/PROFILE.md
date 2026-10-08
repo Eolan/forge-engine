@@ -1081,7 +1081,10 @@ With their clips through the motors (#167, 2026-10-08: the clips sampled, the sw
 inertialized, the mannequins' heads turned to the dogs, the dogs' balance; the same run, two
 rounds to the same digest): **0.126 ms a tick** (p99 0.20, max 0.31). With the slime before
 them (#179: a Jolt soft body of 258 points and 512 triangles, five iterations, hopping):
-**0.180 ms a tick** (p99 0.27–0.30, max 0.44), two runs to the same digest.
+**0.180 ms a tick** (p99 0.27–0.30, max 0.44), two runs to the same digest. The tropical
+island's drop in its place (#180: its bends held by constraints too): **0.237 ms** (p99
+0.35–0.40, max 0.55), two runs to the same digest; `shading/jelly` (D-051) 0.043 ms in the
+lab's view, 0.066 ms from 1 m before it, the frame 1.51 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

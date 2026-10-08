@@ -144,7 +144,8 @@ static const uint MATERIAL_FLAG_DOUBLE_SIDED = 8; // drawn from both sides (#171
 public static const uint MATERIAL_CLASS_STANDARD = 0;
 public static const uint MATERIAL_CLASS_ICE = 1;
 public static const uint MATERIAL_CLASS_LAYERED = 2;
-public static const uint MATERIAL_CLASSES = 3;
+public static const uint MATERIAL_CLASS_JELLY = 3;
+public static const uint MATERIAL_CLASSES = 4;
 static const uint TEXTURE_NONE = 0xFFFFFFFFu;
 
 // An instance's position is an integer cell of CELL_SIZE metres and an offset inside it
@@ -2699,7 +2700,8 @@ struct Surface
 {
     float3 n;               // world-space normal, interpolated
     float3 view;            // unit, world space, from the surface towards the camera (issue #49)
-    float3 transmitted;     // the sunlight crossing the ice to this point and leaving towards the camera, per channel (issues #59, #61), else 0
+    float3 transmitted;     // the sunlight crossing the ice to this point and leaving towards the camera, per channel (issues #59, #61); the jelly's light from behind and through it (#180); else 0
+    float cloud;            // jelly: the share of its path through the body its cloud scatters (#180); else 1
     float3 object_normal;   // object-space normal, interpolated
     float3 object_position; // object-space position
     float3 dpdx;            // its change per pixel to the right and down
@@ -3757,6 +3759,276 @@ float3 ice_transmission(Frame* f, uint instance, float3 world, float scattering)
     return straight * phase * 3.14159265 + diffuse;
 }
 
+// Jelly (#180): a clear, tinted, slightly cloudy body that the eye sees through (the slime). At a
+// pixel, the view ray bends into the body (Snell, `JELLY_IOR`) and crosses it to its far side,
+// found as the ice finds its crossings (D-033): every crossing of the pixel's own instance, none
+// committed, the nearest past the start is where it leaves. It leaves without bending again and
+// meets what lies behind, shaded plainly as a mirror ray's hit: the owner's slimes (the
+// tropical island's) bend what lies behind by their front's normal alone. Bent again by the far
+// side, the ray followed that side's wobbles and the cut's facets (it carries no smooth
+// normals) and broke the horizon behind into hard-edged pieces. Over the path the jelly absorbs
+// (Beer–Lambert, `color_a` being what `JELLY_DEPTH` of it lets through) and its cloud scatters
+// (`scattering` per metre): what it scatters is the body's own colour (`color_b`), lit as a
+// surface. The sunlight crossing the body towards the eye (backlit, it glows) is the ice's
+// rule with the jelly's absorption. Rays from the hits behind it to the sun pass through the
+// jelly, which lets most light by, so they skip it.
+// Its index of refraction at the front: gelatine's is about 1.35, at which a ball of it is a lens
+// showing what lies behind it upside down, a glass marble; the island's slimes bend it gently.
+static const float JELLY_IOR = 1.12;
+static const float JELLY_DEPTH = 0.3; // metres
+
+// The crossings of instance `instance` along `ray` in the structure at `tlas`, none committed,
+// gathered into `nearest` (with its triangle and barycentrics) and `farthest`.
+struct Crossings
+{
+    bool any;
+    float nearest;
+    uint primitive;
+    float2 barycentrics;
+    float farthest;
+};
+
+void gather_crossings(uint64_t tlas, uint instance, RayDesc ray, inout Crossings c)
+{
+    if (tlas == 0)
+        return;
+    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed())
+    {
+        if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE || q.CandidateInstanceID() != instance)
+            continue;
+        float t = q.CandidateTriangleRayT();
+        c.any = true;
+        c.farthest = max(c.farthest, t);
+        if (t < c.nearest)
+        {
+            c.nearest = t;
+            c.primitive = q.CandidatePrimitiveIndex();
+            c.barycentrics = q.CandidateTriangleBarycentrics();
+        }
+    }
+}
+
+Crossings own_crossings(Frame* f, uint instance, RayDesc ray)
+{
+    Crossings c;
+    c.any = false;
+    c.nearest = ray.TMax;
+    c.primitive = 0;
+    c.barycentrics = float2(0.0);
+    c.farthest = -1.0;
+    gather_crossings(f[0].tlas, instance, ray, c);
+    gather_crossings(f[0].tlas_movers, instance, ray, c);
+    return c;
+}
+
+// Whether a shadow ray meets anything but instance `skip`, in either structure.
+bool blocked_in(Frame* f, uint64_t tlas, RayDesc ray, uint skip)
+{
+    if (tlas == 0)
+        return false;
+    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed())
+    {
+        if (q.CandidateInstanceID() != skip
+            && ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
+bool ray_blocked_except(Frame* f, RayDesc ray, uint skip)
+{
+    return blocked_in(f, f[0].tlas, ray, skip) || blocked_in(f, f[0].tlas_movers, ray, skip);
+}
+
+// `trace_closest` that sees through instance `skip`: from inside the jelly, where it sits on the
+// ground, the ray leaving it starts above the ground and meets it.
+void closest_in(Frame* f, uint64_t tlas, inout RayDesc ray, uint skip, bool mover, inout ClosestHit o)
+{
+    if (tlas == 0)
+        return;
+    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed())
+    {
+        if (q.CandidateInstanceID() != skip
+            && ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        o.hit = true;
+        o.instance = q.CommittedInstanceID();
+        o.primitive = q.CommittedPrimitiveIndex();
+        o.barycentrics = q.CommittedTriangleBarycentrics();
+        o.t = q.CommittedRayT();
+        o.mover = mover;
+        ray.TMax = o.t;
+    }
+}
+
+ClosestHit trace_closest_except(Frame* f, RayDesc ray, uint skip)
+{
+    ClosestHit o;
+    o.hit = false;
+    o.instance = 0;
+    o.primitive = 0;
+    o.barycentrics = 0.0;
+    o.t = ray.TMax;
+    o.mover = false;
+    closest_in(f, f[0].tlas, ray, skip, false, o);
+    closest_in(f, f[0].tlas_movers, ray, skip, true, o);
+    return o;
+}
+
+// `hit_radiance`, its sun's shadow ray skipping instance `skip` (the jelly it is seen through).
+float3 hit_radiance_skipping(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 direction, uint skip)
+{
+    float3 sun = normalize(f[0].sun_dir);
+    float ndl = max(dot(hit.n, sun), 0.0);
+    float lit = 0.0;
+    if (ndl > 0.0)
+    {
+        RayDesc ray;
+        ray.Origin = hit.position + (hit.n + sun) * SHADOW_BIAS;
+        ray.Direction = sun;
+        ray.TMin = 0.0;
+        ray.TMax = 50000.0;
+        lit = ray_blocked_except(f, ray, skip) ? 0.0 : 1.0;
+    }
+    float3 ambient = sh_irradiance(sky, hit.n);
+    if (probes != nullptr)
+        ambient = probe_irradiance(probes, hit.position, hit.n, -direction, ambient);
+    return hit.albedo * (ndl * lit * f[0].sun_color.rgb + ambient) + hit.emissive;
+}
+
+// The sky's light along `direction`, in the resolve's units.
+float3 sky_along(float4* sky, float3 direction)
+{
+    float4 up_table = sky[SH_COEFFICIENTS];
+    return sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265;
+}
+
+// What the eye sees through the jelly of row `mat` at `world`, the point of instance `instance` a
+// pixel shows (normal `n`, `view` towards the camera): the light from behind it, absorbed and
+// thinned by the cloud, and the sunlight crossing it. `cloud` is the share of the path its cloud
+// scatters (1 where no ray crosses: the jelly shows its own colour).
+float3 jelly_through(Frame* f, Material mat, uint instance, float3 world, float3 n, float3 view, out float cloud)
+{
+    cloud = 1.0;
+    Instance inst = f[0].instances[instance];
+    float3 inside = refract(-view, n, 1.0 / JELLY_IOR);
+    if (dot(inside, inside) < 1e-6)
+        inside = -view;
+    RayDesc ray;
+    ray.Origin = world;
+    ray.Direction = inside;
+    ray.TMin = 0.002; // past the triangle it starts on
+    ray.TMax = 2.0 * inst.radius + 0.1;
+    Crossings c = own_crossings(f, instance, ray);
+    if (!c.any)
+        return float3(0.0);
+    float3 absorption = -log(clamp(mat.color_a, float3(1e-3), float3(1.0))) / JELLY_DEPTH;
+    float3 through = exp(-(absorption + mat.scattering) * c.nearest);
+    cloud = 1.0 - exp(-mat.scattering * c.nearest);
+    float4* sky = resolve_push.sky;
+    ProbeField* probes = resolve_push.probes;
+    RayHit exit = ray_hit(f, instance, c.primitive, c.barycentrics, world, inside, c.nearest);
+    RtScene* rs = f[0].rt_scene;
+    uint row = inst.material + rs[0].sections[rs[0].meshes[inst.mesh].first_triangle + c.primitive];
+    float3 behind;
+    if (f[0].materials[row].class_index != MATERIAL_CLASS_JELLY)
+    {
+        // Something of its own inside it (an eye, seen from behind).
+        behind = hit_radiance_skipping(f, sky, probes, exit, inside, instance);
+    }
+    else
+    {
+        // It leaves without bending again (see above), from a little inside (the jelly's
+        // bottom lies on the ground), through itself.
+        float3 out_dir = inside;
+        RayDesc onward;
+        onward.Origin = exit.position - inside * 0.01;
+        onward.Direction = out_dir;
+        onward.TMin = 0.0;
+        onward.TMax = 50000.0;
+        ClosestHit h = trace_closest_except(f, onward, instance);
+        if (h.hit)
+        {
+            RayHit hit = ray_hit(f, h.instance, h.primitive, h.barycentrics, onward.Origin, out_dir, h.t);
+            behind = hit_radiance_skipping(f, sky, probes, hit, out_dir, instance);
+        }
+        else
+            behind = sky_along(sky, out_dir);
+    }
+    // The sunlight that crossed the body to this point (backlit, it glows): the ice's rule.
+    float3 sun = normalize(f[0].sun_dir);
+    RayDesc toward;
+    toward.Origin = world;
+    toward.Direction = sun;
+    toward.TMin = 0.002;
+    toward.TMax = 2.0 * inst.radius + 0.1;
+    Crossings s = own_crossings(f, instance, toward);
+    float3 glow = float3(0.0);
+    if (s.any)
+    {
+        RayDesc shadow;
+        shadow.Origin = world + sun * (s.farthest + SHADOW_BIAS);
+        shadow.Direction = sun;
+        shadow.TMin = 0.0;
+        shadow.TMax = 50000.0;
+        if (!ray_blocked_except(f, shadow, instance))
+        {
+            float g = 0.5;
+            float cos_theta = dot(-sun, view);
+            float phase = (1.0 - g * g) / (4.0 * 3.14159265 * pow(max(1.0 + g * g - 2.0 * g * cos_theta, 1e-4), 1.5));
+            float3 crossed = exp(-(absorption + mat.scattering) * s.farthest);
+            // The straight beam, and what the cloud scatters of it in the jelly's colour.
+            glow = f[0].sun_color.rgb * (crossed * phase * 3.14159265
+                + mat.color_b * (1.0 - exp(-mat.scattering * s.farthest)) * exp(-absorption * s.farthest));
+        }
+    }
+    return through * behind + glow;
+}
+
+// Jelly (#180): its cloud lit as a surface of its own colour, the reflections and the highlight
+// on top, and what it lets through (`s.transmitted`) where the surface does not reflect. With
+// rays (`traced`), its mirror ray starts at its surface and skips its own body: the mirror rays'
+// pass starts theirs 1.5 m out (REFLECTION_START, for the cuts standing off the drawn surfaces),
+// under the ground for a small body lying on it, while a skinned body's cut is its surface.
+float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced)
+{
+    float3 albedo;
+    if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
+        albedo = mat.color_b * s.cloud;
+    float ndl;
+    g_reflection_request = float4(0.0);
+    float3 color = sun_light(f, albedo, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, traced, ndl);
+    float4 mirror = g_reflection_request;
+    if (traced && mirror.w > 0.0)
+    {
+        RayDesc ray;
+        ray.Origin = s.world + s.n * 0.003;
+        ray.Direction = mirror.xyz;
+        ray.TMin = 0.0;
+        ray.TMax = 50000.0;
+        ClosestHit h = trace_closest_except(f, ray, instance);
+        if (h.hit)
+        {
+            RayHit hit = ray_hit(f, h.instance, h.primitive, h.barycentrics, ray.Origin, mirror.xyz, h.t);
+            color += mirror.w * (hit_radiance_skipping(f, s.sky, s.probes, hit, mirror.xyz, instance) - sky_along(s.sky, mirror.xyz));
+        }
+    }
+    // The share the surface reflects, as `sky_reflection` weighs it.
+    float roughness = sqrt(sqrt(2.0 / (mat.specular_power + 2.0)));
+    float nv = saturate(dot(s.n, s.view));
+    float fresnel = mat.reflectance + (max(1.0 - roughness, mat.reflectance) - mat.reflectance) * pow(1.0 - nv, 5.0);
+    return color + (1.0 - fresnel) * s.transmitted + mat.emissive;
+}
+
 // The tile list after the classes': tiles holding a smooth row whose mirror ray `reflections_main`
 // traces (issue #52), and the bit `shade_pixel` returns for such a pixel.
 static const uint REFLECTION_LIST = MATERIAL_CLASSES;
@@ -3769,6 +4041,7 @@ bool wants_mirror_ray<let SHADOWS : int>(Frame* f, Material mat)
     const uint flags = FLAG_SKY_REFLECTIONS | FLAG_RAY_REFLECTIONS;
     return SHADOWS != 0 && f[0].tlas != 0 && f[0].rt_scene != nullptr && resolve_push.sky != nullptr
         && (f[0].flags & flags) == flags && mat.specular_power >= RAY_REFLECTION_POWER
+        && mat.class_index != MATERIAL_CLASS_JELLY // it traces its own, from its surface (#180)
         && (f[0].flags & FLAG_SHOW_GI) == 0;
 }
 
@@ -3922,12 +4195,19 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
         s.shadow *= cloud_light(surface_scene, normalize(f[0].sun_dir));
     s.transmitted = float3(0.0);
+    s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
         s.transmitted = ice_transmission(f, record.x, surface_scene, mat.scattering);
+    // The jelly's see-through (#180): under a sky, with the rays' scene.
+    bool jelly_traced = SHADOWS != 0 && class_index == MATERIAL_CLASS_JELLY && (f[0].tlas != 0 || f[0].tlas_movers != 0)
+        && f[0].rt_scene != nullptr && resolve_push.sky != nullptr;
+    if (jelly_traced)
+        s.transmitted = jelly_through(f, mat, record.x, surface_scene, s.n, s.view, s.cloud);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)
         : class_index == MATERIAL_CLASS_LAYERED ? shade_layered(f, row, mat, s)
+        : class_index == MATERIAL_CLASS_JELLY ? shade_jelly(f, mat, s, record.x, jelly_traced && (f[0].flags & FLAG_SKY_REFLECTIONS) != 0)
         : shade_standard(f, mat, s);
     if (culled_debug)
         color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
@@ -4494,6 +4774,20 @@ void resolve_ice_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThread
 void resolve_layered_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 {
     resolve_tiles<1>(MATERIAL_CLASS_LAYERED, group, thread);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_jelly_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    resolve_tiles<0>(MATERIAL_CLASS_JELLY, group, thread);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolve_jelly_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    resolve_tiles<1>(MATERIAL_CLASS_JELLY, group, thread);
 }
 
 // ------------------------------------------------------------ ray tracing ---

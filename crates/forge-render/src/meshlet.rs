@@ -2543,6 +2543,10 @@ impl MeshletRenderer {
                 entry("resolve_layered_main", "resolve_layered_rt_main"),
                 "shading layered",
             )?,
+            shading_pipeline(
+                entry("resolve_jelly_main", "resolve_jelly_rt_main"),
+                "shading jelly",
+            )?,
         ];
         let pipeline_reflections = if rt {
             Some(shading_pipeline("reflections_main", "shading reflections")?)
@@ -3968,6 +3972,7 @@ impl MeshletRenderer {
                     ShadingClass::Standard => "shading/standard",
                     ShadingClass::Ice => "shading/ice",
                     ShadingClass::Layered => "shading/layered",
+                    ShadingClass::Jelly => "shading/jelly",
                 })
                 .image(targets.visibility, ImageAccess::Sampled(compute))
                 .image(color, ImageAccess::StorageWrite(compute))

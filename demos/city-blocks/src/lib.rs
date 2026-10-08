@@ -3366,14 +3366,40 @@ impl CityMaterials {
                 ..RenderLayer::default()
             },
         );
-        // The slime (Phase 3 step 7): a wet green jelly.
+        // The slime (#179, #180), the tropical island's: mint jelly seen through, a little
+        // cloudy; its eyes (section 1) black and glossy, its nucleus (section 2) the jelly's
+        // colour darkened, as the island's (0.42 of its tint).
         let slime = add(
             "slime",
             RenderLayer {
-                color_a: [0.16, 0.55, 0.12],
-                color_b: [0.2, 0.62, 0.16],
+                class: ShadingClass::Jelly,
+                // What 0.3 m of it lets through, and its cloud's colour: the island's mint
+                // (0.25, 0.95, 0.55).
+                color_a: [0.5, 0.96, 0.7],
+                color_b: [0.25, 0.95, 0.55],
+                // A cloud scattering 0.8 per metre (`bubbles` of a millimetre, as the ice's).
+                bubbles: 0.00053,
                 roughness: RenderLayer::roughness_for_power(400.0),
-                specular: 0.3,
+                specular: 0.5,
+                reflectance: 0.025,
+                ..RenderLayer::default()
+            },
+        );
+        add(
+            "slime: eyes",
+            RenderLayer {
+                color_a: [0.02, 0.02, 0.04],
+                color_b: [0.02, 0.02, 0.04],
+                roughness: RenderLayer::roughness_for_power(300.0),
+                specular: 0.6,
+                ..RenderLayer::default()
+            },
+        );
+        add(
+            "slime: nucleus",
+            RenderLayer {
+                color_a: [0.105, 0.4, 0.23],
+                color_b: [0.105, 0.4, 0.23],
                 ..RenderLayer::default()
             },
         );

@@ -591,6 +591,23 @@ hop, away from the camera). With it, the creatures' tick (600 ticks, balls every
 **0.180 ms** (p99 0.27–0.30) against 0.126 ms; on the GPU `skin/vertices` takes 0.006 ms,
 `skin/blas` 0.105 ms for the six refits, and the frame 1.44 ms against 1.41 ms.
 
+**The tropical island's slime** (#180, 2026-10-08, the owner's pick; `reports/2026-10-08-180/`):
+the slime is now that prototype's, a squat drop of mint jelly with a darker nucleus floating
+inside and two tall glossy eyes, seen through. The ball became the island's drop (its underside
+flattened to 0.3 of its height, its sides bulging 12 %; 0.36 m tall, 0.67 m wide), held by its
+edges (10⁻³ m/N), its bends (5·10⁻² m/N, which keep its surface smooth) and a pressure of 8: it
+keeps its shape where it sits and still hops 0.36 m. The eyes (section 1, black and glossy) are
+set into the surface, a third of them standing out, each vertex weighted on the soft body's
+triangle under it. The nucleus (section 2, the island's 0.42 of the jelly's tint) is weighted on
+the four points round the drop's waist, all alike, so it floats as one piece. The jelly is the
+renderer's new class (D-051): the floor and the dogs seen through it, bent gently and tinted
+mint, a little cloudy, the sun glowing through it.
+
+`slime.png`: frames 60 (sitting), 91 (the top of its first hop), 109 (landed), and frame 60 from
+1 m before it (`--view=-0.2,0.5,3.2,0,-12`, also `close.png`). Costs (600 ticks, balls every 50):
+the creatures' tick **0.237 ms** (p99 0.35–0.40; the bends cost 0.057 ms), two runs to the same
+digest; `shading/jelly` **0.043 ms** in the lab's view, 0.066 ms from 1 m; the frame 1.51 ms.
+
 **The clips through the motors** (#167's first three steps, 2026-10-08; `forge_anim::Player`,
 `Inertializer`, `BlendSpace`; `reports/2026-10-08-167/`). The creatures now play their Blender
 clips (idle and walk, `assets/blender/skinned_creatures.py`) through their motors, in place of

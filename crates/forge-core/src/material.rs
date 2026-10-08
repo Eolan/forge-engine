@@ -31,14 +31,20 @@ pub enum ShadingClass {
     /// the object's x and z around its origin. Layer `k` is shaded as the standard row `k + 1`
     /// after this one, and neighbouring layers blend across a texel.
     Layered,
+    /// Jelly (#180): a clear body seen through, bent and tinted by it (`color_a` is what 0.3 m
+    /// of it lets through), a little cloudy (its `bubbles` scatter as the ice's, in the colour
+    /// `color_b`), with the sun glowing through it. With ray queries under a sky; else its
+    /// cloud's colour.
+    Jelly,
 }
 
 impl ShadingClass {
     /// Every class, in the order of their indices.
-    pub const ALL: [ShadingClass; 3] = [
+    pub const ALL: [ShadingClass; 4] = [
         ShadingClass::Standard,
         ShadingClass::Ice,
         ShadingClass::Layered,
+        ShadingClass::Jelly,
     ];
 
     /// The index the GPU tables use (`MATERIAL_CLASS_*` in `meshlet.slang`).
@@ -47,6 +53,7 @@ impl ShadingClass {
             ShadingClass::Standard => 0,
             ShadingClass::Ice => 1,
             ShadingClass::Layered => 2,
+            ShadingClass::Jelly => 3,
         }
     }
 
@@ -56,6 +63,7 @@ impl ShadingClass {
             ShadingClass::Standard => "standard",
             ShadingClass::Ice => "ice",
             ShadingClass::Layered => "layered",
+            ShadingClass::Jelly => "jelly",
         }
     }
 }
