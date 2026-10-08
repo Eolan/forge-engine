@@ -1133,7 +1133,10 @@ front wheels spinning and digging in (#191, a dig a slipping wheel a tick over a
 by 40 cm, slumped): **0.266–0.273 ms a tick** (p99 0.79–0.85) against 0.216–0.236 (p99 0.70–0.73)
 for a56c474 timed alike, two runs each. The spray its slipping wheels throw (#192, the splashes'
 particles without water): `splashes/emit` 0.002 ms, `splashes/advance` 0.003, `splashes/draw`
-0.008 with some 3 000 grains in the air; nothing on the tick (visual only).
+0.008 with some 3 000 grains in the air; nothing on the tick (visual only). The dogs standing on their beds
+(#194, through their IK and footfalls): **0.273–0.279 ms a tick** against 0.267–0.269 for f89951d,
+the more footfalls they now make (51 to 70 a bed against 16 to 18); as Jolt height fields
+felt by the paws they made it 1.08 ms.
 
 The skinned creatures on the GPU (#165), the same run, 1080p:
 | Zone | ms |

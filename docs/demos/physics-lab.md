@@ -850,12 +850,12 @@ about its weight; over 60 s the gulls keep their height and circuit, and replay 
 Left: the gulls are as alike as their flights; a turn of the head or the tail that steers,
 landing and taking off, and the wind (`Air::wind`).
 
-## `yard`: footprints and wheel tracks in sand, mud and snow (issues #185 to #189, #191, #192)
+## `yard`: footprints and wheel tracks in sand, mud and snow (issues #185 to #189, #191 to #194)
 
 Phase 3's materials step starts here: D-007's deformable layer, which what touches the ground
 writes into and the renderer draws. `physics-lab --lab yard`: the course's two dogs walk their
-lanes on the plain floor, over beds of damp sand, mud and fresh snow (2.4 m by 1.25 m each),
-turn about past the snow and come back, pressing their paws in. Beside them the drive lab's car
+lanes over beds of damp sand, mud and fresh snow (2.4 m by 1.25 m each), standing on them and
+sinking into their prints, turn about past the snow and come back. Beside them the drive lab's car
 crosses its own beds of the three (2.4 m by 3 m each) from the snow on an autopilot, 3 m/s down
 its lane, stops in its sand, pulls away hard, its front wheels spinning and digging in, and
 stops past the sand. The arrow keys take the car over as in `--lab drive` (the
@@ -959,8 +959,18 @@ beds.
   last 25 cm, which a wheel's 105 kPa sinks 10.5 cm. On the autopilot (3 m/s, throttle at most
   0.6) the car keeps its pace through the snow and slows from 2.9 to 1.25 m/s in the mud (1.5
   before its spinning front wheel tore at it, #191).
-- **The dogs walk on the floor** under their beds, so their paws go through the snow to it.
-  Their beds stay drawn only.
+- **The dogs stand on their beds** (#194): their IK plants each paw on the bed's top under it
+  (its thickness, `yard::top`) and the torso is held over the paws' mean, so a dog steps onto
+  the untouched material and sinks into the print its footfall presses; a paw comes down over
+  that top and is up again only once it rises twice the height over the floor under it, else a
+  paw standing in its print, below the top beside it, stayed down across a bed (its footfalls
+  came at the beds' edges alone). The physics does not see these beds: Jolt height fields at the
+  point every centimetre a pad needs made a tick 0.6 ms dearer for the paws' contacts, and with
+  them the dogs went their own way after a restore. A field set region by region is not the one
+  set whole from the same samples (Jolt re-encodes the blocks beside a region from what they
+  held), and a field whose blocks are not a power of two each way has blocks padding its tree
+  that a body beside it meets (an assert).
+- **Before #194 the dogs walked on the floor** under their beds, their paws through the snow.
 - **Drawn by displacement:** a bed is a flat grid mesh cooked as a skinned mesh of one joint
   whose clusters keep their own bounds, grown by 40 cm (`SkinnedMesh::cook_displaced`). The skin
   pass gained height fields (`MeshletSceneBuilder::add_displaced_mesh`,
@@ -976,8 +986,8 @@ beds.
   beds on a restore put a car standing on them a fraction off its saved run: a save taken with
   the car spinning in its sand went its own way within a second.
 
-Over 26 s the dogs press 16 footfalls into their sand, 16 into their mud and 18 into their
-snow. The prints are 1.2 cm deep in the sand, 1.9 cm in the mud (as deep as its 56° walls let a
+Over 26 s the dogs press 38 footfalls into their sand, 51 into their mud and 70 into their
+snow (16, 16 and 18 on the floor before #194, which missed most steps). The prints are 1.2 cm deep in the sand, 1.9 cm in the mud (as deep as its 56° walls let a
 3 cm pad's print be), and through to the 4 mm left over the floor in the snow. The car's ruts
 reach the floor in its snow; in its deep sand they sink 4 cm, 6.4 cm where it spun; in its deep
 mud 10.5 cm, their berms 2 to 3 cm over it, their flanks stepping under 1 mm a point (12 cm
@@ -1004,7 +1014,7 @@ restores its prints and treads, a reset clears them, and a recording replays to 
 digests, also from a save taken while the car spins in its sand.
 
 Left: the layer clip-mapped round the player on the island (D-007), finer treads on finer
-beds, the weather refilling it, water pooling in the prints, the dogs' beds as ground, a
+beds, the weather refilling it, water pooling in the prints, the dogs' beds felt by the physics, a
 spray's grains landing on the beds as material, the sound of each, and a print shaped as the paw
 is.
 

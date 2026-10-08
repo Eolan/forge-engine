@@ -86,7 +86,8 @@ const DEEP_SAND: Soft = Soft {
 /// The beds.
 /// - The dogs': across both their lanes (x ±0.7) between where they turn about (z −1.6 and
 ///   2.8), sand, then mud, then snow, the floor showing between them; a point every centimetre,
-///   a dog's pad (3 cm by 4 cm) over a dozen. The dogs walk on the floor under them.
+///   a dog's pad (3 cm by 4 cm) over a dozen. The dogs stand on them (#194, [`top`]): they step
+///   onto them and sink into their prints.
 /// - The car's: across its lane (x `LANE`), 3 m long each in the same order, which it crosses
 ///   from the snow; a point every 2 cm, a tyre's patch (20 cm by 14 cm) over seventy. Ground the
 ///   car stands on, thinning over 25 cm at their edges, gripping as their material does against
@@ -179,6 +180,18 @@ pub(super) fn ground(bed: &Bed) -> TriMesh {
 pub(super) fn place(bed: &Bed) -> Vec3 {
     let o = bed.layer.origin();
     Vec3::new(o.x as f32, -UNDER, o.y as f32)
+}
+
+/// The top of the dogs' beds at (`x`, `z`), metres, where one lies (#194): its thickness, which
+/// their paws stand on through their IK and come down on (`creatures::Herd::drive`, `feel`). The
+/// physics does not see these beds: a dog is held over the ground under its paws by its balance,
+/// and Jolt height fields of them, at the point every centimetre a paw's pad needs, made a tick
+/// cost 0.6 ms more for the paws' contacts.
+pub(super) fn top(beds: &[Bed], x: f64, z: f64) -> Option<f64> {
+    let at = DVec2::new(x, z);
+    beds.iter()
+        .find(|b| b.grip.is_none() && b.layer.covers(at))
+        .map(|b| f64::from(place(b).y + b.layer.height_at(at)))
 }
 
 /// The footfalls `falls` that came down on a bed pressed into it, each taking the bed's
@@ -648,10 +661,13 @@ mod tests {
         let (mut t, mut v, mut sprays) = (Vec::new(), Vec::new(), Vec::new());
         for tick in 0..seconds * 60 {
             let time = f64::from(tick) * f64::from(TICK);
-            field.herd.drive(&mut world, time, false);
+            let under = |x, z| top(&beds, x, z);
+            field.herd.drive(&mut world, time, false, &under);
             drive(&mut world, &driver, &beds, u64::from(tick));
             world.step(TICK, 1).expect("a step");
-            let came = field.herd.feel(&world, u64::from(tick), &mut feet);
+            let came = field
+                .herd
+                .feel(&world, u64::from(tick), &mut feet, &|x, z| top(&beds, x, z));
             press(&mut beds, feet.last_mut(came));
             for fall in feet.last_mut(came) {
                 if let Some(k) = SOFT.iter().position(|&s| s == fall.material) {

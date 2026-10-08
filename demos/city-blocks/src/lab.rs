@@ -1535,12 +1535,15 @@ impl Simulation for LabWorld {
             tug::pull(&mut self.world, sled, self.pulls);
         }
         let column = self.wall.as_ref().map(|w| w.column_velocity(&self.world));
-        // The creatures' motors driven to their poses at this tick (or let go).
+        // The creatures' motors driven to their poses at this tick (or let go), the yard's dogs'
+        // paws on their beds (#194).
         if let Some(herd) = &self.herd {
+            let beds = &self.beds;
             herd.drive(
                 &mut self.world,
                 self.tick as f64 * f64::from(TICK),
                 self.limp,
+                &|x, z| yard::top(beds, x, z),
             );
         }
         slime::drive_all(&mut self.slimes, &mut self.world, self.tick);
@@ -1552,7 +1555,10 @@ impl Simulation for LabWorld {
         if let Some(herd) = &self.herd {
             herd.knock(&mut self.world, TICK);
             // Its dogs' paws that came down in the step.
-            let came = herd.feel(&self.world, self.tick, &mut self.feet);
+            let beds = &self.beds;
+            let came = herd.feel(&self.world, self.tick, &mut self.feet, &|x, z| {
+                yard::top(beds, x, z)
+            });
             // Those on the yard's beds pressed into them.
             if yard::press(&mut self.beds, self.feet.last_mut(came)) > 0 {
                 self.beds_changed += 1;
@@ -3147,12 +3153,17 @@ mod tests {
         for _ in 0..500 {
             first.tick(&[]);
         }
-        // Saved and restored with the car spinning its wheels in its sand (#191): a second on,
-        // the same digest, its grounds as Jolt held them (rebuilt from the beds, which they lag
-        // by up to a millimetre, it went its own way).
+        // Saved and restored with the car spinning its wheels in its sand (#191) and the dogs on
+        // their beds (#194): the same digest at once and a second on, its grounds as Jolt held
+        // them (rebuilt from the beds, which they lag by up to a millimetre, it went its own way).
         let spinning = first.save();
         let (mut third, _) = LabWorld::new(LabScene::Yard, test_pool()).unwrap();
         third.restore(&spinning);
+        assert_eq!(
+            third.digest(),
+            first.digest(),
+            "at once from a save mid-spin"
+        );
         for _ in 0..60 {
             first.tick(&[]);
             third.tick(&[]);
@@ -3172,8 +3183,19 @@ mod tests {
         second.restore(&state);
         assert_eq!(second.beds, first.beds);
         assert_eq!(second.digest(), first.digest());
-        // On for a while, then back to the start: the beds untouched again, and the same run
-        // replayed to the same digests from the restored yard.
+        // On for a while, then back to the start: the car's beds untouched again; the dogs',
+        // where they stand at the start, holding the prints of the reset's own tick alone (#194);
+        // and the same run replayed to the same digests from the restored yard.
+        let printed = |beds: &[yard::Bed]| -> Vec<usize> {
+            beds.iter()
+                .zip(&untouched)
+                .map(|(a, b)| {
+                    let (a, b) = (a.layer.heights(), b.layer.heights());
+                    a.iter().zip(b).filter(|(x, y)| x != y).count()
+                })
+                .collect()
+        };
+        let before = printed(&first.beds);
         let commands = vec![Stamped {
             tick: 1200,
             player: 0,
@@ -3181,7 +3203,12 @@ mod tests {
             command: LabCommand::Reset,
         }];
         let recording = Recording::record(&mut first, commands, 301, 60);
-        assert_eq!(first.beds, untouched);
+        assert_eq!(first.beds[3..], untouched[3..]);
+        let after = printed(&first.beds);
+        assert!(
+            (0..3).all(|k| after[k] * 10 < before[k]),
+            "{after:?} points printed after the reset, {before:?} before"
+        );
         recording.replay(&mut second).expect("the same digests");
     }
 

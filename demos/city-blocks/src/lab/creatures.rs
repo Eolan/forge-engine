@@ -923,7 +923,8 @@ impl Motion {
         );
     }
 
-    /// Puts a dog's paws in `pose` on `ground` under them (#167's feet on uneven ground), its
+    /// Puts a dog's paws in `pose` on `ground` under them (#167's feet on uneven ground; on the
+    /// `soft` ground over it where there is some, #194), its
     /// torso where its balance holds it: over (`x`, `z`), facing `facing` (the stance turned),
     /// at its stance's height over the ground's mean height under the paws. Each paw is as high
     /// over the ground as the clip has it over the floor, its leg bent to it by two-bone IK; the
@@ -934,6 +935,7 @@ impl Motion {
         &self,
         c: &Creature,
         ground: Ground,
+        soft: &dyn Fn(f64, f64) -> Option<f64>,
         (x, z): (f64, f64),
         facing: Quat,
         before: &Pose,
@@ -960,7 +962,10 @@ impl Motion {
             .iter()
             .map(|chain| model[chain.middle].transform_point3(chain.tip))
             .collect();
-        let under = |at: DVec3| ground_at(ground, at.x, at.z);
+        let under = |at: DVec3| {
+            let hard = ground_at(ground, at.x, at.z);
+            soft(at.x, at.z).map_or(hard, |top| top.max(hard))
+        };
         skeleton.model_space(before, &mut model);
         let paws_before: Vec<Vec3> = self
             .legs
@@ -1174,8 +1179,15 @@ fn course_heading(time: f64) -> (f64, f64) {
 
 impl Herd {
     /// Before a step at `time` seconds: every creature's motors driven to its pose then (its
-    /// clips, #167), or let go when `limp`.
-    pub(super) fn drive(&self, world: &mut World, time: f64, limp: bool) {
+    /// clips, #167), or let go when `limp`. `soft`: the top of the soft ground at (x, z) where
+    /// there is some (the yard's beds, #194), which a dog's paws stand on.
+    pub(super) fn drive(
+        &self,
+        world: &mut World,
+        time: f64,
+        limp: bool,
+        soft: &dyn Fn(f64, f64) -> Option<f64>,
+    ) {
         // The mannequins watch the nearest dog walk by.
         let dogs: Vec<BodyId> = self
             .creatures
@@ -1219,6 +1231,7 @@ impl Herd {
                 lift = motion.plant(
                     c,
                     self.ground,
+                    soft,
                     (at.x, at.z),
                     facing(yaw),
                     &before,
@@ -1293,8 +1306,16 @@ impl Herd {
     /// `feet` (#167's foot-down events). A paw is as high over the ground as its pad's lowest
     /// point over what a ray finds under the pad's middle, among the fixed bodies (the paw's own
     /// leg is in the way of any other). It presses with its dog's weight shared among the paws
-    /// down after this step, over its pad (an ellipse of its half sizes). How many came down.
-    pub(super) fn feel(&self, world: &World, tick: u64, feet: &mut Feet) -> usize {
+    /// down after this step, over its pad (an ellipse of its half sizes). On `soft` ground (#194:
+    /// its top at (x, z) where there is some, as [`Herd::drive`] takes it) a paw is as high over
+    /// that, where it stands over what the ray finds. How many came down.
+    pub(super) fn feel(
+        &self,
+        world: &World,
+        tick: u64,
+        feet: &mut Feet,
+        soft: &dyn Fn(f64, f64) -> Option<f64>,
+    ) -> usize {
         let dogs = self.creatures.iter().filter(|c| c.kind == Kind::Dog);
         feet.down
             .resize(4 * dogs.clone().count(), FootDown::new(FOOT_DOWN));
@@ -1317,8 +1338,15 @@ impl Herd {
                 let Some(hit) = world.cast_ray_still(from, Vec3::new(0.0, -FOOT_RAY.1, 0.0)) else {
                     continue;
                 };
-                let ground = from.y - FOOT_RAY.1 as f64 * f64::from(hit.fraction);
-                if feet.down[4 * d + k].update((lowest - ground) as f32) {
+                let hard = from.y - FOOT_RAY.1 as f64 * f64::from(hit.fraction);
+                // On soft ground (#194): down over its top, up again over the hard ground under
+                // it. A paw stands in its own print, below the top beside it, which its middle
+                // crosses before it has risen twice the height over the print's floor: judged
+                // up by the top, it stayed down across a bed and came down at its edges alone.
+                let ground = soft(middle.x, middle.z).map_or(hard, |top| top.max(hard));
+                let foot = &mut feet.down[4 * d + k];
+                let over = if foot.is_down() { hard } else { ground };
+                if foot.update((lowest - over) as f32) {
                     let material = self
                         .grounds
                         .iter()
@@ -1505,9 +1533,11 @@ mod tests {
         let (mut feet, mut falls) = (Feet::default(), Vec::new());
         for tick in 0..seconds * 60 {
             let time = f64::from(tick) * f64::from(TICK);
-            field.herd.drive(&mut world, time, false);
+            field.herd.drive(&mut world, time, false, &|_, _| None);
             world.step(TICK, 1).expect("a step");
-            let came = field.herd.feel(&world, u64::from(tick), &mut feet);
+            let came = field
+                .herd
+                .feel(&world, u64::from(tick), &mut feet, &|_, _| None);
             for n in feet.count - came as u64..feet.count {
                 let fall = feet.falls[(n % PRINTS as u64) as usize].expect("a footfall");
                 // The steps' dog walks the lane at x < 0, the ramp's the other.

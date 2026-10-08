@@ -196,9 +196,12 @@ slow it. Detail that is seen but not stood on, a tyre's tread, goes in a relief 
 layer and no part of its thickness (#188), and a vehicle on soft ground finds it with rays down
 from its wheels, which its ruts' walls cannot catch. A wheel that slips digs ✅ (#191): by the
 distance its tread slid past the ground, along its round (a flat hole's slumped walls held a
-wheel on a ray for good), what it tears thrown the way its tread slides. Not yet: the clip-map
-round the player (a lab bed is a fixed grid), feet on soft ground in the physics, audio reading
-it, and the weather refilling it.
+wheel on a ray for good), what it tears thrown the way its tread slides. Feet stand on it ✅
+(#194) through the creature's IK and its footfalls, not the physics: a creature is held over the
+ground under its paws by its balance, and height fields at the point every centimetre a paw
+needs cost 0.6 ms a tick in contacts. Not yet: the clip-map round the player (a lab bed is a fixed
+grid), feet on soft ground in the physics (a ragdoll let go falls through), audio reading it, and
+the weather refilling it.
 
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
 
