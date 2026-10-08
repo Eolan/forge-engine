@@ -478,7 +478,8 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    their travel each tick, unbroken ruts with berms beside them); the car sinking and slowing in
    mud ✅ (#187: its beds as Jolt height fields edited in place, felt by wheels alone; a rolling
    resistance from each wheel's sinkage, each material's grip); low, even berms and tyre treads
-   ✅ (#189, #188: the lugs in a relief drawn over the layer, the wheels on rays); wheels spinning
+   ✅ (#189, #188: the tread in a relief drawn over the layer, a road tyre's grooves since #193,
+   the wheels on rays); wheels spinning
    and digging in ✅ (#191: a wheel's slip from its spin tears the ground from under it along its
    round and throws it behind; the car stops in deep sand and pulls away hard); the spray a
    spinning wheel throws ✅ (#192: grains of its bed as #107's splash particles, coloured, lit as

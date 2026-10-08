@@ -910,20 +910,23 @@ beds.
   berm, smoothed in the band where this press heaps it before the slump (five passes moving an
   eighth of each difference between neighbours; not the rut, its walls' tops or the tread): heaped
   a step at a time, it stood in ridges a step apart that a low sun striped.
-- **Treads** (#188): a wheel's press lays its tyre's lugs (`deform::Tread`: chevrons 9 mm deep
-  every 8 cm, four of the beds' points a lug) along the ground where it rolled, fixed to the
-  ground by their position along the path, so step after step and the wheel after it press the
-  same lugs. They go into the layer's relief, drawn with its thickness but no part of it: in the
-  thickness the wheels caught on them and the slump wore them away. Never under half the least:
-  in the snow and the sand the ruts reach the floor, and a lug cut through it in patches, so the
-  lugs show there 2 mm deep, in the mud in full.
+- **Treads** (#188, #193): a wheel's press lays its tyre's tread (`deform::Tread`) along the
+  ground where it rolled, fixed to the ground by its position along the path, so step after step
+  and the wheel after it press the same tread. The car's is a road tyre's (`Tread::Grooves`,
+  #193): three grooves 2.5 cm wide across its 20 cm, their middles 5 cm apart, its ribs pressing
+  5 mm, so the grooves stand as lines down its ruts; a spinning tyre leaves them too, running
+  along its way. It had a tractor's chevron lugs (`Tread::Lugs`, 9 mm deep every 8 cm, #188),
+  which the car's smooth tyres could not have left. The tread goes into the layer's relief, drawn
+  with its thickness but no part of it: in the thickness the wheels caught on the lugs and the
+  slump wore them away. Never under half the least: where the ruts reach the floor (the snow) a
+  lug cut through it in patches, so the tread shows there 2 mm deep.
 - **Spinning and digging in** (#191): `World::wheel_spins` gives each wheel's spin (Jolt's), and
   its slip is how much faster its tread runs over the ground than it travels along it. Past
   0.3 m/s a wheel digs (`Layer::dig`): it tears 4 mm from under its patch's middle for each
   metre it slips, down to the material's least, its hole's floor following its round along its
   travel (30 % wider than the wheel, as its press), and throws all of it the way its tread slides,
-  a heap from the hole's end out to 60 cm, highest a third of the way, then slumped. Its lugs fade
-  as its slip nears 1 m/s and are smeared past it. A flat hole slumped to 45° walls, which a wheel
+  a heap from the hole's end out to 60 cm, highest a third of the way, then slumped. (Its lugs
+  faded as it slipped, until the grooves of #193.) A flat hole slumped to 45° walls, which a wheel
   on a ray meets as a 45° slope under its middle: it needed a grip of 1 to climb out and stayed
   in, digging. Faster digging (7 mm a metre slipped and more) leaves the car in its holes for
   good: from 5–8 cm down, a round's climb asks more grip than the sand's 0.63. The car's front

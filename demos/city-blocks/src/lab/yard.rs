@@ -119,13 +119,14 @@ const SAND_END: f64 = -4.6;
 /// whole tyre and the berms rise beyond it, not under its edges.
 const TYRE: Vec2 = Vec2::new(0.1, 0.07);
 const PATCH: Vec2 = Vec2::new(0.12, 0.07);
-/// The car's tyres' tread (#188): lugs 9 mm deep every 8 cm (four of the car's beds' points
-/// a lug, coarse enough not to shimmer), across its 20 cm, in chevrons swept back 0.6 m a metre.
-const TREAD: Tread = Tread {
-    depth: 0.009,
+/// The car's tyres' tread: a road tyre's (#193), three grooves 2.5 cm wide across its 20 cm,
+/// their middles 5 cm apart (two and a half of the car's beds' points, coarse enough not to
+/// shimmer), its ribs pressing 5 mm. The chevron lugs it had (#188) were a tractor's.
+const TREAD: Tread = Tread::Grooves {
+    depth: 0.005,
     half_width: 0.1,
-    pitch: 0.08,
-    sweep_back: 0.6,
+    count: 3,
+    width: 0.025,
 };
 /// The yard's sun: low (26°) from beyond the beds and the sand's side, across the dogs' lanes,
 /// so the prints' walls and rims stand out in light and shadow.
@@ -291,7 +292,8 @@ pub(super) fn roll(
         // Its slip (#191): how much faster its tread runs over the ground than it travels along
         // it (slower, a locked wheel sliding: negative). A slipping tread tears the material from
         // under it and throws it the way it slides, by the distance it slipped, so a wheel
-        // spinning where it stands digs itself in; and it smears its lugs, gone past `SMEAR`.
+        // spinning where it stands digs itself in. Its grooves run along its way, so it leaves
+        // them spinning too.
         let forward = Vec2::new(c.forward.x, c.forward.z).normalize_or(heading);
         let slip = spin * WHEEL_RADIUS - travel.dot(forward);
         if slip.abs() > SLIP {
@@ -304,7 +306,6 @@ pub(super) fn roll(
                 wheel: TROUGH * WHEEL_RADIUS,
             });
         }
-        let lugs = TREAD.depth * (1.0 - slip.abs() / SMEAR).max(0.0);
         bed.layer.press(Pad {
             at: at + (heading * ahead).as_dvec2(),
             heading,
@@ -312,10 +313,7 @@ pub(super) fn roll(
             pressure: share / (4.0 * TYRE.x * TYRE.y),
             sweep: step + ahead,
             wheel: TROUGH * WHEEL_RADIUS,
-            tread: (lugs > 0.0).then_some(Tread {
-                depth: lugs,
-                ..TREAD
-            }),
+            tread: Some(TREAD),
         });
         pressed += 1;
     }
@@ -550,11 +548,10 @@ const LEAD: f32 = 0.04;
 const TROUGH: f32 = 1.3;
 /// A wheel's slip (#191): under `SLIP` (m/s) it grips and digs nothing; past it, its tread
 /// tears `DIG` metres of material from under it for each metre it slips and throws it as far as
-/// `THROWN` past its patch; its lugs fade as its slip nears `SMEAR` (m/s), smeared past it.
+/// `THROWN` past its patch.
 const SLIP: f32 = 0.3;
 const DIG: f32 = 0.004;
 const THROWN: f32 = 0.6;
-const SMEAR: f32 = 1.0;
 /// A slipping wheel's spray (#192): its grains leave its tread at up to `FLUNG` of its slip, at
 /// most `FLUNG_MOST` m/s (6 m/s flies 3.4 m and rises 60 cm), rising at `THROWN_RISE` radians
 /// and leaning `THROWN_OUT` (of the way back) out from the car; `GRAINS` a second for each m/s

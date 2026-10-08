@@ -81,42 +81,95 @@ pub struct Pad {
     /// reaching ahead as far as the wheel meets the material, so the wheel rests in its rut
     /// rather than on the lip before it (#187). 0 for a foot.
     pub wheel: f32,
-    /// The tread it presses into the floor of its print, if any (#188): a tyre's lugs.
+    /// The tread it presses into the floor of its print, if any (#188): a tyre's.
     pub tread: Option<Tread>,
 }
 
-/// A tyre's tread as its print takes it (#188): lugs across it, angled back from its middle in
-/// chevrons, pressed `depth` deeper than its rut's floor. Laid where it rolled, fixed to the
-/// ground (a tyre that does not slip leaves its lugs where they touched), so a wheel's presses
-/// step after step, and the wheel after it in the same rut, press the same lugs.
+/// A tyre's tread as its print takes it (#188): what of the tyre stands out presses `depth`
+/// deeper than its rut's floor. Laid where it rolled, fixed to the ground (a tyre that does not
+/// slip leaves its tread where it touched), so a wheel's presses step after step, and the wheel
+/// after it in the same rut, press the same tread.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Tread {
-    /// How much deeper a lug presses, metres.
-    pub depth: f32,
-    /// Half the tread's width, metres: the lugs lie within it.
-    pub half_width: f32,
-    /// Metres from one lug to the next along the path.
-    pub pitch: f32,
-    /// How far back a lug's arm reaches for each metre from the tread's middle (the chevron).
-    pub sweep_back: f32,
+pub enum Tread {
+    /// A tractor's lugs across it, angled back from its middle in chevrons (#188).
+    Lugs {
+        /// How much deeper a lug presses, metres.
+        depth: f32,
+        /// Half the tread's width, metres: the lugs lie within it.
+        half_width: f32,
+        /// Metres from one lug to the next along the path.
+        pitch: f32,
+        /// How far back a lug's arm reaches for each metre from the tread's middle (the
+        /// chevron).
+        sweep_back: f32,
+    },
+    /// A road tyre's grooves along it (#193): its ribs press, its grooves leave lines standing
+    /// down the rut, the same all along it (so a tyre spinning along its way leaves them too).
+    Grooves {
+        /// How much deeper a rib presses, metres.
+        depth: f32,
+        /// Half the tread's width, metres: the ribs and grooves lie within it.
+        half_width: f32,
+        /// How many grooves, evenly across it.
+        count: u32,
+        /// A groove's width, metres.
+        width: f32,
+    },
 }
 
 impl Tread {
     /// How deep the tread presses at a point `along` metres along the path (in the world: the
-    /// point's position along the heading) and `across` metres from the tread's middle: a lug's
-    /// smooth profile, full depth over its middle, nothing between two lugs; 0 off the tread.
+    /// point's position along the heading) and `across` metres from the tread's middle: full
+    /// depth where it stands out, nothing between, with smooth sides so a coarse grid takes it
+    /// without a step; 0 off the tread.
     pub fn depth_at(&self, along: f32, across: f32) -> f32 {
-        if across.abs() > self.half_width {
-            return 0.0;
+        let ease = |s: f32| {
+            let s = s.clamp(0.0, 1.0);
+            s * s * (3.0 - 2.0 * s)
+        };
+        match *self {
+            Self::Lugs {
+                depth,
+                half_width,
+                pitch,
+                sweep_back,
+            } => {
+                if across.abs() > half_width {
+                    return 0.0;
+                }
+                let phase = (along + sweep_back * across.abs()) / pitch;
+                let t = phase - phase.floor();
+                // A triangle over the pitch, eased: a lug half the pitch wide.
+                let tri = 1.0 - (2.0 * t - 1.0).abs();
+                depth * ease((tri - 0.3) / 0.4)
+            }
+            Self::Grooves {
+                depth,
+                half_width,
+                count,
+                width,
+            } => {
+                if across.abs() > half_width {
+                    return 0.0;
+                }
+                if count == 0 {
+                    return depth;
+                }
+                // The nearest groove's middle: `count` of them a spacing apart about the middle.
+                let spacing = 2.0 * half_width / (count + 1) as f32;
+                let first = -0.5 * (count as f32 - 1.0) * spacing;
+                let k = ((across - first) / spacing)
+                    .round()
+                    .clamp(0.0, (count - 1) as f32);
+                let off = (across - first - k * spacing).abs();
+                // Nothing over its middle half, rising to the rib over a quarter of its width
+                // either side of its edge.
+                depth * ease((off - 0.25 * width) / (0.5 * width))
+            }
         }
-        let phase = (along + self.sweep_back * across.abs()) / self.pitch;
-        let t = phase - phase.floor();
-        // A triangle over the pitch, eased: a lug half the pitch wide, no step on a coarse grid.
-        let tri = 1.0 - (2.0 * t - 1.0).abs();
-        let s = ((tri - 0.3) / 0.4).clamp(0.0, 1.0);
-        self.depth * s * s * (3.0 - 2.0 * s)
     }
 }
+
 /// What digs (#191): a wheel's patch spinning on the layer, its tread running faster than it
 /// travels (or slower: a locked wheel sliding), which tears the material from under it and
 /// throws it the way its tread slides.
@@ -877,7 +930,7 @@ mod tests {
 
     #[test]
     fn a_treaded_wheel_leaves_its_lugs_a_pitch_apart_where_they_touched() {
-        let tread = Tread {
+        let tread = Tread::Lugs {
             depth: 0.006,
             half_width: 0.1,
             pitch: 0.08,
@@ -935,6 +988,53 @@ mod tests {
             .map(|(a, b)| (a - b).abs())
             .fold(0.0, f32::max);
         assert!(moved < 0.001, "{moved}");
+    }
+
+    #[test]
+    fn a_road_tyre_leaves_its_grooves_as_lines_down_its_rut() {
+        // Three grooves 2.5 cm wide across 20 cm: their middles 5 cm apart.
+        let tread = Tread::Grooves {
+            depth: 0.005,
+            half_width: 0.1,
+            count: 3,
+            width: 0.025,
+        };
+        assert_eq!(tread.depth_at(0.0, 0.0), 0.0);
+        assert_eq!(tread.depth_at(0.0, 0.05), 0.0);
+        assert_eq!(tread.depth_at(0.0, 0.025), 0.005);
+        assert_eq!(tread.depth_at(0.0, 0.09), 0.005);
+        assert_eq!(tread.depth_at(0.0, 0.11), 0.0);
+        let mut mud = bed(Soft::MUD);
+        for k in 0..14 {
+            mud.press(Pad {
+                at: DVec2::new(0.0, -0.3 + 0.05 * f64::from(k)),
+                heading: Vec2::Y,
+                size: Vec2::new(0.12, 0.07),
+                pressure: 1.0e5,
+                sweep: 0.1,
+                wheel: 0.4,
+                tread: Some(tread),
+            });
+        }
+        // Across the rut as drawn: lines standing over the ribs' floor where the grooves were.
+        let across = |z: f64| -> Vec<f32> {
+            (-10..=10)
+                .map(|k| mud.drawn_at(DVec2::new(0.01 * f64::from(k), z)))
+                .collect()
+        };
+        let line = across(0.0);
+        // The grooves at −5, 0 and 5 cm (points 5, 10, 15), the ribs 3 cm beside them.
+        for (groove, rib) in [(5, 8), (10, 7), (15, 12)] {
+            assert!(line[groove] - line[rib] > 0.004, "{line:?}");
+        }
+        // The same all along it.
+        let other = across(0.13);
+        let most = line
+            .iter()
+            .zip(&other)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        assert!(most < 0.001, "{most}");
     }
 
     #[test]
