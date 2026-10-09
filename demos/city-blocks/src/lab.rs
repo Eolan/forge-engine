@@ -34,16 +34,19 @@ use forge_task::TaskPool;
 use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 
 use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
+use crate::scenario::PoolView;
 
 mod bonds;
 mod bridge;
 mod creatures;
 pub(crate) use creatures::ArmPose;
+pub(crate) use hooks::{LabArgs, LabScenario};
 mod dominoes;
 mod drive;
 mod flood;
 mod fly;
 mod flyer;
+mod hooks;
 pub(crate) mod materials;
 pub(crate) use materials::ROWS as MATERIAL_ROWS;
 pub(crate) mod models;
@@ -52,15 +55,13 @@ pub(crate) mod room;
 mod sea;
 mod ship;
 mod slime;
-pub(crate) use slime::FLAVOURS as SLIME_FLAVOURS;
+pub(crate) use crate::SLIME_FLAVOURS;
 mod space;
 pub(crate) mod tank;
 mod tug;
 pub(crate) mod walk;
 mod wall;
 pub(crate) mod yard;
-
-pub(crate) use walk::{RUN_SPEED, WALK_SPEED};
 
 /// The lab's scenes (`--lab`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -498,16 +499,6 @@ impl Codec for LabCommand {
             _ => None,
         }
     }
-}
-
-/// The flood's water for the water pass (`forge_render::WaterPool`): its first sample (world x,
-/// z), metres between samples, samples along x and z, and per sample the surface, the depth and
-/// the velocity.
-pub(crate) struct PoolView {
-    pub origin: [f32; 2],
-    pub spacing: f32,
-    pub size: [u32; 2],
-    pub samples: Vec<[f32; 4]>,
 }
 
 /// The bodies of one mesh, in the movers' order: the prop drawing them and how many.
@@ -2074,6 +2065,7 @@ pub(crate) fn water(
 pub(crate) fn build(
     ctx: &Setup,
     args: &Args,
+    flags: &LabArgs,
     cooked: Cooked,
     kind: LabScene,
 ) -> Result<(MeshletScene, Lab)> {
@@ -2187,7 +2179,7 @@ pub(crate) fn build(
     // The skinned creatures (#165): a mesh each (its vertices are its own), cooked once a
     // kind, bounded by the sphere about its root every pose stays in; their movers last.
     // `--dual-quaternion` skins them and the gulls by dual quaternions (#169).
-    let skin_blend = if args.dual_quaternion {
+    let skin_blend = if flags.dual_quaternion {
         forge_render::SkinBlend::DualQuaternion
     } else {
         forge_render::SkinBlend::Linear
@@ -2202,7 +2194,7 @@ pub(crate) fn build(
             // `--elbow-correctives`: the mannequin's elbows' morph targets (#169).
             let kinds_cooked = [creatures::Kind::Mannequin, creatures::Kind::Dog].map(|kind| {
                 let body = kind.body();
-                let targets = if args.elbow_correctives && kind == creatures::Kind::Mannequin {
+                let targets = if flags.elbow_correctives && kind == creatures::Kind::Mannequin {
                     creatures::elbow_correctives()
                 } else {
                     Vec::new()
@@ -2228,7 +2220,7 @@ pub(crate) fn build(
             if slimes > 0 {
                 let s = slime::surface();
                 // `--slime-eight` (#169): the drop on its eight nearest points a vertex.
-                let cooked = if args.slime_eight {
+                let cooked = if flags.slime_eight {
                     SkinnedMesh::cook_full(
                         &s.mesh,
                         &s.eight,
@@ -2316,9 +2308,9 @@ pub(crate) fn build(
         ms = start.elapsed().as_millis(),
         "physics lab ready"
     );
-    let mode = if let Some(delay_ms) = args.net {
+    let mode = if let Some(delay_ms) = flags.net {
         anyhow::ensure!(
-            args.record.is_none() && args.replay.is_none(),
+            flags.record.is_none() && flags.replay.is_none(),
             "--net records and replays nothing"
         );
         tracing::info!(
@@ -2334,7 +2326,7 @@ pub(crate) fn build(
         );
         Mode::Net(Box::new(Net::new(kind, delay_ms, &pool)?))
     } else {
-        let replay = args
+        let replay = flags
             .replay
             .as_ref()
             .map(|path| -> Result<Replay> {
@@ -2368,7 +2360,7 @@ pub(crate) fn build(
         scene,
         Lab {
             arm_pose: None,
-            elbow_correctives: args.elbow_correctives,
+            elbow_correctives: flags.elbow_correctives,
             mode,
             queued: Vec::new(),
             previous: current.clone(),
@@ -2378,7 +2370,7 @@ pub(crate) fn build(
             run_tick_ms: Vec::new(),
             awake: 0,
             logged: [60, 300, 600, 900, 1200],
-            record: args.record.clone(),
+            record: flags.record.clone(),
             tank_steps: Vec::new(),
             skinned,
             slime_points: [points.clone(), points],

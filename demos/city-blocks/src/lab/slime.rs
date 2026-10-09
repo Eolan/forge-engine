@@ -1,7 +1,7 @@
 //! The slimes in `physics-lab --lab creatures` (#179, #180): the tropical island's slime (its
 //! `meshgen::slime`, the owner's pick), a squat drop of mint jelly with a darker nucleus floating
 //! inside and two tall glossy eyes, as Jolt soft bodies hopping before the dogs, one in each of
-//! the island's four flavours (mint, blue, pink, yellow; [`FLAVOURS`]).
+//! the island's four flavours (mint, blue, pink, yellow; [`crate::SLIME_FLAVOURS`]).
 //!
 //! - **The body:** 258 points (an octahedron cut three times into four, then shaped into the
 //!   drop: its underside flattened, its sides bulging), held by their edges, their bends and the
@@ -36,14 +36,6 @@ const MASS: f32 = 2.5;
 const COMPLIANCE: f32 = 1.0e-3;
 const BEND_COMPLIANCE: f32 = 5.0e-2;
 const PRESSURE: f32 = 8.0;
-/// The island's four flavours (`slime_tint` in its `slime.wgsl`): each slime's prop name (its
-/// rows in the material table: the jelly, its eyes, its nucleus) and its tint.
-pub(crate) const FLAVOURS: [(&str, [f32; 3]); 4] = [
-    ("lab-slime-mint", [0.25, 0.95, 0.55]),
-    ("lab-slime-blue", [0.30, 0.70, 1.00]),
-    ("lab-slime-pink", [1.00, 0.55, 0.80]),
-    ("lab-slime-yellow", [1.00, 0.85, 0.30]),
-];
 /// Where each slime's home is (x, z; it starts there, its bottom 2 cm up): two before the dogs,
 /// two between them; and how many ticks after the first slime's its gait starts, so they bounce
 /// out of step.
@@ -451,7 +443,7 @@ fn under(points: &[Vec3], faces: &[[u32; 3]], d: Vec3) -> Vec<(u32, f32)> {
     unreachable!("every direction meets the closed drop")
 }
 
-/// Adds the four slimes to `world`, in the order of [`FLAVOURS`], facing +z (the camera).
+/// Adds the four slimes to `world`, in the order of [`crate::SLIME_FLAVOURS`], facing +z (the camera).
 pub(super) fn build(world: &mut World) -> Result<Vec<Slime>> {
     let s = surface();
     STARTS
@@ -822,7 +814,7 @@ mod tests {
             .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
             .unwrap();
         let mut slimes = build(&mut world).unwrap();
-        assert_eq!(slimes.len(), FLAVOURS.len());
+        assert_eq!(slimes.len(), crate::SLIME_FLAVOURS.len());
         let mut points = Vec::new();
         let span = |points: &[Vec3]| {
             points

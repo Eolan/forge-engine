@@ -17,8 +17,8 @@ use forge_sim::TICK;
 use glam::{DVec2, DVec3, Quat, Vec2, Vec3};
 
 use crate::DrawnGround;
-use crate::lab::materials::{ISLAND_ROWS, SOLE, pair, traction};
-use crate::lab::walk::Player;
+use crate::character::Player;
+use crate::traction::{ISLAND_ROWS, SOLE, pair, traction};
 
 /// A tile's samples a side: 63 cells, 32 of Jolt's blocks of two each way (a power of two, as
 /// its range tree wants, #194).
@@ -523,7 +523,7 @@ mod tests {
         let sand = &ISLAND_ROWS[usize::from(island_layer::SAND)].physics;
         assert_eq!(
             sand.dynamic_friction,
-            crate::lab::MATERIAL_ROWS[2].physics.dynamic_friction
+            crate::traction::ROWS[2].physics.dynamic_friction
         );
     }
 

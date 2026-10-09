@@ -57,18 +57,24 @@ use glam::{Mat4, Quat, Vec2, Vec3};
 use winit::keyboard::KeyCode;
 
 mod afloat;
+pub mod character;
 mod island_demo;
 mod island_sand;
 mod island_walk;
 mod lab;
+pub mod scenario;
+pub mod traction;
 mod world;
 
 use afloat::Barrels;
+use scenario::{Backdrop, Running, Scenario};
 use world::world;
 
+/// The shared app's flags: the city's, the gallery's, the island's and the renderer's (a demo's
+/// own scene adds its own, #216).
 #[derive(Parser, Debug, Clone)]
 #[command(about = "City blocks: the prop gallery")]
-struct Args {
+pub struct Args {
     /// Vertical sync.
     #[arg(long)]
     vsync: bool,
@@ -302,31 +308,9 @@ struct Args {
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
-    /// Show one of `physics-lab`'s scenes instead of the city (issue #136): rigid bodies on a
-    /// flat floor through `forge-physics`.
-    #[arg(long, value_enum)]
-    lab: Option<lab::LabScene>,
-    /// `--lab models`: show this model alone (its name as `tools/fetch-assets.sh` lists it, e.g.
-    /// `WaterBottle`), framed for a capture beside Khronos's screenshot (#170, D-048).
-    #[arg(long)]
-    model: Option<String>,
-    /// With `--lab`, write the session's commands and digests to this file at exit (#137).
-    #[arg(long)]
-    record: Option<PathBuf>,
-    /// With `--lab`, play a recorded session again instead of the keys, checking its digests.
-    #[arg(long)]
-    replay: Option<PathBuf>,
-    /// With `--lab`, run the scene through a server and this player's client over a link of
-    /// this many milliseconds one way, 2 % of the packets lost, a bot throwing too (#137).
-    #[arg(long)]
-    net: Option<f64>,
-    /// With `--lab`, throw a ball from the camera every this many frames, as Space does.
-    #[arg(long)]
-    throw_every: Option<u64>,
-    /// With `--lab sea`, the boat's throttle and rudder from the first frame, `T,R` (−1 to 1),
-    /// in place of the arrow keys (#138).
-    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
-    steer: Option<Vec<f32>>,
+    /// The physics lab's scene and its flags (`physics-lab`, #136).
+    #[command(flatten)]
+    lab: lab::LabArgs,
     /// With `--lab walk` or `--walker`, the player's walk from the first frame, `X,Z` in m/s
     /// along the ground, in place of the keys (#139, #196).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
@@ -340,63 +324,10 @@ struct Args {
     /// there, for an A/B of the window's untouched ground against theirs.
     #[arg(long)]
     no_sand_window: bool,
-    /// With `--lab fly`, the aeroplane's controls from the first frame, `T,E,A,R` (throttle
-    /// 0 to 1, elevator, ailerons and rudder −1 to 1), in place of the keys (#141).
-    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
-    pilot: Option<Vec<f32>>,
     /// The cloud layer's share of the sky (#145; 0 to 1): fair-weather cumulus by default (the
     /// owner's choice, 2026-10-03), 0 for none.
     #[arg(long, default_value_t = 0.45)]
     clouds: f32,
-    /// With `--lab creatures`, let the creatures' motors go at this frame, as ↓ does (#143).
-    #[arg(long)]
-    limp_at: Option<u64>,
-    /// At this frame, as Space does: the wrecking ball let go (`--lab break`, #142), the flood's
-    /// gate lifted (#144), the first domino tipped (#146), the convoy sent across (#147). The
-    /// glass tank's gate lifted (#156).
-    #[arg(long)]
-    release: Option<u64>,
-    /// `--lab tank` (#156): the liquid's pressure sweeps a substep (red and black each), without
-    /// `--liquid-cycles`.
-    #[arg(long, default_value_t = 32)]
-    liquid_sweeps: u32,
-    /// `--lab tank`: the liquid's cell, metres (590 000 particles at 1.25 cm, the default; 1.15
-    /// million at 1 cm).
-    #[arg(long, default_value_t = lab::tank::CELL)]
-    liquid_cell: f32,
-    /// `--lab tank`: the liquid's gravity, m/s² (x,y,z; `0,0,0` for none). Without surface
-    /// tension, none leaves the water as it stands.
-    #[arg(long, value_delimiter = ',', allow_hyphen_values = true, default_values_t = [0.0, -9.81, 0.0])]
-    liquid_gravity: Vec<f32>,
-    /// `--lab tank`: what the tank's drawing shows: the water as it looks (key 1), its speed view
-    /// (the surface coloured by the flow's speed; key 2) or its landing view (where its bent rays
-    /// land; key 3).
-    #[arg(long, value_enum, default_value_t = LiquidView::Look)]
-    liquid_view: LiquidView,
-    /// `--lab tank`: how long the air the water takes in lasts, seconds (fresh water's 0.3 by
-    /// default: white only where a jet plunges; longer for sea water's foam; 0 for none).
-    #[arg(long, default_value_t = forge_render::FRESH_FOAM_LIFE)]
-    liquid_foam: f32,
-    /// `--lab tank`: the share of the particles' crowding undone a substep.
-    #[arg(long, default_value_t = 0.25)]
-    liquid_drift: f32,
-    /// `--lab tank`: the pressure sweeps' over-relaxation.
-    #[arg(long, default_value_t = 1.7)]
-    liquid_omega: f32,
-    /// `--lab tank`: multigrid V-cycles of the liquid's pressure a substep, in place of the
-    /// sweeps (0: the sweeps).
-    #[arg(long, default_value_t = 0)]
-    liquid_cycles: u32,
-    /// `--lab tank`: with `--liquid-cycles`, the red-black sweeps before and after each level's
-    /// correction.
-    #[arg(long, default_value_t = 2)]
-    liquid_smooth: u32,
-    /// `--lab tank`: their over-relaxation.
-    #[arg(long, default_value_t = 1.0)]
-    liquid_smooth_omega: f32,
-    /// `--lab tank`: the lab's ticks between the liquid's lines in the log.
-    #[arg(long, default_value_t = 60)]
-    liquid_log: u64,
     /// Instances placed over the terrain: 1 000 000 by default over the city (the city takes
     /// about 12 k, the hills the rest), 300 000 rocks on the island's land.
     #[arg(long)]
@@ -479,23 +410,6 @@ struct Args {
     /// then smears them).
     #[arg(long)]
     no_mover_motion: bool,
-    /// Skin the lab's creatures and gulls by dual quaternions, not linear blending: a twisting
-    /// joint keeps its thickness, a bending one swells a little (#169, D-052; on request only).
-    #[arg(long)]
-    dual_quaternion: bool,
-    /// `--lab creatures`: draw the mannequins' left forearm twisted or bent 90° on top of their
-    /// pose, to compare the skinning's blends (#169).
-    #[arg(long, value_enum)]
-    arm_pose: Option<lab::ArmPose>,
-    /// Give the lab's mannequins corrective morph targets at the elbows, weighted by how far
-    /// each bends: the linear blend's bent elbow keeps its thickness (#169; on request only).
-    #[arg(long)]
-    elbow_correctives: bool,
-    /// Skin the lab's slimes on the eight soft-body points nearest each vertex, smoothly
-    /// weighted, not on the three of the soft body's triangle under it: their surface bends
-    /// smoothly across the soft body's edges (#169's eight joints a vertex; on request only).
-    #[arg(long)]
-    slime_eight: bool,
     /// Leave the rivers' flow undisturbed by the movers (#107's A/B).
     #[arg(long)]
     no_floaters: bool,
@@ -756,23 +670,14 @@ struct Gallery {
     walker: Option<island_walk::Walker>,
     /// The island's sand round the walker (#197).
     sand: Option<island_sand::SandWindow>,
-    /// `--lab` (#136): the physics lab's world, whose bodies are the movers.
-    /// The camera follows the lab's boat (C), and the throttle and rudder last sent (#138).
-    chase: bool,
-    steering: (f32, f32),
-    /// The player's walk last sent (#139).
-    walking: [f32; 2],
-    /// The car's handbrake last sent (#140).
-    handbrake: bool,
-    /// The yard's beds' change count whose heights went up last, and whether they go up once
-    /// more, so the frame before's heights match this frame's again (#186).
-    beds_seen: u64,
-    beds_again: bool,
-    /// The aeroplane's controls last sent (#141).
-    flying: [f32; 4],
-    /// The tug-of-war's pull last sent (#149).
-    pulling: f32,
-    lab: Option<lab::Lab>,
+    /// A demo's own scene, built (#216): the physics lab's (`physics-lab`, #136), whose bodies
+    /// are the movers.
+    running: Option<Box<dyn Running>>,
+    /// What surrounds the scene (the scene's `Look`).
+    backdrop: Backdrop,
+    /// The liquid's tank's corner in the scene, and the scene's ticks between its log lines.
+    liquid_corner: Vec3,
+    liquid_log: u64,
     /// Their waves in the lakes and the sea (#107), with the water and the movers.
     wakes: Option<WaterWakes>,
     /// The spray where the water splashes (#107), with the water: the steps' falls, and with
@@ -824,25 +729,11 @@ struct Gallery {
     settled: bool,
 }
 
-/// `--lab space`'s sun: from the ship's right and a little behind it and above, so the chase
-/// camera sees its lit side and the planet's day side with its terminator far to the left.
-const SPACE_SUN: Vec3 = Vec3::new(0.75, 0.35, 0.5);
 /// The planet: its direction from the scene, low on the left ahead of the ship, and its angular
 /// radius (32°, the Earth's from about 5 600 km up), so its face shows its oceans, land and
 /// clouds rather than only the haze along its limb (from low orbit, 70°, it was a grey wall).
 const PLANET_DIR: Vec3 = Vec3::new(-0.55, -0.45, -0.7);
 const PLANET_ANGLE_DEG: f32 = 32.0;
-/// The finest probe cascade's spacing in the models lab's rooms, metres (the city's is 4). In
-/// the courtyard room, a few metres wide, probes 4 m apart stood in the columns and deep in the
-/// arcades: a curtain in the shade beside the sunlit courtyard got about 12 lux of bounced
-/// light, and the meter lifted the whole view to show it. At 1 m it gets several times that,
-/// the view meters 1.8 stops darker, and fewer pixels shimmer (16 % against 28 % over TAA's
-/// cycle), for 0.17 ms more at 1600 × 900.
-const ROOM_PROBE_SPACING: f32 = 1.0;
-/// The tank's bench (#156): towards its sun (high, from the left and behind), and its background's
-/// albedo (a dull violet, after Sebastian Lague's fluid renders).
-const BENCH_SUN: Vec3 = Vec3::new(-0.45, 0.8, -0.4);
-const BENCH_BACKGROUND: Vec3 = Vec3::new(0.09, 0.07, 0.1);
 
 /// `--shadow-denoiser`: which denoiser smooths the sun's soft shadows (D-049).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -858,27 +749,6 @@ impl ShadowDenoiserArg {
         match self {
             Self::Sigma => forge_render::ShadowDenoiserKind::Sigma,
             Self::Ffx => forge_render::ShadowDenoiserKind::Ffx,
-        }
-    }
-}
-
-/// `--liquid-view`: what the tank's drawing shows (#156).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum LiquidView {
-    /// The water as it looks.
-    Look,
-    /// The speed view: the surface matte, coloured by the flow's speed.
-    Speed,
-    /// The landing view: each pixel of water coloured by where its bent ray lands.
-    Landing,
-}
-
-impl LiquidView {
-    fn mode(self) -> forge_render::LiquidMode {
-        match self {
-            Self::Look => forge_render::LiquidMode::Look,
-            Self::Speed => forge_render::LiquidMode::Speed,
-            Self::Landing => forge_render::LiquidMode::Landing,
         }
     }
 }
@@ -916,7 +786,13 @@ const SPACING: f32 = 60.0;
 const COLUMNS: u32 = 5;
 
 impl Gallery {
-    fn new(ctx: &Setup, args: Args, cooked: Cooked, title: &'static str) -> Result<Self> {
+    fn new(
+        ctx: &Setup,
+        args: Args,
+        cooked: Cooked,
+        title: &'static str,
+        scenario: Option<Box<dyn Scenario>>,
+    ) -> Result<Self> {
         let args = island_demo::with_shot(args)?;
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
@@ -1002,42 +878,23 @@ impl Gallery {
         }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
-        // In space (the owner's ask of 2026-10-03): the sun unfiltered by any air, from the right
-        // and behind the ship; stars, its disc and a planet below for the sky.
-        let space = (args.lab == Some(lab::LabScene::Space))
+        // The scene's own look (#216): its sun, white where no air reddens it, and what surrounds
+        // it; space's sky (the owner's ask of 2026-10-03) is the stars, the sun's disc and a
+        // planet below.
+        let look = scenario.as_ref().map(|s| s.look()).unwrap_or_default();
+        let space = (look.backdrop == Backdrop::Space)
             .then(|| SpaceSky::new(ctx, renderer.sun_illuminance))
             .transpose()?;
-        if space.is_some() {
-            renderer.sun_dir = SPACE_SUN.normalize();
+        if let Some(sun) = look.sun {
+            renderer.sun_dir = sun.normalize();
+        }
+        if look.white_sun {
             renderer.sun_color = Vec3::ONE;
         }
-        // The glass tank's liquid (#156): pure water, the solver as the arguments set it; on its
-        // bench, tinted, under a white sun from the left and behind.
-        let bench = args.lab == Some(lab::LabScene::TankBench);
-        let liquid_mode = args.liquid_view.mode();
-        if bench {
-            renderer.sun_dir = BENCH_SUN.normalize();
-            renderer.sun_color = Vec3::ONE;
-        }
-        // The sharpness room (#159): the sun alone, white, from the front left.
-        let room = args.lab == Some(lab::LabScene::Room);
-        if room {
-            renderer.sun_dir = lab::room::SUN.normalize();
-            renderer.sun_color = Vec3::ONE;
-        }
-        // The yard (#185): a low sun across the beds, the prints in raking light.
-        if args.lab == Some(lab::LabScene::Yard) {
-            renderer.sun_dir = lab::yard::SUN.normalize();
-        }
-        // The materials' patches (#205): the yard's raking sun, for the prints too.
-        if args.lab == Some(lab::LabScene::Materials) {
-            renderer.sun_dir = lab::yard::SUN.normalize();
-        }
+        // Under the ground's sky alone: the night, the clouds.
+        let open_sky = look.backdrop == Backdrop::Sky;
         // The night under the ground's sky (D-046) wherever the day turns: `--day`, `--time-of-day`.
-        let night = ((args.day.is_some() || args.time_of_day.is_some())
-            && space.is_none()
-            && !bench
-            && !room)
+        let night = ((args.day.is_some() || args.time_of_day.is_some()) && open_sky)
             .then(|| {
                 let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
                 let mut night = forge_render::night::NightSky::new(
@@ -1064,47 +921,13 @@ impl Gallery {
             // Film's night (D-046): a few stops under what the eye would adapt to.
             auto_exposure.night_stops = args.night_stops;
         }
-        let liquid = matches!(
-            args.lab,
-            Some(
-                lab::LabScene::Tank
-                    | lab::LabScene::TankBench
-                    | lab::LabScene::TankHole
-                    | lab::LabScene::TankBlocks
-            )
-        )
-        .then(|| {
-            forge_render::Liquid::new(
-                &ctx.device,
-                &ctx.shaders,
-                lab::tank::liquid(
-                    args.liquid_cell,
-                    args.lab == Some(lab::LabScene::TankHole),
-                    args.lab == Some(lab::LabScene::TankBlocks),
-                ),
-                forge_render::LiquidSolver {
-                    sweeps: args.liquid_sweeps,
-                    omega: args.liquid_omega,
-                    cycles: args.liquid_cycles,
-                    smooth: args.liquid_smooth,
-                    smooth_omega: args.liquid_smooth_omega,
-                    drift: args.liquid_drift,
-                    gravity: Vec3::from_slice(
-                        &[args.liquid_gravity.as_slice(), &[0.0; 3]].concat(),
-                    ),
-                    ..forge_render::LiquidSolver::default()
-                },
-                forge_render::LiquidLook {
-                    foam_life: args.liquid_foam,
-                    ..if bench {
-                        forge_render::LiquidLook::tinted()
-                    } else {
-                        forge_render::LiquidLook::pure_water()
-                    }
-                },
-            )
-        })
-        .transpose()?;
+        // The scene's liquid in its glass tank (#156).
+        let liquid_setup = scenario.as_ref().and_then(|s| s.liquid());
+        let liquid_mode = liquid_setup.as_ref().map(|l| l.mode).unwrap_or_default();
+        let liquid = liquid_setup
+            .as_ref()
+            .map(|l| forge_render::Liquid::new(&ctx.device, &ctx.shaders, l.tank, l.solver, l.look))
+            .transpose()?;
         // The scene behind the tank's water, anti-aliased by a TAA of its own before the water
         // bends it (#156): bent differently every frame, an aliased scene's edges cannot be
         // averaged after.
@@ -1118,7 +941,7 @@ impl Gallery {
             .transpose()?;
         // The cloud layer (#145), over the given share of the sky; none at 0, nor in space, nor on the
         // tank's bench, nor in the sharpness room.
-        let clouds = (args.clouds > 0.0 && space.is_none() && !bench && !room)
+        let clouds = (args.clouds > 0.0 && open_sky)
             .then(|| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
             .transpose()?;
         // DLAA in place of TAA (D-045) where the device has DLSS.
@@ -1143,7 +966,7 @@ impl Gallery {
             None
         };
         // Known before the scene, whose streamed pages it loads first (#121).
-        let mut camera = start_camera(&args)?;
+        let mut camera = start_camera(&args, scenario.as_ref().map(|s| s.camera()))?;
         if let Some(fov) = args.fov {
             camera.fov_y = fov.clamp(0.5, 120.0).to_radians();
         }
@@ -1169,12 +992,11 @@ impl Gallery {
                 .collect();
             tracing::info!(shots = %shots.join("  "), "the island's golden shots (--shot)");
         }
-        let mut lab = None;
+        let mut running = None;
         let mut sand = None;
-        let (scene, placed) = if let Some(kind) = args.lab {
-            let (scene, mut built) = lab::build(ctx, &args, cooked, kind)?;
-            built.arm_pose = args.arm_pose;
-            lab = Some(built);
+        let (scene, placed) = if let Some(scenario) = scenario {
+            let (scene, built) = scenario.build(ctx, &args, cooked)?;
+            running = Some(built);
             (scene, Vec::new())
         } else if args.gallery {
             build_gallery(ctx, &args, cooked)?
@@ -1222,13 +1044,9 @@ impl Gallery {
         }
         // The probes trace the scene's TLAS (issue #53).
         let probes_on = !args.no_probes;
-        let probe_rays = args.probe_rays.unwrap_or(
-            if args.lab == Some(lab::LabScene::Models) && lab::models::room_shown() {
-                256
-            } else {
-                ProbeParams::default().rays
-            },
-        );
+        let probe_rays = args
+            .probe_rays
+            .unwrap_or(look.probes.map_or(ProbeParams::default().rays, |p| p.0));
         anyhow::ensure!(
             (64..=256).contains(&probe_rays),
             "--probe-rays takes 64 to 256"
@@ -1247,13 +1065,9 @@ impl Gallery {
                 rays: probe_rays,
                 cascades: args.probe_cascades,
                 cadence: args.probe_cadence,
-                spacing: args.probe_spacing.unwrap_or(
-                    if args.lab == Some(lab::LabScene::Models) && lab::models::room_shown() {
-                        ROOM_PROBE_SPACING
-                    } else {
-                        ProbeParams::default().spacing
-                    },
-                ),
+                spacing: args
+                    .probe_spacing
+                    .unwrap_or(look.probes.map_or(ProbeParams::default().spacing, |p| p.1)),
                 ..ProbeParams::default()
             };
             let probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
@@ -1276,15 +1090,9 @@ impl Gallery {
         // the air the spray drifts in: the sea's wind, slowed near the water.
         let mut falls = Vec::new();
         let mut wind = Vec3::ZERO;
-        let water = if args.lab == Some(lab::LabScene::Sea) && args.water() {
-            // The physics lab's sea (#138): the island's waves, open, no shore.
-            Some(lab::water(ctx)?)
-        } else if args.lab == Some(lab::LabScene::Flood) && args.water() {
-            // The flood's water (#144): a pool drawn from its columns, no sea; the cascades
-            // still carry its ripples.
-            let water = lab::water(ctx)?;
-            water.1.set_sea(false);
-            Some(water)
+        let water = if let Some(running) = running.as_mut() {
+            // The scene's own water: the lab's sea (#138), the flood's pool (#144).
+            running.water(ctx, &args)?
         } else if args.island.is_some() && args.water() {
             let seed = forge_core::Seed::new(world().island.seed.value()).derive(0x5EA);
             let oceans: Vec<Ocean> = OceanParams::cascades(seed).map(Ocean::new).into();
@@ -1463,7 +1271,7 @@ impl Gallery {
             .transpose()?;
         // `--walker X,Z` (#196): the island's walker on the ground there from the first frame.
         let walker = match &args.walker {
-            Some(at) if args.lab.is_none() && args.island.is_some() => {
+            Some(at) if running.is_none() && args.island.is_some() => {
                 let at = match at.as_slice() {
                     [] => Vec3::new(0.0, 0.0, island_beach() as f32),
                     [x, rest @ ..] => Vec3::new(*x, 0.0, rest.first().copied().unwrap_or(0.0)),
@@ -1474,8 +1282,7 @@ impl Gallery {
             _ => None,
         };
         // With the water, or the yard's spray (#192).
-        let splashes = ((water.is_some() || args.lab == Some(lab::LabScene::Yard))
-            && !args.no_splashes)
+        let splashes = ((water.is_some() || look.splashes) && !args.no_splashes)
             .then(|| WaterSplashes::new(&ctx.device, &ctx.shaders))
             .transpose()?;
         if splashes.is_some() {
@@ -1490,16 +1297,10 @@ impl Gallery {
             barrels,
             walker,
             sand,
-            lab,
-            // The car is followed from the start (C lets it go); the aeroplane always is.
-            chase: matches!(args.lab, Some(lab::LabScene::Drive | lab::LabScene::Flyer)),
-            steering: (0.0, 0.0),
-            walking: [0.0; 2],
-            handbrake: false,
-            beds_seen: u64::MAX,
-            beds_again: false,
-            flying: [0.0; 4],
-            pulling: 0.5,
+            running,
+            backdrop: look.backdrop,
+            liquid_corner: liquid_setup.as_ref().map_or(Vec3::ZERO, |l| l.corner),
+            liquid_log: liquid_setup.as_ref().map_or(60, |l| l.log_every),
             wakes,
             splashes,
             falls,
@@ -1657,6 +1458,17 @@ impl Demo for Gallery {
     }
 
     fn key_pressed(&mut self, _ctx: &mut Context, code: KeyCode) {
+        // The scene's keys first (#216): Space, X, Enter and C in the physics lab. An Enter it
+        // takes starts it over, the tank's water too: seeded again, the tick that puts the gate
+        // back skipped.
+        if let Some(running) = &mut self.running
+            && running.key_pressed(code, &self.camera)
+        {
+            if code == KeyCode::Enter {
+                self.liquid_reset = true;
+            }
+            return;
+        }
         match code {
             KeyCode::KeyO => self.flags.toggle(CullFlags::OCCLUSION),
             KeyCode::KeyM => self.flags.toggle(CullFlags::MESHLET_COLORS),
@@ -1745,34 +1557,14 @@ impl Demo for Gallery {
                 );
                 self.taa.reset_history();
             }
-            // Space: the player jumps in the playground (#139), the car's handbrake on the track
-            // (#140, held: see `update`), what a scene holds back let go (the wrecking ball #142,
-            // the flood's gate, the tank's gate or shutter #156: `held`); elsewhere it throws, as
-            // X does. On the island, the walker jumps (#196).
+            // Space: on the island, the walker jumps (#196).
             KeyCode::Space => {
-                if let Some(lab) = &mut self.lab {
-                    if lab.has_player() {
-                        lab.jump();
-                    } else if lab.held() {
-                        lab.release();
-                    } else if !lab.has_car() {
-                        lab.throw(self.camera.position, self.camera.forward());
-                    }
-                } else if let Some(walker) = &mut self.walker {
+                if let Some(walker) = &mut self.walker {
                     walker.jump();
                 }
             }
-            KeyCode::KeyX => {
-                if let Some(lab) = &mut self.lab {
-                    lab.throw(self.camera.position, self.camera.forward());
-                }
-            }
             KeyCode::Enter => {
-                if let Some(lab) = &mut self.lab {
-                    lab.reset();
-                    // The tank's water too: seeded again, the tick that puts the gate back skipped.
-                    self.liquid_reset = true;
-                } else if self.args.island.is_some() {
+                if self.args.island.is_some() {
                     // The island's walker (#196): on the ground under the camera, or gone and the
                     // camera free again where it is.
                     self.walker = match self.walker.take() {
@@ -1790,7 +1582,6 @@ impl Demo for Gallery {
             KeyCode::Digit1 => self.liquid_mode = forge_render::LiquidMode::Look,
             KeyCode::Digit2 => self.liquid_mode = forge_render::LiquidMode::Speed,
             KeyCode::Digit3 => self.liquid_mode = forge_render::LiquidMode::Landing,
-            KeyCode::KeyC => self.chase = !self.chase,
             _ => {}
         }
     }
@@ -1812,111 +1603,12 @@ impl Demo for Gallery {
             Some(still) => still,
             None => self.sea_time + f64::from(self.step),
         };
-        if let Some(lab) = &mut self.lab {
-            if let Some(every) = self.args.throw_every
-                && self.frame > 0
-                && self.frame.is_multiple_of(every.max(1))
-            {
-                lab.throw(self.camera.position, self.camera.forward());
-            }
-            if self.args.release == Some(self.frame) {
-                lab.release();
-            }
-            // The creatures (#143): ↓ lets their motors go, ↑ powers them again; or
-            // `--limp-at N`.
-            if let Some(limp) = lab.creatures() {
-                let wanted =
-                    if self.args.limp_at == Some(self.frame) || input.is_down(KeyCode::ArrowDown) {
-                        true
-                    } else if input.is_down(KeyCode::ArrowUp) {
-                        false
-                    } else {
-                        limp
-                    };
-                if wanted != limp {
-                    lab.limp(wanted);
-                }
-            }
-            // The boat's motor (#138): the arrows, or `--steer` from the first frame; a command
-            // when they change.
-            let keys = |a: KeyCode, b: KeyCode| {
-                f32::from(u8::from(input.is_down(a))) - f32::from(u8::from(input.is_down(b)))
-            };
-            let mut steering = (
-                keys(KeyCode::ArrowUp, KeyCode::ArrowDown),
-                keys(KeyCode::ArrowRight, KeyCode::ArrowLeft),
-            );
-            if let Some(s) = &self.args.steer {
-                steering = (s[0], s.get(1).copied().unwrap_or(0.0));
-            }
-            if steering != self.steering {
-                self.steering = steering;
-                lab.steer(steering.0, steering.1);
-            }
-            // The aeroplane (#141): W and S open and close the throttle, the arrows are the
-            // stick (down pulls the nose up, left and right roll; half the elevator, all of it
-            // with Shift, as a full pull from the keys stalls it), A and D the rudder; or
-            // `--pilot T,E,A,R`. A command when they change; the camera follows it. The rocket
-            // (#148) takes the same: the stick swings its engine, the ailerons are its roll jets.
-            if lab.has_plane() || lab.has_rocket() || lab.has_ship() {
-                self.chase = true;
-                let keys = |a: KeyCode, b: KeyCode| {
-                    f32::from(u8::from(input.is_down(a))) - f32::from(u8::from(input.is_down(b)))
-                };
-                let throttle = (self.flying[0]
-                    + 0.5 * self.step * keys(KeyCode::KeyW, KeyCode::KeyS))
-                .clamp(0.0, 1.0);
-                let shift = input.is_down(KeyCode::ShiftLeft) || input.is_down(KeyCode::ShiftRight);
-                let elevator = if shift { 1.0 } else { 0.5 };
-                let mut flying = [
-                    throttle,
-                    elevator * keys(KeyCode::ArrowUp, KeyCode::ArrowDown),
-                    keys(KeyCode::ArrowRight, KeyCode::ArrowLeft),
-                    keys(KeyCode::KeyD, KeyCode::KeyA),
-                ];
-                if let Some(f) = &self.args.pilot {
-                    flying = std::array::from_fn(|k| f.get(k).copied().unwrap_or(0.0));
-                }
-                if flying != self.flying {
-                    self.flying = flying;
-                    lab.fly(flying);
-                }
-            }
-            // The car's handbrake (#140): Space held.
-            if lab.has_car() {
-                let pulled = input.is_down(KeyCode::Space);
-                if pulled != self.handbrake {
-                    self.handbrake = pulled;
-                    lab.handbrake(pulled);
-                }
-            }
-            // The tug-of-war (#149): ← held pulls with all the left team's strength, → held
-            // eases to a fifth, neither holds at half.
-            if lab.has_tug() {
-                let pulling = if input.is_down(KeyCode::ArrowLeft) {
-                    1.0
-                } else if input.is_down(KeyCode::ArrowRight) {
-                    0.2
-                } else {
-                    0.5
-                };
-                if pulling != self.pulling {
-                    self.pulling = pulling;
-                    lab.pull(pulling);
-                }
-            }
-            // The playground's player (#139): a command when the walk changes.
-            if lab.has_player() {
-                let walk = wished_walk(&self.args, self.camera.yaw, input);
-                if walk != self.walking {
-                    self.walking = walk;
-                    lab.walk(walk);
-                }
-            }
-            lab.advance(dt, self.args.fixed_step);
-            if let Some(time) = lab.sea_time() {
-                self.sea_time = time;
-            }
+        // The scene's update (#216): the physics lab's commands from the keys, and its ticks.
+        if let Some(running) = &mut self.running
+            && let Some(time) =
+                running.update(&self.args, input, &self.camera, self.frame, dt, self.step)
+        {
+            self.sea_time = time;
         }
         // The island's walker (#196), as the playground's player walks.
         if let Some(walker) = &mut self.walker {
@@ -1960,10 +1652,9 @@ impl Demo for Gallery {
             self.camera.yaw = angle;
             self.camera.pitch = pitch;
         } else if let Some(feet) = self
-            .lab
+            .running
             .as_mut()
-            .and_then(lab::Lab::player)
-            .map(|p| p.position)
+            .and_then(|r| r.player())
             .or_else(|| self.walker.as_ref().map(|w| w.feet().as_vec3()))
         {
             // The playground (#139) and the island's walker (#196): the right mouse button turns
@@ -1984,58 +1675,21 @@ impl Demo for Gallery {
         } else {
             self.camera.update(input, dt);
         }
-        // C: the camera behind the lab's boat, car or aeroplane and over it, looking where it
-        // goes (#138, #140, #141); further back from the aeroplane, 7 m long with a 10 m span.
-        let (back, over, pitch) = if self.lab.as_mut().is_some_and(lab::Lab::has_plane) {
-            (17.0, 3.5, -0.1)
-        } else if self.lab.as_mut().is_some_and(lab::Lab::has_birds) {
-            // A gull (#184), 1.3 m across, from 3 m behind and a little over it.
-            (3.0, 0.7, -0.12)
-        } else {
-            (8.0, 2.8, -0.18)
-        };
-        let rocket = self.lab.as_mut().is_some_and(lab::Lab::has_rocket);
-        let ship = self.lab.as_mut().is_some_and(lab::Lab::has_ship);
-        if self.chase
-            && ship
-            && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
-        {
-            // The spaceship from behind and over it, along its nose and its up as it turns,
-            // looking a little ahead of it.
-            let forward = ride.rotation * Vec3::NEG_Z;
-            let up = ride.rotation * Vec3::Y;
-            self.camera.position = ride.position - forward * 24.0 + up * 6.0;
-            let to = ride.position + forward * 10.0 - self.camera.position;
-            self.camera.yaw = (-to.x).atan2(-to.z);
-            self.camera.pitch = to.y.atan2(Vec3::new(to.x, 0.0, to.z).length());
-        } else if self.chase
-            && rocket
-            && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
-        {
-            // The rocket (#148) from 30 m off its right, a little behind and over its middle,
-            // looking at it: its pitch downrange (−z) crosses the view.
-            let middle = ride.position + ride.rotation * Vec3::new(0.0, 6.0, 0.0);
-            self.camera.position = middle + Vec3::new(30.0, 2.0, 5.0);
-            let to = middle - self.camera.position;
-            self.camera.yaw = (-to.x).atan2(-to.z);
-            self.camera.pitch = to.y.atan2(Vec3::new(to.x, 0.0, to.z).length());
-        } else if self.chase
-            && let Some(ride) = self.lab.as_mut().and_then(lab::Lab::ride)
-        {
-            let forward = ride.rotation * Vec3::NEG_Z;
-            let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or(Vec3::NEG_Z);
-            self.camera.position = ride.position - flat * back + Vec3::new(0.0, over, 0.0);
-            self.camera.yaw = (-flat.x).atan2(-flat.z);
-            self.camera.pitch = pitch;
+        // The camera behind the vehicle the scene follows (C in the physics lab, #138).
+        if let Some(running) = &mut self.running {
+            running.follow(&mut self.camera);
         }
         self.frame += 1;
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
-        // In space, on the tank's bench and in the sharpness room (#159), no sky light: a constant fill.
-        let bench = self.args.lab == Some(lab::LabScene::TankBench);
-        let room = self.args.lab == Some(lab::LabScene::Room);
-        let in_space = self.space.is_some() || bench || room;
+        // In space, on the tank's bench and in the sharpness room (#159), no sky light: a constant
+        // fill. The bench's card in place of the sky.
+        let in_space = self.backdrop != Backdrop::Sky;
+        let card = match self.backdrop {
+            Backdrop::Card(card) => Some(card),
+            _ => None,
+        };
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
@@ -2218,7 +1872,7 @@ impl Demo for Gallery {
         let camera_in_scene = camera.position.relative_to(self.scene.origin());
         // The movers where they stand at the sea's time (#79): the barrels' ticks up to it (#177);
         // then the island's walker, or its place under the island while nobody walks (#196).
-        if self.args.island.is_some() && self.lab.is_none() {
+        if self.args.island.is_some() && self.running.is_none() {
             let mut movers = Vec::new();
             if let Some(barrels) = &mut self.barrels {
                 barrels.advance(self.sea_time);
@@ -2257,48 +1911,28 @@ impl Demo for Gallery {
             }
             self.scene.set_movers_still(&movers, |k| Some(k) == still);
         }
-        // The lab's bodies between their last two ticks (#136).
-        if let Some(lab) = &self.lab {
-            let (mut skins, mut morphs) = (Vec::new(), Vec::new());
-            self.scene.set_movers(&lab.movers(&mut skins, &mut morphs));
-            // The skinned creatures' joints (#165), and their morph targets' weights (#169).
-            self.scene.set_skins(&skins);
-            if !morphs.is_empty() {
-                self.scene.set_morphs(&morphs);
-            }
-            // The yard's beds' heights (#185) when they changed, and once more after (#186).
-            let mut heights = Vec::new();
-            let changed = lab.fields(self.beds_seen, &mut heights);
-            if heights.is_empty() && self.beds_again {
-                lab.fields(changed.wrapping_add(1), &mut heights);
-                self.beds_again = false;
-            } else if !heights.is_empty() {
-                self.beds_again = true;
-            }
-            if !heights.is_empty() {
-                self.scene.set_fields(&heights);
-            }
-            self.beds_seen = changed;
+        // The scene's movers (#216): the lab's bodies between their last two ticks (#136).
+        if let Some(running) = &mut self.running {
+            running.movers(&mut self.scene);
         }
         // The glass tank's liquid (#156): the statistics a frame in this slot asked for, then the
         // substeps the lab's ticks owe it, on the async compute queue.
         // Its buffer imported once, for the simulation and the drawing both.
         let liquid_state = self.liquid.as_ref().map(|l| l.import(&mut frame.graph));
-        if let (Some(liquid), Some(state), Some(lab)) =
-            (&self.liquid, liquid_state, self.lab.as_mut())
+        if let (Some(liquid), Some(state), Some(running)) =
+            (&self.liquid, liquid_state, self.running.as_mut())
         {
             if let Some(stats) = liquid.take_stats(frame.slot)
                 && let Some(tick) = self.liquid_asked[frame.slot.index].take()
             {
                 log_liquid(tick, &stats, liquid.tank());
             }
-            let mut steps = lab.take_tank_steps();
+            let (mut steps, now) = running.liquid_steps();
             if std::mem::take(&mut self.liquid_reset) {
                 liquid.reset();
                 steps.clear();
             }
-            let now = lab.now();
-            let every = self.args.liquid_log.max(1);
+            let every = self.liquid_log.max(1);
             let ask = now >= self.liquid_next_log;
             if ask {
                 self.liquid_next_log = (now / every + 1) * every;
@@ -2618,7 +2252,7 @@ impl Demo for Gallery {
                 exposure,
                 Some(planet),
             );
-        } else if !bench {
+        } else if card.is_none() {
             self.sky.compose(
                 &mut frame.graph,
                 &sky,
@@ -2649,7 +2283,7 @@ impl Demo for Gallery {
             let columns = if self.args.no_gpu_water {
                 None
             } else {
-                self.lab.as_mut().and_then(lab::Lab::columns)
+                self.running.as_mut().and_then(|r| r.columns())
             };
             if let Some((now, pool)) = columns {
                 if self.shallow.is_none() {
@@ -2725,7 +2359,7 @@ impl Demo for Gallery {
                     spacing: grid.fine_spacing(),
                     size: grid.cells(),
                 });
-            } else if let Some(pool) = self.lab.as_mut().and_then(lab::Lab::pool) {
+            } else if let Some(pool) = self.running.as_mut().and_then(|r| r.pool()) {
                 surface.set_pool(&WaterPool {
                     origin: pool.origin,
                     spacing: pool.spacing,
@@ -2816,8 +2450,8 @@ impl Demo for Gallery {
             }
             // The flood's front and its water striking the walls (#162), the yard's slipping
             // wheels' spray (#192).
-            if let Some(lab) = self.lab.as_mut() {
-                lab.splashes(&mut sources);
+            if let Some(running) = self.running.as_mut() {
+                running.splashes(&mut sources);
             }
             let projection = taa_frame.jittered_projection;
             reactive = splashes.update(
@@ -2885,8 +2519,8 @@ impl Demo for Gallery {
         // The glass tank and its water (#156), over the scene and the sky; its reactive mask for TAA
         // (the spray's, where there is spray, comes first: the tank has none).
         if let (Some(liquid), Some(state)) = (&self.liquid, liquid_state) {
-            let background = bench.then(|| {
-                BENCH_BACKGROUND * (self.renderer.sun_illuminance * exposure / std::f32::consts::PI)
+            let background = card.map(|card| {
+                card * (self.renderer.sun_illuminance * exposure / std::f32::consts::PI)
             });
             let mut scene = liquid.copy_scene(
                 &mut frame.graph,
@@ -2912,7 +2546,7 @@ impl Demo for Gallery {
                 &sky,
                 LiquidDrawParams {
                     view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
-                    corner: lab::tank::corner(bench) - camera_in_scene,
+                    corner: self.liquid_corner - camera_in_scene,
                     sun_dir: self.renderer.sun_dir,
                     sun_radiance: self.renderer.sun_color
                         * (self.renderer.sun_illuminance * exposure),
@@ -3039,8 +2673,8 @@ impl Demo for Gallery {
             }
             None => title,
         };
-        let title = match &mut self.lab {
-            Some(lab) => format!("{title} | {}", lab.title()),
+        let title = match &mut self.running {
+            Some(running) => format!("{title} | {}", running.title()),
             None => title,
         };
         let title = match &mut self.barrels {
@@ -3102,9 +2736,9 @@ fn wished_walk(args: &Args, yaw: f32, input: &Input) -> [f32; 2] {
     let wish = forward * (keys(KeyCode::KeyW) - keys(KeyCode::KeyS))
         + right * (keys(KeyCode::KeyD) - keys(KeyCode::KeyA));
     let speed = if input.is_down(KeyCode::ShiftLeft) {
-        lab::RUN_SPEED
+        character::RUN_SPEED
     } else {
-        lab::WALK_SPEED
+        character::WALK_SPEED
     };
     (wish.normalize_or_zero() * speed).to_array()
 }
@@ -3235,6 +2869,16 @@ fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<M
         .collect();
     (meshes, total_ms)
 }
+
+/// The slimes' four flavours (#179, #180; the physics lab's creatures), the tropical island's
+/// (`slime_tint` in its `slime.wgsl`): each slime's prop name (its rows in the material table:
+/// the jelly, its eyes, its nucleus) and its tint.
+pub const SLIME_FLAVOURS: [(&str, [f32; 3]); 4] = [
+    ("lab-slime-mint", [0.25, 0.95, 0.55]),
+    ("lab-slime-blue", [0.30, 0.70, 1.00]),
+    ("lab-slime-pink", [1.00, 0.55, 0.80]),
+    ("lab-slime-yellow", [1.00, 0.85, 0.30]),
+];
 
 /// The city's materials (issue #20): what each prop is made of, from textures generated at
 /// start-up (512 × 512, tileable, with their mips).
@@ -3589,7 +3233,7 @@ impl CityMaterials {
         // through, a little cloudy, each followed by its eyes' row (section 1, black and glossy)
         // and its nucleus's (section 2, the jelly's tint darkened as the island's: 0.42 of it).
         let mut slime_rows = Vec::new();
-        for (name, tint) in lab::SLIME_FLAVOURS {
+        for (name, tint) in SLIME_FLAVOURS {
             slime_rows.push(add(
                 name,
                 RenderLayer {
@@ -3821,13 +3465,13 @@ impl CityMaterials {
             ("island-log", bark),
             ("island-crate", crate_wood),
         ]);
-        for ((name, _), row) in lab::SLIME_FLAVOURS.into_iter().zip(slime_rows) {
+        for ((name, _), row) in SLIME_FLAVOURS.into_iter().zip(slime_rows) {
             by_prop.insert(name, row);
         }
         // The materials' patches (#203): each row as physics reads it, drawn as the lab draws
         // its brick, its planks, its sand (dry: paler), its snow and ice. One record for both
         // (D-007).
-        for row in &lab::MATERIAL_ROWS {
+        for row in &traction::ROWS {
             let look = match &row.name["lab-mat-".len()..] {
                 "brick" => table.get(clay).render,
                 "wood" => table.get(deck_wood).render,
@@ -4321,16 +3965,18 @@ impl CityMaterials {
 
 /// The props a run draws (the city's twenty and its terrain, or the gallery's twenty), cooked
 /// or loaded from the cache, and the milliseconds the props took summed.
-struct Cooked {
-    meshes: Vec<MeshletMesh>,
-    ms: f64,
+pub struct Cooked {
+    /// The meshes, in the props' order.
+    pub meshes: Vec<MeshletMesh>,
+    /// Milliseconds they took, summed.
+    pub ms: f64,
 }
 
 /// Cooks (or loads) the props of this run: the start-up's CPU work, which runs behind the
 /// loading screen (issue #25).
-fn cook(args: &Args) -> Cooked {
-    let props = if let Some(scene) = args.lab {
-        lab::props(scene)
+fn cook(args: &Args, scenario: Option<&dyn Scenario>) -> Cooked {
+    let props = if let Some(scenario) = scenario {
+        scenario.props()
     } else if args.island.is_some() {
         // The island, the sea around it and the rocks on it (`docs/demos/island.md`).
         island_props(args)
@@ -4345,7 +3991,7 @@ fn cook(args: &Args) -> Cooked {
         props
     };
     // The streamed city keeps its pages on the GPU only (issue #36).
-    let pages_in_memory = args.gallery || args.lab.is_some() || args.stream_pool == 0;
+    let pages_in_memory = args.gallery || scenario.is_some() || args.stream_pool == 0;
     let (meshes, ms) = cook_props(&props, args.recook, pages_in_memory);
     Cooked { meshes, ms }
 }
@@ -5246,218 +4892,11 @@ fn parse_pair(text: &str) -> std::result::Result<(f32, f32), String> {
     }
 }
 
-/// Where the camera starts: the island's first view, the gallery's or the city's, or
-/// `--view`.
-fn start_camera(args: &Args) -> Result<FlyCamera> {
-    let mut camera = if args.lab == Some(lab::LabScene::Fly) {
-        // Behind the aeroplane on the runway's threshold; it follows the aeroplane.
-        FlyCamera {
-            position: Vec3::new(0.0, 4.0, 210.0),
-            yaw: 0.0,
-            pitch: -0.15,
-            speed: 20.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Tug) {
-        // In front of the sled, the three lines and most of the ropes in view: the left team's to
-        // the left.
-        FlyCamera {
-            position: Vec3::new(0.0, 2.6, 8.0),
-            yaw: 0.0,
-            pitch: -0.2,
-            speed: 6.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Rocket) {
-        // Off the rocket's right on the pad, looking at it; it follows the rocket once flown.
-        FlyCamera {
-            position: Vec3::new(30.0, 8.0, 5.0),
-            yaw: 1.406,
-            pitch: -0.01,
-            speed: 20.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Bridge) {
-        // Beside the gap, a little over the deck, looking across the bridge from its side: the
-        // cars come from the left.
-        FlyCamera {
-            position: Vec3::new(20.0, 7.0, 2.0),
-            yaw: 1.5,
-            pitch: -0.15,
-            speed: 10.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Dominoes) {
-        // Over the spiral's outer edge, looking down across it.
-        FlyCamera {
-            position: Vec3::new(0.0, 6.5, 11.0),
-            yaw: 0.0,
-            pitch: -0.55,
-            speed: 6.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Models) {
-        // Before the models' row, or framing the one `--model` names (inside a room model).
-        let (position, yaw, pitch) = lab::models::camera();
-        FlyCamera {
-            position,
-            yaw,
-            pitch,
-            speed: 2.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Room) {
-        // In the sharpness room's middle at eye height, looking level at the back wall's targets
-        // 8 m away; the board's, 2.5 m away, below them.
-        FlyCamera {
-            position: Vec3::new(0.0, 1.5, 3.0),
-            yaw: 0.0,
-            pitch: 0.0,
-            speed: 2.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::TankHole) {
-        // In front of the tank, right of the gate, a little over the rim: the hole low in the gate
-        // and the dry side its jet runs into.
-        FlyCamera {
-            position: Vec3::new(0.55, 1.3, 1.2),
-            yaw: 0.5,
-            pitch: -0.25,
-            speed: 0.8,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::TankBench) {
-        // Over the bench's front right, looking down across the tank at its floor of squares.
-        FlyCamera {
-            position: Vec3::new(1.0, 1.05, 1.5),
-            yaw: 0.58,
-            pitch: -0.42,
-            speed: 0.8,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::TankBlocks) {
-        // In front of the tank's right half, over its rim, looking down at the cube and the posts
-        // the wave meets past the gate.
-        FlyCamera {
-            position: Vec3::new(0.6, 1.3, 0.8),
-            yaw: 0.35,
-            pitch: -0.55,
-            speed: 0.8,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Tank) {
-        // In front of the tank and to its right, a little over its rim, looking down into it: the
-        // reservoir behind the gate on the left.
-        FlyCamera {
-            position: Vec3::new(0.45, 1.4, 1.6),
-            yaw: 0.28,
-            pitch: -0.22,
-            speed: 0.8,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Flood) {
-        // Over the basin's lower corner, looking up it at the gate and the reservoir.
-        FlyCamera {
-            position: Vec3::new(12.0, 9.0, 16.0),
-            yaw: 0.9,
-            pitch: -0.34,
-            speed: 10.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Creatures) {
-        // Before the creatures, at a man's height, the mannequins behind the dogs.
-        FlyCamera {
-            position: Vec3::new(0.0, 1.4, 4.4),
-            yaw: 0.0,
-            pitch: -0.1,
-            speed: 6.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Course) {
-        // Beside the course and over it, looking down across both lanes: the ramps nearer.
-        FlyCamera {
-            position: Vec3::new(3.3, 2.1, 0.6),
-            yaw: std::f32::consts::FRAC_PI_2,
-            pitch: -0.52,
-            speed: 6.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Yard) {
-        // Over the end of the car's snow, looking down across its ruts to the dogs' beds (#186).
-        FlyCamera {
-            position: Vec3::new(5.6, 2.2, 2.6),
-            yaw: 60f32.to_radians(),
-            pitch: -40f32.to_radians(),
-            speed: 6.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Flyer) {
-        // Outside the gulls' circuit and under it, looking across it: the near ones pass close.
-        FlyCamera {
-            position: Vec3::new(0.0, 5.0, 45.0),
-            yaw: 0.0,
-            pitch: 0.05,
-            speed: 10.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Break) {
-        // In front of the wall and to its left, clear of the gantry's post: the wall's face, the
-        // column behind it, the ball held back at the right edge.
-        FlyCamera {
-            position: Vec3::new(-6.5, 2.4, 7.5),
-            yaw: -0.71,
-            pitch: -0.1,
-            speed: 6.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Drive) {
-        // Behind the car and to its right, the track ahead along −z.
-        FlyCamera {
-            position: Vec3::new(4.0, 3.0, 8.0),
-            yaw: 0.35,
-            pitch: -0.15,
-            speed: 10.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Materials) {
-        // Behind the walker's start and to its left, high enough to see the patches along its
-        // way, their ramps beyond and the ice at the end (#203).
-        FlyCamera {
-            position: Vec3::new(-9.0, 7.0, -24.0),
-            yaw: -2.79,
-            pitch: -0.21,
-            speed: 8.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Walk) {
-        // Behind the player, looking along −z at the ramps, a little down; it follows the
-        // player from the first frame.
-        FlyCamera {
-            position: Vec3::new(0.0, 3.0, 6.0),
-            yaw: 0.0,
-            pitch: -0.25,
-            speed: 8.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab == Some(lab::LabScene::Sea) {
-        // Over the jetty, looking out past its end at the water where things fell, the boat on
-        // the left.
-        FlyCamera {
-            position: Vec3::new(-2.0, 6.5, -4.0),
-            yaw: -0.42,
-            pitch: -0.2,
-            speed: 8.0,
-            ..FlyCamera::default()
-        }
-    } else if args.lab.is_some() {
-        // South-east of the pyramid, a little above its top, looking at it.
-        FlyCamera {
-            position: Vec3::new(13.0, 7.5, 17.0),
-            yaw: 0.65,
-            pitch: -0.22,
-            speed: 8.0,
-            ..FlyCamera::default()
-        }
+/// Where the camera starts: the scene's own (`Scenario::camera`), the island's first view, the
+/// gallery's or the city's; or `--view`.
+fn start_camera(args: &Args, scene_camera: Option<FlyCamera>) -> Result<FlyCamera> {
+    let mut camera = if let Some(camera) = scene_camera {
+        camera
     } else if args.island.is_some() {
         island_camera()
     } else if args.gallery {
@@ -5561,7 +5000,7 @@ fn island_props(args: &Args) -> Vec<PropSpec> {
         props.extend(afloat::props());
     }
     // The walker's capsule and visor after them (#196).
-    props.extend(lab::walk::player_props());
+    props.extend(character::player_props());
     props
 }
 
@@ -6331,7 +5770,7 @@ pub fn main_lab() -> Result<()> {
         .about("The physics lab: rigid bodies through Jolt, one test scene at a time")
         .get_matches();
     let mut args = Args::from_arg_matches(&matches)?;
-    args.lab.get_or_insert(lab::LabScene::Drop);
+    args.lab.scene.get_or_insert(lab::LabScene::Drop);
     run(args, "forge physics-lab")
 }
 
@@ -6349,9 +5788,11 @@ fn run(args: Args, title: &'static str) -> Result<()> {
     TEXTURES
         .set(args.textures)
         .expect("the textures' mode, set once");
-    lab::models::FOCUS
-        .set(args.model.clone())
-        .expect("the models scene's model, set once");
+    // The physics lab's scene (`--lab`, #136, #216).
+    let scenario: Option<Box<dyn Scenario>> = args
+        .lab
+        .scene
+        .map(|kind| Box::new(lab::LabScenario::new(kind, args.lab.clone())) as Box<dyn Scenario>);
     let config = AppConfig {
         title: title.into(),
         vsync: args.vsync,
@@ -6373,14 +5814,15 @@ fn run(args: Args, title: &'static str) -> Result<()> {
     };
     // The props cook (or load from the cache) behind the loading screen (issue #25).
     forge_app::run_loading(config, move || {
-        let cooked = cook(&args);
+        let cooked = cook(&args, scenario.as_deref());
         if args.island.is_some() {
             tracing::info!(file = %path.display(), ?overrides, "the island's world");
             forge_terrain::warm_island(args.water(), || {
                 island_sand::SandWindow::cooked_mesh();
             });
         }
-        let finish: Finish<Gallery> = Box::new(move |ctx| Gallery::new(ctx, args, cooked, title));
+        let finish: Finish<Gallery> =
+            Box::new(move |ctx| Gallery::new(ctx, args, cooked, title, scenario));
         Ok(finish)
     })
 }
