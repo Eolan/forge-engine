@@ -13,6 +13,10 @@
 //! structure from them ([`forge_gpu::DynamicBlas`]) before the movers' top-level one is built
 //! over it. The pass also writes where the frame before's matrices put each vertex, from which
 //! `mover_motion_main` gives the bent body's pixels their own motion.
+//!
+//! A mesh blends its vertices' joints by their matrices (linear blend skinning), or, on
+//! request, as dual quaternions (#169, D-052, [`SkinBlend`]), which keep a twisting joint's
+//! thickness. [`skin_vertex`] is the pass's twin on the CPU.
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -22,7 +26,86 @@ use forge_geom::{GpuMeshlet, PAGE_SIZE, SkinVertex};
 use forge_gpu::{
     Buffer, BufferDesc, Device, GraphBuffer, MemoryCategory, MemoryLocation, Result, vk,
 };
-use glam::Mat4;
+use glam::{Mat4, Quat, Vec3, Vec4};
+
+/// How a skinned mesh blends each vertex's joints (#169, D-052).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SkinBlend {
+    /// Their matrices, weighted (linear blend skinning). A joint that twists thins the limb
+    /// about it (the "candy wrapper").
+    #[default]
+    Linear,
+    /// Their rigid motions as unit dual quaternions, weighted and normalised (Kavan et al.,
+    /// 2007): a twisting joint keeps its thickness, a bending one swells a little. Each matrix's
+    /// uniform scale (the length of its first row) is blended apart and applied first.
+    DualQuaternion,
+}
+
+/// `GpuSkinCluster::flags`: the cluster's mesh blends as dual quaternions.
+const SKIN_DUAL_QUATERNION: u32 = 1;
+
+/// Where the skin pass puts a bind-pose vertex at `position` with `normal`, carried by the
+/// joints `joints` (indices into `matrices`) weighted by `weights`, blended by `blend`: the twin
+/// of `skin_main` in `shaders/skin.slang`, for tests and measurements.
+pub fn skin_vertex(
+    matrices: &[Mat4],
+    joints: [u16; 4],
+    weights: [f32; 4],
+    position: Vec3,
+    normal: Vec3,
+    blend: SkinBlend,
+) -> (Vec3, Vec3) {
+    let used = || {
+        (0..4)
+            .filter(move |&k| weights[k] > 0.0)
+            .map(move |k| (matrices[usize::from(joints[k])], weights[k]))
+    };
+    match blend {
+        SkinBlend::Linear => {
+            let m = used().fold(Mat4::ZERO, |sum, (m, w)| sum + m * w);
+            let n = m.transform_vector3(normal).normalize_or(normal);
+            (m.transform_point3(position), n)
+        }
+        SkinBlend::DualQuaternion => {
+            let mut pivot = None;
+            let (mut real, mut dual, mut scale) = (Vec4::ZERO, Vec4::ZERO, 0.0);
+            for (m, w) in used() {
+                let (q, d, s) = dual_quaternion(m);
+                let first = *pivot.get_or_insert(q);
+                // The shorter way round: against the first joint's rotation.
+                let sign = if q.dot(first) < 0.0 { -1.0 } else { 1.0 };
+                real += w * sign * Vec4::from(q);
+                dual += w * sign * d;
+                scale += w * s;
+            }
+            let length = real.length();
+            let (r, d) = (Quat::from_vec4(real / length), dual / length);
+            // The translation the unit dual quaternion holds: 2 (d r*).
+            let rv = Vec3::new(r.x, r.y, r.z);
+            let dv = d.truncate();
+            let t = 2.0 * (r.w * dv - d.w * rv + rv.cross(dv));
+            (
+                (r * (scale * position)) + t,
+                (r * normal).normalize_or(normal),
+            )
+        }
+    }
+}
+
+/// A rigid matrix (rotation, translation, a uniform scale) as a unit dual quaternion, its real
+/// part the rotation and its dual part `t r / 2`, and its scale.
+fn dual_quaternion(m: Mat4) -> (Quat, Vec4, f32) {
+    let rows = [m.row(0), m.row(1), m.row(2)];
+    let scale = rows[0].truncate().length();
+    let r = glam::Mat3::from_cols(
+        m.x_axis.truncate() / scale,
+        m.y_axis.truncate() / scale,
+        m.z_axis.truncate() / scale,
+    );
+    let q = Quat::from_mat3(&r).normalize();
+    let t = Quat::from_xyzw(rows[0].w, rows[1].w, rows[2].w, 0.0);
+    (q, 0.5 * Vec4::from(t * q), scale)
+}
 
 /// Mirrors `SkinCluster` in `skin.slang` (32 bytes).
 #[repr(C)]
@@ -39,7 +122,9 @@ pub(crate) struct GpuSkinCluster {
     joints: u32,
     /// Its mesh's height field in the fields' table (`u32::MAX`: none).
     field: u32,
-    pad: [u32; 2],
+    /// `SKIN_DUAL_QUATERNION` when its mesh blends as dual quaternions (#169).
+    flags: u32,
+    pad: u32,
 }
 
 /// A height field that raises a displaced mesh's vertices (#185's deformable ground, added with
@@ -108,6 +193,8 @@ pub(crate) struct SkinSource {
     pub vertices: Vec<SkinVertex>,
     /// The height field that raises it, for a displaced mesh.
     pub field: Option<HeightField>,
+    /// How it blends its vertices' joints (#169).
+    pub blend: SkinBlend,
 }
 
 /// Ring slots of the joints' matrices: this frame's, the frame before's and one more, as the
@@ -216,7 +303,12 @@ impl SceneSkins {
                     ray: ray.map_or(u32::MAX, |r| r + local as u32),
                     joints,
                     field,
-                    pad: [0; 2],
+                    flags: if source.blend == SkinBlend::DualQuaternion {
+                        SKIN_DUAL_QUATERNION
+                    } else {
+                        0
+                    },
+                    pad: 0,
                 });
                 local += m.vertex_count as usize;
             }
@@ -394,7 +486,6 @@ fn rows(m: Mat4) -> [f32; 12] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::{Quat, Vec3, Vec4};
 
     #[test]
     fn rows_apply_as_the_matrix_does() {
@@ -411,5 +502,70 @@ mod tests {
             Vec4::from_slice(&r[8..12]).dot(p),
         );
         assert!(moved.abs_diff_eq(m.transform_point3(p.truncate()), 1e-6));
+    }
+
+    #[test]
+    fn one_joint_moves_a_vertex_as_its_matrix_does_either_way() {
+        let m = Mat4::from_scale_rotation_translation(
+            Vec3::splat(1.5),
+            Quat::from_euler(glam::EulerRot::YXZ, 0.7, -0.4, 2.9),
+            Vec3::new(1.0, -2.0, 3.0),
+        );
+        let (p, n) = (Vec3::new(0.3, 0.4, -0.5), Vec3::new(0.0, 0.6, 0.8));
+        for blend in [SkinBlend::Linear, SkinBlend::DualQuaternion] {
+            let (at, normal) = skin_vertex(&[m], [0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0], p, n, blend);
+            assert!(
+                at.abs_diff_eq(m.transform_point3(p), 1e-5),
+                "{blend:?}: {at}"
+            );
+            let turned = m.transform_vector3(n).normalize();
+            assert!(normal.abs_diff_eq(turned, 1e-5), "{blend:?}: {normal}");
+        }
+    }
+
+    #[test]
+    fn a_twist_thins_a_linear_blend_and_keeps_a_dual_quaternion_s_radius() {
+        // Two joints along x, the second turned 90° about the axis, a vertex 5 cm from the
+        // axis shared half and half: the linear blend pulls it in to cos 45° of its distance.
+        let twist = Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let matrices = [Mat4::IDENTITY, twist];
+        let p = Vec3::new(0.2, 0.05, 0.0);
+        let n = Vec3::Y;
+        let radius = |v: Vec3| (v.y * v.y + v.z * v.z).sqrt();
+        let half = [0.5, 0.5, 0.0, 0.0];
+        let (linear, _) = skin_vertex(&matrices, [0, 1, 0, 0], half, p, n, SkinBlend::Linear);
+        let (dual, normal) = skin_vertex(
+            &matrices,
+            [0, 1, 0, 0],
+            half,
+            p,
+            n,
+            SkinBlend::DualQuaternion,
+        );
+        assert!((radius(linear) - 0.05 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
+        assert!((radius(dual) - 0.05).abs() < 1e-5, "{dual}");
+        assert!(
+            (dual.x - 0.2).abs() < 1e-6,
+            "it stays where it was along the axis"
+        );
+        // Half way round: turned 45°, its normal too.
+        let angle = dual.z.atan2(dual.y);
+        assert!(
+            (angle - std::f32::consts::FRAC_PI_4).abs() < 1e-5,
+            "{angle}"
+        );
+        assert!(normal.abs_diff_eq(Vec3::new(0.0, dual.y, dual.z).normalize(), 1e-5));
+        // A joint's quaternion and its negation are the same turn: the blend takes the shorter
+        // way round whichever comes.
+        let full = Mat4::from_rotation_x(std::f32::consts::PI);
+        let (a, _) = skin_vertex(
+            &[Mat4::IDENTITY, full],
+            [0, 1, 0, 0],
+            [0.75, 0.25, 0.0, 0.0],
+            p,
+            n,
+            SkinBlend::DualQuaternion,
+        );
+        assert!((radius(a) - 0.05).abs() < 1e-5, "{a}");
     }
 }

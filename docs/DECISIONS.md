@@ -2843,7 +2843,7 @@ focuses the light under the body (#181).
 0.043 ms in the lab's view, 0.066 ms with the slime filling a sixth of the screen. The tinted
 shadow, four slimes: the frame 1.59 → 1.66 ms, `shading/standard` 0.194 → 0.234 ms.
 
-## D-052 — Joints that twist without thinning 🟡 (proposed 2026-10-09, #169's item 2)
+## D-052 — Joints that twist without thinning ✅ (proposed and accepted 2026-10-09, #169's item 2)
 
 **The problem.** The skin pass (`shaders/skin.slang`, #165) blends a vertex's four joints'
 matrices linearly. Where a limb turns about its own axis, the blended matrix shrinks, and the
@@ -2883,8 +2883,37 @@ fall.
 It costs one path in the skin pass and no rig work. If the swelling at the bends shows, add 2
 to the limbs of Forge's own creatures. Leave 3 until morph targets exist.
 
-**To decide:** whether DQS (option 1) is acceptable as the first step, and whether the creatures
-should take it by default or only on request.
+**Decided (the owner, 2026-10-09):** "go with dual quaternion skinning, on request only".
+Linear blending stays the default, and a mesh asks for dual quaternions.
+
+**Built (#169):**
+- `forge_render::SkinBlend` is the choice per mesh, set with
+  `MeshletSceneBuilder::set_skin_blend`, and the skin pass's clusters carry it as a flag.
+- `skin.slang`'s `dual_blend` turns each joint's three rows into a unit dual quaternion
+  (Shepperd's method for the rotation). It takes the shorter way round from the first joint's
+  rotation, normalises the blend, and blends a uniform scale apart. The frame before's
+  positions, which the motion vectors read, use the same blend.
+- `forge_render::skin_vertex` is the pass's twin on the CPU.
+- `physics-lab --dual-quaternion` skins the creatures and the gulls by dual quaternions. The
+  slimes' joints are their points' translations, where the two blends agree, so they stay
+  linear.
+- `--arm-pose twist|bend` turns the mannequins' left forearm, for comparing the two.
+
+**Measured:**
+- The mannequin's arm, through the CPU twin (`dual_quaternions_keep_a_twisted_arm_s_thickness`).
+  Per slice of the arm, the vertices' mean distance from the bones as a share of the rest
+  pose's, the least and the most:
+
+  | Pose | Linear | Dual quaternions |
+  |---|---|---|
+  | forearm turned 90° | 0.753–1.000 | 1.000–1.001 |
+  | elbow bent 90° | 0.825–1.000 | 0.955–1.006 |
+  | shoulder turned 0.8 rad (the ragdoll's limit) | 0.964–1.000 | 1.000–1.000 |
+
+  - Every vertex stays inside the culling sphere the clusters share, under either blend.
+  - The bent elbow's swelling stays under 1 %.
+- **The cost:** `skin/vertices` is 0.008 ms either way in `--lab creatures`, and the frame 1.72
+  ms (RTX 5070 Ti, 1600 × 900, 600 frames, two runs each).
 
 *Sources:* Kavan, Collins, Žára and O'Sullivan, "Skinning with Dual Quaternions" (I3D 2007,
 <https://users.cs.utah.edu/~ladislav/dq/>); Disney Animation, "Enhanced Dual Quaternion

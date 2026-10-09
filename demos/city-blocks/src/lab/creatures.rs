@@ -792,6 +792,36 @@ pub(super) fn skin(kind: Kind, parts: &[(Vec3, Quat)], out: &mut Vec<Mat4>) -> V
     root
 }
 
+/// A test pose of the mannequins' left forearm (#169, `--arm-pose`), drawn on top of their pose
+/// to compare the skinning's blends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ArmPose {
+    /// Turned 90° about its own bone.
+    Twist,
+    /// Bent 90° forward at the elbow, the hinge's way.
+    Bend,
+}
+
+/// Draws a mannequin's left forearm in `pose` on top of the pose its `matrices` ([`skin`]'s)
+/// give: turned in the bind frame about the elbow, before its part's motion. A dog is left as it
+/// is.
+pub(super) fn pose_arm(kind: Kind, pose: ArmPose, matrices: &mut [Mat4]) {
+    if kind != Kind::Mannequin {
+        return;
+    }
+    let body = kind.body();
+    let elbow = body.pivot[4];
+    let axis = match pose {
+        ArmPose::Twist => (body.middle[4] - elbow).normalize(),
+        ArmPose::Bend => Vec3::X,
+    };
+    let turn = Mat4::from_translation(elbow)
+        * Mat4::from_axis_angle(axis, std::f32::consts::FRAC_PI_2)
+        * Mat4::from_translation(-elbow);
+    let j = body.joint[4];
+    matrices[j] *= turn;
+}
+
 /// How long a creature plays a clip before the other (idle, walk, idle…), seconds, and how long
 /// a switch takes to die away (#167).
 const SEGMENT: f64 = 6.0;
@@ -1398,6 +1428,147 @@ impl Herd {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The mannequin's left arm in a pose, through the skin pass's twin (#169, D-052): per
+    /// slice of the arm along its bones (shoulder to hand, 24 slices), the mean distance of its
+    /// vertices from the bones, as a share of the rest pose's. Returns the least and the most
+    /// share, and the farthest any vertex goes from the root's middle.
+    fn arm_shares(pose: &[Mat4], blend: forge_render::SkinBlend) -> (f32, f32, f32) {
+        const SLICES: usize = 24;
+        let body = Kind::Mannequin.body();
+        let (upper, lower) = (body.joint[3], body.joint[4]);
+        let (shoulder, elbow) = (body.pivot[3], body.pivot[4]);
+        let hand = elbow + 2.0 * (body.middle[4] - elbow);
+        // Along the chain shoulder–elbow–hand: where along it (0 to 1) and how far from it.
+        let along = |p: Vec3, chain: [Vec3; 3]| -> (f32, f32) {
+            let lengths = [chain[0].distance(chain[1]), chain[1].distance(chain[2])];
+            let total = lengths[0] + lengths[1];
+            let mut best = (0.0, f32::MAX);
+            for s in 0..2 {
+                let (a, b) = (chain[s], chain[s + 1]);
+                let t = ((p - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+                let d = p.distance(a + t * (b - a));
+                if d < best.1 {
+                    let before = if s == 0 { 0.0 } else { lengths[0] };
+                    best = ((before + t * lengths[s]) / total, d);
+                }
+            }
+            best
+        };
+        let profile = |matrices: &[Mat4], blend| {
+            let chain = [shoulder, elbow, hand].map(|p| {
+                if p == hand {
+                    matrices[lower].transform_point3(p)
+                } else if p == elbow {
+                    matrices[upper].transform_point3(p)
+                } else {
+                    p
+                }
+            });
+            let (mut sums, mut counts, mut farthest) =
+                ([0.0_f32; SLICES], [0_u32; SLICES], 0.0_f32);
+            for (k, s) in body.skin.iter().enumerate() {
+                let on_arm: f32 = (0..4)
+                    .filter(|&i| [upper, lower].contains(&usize::from(s.joints[i])))
+                    .map(|i| s.weights[i])
+                    .sum();
+                let (p, _) = forge_render::skin_vertex(
+                    matrices,
+                    s.joints,
+                    s.weights,
+                    Vec3::from(body.mesh.positions[k]),
+                    Vec3::from(body.mesh.normals[k]),
+                    blend,
+                );
+                farthest = farthest.max(p.distance(body.middle[0]));
+                if on_arm >= 0.5 {
+                    let (t, d) = along(p, chain);
+                    let slice = ((t * SLICES as f32) as usize).min(SLICES - 1);
+                    sums[slice] += d;
+                    counts[slice] += 1;
+                }
+            }
+            let means: Vec<Option<f32>> = (0..SLICES)
+                .map(|i| (counts[i] >= 5).then(|| sums[i] / counts[i] as f32))
+                .collect();
+            (means, farthest)
+        };
+        let rest = vec![Mat4::IDENTITY; body.joints];
+        let (at_rest, _) = profile(&rest, forge_render::SkinBlend::Linear);
+        let (posed, farthest) = profile(pose, blend);
+        let shares: Vec<f32> = at_rest
+            .iter()
+            .zip(&posed)
+            .filter_map(|(r, p)| Some(p.as_ref()? / r.as_ref()?))
+            .collect();
+        let least = shares.iter().copied().fold(f32::MAX, f32::min);
+        let most = shares.iter().copied().fold(0.0, f32::max);
+        (least, most, farthest)
+    }
+
+    #[test]
+    fn dual_quaternions_keep_a_twisted_arm_s_thickness() {
+        use forge_render::SkinBlend::{DualQuaternion, Linear};
+        let body = Kind::Mannequin.body();
+        let (upper, lower) = (body.joint[3], body.joint[4]);
+        let (shoulder, elbow) = (body.pivot[3], body.pivot[4]);
+        let hand = elbow + 2.0 * (body.middle[4] - elbow);
+        let about = |pivot: Vec3, axis: Vec3, angle: f32| {
+            Mat4::from_translation(pivot)
+                * Mat4::from_axis_angle(axis.normalize(), angle)
+                * Mat4::from_translation(-pivot)
+        };
+        let pose = |joints: &[(usize, Mat4)]| {
+            let mut m = vec![Mat4::IDENTITY; body.joints];
+            for &(j, t) in joints {
+                m[j] = t;
+            }
+            m
+        };
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let shoulder_twist = about(shoulder, elbow - shoulder, 0.8);
+        let poses = [
+            // The issue's test: the forearm turned 90° about its own bone.
+            (
+                "forearm turned 90°",
+                pose(&[(lower, about(elbow, hand - elbow, quarter))]),
+            ),
+            // The elbow's hinge (about +x, the forearm forward) bent 90°.
+            (
+                "elbow bent 90°",
+                pose(&[(lower, about(elbow, Vec3::X, quarter))]),
+            ),
+            // The upper arm turned 0.8 rad at the shoulder, the ragdoll's twist limit.
+            (
+                "shoulder turned 0.8 rad",
+                pose(&[(upper, shoulder_twist), (lower, shoulder_twist)]),
+            ),
+        ];
+        let reach = body.reach;
+        let mut shares = Vec::new();
+        for (name, matrices) in &poses {
+            let linear = arm_shares(matrices, Linear);
+            let dual = arm_shares(matrices, DualQuaternion);
+            eprintln!(
+                "{name}: linear {:.3}–{:.3}, dual quaternions {:.3}–{:.3} of the rest's distance from the bones",
+                linear.0, linear.1, dual.0, dual.1
+            );
+            for (blend, (_, _, farthest)) in [("linear", linear), ("dual", dual)] {
+                assert!(
+                    farthest <= reach,
+                    "{name}, {blend}: {farthest} m past the {reach} m bound"
+                );
+            }
+            shares.push((linear, dual));
+        }
+        let (linear, dual) = shares[0];
+        assert!(dual.0 > linear.0, "the twist thins the linear blend more");
+        assert!(
+            dual.0 > 0.95,
+            "dual quaternions keep the forearm's thickness: {}",
+            dual.0
+        );
+    }
 
     #[test]
     fn the_rest_pose_drives_the_ragdolls_to_the_pose_they_were_built_in() {

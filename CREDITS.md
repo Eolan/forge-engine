@@ -393,6 +393,10 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     "Joint-dependent Local Deformations for Hand Animation and Object Grasping", Graphics
     Interface 1988. Four joints a vertex, as glTF 2.0's skins give them; the keys' cubic
     splines are glTF's (Khronos, the specification's appendix C).
+  - **Dual quaternion skinning,** a mesh's option (#169, D-052): Ladislav Kavan, Steven
+    Collins, Jiří Žára and Carol O'Sullivan, "Skinning with Dual Quaternions", I3D 2007. The
+    rotation from each joint's matrix by Shepperd's method: Stanley W. Shepperd, "Quaternion
+    from Rotation Matrix", *Journal of Guidance and Control* 1(3), 1978.
   - **Normalised lerp between rotation keys:** as ozz-animation does between dense keys
     (Guillaume Blanc).
   - **The creatures' weights:** Blender's bone heat, after Ilya Baran and Jovan Popović,

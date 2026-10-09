@@ -38,6 +38,7 @@ use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 mod bonds;
 mod bridge;
 mod creatures;
+pub(crate) use creatures::ArmPose;
 mod dominoes;
 mod drive;
 mod flood;
@@ -1997,6 +1998,9 @@ struct Replay {
 
 /// The lab's running state: the world, how it runs, the transforms of the last two ticks.
 pub(crate) struct Lab {
+    /// `--arm-pose` (#169): the mannequins' left forearm drawn twisted or bent on top of their
+    /// pose, to compare the skinning's blends.
+    pub(crate) arm_pose: Option<creatures::ArmPose>,
     mode: Mode,
     /// Commands made since the last tick (Space, Enter).
     queued: Vec<LabCommand>,
@@ -2179,6 +2183,12 @@ pub(crate) fn build(
         .collect();
     // The skinned creatures (#165): a mesh each (its vertices are its own), cooked once a
     // kind, bounded by the sphere about its root every pose stays in; their movers last.
+    // `--dual-quaternion` skins them and the gulls by dual quaternions (#169).
+    let skin_blend = if args.dual_quaternion {
+        forge_render::SkinBlend::DualQuaternion
+    } else {
+        forge_render::SkinBlend::Linear
+    };
     let skinned = layout
         .groups
         .iter()
@@ -2197,6 +2207,7 @@ pub(crate) fn build(
                 };
                 let id = builder.add_skinned_mesh(&kinds_cooked[k], kind.body().joints as u32);
                 builder.set_mesh_material(id, row);
+                builder.set_skin_blend(id, skin_blend);
                 per_mesh.push((id, 1));
             }
             // The slimes after them, one mesh each in its flavour: their points are its joints.
@@ -2228,6 +2239,7 @@ pub(crate) fn build(
                 for _ in 0..birds {
                     let id = builder.add_skinned_mesh(&cooked, rig.skeleton.len() as u32);
                     builder.set_mesh_material(id, bird_row);
+                    builder.set_skin_blend(id, skin_blend);
                     per_mesh.push((id, 1));
                 }
             }
@@ -2332,6 +2344,7 @@ pub(crate) fn build(
     Ok((
         scene,
         Lab {
+            arm_pose: None,
             mode,
             queued: Vec::new(),
             previous: current.clone(),
@@ -2594,6 +2607,9 @@ impl Lab {
                 .zip(bodies[..parts].chunks(creatures::PARTS))
             {
                 let position = creatures::skin(kind, parts, &mut matrices);
+                if let Some(pose) = self.arm_pose {
+                    creatures::pose_arm(kind, pose, &mut matrices);
+                }
                 skins.extend_from_slice(&matrices);
                 movers.push(MoverTransform {
                     position,

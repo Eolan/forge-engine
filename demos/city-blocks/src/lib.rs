@@ -468,6 +468,14 @@ struct Args {
     /// then smears them).
     #[arg(long)]
     no_mover_motion: bool,
+    /// Skin the lab's creatures and gulls by dual quaternions, not linear blending: a twisting
+    /// joint keeps its thickness, a bending one swells a little (#169, D-052; on request only).
+    #[arg(long)]
+    dual_quaternion: bool,
+    /// `--lab creatures`: draw the mannequins' left forearm twisted or bent 90° on top of their
+    /// pose, to compare the skinning's blends (#169).
+    #[arg(long, value_enum)]
+    arm_pose: Option<lab::ArmPose>,
     /// Leave the rivers' flow undisturbed by the movers (#107's A/B).
     #[arg(long)]
     no_floaters: bool,
@@ -1144,7 +1152,8 @@ impl Gallery {
         let mut lab = None;
         let mut sand = None;
         let (scene, placed) = if let Some(kind) = args.lab {
-            let (scene, built) = lab::build(ctx, &args, cooked, kind)?;
+            let (scene, mut built) = lab::build(ctx, &args, cooked, kind)?;
+            built.arm_pose = args.arm_pose;
             lab = Some(built);
             (scene, Vec::new())
         } else if args.gallery {

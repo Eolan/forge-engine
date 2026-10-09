@@ -1065,8 +1065,17 @@ impl MeshletSceneBuilder {
             joints,
             vertices: skinned.vertices.clone(),
             field: None,
+            blend: crate::SkinBlend::Linear,
         });
         id
+    }
+
+    /// Sets how the skinned mesh `mesh` ([`Self::add_skinned_mesh`]) blends its vertices'
+    /// joints: linearly by default, or as dual quaternions on request (#169, D-052).
+    pub fn set_skin_blend(&mut self, mesh: MeshId, blend: crate::SkinBlend) {
+        if let Some(skin) = self.skins.iter_mut().find(|s| s.mesh == mesh.0) {
+            skin.blend = blend;
+        }
     }
 
     /// Appends a displaced mesh (#185's deformable ground, [`SkinnedMesh::cook_displaced`]):

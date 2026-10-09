@@ -535,6 +535,18 @@ with those the dogs folded under their own weight.
 - **Motion vectors:** the pass also writes where the previous frame's joints put each vertex.
   The movers' motion vectors place a skinned pixel by its weights on its triangle, between
   those previous positions, so TAA and DLAA do not smear a swinging arm.
+- **Dual quaternions, on request** (#169, D-052): `--dual-quaternion` skins the creatures and
+  the gulls by dual quaternions in place of linear blending.
+  - Where it shows: a joint that twists keeps its thickness, where the linear blend pinches it.
+    A bent joint swells by under 1 %.
+  - Comparing the two: `--arm-pose twist` turns the mannequins' left forearm 90° about its
+    bone, and `--arm-pose bend` bends their elbow 90°. Both are drawn on top of the pose.
+  - The arm's thickness, through the pass's CPU twin: the twisted forearm keeps all of it with
+    dual quaternions, and only 75 % at the elbow with linear blending. The bent elbow keeps
+    96 % with dual quaternions, against 83 % for linear blending.
+  - The cost is the same: `skin/vertices` is 0.008 ms either way.
+
+  ![The mannequin's left forearm twisted 90° (top) and bent 90° (bottom), linear blending on the left and dual quaternions on the right: the linear blend pinches the twisted elbow and folds the bent one's crease](images/lab-dual-quaternion.png)
 
 Three mannequins stand on poles, their pelvis held by a joint that lets go past 2 kN or
 400 N·m; two dogs stand on their own legs in front.

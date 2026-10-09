@@ -1,6 +1,7 @@
 // The skin pass (#165, `crate::skin` in forge-render): moves the vertices of the skinned meshes'
 // clusters every frame, before the culls read them. One workgroup per cluster, one thread per
-// vertex: linear blend skinning (four joints a vertex) of the bind-pose position and normal
+// vertex: linear blend skinning (four joints a vertex), or dual quaternion skinning for a mesh
+// that asks for it (#169), of the bind-pose position and normal
 // (`SkinVertex`, crates/forge-geom/src/skin.rs) by this frame's joint matrices, written over the
 // cluster's vertices in the pool of cluster pages (a skinned mesh's pages are all roots,
 // pinned: each cluster keeps its place in the pool). With rays, the positions also go to the
@@ -27,8 +28,12 @@ struct SkinCluster
     uint ray;           // its first vertex in the ray tracing's positions (0xFFFFFFFF: none)
     uint joints;        // its mesh's first matrix in `joints`
     uint field;         // its mesh's height field in `fields` (0xFFFFFFFF: none, #185)
-    uint2 pad;
+    uint flags;         // SKIN_DUAL_QUATERNION: its mesh blends as dual quaternions (#169)
+    uint pad;
 };
+
+// `SkinCluster::flags` (forge-render's `SKIN_DUAL_QUATERNION`).
+static const uint SKIN_DUAL_QUATERNION = 1u;
 
 // Mirrors `GpuHeightField` in crates/forge-render/src/skin.rs (32 bytes): a grid of heights over
 // a displaced mesh's bind-pose x and z (#185's deformable ground).
@@ -126,6 +131,106 @@ float3 turn_normal(Blend b, float3 n)
     return normalize(float3(dot(b.r0.xyz, n), dot(b.r1.xyz, n), dot(b.r2.xyz, n)));
 }
 
+// Dual quaternion skinning (#169, D-052; Kavan et al., 2007), for a mesh that asks for it:
+// each joint's rigid motion as a unit dual quaternion, weighted on the shorter way round from
+// the first joint's rotation, normalised; each matrix's uniform scale blended apart and applied
+// first. `forge_render::skin_vertex` is its twin on the CPU.
+
+// Quaternions as (x, y, z, w).
+float4 quat_mul(float4 a, float4 b)
+{
+    return float4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+
+// The unit quaternion of the rotation whose rows are `a`, `b` and `c` (Shepperd's method).
+float4 quat_from_rows(float3 a, float3 b, float3 c)
+{
+    float trace = a.x + b.y + c.z;
+    float4 q;
+    if (trace > 0.0)
+    {
+        float s = 2.0 * sqrt(trace + 1.0);
+        q = float4((c.y - b.z) / s, (a.z - c.x) / s, (b.x - a.y) / s, 0.25 * s);
+    }
+    else if (a.x > b.y && a.x > c.z)
+    {
+        float s = 2.0 * sqrt(1.0 + a.x - b.y - c.z);
+        q = float4(0.25 * s, (a.y + b.x) / s, (a.z + c.x) / s, (c.y - b.z) / s);
+    }
+    else if (b.y > c.z)
+    {
+        float s = 2.0 * sqrt(1.0 + b.y - a.x - c.z);
+        q = float4((a.y + b.x) / s, 0.25 * s, (b.z + c.y) / s, (a.z - c.x) / s);
+    }
+    else
+    {
+        float s = 2.0 * sqrt(1.0 + c.z - a.x - b.y);
+        q = float4((a.z + c.x) / s, (b.z + c.y) / s, 0.25 * s, (b.x - a.y) / s);
+    }
+    return normalize(q);
+}
+
+// A blend of dual quaternions: its real (rotation) and dual parts, and the blended scale.
+struct DualBlend
+{
+    float4 real;
+    float4 dual;
+    float scale;
+};
+
+DualBlend dual_blend(float4* matrices, uint base, uint4 joints, float4 weights)
+{
+    DualBlend b;
+    b.real = float4(0.0);
+    b.dual = float4(0.0);
+    b.scale = 0.0;
+    float4 first = float4(0.0);
+    bool has_first = false;
+    for (uint k = 0; k < 4; k++)
+    {
+        if (weights[k] > 0.0)
+        {
+            uint j = 3 * (base + joints[k]);
+            float4 r0 = matrices[j];
+            float4 r1 = matrices[j + 1];
+            float4 r2 = matrices[j + 2];
+            float scale = length(r0.xyz);
+            float4 q = quat_from_rows(r0.xyz / scale, r1.xyz / scale, r2.xyz / scale);
+            float4 d = 0.5 * quat_mul(float4(r0.w, r1.w, r2.w, 0.0), q);
+            if (!has_first)
+            {
+                first = q;
+                has_first = true;
+            }
+            float w = dot(q, first) < 0.0 ? -weights[k] : weights[k];
+            b.real += w * q;
+            b.dual += w * d;
+            b.scale += weights[k] * scale;
+        }
+    }
+    float l = length(b.real);
+    b.real /= l;
+    b.dual /= l;
+    return b;
+}
+
+float3 rotate(float4 q, float3 v)
+{
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+float3 dual_move_point(DualBlend b, float3 p)
+{
+    // The translation the unit dual quaternion holds: 2 (dual real*).
+    float3 t = 2.0 * (b.real.w * b.dual.xyz - b.dual.w * b.real.xyz + cross(b.real.xyz, b.dual.xyz));
+    return rotate(b.real, b.scale * p) + t;
+}
+
+float3 dual_turn_normal(DualBlend b, float3 n)
+{
+    return normalize(rotate(b.real, n));
+}
+
 // Field `h`'s height at grid point `g`, clamped to the grid.
 float height_at(float* heights, HeightField h, int2 g)
 {
@@ -204,9 +309,24 @@ void skin_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         bind_before.y += field_height(push.previous_heights, h, v.position.xz);
     }
 
-    Blend now = blend(push.joints, base, joints, weights);
-    float3 p = move_point(now, bind);
-    float3 n = turn_normal(now, bind_normal);
+    bool dual = (c.flags & SKIN_DUAL_QUATERNION) != 0u;
+    float3 p;
+    float3 n;
+    float3 before;
+    if (dual)
+    {
+        DualBlend now = dual_blend(push.joints, base, joints, weights);
+        p = dual_move_point(now, bind);
+        n = dual_turn_normal(now, bind_normal);
+        before = dual_move_point(dual_blend(push.previous_joints, base, joints, weights), bind_before);
+    }
+    else
+    {
+        Blend now = blend(push.joints, base, joints, weights);
+        p = move_point(now, bind);
+        n = turn_normal(now, bind_normal);
+        before = move_point(blend(push.previous_joints, base, joints, weights), bind_before);
+    }
     uint at = c.pool / 4 + i * 4;
     push.pool[at] = asuint(p.x);
     push.pool[at + 1] = asuint(p.y);
@@ -219,7 +339,6 @@ void skin_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         push.rays[r + 1] = p.y;
         push.rays[r + 2] = p.z;
     }
-    float3 before = move_point(blend(push.previous_joints, base, joints, weights), bind_before);
     uint q = 3 * (c.first + i);
     push.previous[q] = before.x;
     push.previous[q + 1] = before.y;
