@@ -1945,7 +1945,9 @@ twin and `lab-drive-turn600`; from the field (#141) `lab-fly1200` (climbing away
 twin; from the break scene (#142) `lab-break85` (the ball through the wall) with its twin and
 `lab-break300` (the wall broken, the column in pieces); and from the creatures (#143)
 `lab-creatures120` (posed) with its twin, `lab-creatures-throw240` (struck by balls) and
-`lab-creatures-limp240` (let go); from the flood (#144) `lab-flood150` (the water running
+`lab-creatures-limp240` (let go), and close on a mannequin's left arm (#169)
+`lab-creatures-dq60` (its forearm twisted, by dual quaternions) and
+`lab-creatures-corrective60` (its elbow bent, with the correctives); from the flood (#144) `lab-flood150` (the water running
 down the basin) with its twin, `lab-flood300` (spread round the blocks) and `lab-flood150-columns`
 (the columns drawn without the GPU's layer, #162); and from the
 dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3000` (all down);
