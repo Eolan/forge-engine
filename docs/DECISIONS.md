@@ -2842,3 +2842,53 @@ focuses the light under the body (#181).
 *Measured* (`--lab creatures`, RTX 5070 Ti, 1600 × 900, 600 frames): `shading/jelly`
 0.043 ms in the lab's view, 0.066 ms with the slime filling a sixth of the screen. The tinted
 shadow, four slimes: the frame 1.59 → 1.66 ms, `shading/standard` 0.194 → 0.234 ms.
+
+## D-052 — Joints that twist without thinning 🟡 (proposed 2026-10-09, #169's item 2)
+
+**The problem.** The skin pass (`shaders/skin.slang`, #165) blends a vertex's four joints'
+matrices linearly. Where a limb turns about its own axis, the blended matrix shrinks, and the
+limb thins to a twisted neck: the "candy wrapper". The creatures' rigs
+(`assets/blender/skinned_creatures.py`) have eleven bones each and no helper bones. Their
+powered ragdolls twist their forearms and shins within the constraints' twist limits, most in a
+fall.
+
+**The options:**
+1. **Dual quaternion skinning (DQS), an option per mesh.**
+   - How: the skin pass blends the joints as unit dual quaternions instead of matrices (Kavan
+     et al., 2007). The skinned mesh's record flags it. The joints' rings carry the dual
+     quaternions written on the CPU, so the shader blends four and normalises. A quaternion
+     against the first joint's is flipped to the same hemisphere.
+   - For: Forge's joints are rigid (ragdoll bodies, no scale or shear), so the plain form is
+     enough. No rig changes, and it works for any glTF rig. The output (positions and normals)
+     is what the BLAS refit and the motion vectors read now, so nothing after it changes.
+   - Against: DQS swells a joint that bends (the elbow, the knee, the shoulder raised). Unity
+     and Unreal ship linear blending only. DQS comes to them through third-party tools, which
+     blend it with linear skinning by a mask per vertex. Disney's production DQS (*Frozen*)
+     needed the same blend.
+2. **Twist bones in Forge's own rigs.**
+   - How: one helper bone per long limb segment (upper arm, forearm, thigh, shin), weighted
+     along the segment by Blender's bone heat. At run time it takes half of the segment's
+     twist: the twist part of a swing-twist split of the child's rotation against the parent's.
+   - For: the industry's usual way, which stays linear and works in any engine. One twist bone
+     a limb is usually enough for a game character seen in third person.
+   - Against: rig work and a runtime step for each creature, more joints a frame, and every
+     imported rig needs its own.
+3. **Corrective shapes:** blend shapes authored per pose. They wait on morph targets
+   (#169's item 3), and each pose takes authoring.
+
+**Proposed:** 1 first, as an option per mesh, measured against linear blending on the mannequin:
+- its forearm turned 90°: the forearm's thickness at its middle, as a share of the rest pose's;
+- its elbow bent 90°: how far the elbow's outer surface swells past the rest pose's.
+
+It costs one path in the skin pass and no rig work. If the swelling at the bends shows, add 2
+to the limbs of Forge's own creatures. Leave 3 until morph targets exist.
+
+**To decide:** whether DQS (option 1) is acceptable as the first step, and whether the creatures
+should take it by default or only on request.
+
+*Sources:* Kavan, Collins, Žára and O'Sullivan, "Skinning with Dual Quaternions" (I3D 2007,
+<https://users.cs.utah.edu/~ladislav/dq/>); Disney Animation, "Enhanced Dual Quaternion
+Skinning for Production Use"
+(<https://disneyanimation.com/publications/enhanced-dual-quaternion-skinning-for-production-use>);
+riggers' practice on twist bones and DQS (<https://polycount.com/discussion/comment/1354571>,
+<https://www.tech-artists.org/t/dual-quaternion-skinning/2112>).
