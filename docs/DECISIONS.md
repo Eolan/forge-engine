@@ -2933,3 +2933,78 @@ Skinning for Production Use"
 (<https://disneyanimation.com/publications/enhanced-dual-quaternion-skinning-for-production-use>);
 riggers' practice on twist bones and DQS (<https://polycount.com/discussion/comment/1354571>,
 <https://www.tech-artists.org/t/dual-quaternion-skinning/2112>).
+
+---
+
+## D-053 — Generated content as data: world files, an engine crate that makes them, one derived-data cache, packages later 🟡 (proposed 2026-10-09, the owner's question on #208)
+
+**The owner's question:** "maybe it's the occasion to make the engine a bit more data driven?
+why is island in city-blocks for example? [...] Maybe packages in a dedicated directory like
+game engines do? but not zipped for now?"
+
+**Where things are today:**
+- **The island's making** lives in `demos/city-blocks/src/lib.rs` (7 568 lines), beside the
+  city, the ballad's scene glue and the labs. It grew there: the island started as
+  `city-blocks --island 7`. The `island` and `physics-lab` binaries are thin `main`s over the
+  `city-blocks` library (`city_blocks::main_lab`).
+- **Its settings** are command-line flags and constants in that file (`RIBBON_PARAMS`,
+  `SILLS`, `SAND_BELOW`, `DETAIL_FADE`, the rules' defaults). The cache keys built from them
+  miss some: the cooked tiles' key leaves out `--no-sills`.
+- **What it generates** is memoized per process, except the eroded heights and the cooked
+  tiles in `mesh-cache/`, keyed without the code that made them (`--recook` by hand). The
+  SPIR-V is in `shader-cache/` (#209).
+- **The engine crates** that exist for it: `forge-procgen` (the algorithms: erosion, rivers,
+  channels, layers…), `forge-geom` (meshes, cooking), `forge-world` (frames, cells, streaming).
+  None holds "an island": the glue that runs the algorithms in order is the demo's.
+
+**How engines split it:** three kinds of data, kept apart.
+- **Sources,** authored or described: Unreal's `Content/`, Unity's `Assets/`, Godot's
+  `res://`.
+- **Derived data,** made from the sources on each machine, never versioned, always
+  regenerable: Unreal's Derived Data Cache, Unity's `Library/`, Godot's `.godot/imported/`.
+  Each entry is keyed by its inputs and by the version of the code that makes it.
+- **Packages,** what a game ships: Unreal's `.pak` and IoStore containers, Unity's asset
+  bundles, Godot's `.pck`. A cook step fills them from the sources through the derived data;
+  in development the editor reads loose files.
+
+**Proposed:**
+1. **Sources: `assets/` as now, plus world descriptions.** `assets/worlds/island.toml` would
+   hold the island's parameters: seed, size, spacing, erosion, rivers, valleys, layers and
+   their rules, the flags' defaults. A flag overrides one field for an experiment and says so
+   in the log. TOML needs the `toml` crate, a new dependency to download (the owner's OK
+   first); JSON works with what Forge already has but is harder to edit by hand.
+2. **Derived data: one cache, `cache/`.** #208's get-or-make cache, keyed by the inputs, the
+   digests of the products it is made from, a digest of its source files and its format.
+   `cache/shaders/`, `cache/meshes/` and `cache/world/` would replace `shader-cache/` and
+   `mesh-cache/`. Never in git, never shipped.
+3. **The makers in an engine crate.** A new `forge-terrain`: a world description in, the
+   products out (heights, water, layers, drawn ground, stones, ground tiles). CPU only,
+   deterministic, over `forge-procgen`, `forge-geom` and the cache. The upload to the GPU and
+   the materials stay in `forge-render` and the demo. `city-blocks` keeps the city; the labs
+   move to `physics-lab`'s own crate; the `island` demo takes a world file.
+4. **Packages, later, unzipped.** `packages/<name>/`: a `manifest.toml` (each entry's id,
+   type, file, hash, format, dependencies) and the cooked files beside it. A cook tool makes
+   one from a world description by running the makers through the cache. The runtime opens
+   a package by its manifest. Zipping, or one container file, is the same manifest with a
+   different file system under it, to decide at a release. A package earns its place when
+   something must load a world without making it: a release, or the server of Phase 5. Until
+   then the cache does the job.
+
+**The order, an issue each:**
+1. #208 builds the cache as an engine module, keyed as above. Its root stays `mesh-cache/`
+   until this is decided.
+2. The island's description in a file; the flags become overrides.
+3. `forge-terrain`, with the island's makers moved out of `city-blocks`; the labs out too.
+4. One `cache/` root for the shaders, meshes and world products.
+5. Packages and the cook tool, when a release or the server needs them.
+
+**For:**
+- A world is changed by editing a file.
+- Every setting reaches the cache keys.
+- The engine owns how a world is made, and the demos only show it.
+- The steps are small, and none blocks the current work.
+
+**Against:**
+- Moving the island's glue touches most of `city-blocks/src/lib.rs`: a large diff with no
+  visible change, checked by the island's captures staying identical.
+- A world file is one more format to keep compatible.
