@@ -3328,3 +3328,67 @@ the island's flatness is then within 5 m at its edge.
   curve would need the rays' copy bent too.
 
 The steps are issues: #220 (step 1). Steps 2 to 5 are filed when step 1 draws.
+
+**Worlds at every scale (the owner, 2026-10-09, after asking how No Man's Sky, Elite
+Dangerous, Star Citizen and X4 make their places):**
+- **This demo:** one planet, maybe a moon, built the way Star Citizen builds its planets: rules
+  and coarse maps for the whole body, detail and scattering at run time, made places set in. It
+  is the reference frame for what follows.
+- **A galaxy:** No Man's Sky's and Elite Dangerous's way, everything from a seed at run time,
+  likely after the voxel work (D-014's near field).
+- **Large detailed maps without a galaxy:** The Witcher 4's and Battlefield 6's kind, in
+  styles from Zelda's to realistic, and voxel worlds like Enshrouded's. These are later targets.
+- **The research:** `docs/research/worlds-at-every-scale.md`, written before the build goes on.
+  It covers those games' latest techniques and the papers and repositories near them.
+
+**Real maps for the coarse ground (the owner, 2026-10-09):** "if it helps you could download the
+earth and moon data for this demo". With the owner's yes to the three files, the Earth's ground
+comes from NOAA's ETOPO 2022 (60 arc-seconds) and the Moon's from NASA's CGI Moon Kit, both
+public. Noise adds only the detail under their resolution. This is Star Citizen's way, coarse
+maps with detail at run time. Noise alone remains (`map = false`), as decided, for planets with
+no map.
+
+**Built, step 1's first part (#220, 2026-10-10):** `cargo run -p planet`,
+`docs/demos/planet.md`.
+- **The tiles:** a fixed cut around the target, made and cooked through the cache. 492 tiles on
+  the Earth, from level 1 to 14 (2.4 m samples).
+- **The descent:** held at three golden shots, over the Mediterranean, the Côte d'Azur and Èze.
+  The Moon is the same, at Tycho.
+- **Frame cost:** 0.81–0.95 ms on the 5070 Ti at 1600 × 900.
+- **What the renderer gained:**
+  - instances at `f64` positions (`add_instance_at`);
+  - the frame's planet for the layered ground (`set_planet`), with a body's colour map;
+  - meshes the rays take as ground whatever their size (`set_ray_terrain`);
+  - the sky's far pixels marched on their own (`march_beyond`);
+  - a packing grid that coarsens past 2^20 m.
+- **Left for step 1:** tiles streamed while flying, which needs a scene that can take and free
+  meshes and instances at run time and a much cheaper cook of a tile. Then the swap rule and the
+  horizon test.
+
+**Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
+owner's yes, nothing built on it):
+- **Every scale shares one structure:**
+  - coarse fields that are cheap to keep;
+  - a deterministic producer that amplifies them per cell;
+  - rules that read them for materials and placement;
+  - places stamped in;
+  - edits kept as a log.
+  Only the coarse fields, the places, the rules and the parts ship. Tiles and placements are
+  derived data in a capped cache.
+- **D-056 gains a step 1b, the planet atlas,** before step 4:
+  - per cube face, 1025² or 2049² samples of height, temperature, humidity, rock, soil depth and a
+    biome;
+  - painted overrides in the world file, as Star Citizen's brushes;
+  - biomes as rules (`[[biome]]`: layers, rock and flora sets, densities by slope, soil and
+    humidity, scatter cell sizes);
+  - places (`[[place]]`: a footprint, a height rule, its own content). The island becomes the
+    first place.
+  The Earth's and the Moon's real maps are already the atlas's height.
+- **D-014:** the volumetric near field and the SDF bricks are per cell and only where caves,
+  overhangs or edits need them. An edit is a small CSG operation appended to the log of the cells
+  it touches, replayed deterministically and compacted into bricks.
+- **D-016 gains a rule for the GPU:** a GPU generator becomes authoritative only as integer noise
+  or as float code with round-to-nearest, a fixed denormal mode, no contraction and no division
+  or transcendental, checked by digests on two vendors.
+- **For a galaxy:** a 64-bit body id in Elite's shape first (sector, layer, system, body), with
+  each body's record made top-down. Voxels only if the game digs.

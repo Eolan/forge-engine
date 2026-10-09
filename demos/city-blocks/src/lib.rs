@@ -1991,6 +1991,7 @@ impl Demo for Gallery {
                 sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
                 luminance_scale: self.renderer.sun_illuminance * exposure,
                 aerial_far_km: 8.0,
+                march_beyond: false,
                 night,
             },
             targets.depth,

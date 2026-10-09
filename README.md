@@ -39,6 +39,7 @@ demos/meshlets        culling test bench: every culling stage switchable and mea
 demos/asteroids       the ballad: a scripted flight through an asteroid field (living showcase)
 demos/city-blocks     a million GPU-placed instances on a 4 km terrain, cluster pages streamed, the 300 m/s flight
 demos/island          Phase 2's demo: a 16 km island from a seed, its sea, rivers and lakes, golden shots and a tour
+demos/planet          a planet of Earth's size from orbit to its ground: the Earth from NOAA's elevation, the Moon from NASA's (D-056)
 demos/physics-lab     Phase 3's first demo: test scenes of rigid bodies through Jolt (forge-physics), each with its numbers and its hash
 tools/imgdiff         pixel and perceptual (LDR- and HDR-FLIP) comparison of captures (golden images)
 tools/sharpness       how sharp a capture's edges are: the slanted-edge method's rise and MTF (#159)
@@ -204,6 +205,21 @@ the sun where `--day` has it (0 sunrise, 0.5 noon, 1 sunset), the exposure meter
 A first layer of cumulus covers 0.45 of the sky by default (the owner's choice, 2026-10-03, #145);
 `--clouds COVERAGE` sets another share, `--clouds 0` none. Numbers:
 [docs/demos/island.md](docs/demos/island.md).
+
+### `planet` — a planet from orbit to its ground (D-056)
+
+```
+tools/fetch-planets.sh
+cargo run --release -p planet
+cargo run --release -p planet -- --world assets/worlds/moon.toml --shot orbit
+```
+
+The Earth from NOAA's ETOPO 2022 elevation and the Moon from NASA's CGI Moon Kit, fetched by
+`tools/fetch-planets.sh` (about 560 MB, not in the repository), with noise for the detail under
+their resolution. Cube-sphere tiles of cluster DAGs are cooked through the cache and drawn from
+orbit down to 2.4 m samples. A 60 s descent ends over Èze on the Côte d'Azur (the Moon's at
+Tycho). `--shot orbit|high|ground` holds it at a golden shot, and **P** flies. Numbers:
+[docs/demos/planet.md](docs/demos/planet.md).
 
 ### `physics-lab` — Phase 3's first demo
 

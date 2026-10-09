@@ -13,6 +13,7 @@
 //! - [`drawn`]: the ground as its tiles draw it, finer, with the amplification's detail.
 //! - [`tiles`]: the ground's tiles as props to cook.
 //! - [`warm_island`]: all of them on the loading thread.
+//! - [`planet`]: a planet's ground as tiles of the cube sphere (#220, D-056).
 
 #![forbid(unsafe_code)]
 
@@ -25,6 +26,7 @@ pub mod drawn;
 pub mod heights;
 mod keys;
 pub mod layers;
+pub mod planet;
 pub mod stones;
 pub mod tiles;
 pub mod water;
@@ -34,6 +36,7 @@ pub use drawn::{DrawnGround, island_drawn};
 pub use heights::island_heights;
 pub use keys::drawn_factor;
 pub use layers::{IslandLayers, island_layer, island_layers};
+pub use planet::{Planet, PlanetWorld, planet_file};
 pub use stones::{RIVER_STONES, SCREE_RUBBLE, island_bank_stones, island_stones};
 pub use tiles::{ISLAND_TILES, island_tiles};
 pub use water::{IslandWater, island_water};
@@ -50,6 +53,11 @@ fn workspace_root() -> PathBuf {
         .and_then(|p| p.parent())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `relative` (a world file's path to a map) under the workspace's root.
+pub fn workspace_path(relative: &str) -> PathBuf {
+    workspace_root().join(relative)
 }
 
 /// The island's CPU work, done on the loading thread while the loading screen draws (#201): its

@@ -127,7 +127,7 @@ read_impact() {
         value=${value//[\[\]\",]/ }
         for set in $value; do
           case $set in
-            sentinels | meshlets | ballad | city | island | lab) ;;
+            sentinels | meshlets | ballad | city | island | lab | planet) ;;
             *) echo "tools/impact.toml: unknown set $set for $pattern" >&2; exit 2 ;;
           esac
         done
@@ -330,8 +330,8 @@ selected=$(echo $selected)
 if [ -n "$only_sets" ]; then
   for set in ${only_sets//,/ }; do
     case $set in
-      sentinels | meshlets | ballad | city | island | lab) ;;
-      *) echo "--sets: unknown set $set: sentinels, meshlets, ballad, city, island or lab" >&2; exit 2 ;;
+      sentinels | meshlets | ballad | city | island | lab | planet) ;;
+      *) echo "--sets: unknown set $set: sentinels, meshlets, ballad, city, island, lab or planet" >&2; exit 2 ;;
     esac
   done
   selected=$(echo ${only_sets//,/ })

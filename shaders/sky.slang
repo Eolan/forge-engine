@@ -87,6 +87,10 @@ void sky_view_main(uint3 id : SV_DispatchThreadID)
     g_storage_images_rgba16f[NonUniformResourceIndex(s[0].sky_view_storage)][id.xy] = float4(luminance, 1.0);
 }
 
+// The longest step of the aerial volume's march, km, and the most steps a slice takes (#220).
+static const float AERIAL_STEP_KM = 2.0;
+static const uint AERIAL_MAX_STEPS = 48;
+
 // The aerial-perspective volume: a thread per froxel column marches the view ray slice by
 // slice, storing the light gathered and the mean transmittance up to each slice's far end.
 [shader("compute")]
@@ -114,23 +118,33 @@ void aerial_main(uint3 id : SV_DispatchThreadID)
     for (uint k = 1; k <= SLICES; k++)
     {
         float t = slice_distance(s, float(k));
-        float dt = t - previous;
-        float3 position = origin + direction * (0.5 * (previous + t));
-        previous = t;
-        float r = length(position);
-        Medium m = sample_medium(p, r - p.radii.x);
-        float3 sunlight = sunlight_at(p, s[0].transmittance, position, sun);
-        float3 multiple = sample_table(s[0].multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, sun)));
-        float3 source = (sunlight * (m.rayleigh * rayleigh_p + m.mie * mie_p) + multiple * m.scattering) * s[0].scale.w;
-        if (other.w > 0.0)
+        // A slice longer than AERIAL_STEP_KM is marched in steps of at most that (#220): seen
+        // from orbit a slice spans a hundred kilometres, and one sample at its middle lands in
+        // the dense low air or above it by the slice, in rings. A shorter slice is one step,
+        // computed as before.
+        uint steps = clamp(uint(ceil((t - previous) / AERIAL_STEP_KM)), 1u, AERIAL_MAX_STEPS);
+        float slice_start = previous;
+        for (uint j = 1; j <= steps; j++)
         {
-            float3 light = sunlight_at(p, s[0].transmittance, position, other.xyz);
-            float3 other_multiple = sample_table(s[0].multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, other.xyz)));
-            source += (light * (m.rayleigh * other_rayleigh + m.mie * other_mie) + other_multiple * m.scattering) * other.w;
+            float end = j == steps ? t : slice_start + (t - slice_start) * float(j) / float(steps);
+            float dt = end - previous;
+            float3 position = origin + direction * (0.5 * (previous + end));
+            previous = end;
+            float r = length(position);
+            Medium m = sample_medium(p, r - p.radii.x);
+            float3 sunlight = sunlight_at(p, s[0].transmittance, position, sun);
+            float3 multiple = sample_table(s[0].multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, sun)));
+            float3 source = (sunlight * (m.rayleigh * rayleigh_p + m.mie * mie_p) + multiple * m.scattering) * s[0].scale.w;
+            if (other.w > 0.0)
+            {
+                float3 light = sunlight_at(p, s[0].transmittance, position, other.xyz);
+                float3 other_multiple = sample_table(s[0].multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, other.xyz)));
+                source += (light * (m.rayleigh * other_rayleigh + m.mie * other_mie) + other_multiple * m.scattering) * other.w;
+            }
+            float3 segment = exp(-m.extinction * dt);
+            luminance += throughput * (source - source * segment) / max(m.extinction, 1e-9);
+            throughput *= segment;
         }
-        float3 segment = exp(-m.extinction * dt);
-        luminance += throughput * (source - source * segment) / max(m.extinction, 1e-9);
-        throughput *= segment;
         uint2 texel = uint2((k - 1) * SLICE + id.x, id.y);
         g_storage_images_rgba16f[NonUniformResourceIndex(s[0].aerial_storage)][texel] = float4(luminance, dot(throughput, float3(1.0 / 3.0)));
     }
@@ -305,6 +319,43 @@ float3 night_sky(Sky* s, Planet p, float3 direction, float elevation)
     return through * light * gain;
 }
 
+// Steps of a pixel's own march beyond the aerial volume (#220).
+static const uint MARCH_BEYOND_STEPS = 32;
+
+// The light the air gathers along `direction` from `t0` to `t1` km from the camera, and the
+// mean transmittance (`a`), as the aerial volume gathers it, in MARCH_BEYOND_STEPS steps closer
+// together towards `t1`: seen from high up, the air the ray crosses is densest near the ground
+// it ends on. The samples stay over the ground.
+float4 march_air(Sky* s, Planet p, float3 direction, float t0, float t1)
+{
+    float3 sun = s[0].sun.xyz;
+    float cos_theta = dot(direction, sun);
+    float rayleigh_p = rayleigh_phase(cos_theta);
+    float mie_p = mie_phase(p.mie_absorption.w, cos_theta);
+    float3 origin = p.view_position.xyz;
+    float3 luminance = 0.0;
+    float3 throughput = 1.0;
+    float previous = t0;
+    for (uint j = 1; j <= MARCH_BEYOND_STEPS; j++)
+    {
+        float u = 1.0 - float(j) / float(MARCH_BEYOND_STEPS);
+        float t = t1 - (t1 - t0) * u * u;
+        float dt = t - previous;
+        float3 position = origin + direction * (0.5 * (previous + t));
+        previous = t;
+        float r = max(length(position), p.radii.x + 0.001);
+        position = normalize(position) * r;
+        Medium m = sample_medium(p, r - p.radii.x);
+        float3 sunlight = sunlight_at(p, s[0].transmittance, position, sun);
+        float3 multiple = sample_table(s[0].multiple_scattering, multiple_scattering_uv(p, r, dot(position / r, sun)));
+        float3 source = (sunlight * (m.rayleigh * rayleigh_p + m.mie * mie_p) + multiple * m.scattering) * s[0].scale.w;
+        float3 segment = exp(-m.extinction * dt);
+        luminance += throughput * (source - source * segment) / max(m.extinction, 1e-9);
+        throughput *= segment;
+    }
+    return float4(luminance, dot(throughput, float3(1.0 / 3.0)));
+}
+
 // The compose pass, a thread per pixel: the sky and the sun where the depth is empty, the
 // aerial perspective over everything else.
 [shader("compute")]
@@ -347,7 +398,18 @@ void compose_main(uint3 id : SV_DispatchThreadID)
     // Reversed-Z: the pixel's world position from its depth, its distance in km.
     float4 world = mul(s[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
     float distance = length(world.xyz / world.w - s[0].camera.xyz) * 0.001 * s[0].camera.w;
-    float4 air = aerial_at(s, uv, distance);
+    float4 air;
+    float far = s[0].scale.z;
+    if (s[0].march_beyond != 0u && distance > far)
+    {
+        // Beyond the volume (#220): its light to its far end, then the rest of the way marched
+        // for this pixel alone, dimmed by what the volume let through.
+        float4 near = aerial_at(s, uv, far);
+        float4 rest = march_air(s, p, view_direction(s, uv), far, distance);
+        air = float4(near.rgb + near.a * rest.rgb, near.a * rest.a);
+    }
+    else
+        air = aerial_at(s, uv, distance);
     float4 c = color[id.xy];
     color[id.xy] = float4(c.rgb * air.a + air.rgb * s[0].scale.x, c.a);
 }

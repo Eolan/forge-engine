@@ -66,7 +66,7 @@ struct GpuSky {
     width: u32,
     height: u32,
     clouds: u32,
-    pad: u32,
+    march_beyond: u32,
     planet: u64,
     irradiance: u64,
     stars: u64,
@@ -133,6 +133,9 @@ pub struct SkyParams {
     pub luminance_scale: f32,
     /// How far the aerial-perspective volume reaches, km (farther pixels take its last slice).
     pub aerial_far_km: f32,
+    /// March each pixel beyond `aerial_far_km` on its own instead of giving it the volume's
+    /// last slice (#220): a planet seen from high up, its ground hundreds of kilometres away.
+    pub march_beyond: bool,
     /// The night's lights and sky (D-046): `sun_dir` is then the key light's and
     /// `luminance_scale` per unit of the reference illuminance.
     pub night: Option<SkyNight>,
@@ -408,7 +411,7 @@ impl GroundSky {
                         width: extent.width,
                         height: extent.height,
                         clouds: clouds.map_or(u32::MAX, |c| resources.sampled(c).0),
-                        pad: 0,
+                        march_beyond: u32::from(params.march_beyond),
                         planet,
                         irradiance: irradiance_address,
                         stars: night.addresses.0,

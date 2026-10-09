@@ -78,6 +78,8 @@ in. CI checks the crate list.
 | The labs' external models (D-048, #170): not in the repository, fetched by `tools/fetch-assets.sh` from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) at commit `edc7c9e`, each with its `LICENSE.md` | TextureCoordinateTest, TextureSettingsTest, NormalTangentTest, NormalTangentMirrorTest and MetalRoughSpheres by Ed Mackey (Analytical Graphics, Inc.); TextureTransformTest and WaterBottle by Microsoft; Fox by PixelMannen (model), tomkranis (rigging and animation), AsoboStudio and scurest (glTF conversion); CesiumMan by Cesium; FlightHelmet converted from Maya by Gary Hsu | `physics-lab --lab models`, for the labs and the tests only | CC0 1.0 or CC-BY 4.0, per model (the Cesium logo excluded) |
 | Sponza, a reference model (D-048: fetched only with `--reference-only`, never committed, never in the engine or a game) | Crytek; Frank Meinl, after Marko Dabrovic's original | `physics-lab --lab models --model Sponza` | Cryengine Limited License Agreement |
 | [NASA's CGI Moon Kit](https://svs.gsfc.nasa.gov/4720) (`assets/sky/moon-albedo-512x256.r8`, its 2025 colour map's luminance, by `assets/blender/moon_albedo.py`) | NASA's Scientific Visualization Studio, from the Lunar Reconnaissance Orbiter Camera's data | the real Moon (`--real-sky`) | NASA imagery, credit "NASA's Scientific Visualization Studio" |
+| [NOAA's ETOPO 2022 Global Relief Model](https://www.ncei.noaa.gov/products/etopo-global-relief-model), 60 arc-seconds, ice surface: not in the repository, fetched into `assets/planets/earth/` by `tools/fetch-planets.sh` and converted by `assets/blender/planet_elevation.py` | NOAA National Centers for Environmental Information (2022) | the Earth of the `planet` demo (#220, D-056) | public domain (U.S. government work) |
+| [NASA's CGI Moon Kit](https://svs.gsfc.nasa.gov/4720): its elevation at 16 samples a degree (`ldem_16_uint.tif`) and its 2025 colour map at 4K: not in the repository, fetched into `assets/planets/moon/` by `tools/fetch-planets.sh` and converted by `assets/blender/planet_elevation.py` and `planet_colour.py` | NASA's Scientific Visualization Studio, from the Lunar Reconnaissance Orbiter's laser altimeter (LOLA) and camera (LROC) | the Moon of the `planet` demo (`--world assets/worlds/moon.toml`) | NASA imagery, credit "NASA's Scientific Visualization Studio" |
 
 ## Techniques
 
@@ -480,3 +482,13 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     for Low-Light Conditions", SIGGRAPH 2011 (the effect); the scotopic luminance after Frédo
     Durand and Julie Dorsey, "Interactive Tone Mapping", EGWR 2000.
   - **Galactic coordinates:** the IAU's J2000 equatorial-to-galactic rotation.
+- **The planet** (`forge_terrain::planet`, `demos/planet`, #220, D-056):
+  - **3-D gradient noise:** Ken Perlin, "Improving Noise", SIGGRAPH 2002: the twelve edge
+    gradients and the quintic fade.
+  - **Skirts under the tiles' edges:** Thatcher Ulrich, "Rendering Massive Terrains using Chunked
+    Level of Detail Control", SIGGRAPH 2002 course notes.
+  - **The tiles on the cube sphere and their cut:** the recommendation of
+    `docs/research/planet-terrain.md` (Cesium's quantized-mesh skirts, S2's cells).
+  - **The far air marched per pixel:** the aerial-perspective volume of Sébastien Hillaire, "A
+    Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020, with the
+    pixels beyond its far end marched on their own (Forge's, for the view from orbit).

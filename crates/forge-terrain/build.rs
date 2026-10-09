@@ -79,6 +79,22 @@ const PRODUCTS: &[(&str, &[&str], bool, &[&str])] = &[
             "crates/forge-geom/src/stone.rs",
         ],
     ),
+    // A planet's tiles (#220): made from noise on the cube sphere and cooked.
+    (
+        "PLANET_TILES",
+        &["noise"],
+        false,
+        &[
+            "crates/forge-terrain/src/planet.rs",
+            "crates/forge-world/src/partition.rs",
+            "crates/forge-world/src/cell_id.rs",
+            "crates/forge-geom/src/cache.rs",
+            "crates/forge-geom/src/lod.rs",
+            "crates/forge-geom/src/meshlet.rs",
+            "crates/forge-geom/src/page.rs",
+            "crates/forge-geom/src/procedural.rs",
+        ],
+    ),
 ];
 
 /// Files in every list: the cache's own encoding and the deterministic foundations.
@@ -124,7 +140,7 @@ fn main() {
         }
         writeln!(
             out,
-            "/// The code digest of the island's {} product.",
+            "/// The code digest of the {} product.",
             name.to_lowercase()
         )
         .unwrap();

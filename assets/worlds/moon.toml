@@ -1,0 +1,29 @@
+# The Moon for the `planet` demo (#220, D-056): `planet --world assets/worlds/moon.toml`.
+#
+# - The map is NASA's CGI Moon Kit's elevation at 16 samples a degree (NASA's Scientific
+#   Visualization Studio, from the Lunar Reconnaissance Orbiter's laser altimeter), fetched and
+#   converted by tools/fetch-planets.sh: metres over the mean radius.
+# - The keys are those of `earth.toml`.
+
+[planet]
+seed = 2
+radius = 1737400.0
+
+[map]
+file = "assets/planets/moon/moon-ldem16.i16"
+size = [5760, 2880]
+detail = [3000.0, 11, 60.0, 0.55]
+rough_above = 2000.0
+sea = false
+colour = "assets/planets/moon/moon-colour-4k.png"
+
+[tiles]
+samples = 257
+finest = 12
+rings = 1.0
+
+[view]
+# Tycho, its rays and its central peaks.
+target = [-43.3, -11.2]
+heading = 0.0
+atmosphere = false

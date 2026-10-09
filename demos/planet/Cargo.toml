@@ -1,0 +1,29 @@
+[package]
+name = "planet"
+description = "A planet of Earth's size from orbit to its ground: cube-sphere tiles of cluster DAGs made from its world file (D-056)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Tracy zones, frame marks and GPU-time plots (connect tracy/tracy-profiler.exe).
+profiling = ["forge-app/profiling"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+forge-app = { workspace = true }
+forge-core = { workspace = true }
+forge-geom = { workspace = true }
+forge-render = { workspace = true }
+forge-task = { workspace = true }
+forge-terrain = { workspace = true }
+forge-world = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+winit = { workspace = true }

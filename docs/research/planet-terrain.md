@@ -489,6 +489,9 @@ build describes the new terrain as a concurrent-binary-tree system, which could 
 from the post itself (the forum is unreachable, §11); the studio closed in 2024.
 *Bearing:* the one shipped-adjacent data point for a CBT terrain on a planet, if the description
 holds; worth reading on a full network before the CBT spike of §8 (the bisection against D-009).
+**Corrected (2026-10-10, `worlds-at-every-scale.md` §4):** the post itself describes "a very similar
+PQS (procedural quad sphere system)" to the first game's; the CBT terrain was Unity's own 2021
+demo. No shipped planet game is known to use a CBT.
 
 **Lionel Fuentes (Asobo Studio). "Advanced Graphics Summit: Designing the Terrain System of
 'Flight Simulator': Representing the Earth." GDC 2022 (GDC Vault 1027581; slides with notes on

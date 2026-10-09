@@ -115,10 +115,13 @@ pub const PACKED_MAX_BITS: u32 = 31;
 /// The exponent of the grid a mesh whose positions reach `reach` metres from its origin is
 /// quantised to (#218): a step of about 2^-17 of that reach, at most a millimetre (2^-10 m) and
 /// at least 2^-16 m. A power of two, so a coordinate on the grid is an integer times the step,
-/// exactly.
+/// exactly. Past a reach of 2^20 m (a planet's coarse tiles, #220) the step grows to keep every
+/// coordinate within 2^30 steps, as [`PACKED_MAX_BITS`] and the header's `i32` origin need.
 pub fn grid_exponent(reach: f32) -> i32 {
-    let exponent = (reach.max(f32::MIN_POSITIVE) / 131_072.0).log2().floor() as i32;
-    exponent.clamp(-16, -10)
+    let reach = reach.max(f32::MIN_POSITIVE);
+    let exponent = (reach / 131_072.0).log2().floor() as i32;
+    let fits = (reach / (1u32 << 30) as f32).log2().ceil() as i32;
+    exponent.clamp(-16, -10).max(fits)
 }
 
 /// The step of the grid of `exponent`, in metres.
@@ -604,6 +607,17 @@ pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex], uvs: bool, grid: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_grid_stays_a_millimetre_and_coarsens_only_past_what_fits() {
+        assert_eq!(grid_exponent(0.5), -16);
+        assert_eq!(grid_exponent(16_384.0), -10);
+        assert_eq!(grid_exponent(1_048_576.0), -10);
+        // A planet's face, 7 000 km from its centre: every coordinate within 2^30 steps.
+        let e = grid_exponent(7.0e6);
+        assert!(7.0e6 / grid_step(e) <= (1u32 << 30) as f32, "{e}");
+        assert!(7.0e6 / grid_step(e - 1) > (1u32 << 30) as f32, "{e}");
+    }
 
     #[test]
     fn normals_survive_the_octahedral_encoding() {

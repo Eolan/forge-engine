@@ -202,6 +202,10 @@ pub struct RenderLayer {
     /// Seen from both sides (glTF's `doubleSided`, #171): its back faces are drawn, with the
     /// normal turned towards the viewer, and rays meet them as fronts.
     pub double_sided: bool,
+    /// [`ShadingClass::Layered`] only: the layers are weighed by the height over the sea, the
+    /// slope and the latitude on the frame's planet (#220), not read from a layer map: the
+    /// standard rows after this one are the sea, sand, grass, rock and snow.
+    pub planet_layers: bool,
 }
 
 /// A layer of a [`ShadingClass::Layered`] row drawn by the ground's height under each pixel: the
@@ -275,6 +279,7 @@ impl Default for RenderLayer {
             contour: None,
             uv: None,
             double_sided: false,
+            planet_layers: false,
         }
     }
 }

@@ -97,8 +97,14 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   second step.
 - **The planet** (D-056, the owner's pick of 2026-10-09, ahead of the network and sound): a
   `planet` demo of its own. The planet has Earth's radius and is made of cube-sphere tiles of
-  cluster DAGs. Its ground comes from noise first, with the genesis across the faces later. The
-  island joins it afterwards. Step 1: #220.
+  cluster DAGs. The island joins it afterwards. Step 1: #220.
+  - **Its first part ✅** (2026-10-10, `docs/demos/planet.md`):
+    - the Earth from NOAA's elevation and the Moon from NASA's, with noise under them (the
+      owner's go to download them);
+    - a fixed cut of tiles around the target;
+    - a descent from orbit to Èze, and to Tycho on the Moon;
+    - 0.8–0.95 ms a frame.
+  - **Next:** tiles streamed while flying.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

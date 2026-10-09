@@ -140,6 +140,7 @@ static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render
 static const uint MATERIAL_FLAG_UV = 2;         // the textures read the mesh's UVs (D-047)
 static const uint MATERIAL_FLAG_MASKED = 4;     // cut out by the base colour's alpha (#171)
 static const uint MATERIAL_FLAG_DOUBLE_SIDED = 8; // drawn from both sides (#171)
+static const uint MATERIAL_FLAG_PLANET = 16;       // layered: the layers by height, slope and latitude on the frame's planet (#220)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -367,6 +368,10 @@ public struct Frame
     public float4* skin_joints;        // this frame's joints' matrices, three rows each: they turn the textures' relief with the body
     public uint64_t skin_pad;
     public float4 ground_window;    // the ground window (#197): min x, min z, max x, max z in the scene's frame, where MESH_WINDOWED_GROUND meshes draw no fragment (min > max: none)
+    public float4 planet;           // the planet the scene stands on (#220): the camera from its centre, world axes (xyz), and its height over the sea (w), metres
+    public float4 planet_axis;      // its north (xyz) and its radius at the sea's level (w, metres; 0: none)
+    public float4 planet_meridian;  // its latitude 0, longitude 0 (xyz)
+    public uint4 planet_map;        // x: the sampled index of its colour map (~0: none); y: 1 when it has a sea
 };
 
 // Mirrors `SkinVertex` in crates/forge-geom/src/skin.rs (32 bytes): a skinned cluster vertex
@@ -3165,6 +3170,136 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
     float reflectance = mat.reflectance;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
     {
+        uint first, second;
+        float w_first, w_second;
+        float3 tint = 1.0;
+        if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u)
+            planet_layers(f, s, first, second, w_first, w_second, tint);
+        else
+            map_layers(mat, s, first, second, w_first, w_second);
+        Material a = f[0].materials[row + 1 + first];
+        float3 albedo_a, n_a;
+        standard_surface(a, s, albedo_a, n_a);
+        albedo = albedo_a;
+        n = n_a;
+        specular_power = a.specular_power;
+        specular = a.specular;
+        reflectance = a.reflectance;
+        emissive = a.emissive;
+        if (second != first && w_second > 0.0)
+        {
+            Material b = f[0].materials[row + 1 + second];
+            float3 albedo_b, n_b;
+            standard_surface(b, s, albedo_b, n_b);
+            float blend = w_second / (w_first + w_second);
+            albedo = lerp(albedo_a, albedo_b, blend);
+            n = normalize(lerp(n_a, n_b, blend));
+            specular = lerp(a.specular, b.specular, blend);
+            reflectance = lerp(a.reflectance, b.reflectance, blend);
+            emissive = lerp(a.emissive, b.emissive, blend);
+        }
+        albedo *= tint;
+    }
+    float3 shadow = s.shadow;
+    if (s.shore != nullptr)
+    {
+        float wet = shore_wetness(s.shore, s.world);
+        albedo *= lerp(1.0, WET_DARKENING, wet);
+        specular_power = lerp(specular_power, WET_POWER, wet);
+        specular = lerp(specular, WET_SPECULAR, wet);
+        reflectance = lerp(reflectance, WATER_F0, wet);
+        // Under the sea, the waves' caustics (#108).
+        if (s.world.y < 0.0 && s.shore[0].cascade_count > 0u)
+            shadow *= shore_caustics(s.shore, s.world, max(length(s.dpdx), length(s.dpdy)));
+    }
+    float ndl;
+    return sun_light(f, albedo, n, specular_power, specular, shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+}
+
+// A planet's layers (#220): the standard rows after its layered row are the sea, sand, grass,
+// rock and snow (PLANET_*), their textures on the scene's frame, weighed by the surface's height over the sea's level, its slope and
+// its latitude, from the frame's planet (`Frame::planet`); the two heaviest are shaded. The
+// height is taken as `(h(2R + h) + 2c·p + p·p) / (|c + p| + R)` from the camera's own height
+// `h`, which the CPU works out in f64: the f32 offset `c` from the planet's centre, thousands of
+// kilometres long, would round it by half a metre.
+static const uint PLANET_SEA = 0;
+static const uint PLANET_SAND = 1;
+static const uint PLANET_GRASS = 2;
+static const uint PLANET_ROCK = 3;
+static const uint PLANET_SNOW = 4;
+
+void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, out float w_first, out float w_second, out float3 tint)
+{
+    float3 c = f[0].planet.xyz;
+    float h = f[0].planet.w;
+    float radius = f[0].planet_axis.w;
+    float3 p = s.world - f[0].camera_in_scene.xyz;
+    float3 out_of_centre = c + p;
+    float distance = length(out_of_centre);
+    float height = (h * (2.0 * radius + h) + 2.0 * dot(c, p) + dot(p, p)) / (distance + radius);
+    float3 up = out_of_centre / distance;
+    float slope = 1.0 - saturate(dot(s.n, up));
+    float latitude = abs(dot(up, f[0].planet_axis.xyz));
+    // The edges wander over noise a few hundred metres and a few metres wide.
+    float wander = value_noise3(s.world / 700.0) + 0.5 * value_noise3(s.world / 6.0) - 0.75;
+    float sea = f[0].planet_map.y != 0u ? 1.0 - smoothstep(0.02, 0.4, height) : 0.0;
+    // A beach is a few tens of metres wide: where a pixel spans more, the sand under 6 m would
+    // be the width of the triangles between the sea's samples and the land's, kilometres on a
+    // coarse tile.
+    float footprint = length(s.dpdx) + length(s.dpdy);
+    float sand = (1.0 - sea) * (1.0 - smoothstep(2.0, 6.0, height + 3.0 * wander)) * (1.0 - smoothstep(0.15, 0.3, slope))
+        * (1.0 - smoothstep(10.0, 40.0, footprint));
+    float snow_line = lerp(4200.0, 300.0, latitude * latitude) + 400.0 * wander;
+    float snow = (1.0 - sea) * smoothstep(snow_line - 150.0, snow_line + 150.0, height) * (1.0 - smoothstep(0.45, 0.6, slope));
+    float rock = (1.0 - sea) * smoothstep(0.28, 0.4, slope + 0.08 * wander) * (1.0 - snow);
+    float grass = max(1.0 - sea - sand - snow - rock, 0.0);
+    float weights[5] = { sea, sand, grass, rock, snow };
+    first = 0u;
+    [unroll]
+    for (uint k = 1; k < 5; k++)
+        first = weights[k] > weights[first] ? k : first;
+    second = first;
+    w_first = weights[first];
+    w_second = 0.0;
+    [unroll]
+    for (uint k = 0; k < 5; k++)
+    {
+        if (k != first && weights[k] > w_second)
+        {
+            second = k;
+            w_second = weights[k];
+        }
+    }
+    // The body's colour map, where it has one (the Moon's): its texel at the pixel's latitude
+    // and longitude, at the level whose texels are the pixel's footprint on the ground.
+    tint = 1.0;
+    uint map = f[0].planet_map.x;
+    if (map != 0xFFFFFFFFu)
+    {
+        float3 axis = f[0].planet_axis.xyz;
+        float3 meridian = f[0].planet_meridian.xyz;
+        float latitude_angle = asin(clamp(dot(up, axis), -1.0, 1.0));
+        float longitude = atan2(dot(up, cross(axis, meridian)), dot(up, meridian));
+        const float TAU = 6.28318530718;
+        float2 uv = float2(longitude / TAU + 0.5, 0.5 - latitude_angle / (0.5 * TAU));
+        uint2 size;
+        g_sampled_images[NonUniformResourceIndex(map)].GetDimensions(size.x, size.y);
+        float texel = TAU * radius / float(size.x);
+        float level = max(log2(max(footprint, 1e-3) / texel), 0.0);
+        tint = sample_image_level(map, SAMPLER_LINEAR_REPEAT, uv, level).rgb;
+    }
+    // The layers' textures are laid on the scene's frame, one surface over every tile: a tile's own
+    // frame is its cell's, so they would jump at its edges.
+    s.object_position = s.world;
+    s.object_normal = s.n;
+    s.frame = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+}
+
+// A layered row's layers from its layer map (issue #42): the two heaviest of the four texels
+// around the pixel, their weights, the contour's share between them (#199).
+void map_layers(Material mat, Surface s, out uint first, out uint second, out float w_first, out float w_second)
+{
+    {
         Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.albedo_texture)];
         uint2 size;
         map.GetDimensions(size.x, size.y);
@@ -3205,8 +3340,10 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         [unroll]
         for (uint k = 1; k < 4; k++)
             heaviest = total[k] > total[heaviest] ? k : heaviest;
-        uint first = ids[heaviest], second = first;
-        float w_first = total[heaviest], w_second = 0.0;
+        first = ids[heaviest];
+        second = first;
+        w_first = total[heaviest];
+        w_second = 0.0;
         [unroll]
         for (uint k = 0; k < 4; k++)
         {
@@ -3290,42 +3427,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             second = layer[1] != NO_LAYER ? layer[1] : first;
             w_second = layer[1] != NO_LAYER ? weight[1] - w_off : 0.0;
         }
-        Material a = f[0].materials[row + 1 + first];
-        float3 albedo_a, n_a;
-        standard_surface(a, s, albedo_a, n_a);
-        albedo = albedo_a;
-        n = n_a;
-        specular_power = a.specular_power;
-        specular = a.specular;
-        reflectance = a.reflectance;
-        emissive = a.emissive;
-        if (second != first && w_second > 0.0)
-        {
-            Material b = f[0].materials[row + 1 + second];
-            float3 albedo_b, n_b;
-            standard_surface(b, s, albedo_b, n_b);
-            float blend = w_second / (w_first + w_second);
-            albedo = lerp(albedo_a, albedo_b, blend);
-            n = normalize(lerp(n_a, n_b, blend));
-            specular = lerp(a.specular, b.specular, blend);
-            reflectance = lerp(a.reflectance, b.reflectance, blend);
-            emissive = lerp(a.emissive, b.emissive, blend);
-        }
     }
-    float3 shadow = s.shadow;
-    if (s.shore != nullptr)
-    {
-        float wet = shore_wetness(s.shore, s.world);
-        albedo *= lerp(1.0, WET_DARKENING, wet);
-        specular_power = lerp(specular_power, WET_POWER, wet);
-        specular = lerp(specular, WET_SPECULAR, wet);
-        reflectance = lerp(reflectance, WATER_F0, wet);
-        // Under the sea, the waves' caustics (#108).
-        if (s.world.y < 0.0 && s.shore[0].cascade_count > 0u)
-            shadow *= shore_caustics(s.shore, s.world, max(length(s.dpdx), length(s.dpdy)));
-    }
-    float ndl;
-    return sun_light(f, albedo, n, specular_power, specular, shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
 // How much of the light crossing the ice leaves towards the camera rather than elsewhere

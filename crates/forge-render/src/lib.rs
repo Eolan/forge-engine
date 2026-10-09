@@ -63,7 +63,7 @@ pub use liquid::{
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,
     MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame,
-    RayRequests, SunShadowRays, SwRaster,
+    PlanetView, RayRequests, SunShadowRays, SwRaster,
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};

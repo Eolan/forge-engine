@@ -189,7 +189,7 @@ impl IslandWorld {
 }
 
 /// `over`'s keys into `base`: tables merged key by key, anything else replaced.
-fn merge(base: &mut toml::Table, over: toml::Table) {
+pub(crate) fn merge(base: &mut toml::Table, over: toml::Table) {
     for (key, value) in over {
         match (base.get_mut(&key), value) {
             (Some(toml::Value::Table(inner)), toml::Value::Table(over)) => merge(inner, over),
@@ -204,7 +204,7 @@ fn merge(base: &mut toml::Table, over: toml::Table) {
 /// float that an `f32` holds exactly takes the `f32`'s shortest text. An `f64` setting that
 /// happens to be such a float reads back the same `f64` only if its text was already that
 /// short, which the round-trip test checks for the island's.
-fn shorten_floats(table: &mut toml::Table) {
+pub(crate) fn shorten_floats(table: &mut toml::Table) {
     fn shorten(value: &mut toml::Value) {
         match value {
             toml::Value::Float(x) => {

@@ -39,7 +39,7 @@ public struct Sky
     public uint width;
     public uint height;
     public uint clouds;              // sampled: the cloud layer over the sky (#145), or ~0: none
-    public uint pad;
+    public uint march_beyond;        // 1: each pixel beyond the volume's far end marched on its own (#220)
     public Planet* planet;
     public float4* irradiance;       // the sky's irradiance, SH_COEFFICIENTS coefficients, then up and forward (irradiance_main)
     public float4* stars;            // the night's stars, two float4 each (`Star` in sky.slang), or null

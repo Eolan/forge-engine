@@ -2468,7 +2468,7 @@ At 1600 × 900 it takes 1.43 ms of GPU a frame (p99 frame 2.10 ms), and at 2560 
     owner's call.
 - **The tour's plainer moments:** climbing out of the valley, and the sea alone as it turns.
 - **The planet variant** (orbit-to-ground, `docs/research/planet-terrain.md`): the demo's second
-  step.
+  step, now a demo of its own (D-056, `docs/demos/planet.md`). The island joins it later.
 
 ## The beaches by type (#128, 2026-10-02)
 

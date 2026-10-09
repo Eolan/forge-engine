@@ -9,6 +9,9 @@
 
 # The labs' external models (D-048): fetched by tools/fetch-assets.sh, never committed.
 /assets/external/
+# The planets' maps (#220): fetched and converted by tools/fetch-planets.sh, hundreds of MB, never
+# committed.
+/assets/planets/
 
 # Vendored third-party binaries and SDKs (Tracy profiler, NVIDIA Streamline): kept locally,
 # never committed (126 MB and 486 MB).

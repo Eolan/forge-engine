@@ -194,6 +194,8 @@ main() {
     pair "$new/$path-lab-tug-net200.png" "$new/$path-lab-tug-net200-noocc.png" "$path lab's tug-of-war, occlusion off"
     pair "$new/$path-lab-space150.png" "$new/$path-lab-space150-noocc.png" "$path lab's spaceship, occlusion off"
     pair "$new/$path-lab-tank90.png" "$new/$path-lab-tank90-noocc.png" "$path lab's glass tank, occlusion off"
+    pair "$new/$path-planet-ground.png" "$new/$path-planet-ground-noocc.png" "$path planet over Èze, occlusion off"
+    pair "$new/$path-planet-ground.png" "$new/$path-planet-ground-resident.png" "$path planet over Èze, streamed against resident"
   done
   for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60 clouds60 \
     shot-mouth shot-lake shot-island shot-valley lab-drop90 lab-drop600 lab-net300 lab-sea300 lab-sea-steer600 lab-walk150 lab-walk-crates240 \
@@ -205,7 +207,7 @@ main() {
     lab-models60 lab-model-CesiumMan lab-model-FlightHelmet lab-model-Fox lab-model-MetalRoughSpheres \
     lab-model-NormalTangentMirrorTest lab-model-NormalTangentTest lab-model-TextureCoordinateTest \
     lab-model-TextureSettingsTest lab-model-TextureTransformTest lab-model-WaterBottle lab-model-Sponza \
-    lab-model-Sponza-noprobes; do
+    lab-model-Sponza-noprobes planet-orbit planet-high planet-ground planet-moon-orbit planet-moon-ground; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   local others=""

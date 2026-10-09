@@ -108,6 +108,46 @@ const INSTANCE_STILL: u32 = 1;
 /// No ground window: its least corner past its greatest.
 const NO_GROUND_WINDOW: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
 
+/// A planet the scene stands on (#220, [`MeshletScene::set_planet`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanetView {
+    /// The culling camera from the planet's centre, world axes, metres.
+    pub camera: DVec3,
+    /// The radius of its sea's level (or its map's reference), metres.
+    pub radius: f64,
+    /// Its north, world axes.
+    pub axis: Vec3,
+    /// Its latitude 0, longitude 0, world axes.
+    pub meridian: Vec3,
+    /// Whether the ground under its reference is sea (the Earth's) or ground (the Moon's).
+    pub sea: bool,
+    /// Its colour map's sampled index ([`crate::material::TextureSet::sampled`]): an
+    /// equirectangular image of the whole body, the north row first, longitude from −180°,
+    /// which tints its layers; `None` for none.
+    pub colour_map: Option<u32>,
+}
+
+/// [`PlanetView`] as the frame block holds it (`Frame::planet` and after it in `meshlet.slang`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GpuPlanet {
+    camera: [f32; 4],
+    axis: [f32; 4],
+    meridian: [f32; 4],
+    map: [u32; 4],
+}
+
+impl Default for GpuPlanet {
+    /// No planet: a radius of 0, no colour map.
+    fn default() -> Self {
+        Self {
+            camera: [0.0; 4],
+            axis: [0.0; 4],
+            meridian: [0.0; 4],
+            map: [u32::MAX, 0, 0, 0],
+        }
+    }
+}
+
 /// `FLAG_SW_RASTER` in the shader: set by the renderer, from [`DrawParams::sw_raster`], in both
 /// passes' frame blocks.
 const FLAG_SW_RASTER: u32 = 512;
@@ -456,6 +496,15 @@ struct GpuFrame {
     /// The ground window (#197): min x, min z, max x, max z in the scene's frame, where the
     /// windowed ground draws no fragment (min > max: none).
     ground_window: [f32; 4],
+    /// The planet the scene stands on (#220, [`MeshletScene::set_planet`]): the camera from its
+    /// centre in world axes (xyz) and its height over the sea's level (w), metres.
+    planet: [f32; 4],
+    /// Its axis, north (xyz), and its radius at the sea's level, metres (w; 0: no planet).
+    planet_axis: [f32; 4],
+    /// Its latitude 0, longitude 0 (xyz).
+    planet_meridian: [f32; 4],
+    /// The sampled index of its colour map (x; `u32::MAX`: none), 1 when it has a sea (y).
+    planet_map: [u32; 4],
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
@@ -921,6 +970,8 @@ pub struct MeshletSceneBuilder {
     /// Meshes cut for the rays as one surface, and their triangles over all of them
     /// ([`MeshletSceneBuilder::set_ray_group`]).
     ray_groups: Vec<(Vec<u32>, u32)>,
+    /// Meshes the rays take as ground whatever their size ([`MeshletSceneBuilder::set_ray_terrain`]).
+    ray_terrain: Vec<u32>,
     /// The view whose pages a streamed scene loads first
     /// ([`MeshletSceneBuilder::set_start_view`]).
     start_view: Option<StartView>,
@@ -1134,6 +1185,14 @@ impl MeshletSceneBuilder {
             .push((meshes.iter().map(|m| m.0).collect(), budget));
     }
 
+    /// Has the rays take `meshes` as ground (#220: a planet's finest tiles, under the kilometre
+    /// across that marks ground otherwise): their shadow rays start clear of the cut the rays
+    /// see, by twice its error ([`raytrace::TERRAIN_SHADOW_START`]), against acne where the
+    /// drawn ground stands under it.
+    pub fn set_ray_terrain(&mut self, meshes: &[MeshId]) {
+        self.ray_terrain.extend(meshes.iter().map(|m| m.0));
+    }
+
     /// Has a streamed scene ([`Residency::Streamed`]) load, before its first frame, the pages
     /// the cut from `view` wants (#121, `crate::streaming`'s notes), as many as its pool
     /// holds: [`MeshletScene::load_start_view`] once its instances are written. Ignored by a
@@ -1159,14 +1218,28 @@ impl MeshletSceneBuilder {
     /// Adds an instance of `mesh` with a uniform-scale transform relative to the scene's
     /// origin ([`Self::set_origin`]), in `material`.
     pub fn add_instance_with_material(&mut self, mesh: MeshId, model: Mat4, material: MaterialId) {
+        let (scale, rotation, translation) = model.to_scale_rotation_translation();
+        let position = self.origin.offset(translation);
+        self.add_instance_at(mesh, position, rotation, scale.x, material);
+    }
+
+    /// Adds an instance of `mesh` standing at `position` in the world, turned by `rotation` and
+    /// scaled by `scale`, in `material`: for an instance whose place an `f32` offset from the
+    /// scene's origin can't hold (a planet's tiles, thousands of kilometres out, #220).
+    pub fn add_instance_at(
+        &mut self,
+        mesh: MeshId,
+        position: CellPos,
+        rotation: Quat,
+        scale: f32,
+        material: MaterialId,
+    ) {
         assert!(
             self.movers.is_none(),
             "the movers are the table's last instances"
         );
         let info = self.meshes[mesh.0 as usize];
-        let (scale, rotation, translation) = model.to_scale_rotation_translation();
-        let scale = scale.x;
-        let position = self.origin.offset(translation);
+        let position = position.normalized();
         let center = rotation * (Vec3::from(info.center) * scale) + position.local;
         self.total_triangles += u64::from(info.triangle_count);
         self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]);
@@ -1284,7 +1357,7 @@ impl MeshletSceneBuilder {
                 slot[0] = Some((|| {
                     let meshlets = clusters(mesh);
                     let uvs = mesh.uvs != 0;
-                    let terrain = mesh.radius > 1000.0;
+                    let terrain = mesh.radius > 1000.0 || self.ray_terrain.contains(&(m as u32));
                     let budget = if terrain {
                         raytrace::TERRAIN_BUDGET
                     } else {
@@ -1551,6 +1624,7 @@ impl MeshletSceneBuilder {
             cutouts,
             jelly,
             ground_window: Cell::new(NO_GROUND_WINDOW),
+            planet: Cell::new(GpuPlanet::default()),
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -1733,6 +1807,8 @@ pub struct MeshletScene {
     pub jelly: bool,
     /// The ground window (#197, [`Self::set_ground_window`]), as the frame block holds it.
     ground_window: Cell<[f32; 4]>,
+    /// The planet ([`Self::set_planet`]), as the frame block holds it.
+    planet: Cell<GpuPlanet>,
     textures: Option<TextureSet>,
     /// Instances.
     pub instance_count: u32,
@@ -1918,6 +1994,26 @@ impl MeshletScene {
     /// `None` for none. The ground's clusters that reach into it take the cut-outs' raster.
     pub fn set_ground_window(&self, window: Option<[f32; 4]>) {
         self.ground_window.set(window.unwrap_or(NO_GROUND_WINDOW));
+    }
+
+    /// The planet the frames drawn from now on stand on (#220), for the layered rows that take
+    /// their layers from it ([`forge_core::material::RenderLayer::planet_layers`]). The camera's
+    /// height over the sea is worked out here in `f64`, where the shaders could not.
+    pub fn set_planet(&self, view: &PlanetView) {
+        let height = view.camera.length() - view.radius;
+        let c = view.camera.as_vec3();
+        let (axis, meridian) = (view.axis, view.meridian);
+        self.planet.set(GpuPlanet {
+            camera: [c.x, c.y, c.z, height as f32],
+            axis: [axis.x, axis.y, axis.z, view.radius as f32],
+            meridian: [meridian.x, meridian.y, meridian.z, 0.0],
+            map: [
+                view.colour_map.unwrap_or(u32::MAX),
+                u32::from(view.sea),
+                0,
+                0,
+            ],
+        });
     }
 
     /// Whether the frames take the cut-outs' raster (#171): with cut-out or double-sided rows,
@@ -3321,6 +3417,10 @@ impl MeshletRenderer {
             skin_joints: scene.skins.as_ref().map_or(0, SceneSkins::joints_address),
             skin_pad: 0,
             ground_window: scene.ground_window.get(),
+            planet: scene.planet.get().camera,
+            planet_axis: scene.planet.get().axis,
+            planet_meridian: scene.planet.get().meridian,
+            planet_map: scene.planet.get().map,
         }
     }
 

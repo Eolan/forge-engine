@@ -1326,6 +1326,26 @@ A room's probes 1 m apart instead of 4 (#175), the same number of probes, Sponza
 view at noon, 1600 × 900, 616 frames: the frame 2.24 → 2.41 ms, `gi/probe rays` 0.90 → 1.02,
 `gi/probe blend` 0.26 → 0.31.
 
+## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
+
+RTX 5070 Ti, 1600 × 900, TAA, the descent held at its golden shots (`--shot`), 238 frames each.
+The tiles' pages stream through a 512 MiB pool. `docs/demos/planet.md` has the scene.
+
+| | Earth from orbit (400 km) | Earth at 10 km | Earth over Èze | Moon from orbit | Moon on Tycho |
+|---|---|---|---|---|---|
+| GPU frame | 0.95 ms | 0.89 ms | 0.86 ms | 0.81 ms | 0.85 ms |
+| `shading/layered` (the planet's layers) | 0.15 | 0.24 | 0.20 | 0.15 | 0.22 |
+| `sky/compose` (with each far pixel marched) | 0.26 | 0.08 | 0.03 | — | — |
+| `sky/aerial perspective` | 0.03 | 0.03 | 0.03 | — | — |
+| `sky/starfield + planet` | — | — | — | 0.11 | 0.08 |
+| `geometry/meshlet pass 1` | 0.06 | 0.05 | 0.07 | 0.06 | 0.04 |
+
+- **The sky from orbit:** the per-pixel march beyond the aerial volume (`march_beyond`, 32 steps)
+  costs 0.26 ms when the planet fills most of the screen. The volume's sub-steps for slices longer
+  than 2 km cost nothing on the island, whose slices are all shorter.
+- **Start:** the Earth's map loads in 0.5 s (466 MB and its pyramid). The 492 tiles take 17.6 s to
+  make and cook the first time, then load from the cache in under 0.1 s.
+
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 
 GPU **0.20 ms** (0.197 since the material classes of #20, 0.177 with one resolve pass; 0.15 with the rocks shaded in the

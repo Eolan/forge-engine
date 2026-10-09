@@ -5,7 +5,7 @@
 # full batch: an unknown path is a shared one until it is mapped here.
 #
 # Patterns: `**/` any directories (none too), `**` anything, `*` anything but `/`. Sets: the
-# names tools/captures.sh knows (sentinels, meshlets, ballad, city, island, lab); [] means no
+# names tools/captures.sh knows (sentinels, meshlets, ballad, city, island, lab, planet); [] means no
 # capture, the gate only. Tier 0 always adds the sentinels when a set is selected.
 #
 # One entry per line, `"pattern" = [...]` or `"pattern" = true`: verify.sh reads this subset
@@ -25,6 +25,12 @@
 "crates/forge-procgen/src/ocean.rs" = ["island", "lab"]
 "crates/forge-procgen/**" = ["island"]
 # The island's makers (#212, D-053) and its world file (#211).
+# The planet (#220, D-056): its makers, its worlds, its demo; the fetch script draws nothing.
+"crates/forge-terrain/src/planet.rs" = ["planet"]
+"assets/worlds/earth.toml" = ["planet"]
+"assets/worlds/moon.toml" = ["planet"]
+"demos/planet/**" = ["planet"]
+"tools/fetch-planets.sh" = []
 "crates/forge-terrain/**" = ["island"]
 "assets/worlds/**" = ["island"]
 "demos/island/**" = ["island"]

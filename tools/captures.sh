@@ -38,8 +38,8 @@ paths=${paths//,/ }
 recook=${FORGE_RECOOK:-0}
 for set in $sets; do
   case $set in
-    all | sentinels | meshlets | ballad | city | island | lab) ;;
-    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island, lab or all" >&2; exit 1 ;;
+    all | sentinels | meshlets | ballad | city | island | lab | planet) ;;
+    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island, lab, planet or all" >&2; exit 1 ;;
   esac
 done
 for path in $paths; do
@@ -61,6 +61,8 @@ island_demo=$bin/island$exe
 external="CesiumMan FlightHelmet Fox MetalRoughSpheres NormalTangentMirrorTest NormalTangentTest TextureCoordinateTest TextureSettingsTest TextureTransformTest WaterBottle"
 # The physics lab (#136), which a baseline from before it lacks: its captures are then skipped.
 lab=$bin/physics-lab$exe
+# The planet (#220), which a baseline from before it lacks: its captures are then skipped.
+planet=$bin/planet$exe
 for demo in "$meshlets" "$asteroids" "$city"; do
   [ -f "$demo" ] || { echo "missing $demo: build with cargo build --release" >&2; exit 1; }
 done
@@ -83,7 +85,7 @@ fi
   echo "sets:$sets"
   echo "paths: $paths"
   echo "driver: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -n 1)"
-  for demo in "$meshlets" "$asteroids" "$city" "$island_demo" "$lab"; do
+  for demo in "$meshlets" "$asteroids" "$city" "$island_demo" "$lab" "$planet"; do
     [ -f "$demo" ] && echo "binary: $(sha256sum "$demo" | cut -c1-16) $(basename "$demo") $(date -u -r "$demo" +%FT%TZ)"
   done
 } > "$out/batch.txt"
@@ -99,6 +101,7 @@ sets_of() {
     city*) echo city ;;
     island* | water* | clouds* | shot-*) echo island ;;
     lab-*) echo lab ;;
+    planet-*) echo planet ;;
   esac
 }
 # wanted NAME: true when FORGE_SETS asks for the capture NAME.
@@ -220,6 +223,22 @@ for path in $paths; do
   if [ -f "$island_demo" ]; then
     for shot in mouth lake island valley; do
       capture "$path-shot-$shot" 60 "$island_demo" --shot "$shot" --sw-raster on --fixed-step "${flag[@]}"
+    done
+  fi
+  # The planet (#220, D-056), when tools/fetch-planets.sh has fetched its maps (never in CI): the
+  # Earth's descent held at its three golden shots, from orbit over the Mediterranean, 10 km over
+  # the Côte d'Azur and over Èze, the ground's with the occlusion off and every page resident
+  # for the A/B harness; the Moon from orbit and on Tycho's floor.
+  if [ -f "$planet" ] && [ -f "$root/assets/planets/earth/etopo-60s.i16" ]; then
+    for shot in orbit high ground; do
+      capture "$path-planet-$shot" 120 "$planet" --shot "$shot" --fixed-step "${flag[@]}"
+    done
+    capture "$path-planet-ground-noocc" 120 "$planet" --shot ground --fixed-step --no-occlusion "${flag[@]}"
+    capture "$path-planet-ground-resident" 120 "$planet" --shot ground --fixed-step --resident "${flag[@]}"
+  fi
+  if [ -f "$planet" ] && [ -f "$root/assets/planets/moon/moon-ldem16.i16" ]; then
+    for shot in orbit ground; do
+      capture "$path-planet-moon-$shot" 120 "$planet" --world assets/worlds/moon.toml --shot "$shot" --fixed-step "${flag[@]}"
     done
   fi
   # The physics lab (#136), a tick a frame: the rain in mid-air at tick 90, with the occlusion

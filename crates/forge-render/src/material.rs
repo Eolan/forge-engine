@@ -97,6 +97,10 @@ pub const MATERIAL_MASKED: u32 = 4;
 /// [`GpuMaterial`] flag: drawn from both sides ([`forge_core::material::RenderLayer::double_sided`]).
 pub const MATERIAL_DOUBLE_SIDED: u32 = 8;
 
+/// [`GpuMaterial`] flag: a layered row whose layers come from the frame's planet
+/// ([`forge_core::material::RenderLayer::planet_layers`], #220).
+pub const MATERIAL_PLANET: u32 = 16;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -367,7 +371,8 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                         MATERIAL_DOUBLE_SIDED
                     } else {
                         0
-                    },
+                    }
+                    | if r.planet_layers { MATERIAL_PLANET } else { 0 },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
                 contour_height: r.contour.map_or(0.0, |c| c.height),

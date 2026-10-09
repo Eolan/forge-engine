@@ -1,9 +1,10 @@
 //! Gradient noise on an integer lattice, deterministic on every machine: the gradient of each
 //! lattice point is one of eight fixed directions chosen by `forge_core::hash::hash_cell2`, the
 //! blend a quintic fade, so a sample needs no transcendental function and the same seed gives
-//! the same bits on a client and a server (D-016). Values lie in about `[−1, 1]`.
+//! the same bits on a client and a server (D-016). Values lie in about `[−1, 1]`. In 3-D (a
+//! planet's surface, #220) the gradients are Perlin's twelve edge directions, by `hash_cell3`.
 
-use forge_core::hash::hash_cell2;
+use forge_core::hash::{hash_cell2, hash_cell3};
 
 /// The eight gradient directions (the diagonals scaled to unit length).
 const GRADIENTS: [(f64, f64); 8] = [
@@ -93,9 +94,80 @@ pub fn ridged(seed: u64, x: f64, y: f64, octaves: u32, lacunarity: f64, gain: f6
     sum / norm
 }
 
+/// Perlin's twelve gradients of improved noise: the cube's edge midpoints.
+const GRADIENTS3: [(f64, f64, f64); 12] = [
+    (1.0, 1.0, 0.0),
+    (-1.0, 1.0, 0.0),
+    (1.0, -1.0, 0.0),
+    (-1.0, -1.0, 0.0),
+    (1.0, 0.0, 1.0),
+    (-1.0, 0.0, 1.0),
+    (1.0, 0.0, -1.0),
+    (-1.0, 0.0, -1.0),
+    (0.0, 1.0, 1.0),
+    (0.0, -1.0, 1.0),
+    (0.0, 1.0, -1.0),
+    (0.0, -1.0, -1.0),
+];
+
+/// Gradient noise at (x, y, z), lattice points at the integers, in about `[−1, 1]`: the noise of
+/// a planet's surface, sampled at points on its sphere (#220).
+pub fn gradient3(seed: u64, x: f64, y: f64, z: f64) -> f64 {
+    let (x0, y0, z0) = (x.floor(), y.floor(), z.floor());
+    let (fx, fy, fz) = (x - x0, y - y0, z - z0);
+    let (ix, iy, iz) = (x0 as i32, y0 as i32, z0 as i32);
+    let dot = |dx: i32, dy: i32, dz: i32| {
+        let h = hash_cell3(seed, ix + dx, iy + dy, iz + dz);
+        let (gx, gy, gz) = GRADIENTS3[(h % 12) as usize];
+        gx * (fx - f64::from(dx)) + gy * (fy - f64::from(dy)) + gz * (fz - f64::from(dz))
+    };
+    let (u, v, w) = (fade(fx), fade(fy), fade(fz));
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let near = lerp(
+        lerp(dot(0, 0, 0), dot(1, 0, 0), u),
+        lerp(dot(0, 1, 0), dot(1, 1, 0), u),
+        v,
+    );
+    let far = lerp(
+        lerp(dot(0, 0, 1), dot(1, 0, 1), u),
+        lerp(dot(0, 1, 1), dot(1, 1, 1), u),
+        v,
+    );
+    lerp(near, far, w)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn noise_in_3d_is_zero_on_the_lattice_bounded_and_continuous() {
+        assert_eq!(gradient3(7, 3.0, -2.0, 5.0), 0.0);
+        let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+        for i in 0..60 {
+            for j in 0..60 {
+                for k in 0..20 {
+                    let p = [
+                        f64::from(i) * 0.137 + 0.5,
+                        f64::from(j) * 0.093,
+                        f64::from(k) * 0.31 - 3.0,
+                    ];
+                    let v = gradient3(7, p[0], p[1], p[2]);
+                    lo = lo.min(v);
+                    hi = hi.max(v);
+                    // Continuous: a small step moves it a little.
+                    let w = gradient3(7, p[0] + 1e-4, p[1], p[2]);
+                    assert!((v - w).abs() < 1e-3, "{p:?}");
+                }
+            }
+        }
+        assert!(
+            lo < -0.5 && hi > 0.5 && lo >= -1.1 && hi <= 1.1,
+            "{lo} {hi}"
+        );
+        assert_eq!(gradient3(7, 1.5, 2.5, -0.5), gradient3(7, 1.5, 2.5, -0.5));
+        assert_ne!(gradient3(7, 1.5, 2.5, -0.5), gradient3(8, 1.5, 2.5, -0.5));
+    }
 
     #[test]
     fn noise_is_zero_on_the_lattice_bounded_between_and_the_same_every_time() {
