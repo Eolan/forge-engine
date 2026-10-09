@@ -32,6 +32,8 @@ forge-gpu = { workspace = true }
 forge-procgen = { workspace = true }
 forge-render = { workspace = true }
 forge-task = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
 glam = { workspace = true }
 tracing = { workspace = true }
 winit = { workspace = true }

@@ -18,7 +18,8 @@ use crate::noise;
 use crate::river::smoothstep;
 
 /// The rule of [`rock_sites`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RockSiteRule {
     /// Metres across a cell (a whole number of the layer map's texels).
     pub cell: f64,
@@ -48,7 +49,8 @@ pub struct RockSiteRule {
 }
 
 /// How likely a rock is on each kind of site, the most likely being 1.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SiteWeights {
     /// Below the steep ground.
     pub talus: f64,

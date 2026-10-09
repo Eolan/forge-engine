@@ -20,7 +20,8 @@ use forge_task::TaskPool;
 use glam::{DVec2, Quat, Vec2, Vec3};
 
 use crate::island_walk::Footfall;
-use crate::{DrawnGround, SAND_BELOW, SAND_WANDER, island_layer};
+use crate::world::world;
+use crate::{DrawnGround, island_layer};
 
 /// Points along each side: 12 m at 2 cm.
 pub(crate) const POINTS: u32 = 601;
@@ -69,7 +70,7 @@ pub(crate) fn drawn_sand(layers: &Field2<u8>, at: DVec2, height: f32) -> bool {
     // lakes' sand is sand at any height, and the sand's texels far over the contour (the salt
     // water's, #199), where the shader lets the texels decide: its reach twice, the wander and
     // the band (`contour_reach` in meshlet.slang).
-    let far = SAND_BELOW + 2.0 * (SAND_WANDER + 0.08);
+    let far = world().layers.sand_below + 2.0 * (world().layers.sand_wander + 0.08);
     height > -0.2
         && (layer == island_layer::LAKE_SAND
             || (layer == island_layer::SAND && height > far)
@@ -80,7 +81,7 @@ pub(crate) fn drawn_sand(layers: &Field2<u8>, at: DVec2, height: f32) -> bool {
                     | island_layer::DRY_GRASS
                     | island_layer::LUSH_GRASS
                     | island_layer::RIVERBANK
-            ) && height < SAND_BELOW))
+            ) && height < world().layers.sand_below))
 }
 
 /// The island's ground as the row draws it at the scene's `at` with the ground `height` there

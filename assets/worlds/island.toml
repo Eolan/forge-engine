@@ -1,0 +1,238 @@
+# The island's world (#211, D-053): every setting that decides what the island is.
+#
+# - Edit a value and run `island` (or `city-blocks --island 7`): the products it reaches are
+#   made again, the others load from the cache (#208).
+# - A key left out takes the code's value. A key the description doesn't have is an error.
+# - A setting that can be off is `false` when off: `steps = false` under [rivers] leaves the
+#   rivers' steps out; `wind = false` keeps the rain flat.
+# - The flags (`--island-plain 0.3`, `--no-steps`…) override this file for one run, and the
+#   log names each. `island --print-world` prints the world a run uses, flags applied.
+# - The meaning of each key is documented on its type in `forge-procgen`: [island] is
+#   `IslandParams`, [erosion] `ErosionParams`, [rivers] `RibbonParams`, [channels]
+#   `ChannelParams`, [valleys] `ValleyParams`. [ground] and [layers] are the island's own,
+#   documented in `demos/city-blocks/src/world.rs`.
+#
+# `island.size` is the samples a side: 16 384 m / `island.spacing` + 1.
+
+[island]
+seed = 7
+size = 2049
+spacing = 8.0
+radius = 0.62
+coast_noise = 0.25
+coast_scale_km = 5.0
+uplift = 4.0
+ridge_scale_km = 3.0
+plain = 0.25
+plain_uplift = 0.03
+plain_wander = 3.0
+basins = 3
+basin_depth = 0.85
+basin_turn = 0.3
+basin_lakes = 0.85
+basin_lake_radius = 550.0
+wind = false
+lake_min_area_m2 = 50000.0
+grade = 0.003
+
+[erosion]
+k = 0.02
+m = 0.5
+diffusion = 15.0
+channel_area = 0.0
+steps = 150
+sea_level = 0.0
+
+[rivers]
+step = 4.0
+relaxing = 4
+smoothing = 3
+settling = 4
+settle_reach = 8.0
+head_fade = 40.0
+spring = [0.16666666666666666, 0.3333333333333333]
+chezy = 15.0
+speed = [0.3, 3.0]
+bend = 0.8
+tuck = [0.5, 0.1]
+freeboard = [0.05, 0.04]
+max_fall = 0.6
+shoal = [8.0, 3.0]
+lake_area = 10000.0
+estuary = [1.5, 1.0]
+regional = [3.0, 1.5]
+brooks = [500000.0, 3000000.0]
+confluence = [2.0, 1.0]
+confluence_scour = 0.6
+
+[rivers.steps]
+from = 0.04
+spacing = [1.0, 0.4]
+steep = 0.15
+least = 3.0
+highest = 2.0
+jitter = 0.5
+scour = [1.8, 1.3]
+lip = 0.4
+fall = [0.4, 0.3]
+bow = [0.4, 0.6]
+foam = 0.35
+pool_speed = 0.5
+
+[rivers.delta]
+reach = [8.0, 5.0]
+flare = 1.0
+shallow = 0.4
+fan = [6.0, 3.5, 0.6]
+top = [0.3, 0.8]
+front = 0.3
+wander = 0.2
+
+[rivers.bars]
+per = 20.0
+most = 2
+length = 2.5
+breadth = 0.15
+gap = 0.3333333333333333
+top = 0.3
+slopes = [0.08333333333333333, 0.3333333333333333]
+wander = 0.25
+
+[rivers.confluence_bars]
+least = [8.0, 0.3]
+half = [1.0, 0.15]
+past = 1.0
+top = 0.2
+slopes = [0.08333333333333333, 0.3333333333333333]
+wander = 0.25
+
+[rivers.distributaries]
+least = 20.0
+split = 7.0
+along = [5.0, 10.0]
+turn = 40.0
+share = 0.3333333333333333
+rise = 3.0
+
+[channels]
+margin = 8.0
+bank = [0.3, 0.06]
+bend = 2.0
+shoal = [8.0, 3.0]
+beach = 1.5
+estuary = [20.0, 0.12]
+split = 8
+shore = 1.0
+coast = [0.0, 2.5]
+carve_lakes = false
+sill = 0.2
+
+[valleys]
+reaches = [0.02, 0.04]
+slope_run = 40.0
+room = 2.0
+bench = 1.5
+floodplain = [3.0, 12.0, 64.0]
+deepest = 6.0
+rise = [0.3, 0.5]
+fall = 0.02
+wall = [0.15, 1.3]
+ease = 6.0
+join = 1.0
+reach = 96.0
+wander = [0.33, 96.0]
+seed = 127999605
+sea = [1.5, 4.0]
+lake_guard = 0.5
+taper = 0.5
+
+[ground]
+drawn_spacing = 2.0
+detail = 1.0
+smoothing = 1
+sea_floor = [60.0, 1500.0]
+shore_smoothing = [3.5, 4]
+detail_fade = [4.0, 32.0]
+
+[layers]
+texels = 4096
+rock_slope = 0.45
+slope_over = 8.0
+sand_below = 2.5
+sand_wander = 0.3
+riparian_strip = [6.0, 2.0]
+lakebed_under = 1.0
+
+[layers.salt]
+reach = 40.0
+above = 5.0
+wander = 0.35
+seed = 8314045633336665445
+
+[layers.beaches]
+cell = 32.0
+headland = 300.0
+backshore = 150.0
+stretch = 200.0
+black = 0.16
+shingle = 0.25
+mouth = 400.0
+under_sea = 12.0
+mixing = 0.8
+seed = 7090180267945849633
+
+[layers.scrub]
+slopes = [0.45, 1.0]
+share = 0.65
+wander = 0.25
+patch = 48.0
+slope_over = 8.0
+seed = 1546322200
+
+[layers.valley_ground]
+steep = [0.025, 0.04]
+slope_run = 40.0
+bed = [2.5, 1.5]
+scree_rise = [5.0, 3.0]
+scree_slope = 0.55
+scrub_rise = [30.0, 12.0]
+scrub_slope = 1.4
+scrub_gaps = -0.25
+reach = 80.0
+patch = 24.0
+seed = 1546576152
+
+[layers.geology]
+limestone_below = [45.0, 25.0]
+wander = 1500.0
+ragged = 4.0
+karst_slope = [0.12, 0.35]
+slope_over = 8.0
+karst_share = 0.2
+karst_patch = 25.0
+grus_slope = [0.05, 0.45]
+grus_near = 48.0
+grus_share = 0.5
+grus_patch = 30.0
+seed = 7450483670070556961
+
+[layers.rock_sites]
+cell = 8.0
+above = 3.0
+steep = 0.55
+slope_over = 8.0
+talus_reach = 40.0
+crest_reach = 64.0
+crest_rise = [3.0, 12.0]
+patch = 60.0
+between = 0.1
+scatter_slope = [0.05, 0.25]
+seed = 8245918755887608933
+
+[layers.rock_sites.weights]
+talus = 1.0
+scree = 1.0
+faces = 0.06
+crests = 0.6
+karst = 0.35
+scatter = 0.004

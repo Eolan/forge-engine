@@ -332,8 +332,8 @@ the origin (the tooling and the predicted numbers 2026-09-25; the record in cell
 cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted.
 
 **Generated content as data (D-053, accepted 2026-10-09):**
-- #208: one derived-data cache, keyed by the inputs and the code.
-- #211: the island described in `assets/worlds/island.toml`.
+- #208: one derived-data cache, keyed by the inputs and the code ✅ (2026-10-09).
+- #211: the island described in `assets/worlds/island.toml` ✅ (2026-10-09).
 - #212: `forge-terrain` makes the island; the labs leave `city-blocks`.
 - #213: one `cache/` root.
 - #214, later: packages in `packages/<name>/`, unzipped.

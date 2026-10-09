@@ -13,6 +13,7 @@ pub mod hash;
 pub mod id;
 pub mod material;
 pub mod seed;
+pub mod switch;
 
 pub use id::Handle;
 pub use material::{

@@ -29,6 +29,30 @@ cargo run --release -p island -- --shot mouth
 `island` is `city-blocks --island 7` with the island's own window, shots and tour: every
 `city-blocks` command on this page runs the same with `island` in its place.
 
+**The island's world file (#211, D-053).** Every setting that decides what the island is lives
+in `assets/worlds/island.toml`:
+
+| Section | What it sets |
+|---|---|
+| `[island]` | the seed, size and spacing, the coast, ridges, plain, basins and rain (`IslandParams`) |
+| `[erosion]` | the erosion (`ErosionParams`) |
+| `[rivers]` | the rivers' ribbons (`RibbonParams`), with steps, deltas, bars and distributaries |
+| `[channels]` | the channels carved for them (`ChannelParams`) |
+| `[valleys]` | the valleys (`ValleyParams`) |
+| `[ground]` | how the ground is drawn: spacing, detail, smoothing, sea floor |
+| `[layers]` | the layer map's rules: sand, salt, beaches, scrub, valleys' ground, geology, rock sites |
+
+- **Editing.** Edit a value and run the island: the products the edit reaches are made again
+  and the others load (#208). A key left out takes the code's value. A key the description
+  doesn't have is an error that lists the keys it has.
+- **Switching off.** A setting that can be off is `false` when off (`steps = false` under
+  `[rivers]`).
+- **Flags.** They override the file for one run, and the log's "the island's world" line names
+  each. `--print-world` prints the world a run uses; `--world PATH` reads another file.
+
+The pages below quote flags such as `--no-steps` and `--island-plain` from before the file:
+they still work, as overrides.
+
 `genesis`: `--seed N`, `--spacing M` (16: 1025² samples; 4: the 4097² target), `--steps N`,
 `--k` (erodibility), `--diffusion`, `--channel-ha H` (the catchment from which a channel
 carries the hillslopes' material away; 0, the default, lets the diffusion raise every cell,

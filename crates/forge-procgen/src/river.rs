@@ -81,7 +81,8 @@ const CONFLUENCE_BAR_SEED: u64 = 0x434f_4e46_4241_5253;
 /// over 6.5 %, their pools half a width to four widths apart, closer as the slope steepens;
 /// Abrahams, Li & Atkinson (1995) a step's height over its spacing one to two times the slope
 /// (H/L/S), the pools' scour making up the difference (`docs/research/rivers.md` §4).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StepParams {
     /// The water surface's slope over which a reach runs in steps and pools, m/m; it runs on in
     /// them down to three quarters of it.
@@ -144,7 +145,8 @@ impl Default for StepParams {
 /// of its mouth its sediment builds a fan on the lake's floor ([`Delta`]), a shallow top just
 /// under the water that drops off at its front into the lake's depth (`docs/research/rivers.md`,
 /// its recommendation's step 7).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeltaParams {
     /// Over how many metres, plus how many of its widths, before the lake's edge the river's
     /// water eases flat to the lake's level and its channel widens.
@@ -261,7 +263,8 @@ impl Delta {
 /// or two side by side, stand a little over the water in its widened channel, and the water runs
 /// round them in two or three channels to the sea; the river widens by the bars' breadth there,
 /// so each channel keeps its share of the water.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BarParams {
     /// Metres of the river's width at its mouth per bar: a river this wide or more has one, twice
     /// as wide two.
@@ -307,7 +310,8 @@ impl Default for BarParams {
 /// mouths' shape against that bank, its head just past the corner. The river does not widen for
 /// it: its channel narrows there, as the flow does, and the scour hole
 /// ([`RibbonParams::confluence_scour`]) deepens beside it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfluenceBarParams {
     /// The narrowest river that lays one, metres, and its narrowest tributary, a share of its
     /// width.
@@ -346,7 +350,8 @@ impl Default for ConfluenceBarParams {
 /// the low ground beside the river. It takes a share of the river's water, so both are sized by
 /// their shares of the catchment, and its water starts at the river's level where it leaves it,
 /// fading in out of the river's as a tributary's fades into it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributaryParams {
     /// The narrowest river at its mouth, metres, before the estuary widens it, that has one.
     pub least: f64,
@@ -528,7 +533,8 @@ pub fn bar_spans(ribbon: &Ribbon) -> Vec<[f32; 4]> {
 }
 
 /// How the ribbons are made.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RibbonParams {
     /// Metres between a ribbon's points.
     pub step: f64,
@@ -573,30 +579,38 @@ pub struct RibbonParams {
     /// D-041's regional curves with their exaggeration `(k, k_d)`: a river `k · 2.7 (A/km²)^0.37`
     /// metres wide and `k_d · 0.3 (A/km²)^0.21` deep, the width growing downstream at nature's
     /// rate; `None` keeps [`hydrology::width`] and [`depth`].
+    #[serde(with = "forge_core::switch")]
     pub regional: Option<(f64, f64)>,
     /// The brooks (D-041's scale, #123): under `to` m² of catchment the regional curves'
     /// exaggeration eases down to nature's (`k = k_d = 1` at `from` m² and under), smoothly in
     /// the area's logarithm, so the few large rivers read as rivers and the many small ones as
     /// brooks; `None` exaggerates every river alike.
+    #[serde(with = "forge_core::switch")]
     pub brooks: Option<(f64, f64)>,
     /// How far along each edge the corners where a tributary meets its river are rounded
     /// ([`Corner`], #119): `a + b ×` the tributary's width, metres.
     pub confluence: (f64, f64),
     /// Steps and pools on the steep reaches (#122); `None` lets the water fall evenly.
+    #[serde(with = "forge_core::switch")]
     pub steps: Option<StepParams>,
     /// The deltas where rivers run into lakes (#120); `None` runs them in as they come.
+    #[serde(with = "forge_core::switch")]
     pub delta: Option<DeltaParams>,
     /// The bars in the large rivers' mouths at the sea (#127); `None` leaves them one channel.
+    #[serde(with = "forge_core::switch")]
     pub bars: Option<BarParams>,
     /// How much deeper a river runs below where a tributary joins it (#119's polish): the share
     /// of its depth added at the deepest, a width downstream, for a tributary as wide as it (less
     /// as the tributary is narrower), easing back over the next two widths; `None` leaves the
     /// bed as it was.
+    #[serde(with = "forge_core::switch")]
     pub confluence_scour: Option<f64>,
     /// The bar a confluence lays against the bank past its downstream corner (#119's polish);
     /// `None` lays none.
+    #[serde(with = "forge_core::switch")]
     pub confluence_bars: Option<ConfluenceBarParams>,
     /// The large rivers' distributaries to the sea (#127); `None` gives them none.
+    #[serde(with = "forge_core::switch")]
     pub distributaries: Option<DistributaryParams>,
 }
 

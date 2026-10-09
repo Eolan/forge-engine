@@ -188,7 +188,8 @@ pub fn paint_moisture(
 }
 
 /// How the scrub takes the steep ground (#118).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScrubRule {
     /// The slopes, rise over run, between which the ground may take scrub: from where it is rock
     /// ([`LayerRule::rock_slope`]) to where it stays bare.
@@ -363,7 +364,8 @@ fn horn(height: &Field2<f32>, x: u32, y: u32, reach: i32) -> (f32, f32) {
 }
 
 /// Where the island's rocks are (D-042, #129): a granite core under a limestone coast.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GeologyRule {
     /// Metres over the sea under which the ground is limestone, on average, and how far that
     /// wanders either way round the island.

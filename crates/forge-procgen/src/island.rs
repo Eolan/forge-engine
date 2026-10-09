@@ -33,7 +33,8 @@ pub const WIND_STEPS: [(i32, i32); 8] = [
 pub const RAIN_EVERY: u32 = 10;
 
 /// The prevailing wind, for the orographic rain.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Wind {
     /// Where it blows to: an index into [`WIND_STEPS`].
     pub towards: u8,
@@ -61,7 +62,8 @@ impl Wind {
 }
 
 /// What shapes the island.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IslandParams {
     /// Every random choice derives from it.
     pub seed: Seed,
@@ -103,6 +105,7 @@ pub struct IslandParams {
     /// The bowls' radius, metres.
     pub basin_lake_radius: f64,
     /// The prevailing wind; `None` rains the same everywhere.
+    #[serde(with = "forge_core::switch")]
     pub wind: Option<Wind>,
     /// After the erosion, the depressions smaller than this (m²) fill to their spill level
     /// and the larger ones stay as lakes (the lake rule, issue #97,

@@ -14,7 +14,8 @@ use crate::field::Field2;
 use crate::noise;
 
 /// How the beaches are split ([`paint_beaches`]).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BeachRule {
     /// Metres a cell of the coarse grid the fields are read on.
     pub cell: f64,
@@ -312,7 +313,8 @@ pub fn paint_beaches(
 /// How far the salt water keeps the grass off the land beside it ([`paint_salt`], #199): the
 /// spray and the floods of the sea and of the rivers' tidal reaches, where only sand and the
 /// plants that bear salt hold.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SaltRule {
     /// Metres from the salt water within which it reaches.
     pub reach: f64,

@@ -22,7 +22,8 @@ use crate::field::Field2;
 use crate::flow::{Drainage, Flow};
 
 /// The erosion's parameters.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ErosionParams {
     /// Erodibility, per step: how fast a channel of unit drainage area cuts down (the
     /// stream-power `K` with `Δt` folded in).

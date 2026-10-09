@@ -80,7 +80,8 @@ fn smooth_min(a: f64, b: f64, k: f64) -> f64 {
 }
 
 /// How the channels are carved.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChannelParams {
     /// Metres past the water's edge the carve and the smoothed ground reach.
     pub margin: f64,
@@ -118,6 +119,7 @@ pub struct ChannelParams {
     /// the lake's water out along ([`crate::LakeWater::arm`], #120): a sill the river's channel
     /// is cut through, its water then trimmed off the arm (`crate::trim_outlets`). `None` leaves
     /// the arm flooded.
+    #[serde(with = "forge_core::switch")]
     pub sill: Option<f64>,
 }
 

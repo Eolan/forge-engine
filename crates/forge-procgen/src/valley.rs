@@ -30,7 +30,8 @@ use crate::noise::fbm;
 use crate::river::{Ribbon, RibbonPoint, offset, segment_distance, smooth_height, smoothstep};
 
 /// How the valleys are carved.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValleyParams {
     /// The water's slopes, m/m, under which a reach has a floodplain and a bench.
     pub reaches: (f64, f64),
@@ -463,15 +464,24 @@ fn reach_slopes(points: &[RibbonPoint], run: f64) -> Vec<f64> {
 
 /// How the steeper rivers' valleys are painted (#118): their beds of gravel, scree at the foot of
 /// their walls, and scrub on the walls above it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValleyGround {
     /// The layer of the beds.
+    /// Not a setting: the layer ids are the caller's.
+    #[serde(skip)]
     pub gravel: u8,
     /// The layer at the walls' foot.
+    /// Not a setting: the layer ids are the caller's.
+    #[serde(skip)]
     pub scree: u8,
     /// The layer of the plants on the walls.
+    /// Not a setting: the layer ids are the caller's.
+    #[serde(skip)]
     pub scrub: u8,
     /// The layer the scrub takes: the bare rock.
+    /// Not a setting: the layer ids are the caller's.
+    #[serde(skip)]
     pub rock: u8,
     /// The water's slopes, m/m, over which a reach is painted, from none of it to all of it (the
     /// threshold wanders with noise in between).
