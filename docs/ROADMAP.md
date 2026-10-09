@@ -331,6 +331,13 @@ Opens with #93, large-world coordinates on the GPU ✅: the city and the belt me
 the origin (the tooling and the predicted numbers 2026-09-25; the record in cells built on the
 cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted.
 
+**Generated content as data (D-053, accepted 2026-10-09):**
+- #208: one derived-data cache, keyed by the inputs and the code.
+- #211: the island described in `assets/worlds/island.toml`.
+- #212: `forge-terrain` makes the island; the labs leave `city-blocks`.
+- #213: one `cache/` root.
+- #214, later: packages in `packages/<name>/`, unzipped.
+
 1. `forge-world`: reference frames (`f64`), integer sector grid, cube-sphere and flat-grid
    partitions, cell streaming with HLOD proxies, `u64` cell ids. Started 2026-09-26 on the
    cloud branch (D-037 ✅): the frame tree with sectors of 2⁴⁰ m, the cells record the GPU

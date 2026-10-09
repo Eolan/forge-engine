@@ -2936,7 +2936,7 @@ riggers' practice on twist bones and DQS (<https://polycount.com/discussion/comm
 
 ---
 
-## D-053 — Generated content as data: world files, an engine crate that makes them, one derived-data cache, packages later 🟡 (proposed 2026-10-09, the owner's question on #208)
+## D-053 — Generated content as data: world files, an engine crate that makes them, one derived-data cache, packages later ✅ (proposed and accepted 2026-10-09, the owner's question on #208)
 
 **The owner's question:** "maybe it's the occasion to make the engine a bit more data driven?
 why is island in city-blocks for example? [...] Maybe packages in a dedicated directory like
@@ -3008,3 +3008,7 @@ game engines do? but not zipped for now?"
 - Moving the island's glue touches most of `city-blocks/src/lib.rs`: a large diff with no
   visible change, checked by the island's captures staying identical.
 - A world file is one more format to keep compatible.
+
+**Decided (the owner, 2026-10-09):** "go with D-053, use TOML, file the issues". The steps:
+#208 (the cache), #211 (the world file), #212 (`forge-terrain`, the labs out of
+`city-blocks`), #213 (one `cache/` root), #214 (packages, milestone "Later").
