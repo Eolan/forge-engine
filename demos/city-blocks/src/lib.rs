@@ -5157,7 +5157,7 @@ fn sea_prop() -> PropSpec {
             key: "a flat sea at 0 m".to_owned(),
             samples: SAMPLES,
             spacing: 8192.0,
-            source: Arc::new(|| Arc::from(vec![0.0; (SAMPLES * SAMPLES) as usize])),
+            source: Arc::new(|| Arc::new(vec![0.0; (SAMPLES * SAMPLES) as usize])),
             detail: None,
             window: None,
         }),

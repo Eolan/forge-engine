@@ -1,25 +1,30 @@
 //! A disk cache of cooked meshes (issue #34). Cooking a 3 M-triangle prop's cluster DAG takes
 //! seconds; loading the result takes milliseconds. A [`MeshletMesh`] is stored as it lies in
-//! memory, under a key made from the text of its generator's parameters and
+//! memory, its pages packed, under a key made from the text of its generator's parameters and
 //! [`COOK_VERSION`], so a demo cooks each prop once per change of either.
 //!
-//! File format (`<name>-<key>.fmesh`, little-endian hosts): a header of
-//! `"FGMS"`, the format version, the key, the cook version, the element counts, the root
-//! pages, the triangle counts, the bounding sphere and the flags (1: the payloads carry UVs,
-//! D-047); then the meshlet records and the clusters per level as raw `Pod` bytes; then, from the next multiple of [`PAGE_ALIGN`],
-//! the pages (issue #36), so a page can be read on its own at
-//! `pages_offset + page * PAGE_SIZE`. A file that does not match (another key, version or
-//! size) is ignored and cooked again; a new file is written beside the old name and renamed
-//! into place.
+//! File format (`<name>-<key>.fmesh`, little-endian hosts):
+//! - A header: `"FGMS"`, the format version, the key, the cook version, the element counts, the
+//!   root pages, the triangle counts, the bounding sphere and the flags (1: the payloads carry
+//!   UVs, D-047).
+//! - The meshlet records and the clusters per level, as raw `Pod` bytes.
+//! - The page table: per page its packed length, and its codec in the top byte.
+//! - The pages (issue #36), each packed on its own (#215, `forge_core::pack`: LZ4, on its
+//!   16-byte records' planes when that is smaller, or as is), so a page can still be read alone.
+//!
+//! A file that does not match (another key, version or size) is ignored and cooked again. A new
+//! file is written beside the old name and renamed into place.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use bytemuck::Pod;
+use forge_core::pack::{Codec, pack, par_chunks_mut, unpack};
 
-use crate::meshlet::{CookOptions, GpuMeshlet, MeshletMesh, PageFile};
+use crate::meshlet::{CookOptions, GpuMeshlet, MeshletMesh, PackedPage, PageFile};
 use crate::page::PAGE_SIZE;
 use crate::procedural::TriMesh;
 
@@ -27,10 +32,8 @@ use crate::procedural::TriMesh;
 /// meshoptimizer changes the output, so every cached mesh is cooked again.
 pub const COOK_VERSION: u32 = 4;
 const MAGIC: [u8; 4] = *b"FGMS";
-const FORMAT_VERSION: u32 = 3;
-/// The pages start at a multiple of this in the file: a page read is then aligned for
-/// unbuffered I/O (sector and page sizes divide it).
-pub const PAGE_ALIGN: usize = 4096;
+/// 4: the pages packed (#215).
+const FORMAT_VERSION: u32 = 4;
 
 /// FNV-1a over `bytes` (stable across platforms and runs).
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -60,10 +63,36 @@ fn push_u64(out: &mut Vec<u8>, v: u64) {
 /// Bytes of the header, before the meshlet records.
 const HEADER_BYTES: usize = 72;
 
-/// Where the pages start in a file of `meshlets` records and `levels` levels.
-fn pages_offset(meshlets: u32, levels: u32) -> u64 {
-    (HEADER_BYTES + meshlets as usize * size_of::<GpuMeshlet>() + levels as usize * 4)
-        .next_multiple_of(PAGE_ALIGN) as u64
+/// Where the page table starts in a file of `meshlets` records and `levels` levels.
+fn table_offset(meshlets: u32, levels: u32) -> usize {
+    HEADER_BYTES + meshlets as usize * size_of::<GpuMeshlet>() + levels as usize * 4
+}
+
+/// A page's entry in the table: its packed length, and its codec in the top byte.
+fn table_entry(codec: Codec, len: usize) -> u32 {
+    len as u32 | (codec as u32) << 24
+}
+
+/// Each page's place in the file from the `table`'s entries, the pages starting at `start`;
+/// `None` if an entry is not one a page can have.
+fn page_table(table: &[u8], start: u64) -> Option<Vec<PackedPage>> {
+    let mut offset = start;
+    table
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|entry| {
+            let entry = u32::from_le_bytes(*entry);
+            let len = entry & 0x00ff_ffff;
+            let codec = Codec::from_byte((entry >> 24) as u8).ok()?;
+            if len as usize > PAGE_SIZE {
+                return None;
+            }
+            let page = PackedPage { offset, len, codec };
+            offset += u64::from(len);
+            Some(page)
+        })
+        .collect()
 }
 
 /// The file's bytes for `mesh` under `key` (its pages must be in memory).
@@ -92,8 +121,16 @@ fn encode(mesh: &MeshletMesh, key: u64) -> Vec<u8> {
     assert_eq!(out.len(), HEADER_BYTES);
     out.extend_from_slice(bytemuck::cast_slice(&mesh.meshlets));
     out.extend_from_slice(bytemuck::cast_slice(&mesh.clusters_per_level));
-    out.resize(out.len().next_multiple_of(PAGE_ALIGN), 0);
-    out.extend_from_slice(&mesh.pages);
+    let mut packed = vec![(Codec::Raw, Vec::new()); mesh.page_count as usize];
+    par_chunks_mut(&mut packed, 1, 4, |p, page| {
+        page[0] = pack(&mesh.pages[p * PAGE_SIZE..(p + 1) * PAGE_SIZE], true);
+    });
+    for (codec, bytes) in &packed {
+        push_u32(&mut out, table_entry(*codec, bytes.len()));
+    }
+    for (_, bytes) in &packed {
+        out.extend_from_slice(bytes);
+    }
     out
 }
 
@@ -132,9 +169,10 @@ impl Reader<'_> {
     }
 }
 
-/// The mesh whose header and records start `bytes` if they hold one under `key`, without
-/// its pages (`page_file` unset), and the file size it needs; else `None`.
-fn decode_hierarchy(bytes: &[u8], key: u64) -> Option<(MeshletMesh, u64)> {
+/// The mesh whose header, records and page table start `bytes` if they hold one under `key`,
+/// without its pages (`page_file` unset), with where each page lies and the file size it
+/// needs; else `None`.
+fn decode_hierarchy(bytes: &[u8], key: u64) -> Option<(MeshletMesh, Vec<PackedPage>, u64)> {
     let mut r = Reader { bytes };
     if r.take(4)? != MAGIC || r.u32()? != FORMAT_VERSION || r.u64()? != key {
         return None;
@@ -148,7 +186,6 @@ fn decode_hierarchy(bytes: &[u8], key: u64) -> Option<(MeshletMesh, u64)> {
     let center = [r.f32()?, r.f32()?, r.f32()?];
     let radius = r.f32()?;
     let uvs = r.u32()? & 1 != 0;
-    let offset = pages_offset(meshlets, levels);
     let mesh = MeshletMesh {
         meshlets: r.array::<GpuMeshlet>(meshlets)?,
         clusters_per_level: r.array::<u32>(levels)?,
@@ -162,20 +199,31 @@ fn decode_hierarchy(bytes: &[u8], key: u64) -> Option<(MeshletMesh, u64)> {
         radius,
         uvs,
     };
-    Some((mesh, offset + u64::from(pages) * PAGE_SIZE as u64))
+    let start = (table_offset(meshlets, levels) + pages as usize * 4) as u64;
+    let table = page_table(r.take(pages as usize * 4)?, start)?;
+    let size = table.last().map_or(start, |p| p.offset + u64::from(p.len));
+    Some((mesh, table, size))
 }
 
 /// The mesh in `bytes` if they hold one under `key`, pages included, else `None`.
 fn decode(bytes: &[u8], key: u64) -> Option<MeshletMesh> {
-    let (mut mesh, size) = decode_hierarchy(bytes, key)?;
+    let (mut mesh, table, size) = decode_hierarchy(bytes, key)?;
     if bytes.len() as u64 != size {
         return None;
     }
-    let offset = pages_offset(
-        mesh.meshlets.len() as u32,
-        mesh.clusters_per_level.len() as u32,
-    );
-    mesh.pages = bytes[offset as usize..].to_vec();
+    let mut pages = vec![0; table.len() * PAGE_SIZE];
+    let failed = AtomicBool::new(false);
+    par_chunks_mut(&mut pages, PAGE_SIZE, 8, |p, out| {
+        let page = table[p];
+        let packed = &bytes[page.offset as usize..][..page.len as usize];
+        if unpack(page.codec, packed, out).is_err() {
+            failed.store(true, Ordering::Relaxed);
+        }
+    });
+    if failed.into_inner() {
+        return None;
+    }
+    mesh.pages = pages;
     Some(mesh)
 }
 
@@ -204,21 +252,21 @@ pub fn load_hierarchy(path: &Path, key: u64) -> Option<MeshletMesh> {
     let len = file.metadata().ok()?.len();
     let mut head = vec![0; HEADER_BYTES];
     file.read_exact(&mut head).ok()?;
-    let meshlets = u32::from_le_bytes(head[20..24].try_into().ok()?);
-    let levels = u32::from_le_bytes(head[24..28].try_into().ok()?);
-    let records = pages_offset(meshlets, levels) as usize;
+    let count = |at: usize| Some(u32::from_le_bytes(head[at..at + 4].try_into().ok()?));
+    let (meshlets, levels, pages) = (count(20)?, count(24)?, count(28)?);
+    let records = table_offset(meshlets, levels) + pages as usize * 4;
     if (len as usize) < records {
         return None;
     }
     head.resize(records, 0);
     file.read_exact(&mut head[HEADER_BYTES..]).ok()?;
-    let (mut mesh, size) = decode_hierarchy(&head, key)?;
+    let (mut mesh, table, size) = decode_hierarchy(&head, key)?;
     if len != size {
         return None;
     }
     mesh.page_file = Some(PageFile {
         path: path.to_path_buf(),
-        offset: records as u64,
+        pages: table,
     });
     Some(mesh)
 }
@@ -299,14 +347,11 @@ pub fn cook_cached(
     let ms = start.elapsed().as_secs_f64() * 1e3;
     let stored = save(&file, &mesh, key).map(|()| remove_stale(dir, name, key));
     if stored.is_ok() && !pages_in_memory {
-        mesh.pages = Vec::new();
-        mesh.page_file = Some(PageFile {
-            path: file,
-            offset: pages_offset(
-                mesh.meshlets.len() as u32,
-                mesh.clusters_per_level.len() as u32,
-            ),
-        });
+        // Where the packed pages lie, as the next start reads it.
+        if let Some(streamed) = load_hierarchy(&file, key) {
+            mesh.pages = Vec::new();
+            mesh.page_file = streamed.page_file;
+        }
     }
     (
         Cooked {
@@ -339,10 +384,8 @@ mod tests {
         );
         assert_eq!(back.pages, mesh.pages);
         assert_eq!(back.root_pages, mesh.root_pages);
-        // The pages sit at an aligned offset, one after the other, at the end of the file.
-        let offset = bytes.len() - mesh.pages.len();
-        assert_eq!(offset % PAGE_ALIGN, 0);
-        assert_eq!(&bytes[offset..offset + PAGE_SIZE], &mesh.pages[..PAGE_SIZE]);
+        // The pages are packed: the file is smaller than they are.
+        assert!(bytes.len() < mesh.pages.len(), "{} bytes", bytes.len());
         assert_eq!(back.clusters_per_level, mesh.clusters_per_level);
         assert_eq!(back.triangle_count, mesh.triangle_count);
         assert_eq!(back.dag_triangle_count, mesh.dag_triangle_count);
@@ -373,14 +416,16 @@ mod tests {
             bytemuck::cast_slice::<_, u8>(&streamed.meshlets),
             bytemuck::cast_slice::<_, u8>(&mesh.meshlets)
         );
+        // Each page unpacks on its own from where the table says it lies.
         let pages = streamed.page_file.expect("a page file");
         let bytes = fs::read(&pages.path).expect("read");
-        let last = mesh.page_count as usize - 1;
-        let at = pages.offset as usize + last * PAGE_SIZE;
-        assert_eq!(
-            &bytes[at..at + PAGE_SIZE],
-            &mesh.pages[last * PAGE_SIZE..(last + 1) * PAGE_SIZE]
-        );
+        assert_eq!(pages.pages.len(), mesh.page_count as usize);
+        for (p, page) in pages.pages.iter().enumerate() {
+            let mut out = vec![0; PAGE_SIZE];
+            let packed = &bytes[page.offset as usize..][..page.len as usize];
+            unpack(page.codec, packed, &mut out).expect("unpacks");
+            assert_eq!(out, mesh.pages[p * PAGE_SIZE..(p + 1) * PAGE_SIZE]);
+        }
         assert!(load_hierarchy(&file, 6).is_none(), "another key");
         let _ = fs::remove_dir_all(&dir);
     }

@@ -950,12 +950,11 @@ impl MeshletSceneBuilder {
             Some(file) if mesh.pages.is_empty() => {
                 let index = self.store.files.len() as u32;
                 self.store.files.push(file.path.clone());
-                self.store
-                    .sources
-                    .extend((0..u64::from(mesh.page_count)).map(|p| PageSource::File {
-                        file: index,
-                        offset: file.offset + p * PAGE_SIZE as u64,
-                    }));
+                self.store.sources.extend(
+                    file.pages
+                        .iter()
+                        .map(|&page| PageSource::File { file: index, page }),
+                );
             }
             _ => {
                 let at = self.store.memory.len();
@@ -1276,11 +1275,13 @@ impl MeshletSceneBuilder {
                 grouped.extend(members.iter().map(|&m| (m as usize, (error, *budget))));
             }
             let skinned: Vec<usize> = self.skins.iter().map(|s| s.mesh as usize).collect();
-            let cuts = self
-                .meshes
-                .iter()
-                .enumerate()
-                .map(|(m, mesh)| {
+            // Each mesh's cut on its own (its pages read and unpacked, #215), side by side.
+            let mut slots: Vec<Option<Result<raytrace::Cut>>> = std::iter::repeat_with(|| None)
+                .take(self.meshes.len())
+                .collect();
+            forge_core::pack::par_chunks_mut(&mut slots, 1, 4, |m, slot| {
+                let mesh = &self.meshes[m];
+                slot[0] = Some((|| {
                     let meshlets = clusters(mesh);
                     let uvs = mesh.uvs != 0;
                     let terrain = mesh.radius > 1000.0;
@@ -1300,7 +1301,11 @@ impl MeshletSceneBuilder {
                     }
                     cut.dynamic = skinned.contains(&m);
                     Ok(cut)
-                })
+                })());
+            });
+            let cuts = slots
+                .into_iter()
+                .map(|cut| cut.expect("every mesh is cut"))
                 .collect::<Result<Vec<_>>>()?;
             // A ground window's rays start as the terrain's (#197).
             let mut cuts = cuts;

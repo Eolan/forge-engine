@@ -58,6 +58,7 @@ in. CI checks the crate list.
 | [ꟻLIP](https://github.com/NVlabs/flip) | Pontus Ebelin (formerly Andersson), Jim Nilsson, Tomas Akenine-Möller, Magnus Oskarsson, Kalle Åström and Mark D. Fairchild (NVIDIA, Lund University, RIT) | LDR-ꟻLIP in `imgdiff`, ported from `FLIP.h` v1.7 with its notice kept (issue #75), and HDR-ꟻLIP (Pontus Andersson, Jim Nilsson, Peter Shirley and Tomas Akenine-Möller, Eurographics 2021) for the HDR captures (issue #126); its magma colour map is matplotlib's, by Nathaniel J. Smith and Stéfan van der Walt (CC0) | BSD-3-Clause |
 | [FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) | AMD | its RCAS (robust contrast-adaptive sharpening), ported to `tools/sharpness --rcas` to preview a sharpening pass on a capture (issue #159), then to TAA's sharpening pass, `sharpen_main` in `shaders/taa.slang` (D-045) | MIT |
 | [xxhash-rust](https://github.com/DoumanAsh/xxhash-rust), after [xxHash](https://github.com/Cyan4973/xxHash) | Douman; the XXH3 algorithm by Yann Collet | cache keys for shaders, cooked meshes and derived products (#208), and their checksums | BSL-1.0 |
+| [lz4_flex](https://github.com/pseitz/lz4_flex), after [LZ4](https://github.com/lz4/lz4) | Pascal Seitz, Arthur Silva and ticki; the LZ4 format by Yann Collet | the caches' packing (`forge_core::pack`, #215): the derived products' frames and each cooked mesh page | MIT |
 | [toml](https://github.com/toml-rs/toml) | Ed Page, Alex Crichton and the toml-rs contributors | the world files (`assets/worlds/`, D-053, issue #211) | MIT OR Apache-2.0 |
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Jorrit Rouwé and the Jolt contributors | rigid bodies (`forge-physics`, D-009, issue #136): v5.6.0's library sources vendored in `third_party/jolt` with its licence, built with `CROSS_PLATFORM_DETERMINISTIC` and double precision | MIT |
 | [JoltC](https://github.com/SecondHalfGames/JoltC) | Second Half Games (Lucien Greathouse and contributors) | the model for `forge-physics`' C layer: opaque shape handles, the layer set-up | MIT OR Apache-2.0 |
@@ -90,6 +91,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - the software rasteriser on 64-bit atomics;
   - 128 KiB cluster pages and their streaming.
 - **The DAG's build.** Arseny Kapoulkine, meshoptimizer's `clusterlod.h`.
+- **Packed caches** (`forge_core::pack`, #215).
+  - The float grids' coding follows lossless image coding: each sample predicted from its
+    left, upper and upper-left neighbours as `a + b − c`, lossless JPEG's predictor 4
+    (ITU-T T.81, 1992).
+  - The byte planes follow Blosc's shuffle filter (Francesc Alted).
 - **GPU-driven culling.**
   - Ulrich Haar, Sebastian Aaltonen, "GPU-Driven Rendering Pipelines", SIGGRAPH 2015: the
     two-pass occlusion against a depth pyramid.

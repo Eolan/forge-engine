@@ -19,72 +19,79 @@
 //! trusted. [`sweep_unused`] keeps the shader and mesh caches the same way.
 //!
 //! Products are written and read through [`Stored`]: a plain little-endian layout, field by
-//! field ([`crate::stored!`] writes the impl of a struct), with runs of numbers as one block.
+//! field ([`crate::stored!`] writes the impl of a struct), with runs of numbers as one block
+//! and grids of `f32` coded from their neighbours ([`Stored::put_grid`]). The file packs that
+//! payload in frames of a megabyte (`crate::pack`, #215: LZ4), unpacked in parallel on load.
 
 use std::fmt::Debug;
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::pack::{Codec, pack, par_chunks_mut, unpack};
+
 #[cfg(not(target_endian = "little"))]
 compile_error!("derived data is stored little-endian, as the CPU holds it");
 
-/// The container's layout; a product's own layout is part of its code digest.
-const FORMAT: u32 = 1;
+/// The container's layout; a product's own layout is part of its code digest. Format 2 (#215)
+/// packs the payload.
+const FORMAT: u32 = 2;
 const MAGIC: &[u8; 4] = b"FDD1";
 /// The file name's extension.
 const EXTENSION: &str = "fdd";
+/// The payload's bytes per packed frame: frames unpack on their own, in parallel.
+const FRAME: usize = 1 << 20;
 
-/// What a stored product is written into: the file, with a running checksum and length.
+/// What a stored product is written into: its payload, in memory until it is packed.
 pub struct Sink<'a> {
-    out: &'a mut dyn Write,
-    hasher: Xxh3,
-    written: u64,
+    out: &'a mut Vec<u8>,
 }
 
 impl Sink<'_> {
     /// Writes raw bytes.
     pub fn bytes(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.hasher.update(bytes);
-        self.written += bytes.len() as u64;
-        self.out.write_all(bytes)
+        self.out.extend_from_slice(bytes);
+        Ok(())
     }
 }
 
-/// What a stored product is read from: the file, with a running checksum and the bytes left.
+/// What a stored product is read from: its payload, unpacked, and the bytes left.
 pub struct Source<'a> {
-    input: &'a mut dyn Read,
-    hasher: Xxh3,
-    left: u64,
+    input: &'a [u8],
 }
 
-impl Source<'_> {
+impl<'a> Source<'a> {
     /// Fills `bytes`, or fails if the payload has fewer left.
     pub fn bytes(&mut self, bytes: &mut [u8]) -> io::Result<()> {
-        if (bytes.len() as u64) > self.left {
+        bytes.copy_from_slice(self.slice(bytes.len())?);
+        Ok(())
+    }
+
+    /// The next `len` bytes as they lie in the payload, or a failure if it has fewer left.
+    pub fn slice(&mut self, len: usize) -> io::Result<&'a [u8]> {
+        if len > self.input.len() {
             return Err(invalid("the stored product ends early"));
         }
-        self.input.read_exact(bytes)?;
-        self.hasher.update(bytes);
-        self.left -= bytes.len() as u64;
-        Ok(())
+        let (head, tail) = self.input.split_at(len);
+        self.input = tail;
+        Ok(head)
     }
 
     /// The payload's bytes not read yet.
     #[must_use]
     pub fn left(&self) -> u64 {
-        self.left
+        self.input.len() as u64
     }
 
     /// A count read back, checked against what is left: each item takes at least
     /// `min_item_bytes`, so a damaged count fails here instead of allocating without bound.
     pub fn count(&mut self, min_item_bytes: u64) -> io::Result<usize> {
         let count = u64::take(self)?;
-        if count.saturating_mul(min_item_bytes.max(1)) > self.left {
+        if count.saturating_mul(min_item_bytes.max(1)) > self.left() {
             return Err(invalid("a stored count larger than the payload"));
         }
         usize::try_from(count).map_err(|_| invalid("a stored count beyond this machine"))
@@ -109,11 +116,24 @@ pub trait Stored: Sized {
     fn take_all(count: usize, source: &mut Source<'_>) -> io::Result<Vec<Self>> {
         (0..count).map(|_| Self::take(source)).collect()
     }
+    /// Writes a run that is a grid `width` items wide, row by row. It is written as
+    /// [`Self::put_all`] writes it, except `f32`'s, which are coded from their neighbours
+    /// ([`crate::pack::encode_grid`]) so the packing finds room in them.
+    fn put_grid(items: &[Self], width: usize, sink: &mut Sink<'_>) -> io::Result<()> {
+        let _ = width;
+        Self::put_all(items, sink)
+    }
+    /// Reads a grid of `count` back, `width` items wide.
+    fn take_grid(count: usize, width: usize, source: &mut Source<'_>) -> io::Result<Vec<Self>> {
+        let _ = width;
+        Self::take_all(count, source)
+    }
 }
 
 macro_rules! stored_numbers {
-    ($($t:ty),*) => {$(
+    ($($t:ty $({ $($grid:tt)* })?),*) => {$(
         impl Stored for $t {
+            $($($grid)*)?
             fn put(&self, sink: &mut Sink<'_>) -> io::Result<()> {
                 sink.bytes(&self.to_le_bytes())
             }
@@ -137,7 +157,19 @@ macro_rules! stored_numbers {
     )*};
 }
 
-stored_numbers!(u8, u16, u32, u64, u128, i8, i16, i32, i64, f32, f64);
+stored_numbers!(u8, u16, u32, u64, u128, i8, i16, i32, i64, f64, f32 {
+    fn put_grid(items: &[Self], width: usize, sink: &mut Sink<'_>) -> io::Result<()> {
+        sink.bytes(&crate::pack::encode_grid(items, width))
+    }
+    fn take_grid(count: usize, width: usize, source: &mut Source<'_>) -> io::Result<Vec<Self>> {
+        if (count as u64).saturating_mul(4) > source.left() {
+            return Err(invalid("a stored grid larger than the payload"));
+        }
+        let mut items = vec![0.0; count];
+        crate::pack::decode_grid(source.slice(count * 4)?, width, &mut items)?;
+        Ok(items)
+    }
+});
 
 impl Stored for usize {
     fn put(&self, sink: &mut Sink<'_>) -> io::Result<()> {
@@ -441,17 +473,12 @@ impl DerivedCache {
 
     /// The stored entry: none if there is no file, an error if there is one it cannot trust.
     fn load<T: Stored>(&self, product: &str, key: Key, path: &Path) -> io::Result<Option<T>> {
-        let file = match File::open(path) {
-            Ok(file) => file,
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        let mut input = BufReader::with_capacity(1 << 20, file);
-        let mut header = Source {
-            input: &mut input,
-            hasher: Xxh3::new(),
-            left: u64::MAX,
-        };
+        let mut header = Source { input: &bytes };
         let mut magic = [0; 4];
         header.bytes(&mut magic)?;
         if &magic != MAGIC || u32::take(&mut header)? != FORMAT {
@@ -463,63 +490,82 @@ impl DerivedCache {
         {
             return Err(invalid("a derived entry of another product or key"));
         }
-        let length = u64::take(&mut header)?;
-        let mut payload = Source {
-            input: &mut input,
-            hasher: Xxh3::new(),
-            left: length,
+        let length = usize::take(&mut header)?;
+        // The frames, then the checksum of their bytes.
+        let Some((frames, trailer)) = header.input.split_last_chunk::<8>() else {
+            return Err(invalid("a derived entry without its checksum"));
         };
-        let value = T::take(&mut payload)?;
-        if payload.left != 0 {
-            return Err(invalid("a derived entry longer than its product"));
-        }
-        let checksum = payload.hasher.digest();
-        let mut trailer = [0; 8];
-        input.read_exact(&mut trailer)?;
-        if u64::from_le_bytes(trailer) != checksum {
+        let mut checksum = Xxh3::new();
+        checksum.update(frames);
+        if u64::from_le_bytes(*trailer) != checksum.digest() {
             return Err(invalid("a derived entry whose checksum fails"));
         }
-        let mut rest = [0; 1];
-        if input.read(&mut rest)? != 0 {
-            return Err(invalid("bytes after a derived entry's checksum"));
+        let mut input = Source { input: frames };
+        let packed = (0..length.div_ceil(FRAME))
+            .map(|_| {
+                let len = u32::take(&mut input)? as usize;
+                let codec = Codec::from_byte(u8::take(&mut input)?)?;
+                Ok((codec, input.slice(len)?))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        if input.left() != 0 {
+            return Err(invalid("bytes after a derived entry's frames"));
+        }
+        let mut payload = vec![0; length];
+        let failed = Mutex::new(None);
+        par_chunks_mut(&mut payload, FRAME, 1, |i, out| {
+            let (codec, packed) = packed[i];
+            if let Err(error) = unpack(codec, packed, out) {
+                *failed.lock().unwrap() = Some(error);
+            }
+        });
+        if let Some(error) = failed.into_inner().unwrap() {
+            return Err(error);
+        }
+        let mut source = Source { input: &payload };
+        let value = T::take(&mut source)?;
+        if source.left() != 0 {
+            return Err(invalid("a derived entry longer than its product"));
         }
         Ok(Some(value))
     }
 
     /// Writes `value` to a file of its own, renamed into place, then removes what nothing
-    /// can match any more and keeps the cache under its cap.
+    /// can match any more and keeps the cache under its cap. The file is a header, the payload
+    /// packed in frames of [`FRAME`] bytes, each its length, its codec and its bytes, and the
+    /// checksum of the frames.
     fn store<T: Stored>(&self, product: &str, key: Key, path: &Path, value: &T) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
+        let mut payload = Vec::new();
+        value.put(&mut Sink { out: &mut payload })?;
+        let mut packed = vec![(Codec::Raw, Vec::new()); payload.len().div_ceil(FRAME)];
+        par_chunks_mut(&mut packed, 1, 1, |i, frame| {
+            let end = ((i + 1) * FRAME).min(payload.len());
+            frame[0] = pack(&payload[i * FRAME..end], false);
+        });
+        let mut header = Vec::new();
+        let mut sink = Sink { out: &mut header };
+        sink.bytes(MAGIC)?;
+        FORMAT.put(&mut sink)?;
+        product.to_owned().put(&mut sink)?;
+        key.code.put(&mut sink)?;
+        key.inputs.put(&mut sink)?;
+        payload.len().put(&mut sink)?;
         let partial = path.with_extension(format!("{EXTENSION}.{}.part", std::process::id()));
         let written = (|| -> io::Result<()> {
             let mut out = BufWriter::with_capacity(1 << 20, File::create(&partial)?);
-            // The payload's length leads it: the product is written to a counter first, which
-            // costs one more pass over it but no copy in memory.
-            let mut counter = Counter(0);
-            value.put(&mut Sink {
-                out: &mut counter,
-                hasher: Xxh3::new(),
-                written: 0,
-            })?;
-            let mut header = Sink {
-                out: &mut out,
-                hasher: Xxh3::new(),
-                written: 0,
-            };
-            header.bytes(MAGIC)?;
-            FORMAT.put(&mut header)?;
-            product.to_owned().put(&mut header)?;
-            key.code.put(&mut header)?;
-            key.inputs.put(&mut header)?;
-            counter.0.put(&mut header)?;
-            let mut payload = Sink {
-                out: &mut out,
-                hasher: Xxh3::new(),
-                written: 0,
-            };
-            value.put(&mut payload)?;
-            let checksum = payload.hasher.digest();
-            out.write_all(&checksum.to_le_bytes())?;
+            out.write_all(&header)?;
+            let mut checksum = Xxh3::new();
+            for (codec, bytes) in &packed {
+                let mut frame = Vec::with_capacity(5);
+                (bytes.len() as u32).put(&mut Sink { out: &mut frame })?;
+                frame.push(*codec as u8);
+                for part in [&frame[..], bytes] {
+                    checksum.update(part);
+                    out.write_all(part)?;
+                }
+            }
+            out.write_all(&checksum.digest().to_le_bytes())?;
             // No sync: an entry cut short by a crash fails its checksum and is made again.
             out.flush()
         })();
@@ -730,19 +776,6 @@ pub fn sweep_once(dir: &Path, extensions: &[&str], unused_for: Duration) {
     }
 }
 
-/// A writer that only counts.
-struct Counter(u64);
-
-impl Write for Counter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0 += bytes.len() as u64;
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,6 +827,65 @@ mod tests {
         let second = cache.get_or_make("sample", key, || -> Sample { unreachable!("stored") });
         assert!(second.from_cache);
         assert_eq!(second.value, sample(7));
+        let _ = fs::remove_dir_all(cache.dir());
+    }
+
+    /// A smooth grid, as the island's heights are.
+    #[derive(Debug, PartialEq)]
+    struct Grid {
+        width: usize,
+        samples: Vec<f32>,
+    }
+
+    impl Stored for Grid {
+        fn put(&self, sink: &mut Sink<'_>) -> io::Result<()> {
+            self.width.put(sink)?;
+            self.samples.len().put(sink)?;
+            f32::put_grid(&self.samples, self.width, sink)
+        }
+        fn take(source: &mut Source<'_>) -> io::Result<Self> {
+            let width = usize::take(source)?;
+            let count = source.count(4)?;
+            Ok(Self {
+                width,
+                samples: f32::take_grid(count, width, source)?,
+            })
+        }
+    }
+
+    #[test]
+    fn a_grid_is_stored_packed_and_comes_back_to_the_bit() {
+        let cache = cache("grid");
+        let key = KeyHasher::new().number(5).key(1);
+        let width = 1500;
+        let grid = || Grid {
+            width,
+            samples: (0..width * width)
+                .map(|i| {
+                    let (x, y) = ((i % width) as f32 * 0.01, (i / width) as f32 * 0.013);
+                    300.0 * (x.sin() * y.cos()) + 0.1 * (x * 37.0).sin()
+                })
+                .collect(),
+        };
+        cache.get_or_make("grid", key, grid);
+        let loaded = cache.get_or_make("grid", key, || -> Grid { unreachable!("stored") });
+        assert!(loaded.from_cache);
+        let made = grid();
+        assert!(
+            loaded
+                .value
+                .samples
+                .iter()
+                .zip(&made.samples)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+        // Several megabytes of floats, more than one frame, stored in much less.
+        let stored = fs::metadata(cache.path("grid", key)).unwrap().len();
+        let raw = (made.samples.len() * 4) as u64;
+        assert!(
+            raw > 2 * FRAME as u64 && stored * 2 < raw,
+            "{stored} of {raw}"
+        );
         let _ = fs::remove_dir_all(cache.dir());
     }
 

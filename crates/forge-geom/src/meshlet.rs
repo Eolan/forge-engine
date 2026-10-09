@@ -229,14 +229,25 @@ impl MeshletMesh {
     }
 }
 
-/// Where a mesh's pages lie in a file: page `p` is the [`PAGE_SIZE`] bytes at
-/// `offset + p × PAGE_SIZE` of `path`.
+/// Where a mesh's pages lie in a file, each packed on its own (#215).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageFile {
     /// The file (a mesh cache file, `crate::cache`).
     pub path: std::path::PathBuf,
-    /// Where page 0 starts.
+    /// Each page's place in it.
+    pub pages: Vec<PackedPage>,
+}
+
+/// A page in a file: its packed bytes, which unpack to [`PAGE_SIZE`]
+/// (`forge_core::pack::unpack`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PackedPage {
+    /// Where its bytes start.
     pub offset: u64,
+    /// How many there are.
+    pub len: u32,
+    /// How they are packed.
+    pub codec: forge_core::pack::Codec,
 }
 
 /// The cooking vertices, the triangle list and each vertex's section. A vertex whose

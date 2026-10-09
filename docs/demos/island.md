@@ -2403,7 +2403,7 @@ tiles). The ground drawn at 2 m, 8 193² samples:
 - **The rocks** stand on the drawn samples, and so does the rubble on the scree; the rocks'
   choice follows the finer ground's slopes, so they are placed anew.
 - **The cost:** 143 M triangles in 3.3 M clusters, cooked in 45 s on the first start (278 s of
-  work), 4.2 GB of pages on disk beside the 8 m tiles' (`island@x-z-2m`), 4 s at each start for
+  work), 4.2 GB of pages on disk beside the 8 m tiles' (`island@x-z-2m`; 2.65 GB packed since #215), 4 s at each start for
   the drawn ground, 0.3 GB more geometry on the GPU (1.8 GB in all with the 512 MiB pool). The
   frame is within 0.05 ms of the 8 m tiles' on PROFILE.md's six views at 1440p (the cluster cull
   0.02–0.04 ms more, the probes' rays up to 0.03): the cluster DAG keeps what is drawn to what

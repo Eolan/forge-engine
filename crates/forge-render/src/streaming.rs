@@ -29,15 +29,17 @@
 //! draws instead of refining over the first second, and a fixed view streams nothing: its
 //! frames depend on no read's timing.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use crate::cells::CellPos;
-use forge_geom::{GpuMeshlet, PAGE_NONE, PAGE_SIZE};
+use forge_core::pack::{Codec, par_chunks_mut, unpack};
+use forge_geom::{GpuMeshlet, PAGE_NONE, PAGE_SIZE, PackedPage};
 use forge_gpu::{
     Buffer, BufferDesc, Device, FRAMES_IN_FLIGHT, GraphBuffer, MemoryCategory, MemoryLocation,
     Result, vk,
@@ -141,8 +143,8 @@ fn page_depths(parents: &[Vec<u32>]) -> Vec<u32> {
 pub(crate) enum PageSource {
     /// At this byte offset of [`PageStore::memory`].
     Memory(usize),
-    /// At `offset` of file `file` of [`PageStore::files`].
-    File { file: u32, offset: u64 },
+    /// Packed in file `file` of [`PageStore::files`] (#215).
+    File { file: u32, page: PackedPage },
 }
 
 /// Every page of a scene and where to read it.
@@ -157,37 +159,57 @@ pub(crate) struct PageStore {
 }
 
 impl PageStore {
-    /// Reads page `page` into `out` (`PAGE_SIZE` bytes); `open` keeps the files open between
-    /// calls.
-    fn read(&self, page: u32, open: &mut HashMap<u32, File>, out: &mut [u8]) -> io::Result<()> {
+    /// Page `page`'s bytes as they are stored, and how they are packed; `open` keeps the files
+    /// open between calls.
+    fn read_packed(
+        &self,
+        page: u32,
+        open: &mut HashMap<u32, File>,
+    ) -> io::Result<(Codec, Cow<'_, [u8]>)> {
         match self.sources[page as usize] {
             PageSource::Memory(at) => {
-                out.copy_from_slice(&self.memory[at..at + PAGE_SIZE]);
-                Ok(())
+                Ok((Codec::Raw, Cow::Borrowed(&self.memory[at..at + PAGE_SIZE])))
             }
-            PageSource::File { file, offset } => {
+            PageSource::File { file, page } => {
                 let handle = match open.entry(file) {
                     std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                     std::collections::hash_map::Entry::Vacant(e) => {
                         e.insert(File::open(&self.files[file as usize])?)
                     }
                 };
-                handle.seek(SeekFrom::Start(offset))?;
-                handle.read_exact(out)
+                handle.seek(SeekFrom::Start(page.offset))?;
+                let mut packed = vec![0; page.len as usize];
+                handle.read_exact(&mut packed)?;
+                Ok((page.codec, Cow::Owned(packed)))
             }
         }
     }
 
-    /// The bytes of `pages`, one after the other.
+    /// Reads page `page` into `out` (`PAGE_SIZE` bytes); `open` keeps the files open between
+    /// calls.
+    fn read(&self, page: u32, open: &mut HashMap<u32, File>, out: &mut [u8]) -> io::Result<()> {
+        let (codec, packed) = self.read_packed(page, open)?;
+        unpack(codec, &packed, out)
+    }
+
+    /// The bytes of `pages`, one after the other: read in order, unpacked in parallel (#215).
     pub fn read_pages(&self, pages: impl Iterator<Item = u32>) -> io::Result<Vec<u8>> {
         let mut open = HashMap::new();
-        let mut bytes = Vec::new();
-        for page in pages {
-            let at = bytes.len();
-            bytes.resize(at + PAGE_SIZE, 0);
-            self.read(page, &mut open, &mut bytes[at..])?;
+        let packed = pages
+            .map(|page| self.read_packed(page, &mut open))
+            .collect::<io::Result<Vec<_>>>()?;
+        let mut bytes = vec![0; packed.len() * PAGE_SIZE];
+        let failed = Mutex::new(None);
+        par_chunks_mut(&mut bytes, PAGE_SIZE, 8, |i, out| {
+            let (codec, page) = &packed[i];
+            if let Err(error) = unpack(*codec, page, out) {
+                *failed.lock().unwrap() = Some(error);
+            }
+        });
+        match failed.into_inner().unwrap() {
+            Some(error) => Err(error),
+            None => Ok(bytes),
         }
-        Ok(bytes)
     }
 }
 

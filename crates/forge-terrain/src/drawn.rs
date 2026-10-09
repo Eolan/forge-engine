@@ -1,9 +1,11 @@
 //! The island's ground as its tiles draw it (#106): the field drawn finer on its cubic, the
 //! rivers' channels carved in it, and away from the water the amplification's detail.
 
+use std::io;
 use std::sync::Arc;
 use std::time::Instant;
 
+use forge_core::derived::{Sink, Source, Stored};
 use forge_geom::city::HeightfieldDetail;
 use forge_procgen::Field2;
 use forge_task::TaskPool;
@@ -21,7 +23,7 @@ pub struct DrawnGround {
     /// Metres between them.
     pub spacing: f64,
     /// The samples, row by row.
-    pub heights: Arc<[f32]>,
+    pub heights: Arc<Vec<f32>>,
     /// The cells drawn finer and their heights.
     pub detail: Arc<HeightfieldDetail>,
 }
@@ -163,12 +165,27 @@ pub fn island_drawn() -> Arc<DrawnGround> {
     drawn
 }
 
-forge_core::stored!(DrawnGround {
-    size,
-    spacing,
-    heights,
-    detail
-});
+/// The heights as a grid, coded from their neighbours (#215).
+impl Stored for DrawnGround {
+    fn put(&self, sink: &mut Sink<'_>) -> io::Result<()> {
+        self.size.put(sink)?;
+        self.spacing.put(sink)?;
+        self.heights.len().put(sink)?;
+        f32::put_grid(&self.heights, self.size as usize, sink)?;
+        self.detail.put(sink)
+    }
+    fn take(source: &mut Source<'_>) -> io::Result<Self> {
+        let size = u32::take(source)?;
+        let spacing = f64::take(source)?;
+        let count = source.count(4)?;
+        Ok(Self {
+            size,
+            spacing,
+            heights: Arc::new(f32::take_grid(count, size as usize, source)?),
+            detail: Arc::<HeightfieldDetail>::take(source)?,
+        })
+    }
+}
 
 /// [`island_drawn`], made.
 fn make_island_drawn(height: Field2<f32>, factor: u32) -> DrawnGround {
@@ -184,7 +201,7 @@ fn make_island_drawn(height: Field2<f32>, factor: u32) -> DrawnGround {
         DrawnGround {
             size,
             spacing,
-            heights: Arc::from(height.data),
+            heights: Arc::new(height.data),
             detail: Arc::new(HeightfieldDetail {
                 split: channels.params().split,
                 cells: channels.refined().to_vec(),
@@ -266,7 +283,7 @@ fn make_island_drawn(height: Field2<f32>, factor: u32) -> DrawnGround {
         DrawnGround {
             size: ground.size,
             spacing: ground.spacing,
-            heights: Arc::from(ground.data),
+            heights: Arc::new(ground.data),
             detail: Arc::new(HeightfieldDetail {
                 split: fine.split,
                 cells: fine.cells,

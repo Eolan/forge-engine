@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 glam = { workspace = true }
 libm = { workspace = true }
+lz4_flex = { workspace = true }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 tracing = { workspace = true }

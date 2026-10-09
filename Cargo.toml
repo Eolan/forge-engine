@@ -50,6 +50,7 @@ num_cpus = "1.16"
 glam = "0.33"
 libm = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 
 # Data
 serde = { version = "1", features = ["derive"] }

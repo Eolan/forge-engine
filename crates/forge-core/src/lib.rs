@@ -12,6 +12,7 @@ pub mod dmath;
 pub mod hash;
 pub mod id;
 pub mod material;
+pub mod pack;
 pub mod seed;
 pub mod switch;
 

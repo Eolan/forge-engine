@@ -1101,13 +1101,15 @@ Reading the table:
 **The cache.**
 - **Location:** `cache/meshes/<name>-<key>.fmesh` (`mesh-cache/` before #213), git-ignored, 749 MB for the set.
 - **Key:** a hash of the prop's parameters, its cook options and `COOK_VERSION`.
-- **Contents:** a small header, then the cooked arrays as they lie in memory.
+- **Contents:** a small header, then the cooked arrays as they lie in memory. Since #215 the
+  pages are packed one by one (LZ4, on their 16-byte records' planes when that is smaller),
+  behind a table of their lengths and codecs.
 - **Writing:** into a temporary file, renamed into place. A new cook removes that prop's
   files under older keys.
 - **Mismatches:** a file whose key, version or size does not match is cooked again.
 
 Since #36 the cache holds cluster pages: the header and the cluster records, then the
-pages from a 4 KiB boundary, read one at a time by the streamer. It is still the demo's
+pages (from a 4 KiB boundary until #215 packed them), read one at a time by the streamer. It is still the demo's
 cache, not the engine's asset format: D-018's container and compressed vertices come later.
 
 **GPU:**

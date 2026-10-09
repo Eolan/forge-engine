@@ -145,6 +145,28 @@ impl Field2<f32> {
     }
 }
 
+/// Derived data (#208): the samples as a grid, so `f32` fields are coded from their neighbours
+/// (#215).
+impl<T: forge_core::derived::Stored> forge_core::derived::Stored for Field2<T> {
+    fn put(&self, sink: &mut forge_core::derived::Sink<'_>) -> std::io::Result<()> {
+        self.size.put(sink)?;
+        self.spacing.put(sink)?;
+        self.data.len().put(sink)?;
+        T::put_grid(&self.data, self.size as usize, sink)
+    }
+    fn take(source: &mut forge_core::derived::Source<'_>) -> std::io::Result<Self> {
+        let size = u32::take(source)?;
+        let spacing = f64::take(source)?;
+        let count = source.count(1)?;
+        let data = T::take_grid(count, size as usize, source)?;
+        Ok(Self {
+            size,
+            spacing,
+            data,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +191,3 @@ mod tests {
         assert_eq!(Field2::<f32>::new(0, 1.0).digest(), 0xcbf2_9ce4_8422_2325);
     }
 }
-
-forge_core::stored!([T: forge_core::derived::Stored] Field2<T> { size, spacing, data });

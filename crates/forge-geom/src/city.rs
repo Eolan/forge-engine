@@ -79,7 +79,7 @@ pub struct Heightfield {
     pub spacing: f32,
     /// The samples, row-major, `samples × samples` of them, as [`Terrain::heights`] lays them
     /// out.
-    pub source: Arc<dyn Fn() -> Arc<[f32]> + Send + Sync>,
+    pub source: Arc<dyn Fn() -> Arc<Vec<f32>> + Send + Sync>,
     /// The cells drawn finer, from the samples (the island's river channels, #105), or none:
     /// every cell two triangles. Part of the field, so `key` names its parameters too.
     pub detail: Option<Arc<DetailSource>>,
@@ -1203,6 +1203,27 @@ pub fn city_props() -> Vec<PropSpec> {
     props
 }
 
+// Derived data (#208): the island's drawn ground keeps its detail between starts, the heights
+// coded as a grid a cell's row wide (#215).
+impl forge_core::derived::Stored for HeightfieldDetail {
+    fn put(&self, sink: &mut forge_core::derived::Sink<'_>) -> std::io::Result<()> {
+        self.split.put(sink)?;
+        self.cells.put(sink)?;
+        self.heights.len().put(sink)?;
+        f32::put_grid(&self.heights, self.split as usize + 1, sink)
+    }
+    fn take(source: &mut forge_core::derived::Source<'_>) -> std::io::Result<Self> {
+        let split = u32::take(source)?;
+        let cells = Vec::take(source)?;
+        let count = source.count(4)?;
+        Ok(Self {
+            split,
+            cells,
+            heights: f32::take_grid(count, split as usize + 1, source)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1576,10 +1597,3 @@ mod tests {
         assert_eq!(names.len(), 20);
     }
 }
-
-// Derived data (#208): the island's drawn ground keeps its detail between starts.
-forge_core::stored!(HeightfieldDetail {
-    split,
-    cells,
-    heights
-});

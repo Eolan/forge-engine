@@ -709,7 +709,8 @@ are now kept on disk by `forge_core::derived`:
 Loading the stored products takes 4 ms for the heights, 52 ms for the water, 5 ms for the
 layers and 113 ms for the drawn ground (299 MB), with the files in the OS's cache. Making
 them took 7.2 s (6.4 of them the eroded field), 3.2 s, 3.1 s and 9.2 s. They take 0.44 GB on
-disk, raw. Compression and the 4.3 GB of 2 m tiles are #215.
+disk raw; since #215 they are packed (D-054): 113 MB, the drawn ground loaded in 95 ms, and a cold
+start reads a quarter of the bytes. The 2 m tiles are D-055's.
 
 ## Ice blocks (2026-09-25, issue #63)
 

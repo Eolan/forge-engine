@@ -84,6 +84,7 @@ const PRODUCTS: &[(&str, &[&str], bool, &[&str])] = &[
 /// Files in every list: the cache's own encoding and the deterministic foundations.
 const ALWAYS: &[&str] = &[
     "crates/forge-core/src/derived.rs",
+    "crates/forge-core/src/pack.rs",
     "crates/forge-core/src/seed.rs",
     "crates/forge-core/src/hash.rs",
     "crates/forge-core/src/dmath.rs",

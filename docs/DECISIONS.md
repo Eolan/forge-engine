@@ -3028,3 +3028,134 @@ into `forge-app`) is a decision for when another demo than the lab needs it.
   for a chunk at run time instead of loading it.
 
 ROADMAP's Phase 9 holds the rest for later.
+
+## D-054 — The caches packed with LZ4 ✅ (the owner's choice on #215, 2026-10-09)
+
+**The owner's question:** "What do games use for efficient compressions?" The answer was posted
+on #215:
+- Games compress in two layers: a codec that knows the data, then a general compressor.
+- Oodle is the industry's (closed), zstd the open one closest to it. LZ4 is the fastest to
+  decompress.
+- Floats, meshes and textures get their own codecs in front of the compressor.
+
+**Decided (the owner):** "since it's more important to have shorter loading times and better
+runtime performances I would go for lz4_flex instead, reading is more important than writing
+(except for saving the game state but we are not there yet)". So the compressor is
+`lz4_flex` (pure Rust, MIT), over zstd, which was already on the machine.
+
+**Built (#215's step 1):** `forge_core::pack`.
+- **The world's products** (`forge_core::derived`, format 2):
+  - The payload is packed in frames of 1 MiB, unpacked in parallel. The checksum covers the
+    packed bytes.
+  - `f32` grids (`Stored::put_grid`: the heights, the drawn ground, the detail cells) are
+    coded losslessly first:
+    - each sample's bits are ordered as the numbers;
+    - each sample is predicted from its left, upper and upper-left neighbours (`a + b − c`);
+    - the zigzagged differences go on four byte planes, in bands that decode on their own.
+- **The cooked meshes** (`forge_geom::cache`, format 4): each 128 KiB page is packed on its
+  own, as LZ4, as LZ4 over its 16-byte records' planes, or as is, whichever is smallest. A
+  table gives each page's length and codec, so the streamer still reads one page alone.
+- **Lossless:** every product and page comes back to the bit, and every capture is unchanged.
+
+| On disk | Before | Packed |
+|---|---|---|
+| The island's products (heights, water, layers, drawn ground, stones) | 455 MB | 113 MB (25 %) |
+| — the drawn ground (8193² heights and the detail cells) | 314 MB | 100 MB |
+| — the water | 103 MB | 6.3 MB |
+| The island's 2 m tiles (64) | 4.61 GB | 2.65 GB (57 %) |
+| The island's 8 m tiles (64) | 583 MB | 358 MB (61 %) |
+| The other props (138: the city, the rocks, the lab's) | 1.24 GB | 723 MB (59 %) |
+| The glTF models (45) | 44 MB | 30 MB (68 %) |
+
+| Island start (`island --frames 5`, medians of 5, alternated with the build before) | Before | Packed |
+|---|---|---|
+| Warm: prepared | 597 ms | 599 ms |
+| Warm: total | 2 577 ms | 2 522 ms |
+| Warm: the drawn ground loaded | 115 ms | 95 ms |
+| Warm: the rays' cuts (`blas_ms`) | 321 ms | 277 ms |
+| Cold: the products read from the NVMe drive, no OS cache | 118–160 ms | 31–36 ms |
+
+- **The warm start stays as fast.** Three changes keep it there, where the first version
+  was 80 ms slower:
+  - The drawn ground's heights move into an `Arc<Vec<f32>>` instead of being copied (268 MB).
+  - Small batches of pages unpack on the caller's thread: a thread costs more to start than a
+    page to unpack.
+  - The rays' cuts read their meshes' pages side by side.
+- **The products step** (prepared) is within its noise. The sand window's cook beside it
+  (`SandWindow::cooked_mesh`, not cached) shares the CPU with the decoding.
+- **A cold start** reads a quarter of the products' bytes. A drive slower than this NVMe
+  (3–4 GB/s) gains more.
+
+**Left (#215's next steps):**
+- No 2 m mesh of the whole island: D-055.
+- Content-addressed chunks with the packages (#214).
+- A tighter compressor for shipped packages, if a download's size ever matters more than its
+  load. The frames and pages carry their codec, so another can join without a new format.
+
+## D-055 — The island's fine ground without a 2 m mesh of the whole island 🟡 (proposed 2026-10-09, #215's step 2)
+
+**Today:**
+- The ground is drawn from its 2 m field (8193² samples, #106). It's cooked into 64 tiles of
+  cluster DAGs (`island@x-z-2m`).
+- Every tile is cooked whole and kept: 4.6 GB of pages raw, 2.65 GB packed since #215 (D-054).
+  That is more than half the cache, for a 16 km island.
+- The 8 m tiles (`island@x-z`) are kept too. Only the start view's pages, and the pages the
+  camera then needs, are read: the streamer already reads little of it.
+- The disk cost grows with the area: a world four times the island's would need over 10 GB of 2 m tiles.
+
+**How engines draw large ground:**
+- **From the height field, on the GPU.** This is most engines' terrain.
+  - Geometry clipmaps (Losasso and Hoppe, SIGGRAPH 2004) and CDLOD (Strugar, 2009): nested
+    grids around the camera, displaced by the heights in the shader.
+  - Unreal's landscape and Far Cry 5's terrain (GDC 2018) work the same way: a quadtree of
+    patches over a height map.
+  - Disk holds only the heights (16-bit in Unreal), and the mesh is never stored.
+- **Cooked meshes of the ground, streamed near the camera.** Unreal's Nanite landscape
+  (5.3 and later) makes Nanite meshes from the landscape and keeps them in the derived-data
+  cache. Far tiles keep their coarse levels.
+
+**Options for Forge:**
+1. **Cook the 2 m tiles on demand, near the camera.**
+   - The 8 m tiles stay everywhere. A 2 m tile is cooked on the job system when the camera
+     comes within a ring of tiles (3×3 or 5×5), into a cache capped by recent use.
+   - It is the same path as today: meshlets, rays, shadows and the start view's cut.
+   - A tile is about 4 s of cooking work, a third of a second on all cores, and 2 km wide: walking takes
+     minutes to cross one, and a flight at 300 m/s seven seconds.
+   - Against: a tile cooking as the camera arrives costs CPU at run time. Until it is ready,
+     the 8 m tile is drawn, a visible step that must blend (the owner sees LOD pops).
+2. **Draw the near ground from the height field** (a clipmap or CDLOD).
+   - Disk holds only the heights: 71 MB packed for the 2 m field.
+   - Against: a second geometry path beside the meshlets. The culling, the visibility buffer,
+     the rays' BLAS, the shadows and the probes would each need it too. The river channels'
+     cells drawn at a metre (#105) don't fit a regular grid. Weeks of work, and two ways to
+     draw the ground.
+3. **Keep the cooked tiles, but store only their coarse levels for far tiles.**
+   - Against: any tile is near the camera at some point, so this comes back to cooking on
+     demand (option 1) with a smaller first cook.
+4. **Store the clusters' vertices smaller** (D-025's "compressed vertices", left for later).
+   - Positions quantised to a grid the whole mesh shares (as Nanite does, so neighbouring
+     clusters stay crack-free) fit in 6 bytes relative to their cluster instead of 12; a ground
+     tile's lie on a regular grid in x and z, which needs fewer still.
+   - Pages would hold about twice the triangles: the disk, the streamed bandwidth and the GPU
+     pool would all halve, for every mesh, not only the ground.
+   - Against: the shaders decode the vertices (a few ALU), and the cooking and the page
+     format change. Positions move by under a millimetre, so the captures change a little and
+     are passed by their ꟻLIP numbers.
+
+**Proposed:** option 4 first, then option 1 when a world larger than the island needs it.
+- Option 4 halves everything, every mesh, on the one path, and helps the frame as well as the
+  disk.
+- Option 1 bounds the disk for any size of world, but trades it for run-time cooking and a
+  blend to make invisible. It is worth it with the packages (#214) and larger worlds (D-053's
+  "Larger worlds").
+- Option 2 is not proposed: a second terrain path costs more than the disk it saves while one
+  path suffices.
+
+**For:**
+- One way to draw the ground.
+- The gain reaches every mesh, the city's included.
+- No run-time cooking yet.
+
+**Against:**
+- The 2 m tiles stay cooked whole until option 1: about 1.3 GB after option 4 and
+  #215's packing.

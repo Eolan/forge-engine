@@ -17,7 +17,7 @@ pub mod stone;
 pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag};
 pub use meshlet::{
     CookOptions, DagStats, GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES,
-    MeshletMesh, PageFile,
+    MeshletMesh, PackedPage, PageFile,
 };
 pub use page::{PAGE_NONE, PAGE_SIZE, PagedVertex};
 pub use procedural::TriMesh;

@@ -98,6 +98,10 @@ runs it:
   `cache/` costs one cold start. A tree's first start after #213 moves its `shader-cache/`,
   `mesh-cache/` and `mesh-cache/derived/` there (a rename each). An old directory whose new
   one already exists is left in place, the log says so, and it can be removed by hand.
+- **Packed** (#215, D-054): the world's products and the cooked meshes' pages are stored
+  compressed (`forge_core::pack`: LZ4, lossless): the products take a quarter of their old size,
+  the meshes under 60 %. A format change makes every entry again at the next start, as a code
+  change does: about 95 s for the island.
 - **Accepted sets** replace the "before" batch. A passing run becomes HEAD's accepted set,
   `captures/accepted/<sha>/`: the base set's images with the run's on top, and
   `manifest.txt` (the commit, the tier, the build, the driver, each image's SHA-256 and the

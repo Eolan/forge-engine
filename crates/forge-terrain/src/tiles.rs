@@ -50,7 +50,7 @@ pub fn island_tiles() -> Vec<PropSpec> {
         drawn_key(world()).digest(),
         code_digests::CODE_TILES
     );
-    let source: Arc<dyn Fn() -> Arc<[f32]> + Send + Sync> =
+    let source: Arc<dyn Fn() -> Arc<Vec<f32>> + Send + Sync> =
         Arc::new(|| island_drawn().heights.clone());
     // The rivers' channels, carved into cells drawn in quads of a metre (#105).
     let detail: Arc<forge_geom::city::DetailSource> =
