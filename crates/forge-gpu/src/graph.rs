@@ -2248,7 +2248,9 @@ impl RenderGraph {
                 stats.memory_barriers += memory.len() as u32;
                 stats.queue_passes[batch.queue.index()] += 1;
                 commands.set_pass(pass.decl.label);
+                self.device.begin_label(cb, pass.decl.label);
                 (pass.run)(&resources, &commands)?;
+                self.device.end_label(cb);
                 if !plan.poison.is_empty() {
                     commands.barriers(plan.poison_barrier.as_slice(), &[]);
                     for &handle in &plan.poison {

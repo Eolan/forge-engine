@@ -450,7 +450,7 @@ impl Device {
             .mesh_shader
             .then(|| ext::mesh_shader::Device::new(raw_instance, &raw));
         let debug_utils = instance
-            .validation_enabled()
+            .debug_labels_enabled()
             .then(|| ext::debug_utils::Device::new(raw_instance, &raw));
         let push_descriptor_loader = best
             .features
@@ -1003,6 +1003,27 @@ impl Device {
     /// Frees a storage-image slot. No in-flight frame may still read it.
     pub fn release_storage_image(&self, id: StorageImageId) {
         self.with_bindless(|b| b.release_storage(id));
+    }
+
+    /// Opens a label named `name` in `cb` (`vkCmdBeginDebugUtilsLabelEXT`): the render graph
+    /// labels each pass, which crash dumps and captures show (#28). A no-op without debug labels
+    /// ([`crate::Instance::debug_labels_enabled`]).
+    pub fn begin_label(&self, cb: vk::CommandBuffer, name: &str) {
+        if let Some(debug) = &self.debug_utils
+            && let Ok(name) = std::ffi::CString::new(name)
+        {
+            let label = vk::DebugUtilsLabelEXT::default().label_name(&name);
+            // SAFETY: `cb` is recording and belongs to this device.
+            unsafe { debug.cmd_begin_debug_utils_label(cb, &label) };
+        }
+    }
+
+    /// Closes the label [`Self::begin_label`] opened last in `cb`.
+    pub fn end_label(&self, cb: vk::CommandBuffer) {
+        if let Some(debug) = &self.debug_utils {
+            // SAFETY: `cb` is recording, with a label open.
+            unsafe { debug.cmd_end_debug_utils_label(cb) };
+        }
     }
 
     /// Names an object for validation messages and RenderDoc (no-op without validation).

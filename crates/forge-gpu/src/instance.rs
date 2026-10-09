@@ -16,6 +16,8 @@ pub struct Instance {
     surface_loader: khr::surface::Instance,
     debug: Option<(ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
     validation: bool,
+    /// `VK_EXT_debug_utils` is enabled: with validation, or `FORGE_DEBUG_LABELS=1` (#28).
+    labels: bool,
     /// `VK_EXT_swapchain_colorspace` is enabled: surfaces can list HDR formats (issue #94).
     swapchain_colorspace: bool,
     /// Last, so it is dropped after the entry: the Vulkan API came from its interposer.
@@ -140,7 +142,11 @@ impl Instance {
                 extensions.push(ext::swapchain_colorspace::NAME.as_ptr());
             }
         }
-        if validation {
+        // Debug labels without the validation layer (`FORGE_DEBUG_LABELS=1`, #28): each render
+        // graph pass labelled in the command buffer, for AMD's Radeon GPU Detective, RenderDoc
+        // and Nsight.
+        let labels = validation || std::env::var_os("FORGE_DEBUG_LABELS").is_some_and(|v| v != "0");
+        if labels {
             extensions.push(ext::debug_utils::NAME.as_ptr());
         }
         let layer_names = if validation {
@@ -213,6 +219,7 @@ impl Instance {
             surface_loader,
             debug,
             validation,
+            labels,
             swapchain_colorspace,
             #[cfg(all(feature = "dlss", windows))]
             streamline: None,
@@ -237,6 +244,12 @@ impl Instance {
     /// Whether validation is active (debug names are only set when it is).
     pub fn validation_enabled(&self) -> bool {
         self.validation
+    }
+
+    /// Whether `VK_EXT_debug_utils` is enabled: objects are named and the render graph's passes
+    /// labelled (with validation, or `FORGE_DEBUG_LABELS=1`).
+    pub fn debug_labels_enabled(&self) -> bool {
+        self.labels
     }
 
     /// Whether surfaces can offer HDR colour spaces (`VK_EXT_swapchain_colorspace`).
