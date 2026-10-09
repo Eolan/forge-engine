@@ -3010,8 +3010,9 @@ game engines do? but not zipped for now?"
 - A world file is one more format to keep compatible.
 
 **Decided (the owner, 2026-10-09):** "go with D-053, use TOML, file the issues". The steps:
-#208 (the cache), #211 (the world file), #212 (`forge-terrain`, the labs out of
-`city-blocks`), #213 (one `cache/` root), #214 (packages, milestone "Later").
+#208 (the cache), #211 (the world file), #212 (`forge-terrain`; the labs out of
+`city-blocks` split off to #216, the owner, 2026-10-09: they need a scene interface in the
+shared app first), #213 (one `cache/` root), #214 (packages, milestone "Later").
 
 **Larger worlds (the owner, 2026-10-09):**
 - **Generation** may keep whole products, made complete through the cache: a world, a
