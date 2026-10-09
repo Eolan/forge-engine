@@ -31,8 +31,9 @@
 "demos/city-blocks/src/island_demo.rs" = ["island"]
 # The physics lab (#136): its demo and scenes, the physics under them, Jolt's sources.
 "demos/physics-lab/**" = ["lab"]
-"demos/city-blocks/src/lab.rs" = ["lab"]
-"demos/city-blocks/src/lab/**" = ["lab"]
+# The walking player and the materials' rows (#216): the lab's and the island's walker's.
+"demos/city-blocks/src/character.rs" = ["island", "lab"]
+"demos/city-blocks/src/traction.rs" = ["island", "lab"]
 "crates/forge-geom/src/model.rs" = ["lab"]
 "crates/forge-geom/src/fracture.rs" = ["lab"]
 "assets/models/**" = ["lab"]

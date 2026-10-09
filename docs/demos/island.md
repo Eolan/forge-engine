@@ -3285,7 +3285,7 @@ the ground's row by the geometric mean.
 - grass where the contour draws grass over the sand's texels.
 
 **The rows** are in the materials table next to the lab's patches
-(`lab/materials.rs`, `ISLAND_ROWS`, one per `island_layer`). The beach's dry sand is the
+(`city-blocks`' `traction.rs` since #216, `ISLAND_ROWS`, one per `island_layer`). The beach's dry sand is the
 table's sand row. Friction is each material's against itself. The last two columns are the
 pair's μ with the sole and the time to reach a 3 m/s walk from rest:
 

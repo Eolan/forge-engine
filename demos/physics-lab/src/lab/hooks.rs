@@ -13,8 +13,8 @@ use glam::Vec3;
 use winit::keyboard::KeyCode;
 
 use super::{ArmPose, Lab, LabScene, models, room, tank, yard};
-use crate::scenario::{Backdrop, LiquidSetup, Look, PoolView, Running, Scenario, Water};
-use crate::{Args, Cooked};
+use city_blocks::scenario::{Backdrop, LiquidSetup, Look, PoolView, Running, Scenario, Water};
+use city_blocks::{Args, Cooked};
 
 /// `--lab space`'s sun: from the ship's right and a little behind it and above, so the chase
 /// camera sees its lit side and the planet's day side with its terminator far to the left.
@@ -657,7 +657,7 @@ impl Running for LabRunning {
             }
             // The playground's player (#139): a command when the walk changes.
             if lab.has_player() {
-                let walk = crate::wished_walk(args, camera.yaw, input);
+                let walk = city_blocks::wished_walk(args, camera.yaw, input);
                 if walk != self.walking {
                     self.walking = walk;
                     lab.walk(walk);

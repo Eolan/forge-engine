@@ -35,8 +35,10 @@ const FOOT_APART: f64 = 0.1;
 
 /// A footfall (#197): where a foot came down, the scene's (x, z), and the way it pointed.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Footfall {
+pub struct Footfall {
+    /// Where it came down, the scene's (x, z).
     pub at: DVec2,
+    /// The way it pointed (unit, x and z).
     pub heading: Vec2,
 }
 
@@ -73,8 +75,10 @@ pub(crate) struct Walker {
 /// A walker's stride (#197; the lab's materials scene's too, #205): the metres walked since the
 /// last footfall, and whether the next is the left foot's.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Stride {
+pub struct Stride {
+    /// Metres walked since the last footfall.
     pub walked: f64,
+    /// Whether the next is the left foot's.
     pub left: bool,
 }
 
@@ -91,7 +95,7 @@ impl Stride {
     /// Its feet's way on firm ground over a tick of `dt` seconds, from `from` to `to`: a
     /// footfall every stride, left and right of its way in turn, the stride longer the faster it
     /// goes (0.9 m walking, 1.4 m running).
-    pub(crate) fn step(&mut self, from: DVec3, to: DVec3, dt: f64) -> Option<Footfall> {
+    pub fn step(&mut self, from: DVec3, to: DVec3, dt: f64) -> Option<Footfall> {
         let way = DVec2::new(to.x - from.x, to.z - from.z);
         let along = way.length();
         if along < 1e-6 {

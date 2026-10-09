@@ -19,3 +19,16 @@ nrd = ["city-blocks/nrd"]
 [dependencies]
 anyhow = { workspace = true }
 city-blocks = { workspace = true }
+clap = { workspace = true }
+forge-anim = { workspace = true }
+forge-app = { workspace = true }
+forge-core = { workspace = true }
+forge-geom = { workspace = true }
+forge-physics = { workspace = true }
+forge-procgen = { workspace = true }
+forge-render = { workspace = true }
+forge-sim = { workspace = true }
+forge-task = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+winit = { workspace = true }

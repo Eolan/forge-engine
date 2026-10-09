@@ -33,8 +33,8 @@ use forge_sim::{
 use forge_task::TaskPool;
 use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 
-use super::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
-use crate::scenario::PoolView;
+use city_blocks::scenario::PoolView;
+use city_blocks::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
 mod bonds;
 mod bridge;
@@ -55,7 +55,7 @@ pub(crate) mod room;
 mod sea;
 mod ship;
 mod slime;
-pub(crate) use crate::SLIME_FLAVOURS;
+pub(crate) use city_blocks::SLIME_FLAVOURS;
 mod space;
 pub(crate) mod tank;
 mod tug;
@@ -646,9 +646,9 @@ impl LabWorld {
         // The shapes, each with its origin where its mesh has its own: the barrel's and the
         // ball's at their bottom, the rocks' hulls from their meshes' vertices.
         let block_shape = Shape::cuboid(Vec3::splat(BLOCK_HALF), 0.03, 2300.0)?;
-        let half_length = super::BARREL_LENGTH * 0.5;
+        let half_length = city_blocks::BARREL_LENGTH * 0.5;
         let up = |h: f32| Vec3::new(0.0, h, 0.0);
-        let barrel_shape = Shape::cylinder(half_length, super::BARREL_RADIUS, 0.03, 300.0)?
+        let barrel_shape = Shape::cylinder(half_length, city_blocks::BARREL_RADIUS, 0.03, 300.0)?
             .offset(up(half_length), Quat::IDENTITY)?;
         let ball_shape =
             Shape::sphere(BALL_RADIUS, 500.0)?.offset(up(BALL_RADIUS), Quat::IDENTITY)?;
@@ -862,7 +862,13 @@ impl LabWorld {
                     })?);
                 }
                 afloat(
-                    Hull::cylinder(super::BARREL_RADIUS, super::BARREL_LENGTH, 0.0, 16, 3),
+                    Hull::cylinder(
+                        city_blocks::BARREL_RADIUS,
+                        city_blocks::BARREL_LENGTH,
+                        0.0,
+                        16,
+                        3,
+                    ),
                     &barrels,
                     &mut hulls,
                 );
@@ -1047,7 +1053,13 @@ impl LabWorld {
                         BARREL,
                         &barrel_shape,
                         FLOOD_BARRELS,
-                        Hull::cylinder(super::BARREL_RADIUS, super::BARREL_LENGTH, 0.0, 16, 3),
+                        Hull::cylinder(
+                            city_blocks::BARREL_RADIUS,
+                            city_blocks::BARREL_LENGTH,
+                            0.0,
+                            16,
+                            3,
+                        ),
                         Some(60.0),
                     ),
                     (
@@ -1436,7 +1448,7 @@ impl Simulation for LabWorld {
                     self.started = self.tick;
                     self.feet.clear();
                     if let Some(yard) = &mut self.materials {
-                        yard.stride = crate::island_walk::Stride::default();
+                        yard.stride = city_blocks::island_walk::Stride::default();
                     }
                     if !self.beds.is_empty() {
                         self.beds = if self.materials.is_some() {
@@ -1739,7 +1751,7 @@ impl Simulation for LabWorld {
         if let Some(yard) = &mut self.materials {
             let (walked, after) = rest.split_at(8);
             let (left, after) = after.split_at(1);
-            yard.stride = crate::island_walk::Stride {
+            yard.stride = city_blocks::island_walk::Stride {
                 walked: f64::from_bits(u64::from_le_bytes(walked.try_into().expect("8 bytes"))),
                 left: left[0] != 0,
             };
@@ -2941,8 +2953,8 @@ impl Drop for Lab {
         tracing::info!(
             ticks = ticks.len(),
             mean = format!("{mean:.3}"),
-            p99 = format!("{:.3}", super::percentile(&mut ticks, 0.99)),
-            max = format!("{:.3}", super::percentile(&mut ticks, 1.0)),
+            p99 = format!("{:.3}", city_blocks::percentile(&mut ticks, 0.99)),
+            max = format!("{:.3}", city_blocks::percentile(&mut ticks, 1.0)),
             digest = format!("{digest:#018x}"),
             awake = self.awake,
             "physics ticks (ms) over the run"

@@ -1,7 +1,7 @@
 //! The slimes in `physics-lab --lab creatures` (#179, #180): the tropical island's slime (its
 //! `meshgen::slime`, the owner's pick), a squat drop of mint jelly with a darker nucleus floating
 //! inside and two tall glossy eyes, as Jolt soft bodies hopping before the dogs, one in each of
-//! the island's four flavours (mint, blue, pink, yellow; [`crate::SLIME_FLAVOURS`]).
+//! the island's four flavours (mint, blue, pink, yellow; [`city_blocks::SLIME_FLAVOURS`]).
 //!
 //! - **The body:** 258 points (an octahedron cut three times into four, then shaped into the
 //!   drop: its underside flattened, its sides bulging), held by their edges, their bends and the
@@ -443,7 +443,7 @@ fn under(points: &[Vec3], faces: &[[u32; 3]], d: Vec3) -> Vec<(u32, f32)> {
     unreachable!("every direction meets the closed drop")
 }
 
-/// Adds the four slimes to `world`, in the order of [`crate::SLIME_FLAVOURS`], facing +z (the camera).
+/// Adds the four slimes to `world`, in the order of [`city_blocks::SLIME_FLAVOURS`], facing +z (the camera).
 pub(super) fn build(world: &mut World) -> Result<Vec<Slime>> {
     let s = surface();
     STARTS
@@ -814,7 +814,7 @@ mod tests {
             .add_body(&BodyDesc::fixed(&floor, DVec3::new(0.0, -0.5, 0.0)))
             .unwrap();
         let mut slimes = build(&mut world).unwrap();
-        assert_eq!(slimes.len(), crate::SLIME_FLAVOURS.len());
+        assert_eq!(slimes.len(), city_blocks::SLIME_FLAVOURS.len());
         let mut points = Vec::new();
         let span = |points: &[Vec3]| {
             points

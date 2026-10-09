@@ -336,7 +336,7 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
 - #211: the island described in `assets/worlds/island.toml` ✅ (2026-10-09).
 - #212: `forge-terrain` makes the island ✅ (2026-10-09).
 - #216: the labs leave `city-blocks` for `physics-lab`, through a scene interface of the shared
-  app.
+  app ✅ (2026-10-09).
 - #213: one `cache/` root ✅ (2026-10-09).
 - #214, later: packages in `packages/<name>/`, unzipped.
 

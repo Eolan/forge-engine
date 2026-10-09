@@ -5,8 +5,9 @@
 //! (issue #35): a street grid of buildings, lamp posts and plazas, and rocks over the hills
 //! around it. Their cluster pages stream from the cache files through a GPU pool as the LOD
 //! cut asks for them (issue #36); `--fly` flies a loop at 300 m/s through TAA (issue #13).
-//! `--gallery` shows the twenty props side by side instead; `--lab SCENE` one of `physics-lab`'s
-//! scenes (issue #136, Space throws a ball, Enter starts it over).
+//! `--gallery` shows the twenty props side by side instead, `--island SEED` the island (`island`).
+//! It is also the shared app other demos run their own scenes in ([`scenario`], [`run`]):
+//! `physics-lab`'s (issue #136, #216).
 //!
 //! Controls: WASD/QE move, Shift fast, right mouse look, L cluster LOD, K LOD colours, M
 //! cluster colours, O occlusion, R software rasteriser, H show what it drew, [ / ] LOD
@@ -59,9 +60,8 @@ use winit::keyboard::KeyCode;
 mod afloat;
 pub mod character;
 mod island_demo;
-mod island_sand;
-mod island_walk;
-mod lab;
+pub mod island_sand;
+pub mod island_walk;
 pub mod scenario;
 pub mod traction;
 mod world;
@@ -308,9 +308,6 @@ pub struct Args {
     /// Show the twenty props side by side instead of the city.
     #[arg(long)]
     gallery: bool,
-    /// The physics lab's scene and its flags (`physics-lab`, #136).
-    #[command(flatten)]
-    lab: lab::LabArgs,
     /// With `--lab walk` or `--walker`, the player's walk from the first frame, `X,Z` in m/s
     /// along the ground, in place of the keys (#139, #196).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
@@ -346,7 +343,7 @@ pub struct Args {
     /// Advance the flight by 1/60 s a frame instead of the frame's time (reproducible
     /// captures; with `--vsync` at 60 Hz, still 300 m/s).
     #[arg(long)]
-    fixed_step: bool,
+    pub fixed_step: bool,
     /// With `--fixed-step`, the rate the day, the exposure and the water advance at, steps a
     /// second (60): a high rate reproduces what a fast frame rate does in a scripted run.
     #[arg(long, default_value_t = 60.0)]
@@ -358,7 +355,7 @@ pub struct Args {
     /// Draw without the sun's ray-traced shadows (J toggles them; devices without ray queries
     /// have none).
     #[arg(long)]
-    no_shadows: bool,
+    pub no_shadows: bool,
     /// Light the shaded sides with space's constant fill instead of the sky's irradiance (I
     /// toggles it).
     #[arg(long)]
@@ -588,7 +585,7 @@ pub struct Args {
 impl Args {
     /// Whether the island draws its water: its sea, rivers and lakes (unless `--no-water`;
     /// `--water`, the old opt-in, asks for the default).
-    fn water(&self) -> bool {
+    pub fn water(&self) -> bool {
         self.legacy_water || !self.no_water
     }
 }
@@ -2726,7 +2723,7 @@ impl Drop for Gallery {
 
 /// The walk the keys ask of a player (#139) or the island's walker (#196): WASD along the view
 /// turned `yaw`, Shift to run; or `--walk`. M/s along the ground, world x and z.
-fn wished_walk(args: &Args, yaw: f32, input: &Input) -> [f32; 2] {
+pub fn wished_walk(args: &Args, yaw: f32, input: &Input) -> [f32; 2] {
     if let Some(w) = &args.walk {
         return [w[0], w.get(1).copied().unwrap_or(0.0)];
     }
@@ -2804,7 +2801,7 @@ fn settled_level(tank: &LiquidTank, volume: f32) -> f32 {
 }
 
 /// The `q` quantile of `values` (sorted in place; 0 when empty).
-fn percentile(values: &mut [f64], q: f64) -> f64 {
+pub fn percentile(values: &mut [f64], q: f64) -> f64 {
     values.sort_by(f64::total_cmp);
     values
         .get(((values.len().max(1) - 1) as f64 * q).round() as usize)
@@ -2882,9 +2879,10 @@ pub const SLIME_FLAVOURS: [(&str, [f32; 3]); 4] = [
 
 /// The city's materials (issue #20): what each prop is made of, from textures generated at
 /// start-up (512 × 512, tileable, with their mips).
-struct CityMaterials {
+pub struct CityMaterials {
     table: MaterialTable,
-    textures: TextureSet,
+    /// The textures the rows sample (a model's own add to them, D-047).
+    pub textures: TextureSet,
     /// Row per prop name.
     by_prop: HashMap<&'static str, MaterialId>,
     /// The albedo and normal maps: rock, concrete, brick, grass.
@@ -2916,7 +2914,8 @@ fn textured(
 }
 
 impl CityMaterials {
-    fn new(device: &Arc<forge_gpu::Device>) -> Result<Self> {
+    /// The table: every prop's rows and the textures they sample, made on `device`.
+    pub fn new(device: &Arc<forge_gpu::Device>) -> Result<Self> {
         let start = Instant::now();
         let mut textures = TextureSet::new(device);
         // Generated in parallel: each set is a few hundred thousand noise lookups per map.
@@ -3933,7 +3932,7 @@ impl CityMaterials {
 
     /// The row `prop` is made of (the default grey for a prop the table does not know). A part
     /// of a prop, `name@part` (the island's tiles), is made of the prop's.
-    fn of(&self, prop: &str) -> MaterialId {
+    pub fn of(&self, prop: &str) -> MaterialId {
         let prop = prop.split_once('@').map_or(prop, |(whole, _)| whole);
         self.by_prop
             .get(prop)
@@ -3944,7 +3943,7 @@ impl CityMaterials {
     /// Gives every mesh its prop's row and hands the table and the textures to the scene.
     /// Adds `rows` one after the other, the first for `prop`: a mesh with sections draws
     /// section `s` with the row `s` after its own (a model's materials, #138).
-    fn add_rows(&mut self, prop: &'static str, rows: Vec<(String, RenderLayer)>) {
+    pub fn add_rows(&mut self, prop: &'static str, rows: Vec<(String, RenderLayer)>) {
         let mut first = None;
         for (name, layer) in rows {
             let id = self.table.add(Material::new(&name, layer));
@@ -3955,7 +3954,9 @@ impl CityMaterials {
         }
     }
 
-    fn apply(self, builder: &mut MeshletSceneBuilder, props: &[PropSpec], ids: &[MeshId]) {
+    /// The table and its textures into `builder`, and each prop's row: the mesh `ids[k]` of
+    /// `props[k]` drawn with its name's.
+    pub fn apply(self, builder: &mut MeshletSceneBuilder, props: &[PropSpec], ids: &[MeshId]) {
         for (spec, &id) in props.iter().zip(ids) {
             builder.set_mesh_material(id, self.of(&spec.name));
         }
@@ -5110,7 +5111,7 @@ fn island_stone_props(normals: f32) -> Vec<PropSpec> {
 
 /// A metal drum, 0.6 m across and 0.88 m long with two rolling hoops: the movers of `--movers`
 /// (#79). Its axis is the lathe's, +y from its bottom's centre.
-fn barrel_prop() -> PropSpec {
+pub fn barrel_prop() -> PropSpec {
     let r = BARREL_RADIUS;
     PropSpec {
         name: "barrel".to_owned(),
@@ -5139,8 +5140,9 @@ fn barrel_prop() -> PropSpec {
 }
 
 /// The barrel's radius and length, metres.
-const BARREL_RADIUS: f32 = 0.3;
-const BARREL_LENGTH: f32 = 0.88;
+pub const BARREL_RADIUS: f32 = 0.3;
+/// The barrel's length, metres.
+pub const BARREL_LENGTH: f32 = 0.88;
 /// The air near the water, a share of the sea's wind at 10 m: the spray drifts in it.
 const SPRAY_WIND: f32 = 0.15;
 
@@ -5739,7 +5741,7 @@ fn wants_dlaa(args: &Args) -> bool {
 
 /// The `city-blocks` binary: the city, `--gallery` or `--island SEED`.
 pub fn main_city() -> Result<()> {
-    run(Args::parse(), "forge city-blocks")
+    run(Args::parse(), "forge city-blocks", None)
 }
 
 /// The `island` binary (#96's step 3): the same demo with the island of `--island` (the world
@@ -5759,23 +5761,12 @@ pub fn main_island() -> Result<()> {
                 .value(),
         );
     }
-    run(args, "forge island")
+    run(args, "forge island", None)
 }
 
-/// The `physics-lab` binary (#136): the same demo with one of the lab's scenes (`--lab`, `drop`
-/// unless given).
-pub fn main_lab() -> Result<()> {
-    let matches = Args::command()
-        .name("physics-lab")
-        .about("The physics lab: rigid bodies through Jolt, one test scene at a time")
-        .get_matches();
-    let mut args = Args::from_arg_matches(&matches)?;
-    args.lab.scene.get_or_insert(lab::LabScene::Drop);
-    run(args, "forge physics-lab")
-}
-
-/// Runs the demo over `args`, its window titled `title`.
-fn run(args: Args, title: &'static str) -> Result<()> {
+/// Runs the shared app over `args`, its window titled `title`: the city, the gallery or the
+/// island, or `scenario`, a demo's own scene (`physics-lab`'s, #216).
+pub fn run(args: Args, title: &'static str, scenario: Option<Box<dyn Scenario>>) -> Result<()> {
     // The island's world (#211, D-053): its file, then the flags over it.
     let path = world::path(&args);
     let mut described = world::IslandWorld::load(&path)?;
@@ -5788,11 +5779,6 @@ fn run(args: Args, title: &'static str) -> Result<()> {
     TEXTURES
         .set(args.textures)
         .expect("the textures' mode, set once");
-    // The physics lab's scene (`--lab`, #136, #216).
-    let scenario: Option<Box<dyn Scenario>> = args
-        .lab
-        .scene
-        .map(|kind| Box::new(lab::LabScenario::new(kind, args.lab.clone())) as Box<dyn Scenario>);
     let config = AppConfig {
         title: title.into(),
         vsync: args.vsync,
@@ -5845,7 +5831,7 @@ fn log_rays(scene: &MeshletScene) {
 
 /// The scene's origin (`--origin`, issue #93): the same distance along every axis, split into
 /// an integer cell and an offset from an `f64`, so the split is exact.
-fn scene_origin(args: &Args) -> forge_render::CellPos {
+pub fn scene_origin(args: &Args) -> forge_render::CellPos {
     forge_render::CellPos::from_f64(glam::DVec3::splat(f64::from(args.origin)))
 }
 

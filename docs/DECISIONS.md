@@ -3014,6 +3014,11 @@ game engines do? but not zipped for now?"
 `city-blocks` split off to #216, the owner, 2026-10-09: they need a scene interface in the
 shared app first), #213 (one `cache/` root), #214 (packages, milestone "Later").
 
+**Done (2026-10-09):** #208, #211, #212, #213 and #216. The labs run in the shared app through
+its scene interface (`city_blocks::scenario`, #216); the shared app itself stays in
+`city-blocks`, where it was, beside the city and the island: moving it to a crate of its own (or
+into `forge-app`) is a decision for when another demo than the lab needs it.
+
 **Larger worlds (the owner, 2026-10-09):**
 - **Generation** may keep whole products, made complete through the cache: a world, a
   planet, a place or an entity. It produces the packages and assets a game ships.

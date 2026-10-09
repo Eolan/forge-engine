@@ -47,12 +47,12 @@ Where Forge uses them:
 - `ash-window`: forge-gpu
 - `bytemuck`: forge-app, forge-core, forge-geom, forge-gpu, forge-render
 - `cc`: forge-physics
-- `clap`: asteroids, city-blocks, contact-sheet, credits, genesis, imgdiff, meshlets, sharpness, task-bench
+- `clap`: asteroids, city-blocks, contact-sheet, credits, genesis, imgdiff, meshlets, physics-lab, sharpness, task-bench
 - `core_affinity`: forge-task
 - `crossbeam-channel`: forge-task
 - `crossbeam-deque`: forge-task
 - `crossbeam-utils`: forge-task
-- `glam`: asteroids, city-blocks, forge-anim, forge-app, forge-core, forge-geom, forge-physics, forge-procgen, forge-render, forge-world, meshlets
+- `glam`: asteroids, city-blocks, forge-anim, forge-app, forge-core, forge-geom, forge-physics, forge-procgen, forge-render, forge-world, meshlets, physics-lab
 - `gltf`: forge-anim, forge-geom
 - `gpu-allocator`: forge-gpu
 - `image`: contact-sheet, forge-app, forge-procgen, forge-render, imgdiff, sharpness
@@ -67,11 +67,11 @@ Where Forge uses them:
 - `serde_json`: credits, forge-geom
 - `thiserror`: forge-anim, forge-geom, forge-gpu, forge-physics, forge-sim
 - `toml`: city-blocks, forge-terrain
-- `tracing`: asteroids, city-blocks, forge-app, forge-core, forge-gpu, forge-render, forge-task, forge-terrain, meshlets
+- `tracing`: asteroids, city-blocks, forge-app, forge-core, forge-gpu, forge-render, forge-task, forge-terrain, meshlets, physics-lab
 - `tracing-subscriber`: forge-app
 - `tracy-client`: forge-app, forge-task
 - `windows-sys`: forge-gpu
-- `winit`: asteroids, city-blocks, forge-app, meshlets
+- `winit`: asteroids, city-blocks, forge-app, meshlets, physics-lab
 - `xxhash-rust`: forge-core, forge-gpu, forge-physics
 
 ## Their dependencies (229)

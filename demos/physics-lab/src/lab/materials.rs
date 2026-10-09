@@ -15,8 +15,8 @@ use forge_physics::{BodyDesc, BodyId, CharacterDesc, CharacterId, Shape, World};
 use glam::{DVec2, DVec3, Mat4, Quat, Vec3};
 
 use super::yard::Bed;
-use crate::island_walk::{Footfall, Stride};
-pub(crate) use crate::traction::{ROWS, Row, SOLE, pair, traction};
+use city_blocks::island_walk::{Footfall, Stride};
+pub(crate) use city_blocks::traction::{ROWS, Row, SOLE, pair, traction};
 
 /// The crates: planks of the wood row.
 const CRATE_WOOD: usize = 1;
@@ -57,7 +57,7 @@ const BED_BEVEL: f32 = 0.25;
 
 /// The patches the walker leaves prints in (#205): the sand, the island's dry sand (#197), and
 /// the snow, the yard's fresh snow.
-const PRINTED: [(usize, Soft); 2] = [(2, crate::island_sand::SOFT), (3, Soft::SNOW)];
+const PRINTED: [(usize, Soft); 2] = [(2, city_blocks::island_sand::SOFT), (3, Soft::SNOW)];
 
 /// The beds, untouched (#205): each printed patch a centimetre in from its edges, lying on it
 /// as the yard's lie on the floor (its ground just under the patch's top, its edges thinning to
@@ -94,8 +94,8 @@ pub(super) fn press(beds: &mut [Bed], fall: Footfall) -> bool {
     bed.layer.press(Pad {
         at: fall.at,
         heading: fall.heading,
-        size: crate::island_sand::FOOT,
-        pressure: crate::island_sand::FOOT_PRESSURE,
+        size: city_blocks::island_sand::FOOT,
+        pressure: city_blocks::island_sand::FOOT_PRESSURE,
         sweep: 0.0,
         wheel: 0.0,
         tread: None,

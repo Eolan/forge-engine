@@ -11,9 +11,12 @@ cargo run --release -p physics-lab
 cargo run --release -p physics-lab -- --lab drop --fixed-step
 ```
 
-`physics-lab` is `city-blocks --lab drop` in a window of its own: it shares that demo's
-renderer, keys and options (the sun, the probes, TAA, `--view`, `--capture`). **Space** throws a
-ball from the camera at 25 m/s; **Enter** takes the scene back to its start.
+`physics-lab` holds the lab's scenes and flags (`demos/physics-lab/src/lab/`, since #216). It runs
+them in `city-blocks`' shared app through its scene interface (`city_blocks::scenario`): the app
+draws a scene and runs its frames, and the scene says how it is lit, where its camera starts, and
+drives its world. So the lab shares the city's renderer, keys and options (the sun, the probes,
+TAA, `--view`, `--capture`). **Space** throws a ball from the camera at 25 m/s; **Enter** takes
+the scene back to its start.
 
 | Scene | What it tests | State |
 |---|---|---|
@@ -1078,7 +1081,7 @@ from one table"). Until now every body's friction and restitution were set by ha
 scene, nothing read `forge_core::material::PhysicsLayer`, and the walker set its velocity outright,
 so it could not slip.
 
-**The table** (`lab/materials.rs`, `ROWS`): a row per material, its physical layer and its
+**The table** (`city-blocks`' `traction.rs` since #216, `ROWS`): a row per material, its physical layer and its
 tags. Friction is each material's against itself.
 
 | Row | Static | Dynamic | Restitution | Density | Tags |

@@ -1633,6 +1633,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "city-blocks",
+ "clap",
+ "forge-anim",
+ "forge-app",
+ "forge-core",
+ "forge-geom",
+ "forge-physics",
+ "forge-procgen",
+ "forge-render",
+ "forge-sim",
+ "forge-task",
+ "glam",
+ "tracing",
+ "winit",
 ]
 
 [[package]]

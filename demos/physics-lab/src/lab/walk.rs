@@ -10,7 +10,7 @@ use forge_geom::city::{Block, PropKind, PropSpec};
 use forge_physics::{BodyDesc, BodyId, CharacterDesc, CharacterId, Motion, Shape, World};
 use glam::{DVec3, Mat4, Quat, Vec3};
 
-pub(crate) use crate::character::{Player, RUN_SPEED, player_props};
+pub(crate) use city_blocks::character::{Player, RUN_SPEED, player_props};
 
 /// The stairs: steps, their rise and run, metres, the first's near edge, and their width.
 pub(super) const STEPS: u32 = 6;
