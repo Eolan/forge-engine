@@ -2568,6 +2568,13 @@ models scene, and the test models' captures beside their Khronos screenshots.
   DXC, SPIR-V only). `forge_gpu::nrd` loads it at run time through a hand-written FFI whose
   structures were checked against MSVC's layout, behind the `nrd` cargo feature (on in the
   demos). `FORGE_NRD_DIR` points elsewhere; an empty folder runs without it.
+  - **Since #210 (2026-10-09): NRD 4.18.0, `master` at d3df343**, not yet a tagged release.
+    4.17.3's `SIGMA_ClassifyTiles` raced on its groupshared tile counters (`GroupMemoryBarrier`
+    without a group sync, 7 206 reports from GPU-assisted validation over 1 200 frames of the
+    yard); `master` synchronises them. The settings gained `motionVectorBias`,
+    `outputRectOrigin` and SIGMA's `checkerboardMode` (left off); quad intrinsics are built off
+    (they need `VK_KHR_compute_shader_derivatives`). `fetch-nrd.sh` patches one macro of
+    `master`'s that DXC rejects without material IDs (RELAX, unused).
 - **The passes.** `shadow/trace` (`sun_shadow_trace_main`, `shaders/meshlet.slang`) traces one
   ray a pixel to a point of the sun's disc, keeps the closest hit and writes NRD's inputs: the
   penumbra's radius, the normal and roughness, the view depth. Each of NRD's dispatches is a

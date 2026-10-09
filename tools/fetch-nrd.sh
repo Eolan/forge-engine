@@ -12,11 +12,12 @@
 # Windows: the build uses Visual Studio's C++ tools, CMake and Ninja (found with vswhere) and the
 # Vulkan SDK's DXC for the SPIR-V. NRD's CMake also downloads its two build dependencies,
 # NVIDIA's ShaderMake and MathLib, at the versions it pins. Built as Forge reads it: SPIR-V
-# only, normals as floats (NRD_NORMAL_ENCODING 4), linear roughness, the C runtime linked in.
+# only, normals as floats (NRD_NORMAL_ENCODING 4), linear roughness, the C runtime linked in, no
+# quad intrinsics (they need VK_KHR_compute_shader_derivatives, which Forge does not enable).
 set -euo pipefail
 
-release=v4.17.3
-commit=792eff196afdd350fd9c3f862119017ccb438a0e
+release=v4.18.0
+commit=d3df3435c876c29346d4538500eddd4621ce451a
 here=$(cd "$(dirname "$0")/.." && pwd)
 sdk=$here/nrd-sdk
 case ${1:-} in
@@ -40,11 +41,22 @@ if [ -d "$src/.git" ]; then
   fi
   echo "NRD $release already in nrd-sdk/src"
 else
-  echo "cloning NRD $release from https://github.com/NVIDIA-RTX/NRD"
-  git clone --quiet --depth 1 --branch "$release" https://github.com/NVIDIA-RTX/NRD.git "$src"
+  # By commit: 4.18.0 is master's, not a tagged release yet (#210: SIGMA's tile classification
+  # synchronises its threads there, 4.17.3 raced).
+  echo "cloning NRD $release ($commit) from https://github.com/NVIDIA-RTX/NRD"
+  git init --quiet "$src"
+  git -C "$src" remote add origin https://github.com/NVIDIA-RTX/NRD.git
+  git -C "$src" fetch --quiet --depth 1 origin "$commit"
+  git -C "$src" checkout --quiet FETCH_HEAD
   have=$(git -C "$src" rev-parse HEAD)
-  [ "$have" = "$commit" ] || { echo "the tag $release points at $have, not $commit" >&2; exit 1; }
+  [ "$have" = "$commit" ] || { echo "fetched $have, not $commit" >&2; exit 1; }
 fi
+
+# Without material IDs (Forge's normal encoding 4), master's `CompareMaterials` is a scalar
+# `true` that RELAX's shaders put in `float3(...)`, which DXC rejects: give it the comparison's
+# dimension (`m == m`, true for any material ID). RELAX is not used; NRD builds all its shaders.
+sed -i 's/#define CompareMaterials( m0, m, minm )     true$/#define CompareMaterials( m0, m, minm )     ( ( m ) == ( m ) )/' \
+  "$src/Shaders/Common.hlsli"
 
 vswhere="${ProgramFiles:-C:/Program Files} (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
 [ -x "$vswhere" ] || vswhere="C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
@@ -63,6 +75,7 @@ set "PATH=$cmake_bin\\CMake\\bin;$cmake_bin\\Ninja;%PATH%"
 cmake -S "$(cygpath -w "$src")" -B "$(cygpath -w "$build")" -G Ninja -DCMAKE_BUILD_TYPE=Release ^
   -DNRD_EMBEDS_SPIRV_SHADERS=ON -DNRD_EMBEDS_DXIL_SHADERS=OFF -DNRD_EMBEDS_DXBC_SHADERS=OFF ^
   -DSHADERMAKE_FIND_DXC=OFF -DNRD_NORMAL_ENCODING=4 -DNRD_ROUGHNESS_ENCODING=1 ^
+  -DNRD_SUPPORTS_QUAD_INTRINSICS=OFF ^
   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded || exit /b 2
 cmake --build "$(cygpath -w "$build")" --config Release || exit /b 3
 EOF

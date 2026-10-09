@@ -22,7 +22,7 @@
 //! robust image access: D3D12's behaviour), Forge's own keep the device's default, and NRD's
 //! clears become `vkCmdClearColorImage`, which clears the image exactly.
 //!
-//! The declarations below mirror NRD 4.17's C API (`NRD.h`, `NRDDescs.h`, `NRDSettings.h`):
+//! The declarations below mirror NRD 4.18's C API (`NRD.h`, `NRDDescs.h`, `NRDSettings.h`):
 //! every structure's size and the offsets where padding decides were checked against MSVC's
 //! layout of the originals, and the library's version is checked when it loads.
 
@@ -36,7 +36,7 @@ use crate::frame::FrameSlot;
 use crate::graph::{FrameGraph, ImageHandle};
 
 /// The NRD release `tools/fetch-nrd.sh` builds and [`Sigma::load`] accepts.
-pub const NRD_RELEASE: &str = "v4.17.3";
+pub const NRD_RELEASE: &str = "v4.18.0";
 
 /// The format of [`SigmaImages::penumbra`]: the penumbra's radius in metres where the shadow
 /// ray met an occluder (hit distance × tan of the sun's angular radius, halved), 65 504 where
@@ -315,6 +315,7 @@ mod imp {
         world_to_view_matrix_prev: [f32; 16],
         world_prev_to_world_matrix: [f32; 16],
         motion_vector_scale: [f32; 3],
+        motion_vector_bias: [f32; 3],
         camera_jitter: [f32; 2],
         camera_jitter_prev: [f32; 2],
         resource_size: [u16; 2],
@@ -333,7 +334,8 @@ mod imp {
         split_screen: f32,
         printf_at: [u16; 2],
         debug: f32,
-        rect_origin: [u32; 2],
+        input_rect_origin: [u32; 2],
+        output_rect_origin: [u32; 2],
         frame_index: u32,
         accumulation_mode: u8,
         is_motion_vector_in_world_space: bool,
@@ -347,9 +349,10 @@ mod imp {
         light_direction: [f32; 3],
         plane_distance_sensitivity: f32,
         max_stabilized_frame_num: u32,
+        checkerboard_mode: u8,
     }
 
-    // Sizes and the offsets where padding decides, from MSVC's layout of NRD 4.17.3's headers.
+    // Sizes and the offsets where padding decides, from MSVC's layout of NRD 4.18.0's headers.
     const _: () = {
         use std::mem::{offset_of, size_of};
         assert!(size_of::<AllocationCallbacks>() == 32);
@@ -381,17 +384,21 @@ mod imp {
         assert!(offset_of!(DispatchDesc, constant_buffer_data_matches_previous_dispatch) == 44);
         assert!(offset_of!(DispatchDesc, pipeline_index) == 46);
         assert!(offset_of!(DispatchDesc, grid_height) == 50);
-        assert!(size_of::<CommonSettings>() == 432);
+        assert!(size_of::<CommonSettings>() == 452);
         assert!(offset_of!(CommonSettings, motion_vector_scale) == 320);
-        assert!(offset_of!(CommonSettings, resource_size) == 348);
-        assert!(offset_of!(CommonSettings, view_z_scale) == 364);
-        assert!(offset_of!(CommonSettings, split_screen) == 400);
-        assert!(offset_of!(CommonSettings, debug) == 408);
-        assert!(offset_of!(CommonSettings, rect_origin) == 412);
-        assert!(offset_of!(CommonSettings, frame_index) == 420);
-        assert!(offset_of!(CommonSettings, accumulation_mode) == 424);
-        assert!(offset_of!(CommonSettings, enable_validation) == 428);
-        assert!(size_of::<SigmaSettings>() == 20);
+        assert!(offset_of!(CommonSettings, motion_vector_bias) == 332);
+        assert!(offset_of!(CommonSettings, camera_jitter) == 344);
+        assert!(offset_of!(CommonSettings, resource_size) == 360);
+        assert!(offset_of!(CommonSettings, view_z_scale) == 376);
+        assert!(offset_of!(CommonSettings, split_screen) == 412);
+        assert!(offset_of!(CommonSettings, debug) == 420);
+        assert!(offset_of!(CommonSettings, input_rect_origin) == 424);
+        assert!(offset_of!(CommonSettings, output_rect_origin) == 432);
+        assert!(offset_of!(CommonSettings, frame_index) == 440);
+        assert!(offset_of!(CommonSettings, accumulation_mode) == 444);
+        assert!(offset_of!(CommonSettings, enable_validation) == 448);
+        assert!(size_of::<SigmaSettings>() == 24);
+        assert!(offset_of!(SigmaSettings, checkerboard_mode) == 20);
     };
 
     /// `nrd::Result::SUCCESS`.
@@ -420,6 +427,8 @@ mod imp {
     /// `nrd::AccumulationMode`.
     const ACCUMULATION_CONTINUE: u8 = 0;
     const ACCUMULATION_RESTART: u8 = 1;
+    /// `CheckerboardMode::OFF`: every pixel holds its own samples.
+    const CHECKERBOARD_OFF: u8 = 0;
     /// Dispatches a frame may hold (SIGMA has 6; its first frame adds a clear per image).
     const MAX_DISPATCHES: u64 = 64;
 
@@ -509,7 +518,7 @@ mod imp {
         set_common_settings: SetCommonSettings,
         set_denoiser_settings: SetDenoiserSettings,
         get_compute_dispatches: GetComputeDispatches,
-        /// The library's version (`4.17.3`).
+        /// The library's version (`4.18.0`).
         version: String,
         // Last: the functions above point into it.
         _library: libloading::Library,
@@ -1021,6 +1030,7 @@ mod imp {
                 ],
                 // TAA's motion is already the UV offset to the previous frame.
                 motion_vector_scale: [1.0, 1.0, 0.0],
+                motion_vector_bias: [0.0; 3],
                 camera_jitter: frame.jitter,
                 camera_jitter_prev: frame.jitter_prev,
                 resource_size: size,
@@ -1041,7 +1051,8 @@ mod imp {
                 split_screen: 0.0,
                 printf_at: [9999, 9999],
                 debug: 0.0,
-                rect_origin: [0, 0],
+                input_rect_origin: [0, 0],
+                output_rect_origin: [0, 0],
                 frame_index: frame.frame_index,
                 accumulation_mode: if frame.reset {
                     ACCUMULATION_RESTART
@@ -1057,6 +1068,7 @@ mod imp {
                 light_direction: frame.light_direction,
                 plane_distance_sensitivity: 0.02,
                 max_stabilized_frame_num: frame.stabilized_frames.min(7),
+                checkerboard_mode: CHECKERBOARD_OFF,
             };
             let state = self.state.lock();
             let mut dispatches: *const DispatchDesc = std::ptr::null();
