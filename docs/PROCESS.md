@@ -378,7 +378,8 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   of pass-name prefixes (`=temporal/,debug/`) only before those passes. When it makes two runs
   agree, timing is involved; bisect with the prefixes.
 - **Two runs that part (#161):** city-blocks' `FORGE_HASH_IMAGES=1` logs, each frame, hashes of
-  the shadow rays' three images and the denoised shadow (#204), the clouds, the scene colour,
+  the probes' irradiance atlas and the ambient occlusion (#207), the shadow rays' three images
+  and the denoised shadow (#204), the clouds, the scene colour,
   the depth, the motion vectors (before and after the movers') and TAA's history
   (`crates/forge-render/src/debug_hash.rs`). Images that hash alike are alike: three images
   with one hash are empty. A frame's hashes are logged when its slot comes back, two frames

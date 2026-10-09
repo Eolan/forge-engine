@@ -2393,6 +2393,7 @@ impl Demo for Gallery {
         });
         // The probes' light in place of the open sky's (issue #53): after the sky's tables,
         // which light their rays' misses, before the resolve.
+        let probe_extent = self.probes.as_ref().map(|p| p.irradiance_extent());
         let probes = match &mut self.probes {
             Some(probes) if self.probes_on && self.sky_light && !in_space => {
                 if !self.probes_live {
@@ -2430,6 +2431,24 @@ impl Demo for Gallery {
                 },
             )
         });
+        if let Some(h) = hasher {
+            use forge_render::debug_hash::HashKind;
+            if let (Some(light), Some([w, hgt])) = (probes.as_ref(), probe_extent) {
+                let atlas = forge_gpu::vk::Extent2D {
+                    width: w,
+                    height: hgt,
+                };
+                h.add(
+                    &mut frame.graph,
+                    light.irradiance(),
+                    HashKind::Float4,
+                    atlas,
+                );
+            }
+            if let Some(ao) = occlusion {
+                h.add(&mut frame.graph, ao, HashKind::Float4, extent);
+            }
+        }
         // The sun's soft shadow denoised by NVIDIA's SIGMA (#172) or AMD's FidelityFX (#173),
         // D-049: a ray a pixel before the resolve, which then reads the result in place of its
         // own ray. The motion vectors come first, for the denoiser's reprojection (they are
