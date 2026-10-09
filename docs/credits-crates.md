@@ -63,7 +63,7 @@ Where Forge uses them:
 - `raw-window-handle`: forge-app, forge-gpu
 - `rayon`: task-bench
 - `serde`: forge-core
-- `serde_json`: credits
+- `serde_json`: credits, forge-geom
 - `thiserror`: forge-anim, forge-geom, forge-gpu, forge-physics, forge-sim
 - `tracing`: asteroids, city-blocks, forge-app, forge-gpu, forge-render, forge-task, meshlets
 - `tracing-subscriber`: forge-app

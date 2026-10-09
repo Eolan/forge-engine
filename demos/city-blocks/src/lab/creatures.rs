@@ -20,7 +20,7 @@ use forge_anim::{
 use forge_core::dmath::{atan2, sin_cos};
 use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_geom::model::{Model, ModelMesh, load_glb};
-use forge_geom::{TriMesh, VertexSkin};
+use forge_geom::{MorphTarget, TriMesh, VertexSkin};
 use forge_physics::{
     BodyDesc, BodyId, JointId, JointLoad, Motors, RagdollId, RagdollJoint, RagdollPart, Shape,
     Transform, World,
@@ -822,6 +822,79 @@ pub(super) fn pose_arm(kind: Kind, pose: ArmPose, matrices: &mut [Mat4]) {
     matrices[j] *= turn;
 }
 
+/// The mannequin's arms, left and right, as (upper arm, forearm) parts.
+const ARMS: [(usize, usize); 2] = [(3, 4), (5, 6)];
+
+/// The mannequin's elbow correctives (#169, `--elbow-correctives`): per arm, left then right,
+/// a morph target that puts back what the linear blend loses at an elbow bent 90° the hinge's
+/// way. A real rig's correctives are sculpted; these are made from the dual quaternions' bend:
+/// at each vertex the forearm moves, the change that takes the linear blend's position and
+/// normal to theirs, brought back into the bind pose through the linear blend's own turn
+/// there, so at its full weight the target gives exactly the dual quaternions' elbow.
+pub(super) fn elbow_correctives() -> Vec<MorphTarget> {
+    use forge_render::SkinBlend::{DualQuaternion, Linear};
+    let body = Kind::Mannequin.body();
+    ARMS.iter()
+        .zip(["elbow-l", "elbow-r"])
+        .map(|(&(_, lower), name)| {
+            let mut bent = vec![Mat4::IDENTITY; body.joints];
+            let elbow = body.pivot[lower];
+            bent[body.joint[lower]] = Mat4::from_translation(elbow)
+                * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
+                * Mat4::from_translation(-elbow);
+            let mut target = MorphTarget {
+                name: name.into(),
+                positions: vec![[0.0; 3]; body.mesh.positions.len()],
+                normals: vec![[0.0; 3]; body.mesh.positions.len()],
+            };
+            for (k, s) in body.skin.iter().enumerate() {
+                let moved = (0..4)
+                    .any(|i| s.weights[i] > 0.0 && usize::from(s.joints[i]) == body.joint[lower]);
+                if !moved {
+                    continue;
+                }
+                let (p, n) = (
+                    Vec3::from(body.mesh.positions[k]),
+                    Vec3::from(body.mesh.normals[k]),
+                );
+                let (p_linear, _) =
+                    forge_render::skin_vertex(&bent, s.joints, s.weights, p, n, Linear);
+                let (p_dual, n_dual) =
+                    forge_render::skin_vertex(&bent, s.joints, s.weights, p, n, DualQuaternion);
+                // The linear blend's turn at the vertex: its weighted matrices' 3 × 3 parts.
+                let turn: Mat3 = (0..4)
+                    .map(|i| s.weights[i] * Mat3::from_mat4(bent[usize::from(s.joints[i])]))
+                    .fold(Mat3::ZERO, |a, b| a + b);
+                let back = turn.inverse();
+                target.positions[k] = (back * (p_dual - p_linear)).to_array();
+                target.normals[k] = (back * n_dual - n).to_array();
+            }
+            target
+        })
+        .collect()
+}
+
+/// How far a mannequin's elbows bend the hinge's way, left then right, from its joints'
+/// matrices ([`skin`]'s): each forearm's turn from its upper arm about the hinge's axis (x in
+/// the bind pose), as a share of 90°, between 0 and 1: [`elbow_correctives`]' weights.
+pub(super) fn elbow_bends(matrices: &[Mat4]) -> [f32; 2] {
+    let body = Kind::Mannequin.body();
+    ARMS.map(|(upper, lower)| {
+        let relative = matrices[body.joint[upper]].inverse() * matrices[body.joint[lower]];
+        let q = Quat::from_mat4(&relative).normalize();
+        // The turn's part about x (its twist about the hinge's axis).
+        let angle = 2.0 * q.x.atan2(q.w);
+        let angle = if angle > std::f32::consts::PI {
+            angle - std::f32::consts::TAU
+        } else if angle < -std::f32::consts::PI {
+            angle + std::f32::consts::TAU
+        } else {
+            angle
+        };
+        (angle / std::f32::consts::FRAC_PI_2).clamp(0.0, 1.0)
+    })
+}
+
 /// How long a creature plays a clip before the other (idle, walk, idle…), seconds, and how long
 /// a switch takes to die away (#167).
 const SEGMENT: f64 = 6.0;
@@ -1431,9 +1504,14 @@ mod tests {
 
     /// The mannequin's left arm in a pose, through the skin pass's twin (#169, D-052): per
     /// slice of the arm along its bones (shoulder to hand, 24 slices), the mean distance of its
-    /// vertices from the bones, as a share of the rest pose's. Returns the least and the most
-    /// share, and the farthest any vertex goes from the root's middle.
-    fn arm_shares(pose: &[Mat4], blend: forge_render::SkinBlend) -> (f32, f32, f32) {
+    /// vertices from the bones, as a share of the rest pose's, `morphs` (targets and weights)
+    /// added first. Returns the least and the most share, and the farthest any vertex goes from
+    /// the root's middle.
+    fn arm_shares(
+        pose: &[Mat4],
+        blend: forge_render::SkinBlend,
+        morphs: &[(&MorphTarget, f32)],
+    ) -> (f32, f32, f32) {
         const SLICES: usize = 24;
         let body = Kind::Mannequin.body();
         let (upper, lower) = (body.joint[3], body.joint[4]);
@@ -1455,7 +1533,7 @@ mod tests {
             }
             best
         };
-        let profile = |matrices: &[Mat4], blend| {
+        let profile = |matrices: &[Mat4], blend, morphs: &[(&MorphTarget, f32)]| {
             let chain = [shoulder, elbow, hand].map(|p| {
                 if p == hand {
                     matrices[lower].transform_point3(p)
@@ -1472,11 +1550,17 @@ mod tests {
                     .filter(|&i| [upper, lower].contains(&usize::from(s.joints[i])))
                     .map(|i| s.weights[i])
                     .sum();
+                // The morph targets first, as the pass adds them.
+                let bind = morphs
+                    .iter()
+                    .fold(Vec3::from(body.mesh.positions[k]), |p, (t, w)| {
+                        p + *w * Vec3::from(t.positions[k])
+                    });
                 let (p, _) = forge_render::skin_vertex(
                     matrices,
                     s.joints,
                     s.weights,
-                    Vec3::from(body.mesh.positions[k]),
+                    bind,
                     Vec3::from(body.mesh.normals[k]),
                     blend,
                 );
@@ -1494,8 +1578,8 @@ mod tests {
             (means, farthest)
         };
         let rest = vec![Mat4::IDENTITY; body.joints];
-        let (at_rest, _) = profile(&rest, forge_render::SkinBlend::Linear);
-        let (posed, farthest) = profile(pose, blend);
+        let (at_rest, _) = profile(&rest, forge_render::SkinBlend::Linear, &[]);
+        let (posed, farthest) = profile(pose, blend, morphs);
         let shares: Vec<f32> = at_rest
             .iter()
             .zip(&posed)
@@ -1547,8 +1631,8 @@ mod tests {
         let reach = body.reach;
         let mut shares = Vec::new();
         for (name, matrices) in &poses {
-            let linear = arm_shares(matrices, Linear);
-            let dual = arm_shares(matrices, DualQuaternion);
+            let linear = arm_shares(matrices, Linear, &[]);
+            let dual = arm_shares(matrices, DualQuaternion, &[]);
             eprintln!(
                 "{name}: linear {:.3}–{:.3}, dual quaternions {:.3}–{:.3} of the rest's distance from the bones",
                 linear.0, linear.1, dual.0, dual.1
@@ -1568,6 +1652,58 @@ mod tests {
             "dual quaternions keep the forearm's thickness: {}",
             dual.0
         );
+    }
+
+    #[test]
+    fn the_elbow_correctives_keep_a_linearly_bent_elbow_s_thickness() {
+        use forge_render::SkinBlend::{DualQuaternion, Linear};
+        let body = Kind::Mannequin.body();
+        let targets = elbow_correctives();
+        let left = &targets[0];
+        // Only the vertices the forearms carry move, each arm's under its own target.
+        let moved = |t: &MorphTarget| t.positions.iter().filter(|p| **p != [0.0; 3]).count();
+        assert!(moved(left) > 50 && moved(&targets[1]) > 50);
+        for (k, s) in body.skin.iter().enumerate() {
+            let on_left =
+                (0..4).any(|i| s.weights[i] > 0.0 && usize::from(s.joints[i]) == body.joint[4]);
+            if !on_left {
+                assert_eq!(left.positions[k], [0.0; 3]);
+            }
+        }
+        let elbow = body.pivot[4];
+        let bent = |angle: f32| {
+            let mut m = vec![Mat4::IDENTITY; body.joints];
+            m[body.joint[4]] = Mat4::from_translation(elbow)
+                * Mat4::from_rotation_x(angle)
+                * Mat4::from_translation(-elbow);
+            m
+        };
+        let quarter = std::f32::consts::FRAC_PI_2;
+        for (angle, name) in [(quarter, "90°"), (0.5 * quarter, "45°")] {
+            let pose = bent(angle);
+            // The bend weighs the left target alone, by the share of 90°.
+            let [w, right] = elbow_bends(&pose);
+            assert!(
+                (w - angle / quarter).abs() < 1e-4 && right == 0.0,
+                "{w} {right}"
+            );
+            let linear = arm_shares(&pose, Linear, &[]);
+            let corrected = arm_shares(&pose, Linear, &[(left, w)]);
+            let dual = arm_shares(&pose, DualQuaternion, &[]);
+            eprintln!(
+                "elbow bent {name}: linear {:.3}–{:.3}, with the corrective {:.3}–{:.3}, dual quaternions {:.3}–{:.3}",
+                linear.0, linear.1, corrected.0, corrected.1, dual.0, dual.1
+            );
+            assert!(
+                corrected.0 > linear.0,
+                "the corrective thickens the bent elbow"
+            );
+            assert!(corrected.2 <= body.reach + 0.05);
+            if angle == quarter {
+                // At its full weight, the dual quaternions' elbow exactly.
+                assert!((corrected.0 - dual.0).abs() < 1e-3 && (corrected.1 - dual.1).abs() < 1e-3);
+            }
+        }
     }
 
     #[test]

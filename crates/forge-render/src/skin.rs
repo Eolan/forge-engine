@@ -17,12 +17,17 @@
 //! A mesh blends its vertices' joints by their matrices (linear blend skinning), or, on
 //! request, as dual quaternions (#169, D-052, [`SkinBlend`]), which keep a twisting joint's
 //! thickness. [`skin_vertex`] is the pass's twin on the CPU.
+//!
+//! A mesh with morph targets (#169, [`forge_geom::SkinnedMesh::cook_morphed`]) has them added
+//! to its bind pose first, each by the weight [`crate::MeshletScene::set_morphs`] gives it this
+//! frame (and the frame before's for the previous positions): a face's expressions, or the
+//! corrective shapes that put back what a bent joint loses.
 
 use std::cell::Cell;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use forge_geom::{GpuMeshlet, PAGE_SIZE, SkinVertex};
+use forge_geom::{GpuMeshlet, MorphDelta, Morphs, PAGE_SIZE, SkinVertex};
 use forge_gpu::{
     Buffer, BufferDesc, Device, GraphBuffer, MemoryCategory, MemoryLocation, Result, vk,
 };
@@ -43,6 +48,9 @@ pub enum SkinBlend {
 
 /// `GpuSkinCluster::flags`: the cluster's mesh blends as dual quaternions.
 const SKIN_DUAL_QUATERNION: u32 = 1;
+/// `GpuSkinCluster::flags`: the cluster's mesh has morph targets, which its vertices' ranges
+/// in the morph ranges name (#169).
+const SKIN_MORPHED: u32 = 2;
 
 /// Where the skin pass puts a bind-pose vertex at `position` with `normal`, carried by the
 /// joints `joints` (indices into `matrices`) weighted by `weights`, blended by `blend`: the twin
@@ -122,7 +130,8 @@ pub(crate) struct GpuSkinCluster {
     joints: u32,
     /// Its mesh's height field in the fields' table (`u32::MAX`: none).
     field: u32,
-    /// `SKIN_DUAL_QUATERNION` when its mesh blends as dual quaternions (#169).
+    /// `SKIN_DUAL_QUATERNION` when its mesh blends as dual quaternions, `SKIN_MORPHED` when it
+    /// has morph targets (#169).
     flags: u32,
     pad: u32,
 }
@@ -176,6 +185,10 @@ pub(crate) struct SkinPush {
     pub fields: u64,
     pub heights: u64,
     pub previous_heights: u64,
+    pub morph_ranges: u64,
+    pub morph_deltas: u64,
+    pub morph_weights: u64,
+    pub previous_morph_weights: u64,
     pub cluster_count: u32,
     pub has_rays: u32,
 }
@@ -195,6 +208,8 @@ pub(crate) struct SkinSource {
     pub field: Option<HeightField>,
     /// How it blends its vertices' joints (#169).
     pub blend: SkinBlend,
+    /// Its morph targets (#169), per cluster vertex as `vertices`.
+    pub morphs: Option<Morphs>,
 }
 
 /// Ring slots of the joints' matrices: this frame's, the frame before's and one more, as the
@@ -229,7 +244,20 @@ pub(crate) struct SceneSkins {
     height_count: u32,
     /// The heights' ring slots.
     heights_turn: Turn,
-    /// Whether joints or heights came since the skin pass last ran (#197): it runs only then.
+    /// Per skinned vertex, its first morph delta and how many (#169); none for a mesh without
+    /// targets.
+    morph_ranges: Buffer,
+    /// The morph targets' deltas, each naming its weight in a frame's weights.
+    morph_deltas: Buffer,
+    /// The morph weights of each frame, every morphed mesh's targets in the order they were
+    /// added.
+    morph_weights: Vec<Buffer>,
+    /// Weights a frame.
+    morph_count: u32,
+    /// The weights' ring slots.
+    morphs_turn: Turn,
+    /// Whether joints, heights or weights came since the skin pass last ran (#197): it runs
+    /// only then.
     fresh: Cell<bool>,
 }
 
@@ -276,7 +304,25 @@ impl SceneSkins {
         let mut has_rays = false;
         let mut fields = Vec::new();
         let mut heights = 0;
+        let mut morph_ranges: Vec<[u32; 2]> = Vec::new();
+        let mut morph_deltas: Vec<MorphDelta> = Vec::new();
+        let mut morph_count = 0;
         for source in sources {
+            // Its vertices' ranges, rebased into the scene's deltas, their targets into a
+            // frame's weights.
+            match &source.morphs {
+                Some(m) => {
+                    assert_eq!(m.ranges.len(), source.vertices.len(), "a range a vertex");
+                    let base = morph_deltas.len() as u32;
+                    morph_ranges.extend(m.ranges.iter().map(|&[first, n]| [base + first, n]));
+                    morph_deltas.extend(m.deltas.iter().map(|d| MorphDelta {
+                        target: morph_count + d.target,
+                        ..*d
+                    }));
+                    morph_count += m.targets;
+                }
+                None => morph_ranges.extend(std::iter::repeat_n([0, 0], source.vertices.len())),
+            }
             meshes.push((source.mesh, clusters.len() as u32));
             let ray = ray_first(source.mesh);
             has_rays |= ray.is_some();
@@ -307,6 +353,10 @@ impl SceneSkins {
                         SKIN_DUAL_QUATERNION
                     } else {
                         0
+                    } | if source.morphs.is_some() {
+                        SKIN_MORPHED
+                    } else {
+                        0
                     },
                     pad: 0,
                 });
@@ -324,6 +374,10 @@ impl SceneSkins {
             clusters.len() <= 65_535,
             "the skin pass dispatches a workgroup per cluster, at most 65 535"
         );
+        // Without targets the pass reads no range.
+        if morph_count == 0 {
+            morph_ranges.clear();
+        }
         tracing::info!(
             meshes = sources.len(),
             joints,
@@ -331,6 +385,8 @@ impl SceneSkins {
             vertices = vertices.len(),
             fields = fields.len(),
             heights,
+            morph_targets = morph_count,
+            morph_deltas = morph_deltas.len(),
             "skinned meshes ready"
         );
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
@@ -367,6 +423,26 @@ impl SceneSkins {
         if fields.is_empty() {
             fields.push(GpuHeightField::zeroed());
         }
+        // Until the first frame's weights come, the targets' base.
+        let weights_ring = (0..SKIN_SLOTS)
+            .map(|i| {
+                let buffer = device.create_buffer(BufferDesc {
+                    size: u64::from(morph_count.max(1)) * 4,
+                    usage: storage,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("skin morph weights {i}"),
+                })?;
+                buffer.write(0, &vec![0.0f32; morph_count as usize]);
+                Ok(buffer)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if morph_ranges.is_empty() {
+            morph_ranges.push([0, 0]);
+        }
+        if morph_deltas.is_empty() {
+            morph_deltas.push(MorphDelta::default());
+        }
         Ok(Self {
             clusters: device.create_buffer_with_data(
                 &clusters,
@@ -402,6 +478,21 @@ impl SceneSkins {
             heights: heights_ring,
             height_count: heights,
             heights_turn: Turn::default(),
+            morph_ranges: device.create_buffer_with_data(
+                &morph_ranges,
+                storage,
+                MemoryCategory::Geometry,
+                "skin morph ranges",
+            )?,
+            morph_deltas: device.create_buffer_with_data(
+                &morph_deltas,
+                storage,
+                MemoryCategory::Geometry,
+                "skin morph deltas",
+            )?,
+            morph_weights: weights_ring,
+            morph_count,
+            morphs_turn: Turn::default(),
             // The first frame bends the bind pose once, the previous positions with it.
             fresh: Cell::new(true),
         })
@@ -432,6 +523,18 @@ impl SceneSkins {
         self.fresh.set(true);
     }
 
+    /// Writes a frame's morph weights, every morphed mesh's targets in turn, into the next slot
+    /// of their ring (#169).
+    pub fn set_morphs(&self, weights: &[f32]) {
+        assert_eq!(
+            weights.len(),
+            self.morph_count as usize,
+            "a weight per target of every morphed mesh"
+        );
+        self.morph_weights[self.morphs_turn.advance()].write(0, weights);
+        self.fresh.set(true);
+    }
+
     /// Whether joints or heights came since the last call (#197): the skin pass and the
     /// structures' refit run only then. What they wrote stays: the pool's pages of skinned
     /// clusters are roots, always resident.
@@ -452,6 +555,10 @@ impl SceneSkins {
             fields: self.fields.address(),
             heights: self.heights[self.heights_turn.current.get()].address(),
             previous_heights: self.heights[self.heights_turn.previous.get()].address(),
+            morph_ranges: self.morph_ranges.address(),
+            morph_deltas: self.morph_deltas.address(),
+            morph_weights: self.morph_weights[self.morphs_turn.current.get()].address(),
+            previous_morph_weights: self.morph_weights[self.morphs_turn.previous.get()].address(),
             cluster_count: self.cluster_count,
             has_rays: u32::from(self.has_rays && rays != 0),
         }

@@ -476,6 +476,10 @@ struct Args {
     /// pose, to compare the skinning's blends (#169).
     #[arg(long, value_enum)]
     arm_pose: Option<lab::ArmPose>,
+    /// Give the lab's mannequins corrective morph targets at the elbows, weighted by how far
+    /// each bends: the linear blend's bent elbow keeps its thickness (#169; on request only).
+    #[arg(long)]
+    elbow_correctives: bool,
     /// Leave the rivers' flow undisturbed by the movers (#107's A/B).
     #[arg(long)]
     no_floaters: bool,
@@ -2243,10 +2247,13 @@ impl Demo for Gallery {
         }
         // The lab's bodies between their last two ticks (#136).
         if let Some(lab) = &self.lab {
-            let mut skins = Vec::new();
-            self.scene.set_movers(&lab.movers(&mut skins));
-            // The skinned creatures' joints (#165).
+            let (mut skins, mut morphs) = (Vec::new(), Vec::new());
+            self.scene.set_movers(&lab.movers(&mut skins, &mut morphs));
+            // The skinned creatures' joints (#165), and their morph targets' weights (#169).
             self.scene.set_skins(&skins);
+            if !morphs.is_empty() {
+                self.scene.set_morphs(&morphs);
+            }
             // The yard's beds' heights (#185) when they changed, and once more after (#186).
             let mut heights = Vec::new();
             let changed = lab.fields(self.beds_seen, &mut heights);

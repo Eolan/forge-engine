@@ -1066,6 +1066,7 @@ impl MeshletSceneBuilder {
             vertices: skinned.vertices.clone(),
             field: None,
             blend: crate::SkinBlend::Linear,
+            morphs: skinned.morphs.clone(),
         });
         id
     }
@@ -1930,6 +1931,17 @@ impl MeshletScene {
     pub fn set_fields(&self, heights: &[f32]) {
         if let Some(skins) = &self.skins {
             skins.set_fields(heights);
+        }
+    }
+
+    /// The morph targets' weights for the frame about to be drawn (#169): every morphed
+    /// skinned mesh's ([`forge_geom::SkinnedMesh::cook_morphed`]) in the order they were added,
+    /// each one's targets in turn. Until the first call they are 0, the targets' base. The skin
+    /// pass runs on the frames that bring them, as with [`Self::set_skins`]: call it when they
+    /// change and once more the frame after.
+    pub fn set_morphs(&self, weights: &[f32]) {
+        if let Some(skins) = &self.skins {
+            skins.set_morphs(weights);
         }
     }
 

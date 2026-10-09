@@ -3,7 +3,8 @@
 //! [`TriMesh`] in the scene's frame (its nodes' transforms applied), its primitives as material
 //! sections, with the materials' base colour, roughness and metalness to make rows of, and
 //! (D-047) the texture coordinates, the embedded images and the textures each material
-//! samples, with their samplers and transforms as the artist set them.
+//! samples, with their samplers and transforms as the artist set them. A skinned mesh keeps
+//! its vertices' joints (#165), and a mesh its morph targets, their names and weights (#169).
 //!
 //! glTF is +Y up, metres, and a model's front faces `+Z`; Blender's exporter turns its +Y
 //! (forward) into glTF's `−Z`, which is Forge's forward too.
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 use glam::{Mat3, Mat4, Vec3};
 
 use crate::procedural::TriMesh;
-use crate::skin::VertexSkin;
+use crate::skin::{MorphTarget, VertexSkin};
 
 /// Why a model did not load.
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +47,12 @@ pub enum GltfError {
     /// A skinned primitive's joints or weights are not one per vertex.
     #[error("mesh {mesh}: not one joint set and one weight set per vertex")]
     BadSkin {
+        /// The mesh's name.
+        mesh: String,
+    },
+    /// A morph target's changes are not one per vertex of its primitive.
+    #[error("mesh {mesh}: a morph target without one change per vertex")]
+    BadMorph {
         /// The mesh's name.
         mesh: String,
     },
@@ -131,6 +138,14 @@ pub struct ModelMesh {
     /// are then in the bind pose as the file gives them: glTF moves a skinned mesh by its
     /// joints alone, not by its node.
     pub skin: Option<Vec<VertexSkin>>,
+    /// Its morph targets (#169), each with a change per vertex, turned into the scene's frame
+    /// as the vertices are; empty for none. [`SkinnedMesh::cook_morphed`] takes them.
+    ///
+    /// [`SkinnedMesh::cook_morphed`]: crate::SkinnedMesh::cook_morphed
+    pub morphs: Vec<MorphTarget>,
+    /// The file's weights of its targets, which `mesh` does not include: its vertices are the
+    /// targets' base.
+    pub morph_weights: Vec<f32>,
 }
 
 /// The meshes of a model.
@@ -280,6 +295,7 @@ fn read_mesh(
     let mut out = TriMesh::default();
     let mut materials: Vec<ModelMaterial> = Vec::new();
     let mut skin: Vec<VertexSkin> = Vec::new();
+    let mut morphs: Vec<MorphTarget> = Vec::new();
     let mut needs_normals = false;
     let mut uvs: Vec<[f32; 2]> = Vec::new();
     let mut any_uvs = false;
@@ -344,6 +360,47 @@ fn read_mesh(
                 "mesh {name}: a second UV set (TEXCOORD_1) is ignored"
             ));
         }
+        // Its morph targets' changes, turned as its vertices and normals are, after the
+        // primitives before's (whose changes a target this one adds are zero).
+        let linear = Mat3::from_mat4(world);
+        let before = out.positions.len();
+        let after = before + positions.len();
+        let mut given = 0;
+        for (t, (moved, turned, _)) in reader.read_morph_targets().enumerate() {
+            given = t + 1;
+            if t == morphs.len() {
+                morphs.push(MorphTarget {
+                    name: String::new(),
+                    positions: vec![[0.0; 3]; before],
+                    normals: vec![[0.0; 3]; before],
+                });
+            }
+            let target = &mut morphs[t];
+            match moved {
+                Some(m) => target
+                    .positions
+                    .extend(m.map(|d| (linear * Vec3::from(d)).to_array())),
+                None => target
+                    .positions
+                    .extend(std::iter::repeat_n([0.0; 3], positions.len())),
+            }
+            match turned {
+                Some(n) => target
+                    .normals
+                    .extend(n.map(|d| (normal_matrix * Vec3::from(d)).to_array())),
+                None => target
+                    .normals
+                    .extend(std::iter::repeat_n([0.0; 3], positions.len())),
+            }
+            if target.positions.len() != after || target.normals.len() != after {
+                return Err(GltfError::BadMorph { mesh: name });
+            }
+        }
+        // A target this primitive lacks moves none of its vertices.
+        for target in &mut morphs[given..] {
+            target.positions.resize(after, [0.0; 3]);
+            target.normals.resize(after, [0.0; 3]);
+        }
         let first = out.positions.len() as u32;
         out.positions.extend(positions.iter().map(|p| p.to_array()));
         match &normals {
@@ -377,11 +434,30 @@ fn read_mesh(
     if materials.len() <= 1 {
         out.sections.clear();
     }
+    // The targets' names, which Blender and most exporters put in the mesh's extras.
+    let names: Vec<String> = mesh
+        .extras()
+        .as_ref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
+        .and_then(|extras| serde_json::from_value(extras.get("targetNames")?.clone()).ok())
+        .unwrap_or_default();
+    for (target, name) in morphs.iter_mut().zip(names) {
+        target.name = name;
+    }
+    for target in &mut morphs {
+        if target.normals.iter().all(|n| *n == [0.0; 3]) {
+            target.normals.clear();
+        }
+    }
+    let mut morph_weights = mesh.weights().map(<[f32]>::to_vec).unwrap_or_default();
+    morph_weights.resize(morphs.len(), 0.0);
     Ok(ModelMesh {
         name,
         mesh: out,
         materials,
         skin: skinned.then_some(skin),
+        morphs,
+        morph_weights,
     })
 }
 
@@ -628,6 +704,71 @@ mod tests {
         assert!(model.point("tip").is_some());
         let model = load_glb(&triangle_glb()).unwrap();
         assert!(model.mesh("tri").unwrap().skin.is_none());
+    }
+
+    #[test]
+    fn a_mesh_s_morph_targets_come_through_turned_named_and_weighted() {
+        // A triangle drawn twice (two primitives), on a node turned a quarter round +y. The
+        // first primitive has two targets: "smile" moves its second corner 10 cm along +x,
+        // "blink" lifts every corner 20 cm and tilts its normal towards +z. The second has none.
+        let floats: [f32; 36] = [
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, // positions
+            0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, // smile
+            0.0, 0.2, 0.0, 0.0, 0.2, 0.0, 0.0, 0.2, 0.0, // blink
+            0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, // blink's normals
+        ];
+        let bin: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
+            "nodes":[{{"name":"face","mesh":0,"rotation":[0,{s},0,{s}]}}],
+            "meshes":[{{"primitives":[
+                {{"attributes":{{"POSITION":0}},"targets":[{{"POSITION":1}},{{"POSITION":2,"NORMAL":3}}]}},
+                {{"attributes":{{"POSITION":0}}}}],
+              "weights":[0.25,0.5],"extras":{{"targetNames":["smile","blink"]}}}}],
+            "accessors":[
+              {{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},
+              {{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0.1,0,0]}},
+              {{"bufferView":2,"componentType":5126,"count":3,"type":"VEC3","min":[0,0.2,0],"max":[0,0.2,0]}},
+              {{"bufferView":3,"componentType":5126,"count":3,"type":"VEC3"}}],
+            "bufferViews":[{{"buffer":0,"byteLength":36}},
+                           {{"buffer":0,"byteOffset":36,"byteLength":36}},
+                           {{"buffer":0,"byteOffset":72,"byteLength":36}},
+                           {{"buffer":0,"byteOffset":108,"byteLength":36}}],
+            "buffers":[{{"byteLength":{}}}]}}"#,
+            bin.len()
+        );
+        let model = load_glb(&pack(json, bin)).unwrap();
+        let face = model.mesh("face").unwrap();
+        assert_eq!(face.mesh.positions.len(), 6);
+        assert_eq!(face.morph_weights, [0.25, 0.5]);
+        let [smile, blink] = &face.morphs[..] else {
+            panic!("two targets, not {}", face.morphs.len());
+        };
+        assert_eq!(
+            (smile.name.as_str(), blink.name.as_str()),
+            ("smile", "blink")
+        );
+        let near = |a: [f32; 3], b: [f32; 3]| Vec3::from(a).abs_diff_eq(Vec3::from(b), 1e-6);
+        // Turned as the vertices are: +x becomes −z, +z becomes +x; the second primitive's
+        // vertices move under neither.
+        assert!(near(smile.positions[1], [0.0, 0.0, -0.1]));
+        assert!(
+            smile.normals.is_empty(),
+            "a target without normals keeps none"
+        );
+        for v in 0..6 {
+            let lifted = if v < 3 { 0.2 } else { 0.0 };
+            assert!(near(blink.positions[v], [0.0, lifted, 0.0]));
+            assert!(near(blink.normals[v], [lifted * 5.0, 0.0, 0.0]));
+            if v != 1 {
+                assert_eq!(smile.positions[v], [0.0; 3]);
+            }
+        }
+        // A mesh without targets has none.
+        let model = load_glb(&triangle_glb()).unwrap();
+        let tri = model.mesh("tri").unwrap();
+        assert!(tri.morphs.is_empty() && tri.morph_weights.is_empty());
     }
 
     /// A textured triangle: UVs, an embedded image, a sampler that clamps u and mirrors v, a

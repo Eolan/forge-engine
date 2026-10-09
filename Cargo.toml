@@ -34,7 +34,8 @@ winit = "0.30"
 raw-window-handle = "0.6"
 meshopt = "0.6"
 # glTF models (forge-geom, #138): the binary form with its buffer inside; no images, no URIs.
-gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_emissive_strength", "KHR_texture_transform"] }
+# `extras` for the morph targets' names (#169), read with serde_json.
+gltf = { version = "1.4", default-features = false, features = ["utils", "names", "extras", "KHR_materials_emissive_strength", "KHR_texture_transform"] }
 
 # Concurrency
 crossbeam-deque = "0.8"
@@ -51,6 +52,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Data
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 bytemuck = { version = "1", features = ["derive"] }
 
 # Diagnostics

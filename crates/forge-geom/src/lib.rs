@@ -21,4 +21,4 @@ pub use meshlet::{
 };
 pub use page::{PAGE_NONE, PAGE_SIZE, PagedVertex};
 pub use procedural::TriMesh;
-pub use skin::{SkinVertex, SkinnedMesh, VertexSkin};
+pub use skin::{MorphDelta, MorphTarget, Morphs, SkinVertex, SkinnedMesh, VertexSkin};

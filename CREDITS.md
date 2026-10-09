@@ -397,6 +397,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     Collins, Jiří Žára and Carol O'Sullivan, "Skinning with Dual Quaternions", I3D 2007. The
     rotation from each joint's matrix by Shepperd's method: Stanley W. Shepperd, "Quaternion
     from Rotation Matrix", *Journal of Guidance and Control* 1(3), 1978.
+  - **Morph targets** (#169): glTF 2.0's morph targets and mesh weights (Khronos), their names
+    from the `targetNames` extras Blender's exporter writes. The lab's elbow correctives are
+    pose space deformation's idea, a shape added by how far a joint is posed: J. P. Lewis, Matt
+    Cordner and Nickson Fong, "Pose Space Deformation: A Unified Approach to Shape
+    Interpolation and Skeleton-Driven Deformation", SIGGRAPH 2000.
   - **Normalised lerp between rotation keys:** as ozz-animation does between dense keys
     (Guillaume Blanc).
   - **The creatures' weights:** Blender's bone heat, after Ilya Baran and Jovan Popović,

@@ -8,7 +8,10 @@
 //!   sphere the whole body stays in whatever its pose (`bound`), and the normal cone is off;
 //! - **the cluster vertices' sources:** [`SkinnedMesh::vertices`] gives, in the order the
 //!   pages hold them (cluster by cluster), each vertex's bind position, normal, joints and
-//!   weights, which the skin pass reads to write the pages.
+//!   weights, which the skin pass reads to write the pages;
+//! - **its morph targets** (#169, [`SkinnedMesh::cook_morphed`]): per cluster vertex, the
+//!   changes the targets that move it make, which the skin pass adds by the frame's weights
+//!   before the joints move the vertex.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -92,6 +95,63 @@ fn quantize_weights(weights: [f32; 4]) -> [u16; 4] {
     q
 }
 
+/// A morph target (glTF's, a blend shape, #169): per vertex of its mesh, how far the target at
+/// its full weight moves the vertex's bind position and normal. The skin pass adds the targets,
+/// each times its weight, before the joints move the vertex.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphTarget {
+    /// Its name (the file's `targetNames`), or empty.
+    pub name: String,
+    /// Per vertex, the position's change.
+    pub positions: Vec<[f32; 3]>,
+    /// Per vertex, the normal's change; empty when the target leaves the normals.
+    pub normals: Vec<[f32; 3]>,
+}
+
+/// A vertex's change under one morph target as the skin pass reads it (32 bytes;
+/// `MorphDelta` in `skin.slang`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct MorphDelta {
+    /// The position's change at the target's full weight.
+    pub position: [f32; 3],
+    /// The target, in its mesh's order (the scene rebases it into the frame's weights).
+    pub target: u32,
+    /// The normal's change at the target's full weight.
+    pub normal: [f32; 3],
+    /// Zero.
+    pub pad: u32,
+}
+
+/// A skinned mesh's morph targets, cooked for the skin pass: only the vertices a target moves
+/// keep a delta for it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Morphs {
+    /// How many targets, so how many weights a frame.
+    pub targets: u32,
+    /// Per cluster vertex (as [`SkinnedMesh::vertices`]), its first delta and how many.
+    pub ranges: Vec<[u32; 2]>,
+    /// The deltas, vertex by vertex.
+    pub deltas: Vec<MorphDelta>,
+}
+
+impl Morphs {
+    /// What the targets at `weights` add to cluster vertex `vertex`'s bind position and normal,
+    /// as the skin pass adds them.
+    pub fn offset(&self, vertex: usize, weights: &[f32]) -> ([f32; 3], [f32; 3]) {
+        let [first, count] = self.ranges[vertex];
+        let (mut position, mut normal) = ([0.0; 3], [0.0; 3]);
+        for d in &self.deltas[first as usize..(first + count) as usize] {
+            let w = weights[d.target as usize];
+            for k in 0..3 {
+                position[k] += w * d.position[k];
+                normal[k] += w * d.normal[k];
+            }
+        }
+        (position, normal)
+    }
+}
+
 /// A cooked skinned mesh: its clusters (one level, all roots) and their vertices' skin data.
 pub struct SkinnedMesh {
     /// The clusters and their pages, the vertices in the bind pose.
@@ -99,6 +159,8 @@ pub struct SkinnedMesh {
     /// Per cluster vertex, in the pages' order (cluster by cluster, each cluster's vertices in
     /// its payload's order), what the skin pass moves it from.
     pub vertices: Vec<SkinVertex>,
+    /// Its morph targets (#169), when it has any.
+    pub morphs: Option<Morphs>,
 }
 
 impl SkinnedMesh {
@@ -110,9 +172,41 @@ impl SkinnedMesh {
     ///
     /// When `skin` does not have one entry per vertex of `mesh`.
     pub fn cook(mesh: &TriMesh, skin: &[VertexSkin], bound: ([f32; 3], f32)) -> Self {
+        Self::cook_morphed(mesh, skin, &[], bound)
+    }
+
+    /// [`Self::cook`] with morph targets (#169), each giving a change per vertex of `mesh`.
+    /// The bound grows by the farthest the targets together move a vertex, their weights
+    /// taken between 0 and 1.
+    ///
+    /// # Panics
+    ///
+    /// When `skin` or a target does not have one entry per vertex of `mesh`.
+    pub fn cook_morphed(
+        mesh: &TriMesh,
+        skin: &[VertexSkin],
+        targets: &[MorphTarget],
+        bound: ([f32; 3], f32),
+    ) -> Self {
         assert_eq!(skin.len(), mesh.positions.len(), "one skin per vertex");
-        let (center, radius) = bound;
-        Self::cook_with(mesh, skin, bound, |m| {
+        for t in targets {
+            assert_eq!(
+                t.positions.len(),
+                mesh.positions.len(),
+                "one change per vertex"
+            );
+            assert!(t.normals.is_empty() || t.normals.len() == mesh.positions.len());
+        }
+        let reach = (0..mesh.positions.len())
+            .map(|v| {
+                targets
+                    .iter()
+                    .map(|t| t.positions[v].iter().map(|c| c * c).sum::<f32>().sqrt())
+                    .sum::<f32>()
+            })
+            .fold(0.0, f32::max);
+        let (center, radius) = (bound.0, bound.1 + reach);
+        Self::cook_with(mesh, skin, targets, (center, radius), |m| {
             m.center = center;
             m.radius = radius;
             m.self_center = center;
@@ -152,7 +246,7 @@ impl SkinnedMesh {
                     .sqrt()
             })
             .fold(0.0, f32::max);
-        Self::cook_with(mesh, &skin, (center, radius + reach), |m| {
+        Self::cook_with(mesh, &skin, &[], (center, radius + reach), |m| {
             m.radius += reach;
             m.self_center = m.center;
             m.self_radius = m.radius;
@@ -165,6 +259,7 @@ impl SkinnedMesh {
     fn cook_with(
         mesh: &TriMesh,
         skin: &[VertexSkin],
+        targets: &[MorphTarget],
         bound: ([f32; 3], f32),
         cluster: impl Fn(&mut GpuMeshlet),
     ) -> Self {
@@ -182,11 +277,34 @@ impl SkinnedMesh {
         let uvs = !mesh.uvs.is_empty();
         let pages = page::pack(&mut dag, &vertices, uvs);
         let mut skinned = Vec::with_capacity(dag.meshlet_vertices.len());
+        let mut morphs = Morphs {
+            targets: targets.len() as u32,
+            ..Morphs::default()
+        };
         for (m, range) in dag.meshlets.iter().zip(&dag.ranges) {
             let first = range.vertex_offset as usize;
             for &v in &dag.meshlet_vertices[first..first + m.vertex_count as usize] {
                 let s = source[v as usize] as usize;
                 skinned.push(SkinVertex::new(mesh.positions[s], mesh.normals[s], skin[s]));
+                if targets.is_empty() {
+                    continue;
+                }
+                let start = morphs.deltas.len() as u32;
+                for (t, target) in targets.iter().enumerate() {
+                    let position = target.positions[s];
+                    let normal = target.normals.get(s).copied().unwrap_or([0.0; 3]);
+                    if position != [0.0; 3] || normal != [0.0; 3] {
+                        morphs.deltas.push(MorphDelta {
+                            position,
+                            target: t as u32,
+                            normal,
+                            pad: 0,
+                        });
+                    }
+                }
+                morphs
+                    .ranges
+                    .push([start, morphs.deltas.len() as u32 - start]);
             }
         }
         Self {
@@ -204,6 +322,7 @@ impl SkinnedMesh {
                 uvs,
             },
             vertices: skinned,
+            morphs: (!targets.is_empty()).then_some(morphs),
         }
     }
 }
@@ -278,6 +397,60 @@ mod tests {
             }
         }
         assert_eq!(k, cooked.vertices.len());
+    }
+
+    #[test]
+    fn each_cluster_vertex_carries_the_changes_its_source_s_targets_make() {
+        let (mesh, skin) = skinned_rock();
+        // One target swells the upper half by a tenth along x, one lifts every vertex 5 cm and
+        // tilts its normal.
+        let swell = MorphTarget {
+            name: "swell".into(),
+            positions: mesh
+                .positions
+                .iter()
+                .map(|p| {
+                    if p[1] > 0.0 {
+                        [0.1 * p[0], 0.0, 0.0]
+                    } else {
+                        [0.0; 3]
+                    }
+                })
+                .collect(),
+            normals: Vec::new(),
+        };
+        let lift = MorphTarget {
+            name: "lift".into(),
+            positions: vec![[0.0, 0.05, 0.0]; mesh.positions.len()],
+            normals: vec![[0.0, 0.0, 0.2]; mesh.positions.len()],
+        };
+        let cooked = SkinnedMesh::cook_morphed(&mesh, &skin, &[swell, lift], ([0.0; 3], 3.0));
+        let morphs = cooked.morphs.as_ref().expect("morphed");
+        assert_eq!(morphs.targets, 2);
+        assert_eq!(morphs.ranges.len(), cooked.vertices.len());
+        // The farthest a vertex moves, both targets at their full weight, grows the bound.
+        let widest = mesh
+            .positions
+            .iter()
+            .map(|p| p[0].abs())
+            .fold(0.0, f32::max);
+        assert!(cooked.mesh.radius > 3.05 && cooked.mesh.radius <= 3.05 + 0.1 * widest + 1e-5);
+        for (k, s) in cooked.vertices.iter().enumerate() {
+            let p = s.position;
+            let (moved, turned) = morphs.offset(k, &[1.0, 0.5]);
+            let swell = if p[1] > 0.0 { 0.1 * p[0] } else { 0.0 };
+            assert_eq!(moved, [swell, 0.025, 0.0]);
+            assert_eq!(turned, [0.0, 0.0, 0.1]);
+            // Only the changes a target makes are kept.
+            let kept = morphs.ranges[k][1];
+            assert_eq!(kept, if swell != 0.0 { 2 } else { 1 });
+        }
+        // Without targets, nothing.
+        assert!(
+            SkinnedMesh::cook(&mesh, &skin, ([0.0; 3], 3.0))
+                .morphs
+                .is_none()
+        );
     }
 
     #[test]

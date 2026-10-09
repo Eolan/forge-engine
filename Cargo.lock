@@ -704,6 +704,7 @@ dependencies = [
  "glam",
  "gltf",
  "meshopt",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

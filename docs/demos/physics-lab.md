@@ -547,6 +547,24 @@ with those the dogs folded under their own weight.
   - The cost is the same: `skin/vertices` is 0.008 ms either way.
 
   ![The mannequin's left forearm twisted 90° (top) and bent 90° (bottom), linear blending on the left and dual quaternions on the right: the linear blend pinches the twisted elbow and folds the bent one's crease](images/lab-dual-quaternion.png)
+- **Morph targets and elbow correctives, on request** (#169): a skinned mesh can carry morph
+  targets, glTF's or made in code (`SkinnedMesh::cook_morphed`). The skin pass adds them to
+  the bind pose by this frame's weights (`MeshletScene::set_morphs`) before the joints move
+  the vertex.
+  - `--elbow-correctives` gives the mannequins one target per elbow and weighs it by how far
+    the elbow bends the hinge's way: 0 straight, 1 at 90°. The lab makes the targets from the
+    dual quaternions' bend, brought back into the bind pose through the linear blend's turn at
+    each vertex. At their full weight, the linear blend then gives the dual quaternions' elbow
+    exactly; a real rig's correctives would be sculpted.
+  - The arm's thickness, through the pass's CPU twin
+    (`the_elbow_correctives_keep_a_linearly_bent_elbow_s_thickness`): bent 90°, the elbow keeps
+    96 % with the corrective, against 83 % for the linear blend alone. Bent 45°, it keeps
+    100 % (94 % alone) and swells by 5 % at most.
+  - The cost: three mannequins with two targets each are 5094 deltas, and `skin/vertices` goes
+    from 0.008 to 0.009 ms. The frame stays at 1.88 ms (`--arm-pose bend`, 60 frames, with
+    the correctives and without).
+
+  ![The mannequin's left elbow bent 90°: linear blending alone (left), with the elbow corrective (middle), and dual quaternions (right). The corrective puts back the thickness the linear blend folds away](images/lab-elbow-corrective.png)
 
 Three mannequins stand on poles, their pelvis held by a joint that lets go past 2 kN or
 400 N·m; two dogs stand on their own legs in front.

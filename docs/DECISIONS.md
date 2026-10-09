@@ -2915,6 +2915,11 @@ Linear blending stays the default, and a mesh asks for dual quaternions.
 - **The cost:** `skin/vertices` is 0.008 ms either way in `--lab creatures`, and the frame 1.72
   ms (RTX 5070 Ti, 1600 × 900, 600 frames, two runs each).
 
+**Option 3 since (#169's item 3):** morph targets exist. `physics-lab --elbow-correctives` gives
+the mannequins a corrective per elbow, weighted by its bend, made from the dual quaternions'
+bend. With it, the linear blend keeps 0.955 of the bent elbow (0.825 without), as the dual
+quaternions do. Both stay on request.
+
 *Sources:* Kavan, Collins, Žára and O'Sullivan, "Skinning with Dual Quaternions" (I3D 2007,
 <https://users.cs.utah.edu/~ladislav/dq/>); Disney Animation, "Enhanced Dual Quaternion
 Skinning for Production Use"

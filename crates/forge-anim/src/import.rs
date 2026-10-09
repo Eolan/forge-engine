@@ -202,7 +202,8 @@ fn read_rig(
                         interpolation,
                     });
                 }
-                // Morph target weights: no morph targets in Forge.
+                // Morph target weights (#169): not read from clips yet; the scene gives them
+                // every frame (`forge_render::MeshletScene::set_morphs`).
                 ReadOutputs::MorphTargetWeights(_) => {}
             }
         }

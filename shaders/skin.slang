@@ -8,7 +8,8 @@
 // ray tracing's copy, which the mesh's bottom-level structure is then refitted from. And the
 // position the frame before's matrices gave goes to `previous`, which the motion vectors read.
 // A displaced mesh (#185's deformable ground: one joint, which places it) is first raised by
-// its height field, this frame's and the frame before's, its normal the field's slopes.
+// its height field, this frame's and the frame before's, its normal the field's slopes. A mesh
+// with morph targets (#169) first has them added to its bind pose, each by its weight.
 
 // Mirrors `SkinVertex` in crates/forge-geom/src/skin.rs (32 bytes).
 struct SkinVertex
@@ -28,12 +29,23 @@ struct SkinCluster
     uint ray;           // its first vertex in the ray tracing's positions (0xFFFFFFFF: none)
     uint joints;        // its mesh's first matrix in `joints`
     uint field;         // its mesh's height field in `fields` (0xFFFFFFFF: none, #185)
-    uint flags;         // SKIN_DUAL_QUATERNION: its mesh blends as dual quaternions (#169)
+    uint flags;         // SKIN_DUAL_QUATERNION: its mesh blends as dual quaternions; SKIN_MORPHED: it has morph targets (#169)
     uint pad;
 };
 
-// `SkinCluster::flags` (forge-render's `SKIN_DUAL_QUATERNION`).
+// `SkinCluster::flags` (forge-render's `SKIN_DUAL_QUATERNION` and `SKIN_MORPHED`).
 static const uint SKIN_DUAL_QUATERNION = 1u;
+static const uint SKIN_MORPHED = 2u;
+
+// Mirrors `MorphDelta` in crates/forge-geom/src/skin.rs (32 bytes): a vertex's change under one
+// morph target at its full weight (#169).
+struct MorphDelta
+{
+    float3 position;
+    uint target;    // its weight in a frame's weights
+    float3 normal;
+    uint pad;
+};
 
 // Mirrors `GpuHeightField` in crates/forge-render/src/skin.rs (32 bytes): a grid of heights over
 // a displaced mesh's bind-pose x and z (#185's deformable ground).
@@ -60,6 +72,10 @@ struct SkinPush
     HeightField* fields;     // the displaced meshes' height fields (#185)
     float* heights;          // this frame's heights, every field's in turn, row by row along x
     float* previous_heights; // the frame before's
+    uint2* morph_ranges;     // per vertex, its first morph delta and how many (#169)
+    MorphDelta* morph_deltas;
+    float* morph_weights;    // this frame's weights, every morphed mesh's targets in turn
+    float* previous_morph_weights; // the frame before's
     uint cluster_count;
     uint has_rays;
 };
@@ -301,6 +317,22 @@ void skin_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float3 bind = v.position;
     float3 bind_normal = decode_normal(v.normal);
     float3 bind_before = v.position;
+    // A morphed mesh (#169): its targets added by this frame's weights, and by the frame
+    // before's for where it was.
+    if ((c.flags & SKIN_MORPHED) != 0u)
+    {
+        uint2 range = push.morph_ranges[c.first + i];
+        float3 turned = float3(0.0);
+        for (uint k = 0; k < range.y; k++)
+        {
+            MorphDelta d = push.morph_deltas[range.x + k];
+            float w = push.morph_weights[d.target];
+            bind += w * d.position;
+            turned += w * d.normal;
+            bind_before += push.previous_morph_weights[d.target] * d.position;
+        }
+        bind_normal = normalize(bind_normal + turned);
+    }
     if (c.field != 0xFFFFFFFFu)
     {
         HeightField h = push.fields[c.field];

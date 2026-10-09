@@ -1206,6 +1206,11 @@ mesh's every N frames, in turn), the creatures limp from tick 60, 600 frames, tw
 
 The refitted trees trace as fast as fresh ones here, so the default is refits only.
 
+Dual quaternions (`--dual-quaternion`) and morph targets (#169): `skin/vertices` 0.008 ms
+with linear blending, 0.009 ms with dual quaternions, and 0.009 ms with the mannequins' elbow
+correctives (`--elbow-correctives`: 5094 morph deltas, two targets on each of three
+mannequins), `--arm-pose bend`, 60 frames, the frame 1.88 ms in all three.
+
 `--lab flood` (#144), the gate lifted at tick 31, 600 ticks: **0.86 ms a tick** (p99 1.1, max
 1.4). Most of it is the water: 18 432 cells in two half steps (velocities carried along, the
 fluxes, the slopes), on one thread; then the pushes on 39 floaters. The water's drawing is the

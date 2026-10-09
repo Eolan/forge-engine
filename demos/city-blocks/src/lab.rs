@@ -2001,6 +2001,9 @@ pub(crate) struct Lab {
     /// `--arm-pose` (#169): the mannequins' left forearm drawn twisted or bent on top of their
     /// pose, to compare the skinning's blends.
     pub(crate) arm_pose: Option<creatures::ArmPose>,
+    /// `--elbow-correctives` (#169): the mannequins carry their elbows' corrective morph
+    /// targets, weighted by how far each elbow bends.
+    elbow_correctives: bool,
     mode: Mode,
     /// Commands made since the last tick (Space, Enter).
     queued: Vec<LabCommand>,
@@ -2196,9 +2199,15 @@ pub(crate) fn build(
         .map(|g| {
             let start = layout.groups[..g].iter().map(|g| g.count as usize).sum();
             let kinds = world.herd.as_ref().map(|h| h.kinds()).unwrap_or_default();
+            // `--elbow-correctives`: the mannequin's elbows' morph targets (#169).
             let kinds_cooked = [creatures::Kind::Mannequin, creatures::Kind::Dog].map(|kind| {
                 let body = kind.body();
-                SkinnedMesh::cook(&body.mesh, &body.skin, ([0.0; 3], body.reach))
+                let targets = if args.elbow_correctives && kind == creatures::Kind::Mannequin {
+                    creatures::elbow_correctives()
+                } else {
+                    Vec::new()
+                };
+                SkinnedMesh::cook_morphed(&body.mesh, &body.skin, &targets, ([0.0; 3], body.reach))
             });
             for &kind in &kinds {
                 let (k, row) = match kind {
@@ -2345,6 +2354,7 @@ pub(crate) fn build(
         scene,
         Lab {
             arm_pose: None,
+            elbow_correctives: args.elbow_correctives,
             mode,
             queued: Vec::new(),
             previous: current.clone(),
@@ -2570,8 +2580,13 @@ impl Lab {
 
     /// The movers' transforms, between the last two ticks by the time not yet ticked, and the
     /// skinned creatures' joints' matrices into `skins` (#165): their bodies' transforms become
-    /// a mover each, after the others, and the matrices that bend their meshes.
-    pub(crate) fn movers(&self, skins: &mut Vec<Mat4>) -> Vec<MoverTransform> {
+    /// a mover each, after the others, and the matrices that bend their meshes. With
+    /// `--elbow-correctives`, the mannequins' morph weights into `morphs` (#169).
+    pub(crate) fn movers(
+        &self,
+        skins: &mut Vec<Mat4>,
+        morphs: &mut Vec<f32>,
+    ) -> Vec<MoverTransform> {
         let t = (self.pending / TICK).clamp(0.0, 1.0);
         let mut movers: Vec<MoverTransform> = self
             .previous
@@ -2593,6 +2608,7 @@ impl Lab {
             })
             .collect();
         skins.clear();
+        morphs.clear();
         if let Some(skinned) = &self.skinned {
             let parts = skinned.kinds.len() * creatures::PARTS;
             let end = skinned.start + parts + skinned.slimes + skinned.birds;
@@ -2609,6 +2625,9 @@ impl Lab {
                 let position = creatures::skin(kind, parts, &mut matrices);
                 if let Some(pose) = self.arm_pose {
                     creatures::pose_arm(kind, pose, &mut matrices);
+                }
+                if self.elbow_correctives && kind == creatures::Kind::Mannequin {
+                    morphs.extend(creatures::elbow_bends(&matrices));
                 }
                 skins.extend_from_slice(&matrices);
                 movers.push(MoverTransform {
@@ -2714,7 +2733,7 @@ impl Lab {
     pub(crate) fn player(&mut self) -> Option<MoverTransform> {
         self.shown().player()?;
         let beds = self.skinned.as_ref().map_or(0, |s| s.beds.len());
-        let movers = self.movers(&mut Vec::new());
+        let movers = self.movers(&mut Vec::new(), &mut Vec::new());
         movers.get(movers.len().checked_sub(2 + beds)?).copied()
     }
 
@@ -2731,7 +2750,9 @@ impl Lab {
                 scale: 1.0,
             });
         }
-        self.movers(&mut Vec::new()).get(k).copied()
+        self.movers(&mut Vec::new(), &mut Vec::new())
+            .get(k)
+            .copied()
     }
 
     /// Whether the scene has gulls (the camera follows the first).
