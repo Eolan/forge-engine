@@ -408,6 +408,9 @@ bricks for edits, genesis (uplift, stream-power erosion, hydrology) baked per re
 deterministic runtime detail layer. Lifted from the previous project's design and code.
 *(research: large-worlds.md §8, RESEARCH.md §1)* Accepted by the owner 2026-09-24.
 
+**Amended by D-056 (2026-10-09):** the far field is cluster-DAG tiles on the existing path, one
+per cell of D-037's clipmap, not CDLOD.
+
 ## D-015 — Services: MongoDB persistence, RabbitMQ events only ✅ (carried over)
 
 Unchanged from the previous project: persistence is write-behind to MongoDB (transactions
@@ -3208,3 +3211,118 @@ the mesh shares, so neighbouring clusters stay crack-free.
 - **The captures move** with the cooks: the positions by under half a millimetre, and the
   clusters' boundaries with them. The meshlets demo colours each cluster, so its views move by
   a ꟻLIP mean of 0.12–0.19; the others by 0.0002–0.035.
+
+## D-056 — The planet: a cube sphere of cluster-DAG tiles, flown from orbit down to the island ✅ (proposed and decided 2026-10-09)
+
+**The owner's pick (2026-10-09):** the island demo's second step, the planet variant, ahead of
+the network and sound systems.
+
+**Where things are:**
+- **`forge-world`:** D-037's cube sphere, its `u64` cell ids, the clipmap's streaming plan and the
+  residency are all unit-tested, but nothing draws them yet.
+- **D-014:** names a CDLOD far field for planets. It was never built.
+- **The island:** a flat 16 km square.
+  - Its genesis runs at 8 m (2049²). Its ground is drawn at 2 m, in 2 km tiles of cluster DAGs
+    made through the cache (#208) and packed (#215, #218).
+  - Everything on it is flat, its sea at y = 0: the FFT sea's clipmap, the rivers, the lakes, the
+    shore, the splashes, the physics' height fields and the walker.
+- **The genesis:** drainage, flooding and erosion work on a flat grid (`Field2`, D8 neighbours).
+- **The sky:** Hillaire's atmosphere at Earth's radius (6 360 km), with the planet-view table for
+  the view from outside (#26). The ballad's planet is that disc seen from space. It has no ground.
+- **The research** (`docs/research/planet-terrain.md`, 2026-09-26) recommends:
+  - one cluster-DAG tile per cell of the clipmap, borders locked, skirts at level changes;
+  - the six level-0 tiles always resident;
+  - a coarse genesis on the six faces, amplified per tile as the tiles stream in;
+  - one occlusion point per tile for the horizon;
+  - a finer tile swapped in only once its parent's clusters there are under a pixel of error,
+    each swap's ꟻLIP logged;
+  - the island placed on a cell as an override of the coarse field.
+
+**Proposed:** the research's recommendation, with these changes.
+1. **D-014 amended:** the planet's ground is cluster-DAG tiles on the existing path (meshlets,
+   rays, shadows, probes). No CDLOD, as D-055 already chose for the island's ground.
+2. **Through what exists since:** each tile is made by `forge-terrain` through the derived cache
+   (#208), keyed by the seed, the cell id and the code. It is packed (#215, #218): about a
+   megabyte of pages a tile, where the research counted 3.4. The planet is described in
+   `assets/worlds/planet.toml` (D-053).
+3. **The ground before the geology:** the first build shapes the planet from seeded noise
+   (continents, ranges, sea floor). The genesis across the six faces comes after, as its own
+   step. The risks are in the drawing (pops, cracks, precision, streaming, the horizon), and the
+   genesis on the faces is CPU work that can't show anything until the tiles draw.
+4. **A `planet` demo of its own** (`cargo run -p planet`), sharing `city-blocks`' renderer as
+   `island` does. It has a scripted descent with golden shots at 400 km, 10 km and the coast,
+   `--radius`, and the F1 overlay's tile counters.
+
+**The steps, an issue each:**
+1. **The ground from noise, drawn and streamed:**
+   - tiles of 257² samples with a halo, made on the job system;
+   - roots at start, the clipmap's wants each frame, prefetch along the velocity;
+   - the horizon test in the instance cull, and the near plane from the height over the ground;
+   - the swap rule, with each swap's ꟻLIP logged;
+   - the sea as a sphere at sea level, shaded as the far sea;
+   - the atmosphere at the planet's radius.
+2. **The island on the planet** (question 3).
+3. **The sea's waves on the sphere:** the FFT clipmap around the camera, bent onto the sphere,
+   so a low flight over open sea has waves.
+4. **The genesis across the faces** (question 2): drainage, flooding and erosion with a neighbour
+   rule across face edges. The tiles then amplify its coarse field.
+5. **The descent's checks:** the ꟻLIP of every swap under D-017's thresholds, timings at the
+   three altitudes, and the cells' digests at one and six workers.
+
+**Question 1: the radius** (`--radius` changes it for a run either way).
+
+| Radius | Face width | The island's flat error at its edge (8 km, corner 11 km) | Horizon from 2 m | Notes |
+|---|---|---|---|---|
+| **6 371 km (Earth)** | 10 000 km | 5 m (10 m) | 5.0 km | The sky is already Earth's. Two more levels of tiles. The flat island fits best (question 3). |
+| 1 500 km (the research's example) | 2 360 km | 21 m (43 m) | 2.4 km | The curve shows from a plane. The coarse genesis is 1.2 km at 2049² a face. |
+| 300–600 km (KSP's Kerbin is 600) | 470–940 km | 53–107 m | 1.1–1.5 km | Quick to fly round. The curve shows at the beach. The island would have to be bent onto the sphere. |
+
+**Recommended: Earth's radius.** The sky and the sun's light are already tuned for it, and
+the island's flatness is then within 5 m at its edge.
+
+**Question 2: the rest of the planet.**
+- **(a) Noise first, the genesis on the faces after (recommended):** the planet is visible after
+  step 1. Mountain ranges and rivers across it come with step 4.
+- **(b) The genesis first, as the research ordered:** continents with drainage from the start,
+  but nothing to see until the tiles draw.
+- **(c) Noise only:** no rivers or erosion outside the island, as the shipped planet games do.
+  Cheapest, and the land away from the island looks generic.
+
+**Question 3: the island on the sphere.**
+- **(a) Flat in its own frame (recommended for now):** the island stays a flat 16 km square in a
+  tangent frame on its cell, and every system on it works unchanged.
+  - The planet's tiles leave a hole for it and bend to meet its rim over a 1 km band. Its sea
+    joins the sphere's sea over the same band.
+  - On Earth's radius the error is 5 m at the rim, below the ground's own detail from where its
+    rim is seen.
+- **(b) Bent onto the sphere:** the island is made in the planet's coordinates, its tiles too.
+  - Right at any radius, and needed for a small planet or for detailed places side by side.
+  - Every island system must then work on a curved surface: the sea, the rivers, the lakes, the
+    shore, the splashes, the physics' height fields and the walker.
+
+**Left out:**
+- **Bending the flat island in the vertex shader** (games' "world curvature" trick): the rays'
+  acceleration structures would keep the flat copy, so the shadows and reflections would not
+  match the raster.
+- **CBT or CDLOD:** a second ground path (D-055's option 2).
+- **Caves and overhangs** (D-014's volumetric near field) wait for a place that needs them.
+
+**For:**
+- One way to draw ground, from orbit to the island's 2 m.
+- Each step shows something.
+- The island keeps everything it has.
+
+**Against:**
+- A flat island is right only on a large planet.
+- Tiles made at run time cost CPU while flying. Their cache bounds it after the first visit.
+- Step 1 alone touches the instance cull, the streaming, the sky's radius and the water's far
+  shading.
+
+**Decided (the owner, 2026-10-09):**
+- **Question 1:** Earth's radius, 6 371 km.
+- **Question 2:** noise first, the genesis on the faces later.
+- **Question 3:** "either one or we can do it in a separate demo". So the `planet` demo starts
+  without the island. When step 2 comes, the island goes on flat in its own frame (the
+  recommendation), unless a separate demo with a bent island suits better by then.
+
+The steps are issues: #220 (step 1). Steps 2 to 5 are filed when step 1 draws.

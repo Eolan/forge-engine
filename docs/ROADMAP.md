@@ -94,7 +94,11 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   70 s tour (`--tour`), the sun held at a time of day (`--time-of-day`). It shares
   `city-blocks`' renderer as a library, so `city-blocks --island SEED` draws the same. The
   planet variant (orbit-to-ground, researched in `docs/research/planet-terrain.md`) is its
-  second step, not started.
+  second step.
+- **The planet** (D-056, the owner's pick of 2026-10-09, ahead of the network and sound): a
+  `planet` demo of its own. The planet has Earth's radius and is made of cube-sphere tiles of
+  cluster DAGs. Its ground comes from noise first, with the genesis across the faces later. The
+  island joins it afterwards. Step 1: #220.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's
@@ -424,7 +428,8 @@ cloud branch and verified on the 5070 Ti 2026-09-26), D-004's amendment accepted
    **Demo:** `island` — a 16 km island from seed, orbit-to-ground on the planet variant,
    golden shots at four times of day. Its first step ✅ (2026-10-02, #96): `cargo run -p
    island`, the four golden shots in the batch and a tour (`docs/demos/island.md`, "The island
-   demo"). The planet variant is researched
+   demo"). The planet variant is decided (D-056, 2026-10-09: Earth's radius, noise first, a
+   `planet` demo of its own; #220) and researched
    (`docs/research/planet-terrain.md`, 2026-09-26): tiles as cluster-DAG props per cell of
    D-037's clipmap with skirts and halos, the six level-0 tiles always resident, horizon culling
    by an occlusion point per tile, swaps allowed under a pixel of error and judged by ꟻLIP, the
