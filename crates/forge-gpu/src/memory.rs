@@ -287,7 +287,16 @@ impl Device {
         // SAFETY: valid create info on a live device.
         let raw = unsafe { self.raw().create_buffer(&info, None)? };
         // SAFETY: `raw` is a live buffer.
-        let requirements = unsafe { self.raw().get_buffer_memory_requirements(raw) };
+        let mut requirements = unsafe { self.raw().get_buffer_memory_requirements(raw) };
+        // The instance records a top-level build reads must start on 16 bytes, which the
+        // driver's requirements need not give: AMD's put the movers' records 4 bytes off (#207,
+        // found by validation on the AMD iGPU).
+        if desc
+            .usage
+            .contains(vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR)
+        {
+            requirements.alignment = requirements.alignment.max(16);
+        }
         let allocation = match self.with_allocator(|a| {
             a.allocate(&AllocationCreateDesc {
                 name: desc.name,

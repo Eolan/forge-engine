@@ -173,6 +173,10 @@ struct Candidate {
 
 /// NVIDIA's PCI vendor id: the only vendor NVIDIA Streamline (DLSS) is loaded for (issue #67).
 pub const VENDOR_NVIDIA: u32 = 0x10DE;
+/// AMD's PCI vendor id (`FORGE_GPU=amd`, issue #67).
+pub const VENDOR_AMD: u32 = 0x1002;
+/// Intel's PCI vendor id (`FORGE_GPU=intel`).
+pub const VENDOR_INTEL: u32 = 0x8086;
 
 impl Device {
     /// Picks the best physical device that can present to `surface` (when given) and creates
@@ -520,20 +524,54 @@ impl Device {
         Ok(Self::best_candidate(instance, surface)?.map(|c| c.vendor_id))
     }
 
-    /// The highest-scoring GPU of `instance` that meets the baseline (the last of equals).
+    /// The highest-scoring GPU of `instance` that meets the baseline (the last of equals), or
+    /// the one `FORGE_GPU` names (issue #67): `nvidia`, `amd` or `intel` (the best of that
+    /// vendor's), or an index in Vulkan's enumeration order. A name that matches no GPU able to
+    /// run Forge is an error, not a silent fallback.
     fn best_candidate(
         instance: &Instance,
         surface: Option<vk::SurfaceKHR>,
     ) -> Result<Option<Candidate>> {
         // SAFETY: plain enumeration on a live instance.
         let physicals = unsafe { instance.raw().enumerate_physical_devices()? };
-        let mut candidates: Vec<Candidate> = Vec::new();
-        for physical in physicals {
+        let mut candidates: Vec<(usize, Candidate)> = Vec::new();
+        for (index, physical) in physicals.into_iter().enumerate() {
             if let Some(c) = Self::evaluate(instance, physical, surface)? {
-                candidates.push(c);
+                candidates.push((index, c));
             }
         }
-        Ok(candidates.into_iter().max_by_key(|c| c.score))
+        let Some(wanted) = std::env::var("FORGE_GPU").ok().filter(|v| !v.is_empty()) else {
+            return Ok(candidates
+                .into_iter()
+                .map(|(_, c)| c)
+                .max_by_key(|c| c.score));
+        };
+        let vendor = match wanted.to_ascii_lowercase().as_str() {
+            "nvidia" => Some(VENDOR_NVIDIA),
+            "amd" => Some(VENDOR_AMD),
+            "intel" => Some(VENDOR_INTEL),
+            _ => None,
+        };
+        let index: Option<usize> = wanted.parse().ok();
+        if vendor.is_none() && index.is_none() {
+            return Err(GpuError::Unsupported(format!(
+                "FORGE_GPU={wanted}: expected nvidia, amd, intel or a device index"
+            )));
+        }
+        let chosen = candidates
+            .into_iter()
+            .filter(|(i, c)| Some(*i) == index || Some(c.vendor_id) == vendor)
+            .map(|(_, c)| c)
+            .max_by_key(|c| c.score);
+        match chosen {
+            Some(c) => {
+                tracing::info!(device = %c.name, "GPU chosen by FORGE_GPU={wanted}");
+                Ok(Some(c))
+            }
+            None => Err(GpuError::Unsupported(format!(
+                "FORGE_GPU={wanted}: no such GPU able to run Forge"
+            ))),
+        }
     }
 
     fn evaluate(

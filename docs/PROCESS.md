@@ -376,7 +376,23 @@ reach the GPU, and in Tier 2, and put its lines in the report.
     transients does: in the yard, the first spray at frame 116.
 - `FORGE_PARANOID_BARRIERS=1` puts a full barrier before every dispatch, draw and blit; a list
   of pass-name prefixes (`=temporal/,debug/`) only before those passes. When it makes two runs
-  agree, timing is involved; bisect with the prefixes.
+  agree, timing is involved; bisect with the prefixes. Run the control too (barriers only on
+  the passes after the suspect): a barrier set can lower the odds by timing alone (#207).
+- **A serial-only race's reference is serial with `FORGE_WAIT_IDLE=1`, not async (#207).** On
+  the RTX 5070 Ti two hashed async runs of the yard differed, while wait-idle and full-barrier
+  serial runs agreed on every hash of 1 200 frames. With `FORGE_HASH_IMAGES=1` the yard's serial
+  runs part every time, so each step of a bisection takes one run.
+- `FORGE_GPU=nvidia|amd|intel|<index>` picks the GPU (#67); the dev machine's AMD iGPU (RDNA 2)
+  shows AMD's driver behaviour. On it the mesh path loses the device after two frames (#28's
+  look-back) and NRD cannot load (no push descriptors or pipeline robustness), so run it with
+  `--force-fallback`; the yard's frame there repeats to the bit, serial and async (#207).
+- **GPU-assisted validation** (`--validate` with `FORGE_GPU_AV=1`) instruments the shaders: it
+  checks the bindless indices and device addresses the sync validation layer cannot see, and
+  races on groupshared memory (it found NRD 4.17.3's, #210). Its buffer validation kills the
+  demos on their first frame (`STATUS_FATAL_USER_CALLBACK_EXCEPTION`): run with
+  `VK_KHRONOS_VALIDATION_GPUAV_BUFFERS_VALIDATION=false`, and
+  `VK_KHRONOS_VALIDATION_DUPLICATE_MESSAGE_LIMIT=100000` to see past the tenth report. 1 200
+  frames of the yard take two minutes.
 - **Two runs that part (#161):** city-blocks' `FORGE_HASH_IMAGES=1` logs, each frame, hashes of
   the probes' irradiance atlas and the ambient occlusion (#207), the shadow rays' three images
   and the denoised shadow (#204), the clouds, the scene colour,
