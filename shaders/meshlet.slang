@@ -1991,32 +1991,39 @@ void mesh_main(
 {
     Frame* f = push.frame;
     uint index = grid_index(group);
-    if (index >= pass_args(f)[3])
+    uint vertex_count = 0;
+    uint triangle_count = 0;
+    uint slot = 0;
+    uint base = 0;
+    Meshlet m = {};
+    Instance inst = {};
+    // Nothing for the partial last row of the grid, nor for the clusters `mesh_cutout_main`
+    // draws (#171).
+    if (index < pass_args(f)[3])
     {
-        SetMeshOutputCounts(0, 0); // the partial last row of the grid
-        return;
+        slot = f[0].raster[index];
+        uint2 record = f[0].visible[slot];
+        m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+        inst = f[0].instances[record.x];
+        if (cluster_cutouts(f, inst, m) == 0)
+        {
+            vertex_count = m.vertex_count;
+            triangle_count = m.triangle_count;
+            base = payload_base(f, m);
+        }
     }
-    uint slot = f[0].raster[index];
-    uint2 record = f[0].visible[slot];
-    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
-    Instance inst = f[0].instances[record.x];
-    if (cluster_cutouts(f, inst, m) != 0)
-    {
-        SetMeshOutputCounts(0, 0); // drawn by `mesh_cutout_main` (#171)
-        return;
-    }
+    // One call, at the top level, whatever the cluster: AMD's RDNA 2 driver hangs the GPU
+    // when the call sits in several branches with early returns (#28).
+    SetMeshOutputCounts(vertex_count, triangle_count);
 
-    SetMeshOutputCounts(m.vertex_count, m.triangle_count);
-    uint base = payload_base(f, m);
-
-    if (thread < m.vertex_count)
+    if (thread < vertex_count)
     {
         PagedVertex v = paged_vertex(f, base, thread);
         float3 relative = instance_point(f, inst, v.position);
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
     }
 
-    for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
+    for (uint t = thread; t < triangle_count; t += MESH_GROUP_SIZE)
     {
         tris[t] = uint3(paged_index(f, base, m, t, 0), paged_index(f, base, m, t, 1), paged_index(f, base, m, t, 2));
         prims[t].id = (slot << VISIBILITY_TRIANGLE_BITS) | t;
@@ -2046,27 +2053,32 @@ void mesh_cutout_main(
 {
     Frame* f = push.frame;
     uint index = grid_index(group);
-    if (index >= pass_args(f)[3])
+    uint vertex_count = 0;
+    uint triangle_count = 0;
+    uint slot = 0;
+    uint base = 0;
+    Meshlet m = {};
+    Instance inst = {};
+    // Nothing for the partial last row of the grid, nor for the clusters `mesh_main` draws.
+    if (index < pass_args(f)[3])
     {
-        SetMeshOutputCounts(0, 0);
-        return;
+        slot = f[0].raster[index];
+        uint2 record = f[0].visible[slot];
+        m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+        inst = f[0].instances[record.x];
+        if (cluster_cutouts(f, inst, m) != 0)
+        {
+            vertex_count = m.vertex_count;
+            triangle_count = m.triangle_count;
+            base = payload_base(f, m);
+        }
     }
-    uint slot = f[0].raster[index];
-    uint2 record = f[0].visible[slot];
-    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
-    Instance inst = f[0].instances[record.x];
-    if (cluster_cutouts(f, inst, m) == 0)
-    {
-        SetMeshOutputCounts(0, 0); // drawn by `mesh_main`
-        return;
-    }
+    // One call at the top level, as in `mesh_main` (#28).
+    SetMeshOutputCounts(vertex_count, triangle_count);
 
-    SetMeshOutputCounts(m.vertex_count, m.triangle_count);
-    uint base = payload_base(f, m);
-    bool uvs = f[0].meshes[inst.mesh].uvs != 0;
-
-    if (thread < m.vertex_count)
+    if (thread < vertex_count)
     {
+        bool uvs = f[0].meshes[inst.mesh].uvs != 0;
         PagedVertex v = paged_vertex(f, base, thread);
         float3 relative = instance_point(f, inst, v.position);
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
@@ -2074,7 +2086,7 @@ void mesh_cutout_main(
         verts[thread].ground = v.position.xz;
     }
 
-    for (uint t = thread; t < m.triangle_count; t += MESH_GROUP_SIZE)
+    for (uint t = thread; t < triangle_count; t += MESH_GROUP_SIZE)
     {
         tris[t] = uint3(paged_index(f, base, m, t, 0), paged_index(f, base, m, t, 1), paged_index(f, base, m, t, 2));
         prims[t].id = (slot << VISIBILITY_TRIANGLE_BITS) | t;

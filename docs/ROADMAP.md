@@ -160,8 +160,10 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   Each is small; none blocks anything.
 
 **Waiting:**
-- #39 waits for the RTX 3080, #67 and #28 for an AMD card: set aside by the owner for now
-  (2026-10-02).
+- #39 waits for the RTX 3080, #67 for an AMD card: set aside by the owner for now
+  (2026-10-02). #28 ran on the dev machine's AMD iGPU (2026-10-09): the look-back holds there,
+  and its lost device was a mesh-shader driver hang, worked around. Asteroids, the reruns and
+  validation on the iGPU are left for `tools/amd-check.sh`.
 - #71 closed by the owner (2026-10-02), not reported upstream.
 - #70: a cheaper lookup ✅ (2026-10-04, 0.14 ms at 1440p).
 - #124 stays unbuilt below its gate (recording 0.12 ms against 0.5).

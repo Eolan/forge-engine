@@ -146,8 +146,12 @@ version): one ticket, one status word and at least one look-back read per work i
 1 px most work items draw nothing. Eight work items per workgroup brought it back to
 0.181 (four: 0.185; sixteen: no better at 1 px, worse at full detail). The look-back relies
 on a waiting workgroup never starving the one it waits for, which Vulkan does not promise:
-it holds on this GPU; GPUs without that guarantee (Apple's M-series is the documented case)
-need the bounded-spin variant, "Decoupled Fallback" (research/gpu-geometry.md; issue #28).
+it holds on this GPU and on the dev machine's AMD iGPU (RDNA 2), whose culls count the same
+clusters and whose mesh path matches its fallback to the pixel (meshlets and the yard, #28);
+GPUs without that guarantee (Apple's M-series is the documented case) would need the
+bounded-spin variant, "Decoupled Fallback" (research/gpu-geometry.md). The iGPU's lost
+device, first blamed on the look-back, was a hang in its mesh-shader driver: `SetMeshOutputCounts`
+called in several branches. The mesh shaders now call it once, at the top level.
 
 The golden image of the ballad moved once because of it: against the previous commit, 14 946
 pixels differ by ±1 (711 by more than 2, at most 16) with TAA and automatic exposure; with a

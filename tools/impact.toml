@@ -39,6 +39,8 @@
 # The tiers themselves (#199): what they run, not what the demos draw.
 "tools/verify.sh" = []
 "tools/impact.toml" = []
+# The occasional AMD check (#28): a script the tiers do not run.
+"tools/amd-check.sh" = []
 "assets/blender/**" = []
 "crates/forge-physics/**" = ["lab"]
 "crates/forge-sim/**" = ["lab"]

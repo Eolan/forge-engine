@@ -463,7 +463,15 @@ What building the "Fallback path" above taught (numbers in `docs/demos/meshlets.
   https://github.com/b0nes164/GPUPrefixSums describes it as letting such devices run the scan
   "without crashing") bounds the spin and lets the waiting workgroup compute the missing
   count itself (issue #28). The paper's PDF could not be read here (no text extractor), so
-  its details come from the ACM listing and the repository.
+  its details come from the ACM listing and the repository. The look-back also held on an
+  AMD RDNA 2 iGPU (2026-10-09): the same cull counts as NVIDIA's, the mesh path equal to the
+  fallback to the pixel.
+- **Call `SetMeshOutputCounts` once, at the top level of the mesh shader.** AMD's RDNA 2
+  driver (Adrenalin 26.8.1) hangs the GPU when it is called in several branches with early
+  returns, as soon as a group emits triangles: Radeon GPU Detective showed a hang without a
+  page fault in the mesh draw. A one-run-at-a-time bisection ruled out the shader's reads, its
+  indices, its positions, the per-primitive id, the fragment shader, the culling and depth
+  state, the indirect draw and the push-constant stages (#28). Both forms pass validation.
 - **Indirect grids are two-dimensional.** The spec guarantees only 65 535 workgroups per
   dimension for compute and mesh dispatches; the culls write `x = min(n, 32 768)` and
   `y = ⌈n / 32 768⌉` and the rest of the last row exits.

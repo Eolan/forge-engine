@@ -138,6 +138,17 @@ The Tier 2 run's steps, which also give Tier 1's (about 11 min, 20 with the timi
 Before #134 a check was quoted at 15–20 minutes of captures, a "before" batch and an "after"
 batch. Accepted sets remove the "before" batch.
 
+### The AMD check (#28)
+
+`tools/amd-check.sh` runs meshlets, asteroids and the physics lab's yard on the dev machine's
+AMD iGPU (RDNA 2): each on the mesh path and the fallback, twice, then under sync validation.
+It prints whether the reruns are identical, whether the mesh path matches the fallback (both
+0 pixels) and the validation messages. A second vendor's driver finds what NVIDIA's lets
+through: #28's mesh-shader hang, #207's barriers. It is neither a tier nor a gate: run it now
+and then, on a night that has a Tier 2, after the Tier 2, and report what it found. It stops
+at the first lost device. Read that run's log before anything else runs on the iGPU, and never
+loop runs that may lose it: repeated losses once disabled both GPUs.
+
 ## The verification batch (`tools/`, issue #74)
 
 Tier 1 runs the whole batch; Tier 0 a part of it. It runs on the owner's machine: the demos
@@ -360,6 +371,9 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   `--validate`.
 - `FORGE_GRAPH_LOG=1` prints the render graph's plan: its batches, the queue of each and the
   timeline values it waits for, then each pass and its barriers.
+- `FORGE_DEBUG_LABELS=1` labels each render-graph pass in the command buffers
+  (`VK_EXT_debug_utils`) without the validation layer, for Radeon GPU Detective, RenderDoc and
+  Nsight; `--validate` turns them on too.
 - `FORGE_ASYNC=0` keeps everything on the graphics queue (no async compute, no transfer
   queue, `EXCLUSIVE` sharing): the serial reference to compare an async frame with (issue
   #77). Captures must match in both modes. On NVIDIA the serial frame puts a full barrier
@@ -386,9 +400,19 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   serial runs agreed on every hash of 1 200 frames. With `FORGE_HASH_IMAGES=1` the yard's serial
   runs part every time, so each step of a bisection takes one run.
 - `FORGE_GPU=nvidia|amd|intel|<index>` picks the GPU (#67); the dev machine's AMD iGPU (RDNA 2)
-  shows AMD's driver behaviour. On it the mesh path loses the device after two frames (#28's
-  look-back) and NRD cannot load (no push descriptors or pipeline robustness), so run it with
-  `--force-fallback`; the yard's frame there repeats to the bit, serial and async (#207).
+  shows AMD's driver behaviour. NRD cannot load there (no push descriptors or pipeline
+  robustness); the yard's frame repeats to the bit, serial and async (#207), and the mesh path
+  matches the fallback to the pixel (#28). **Never loop runs that may lose its device:** one
+  loss at a time, then look; repeated losses disabled both GPUs once.
+- **A lost device on AMD: Radeon GPU Detective** (in the Radeon Developer Tool Suite). Start
+  `RadeonDeveloperPanelCLI -m crash -p <process> --rgd-enhanced --rgd-text-summary
+  --rgd-expand-markers -o X.rgd`, wait for "initialized successfully", run the demo with
+  `FORGE_DEBUG_LABELS=1`, then `rgd --parse X.rgd -o X.txt --expand-markers`: the marker tree
+  names the pass and the command in flight, and the page-fault summary tells a hang from a bad
+  address. Do not start the developer service as well: it takes the panel's router. Wave
+  analysis does not support RDNA 2. It found #28's hang: a mesh shader calling
+  `SetMeshOutputCounts` in several branches (early returns) hangs RDNA 2; call it once, at the
+  top level.
 - **GPU-assisted validation** (`--validate` with `FORGE_GPU_AV=1`) instruments the shaders: it
   checks the bindless indices and device addresses the sync validation layer cannot see, and
   races on groupshared memory (it found NRD 4.17.3's, #210). Its buffer validation kills the
