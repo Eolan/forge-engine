@@ -35,8 +35,74 @@ target = [43.728, 7.362]
 heading = 180.0
 orbit = 400000.0
 atmosphere = true
+sun = [240.0, 25.0]
 # The stars: NASA's Deep Star Maps 2020 (tools/fetch-planets.sh), turned by the Earth's pole and
 # its rotation at J2000.0 (W = 280.46°).
 stars = "assets/planets/sky/stars-8k.png"
 sky_pole = [0.0, 90.0]
 sky_meridian = 280.46
+
+# The Moon over the sea towards Italy, 120° from the sun: three quarters lit. Its near side faces
+# the Earth; its colour map, brightened for show, times 0.2 is its albedo of about 0.12.
+[[view.bodies]]
+name = "the Moon"
+map = "assets/planets/moon/moon-colour-4k.png"
+albedo = 0.2
+radius = 1737400.0
+distance = 384400000.0
+azimuth = 100.0
+elevation = 20.0
+facing = [0.0, 0.0]
+air = false
+
+# The tour (`planet --tour`): heights in metres over the ground there, angles in degrees, times in
+# seconds.
+[[view.tour]]
+name = "the Alps from the station"
+at = [47.5, 7.5]
+height = 400000.0
+heading = 180.0
+pitch = -35.0
+fov = 60.0
+travel = 0.0
+hold = 4.0
+
+[[view.tour]]
+name = "Corsica straight down"
+at = [42.15, 9.1]
+height = 400000.0
+heading = 0.0
+pitch = -89.0
+fov = 60.0
+travel = 10.0
+hold = 5.0
+
+[[view.tour]]
+name = "Mont Blanc"
+at = [45.55, 6.55]
+height = 6000.0
+heading = 40.0
+pitch = -10.0
+fov = 60.0
+travel = 12.0
+hold = 5.0
+
+[[view.tour]]
+name = "Èze over the sea"
+at = [43.74, 7.36]
+height = 120.0
+heading = 180.0
+pitch = -4.0
+fov = 60.0
+travel = 14.0
+hold = 5.0
+
+[[view.tour]]
+name = "the Moon over the sea"
+at = [43.74, 7.36]
+height = 120.0
+heading = 100.0
+pitch = 20.0
+fov = 6.0
+travel = 5.0
+hold = 6.0

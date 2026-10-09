@@ -142,6 +142,8 @@ pub struct ViewParams {
     pub orbit: f64,
     /// Whether it has an atmosphere (the Earth's), or space's black sky (the Moon's).
     pub atmosphere: bool,
+    /// The sun over the target, degrees: its azimuth from north towards east, and its elevation.
+    pub sun: (f64, f64),
     /// The sky's map (an equirectangular PNG relative to the workspace: NASA's Deep Star Maps,
     /// `forge_render::SkyBox`), or `false` for the procedural starfield.
     #[serde(with = "forge_core::switch")]
@@ -151,6 +153,59 @@ pub struct ViewParams {
     pub sky_pole: (f64, f64),
     /// See `sky_pole`.
     pub sky_meridian: f64,
+    /// The bodies in its sky (the Moon over the Earth, the Earth over the Moon).
+    pub bodies: Vec<SkyBodyParams>,
+    /// The tour (`planet --tour`): its stops in turn.
+    pub tour: Vec<TourStop>,
+}
+
+/// A body in a planet's sky (#220): the Moon over the Earth, the Earth over the Moon.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkyBodyParams {
+    /// Its name, for the log.
+    pub name: String,
+    /// Its colour map, an equirectangular PNG or JPEG relative to the workspace (a planet's).
+    pub map: String,
+    /// Its map's scale to an albedo.
+    pub albedo: f64,
+    /// Its radius and its distance from the camera, metres.
+    pub radius: f64,
+    /// See `radius`.
+    pub distance: f64,
+    /// Where it stands over the target, degrees: from north towards east, and over the horizon.
+    pub azimuth: f64,
+    /// See `azimuth`.
+    pub elevation: f64,
+    /// Its point that faces the camera, latitude and longitude in degrees.
+    pub facing: (f64, f64),
+    /// Its air: the light at its limb (a share of the sun's term, RGB) and the air's depth (a
+    /// share of its radius), or `false` for none.
+    #[serde(with = "forge_core::switch")]
+    pub air: Option<(f64, f64, f64, f64)>,
+}
+
+/// A stop of a planet's tour (#220): where the camera goes, how long it takes to get there and
+/// how long it stays.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TourStop {
+    /// Its name, for the log and the captures.
+    pub name: String,
+    /// Latitude and longitude, degrees.
+    pub at: (f64, f64),
+    /// Metres over the ground there.
+    pub height: f64,
+    /// The way the camera looks, degrees from north towards east, and over the horizon.
+    pub heading: f64,
+    /// See `heading`.
+    pub pitch: f64,
+    /// The vertical field of view, degrees.
+    pub fov: f64,
+    /// Seconds to get there from the stop before, and to stay.
+    pub travel: f64,
+    /// See `travel`.
+    pub hold: f64,
 }
 
 impl Default for PlanetWorld {
@@ -177,9 +232,12 @@ impl Default for PlanetWorld {
                 heading: 0.0,
                 orbit: 400_000.0,
                 atmosphere: true,
+                sun: (240.0, 25.0),
                 stars: None,
                 sky_pole: (0.0, 90.0),
                 sky_meridian: 280.46,
+                bodies: Vec::new(),
+                tour: Vec::new(),
             },
         }
     }

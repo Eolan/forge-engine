@@ -239,11 +239,18 @@ for path in $paths; do
     # compare with its photographs.
     capture "$path-planet-corsica-top" 120 "$planet" --target 42.15,9.1 --heading 0 --shot top \
       --sun-elevation 55 --sun-azimuth 160 --fixed-step "${flag[@]}"
+    # The tour's stop looking up at the Moon over the sea (#220).
+    capture "$path-planet-tour-moon" 80 "$planet" --tour-stop 4 --fixed-step "${flag[@]}"
   fi
   if [ -f "$planet" ] && [ -f "$root/assets/planets/moon/moon-ldem16.i16" ]; then
     for shot in orbit ground; do
       capture "$path-planet-moon-$shot" 120 "$planet" --world assets/worlds/moon.toml --shot "$shot" --fixed-step "${flag[@]}"
     done
+    # The Moon's tour's stop looking up at the Earth over Tycho (#220), when the Earth's colour is
+    # there too.
+    if [ -f "$root/assets/planets/earth/earth-colour-16k.jpg" ]; then
+      capture "$path-planet-moon-earth" 80 "$planet" --world assets/worlds/moon.toml --tour-stop 3 --fixed-step "${flag[@]}"
+    fi
   fi
   # The physics lab (#136), a tick a frame: the rain in mid-air at tick 90, with the occlusion
   # off for the A/B harness (the movers are culled like the rest), and the pile at rest at tick

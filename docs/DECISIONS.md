@@ -3382,7 +3382,10 @@ Marble, the Deep Star Maps):
 - **The Moon's descent** starts 4 000 km out, from where it is seen whole. The offset from the
   target is capped at a tenth of the radius: on a small body the curve was seen from the side and
   stretched by the lens.
-- **Next:** a tour of the Earth and the Moon, and the tiles streamed while flying.
+- **A tour** (`--tour`, 2026-10-10): the Earth's places from orbit to Èze and the Moon over the
+  sea; the Moon from 4 000 km to Tycho and the Earth over it. Each body in the other's sky is a
+  disc of its colour map, lit by the same sun (`forge_render::SkyBody`).
+- **Next:** the tiles streamed while flying.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

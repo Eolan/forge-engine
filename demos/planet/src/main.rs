@@ -29,11 +29,12 @@ use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CellPos, CullCamera,
     CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, PlanetView, Residency, SkyBox, SkyBoxPlanet, SkyParams,
-    Starfield, StartView, StreamingConfig, SwRaster, Taa, Tonemap, sky_from_body,
+    MeshletScene, MeshletSceneBuilder, PlanetView, Residency, SkyBody, SkyBodyView, SkyBox,
+    SkyBoxPlanet, SkyParams, Starfield, StartView, StreamingConfig, SwRaster, Taa, Tonemap,
+    sky_from_body,
 };
 use forge_task::TaskPool;
-use forge_terrain::planet::{tile_mesh, tile_name, tile_origin};
+use forge_terrain::planet::{SkyBodyParams, TourStop, tile_mesh, tile_name, tile_origin};
 use forge_terrain::{Planet, PlanetWorld};
 use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
@@ -65,18 +66,24 @@ struct Args {
     /// The way the descent looks, degrees from north towards east, over the world file's.
     #[arg(long, allow_hyphen_values = true)]
     heading: Option<f64>,
+    /// Fly the world's tour (`[[view.tour]]` in its file) instead of the descent.
+    #[arg(long)]
+    tour: bool,
+    /// Hold the tour at its stop N (from 0), for a capture.
+    #[arg(long, value_name = "N")]
+    tour_stop: Option<usize>,
     /// Seconds from orbit to the ground.
     #[arg(long, default_value_t = 60.0)]
     duration: f32,
     /// Advance the descent by 1/120 s per frame instead of wall time (deterministic captures).
     #[arg(long)]
     fixed_step: bool,
-    /// The sun's elevation over the coast, degrees.
-    #[arg(long, default_value_t = 25.0, allow_hyphen_values = true)]
-    sun_elevation: f32,
-    /// The sun's azimuth over the target, degrees from north towards east.
-    #[arg(long, default_value_t = 240.0)]
-    sun_azimuth: f32,
+    /// The sun's elevation over the target, degrees, over the world's.
+    #[arg(long, allow_hyphen_values = true)]
+    sun_elevation: Option<f64>,
+    /// The sun's azimuth over the target, degrees from north towards east, over the world's.
+    #[arg(long)]
+    sun_azimuth: Option<f64>,
     /// Draw without the sun's ray-traced shadows (J toggles them).
     #[arg(long)]
     no_shadows: bool,
@@ -472,6 +479,12 @@ struct PlanetDemo {
     /// The real sky (NASA's Deep Star Maps) when the world names it, and the rotation from the
     /// world's axes to the sky's.
     sky_box: Option<SkyBox>,
+    /// The bodies in the sky, their passes and their settings.
+    bodies: Vec<(SkyBody, SkyBodyParams)>,
+    /// The tour's stop the camera holds at, for the log.
+    tour_stop: Option<String>,
+    /// The air's settings, for the light reaching a body through it.
+    air_params: Option<AtmosphereParams>,
     sky_from_world: glam::Mat3,
     taa: Taa,
     taa_enabled: bool,
@@ -507,8 +520,8 @@ impl PlanetDemo {
         let placement = Placement::new(&world, target);
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         // The sun over the coast, through the air (the coast's sunlight lights every tile).
-        let elevation = f64::from(args.sun_elevation).to_radians();
-        let azimuth = f64::from(args.sun_azimuth).to_radians();
+        let elevation = world.view.sun.1.to_radians();
+        let azimuth = world.view.sun.0.to_radians();
         renderer.sun_dir = ((placement.north * azimuth.cos() + placement.east * azimuth.sin())
             * elevation.cos()
             + DVec3::Y * elevation.sin())
@@ -516,6 +529,7 @@ impl PlanetDemo {
         renderer.sun_illuminance = forge_render::starfield::SUN_ILLUMINANCE_1AU;
         let mut starfield = Starfield::new(&ctx.device, &ctx.shaders, forge_render::HDR_FORMAT)?;
         starfield.sun_illuminance = renderer.sun_illuminance;
+        let mut air_params = None;
         let air = if world.view.atmosphere {
             // The Earth's air over a ground of the planet's radius; the sunlight through it at the
             // target lights every tile.
@@ -527,6 +541,7 @@ impl PlanetDemo {
                 renderer.sun_dir,
                 64,
             ));
+            air_params = Some(params);
             let pair = || -> Result<_> {
                 Ok((
                     Atmosphere::new(&ctx.device, &ctx.shaders, params)?,
@@ -562,6 +577,24 @@ impl PlanetDemo {
                 Ok(sky_box)
             })
             .transpose()?;
+        // The bodies in the sky, each with its map.
+        let bodies = world
+            .view
+            .bodies
+            .iter()
+            .map(|body| -> Result<(SkyBody, SkyBodyParams)> {
+                let path = forge_terrain::workspace_path(&body.map);
+                let bytes = std::fs::read(&path).map_err(|e| {
+                    anyhow::anyhow!(
+                        "{}'s map {} ({e}; tools/fetch-planets.sh fetches it)",
+                        body.name,
+                        path.display()
+                    )
+                })?;
+                let map = textures::decode_image(&body.map, &bytes, textures::ImageUse::Color)?;
+                Ok((SkyBody::new(&ctx.device, &ctx.shaders, &map)?, body.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let (pole_ra, pole_dec) = world.view.sky_pole;
         let sky_from_world = (sky_from_body(pole_ra, pole_dec, world.view.sky_meridian)
             * glam::DMat3::from_quat(placement.rotation.inverse()))
@@ -692,6 +725,9 @@ impl PlanetDemo {
             starfield,
             sky_box,
             sky_from_world,
+            bodies,
+            air_params,
+            tour_stop: None,
             taa,
             bloom: Bloom::new(&ctx.device, &ctx.shaders)?,
             gtao: Gtao::new(&ctx.device, &ctx.shaders)?,
@@ -711,8 +747,28 @@ impl PlanetDemo {
         Ok(demo)
     }
 
-    /// Places the camera on the descent where it is now.
+    /// Places the camera on the tour where it is now (`--tour`, `--tour-stop`), or on the descent.
     fn place_camera(&mut self) {
+        let stops = &self.planet.world.view.tour;
+        if (self.args.tour || self.args.tour_stop.is_some()) && !stops.is_empty() {
+            let time = match self.args.tour_stop {
+                // Held a second into its stay, as a capture wants.
+                Some(n) => {
+                    let n = n.min(stops.len() - 1);
+                    stops[..=n].iter().map(|s| s.travel).sum::<f64>()
+                        + stops[..n].iter().map(|s| s.hold).sum::<f64>()
+                        + 1.0
+                }
+                None => f64::from(self.time),
+            };
+            if let Some(name) = tour(stops, time, &self.planet, &self.placement, &mut self.camera)
+                && self.tour_stop.as_deref() != Some(name)
+            {
+                tracing::info!(stop = name, time = %format_args!("{time:.1}"), "tour");
+                self.tour_stop = Some(name.to_owned());
+            }
+            return;
+        }
         place(
             self.args.shot,
             self.time,
@@ -735,6 +791,89 @@ impl PlanetDemo {
         let ground = self.planet.ground(self.placement.direction(p), fine);
         (over_sea, over_sea - ground)
     }
+}
+
+/// `camera` `time` seconds into the tour of `stops`: travelling from one stop to the next along
+/// the great circle between them, its height eased in its logarithm and raised over long hops (a
+/// flight's arc, so it clears what lies between), its heading, pitch and field of view eased; or
+/// holding at a stop. Returns the stop it holds at.
+fn tour<'a>(
+    stops: &'a [TourStop],
+    time: f64,
+    planet: &Planet,
+    placement: &Placement,
+    camera: &mut FlyCamera,
+) -> Option<&'a str> {
+    // A stop's pose: its direction (the planet's frame), height, heading, pitch, field of view.
+    let pose = |s: &TourStop| {
+        (
+            forge_terrain::planet::direction(s.at.0, s.at.1),
+            s.height,
+            s.heading,
+            s.pitch,
+            s.fov,
+        )
+    };
+    let mut start = 0.0;
+    let mut held = None;
+    let mut at = pose(&stops[0]);
+    for (i, stop) in stops.iter().enumerate() {
+        let arrive = start + stop.travel;
+        let leave = arrive + stop.hold;
+        if time < arrive && i > 0 {
+            let from = pose(&stops[i - 1]);
+            let to = pose(stop);
+            let t = ((time - start) / stop.travel.max(1e-3)).clamp(0.0, 1.0);
+            let s = t * t * (3.0 - 2.0 * t);
+            let angle = from.0.angle_between(to.0);
+            let direction = if angle < 1e-9 {
+                to.0
+            } else {
+                // Slerp.
+                (from.0 * ((1.0 - s) * angle).sin() + to.0 * (s * angle).sin()) / angle.sin()
+            };
+            let arc = 0.15 * angle * placement.radius * 4.0 * s * (1.0 - s);
+            let height = (from.1.ln() + (to.1.ln() - from.1.ln()) * s).exp() + arc;
+            let mut turn = (to.2 - from.2).rem_euclid(360.0);
+            if turn > 180.0 {
+                turn -= 360.0;
+            }
+            at = (
+                direction,
+                height,
+                from.2 + turn * s,
+                from.3 + (to.3 - from.3) * s,
+                from.4 + (to.4 - from.4) * s,
+            );
+            break;
+        }
+        at = pose(stop);
+        if time < leave {
+            held = Some(stop.name.as_str());
+            break;
+        }
+        start = leave;
+    }
+    let (direction, height, heading, pitch, fov) = at;
+    let fine = planet.world.min_wavelength(planet.world.tiles.finest);
+    let ground = planet.ground(direction, fine);
+    let position =
+        placement.world_point(direction * (placement.radius + ground + height.max(30.0)));
+    // The view in the place's own frame: north, east and up there, turned into the world.
+    let up = direction.normalize();
+    let north = (DVec3::Y - up * up.y).try_normalize().unwrap_or(DVec3::Z);
+    let east = north.cross(up);
+    let (heading, pitch) = (heading.to_radians(), pitch.to_radians());
+    let forward = placement.rotation
+        * ((north * heading.cos() + east * heading.sin()) * pitch.cos() + up * pitch.sin());
+    let forward = forward.as_vec3();
+    camera.position = position.as_vec3();
+    let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or(Vec3::NEG_Z);
+    camera.yaw = -flat.x.atan2(-flat.z);
+    camera.pitch = forward.y.asin().clamp(-1.55, 1.55);
+    camera.fov_y = (fov as f32).to_radians();
+    camera.near = (height as f32 * 0.1).clamp(0.05, 100.0);
+    held
 }
 
 /// How far along the descent, 0 (orbit) to 1 (the ground): eased at both ends `time` seconds
@@ -1085,6 +1224,48 @@ impl Demo for PlanetDemo {
                 }),
             );
         }
+        // The bodies in the sky (#220): placed by their azimuth and elevation over the target
+        // (far enough that the camera's moves don't shift them), lit by the sun through the air
+        // towards them.
+        for (body, params) in &self.bodies {
+            let (azimuth, elevation) = (params.azimuth.to_radians(), params.elevation.to_radians());
+            let direction = ((self.placement.north * azimuth.cos()
+                + self.placement.east * azimuth.sin())
+                * elevation.cos()
+                + DVec3::Y * elevation.sin())
+            .as_vec3();
+            let through = self.air_params.map_or(1.0, |air| {
+                let t = air.transmittance(view_km, direction, 32);
+                0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2]
+            });
+            let air = params.air.map_or([0.0; 4], |(r, g, b, depth)| {
+                [r as f32, g as f32, b as f32, depth as f32]
+            });
+            body.draw(
+                &mut frame.graph,
+                taa_frame.color,
+                targets.depth,
+                extent,
+                draw_view_proj,
+                &SkyBodyView {
+                    direction,
+                    angular_radius: (params.radius / params.distance).asin() as f32,
+                    body_from_world: forge_render::skybody::facing(
+                        direction,
+                        params.facing.0 as f32,
+                        params.facing.1 as f32,
+                    ),
+                    sun_dir,
+                    sun_luminance: forge_render::exposure::lambertian_luminance(
+                        self.renderer.sun_illuminance,
+                    ) * exposure
+                        * through,
+                    albedo: params.albedo as f32,
+                    rim: air,
+                    through_air: sky.is_some(),
+                },
+            );
+        }
         self.meter.measure(
             &mut frame.graph,
             frame.slot,
@@ -1159,6 +1340,12 @@ fn main() -> Result<()> {
     }
     if let Some(heading) = args.heading {
         world.view.heading = heading;
+    }
+    if let Some(azimuth) = args.sun_azimuth {
+        world.view.sun.0 = azimuth;
+    }
+    if let Some(elevation) = args.sun_elevation {
+        world.view.sun.1 = elevation;
     }
     if args.print_world {
         print!("{}", world.to_toml()?);

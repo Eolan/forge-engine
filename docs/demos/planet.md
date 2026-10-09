@@ -28,6 +28,7 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | `--ev100 EV`, `--auto-exposure` | the exposure: sunny 16 (EV 15) by default, as a camera takes anything sunlit; or metered |
 | `--stars STOPS` | the stars' brightness: a map value of 1 at 2^STOPS cd/m² (12) |
 | `--radius KM`, `--seed N` | over the world's |
+| `--tour`, `--tour-stop N` | flies the world's tour, or holds its stop N |
 | `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B) |
 
 ## How it is made
@@ -100,6 +101,39 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
   level). Every tile is ground to the rays (`set_ray_terrain`), so the finest tiles' shadows
   start clear of the rays' cut, as the island's do.
 
+## The tour and the bodies in the sky
+
+`planet --tour` flies the world's `[[view.tour]]` stops in turn, and `--tour-stop N` holds stop N
+for a capture. The camera travels along the great circle between stops, its height eased in its
+logarithm and raised over long hops, so it clears the mountains between. Heading, pitch and field
+of view ease too. A stop looking up narrows the field of view, because the Moon is half a degree
+across.
+
+| The Earth's tour (`earth.toml`) | The Moon's tour (`moon.toml`) |
+|---|---|
+| the Alps from the station (400 km) | the Moon from 4 000 km |
+| Corsica straight down | Tycho from 60 km |
+| Mont Blanc from 6 km | on Tycho's floor |
+| Èze over the sea | the Earth over Tycho (12° field of view) |
+| the Moon over the sea (6° field of view) | |
+
+![the two tours' stops](images/planet-tour.png)
+
+**The bodies** (`[[view.bodies]]`, `forge_render::SkyBody`): the Moon in the Earth's sky, the
+Earth in the Moon's. Each is placed by its azimuth and elevation over the target. Its colour map
+is the Moon Kit's or the Blue Marble's, turned so a given point faces the camera: the Moon's near
+side, or Europe and Africa. It is lit by the same sun as the ground, so its phase follows: the
+sun at 240° and the Moon at 100° make it three quarters lit. On the Earth, its light passes through
+the air (the CPU's transmittance) and adds to the day sky, which lies in front of it. The Earth's
+air is a rim of blue light at its limb.
+
+![the Earth over Tycho, the Moon over the sea](images/planet-bodies.png)
+
+- **Against photographs:** the Moon in the day sky is pale, its maria clear, its dark side lost in
+  the blue. The Earth from the Moon has no clouds, since the Blue Marble is cloud-free, where the
+  real Earth is about two-thirds covered and white with them.
+- **Cost:** `sky/body` 0.01–0.02 ms.
+
 ## Numbers (RTX 5070 Ti, 1600 × 900, TAA, 2026-10-10)
 
 | | Earth (Èze) | Moon (Tycho) |
@@ -123,8 +157,9 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
   stays near the target. Next: the cut made again around the camera on a worker and the scene
   swapped, then the renderer's scene taking and freeing meshes at run time, and a tile cooked in
   milliseconds rather than a quarter of a second (a regular grid's DAG built directly).
-- **A tour:** the Earth's places in turn, the Moon seen from the ground, the Earth from the Moon,
-  compared with known photographs (the owner, 2026-10-10).
+- **Clouds for the Earth seen from afar,** as the Moon and orbit see it.
+- **The tour's low stops away from the target** (Mont Blanc) draw coarse tiles until they stream;
+  the snow layer on them reads as cloud.
 - **Steps where levels meet:** a tile next to a coarser one meets it with a step its skirt fills.
   The research's swap rule (a level only where its parent errs under a pixel) comes with
   streaming.
@@ -142,4 +177,5 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 - the Earth at its three shots (`planet-orbit`, `planet-high`, `planet-ground`);
 - the ground's twins with the occlusion off and every page resident;
 - Corsica straight down from 400 km at the sun's 55° (`planet-corsica-top`);
-- the Moon from 4 000 km and on Tycho's floor.
+- the tour's stop under the Moon over the sea (`planet-tour-moon`);
+- the Moon from 4 000 km, on Tycho's floor, and the Earth over Tycho (`planet-moon-earth`).

@@ -211,6 +211,7 @@ A first layer of cumulus covers 0.45 of the sky by default (the owner's choice, 
 ```
 tools/fetch-planets.sh
 cargo run --release -p planet
+cargo run --release -p planet -- --tour
 cargo run --release -p planet -- --world assets/worlds/moon.toml --shot orbit
 ```
 
@@ -218,7 +219,9 @@ The Earth from NOAA's ETOPO 2022 elevation and the Moon from NASA's CGI Moon Kit
 `tools/fetch-planets.sh` (about 560 MB, not in the repository), with noise for the detail under
 their resolution. Cube-sphere tiles of cluster DAGs are cooked through the cache and drawn from
 orbit down to 2.4 m samples. A 60 s descent ends over Èze on the Côte d'Azur (the Moon's at
-Tycho). `--shot orbit|high|ground` holds it at a golden shot, and **P** flies. Numbers:
+Tycho). `--shot orbit|high|ground|top` holds it at a golden shot, `--tour` flies the world's
+tour (the Alps, Corsica, Mont Blanc, Èze, the Moon over the sea; on the Moon, Tycho and the Earth
+overhead), and **P** flies. The sky is NASA's map of the real stars. Numbers:
 [docs/demos/planet.md](docs/demos/planet.md).
 
 ### `physics-lab` — Phase 3's first demo

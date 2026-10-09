@@ -1339,6 +1339,7 @@ scene.
 | `sky/compose` (each far pixel marched) | 0.31 | 0.47 | 0.03 | — | — |
 | `sky/sky-view table` + `sky/irradiance` (the camera's and the ground's) | 0.09 | 0.23 | 0.05 | — | — |
 | `sky/box` (the real stars) | 0.02 | — | — | 0.06 | — |
+| `sky/body` (the Moon, the Earth: a disc) | 0.01 | — | — | — | 0.02 (the Earth over Tycho) |
 
 - **The sky from high up:** the per-pixel march beyond the aerial volume (`march_beyond`, 32
   steps) costs 0.3–0.5 ms where the planet fills the frame; the ground's own tables (its sky
