@@ -49,6 +49,11 @@
 //! address is valid from its first declared pass to its last: a body takes it from
 //! [`Resources::buffer`], never before [`RenderGraph::execute`].
 //!
+//! A frame that creates its transients anew (the first, and any whose transients change) puts a
+//! full barrier before each pass that first uses one (#204): without it, on the RTX 5070 Ti in
+//! the serial frame, SIGMA read the sun-shadow trace's new images back empty, though the
+//! derived barriers order them. Such frames are rare, so the cost is nil.
+//!
 //! Debugging: `FORGE_GRAPH_LOG=1` logs the compiled plan (passes, barriers, transient
 //! placement) whenever it changes; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
 //! memory, to tell an aliasing bug from anything else (`FORGE_GRAPH_NO_ALIAS=ao,taa` only to
@@ -1069,6 +1074,9 @@ struct CompiledPass {
     /// before it (image, aspect, mips), and the barriers that put them in the transfer layout.
     zero: Vec<(vk::Image, vk::ImageAspectFlags, u32)>,
     zero_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
+    /// Whether the pass is a transient's first (#204: on a frame that creates the transients
+    /// anew, such a pass waits behind a full barrier).
+    first_transient: bool,
     /// Index into the batches.
     batch: usize,
 }
@@ -1359,6 +1367,7 @@ fn compile_queued(
                 } else {
                     image_states[i].fill(undefined);
                 }
+                out.first_transient = true;
             }
             first_use[i] = false;
             let (base, count) = match use_.mip {
@@ -1452,6 +1461,7 @@ fn compile_queued(
                     write: true,
                     ..src
                 };
+                out.first_transient = true;
             }
             first_buffer_use[i] = false;
             let state = &mut buffer_states[i];
@@ -1962,7 +1972,10 @@ impl RenderGraph {
                 "render graph transients laid out again on request (FORGE_GRAPH_RELAYOUT)"
             );
         }
-        if relayout || self.cache.as_ref().is_none_or(|c| c.placement != placement) {
+        // A frame that creates its transients anew (#204): each pass that first uses one waits
+        // behind a full barrier, recorded below.
+        let laid_out = relayout || self.cache.as_ref().is_none_or(|c| c.placement != placement);
+        if laid_out {
             self.rebuild_cache(placement, frames)?;
         }
         let cache = self.cache.as_ref().expect("transient cache built above");
@@ -2194,6 +2207,19 @@ impl RenderGraph {
             }
             started[batch.queue.index()] = true;
             while let Some((pass, plan)) = work.next_if(|(_, plan)| plan.batch == index) {
+                if laid_out && plan.first_transient {
+                    // The transients are new this frame (#204): in the serial frame on the
+                    // mesh path, the sun-shadow trace's images read back empty in SIGMA on
+                    // such a frame unless a full barrier stood between (on the RTX 5070 Ti;
+                    // the derived barriers alone are correct, the cause is not known yet).
+                    let everything = vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE;
+                    commands.memory_barrier(
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        everything,
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        everything,
+                    );
+                }
                 if !plan.zero.is_empty() {
                     commands.barriers(&[], &plan.zero_barriers);
                     for &(image, aspect, mips) in &plan.zero {
@@ -3041,6 +3067,8 @@ mod tests {
             (S::TRANSFER, compute)
         );
         assert!(plan[1].zero.is_empty() && plan[1].zero_barriers.is_empty());
+        // The first use is marked, for a frame whose transients are new (#204).
+        assert!(plan[0].first_transient && !plan[1].first_transient);
     }
 
     fn request(name: &'static str, size: u64, first: usize, last: usize) -> Request {
