@@ -720,7 +720,7 @@ impl<D: Demo> State<D> {
         let frames = Frames::new(Arc::clone(&device), swapchain.image_count())?;
         let shaders = ShaderCompiler::new(
             root.join("shaders"),
-            root.join("shader-cache"),
+            forge_core::derived::cache_dir(forge_core::derived::CacheKind::Shaders),
             config.optimize_shaders,
         )?;
         let font_path = std::env::var_os("FORGE_OVERLAY_FONT")

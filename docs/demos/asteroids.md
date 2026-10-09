@@ -558,7 +558,7 @@ ballad:
 - **Shaders compile ahead.** After a shader change, the cache misses every entry, and the
   finishing step used to compile them all: about 10 s, with the window frozen. The compiler
   now records the entries a program asks for, and the shell lists them in
-  `shader-cache/<program>.entries` at the end of loading. At the next start, the loading
+  `cache/shaders/<program>.entries` (`shader-cache/` before #213) at the end of loading. At the next start, the loading
   screen compiles that list into the cache on four threads, alongside the mesh build. After a
   shader change, the ballad is ready in 3.9 s (33 entries compiled ahead) instead of 12 s
   frozen.
@@ -682,7 +682,7 @@ remade the island's CPU products at every launch: they were memoized per process
 are now kept on disk by `forge_core::derived`:
 - **The products:** the eroded field, the shaped heights, the water (ribbons, channels,
   lakes), the layer map with the rock sites, the drawn ground and the two sets of stones.
-- **Where:** `mesh-cache/derived/`, until #213.
+- **Where:** `cache/world/` (`mesh-cache/derived/` until #213).
 - **The keys:**
   - each product's inputs;
   - the keys of the products it is made from, so a change upstream reaches downstream;

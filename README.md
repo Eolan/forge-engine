@@ -158,7 +158,7 @@ cargo run --release -p city-blocks
 A city on a 4 km terrain: a compute pass places a million instances of twenty procedural
 props (buildings with real window recesses, towers, lamp posts, fountains, columns, and
 rocks and rubble over the hills around it; 25.8 M triangles of props, 8 M of terrain),
-cooked into cluster DAGs on the job system and cached in `mesh-cache/` (13 s the first
+cooked into cluster DAGs on the job system and cached in `cache/meshes/` (13 s the first
 time, under a second after), then streamed: 128 KiB cluster pages read from the cache files
 as the LOD cut asks for them, through a 512 MiB pool. Every prop is made of textured
 materials (brick, plaster, concrete, glass windows, marble, rock), and the ground of layers:

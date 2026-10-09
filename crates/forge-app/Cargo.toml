@@ -22,6 +22,7 @@ nrd = ["forge-gpu/nrd"]
 anyhow = { workspace = true }
 bytemuck = { workspace = true }
 ab_glyph = { workspace = true }
+forge-core = { workspace = true }
 forge-gpu = { workspace = true }
 tracy-client = { workspace = true, optional = true }
 glam = { workspace = true }

@@ -82,17 +82,22 @@ runs it:
   wins. A path no pattern matches sends the change to Tier 1: an unknown path counts as
   shared until someone maps it. Its `[recook]` and `[gpu]` tables add `--recook`, and the
   fallback with validation.
-- **`--recook`:** the props are cached in `mesh-cache/` by their parameters' text and
+- **`--recook`:** the props are cached in `cache/meshes/` by their parameters' text and
   `COOK_VERSION`, not by the code that makes them. After a change to that code,
   `FORGE_RECOOK=1` passes `--recook` to the first run of each scene that cooks (the city, the
   gallery, the island's 2 m and 8 m grounds). The island needs it no more (#208): its
-  products (`mesh-cache/derived/`) and its tiles are keyed by the code that makes them, so a
+  products (`cache/world/`) and its tiles are keyed by the code that makes them, so a
   change to `forge-procgen`, `forge-geom` or `forge-terrain` remakes what it touches.
 - **The caches keep only what is used** (#208, #209): a product's entry made by other code
   goes when the new one is written, a shader entry keeps its newest SPIR-V, and a file in
-  `mesh-cache/`, `mesh-cache/derived/` or `shader-cache/` that nothing used for a month is
+  `cache/meshes/`, `cache/world/` or `cache/shaders/` that nothing used for a month is
   removed at the next start, with partial writes older than an hour. The island's products
   are also capped at 4 GiB, least recently used first.
+- **One root, `cache/`** (#213, D-053): `cache/shaders/`, `cache/meshes/` and `cache/world/`,
+  from `forge_core::derived::cache_dir`. Ignored by git, never shipped, all regenerable: removing
+  `cache/` costs one cold start. A tree's first start after #213 moves its `shader-cache/`,
+  `mesh-cache/` and `mesh-cache/derived/` there (a rename each). An old directory whose new
+  one already exists is left in place, the log says so, and it can be removed by hand.
 - **Accepted sets** replace the "before" batch. A passing run becomes HEAD's accepted set,
   `captures/accepted/<sha>/`: the base set's images with the run's on top, and
   `manifest.txt` (the commit, the tier, the build, the driver, each image's SHA-256 and the
@@ -175,8 +180,8 @@ need the RTX 5070 Ti and open on the secondary monitor without taking focus. It 
    - To capture an older commit, build it in a tree of its own:
      `git worktree add --detach ../forge-base <commit>`, then `cargo build --release` in that
      tree, then `tools/captures.sh captures/base ../forge-base/target/release`.
-   - Each tree must be built in place, because the shader, shader-cache and mesh-cache roots
-     are compiled into the binaries from `CARGO_MANIFEST_DIR`.
+   - Each tree must be built in place, because the shaders' root and `cache/` (#213, one root:
+     `forge_core::derived::ROOT`) are compiled into the binaries from `CARGO_MANIFEST_DIR`.
    - Remove the tree afterwards with `git worktree remove ../forge-base`.
 3. **Compare:**
    - `tools/compare.sh NEW` compares with the newest accepted set; `tools/compare.sh BASE NEW`

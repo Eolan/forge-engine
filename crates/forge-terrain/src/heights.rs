@@ -54,10 +54,11 @@ pub fn island_heights() -> Field2<f32> {
 /// shaped.
 fn make_island_heights() -> Field2<f32> {
     let (params, erosion) = (world().island, world().erosion);
-    let root = crate::workspace_root();
-    // The eroded fields kept before #208 (`mesh-cache/island-<key>.f32`, keyed without their
+    // The eroded fields kept before #208 (`island-<key>.f32` among the meshes, keyed without their
     // code) are read no more.
-    if let Ok(dir) = std::fs::read_dir(root.join("mesh-cache")) {
+    if let Ok(dir) = std::fs::read_dir(forge_core::derived::cache_dir(
+        forge_core::derived::CacheKind::Meshes,
+    )) {
         for path in dir.filter_map(|e| e.ok().map(|e| e.path())) {
             let name = path
                 .file_name()

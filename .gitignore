@@ -1,6 +1,8 @@
 # Build output and caches
 /target/
 **/target/
+/cache/
+# The caches of before #213, moved under cache/ at the first start.
 /shader-cache/
 /mesh-cache/
 /captures/

@@ -77,7 +77,7 @@ Strahler order and the lakes over the hillshade), `coast.png`, `sea-height.png`,
 `city-blocks --island SEED` draws the island in the engine (stage 7, written in the cloud,
 first seen on the 5070 Ti on 2026-09-26: "In the engine" below): the heightfield (`--island-spacing`, 8 m by default: 2049²,
 8.4 M triangles like the city's ground; 4 m for the 4097² target, 33.5 M) is generated once
-into `mesh-cache/island-<key>.f32`, cooked into a cluster DAG through the same path as the
+(kept since #208 in `cache/world/` with the other products, #213), cooked into a cluster DAG through the same path as the
 city's terrain (`PropKind::Heightfield`, `forge_geom::city::heightfield_mesh`) and cached
 (since #106 drawn at 2 m in 64 tiles, `--island-drawn`: "The ground in tiles, towards 2 m"
 below). It is drawn on its own layered ground: sand on the shore, rock where the ground is steeper than

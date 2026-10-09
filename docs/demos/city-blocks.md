@@ -241,7 +241,7 @@ The city starts through `forge_app::run_loading`, like the ballad
   loading animation. From a warm cache that takes milliseconds; after a cook-version change
   (like #51's) it is several seconds of cooking, and the window no longer sits frozen.
 - **Shaders compile ahead:** after a shader change, the city's entries in
-  `shader-cache/city-blocks.entries` compile behind the loading screen too.
+  `cache/shaders/city-blocks.entries` compile behind the loading screen too.
 - **Unchanged:** every capture, the frame numbering and the profile.
 
 ## The sky and the probes beside the geometry: async compute (issue #77, 2026-09-25)
@@ -1099,7 +1099,7 @@ Reading the table:
 - **From the cache**, the twenty load in **0.54 s** (0.70 s of CPU, about 1.4 GB/s).
 
 **The cache.**
-- **Location:** `mesh-cache/<name>-<key>.fmesh`, git-ignored, 749 MB for the set.
+- **Location:** `cache/meshes/<name>-<key>.fmesh` (`mesh-cache/` before #213), git-ignored, 749 MB for the set.
 - **Key:** a hash of the prop's parameters, its cook options and `COOK_VERSION`.
 - **Contents:** a small header, then the cooked arrays as they lie in memory.
 - **Writing:** into a temporary file, renamed into place. A new cook removes that prop's

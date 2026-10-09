@@ -1,7 +1,7 @@
 //! `city-blocks` — the Phase 1 closing demo (issue #13), built in steps. The twenty
 //! procedural props of the city set (0.5 to 3 M triangles each, issue #34) and a 4 km
 //! terrain (8 M triangles) are cooked into cluster DAGs once and cached on disk
-//! (`mesh-cache/`); a compute pass places a million instances of the props over the terrain
+//! (`cache/meshes/`); a compute pass places a million instances of the props over the terrain
 //! (issue #35): a street grid of buildings, lamp posts and plazas, and rocks over the hills
 //! around it. Their cluster pages stream from the cache files through a GPU pool as the LOD
 //! cut asks for them (issue #36); `--fly` flies a loop at 300 m/s through TAA (issue #13).
@@ -3181,8 +3181,7 @@ fn percentile(values: &mut [f64], q: f64) -> f64 {
 /// Cooks (or loads) `props` in parallel on the job system, logging each prop's DAG; returns
 /// the meshes in order and the milliseconds they took together.
 fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<MeshletMesh>, f64) {
-    let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
-    let cache = root.join("mesh-cache");
+    let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
     if recook {
         // Stale files would still match their keys: remove this set's before cooking.
         for spec in props {

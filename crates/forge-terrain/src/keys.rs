@@ -12,10 +12,11 @@ pub(crate) mod code_digests {
     include!(concat!(env!("OUT_DIR"), "/code_digests.rs"));
 }
 
-/// Where the island's products are kept between starts (#208, D-053): beside the cooked meshes
-/// until #213 gathers every cache under `cache/`.
+/// Where the island's products are kept between starts (#208, D-053): `cache/world/` (#213).
 pub(crate) fn derived_cache() -> DerivedCache {
-    DerivedCache::new(crate::workspace_root().join("mesh-cache/derived"))
+    DerivedCache::new(forge_core::derived::cache_dir(
+        forge_core::derived::CacheKind::World,
+    ))
 }
 
 /// The key of the island's eroded field (#208) in world `w`: its parameters.

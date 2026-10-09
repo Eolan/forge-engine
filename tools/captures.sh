@@ -20,11 +20,11 @@
 #                the island demo's shots), lab (the physics lab's scenes), all. The images keep
 #                their names.
 #   FORGE_PATHS  the paths, mesh and fb (default both).
-#   FORGE_RECOOK 1: make the cached meshes again. The props and the island's tiles are cached
-#                in BIN's tree (mesh-cache/) by their parameters' text, not the code that makes
-#                them: a change to forge-procgen or forge-geom needs it. The island's cached
-#                heightfield is removed, and the first run of each scene that cooks (the city,
-#                the gallery, the island on its 2 m and 8 m grounds) gets `--recook`.
+#   FORGE_RECOOK 1: make the cached meshes again. The props are cached in BIN's tree
+#                (cache/meshes/) by their parameters' text, not the code that makes them: a
+#                change to forge-procgen or forge-geom needs it (the island's products and tiles
+#                follow their code, #208). The first run of each scene that cooks (the city, the
+#                gallery, the island on its 2 m and 8 m grounds) gets `--recook`.
 # OUT/batch.txt records the commit, the sets, the paths, the driver and the binaries' hashes.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -110,12 +110,8 @@ wanted() {
   done
   return 1
 }
-# The scenes already cooked again with FORGE_RECOOK=1; the island's heightfield (#96), which
-# --recook keeps, made again too.
+# The scenes already cooked again with FORGE_RECOOK=1.
 recooked=" "
-if [ "$recook" != 0 ]; then
-  rm -f "$bin/../../mesh-cache"/island-*.f32
-fi
 # scene DEMO ARGS...: the cooked scene a run draws (city, gallery, island2, island8), or nothing.
 scene() {
   local demo=$1

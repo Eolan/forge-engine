@@ -580,6 +580,80 @@ impl DerivedCache {
     }
 }
 
+/// The directory, in the workspace, of everything made on this machine (#213, D-053): never in
+/// git, never shipped, every entry regenerable. It is compiled in from where this tree is
+/// built, so each tree keeps its own (`docs/PROCESS.md`).
+pub const ROOT: &str = "cache";
+
+/// What [`ROOT`] holds, a directory each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheKind {
+    /// The shaders' SPIR-V and entry lists (#209), `cache/shaders/`.
+    Shaders,
+    /// The cooked meshes (`forge_geom::cache`), `cache/meshes/`.
+    Meshes,
+    /// The worlds' products ([`DerivedCache`], #208), `cache/world/`.
+    World,
+}
+
+impl CacheKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Shaders => "shaders",
+            Self::Meshes => "meshes",
+            Self::World => "world",
+        }
+    }
+}
+
+/// The directory of `kind` under [`ROOT`] in this workspace. The first call in a process moves
+/// the caches of before #213 there ([`move_old_caches`]).
+pub fn cache_dir(kind: CacheKind) -> PathBuf {
+    static MOVED: std::sync::Once = std::sync::Once::new();
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let root = workspace.join(ROOT);
+    MOVED.call_once(|| {
+        move_old_caches(&workspace, &root);
+    });
+    root.join(kind.name())
+}
+
+/// Moves the caches of before #213 under `root`: `mesh-cache/derived/` to `world/`, then
+/// `mesh-cache/` to `meshes/` and `shader-cache/` to `shaders/`. Each is a rename, done only
+/// when its destination does not exist yet; an old directory that cannot move stays where it
+/// is, and the log says so. Returns how many moved.
+pub fn move_old_caches(workspace: &Path, root: &Path) -> usize {
+    let mut moved = 0;
+    for (old, kind) in [
+        ("mesh-cache/derived", CacheKind::World),
+        ("mesh-cache", CacheKind::Meshes),
+        ("shader-cache", CacheKind::Shaders),
+    ] {
+        let from = workspace.join(old);
+        let to = root.join(kind.name());
+        if !from.is_dir() {
+            continue;
+        }
+        if to.exists() {
+            tracing::warn!(old = %from.display(), new = %to.display(), "an old cache beside its new one (#213): nothing reads it, remove it by hand");
+            continue;
+        }
+        match fs::create_dir_all(root).and_then(|()| fs::rename(&from, &to)) {
+            Ok(()) => {
+                moved += 1;
+                tracing::info!(from = %from.display(), to = %to.display(), "a cache moved under cache/ (#213)");
+            }
+            Err(error) => {
+                tracing::warn!(old = %from.display(), %error, "an old cache could not move under cache/ (#213): it stays")
+            }
+        }
+    }
+    moved
+}
+
 /// How long a cached file may go unused before a sweep removes it (#208): whatever nothing has
 /// asked for in a month (a renamed product, an old prop, a removed shader, another seed tried
 /// once) goes, so no cache directory grows with what is never used again.
@@ -822,5 +896,32 @@ mod tests {
         assert!(!partial.exists());
         assert!(other.exists());
         let _ = fs::remove_dir_all(cache.dir());
+    }
+
+    #[test]
+    fn the_old_caches_move_under_the_root_once() {
+        let workspace =
+            std::env::temp_dir().join(format!("forge-derived-move-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&workspace);
+        for (dir, file) in [
+            ("mesh-cache/derived", "a.fdd"),
+            ("mesh-cache", "b.fmesh"),
+            ("shader-cache", "c.spv"),
+        ] {
+            fs::create_dir_all(workspace.join(dir)).unwrap();
+            fs::write(workspace.join(dir).join(file), b"x").unwrap();
+        }
+        let root = workspace.join(ROOT);
+        assert_eq!(move_old_caches(&workspace, &root), 3);
+        assert!(root.join("world/a.fdd").exists());
+        assert!(root.join("meshes/b.fmesh").exists());
+        assert!(!root.join("meshes/derived").exists());
+        assert!(root.join("shaders/c.spv").exists());
+        assert!(!workspace.join("mesh-cache").exists());
+        // An old directory beside its new one stays, for the owner to remove.
+        fs::create_dir_all(workspace.join("shader-cache")).unwrap();
+        assert_eq!(move_old_caches(&workspace, &root), 0);
+        assert!(workspace.join("shader-cache").exists());
+        let _ = fs::remove_dir_all(&workspace);
     }
 }
