@@ -3321,8 +3321,10 @@ the island's flatness is then within 5 m at its edge.
 **Decided (the owner, 2026-10-09):**
 - **Question 1:** Earth's radius, 6 371 km.
 - **Question 2:** noise first, the genesis on the faces later.
-- **Question 3:** "either one or we can do it in a separate demo". So the `planet` demo starts
-  without the island. When step 2 comes, the island goes on flat in its own frame (the
-  recommendation), unless a separate demo with a bent island suits better by then.
+- **Question 3:** "either one or we can do it in a separate demo", then "I just prefer the
+  planet (or maybe planets and suns in the future) to have their own demo". So the `planet`
+  demo starts without the island, and later planets and suns go in it too. Any of the three
+  ways is allowed, the vertex-shader curve included. Step 2 picks one by what it measures; the
+  curve would need the rays' copy bent too.
 
 The steps are issues: #220 (step 1). Steps 2 to 5 are filed when step 1 draws.
