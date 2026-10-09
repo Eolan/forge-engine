@@ -1439,7 +1439,8 @@ impl Gallery {
                     [] => Vec3::new(0.0, 0.0, island_beach(&args) as f32),
                     [x, rest @ ..] => Vec3::new(*x, 0.0, rest.first().copied().unwrap_or(0.0)),
                 };
-                Some(island_walk::Walker::new(island_drawn(&args), at)?)
+                let layers = sand.as_ref().map(island_sand::SandWindow::layers);
+                Some(island_walk::Walker::new(island_drawn(&args), at, layers)?)
             }
             _ => None,
         };
@@ -1748,9 +1749,14 @@ impl Demo for Gallery {
                     self.walker = match self.walker.take() {
                         Some(_) => None,
                         None => {
-                            island_walk::Walker::new(island_drawn(&self.args), self.camera.position)
-                                .inspect_err(|e| tracing::warn!("the walker: {e}"))
-                                .ok()
+                            let layers = self.sand.as_ref().map(island_sand::SandWindow::layers);
+                            island_walk::Walker::new(
+                                island_drawn(&self.args),
+                                self.camera.position,
+                                layers,
+                            )
+                            .inspect_err(|e| tracing::warn!("the walker: {e}"))
+                            .ok()
                         }
                     };
                 }

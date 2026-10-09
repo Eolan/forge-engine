@@ -1056,8 +1056,9 @@ tags. Friction is each material's against itself.
 - **The walker** crosses on its autopilot at 3 m/s and stops walking once on the ice.
 - **Its grip:** on a ground with a row, its feet change its speed by at most the pair friction
   of its sole and the ground times g each second (`materials::traction`, `Player::tick`'s
-  `traction`). A ground without a row is gripped at once as before, so `walk` and the island's
-  walker are unchanged.
+  `traction`). A ground without a row is gripped at once as before, so `walk` is unchanged.
+  Since #206 the island's walker grips the island's ground through its rows
+  (`docs/demos/island.md`, "The walker's grip on the island's ground").
 
 ![The patches at tick 60: the crates holding on brick, wood and sand, sliding off the snow's and the ice's ramps, the balls bouncing; at tick 800 the walker at rest where it slid on the ice](images/lab-materials.png)
 

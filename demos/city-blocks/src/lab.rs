@@ -43,7 +43,7 @@ mod drive;
 mod flood;
 mod fly;
 mod flyer;
-mod materials;
+pub(crate) mod materials;
 pub(crate) use materials::ROWS as MATERIAL_ROWS;
 pub(crate) mod models;
 mod rocket;

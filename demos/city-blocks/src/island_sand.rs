@@ -49,6 +49,58 @@ pub(crate) const FOOT_PRESSURE: f32 = 70.0 * 9.81 / (std::f32::consts::PI * 0.05
 /// Where the window's mover waits while it is not drawn: far under the island.
 const PARKED: Vec3 = Vec3::new(0.0, -5000.0, 0.0);
 
+/// The island's layer (`island_layer`) at the scene's `at` in `layers`, the island's layer map.
+pub(crate) fn layer_at(layers: &Field2<u8>, at: DVec2) -> u8 {
+    let extent = f64::from(layers.size) * layers.spacing;
+    let texel = |c: f64| {
+        ((c / extent + 0.5) * f64::from(layers.size))
+            .floor()
+            .clamp(0.0, f64::from(layers.size - 1)) as u32
+    };
+    layers.get(texel(at.x), texel(at.y))
+}
+
+/// Whether the island's row draws sand at the scene's `at` with the ground `height` there, above
+/// the sea: a texel of the contour's own layers (sand or grass) under the sand's contour (the
+/// row's `LayerContour`, its wander left out), or the lakes' sand.
+pub(crate) fn drawn_sand(layers: &Field2<u8>, at: DVec2, height: f32) -> bool {
+    let layer = layer_at(layers, at);
+    // The contour's own layers are sand under it and grass over it, the sand's texels too; the
+    // lakes' sand is sand at any height, and the sand's texels far over the contour (the salt
+    // water's, #199), where the shader lets the texels decide: its reach twice, the wander and
+    // the band (`contour_reach` in meshlet.slang).
+    let far = SAND_BELOW + 2.0 * (SAND_WANDER + 0.08);
+    height > -0.2
+        && (layer == island_layer::LAKE_SAND
+            || (layer == island_layer::SAND && height > far)
+            || (matches!(
+                layer,
+                island_layer::SAND
+                    | island_layer::GRASS
+                    | island_layer::DRY_GRASS
+                    | island_layer::LUSH_GRASS
+                    | island_layer::RIVERBANK
+            ) && height < SAND_BELOW))
+}
+
+/// The island's ground as the row draws it at the scene's `at` with the ground `height` there
+/// (#206): the layer, the sand where the contour draws sand over grass, and grass where it draws
+/// grass over the sand's texels.
+pub(crate) fn drawn_layer(layers: &Field2<u8>, at: DVec2, height: f32) -> u8 {
+    let layer = layer_at(layers, at);
+    if drawn_sand(layers, at, height) {
+        if layer == island_layer::LAKE_SAND {
+            layer
+        } else {
+            island_layer::SAND
+        }
+    } else if layer == island_layer::SAND && height > -0.2 {
+        island_layer::GRASS
+    } else {
+        layer
+    }
+}
+
 /// The window, its layer and the ground under it.
 pub(crate) struct SandWindow {
     ground: Arc<DrawnGround>,
@@ -289,34 +341,14 @@ impl SandWindow {
         }
     }
 
-    /// Whether the island's row draws sand at `at` with the ground `height` there, above the sea:
-    /// a texel of the contour's own layers (sand or grass) under the sand's contour (the row's
-    /// `LayerContour`, its wander left out), or the lakes' sand.
+    /// The island's layer map it reads, which the walker reads too (#206).
+    pub(crate) fn layers(&self) -> Arc<Field2<u8>> {
+        Arc::clone(&self.layers)
+    }
+
+    /// Whether the island's row draws sand at `at` with the ground `height` there.
     fn sand_ground(&self, at: DVec2, height: f32) -> bool {
-        let l = &self.layers;
-        let extent = f64::from(l.size) * l.spacing;
-        let texel = |c: f64| {
-            ((c / extent + 0.5) * f64::from(l.size))
-                .floor()
-                .clamp(0.0, f64::from(l.size - 1)) as u32
-        };
-        let layer = l.get(texel(at.x), texel(at.y));
-        // The contour's own layers are sand under it and grass over it, the sand's texels too;
-        // the lakes' sand is sand at any height, and the sand's texels far over the contour
-        // (the salt water's, #199), where the shader lets the texels decide: its reach twice,
-        // the wander and the band (`contour_reach` in meshlet.slang).
-        let far = SAND_BELOW + 2.0 * (SAND_WANDER + 0.08);
-        height > -0.2
-            && (layer == island_layer::LAKE_SAND
-                || (layer == island_layer::SAND && height > far)
-                || (matches!(
-                    layer,
-                    island_layer::SAND
-                        | island_layer::GRASS
-                        | island_layer::DRY_GRASS
-                        | island_layer::LUSH_GRASS
-                        | island_layer::RIVERBANK
-                ) && height < SAND_BELOW))
+        drawn_sand(&self.layers, at, height)
     }
 
     /// Whether the window holds sand at `at`.

@@ -11,11 +11,13 @@ use std::time::Instant;
 
 use anyhow::Result;
 use forge_physics::{BodyDesc, BodyId, CharacterDesc, CharacterId, Shape, World, WorldDesc};
+use forge_procgen::Field2;
 use forge_render::MoverTransform;
 use forge_sim::TICK;
 use glam::{DVec2, DVec3, Quat, Vec2, Vec3};
 
 use crate::DrawnGround;
+use crate::lab::materials::{ISLAND_ROWS, SOLE, pair, traction};
 use crate::lab::walk::Player;
 
 /// A tile's samples a side: 63 cells, 32 of Jolt's blocks of two each way (a power of two, as
@@ -62,6 +64,10 @@ pub(crate) struct Walker {
     /// Its footfalls since they were last taken (#197), and its stride.
     footfalls: Vec<Footfall>,
     stride: Stride,
+    /// The island's layer map (`island_layer`), whose rows grip its boots (#206); without one,
+    /// any ground grips at once. And the layer under its feet at the last tick.
+    layers: Option<Arc<Field2<u8>>>,
+    underfoot: Option<u8>,
 }
 
 /// A walker's stride (#197; the lab's materials scene's too, #205): the metres walked since the
@@ -111,8 +117,13 @@ impl Stride {
 }
 
 impl Walker {
-    /// A walker standing on the ground under `at` (the scene's x and z).
-    pub(crate) fn new(ground: Arc<DrawnGround>, at: Vec3) -> Result<Self> {
+    /// A walker standing on the ground under `at` (the scene's x and z), gripped by the rows of
+    /// `layers`' ground (#206).
+    pub(crate) fn new(
+        ground: Arc<DrawnGround>,
+        at: Vec3,
+        layers: Option<Arc<Field2<u8>>>,
+    ) -> Result<Self> {
         let fine = ground.spacing / f64::from(ground.detail.split.max(1));
         let half = 0.5 * f64::from(ground.size - 1) * ground.spacing;
         let mut world = World::new(&WorldDesc::default());
@@ -141,6 +152,8 @@ impl Walker {
             off: 0.0,
             footfalls: Vec::new(),
             stride: Stride::default(),
+            layers,
+            underfoot: None,
         };
         walker.keep_tiles(feet)?;
         tracing::info!(
@@ -191,7 +204,16 @@ impl Walker {
         let start = Instant::now();
         let feet = self.world.character(self.character).position;
         self.keep_tiles(feet)?;
-        self.player.tick(&mut self.world, None, 0, TICK, |_| None);
+        // Its boots grip the ground as drawn under them (#206): the row's against the sole.
+        self.underfoot = self.layers.as_ref().map(|layers| {
+            let height = self.ground_at(feet.x, feet.z) as f32;
+            crate::island_sand::drawn_layer(layers, DVec2::new(feet.x, feet.z), height)
+        });
+        let grip = self
+            .underfoot
+            .and_then(|layer| ISLAND_ROWS.get(usize::from(layer)))
+            .map(|row| traction(&row.physics, TICK));
+        self.player.tick(&mut self.world, None, 0, TICK, |_| grip);
         let s = self.world.character(self.character);
         if s.ground == forge_physics::Ground::Firm {
             let off = s.position.y - self.ground_at(s.position.x, s.position.z);
@@ -331,8 +353,16 @@ impl Walker {
         let mean = self.tick_ms.iter().sum::<f64>() / n;
         let max = self.tick_ms.iter().copied().fold(0.0, f64::max);
         let cut = self.cut_ms.iter().copied().fold(0.0, f64::max);
+        // The ground under its feet and the boots' grip on it (#206).
+        let on = self
+            .underfoot
+            .and_then(|layer| ISLAND_ROWS.get(usize::from(layer)))
+            .map_or_else(String::new, |row| {
+                let mu = pair(SOLE.dynamic_friction, row.physics.dynamic_friction);
+                format!(", on {} (μ {mu:.2})", row.name)
+            });
         let title = format!(
-            "walker {mean:.3} ms a tick (max {max:.3}), {} tiles, cut in {cut:.2} ms at most, feet {:+.1} cm off the ground",
+            "walker {mean:.3} ms a tick (max {max:.3}), {} tiles, cut in {cut:.2} ms at most, feet {:+.1} cm off the ground{on}",
             self.tiles.len(),
             100.0 * self.off
         );
@@ -397,10 +427,110 @@ mod tests {
         })
     }
 
+    /// A flat field of 33 × 33 samples 2 m apart, `height` metres over the sea.
+    fn flat(height: f32) -> Arc<DrawnGround> {
+        let size = 33u32;
+        Arc::new(DrawnGround {
+            size,
+            spacing: 2.0,
+            heights: vec![height; (size * size) as usize].into(),
+            detail: Arc::new(HeightfieldDetail {
+                split: 1,
+                cells: Vec::new(),
+                heights: Vec::new(),
+            }),
+        })
+    }
+
+    #[test]
+    fn the_walker_speeds_up_as_its_grip_on_the_layer_allows() {
+        use crate::island_layer;
+        let ground = flat(20.0);
+        // Its speed along x ten ticks after it starts walking 3 m/s from rest, and a second
+        // later, on a layer map all of one layer.
+        let speed_up = |layer: u8| {
+            let layers = Arc::new(Field2::from_fn(64, 1.0, |_, _| layer));
+            let mut walker = Walker::new(ground.clone(), Vec3::ZERO, Some(layers)).unwrap();
+            for _ in 0..10 {
+                walker.advance(0.0, true);
+            }
+            walker.walk([3.0, 0.0]);
+            for _ in 0..10 {
+                walker.advance(0.0, true);
+            }
+            let ten = (walker.feet[1].x - walker.feet[0].x) / f64::from(TICK);
+            for _ in 0..60 {
+                walker.advance(0.0, true);
+            }
+            let later = (walker.feet[1].x - walker.feet[0].x) / f64::from(TICK);
+            (walker.underfoot, ten, later)
+        };
+        let mut speeds = Vec::new();
+        for layer in [
+            island_layer::ROCK,
+            island_layer::GRASS,
+            island_layer::LAKEBED,
+        ] {
+            let (underfoot, ten, later) = speed_up(layer);
+            assert_eq!(
+                underfoot,
+                Some(layer),
+                "the walker reads the layer under it"
+            );
+            let row = &ISLAND_ROWS[usize::from(layer)];
+            let expected = f64::from(pair(SOLE.dynamic_friction, row.physics.dynamic_friction))
+                * 9.81
+                * 10.0
+                * f64::from(TICK);
+            assert!(
+                (ten - expected).abs() < 0.1 * expected,
+                "on {}: {ten:.3} m/s after ten ticks, the row allows {expected:.3}",
+                row.name
+            );
+            assert!(
+                (later - 3.0).abs() < 0.05,
+                "on {}: {later:.3} m/s",
+                row.name
+            );
+            speeds.push(ten);
+        }
+        assert!(speeds[0] > speeds[1] && speeds[1] > speeds[2], "{speeds:?}");
+        // Without a layer map, any ground grips at once, as before.
+        let mut walker = Walker::new(ground.clone(), Vec3::ZERO, None).unwrap();
+        for _ in 0..10 {
+            walker.advance(0.0, true);
+        }
+        walker.walk([3.0, 0.0]);
+        for _ in 0..2 {
+            walker.advance(0.0, true);
+        }
+        let at_once = (walker.feet[1].x - walker.feet[0].x) / f64::from(TICK);
+        assert!((at_once - 3.0).abs() < 0.05, "{at_once:.3} m/s");
+    }
+
+    #[test]
+    fn the_island_rows_follow_the_layers_ids() {
+        use crate::island_layer;
+        let name = |layer: u8| ISLAND_ROWS[usize::from(layer)].name;
+        assert_eq!(name(island_layer::GRASS), "grass");
+        assert_eq!(name(island_layer::SAND), "dry sand");
+        assert_eq!(name(island_layer::ROCK), "granite");
+        assert_eq!(name(island_layer::LAKEBED), "mud");
+        assert_eq!(name(island_layer::LAKE_SAND), "silty sand");
+        assert_eq!(name(island_layer::LIMESTONE), "limestone");
+        assert_eq!(name(island_layer::GRUS), "grus");
+        // The beach's dry sand is the materials table's sand row.
+        let sand = &ISLAND_ROWS[usize::from(island_layer::SAND)].physics;
+        assert_eq!(
+            sand.dynamic_friction,
+            crate::lab::MATERIAL_ROWS[2].physics.dynamic_friction
+        );
+    }
+
     #[test]
     fn the_walkers_ground_is_the_drawn_ground_and_it_walks_on_it() {
         let ground = rough();
-        let mut walker = Walker::new(ground.clone(), Vec3::new(-2.5, 0.0, -9.3)).unwrap();
+        let mut walker = Walker::new(ground.clone(), Vec3::new(-2.5, 0.0, -9.3), None).unwrap();
         // Rays down onto Jolt's tiles at points all over the field, the refined cells among
         // them, meet the drawn ground within its compression (a few millimetres).
         let mut worst: f64 = 0.0;

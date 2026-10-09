@@ -3238,6 +3238,59 @@ alike. A test in `island_sand.rs` checks the window on a small field:
 
 `deform`'s test checks `Layer::move_to`.
 
+## The walker's grip on the island's ground (#206, Phase 3's materials, 2026-10-09)
+
+**Before:** the island's walker gripped any ground at once.
+
+**Now:** its boots grip the ground under them as the lab's walker's do since #203. Each tick,
+its feet change its speed by at most μ g, where μ pairs the rubber sole's friction (0.8) with
+the ground's row by the geometric mean.
+
+**The ground under its feet** is the ground as drawn (`island_sand::drawn_layer`):
+- the layer map's layer;
+- sand where the sand's contour draws sand over grass, the test the sand window uses;
+- grass where the contour draws grass over the sand's texels.
+
+**The rows** are in the materials table next to the lab's patches
+(`lab/materials.rs`, `ISLAND_ROWS`, one per `island_layer`). The beach's dry sand is the
+table's sand row. Friction is each material's against itself. The last two columns are the
+pair's μ with the sole and the time to reach a 3 m/s walk from rest:
+
+| Row | Static | Dynamic | Restitution | Density | Tags | μ with the sole | To 3 m/s |
+|---|---|---|---|---|---|---|---|
+| grass | 0.5 | 0.4 | 0.2 | 1 300 |  | 0.57 | 0.54 s |
+| dry sand (the beach) | 0.6 | 0.5 | 0.05 | 1 600 | deformable | 0.63 | 0.48 s |
+| wet sand (under the sea) | 0.6 | 0.5 | 0.05 | 2 000 | deformable | 0.63 | 0.48 s |
+| granite | 0.8 | 0.7 | 0.5 | 2 700 |  | 0.75 | 0.41 s |
+| wet stones (the streams) | 0.35 | 0.25 | 0.3 | 2 000 | slippery | 0.45 | 0.68 s |
+| dry grass | 0.55 | 0.45 | 0.2 | 1 300 |  | 0.60 | 0.51 s |
+| lush grass | 0.4 | 0.3 | 0.2 | 1 400 |  | 0.49 | 0.62 s |
+| riverbank | 0.4 | 0.3 | 0.1 | 1 500 | deformable | 0.49 | 0.62 s |
+| mud (the lakes' beds) | 0.3 | 0.2 | 0.05 | 1 500 | deformable, slippery | 0.40 | 0.76 s |
+| gravel | 0.5 | 0.4 | 0.3 | 1 900 |  | 0.57 | 0.54 s |
+| scree | 0.5 | 0.4 | 0.3 | 1 800 |  | 0.57 | 0.54 s |
+| scrub | 0.5 | 0.4 | 0.2 | 1 300 |  | 0.57 | 0.54 s |
+| silty sand (the deltas) | 0.65 | 0.55 | 0.05 | 1 900 | deformable | 0.66 | 0.46 s |
+| shingle | 0.45 | 0.35 | 0.3 | 1 800 |  | 0.53 | 0.58 s |
+| limestone | 0.6 | 0.5 | 0.5 | 2 600 |  | 0.63 | 0.48 s |
+| karst | 0.7 | 0.6 | 0.5 | 2 600 |  | 0.69 | 0.44 s |
+| grus | 0.55 | 0.45 | 0.1 | 1 700 | deformable | 0.60 | 0.51 s |
+
+These are the engine's choices, not measured soils. Rough rock grips best. The streams'
+stones under a film of algae and the lakes' mud grip least.
+
+**Its title** names the ground it stands on and the pair's μ ("on dry sand (μ 0.63)").
+
+**Checked:**
+- A test walks the walker from rest on a flat field over a layer map of one layer at a time.
+  Ten ticks in, its speed is the row's μ g t to the thousandth: 1.224 m/s on granite, 0.925 on
+  grass, 0.654 in the mud. A second later it walks at 3 m/s on each.
+- Without a layer map it grips at once, as before.
+- The batch's walker on the beach (`island-sand300`) doesn't change: 0 px. It walks from its
+  first tick, before its feet have found the ground, and a walk in the air takes effect at
+  once (`Player::tick`'s rule). So it leaves at its full 1.5 m/s. Starting from a standstill on
+  the sand, as a player does, it takes 0.24 s to reach that pace.
+
 ## A line across the lake (#178, the owner's report, 2026-10-08)
 
 In a capture 1.3 m over the highest lake (`--view=-238.2,318.14,-1843.9,135.2,-18.1`), the owner
