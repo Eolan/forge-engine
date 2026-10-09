@@ -428,24 +428,70 @@ uint payload_base(Frame* f, Meshlet m)
     return f[0].page_table[m.page] * PAGE_SIZE + m.payload;
 }
 
-// Vertex `i` of the payload at `base`.
-PagedVertex paged_vertex(Frame* f, uint base, uint i)
+// A packed payload (#218, forge_geom::page::Layout), marked in its cluster's `section` word: a
+// 16-byte header (the cluster's origin on its mesh's grid, three ints, then the widths and the
+// grid's exponent), a 32-bit normal per vertex, then each position's offset from the origin,
+// bit-packed. A cluster without the mark holds `PagedVertex` records (the skinned meshes').
+static const uint SECTION_PACKED = 1u << 24;
+static const uint PACKED_HEADER_WORDS = 4;
+
+// The `width` bits (at most 31) at bit `bit` of the words from `start` on.
+uint packed_bits(uint* words, uint start, uint bit, uint width)
 {
-    return ((PagedVertex*)f[0].pool)[base / PAGED_VERTEX_BYTES + i];
+    uint w = start + (bit >> 5);
+    uint s = bit & 31u;
+    uint value = words[w] >> s;
+    if (s != 0u)
+        value |= words[w + 1] << (32u - s);
+    return value & ((1u << width) - 1u);
+}
+
+// Vertex `i` of cluster `m`, whose payload is at `base`: its position decoded from the grid
+// exactly as the cook snapped it (an integer times a power of two).
+PagedVertex paged_vertex(Frame* f, uint base, Meshlet m, uint i)
+{
+    if ((m.section & SECTION_PACKED) == 0u)
+        return ((PagedVertex*)f[0].pool)[base / PAGED_VERTEX_BYTES + i];
+    uint* words = f[0].pool;
+    uint h = base / 4;
+    uint info = words[h + 3];
+    uint3 bits = uint3(info & 31u, (info >> 5) & 31u, (info >> 10) & 31u);
+    float step = asfloat((((info >> 16) & 0xFFu) - 1u) << 23); // 2^(exponent), biased by 128
+    uint start = h + PACKED_HEADER_WORDS + m.vertex_count;
+    uint bit = i * (bits.x + bits.y + bits.z);
+    uint3 offset = uint3(packed_bits(words, start, bit, bits.x),
+                         packed_bits(words, start, bit + bits.x, bits.y),
+                         packed_bits(words, start, bit + bits.x + bits.y, bits.z));
+    int3 grid = int3(asint(words[h]), asint(words[h + 1]), asint(words[h + 2])) + int3(offset);
+    PagedVertex v;
+    v.position = float3(grid) * step;
+    v.normal = words[h + PACKED_HEADER_WORDS + i];
+    return v;
+}
+
+// Where the triangles of cluster `m`, whose payload is at `base`, start in the pool, in bytes.
+uint paged_triangles(Frame* f, uint base, Meshlet m)
+{
+    if ((m.section & SECTION_PACKED) == 0u)
+        return base + m.vertex_count * PAGED_VERTEX_BYTES;
+    uint info = f[0].pool[base / 4 + 3];
+    uint stride = (info & 31u) + ((info >> 5) & 31u) + ((info >> 10) & 31u);
+    // The positions in whole words, and one more (forge_geom::page::Packed::position_bytes).
+    return base + PACKED_HEADER_WORDS * 4 + m.vertex_count * 4 + ((m.vertex_count * stride + 31u) / 32u) * 4 + 4;
 }
 
 // Local vertex index `k` (0..2) of triangle `t` of cluster `m`, whose payload is at `base`.
 uint paged_index(Frame* f, uint base, Meshlet m, uint t, uint k)
 {
-    return load_byte(f[0].pool, base + m.vertex_count * PAGED_VERTEX_BYTES + t * 3 + k);
+    return load_byte(f[0].pool, paged_triangles(f, base, m) + t * 3 + k);
 }
 
 // Where the UV stream of cluster `m`, whose payload is at `base`, starts (a mesh with UVs,
-// D-047; forge_geom::page::uv_offset): after its vertices and triangles, 16-byte aligned. It
+// D-047; forge_geom::page::Layout::uvs): after its vertices and triangles, 16-byte aligned. It
 // holds the cluster's UV minimum and extent, then a 16-bit unorm pair per vertex.
-uint uv_stream(uint base, Meshlet m)
+uint uv_stream(Frame* f, uint base, Meshlet m)
 {
-    return base + ((m.vertex_count * PAGED_VERTEX_BYTES + m.triangle_count * 3 + 15) & ~15u);
+    return (paged_triangles(f, base, m) + m.triangle_count * 3 + 15) & ~15u;
 }
 
 // The UV of vertex `i` in the stream at `stream`.
@@ -1395,7 +1441,8 @@ void cluster_cull(uint thread, bool streamed)
         uint* draw = f[0].draws + hw_index * 5;
         draw[0] = v.triangle_count * 3;
         draw[1] = 1;
-        draw[2] = v.payload + v.vertex_count * PAGED_VERTEX_BYTES;
+        // The header read here only: a cluster the cull describes may have no page resident.
+        draw[2] = paged_triangles(f, v.payload, f[0].meshlets[v.meshlet]);
         draw[3] = v.payload / PAGED_VERTEX_BYTES;
         draw[4] = slot;
     }
@@ -2018,7 +2065,7 @@ void mesh_main(
 
     if (thread < vertex_count)
     {
-        PagedVertex v = paged_vertex(f, base, thread);
+        PagedVertex v = paged_vertex(f, base, m, thread);
         float3 relative = instance_point(f, inst, v.position);
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
     }
@@ -2079,10 +2126,10 @@ void mesh_cutout_main(
     if (thread < vertex_count)
     {
         bool uvs = f[0].meshes[inst.mesh].uvs != 0;
-        PagedVertex v = paged_vertex(f, base, thread);
+        PagedVertex v = paged_vertex(f, base, m, thread);
         float3 relative = instance_point(f, inst, v.position);
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
-        verts[thread].uv = uvs ? paged_uv(f, uv_stream(base, m), thread) : float2(0.0);
+        verts[thread].uv = uvs ? paged_uv(f, uv_stream(f, base, m), thread) : float2(0.0);
         verts[thread].ground = v.position.xz;
     }
 
@@ -2113,14 +2160,16 @@ FallbackVertex vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV
     Frame* f = push.frame;
     uint2 record = f[0].visible[slot];
     Instance inst = f[0].instances[record.x];
-    PagedVertex v = paged_vertex(f, 0, vertex_index);
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    // The draw's vertex offset is the payload's start over 16: the vertex's index in it.
+    uint base = payload_base(f, m);
+    PagedVertex v = paged_vertex(f, base, m, vertex_index - base / PAGED_VERTEX_BYTES);
     float3 relative = instance_point(f, inst, v.position);
     FallbackVertex o;
     o.position = mul(f[0].view_proj, float4(relative, 1));
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
     // A cut-out cluster is drawn by `vertex_cutout_main` (#171): its triangles collapse here.
-    if ((f[0].flags & FLAG_CUTOUTS) != 0
-        && cluster_cutouts(f, inst, f[0].meshlets[record.y & MESHLET_INDEX_MASK]) != 0)
+    if ((f[0].flags & FLAG_CUTOUTS) != 0 && cluster_cutouts(f, inst, m) != 0)
         o.position = float4(0.0, 0.0, 0.0, 1.0);
     return o;
 }
@@ -2141,16 +2190,17 @@ FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, u
     uint2 record = f[0].visible[slot];
     Instance inst = f[0].instances[record.x];
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
-    PagedVertex v = paged_vertex(f, 0, vertex_index);
+    uint base = payload_base(f, m);
+    uint local = vertex_index - base / PAGED_VERTEX_BYTES;
+    PagedVertex v = paged_vertex(f, base, m, local);
     float3 relative = instance_point(f, inst, v.position);
     FallbackCutoutVertex o;
     o.position = mul(f[0].view_proj, float4(relative, 1));
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
     o.uv = float2(0.0);
     o.ground = v.position.xz;
-    uint base = payload_base(f, m);
     if (f[0].meshes[inst.mesh].uvs != 0)
-        o.uv = paged_uv(f, uv_stream(base, m), vertex_index - base / PAGED_VERTEX_BYTES);
+        o.uv = paged_uv(f, uv_stream(f, base, m), local);
     if (cluster_cutouts(f, inst, m) == 0)
         o.position = float4(0.0, 0.0, 0.0, 1.0);
     return o;
@@ -2395,7 +2445,7 @@ void sw_raster_main(uint thread : SV_GroupThreadID, uint3 group : SV_GroupID)
     {
         // The mesh shader's transform, then the fixed-function steps: perspective division,
         // the viewport of `set_viewport_full` (y flipped) and the snap to sub-pixels.
-        PagedVertex v = paged_vertex(f, base, thread);
+        PagedVertex v = paged_vertex(f, base, m, thread);
         float3 relative = instance_point(f, inst, v.position);
         float4 clip = mul(f[0].view_proj, float4(relative, 1));
         float3 ndc = clip.xyz / clip.w;
@@ -4264,9 +4314,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     bool culled_debug = (record.y & CULLED_BIT) != 0;
     bool software = (record.y & SOFTWARE_BIT) != 0;
     uint base = payload_base(f, m);
-    PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
-    PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
-    PagedVertex v2 = paged_vertex(f, base, paged_index(f, base, m, tri, 2));
+    PagedVertex v0 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 0));
+    PagedVertex v1 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 1));
+    PagedVertex v2 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 2));
     float3x3 frame = instance_frame(inst);
     float3 relative = instance_relative(f, inst);
     float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
@@ -4319,7 +4369,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.duvdy = float2(0.0);
     if (s.has_uv)
     {
-        uint stream = uv_stream(base, m);
+        uint stream = uv_stream(f, base, m);
         float2 t0 = paged_uv(f, stream, paged_index(f, base, m, tri, 0));
         float2 t1 = paged_uv(f, stream, paged_index(f, base, m, tri, 1));
         float2 t2 = paged_uv(f, stream, paged_index(f, base, m, tri, 2));
@@ -4492,9 +4542,9 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     // The surface at the pixel centre, as `shade_pixel` rebuilt it: its world position and
     // interpolated normal start the ray.
     uint base = payload_base(f, m);
-    PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
-    PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
-    PagedVertex v2 = paged_vertex(f, base, paged_index(f, base, m, tri, 2));
+    PagedVertex v0 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 0));
+    PagedVertex v1 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 1));
+    PagedVertex v2 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 2));
     float3x3 frame = instance_frame(inst);
     float3 relative = instance_relative(f, inst);
     float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
@@ -4683,9 +4733,9 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
     // The surface at the pixel centre, as `shade_pixel` rebuilds it.
     uint base = payload_base(f, m);
-    PagedVertex v0 = paged_vertex(f, base, paged_index(f, base, m, tri, 0));
-    PagedVertex v1 = paged_vertex(f, base, paged_index(f, base, m, tri, 1));
-    PagedVertex v2 = paged_vertex(f, base, paged_index(f, base, m, tri, 2));
+    PagedVertex v0 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 0));
+    PagedVertex v1 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 1));
+    PagedVertex v2 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 2));
     float3x3 frame = instance_frame(inst);
     float3 relative = instance_relative(f, inst);
     float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
@@ -5378,8 +5428,8 @@ float3 skinned_before(MoverMotion* p, Frame* f, uint mesh_index, uint vis, float
     uint k0 = paged_index(f, base, m, tri, 0);
     uint k1 = paged_index(f, base, m, tri, 1);
     uint k2 = paged_index(f, base, m, tri, 2);
-    float3 w = triangle_weights(object, paged_vertex(f, base, k0).position,
-                                paged_vertex(f, base, k1).position, paged_vertex(f, base, k2).position);
+    float3 w = triangle_weights(object, paged_vertex(f, base, m, k0).position,
+                                paged_vertex(f, base, m, k1).position, paged_vertex(f, base, m, k2).position);
     SkinCluster c = p[0].skin_clusters[mesh.skin + meshlet_index - mesh.meshlet_offset];
     float* previous = p[0].skin_previous;
     uint i0 = 3 * (c.first + k0);

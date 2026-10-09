@@ -367,7 +367,7 @@ impl SkinnedMesh {
             m.cone_cutoff = 1.0;
         }
         let uvs = !mesh.uvs.is_empty();
-        let pages = page::pack(&mut dag, &vertices, uvs);
+        let pages = page::pack(&mut dag, &vertices, uvs, None);
         let mut skinned = Vec::with_capacity(dag.meshlet_vertices.len());
         let mut extra = Vec::new();
         let mut morphs = Morphs {

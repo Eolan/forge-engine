@@ -1341,6 +1341,23 @@ triangles, 6.41 → 2.48 ms). Through the indirect-count fallback (`--force-fall
 taking 0.159 ms instead of 0.071; both paths and the old task path compared in
 [meshlets.md](demos/meshlets.md).
 
+## Packed cluster vertices (#218, D-055, 2026-10-09)
+
+The pages hold each cluster's positions bit-packed on a grid the mesh shares, instead of
+16-byte vertices. The shaders decode a vertex with a few more ALU and a header read.
+
+| `--frames 600`, GPU ms per frame | Before | Packed |
+|---|---|---|
+| `city-blocks --fixed-step` | 2.648 | 2.655 |
+| `island --shot valley --sw-raster on` | 2.286 | 2.305 |
+| `island --shot mouth --sw-raster on` | 1.816 | 1.843 |
+| `meshlets` | 0.240 | 0.260 |
+
+- **The city's cluster cull** falls from 0.32 to 0.23 ms: the snapped positions cut the
+  clusters a little differently.
+- **The island's scene** holds 21 933 pages (2.74 GB) instead of 32 967 (4.12 GB).
+- **Its start view** reads 266 pages (33 MiB) in 17 ms instead of 356 (44 MiB) in 37 ms.
+
 ## Memory — both demos (the overlay's memory group, issue #9)
 
 The group reads `VK_EXT_memory_budget` four times per second and on every captured frame

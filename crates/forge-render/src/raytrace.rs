@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytemuck::{Pod, Zeroable};
-use forge_geom::page::{UV_RANGE_BYTES, decode_uv, uv_offset};
+use forge_geom::page::{Layout, paged_uv};
 use forge_geom::{GpuMeshlet, PAGE_SIZE};
 use forge_gpu::{
     AccelerationStructure, BlasTriangles, Buffer, BufferAccess, BufferDesc, BufferHandle,
@@ -147,16 +147,13 @@ pub(crate) fn mesh_cut_at(
     };
     for m in clusters {
         let base = at[&m.page] + m.payload as usize;
+        let payload = &bytes[base..at[&m.page] + PAGE_SIZE];
+        let layout = Layout::of(m, payload);
         let first = cut.positions.len() as u32;
-        for v in 0..m.vertex_count as usize {
-            let p = base + v * 16;
-            cut.positions.push([0, 1, 2].map(|k| {
-                f32::from_le_bytes(bytes[p + 4 * k..p + 4 * k + 4].try_into().expect("4 bytes"))
-            }));
-        }
-        let triangles = base + m.vertex_count as usize * 16;
+        cut.positions
+            .extend((0..m.vertex_count as usize).map(|v| layout.vertex(payload, v).position));
         cut.indices.extend(
-            bytes[triangles..triangles + m.triangle_count as usize * 3]
+            payload[layout.triangles..layout.triangles + m.triangle_count as usize * 3]
                 .iter()
                 .map(|&l| first + u32::from(l)),
         );
@@ -169,14 +166,8 @@ pub(crate) fn mesh_cut_at(
         cut.sections
             .extend((0..m.triangle_count).map(|t| if t < split { a } else { b }));
         if uvs {
-            let stream = base + uv_offset(m.vertex_count, m.triangle_count);
-            let word =
-                |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("4 bytes"));
-            let range = [0, 1, 2, 3].map(|k| f32::from_bits(word(stream + 4 * k)));
-            cut.uvs.extend(
-                (0..m.vertex_count as usize)
-                    .map(|v| decode_uv(word(stream + UV_RANGE_BYTES + 4 * v), range)),
-            );
+            cut.uvs
+                .extend((0..m.vertex_count as usize).map(|v| paged_uv(payload, layout.uvs, v)));
         }
     }
     Ok(cut)

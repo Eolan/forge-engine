@@ -30,7 +30,7 @@ use crate::procedural::TriMesh;
 
 /// Version of what cooking produces: bump it when the DAG builder, the meshlet format or
 /// meshoptimizer changes the output, so every cached mesh is cooked again.
-pub const COOK_VERSION: u32 = 4;
+pub const COOK_VERSION: u32 = 5;
 const MAGIC: [u8; 4] = *b"FGMS";
 /// 4: the pages packed (#215).
 const FORMAT_VERSION: u32 = 4;

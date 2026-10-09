@@ -924,7 +924,7 @@ after the roots' (`MeshletScene::load_start_view`):
   switches the auto software raster on in the city's first view, as with every page resident:
   1.82 → 1.85 ms there (`docs/PROFILE.md`).
 
-Left for later: compressed vertices (quantised to a per-mesh grid) and D-018's container
+Left for later: compressed vertices (quantised to a per-mesh grid; built in #218, D-055) and D-018's container
 (BLAKE3 chunks, zstd), IOCP reads, and a transfer-queue upload. *(research:
 memory-streaming.md §4, gpu-geometry.md; demo: city-blocks)*
 
@@ -3092,7 +3092,7 @@ runtime performances I would go for lz4_flex instead, reading is more important 
 - A tighter compressor for shipped packages, if a download's size ever matters more than its
   load. The frames and pages carry their codec, so another can join without a new format.
 
-## D-055 — The island's fine ground without a 2 m mesh of the whole island 🟡 (proposed 2026-10-09, #215's step 2)
+## D-055 — The island's fine ground without a 2 m mesh of the whole island ✅ (proposed and decided 2026-10-09, #215's step 2)
 
 **Today:**
 - The ground is drawn from its 2 m field (8193² samples, #106). It's cooked into 64 tiles of
@@ -3159,3 +3159,52 @@ runtime performances I would go for lz4_flex instead, reading is more important 
 **Against:**
 - The 2 m tiles stay cooked whole until option 1: about 1.3 GB after option 4 and
   #215's packing.
+
+**The 1 m experiment (2026-10-09, before the decision).** `island --island-drawn 1`, nothing
+committed:
+- **The cost:**
+  - the tiles take 9.6 GB packed, against 2.65 GB at 2 m;
+  - a cold start takes 195 s, with 1 241 s of tile cooking work;
+  - a warm start takes 5.4 s against 2.5 s, with 1.0 s for the rays' cuts;
+  - the GPU frame costs 0.01–0.41 ms more on the same views;
+  - the peak working set is 11.2 GB.
+- **The gain:** small at walking height. The ground's look there comes from the layer map and
+  the textures more than from the geometry.
+- **Two things 1 m would need first:**
+  - The rivers' channels and the lakes' shores are carved only into cells drawn finer than the
+    grid. At 1 m there are none (`refined_cells=0`), so the near river lies under dry ground and
+    a lake's shore is a cliff.
+  - The ground's ray budget (`TERRAIN_BUDGET`) is fixed, so the rays' cut stands up to 107 m
+    off the drawn ground (0.67 m at 2 m), and the shadows in the valleys change.
+
+**Decided (the owner, 2026-10-09):** "keep 2 m, go with D-055 option 4". The ground stays drawn
+at 2 m. The clusters' vertices are stored smaller, for every mesh: positions quantised to a grid
+the mesh shares, so neighbouring clusters stay crack-free.
+
+**Built (#218, 2026-10-09):** `forge_geom::page`'s packed payloads.
+- **The grid:** every mesh's positions are snapped to a power-of-two step before its DAG is
+  built: about 2^-17 of its reach, at most 1 mm (2^-10 m) and at least 2^-16 m. The DAG's
+  bounds and errors are then those of the decoded positions, to the bit.
+- **The payload:** each cluster holds a 16-byte header (its origin on the grid, the widths, the
+  exponent), a 32-bit normal per vertex, and the offsets bit-packed. Bit 24 of `section` marks
+  it. Skinned meshes keep 16-byte records, since the skin pass writes them every frame.
+- **Exact everywhere:** the mesh shader, the fallback, the software rasteriser, the resolve and
+  the rays' cuts on the CPU all decode the same integers times the same power of two. Mesh
+  against fallback and the A/B harness stay at 0 px.
+
+| Pages | Before | Packed |
+|---|---|---|
+| The island's 2 m tiles | 32 370 | 21 501 (66 %) |
+| The island's 8 m tiles | 4 100 | 2 820 (69 %) |
+| The other props | 8 685 | 5 502 (63 %) |
+| The glTF models | 315 | 239 (76 %) |
+
+- **The GPU:** the island's scene takes 2.74 GB of pages instead of 4.12 GB, and its start view
+  33 MiB instead of 44. The frame costs 0.01–0.03 ms more (`docs/PROFILE.md`).
+- **Disk:** the props drop 13 % (723 → 629 MB), but the 2 m tiles don't move (2.65 → 2.69 GB).
+  #215's LZ4 had already taken the room out of the raw floats, so this proposal's "halve the
+  disk" held only for the GPU. What remains on disk is the normals (32 bits) and the triangles
+  (3 bytes each), which a later codec could take on.
+- **The captures move** with the cooks: the positions by under half a millimetre, and the
+  clusters' boundaries with them. The meshlets demo colours each cluster, so its views move by
+  a ꟻLIP mean of 0.12–0.19; the others by 0.0002–0.035.

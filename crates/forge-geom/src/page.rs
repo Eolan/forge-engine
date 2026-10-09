@@ -2,12 +2,24 @@
 //! (D-018, D-025).
 //!
 //! A page is [`PAGE_SIZE`] bytes of cluster payloads packed back to back. A cluster's
-//! payload lies at a 16-byte offset of its page (`GpuMeshlet::payload`): its vertices
-//! ([`PagedVertex`], 16 bytes each), then its triangles (three one-byte local indices each),
-//! padded to 16 bytes. A mesh with texture coordinates (D-047) adds its UV stream after them
-//! ([`uv_offset`]): the cluster's UV range (its minimum and extent, four `f32`), then each
-//! vertex's UV as two 16-bit unorms within that range, padded to 16 bytes. Every cluster carries its own copy of its vertices, so a page needs
-//! nothing outside itself.
+//! payload lies at a 16-byte offset of its page (`GpuMeshlet::payload`), laid out as
+//! [`Layout`] says:
+//! - **Its vertices, packed** (#218, D-055, [`SECTION_PACKED`] in the cluster's record):
+//!   - a 16-byte header: the cluster's origin on its mesh's grid (three `i32`), then its widths
+//!     and the grid's exponent ([`Packed`]);
+//!   - a 32-bit octahedral normal per vertex;
+//!   - each position's offset from the origin, bit-packed at those widths.
+//!
+//!   The mesh's positions are snapped to the grid before its DAG is built ([`snap`]), so a
+//!   vertex two clusters share decodes to the same bits, and a cut has no crack.
+//! - **Or its vertices as records** ([`PagedVertex`], 16 bytes each): the skinned meshes',
+//!   which the skin pass writes every frame.
+//! - **Then its triangles** (three one-byte local indices each), padded to 16 bytes.
+//! - **A mesh with texture coordinates** (D-047) adds its UV stream after them: the cluster's
+//!   UV range (its minimum and extent, four `f32`), then each vertex's UV as two 16-bit unorms
+//!   within that range, padded to 16 bytes.
+//!
+//! Every cluster carries its own copy of its vertices, so a page needs nothing outside itself.
 //!
 //! Packing keeps together what the LOD cut decides together:
 //! - **Roots first,** in the first [`Pages::root_pages`] pages. They stay resident, so the
@@ -22,7 +34,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use crate::lod::{ClusterDag, NO_GROUP};
-use crate::meshlet::GpuVertex;
+use crate::meshlet::{GpuMeshlet, GpuVertex};
 
 /// Bytes per page (D-018: fixed 128 KB pages, after Nanite).
 pub const PAGE_SIZE: usize = 128 * 1024;
@@ -91,21 +103,186 @@ impl Pages {
     }
 }
 
-/// Bytes of a cluster's payload with `vertices` and `triangles`, and its UV stream when `uvs`.
-pub fn payload_bytes(vertices: u32, triangles: u32, uvs: bool) -> usize {
+/// Set in a cluster's `section` word (`GpuMeshlet::section`, above its three bytes) when its
+/// payload holds packed vertices (#218); a cluster without it holds [`PagedVertex`] records,
+/// as the skin pass writes them every frame.
+pub const SECTION_PACKED: u32 = 1 << 24;
+/// Bytes of a packed payload's header: the cluster's grid origin, then its widths and step.
+pub const PACKED_HEADER_BYTES: usize = 16;
+/// The widest a packed coordinate may be, in bits (the shaders shift by less than 32).
+pub const PACKED_MAX_BITS: u32 = 31;
+
+/// The exponent of the grid a mesh whose positions reach `reach` metres from its origin is
+/// quantised to (#218): a step of about 2^-17 of that reach, at most a millimetre (2^-10 m) and
+/// at least 2^-16 m. A power of two, so a coordinate on the grid is an integer times the step,
+/// exactly.
+pub fn grid_exponent(reach: f32) -> i32 {
+    let exponent = (reach.max(f32::MIN_POSITIVE) / 131_072.0).log2().floor() as i32;
+    exponent.clamp(-16, -10)
+}
+
+/// The step of the grid of `exponent`, in metres.
+pub fn grid_step(exponent: i32) -> f32 {
+    f32::from_bits(((exponent + 127) as u32) << 23)
+}
+
+/// `p` on the grid of `exponent`: each coordinate rounded to the nearest step. The cook snaps
+/// every vertex before it builds the DAG, so the packed payloads hold the positions exactly.
+pub fn snap(p: [f32; 3], exponent: i32) -> [f32; 3] {
+    let step = grid_step(exponent);
+    p.map(|c| (c / step).round() * step)
+}
+
+/// How a packed cluster stores its positions: an origin on the grid, each vertex's offset
+/// from it in `bits` per axis, and the grid's exponent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Packed {
+    /// The cluster's smallest grid coordinates.
+    pub origin: [i32; 3],
+    /// Bits per offset, per axis (0 when the cluster is flat along it).
+    pub bits: [u32; 3],
+    /// The grid's exponent ([`grid_exponent`]).
+    pub exponent: i32,
+}
+
+impl Packed {
+    /// The packing of `positions` (on the grid of `exponent`).
+    pub fn of(positions: impl Iterator<Item = [f32; 3]> + Clone, exponent: i32) -> Self {
+        let step = grid_step(exponent);
+        let grid = |p: [f32; 3]| p.map(|c| (c / step).round() as i64);
+        let mut lo = [i64::MAX; 3];
+        let mut hi = [i64::MIN; 3];
+        for p in positions {
+            let q = grid(p);
+            for k in 0..3 {
+                lo[k] = lo[k].min(q[k]);
+                hi[k] = hi[k].max(q[k]);
+            }
+        }
+        if lo[0] > hi[0] {
+            return Self {
+                origin: [0; 3],
+                bits: [0; 3],
+                exponent,
+            };
+        }
+        let bits = [0, 1, 2].map(|k| 64 - ((hi[k] - lo[k]) as u64).leading_zeros());
+        assert!(
+            bits.iter().all(|&b| b <= PACKED_MAX_BITS),
+            "a cluster {bits:?} bits wide on a grid of 2^{exponent} m"
+        );
+        Self {
+            origin: lo.map(|v| i32::try_from(v).expect("a grid coordinate beyond 32 bits")),
+            bits,
+            exponent,
+        }
+    }
+
+    /// Bits per vertex.
+    pub fn stride(&self) -> u32 {
+        self.bits.iter().sum()
+    }
+
+    /// Bytes of the positions of `vertices`: whole words, and one more so a reader may always
+    /// take the word after the one an offset starts in.
+    pub fn position_bytes(&self, vertices: u32) -> usize {
+        (vertices as usize * self.stride() as usize).div_ceil(32) * 4 + 4
+    }
+
+    /// The header's fourth word: the widths, then the exponent biased by 128.
+    pub fn info(&self) -> u32 {
+        self.bits[0] | self.bits[1] << 5 | self.bits[2] << 10 | ((self.exponent + 128) as u32) << 16
+    }
+
+    /// The packing a payload's header holds.
+    pub fn from_header(header: &[u8]) -> Self {
+        let word = |i: usize| u32::from_le_bytes(header[4 * i..4 * i + 4].try_into().unwrap());
+        let info = word(3);
+        Self {
+            origin: [0, 1, 2].map(|i| word(i) as i32),
+            bits: [info & 31, (info >> 5) & 31, (info >> 10) & 31],
+            exponent: ((info >> 16) & 0xFF) as i32 - 128,
+        }
+    }
+}
+
+/// Where the parts of a cluster's payload start, in bytes from its start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// The packing, for a packed payload.
+    pub packed: Option<Packed>,
+    /// The positions: [`PagedVertex`] records (normals included), or packed offsets.
+    pub positions: usize,
+    /// The triangles: three one-byte local indices each.
+    pub triangles: usize,
+    /// The UV stream, when the mesh has one (16-byte aligned, after the triangles).
+    pub uvs: usize,
+}
+
+impl Layout {
+    /// The layout of a payload of `vertices` and `triangles`, `packed` or of raw records. A
+    /// packed payload: its header, a normal per vertex (32 bits), then the positions.
+    pub fn new(vertices: u32, triangles: u32, packed: Option<Packed>) -> Self {
+        let (positions, triangles_at) = match &packed {
+            None => (0, vertices as usize * size_of::<PagedVertex>()),
+            Some(p) => {
+                let positions = PACKED_HEADER_BYTES + vertices as usize * 4;
+                (positions, positions + p.position_bytes(vertices))
+            }
+        };
+        Self {
+            packed,
+            positions,
+            triangles: triangles_at,
+            uvs: (triangles_at + triangles as usize * 3).next_multiple_of(PAYLOAD_ALIGN),
+        }
+    }
+
+    /// The layout of cluster `m`'s payload, which `payload` starts with.
+    pub fn of(m: &GpuMeshlet, payload: &[u8]) -> Self {
+        let packed = (m.section & SECTION_PACKED != 0)
+            .then(|| Packed::from_header(&payload[..PACKED_HEADER_BYTES]));
+        Self::new(m.vertex_count, m.triangle_count, packed)
+    }
+
+    /// Vertex `i` of `payload`, laid out so.
+    pub fn vertex(&self, payload: &[u8], i: usize) -> PagedVertex {
+        let word = |at: usize| u32::from_le_bytes(payload[at..at + 4].try_into().unwrap());
+        let Some(p) = self.packed else {
+            let at = i * size_of::<PagedVertex>();
+            return bytemuck::pod_read_unaligned(&payload[at..at + size_of::<PagedVertex>()]);
+        };
+        let step = grid_step(p.exponent);
+        let mut offset = i * p.stride() as usize;
+        let position = [0, 1, 2].map(|k| {
+            let at = self.positions + offset / 32 * 4;
+            let pair = u64::from(word(at)) | u64::from(word(at + 4)) << 32;
+            let value = (pair >> (offset % 32)) & ((1_u64 << p.bits[k]) - 1);
+            offset += p.bits[k] as usize;
+            p.origin[k].wrapping_add(value as i32) as f32 * step
+        });
+        PagedVertex {
+            position,
+            normal: word(PACKED_HEADER_BYTES + 4 * i),
+        }
+    }
+
+    /// The local vertex indices of triangle `t` of `payload`.
+    pub fn triangle(&self, payload: &[u8], t: usize) -> [u8; 3] {
+        let at = self.triangles + 3 * t;
+        [payload[at], payload[at + 1], payload[at + 2]]
+    }
+}
+
+/// Bytes of a cluster's payload with `vertices` and `triangles`, `packed` or of raw records,
+/// and its UV stream when `uvs`.
+pub fn payload_bytes(vertices: u32, triangles: u32, uvs: bool, packed: Option<Packed>) -> usize {
     let stream = if uvs {
         UV_RANGE_BYTES + (vertices as usize * 4).next_multiple_of(PAYLOAD_ALIGN)
     } else {
         0
     };
-    uv_offset(vertices, triangles) + stream
-}
-
-/// Where a cluster's UV stream starts in its payload (D-047): after its vertices and its
-/// triangles.
-pub fn uv_offset(vertices: u32, triangles: u32) -> usize {
-    (vertices as usize * size_of::<PagedVertex>() + triangles as usize * 3)
-        .next_multiple_of(PAYLOAD_ALIGN)
+    Layout::new(vertices, triangles, packed).uvs + stream
 }
 
 /// Bytes of a UV stream's range: the cluster's UV minimum and extent, two `f32` each.
@@ -147,6 +324,27 @@ pub fn decode_uv(e: u32, range: [f32; 4]) -> [f32; 2] {
     ]
 }
 
+/// Bytes of cluster `m`'s payload, which `payload` starts with, its UV stream included when
+/// `uvs`.
+pub fn stored_bytes(m: &GpuMeshlet, payload: &[u8], uvs: bool) -> usize {
+    payload_bytes(
+        m.vertex_count,
+        m.triangle_count,
+        uvs,
+        Layout::of(m, payload).packed,
+    )
+}
+
+/// The UV of vertex `i` from the UV stream at byte `stream` of `payload` ([`Layout::uvs`]).
+pub fn paged_uv(payload: &[u8], stream: usize, i: usize) -> [f32; 2] {
+    let range: [f32; 4] = bytemuck::pod_read_unaligned(&payload[stream..stream + UV_RANGE_BYTES]);
+    let e = stream + UV_RANGE_BYTES + i * 4;
+    decode_uv(
+        u32::from_le_bytes(payload[e..e + 4].try_into().unwrap()),
+        range,
+    )
+}
+
 /// Appends payloads to pages, opening a new page when one does not fit.
 struct Packer {
     bytes: Vec<u8>,
@@ -173,11 +371,14 @@ impl Packer {
     }
 }
 
-/// Writes cluster `c`'s payload at `page`/`offset` and records the place in its record.
+/// Writes cluster `c`'s payload at `page`/`offset`, `packed` or of raw records, and records the
+/// place (and the packing's flag) in its record.
+#[allow(clippy::too_many_arguments)]
 fn write_payload(
     dag: &mut ClusterDag,
     vertices: &[GpuVertex],
     uvs: bool,
+    packed: Option<Packed>,
     bytes: &mut [u8],
     c: usize,
     page: u32,
@@ -185,36 +386,81 @@ fn write_payload(
 ) {
     let m = dag.meshlets[c];
     let range = dag.ranges[c];
+    let local =
+        |i: usize| vertices[dag.meshlet_vertices[range.vertex_offset as usize + i] as usize];
+    let count = m.vertex_count as usize;
+    let layout = Layout::new(m.vertex_count, m.triangle_count, packed);
     let base = page as usize * PAGE_SIZE + offset;
-    let mut at = base;
-    for i in 0..m.vertex_count as usize {
-        let v = vertices[dag.meshlet_vertices[range.vertex_offset as usize + i] as usize];
-        let paged = PagedVertex {
-            position: v.position,
-            normal: encode_normal(v.normal),
-        };
-        bytes[at..at + size_of::<PagedVertex>()].copy_from_slice(bytemuck::bytes_of(&paged));
-        at += size_of::<PagedVertex>();
+    let payload =
+        &mut bytes[base..base + payload_bytes(m.vertex_count, m.triangle_count, uvs, packed)];
+    match packed {
+        None => {
+            for i in 0..count {
+                let v = local(i);
+                let paged = PagedVertex {
+                    position: v.position,
+                    normal: encode_normal(v.normal),
+                };
+                let at = i * size_of::<PagedVertex>();
+                payload[at..at + size_of::<PagedVertex>()]
+                    .copy_from_slice(bytemuck::bytes_of(&paged));
+            }
+        }
+        Some(p) => {
+            for (k, word) in p
+                .origin
+                .map(|o| o as u32)
+                .into_iter()
+                .chain([p.info()])
+                .enumerate()
+            {
+                payload[4 * k..4 * k + 4].copy_from_slice(&word.to_le_bytes());
+            }
+            let step = grid_step(p.exponent);
+            // One word more than stored: a 0-bit axis may leave the cursor on the last one.
+            let mut words = vec![0_u32; p.position_bytes(m.vertex_count) / 4 + 1];
+            let mut bit = 0_usize;
+            for i in 0..count {
+                let v = local(i);
+                let at = PACKED_HEADER_BYTES + 4 * i;
+                payload[at..at + 4].copy_from_slice(&encode_normal(v.normal).to_le_bytes());
+                for k in 0..3 {
+                    let grid = v.position[k] / step;
+                    assert_eq!(grid.round(), grid, "a vertex off its mesh's grid");
+                    let value = (grid as i64 - i64::from(p.origin[k])) as u64;
+                    let word = bit / 32;
+                    let shifted = value << (bit % 32);
+                    words[word] |= shifted as u32;
+                    words[word + 1] |= (shifted >> 32) as u32;
+                    bit += p.bits[k] as usize;
+                }
+            }
+            for (k, word) in words[..words.len() - 1].iter().enumerate() {
+                let at = layout.positions + 4 * k;
+                payload[at..at + 4].copy_from_slice(&word.to_le_bytes());
+            }
+        }
     }
     let t = range.triangle_offset as usize;
     let n = m.triangle_count as usize * 3;
-    bytes[at..at + n].copy_from_slice(&dag.meshlet_triangles[t..t + n]);
+    payload[layout.triangles..layout.triangles + n]
+        .copy_from_slice(&dag.meshlet_triangles[t..t + n]);
     if uvs {
-        let local =
-            |i: usize| vertices[dag.meshlet_vertices[range.vertex_offset as usize + i] as usize];
-        let count = m.vertex_count as usize;
         let uv_range = uv_range((0..count).map(|i| local(i).uv));
-        let mut at = base + uv_offset(m.vertex_count, m.triangle_count);
-        bytes[at..at + UV_RANGE_BYTES].copy_from_slice(bytemuck::bytes_of(&uv_range));
+        let mut at = layout.uvs;
+        payload[at..at + UV_RANGE_BYTES].copy_from_slice(bytemuck::bytes_of(&uv_range));
         at += UV_RANGE_BYTES;
         for i in 0..count {
             let e = encode_uv(local(i).uv, uv_range);
-            bytes[at..at + 4].copy_from_slice(&e.to_le_bytes());
+            payload[at..at + 4].copy_from_slice(&e.to_le_bytes());
             at += 4;
         }
     }
     dag.meshlets[c].page = page;
     dag.meshlets[c].payload = offset as u32;
+    if packed.is_some() {
+        dag.meshlets[c].section |= SECTION_PACKED;
+    }
 }
 
 /// A 30-bit Morton code of `p` within `min`..`max`.
@@ -234,14 +480,31 @@ fn morton(p: [f32; 3], min: [f32; 3], max: [f32; 3]) -> u32 {
 }
 
 /// Packs the DAG's clusters into pages (see the module notes) and fills every record's
-/// `page`, `payload` and `child_page`. With `uvs` every payload carries its UV stream.
-pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex], uvs: bool) -> Pages {
+/// `page`, `payload` and `child_page`. With `uvs` every payload carries its UV stream. With
+/// `grid`, the exponent of the grid the vertices were snapped to ([`snap`]), the payloads hold
+/// packed vertices (#218); without, [`PagedVertex`] records (the skinned meshes').
+pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex], uvs: bool, grid: Option<i32>) -> Pages {
     let n = dag.meshlets.len();
+    let packings: Vec<Option<Packed>> = (0..n)
+        .map(|c| {
+            grid.map(|exponent| {
+                let range = dag.ranges[c];
+                let first = range.vertex_offset as usize;
+                let local =
+                    &dag.meshlet_vertices[first..first + dag.meshlets[c].vertex_count as usize];
+                Packed::of(
+                    local.iter().map(|&v| vertices[v as usize].position),
+                    exponent,
+                )
+            })
+        })
+        .collect();
     let size = |dag: &ClusterDag, c: usize| {
         payload_bytes(
             dag.meshlets[c].vertex_count,
             dag.meshlets[c].triangle_count,
             uvs,
+            packings[c],
         )
     };
     let mut packer = Packer {
@@ -250,10 +513,19 @@ pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex], uvs: bool) -> Pages {
     };
 
     // The roots, cluster by cluster.
-    for c in 0..n {
+    for (c, &packed) in packings.iter().enumerate() {
         if dag.meshlets[c].parent_error.is_infinite() {
             let (page, offset) = packer.reserve(size(dag, c));
-            write_payload(dag, vertices, uvs, &mut packer.bytes, c, page, offset);
+            write_payload(
+                dag,
+                vertices,
+                uvs,
+                packed,
+                &mut packer.bytes,
+                c,
+                page,
+                offset,
+            );
         }
     }
     let root_pages = packer.page_count();
@@ -299,7 +571,16 @@ pub fn pack(dag: &mut ClusterDag, vertices: &[GpuVertex], uvs: bool) -> Pages {
         let total: usize = members[g].iter().map(|&c| size(dag, c)).sum();
         let (page, mut offset) = packer.reserve(total);
         for &c in &members[g] {
-            write_payload(dag, vertices, uvs, &mut packer.bytes, c, page, offset);
+            write_payload(
+                dag,
+                vertices,
+                uvs,
+                packings[c],
+                &mut packer.bytes,
+                c,
+                page,
+                offset,
+            );
             offset += size(dag, c);
         }
         group_page[g] = page;

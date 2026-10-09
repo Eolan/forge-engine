@@ -976,7 +976,7 @@ The city's geometry no longer has to fit in VRAM. Every mesh is cut into **128 K
 of clusters** (7 868 for the city, 983 MiB), which stay in the cache files. The GPU keeps a
 **pool of page slots** and a page table, and the cut through the LOD DAG follows whatever
 is resident. How it works is in [D-025](../DECISIONS.md) and `forge_render::streaming`:
-- **Pages:** a cluster's own 16-byte vertices and its triangles; a DAG group never spans
+- **Pages:** a cluster's own vertices (16 bytes each, packed on a grid since #218) and its triangles; a DAG group never spans
   two pages; the roots' pages always resident.
 - **The cut:** a cluster draws when its page is resident, its parent is too coarse, and it
   is fine enough or its children's page is absent. What is missing costs detail, never a
@@ -1110,7 +1110,7 @@ Reading the table:
 
 Since #36 the cache holds cluster pages: the header and the cluster records, then the
 pages (from a 4 KiB boundary until #215 packed them), read one at a time by the streamer. It is still the demo's
-cache, not the engine's asset format: D-018's container and compressed vertices come later.
+cache, not the engine's asset format: D-018's container comes later (the vertices are packed since #218).
 
 **GPU:**
 - The gallery overview draws in **0.12 ms** at 1 px LOD, against 0.71 ms at full detail

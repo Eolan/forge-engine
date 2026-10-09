@@ -146,7 +146,17 @@ impl MeshletMesh {
 
     /// [`MeshletMesh::build`] with explicit options.
     pub fn build_with(mesh: &TriMesh, options: CookOptions) -> Self {
-        let (vertices, indices, vertex_section, _) = split_sections(mesh);
+        let (mut vertices, indices, vertex_section, _) = split_sections(mesh);
+        // The positions on the mesh's grid (#218), before the DAG: its bounds, cones and errors
+        // are those of the positions the packed pages hold, to the bit.
+        let reach = vertices
+            .iter()
+            .flat_map(|v| v.position)
+            .fold(0.0_f32, |r, c| r.max(c.abs()));
+        let grid = page::grid_exponent(reach);
+        for v in &mut vertices {
+            v.position = page::snap(v.position, grid);
+        }
         let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
         let mut dag = lod::build_dag(
             &indices,
@@ -156,7 +166,7 @@ impl MeshletMesh {
             lod::MAX_LEVELS,
         );
         let uvs = !mesh.uvs.is_empty();
-        let pages = page::pack(&mut dag, &vertices, uvs);
+        let pages = page::pack(&mut dag, &vertices, uvs, Some(grid));
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
             meshlets: dag.meshlets,
@@ -180,32 +190,27 @@ impl MeshletMesh {
 
     /// Vertex `i` of cluster `m`, read from its page (the pages must be in memory).
     pub fn vertex(&self, m: &GpuMeshlet, i: usize) -> PagedVertex {
-        let at = m.page as usize * PAGE_SIZE + m.payload as usize + i * size_of::<PagedVertex>();
-        bytemuck::pod_read_unaligned(&self.pages[at..at + size_of::<PagedVertex>()])
+        let payload = self.payload(m);
+        page::Layout::of(m, payload).vertex(payload, i)
+    }
+
+    /// Cluster `m`'s payload and what follows it in its page (the pages must be in memory).
+    pub fn payload(&self, m: &GpuMeshlet) -> &[u8] {
+        let at = m.page as usize * PAGE_SIZE + m.payload as usize;
+        &self.pages[at..(m.page as usize + 1) * PAGE_SIZE]
     }
 
     /// The texture coordinates of vertex `i` of cluster `m`, from its UV stream (the pages must
     /// be in memory and the mesh have [`MeshletMesh::uvs`]).
     pub fn uv(&self, m: &GpuMeshlet, i: usize) -> [f32; 2] {
-        let at = m.page as usize * PAGE_SIZE
-            + m.payload as usize
-            + page::uv_offset(m.vertex_count, m.triangle_count);
-        let range: [f32; 4] =
-            bytemuck::pod_read_unaligned(&self.pages[at..at + page::UV_RANGE_BYTES]);
-        let e = at + page::UV_RANGE_BYTES + i * 4;
-        page::decode_uv(
-            u32::from_le_bytes(self.pages[e..e + 4].try_into().unwrap()),
-            range,
-        )
+        let payload = self.payload(m);
+        page::paged_uv(payload, page::Layout::of(m, payload).uvs, i)
     }
 
     /// The three local vertex indices of triangle `t` of cluster `m` (pages in memory).
     pub fn triangle(&self, m: &GpuMeshlet, t: usize) -> [u8; 3] {
-        let at = m.page as usize * PAGE_SIZE
-            + m.payload as usize
-            + m.vertex_count as usize * size_of::<PagedVertex>()
-            + t * 3;
-        [self.pages[at], self.pages[at + 1], self.pages[at + 2]]
+        let payload = self.payload(m);
+        page::Layout::of(m, payload).triangle(payload, t)
     }
 
     /// The position of corner `k` of triangle `t` of cluster `m` (pages in memory).
@@ -363,8 +368,7 @@ mod tests {
             assert!(m.radius > 0.0);
             assert!(m.page < built.page_count);
             assert_eq!(m.payload as usize % page::PAYLOAD_ALIGN, 0);
-            let end =
-                m.payload as usize + page::payload_bytes(m.vertex_count, m.triangle_count, false);
+            let end = m.payload as usize + page::stored_bytes(m, built.payload(m), false);
             assert!(end <= PAGE_SIZE);
             for t in 0..m.triangle_count as usize {
                 for local in built.triangle(m, t) {
@@ -392,7 +396,7 @@ mod tests {
                 let start = m.page as usize * PAGE_SIZE + m.payload as usize;
                 (
                     start,
-                    start + page::payload_bytes(m.vertex_count, m.triangle_count, false),
+                    start + page::stored_bytes(m, built.payload(m), false),
                 )
             })
             .collect();
@@ -434,17 +438,37 @@ mod tests {
         assert!(children > 0);
     }
 
-    /// The paged vertices are the cooked ones: exact positions, normals within 0.01°.
+    /// The positions `mesh` is cooked with: on its grid (#218).
+    fn on_grid(mesh: &TriMesh) -> impl Fn([f32; 3]) -> [f32; 3] + use<> {
+        let reach = mesh
+            .positions
+            .iter()
+            .flatten()
+            .fold(0.0_f32, |r, c| r.max(c.abs()));
+        let grid = page::grid_exponent(reach);
+        move |p| page::snap(p, grid)
+    }
+
+    /// The paged vertices are the cooked ones: their positions on the mesh's grid exactly, in
+    /// every cluster of every level (so a vertex two clusters share decodes the same, and a cut
+    /// has no crack), normals within 0.01°.
     #[test]
     fn paged_vertices_keep_the_positions_exactly() {
         let mesh = crate::procedural::asteroid(Seed::new(7), 24, 1.0, 0.2);
         let built = MeshletMesh::build(&mesh);
+        assert!(
+            built
+                .meshlets
+                .iter()
+                .all(|m| m.section & page::SECTION_PACKED != 0)
+        );
+        let snap = on_grid(&mesh);
+        let snapped: Vec<[f32; 3]> = mesh.positions.iter().map(|&p| snap(p)).collect();
         let mut matched = 0;
-        for m in level0(&built) {
+        for m in &built.meshlets {
             for i in 0..m.vertex_count as usize {
                 let v = built.vertex(m, i);
-                let source = mesh
-                    .positions
+                let source = snapped
                     .iter()
                     .position(|p| *p == v.position)
                     .expect("a paged position that is not a mesh vertex");
@@ -466,8 +490,10 @@ mod tests {
         let plain = MeshletMesh::build(&mesh);
         assert!(!plain.uvs);
         // UVs from the position, tiling well past 0–1, so a vertex's own UV is known.
+        // From the position on the grid, which is what the pages hold.
+        let snap = on_grid(&mesh);
         let uv_of = |p: [f32; 3]| [p[0] * 7.0 + 3.0, p[2] * -5.0 + p[1]];
-        mesh.uvs = mesh.positions.iter().map(|&p| uv_of(p)).collect();
+        mesh.uvs = mesh.positions.iter().map(|&p| uv_of(snap(p))).collect();
         let built = MeshletMesh::build(&mesh);
         assert!(built.uvs);
         assert!(built.levels() > 1);

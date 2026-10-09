@@ -413,8 +413,9 @@ The geometry the GPU reads is now a pool of **128 KiB pages** and a page table (
 The pages are streamed in city-blocks (`docs/demos/city-blocks.md`); here every page is
 resident, each in the slot of its own index. The shared vertex buffer and its per-cluster
 index lists are gone:
-- **Each cluster carries its own vertices,** 16 bytes each: the exact position and a
-  16-bit octahedral normal.
+- **Each cluster carries its own vertices,** 16 bytes each until #218: the exact position and a
+  16-bit octahedral normal. Since #218 (D-055) they are packed: positions on a grid the mesh
+  shares, bit-packed from the cluster's origin, and a 32-bit normal, a third fewer pages.
 - **Its triangles follow** as one-byte local indices.
 - **Readers:** the mesh shader, the software rasteriser and the resolve read the payload at
   `page_table[page] × 128 KiB + payload`. The fallback binds the pool as its index buffer,

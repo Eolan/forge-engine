@@ -277,7 +277,7 @@ struct GpuMesh {
     /// A skinned mesh's first cluster in the skin pass's table (#165), `u32::MAX` for others:
     /// the motion vectors find its vertices' previous positions through it.
     skin: u32,
-    /// 1 when its payloads carry a UV stream (D-047, `forge_geom::page::uv_offset`).
+    /// 1 when its payloads carry a UV stream (D-047, `forge_geom::page::Layout::uvs`).
     uvs: u32,
     /// `MESH_WINDOWED_GROUND` and `MESH_SCENE_SHADED` (#197).
     flags: u32,
