@@ -110,6 +110,8 @@ pub struct MeshShaderLimits {
 pub struct Device {
     instance: Arc<Instance>,
     physical: vk::PhysicalDevice,
+    /// Its PCI vendor id ([`VENDOR_NVIDIA`], [`VENDOR_AMD`], …).
+    vendor_id: u32,
     raw: ash::Device,
     graphics_family: u32,
     graphics_queue: vk::Queue,
@@ -480,6 +482,7 @@ impl Device {
         Ok(Arc::new(Self {
             instance,
             physical: best.physical,
+            vendor_id: best.vendor_id,
             raw,
             graphics_family: best.graphics_family,
             graphics_queue,
@@ -840,6 +843,11 @@ impl Device {
     /// The physical device.
     pub fn physical(&self) -> vk::PhysicalDevice {
         self.physical
+    }
+
+    /// The GPU's PCI vendor id ([`VENDOR_NVIDIA`], [`VENDOR_AMD`], …).
+    pub fn vendor_id(&self) -> u32 {
+        self.vendor_id
     }
 
     /// Graphics + compute + present queue.

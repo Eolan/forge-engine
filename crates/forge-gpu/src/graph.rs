@@ -54,6 +54,13 @@
 //! the serial frame, SIGMA read the sun-shadow trace's new images back empty, though the
 //! derived barriers order them. Such frames are rare, so the cost is nil.
 //!
+//! On NVIDIA's serial frame (no async compute queue: `FORGE_ASYNC=0`) a full barrier stands
+//! before every pass (#207). Without it, on the RTX 5070 Ti, some passes of the yard (the
+//! ambient occlusion first, then SIGMA) came out one of two ways in some frames from inputs
+//! that hashed alike, though no barrier is missing that validation, the hashes or the AMD iGPU
+//! show; the frame then parted from the async one. It costs the serial frame 0.18 ms (1.96 →
+//! 2.13–2.15 ms in the yard) and the async frame nothing. `FORGE_SERIAL_BARRIERS=0` leaves them out.
+//!
 //! Debugging: `FORGE_GRAPH_LOG=1` logs the compiled plan (passes, barriers, transient
 //! placement) whenever it changes; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
 //! memory, to tell an aliasing bug from anything else (`FORGE_GRAPH_NO_ALIAS=ao,taa` only to
@@ -77,7 +84,7 @@ use ash::vk;
 
 use crate::bindless::{SampledImageId, StorageImageId};
 use crate::commands::Commands;
-use crate::device::{Device, QueueKind};
+use crate::device::{Device, QueueKind, VENDOR_NVIDIA};
 use crate::error::{GpuError, Result};
 use crate::frame::{Batch, FrameSlot, Frames};
 use crate::memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};
@@ -1807,6 +1814,9 @@ pub struct RenderGraph {
     relayout_at: Option<u32>,
     /// The frames with transients this graph executed.
     executed: u32,
+    /// A full barrier before every pass (#207): on NVIDIA's serial frame (no async compute
+    /// queue), unless `FORGE_SERIAL_BARRIERS=0`.
+    serial_barriers: bool,
     /// What each queue's batches waited for on the other queues, from frame to frame (#104).
     waited: Waited,
     last_plan: u64,
@@ -1854,6 +1864,9 @@ impl RenderGraph {
                 .and_then(|v| v.parse().ok()),
             executed: 0,
             waited: Waited::default(),
+            serial_barriers: device.resolve_queue(QueueKind::Compute) == QueueKind::Graphics
+                && device.vendor_id() == VENDOR_NVIDIA
+                && std::env::var_os("FORGE_SERIAL_BARRIERS").is_none_or(|v| v != "0"),
             last_plan: 0,
         }
     }
@@ -2207,11 +2220,14 @@ impl RenderGraph {
             }
             started[batch.queue.index()] = true;
             while let Some((pass, plan)) = work.next_if(|(_, plan)| plan.batch == index) {
-                if laid_out && plan.first_transient {
+                if self.serial_barriers || (laid_out && plan.first_transient) {
                     // The transients are new this frame (#204): in the serial frame on the
                     // mesh path, the sun-shadow trace's images read back empty in SIGMA on
                     // such a frame unless a full barrier stood between (on the RTX 5070 Ti;
                     // the derived barriers alone are correct, the cause is not known yet).
+                    // And on NVIDIA's serial frame, before every pass (#207): without, some
+                    // passes (the ambient occlusion first) came out one of two ways in some
+                    // frames from inputs that hashed alike; the AMD iGPU repeats to the bit.
                     let everything = vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE;
                     commands.memory_barrier(
                         vk::PipelineStageFlags2::ALL_COMMANDS,
