@@ -321,7 +321,7 @@ output with a `Custom` access, because NGX clears it at the transfer stage befor
 - Deterministic crates deny platform float functions (clippy `disallowed-methods`, coming
   with `forge-sim`).
 - Shaders: Slang only, one file per pipeline family, `-matrix-layout-column-major`, cached
-  by content hash under `shader-cache/`.
+  under `shader-cache/` by a hash of each file and the files it imports (#209).
 - Every demo takes `--frames N` and `--capture file.png` so it can run headless in CI and
   produce golden images.
 - Secrets never enter the repository (`.env`, `server-auth.md` are ignored).

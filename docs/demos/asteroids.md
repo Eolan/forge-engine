@@ -657,6 +657,26 @@ both starts.
   bailed out after its slot wait.
 - Synchronization validation is silent, loading frames included.
 
+**After a shader edit (#209, 2026-10-09).** Moving the finishing step to a worker had cost the
+warm-up its list. The worker asked for its shaders on a copy of the compiler, whose list of
+entries started empty, so `<program>.entries` kept only the overlay's and the loading screen's
+four. After a shader edit, the 83 entries the island asks for then compiled one by one on the
+finishing step: 40 s. The copies now share one list. Three more changes:
+- **Keys per file.** Each file's entries are keyed by its text and the text of every file it
+  imports, directly or not, so an edit recompiles only the entries that reach the edited file.
+- **One file per entry.** Writing an entry's SPIR-V removes that entry's older ones. The SPIR-V
+  of the old keys, one set per past edit, is removed once, beside the first start. It was
+  35 480 files and 800 MB, and is now 91 files and 2.9 MB.
+- **No pipeline cache.** The island's 84 pipelines take 14 ms to create in all, warm or after
+  an edit, because NVIDIA's driver caches them itself. A Vulkan pipeline cache could save at
+  most those 14 ms. Changed code misses both caches, and a driver update clears both.
+
+| Island start (`island --frames 5`) | Before | After |
+|---|---|---|
+| Cache warm | 9.7–10.4 s | 9.6–9.8 s |
+| After editing `water.slang` (21 entries reach it) | 40.4 s, 83 compiled | 10.2 s, 21 compiled ahead |
+| After editing `bindless.slang` (81 entries reach it) | 40.4 s, 83 compiled | 12.9 s, 81 compiled ahead |
+
 ## Ice blocks (2026-09-25, issue #63)
 
 The owner asked for "the ice ones more like ice blocks/chunks". Until now the ice asteroids
