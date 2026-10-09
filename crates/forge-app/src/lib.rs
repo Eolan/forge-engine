@@ -464,6 +464,9 @@ struct State<D: Demo> {
     config: AppConfig,
     /// `FORGE_WAIT_IDLE=1`: wait for the device after every submit (debugging).
     debug_wait_idle: bool,
+    /// Whether the window is shown: it is created hidden and shown after its first frame is
+    /// presented, so it never shows the system's white background (#219).
+    shown: bool,
     /// `FORGE_NO_TITLE=1`: never update the window title (debugging).
     debug_no_title: bool,
     /// `FORGE_STALL_MS=N`: sleep N ms after every frame (debugging).
@@ -814,6 +817,7 @@ impl<D: Demo> State<D> {
             last_title: Instant::now(),
             config,
             debug_wait_idle: std::env::var_os("FORGE_WAIT_IDLE").is_some_and(|v| v != "0"),
+            shown: false,
             debug_no_title: std::env::var_os("FORGE_NO_TITLE").is_some_and(|v| v != "0"),
             debug_stall_ms: std::env::var("FORGE_STALL_MS")
                 .ok()
@@ -1333,9 +1337,12 @@ impl<D: Demo> ApplicationHandler for App<D> {
         if self.state.is_some() {
             return;
         }
+        // Hidden until its first frame is presented (#219): a new window shows the system's
+        // white background until then, through the device's and swapchain's setup.
         let mut attributes = Window::default_attributes()
             .with_title(&self.config.title)
-            .with_inner_size(PhysicalSize::new(self.config.width, self.config.height));
+            .with_inner_size(PhysicalSize::new(self.config.width, self.config.height))
+            .with_visible(false);
         // Which monitor: `FORGE_MONITOR` = `secondary` (default: the first non-primary monitor,
         // so demos stay off the owner's working screen), `primary`, or an index into the
         // monitor list. Scripted runs (a frame limit) do not take keyboard focus.
@@ -1474,18 +1481,7 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 });
                 state.ctx.window.set_cursor_visible(!looking);
             }
-            WindowEvent::RedrawRequested => {
-                if let Err(e) = state.frame() {
-                    self.error = Some(e);
-                    event_loop.exit();
-                    return;
-                }
-                if let Some(limit) = state.config.frame_limit
-                    && state.ctx.frames_rendered >= limit
-                {
-                    event_loop.exit();
-                }
-            }
+            WindowEvent::RedrawRequested => self.redraw(event_loop),
             _ => {}
         }
     }
@@ -1497,9 +1493,38 @@ impl<D: Demo> ApplicationHandler for App<D> {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(state) = &self.state {
-            state.ctx.window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        match &self.state {
+            // A hidden window is never asked to redraw: its frames are drawn from here until
+            // the first one shows it.
+            Some(state) if !state.shown => self.redraw(event_loop),
+            Some(state) => state.ctx.window.request_redraw(),
+            None => {}
+        }
+    }
+}
+
+impl<D: Demo> App<D> {
+    /// One frame, then the window shown after its first (#219), and the exit at the frame
+    /// limit.
+    fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if let Err(e) = state.frame() {
+            self.error = Some(e);
+            event_loop.exit();
+            return;
+        }
+        if !state.shown {
+            // Without activation when the window was made inactive (scripted runs).
+            state.ctx.window.set_visible(true);
+            state.shown = true;
+        }
+        if let Some(limit) = state.config.frame_limit
+            && state.ctx.frames_rendered >= limit
+        {
+            event_loop.exit();
         }
     }
 }

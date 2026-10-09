@@ -587,6 +587,17 @@ the bottom right, and a bar of the shaders compiling at the bottom centre. Both 
 The shaders the finishing step still compiles (those no earlier run listed) do not count: that
 step runs on the main thread, after the loading screen.
 
+**Black from the first instant (#219, 2026-10-09).** The owner saw the window open white, then
+the loading screen's very dark blue-grey.
+- **The white** was the system's own background: a new window shows it until its first frame is
+  presented, through the device's and the swapchain's setup.
+- **The fix:** the window is now created hidden, and shown after its first frame is presented.
+  While it is hidden, the event loop draws its frames itself, since a hidden window is never
+  asked to redraw.
+- **Focus:** a scripted run's window is made inactive, and it is still shown without taking
+  focus (`SW_SHOWNOACTIVATE`).
+- **The loading screen** is now pure black.
+
 **The island's frozen seconds (#201, 2026-10-09).** The owner saw the loading screen freeze before
 the island showed. The island's preparation only loaded its cooked tiles (65 ms with the cache
 warm). The finishing step then made everything else on the main thread, which draws no

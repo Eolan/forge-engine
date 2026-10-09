@@ -242,7 +242,7 @@ float3 progress_bar(float3 colour, float2 pixel_at, float scale, float time)
 float4 frag_main(VertexOut input) : SV_Target
 {
     float scale = min(push.size.x, push.size.y);
-    float3 colour = float3(0.012, 0.014, 0.020);
+    float3 colour = float3(0.0); // black, as the window before its first frame (#219)
     // The forge in the bottom right corner, a sixth of the screen's height across.
     float icon = 0.16 * scale;
     float2 corner = push.size - float2(0.14, 0.13) * scale;
