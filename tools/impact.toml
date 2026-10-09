@@ -18,6 +18,8 @@
 "**/*.md" = []
 "tools/credits/**" = []
 "tools/sharpness/**" = []
+# Claude's settings and its agents' worktrees: never built, never committed (#220).
+".claude/**" = []
 
 # The island: its generator, its demo, its stones and its water. The city-blocks code that
 # serves both the city and its island selects both.
