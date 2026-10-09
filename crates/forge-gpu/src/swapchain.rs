@@ -356,7 +356,9 @@ impl Swapchain {
             .wait_semaphores(&waits)
             .swapchains(&swapchains)
             .image_indices(&indices);
-        // SAFETY: the image was acquired and rendering into it is ordered by `wait`.
+        let _queues = self.device.hold_queues();
+        // SAFETY: the image was acquired and rendering into it is ordered by `wait`; the
+        // queues are held.
         match unsafe {
             self.device
                 .swapchain_loader()

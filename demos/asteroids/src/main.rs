@@ -18,7 +18,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input, vk};
+use forge_app::{
+    AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input, Setup, vk,
+};
 use forge_core::hash::hash_cell3;
 use forge_core::material::{Material, RenderLayer};
 use forge_core::{MaterialTable, Seed, SplitMix64};
@@ -497,7 +499,7 @@ struct Ballad {
 }
 
 impl Ballad {
-    fn new(ctx: &mut Context, args: Args, field: FieldMeshes) -> Result<Self> {
+    fn new(ctx: &Setup, args: Args, field: FieldMeshes) -> Result<Self> {
         // The scene is drawn into a visibility buffer and shaded into the TAA's HDR target;
         // the swapchain only receives the resolve.
         let renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
@@ -1400,7 +1402,7 @@ fn build_meshes(args: &Args) -> FieldMeshes {
 /// The field: seven size classes of asteroid meshes in several shapes, thousands of instances
 /// clustered along a curved belt, and a camera path weaving through it, from the meshes
 /// [`build_meshes`] made.
-fn build_field(ctx: &Context, args: &Args, field: FieldMeshes) -> Result<(MeshletScene, Path)> {
+fn build_field(ctx: &Setup, args: &Args, field: FieldMeshes) -> Result<(MeshletScene, Path)> {
     let start = Instant::now();
     let recipes = RECIPES;
     let variants = rock_variants(args);

@@ -139,6 +139,10 @@ pub struct Device {
     push_descriptor_loader: Option<khr::push_descriptor::Device>,
     allocator: Mutex<Option<Allocator>>,
     bindless: Mutex<Option<Bindless>>,
+    /// Held by every call that uses the queues (submits, presents, waits for the device): a
+    /// demo's setup uploads on a worker while the loading screen draws on the main thread
+    /// (#201), and Vulkan wants the queues' host access synchronized.
+    queue_lock: Mutex<()>,
     bindless_layout: vk::DescriptorSetLayout,
     bindless_set: vk::DescriptorSet,
     /// Bytes allocated per category, uploaded and read back.
@@ -492,6 +496,7 @@ impl Device {
             push_descriptor_loader,
             allocator: Mutex::new(Some(allocator)),
             bindless: Mutex::new(Some(bindless)),
+            queue_lock: Mutex::new(()),
             bindless_layout,
             bindless_set,
             dlss,
@@ -1030,8 +1035,14 @@ impl Device {
 
     /// Blocks until the GPU is idle. Only for shutdown and resource teardown.
     pub fn wait_idle(&self) {
-        // SAFETY: plain wait on a live device.
+        let _queues = self.queue_lock.lock();
+        // SAFETY: plain wait on a live device; the queues are held.
         let _ = unsafe { self.raw.device_wait_idle() };
+    }
+
+    /// Holds the queues for a call that uses them (a submit, a present): see `queue_lock`.
+    pub fn hold_queues(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.queue_lock.lock()
     }
 
     /// Records `f` into a one-shot command buffer, submits it and waits. Initialisation only:
@@ -1061,8 +1072,11 @@ impl Device {
                 .create_fence(&vk::FenceCreateInfo::default(), None)?;
             let cbs = [vk::CommandBufferSubmitInfo::default().command_buffer(cb)];
             let submit = vk::SubmitInfo2::default().command_buffer_infos(&cbs);
-            self.raw
-                .queue_submit2(self.graphics_queue, &[submit], fence)?;
+            {
+                let _queues = self.queue_lock.lock();
+                self.raw
+                    .queue_submit2(self.graphics_queue, &[submit], fence)?;
+            }
             self.raw.wait_for_fences(&[fence], true, u64::MAX)?;
             self.raw.destroy_fence(fence, None);
             self.raw.destroy_command_pool(pool, None);

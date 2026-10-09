@@ -177,6 +177,44 @@ impl Context {
         let e = self.extent();
         e.width as f32 / e.height.max(1) as f32
     }
+
+    /// What a demo's finishing step reads of the shell ([`Setup`]), as it stands now.
+    pub fn setup(&self) -> Setup {
+        Setup {
+            device: Arc::clone(&self.device),
+            shaders: self.shaders.clone(),
+            output: self.output,
+            extent: self.extent(),
+        }
+    }
+}
+
+/// What a demo's finishing step has of the shell (#201): the device, the shader compiler, the
+/// frame target's format and HDR settings, and the frame's size when it started. It runs on a
+/// worker while the loading screen keeps drawing on the main thread, so it gets these rather
+/// than the [`Context`] (the swapchain, the frames and the graph stay the loading screen's).
+#[derive(Clone)]
+pub struct Setup {
+    /// The device.
+    pub device: Arc<Device>,
+    /// The shader compiler rooted at the workspace `shaders/` directory.
+    pub shaders: ShaderCompiler,
+    /// The frame target's format and the HDR settings.
+    pub output: DisplayOutput,
+    extent: vk::Extent2D,
+}
+
+impl Setup {
+    /// The size the demo draws its frame at, as [`Context::extent`] gave it.
+    pub fn extent(&self) -> vk::Extent2D {
+        self.extent
+    }
+
+    /// Its aspect ratio.
+    pub fn aspect(&self) -> f32 {
+        let e = self.extent;
+        e.width as f32 / e.height.max(1) as f32
+    }
 }
 
 /// One frame handed to [`Demo::render`].
@@ -222,9 +260,10 @@ pub trait Demo: Sized + 'static {
 
 /// Runs a demo whose start-up has heavy CPU work (issue #25): `prepare` runs on a thread of its
 /// own while the window shows a loading animation, and returns the step that finishes the demo
-/// on the main thread (uploads, pipelines). The loading frames do not count: the demo's frames
+/// (uploads, pipelines), which runs on a worker of its own too while the animation goes on
+/// (#201), with the [`Setup`] of the shell. The loading frames do not count: the demo's frames
 /// number from 0, as with [`run`], so frame limits and captures are unchanged.
-pub fn run_loading<D: Demo>(
+pub fn run_loading<D: Demo + Send>(
     config: AppConfig,
     prepare: impl FnOnce() -> Result<Finish<D>> + Send + 'static,
 ) -> Result<()> {

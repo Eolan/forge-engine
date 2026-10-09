@@ -3,10 +3,12 @@
 //! window alive: this stage draws a hammer striking an anvil in the bottom right corner, and a
 //! bar of the shaders compiled ahead at the bottom centre (#200, `shaders/loading.slang`); the
 //! frames it draws do not count ([`Context::loading`]). When the thread is done, the step it
-//! returns finishes the demo on the main thread (the uploads), and the demo takes over from
-//! frame 0 with a fresh profile, as if it had been built before the first frame.
+//! returns finishes the demo (the uploads, the pipelines) on a worker with the shell's
+//! [`Setup`], the loading screen drawing on meanwhile (#201: on the main thread it froze the
+//! screen for seconds; the device's queues are held by whoever uses them). Then the demo takes
+//! over from frame 0 with a fresh profile, as if it had been built before the first frame.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -17,11 +19,12 @@ use forge_gpu::{
 };
 use winit::keyboard::KeyCode;
 
-use crate::{Context, Demo, FrameInfo, Input, Profile};
+use crate::{Context, Demo, FrameInfo, Input, Profile, Setup};
 
-/// What a demo's preparation hands back: the step that finishes it on the main thread, with
-/// the context (uploads, pipelines).
-pub type Finish<D> = Box<dyn FnOnce(&mut Context) -> Result<D> + Send>;
+/// What a demo's preparation hands back: the step that finishes it (uploads, pipelines), with
+/// the shell's [`Setup`]. It runs on a worker while the loading screen goes on drawing (#201);
+/// before, it ran on the main thread, and the screen froze for its seconds.
+pub type Finish<D> = Box<dyn FnOnce(&Setup) -> Result<D> + Send>;
 
 /// How long a loading frame lasts at least: the preparation needs the cores more than the
 /// animation needs a high frame rate.
@@ -43,10 +46,25 @@ pub(crate) enum Stage<D> {
         progress: Arc<WarmProgress>,
         /// Where the program's shader entries are listed for the next start.
         entries: PathBuf,
+        /// The finishing step on its worker once the preparation is done (#201), the
+        /// milliseconds the preparation took, and the frame's size the step was given.
+        finishing: Option<Box<Finishing<D>>>,
+        /// When the last loading frame was asked for, and the longest wait between two: the
+        /// screen's longest freeze (#201).
+        last_frame: Instant,
+        longest_gap: Duration,
     },
     Running(D),
     /// The preparation or the finishing step failed: the next frame returns the error.
     Failed(Option<anyhow::Error>),
+}
+
+/// The finishing step on its worker (#201): its thread, the milliseconds the preparation took
+/// before it, and the frame's size it was given.
+pub(crate) struct Finishing<D> {
+    worker: JoinHandle<Result<D>>,
+    prepared_ms: u128,
+    given: vk::Extent2D,
 }
 
 /// Whether a thread is done (or was never started).
@@ -54,7 +72,7 @@ fn finished<T>(handle: &Option<JoinHandle<T>>) -> bool {
     handle.as_ref().is_none_or(JoinHandle::is_finished)
 }
 
-impl<D: Demo> Stage<D> {
+impl<D: Demo + Send> Stage<D> {
     /// Starts `prepare` on its thread and the loading screen in the window.
     pub(crate) fn start(
         ctx: &mut Context,
@@ -108,21 +126,52 @@ impl<D: Demo> Stage<D> {
             warm_up: Some(warm_up),
             progress,
             entries,
+            finishing: None,
+            last_frame: Instant::now(),
+            longest_gap: Duration::ZERO,
         })
     }
 
-    /// Once the preparation is done: finishes the demo and hands it the frames.
+    /// Once the preparation is done, starts the finishing step on its worker (#201); once that
+    /// is done, hands the demo the frames.
     fn poll(&mut self, ctx: &mut Context) {
         let Self::Loading {
             started,
             thread,
             warm_up,
             entries,
+            finishing,
+            last_frame,
+            longest_gap,
             ..
         } = self
         else {
             return;
         };
+        let now = Instant::now();
+        *longest_gap = (*longest_gap).max(now - *last_frame);
+        *last_frame = now;
+        if let Some(step) = finishing.as_ref() {
+            if !step.worker.is_finished() {
+                std::thread::sleep(LOADING_FRAME);
+                return;
+            }
+            let Finishing {
+                worker,
+                prepared_ms,
+                given,
+            } = *finishing.take().expect("a finishing step");
+            let result = worker
+                .join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("the finishing step panicked")));
+            let (started, entries, gap) = (*started, entries.clone(), *longest_gap);
+            tracing::info!(
+                longest_gap_ms = gap.as_millis(),
+                "the loading screen's longest wait between two frames (#201)"
+            );
+            self.finish(ctx, result, prepared_ms, started, given, &entries);
+            return;
+        }
         if !finished(thread) || !finished(warm_up) {
             std::thread::sleep(LOADING_FRAME);
             return;
@@ -134,21 +183,54 @@ impl<D: Demo> Stage<D> {
             Some(Ok(Err(error))) => tracing::warn!(%error, "shader warm-up"),
             _ => {}
         }
-        let entries = entries.clone();
         let prepared = thread.take().map(JoinHandle::join);
         let prepared_ms = started.elapsed().as_millis();
-        let result = match prepared {
-            Some(Ok(Ok(finish))) => finish(ctx),
-            Some(Ok(Err(error))) => Err(error),
-            _ => Err(anyhow::anyhow!("the loading thread panicked")),
+        let finish = match prepared {
+            Some(Ok(Ok(finish))) => finish,
+            Some(Ok(Err(error))) => {
+                *self = Self::Failed(Some(error));
+                return;
+            }
+            _ => {
+                *self = Self::Failed(Some(anyhow::anyhow!("the loading thread panicked")));
+                return;
+            }
         };
+        let setup = ctx.setup();
+        let given = setup.extent();
+        match std::thread::Builder::new()
+            .name("finishing".to_owned())
+            .spawn(move || finish(&setup))
+        {
+            Ok(worker) => {
+                *finishing = Some(Box::new(Finishing {
+                    worker,
+                    prepared_ms,
+                    given,
+                }))
+            }
+            Err(error) => *self = Self::Failed(Some(error.into())),
+        }
+    }
+
+    /// The finishing step's `result`: the demo takes the frames from frame 0, or the next frame
+    /// returns the error.
+    fn finish(
+        &mut self,
+        ctx: &mut Context,
+        result: Result<D>,
+        prepared_ms: u128,
+        started: Instant,
+        given: vk::Extent2D,
+        entries: &Path,
+    ) {
         // The loading frames still in flight use the pipeline this drops.
         ctx.device.wait_idle();
         ctx.loading = false;
         ctx.profile = Profile::new(ctx.profile.mode);
         *self = match result {
-            Ok(demo) => {
-                if let Err(error) = ctx.shaders.save_entries(&entries) {
+            Ok(mut demo) => {
+                if let Err(error) = ctx.shaders.save_entries(entries) {
                     tracing::warn!(%error, "cannot list the shader entries for the next start");
                 }
                 tracing::info!(
@@ -156,6 +238,14 @@ impl<D: Demo> Stage<D> {
                     total_ms = started.elapsed().as_millis(),
                     "loaded"
                 );
+                // The window changed size while the step worked with the size it was given.
+                let now = ctx.extent();
+                if (now.width, now.height) != (given.width, given.height)
+                    && let Err(error) = demo.resized(ctx)
+                {
+                    *self = Self::Failed(Some(error));
+                    return;
+                }
                 Self::Running(demo)
             }
             Err(error) => Self::Failed(Some(error)),
@@ -163,7 +253,7 @@ impl<D: Demo> Stage<D> {
     }
 }
 
-impl<D: Demo> Demo for Stage<D> {
+impl<D: Demo + Send> Demo for Stage<D> {
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
         match self {
             Self::Running(demo) => demo.resized(ctx),

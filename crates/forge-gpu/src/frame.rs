@@ -361,8 +361,10 @@ impl Frames {
                 .wait_semaphore_infos(&waits)
                 .command_buffer_infos(&cbs)
                 .signal_semaphore_infos(&signals);
+            let _queues = self.device.hold_queues();
             // SAFETY: the command buffer is ended, every semaphore is live, and every value
-            // waited for was reserved by an earlier batch, submitted before this one.
+            // waited for was reserved by an earlier batch, submitted before this one; the
+            // queues are held.
             unsafe {
                 raw.queue_submit2(self.device.queue(batch.queue), &[submit], vk::Fence::null())?
             };

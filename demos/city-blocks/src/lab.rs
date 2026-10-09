@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context as _, Result};
-use forge_app::Context;
+use forge_app::Setup;
 use forge_geom::SkinnedMesh;
 use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_physics::buoyancy::{Fluid, Hull};
@@ -1993,7 +1993,7 @@ struct Skinned {
 /// The sea scene's water (#138): the island's cascades of FFT waves from the same seed as the
 /// physics' heights, and an open surface with no shore.
 pub(crate) fn water(
-    ctx: &Context,
+    ctx: &Setup,
 ) -> Result<(
     forge_render::WaterCascades,
     forge_render::WaterSurface,
@@ -2021,7 +2021,7 @@ pub(crate) fn water(
 /// Builds the lab's scene and its world: the floor, the bodies of `kind`, the movers that draw
 /// them.
 pub(crate) fn build(
-    ctx: &Context,
+    ctx: &Setup,
     args: &Args,
     cooked: Cooked,
     kind: LabScene,

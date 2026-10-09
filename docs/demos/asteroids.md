@@ -618,10 +618,36 @@ it made:
 | Cache warm: prepared / frozen / total | 0.07 / 14.85 / 14.9 s | 7.7 / 2.4 / 10.1 s |
 | After a shader change | 11.2 / 14.0 / 25.2 s | 11.1 / 2.3 / 13.4 s |
 
-The frozen 2.4 s left are the finishing step's device work. The renderer and its passes take
+The frozen 2.4 s left were the finishing step's device work. The renderer and its passes take
 0.3 s, the textures 0.7 s (generated and uploaded), the scene's pages 0.7 s, the rocks' placement,
-the start view and the BLAS 0.5 s, the probes and the sea 0.25 s. Drawing loading frames
-through them needs the finishing step split into stages.
+the start view and the BLAS 0.5 s, the probes and the sea 0.25 s.
+
+**The finishing step on a worker (#201's second step).** It now runs on a thread of its own
+while the main thread goes on drawing loading frames:
+- **What it has of the shell:** a `forge_app::Setup` in place of the `Context`. That is the
+  device, the shader compiler, the frame target's format and HDR settings, and the frame's size
+  when it started. Those are all the demos' setups read. The swapchain, the frames and the graph
+  stay the loading screen's.
+- **The queues:** both threads use the device, so its queues are held by every call that uses
+  them. That is a lock around the frames' submits, the present, the one-shot uploads'
+  submit, and the wait for the device.
+- **Descriptors:** the bindless set takes the setup's new images while loading frames are in
+  flight. Its bindings are update-after-bind and partially bound, and the loading screen
+  samples none.
+- **A resize meanwhile:** if the window changed size while the step worked, the demo is told
+  before its first frame.
+- **The demos** (city-blocks, the island, the lab and the ballad) are `Send`, built on the
+  worker and handed to the main thread.
+
+| Island start, cache warm | Prepared | Finishing | Longest wait between two loading frames |
+|---|---|---|---|
+| Before #201 | 0.07 s | 14.85 s on the main thread | 14.85 s |
+| The CPU work on the loading thread | 7.7 s | 2.4 s on the main thread | 2.4 s |
+| The finishing step on a worker | 8.3 s | 2.3 s on its worker | 71 ms |
+
+The ballad's longest wait is 47 ms. The log says it: "the loading screen's longest wait
+between two frames". The validation layers, thread-safety checks included, are silent through
+both starts.
 
 **Checks:**
 - Every capture is identical to the previous build: both demos, both paths, the culling

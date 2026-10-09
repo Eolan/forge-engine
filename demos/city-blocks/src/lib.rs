@@ -23,7 +23,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser};
-use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input};
+use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input, Setup};
 use forge_core::material::{
     LayerContour, Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
 };
@@ -867,7 +867,7 @@ struct SpaceSky {
 }
 
 impl SpaceSky {
-    fn new(ctx: &Context, sun_illuminance: f32) -> Result<Self> {
+    fn new(ctx: &Setup, sun_illuminance: f32) -> Result<Self> {
         let params = AtmosphereParams::earth();
         let view = params.view_from_space(PLANET_DIR, PLANET_ANGLE_DEG.to_radians());
         let mut planet = Atmosphere::new(&ctx.device, &ctx.shaders, params)?;
@@ -888,7 +888,7 @@ const SPACING: f32 = 60.0;
 const COLUMNS: u32 = 5;
 
 impl Gallery {
-    fn new(ctx: &mut Context, args: Args, cooked: Cooked, title: &'static str) -> Result<Self> {
+    fn new(ctx: &Setup, args: Args, cooked: Cooked, title: &'static str) -> Result<Self> {
         let args = island_demo::with_shot(args)?;
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
@@ -6095,7 +6095,7 @@ fn start_camera(args: &Args) -> Result<FlyCamera> {
 /// a fixed view then streams nothing, and the capture batch can draw the island's 2 m ground.
 fn set_start_view(
     builder: &mut MeshletSceneBuilder,
-    ctx: &Context,
+    ctx: &Setup,
     args: &Args,
     origin: forge_render::CellPos,
     camera: &FlyCamera,
@@ -6333,7 +6333,7 @@ fn sea_prop() -> PropSpec {
 /// instance of the scene, on the ground's layered material with rock where the ground is
 /// steep or high and grass elsewhere.
 fn build_island(
-    ctx: &Context,
+    ctx: &Setup,
     args: &Args,
     cooked: Cooked,
     camera: &FlyCamera,
@@ -6719,7 +6719,7 @@ fn build_island(
 /// The city: the terrain and the twenty props cooked (or loaded), the terrain placed once
 /// at the origin and `args.instances` props placed over it by the GPU.
 fn build_city(
-    ctx: &Context,
+    ctx: &Setup,
     args: &Args,
     cooked: Cooked,
     camera: &FlyCamera,
@@ -6859,11 +6859,7 @@ fn build_city(
 
 /// Cooks (or loads) every prop of the city set in parallel and lays one of each out on a
 /// grid, `SPACING` metres apart.
-fn build_gallery(
-    ctx: &Context,
-    args: &Args,
-    cooked: Cooked,
-) -> Result<(MeshletScene, Vec<Placed>)> {
+fn build_gallery(ctx: &Setup, args: &Args, cooked: Cooked) -> Result<(MeshletScene, Vec<Placed>)> {
     let start = Instant::now();
     let props = city_props();
     let (meshes, total_ms) = (cooked.meshes, cooked.ms);
