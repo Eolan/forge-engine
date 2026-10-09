@@ -677,6 +677,40 @@ finishing step: 40 s. The copies now share one list. Three more changes:
 | After editing `water.slang` (21 entries reach it) | 40.4 s, 83 compiled | 10.2 s, 21 compiled ahead |
 | After editing `bindless.slang` (81 entries reach it) | 40.4 s, 83 compiled | 12.9 s, 81 compiled ahead |
 
+**The island's products kept between starts (#208, D-053, 2026-10-09).** The warm start
+remade the island's CPU products at every launch: they were memoized per process only. They
+are now kept on disk by `forge_core::derived`:
+- **The products:** the eroded field, the shaped heights, the water (ribbons, channels,
+  lakes), the layer map with the rock sites, the drawn ground and the two sets of stones.
+- **Where:** `mesh-cache/derived/`, until #213.
+- **The keys:**
+  - each product's inputs;
+  - the keys of the products it is made from, so a change upstream reaches downstream;
+  - a digest of its source files, made at build time (`demos/city-blocks/build.rs` lists
+    them).
+  A procgen edit remakes what it touches with no `--recook`. The ground tiles' key adds the
+  drawn ground's key and the cooking code's digest, so they follow too. Before, `--no-sills`
+  was missing from their key.
+- **The amplified field** (268 MB) is not kept: it is read only to make the drawn ground. A
+  start whose drawn ground is stored skips it.
+- **Nothing piles up.** Writing a product removes its entries made by other code. A file
+  unused for a month goes at the next start, in this cache, the cooked meshes and the
+  shaders, and partial writes older than an hour go with it. The products are capped at
+  4 GiB, least recently used first.
+- **Every entry is checked:** a header with the product, key and format, a length, and an
+  xxh3 checksum. An entry that fails is made again.
+
+| Island start (`island --frames 5`) | Prepared | Total |
+|---|---|---|
+| Warm, before | 7.6 s | 9.8 s |
+| **Warm, products stored** | **0.59 s** | **2.56 s** |
+| Cold, every product made and the tiles cooked again (once, their key changed) | 58.5 s | 60.8 s |
+
+Loading the stored products takes 4 ms for the heights, 52 ms for the water, 5 ms for the
+layers and 113 ms for the drawn ground (299 MB), with the files in the OS's cache. Making
+them took 7.2 s (6.4 of them the eroded field), 3.2 s, 3.1 s and 9.2 s. They take 0.44 GB on
+disk, raw. Compression and the 4.3 GB of 2 m tiles are #215.
+
 ## Ice blocks (2026-09-25, issue #63)
 
 The owner asked for "the ice ones more like ice blocks/chunks". Until now the ice asteroids

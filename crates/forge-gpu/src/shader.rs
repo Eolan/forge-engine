@@ -215,6 +215,13 @@ impl ShaderCompiler {
                 if removed > 0 {
                     tracing::info!(removed, "shader cache: the SPIR-V of the old keys removed");
                 }
+                // The entries and the programs' lists nothing has used in a month: a shader or
+                // a program removed, a variant no longer run.
+                forge_core::derived::sweep_unused(
+                    &sweep,
+                    &["spv", "entries"],
+                    forge_core::derived::UNUSED_FOR,
+                );
             });
         Ok(Self {
             slangc,
@@ -425,6 +432,8 @@ impl ShaderCompiler {
             && bytes.len() % 4 == 0
             && !bytes.is_empty()
         {
+            // Its last use, for the sweep of what goes unused (#208).
+            forge_core::derived::touch(&cached);
             return Ok(bytemuck::cast_slice(&bytes).to_vec());
         }
         let source = self.shader_dir.join(file);

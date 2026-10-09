@@ -14,4 +14,6 @@ workspace = true
 glam = { workspace = true }
 libm = { workspace = true }
 serde = { workspace = true }
+bytemuck = { workspace = true }
+tracing = { workspace = true }
 xxhash-rust = { workspace = true }

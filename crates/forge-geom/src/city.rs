@@ -1576,3 +1576,10 @@ mod tests {
         assert_eq!(names.len(), 20);
     }
 }
+
+// Derived data (#208): the island's drawn ground keeps its detail between starts.
+forge_core::stored!(HeightfieldDetail {
+    split,
+    cells,
+    heights
+});

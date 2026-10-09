@@ -20,6 +20,7 @@ nrd = ["dep:libloading"]
 
 [dependencies]
 ash = { workspace = true }
+forge-core = { workspace = true }
 ash-window = { workspace = true }
 bytemuck = { workspace = true }
 gpu-allocator = { workspace = true }

@@ -2489,3 +2489,78 @@ mod step_tests {
         }
     }
 }
+
+// Derived data (#208): the channels and stones, kept between starts.
+forge_core::stored!(Channels {
+    params,
+    spacing,
+    side,
+    segments,
+    start,
+    list,
+    corners,
+    corner_start,
+    corner_list,
+    fans,
+    fan_start,
+    fan_list,
+    sills,
+    sill_start,
+    sill_list,
+    bars,
+    bar_start,
+    bar_list,
+    refined,
+    inner,
+});
+forge_core::stored!(ChannelParams {
+    margin,
+    bank,
+    bend,
+    shoal,
+    beach,
+    estuary,
+    split,
+    shore,
+    coast,
+    carve_lakes,
+    sill,
+});
+forge_core::stored!(Segment {
+    a,
+    b,
+    level,
+    depth,
+    half,
+    bend,
+    mouth,
+    keep,
+    margin,
+    estuary,
+    banks,
+    below,
+    bowed,
+});
+forge_core::stored!(Bowed {
+    at,
+    down,
+    reach,
+    lip
+});
+forge_core::stored!(Sill {
+    level,
+    first,
+    size,
+    arm
+});
+forge_core::stored!(Fillet { corner, rise });
+forge_core::stored!(Stone {
+    position,
+    bed,
+    radius,
+    level,
+    turn,
+    pick,
+    ribbon,
+    point
+});

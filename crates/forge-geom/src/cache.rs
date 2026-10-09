@@ -275,12 +275,16 @@ pub fn cook_cached(
     let start = Instant::now();
     let key = key(key_text);
     let file = path(dir, name, key);
+    // The props nothing has asked for in a month go (#208), once a process.
+    forge_core::derived::sweep_once(dir, &["fmesh"], forge_core::derived::UNUSED_FOR);
     let cached = if pages_in_memory {
         load(&file, key)
     } else {
         load_hierarchy(&file, key)
     };
     if let Some(mesh) = cached {
+        // Its last use, for the sweep.
+        forge_core::derived::touch(&file);
         let ms = start.elapsed().as_secs_f64() * 1e3;
         return (
             Cooked {

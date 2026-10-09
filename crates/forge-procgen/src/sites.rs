@@ -325,3 +325,10 @@ mod tests {
         assert!(share > 0.0 && share < 1.0);
     }
 }
+
+// Derived data (#208): the rock sites' statistics, kept between starts.
+forge_core::stored!(RockSiteStats {
+    granite,
+    limestone,
+    by_site
+});

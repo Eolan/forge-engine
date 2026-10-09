@@ -82,10 +82,17 @@ runs it:
   wins. A path no pattern matches sends the change to Tier 1: an unknown path counts as
   shared until someone maps it. Its `[recook]` and `[gpu]` tables add `--recook`, and the
   fallback with validation.
-- **`--recook`:** the props, the island's tiles and its heightfield are cached in
-  `mesh-cache/` by their parameters' text, not by the code that makes them. After a change to
-  that code, `FORGE_RECOOK=1` removes the heightfield and passes `--recook` to the first run
-  of each scene that cooks (the city, the gallery, the island's 2 m and 8 m grounds).
+- **`--recook`:** the props are cached in `mesh-cache/` by their parameters' text and
+  `COOK_VERSION`, not by the code that makes them. After a change to that code,
+  `FORGE_RECOOK=1` passes `--recook` to the first run of each scene that cooks (the city, the
+  gallery, the island's 2 m and 8 m grounds). The island needs it no more (#208): its
+  products (`mesh-cache/derived/`) and its tiles are keyed by the code that makes them, so a
+  change to `forge-procgen`, `forge-geom` or the island's glue remakes what it touches.
+- **The caches keep only what is used** (#208, #209): a product's entry made by other code
+  goes when the new one is written, a shader entry keeps its newest SPIR-V, and a file in
+  `mesh-cache/`, `mesh-cache/derived/` or `shader-cache/` that nothing used for a month is
+  removed at the next start, with partial writes older than an hour. The island's products
+  are also capped at 4 GiB, least recently used first.
 - **Accepted sets** replace the "before" batch. A passing run becomes HEAD's accepted set,
   `captures/accepted/<sha>/`: the base set's images with the run's on top, and
   `manifest.txt` (the commit, the tier, the build, the driver, each image's SHA-256 and the

@@ -3219,3 +3219,83 @@ mod tests {
         assert_eq!(super::ribbons(&fork, &rivers, &[], &params), ribbons);
     }
 }
+
+// Derived data (#208): the water's ribbons, kept between starts.
+forge_core::stored!(Ribbon {
+    river,
+    mouth_area,
+    points,
+    lake_runs,
+    corners,
+    steps,
+    deltas,
+    outlets,
+    bars,
+    confluence_bars,
+    split,
+});
+forge_core::stored!(RibbonPoint {
+    position,
+    level,
+    direction,
+    half_width,
+    cover,
+    reach,
+    depth,
+    bank,
+    speed,
+    slope,
+    grade,
+    unstepped,
+    foam,
+    key,
+    lip,
+    fade,
+    ground,
+});
+forge_core::stored!(Corner {
+    centre,
+    radius,
+    touches,
+    tip,
+    level,
+    slope,
+    deepest,
+    blend
+});
+forge_core::stored!(Step {
+    lip,
+    foot,
+    drop,
+    spacing,
+    width
+});
+forge_core::stored!(Delta {
+    apex,
+    down,
+    level,
+    floor,
+    half_width,
+    length,
+    top,
+    front,
+    wander,
+    seed
+});
+forge_core::stored!(Outlet {
+    lake,
+    at,
+    down,
+    level,
+    half_width
+});
+forge_core::stored!(Bar {
+    centre,
+    down,
+    half,
+    level,
+    top,
+    slopes,
+    wander,
+    seed
+});

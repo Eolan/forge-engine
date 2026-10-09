@@ -3012,3 +3012,13 @@ game engines do? but not zipped for now?"
 **Decided (the owner, 2026-10-09):** "go with D-053, use TOML, file the issues". The steps:
 #208 (the cache), #211 (the world file), #212 (`forge-terrain`, the labs out of
 `city-blocks`), #213 (one `cache/` root), #214 (packages, milestone "Later").
+
+**Larger worlds (the owner, 2026-10-09):**
+- **Generation** may keep whole products, made complete through the cache: a world, a
+  planet, a place or an entity. It produces the packages and assets a game ships.
+- **Those packages** are cut along `forge-world`'s cells and streamed. A package's entries
+  are chunks a viewer can load alone, not whole worlds.
+- **The engine** can still generate on the fly where a game needs it: the same makers, run
+  for a chunk at run time instead of loading it.
+
+ROADMAP's Phase 9 holds the rest for later.

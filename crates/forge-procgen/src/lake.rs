@@ -334,3 +334,14 @@ mod tests {
         }
     }
 }
+
+// Derived data (#208): the lakes' water, kept between starts.
+forge_core::stored!(LakeWater {
+    lake,
+    level,
+    depth,
+    outlet,
+    first,
+    size,
+    mask
+});

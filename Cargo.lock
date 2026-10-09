@@ -689,9 +689,11 @@ dependencies = [
 name = "forge-core"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "glam",
  "libm",
  "serde",
+ "tracing",
  "xxhash-rust",
 ]
 
@@ -715,6 +717,7 @@ dependencies = [
  "ash",
  "ash-window",
  "bytemuck",
+ "forge-core",
  "gpu-allocator",
  "libloading",
  "parking_lot",

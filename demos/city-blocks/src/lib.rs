@@ -24,6 +24,7 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input, Setup};
+use forge_core::derived::{DerivedCache, Key, KeyHasher};
 use forge_core::material::{
     LayerContour, Material, MaterialId, MaterialTable, RenderLayer, ShadingClass, TextureId,
 };
@@ -4425,9 +4426,119 @@ fn valley_params(args: &Args) -> Option<forge_procgen::ValleyParams> {
     (!args.no_valleys).then(forge_procgen::ValleyParams::default)
 }
 
-/// The island's heightfield, generated once and kept in `mesh-cache/` beside the cooked
-/// meshes (`forge_procgen::cached_island`), then shaped for the sea and the rivers; made once a
-/// process (the sea, the camera, the layers and the cook all ask for it).
+/// The island's products' code digests (#208), written by `build.rs`.
+mod code_digests {
+    include!(concat!(env!("OUT_DIR"), "/code_digests.rs"));
+}
+
+/// Where the island's products are kept between starts (#208, D-053): beside the cooked meshes
+/// until #213 gathers every cache under `cache/`.
+fn derived_cache() -> DerivedCache {
+    DerivedCache::new(
+        forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("mesh-cache/derived"),
+    )
+}
+
+/// The key of the island's eroded field (#208): its parameters.
+fn eroded_key(args: &Args) -> Key {
+    let (params, erosion) = island_settings(args);
+    KeyHasher::new()
+        .debug(&forge_procgen::island::island_key(&params, &erosion))
+        .key(code_digests::CODE_ERODED)
+}
+
+/// The key of [`island_heights`]: the eroded field's, and how it is shaped.
+fn heights_key(args: &Args) -> Key {
+    KeyHasher::new()
+        .number(eroded_key(args).digest())
+        .debug(&valley_params(args))
+        .debug(&ribbon_params())
+        .debug(&(GROUND_SMOOTHING, SEA_FLOOR, SHORE_SMOOTHING))
+        .key(code_digests::CODE_HEIGHTS)
+}
+
+/// The key of [`island_water`] made from the heights of key `heights`.
+fn water_key(heights: Key) -> Key {
+    KeyHasher::new()
+        .number(heights.digest())
+        .debug(&ribbon_params())
+        .debug(&SILLS.get().copied().unwrap_or(true))
+        .debug(&forge_procgen::ChannelParams::default())
+        .key(code_digests::CODE_WATER)
+}
+
+/// The key of the stones of `seed` on the water of key `water`.
+fn stones_key(water: Key, seed: u64) -> Key {
+    KeyHasher::new()
+        .number(water.digest())
+        .number(seed)
+        .key(code_digests::CODE_STONES)
+}
+
+/// The key of [`island_layers`].
+fn layers_key(args: &Args) -> Key {
+    KeyHasher::new()
+        .number(water_key(heights_key(args)).digest())
+        .debug(&island_settings(args))
+        .debug(&[
+            args.water(),
+            args.no_salt,
+            args.no_beach_types,
+            args.no_rock_types,
+            args.no_rock_sites,
+        ])
+        .debug(&ISLAND_TEXELS)
+        .key(code_digests::CODE_LAYERS)
+}
+
+/// The key of the amplified field made from the heights of key `heights`. The field is not
+/// stored (268 MB, 3.5 s to make, read only to make the drawn ground): its key is part of the
+/// drawn ground's, so a change to the amplification remakes that.
+fn amplified_derived_key(heights: Key, factor: u32, seed: u64) -> Key {
+    KeyHasher::new()
+        .number(heights.digest())
+        .number(u64::from(factor))
+        .number(seed)
+        .key(code_digests::CODE_AMPLIFIED)
+}
+
+/// The key of [`island_drawn`]: the water's, the amplified field's when it adds detail, and how
+/// they are drawn.
+fn drawn_key(args: &Args) -> Key {
+    let heights = heights_key(args);
+    let factor = island_factor(args);
+    let mut key = KeyHasher::new().number(water_key(heights).digest());
+    if factor > 1 && args.island_detail > 0.0 {
+        key = key.number(amplified_derived_key(heights, factor, args.island.unwrap_or(7)).digest());
+    }
+    key.debug(&(factor, args.island_detail, SHORE_SMOOTHING, DETAIL_FADE))
+        .key(code_digests::CODE_DRAWN)
+}
+
+/// The identity of a field in a process: what the products made from a field alone are
+/// memoized by.
+fn field_identity(height: &Field2<f32>) -> u64 {
+    height.digest() ^ height.spacing.to_bits() ^ u64::from(height.size)
+}
+
+/// The keys of the heights [`island_heights`] made, by their field's identity: the products
+/// made from a field alone (the water, the stones, the amplified field) find their upstream key
+/// here. A field made otherwise has none, and its products are made, not stored.
+static HEIGHTS_KEYS: std::sync::Mutex<Vec<(u64, Key)>> = std::sync::Mutex::new(Vec::new());
+
+/// The key of the heights `height` was made as, if [`island_heights`] made it.
+fn heights_key_of(identity: u64) -> Option<Key> {
+    HEIGHTS_KEYS
+        .lock()
+        .expect("the heights' keys")
+        .iter()
+        .find(|(made, _)| *made == identity)
+        .map(|(_, key)| *key)
+}
+
+/// The island's heightfield: the eroded field, shaped for the sea and the rivers. Both are
+/// kept between starts (#208); made or loaded once a process (the sea, the camera, the layers
+/// and the cook all ask for it).
 fn island_heights(args: &Args) -> Field2<f32> {
     static MADE: std::sync::Mutex<Option<(String, Field2<f32>)>> = std::sync::Mutex::new(None);
     let (params, erosion) = island_settings(args);
@@ -4443,22 +4554,59 @@ fn island_heights(args: &Args) -> Field2<f32> {
     {
         return height.clone();
     }
-    let height = make_island_heights(args);
+    let start = Instant::now();
+    let derived = derived_cache().get_or_make("island-heights", heights_key(args), || {
+        make_island_heights(args)
+    });
+    let height = derived.value;
+    let (lo, hi) = height.min_max();
+    tracing::info!(
+        seed = args.island.unwrap_or(7),
+        samples = height.size,
+        spacing_m = height.spacing,
+        from_cache = derived.from_cache,
+        ms = start.elapsed().as_millis(),
+        height_m = %format_args!("{lo:.0}-{hi:.0}"),
+        "island heightfield"
+    );
+    HEIGHTS_KEYS
+        .lock()
+        .expect("the heights' keys")
+        .push((field_identity(&height), heights_key(args)));
     *made = Some((key, height.clone()));
     height
 }
 
-/// [`island_heights`], made.
+/// [`island_heights`], made: the eroded field (stored on its own, the longest to make), then
+/// shaped.
 fn make_island_heights(args: &Args) -> Field2<f32> {
     let (params, erosion) = island_settings(args);
-    let dir = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("mesh-cache");
-    let start = Instant::now();
+    let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+    // The eroded fields kept before #208 (`mesh-cache/island-<key>.f32`, keyed without their
+    // code) are read no more.
+    if let Ok(dir) = std::fs::read_dir(root.join("mesh-cache")) {
+        for path in dir.filter_map(|e| e.ok().map(|e| e.path())) {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if name.starts_with("island-") && name.ends_with(".f32") {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
     let pool = TaskPool::client();
-    let (height, from_cache) = forge_procgen::cached_island(&dir, &params, &erosion, &pool)
-        .expect("the island's cache file");
+    let eroded = derived_cache().get_or_make("island-eroded", eroded_key(args), || {
+        forge_procgen::generate_island(&params, &erosion, &pool).0
+    });
+    tracing::info!(
+        from_cache = eroded.from_cache,
+        ms = eroded.ms,
+        "the island's eroded field"
+    );
     // The sea floor under the flat sea (#96): the sea's plane then meets the ground along the
     // coast, between the samples.
-    let mut height = height;
+    let mut height = eroded.value;
     forge_procgen::smooth_shore(&mut height, 0.0, f32::INFINITY, GROUND_SMOOTHING);
     let coast = forge_procgen::coast_distance(&height, 0.0, &pool);
     forge_procgen::sea_floor(&mut height, &coast, 0.0, SEA_FLOOR.0, SEA_FLOOR.1);
@@ -4491,16 +4639,6 @@ fn make_island_heights(args: &Args) -> Field2<f32> {
             "the rivers' valleys carved"
         );
     }
-    let (lo, hi) = height.min_max();
-    tracing::info!(
-        seed = args.island.unwrap_or(7),
-        samples = height.size,
-        spacing_m = height.spacing,
-        from_cache,
-        ms = start.elapsed().as_millis(),
-        height_m = %format_args!("{lo:.0}-{hi:.0}"),
-        "island heightfield"
-    );
     height
 }
 
@@ -4573,20 +4711,58 @@ struct IslandWater {
     lakes: Vec<forge_procgen::LakeWater>,
 }
 
-/// The island's rivers and lakes as water and beds, made once a process for the field it was
-/// made from: the ground's layers and the water both ask for it at start (0.75 s each).
+forge_core::stored!(IslandWater {
+    ribbons,
+    channels,
+    lakes
+});
+
+/// The island's rivers and lakes as water and beds, once a process for the field it was made
+/// from: the ground's layers and the water both ask for it at start (0.75 s each). Kept
+/// between starts (#208) for the heights [`island_heights`] made.
 fn island_water(height: &Field2<f32>) -> IslandWater {
     static MADE: std::sync::Mutex<Option<(u64, IslandWater)>> = std::sync::Mutex::new(None);
-    let key = height.digest() ^ height.spacing.to_bits() ^ u64::from(height.size);
+    let key = field_identity(height);
     let mut made = MADE.lock().expect("the island's water");
     if let Some((made_for, water)) = made.as_ref()
         && *made_for == key
     {
         return water.clone();
     }
-    let water = make_island_water(height);
+    let water = match heights_key_of(key) {
+        Some(heights) => {
+            let derived = derived_cache().get_or_make("island-water", water_key(heights), || {
+                make_island_water(height)
+            });
+            tracing::info!(
+                from_cache = derived.from_cache,
+                ms = derived.ms,
+                "the island's water"
+            );
+            derived.value
+        }
+        None => make_island_water(height),
+    };
     *made = Some((key, water.clone()));
     water
+}
+
+/// `seed`'s stones on the island's water, kept between starts (#208) for the heights
+/// [`island_heights`] made.
+fn derived_stones(
+    product: &str,
+    height: &Field2<f32>,
+    seed: u64,
+    make: impl FnOnce() -> Vec<forge_procgen::Stone>,
+) -> Vec<forge_procgen::Stone> {
+    match heights_key_of(field_identity(height)) {
+        Some(heights) => {
+            derived_cache()
+                .get_or_make(product, stones_key(water_key(heights), seed), make)
+                .value
+        }
+        None => make(),
+    }
 }
 
 /// [`island_water`], made.
@@ -4646,7 +4822,9 @@ fn island_stones(
     {
         return stones.clone();
     }
-    let stones = forge_procgen::stones(ribbons, channels, height, RIVER_STONES);
+    let stones = derived_stones("island-stones", height, RIVER_STONES, || {
+        forge_procgen::stones(ribbons, channels, height, RIVER_STONES)
+    });
     *made = Some((key, stones.clone()));
     stones
 }
@@ -4667,7 +4845,9 @@ fn island_bank_stones(
     {
         return stones.clone();
     }
-    let stones = forge_procgen::bank_stones(ribbons, channels, height, RIVER_STONES ^ 0xba);
+    let stones = derived_stones("island-bank-stones", height, RIVER_STONES ^ 0xba, || {
+        forge_procgen::bank_stones(ribbons, channels, height, RIVER_STONES ^ 0xba)
+    });
     *made = Some((key, stones.clone()));
     stones
 }
@@ -5544,6 +5724,13 @@ fn island_tiles(args: &Args) -> Vec<PropSpec> {
             );
         }
     }
+    // The drawn ground's key and the cooking code's digest (#208): the tiles follow a change
+    // of either, as the island's other products do.
+    key += &format!(
+        ", drawn {:016x}, cooked by {:016x}",
+        drawn_key(args).digest(),
+        code_digests::CODE_TILES
+    );
     let for_source = args.clone();
     let source: Arc<dyn Fn() -> Arc<[f32]> + Send + Sync> =
         Arc::new(move || island_drawn(&for_source).heights.clone());
@@ -5736,6 +5923,28 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
     {
         return drawn.clone();
     }
+    let derived = derived_cache().get_or_make("island-drawn", drawn_key(args), || {
+        make_island_drawn(args, height, factor)
+    });
+    tracing::info!(
+        from_cache = derived.from_cache,
+        ms = derived.ms,
+        "the island's drawn ground"
+    );
+    let drawn = Arc::new(derived.value);
+    *made = Some((key, drawn.clone()));
+    drawn
+}
+
+forge_core::stored!(DrawnGround {
+    size,
+    spacing,
+    heights,
+    detail
+});
+
+/// [`island_drawn`], made.
+fn make_island_drawn(args: &Args, height: Field2<f32>, factor: u32) -> DrawnGround {
     let start = Instant::now();
     let IslandWater {
         channels, lakes, ..
@@ -5842,8 +6051,6 @@ fn island_drawn(args: &Args) -> Arc<DrawnGround> {
         ms = start.elapsed().as_millis(),
         "island ground drawn, the river channels carved"
     );
-    let drawn = Arc::new(drawn);
-    *made = Some((key, drawn.clone()));
     drawn
 }
 
@@ -7065,8 +7272,12 @@ fn warm_island(args: &Args) {
     let height = island_heights(args);
     let factor = island_factor(args);
     std::thread::scope(|ahead| {
-        // The drawn ground's amplified detail needs the heights alone: beside the water.
-        if factor > 1 && args.island_detail > 0.0 {
+        // The drawn ground's amplified detail needs the heights alone: beside the water. Not
+        // when the drawn ground is stored (#208): only its making reads the field.
+        let drawn_stored = derived_cache()
+            .path("island-drawn", drawn_key(args))
+            .exists();
+        if factor > 1 && args.island_detail > 0.0 && !drawn_stored {
             ahead.spawn(|| {
                 amplify_ahead(
                     &height,
@@ -7162,10 +7373,20 @@ fn island_layers(args: &Args) -> Arc<IslandLayers> {
     {
         return layers.clone();
     }
-    let layers = Arc::new(make_island_layers(args, &height, ISLAND_TEXELS));
+    let derived = derived_cache().get_or_make("island-layers", layers_key(args), || {
+        make_island_layers(args, &height, ISLAND_TEXELS)
+    });
+    tracing::info!(
+        from_cache = derived.from_cache,
+        ms = derived.ms,
+        "the island's layers"
+    );
+    let layers = Arc::new(derived.value);
     *made = Some((key, layers.clone()));
     layers
 }
+
+forge_core::stored!(IslandLayers { layers, sites });
 
 /// [`island_layers`], made: the slope rule's layers, then the moisture, the salt water's sand,
 /// the beaches, the rivers' and lakes' layers, the valleys' ground and the geology, and the rock
@@ -7565,4 +7786,54 @@ fn make_island_layers(args: &Args, height: &Field2<f32>, texels: u32) -> IslandL
         (map, stats, sites_start.elapsed().as_millis())
     });
     IslandLayers { layers, sites }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(extra: &[&str]) -> Args {
+        Args::try_parse_from(["city-blocks", "--island", "7"].iter().chain(extra))
+            .expect("the test's arguments")
+    }
+
+    /// The island's products' keys, in their order downstream.
+    fn keys(args: &Args) -> [Key; 5] {
+        [
+            eroded_key(args),
+            heights_key(args),
+            water_key(heights_key(args)),
+            layers_key(args),
+            drawn_key(args),
+        ]
+    }
+
+    /// Which of [`keys`] differ between the two arguments.
+    fn moved(a: &[&str], b: &[&str]) -> [bool; 5] {
+        let (a, b) = (keys(&args(a)), keys(&args(b)));
+        std::array::from_fn(|i| a[i] != b[i])
+    }
+
+    #[test]
+    fn a_parameter_change_remakes_only_the_products_that_read_it() {
+        // The salt: the layers' alone.
+        assert_eq!(
+            moved(&[], &["--no-salt"]),
+            [false, false, false, true, false]
+        );
+        // The amplification's strength: the drawn ground's alone.
+        assert_eq!(
+            moved(&[], &["--island-detail", "0.5"]),
+            [false, false, false, false, true]
+        );
+        // The valleys reshape the heights: everything after the eroded field.
+        assert_eq!(
+            moved(&[], &["--no-valleys"]),
+            [false, true, true, true, true]
+        );
+        // The coastal plain shapes the erosion: everything.
+        assert_eq!(moved(&[], &["--island-plain", "0.3"]), [true; 5]);
+        // The same arguments, the same keys.
+        assert_eq!(moved(&[], &[]), [false; 5]);
+    }
 }

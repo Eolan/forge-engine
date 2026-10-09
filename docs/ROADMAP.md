@@ -602,6 +602,19 @@ The items below are the phase's original outline; the plan above orders them.
 2. SSD streaming: async I/O, GPU decompression, page-granular residency for clusters and
    virtual textures; Resizable BAR upload paths.
    **Demo:** fly-through at 300 m/s with residency and bandwidth graphs.
+3. **Worlds far larger than the island, up to planets and a galaxy** (the owner, 2026-10-09).
+   Two stages, as D-053 splits them:
+   - **Generation** keeps whole products where it must: a world, a planet, a place or an
+     entity made complete, through the derived-data cache (#208). It produces the packages
+     and assets a game ships. For the demos the cache alone is enough.
+   - **A game** loads those results optimised: in packages (#214), chunked along
+     `forge-world`'s cells (the flat grid, the cube sphere, the sectors), compressed (#215),
+     and streamed by distance.
+   - **Generation at run time** stays possible where a game needs it: the same makers, run
+     by the engine for a chunk on the fly instead of loading it.
+   - **Still to find:** how to generate whole worlds, planets included, so that their chunks
+     can be made or loaded alone. Erosion and rivers are global today. Each needs its own
+     research and decision when its phase comes.
 
 ## Later, low priority — Graphics settings and a dev console (#160)
 

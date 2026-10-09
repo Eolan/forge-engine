@@ -44,7 +44,7 @@ Where Forge uses them:
 - `anyhow`: asteroids, city-blocks, contact-sheet, credits, forge-app, genesis, imgdiff, island, meshlets, physics-lab, sharpness
 - `ash`: forge-gpu
 - `ash-window`: forge-gpu
-- `bytemuck`: forge-app, forge-geom, forge-gpu, forge-render
+- `bytemuck`: forge-app, forge-core, forge-geom, forge-gpu, forge-render
 - `cc`: forge-physics
 - `clap`: asteroids, city-blocks, contact-sheet, credits, genesis, imgdiff, meshlets, sharpness, task-bench
 - `core_affinity`: forge-task
@@ -65,7 +65,7 @@ Where Forge uses them:
 - `serde`: forge-core
 - `serde_json`: credits, forge-geom
 - `thiserror`: forge-anim, forge-geom, forge-gpu, forge-physics, forge-sim
-- `tracing`: asteroids, city-blocks, forge-app, forge-gpu, forge-render, forge-task, meshlets
+- `tracing`: asteroids, city-blocks, forge-app, forge-core, forge-gpu, forge-render, forge-task, meshlets
 - `tracing-subscriber`: forge-app
 - `tracy-client`: forge-app, forge-task
 - `windows-sys`: forge-gpu

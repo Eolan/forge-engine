@@ -169,3 +169,5 @@ mod tests {
         assert_eq!(Field2::<f32>::new(0, 1.0).digest(), 0xcbf2_9ce4_8422_2325);
     }
 }
+
+forge_core::stored!([T: forge_core::derived::Stored] Field2<T> { size, spacing, data });
