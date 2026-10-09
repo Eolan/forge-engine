@@ -1079,8 +1079,26 @@ tags. Friction is each material's against itself.
   slide within 5 %, the crates on brick, wood and sand still, those on snow and ice more than a
   metre down, and a recording of 900 ticks replayed to the same digests.
 
+**Footprints (#205).** The walker's boots now print the sand and the snow:
+- **The beds:** each of the two patches carries a deformable bed (`yard::Bed`) a centimetre in
+  from its edges, at 2 cm. The sand is the island's dry sand (#197) and the snow the yard's
+  fresh snow. A bed lies on its patch as the yard's lie on the floor (`Bed::base`, its ground
+  just under the patch's top) and is drawn with the patch's row through the skinned group.
+  Flush with the patch, its prints sank under the patch's own top, which hid them. A strip
+  1.6 m wide drew its bevel as a hard line beside the way.
+- **The stride:** the island walker's (#196), now `island_walk::Stride`, shared with the lab's
+  player. A footfall every 0.45 + 0.15 m per m/s, 10 cm either side of the way in turn, presses
+  the island's boot (5 × 13 cm half sizes, 70 kg) into the bed under it: 2.2 cm in the sand,
+  the snow down to its least.
+- **Replays:** the stride is saved and digested with the world, and a reset rebuilds the
+  scene's own beds.
+- **The light:** the yard's raking sun, so the prints show.
+- **The test** also finds over a hundred points of each bed pressed (the sand by 1.5 cm or more,
+  the snow by 4 cm), all within 30 cm of the way.
+
+![The walker's prints: in the sand at tick 360 (above), in the snow at tick 520 (below)](images/lab-materials-prints.png)
+
 **Not yet:**
-- footprints on the sand and snow (the yard's layer);
 - the walker's first step at the static friction;
 - the rows' sounds (Phase 6 has no mixer yet);
 - wetness and frost from the weather;

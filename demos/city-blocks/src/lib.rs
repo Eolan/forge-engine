@@ -1001,6 +1001,10 @@ impl Gallery {
         if args.lab == Some(lab::LabScene::Yard) {
             renderer.sun_dir = lab::yard::SUN.normalize();
         }
+        // The materials' patches (#205): the yard's raking sun, for the prints too.
+        if args.lab == Some(lab::LabScene::Materials) {
+            renderer.sun_dir = lab::yard::SUN.normalize();
+        }
         // The night under the ground's sky (D-046) wherever the day turns: `--day`, `--time-of-day`.
         let night = ((args.day.is_some() || args.time_of_day.is_some())
             && space.is_none()

@@ -949,6 +949,10 @@ impl LabWorld {
                 group(BALL, field.balls, &mut bodies);
                 player.character = Some(field.player);
                 yard = Some(field.yard);
+                // The beds the walker's boots press (#205), drawn as the yard's are: through
+                // the skinned group, which no body of the scene's is in.
+                beds = materials::beds();
+                group(SKINNED, Vec::new(), &mut bodies);
             }
             LabScene::Drive => {
                 let crate_shape = Shape::cuboid(Vec3::splat(sea::CRATE_HALF), 0.025, 150.0)?;
@@ -1439,8 +1443,15 @@ impl Simulation for LabWorld {
                     self.next_throw = 0;
                     self.started = self.tick;
                     self.feet.clear();
+                    if let Some(yard) = &mut self.materials {
+                        yard.stride = crate::island_walk::Stride::default();
+                    }
                     if !self.beds.is_empty() {
-                        self.beds = yard::beds();
+                        self.beds = if self.materials.is_some() {
+                            materials::beds()
+                        } else {
+                            yard::beds()
+                        };
                         self.beds_changed += 1;
                         yard::settle(&mut self.world, &mut self.beds, &mut self.grounds, true);
                     }
@@ -1546,9 +1557,12 @@ impl Simulation for LabWorld {
             flood::displace(water, &self.world, &self.floaters, &self.hulls, &volumes);
             water.step(TICK);
         }
-        // The materials' walker on its autopilot (#203).
+        // The materials' walker on its autopilot (#203), and where its feet were (#205).
+        let mut feet_before = None;
         if let (Some(yard), Some(c)) = (&self.materials, self.player.character) {
-            self.player.walk = yard.walk(self.world.character(c).position.z);
+            let position = self.world.character(c).position;
+            self.player.walk = yard.walk(position.z);
+            feet_before = Some(position);
         }
         // The playground's platform and player, before the bodies move: on the materials'
         // patches its feet grip as their rows do (#203).
@@ -1558,6 +1572,18 @@ impl Simulation for LabWorld {
                 yard.and_then(|y| y.row(body))
                     .map(|row| materials::traction(&row.physics, TICK))
             });
+        // Its boots pressing the sand and the snow as its stride brings them down (#205).
+        if let (Some(yard), Some(c), Some(from)) =
+            (&mut self.materials, self.player.character, feet_before)
+        {
+            let s = self.world.character(c);
+            if s.ground == forge_physics::Ground::Firm
+                && let Some(fall) = yard.stride.step(from, s.position, f64::from(TICK))
+                && materials::press(&mut self.beds, fall)
+            {
+                self.beds_changed += 1;
+            }
+        }
         // The yard's car on its autopilot unless the player drives it (#186).
         if self.beds.is_empty() {
             self.driver.tick(&mut self.world);
@@ -1668,6 +1694,11 @@ impl Simulation for LabWorld {
                 out.extend_from_slice(&h.to_bits().to_le_bytes());
             }
         }
+        // The materials' walker's stride (#205).
+        if let Some(yard) = &self.materials {
+            out.extend_from_slice(&yard.stride.walked.to_bits().to_le_bytes());
+            out.push(u8::from(yard.stride.left));
+        }
         // The car's grounds as Jolt holds them, a millimetre from their beds at most (#191).
         for ground in &self.grounds {
             for s in ground.samples() {
@@ -1713,6 +1744,15 @@ impl Simulation for LabWorld {
             }
         }
         self.beds_changed += 1;
+        if let Some(yard) = &mut self.materials {
+            let (walked, after) = rest.split_at(8);
+            let (left, after) = after.split_at(1);
+            yard.stride = crate::island_walk::Stride {
+                walked: f64::from_bits(u64::from_le_bytes(walked.try_into().expect("8 bytes"))),
+                left: left[0] != 0,
+            };
+            rest = after;
+        }
         // The car's grounds as they were saved, not their beds: Jolt's saved state holds no
         // shape (#187), and the grounds lag their beds (#191).
         let rest = yard::set_grounds(&mut self.world, &mut self.beds, &mut self.grounds, rest);
@@ -1790,6 +1830,10 @@ impl Simulation for LabWorld {
                 h = (h ^ u64::from(height.to_bits())).wrapping_mul(0x0000_0100_0000_01b3);
             }
             d ^= h.rotate_left(31);
+        }
+        // The materials' walker's stride (#205).
+        if let Some(yard) = &self.materials {
+            d ^= yard.stride.walked.to_bits().rotate_left(41) ^ u64::from(yard.stride.left);
         }
         // The car's grounds as Jolt holds them (#191).
         for (g, ground) in self.grounds.iter().enumerate() {
@@ -2111,7 +2155,12 @@ pub(crate) fn build(
         model_rows(&mut materials, &mut textures, "lab-bird", mesh, true);
     }
     let creature_rows = [materials.of("lab-mannequin"), materials.of("lab-dog")];
-    let soft_rows = yard::SOFT.map(|name| (name, materials.of(name)));
+    // The beds' rows: the yard's soft materials, and the materials scene's sand and snow (#205).
+    let soft_rows: Vec<_> = yard::SOFT
+        .iter()
+        .chain(&[MATERIAL_ROWS[2].name, MATERIAL_ROWS[3].name])
+        .map(|&name| (name, materials.of(name)))
+        .collect();
     let bird_row = materials.of("lab-bird");
     let slime_rows = SLIME_FLAVOURS.map(|(name, _)| materials.of(name));
     materials.apply(&mut builder, &props, &ids);
@@ -2644,11 +2693,13 @@ impl Lab {
         self.shown().player().is_some()
     }
 
-    /// The player as drawn, when the scene has one: its capsule's mover (the last but one).
+    /// The player as drawn, when the scene has one: its capsule's mover (the last but one
+    /// before the beds', #205).
     pub(crate) fn player(&mut self) -> Option<MoverTransform> {
         self.shown().player()?;
+        let beds = self.skinned.as_ref().map_or(0, |s| s.beds.len());
         let movers = self.movers(&mut Vec::new());
-        movers.get(movers.len().checked_sub(2)?).copied()
+        movers.get(movers.len().checked_sub(2 + beds)?).copied()
     }
 
     /// What the camera follows (C) as drawn: the boat or the car, when the scene has one.
@@ -3066,6 +3117,26 @@ mod tests {
         let travel = yard.crate_travel(&first.world);
         assert!(travel[..3].iter().all(|&d| d < 0.02), "{travel:?}");
         assert!(travel[3] > 1.0 && travel[4] > 1.0, "{travel:?}");
+        // Its boots' prints in the sand and the snow (#205): a few on each, along its way (the
+        // feet 10 cm either side of it at x = 0), the sand's 1.5 cm deep at least, the snow's
+        // 4 cm.
+        let untouched = materials::beds();
+        for ((bed, before), deepest) in first.beds.iter().zip(&untouched).zip([0.015_f32, 0.04]) {
+            let [nx, _] = bed.layer.size();
+            let (origin, cell) = (bed.layer.origin(), f64::from(bed.layer.cell()));
+            // Against the bed untouched: its edges thin to nothing on their own.
+            let pressed: Vec<f64> = bed
+                .layer
+                .heights()
+                .iter()
+                .zip(before.layer.heights())
+                .enumerate()
+                .filter(|&(_, (&h, &was))| h < was - deepest)
+                .map(|(k, _)| origin.x + (k as u32 % nx) as f64 * cell)
+                .collect();
+            assert!(pressed.len() > 100, "{} points pressed", pressed.len());
+            assert!(pressed.iter().all(|x| x.abs() < 0.3), "a print off the way");
+        }
         // A grip changes no walk where the ground has no row: the playground's replay, above.
         let (mut second, _) = LabWorld::new(LabScene::Materials, test_pool()).unwrap();
         recording.replay(&mut second).expect("the same digests");

@@ -36,7 +36,7 @@ const STRAY: f64 = 2.0;
 /// The beach's dry sand: 5 cm over the ground and loose, a foot's 34 kPa sinking it 2.2 cm
 /// (the yard's damp sand, `Soft::SAND`, took 8 mm), most of what it pushes heaped in a rim,
 /// standing at 35° (dry sand's angle of repose).
-const SOFT: Soft = Soft {
+pub(crate) const SOFT: Soft = Soft {
     depth: 0.05,
     least: 0.004,
     stiffness: 1.5e6,
@@ -44,8 +44,8 @@ const SOFT: Soft = Soft {
     repose: 0.7,
 };
 /// A footprint's half sizes across and along, metres, and its pressure: 70 kg on its ellipse.
-const FOOT: Vec2 = Vec2::new(0.05, 0.13);
-const FOOT_PRESSURE: f32 = 70.0 * 9.81 / (std::f32::consts::PI * 0.05 * 0.13);
+pub(crate) const FOOT: Vec2 = Vec2::new(0.05, 0.13);
+pub(crate) const FOOT_PRESSURE: f32 = 70.0 * 9.81 / (std::f32::consts::PI * 0.05 * 0.13);
 /// Where the window's mover waits while it is not drawn: far under the island.
 const PARKED: Vec3 = Vec3::new(0.0, -5000.0, 0.0);
 

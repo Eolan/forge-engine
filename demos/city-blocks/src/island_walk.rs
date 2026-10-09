@@ -59,11 +59,55 @@ pub(crate) struct Walker {
     tick_ms: Vec<f64>,
     cut_ms: Vec<f64>,
     off: f64,
-    /// Its footfalls since they were last taken (#197), metres walked since the last, and
-    /// whether the next is its left foot's.
+    /// Its footfalls since they were last taken (#197), and its stride.
     footfalls: Vec<Footfall>,
-    walked: f64,
-    left: bool,
+    stride: Stride,
+}
+
+/// A walker's stride (#197; the lab's materials scene's too, #205): the metres walked since the
+/// last footfall, and whether the next is the left foot's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Stride {
+    pub walked: f64,
+    pub left: bool,
+}
+
+impl Default for Stride {
+    fn default() -> Self {
+        Self {
+            walked: 0.0,
+            left: true,
+        }
+    }
+}
+
+impl Stride {
+    /// Its feet's way on firm ground over a tick of `dt` seconds, from `from` to `to`: a
+    /// footfall every stride, left and right of its way in turn, the stride longer the faster it
+    /// goes (0.9 m walking, 1.4 m running).
+    pub(crate) fn step(&mut self, from: DVec3, to: DVec3, dt: f64) -> Option<Footfall> {
+        let way = DVec2::new(to.x - from.x, to.z - from.z);
+        let along = way.length();
+        if along < 1e-6 {
+            return None;
+        }
+        self.walked += along;
+        let pace = along / dt;
+        let stride = 0.45 + 0.15 * pace;
+        if self.walked < stride {
+            return None;
+        }
+        self.walked -= stride;
+        let heading = way / along;
+        // Its right, along the ground, seen from above (+y): −z ahead, +x right.
+        let right = DVec2::new(-heading.y, heading.x);
+        let side = if self.left { -FOOT_APART } else { FOOT_APART };
+        self.left = !self.left;
+        Some(Footfall {
+            at: DVec2::new(to.x, to.z) + right * side,
+            heading: heading.as_vec2(),
+        })
+    }
 }
 
 impl Walker {
@@ -96,8 +140,7 @@ impl Walker {
             cut_ms: Vec::new(),
             off: 0.0,
             footfalls: Vec::new(),
-            walked: 0.0,
-            left: true,
+            stride: Stride::default(),
         };
         walker.keep_tiles(feet)?;
         tracing::info!(
@@ -164,31 +207,12 @@ impl Walker {
         Ok(())
     }
 
-    /// Its feet's way on firm ground over a tick, from `from` to `to` (#197): a footfall every
-    /// stride, left and right of its way in turn, the stride longer the faster it goes (0.9 m
-    /// walking, 1.4 m running).
+    /// Its feet's way on firm ground over a tick, from `from` to `to` (#197): its stride's
+    /// footfalls.
     fn step(&mut self, from: DVec3, to: DVec3) {
-        let way = DVec2::new(to.x - from.x, to.z - from.z);
-        let along = way.length();
-        if along < 1e-6 {
-            return;
+        if let Some(fall) = self.stride.step(from, to, f64::from(TICK)) {
+            self.footfalls.push(fall);
         }
-        self.walked += along;
-        let pace = along / f64::from(TICK);
-        let stride = 0.45 + 0.15 * pace;
-        if self.walked < stride {
-            return;
-        }
-        self.walked -= stride;
-        let heading = way / along;
-        // Its right, along the ground, seen from above (+y): −z ahead, +x right.
-        let right = DVec2::new(-heading.y, heading.x);
-        let side = if self.left { -FOOT_APART } else { FOOT_APART };
-        self.footfalls.push(Footfall {
-            at: DVec2::new(to.x, to.z) + right * side,
-            heading: heading.as_vec2(),
-        });
-        self.left = !self.left;
     }
 
     /// Its footfalls since the last call (#197).

@@ -492,8 +492,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
    `materials-yard` demo's first step: brick, wood, sand, snow and ice patches whose bodies take
    their friction and restitution from one table, crates holding or sliding on ramps of each,
    balls bouncing, the walker's grip from its sole and the ground's row, sliding 3.6 m to a stop
-   on the ice). Left: the weather refilling the layer, sound from the material row, the
-   footprints and the island's ground in `materials-yard`.
+   on the ice). Its footprints ✅ (#205: the walker's boots printing beds on the sand and the snow
+   patches, its stride the island walker's). Left: the weather refilling the layer, sound from
+   the material row, and the island's ground in `materials-yard`.
 
 Later tests for an advanced demo: a domino run that ends the same on two machines (✅ #146, `--lab
 dominoes`: 300 on a spiral, replayed to the same digests), a ship in a

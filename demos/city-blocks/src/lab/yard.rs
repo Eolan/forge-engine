@@ -22,13 +22,15 @@ use glam::{DVec2, Vec2, Vec3};
 
 use super::drive::{self, Driver};
 
-/// A bed: its layer, its material's name (the lab's rows'), and its grip when the physics
-/// stands on it (the car's, #187: a height field kept to the layer, `Ground`).
+/// A bed: its layer, its material's name (the lab's rows'), its grip when the physics stands
+/// on it (the car's, #187: a height field kept to the layer, `Ground`), and the height its
+/// ground is drawn at (`UNDER` the floor; the materials' beds, on their patches, #205).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Bed {
     pub layer: Layer,
     pub name: &'static str,
     pub grip: Option<f32>,
+    pub base: f32,
 }
 
 /// The beds' materials (the lab's rows): sand, mud and snow.
@@ -149,6 +151,7 @@ pub(super) fn beds() -> Vec<Bed> {
                 layer: Layer::with_bevel(b.soft, DVec2::from_array(b.low), b.cell, size, b.bevel),
                 name: b.name,
                 grip: b.grip,
+                base: -UNDER,
             }
         })
         .collect()
@@ -177,10 +180,10 @@ pub(super) fn ground(bed: &Bed) -> TriMesh {
     mesh
 }
 
-/// Where a bed's ground is drawn: its first point, `UNDER` the floor.
+/// Where a bed's ground is drawn: its first point, at its base (the yard's `UNDER` the floor).
 pub(super) fn place(bed: &Bed) -> Vec3 {
     let o = bed.layer.origin();
-    Vec3::new(o.x as f32, -UNDER, o.y as f32)
+    Vec3::new(o.x as f32, bed.base, o.y as f32)
 }
 
 /// The top of the dogs' beds at (`x`, `z`), metres, where one lies (#194): its thickness, which

@@ -11,8 +11,12 @@ use anyhow::Result;
 use forge_core::dmath::sin_cos;
 use forge_core::material::{MaterialTags, PhysicsLayer};
 use forge_geom::city::{Block, PropKind, PropSpec};
+use forge_physics::deform::{Layer, Pad, Soft};
 use forge_physics::{BodyDesc, BodyId, CharacterDesc, CharacterId, Shape, World};
-use glam::{DVec3, Mat4, Quat, Vec3};
+use glam::{DVec2, DVec3, Mat4, Quat, Vec3};
+
+use super::yard::Bed;
+use crate::island_walk::{Footfall, Stride};
 
 /// A material's row as physics reads it: its name (the prop drawn with it), its physical layer
 /// and its tags.
@@ -116,6 +120,62 @@ const STOP_Z: f64 = 12.0;
 /// Ticks a second, and the tick at which the crates' slides are measured (half a second in).
 const RATE: f64 = 60.0;
 const MEASURE_TICK: u64 = 30;
+
+/// The beds the walker's boots press (#205): the sand's and the snow's patches, their half
+/// width (a centimetre in from the patch's edges), their points' spacing, metres, and how far
+/// in from their edges they thin to nothing, metres. A strip 1.6 m wide along the walker's way
+/// drew its 10 cm bevel as a hard line beside it.
+const BED_HALF_WIDTH: f64 = 1.98;
+const BED_CELL: f32 = 0.02;
+const BED_BEVEL: f32 = 0.25;
+
+/// The patches the walker leaves prints in (#205): the sand, the island's dry sand (#197), and
+/// the snow, the yard's fresh snow.
+const PRINTED: [(usize, Soft); 2] = [(2, crate::island_sand::SOFT), (3, Soft::SNOW)];
+
+/// The beds, untouched (#205): each printed patch a centimetre in from its edges, lying on it
+/// as the yard's lie on the floor (its ground just under the patch's top, its edges thinning to
+/// nothing there), drawn with the patch's row: loose sand or fresh snow a few centimetres
+/// deep. Flush with the patch, its prints sank under the patch's own top, which hid them.
+pub(super) fn beds() -> Vec<Bed> {
+    let length = f64::from(2.0 * PATCH_HALF[2]);
+    let span = length - 2.0 * (f64::from(PATCH_HALF[0]) - BED_HALF_WIDTH);
+    let top = 2.0 * PATCH_HALF[1];
+    PRINTED
+        .iter()
+        .map(|&(k, soft)| {
+            let low = DVec2::new(-BED_HALF_WIDTH, FIRST_Z + length * k as f64 - 0.5 * span);
+            let size = [
+                (2.0 * BED_HALF_WIDTH / f64::from(BED_CELL)).round() as u32 + 1,
+                (span / f64::from(BED_CELL)).round() as u32 + 1,
+            ];
+            Bed {
+                layer: Layer::with_bevel(soft, low, BED_CELL, size, BED_BEVEL),
+                name: ROWS[k].name,
+                grip: None,
+                base: top - super::yard::UNDER,
+            }
+        })
+        .collect()
+}
+
+/// The walker's boot coming down at `fall` (#205): pressed into the bed under it, if any
+/// (the island's boot, 70 kg on an ellipse of 5 by 13 cm half sizes). Whether it was.
+pub(super) fn press(beds: &mut [Bed], fall: Footfall) -> bool {
+    let Some(bed) = beds.iter_mut().find(|b| b.layer.covers(fall.at)) else {
+        return false;
+    };
+    bed.layer.press(Pad {
+        at: fall.at,
+        heading: fall.heading,
+        size: crate::island_sand::FOOT,
+        pressure: crate::island_sand::FOOT_PRESSURE,
+        sweep: 0.0,
+        wheel: 0.0,
+        tread: None,
+    });
+    true
+}
 
 /// The pair friction of two rows' coefficients, as Jolt combines them.
 pub(crate) fn pair(a: f32, b: f32) -> f32 {
@@ -236,6 +296,7 @@ pub(super) fn build(
         balls: balls.clone(),
         player,
         yard: Yard {
+            stride: Stride::default(),
             grounds,
             crates,
             balls,
@@ -262,6 +323,8 @@ enum Bounce {
 /// The scene's state: which row each ground body is, and what is measured (the log's, never
 /// the simulation's: a replay does not need it).
 pub(crate) struct Yard {
+    /// The walker's stride (#205): simulation state, saved and digested with the world.
+    pub stride: Stride,
     grounds: Vec<(BodyId, usize)>,
     crates: Vec<BodyId>,
     balls: Vec<BodyId>,
