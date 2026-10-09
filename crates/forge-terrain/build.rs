@@ -26,37 +26,49 @@ const PRODUCTS: &[(&str, &[&str], bool, &[&str])] = &[
         "HEIGHTS",
         &["coast", "valley"],
         true,
-        &["demos/city-blocks/src/lib.rs"],
+        &["crates/forge-terrain/src/heights.rs"],
     ),
-    ("WATER", &[], true, &["demos/city-blocks/src/lib.rs"]),
+    (
+        "WATER",
+        &[],
+        true,
+        &[
+            "crates/forge-terrain/src/water.rs",
+            "crates/forge-terrain/src/heights.rs",
+        ],
+    ),
     (
         "LAYERS",
         &["layers", "beach", "sites", "valley", "island", "coast"],
         true,
-        &["demos/city-blocks/src/lib.rs"],
+        &[
+            "crates/forge-terrain/src/layers.rs",
+            "crates/forge-terrain/src/heights.rs",
+        ],
     ),
     (
         "AMPLIFIED",
         &["amplify", "field", "flow", "hydrology", "noise"],
         false,
-        &["demos/city-blocks/src/lib.rs"],
+        &["crates/forge-terrain/src/drawn.rs"],
     ),
     (
         "DRAWN",
         &["coast"],
         true,
         &[
-            "demos/city-blocks/src/lib.rs",
+            "crates/forge-terrain/src/drawn.rs",
             "crates/forge-geom/src/city.rs",
         ],
     ),
-    ("STONES", &[], true, &["demos/city-blocks/src/lib.rs"]),
+    ("STONES", &[], true, &["crates/forge-terrain/src/stones.rs"]),
     // The island's ground tiles as `forge-geom` cooks them.
     (
         "TILES",
         &[],
         false,
         &[
+            "crates/forge-terrain/src/tiles.rs",
             "crates/forge-geom/src/cache.rs",
             "crates/forge-geom/src/city.rs",
             "crates/forge-geom/src/lod.rs",
@@ -75,7 +87,7 @@ const ALWAYS: &[&str] = &[
     "crates/forge-core/src/seed.rs",
     "crates/forge-core/src/hash.rs",
     "crates/forge-core/src/dmath.rs",
-    "demos/city-blocks/build.rs",
+    "crates/forge-terrain/build.rs",
 ];
 
 /// FNV-1a, 64 bits, over the text with its line endings made `\n` (a checkout's CRLF must not

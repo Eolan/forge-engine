@@ -18,6 +18,7 @@ forge-gpu = { path = "crates/forge-gpu" }
 forge-geom = { path = "crates/forge-geom" }
 forge-app = { path = "crates/forge-app" }
 forge-procgen = { path = "crates/forge-procgen" }
+forge-terrain = { path = "crates/forge-terrain" }
 forge-render = { path = "crates/forge-render" }
 forge-world = { path = "crates/forge-world" }
 forge-physics = { path = "crates/forge-physics" }

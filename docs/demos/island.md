@@ -53,6 +53,15 @@ in `assets/worlds/island.toml`:
 The pages below quote flags such as `--no-steps` and `--island-plain` from before the file:
 they still work, as overrides.
 
+**Its makers are an engine crate (#212, D-053).** `forge-terrain` takes the world and makes
+the island's products: the heights, the water, the stones, the layer map, the drawn ground and
+the ground's tiles to cook, with `warm_island` making them behind the loading screen. Each is
+kept between starts by its inputs and the digest of its own source files
+(`crates/forge-terrain/build.rs`). The demo keeps what the GPU draws from them: the water's
+records, the materials, the placement, the camera and the walker. An edit to the demo no longer
+remakes the island's products, as an edit to the makers' old home, `city-blocks`' `lib.rs`, did.
+The pages below name the makers as they were then (`island_heights(args)` and so on).
+
 `genesis`: `--seed N`, `--spacing M` (16: 1025² samples; 4: the 4097² target), `--steps N`,
 `--k` (erodibility), `--diffusion`, `--channel-ha H` (the catchment from which a channel
 carries the hillslopes' material away; 0, the default, lets the diffusion raise every cell,

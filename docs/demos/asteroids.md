@@ -686,7 +686,7 @@ are now kept on disk by `forge_core::derived`:
 - **The keys:**
   - each product's inputs;
   - the keys of the products it is made from, so a change upstream reaches downstream;
-  - a digest of its source files, made at build time (`demos/city-blocks/build.rs` lists
+  - a digest of its source files, made at build time (`crates/forge-terrain/build.rs` lists
     them).
   A procgen edit remakes what it touches with no `--recook`. The ground tiles' key adds the
   drawn ground's key and the cooking code's digest, so they follow too. Before, `--no-sills`

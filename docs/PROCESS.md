@@ -87,7 +87,7 @@ runs it:
   `FORGE_RECOOK=1` passes `--recook` to the first run of each scene that cooks (the city, the
   gallery, the island's 2 m and 8 m grounds). The island needs it no more (#208): its
   products (`mesh-cache/derived/`) and its tiles are keyed by the code that makes them, so a
-  change to `forge-procgen`, `forge-geom` or the island's glue remakes what it touches.
+  change to `forge-procgen`, `forge-geom` or `forge-terrain` remakes what it touches.
 - **The caches keep only what is used** (#208, #209): a product's entry made by other code
   goes when the new one is written, a shader entry keeps its newest SPIR-V, and a file in
   `mesh-cache/`, `mesh-cache/derived/` or `shader-cache/` that nothing used for a month is

@@ -56,8 +56,8 @@ struct Island {
 }
 
 impl Island {
-    fn new(args: &Args) -> Self {
-        let height = island_heights(args);
+    fn new() -> Self {
+        let height = island_heights();
         let water = island_water(&height);
         let half = (height.extent() * 0.5) as f32;
         Self {
@@ -200,8 +200,8 @@ impl Island {
 }
 
 /// The island's golden shots for `args` (logged at start).
-pub(crate) fn island_shots(args: &Args) -> Vec<Shot> {
-    Island::new(args).shots()
+pub(crate) fn island_shots() -> Vec<Shot> {
+    Island::new().shots()
 }
 
 /// `--shot NAME`: its view in `--view` and its time in `--time-of-day`, unless given.
@@ -213,7 +213,7 @@ pub(crate) fn with_shot(mut args: Args) -> anyhow::Result<Args> {
         args.island.is_some(),
         "--shot frames the island: add --island SEED"
     );
-    let shots = island_shots(&args);
+    let shots = island_shots();
     let shot = shots.iter().find(|s| s.name == name).ok_or_else(|| {
         let names: Vec<&str> = shots.iter().map(|s| s.name).collect();
         anyhow::anyhow!("no shot {name:?}: the island's are {}", names.join(", "))
@@ -248,7 +248,7 @@ impl Tour {
             args.island.is_some(),
             "--tour flies over the island: add --island SEED"
         );
-        let island = Island::new(args);
+        let island = Island::new();
         let mut keys: Vec<Shot> = [island.valley(), island.lake(), island.mouth()]
             .into_iter()
             .flatten()

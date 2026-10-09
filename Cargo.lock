@@ -330,6 +330,7 @@ dependencies = [
  "forge-render",
  "forge-sim",
  "forge-task",
+ "forge-terrain",
  "glam",
  "serde",
  "toml",
@@ -785,6 +786,20 @@ dependencies = [
  "parking_lot",
  "tracing",
  "tracy-client",
+]
+
+[[package]]
+name = "forge-terrain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "forge-core",
+ "forge-geom",
+ "forge-procgen",
+ "forge-task",
+ "serde",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

@@ -24,6 +24,9 @@
 # The sea's spectrum also floats the physics lab's sea (#138).
 "crates/forge-procgen/src/ocean.rs" = ["island", "lab"]
 "crates/forge-procgen/**" = ["island"]
+# The island's makers (#212, D-053) and its world file (#211).
+"crates/forge-terrain/**" = ["island"]
+"assets/worlds/**" = ["island"]
 "demos/island/**" = ["island"]
 "demos/city-blocks/src/island_demo.rs" = ["island"]
 # The physics lab (#136): its demo and scenes, the physics under them, Jolt's sources.

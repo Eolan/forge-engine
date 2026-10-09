@@ -30,6 +30,7 @@ forge-physics = { workspace = true }
 forge-sim = { workspace = true }
 forge-gpu = { workspace = true }
 forge-procgen = { workspace = true }
+forge-terrain = { workspace = true }
 forge-render = { workspace = true }
 forge-task = { workspace = true }
 serde = { workspace = true }
