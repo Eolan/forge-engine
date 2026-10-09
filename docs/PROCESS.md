@@ -365,12 +365,24 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   #77). Captures must match in both modes.
 - `FORGE_FRAME_BARRIER=1` puts a full barrier at the start of each queue's first batch,
   which serialises frames on the GPU.
+- The transients (#204):
+  - `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own memory. A list of words
+    (`=taa,sun`) gives it only to the transients whose name contains one of them.
+  - `FORGE_GRAPH_ZERO=1` clears every transient image to zero before its first pass
+    (`=ao,taa` only those). A pass that reads texels nothing wrote this frame then changes
+    the image. The clears are also barriers: a change can come from either.
+  - `FORGE_GRAPH_RELAYOUT=N` creates the transients again on the graph's N-th frame with
+    transients (a loading screen's frames have none). It does what a change of the frame's
+    transients does: in the yard, the first spray at frame 116.
 - `FORGE_PARANOID_BARRIERS=1` puts a full barrier before every dispatch, draw and blit; a list
   of pass-name prefixes (`=temporal/,debug/`) only before those passes. When it makes two runs
   agree, timing is involved; bisect with the prefixes.
 - **Two runs that part (#161):** city-blocks' `FORGE_HASH_IMAGES=1` logs, each frame, hashes of
-  the clouds, the scene colour, the depth, the motion vectors (before and after the movers')
-  and TAA's history (`crates/forge-render/src/debug_hash.rs`). Diff the logs of two runs to find
+  the shadow rays' three images and the denoised shadow (#204), the clouds, the scene colour,
+  the depth, the motion vectors (before and after the movers') and TAA's history
+  (`crates/forge-render/src/debug_hash.rs`). Images that hash alike are alike: three images
+  with one hash are empty. A frame's hashes are logged when its slot comes back, two frames
+  later. Diff the logs of two runs to find
   the first image and the first frame that differ. `HashKind::Compare` counts the texels where
   two images differ; `Where` and `Range` give their bounding box and their values. Running a
   pass twice in one frame and comparing the two outputs shows whether the pass itself is

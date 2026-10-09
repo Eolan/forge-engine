@@ -2486,6 +2486,20 @@ impl Demo for Gallery {
                     motion,
                     &shadow_frame,
                 )?);
+                // The shadow rays' three images and the denoised shadow (#204: a frame that lays
+                // the transients out again lost them in the serial frame).
+                if let (Some(h), Some(out)) = (hasher, sun_shadow) {
+                    use forge_render::debug_hash::HashKind;
+                    h.add(&mut frame.graph, rays.penumbra, HashKind::Float4, extent);
+                    h.add(&mut frame.graph, rays.view_z, HashKind::Float4, extent);
+                    h.add(
+                        &mut frame.graph,
+                        rays.normal_roughness,
+                        HashKind::Float4,
+                        extent,
+                    );
+                    h.add(&mut frame.graph, out, HashKind::Float4, extent);
+                }
             }
         }
         // The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.

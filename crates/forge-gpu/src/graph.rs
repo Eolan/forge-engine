@@ -51,9 +51,16 @@
 //!
 //! Debugging: `FORGE_GRAPH_LOG=1` logs the compiled plan (passes, barriers, transient
 //! placement) whenever it changes; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
-//! memory, to tell an aliasing bug from anything else; `FORGE_GRAPH_POISON=1` fills each
-//! transient buffer with `0xDEADBEEF` after its last pass, so a stale address read shows in
-//! the captures (the validation layers cannot see one).
+//! memory, to tell an aliasing bug from anything else (`FORGE_GRAPH_NO_ALIAS=ao,taa` only to
+//! the transients whose name contains one of the words); `FORGE_GRAPH_RELAYOUT=N` creates the
+//! transients again on the graph's N-th frame, as a change of the frame's transients does
+//! (#204; frames without transients, as a loading screen's, do not count);
+//! `FORGE_GRAPH_POISON=1` fills each transient buffer with `0xDEADBEEF` after its
+//! last pass, so a stale address read shows in the captures (the validation layers cannot see
+//! one); `FORGE_GRAPH_ZERO=1` clears every
+//! transient image to zero before its first pass (`FORGE_GRAPH_ZERO=ao,taa` only those whose
+//! name contains one of the words), so a pass that reads texels nothing wrote this frame
+//! shows by changing the image (#204).
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -541,6 +548,7 @@ impl GraphImage {
             sampled_layout: self.sampled_layout,
             transient: None,
             concurrent: self.device.image_concurrent(self.image.usage()),
+            zero: false,
             name: self.name.clone(),
         }
     }
@@ -640,12 +648,13 @@ pub struct TransientDesc {
 }
 
 impl TransientDesc {
-    fn image_desc(&self) -> ImageDesc<'static> {
+    /// The image to create, with `extra` usage (`TRANSFER_DST` for `FORGE_GRAPH_ZERO`).
+    fn image_desc(&self, extra: vk::ImageUsageFlags) -> ImageDesc<'static> {
         ImageDesc {
             width: self.width,
             height: self.height,
             format: self.format,
-            usage: self.usage,
+            usage: self.usage | extra,
             aspect: self.aspect,
             mip_levels: self.mip_levels.max(1),
             name: self.name,
@@ -1039,6 +1048,8 @@ struct ImageMeta {
     transient: Option<Option<(u64, u64)>>,
     /// Whether it is `CONCURRENT`, so a pass on another queue than graphics may use it.
     concurrent: bool,
+    /// `FORGE_GRAPH_ZERO` (#204): a transient cleared to zero before its first pass.
+    zero: bool,
     name: String,
 }
 
@@ -1054,6 +1065,10 @@ struct CompiledPass {
     /// sentinel after it, and the barrier before the fills.
     poison: Vec<u32>,
     poison_barrier: Option<vk::MemoryBarrier2<'static>>,
+    /// `FORGE_GRAPH_ZERO` (#204): the transient images this pass uses first, cleared to zero
+    /// before it (image, aspect, mips), and the barriers that put them in the transfer layout.
+    zero: Vec<(vk::Image, vk::ImageAspectFlags, u32)>,
+    zero_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
     /// Index into the batches.
     batch: usize,
 }
@@ -1325,11 +1340,25 @@ fn compile_queued(
                             src
                         }),
                 };
-                image_states[i].fill(ResourceState {
+                let undefined = ResourceState {
                     layout: vk::ImageLayout::UNDEFINED,
                     write: true,
                     ..src
-                });
+                };
+                if meta.zero {
+                    let fill = ImageAccess::TransferDst.state(meta.sampled_layout);
+                    out.zero_barriers.push(image_barrier(
+                        meta,
+                        0,
+                        meta.mip_levels,
+                        undefined,
+                        fill,
+                    ));
+                    out.zero.push((meta.raw, meta.aspect, meta.mip_levels));
+                    image_states[i].fill(fill);
+                } else {
+                    image_states[i].fill(undefined);
+                }
             }
             first_use[i] = false;
             let (base, count) = match use_.mip {
@@ -1750,15 +1779,48 @@ pub struct RenderGraph {
     stats: GraphStats,
     log: bool,
     allow_alias: bool,
+    /// `FORGE_GRAPH_NO_ALIAS=taa,sun` (#204): the transients whose name contains one of the
+    /// words keep their memory for the whole frame, sharing it with no other.
+    alone: Vec<String>,
     /// `FORGE_GRAPH_POISON=1` (#78): every transient buffer filled with a sentinel after its
     /// last pass, so a stale read shows in the captures.
     poison: bool,
+    /// `FORGE_GRAPH_ZERO` (#204): the transient images cleared to zero before their first
+    /// pass, all of them (no words) or those whose name contains one of the words.
+    zero: Option<Vec<String>>,
     /// `FORGE_FRAME_BARRIER=1`: a full barrier at the start of each queue's first batch, which
     /// serialises frames on the GPU (a debugging aid).
     frame_barrier: bool,
+    /// `FORGE_GRAPH_RELAYOUT=N` (#204): the transients created again on the graph's N-th frame
+    /// with transients (counted from 1; a loading screen's frames have none), as when the
+    /// frame's transients change, to reproduce what a new layout does to that frame.
+    relayout_at: Option<u32>,
+    /// The frames with transients this graph executed.
+    executed: u32,
     /// What each queue's batches waited for on the other queues, from frame to frame (#104).
     waited: Waited,
     last_plan: u64,
+}
+
+/// A debugging variable that is off, on (`1`: no words) or limited to the names that contain
+/// one of its comma-separated words.
+fn words(name: &str) -> Option<Vec<String>> {
+    let value = std::env::var(name).ok().filter(|v| v != "0")?;
+    Some(
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|w| !w.is_empty() && *w != "1")
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// Whether `name` is selected by the [`words`] of a debugging variable.
+fn selects(words: &Option<Vec<String>>, name: &str) -> bool {
+    words
+        .as_ref()
+        .is_some_and(|w| w.is_empty() || w.iter().any(|w| name.contains(w.as_str())))
 }
 
 impl RenderGraph {
@@ -1772,9 +1834,15 @@ impl RenderGraph {
             buffer_requirements: HashMap::new(),
             stats: GraphStats::default(),
             log: flag("FORGE_GRAPH_LOG"),
-            allow_alias: !flag("FORGE_GRAPH_NO_ALIAS"),
+            allow_alias: words("FORGE_GRAPH_NO_ALIAS").is_none_or(|w| !w.is_empty()),
+            alone: words("FORGE_GRAPH_NO_ALIAS").unwrap_or_default(),
             poison: flag("FORGE_GRAPH_POISON"),
+            zero: words("FORGE_GRAPH_ZERO"),
             frame_barrier: flag("FORGE_FRAME_BARRIER"),
+            relayout_at: std::env::var("FORGE_GRAPH_RELAYOUT")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            executed: 0,
             waited: Waited::default(),
             last_plan: 0,
         }
@@ -1822,6 +1890,7 @@ impl RenderGraph {
         // Transient lifetimes, then their placement; reuse the cache when it matches.
         let mut requests = Vec::new();
         let mut request_of_image: Vec<Option<usize>> = vec![None; images.len()];
+        let extra = self.extra_usage();
         for (i, entry) in images.iter().enumerate() {
             let ImageEntry::Transient(desc) = entry else {
                 continue;
@@ -1835,10 +1904,11 @@ impl RenderGraph {
             let (Some(&first), Some(&last)) = (uses.first(), uses.last()) else {
                 continue;
             };
-            let req = *self
-                .requirements
-                .entry(*desc)
-                .or_insert_with(|| self.device.image_memory_requirements(&desc.image_desc()));
+            let req = *self.requirements.entry(*desc).or_insert_with(|| {
+                let desc = desc.image_desc(extra);
+                self.device.image_memory_requirements(&desc)
+            });
+            let (first, last) = self.lifetime(desc.name, first, last, decls.len());
             request_of_image[i] = Some(requests.len());
             requests.push(Request {
                 desc: TransientKind::Image(*desc),
@@ -1870,6 +1940,7 @@ impl RenderGraph {
                 self.device
                     .buffer_memory_requirements(desc.size, desc.usage())
             });
+            let (first, last) = self.lifetime(desc.name, first, last, decls.len());
             request_of_buffer[i] = Some(requests.len());
             requests.push(Request {
                 desc: TransientKind::Buffer(*desc),
@@ -1881,7 +1952,17 @@ impl RenderGraph {
             });
         }
         let placement = plan(&requests, self.allow_alias);
-        if self.cache.as_ref().is_none_or(|c| c.placement != placement) {
+        if !requests.is_empty() {
+            self.executed += 1;
+        }
+        let relayout = !requests.is_empty() && self.relayout_at == Some(self.executed);
+        if relayout {
+            tracing::info!(
+                frame = self.executed,
+                "render graph transients laid out again on request (FORGE_GRAPH_RELAYOUT)"
+            );
+        }
+        if relayout || self.cache.as_ref().is_none_or(|c| c.placement != placement) {
             self.rebuild_cache(placement, frames)?;
         }
         let cache = self.cache.as_ref().expect("transient cache built above");
@@ -1905,6 +1986,7 @@ impl RenderGraph {
                         sampled_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                         transient: None,
                         concurrent: false,
+                        zero: false,
                         name: raw.name.to_owned(),
                     });
                     resolved.push(ResolvedImage {
@@ -1931,6 +2013,7 @@ impl RenderGraph {
                                 .aliased
                                 .then_some((placed.offset, placed.size)),
                         );
+                        meta.zero = selects(&self.zero, desc.name);
                         metas.push(meta);
                         resolved.push(image.resolved());
                         // Contents never survive a frame; what the memory last did does.
@@ -1954,6 +2037,7 @@ impl RenderGraph {
                             sampled_layout: vk::ImageLayout::UNDEFINED,
                             transient: None,
                             concurrent: false,
+                            zero: false,
                             name: format!("{} (unused)", desc.name),
                         });
                         resolved.push(ResolvedImage {
@@ -2110,6 +2194,12 @@ impl RenderGraph {
             }
             started[batch.queue.index()] = true;
             while let Some((pass, plan)) = work.next_if(|(_, plan)| plan.batch == index) {
+                if !plan.zero.is_empty() {
+                    commands.barriers(&[], &plan.zero_barriers);
+                    for &(image, aspect, mips) in &plan.zero {
+                        commands.clear_image_to_zero(image, aspect, mips);
+                    }
+                }
                 let memory = plan.memory_barrier.as_slice();
                 commands.barriers(memory, &plan.image_barriers);
                 stats.image_barriers += plan.image_barriers.len() as u32;
@@ -2200,6 +2290,25 @@ impl RenderGraph {
         Ok(stats)
     }
 
+    /// The passes a transient's memory is held through: its uses, or the whole frame of
+    /// `passes` when `FORGE_GRAPH_NO_ALIAS` names it.
+    fn lifetime(&self, name: &str, first: usize, last: usize, passes: usize) -> (usize, usize) {
+        if self.alone.iter().any(|w| name.contains(w.as_str())) {
+            (0, passes)
+        } else {
+            (first, last)
+        }
+    }
+
+    /// The usage every transient image gains: `TRANSFER_DST` for `FORGE_GRAPH_ZERO`'s clears.
+    fn extra_usage(&self) -> vk::ImageUsageFlags {
+        if self.zero.is_some() {
+            vk::ImageUsageFlags::TRANSFER_DST
+        } else {
+            vk::ImageUsageFlags::empty()
+        }
+    }
+
     fn rebuild_cache(&mut self, placement: Placement, frames: &mut Frames) -> Result<()> {
         let heap = if placement.aliased && placement.heap_size > 0 {
             Some(self.device.create_transient_heap(
@@ -2215,7 +2324,7 @@ impl RenderGraph {
         for placed in &placement.entries {
             let transient = match placed.desc {
                 TransientKind::Image(desc) => {
-                    let desc = desc.image_desc();
+                    let desc = desc.image_desc(self.extra_usage());
                     let image = match &heap {
                         Some(heap) => self.device.create_image_in(desc, heap, placed.offset)?,
                         None => self
@@ -2410,6 +2519,7 @@ mod tests {
             },
             transient,
             concurrent: true,
+            zero: false,
             name: name.to_owned(),
         }
     }
@@ -2880,6 +2990,57 @@ mod tests {
         assert_eq!((b.src_stage_mask, b.dst_stage_mask), (compute, S::TRANSFER));
         assert!(plan[2].poison.is_empty());
         assert_eq!(buffer_states[0], BufferAccess::TransferDst.state());
+    }
+
+    #[test]
+    fn a_debugging_variable_selects_all_names_or_those_with_its_words() {
+        assert!(!selects(&None, "ao raw"));
+        assert!(selects(&Some(Vec::new()), "ao raw"));
+        let words = Some(vec!["ao".to_owned(), "taa".to_owned()]);
+        assert!(selects(&words, "ao raw") && selects(&words, "taa motion"));
+        assert!(!selects(&words, "sun penumbra"));
+    }
+
+    #[test]
+    fn a_zeroed_transient_is_cleared_before_its_first_pass_only() {
+        let compute = S::COMPUTE_SHADER;
+        let mut zeroed = meta("t", 2, Some(Some((0, 16))));
+        zeroed.zero = true;
+        let images = [zeroed, meta("u", 1, Some(Some((16, 16))))];
+        let mut states = vec![
+            vec![ResourceState::UNDEFINED; 2],
+            vec![ResourceState::UNDEFINED],
+        ];
+        let passes = [
+            pass(
+                "a/write",
+                &[
+                    (0, None, ImageAccess::StorageWrite(compute)),
+                    (1, None, ImageAccess::StorageWrite(compute)),
+                ],
+            ),
+            pass("b/read", &[(0, None, ImageAccess::Sampled(compute))]),
+        ];
+        let plan = compile(&passes, &images, &mut states, &mut []).unwrap();
+        assert_eq!(plan[0].zero.len(), 1, "the zeroed transient alone");
+        assert_eq!(plan[0].zero[0].2, 2, "every mip");
+        let clear = plan[0].zero_barriers[0];
+        assert_eq!(
+            (clear.old_layout, clear.new_layout),
+            (L::UNDEFINED, L::TRANSFER_DST_OPTIMAL)
+        );
+        assert_eq!(clear.subresource_range.level_count, 2);
+        // The pass's own barrier then starts from the clear, not from undefined contents.
+        let own = plan[0]
+            .image_barriers
+            .iter()
+            .find(|b| b.old_layout == L::TRANSFER_DST_OPTIMAL)
+            .expect("the write waits for the clear");
+        assert_eq!(
+            (own.src_stage_mask, own.dst_stage_mask),
+            (S::TRANSFER, compute)
+        );
+        assert!(plan[1].zero.is_empty() && plan[1].zero_barriers.is_empty());
     }
 
     fn request(name: &'static str, size: u64, first: usize, last: usize) -> Request {

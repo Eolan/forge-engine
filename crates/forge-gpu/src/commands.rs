@@ -344,6 +344,42 @@ impl<'a> Commands<'a> {
         }
     }
 
+    /// Clears the `mip_levels` mips of `image` to zero, colour or depth by `aspect`
+    /// (`FORGE_GRAPH_ZERO`, #204; the image is in the transfer-destination layout).
+    pub fn clear_image_to_zero(
+        &self,
+        image: vk::Image,
+        aspect: vk::ImageAspectFlags,
+        mip_levels: u32,
+    ) {
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(aspect)
+            .level_count(mip_levels)
+            .layer_count(1);
+        let layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+        // SAFETY: recording state; the graph put every mip of the image in the
+        // transfer-destination layout and keeps it alive until the frame completes.
+        unsafe {
+            if aspect.contains(vk::ImageAspectFlags::COLOR) {
+                self.device.raw().cmd_clear_color_image(
+                    self.cb,
+                    image,
+                    layout,
+                    &vk::ClearColorValue { uint32: [0; 4] },
+                    &[range],
+                );
+            } else {
+                self.device.raw().cmd_clear_depth_stencil_image(
+                    self.cb,
+                    image,
+                    layout,
+                    &vk::ClearDepthStencilValue::default(),
+                    &[range],
+                );
+            }
+        }
+    }
+
     /// Fills `size` bytes of `buffer` from `offset` with the 32-bit `value`
     /// (`vkCmdFillBuffer`; the buffer needs `TRANSFER_DST` usage, offset and size are
     /// multiples of 4).
