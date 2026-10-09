@@ -98,6 +98,12 @@ pub struct ChannelParams {
     /// The metres over the sea under which the banks flatten towards a river's mouth, to
     /// three tenths of their rise at the sea's level: a beach, not a cut (D-041's estuary).
     pub beach: f64,
+    /// Where the banks flatten so (the water under `beach`, fully; under twice it, partly), the
+    /// carve reaches past the water as far as a bank takes to climb to the ground beside the
+    /// river at this mean slope, plus the margin's fade, up to the second number, metres (#202):
+    /// the margin alone left a bank metres high at one distance from the water, a ruled band
+    /// along a straight reach.
+    pub estuary: (f64, f64),
     /// Quads a side of a cell drawn finer.
     pub split: u32,
     /// Metres either side of a lake's level over which its shore's cells are drawn finer.
@@ -118,7 +124,8 @@ pub struct ChannelParams {
 impl Default for ChannelParams {
     /// 8 m past the water, a bank rising by 0.3 m a metre and more in a straight reach, the
     /// bend's share full at a radius of twice the half width plus 4 m, a channel shoaling over
-    /// 8 m and three widths into a lake, the banks flattening under 1.5 m over the sea, cells of
+    /// 8 m and three widths into a lake, the banks flattening under 1.5 m over the sea (the carve
+    /// reaching there as far as a bank of 0.12 takes to the ground, up to 20 m), cells of
     /// 8 m drawn in quads of 1 m, a lake's shore within
     /// a metre of its level, the coast's cells crossing the sea's level and the sand's top
     /// (2.5 m, the island's layer rule), no channel through a lake, the outlets' arms risen 0.2 m
@@ -130,6 +137,7 @@ impl Default for ChannelParams {
             bend: 2.0,
             shoal: (8.0, 3.0),
             beach: 1.5,
+            estuary: (20.0, 0.12),
             split: 8,
             shore: 1.0,
             coast: [0.0, 2.5],
@@ -155,6 +163,12 @@ struct Segment {
     mouth: [f64; 2],
     /// How much of the carve is kept at each end: 1 but in a lake, where it fades out.
     keep: [f64; 2],
+    /// How far past the water the carve reaches at each end: the margin, wider by an estuary's
+    /// high banks (#202).
+    margin: [f64; 2],
+    /// How much each end is an estuary's, 0..1: where the banks flatten towards the sea, the
+    /// bank is the even climb to the ground over the margin alone (#202).
+    estuary: [f64; 2],
     /// The level the banks rise from at each end: the water's before the steps (#122), over a
     /// pool's.
     banks: [f64; 2],
@@ -350,6 +364,37 @@ impl Channels {
                     1.0 - smoothstep(0.0, reach(k), to_shore[k])
                 }
             };
+            // How far past the water the carve reaches at each point (#202): the margin, but
+            // where the banks flatten towards the sea, as far as a bank of the estuary's slope
+            // takes to climb to the ground beside the river (the higher side, a margin out),
+            // plus the carve's 3 m fade, up to the estuary's most.
+            let near_sea = |k: usize| {
+                if params.estuary.0 <= params.margin {
+                    return 0.0;
+                }
+                1.0 - smoothstep(params.beach, 2.0 * params.beach, f(p[k].level))
+            };
+            let margin = |k: usize| {
+                let level = f(p[k].level);
+                let near_sea = near_sea(k);
+                if near_sea <= 0.0 {
+                    return params.margin;
+                }
+                let (most, climb) = params.estuary;
+                let out = f(p[k].half_width) + params.margin;
+                let across = [-f(p[k].direction[1]), f(p[k].direction[0])];
+                let centre = at(k);
+                let ground = |side: f64| {
+                    smooth_height(
+                        height,
+                        centre[0] + across[0] * out * side,
+                        centre[1] + across[1] * out * side,
+                    )
+                };
+                let rise = (ground(1.0).max(ground(-1.0)) - level).max(0.0);
+                let wanted = (rise / climb + 3.0).clamp(params.margin, most.max(params.margin));
+                params.margin + (wanted - params.margin) * near_sea
+            };
             // Below each step, each segment from just past the lip to the half width and the
             // margin past the foot carves nothing upstream of its own start: the fall is steep,
             // and a lower segment's reach back cut the step away and the banks beside the water
@@ -358,7 +403,7 @@ impl Channels {
             for step in &r.steps {
                 let (lip, foot) = (step.lip as usize, step.foot as usize);
                 for k in lip + 1..n {
-                    if k > foot && arc[k] - arc[foot] > f(p[k].reach) + params.margin + spacing {
+                    if k > foot && arc[k] - arc[foot] > f(p[k].reach) + margin(k) + spacing {
                         break;
                     }
                     below[k] = Some([f(p[k].direction[0]), f(p[k].direction[1])]);
@@ -389,16 +434,18 @@ impl Channels {
                     bend: [bend[k], bend[k + 1]],
                     mouth: [mouth(k), mouth(k + 1)],
                     keep: [keep(k), keep(k + 1)],
+                    margin: [margin(k), margin(k + 1)],
+                    estuary: [near_sea(k), near_sea(k + 1)],
                     banks: [f(p[k].unstepped), f(p[k + 1].unstepped)],
                     below: below[k],
                     bowed: bowed[k],
                 });
             }
         }
-        // The cells each segment reaches: its box grown by its widest half width, the margin
-        // and a cell, so a point on a cell's edge finds it from either side.
+        // The cells each segment reaches: its box grown by its widest half width, its widest
+        // margin and a cell, so a point on a cell's edge finds it from either side.
         let cells_of = |s: &Segment| {
-            let grow = s.half[0].max(s.half[1]) + params.margin + spacing;
+            let grow = s.half[0].max(s.half[1]) + s.margin[0].max(s.margin[1]) + spacing;
             let last = i64::from(side) - 1;
             let lo = |v: f64| (((v - grow) / spacing).floor() as i64).clamp(0, last) as u32;
             let hi = |v: f64| (((v + grow) / spacing).floor() as i64).clamp(0, last) as u32;
@@ -535,7 +582,7 @@ impl Channels {
                     .any(|&s| {
                         let s = &segments[s as usize];
                         let (r, t) = segment_distance(centre, s.a, s.b);
-                        r <= Segment::at(s.half, t) + params.margin + half_diagonal
+                        r <= Segment::at(s.half, t) + Segment::at(s.margin, t) + half_diagonal
                     })
             })
             .collect();
@@ -790,7 +837,6 @@ impl Channels {
         );
         let c = cy * self.side as usize + cx;
         let segments = &self.list[self.start[c] as usize..self.start[c + 1] as usize];
-        let margin = self.params.margin;
         let base = if cubic {
             smooth_height(height, x, y)
         } else {
@@ -804,6 +850,7 @@ impl Channels {
                 let s = &self.segments[s as usize];
                 let (r, t) = segment_distance([x, y], s.a, s.b);
                 let out = r - Segment::at(s.half, t);
+                let margin = Segment::at(s.margin, t);
                 if out < margin {
                     smooth = smooth.max(1.0 - smoothstep(1.0, margin, out));
                 }
@@ -833,6 +880,7 @@ impl Channels {
             // banks covers it.
             let half = Segment::at(s.half, t) * waterline_wander(x, y);
             let out = r - half;
+            let margin = Segment::at(s.margin, t);
             if out >= margin {
                 continue;
             }
@@ -863,7 +911,11 @@ impl Channels {
                 // sea under higher ground ended in the fade instead: a wall at one distance from
                 // the centreline, straight along a straight reach (#199).
                 let meet = level + (base - level).max(0.0) * smoothstep(0.0, margin - 3.0, o);
-                bank.max(meet)
+                // In an estuary the bank is that climb alone, even over its widened margin
+                // (#202): the bank's own rise, flattened only to half there, still stood a
+                // metre in its first three, a dark band seen into the sun.
+                let estuary = Segment::at(s.estuary, t);
+                bank.max(meet) + (meet - bank.max(meet)) * estuary
             };
             let weight = (1.0 - smoothstep(margin - 3.0, margin, out)) * Segment::at(s.keep, t);
             // The bank's top rounded into the ground over BANK_ROUND, not a crease (#199), where
@@ -1486,13 +1538,30 @@ mod tests {
         let flow = drain(&valley, 0.0, &pool);
         let rivers = trace_rivers(&valley, &flow, 15);
         let ribbons = ribbons(&valley, &rivers, &[], &RibbonParams::default());
-        let channels = Channels::new(&valley, &ribbons, &[], &ChannelParams::default());
+        // Its last metres run under the beach's 3 m, where an estuary's high banks widen the
+        // carve (#202): first without that, the margin alone.
+        let plain = ChannelParams {
+            estuary: (0.0, 0.12),
+            ..ChannelParams::default()
+        };
+        let channels = Channels::new(&valley, &ribbons, &[], &plain);
         // The cells along the valley's floor are refined, those on its far sides are not.
         assert!(!channels.refined().is_empty());
         for &c in channels.refined() {
             let x = c % 20;
             assert!((8..=11).contains(&x), "cell {c}");
         }
+        // With it, the carve reaches farther where the water runs under 3 m, the valley's
+        // first rows (its floor rises a metre a sample), and nowhere else.
+        let estuary = Channels::new(&valley, &ribbons, &[], &ChannelParams::default());
+        let wider: Vec<u32> = estuary
+            .refined()
+            .iter()
+            .copied()
+            .filter(|c| !(8..=11).contains(&(c % 20)))
+            .collect();
+        assert!(!wider.is_empty());
+        assert!(wider.iter().all(|c| c / 20 <= 3), "{wider:?}");
         let mid = ribbons[0].points[ribbons[0].points.len() / 2];
         let (x, y) = (f64::from(mid.position[0]), f64::from(mid.position[1]));
         let (level, half) = (f64::from(mid.level), f64::from(mid.half_width));

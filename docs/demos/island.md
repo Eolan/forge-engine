@@ -3333,6 +3333,26 @@ widen further without refining more cells (#202).
 
 ![The mouth's right bank: before the carve's changes (above), after (below)](../../reports/2026-10-08-199/banks.png)
 
+**The estuaries' banks (#202, 2026-10-09).** Two things kept that band:
+- **The margin:** the carve stops 8 m past the water.
+- **The bank's own rise:** at 0.6 m over the sea it is flattened only to about half, so it
+  still climbs 0.8 m in its first 3 m.
+
+Where the banks flatten towards the sea (the water under 1.5 m fully, under 3 m partly, the
+same zone as their flattening), two things change:
+- **The carve reaches farther:** as far as a bank of slope 0.12 takes to climb to the ground
+  beside the river (the higher side, a margin out), plus the carve's 3 m fade, up to 20 m.
+  The margin is per segment end (`ChannelParams::estuary`). The cells refined, the segments'
+  cells and the carve's weights all follow it, so the carve still ends where the drawn mesh
+  does.
+- **The bank is that climb alone,** even over the widened margin, steepest in its middle (about
+  0.18 for the mouth's 1.2 m). Upstream nothing changes.
+
+On seed 7 the refined cells grow by 0.3 % (1 143 360 → 1 146 816 fine), and the drawn ground
+takes 2.3 s with the cache warm, as before.
+
+![The mouth's right bank: the banks wandering (above), the estuary's even climb (below)](../../reports/2026-10-08-199/estuary.png)
+
 - **Cost:** `shading/layered` 0.318 → 0.319 ms on the island's view, 0.340 → 0.343 ms on its
   tour (three runs each, alternating, against `ecd826f`), within the noise.
 - **Checks:** Tier 0 on the sentinels and the island (`tools/verify.sh --sets island`, 730 s,

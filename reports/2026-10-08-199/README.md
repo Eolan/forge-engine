@@ -35,4 +35,4 @@
   rounded into the ground over 0.8 m.
 - Checked: Tier 0 on the sentinels and the island, passed (`captures/verify/20261008-220731-e569ca9`).
 - Left: the bank still reads as a dark band seen into the sun. It is a real bank, 1.2 m high, and
-  the carve's 8 m margin keeps it narrow (#202).
+  the carve's 8 m margin kept it narrow: #202 widens the estuaries' carve and evens their banks (`estuary.png`).
