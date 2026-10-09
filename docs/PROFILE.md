@@ -1209,7 +1209,9 @@ The refitted trees trace as fast as fresh ones here, so the default is refits on
 Dual quaternions (`--dual-quaternion`) and morph targets (#169): `skin/vertices` 0.008 ms
 with linear blending, 0.009 ms with dual quaternions, and 0.009 ms with the mannequins' elbow
 correctives (`--elbow-correctives`: 5094 morph deltas, two targets on each of three
-mannequins), `--arm-pose bend`, 60 frames, the frame 1.88 ms in all three.
+mannequins), `--arm-pose bend`, 60 frames, the frame 1.88 ms in all three. Eight joints a
+vertex (`--slime-eight`, the four slimes' 4 098-vertex drops): `skin/vertices` 0.011–0.013 ms
+against 0.009, frames 60 and 100 close on the slimes, the frame unchanged (2.25–2.32 ms).
 
 `--lab flood` (#144), the gate lifted at tick 31, 600 ticks: **0.86 ms a tick** (p99 1.1, max
 1.4). Most of it is the water: 18 432 cells in two half steps (velocities carried along, the

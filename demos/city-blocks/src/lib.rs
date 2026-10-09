@@ -480,6 +480,11 @@ struct Args {
     /// each bends: the linear blend's bent elbow keeps its thickness (#169; on request only).
     #[arg(long)]
     elbow_correctives: bool,
+    /// Skin the lab's slimes on the eight soft-body points nearest each vertex, smoothly
+    /// weighted, not on the three of the soft body's triangle under it: their surface bends
+    /// smoothly across the soft body's edges (#169's eight joints a vertex; on request only).
+    #[arg(long)]
+    slime_eight: bool,
     /// Leave the rivers' flow undisturbed by the movers (#107's A/B).
     #[arg(long)]
     no_floaters: bool,

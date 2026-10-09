@@ -2227,7 +2227,18 @@ pub(crate) fn build(
                 .map_or(0, |g| g.count as usize);
             if slimes > 0 {
                 let s = slime::surface();
-                let cooked = SkinnedMesh::cook(&s.mesh, &s.skin, ([0.0; 3], slime::BOUND));
+                // `--slime-eight` (#169): the drop on its eight nearest points a vertex.
+                let cooked = if args.slime_eight {
+                    SkinnedMesh::cook_full(
+                        &s.mesh,
+                        &s.eight,
+                        &s.more,
+                        &[],
+                        ([0.0; 3], slime::BOUND),
+                    )
+                } else {
+                    SkinnedMesh::cook(&s.mesh, &s.skin, ([0.0; 3], slime::BOUND))
+                };
                 for k in 0..slimes {
                     let id = builder.add_skinned_mesh(&cooked, slime::POINTS as u32);
                     builder.set_mesh_material(id, slime_rows[k % slime_rows.len()]);
@@ -2244,7 +2255,10 @@ pub(crate) fn build(
                 let (bird_model, rig) = flyer::model();
                 let mesh = bird_model.mesh("bird-body").expect("the bird's body");
                 let skin = mesh.skin.as_ref().expect("a skinned bird");
-                let cooked = SkinnedMesh::cook(&mesh.mesh, skin, ([0.0; 3], flyer::REACH));
+                // A model's second joint set when it has one (#169).
+                let more = mesh.skin_more.as_deref().unwrap_or_default();
+                let cooked =
+                    SkinnedMesh::cook_full(&mesh.mesh, skin, more, &[], ([0.0; 3], flyer::REACH));
                 for _ in 0..birds {
                     let id = builder.add_skinned_mesh(&cooked, rig.skeleton.len() as u32);
                     builder.set_mesh_material(id, bird_row);

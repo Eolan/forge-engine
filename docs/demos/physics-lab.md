@@ -565,6 +565,23 @@ with those the dogs folded under their own weight.
     the correctives and without).
 
   ![The mannequin's left elbow bent 90°: linear blending alone (left), with the elbow corrective (middle), and dual quaternions (right). The corrective puts back the thickness the linear blend folds away](images/lab-elbow-corrective.png)
+- **Eight joints a vertex, on request** (#169): the importer reads glTF's second joint set
+  (`JOINTS_1`, `WEIGHTS_1`), and `SkinnedMesh::cook_full` keeps each vertex's four heaviest
+  joints in its record and the other four in a second one, which the skin pass adds under either
+  blend. A model with a second set gets it (the gulls would). Meshes on four joints read no
+  second record.
+  - `--slime-eight` puts the slimes on it. Each drawn vertex is weighted on the eight
+    soft-body points nearest it, by `(1 − (a / r)²)²` of its angle `a` to each (`r` is the
+    ninth's), in place of the three corners of the soft-body triangle under it. Their surface
+    then bends smoothly across the soft body's edges, not along them.
+  - The sharpest crease about the top, with the top point poked 3 cm out, through the pass's
+    CPU twin (`eight_points_a_vertex_smooth_a_poked_drop`): 50.3° on three points, 31.2° on
+    eight, against 2.6° at rest.
+  - The cost: `skin/vertices` goes from 0.009 to 0.011–0.013 ms with the four slimes on eight
+    points (`--view=-0.2,0.5,3.2,0,-12`, frames 60 and 100). The frame is unchanged at 2.25–2.32
+    ms.
+
+  ![The blue slime's rim at frame 60, on the three points of its soft-body triangle a vertex (left) and on its eight nearest points (right): the kinks along the soft body's edges smooth out](images/lab-slime-eight.png)
 
 Three mannequins stand on poles, their pelvis held by a joint that lets go past 2 kN or
 400 N·m; two dogs stand on their own legs in front.
@@ -1947,7 +1964,8 @@ twin; from the break scene (#142) `lab-break85` (the ball through the wall) with
 `lab-creatures120` (posed) with its twin, `lab-creatures-throw240` (struck by balls) and
 `lab-creatures-limp240` (let go), and close on a mannequin's left arm (#169)
 `lab-creatures-dq60` (its forearm twisted, by dual quaternions) and
-`lab-creatures-corrective60` (its elbow bent, with the correctives); from the flood (#144) `lab-flood150` (the water running
+`lab-creatures-corrective60` (its elbow bent, with the correctives), and close on the slimes
+`lab-creatures-slime8-60` (on eight points a vertex); from the flood (#144) `lab-flood150` (the water running
 down the basin) with its twin, `lab-flood300` (spread round the blocks) and `lab-flood150-columns`
 (the columns drawn without the GPU's layer, #162); and from the
 dominoes (#146) `lab-dominoes900` (a turn down) with its twin and `lab-dominoes3000` (all down);

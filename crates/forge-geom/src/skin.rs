@@ -11,7 +11,10 @@
 //!   weights, which the skin pass reads to write the pages;
 //! - **its morph targets** (#169, [`SkinnedMesh::cook_morphed`]): per cluster vertex, the
 //!   changes the targets that move it make, which the skin pass adds by the frame's weights
-//!   before the joints move the vertex.
+//!   before the joints move the vertex;
+//! - **eight joints a vertex** (#169, [`SkinnedMesh::cook_full`]): a rig whose vertices follow
+//!   up to eight keeps their four heaviest in [`SkinnedMesh::vertices`] and the others in
+//!   [`SkinnedMesh::more`].
 
 use bytemuck::{Pod, Zeroable};
 
@@ -46,18 +49,48 @@ pub struct SkinVertex {
 impl SkinVertex {
     /// Packs a vertex.
     pub fn new(position: [f32; 3], normal: [f32; 3], skin: VertexSkin) -> Self {
-        let pack = |v: [u16; 4]| {
-            [
-                u32::from(v[0]) | u32::from(v[1]) << 16,
-                u32::from(v[2]) | u32::from(v[3]) << 16,
-            ]
-        };
         Self {
             position,
             normal: encode_normal(normal),
             joints: pack(skin.joints),
             weights: pack(quantize_weights(skin.weights)),
         }
+    }
+
+    /// Packs a vertex that follows up to eight joints (#169): `skin` and `more` (glTF's
+    /// `JOINTS_1` and `WEIGHTS_1`), their eight weights summing to 1. The four heaviest go in
+    /// the vertex, the others in the returned [`SkinMore`]; the eight quantised weights sum to
+    /// 65 535.
+    pub fn new_eight(
+        position: [f32; 3],
+        normal: [f32; 3],
+        skin: VertexSkin,
+        more: VertexSkin,
+    ) -> (Self, SkinMore) {
+        let mut pairs: [(u16, f32); 8] = std::array::from_fn(|k| match k {
+            0..4 => (skin.joints[k], skin.weights[k]),
+            _ => (more.joints[k - 4], more.weights[k - 4]),
+        });
+        pairs.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let q = quantize_weights(pairs.map(|(_, w)| w));
+        let joints = |range: std::ops::Range<usize>| -> [u16; 4] {
+            std::array::from_fn(|k| pairs[range.start + k].0)
+        };
+        let weights = |range: std::ops::Range<usize>| -> [u16; 4] {
+            std::array::from_fn(|k| q[range.start + k])
+        };
+        (
+            Self {
+                position,
+                normal: encode_normal(normal),
+                joints: pack(joints(0..4)),
+                weights: pack(weights(0..4)),
+            },
+            SkinMore {
+                joints: pack(joints(4..8)),
+                weights: pack(weights(4..8)),
+            },
+        )
     }
 
     /// The joint indices.
@@ -71,6 +104,37 @@ impl SkinVertex {
     }
 }
 
+/// A vertex's second four joints and weights as the skin pass reads them (16 bytes; `SkinMore`
+/// in `skin.slang`), for a mesh whose vertices follow up to eight joints (#169): packed as
+/// [`SkinVertex`]'s, the vertex's eight weights together summing to 65 535.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct SkinMore {
+    /// Joints 4 to 7, packed as [`SkinVertex::joints`].
+    pub joints: [u32; 2],
+    /// Their weights, packed as [`SkinVertex::weights`].
+    pub weights: [u32; 2],
+}
+
+impl SkinMore {
+    /// The joint indices.
+    pub fn joints(&self) -> [u16; 4] {
+        unpack(self.joints)
+    }
+
+    /// The weights, as fractions of 65 535.
+    pub fn weights(&self) -> [u16; 4] {
+        unpack(self.weights)
+    }
+}
+
+fn pack(v: [u16; 4]) -> [u32; 2] {
+    [
+        u32::from(v[0]) | u32::from(v[1]) << 16,
+        u32::from(v[2]) | u32::from(v[3]) << 16,
+    ]
+}
+
 fn unpack(v: [u32; 2]) -> [u16; 4] {
     [
         v[0] as u16,
@@ -82,15 +146,17 @@ fn unpack(v: [u32; 2]) -> [u16; 4] {
 
 /// Weights as 16-bit fractions summing to exactly 65 535 (the largest takes the rounding), so
 /// a vertex at rest stays where it was bound. Weights summing to 0 go to the first joint.
-fn quantize_weights(weights: [f32; 4]) -> [u16; 4] {
+fn quantize_weights<const N: usize>(weights: [f32; N]) -> [u16; N] {
     let weights = weights.map(|w| if w.is_finite() { w.max(0.0) } else { 0.0 });
     let sum: f32 = weights.iter().sum();
     if sum <= 0.0 {
-        return [u16::MAX, 0, 0, 0];
+        let mut first = [0; N];
+        first[0] = u16::MAX;
+        return first;
     }
     let mut q = weights.map(|w| (w / sum * 65535.0).round().min(65535.0) as u16);
     let total: i32 = q.iter().map(|&w| i32::from(w)).sum();
-    let largest = (0..4).max_by_key(|&k| q[k]).expect("four weights");
+    let largest = (0..N).max_by_key(|&k| q[k]).expect("some weights");
     q[largest] = (i32::from(q[largest]) + 65535 - total).clamp(0, 65535) as u16;
     q
 }
@@ -161,6 +227,9 @@ pub struct SkinnedMesh {
     pub vertices: Vec<SkinVertex>,
     /// Its morph targets (#169), when it has any.
     pub morphs: Option<Morphs>,
+    /// Per cluster vertex as `vertices`, its second four joints, for a mesh whose vertices
+    /// follow up to eight (#169).
+    pub more: Option<Vec<SkinMore>>,
 }
 
 impl SkinnedMesh {
@@ -188,7 +257,29 @@ impl SkinnedMesh {
         targets: &[MorphTarget],
         bound: ([f32; 3], f32),
     ) -> Self {
+        Self::cook_full(mesh, skin, &[], targets, bound)
+    }
+
+    /// [`Self::cook_morphed`] for vertices that follow up to eight joints (#169): `more` gives
+    /// each vertex's second four (glTF's `JOINTS_1` and `WEIGHTS_1`), or is empty for four.
+    /// A vertex's four heaviest joints go in [`Self::vertices`], the others in [`Self::more`].
+    ///
+    /// # Panics
+    ///
+    /// When `skin`, `more` (if not empty) or a target does not have one entry per vertex of
+    /// `mesh`.
+    pub fn cook_full(
+        mesh: &TriMesh,
+        skin: &[VertexSkin],
+        more: &[VertexSkin],
+        targets: &[MorphTarget],
+        bound: ([f32; 3], f32),
+    ) -> Self {
         assert_eq!(skin.len(), mesh.positions.len(), "one skin per vertex");
+        assert!(
+            more.is_empty() || more.len() == skin.len(),
+            "none or one more per vertex"
+        );
         for t in targets {
             assert_eq!(
                 t.positions.len(),
@@ -206,7 +297,7 @@ impl SkinnedMesh {
             })
             .fold(0.0, f32::max);
         let (center, radius) = (bound.0, bound.1 + reach);
-        Self::cook_with(mesh, skin, targets, (center, radius), |m| {
+        Self::cook_with(mesh, skin, more, targets, (center, radius), |m| {
             m.center = center;
             m.radius = radius;
             m.self_center = center;
@@ -246,7 +337,7 @@ impl SkinnedMesh {
                     .sqrt()
             })
             .fold(0.0, f32::max);
-        Self::cook_with(mesh, &skin, &[], (center, radius + reach), |m| {
+        Self::cook_with(mesh, &skin, &[], &[], (center, radius + reach), |m| {
             m.radius += reach;
             m.self_center = m.center;
             m.self_radius = m.radius;
@@ -259,6 +350,7 @@ impl SkinnedMesh {
     fn cook_with(
         mesh: &TriMesh,
         skin: &[VertexSkin],
+        more: &[VertexSkin],
         targets: &[MorphTarget],
         bound: ([f32; 3], f32),
         cluster: impl Fn(&mut GpuMeshlet),
@@ -277,6 +369,7 @@ impl SkinnedMesh {
         let uvs = !mesh.uvs.is_empty();
         let pages = page::pack(&mut dag, &vertices, uvs);
         let mut skinned = Vec::with_capacity(dag.meshlet_vertices.len());
+        let mut extra = Vec::new();
         let mut morphs = Morphs {
             targets: targets.len() as u32,
             ..Morphs::default()
@@ -285,7 +378,14 @@ impl SkinnedMesh {
             let first = range.vertex_offset as usize;
             for &v in &dag.meshlet_vertices[first..first + m.vertex_count as usize] {
                 let s = source[v as usize] as usize;
-                skinned.push(SkinVertex::new(mesh.positions[s], mesh.normals[s], skin[s]));
+                if more.is_empty() {
+                    skinned.push(SkinVertex::new(mesh.positions[s], mesh.normals[s], skin[s]));
+                } else {
+                    let (vertex, rest) =
+                        SkinVertex::new_eight(mesh.positions[s], mesh.normals[s], skin[s], more[s]);
+                    skinned.push(vertex);
+                    extra.push(rest);
+                }
                 if targets.is_empty() {
                     continue;
                 }
@@ -323,6 +423,7 @@ impl SkinnedMesh {
             },
             vertices: skinned,
             morphs: (!targets.is_empty()).then_some(morphs),
+            more: (!more.is_empty()).then_some(extra),
         }
     }
 }
@@ -449,6 +550,59 @@ mod tests {
         assert!(
             SkinnedMesh::cook(&mesh, &skin, ([0.0; 3], 3.0))
                 .morphs
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_vertex_on_eight_joints_keeps_its_four_heaviest_first_and_all_eight_weights() {
+        let (mesh, _) = skinned_rock();
+        // Every vertex on joints 0 to 7, weighted by its height: joint 7 heaviest at the top,
+        // joint 0 at the bottom.
+        let weights = |p: [f32; 3]| -> [f32; 8] {
+            let up = (p[1] + 1.0).clamp(0.0, 2.0) / 2.0;
+            let raw: [f32; 8] = std::array::from_fn(|k| 1.0 - 0.9 * (k as f32 / 7.0 - up).abs());
+            let sum: f32 = raw.iter().sum();
+            raw.map(|w| w / sum)
+        };
+        let (skin, more): (Vec<VertexSkin>, Vec<VertexSkin>) = mesh
+            .positions
+            .iter()
+            .map(|&p| {
+                let w = weights(p);
+                (
+                    VertexSkin {
+                        joints: [0, 1, 2, 3],
+                        weights: [w[0], w[1], w[2], w[3]],
+                    },
+                    VertexSkin {
+                        joints: [4, 5, 6, 7],
+                        weights: [w[4], w[5], w[6], w[7]],
+                    },
+                )
+            })
+            .unzip();
+        let cooked = SkinnedMesh::cook_full(&mesh, &skin, &more, &[], ([0.0; 3], 3.0));
+        let rest = cooked.more.as_ref().expect("eight joints");
+        assert_eq!(rest.len(), cooked.vertices.len());
+        for (v, r) in cooked.vertices.iter().zip(rest) {
+            let w = weights(v.position);
+            let joints: Vec<u16> = v.joints().into_iter().chain(r.joints()).collect();
+            let q: Vec<u16> = v.weights().into_iter().chain(r.weights()).collect();
+            // All eight joints, each once, at its own weight; the four heaviest first.
+            let mut sorted = joints.clone();
+            sorted.sort_unstable();
+            assert_eq!(sorted, [0, 1, 2, 3, 4, 5, 6, 7]);
+            for (j, q) in joints.iter().zip(&q) {
+                assert!((f32::from(*q) / 65535.0 - w[usize::from(*j)]).abs() < 1e-4);
+            }
+            assert!(q[..4].iter().min() >= q[4..].iter().max());
+            assert_eq!(q.iter().map(|&w| u32::from(w)).sum::<u32>(), 65535);
+        }
+        // With four joints, none more.
+        assert!(
+            SkinnedMesh::cook(&mesh, &skin, ([0.0; 3], 3.0))
+                .more
                 .is_none()
         );
     }

@@ -166,6 +166,34 @@ pub(super) struct Surface {
     /// points.
     pub mesh: TriMesh,
     pub skin: Vec<VertexSkin>,
+    /// `--slime-eight` (#169): the drawn drop's vertices on their eight nearest points, by a
+    /// smooth fall-off of their angle to them (the four heaviest, then the four others); the
+    /// parts' as `skin`, none more.
+    pub eight: Vec<VertexSkin>,
+    pub more: Vec<VertexSkin>,
+}
+
+/// A drawn drop's vertex in the unit direction `d` on the eight of `points` (unit directions)
+/// nearest it (#169): each weighted by `(1 − (a / r)²)²`, `a` its angle from `d` and `r` the
+/// ninth nearest's, then all eight to a sum of 1. The weights fall smoothly to 0 as a point
+/// leaves the eight, so the surface they carry bends smoothly across the soft body's edges.
+fn eight_nearest(points: &[Vec3], d: Vec3) -> (VertexSkin, VertexSkin) {
+    let mut near: Vec<(f32, u16)> = points
+        .iter()
+        .enumerate()
+        .map(|(k, p)| (p.dot(d).clamp(-1.0, 1.0).acos(), k as u16))
+        .collect();
+    near.select_nth_unstable_by(8, |a, b| a.0.total_cmp(&b.0));
+    near[..9].sort_by(|a, b| a.0.total_cmp(&b.0));
+    let reach = near[8].0.max(1e-6);
+    let raw: [f32; 8] =
+        std::array::from_fn(|k| (1.0 - (near[k].0 / reach).powi(2)).max(0.0).powi(2));
+    let sum: f32 = raw.iter().sum();
+    let skin = |from: usize| VertexSkin {
+        joints: std::array::from_fn(|k| near[from + k].1),
+        weights: std::array::from_fn(|k| raw[from + k] / sum),
+    };
+    (skin(0), skin(4))
 }
 
 /// The drop at the unit direction `d` from its middle: the tropical island's shape, the
@@ -281,6 +309,13 @@ pub(super) fn surface() -> &'static Surface {
             uvs: Vec::new(),
         };
         let mut skin: Vec<VertexSkin> = ball.weights.iter().map(|w| vertex_skin(w)).collect();
+        // The same drop on its eight nearest points (#169): the ball's first points are the
+        // soft body's, in its order.
+        let (mut eight, mut more): (Vec<VertexSkin>, Vec<VertexSkin>) = ball
+            .points
+            .iter()
+            .map(|&d| eight_nearest(&ball.points[..POINTS], d))
+            .unzip();
         let mut parts = Parts {
             points: &points,
             faces: &faces,
@@ -304,6 +339,9 @@ pub(super) fn surface() -> &'static Surface {
             Some(&WAIST),
         );
         assert_eq!(points.len(), POINTS);
+        // The parts stay on their own points.
+        eight.extend_from_slice(&skin[eight.len()..]);
+        more.resize(skin.len(), VertexSkin::default());
         Surface {
             normals: normals(&faces, &points)
                 .into_iter()
@@ -313,6 +351,8 @@ pub(super) fn surface() -> &'static Surface {
             faces,
             mesh,
             skin,
+            eight,
+            more,
         }
     })
 }
@@ -603,6 +643,113 @@ fn normals(faces: &[[u32; 3]], points: &[Vec3]) -> Vec<Vec3> {
 mod tests {
     use super::*;
     use forge_physics::{BodyDesc, Shape, WorldDesc};
+
+    #[test]
+    fn eight_points_a_vertex_smooth_a_poked_drop() {
+        let s = surface();
+        // The top point poked 3 cm out along its normal.
+        let top = (0..POINTS)
+            .max_by(|&a, &b| s.points[a].y.total_cmp(&s.points[b].y))
+            .unwrap();
+        let mut m = vec![Mat4::IDENTITY; POINTS];
+        m[top] = Mat4::from_translation(0.03 * s.normals[top]);
+        // The sharpest crease about the poke: the largest angle between two of the drop's
+        // triangles within 15 cm of the top that share an edge, in degrees.
+        let drop: Vec<[u32; 3]> = s
+            .mesh
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(&s.mesh.sections)
+            .filter(|&(t, &k)| {
+                k == 0
+                    && Vec3::from_array(s.mesh.positions[t[0] as usize]).distance(s.points[top])
+                        < 0.15
+            })
+            .map(|(t, _)| *t)
+            .collect();
+        let crease = |at: &[Vec3]| -> f32 {
+            let normal = |t: &[u32; 3]| {
+                let [a, b, c] = t.map(|v| at[v as usize]);
+                (b - a).cross(c - a).normalize()
+            };
+            let mut edges: HashMap<(u32, u32), Vec3> = HashMap::new();
+            let mut sharpest = 0.0_f32;
+            for t in &drop {
+                let n = normal(t);
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    match edges.remove(&(a.min(b), a.max(b))) {
+                        Some(other) => {
+                            sharpest = sharpest.max(n.dot(other).clamp(-1.0, 1.0).acos())
+                        }
+                        None => {
+                            edges.insert((a.min(b), a.max(b)), n);
+                        }
+                    }
+                }
+            }
+            sharpest.to_degrees()
+        };
+        let moved = |eight: bool| -> Vec<Vec3> {
+            s.mesh
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(k, p)| {
+                    let (joints, weights): (Vec<u16>, Vec<f32>) = if eight {
+                        let (a, b) = (&s.eight[k], &s.more[k]);
+                        (
+                            a.joints.iter().chain(&b.joints).copied().collect(),
+                            a.weights.iter().chain(&b.weights).copied().collect(),
+                        )
+                    } else {
+                        (s.skin[k].joints.to_vec(), s.skin[k].weights.to_vec())
+                    };
+                    let p = Vec3::from_array(*p);
+                    forge_render::skin_vertex(
+                        &m,
+                        &joints,
+                        &weights,
+                        p,
+                        Vec3::Y,
+                        forge_render::SkinBlend::Linear,
+                    )
+                    .0
+                })
+                .collect()
+        };
+        let rest: Vec<Vec3> = s
+            .mesh
+            .positions
+            .iter()
+            .map(|p| Vec3::from_array(*p))
+            .collect();
+        let (at_rest, three, eight) = (crease(&rest), crease(&moved(false)), crease(&moved(true)));
+        eprintln!(
+            "the sharpest crease about the poked top: {at_rest:.1}° at rest, poked {three:.1}° on three points a vertex, {eight:.1}° on eight"
+        );
+        assert!(eight < three, "eight points a vertex smooth the poke");
+        // Every vertex's weights summing to 1; on the drop, the nearest point heaviest.
+        assert_eq!((s.eight.len(), s.more.len()), (rest.len(), rest.len()));
+        // The drop's vertices come first, before its parts'.
+        let drop_vertices = s
+            .mesh
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(&s.mesh.sections)
+            .filter(|&(_, &k)| k == 0)
+            .flat_map(|(t, _)| *t)
+            .max()
+            .map_or(0, |v| v as usize + 1);
+        for (k, (a, b)) in s.eight.iter().zip(&s.more).enumerate() {
+            let all: Vec<f32> = a.weights.iter().chain(&b.weights).copied().collect();
+            assert!((all.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+            assert!(k >= drop_vertices || all.iter().all(|&w| w <= all[0]));
+        }
+    }
 
     #[test]
     fn the_drawn_drop_is_weighted_on_the_soft_bodys_points() {

@@ -1067,6 +1067,7 @@ impl MeshletSceneBuilder {
             field: None,
             blend: crate::SkinBlend::Linear,
             morphs: skinned.morphs.clone(),
+            more: skinned.more.clone(),
         });
         id
     }

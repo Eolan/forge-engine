@@ -21,13 +21,15 @@
 //! A mesh with morph targets (#169, [`forge_geom::SkinnedMesh::cook_morphed`]) has them added
 //! to its bind pose first, each by the weight [`crate::MeshletScene::set_morphs`] gives it this
 //! frame (and the frame before's for the previous positions): a face's expressions, or the
-//! corrective shapes that put back what a bent joint loses.
+//! corrective shapes that put back what a bent joint loses. A mesh whose vertices follow up to
+//! eight joints (glTF's `JOINTS_1`, [`forge_geom::SkinnedMesh::cook_full`]) has its second four
+//! in a record a vertex, blended with the first four under either blend.
 
 use std::cell::Cell;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use forge_geom::{GpuMeshlet, MorphDelta, Morphs, PAGE_SIZE, SkinVertex};
+use forge_geom::{GpuMeshlet, MorphDelta, Morphs, PAGE_SIZE, SkinMore, SkinVertex};
 use forge_gpu::{
     Buffer, BufferDesc, Device, GraphBuffer, MemoryCategory, MemoryLocation, Result, vk,
 };
@@ -51,22 +53,27 @@ const SKIN_DUAL_QUATERNION: u32 = 1;
 /// `GpuSkinCluster::flags`: the cluster's mesh has morph targets, which its vertices' ranges
 /// in the morph ranges name (#169).
 const SKIN_MORPHED: u32 = 2;
+/// `GpuSkinCluster::flags`: the cluster's vertices follow up to eight joints, the second four
+/// in the skin's `more` records (#169).
+const SKIN_EIGHT: u32 = 4;
 
 /// Where the skin pass puts a bind-pose vertex at `position` with `normal`, carried by the
-/// joints `joints` (indices into `matrices`) weighted by `weights`, blended by `blend`: the twin
-/// of `skin_main` in `shaders/skin.slang`, for tests and measurements.
+/// joints `joints` (indices into `matrices`, four or eight, #169) weighted by `weights`, blended
+/// by `blend`: the twin of `skin_main` in `shaders/skin.slang`, for tests and measurements.
 pub fn skin_vertex(
     matrices: &[Mat4],
-    joints: [u16; 4],
-    weights: [f32; 4],
+    joints: &[u16],
+    weights: &[f32],
     position: Vec3,
     normal: Vec3,
     blend: SkinBlend,
 ) -> (Vec3, Vec3) {
     let used = || {
-        (0..4)
-            .filter(move |&k| weights[k] > 0.0)
-            .map(move |k| (matrices[usize::from(joints[k])], weights[k]))
+        joints
+            .iter()
+            .zip(weights)
+            .filter(|&(_, &w)| w > 0.0)
+            .map(|(&j, &w)| (matrices[usize::from(j)], w))
     };
     match blend {
         SkinBlend::Linear => {
@@ -131,7 +138,7 @@ pub(crate) struct GpuSkinCluster {
     /// Its mesh's height field in the fields' table (`u32::MAX`: none).
     field: u32,
     /// `SKIN_DUAL_QUATERNION` when its mesh blends as dual quaternions, `SKIN_MORPHED` when it
-    /// has morph targets (#169).
+    /// has morph targets, `SKIN_EIGHT` when its vertices follow up to eight joints (#169).
     flags: u32,
     pad: u32,
 }
@@ -189,9 +196,13 @@ pub(crate) struct SkinPush {
     pub morph_deltas: u64,
     pub morph_weights: u64,
     pub previous_morph_weights: u64,
+    pub more: u64,
     pub cluster_count: u32,
     pub has_rays: u32,
 }
+
+// At most the push constants every device has.
+const _: () = assert!(std::mem::size_of::<SkinPush>() <= 128);
 
 /// A skinned mesh as the scene builder keeps it until the build.
 pub(crate) struct SkinSource {
@@ -210,6 +221,9 @@ pub(crate) struct SkinSource {
     pub blend: SkinBlend,
     /// Its morph targets (#169), per cluster vertex as `vertices`.
     pub morphs: Option<Morphs>,
+    /// Per cluster vertex as `vertices`, its second four joints, when they follow up to eight
+    /// (#169).
+    pub more: Option<Vec<SkinMore>>,
 }
 
 /// Ring slots of the joints' matrices: this frame's, the frame before's and one more, as the
@@ -256,6 +270,9 @@ pub(crate) struct SceneSkins {
     morph_count: u32,
     /// The weights' ring slots.
     morphs_turn: Turn,
+    /// Per skinned vertex, its second four joints (`SkinMore`, #169), when a mesh's vertices
+    /// follow up to eight; a record otherwise.
+    more: Buffer,
     /// Whether joints, heights or weights came since the skin pass last ran (#197): it runs
     /// only then.
     fresh: Cell<bool>,
@@ -307,6 +324,8 @@ impl SceneSkins {
         let mut morph_ranges: Vec<[u32; 2]> = Vec::new();
         let mut morph_deltas: Vec<MorphDelta> = Vec::new();
         let mut morph_count = 0;
+        let mut more: Vec<SkinMore> = Vec::new();
+        let mut any_more = false;
         for source in sources {
             // Its vertices' ranges, rebased into the scene's deltas, their targets into a
             // frame's weights.
@@ -322,6 +341,18 @@ impl SceneSkins {
                     morph_count += m.targets;
                 }
                 None => morph_ranges.extend(std::iter::repeat_n([0, 0], source.vertices.len())),
+            }
+            // Its vertices' second four joints, or none.
+            match &source.more {
+                Some(m) => {
+                    assert_eq!(m.len(), source.vertices.len(), "a record a vertex");
+                    more.extend_from_slice(m);
+                    any_more = true;
+                }
+                None => more.extend(std::iter::repeat_n(
+                    SkinMore::default(),
+                    source.vertices.len(),
+                )),
             }
             meshes.push((source.mesh, clusters.len() as u32));
             let ray = ray_first(source.mesh);
@@ -357,7 +388,7 @@ impl SceneSkins {
                         SKIN_MORPHED
                     } else {
                         0
-                    },
+                    } | if source.more.is_some() { SKIN_EIGHT } else { 0 },
                     pad: 0,
                 });
                 local += m.vertex_count as usize;
@@ -374,10 +405,14 @@ impl SceneSkins {
             clusters.len() <= 65_535,
             "the skin pass dispatches a workgroup per cluster, at most 65 535"
         );
-        // Without targets the pass reads no range.
+        // Without targets the pass reads no range, and without eight joints a vertex no record.
         if morph_count == 0 {
             morph_ranges.clear();
         }
+        if !any_more {
+            more.clear();
+        }
+        let eight = more.len();
         tracing::info!(
             meshes = sources.len(),
             joints,
@@ -387,6 +422,7 @@ impl SceneSkins {
             heights,
             morph_targets = morph_count,
             morph_deltas = morph_deltas.len(),
+            eight_joint_vertices = eight,
             "skinned meshes ready"
         );
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
@@ -443,6 +479,9 @@ impl SceneSkins {
         if morph_deltas.is_empty() {
             morph_deltas.push(MorphDelta::default());
         }
+        if more.is_empty() {
+            more.push(SkinMore::default());
+        }
         Ok(Self {
             clusters: device.create_buffer_with_data(
                 &clusters,
@@ -493,6 +532,12 @@ impl SceneSkins {
             morph_weights: weights_ring,
             morph_count,
             morphs_turn: Turn::default(),
+            more: device.create_buffer_with_data(
+                &more,
+                storage,
+                MemoryCategory::Geometry,
+                "skin more joints",
+            )?,
             // The first frame bends the bind pose once, the previous positions with it.
             fresh: Cell::new(true),
         })
@@ -559,6 +604,7 @@ impl SceneSkins {
             morph_deltas: self.morph_deltas.address(),
             morph_weights: self.morph_weights[self.morphs_turn.current.get()].address(),
             previous_morph_weights: self.morph_weights[self.morphs_turn.previous.get()].address(),
+            more: self.more.address(),
             cluster_count: self.cluster_count,
             has_rays: u32::from(self.has_rays && rays != 0),
         }
@@ -620,7 +666,7 @@ mod tests {
         );
         let (p, n) = (Vec3::new(0.3, 0.4, -0.5), Vec3::new(0.0, 0.6, 0.8));
         for blend in [SkinBlend::Linear, SkinBlend::DualQuaternion] {
-            let (at, normal) = skin_vertex(&[m], [0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0], p, n, blend);
+            let (at, normal) = skin_vertex(&[m], &[0], &[1.0], p, n, blend);
             assert!(
                 at.abs_diff_eq(m.transform_point3(p), 1e-5),
                 "{blend:?}: {at}"
@@ -639,16 +685,10 @@ mod tests {
         let p = Vec3::new(0.2, 0.05, 0.0);
         let n = Vec3::Y;
         let radius = |v: Vec3| (v.y * v.y + v.z * v.z).sqrt();
-        let half = [0.5, 0.5, 0.0, 0.0];
-        let (linear, _) = skin_vertex(&matrices, [0, 1, 0, 0], half, p, n, SkinBlend::Linear);
-        let (dual, normal) = skin_vertex(
-            &matrices,
-            [0, 1, 0, 0],
-            half,
-            p,
-            n,
-            SkinBlend::DualQuaternion,
-        );
+        let half = [0.5, 0.5];
+        let (linear, _) = skin_vertex(&matrices, &[0, 1], &half, p, n, SkinBlend::Linear);
+        let (dual, normal) =
+            skin_vertex(&matrices, &[0, 1], &half, p, n, SkinBlend::DualQuaternion);
         assert!((radius(linear) - 0.05 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
         assert!((radius(dual) - 0.05).abs() < 1e-5, "{dual}");
         assert!(
@@ -667,12 +707,48 @@ mod tests {
         let full = Mat4::from_rotation_x(std::f32::consts::PI);
         let (a, _) = skin_vertex(
             &[Mat4::IDENTITY, full],
-            [0, 1, 0, 0],
-            [0.75, 0.25, 0.0, 0.0],
+            &[0, 1],
+            &[0.75, 0.25],
             p,
             n,
             SkinBlend::DualQuaternion,
         );
         assert!((radius(a) - 0.05).abs() < 1e-5, "{a}");
+    }
+
+    #[test]
+    fn eight_joints_carry_a_vertex_by_all_their_weights_either_way() {
+        // Eight joints moved 0 to 7 cm along x, the last turned 90° about y; a vertex an eighth
+        // on each. Linearly, it moves by their mean; the dual quaternions turn it too.
+        let mut matrices: Vec<Mat4> = (0..8)
+            .map(|k| Mat4::from_translation(Vec3::new(0.01 * k as f32, 0.0, 0.0)))
+            .collect();
+        let (p, n) = (Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
+        let joints: [u16; 8] = std::array::from_fn(|k| k as u16);
+        let even = [0.125; 8];
+        for blend in [SkinBlend::Linear, SkinBlend::DualQuaternion] {
+            let (at, normal) = skin_vertex(&matrices, &joints, &even, p, n, blend);
+            assert!(
+                at.abs_diff_eq(Vec3::new(0.035, 1.0, 0.0), 1e-5),
+                "{blend:?}: {at}"
+            );
+            assert!(normal.abs_diff_eq(Vec3::Y, 1e-5));
+        }
+        // Only the last four weigh: the first four's joints do not move it.
+        let back: [f32; 8] = [0.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.25, 0.25];
+        let (at, _) = skin_vertex(&matrices, &joints, &back, p, n, SkinBlend::Linear);
+        assert!(at.abs_diff_eq(Vec3::new(0.055, 1.0, 0.0), 1e-5), "{at}");
+        // A turn on the eighth joint reaches the vertex by its weight alone.
+        matrices[7] = Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let last: [f32; 8] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        let (at, _) = skin_vertex(
+            &matrices,
+            &joints,
+            &last,
+            Vec3::X,
+            n,
+            SkinBlend::DualQuaternion,
+        );
+        assert!(at.abs_diff_eq(-Vec3::Z, 1e-5), "{at}");
     }
 }

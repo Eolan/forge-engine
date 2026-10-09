@@ -266,9 +266,11 @@ for path in $paths; do
     capture "$path-lab-creatures-throw240" 240 "$lab" --lab creatures --fixed-step --throw-every 50 "${flag[@]}"
     capture "$path-lab-creatures-limp240" 240 "$lab" --lab creatures --fixed-step --limp-at 60 "${flag[@]}"
     # The skin pass's paths on request (#169), close on the mannequin's left arm: its forearm
-    # twisted by dual quaternions, and its elbow bent with the morph targets' correctives.
+    # twisted by dual quaternions, and its elbow bent with the morph targets' correctives; and
+    # close on the slimes, on eight points a vertex.
     capture "$path-lab-creatures-dq60" 60 "$lab" --lab creatures --fixed-step --arm-pose twist --dual-quaternion "--view=0.42,1.05,0.75,0,-5" "${flag[@]}"
     capture "$path-lab-creatures-corrective60" 60 "$lab" --lab creatures --fixed-step --arm-pose bend --elbow-correctives "--view=0.42,1.05,0.75,0,-5" "${flag[@]}"
+    capture "$path-lab-creatures-slime8-60" 60 "$lab" --lab creatures --fixed-step --slime-eight "--view=-0.2,0.5,3.2,0,-12" "${flag[@]}"
     # The dogs on their course (#167): up the steps and the ramp at tick 600, coming back down at
     # 1200.
     capture "$path-lab-course600" 600 "$lab" --lab course --fixed-step "${flag[@]}"

@@ -138,6 +138,12 @@ pub struct ModelMesh {
     /// are then in the bind pose as the file gives them: glTF moves a skinned mesh by its
     /// joints alone, not by its node.
     pub skin: Option<Vec<VertexSkin>>,
+    /// For a skinned mesh whose vertices follow up to eight joints (#169), each vertex's second
+    /// four (glTF's `JOINTS_1` and `WEIGHTS_1`; zero weights where a primitive has none): the
+    /// eight weights together sum to 1. [`SkinnedMesh::cook_full`] takes them.
+    ///
+    /// [`SkinnedMesh::cook_full`]: crate::SkinnedMesh::cook_full
+    pub skin_more: Option<Vec<VertexSkin>>,
     /// Its morph targets (#169), each with a change per vertex, turned into the scene's frame
     /// as the vertices are; empty for none. [`SkinnedMesh::cook_morphed`] takes them.
     ///
@@ -295,6 +301,8 @@ fn read_mesh(
     let mut out = TriMesh::default();
     let mut materials: Vec<ModelMaterial> = Vec::new();
     let mut skin: Vec<VertexSkin> = Vec::new();
+    let mut more: Vec<VertexSkin> = Vec::new();
+    let mut any_more = false;
     let mut morphs: Vec<MorphTarget> = Vec::new();
     let mut needs_normals = false;
     let mut uvs: Vec<[f32; 2]> = Vec::new();
@@ -347,6 +355,23 @@ fn read_mesh(
                     .zip(weights)
                     .map(|(joints, weights)| VertexSkin { joints, weights }),
             );
+            // A second set (#169): its vertices follow up to eight joints. The primitives
+            // before without one follow none more.
+            if let (Some(j), Some(w)) = (reader.read_joints(1), reader.read_weights(1)) {
+                let joints: Vec<[u16; 4]> = j.into_u16().collect();
+                let weights: Vec<[f32; 4]> = w.into_f32().collect();
+                if joints.len() != positions.len() || weights.len() != positions.len() {
+                    return Err(GltfError::BadSkin { mesh: name });
+                }
+                more.resize(skin.len() - positions.len(), VertexSkin::default());
+                more.extend(
+                    joints
+                        .into_iter()
+                        .zip(weights)
+                        .map(|(joints, weights)| VertexSkin { joints, weights }),
+                );
+                any_more = true;
+            }
         }
         match reader.read_tex_coords(0) {
             Some(t) => {
@@ -449,6 +474,8 @@ fn read_mesh(
             target.normals.clear();
         }
     }
+    // The primitives after the last with a second set follow none more.
+    more.resize(skin.len(), VertexSkin::default());
     let mut morph_weights = mesh.weights().map(<[f32]>::to_vec).unwrap_or_default();
     morph_weights.resize(morphs.len(), 0.0);
     Ok(ModelMesh {
@@ -456,6 +483,7 @@ fn read_mesh(
         mesh: out,
         materials,
         skin: skinned.then_some(skin),
+        skin_more: any_more.then_some(more),
         morphs,
         morph_weights,
     })
@@ -704,6 +732,55 @@ mod tests {
         assert!(model.point("tip").is_some());
         let model = load_glb(&triangle_glb()).unwrap();
         assert!(model.mesh("tri").unwrap().skin.is_none());
+        assert!(
+            body.skin_more.is_none(),
+            "four joints a vertex: no second set"
+        );
+    }
+
+    #[test]
+    fn a_vertex_s_second_joint_set_comes_through() {
+        // One triangle on four joints: its last corner shares itself among all four, its two
+        // sets (JOINTS_0 and JOINTS_1) a quarter each.
+        let positions: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let mut bin: Vec<u8> = positions.iter().flat_map(|v| v.to_le_bytes()).collect();
+        bin.extend_from_slice(&[0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0]);
+        let weights: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.0, 0.0];
+        bin.extend(weights.iter().flat_map(|v| v.to_le_bytes()));
+        bin.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 0, 0]);
+        let more: [f32; 12] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.0, 0.0];
+        bin.extend(more.iter().flat_map(|v| v.to_le_bytes()));
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0,1]}}],
+            "nodes":[{{"name":"body","mesh":0,"skin":0}},
+                     {{"name":"root","children":[2,3,4]}},{{"name":"a"}},{{"name":"b"}},{{"name":"c"}}],
+            "skins":[{{"joints":[1,2,3,4]}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2,"JOINTS_1":3,"WEIGHTS_1":4}}}}]}}],
+            "accessors":[
+              {{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},
+              {{"bufferView":1,"componentType":5121,"count":3,"type":"VEC4"}},
+              {{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"}},
+              {{"bufferView":3,"componentType":5121,"count":3,"type":"VEC4"}},
+              {{"bufferView":4,"componentType":5126,"count":3,"type":"VEC4"}}],
+            "bufferViews":[{{"buffer":0,"byteLength":36}},
+                           {{"buffer":0,"byteOffset":36,"byteLength":12}},
+                           {{"buffer":0,"byteOffset":48,"byteLength":48}},
+                           {{"buffer":0,"byteOffset":96,"byteLength":12}},
+                           {{"buffer":0,"byteOffset":108,"byteLength":48}}],
+            "buffers":[{{"byteLength":{}}}]}}"#,
+            bin.len()
+        );
+        let model = load_glb(&pack(json, bin)).unwrap();
+        let body = model.mesh("body").unwrap();
+        let skin = body.skin.as_ref().unwrap();
+        let more = body.skin_more.as_ref().expect("a second set");
+        assert_eq!(more.len(), 3);
+        assert_eq!(
+            (skin[2].joints, more[2].joints),
+            ([0, 1, 0, 0], [2, 3, 0, 0])
+        );
+        assert_eq!(more[2].weights, [0.25, 0.25, 0.0, 0.0]);
+        assert_eq!(more[0].weights, [0.0; 4]);
     }
 
     #[test]

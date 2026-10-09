@@ -858,9 +858,9 @@ pub(super) fn elbow_correctives() -> Vec<MorphTarget> {
                     Vec3::from(body.mesh.normals[k]),
                 );
                 let (p_linear, _) =
-                    forge_render::skin_vertex(&bent, s.joints, s.weights, p, n, Linear);
+                    forge_render::skin_vertex(&bent, &s.joints, &s.weights, p, n, Linear);
                 let (p_dual, n_dual) =
-                    forge_render::skin_vertex(&bent, s.joints, s.weights, p, n, DualQuaternion);
+                    forge_render::skin_vertex(&bent, &s.joints, &s.weights, p, n, DualQuaternion);
                 // The linear blend's turn at the vertex: its weighted matrices' 3 × 3 parts.
                 let turn: Mat3 = (0..4)
                     .map(|i| s.weights[i] * Mat3::from_mat4(bent[usize::from(s.joints[i])]))
@@ -1558,8 +1558,8 @@ mod tests {
                     });
                 let (p, _) = forge_render::skin_vertex(
                     matrices,
-                    s.joints,
-                    s.weights,
+                    &s.joints,
+                    &s.weights,
                     bind,
                     Vec3::from(body.mesh.normals[k]),
                     blend,

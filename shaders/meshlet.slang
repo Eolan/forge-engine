@@ -4165,10 +4165,14 @@ bool wants_mirror_ray<let SHADOWS : int>(Frame* f, Material mat)
 
 // The turn the skin gives a bind-pose vertex `v` this frame: its joints' matrices (`base` the
 // mesh's first in `Frame::skin_joints`), their 3 × 3 parts weighed as the skin pass weighs them.
-float3x3 skin_turn(Frame* f, uint base, SkinVertex v)
+// A vertex on up to eight joints (`eight`, #169) is turned by its four heaviest, weighed up to
+// the whole.
+float3x3 skin_turn(Frame* f, uint base, SkinVertex v, bool eight)
 {
     uint4 joints = uint4(v.joints.x & 0xFFFFu, v.joints.x >> 16, v.joints.y & 0xFFFFu, v.joints.y >> 16);
     float4 weights = float4(v.weights.x & 0xFFFFu, v.weights.x >> 16, v.weights.y & 0xFFFFu, v.weights.y >> 16) / 65535.0;
+    if (eight)
+        weights /= max(dot(weights, float4(1.0)), 1e-6);
     float3 r0 = float3(0.0);
     float3 r1 = float3(0.0);
     float3 r2 = float3(0.0);
@@ -4199,8 +4203,9 @@ void bind_pose_surface(Frame* f, Mesh mesh, uint meshlet_index, Meshlet m, uint 
     SkinVertex a0 = f[0].skin_vertices[c.first + paged_index(f, base, m, tri, 0)];
     SkinVertex a1 = f[0].skin_vertices[c.first + paged_index(f, base, m, tri, 1)];
     SkinVertex a2 = f[0].skin_vertices[c.first + paged_index(f, base, m, tri, 2)];
-    float3x3 turn = b.lambda.x * skin_turn(f, c.joints, a0) + b.lambda.y * skin_turn(f, c.joints, a1)
-                  + b.lambda.z * skin_turn(f, c.joints, a2);
+    bool eight = (c.flags & 4u) != 0u; // skin.slang's SKIN_EIGHT (#169)
+    float3x3 turn = b.lambda.x * skin_turn(f, c.joints, a0, eight) + b.lambda.y * skin_turn(f, c.joints, a1, eight)
+                  + b.lambda.z * skin_turn(f, c.joints, a2, eight);
     s.frame = mul(s.frame, turn);
     s.object_normal = normalize(b.lambda.x * decode_normal(a0.normal) + b.lambda.y * decode_normal(a1.normal)
                                 + b.lambda.z * decode_normal(a2.normal));
@@ -5312,7 +5317,8 @@ public struct SkinCluster
     public uint ray;
     public uint joints;
     public uint field;          // its height field (#185), which the skin pass reads
-    public uint2 pad;
+    public uint flags;          // skin.slang's SKIN_* flags (#169)
+    public uint pad;
 };
 
 struct MoverMotionPush

@@ -1,6 +1,6 @@
 // The skin pass (#165, `crate::skin` in forge-render): moves the vertices of the skinned meshes'
 // clusters every frame, before the culls read them. One workgroup per cluster, one thread per
-// vertex: linear blend skinning (four joints a vertex), or dual quaternion skinning for a mesh
+// vertex: linear blend skinning (four joints a vertex, or eight, #169), or dual quaternion skinning for a mesh
 // that asks for it (#169), of the bind-pose position and normal
 // (`SkinVertex`, crates/forge-geom/src/skin.rs) by this frame's joint matrices, written over the
 // cluster's vertices in the pool of cluster pages (a skinned mesh's pages are all roots,
@@ -29,13 +29,22 @@ struct SkinCluster
     uint ray;           // its first vertex in the ray tracing's positions (0xFFFFFFFF: none)
     uint joints;        // its mesh's first matrix in `joints`
     uint field;         // its mesh's height field in `fields` (0xFFFFFFFF: none, #185)
-    uint flags;         // SKIN_DUAL_QUATERNION: its mesh blends as dual quaternions; SKIN_MORPHED: it has morph targets (#169)
+    uint flags;         // SKIN_DUAL_QUATERNION: its mesh blends as dual quaternions; SKIN_MORPHED: it has morph targets; SKIN_EIGHT: its vertices follow up to eight joints (#169)
     uint pad;
 };
 
-// `SkinCluster::flags` (forge-render's `SKIN_DUAL_QUATERNION` and `SKIN_MORPHED`).
+// `SkinCluster::flags` (forge-render's `SKIN_DUAL_QUATERNION`, `SKIN_MORPHED` and `SKIN_EIGHT`).
 static const uint SKIN_DUAL_QUATERNION = 1u;
 static const uint SKIN_MORPHED = 2u;
+static const uint SKIN_EIGHT = 4u;
+
+// Mirrors `SkinMore` in crates/forge-geom/src/skin.rs (16 bytes): a vertex's second four joints
+// and weights, for a mesh whose vertices follow up to eight (#169).
+struct SkinMore
+{
+    uint2 joints;   // as SkinVertex's
+    uint2 weights;  // as SkinVertex's; the eight together sum to 65 535
+};
 
 // Mirrors `MorphDelta` in crates/forge-geom/src/skin.rs (32 bytes): a vertex's change under one
 // morph target at its full weight (#169).
@@ -76,6 +85,7 @@ struct SkinPush
     MorphDelta* morph_deltas;
     float* morph_weights;    // this frame's weights, every morphed mesh's targets in turn
     float* previous_morph_weights; // the frame before's
+    SkinMore* more;          // per vertex, its second four joints, for a mesh on up to eight (#169)
     uint cluster_count;
     uint has_rays;
 };
@@ -132,6 +142,21 @@ Blend blend(float4* matrices, uint base, uint4 joints, float4 weights)
             b.r1 += weights[k] * matrices[j + 1];
             b.r2 += weights[k] * matrices[j + 2];
         }
+    }
+    return b;
+}
+
+// A vertex's joints' matrices blended: its first four, and with `eight` its second four (#169).
+Blend blend_all(float4* matrices, uint base, uint4 joints, float4 weights, bool eight, uint4 joints_more,
+                float4 weights_more)
+{
+    Blend b = blend(matrices, base, joints, weights);
+    if (eight)
+    {
+        Blend more = blend(matrices, base, joints_more, weights_more);
+        b.r0 += more.r0;
+        b.r1 += more.r1;
+        b.r2 += more.r2;
     }
     return b;
 }
@@ -194,14 +219,11 @@ struct DualBlend
     float scale;
 };
 
-DualBlend dual_blend(float4* matrices, uint base, uint4 joints, float4 weights)
+// The four joints `joints` weighted by `weights` added to the sum `b`, each quaternion on the
+// shorter way round from `first`, the first joint's (set by the first joint added).
+void dual_add(inout DualBlend b, inout float4 first, inout bool has_first, float4* matrices, uint base,
+              uint4 joints, float4 weights)
 {
-    DualBlend b;
-    b.real = float4(0.0);
-    b.dual = float4(0.0);
-    b.scale = 0.0;
-    float4 first = float4(0.0);
-    bool has_first = false;
     for (uint k = 0; k < 4; k++)
     {
         if (weights[k] > 0.0)
@@ -224,6 +246,21 @@ DualBlend dual_blend(float4* matrices, uint base, uint4 joints, float4 weights)
             b.scale += weights[k] * scale;
         }
     }
+}
+
+// A vertex's joints blended: its first four, and with `eight` its second four (#169).
+DualBlend dual_blend(float4* matrices, uint base, uint4 joints, float4 weights, bool eight, uint4 joints_more,
+                     float4 weights_more)
+{
+    DualBlend b;
+    b.real = float4(0.0);
+    b.dual = float4(0.0);
+    b.scale = 0.0;
+    float4 first = float4(0.0);
+    bool has_first = false;
+    dual_add(b, first, has_first, matrices, base, joints, weights);
+    if (eight)
+        dual_add(b, first, has_first, matrices, base, joints_more, weights_more);
     float l = length(b.real);
     b.real /= l;
     b.dual /= l;
@@ -341,23 +378,36 @@ void skin_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         bind_before.y += field_height(push.previous_heights, h, v.position.xz);
     }
 
+    // Up to eight joints (#169): the second four in the vertex's record.
+    bool eight = (c.flags & SKIN_EIGHT) != 0u;
+    uint4 joints_more = uint4(0u);
+    float4 weights_more = float4(0.0);
+    if (eight)
+    {
+        SkinMore m = push.more[c.first + i];
+        joints_more = uint4(m.joints.x & 0xFFFFu, m.joints.x >> 16, m.joints.y & 0xFFFFu, m.joints.y >> 16);
+        weights_more = float4(m.weights.x & 0xFFFFu, m.weights.x >> 16, m.weights.y & 0xFFFFu, m.weights.y >> 16) / 65535.0;
+    }
+
     bool dual = (c.flags & SKIN_DUAL_QUATERNION) != 0u;
     float3 p;
     float3 n;
     float3 before;
     if (dual)
     {
-        DualBlend now = dual_blend(push.joints, base, joints, weights);
+        DualBlend now = dual_blend(push.joints, base, joints, weights, eight, joints_more, weights_more);
         p = dual_move_point(now, bind);
         n = dual_turn_normal(now, bind_normal);
-        before = dual_move_point(dual_blend(push.previous_joints, base, joints, weights), bind_before);
+        before = dual_move_point(
+            dual_blend(push.previous_joints, base, joints, weights, eight, joints_more, weights_more), bind_before);
     }
     else
     {
-        Blend now = blend(push.joints, base, joints, weights);
+        Blend now = blend_all(push.joints, base, joints, weights, eight, joints_more, weights_more);
         p = move_point(now, bind);
         n = turn_normal(now, bind_normal);
-        before = move_point(blend(push.previous_joints, base, joints, weights), bind_before);
+        before = move_point(blend_all(push.previous_joints, base, joints, weights, eight, joints_more, weights_more),
+                            bind_before);
     }
     uint at = c.pool / 4 + i * 4;
     push.pool[at] = asuint(p.x);
