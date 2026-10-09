@@ -33,6 +33,7 @@ pub mod reflection_history;
 pub mod shallow;
 pub mod skin;
 pub mod sky;
+pub mod skybox;
 pub mod splashes;
 pub mod starfield;
 pub mod streaming;
@@ -72,6 +73,7 @@ pub use shallow::{
 };
 pub use skin::{HeightField, SkinBlend, skin_vertex};
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyNight, SkyParams, sh_irradiance};
+pub use skybox::{SkyBox, SkyBoxPlanet, sky_from_body};
 pub use splashes::{
     SPLASH_CAPACITY, SplashFoam, SplashParams, SplashSource, SplashStats, WaterSplashes,
 };

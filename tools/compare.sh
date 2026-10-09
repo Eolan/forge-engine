@@ -207,7 +207,8 @@ main() {
     lab-models60 lab-model-CesiumMan lab-model-FlightHelmet lab-model-Fox lab-model-MetalRoughSpheres \
     lab-model-NormalTangentMirrorTest lab-model-NormalTangentTest lab-model-TextureCoordinateTest \
     lab-model-TextureSettingsTest lab-model-TextureTransformTest lab-model-WaterBottle lab-model-Sponza \
-    lab-model-Sponza-noprobes planet-orbit planet-high planet-ground planet-moon-orbit planet-moon-ground; do
+    lab-model-Sponza-noprobes planet-orbit planet-high planet-ground planet-corsica-top planet-moon-orbit \
+    planet-moon-ground; do
     pair "$new/mesh-$name.png" "$new/fb-$name.png" "mesh against fallback, $name"
   done
   local others=""

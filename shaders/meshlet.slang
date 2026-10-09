@@ -371,7 +371,7 @@ public struct Frame
     public float4 planet;           // the planet the scene stands on (#220): the camera from its centre, world axes (xyz), and its height over the sea (w), metres
     public float4 planet_axis;      // its north (xyz) and its radius at the sea's level (w, metres; 0: none)
     public float4 planet_meridian;  // its latitude 0, longitude 0 (xyz)
-    public uint4 planet_map;        // x: the sampled index of its colour map (~0: none); y: 1 when it has a sea
+    public uint4 planet_map;        // x: the sampled index of its colour map (~0: none); y: 1 when it has a sea; z: 1 when the map is its albedo from afar, 0 a tint; w: its sea mask (~0: none)
 };
 
 // Mirrors `SkinVertex` in crates/forge-geom/src/skin.rs (32 bytes): a skinned cluster vertex
@@ -3172,9 +3172,12 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
     {
         uint first, second;
         float w_first, w_second;
+        // A planet's colour map (#220): its layers times `tint`, then `body.rgb` in place of them by
+        // `body.a`.
         float3 tint = 1.0;
+        float4 body = 0.0;
         if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u)
-            planet_layers(f, s, first, second, w_first, w_second, tint);
+            planet_layers(f, s, first, second, w_first, w_second, tint, body);
         else
             map_layers(mat, s, first, second, w_first, w_second);
         Material a = f[0].materials[row + 1 + first];
@@ -3197,8 +3200,12 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             specular = lerp(a.specular, b.specular, blend);
             reflectance = lerp(a.reflectance, b.reflectance, blend);
             emissive = lerp(a.emissive, b.emissive, blend);
+            // A planet's water and land meet along every coast (#220): with the heavier row's power
+            // alone, the land's broad highlight took half the water's strength there, a bright line.
+            if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u)
+                specular_power = lerp(a.specular_power, b.specular_power, blend);
         }
-        albedo *= tint;
+        albedo = lerp(albedo * tint, body.rgb, body.a);
     }
     float3 shadow = s.shadow;
     if (s.shore != nullptr)
@@ -3228,7 +3235,7 @@ static const uint PLANET_GRASS = 2;
 static const uint PLANET_ROCK = 3;
 static const uint PLANET_SNOW = 4;
 
-void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, out float w_first, out float w_second, out float3 tint)
+void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, out float w_first, out float w_second, out float3 tint, out float4 body)
 {
     float3 c = f[0].planet.xyz;
     float h = f[0].planet.w;
@@ -3242,13 +3249,37 @@ void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, o
     float latitude = abs(dot(up, f[0].planet_axis.xyz));
     // The edges wander over noise a few hundred metres and a few metres wide.
     float wander = value_noise3(s.world / 700.0) + 0.5 * value_noise3(s.world / 6.0) - 0.75;
+    float footprint = length(s.dpdx) + length(s.dpdy);
+    // Where a pixel spans more than the layers' textures show (from orbit and high up), the
+    // body's maps stand for the ground (#220): its colour and its sea, which follow the maps' own
+    // texels rather than a coarse tile's triangles, kilometres wide.
+    float far = smoothstep(30.0, 400.0, footprint);
+    // The pixel's latitude and longitude on the maps, and the level whose texels are its
+    // footprint (the maps share the projection; each sampled at its own level).
+    float3 axis = f[0].planet_axis.xyz;
+    float3 meridian = f[0].planet_meridian.xyz;
+    const float TAU = 6.28318530718;
+    float latitude_angle = asin(clamp(dot(up, axis), -1.0, 1.0));
+    float longitude = atan2(dot(up, cross(axis, meridian)), dot(up, meridian));
+    float2 uv = float2(longitude / TAU + 0.5, 0.5 - latitude_angle / (0.5 * TAU));
     float sea = f[0].planet_map.y != 0u ? 1.0 - smoothstep(0.02, 0.4, height) : 0.0;
+    uint sea_mask = f[0].planet_map.w;
+    if (sea_mask != 0xFFFFFFFFu && far > 0.0)
+    {
+        uint2 size;
+        g_sampled_images[NonUniformResourceIndex(sea_mask)].GetDimensions(size.x, size.y);
+        float level = max(log2(max(footprint, 1e-3) / (TAU * radius / float(size.x))), 0.0);
+        float mapped = sample_image_level(sea_mask, SAMPLER_LINEAR_REPEAT, uv, level).r;
+        sea = lerp(sea, smoothstep(0.3, 0.7, mapped), far);
+    }
     // A beach is a few tens of metres wide: where a pixel spans more, the sand under 6 m would
     // be the width of the triangles between the sea's samples and the land's, kilometres on a
     // coarse tile.
-    float footprint = length(s.dpdx) + length(s.dpdy);
     float sand = (1.0 - sea) * (1.0 - smoothstep(2.0, 6.0, height + 3.0 * wander)) * (1.0 - smoothstep(0.15, 0.3, slope))
         * (1.0 - smoothstep(10.0, 40.0, footprint));
+    // Water lies flat: where the mask makes sea of a coarse tile's coastal slope, the slope's own
+    // normal would catch the sun's highlight along every coast.
+    s.n = normalize(lerp(s.n, up, sea));
     float snow_line = lerp(4200.0, 300.0, latitude * latitude) + 400.0 * wander;
     float snow = (1.0 - sea) * smoothstep(snow_line - 150.0, snow_line + 150.0, height) * (1.0 - smoothstep(0.45, 0.6, slope));
     float rock = (1.0 - sea) * smoothstep(0.28, 0.4, slope + 0.08 * wander) * (1.0 - snow);
@@ -3270,23 +3301,21 @@ void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, o
             w_second = weights[k];
         }
     }
-    // The body's colour map, where it has one (the Moon's): its texel at the pixel's latitude
-    // and longitude, at the level whose texels are the pixel's footprint on the ground.
+    // The body's colour map, where it has one: a tint (the Moon's: its regolith rows take its
+    // colours), or the ground's albedo from afar (the Earth's), the layers near the ground.
     tint = 1.0;
+    body = 0.0;
     uint map = f[0].planet_map.x;
     if (map != 0xFFFFFFFFu)
     {
-        float3 axis = f[0].planet_axis.xyz;
-        float3 meridian = f[0].planet_meridian.xyz;
-        float latitude_angle = asin(clamp(dot(up, axis), -1.0, 1.0));
-        float longitude = atan2(dot(up, cross(axis, meridian)), dot(up, meridian));
-        const float TAU = 6.28318530718;
-        float2 uv = float2(longitude / TAU + 0.5, 0.5 - latitude_angle / (0.5 * TAU));
         uint2 size;
         g_sampled_images[NonUniformResourceIndex(map)].GetDimensions(size.x, size.y);
-        float texel = TAU * radius / float(size.x);
-        float level = max(log2(max(footprint, 1e-3) / texel), 0.0);
-        tint = sample_image_level(map, SAMPLER_LINEAR_REPEAT, uv, level).rgb;
+        float level = max(log2(max(footprint, 1e-3) / (TAU * radius / float(size.x))), 0.0);
+        float3 colour = sample_image_level(map, SAMPLER_LINEAR_REPEAT, uv, level).rgb;
+        if (f[0].planet_map.z == 0u)
+            tint = colour;
+        else
+            body = float4(colour, far);
     }
     // The layers' textures are laid on the scene's frame, one surface over every tile: a tile's own
     // frame is its cell's, so they would jump at its edges.

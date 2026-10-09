@@ -16,6 +16,8 @@ detail = [3000.0, 11, 60.0, 0.55]
 rough_above = 2000.0
 sea = false
 colour = "assets/planets/moon/moon-colour-4k.png"
+colour_albedo = false
+sea_mask = false
 
 [tiles]
 samples = 257
@@ -26,4 +28,10 @@ rings = 1.0
 # Tycho, its rays and its central peaks.
 target = [-43.3, -11.2]
 heading = 0.0
+orbit = 4000000.0
 atmosphere = false
+# The stars, turned by the Moon's pole and prime meridian at J2000.0 (the IAU's α₀ 266.86°,
+# δ₀ 65.64°, W 38.32°).
+stars = "assets/planets/sky/stars-8k.png"
+sky_pole = [266.86, 65.64]
+sky_meridian = 38.32

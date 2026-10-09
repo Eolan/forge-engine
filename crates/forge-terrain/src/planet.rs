@@ -102,6 +102,14 @@ pub struct MapParams {
     /// `false`: it tints the ground's layers.
     #[serde(with = "forge_core::switch")]
     pub colour: Option<String>,
+    /// Whether the colour map is the ground's albedo seen from afar, in place of its layers (the
+    /// Earth's Blue Marble), or a tint of its layers everywhere (the Moon's).
+    pub colour_albedo: bool,
+    /// A sea mask of the whole body (white over the sea), a PNG in the colour map's projection
+    /// (`assets/blender/planet_sea_mask.py`), or `false`: from afar the sea follows it, not a
+    /// coarse tile's triangles.
+    #[serde(with = "forge_core::switch")]
+    pub sea_mask: Option<String>,
 }
 
 /// How a planet is cut into tiles.
@@ -119,7 +127,7 @@ pub struct TileParams {
 }
 
 /// What the demo shows of a planet.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewParams {
     /// The point the descent ends over, latitude and longitude in degrees, or `false` for the
@@ -129,8 +137,20 @@ pub struct ViewParams {
     /// The way the descent looks, degrees from north towards east: it comes in from the
     /// opposite side.
     pub heading: f64,
+    /// Where the descent starts, metres over the target's ground: 400 km on the Earth, the
+    /// space station's height; a few thousand on the Moon, from where it is seen whole.
+    pub orbit: f64,
     /// Whether it has an atmosphere (the Earth's), or space's black sky (the Moon's).
     pub atmosphere: bool,
+    /// The sky's map (an equirectangular PNG relative to the workspace: NASA's Deep Star Maps,
+    /// `forge_render::SkyBox`), or `false` for the procedural starfield.
+    #[serde(with = "forge_core::switch")]
+    pub stars: Option<String>,
+    /// Where the body's north pole points in the sky, right ascension and declination in degrees
+    /// (the IAU's α₀ and δ₀), and its prime meridian's angle W, degrees: they turn the stars.
+    pub sky_pole: (f64, f64),
+    /// See `sky_pole`.
+    pub sky_meridian: f64,
 }
 
 impl Default for PlanetWorld {
@@ -155,7 +175,11 @@ impl Default for PlanetWorld {
             view: ViewParams {
                 target: None,
                 heading: 0.0,
+                orbit: 400_000.0,
                 atmosphere: true,
+                stars: None,
+                sky_pole: (0.0, 90.0),
+                sky_meridian: 280.46,
             },
         }
     }
@@ -328,7 +352,7 @@ impl Elevation {
         Ok(Self { levels, digest })
     }
 
-    /// The height at latitude `lat` and longitude `lon` (radians) on `level`, bilinear,
+    /// The height at latitude `lat` and longitude `lon` (radians) on `level`, Catmull-Rom,
     /// wrapping round the longitude.
     fn sample(&self, level: usize, lat: f64, lon: f64) -> f64 {
         let (w, h, grid) = &self.levels[level];
@@ -343,9 +367,29 @@ impl Elevation {
             let y = y.clamp(0, h - 1);
             f64::from(grid[(y * w + x) as usize])
         };
-        let top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
-        let bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
-        top + (bottom - top) * fy
+        // Catmull-Rom across four samples each way (#220): through the samples as bilinear is,
+        // but smooth across them, where bilinear left flat facets a map's texel wide (a peak a
+        // few texels across stood as a square pyramid, its faces catching the sun in bands).
+        let weights = |t: f64| {
+            let (t2, t3) = (t * t, t * t * t);
+            [
+                0.5 * (-t3 + 2.0 * t2 - t),
+                0.5 * (3.0 * t3 - 5.0 * t2 + 2.0),
+                0.5 * (-3.0 * t3 + 4.0 * t2 + t),
+                0.5 * (t3 - t2),
+            ]
+        };
+        let (wx, wy) = (weights(fx), weights(fy));
+        let mut sum = 0.0;
+        for (j, wy) in wy.iter().enumerate() {
+            let row: f64 = wx
+                .iter()
+                .enumerate()
+                .map(|(i, wx)| wx * at(x0 + i as i64 - 1, y0 + j as i64 - 1))
+                .sum();
+            sum += wy * row;
+        }
+        sum
     }
 
     /// The height in `direction` holding no detail narrower than `min_wavelength` metres on a
@@ -479,12 +523,12 @@ impl Planet {
     /// The cache key text of its tiles: every setting that shapes them, the map's digest and the
     /// digest of the code that makes and cooks them (#208), so any of them remakes them.
     pub fn tile_key(&self) -> String {
-        // The colour map tints the ground as it is drawn and shapes nothing.
+        // Only what shapes the ground: the colour maps tint it as it is drawn.
         let map = self
             .world
             .map
-            .clone()
-            .map(|m| MapParams { colour: None, ..m });
+            .as_ref()
+            .map(|m| (&m.file, m.size, m.detail, m.rough_above, m.sea));
         format!(
             "{:?}, map {:?} {:016x}, {} samples, made and cooked by {:016x}",
             self.world.planet,
@@ -769,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn a_map_is_read_bilinear_and_smoothed_by_its_pyramid() {
+    fn a_map_is_read_through_its_samples_and_smoothed_by_its_pyramid() {
         // A map of 8 × 4: a ramp in longitude.
         let levels = vec![(
             8,

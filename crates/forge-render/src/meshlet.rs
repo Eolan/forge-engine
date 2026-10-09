@@ -123,8 +123,15 @@ pub struct PlanetView {
     pub sea: bool,
     /// Its colour map's sampled index ([`crate::material::TextureSet::sampled`]): an
     /// equirectangular image of the whole body, the north row first, longitude from −180°,
-    /// which tints its layers; `None` for none.
+    /// which tints its layers, or with `colour_albedo` stands for them seen from afar; `None` for
+    /// none.
     pub colour_map: Option<u32>,
+    /// The colour map is the ground's albedo where a pixel spans hundreds of metres (the Earth's),
+    /// not a tint of its layers (the Moon's).
+    pub colour_albedo: bool,
+    /// Its sea mask's sampled index (white over the sea, the colour map's projection): from afar
+    /// the sea follows it rather than the tiles' triangles; `None` for none.
+    pub sea_mask: Option<u32>,
 }
 
 /// [`PlanetView`] as the frame block holds it (`Frame::planet` and after it in `meshlet.slang`).
@@ -143,7 +150,7 @@ impl Default for GpuPlanet {
             camera: [0.0; 4],
             axis: [0.0; 4],
             meridian: [0.0; 4],
-            map: [u32::MAX, 0, 0, 0],
+            map: [u32::MAX, 0, 0, u32::MAX],
         }
     }
 }
@@ -503,7 +510,8 @@ struct GpuFrame {
     planet_axis: [f32; 4],
     /// Its latitude 0, longitude 0 (xyz).
     planet_meridian: [f32; 4],
-    /// The sampled index of its colour map (x; `u32::MAX`: none), 1 when it has a sea (y).
+    /// The sampled index of its colour map (x; `u32::MAX`: none), 1 when it has a sea (y), 1 when
+    /// the map is its albedo from afar (z), its sea mask's index (w; `u32::MAX`: none).
     planet_map: [u32; 4],
 }
 
@@ -2010,8 +2018,8 @@ impl MeshletScene {
             map: [
                 view.colour_map.unwrap_or(u32::MAX),
                 u32::from(view.sea),
-                0,
-                0,
+                u32::from(view.colour_albedo),
+                view.sea_mask.unwrap_or(u32::MAX),
             ],
         });
     }

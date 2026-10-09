@@ -29,8 +29,8 @@ use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CellPos, CullCamera,
     CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, PlanetView, Residency, SkyParams, Starfield, StartView,
-    StreamingConfig, SwRaster, Taa, Tonemap,
+    MeshletScene, MeshletSceneBuilder, PlanetView, Residency, SkyBox, SkyBoxPlanet, SkyParams,
+    Starfield, StartView, StreamingConfig, SwRaster, Taa, Tonemap, sky_from_body,
 };
 use forge_task::TaskPool;
 use forge_terrain::planet::{tile_mesh, tile_name, tile_origin};
@@ -54,10 +54,17 @@ struct Args {
     /// The planet's seed, over the world file's.
     #[arg(long)]
     seed: Option<u64>,
-    /// Hold the descent at one of its golden shots: orbit (400 km), high (10 km) or ground
-    /// (the coast).
+    /// Hold the descent at one of its golden shots: orbit (the world's, 400 km on the Earth),
+    /// high (10 km), ground (the
+    /// coast) or top (400 km straight over the target, looking down).
     #[arg(long)]
     shot: Option<Shot>,
+    /// The point the descent ends over, "LAT,LON" in degrees, over the world file's.
+    #[arg(long, value_parser = parse_lat_lon, allow_hyphen_values = true)]
+    target: Option<(f64, f64)>,
+    /// The way the descent looks, degrees from north towards east, over the world file's.
+    #[arg(long, allow_hyphen_values = true)]
+    heading: Option<f64>,
     /// Seconds from orbit to the ground.
     #[arg(long, default_value_t = 60.0)]
     duration: f32,
@@ -143,9 +150,18 @@ struct Args {
     /// Tone curve: agx, agx-punchy, aces, aces2 or neutral (G cycles them).
     #[arg(long, default_value = "agx")]
     tonemap: Tonemap,
-    /// The starting exposure value at ISO 100; the automatic exposure takes over from it.
+    /// The exposure value at ISO 100: 15 by default, sunny 16, as a camera takes anything the sun
+    /// lights, in space as on the ground (a metered exposure, over a frame of black sky, burns a
+    /// sunlit body white).
     #[arg(long, default_value_t = 15.0)]
     ev100: f32,
+    /// Meter the exposure from the frame instead, starting from `--ev100`.
+    #[arg(long)]
+    auto_exposure: bool,
+    /// How bright the sky box's stars are: a map value of 1 at 2^STOPS cd/m² (12: the bright
+    /// stars faint beside a sunlit body, where an eye would see none).
+    #[arg(long, default_value_t = 12.0, allow_hyphen_values = true)]
+    stars: f32,
     /// The automatic exposure's compensation in stops (- / =).
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     exposure_compensation: f32,
@@ -157,6 +173,18 @@ struct Args {
     no_overlay: bool,
 }
 
+/// "LAT,LON" in degrees.
+fn parse_lat_lon(text: &str) -> std::result::Result<(f64, f64), String> {
+    let parts: Vec<f64> = text
+        .split(',')
+        .map(|p| p.trim().parse::<f64>().map_err(|e| e.to_string()))
+        .collect::<std::result::Result<_, _>>()?;
+    match parts.as_slice() {
+        [lat, lon] => Ok((*lat, *lon)),
+        _ => Err("expected two numbers: latitude,longitude".to_owned()),
+    }
+}
+
 /// The descent's golden shots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum Shot {
@@ -166,10 +194,10 @@ enum Shot {
     High,
     /// Over the coast.
     Ground,
+    /// 400 km straight over the target, looking down: as the space station sees it.
+    Top,
 }
 
-/// Where the descent starts, metres over the target's ground.
-const ORBIT: f64 = 400_000.0;
 /// How far over the target's ground it ends, metres.
 const LOW: f64 = 60.0;
 
@@ -285,6 +313,7 @@ struct PlanetMaterials {
     set: TextureSet,
     ground: forge_core::MaterialId,
     colour_map: Option<u32>,
+    sea_mask: Option<u32>,
 }
 
 fn planet_materials(ctx: &Setup, world: &PlanetWorld) -> Result<PlanetMaterials> {
@@ -343,26 +372,34 @@ fn planet_materials(ctx: &Setup, world: &PlanetWorld) -> Result<PlanetMaterials>
     for (name, row) in rows {
         table.add(Material::new(name, row));
     }
-    let colour_map = match world.map.as_ref().and_then(|m| m.colour.as_ref()) {
-        Some(file) => {
-            let path = forge_terrain::workspace_path(file);
-            let bytes = std::fs::read(&path).map_err(|e| {
-                anyhow::anyhow!(
-                    "the colour map {} ({e}; tools/fetch-planets.sh fetches and converts it)",
-                    path.display()
-                )
-            })?;
-            let data = textures::decode_image(file, &bytes, textures::ImageUse::Color)?;
-            let id = set.add(&data)?;
-            Some(set.sampled(id))
-        }
-        None => None,
+    // A map of the whole body, decoded with its mips: its sampled index.
+    let mut image = |file: &String, use_: textures::ImageUse| -> Result<u32> {
+        let path = forge_terrain::workspace_path(file);
+        let bytes = std::fs::read(&path).map_err(|e| {
+            anyhow::anyhow!(
+                "the map {} ({e}; tools/fetch-planets.sh fetches and converts it)",
+                path.display()
+            )
+        })?;
+        let data = textures::decode_image(file, &bytes, use_)?;
+        let id = set.add(&data)?;
+        Ok(set.sampled(id))
     };
+    let map = world.map.as_ref();
+    let colour_map = map
+        .and_then(|m| m.colour.as_ref())
+        .map(|f| image(f, textures::ImageUse::Color))
+        .transpose()?;
+    let sea_mask = map
+        .and_then(|m| m.sea_mask.as_ref())
+        .map(|f| image(f, textures::ImageUse::Data))
+        .transpose()?;
     Ok(PlanetMaterials {
         table,
         set,
         ground,
         colour_map,
+        sea_mask,
     })
 }
 
@@ -420,14 +457,22 @@ struct PlanetDemo {
     placement: Placement,
     /// The target's ground, metres over the sea.
     target_height: f64,
-    /// The body's colour map's sampled index, if any.
+    /// The body's colour map's and sea mask's sampled indices, if any.
     colour_map: Option<u32>,
+    sea_mask: Option<u32>,
     tiles: usize,
     renderer: MeshletRenderer,
     scene: MeshletScene,
     /// The air and its sky (the Earth's), or none (the Moon's: space's black and the stars).
     air: Option<(Atmosphere, GroundSky)>,
+    /// The same air seen from the ground under the camera, whose sky lights and is reflected by
+    /// the ground while the camera is high: from orbit the camera's own sky is space's black.
+    ground_air: Option<(Atmosphere, GroundSky)>,
     starfield: Starfield,
+    /// The real sky (NASA's Deep Star Maps) when the world names it, and the rotation from the
+    /// world's axes to the sky's.
+    sky_box: Option<SkyBox>,
+    sky_from_world: glam::Mat3,
     taa: Taa,
     taa_enabled: bool,
     bloom: Bloom,
@@ -482,14 +527,45 @@ impl PlanetDemo {
                 renderer.sun_dir,
                 64,
             ));
-            Some((
-                Atmosphere::new(&ctx.device, &ctx.shaders, params)?,
-                GroundSky::new(&ctx.device, &ctx.shaders)?,
-            ))
+            let pair = || -> Result<_> {
+                Ok((
+                    Atmosphere::new(&ctx.device, &ctx.shaders, params)?,
+                    GroundSky::new(&ctx.device, &ctx.shaders)?,
+                ))
+            };
+            Some((pair()?, pair()?))
         } else {
             renderer.sun_color = Vec3::ONE;
             None
         };
+        let (air, ground_air) = match air {
+            Some((camera, ground)) => (Some(camera), Some(ground)),
+            None => (None, None),
+        };
+        // The real sky, turned by the body's pole and meridian and by the placement.
+        let sky_box = world
+            .view
+            .stars
+            .as_ref()
+            .map(|file| -> Result<SkyBox> {
+                let path = forge_terrain::workspace_path(file);
+                let bytes = std::fs::read(&path).map_err(|e| {
+                    anyhow::anyhow!(
+                        "the sky's map {} ({e}; tools/fetch-planets.sh sky fetches it)",
+                        path.display()
+                    )
+                })?;
+                let map = textures::decode_image(file, &bytes, textures::ImageUse::Color)?;
+                let mut sky_box = SkyBox::new(&ctx.device, &ctx.shaders, &map)?;
+                sky_box.luminance = 2f32.powf(args.stars);
+                sky_box.sun_illuminance = renderer.sun_illuminance;
+                Ok(sky_box)
+            })
+            .transpose()?;
+        let (pole_ra, pole_dec) = world.view.sky_pole;
+        let sky_from_world = (sky_from_body(pole_ra, pole_dec, world.view.sky_meridian)
+            * glam::DMat3::from_quat(placement.rotation.inverse()))
+        .as_mat3();
 
         let mut builder = MeshletSceneBuilder::new();
         let PlanetMaterials {
@@ -497,6 +573,7 @@ impl PlanetDemo {
             set,
             ground,
             colour_map,
+            sea_mask,
         } = planet_materials(ctx, &world)?;
         builder.set_materials(&table, Some(set));
         builder.set_ray_traced(!args.no_shadows);
@@ -534,11 +611,13 @@ impl PlanetDemo {
         let fine = world.min_wavelength(world.tiles.finest);
         let target_height = planet.ground(target, fine);
         let mut camera = FlyCamera::default();
-        descend(
+        place(
+            args.shot,
+            0.0,
+            args.duration,
             &planet,
             &placement,
             target_height,
-            progress(args.shot, 0.0, args.duration),
             &mut camera,
         );
         builder.set_start_view(StartView {
@@ -590,7 +669,11 @@ impl PlanetDemo {
         let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
         taa.bloom_strength = args.bloom;
         taa.sharpen = Some(args.rcas);
-        let mut exposure = AutoExposure::new(args.ev100);
+        let mut exposure = if args.auto_exposure {
+            AutoExposure::new(args.ev100)
+        } else {
+            AutoExposure::fixed(args.ev100)
+        };
         exposure.compensation = args.exposure_compensation;
         let mut demo = Self {
             taa_enabled: !args.no_taa,
@@ -600,11 +683,15 @@ impl PlanetDemo {
             placement,
             target_height,
             colour_map,
+            sea_mask,
             tiles: cells.len(),
             renderer,
             scene,
             air,
+            ground_air,
             starfield,
+            sky_box,
+            sky_from_world,
             taa,
             bloom: Bloom::new(&ctx.device, &ctx.shaders)?,
             gtao: Gtao::new(&ctx.device, &ctx.shaders)?,
@@ -626,12 +713,13 @@ impl PlanetDemo {
 
     /// Places the camera on the descent where it is now.
     fn place_camera(&mut self) {
-        let s = progress(self.args.shot, self.time, self.args.duration);
-        descend(
+        place(
+            self.args.shot,
+            self.time,
+            self.args.duration,
             &self.planet,
             &self.placement,
             self.target_height,
-            s,
             &mut self.camera,
         );
     }
@@ -651,12 +739,13 @@ impl PlanetDemo {
 
 /// How far along the descent, 0 (orbit) to 1 (the ground): eased at both ends `time` seconds
 /// into a descent of `duration`, or `shot`'s.
-fn progress(shot: Option<Shot>, time: f32, duration: f32) -> f64 {
-    let at = |over: f64| ((ORBIT / over).ln() / (ORBIT / LOW).ln()).clamp(0.0, 1.0);
+fn progress(shot: Option<Shot>, time: f32, duration: f32, orbit: f64) -> f64 {
+    let at = |over: f64| ((orbit / over).ln() / (orbit / LOW).ln()).clamp(0.0, 1.0);
     match shot {
         Some(Shot::Orbit) => 0.0,
         Some(Shot::High) => at(10_000.0),
         Some(Shot::Ground) => 1.0,
+        Some(Shot::Top) => 0.0,
         None => {
             let t = f64::from(time / duration.max(1e-3)).clamp(0.0, 1.0);
             t * t * (3.0 - 2.0 * t)
@@ -676,9 +765,12 @@ fn descend(
 ) {
     // Over the target's ground, not the sea's level: the Moon's ground lies kilometres under
     // its reference in places.
-    let over = (ORBIT.ln() + (LOW.ln() - ORBIT.ln()) * s).exp();
+    let orbit = planet.world.view.orbit;
+    let over = (orbit.ln() + (LOW.ln() - orbit.ln()) * s).exp();
     let altitude = target_height + over;
-    let distance = 2.5 * over + 150.0;
+    // At most a tenth of the radius from the target: on a small body, farther would view its
+    // curve from the side, stretched by the lens at the frame's edge.
+    let distance = (2.5 * over + 150.0).min(0.1 * placement.radius);
     let angle = distance / placement.radius;
     let (sin, cos) = angle.sin_cos();
     let along = DVec3::new(0.0, cos, sin);
@@ -698,6 +790,28 @@ fn descend(
     // The near plane follows the height over the ground: a tenth of it, 5 cm to 100 m.
     let over_ground = (r - placement.radius) - planet.ground(placement.direction(position), fine);
     camera.near = (over_ground as f32 * 0.1).clamp(0.05, 100.0);
+}
+
+/// `camera` at `shot` or `time` seconds into the descent: the top shot straight over the target from
+/// orbit, looking down, the others on the descent ([`descend`]).
+fn place(
+    shot: Option<Shot>,
+    time: f32,
+    duration: f32,
+    planet: &Planet,
+    placement: &Placement,
+    target_height: f64,
+    camera: &mut FlyCamera,
+) {
+    if shot == Some(Shot::Top) {
+        camera.position = DVec3::new(0.0, target_height + planet.world.view.orbit, 0.0).as_vec3();
+        camera.yaw = 0.0;
+        camera.pitch = -1.5;
+        camera.near = 100.0;
+        return;
+    }
+    let s = progress(shot, time, duration, planet.world.view.orbit);
+    descend(planet, placement, target_height, s, camera);
 }
 
 impl Demo for PlanetDemo {
@@ -791,6 +905,13 @@ impl Demo for PlanetDemo {
             meridian: (self.placement.rotation * DVec3::Z).as_vec3(),
             sea: self.planet.world.map.as_ref().is_none_or(|m| m.sea),
             colour_map: self.colour_map,
+            colour_albedo: self
+                .planet
+                .world
+                .map
+                .as_ref()
+                .is_some_and(|m| m.colour_albedo),
+            sea_mask: self.sea_mask,
         });
         let extent = ctx.extent();
         self.taa.enabled = self.taa_enabled;
@@ -854,6 +975,41 @@ impl Demo for PlanetDemo {
             );
             (ground, tables)
         });
+        // High up, the ground is lit by the sky over it, not by the camera's: the air's tables
+        // again from 2 m over the ground under the camera.
+        let ground_light = if over_ground > 1500.0 {
+            let under_km = (from_centre.normalize()
+                * (self.placement.radius + over_sea - over_ground + 2.0)
+                * 1e-3)
+                .as_vec3();
+            self.ground_air.as_mut().map(|(atmosphere, ground)| {
+                let air = atmosphere.frame(&mut frame.graph, frame.slot, under_km, sun_dir);
+                let ground: &'f GroundSky = ground;
+                ground
+                    .tables(
+                        &mut frame.graph,
+                        frame.slot,
+                        &air,
+                        SkyParams {
+                            view_proj: draw_view_proj,
+                            camera: Vec3::ZERO,
+                            sun_dir,
+                            sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
+                            luminance_scale,
+                            aerial_far_km: 8.0,
+                            march_beyond: false,
+                            night: None,
+                        },
+                        targets.depth,
+                        taa_frame.color,
+                        None,
+                        extent,
+                    )
+                    .light
+            })
+        } else {
+            None
+        };
         let occlusion = self.ao_on.then(|| {
             self.gtao.draw(
                 &mut frame.graph,
@@ -872,9 +1028,10 @@ impl Demo for PlanetDemo {
             targets,
             taa_frame.color,
             extent,
-            None,
+            // With no air and a sky box, the sky starts black (the box adds to it).
+            (sky.is_none() && self.sky_box.is_some()).then_some([0.0; 4]),
             AmbientLight {
-                sky: sky.as_ref().map(|(_, tables)| tables.light),
+                sky: ground_light.or(sky.as_ref().map(|(_, tables)| tables.light)),
                 occlusion,
                 probes: None,
                 wet_ground: None,
@@ -884,15 +1041,16 @@ impl Demo for PlanetDemo {
                 reflection_history: None,
             },
         );
-        match &sky {
-            Some((ground, tables)) => ground.compose(
+        match (&sky, &self.sky_box) {
+            (Some((ground, tables)), _) => ground.compose(
                 &mut frame.graph,
                 tables,
                 targets.depth,
                 taa_frame.color,
                 extent,
             ),
-            None => self.starfield.draw(
+            (None, Some(_)) => {}
+            (None, None) => self.starfield.draw(
                 &mut frame.graph,
                 taa_frame.color,
                 targets.depth,
@@ -902,6 +1060,30 @@ impl Demo for PlanetDemo {
                 exposure,
                 None,
             ),
+        }
+        // The real sky (#220): added over the air's sky, fading through its lowest layers, or the
+        // whole sky with the sun on an airless body.
+        if let Some(sky_box) = &self.sky_box {
+            let radius_km = (self.placement.radius * 1e-3) as f32;
+            sky_box.draw(
+                &mut frame.graph,
+                taa_frame.color,
+                targets.depth,
+                extent,
+                draw_view_proj,
+                self.sky_from_world,
+                sun_dir,
+                exposure,
+                Some(SkyBoxPlanet {
+                    centre_km: (-from_centre * 1e-3).as_vec3(),
+                    radius_km,
+                    top_km: if sky.is_some() {
+                        radius_km + 100.0
+                    } else {
+                        0.0
+                    },
+                }),
+            );
         }
         self.meter.measure(
             &mut frame.graph,
@@ -971,6 +1153,12 @@ fn main() -> Result<()> {
     }
     if let Some(seed) = args.seed {
         world.planet.seed = seed;
+    }
+    if let Some(target) = args.target {
+        world.view.target = Some(target);
+    }
+    if let Some(heading) = args.heading {
+        world.view.heading = heading;
     }
     if args.print_world {
         print!("{}", world.to_toml()?);

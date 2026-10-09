@@ -3365,6 +3365,25 @@ no map.
   meshes and instances at run time and a much cheaper cook of a tile. Then the swap rule and the
   horizon test.
 
+**After the owner's review (2026-10-10):** "atmospheres rendering needs a bit of work to look more
+real, and rendered terrain geometry as well (from orbit)", with a photograph of Corsica from
+space, then "the sea / terrain borders are too marked", "why does the moon not looking
+spherical?", and a real sky for space. With the owner's yes to two more downloads (the Blue
+Marble, the Deep Star Maps):
+- **From afar the maps stand for the ground:** the Blue Marble's colour, and the sea from a mask
+  made from the elevation, instead of the coarse tiles' triangles. Water is shaded flat, and the
+  layers' highlights blend in power as in strength, so the coasts lost their bright lines.
+- **The elevation is read with Catmull-Rom.** Bilinear left flat facets a texel wide, such as a
+  square pyramid for Tycho's central peak and bands of light on the Alps.
+- **The ground's sky light** comes from tables at the ground under the camera when it is high.
+- **The real sky** (`forge_render::SkyBox`) is turned by each body's pole and meridian.
+- **Exposure:** sunny 16 by default. A metered exposure over a frame of black sky burned the
+  Moon white.
+- **The Moon's descent** starts 4 000 km out, from where it is seen whole. The offset from the
+  target is capped at a tenth of the radius: on a small body the curve was seen from the side and
+  stretched by the lens.
+- **Next:** a tour of the Earth and the Moon, and the tiles streamed while flying.
+
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):
 - **Every scale shares one structure:**

@@ -235,6 +235,10 @@ for path in $paths; do
     done
     capture "$path-planet-ground-noocc" 120 "$planet" --shot ground --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-planet-ground-resident" 120 "$planet" --shot ground --fixed-step --resident "${flag[@]}"
+    # Corsica straight down from 400 km at the sun's 55°, north up: the station's view, to
+    # compare with its photographs.
+    capture "$path-planet-corsica-top" 120 "$planet" --target 42.15,9.1 --heading 0 --shot top \
+      --sun-elevation 55 --sun-azimuth 160 --fixed-step "${flag[@]}"
   fi
   if [ -f "$planet" ] && [ -f "$root/assets/planets/moon/moon-ldem16.i16" ]; then
     for shot in orbit ground; do

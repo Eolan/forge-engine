@@ -1,14 +1,16 @@
 # Demo: planet
 
 Phase 2's planet (D-056, #220): a planet of Earth's size from orbit down to its ground. The
-Earth comes from NOAA's real elevation, the Moon from NASA's, and noise adds the detail under
-their resolution. It is the island demo's second step. The owner wanted it as a demo of its own
+Earth comes from NOAA's real elevation and NASA's Blue Marble, the Moon from NASA's elevation and
+colour maps, and noise adds the detail under their resolution. The sky is NASA's map of the real
+stars. It is the island demo's second step. The owner wanted it as a demo of its own
 (2026-10-09), so that planets, moons and later suns stay apart from the island.
 
 ```
-tools/fetch-planets.sh                                    # the maps, once: 466 MB + 95 MB
+tools/fetch-planets.sh                                    # the maps, once: about 750 MB
 cargo run --release -p planet                             # the Earth: a 60 s descent to Èze
-cargo run --release -p planet -- --shot orbit             # held at a golden shot: orbit, high, ground
+cargo run --release -p planet -- --shot orbit             # held at a golden shot: orbit, high, ground, top
+cargo run --release -p planet -- --target 42.15,9.1 --heading 0 --shot top   # Corsica from the station
 cargo run --release -p planet -- --world assets/worlds/moon.toml
 ```
 
@@ -17,25 +19,42 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 **X** show culled, **K** LOD colours, **J** shadows, **N** ambient occlusion, **G** tone curve,
 **-** / **=** exposure, **[** / **]** LOD error.
 
+| Flag | What it does |
+|---|---|
+| `--world FILE` | the world (`assets/worlds/earth.toml` by default, `moon.toml`); `--print-world` prints it |
+| `--shot orbit\|high\|ground\|top` | holds the descent at a golden shot; `top` looks straight down from the orbit's height |
+| `--target LAT,LON`, `--heading DEG` | where the descent ends and the way it looks, over the world's |
+| `--sun-elevation`, `--sun-azimuth` | the sun over the target, degrees (25° and 240° by default) |
+| `--ev100 EV`, `--auto-exposure` | the exposure: sunny 16 (EV 15) by default, as a camera takes anything sunlit; or metered |
+| `--stars STOPS` | the stars' brightness: a map value of 1 at 2^STOPS cd/m² (12) |
+| `--radius KM`, `--seed N` | over the world's |
+| `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B) |
+
 ## How it is made
 
 - **The world file** (`assets/worlds/earth.toml`, `moon.toml`; `forge_terrain::planet`):
-  - the radius;
-  - the elevation map and the noise under it;
+  - the radius and the noise;
+  - the maps (elevation, colour, sea mask) and the noise under them;
   - the tiles' size and how finely the cut follows the target;
-  - the target (latitude, longitude) and the way the descent comes in;
-  - whether there is air.
-  `--print-world` prints it, flags applied.
-- **The maps** (`tools/fetch-planets.sh`, into `assets/planets/`, which git ignores):
-  - **Earth:** NOAA's ETOPO 2022 at 60 arc-seconds (about 1.85 km), public domain.
-  - **Moon:** NASA's CGI Moon Kit, its elevation at 16 samples a degree (about 1.9 km) and its
-    2025 colour map at 4K.
-  - The script pins each download by size and SHA-256. Blender converts the TIFFs into what the
-    engine reads, `i16` metres and a PNG (`assets/blender/planet_elevation.py`,
-    `planet_colour.py`), since no TIFF reader is in Forge's dependencies.
+  - the target, the way the descent comes in, and the height it starts from (400 km on the
+    Earth; 4 000 km on the Moon, from where it is seen whole);
+  - whether there is air, and the sky's map with the body's pole and prime meridian.
+- **The maps** (`tools/fetch-planets.sh`, into `assets/planets/`, which git ignores). The
+  script pins each download by size and SHA-256, and Blender converts what the engine can't read
+  (`assets/blender/planet_*.py`; Forge has no TIFF reader).
+
+  | Map | Source | Converted to |
+  |---|---|---|
+  | The Earth's elevation | NOAA's ETOPO 2022, 60 arc-seconds (about 1.85 km), public domain | `i16` metres |
+  | The Earth's colour | NASA's Blue Marble Next Generation, July 2004, without its relief shaded | 16 384 × 8 192 JPEG (a power of two, AMD's widest image) |
+  | The Earth's sea | the elevation under 0 m | 8 192 × 4 096 grey PNG |
+  | The Moon's elevation | NASA's CGI Moon Kit, 16 samples a degree (about 1.9 km) | `i16` metres |
+  | The Moon's colour | the CGI Moon Kit's 2025 colour map at 4K | PNG |
+  | The sky | NASA's Deep Star Maps 2020 at 8K (Gaia, Hipparcos) | sRGB PNG |
 - **The height** (`Planet::height`):
-  - the map, bilinear from its mip pyramid at the level that holds nothing narrower than the
-    tile's samples allow;
+  - the map, read through its samples with Catmull-Rom from its mip pyramid, at the level that
+    holds nothing narrower than the tile's samples allow (bilinear left flat facets a texel
+    wide: Tycho's central peak was a square pyramid);
   - then band-limited 3-D gradient noise (Perlin's improved gradients) for the octaves under the
     map's resolution, a quarter as strong at the sea's level as on the high ground.
   The Earth's ground under 0 m is sea, flattened at its level. The Moon has none.
@@ -46,30 +65,37 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
   - A skirt on vertices of their own hangs from the edge, so the simplifier keeps the edge
     locked.
   - Each is cooked into a cluster DAG through the cache (`cache/meshes/earth@face-level-x-y`),
-    keyed by the world, the map's digest and the code.
+    keyed by the world's shape, the map's digest and the code (not by its colours).
 - **The cut** (`PlanetWorld::tile_cut`): a quadtree of cells. A cell splits while the target lies
   within its side plus half its diagonal, down to level 14 on the Earth (tiles of 611 m, samples
   2.4 m apart) and 12 on the Moon. Each tile's DAG coarsens with distance, so the 600 m tiles
   under the camera cost almost nothing from orbit.
 - **Drawing:** the cluster renderer, streamed through a 512 MiB pool. The start view's pages load
   before the first frame. Each tile is an instance placed at its `f64` position
-  (`add_instance_at`), turned so the target stands at the world's origin with +Y up. Packed
-  vertices on a coarser grid for the largest tiles (#218: only past 2^20 m of reach, so no other
-  mesh changes).
+  (`add_instance_at`), turned so the target stands at the world's origin with +Y up.
 - **Shading:** the layered ground with its layers by height, slope and latitude
   (`RenderLayer::planet_layers`, `planet_layers` in `meshlet.slang`).
-  - **The Earth:** sea, sand (where a pixel spans under 40 m), grass, rock on slopes over about
-    0.3, snow over a line falling from 4 200 m at the equator to 300 m at the poles.
-  - **The Moon:** regolith under its colour map.
+  - **Near the ground:** on the Earth, sea, sand (where a pixel spans under 40 m), grass, rock on
+    slopes over about 0.3, and snow over a line falling from 4 200 m at the equator to 300 m at
+    the poles. On the Moon, regolith of a few kinds under its colour map.
+  - **From afar** (a pixel spanning 30 m to 400 m and more), the maps stand for the ground: the
+    Blue Marble's colour, and the sea from the mask rather than the coarse tiles' triangles, whose
+    coasts were kilometre-wide shapes. Water is shaded flat, and on the planet the layers'
+    highlights blend in strength and power alike, so no bright line follows the coasts.
   - The textures lie on the scene's frame, one surface over every tile.
 - **The sky:**
   - **The Earth:** Hillaire's atmosphere at the planet's radius.
-    - The aerial volume reaches up to 64 km.
-    - Each pixel beyond it is marched on its own in 32 steps closing up towards the ground
-      (`march_beyond`).
-    - The volume's slices longer than 2 km are marched in steps.
-    - Together these remove the rings a single volume left from orbit.
-  - **The Moon:** the ballad's starfield.
+    - The aerial volume reaches up to 64 km. Each pixel beyond it is marched on its own in 32
+      steps closing up towards the ground (`march_beyond`), and the volume's slices longer than
+      2 km are marched in steps: from orbit, no rings.
+    - When the camera is over 1.5 km up, the ground's sky light and the reflections it takes
+      come from a second set of tables at 2 m over the ground under the camera: from orbit, the
+      camera's own sky is space's black.
+  - **The stars** (`forge_render::SkyBox`): NASA's map, turned by the body's pole and prime
+    meridian (the IAU's, the Moon's at J2000) and added over the air's sky, fading through its
+    lowest 40 km. On an airless body it draws the sun's disc too. The map is made for display (its
+    bright stars clipped), so the stars carry no photometry: at sunny 16 they are faint dots,
+    where an eye beside a sunlit body would see none, and `--stars` sets them.
 - **Shadows:** the sun's rays against each level's tiles cut as one surface (120 000 triangles a
   level). Every tile is ground to the rays (`set_ray_terrain`), so the finest tiles' shadows
   start clear of the rays' cut, as the island's do.
@@ -82,11 +108,11 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | Triangles in the tiles' finest levels | 65.5 M | 56.3 M |
 | Cluster pages (128 KiB) | 12 848 | 10 834 |
 | The rays' cuts | 1.68 M triangles, 101 MiB | 1.44 M, 86 MiB |
-| First start (map, then every tile made and cooked) | 18.1 s | 15.7 s |
-| Later starts (from the cache) | 1.3 s (the map 0.5 s) | 1.3 s |
-| GPU frame from orbit (400 km) | 0.95 ms (`sky/compose`'s march 0.26) | 0.81 ms |
-| GPU frame at 10 km | 0.89 ms | — |
-| GPU frame over the ground | 0.86 ms | 0.85 ms |
+| First start (the maps, then every tile made and cooked) | about 26 s | about 18 s |
+| Later starts (tiles from the cache) | 7.9 s (the 16K colour map 7 s, the elevation 0.5 s) | 2.3 s |
+| GPU frame from orbit | 1.09 ms (`sky/compose`'s march 0.31) | 0.68 ms (4 000 km; `sky/box` 0.06) |
+| GPU frame straight down over Corsica | 1.88 ms (the march 0.47 over the whole frame) | — |
+| GPU frame over the ground | 0.78 ms | 0.77 ms |
 
 - **A tile:** made in about 0.1 s and cooked in 0.16 s on one core (133 000 triangles, 23 pages),
   about 28 a second over the machine's cores (492 in 17.6 s).
@@ -94,17 +120,19 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 ## Left for later (#220 and D-056's steps)
 
 - **Tiles that come and go as the camera flies:** the cut is made once at start, so the camera
-  stays near the target. Streaming tiles needs meshes and instances added and freed while frames
-  run (the renderer's scene is fixed today), and a tile cooked in milliseconds rather than a
-  quarter of a second (a regular grid's DAG built directly).
-- **Steps where levels meet:** a tile next to a coarser one meets it with a step its skirt
-  fills, visible from 10 km on the Moon where the finer tiles hold the detail noise the coarser
-  ones leave out. The research's swap rule (a level only where its parent errs under a pixel)
-  comes with streaming.
-- **Coasts at coarse levels:** from orbit the coasts follow the large tiles' triangles. The
-  Earth's land under the sea's level (the Netherlands, the Caspian's shores) floods.
-- **The Moon's sky:** the ballad's nebula, too bright for a planet. The real sky (`--real-sky`'s
-  catalogue) comes later.
+  stays near the target. Next: the cut made again around the camera on a worker and the scene
+  swapped, then the renderer's scene taking and freeing meshes at run time, and a tile cooked in
+  milliseconds rather than a quarter of a second (a regular grid's DAG built directly).
+- **A tour:** the Earth's places in turn, the Moon seen from the ground, the Earth from the Moon,
+  compared with known photographs (the owner, 2026-10-10).
+- **Steps where levels meet:** a tile next to a coarser one meets it with a step its skirt fills.
+  The research's swap rule (a level only where its parent errs under a pixel) comes with
+  streaming.
+- **The haze from orbit:** a light veil over the land that the station's processed photographs
+  don't show; to compare with raw ones.
+- **The Earth's land under the sea's level** (the Netherlands, the Caspian's shores) floods, and
+  the Blue Marble is July's: no seasons, no clouds.
+- **The 16K colour map's start:** 7 s to decode it and make its mips, every start; to cache.
 - **The island on the planet** (D-056's step 2), the sea's waves on the sphere (step 3), the
   genesis across the faces (step 4), the descent's checks (step 5).
 
@@ -113,4 +141,5 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 `tools/captures.sh` takes the planet when its maps are fetched (never in CI):
 - the Earth at its three shots (`planet-orbit`, `planet-high`, `planet-ground`);
 - the ground's twins with the occlusion off and every page resident;
-- the Moon from orbit and on Tycho's floor.
+- Corsica straight down from 400 km at the sun's 55° (`planet-corsica-top`);
+- the Moon from 4 000 km and on Tycho's floor.

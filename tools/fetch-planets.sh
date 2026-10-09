@@ -3,14 +3,19 @@
 # each download's size and SHA-256, and converts them through Blender into what
 # forge_terrain::planet reads:
 #
-#   tools/fetch-planets.sh            the Earth and the Moon
-#   tools/fetch-planets.sh moon       only the Moon (about 95 MB; the Earth is 466 MB)
+#   tools/fetch-planets.sh            the Earth, the Moon and the sky
+#   tools/fetch-planets.sh moon       only the Moon (about 95 MB; the Earth is 487 MB, the sky 131 MB)
 #
 # - The Earth: NOAA NCEI's ETOPO 2022 global relief at 60 arc-seconds, ice surface (public
-#   domain), to `earth/etopo-60s.i16`.
+#   domain), to `earth/etopo-60s.i16`; NASA's Blue Marble Next Generation for July 2004 without
+#   its relief shaded (credit "NASA Earth Observatory"), to `earth/earth-colour-16k.jpg`; the sea
+#   from the elevation, to `earth/earth-sea-8k.png`.
 # - The Moon: NASA's CGI Moon Kit (https://svs.gsfc.nasa.gov/4720; credit "NASA's Scientific
 #   Visualization Studio"): its elevation at 16 samples a degree to `moon/moon-ldem16.i16`, its
 #   2025 colour map at 4096 × 2048 to `moon/moon-colour-4k.png`.
+# - The sky: NASA's Deep Star Maps 2020 at 8K (https://svs.gsfc.nasa.gov/4851; from ESA's Gaia and
+#   Hipparcos; credit "NASA/Goddard Space Flight Center Scientific Visualization Studio" and
+#   "ESA/Gaia/DPAC"), to `sky/stars-8k.png` (its values are a display's, 0 to 1: sRGB keeps them).
 #
 # A file already there with the right hash is kept, and a conversion already made is not made
 # again. Blender is found on the PATH, else in its default Windows place (BLENDER overrides).
@@ -19,7 +24,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 out=$here/assets/planets
 bodies=("$@")
-[ ${#bodies[@]} -gt 0 ] || bodies=(earth moon)
+[ ${#bodies[@]} -gt 0 ] || bodies=(earth moon sky)
 
 blender=${BLENDER:-}
 if [ -z "$blender" ]; then
@@ -82,6 +87,13 @@ for body in "${bodies[@]}"; do
         465969062 9d27d4b8ea8e76977e2988bca667d7c8fa68b927355feffcddd6b4875a7fd08e
       convert planet_elevation.py "$out/earth/ETOPO_2022_v1_60s_N90W180_surface.tif" \
         "$out/earth/etopo-60s.i16" 1 0
+      fetch earth world.200407.3x21600x10800.jpg \
+        https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/bmng-base/july/world.200407.3x21600x10800.jpg \
+        21125326 dea8b4dc8a4f93f5f8bce0c8c85a508a178e7901e9ed8e6bf86e6ce7ef6d61e2
+      convert planet_colour.py "$out/earth/world.200407.3x21600x10800.jpg" \
+        "$out/earth/earth-colour-16k.jpg" 16384 8192
+      convert planet_sea_mask.py "$out/earth/etopo-60s.i16" "$out/earth/earth-sea-8k.png" \
+        21600 10800 8192 4096
       ;;
     moon)
       fetch moon ldem_16_uint.tif "$nasa/ldem_16_uint.tif" \
@@ -93,6 +105,12 @@ for body in "${bodies[@]}"; do
       convert planet_colour.py "$out/moon/lroc_color_16bit_srgb_4k.tif" \
         "$out/moon/moon-colour-4k.png"
       ;;
-    *) echo "unknown body $body: earth or moon" >&2; exit 2 ;;
+    sky)
+      fetch sky starmap_2020_8k.exr \
+        https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k.exr \
+        130530278 dc6c4f413e85707a29a25a9451148154554ecca2c996f84fa8f47b65ef9ff7c4
+      convert planet_colour.py "$out/sky/starmap_2020_8k.exr" "$out/sky/stars-8k.png"
+      ;;
+    *) echo "unknown body $body: earth, moon or sky" >&2; exit 2 ;;
   esac
 done
