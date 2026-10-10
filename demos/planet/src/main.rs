@@ -40,7 +40,7 @@ use forge_terrain::planet::{SkyBodyParams, TourStop};
 use forge_terrain::{Planet, PlanetWorld};
 use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
-use stream::{Built, Change, SceneParts, Tile, TileStream, needs_new_cut};
+use stream::{Built, Change, SceneParts, Tile, TileStream};
 use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
@@ -234,6 +234,8 @@ struct Tiles {
     /// The first frame's camera, and the cut around it and where the run is heading.
     camera: FlyCamera,
     cells: Vec<CellId>,
+    /// The cells' errors the cut worked out (the swap rule's), for the worker.
+    errors: stream::CellErrors,
     tiles: Vec<Tile>,
     cooked: usize,
     ms: f64,
@@ -263,7 +265,11 @@ fn cook_tiles(planet: Planet, body: String, args: &Args) -> Result<Tiles> {
         &camera,
         false,
     );
-    let cells = world.tile_cut_around(&points);
+    // The swap rule's cut (#220), the cells' errors worked out on every core and kept for the
+    // worker.
+    let mut errors = stream::CellErrors::default();
+    let pixels = pixels_per_radian(&camera, args.width as f32 / args.height as f32, args.height);
+    let cells = stream::cut_around(&planet, &points, pixels, &mut errors, &TaskPool::client());
     let mut per_level = [0u32; 21];
     for c in &cells {
         per_level[usize::from(c.level())] += 1;
@@ -299,6 +305,7 @@ fn cook_tiles(planet: Planet, body: String, args: &Args) -> Result<Tiles> {
         camera,
         cells,
         tiles,
+        errors,
         cooked,
         ms,
     })
@@ -555,6 +562,7 @@ impl PlanetDemo {
             camera,
             cells,
             mut tiles,
+            errors,
             cooked,
             ms,
         } = tiles;
@@ -744,6 +752,7 @@ impl PlanetDemo {
             cells,
             live,
             editor,
+            errors,
             build,
         )?;
         let mut flags = CullFlags::DEFAULT;
@@ -887,16 +896,15 @@ impl PlanetDemo {
             &camera,
             self.paused,
         );
-        let cells = self.planet.world.tile_cut_around(&points);
-        if needs_new_cut(&self.stream.current, &cells) {
-            let start = start_view(
-                &camera,
-                ctx.aspect(),
-                ctx.extent().height,
-                self.args.lod_error,
-            );
-            self.stream.ask(cells, start);
-        }
+        // The worker makes the cut by the swap rule and changes the scene when it should.
+        let pixels = pixels_per_radian(&camera, ctx.aspect(), ctx.extent().height);
+        let start = start_view(
+            &camera,
+            ctx.aspect(),
+            ctx.extent().height,
+            self.args.lod_error,
+        );
+        self.stream.ask(points, pixels, start);
     }
 
     /// Takes the worker's new cut in at the start of this frame: an edit of the drawn scene,
@@ -990,6 +998,14 @@ impl PlanetDemo {
         let ground = self.planet.ground(self.placement.direction(p), fine);
         (over_sea, over_sea - ground)
     }
+}
+
+/// Pixels a radian at the middle of `camera`'s view of an image `height` tall: what the swap
+/// rule's cut sees cells' errors with (#220). Its field of view is taken no narrower than 45°: a
+/// zoomed stop looks at the sky, and its tiles would multiply for nothing.
+fn pixels_per_radian(camera: &FlyCamera, aspect: f32, height: u32) -> f64 {
+    let widest = 1.0 / 22.5_f64.to_radians().tan();
+    f64::from(camera.projection(aspect).y_axis.y).min(widest) * f64::from(height) / 2.0
 }
 
 /// `cells` with each of its finest cells' parents in their place (`--edited`, #220): a cut the

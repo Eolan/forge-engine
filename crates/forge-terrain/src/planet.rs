@@ -151,8 +151,20 @@ pub struct TileParams {
     /// apart).
     pub finest: u8,
     /// A cell splits into its four children while the point the cut is around lies within
-    /// this many of its sides of its centre (plus half its diagonal).
+    /// this many of its sides of its centre (plus half its diagonal): the cut by distance
+    /// ([`PlanetWorld::tile_cut_around`]).
     pub rings: f64,
+    /// The swap rule (#220, [`PlanetWorld::tile_cut_by_error`]): a cell splits where its
+    /// samples, seen from the nearest point, would stand more than this many pixels apart, so
+    /// that what its children change (their facets, the slopes their normal maps add) is
+    /// smaller than this when they come.
+    pub spacing_px: f64,
+    /// Degrees: the slopes its children add must reach this for the spacing to count. Flatter
+    /// ground (the open sea, plains) shows no more for being split.
+    pub slope: f64,
+    /// A cell also splits where the height its children add would show more than this many
+    /// pixels ([`Planet::cell_error`]): the far mountains' outlines.
+    pub error_px: f64,
 }
 
 /// What the demo shows of a planet.
@@ -255,6 +267,9 @@ impl Default for PlanetWorld {
                 samples: 257,
                 finest: 14,
                 rings: 1.0,
+                spacing_px: 2.5,
+                slope: 1.0,
+                error_px: 1.0,
             },
             view: ViewParams {
                 target: None,
@@ -367,7 +382,59 @@ impl PlanetWorld {
         cut.sort_unstable();
         cut
     }
+
+    /// The tiles around `points` by the swap rule (#220, [`TileParams::spacing_px`]): a cell
+    /// splits into its four children where, seen from the nearest of `points` at
+    /// `pixels_per_radian`, its samples would stand more than `spacing_px` apart on ground whose
+    /// children add slopes of `slope` or more, or where the height they add would show more than
+    /// `error_px`; down to [`TileParams::finest`]. `errors` gives the errors
+    /// ([`Planet::cell_error`]) of a level's cells at a time, which the caller may work out in
+    /// parallel and keep. The cells that don't split cover the sphere once, in id order.
+    pub fn tile_cut_by_error(
+        &self,
+        points: &[DVec3],
+        pixels_per_radian: f64,
+        mut errors: impl FnMut(&[CellId]) -> Vec<f64>,
+    ) -> Vec<CellId> {
+        let sphere = self.sphere();
+        let tiles = &self.tiles;
+        let slope = tiles.slope.to_radians();
+        let mut level: Vec<CellId> = Face::ALL
+            .iter()
+            .map(|f| CellId::cube(f.index(), 0, 0, 0))
+            .collect();
+        let mut cut = Vec::new();
+        while !level.is_empty() {
+            let errors = errors(&level);
+            let mut next = Vec::new();
+            for (&cell, &error) in level.iter().zip(&errors) {
+                let l = cell.level();
+                let spacing = self.spacing(l);
+                // Pixels a metre at the cell's nearest point to one of `points` (its bounding
+                // sphere, half its diagonal and a little more), a metre away at the nearest.
+                let centre = sphere.cell_center(cell);
+                let reach = 0.75 * sphere.cell_size(l);
+                let distance = points
+                    .iter()
+                    .map(|&p| ((centre - p).length() - reach).max(1.0))
+                    .fold(f64::INFINITY, f64::min);
+                let per_metre = pixels_per_radian / distance;
+                let splits = (spacing * per_metre > tiles.spacing_px && error >= slope * spacing)
+                    || error * per_metre > tiles.error_px;
+                match cell.children() {
+                    Some(children) if splits && l < tiles.finest => next.extend(children),
+                    _ => cut.push(cell),
+                }
+            }
+            level = next;
+        }
+        cut.sort_unstable();
+        cut
+    }
 }
+
+/// Points a side of the grid [`Planet::cell_error`] samples a cell's error over.
+pub const CELL_ERROR_POINTS: u32 = 9;
 
 /// The default world file: the Earth's, `assets/worlds/earth.toml`.
 pub fn planet_file() -> PathBuf {
@@ -698,6 +765,34 @@ impl Planet {
             }
             _ => planet.height(direction, min_wavelength),
         }
+    }
+
+    /// How far `cell`'s tile stands from its children's (#220, the swap rule), metres: the
+    /// largest height the next level adds over a grid of points across the cell
+    /// ([`CELL_ERROR_POINTS`]² of them), and the sag of its triangles under the sphere that the
+    /// children's halved ones take away. Open sea adds no height (its ground is the sea's level),
+    /// so only the sag is left there.
+    pub fn cell_error(&self, cell: CellId) -> f64 {
+        let world = &self.world;
+        let level = cell.level();
+        let face = Face::from_index(cell.face());
+        let cells = f64::from(1_u32 << level);
+        let (x, y) = cell.xy();
+        let start = DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0;
+        let step = 2.0 / cells / f64::from(CELL_ERROR_POINTS);
+        let (coarse, fine) = (world.min_wavelength(level), world.min_wavelength(level + 1));
+        let mut error = 0.0_f64;
+        for j in 0..CELL_ERROR_POINTS {
+            for i in 0..CELL_ERROR_POINTS {
+                let st = start + (DVec2::new(f64::from(i), f64::from(j)) + 0.5) * step;
+                let direction = CubeSphere::direction(face, st);
+                error = error
+                    .max((self.ground(direction, fine) - self.ground(direction, coarse)).abs());
+            }
+        }
+        // A chord of `s` sags `s² / 8R` under the sphere; the children's, half as long, a quarter.
+        let s = world.spacing(level);
+        error + 3.0 * s * s / (32.0 * world.planet.radius)
     }
 
     /// The ground as the tiles draw it: [`Self::height`], the sea's floor flattened at its level
@@ -1335,6 +1430,58 @@ mod tests {
     }
 
     #[test]
+    fn the_swap_rule_splits_rough_ground_where_it_shows_and_leaves_flat_ground_whole() {
+        let planet = small();
+        let world = &planet.world;
+        let sphere = world.sphere();
+        let radius = world.planet.radius;
+        let a = DVec3::new(0.3, 1.0, 0.2).normalize();
+        let k = 780.0;
+        let area = |cut: &[CellId]| -> f64 {
+            cut.iter()
+                .map(|c| 1.0 / f64::from(1_u32 << (2 * c.level())))
+                .sum()
+        };
+        // Rough ground everywhere (slopes of 45°, errors as wide as the samples): the cell
+        // under the point down to the finest level, each cell split while its samples would
+        // stand over `spacing_px` apart.
+        let rough = |cells: &[CellId]| -> Vec<f64> {
+            cells.iter().map(|c| world.spacing(c.level())).collect()
+        };
+        let cut = world.tile_cut_by_error(&[a * radius], k, rough);
+        assert!((area(&cut) - 6.0).abs() < 1e-9);
+        let under = sphere.cell_of(sphere.surface_point(a, 0.0), world.tiles.finest);
+        assert!(cut.contains(&under));
+        for c in &cut {
+            let l = c.level();
+            let d = (sphere.cell_center(*c) - a * radius).length() - 0.75 * sphere.cell_size(l);
+            assert!(
+                l == world.tiles.finest
+                    || world.spacing(l) * k / d.max(1.0) <= world.tiles.spacing_px,
+                "{c:?} should have split"
+            );
+        }
+        // Flat ground (the open sea): nothing shows, nothing splits.
+        let flat = world.tile_cut_by_error(&[a * radius], k, |cells| vec![0.0; cells.len()]);
+        assert_eq!(flat.len(), 6);
+        // Gentle slopes split only where their height would show, much nearer.
+        let gentle = |cells: &[CellId]| -> Vec<f64> {
+            cells
+                .iter()
+                .map(|c| 0.001 * world.spacing(c.level()))
+                .collect()
+        };
+        let fewer = world.tile_cut_by_error(&[a * radius], k, gentle);
+        assert!((area(&fewer) - 6.0).abs() < 1e-9);
+        assert!(
+            fewer.len() < cut.len(),
+            "{} against {}",
+            fewer.len(),
+            cut.len()
+        );
+    }
+
+    #[test]
     fn heights_are_deterministic_and_band_limited() {
         let planet = Planet::new(PlanetWorld::default()).unwrap();
         let world = &planet.world;
@@ -1406,5 +1553,118 @@ mod tests {
         let coast = planet.target(50.0).expect("a coast");
         let fine = planet.world.min_wavelength(planet.world.tiles.finest);
         assert!(planet.height(coast, fine) >= 50.0);
+    }
+}
+
+/// The swap rule's calibration (#220), with the Earth's maps (`tools/fetch-planets.sh`): the
+/// cells' errors in the cut at three tour stops, and the cut's tiles there under a few settings.
+/// `cargo test --release -p forge-terrain calibration -- --ignored --nocapture`.
+#[cfg(test)]
+mod calibration {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    #[ignore = "needs the Earth's maps"]
+    fn cell_errors_at_the_stops() {
+        let world = PlanetWorld::load(&planet_file()).unwrap();
+        let planet = Planet::new(world).unwrap();
+        let world = &planet.world;
+        let sphere = world.sphere();
+        // Pixels a radian at 900 rows and 60° of field of view.
+        let k = 450.0 / (30.0_f64).to_radians().tan();
+        for (name, lat, lon, over) in [
+            ("Mont Blanc", 45.55, 6.55, 6000.0),
+            ("Corsica", 42.15, 9.1, 400_000.0),
+            ("Eze", 43.73, 7.36, 1500.0),
+        ] {
+            let d = direction(lat, lon);
+            let ground = planet.ground(d, world.min_wavelength(world.tiles.finest));
+            let camera = sphere.surface_point(d, ground + over);
+            let cut = world.tile_cut_around(&[camera]);
+            let started = std::time::Instant::now();
+            let mut per_level: Vec<Vec<(f64, f64)>> = vec![Vec::new(); 21];
+            for &cell in &cut {
+                let e = planet.cell_error(cell);
+                let dist = ((sphere.cell_center(cell) - camera).length()
+                    - 0.75 * sphere.cell_size(cell.level()))
+                .max(over.min(1000.0));
+                per_level[usize::from(cell.level())].push((e, e * k / dist));
+            }
+            let ms = started.elapsed().as_secs_f64() * 1e3;
+            println!(
+                "{name}: {} tiles, {:.2} ms a cell",
+                cut.len(),
+                ms / cut.len() as f64
+            );
+            for (level, list) in per_level.iter_mut().enumerate() {
+                if list.is_empty() {
+                    continue;
+                }
+                list.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let e: Vec<f64> = list.iter().map(|x| x.0).collect();
+                let mut px: Vec<f64> = list.iter().map(|x| x.1).collect();
+                px.sort_by(f64::total_cmp);
+                println!(
+                    "  level {level:2}: {:3} cells, error {:8.3} / {:8.3} / {:8.3} m, px {:7.3} / {:7.3} / {:7.3}",
+                    list.len(),
+                    e[0],
+                    e[e.len() / 2],
+                    e[e.len() - 1],
+                    px[0],
+                    px[px.len() / 2],
+                    px[px.len() - 1]
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "needs the Earth's maps"]
+    fn swap_rule_cuts_at_the_stops() {
+        let world = PlanetWorld::load(&planet_file()).unwrap();
+        let mut planet = Planet::new(world).unwrap();
+        let sphere = planet.world.sphere();
+        let k = 450.0 / (30.0_f64).to_radians().tan();
+        let mut memo: HashMap<CellId, f64> = HashMap::new();
+        let stops = [
+            ("Mont Blanc", 45.55, 6.55, 6000.0),
+            ("Corsica", 42.15, 9.1, 400_000.0),
+            ("Eze", 43.73, 7.36, 1500.0),
+            ("Corsica low", 42.15, 9.1, 3000.0),
+        ];
+        for (spacing_px, slope, error_px) in [
+            (3.2, 1.0, 1.0),
+            (2.5, 1.0, 1.0),
+            (1.8, 1.0, 1.0),
+            (1.0, 1.0, 1.0),
+        ] {
+            planet.world.tiles.spacing_px = spacing_px;
+            planet.world.tiles.slope = slope;
+            planet.world.tiles.error_px = error_px;
+            println!("spacing {spacing_px} px, slope {slope}°, error {error_px} px:");
+            for (name, lat, lon, over) in stops {
+                let d = direction(lat, lon);
+                let fine = planet.world.min_wavelength(planet.world.tiles.finest);
+                let camera = sphere.surface_point(d, planet.ground(d, fine) + over);
+                let rings = planet.world.tile_cut_around(&[camera]);
+                let cut = planet.world.tile_cut_by_error(&[camera], k, |cells| {
+                    cells
+                        .iter()
+                        .map(|&c| *memo.entry(c).or_insert_with(|| planet.cell_error(c)))
+                        .collect()
+                });
+                let mut levels = [0u32; 15];
+                for c in &cut {
+                    levels[usize::from(c.level())] += 1;
+                }
+                println!(
+                    "  {name:12}: {:4} tiles (rings {:4}), per level {:?}",
+                    cut.len(),
+                    rings.len(),
+                    levels
+                );
+            }
+        }
     }
 }

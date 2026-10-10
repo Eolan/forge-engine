@@ -39,6 +39,12 @@ detail = [180.0, 6, 10.0, 0.55]
 samples = 257
 finest = 14
 rings = 1.0
+# The swap rule (#220): a tile splits where its samples would stand over 2.5 px apart on
+# ground whose next level adds slopes of 1° or more, or where that level's height would show
+# over a pixel.
+spacing_px = 2.5
+slope = 1.0
+error_px = 1.0
 
 [view]
 # The Côte d'Azur by Èze, where the Alps fall into the sea: the descent comes in over the Alps

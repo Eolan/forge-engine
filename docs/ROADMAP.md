@@ -115,8 +115,12 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   - **The scene takes and frees tiles in place ✅** (2026-10-10): a new cut's tiles added and
     the old ones removed by a worker's edit, ready in about 11 ms rather than 0.4 s for a whole
     scene; the longest frame between changes 2.4 ms on average, against 9.4.
-  - **Next:** the swap rule (a cell split where its error would show), tiles cooked in
-    milliseconds.
+  - **The swap rule ✅** (2026-10-10): a cell split where a split would show (its samples over
+    2.5 px apart on ground rough enough, or its children's height over a pixel): the same tiles
+    on rough ground, fewer over the sea. The pops it leaves come from the children's finer
+    normal maps.
+  - **Next:** a blend over the swap (the parent dithered into its children over a few frames),
+    tiles cooked in milliseconds.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

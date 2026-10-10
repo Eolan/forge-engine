@@ -968,6 +968,23 @@ scenes, plus a test that adds and removes meshes against a scene built whole fro
   where a whole scene took 0.39 s; the longest frame between changes is 2.4 ms on average,
   against 9.4. The room costs 0.25 GiB of geometry more on the tour.
 
+**The swap rule, built after it (2026-10-10):** §6's criterion, a split where it would show,
+measured on the drawn Earth before it was written down.
+- **By height alone the near tiles are over-resolved.** A cell's error (the largest height its
+  children add, sampled 9 × 9, and its triangles' sag) is 10–120 m at the ETOPO and GLO-90
+  levels (7–9), near a pixel where `rings` split them, and 0.1–3 m of noise at the finest
+  levels, 0.05–0.27 px. Splitting where the height shows over a pixel would bring the near tiles
+  in three to ten times nearer, their normal maps magnified as many times.
+- **So the rule counts the spacing on rough ground.** A cell splits where its samples would stand
+  over 2.5 px apart on ground whose children add slopes of 1° or more, or where their height
+  would show over a pixel. Rough ground keeps `rings`' tiles, the sea and the plains take fewer.
+- **The pops stay.** The tour's swap check finds the share `rings` had (4 of 14 changes peak at
+  0.17–0.79), and 10 of 35 without ambient occlusion and shadows: the children's normal maps
+  bring the band the parent's, magnified 2.5 times, held only blurred. Splitting at a pixel would
+  hide it at three times the tiles. The blend over the swap rejected above (both drawn for a few
+  frames, dithered) is what remains, and the in-place scene lets the parent and its children
+  stand together without a second scene.
+
 ## Verification notes
 
 Checked on 2026-09-26 with WebSearch and WebFetch only, no browser pane. The session's egress

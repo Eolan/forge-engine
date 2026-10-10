@@ -1,10 +1,12 @@
 //! The planet's tiles as the camera flies (#220): the cut made again around where the camera is
 //! going, and the drawn scene edited in place to it, on a worker.
 //!
-//! - **The cut** follows the points the demo gives ([`PlanetWorld::tile_cut_around`]): the
-//!   camera where it will be when the change is ready, and the place it is heading for (the
-//!   tour's next stop, the descent's target), so a stop's tiles are made before the camera gets
-//!   there.
+//! - **The cut** follows the points the demo gives every [`ASK_EVERY`] seconds: the camera where
+//!   it will be when the change is ready, and the place it is heading for (the tour's next stop,
+//!   the descent's target), so a stop's tiles are made before the camera gets there. The worker
+//!   makes it by the swap rule ([`forge_terrain::PlanetWorld::tile_cut_by_error`]): a cell splits
+//!   where its samples would stand too far apart on ground rough enough to show it, or where its
+//!   children's height would show. It keeps the cells' errors it worked out ([`CellErrors`]).
 //! - **The worker** keeps the tiles of the drawn cut; a new cut reuses them and cooks or loads
 //!   the tiles it lacks from the cache, on a pool of a quarter of the hardware threads, so the
 //!   frames keep theirs.
@@ -40,6 +42,7 @@ use forge_terrain::planet::{
     NORMAL_MAP_SIZE, normal_map_levels, tile_mesh, tile_name, tile_normal_map_cached, tile_origin,
 };
 use forge_world::CellId;
+use glam::DVec3;
 
 use crate::Placement;
 
@@ -47,8 +50,13 @@ use crate::Placement;
 /// place is cut as in a scene built whole, whichever tiles stand beside it.
 const TILE_RAY_BUDGET: u32 = 4_000;
 
-/// Tiles a scene has room for at least: the tour's cuts hold up to about 700.
-const TILE_ROOM: usize = 1_024;
+/// Seconds between two asks for the cut: the worker makes it again (a millisecond of its time)
+/// at most this often.
+const ASK_EVERY: f64 = 0.05;
+
+/// Tiles a scene has room for at least: the tour's cuts hold up to about 700, and an edit needs
+/// room for the tiles it adds before those it removes are freed.
+const TILE_ROOM: usize = 1_536;
 
 /// What every scene of the run is built from.
 #[derive(Clone)]
@@ -218,8 +226,8 @@ pub(crate) fn capacity_for(tiles: &[Tile]) -> DynamicCapacity {
         instances: room,
         meshlets: room * largest(|m| m.meshlets.len() as u32),
         pages: 2 * room * largest(|m| m.page_count),
-        // A cut's vertices are about as many as its triangles; twice for room.
-        ray_vertices: room * 2 * TILE_RAY_BUDGET,
+        // A cut's vertices are about as many as its triangles; half again for room.
+        ray_vertices: room * TILE_RAY_BUDGET * 3 / 2,
         ray_triangles: room * TILE_RAY_BUDGET,
     }
 }
@@ -408,23 +416,76 @@ pub(crate) struct Built {
     pub build_seconds: f64,
 }
 
-/// A cut to make, and the view its pages are loaded for.
+/// Where the cut is wanted around, and the view its pages are loaded for.
 struct Request {
-    cells: Vec<CellId>,
+    /// The points the cut is made around ([`forge_terrain::PlanetWorld::tile_cut_by_error`]) and the view's
+    /// pixels a radian.
+    points: Vec<DVec3>,
+    pixels_per_radian: f64,
     start: StartView,
     asked: Instant,
     /// Build the scene whole, whatever the room: the drawn scene refused the last edit.
     whole: bool,
 }
 
+/// The cells' errors ([`Planet::cell_error`]) worked out so far: the swap rule's cut asks for a
+/// level's at a time, and those it lacks are worked out in parallel. Each is a function of its
+/// cell alone, so the cut is the same whichever were known.
+#[derive(Default)]
+pub(crate) struct CellErrors(HashMap<CellId, f64>);
+
+impl CellErrors {
+    /// The errors of `cells`, those not known yet worked out on `pool`.
+    pub fn of(&mut self, planet: &Planet, cells: &[CellId], pool: &TaskPool) -> Vec<f64> {
+        let missing: Vec<CellId> = cells
+            .iter()
+            .copied()
+            .filter(|c| !self.0.contains_key(c))
+            .collect();
+        if !missing.is_empty() {
+            let mut found = vec![0.0; missing.len()];
+            pool.scope(|s| {
+                for (cells, out) in missing.chunks(8).zip(found.chunks_mut(8)) {
+                    s.spawn(move |_| {
+                        for (&cell, error) in cells.iter().zip(out) {
+                            *error = planet.cell_error(cell);
+                        }
+                    });
+                }
+            });
+            self.0.extend(missing.into_iter().zip(found));
+        }
+        cells.iter().map(|c| self.0[c]).collect()
+    }
+}
+
+/// The swap rule's cut of `planet` around `points` seen at `pixels_per_radian`
+/// ([`forge_terrain::PlanetWorld::tile_cut_by_error`]), the errors it lacks worked out on `pool`.
+pub(crate) fn cut_around(
+    planet: &Planet,
+    points: &[DVec3],
+    pixels_per_radian: f64,
+    errors: &mut CellErrors,
+    pool: &TaskPool,
+) -> Vec<CellId> {
+    planet
+        .world
+        .tile_cut_by_error(points, pixels_per_radian, |cells| {
+            errors.of(planet, cells, pool)
+        })
+}
+
 /// The worker that makes the new cuts (see the module notes).
 pub(crate) struct TileStream {
     requests: Option<mpsc::Sender<Request>>,
-    built: mpsc::Receiver<Result<Built>>,
+    built: mpsc::Receiver<Result<Option<Built>>>,
     worker: Option<thread::JoinHandle<()>>,
-    /// The cut of the scene drawn, and the one being made.
+    /// The cut of the scene drawn.
     pub current: Vec<CellId>,
-    pending: Option<Vec<CellId>>,
+    /// An ask is being answered.
+    pending: bool,
+    /// When the last ask went: the cut is made again at most every [`ASK_EVERY`] seconds.
+    asked: Option<Instant>,
     /// The next ask builds the scene whole.
     whole: bool,
     /// How long the last change took, seconds: how far ahead to ask for the next.
@@ -433,15 +494,19 @@ pub(crate) struct TileStream {
     pub swaps: u32,
 }
 
-/// The worker's state: the drawn scene's editor (a scene edited in place), and its tiles.
+/// The worker's state: the drawn scene's editor (a scene edited in place), its tiles and its
+/// cut, and the cells' errors known.
 struct WorkerScene {
     editor: Option<SceneEditor>,
     live: HashMap<CellId, LiveTile>,
+    cells: Vec<CellId>,
+    errors: CellErrors,
 }
 
 impl TileStream {
-    /// Starts the worker, which holds the tiles `live` of the drawn scene and its `editor` (one
-    /// edited in place).
+    /// Starts the worker, which holds the drawn scene's cut `current`, its tiles `live` and its
+    /// `editor` (one edited in place), and the cells' errors known.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: Arc<Device>,
         shaders: ShaderCompiler,
@@ -449,10 +514,12 @@ impl TileStream {
         current: Vec<CellId>,
         live: HashMap<CellId, LiveTile>,
         editor: Option<SceneEditor>,
+        errors: CellErrors,
         latency: f64,
     ) -> Result<Self> {
         let (requests, asked) = mpsc::channel::<Request>();
-        let (done, built) = mpsc::channel::<Result<Built>>();
+        let (done, built) = mpsc::channel::<Result<Option<Built>>>();
+        let cells = current.clone();
         let worker = thread::Builder::new()
             .name("planet tiles".into())
             .spawn(move || {
@@ -464,13 +531,18 @@ impl TileStream {
                     thread_name: "planet-tile".to_owned(),
                     ..PoolConfig::with_workers(workers)
                 });
-                let mut drawn = WorkerScene { editor, live };
+                let mut drawn = WorkerScene {
+                    editor,
+                    live,
+                    cells,
+                    errors,
+                };
                 while let Ok(mut request) = asked.recv() {
                     // Only the latest ask counts.
                     while let Ok(newer) = asked.try_recv() {
-                        request.whole |= newer.whole;
-                        request.cells = newer.cells;
-                        request.start = newer.start;
+                        let whole = request.whole || newer.whole;
+                        request = newer;
+                        request.whole = whole;
                     }
                     let result = make_cut(&device, &shaders, &parts, &pool, &mut drawn, request);
                     if done.send(result).is_err() {
@@ -483,23 +555,31 @@ impl TileStream {
             built,
             worker: Some(worker),
             current,
-            pending: None,
+            pending: false,
+            asked: None,
             whole: false,
             latency,
             swaps: 0,
         })
     }
 
-    /// Asks for the cut `cells`, its pages loaded for `start`, unless it is the drawn one or a
-    /// cut is being made (the next ask after it lands then counts).
-    pub fn ask(&mut self, cells: Vec<CellId>, start: StartView) {
-        if self.pending.is_some() || cells == self.current {
+    /// Asks for the cut around `points` seen at `pixels_per_radian`, its pages loaded for
+    /// `start`, unless an ask is being answered or the last went under [`ASK_EVERY`] ago: the
+    /// worker makes it and changes the drawn scene when it should ([`needs_new_cut`]).
+    pub fn ask(&mut self, points: Vec<DVec3>, pixels_per_radian: f64, start: StartView) {
+        if self.pending
+            || self
+                .asked
+                .is_some_and(|t| t.elapsed().as_secs_f64() < ASK_EVERY)
+        {
             return;
         }
-        self.pending = Some(cells.clone());
+        self.pending = true;
+        self.asked = Some(Instant::now());
         if let Some(requests) = &self.requests {
             let _ = requests.send(Request {
-                cells,
+                points,
+                pixels_per_radian,
                 start,
                 asked: Instant::now(),
                 whole: std::mem::take(&mut self.whole),
@@ -511,13 +591,13 @@ impl TileStream {
     /// worker's view of it is wrong.
     pub fn rebuild(&mut self) {
         self.whole = true;
-        self.current.clear();
     }
 
-    /// The change made since the last call, if one is ready.
+    /// The change made since the last call, if the last ask brought one.
     pub fn take(&mut self) -> Option<Result<Built>> {
         let result = self.built.try_recv().ok()?;
-        self.pending = None;
+        self.pending = false;
+        let result = result.transpose()?;
         if let Ok(built) = &result {
             self.current.clone_from(&built.cells);
             self.latency = built.seconds;
@@ -527,8 +607,9 @@ impl TileStream {
     }
 }
 
-/// The worker's answer to `request`: an edit of the drawn scene when it is edited in place and
-/// the edit fits, its scene built whole otherwise.
+/// The worker's answer to `request`: nothing when the drawn cut should stay, else an edit of
+/// the drawn scene when it is edited in place and the edit fits, its scene built whole
+/// otherwise.
 fn make_cut(
     device: &Arc<Device>,
     shaders: &ShaderCompiler,
@@ -536,7 +617,24 @@ fn make_cut(
     pool: &TaskPool,
     drawn: &mut WorkerScene,
     request: Request,
-) -> Result<Built> {
+) -> Result<Option<Built>> {
+    let cells = cut_around(
+        &parts.planet,
+        &request.points,
+        request.pixels_per_radian,
+        &mut drawn.errors,
+        pool,
+    );
+    let needed = request.whole || needs_new_cut(&drawn.cells, &cells);
+    tracing::trace!(
+        tiles = cells.len(),
+        drawn = drawn.cells.len(),
+        needed,
+        "the swap rule's cut"
+    );
+    if !needed {
+        return Ok(None);
+    }
     let started = Instant::now();
     let have: HashMap<CellId, Tile> = drawn
         .live
@@ -547,15 +645,15 @@ fn make_cut(
         &parts.planet,
         &parts.body,
         !parts.in_place(),
-        &request.cells,
+        &cells,
         &have,
         pool,
     );
     drop(have);
     let cook_seconds = started.elapsed().as_secs_f64();
-    let built = |change| Built {
+    let built = |change, cells: &[CellId]| Built {
         change,
-        cells: request.cells.clone(),
+        cells: cells.to_vec(),
         cooked,
         loaded,
         seconds: request.asked.elapsed().as_secs_f64(),
@@ -568,16 +666,18 @@ fn make_cut(
             parts,
             editor,
             &mut drawn.live,
-            &request.cells,
+            &cells,
             &tiles,
             &request.start,
         ) {
             Ok((edit, added, removed)) => {
-                return Ok(built(Change::Edit {
+                drawn.cells.clone_from(&cells);
+                let change = Change::Edit {
                     edit: Box::new(edit),
                     added,
                     removed,
-                }));
+                };
+                return Ok(Some(built(change, &cells)));
             }
             // Out of room: the scene is built whole, with room for this cut.
             Err(error) => {
@@ -591,14 +691,15 @@ fn make_cut(
         device,
         shaders,
         parts,
-        &request.cells,
+        &cells,
         &mut tiles,
         request.start,
         capacity,
     )?;
     drawn.editor = scene.editor(device, shaders)?;
-    drawn.live = live_tiles(&request.cells, tiles);
-    Ok(built(Change::Scene(Box::new(scene))))
+    drawn.live = live_tiles(&cells, tiles);
+    drawn.cells.clone_from(&cells);
+    Ok(Some(built(Change::Scene(Box::new(scene)), &cells)))
 }
 
 impl Drop for TileStream {

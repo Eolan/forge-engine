@@ -3441,8 +3441,21 @@ Marble, the Deep Star Maps):
     surface, so a tile's cut does not depend on its neighbours. The planet's shadows moved a
     little: the planet's captures were accepted again.
   - `--resident` and a cut an edit has no room for still build a whole scene.
-- **Next:** the swap rule (a cell split where its error would show), and tiles cooked in
-  milliseconds.
+- **The swap rule** (2026-10-10, the owner's "go on with the swap rule"; `docs/demos/planet.md`,
+  "The swap rule"): the cut splits a cell where a split would show, not within `rings` of the
+  camera. A cell's error is the largest height its children add (sampled 9 × 9) and its
+  triangles' sag; it splits where its samples would stand over 2.5 px apart on ground whose
+  children add slopes of 1° or more, or where their height would show over a pixel. The worker
+  makes the cut every 50 ms and keeps the errors it worked out.
+  - Around the camera, rough ground keeps `rings`' tiles (Mont Blanc 390 against 375); the sea
+    and the plains take fewer (Corsica from orbit 114 against 159). The held shots differ from
+    `rings` by a ꟻLIP mean of 0.0003–0.0033 on the Earth, 0.008 on the Moon's floor.
+  - It does not remove the pops: 4 of 14 changes on the tour still peak at 0.17–0.79, the share
+    `rings` had, and 10 of 35 without ambient occlusion and shadows. A split brings its
+    children's normal maps' finer band, magnified 2.5 times in the parent's; splitting at a
+    pixel would take three times the tiles.
+- **Next:** a blend over the swap (the parent dithered into its children over a few frames, in
+  the in-place scene), and tiles cooked in milliseconds.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

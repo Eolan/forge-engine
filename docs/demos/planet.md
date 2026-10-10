@@ -39,7 +39,8 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 - **The world file** (`assets/worlds/earth.toml`, `moon.toml`; `forge_terrain::planet`):
   - the radius and the noise;
   - the maps (elevation, colour, sea mask) and the noise under them;
-  - the tiles' size and how finely the cut follows the target;
+  - the tiles' size and the swap rule's settings, which say how finely the cut follows the
+    camera and the target;
   - the target, the way the descent comes in, and the height it starts from (400 km on the
     Earth; 4 000 km on the Moon, from where it is seen whole);
   - whether there is air, and the sky's map with the body's pole and prime meridian.
@@ -143,10 +144,11 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 
 ## The tiles as the camera flies
 
-The cut follows the camera (`demos/planet/src/stream.rs`). Every frame the demo works out the cut
-around where the camera will be once a change is ready (the last one's latency ahead, on the
-tour and the descent) and where the run heads. When that cut is finer somewhere than the one
-drawn, or the one drawn holds half as many tiles again, a worker makes it:
+The cut follows the camera (`demos/planet/src/stream.rs`). Every 50 ms the demo gives the
+worker where the camera will be once a change is ready (the last one's latency ahead, on the
+tour and the descent) and where the run heads. The worker makes the cut there by the swap rule
+(below). When that cut is finer somewhere than the one drawn, or the one drawn holds half as many
+tiles again, it changes the scene:
 - **The tiles:** it keeps those of the scene drawn, loads the ones it lacks from the cache, or
   makes and cooks them on a quarter of the hardware threads (half the cores), so the frames keep
   theirs.
@@ -164,10 +166,12 @@ drawn, or the one drawn holds half as many tiles again, a worker makes it:
   no frame in flight reads it. The tiles keep their places in the world either way, so TAA
   keeps its history and the sky stays the same.
 
-The scene reserves room for twice the first cut's tiles, a thousand at least, each with as many
-clusters as its largest tile and twice its pages, and their rays' cuts. On the Earth's tour this
-holds 1.20 GiB of geometry against 0.95 GiB for the whole scenes, and the uploads fall from 249
-to 23 KiB a frame on average. A cut that would only coarsen waits for the next one that refines:
+The scene reserves room for twice the first cut's tiles, 1 536 at least, each with as many
+clusters as its largest tile and twice its pages, and their rays' cuts. An edit needs room for the
+tiles it adds before those it removes are freed: a thousand tiles of room overflowed once on the
+tour, and that cut was built whole. With 1 024 tiles of room the tour held 1.20 GiB of geometry
+against 0.95 GiB for the whole scenes; the uploads fall from 249 to 23 KiB a frame on average. A
+cut that would only coarsen waits for the next one that refines:
 finer tiles where they are no longer needed cost little. The tour asks for its next stop's tiles
 while it holds at the one before, so they are there when it arrives. They are made once, then
 loaded from the cache.
@@ -235,6 +239,50 @@ with ꟻLIP against D-017's class 2.
 - **The horizon test** D-056 planned for the instance cull is left out. The whole instance cull
   takes 0.014 ms a frame for the planet's 400–700 tiles (Tracy, the tour), and the depth pyramid
   already culls the far side's tiles.
+
+### The swap rule
+
+Until #220's swap rule a cell split while a point lay within `rings` of its sides (plus half its
+diagonal) of its centre, whatever the ground: the open sea split as eagerly as the Alps. The cut
+is now made by what a split would show (`PlanetWorld::tile_cut_by_error`, the world file's
+`[tiles]` keys):
+- **A cell's error** (`Planet::cell_error`): the largest height its children add, over a grid of
+  9 × 9 points across it, and the sag of its triangles under the sphere that their halved ones
+  take away. It is a function of the cell alone, worked out on the worker's pool (0.05 ms a
+  cell) and kept, so the cut is the same whichever were known.
+- **A cell splits** where, seen from the nearest point (its bounding sphere, at the view's pixels
+  a radian, the field of view taken no narrower than 45°), its samples would stand more than
+  `spacing_px` (2.5) apart on ground whose children add slopes of `slope` (1°) or more, or where
+  their height would show more than `error_px` (1). Flat ground (the open sea, plains) splits
+  only where its height would show.
+
+The errors at the tour's stops, in the cut by `rings` (`cargo test --release -p forge-terrain
+calibration -- --ignored --nocapture`): the ETOPO and GLO-90 levels (7–9) add 10–120 m and sit
+near a pixel; the finest levels add 0.1–3 m of noise, 0.05–0.27 px; the open sea adds nothing.
+The height alone over-resolves the near tiles: what a split near the camera changes is the
+shading of its normal maps, which the spacing measures.
+
+| Tiles around the camera alone | Mont Blanc (6 km) | Corsica (400 km) | Èze (1.5 km) | Corsica (3 km) |
+|---|---|---|---|---|
+| `rings = 1` | 375 | 159 | 453 | 414 |
+| `spacing_px = 3.2` | 300 | 90 | 312 | 282 |
+| `spacing_px = 2.5` (kept) | 390 | 114 | 417 | 342 |
+| `spacing_px = 1.8` | 555 | 144 | 585 | 498 |
+| `spacing_px = 1` | 1 197 | 267 | 1 125 | 1 005 |
+
+- **2.5 px keeps the near tiles as `rings` drew them on rough ground** (`rings` split where a
+  cell's samples stood about 3.2 px apart at its nearest point, 1.8 at its centre) and spends
+  fewer over the sea and the plains. The held shots differ from `rings` by a ꟻLIP mean of
+  0.0003–0.0033 on the Earth and 0.008 on the Moon's floor; the tour's cuts hold 393–675 tiles, as
+  before.
+- **The pops it leaves.** The tour's swap check (fixed step, the tiles cached) finds 4 of 14
+  changes peaking at 0.17–0.79 at 2.5 px and 6 of 26 at 0.18–0.69 at 1.8 px: the share `rings`
+  had (12 of 43). Without ambient occlusion and shadows, 10 of 35 still peak at 0.19–0.44. The
+  flip maps show the split tiles' whole patches: the children's normal maps bring the band the
+  parent's, magnified 2.5 times, could not. Splitting at a pixel would hide it at three times the
+  tiles; wider rings (2.3) still left peaks. The remedy to come is a blend over the swap: the
+  parent and its children drawn together for a few frames, dithered from one to the other, which
+  the in-place scene allows.
 
 What the engine gained for it:
 - **`MeshletSceneBuilder::set_material_rows`:** scenes built in turn over one texture set, which
@@ -354,10 +402,10 @@ air is a rim of blue light at its limb.
 - **A tile cooked in milliseconds** rather than a quarter of a second (a regular grid's DAG built
   directly): with the scene edited in place, cooking is what a new tile not in the cache waits
   for.
-- **The splits under the camera** still show on a patch (`--check-swaps`: 12 of 43 changes peak
-  at 0.21–0.70): the coarse parent's depth and ambient occlusion giving way to its children's.
-  The swap rule (a cell split where its error would show, not at a distance) is the remedy to
-  come.
+- **The splits under the camera** still show on a patch (`--check-swaps`: 4 of 14 changes peak
+  at 0.17–0.79 under the swap rule): the children's normal maps bring a band the parent's,
+  magnified, could not. A blend over the swap, the parent dithered into its children over a few
+  frames, is the remedy to come.
 - **The room's ranges** are taken first fit and leave gaps as tiles come and go: the page numbers
   in use reached 37 000 for about 26 000 pages on the tour, and the needs read back every frame
   cover them all (149 KiB).
