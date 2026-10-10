@@ -12,6 +12,7 @@ streaming on, 120 fps at 1440p on the RTX 5070 Ti. It is built in steps:
 | Culling at a million instances | #37 | ✅ far instances' roots 32 to an item: the city in 1.06 ms instead of 4.90 |
 | Streaming of cluster pages | #36 | ✅ 128 KiB pages from the cache files; the flight at 300 m/s in a 48 MiB pool, no holes |
 | The flight, 1440p, numbers | #13 | ✅ the flight at 300 m/s at 1440p: worst frame 2.6 ms (385 fps) on the 5070 Ti |
+| The RTX 3080 at 1440p, 60 fps | #39 | ✅ the flight 7.4–7.6 ms of GPU, p99 frame 9.2 ms; 8.3 ms through the fallback |
 | Materials: brick, plaster, concrete, glass, grass, rock | #20 | ✅ a row per prop, textured, 1.79 ms for the 1440p flight |
 | Windows of glass: material sections within a mesh | #41 | ✅ two sections per building through the DAG |
 | Streets, sidewalks, plazas: terrain layers | #42 | ✅ a layer map from the city's grid, 0.031 ms |
@@ -875,8 +876,8 @@ cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
   - the culls 0.72 ms (instance 0.32, clusters 0.19 + 0.20);
   - hardware and software raster 0.57;
   - resolve 0.09 and TAA 0.15.
-- **The RTX 3080** half of the target (60 fps at 1440p) waits for a run on the server PC
-  (#39).
+- **The RTX 3080** half of the target (60 fps at 1440p) holds with twice the margin
+  (#39, "On the RTX 3080" below).
 
 ![The flight at 300 m/s at 1440p with the F1 overlay, re-taken with the materials, glass, streets, sky, bloom and shadows of #20 to #45](images/city-blocks-profile.png)
 
@@ -903,6 +904,46 @@ coarse root boxes. The surfaces lose their detail but stay whole (the third pane
 the pixels that differ):
 
 ![Every page resident, a 16 MiB pool, and the pixels that differ](images/city-blocks-streaming-fallback.png)
+
+### On the RTX 3080 (issue #39, 2026-10-11)
+
+The other half of #13's target, 60 fps at 1440p on a 3080-class card, measured on the server
+PC: RTX 3080 10 GB, driver 617.42, i7-9700K (8 threads), Vulkan SDK 1.4.357, at 471efdd. The
+sun's shadows go through SIGMA (NRD 4.18.0), TAA is on, and the window holds 2560 × 1440 for
+the whole run (the swapchain's extent in the log), on a 1080p screen.
+
+```
+city-blocks --width 2560 --height 1440 --fly --frames 20000 [--force-fallback]
+asteroids --fixed-step --width 2560 --height 1440 --frames 600
+```
+
+| 2560 × 1440, RTX 3080, LOD 1 px, TAA, SIGMA | GPU per frame | frame p50 / p99 / worst |
+|---|---|---|
+| **the flight at 300 m/s** (two runs of 20 000 frames) | **7.42 / 7.55 ms** | 7.61–7.72 / 8.97–9.17 / 22–29 ms |
+| the flight through the indirect-count fallback (`--force-fallback`) | 8.32 ms | 8.52 / 9.90 / 26.5 ms |
+| the ballad, every system on (`--fixed-step`, 600 frames) | 5.21 ms | |
+
+- **60 fps holds.** The budget is 16.67 ms: the flight's median frame is less than half of
+  it and its p99 frame 9.2 ms. None of the 149–167 one-second spans of a run has its p99 over
+  the budget, so the worst frames (22–29 ms) come one at a time.
+- **Where the time goes** in the first flight (zones by group; the async compute zones overlap
+  the graphics work):
+  - geometry 2.10 ms (meshlet pass 1 0.63, software raster 1 0.66, cluster cull 1 0.41);
+  - shading 1.88 (standard 1.07, reflections 0.45, layered 0.35);
+  - the sun's shadows 1.25 (the trace 0.45, SIGMA 0.79);
+  - TAA with its sharpening and motion vectors 0.95, the sky 0.51, AO 0.41, bloom 0.15;
+  - on the async compute queue, the probes 1.19 and the sky's tables 0.49.
+- **The fallback** costs 0.8–0.9 ms more than the mesh path: its meshlet pass 1 takes 1.71 ms
+  (0.63–0.66 through the mesh shaders).
+- **The 5070 Ti's rows** above are from 2026-09-25, before the clouds, SIGMA and the later
+  shading. They are not the same frame, so the ratio between the cards is not a measure of
+  either.
+- **Without NRD** (FidelityFX's denoiser, the default where NRD is missing) the flight took
+  7.74 ms (p99 9.49), its `shading/standard` 1.68 ms against 1.07 with SIGMA (not looked
+  into). Those runs shared the machine with an installer and had outlying frames (135 ms, and
+  170 ms through the fallback). The 135 ms one was not the GPU's: no one-second span of that
+  run averaged more than 8.2 ms of GPU. The runs with SIGMA above, on a quiet machine, have
+  none.
 
 ## The city (issue #35, 2026-09-24)
 

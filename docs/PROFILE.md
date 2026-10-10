@@ -362,7 +362,13 @@ south view 2.59 ms, the orbit 3.01, the flight 2.47, the island 2.03 (the milest
 **Where it stands (2026-09-25, after #77 and #92):** the flight at 1440p takes 3.38 ms of GPU
 (three runs of 3000 frames: 3.37–3.39), its p99 frame 3.8 ms against the 8.33 of the 120 fps
 target; 2.6 ms without the probes. It was 3.81 ms after #68.
-**Priority:** the RTX 3080 run (#39). Nothing here needs work for the target. Cluster cull 1
+**On the RTX 3080 (#39, 2026-10-11, 471efdd, SIGMA on):** the same flight at 1440p takes
+7.42–7.55 ms of GPU (two runs of 20 000 frames), its p99 frame 9.2 ms against the 16.67 of the
+60 fps target; 8.32 ms through the fallback (p99 9.9). The zones by group: geometry 2.10,
+shading 1.88, the sun's shadows 1.25 (SIGMA 0.79), TAA 0.95, the sky 0.51, AO 0.41; the probes
+1.19 and the sky's tables 0.49 on the async queue. The ballad at 1440p takes 5.21 ms there.
+Details in [city-blocks.md](demos/city-blocks.md), "On the RTX 3080".
+**Priority:** nothing here needs work for either target. Cluster cull 1
 (0.35 ms at the south view, 0.56 in the orbit) is now the largest geometry zone. Details in
 [city-blocks.md](demos/city-blocks.md) and [meshlets.md](demos/meshlets.md).
 
