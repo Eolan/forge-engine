@@ -883,6 +883,69 @@ height's error, did not catch what it found.
     the ambient occlusion from the depth and the shadows.
   - **From orbit**, the Alps' ridges appear, and the snow lies on them.
 
+## The scene that takes and frees tiles in place: a design for the next step (2026-10-10)
+
+The demo builds a whole `MeshletScene` for every new cut on a worker and swaps it in
+(`demos/planet/src/stream.rs`).
+- **The cost:** 0.25–0.6 s of latency per new cut, for 400–675 tiles of which a new cut
+  changes 4 to 60.
+- **What it uploads again each time:** every tile's clusters table (about 150 MB at 670
+  tiles), root pages and start pages, and a 512 MiB pool.
+- **The frames:** since staging was chunked, they lose under 10 ms a swap. What remains to win
+  is the latency and the work, not the frame.
+
+**What the scene holds, and what changes when a tile comes or goes:**
+- **Sized by the meshes:**
+  - `meshlets`, the cluster records, with pages rebased on the scene's page numbering;
+  - `meshes`, a record each;
+  - the page store's sources and the streamer's residency: parents, pinned roots, needs,
+    readbacks;
+  - the page table;
+  - the rays' structures: a BLAS each, their addresses, their hit data.
+- **Sized by the instances:**
+  - `instances`;
+  - the cells of 64 and their lists;
+  - the deferred list and the status words (rounded to 1 024 since #220);
+  - the TLAS.
+- **Fixed:** the pool, the materials, the per-frame grids.
+
+**The design:**
+1. **Capacities at build** (`MeshletSceneBuilder::reserve_dynamic(meshes, meshlets, pages,
+   instances)`). Each table is allocated at its capacity, and the counts the shaders read come
+   from the frame block, not from the buffers' sizes.
+2. **Slots and free lists:**
+   - Mesh records and instance records take free slots.
+   - Cluster ranges and page ranges are first-fit in their tables. A planet's tiles vary little
+     in size.
+   - A freed range is reused only after `FRAMES_IN_FLIGHT` frames, so no frame in flight reads
+     a range being written.
+3. **Adding a tile** (`scene.add_mesh`, on the worker): its clusters go to a free range by a
+   transient copy, safe as the range is unread. Its record goes to a free slot. Its pages join
+   the store and the streamer's parents, its roots are pinned into free pool slots, and its BLAS
+   is built on the compute queue.
+4. **Publishing at a frame's start** (main thread, a graph copy pass): the new instances'
+   records, the page table's entries for the new roots, the TLAS rebuilt from the instance list.
+   The TLAS is double-buffered, since frames in flight trace the old one. A removed instance is
+   marked hidden (an instance flag the instance cull skips) and its slot freed later. Nothing
+   moves, so last frame's lists and the cells stay valid.
+5. **Removing a tile:** its instance hidden, then once no frame reads it, its pages evicted and
+   unpinned, its ranges and slot freed, its BLAS and normal map dropped.
+6. **The demo:** the worker cooks and loads tiles as now, then sends "add these, remove those"
+   instead of a scene. A new cut costs its new tiles only, a few milliseconds each.
+
+**The risks:**
+- The residency's invariant that a resident page's parents are resident must hold as pages come
+  and go mid-run.
+- The cells of 64 instances assume neighbours in the table; holes are harmless, but the cells'
+  bounds need rebuilding.
+- The fallback path's draw lists.
+- Determinism (D-016) where the order of slots now depends on history: the held shots never
+  swap, so their captures stay the same.
+
+**The check:** the swap check (`--check-swaps`) and the within-run A/B pairs, as for the whole
+scenes, plus a test that adds and removes meshes against a scene built whole from the same set
+(the same image, 0 px).
+
 ## Verification notes
 
 Checked on 2026-09-26 with WebSearch and WebFetch only, no browser pane. The session's egress
