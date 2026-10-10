@@ -41,6 +41,7 @@ the system you are about to touch.
 | [research/smart-systems.md](research/smart-systems.md) | smart systems: predictive streaming and prefetching (Unreal's streaming sources and cinematic prestreaming, DirectStorage and the PS5's priorities, learned viewport prediction against extrapolation), importance for what is drawn and what is updated (screen-space error budgets, dynamic resolution, VRS, the Significance Manager, the Animation Budget Allocator, Mass, population budgets), scheduling under a frame budget, what is public about GTA VI and Rockstar, learned models on the client (DLSS 5, NTC, neural caches, ML deformers, learned motion) and their hardware path (cooperative matrices and vectors), learned prediction and control (directors, test bots), the server (interest management, server meshing, autoscaling, VACnet), determinism and trust under D-016 | 41 sources (+ earlier files') | done (#222, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
 | [research/galaxy-sky.md](research/galaxy-sky.md) | a galaxy's sky: how many stars an eye sees (the counts per limiting magnitude, Crumey's threshold model, about 8 in space against 6.5 on Earth, where the naked-eye stars lie), how Elite Dangerous, SpaceEngine, Celestia, Gaia Sky, OpenSpace, No Man's Sky, Star Citizen, KSP and Starfield build their skies, the magnitude-limited query over a brightness-sorted tree, points near and a volume far, one sky per system, integer ids and positions under D-016, and the eye, a bridge telescope and the galaxy map as one query | 38 sources, a toy galaxy | done (#223, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
 | [research/assets-and-licences.md](research/assets-and-licences.md) | assets and their licences: four licence classes (redistributable, shippable only, engine-locked, non-commercial) and the clauses that decide them; humans (MetaHuman outside Unreal and its MIT face-rig runtime, MPFB, NAVER's Anny, Meta's MHR, NVIDIA's SOMA, the SMPL family, Character Creator, Daz, Rocketbox, clothing); what a Forge human generator would need; building kits (Quaternius's 2026 licence, Kenney, KayKit, Poly Haven, ambientCG, Sketchfab, BlendKit, Fab and Megascans, Synty, KitBash3D, TurboSquid, CGTrader); interiors, vegetation (SpeedTree's rights ending with the subscription, The Grove), vehicles, PBR textures; a paid shortlist with prices | 42 | done (2026-10-10: the owner's showcase brief, answers part of #231; sources read, read through a reader proxy or search-recorded, graded per entry) |
+| [research/population-simulation.md](research/population-simulation.md) | a persistent population of millions: tiers by what a person is doing (records advanced by events for everyone, coarse agents near players, full agents close, the drawn crowd) and hand-offs without inconsistency; events against ticks, time warp; published throughput (MATSim's Hermes, SUMO, FLAME GPU 2, MANTA, LPSim, Mass, DOTS); bytes per person and totals at 1 M and 4 M; day plans, appointments, needs and personalities; Vuntra City, Cities: Skylines II, SimCity 2013, Census, X4, EVE, Nivalis Nights and others; the server and clients (interest, bandwidth, persistence, a second server); what an 8-thread server with an RTX 3080 holds; patents (Improbable, Take-Two, Activision) | 31 | done (2026-10-10: the owner's showcase brief; sources read or search-recorded, graded per entry) |
 
 ## Verdicts
 
@@ -375,6 +376,19 @@ packing in a release. Fab and Textures.com also forbid mixing their content into
 licences. The SMPL family is non-commercial. Free and paid sources alike lack a realistic building
 kit with interiors, futuristic vehicles in one style, and park trees, so those are made, or grown
 with a tree tool.
+
+**A persistent population.** At any moment nearly everyone is inside a place or on a known route
+begun at a known time. So a million people is a data problem, not an AI problem. Kept as records of
+about 100–130 bytes (0.15–0.2 GB at a million with the routes and graphs) and advanced by events
+rather than ticks, the whole population costs a few percent of a core. Even MATSim's queue
+simulation, scaled to a clock four times real time, puts it at about 1.4 cores at four million. The
+costly people are the hundred or two near each player, which every shipped game caps (Assassin's
+Creed Unity's 40 full AIs, Vuntra City's roughly 100 spawned out of four million). The seams hold
+when every tier answers "where is this person now" from the same record. The server's CPU decides
+everything (D-016), the GPU generates offline and draws the crowd on the client, and the near people
+cost 10–20 KB/s per client. Improbable's interest and hand-off patents (to 2036–2037) and Take-Two's
+coarse-graph routing patent (to 2039) each have an alternative that was checked against their
+titles and summaries; their claims were not read in full.
 
 ## Still to research
 
