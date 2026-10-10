@@ -133,7 +133,10 @@ the runtime SDK, node-locked or floating). Current version 10.2.0. Unity acquire
 2021.
 *Bearing:* at $19/month it is worth having as the *reference implementation* of the pipeline Forge
 is building and for hero trees; do not take the runtime SDK dependency — everything it does at
-runtime (wind, LOD, billboards) is in this document.
+runtime (wind, LOD, billboards) is in this document. *Update 2026-10-10:* Unity's current terms end
+the rights to trees made with it when the subscription ends, and a production not yet public by
+then may not be released with them (`assets-and-licences.md` §6). The Grove's lifetime licence has
+no such clause.
 
 **Epic Games. "Unreal Engine 5.6 is now available" (3 June 2025) and "Unreal Engine 5.7 is now
 available" (12 November 2025).** [docs] [recent]

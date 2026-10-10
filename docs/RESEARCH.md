@@ -40,6 +40,7 @@ the system you are about to touch.
 | [research/game-ai-ecosystems.md](research/game-ai-ecosystems.md) | game AI and ecosystems: decision architectures (behaviour trees, utility over needs, GOAP and HTN planners, schedules and packages, smart objects, the director and barks, where learned policies stand), navigation (Recast's tiles rebuilt where the terrain changes, Polyanya, flow fields, ORCA, Reynolds' steering, sparse voxel octrees for flight, lanes for traffic), crowds and the simulation LOD (AC Unity's 40/120/10 000, A-Life and Stalker 2's lesson, Census), animals and their populations (needs, senses, herds, territories, Wolf Sheep Predation and ODD), ship AI in 6 DoF (Elite, FreeSpace, Isaacs, formations, convex landing), the planet-scale layers with their hand-offs and digests, the Rust crates | 41 (+ a table of 16 projects) | done (the owner's brief behind #84, #87, #90 and #80; Phase 3's `forge-sim`; thirteen repositories read on GitHub, the rest confirmed by search only, #99) |
 | [research/smart-systems.md](research/smart-systems.md) | smart systems: predictive streaming and prefetching (Unreal's streaming sources and cinematic prestreaming, DirectStorage and the PS5's priorities, learned viewport prediction against extrapolation), importance for what is drawn and what is updated (screen-space error budgets, dynamic resolution, VRS, the Significance Manager, the Animation Budget Allocator, Mass, population budgets), scheduling under a frame budget, what is public about GTA VI and Rockstar, learned models on the client (DLSS 5, NTC, neural caches, ML deformers, learned motion) and their hardware path (cooperative matrices and vectors), learned prediction and control (directors, test bots), the server (interest management, server meshing, autoscaling, VACnet), determinism and trust under D-016 | 41 sources (+ earlier files') | done (#222, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
 | [research/galaxy-sky.md](research/galaxy-sky.md) | a galaxy's sky: how many stars an eye sees (the counts per limiting magnitude, Crumey's threshold model, about 8 in space against 6.5 on Earth, where the naked-eye stars lie), how Elite Dangerous, SpaceEngine, Celestia, Gaia Sky, OpenSpace, No Man's Sky, Star Citizen, KSP and Starfield build their skies, the magnitude-limited query over a brightness-sorted tree, points near and a volume far, one sky per system, integer ids and positions under D-016, and the eye, a bridge telescope and the galaxy map as one query | 38 sources, a toy galaxy | done (#223, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
+| [research/assets-and-licences.md](research/assets-and-licences.md) | assets and their licences: four licence classes (redistributable, shippable only, engine-locked, non-commercial) and the clauses that decide them; humans (MetaHuman outside Unreal and its MIT face-rig runtime, MPFB, NAVER's Anny, Meta's MHR, NVIDIA's SOMA, the SMPL family, Character Creator, Daz, Rocketbox, clothing); what a Forge human generator would need; building kits (Quaternius's 2026 licence, Kenney, KayKit, Poly Haven, ambientCG, Sketchfab, BlendKit, Fab and Megascans, Synty, KitBash3D, TurboSquid, CGTrader); interiors, vegetation (SpeedTree's rights ending with the subscription, The Grove), vehicles, PBR textures; a paid shortlist with prices | 42 | done (2026-10-10: the owner's showcase brief, answers part of #231; sources read, read through a reader proxy or search-recorded, graded per entry) |
 
 ## Verdicts
 
@@ -360,6 +361,20 @@ to. One sky per system is exact to half a pixel. The light fainter than the limi
 band) and the dust belong in a coarse volume, which is what voxels are for. The eye, a bridge
 telescope and the galaxy map are the same query with a field, a limit and a centre. Nothing is
 needed before the galaxy phase; its decision comes after D-057.
+
+**Assets and licences.** Free, redistributable assets are enough for surfaces, props and
+placeholders, but not for release-quality people, buildings and vehicles. Poly Haven and ambientCG
+(CC0 scans), Kenney and KayKit (CC0 low-poly), MPFB's assets (CC0, some CC-BY), NAVER's Anny (Apache
+code over CC0 data) and Microsoft's Rocketbox (MIT) may be fetched by a public repository. Quaternius
+moved to a no-redistribution licence on 28 August 2026. Everything at AAA quality can ship in a
+game but may not be redistributed: MetaHuman (any engine since June 2025, free below $1 M; its DNA
+and RigLogic runtime MIT since June 2026), Fab and Megascans, Reallusion, Daz, KitBash3D,
+TurboSquid, CGTrader, Substance assets, trees from SpeedTree or The Grove (SpeedTree's rights end
+with the subscription). Most of these licences forbid AI training and ask for extraction-resistant
+packing in a release. Fab and Textures.com also forbid mixing their content into open-source
+licences. The SMPL family is non-commercial. Free and paid sources alike lack a realistic building
+kit with interiors, futuristic vehicles in one style, and park trees, so those are made, or grown
+with a tree tool.
 
 ## Still to research
 
