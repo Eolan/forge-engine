@@ -155,6 +155,26 @@ against D-017's class 2.
   children. Side by side the two frames look alike, but such a patch would show as a faint pop.
   The swap rule, splitting a cell where its error would show rather than at a distance, is the
   remedy to come.
+- **Wider rings** (`rings = 2.3`, a sample under a pixel where a cell splits) move the patches
+  out to the horizon, fainter, but 2 of 4 swaps still peak at 0.15. The tiles over Mont Blanc
+  double (about 1 200) and a new scene takes 0.7 s.
+- **Why: the normals, not the heights.**
+  - Where a level-13 cell splits, about 2 km from the camera, its children add noise of 10–20 m
+    wavelength. Their height differs by about 0.3 m, which is 0.13 px: the research's swap
+    criterion, on the height's error, already holds.
+  - Their slopes differ by about 8°, which is what the snow's shading and the layers' slope
+    rules show.
+  - The cluster DAG keeps its vertices' own normals as it simplifies (terrain cooks with
+    `normal_weight` 0), so a fine tile's coarse clusters carry samples of its finest slopes,
+    where its parent's normals are smooth.
+  - Each level adds an octave of slope, and a swap reveals it, until the children's finest
+    wavelength falls under a pixel: about 5 rings, three times the tiles.
+- **The remedy to come:** a normal map per tile, mip-mapped, at twice its vertices' resolution
+  and from the next level's height. The parent then already shows its children's slopes, and
+  the mips filter the slopes a coarse cluster's vertices only sample.
+- **The horizon test** D-056 planned for the instance cull is left out. The whole instance cull
+  takes 0.014 ms a frame for the planet's 400–700 tiles (Tracy, the tour), and the depth pyramid
+  already culls the far side's tiles.
 
 What the engine gained for it:
 - **`MeshletSceneBuilder::set_material_rows`:** scenes built in turn over one texture set, which

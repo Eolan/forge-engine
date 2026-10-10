@@ -107,9 +107,12 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   - **After the owner's review ✅** (2026-10-10): the Blue Marble, a sea mask, the real stars, the
     Moon and the Earth in each other's sky, and a tour of both.
   - **The tiles follow the camera ✅** (2026-10-10): a new cut built on a worker as the camera
-    flies, its scene swapped in.
-  - **Next:** the scene taking and freeing tiles in place (no whole-scene builds), then a finer
-    elevation for the mountains (a download to ask for).
+    flies, its scene swapped in; each swap checked with ꟻLIP (`--check-swaps`).
+  - **Next:**
+    - a mip-mapped normal map per tile, so a swap changes no slope that shows: the swaps'
+      remaining patches are the finer tiles' normals;
+    - then the scene taking and freeing tiles in place, rather than whole-scene builds;
+    - a finer elevation for the mountains (a download to ask for).
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

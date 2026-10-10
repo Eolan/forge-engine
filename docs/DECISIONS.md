@@ -3397,8 +3397,16 @@ Marble, the Deep Star Maps):
   its frames before and after compared with ꟻLIP. On the tour, every mean is at most 0.0027.
   Three swaps of 14 peak at 0.15–0.24 on a patch: the snow's shading near the camera over Mont
   Blanc as a cell splits.
-- **Next:** the swap rule (a cell split where its error would show), then the scene taking and
-  freeing tiles in place, rather than whole scenes built again.
+  - **The patches are the normals' doing, not the heights'.** Where a cell splits, its
+    children's heights differ by 0.13 px, so the research's swap criterion on the height's error
+    holds, but their slopes differ by about 8°. The DAG also keeps each vertex's own normal as
+    it simplifies, so a fine tile's coarse clusters sample its finest slopes.
+  - **Wider rings** (2.3) moved the patches to the horizon at twice the tiles.
+- **The horizon test** of step 1 is left out: the planet's whole instance cull takes 0.014 ms
+  a frame, and the depth pyramid culls the far side.
+- **Next:** a mip-mapped normal map per tile, at twice its vertices' resolution and from the
+  next level's height, so a swap changes no slope that shows. Then the scene taking and freeing
+  tiles in place, rather than whole scenes built again.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):
