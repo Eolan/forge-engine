@@ -6,7 +6,7 @@ use bytemuck::Pod;
 use gpu_allocator::MemoryLocation;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 
-use crate::device::Device;
+use crate::device::{Device, QueueKind};
 use crate::error::Result;
 use crate::memory_report::MemoryCategory;
 
@@ -495,7 +495,8 @@ impl Device {
             category,
             name,
         })?;
-        self.execute_transient(|device, cb| {
+        // On the transfer queue: beside the frames when a worker uploads (#220).
+        self.execute_transient_on(QueueKind::Transfer, |device, cb| {
             let region = vk::BufferCopy::default().size(size);
             // SAFETY: both buffers are live and the copy is within bounds.
             unsafe { device.cmd_copy_buffer(cb, staging.raw(), buffer.raw(), &[region]) };
@@ -522,7 +523,7 @@ impl Device {
             name: "staging",
         })?;
         staging.write(0, data);
-        self.execute_transient(|device, cb| {
+        self.execute_transient_on(QueueKind::Transfer, |device, cb| {
             let region = vk::BufferCopy::default()
                 .dst_offset(offset)
                 .size(data.len() as u64);

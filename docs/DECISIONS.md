@@ -3385,7 +3385,16 @@ Marble, the Deep Star Maps):
 - **A tour** (`--tour`, 2026-10-10): the Earth's places from orbit to Èze and the Moon over the
   sea; the Moon from 4 000 km to Tycho and the Earth over it. Each body in the other's sky is a
   disc of its colour map, lit by the same sun (`forge_render::SkyBody`).
-- **Next:** the tiles streamed while flying.
+- **The tiles follow the camera** (2026-10-10, `docs/demos/planet.md`, "The tiles as the camera
+  flies"): the cut is made again around where the camera will be and where the run heads, and a
+  worker builds its whole scene, which the demo swaps in at a frame's start. The engine gained
+  scenes over one shared texture set, one-shot copies on the transfer queue and structure builds
+  on the compute queue, BLAS uploads in two copies, and per-instance transients that keep the
+  graph's layout across scenes of a few tiles more or less. A swap still stalls the frames, in
+  proportion to what the whole new scene uploads: 11 ms at 200 tiles, up to 50 ms at 670,
+  against 2 ms uncapped.
+- **Next:** the scene taking and freeing tiles in place, which ends the whole-scene builds and
+  their stall.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

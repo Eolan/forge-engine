@@ -1348,6 +1348,10 @@ scene.
 - **Start:** the Earth's elevation loads in 0.5 s (466 MB and its pyramid), its 16K colour map in
   about 7 s (decoded and its mips made on the finishing thread, every start). The 492 tiles take
   17.6 s to make and cook the first time, then load from the cache in under 0.1 s.
+- **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
+  a new scene takes 0.26–0.47 s on a worker for 400–675 tiles, and each swap stalls the frames:
+  the longest frame between swaps reaches 23–50 ms against 2 ms uncapped, in proportion to what
+  the new scene uploads. The scene taking and freeing tiles in place is the fix to come.
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

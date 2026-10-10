@@ -67,10 +67,12 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
     locked.
   - Each is cooked into a cluster DAG through the cache (`cache/meshes/earth@face-level-x-y`),
     keyed by the world's shape, the map's digest and the code (not by its colours).
-- **The cut** (`PlanetWorld::tile_cut`): a quadtree of cells. A cell splits while the target lies
-  within its side plus half its diagonal, down to level 14 on the Earth (tiles of 611 m, samples
-  2.4 m apart) and 12 on the Moon. Each tile's DAG coarsens with distance, so the 600 m tiles
-  under the camera cost almost nothing from orbit.
+- **The cut** (`PlanetWorld::tile_cut_around`): a quadtree of cells around a few points, the
+  camera and where the run heads (the tour's next stop, the descent's target). A cell splits while
+  one of them lies within its side plus half its diagonal, down to level 14 on the Earth (tiles of
+  611 m, samples 2.4 m apart) and 12 on the Moon. A camera high over the ground splits no cell much
+  smaller than its height. Each tile's DAG coarsens with distance, so the 600 m tiles under the
+  camera cost almost nothing from orbit.
 - **Drawing:** the cluster renderer, streamed through a 512 MiB pool. The start view's pages load
   before the first frame. Each tile is an instance placed at its `f64` position
   (`add_instance_at`), turned so the target stands at the world's origin with +Y up.
@@ -100,6 +102,54 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 - **Shadows:** the sun's rays against each level's tiles cut as one surface (120 000 triangles a
   level). Every tile is ground to the rays (`set_ray_terrain`), so the finest tiles' shadows
   start clear of the rays' cut, as the island's do.
+
+## The tiles as the camera flies
+
+The cut follows the camera (`demos/planet/src/stream.rs`). Every frame the demo works out the cut
+around where the camera will be once a new scene is ready (the last scene's build time ahead, on
+the tour and the descent) and where the run heads. When that cut is finer somewhere than the one
+drawn, or the one drawn holds half as many tiles again, a worker builds its scene:
+- **The tiles:** it keeps those of the scene drawn, loads the ones it lacks from the cache, or
+  makes and cooks them on a quarter of the hardware threads (half the cores), so the frames keep
+  theirs.
+- **The scene:** it builds a whole one, with its tables, its rays' structures and the pages its
+  first view wants.
+- **The swap:** the demo swaps it in at the start of a frame, and the old one goes to the frames'
+  deferred deletion, freed once no frame in flight reads it. The tiles keep their places in the
+  world, so TAA keeps its history and the sky stays the same.
+
+A cut that would only coarsen waits for the next one that refines: finer tiles where they are no
+longer needed cost little. The tour asks for its next stop's tiles while it holds at the one
+before, so they are there when it arrives. They are made once, then loaded from the cache.
+
+| The Earth's tour, uncapped (2026-10-10) | Tiles | A new scene | Swaps |
+|---|---|---|---|
+| The Alps from 400 km, then on to Corsica | 204 | none: the cut only coarsens | 0 |
+| Corsica to Mont Blanc (17 s) | 393–423 | 0.26–0.31 s | 24 |
+| Over Mont Blanc, then towards Èze | 525–675 | 0.34–0.47 s | 29 in its first 20 s |
+
+- **A tile not in the cache** adds 0.26 s on a worker thread. The tour's tiles are made once.
+- **The first scene,** behind the loading screen: 0.15 s for 204 tiles.
+- **The stall:** a new scene moves 50–300 MB (its clusters' table, its tiles' root pages, the
+  pages of its first view) and allocates a pool of 512 MiB. While it does, the GPU stops
+  between two frames. The longest frame between two swaps is 11 ms at 200 tiles, 23–28 ms at 400
+  and 30–50 ms at 550–670, against 2 ms uncapped. A Tracy capture shows the GPU idle after a
+  present while the CPU waits for its frame slot. The pool's size, the rays' structures
+  (`--no-shadows`) and the queue the copies take each made no difference; the amount each swap
+  moves did. The next step moves only the tiles that change.
+
+What the engine gained for it:
+- **`MeshletSceneBuilder::set_material_rows`:** scenes built in turn over one texture set, which
+  the demo keeps.
+- **`Device::execute_transient_on`:** staged copies run on the transfer queue and structures are
+  built on the compute queue, beside the frames rather than between them (the graphics queue
+  without them, or with `FORGE_ASYNC=0`).
+- **`Device::build_blases`** uploads every mesh's triangles in two copies rather than two a mesh.
+  Each copy waited behind the frames in flight: a scene of 200 tiles took 0.65 s to build while
+  frames ran, now 0.15 s.
+- **The frame's per-instance transients** (the instance culls' status words, the deferred
+  instances) are sized for the instances rounded up to 1 024. A scene a few tiles larger or
+  smaller keeps the graph's layout, where before the 46 MB heap was laid out again at every swap.
 
 ## The tour and the bodies in the sky
 
@@ -153,13 +203,15 @@ air is a rim of blue light at its limb.
 
 ## Left for later (#220 and D-056's steps)
 
-- **Tiles that come and go as the camera flies:** the cut is made once at start, so the camera
-  stays near the target. Next: the cut made again around the camera on a worker and the scene
-  swapped, then the renderer's scene taking and freeing meshes at run time, and a tile cooked in
-  milliseconds rather than a quarter of a second (a regular grid's DAG built directly).
+- **A scene that takes and frees tiles in place,** rather than a whole scene built again for each
+  new cut, with the stall that brings. Also a tile cooked in milliseconds rather than a quarter of
+  a second (a regular grid's DAG built directly).
 - **Clouds for the Earth seen from afar,** as the Moon and orbit see it.
-- **The tour's low stops away from the target** (Mont Blanc) draw coarse tiles until they stream;
-  the snow layer on them reads as cloud.
+- **The Alps look like rolling hills** from the Mont Blanc stop. ETOPO's samples are 1.85 km
+  apart, so peaks and valleys narrower than that are smoothed away, and the noise under them adds
+  no ridges. They need a finer elevation for the mountains (Copernicus GLO-30, 30 m, free, a
+  download to ask for) or ridged detail where the map stands high. The snow layer on them reads
+  as cloud.
 - **Steps where levels meet:** a tile next to a coarser one meets it with a step its skirt fills.
   The research's swap rule (a level only where its parent errs under a pixel) comes with
   streaming.

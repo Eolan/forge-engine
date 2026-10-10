@@ -5,8 +5,8 @@
 //! samples near the ground. The sky is the island's (Hillaire's atmosphere at the planet's
 //! radius), the shading the layered ground's with its layers by height, slope and latitude.
 //!
-//! The first step draws a fixed set of tiles chosen at start; the tiles that come and go as the
-//! camera flies follow (#220).
+//! The tiles follow the camera (`stream`): a worker makes the cut again around where it is going,
+//! builds its scene and the demo swaps it in.
 //!
 //! Controls: P pause the descent and fly (right mouse look, WASD, Shift faster), T TAA, O
 //! occlusion, C cone culling, X show culled, K LOD colours, M meshlet colours, J shadows, N
@@ -14,7 +14,11 @@
 
 #![forbid(unsafe_code)]
 
+mod stream;
+
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, bail};
@@ -22,22 +26,22 @@ use clap::{Parser, ValueEnum};
 use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input, Setup};
 use forge_core::MaterialTable;
 use forge_core::material::{Material, RenderLayer, ShadingClass, TextureId};
-use forge_geom::{CookOptions, MeshletMesh};
-use forge_render::material::TextureSet;
+use forge_geom::MeshletMesh;
+use forge_render::material::{TextureSet, gpu_rows};
 use forge_render::meshlet::DrawParams;
 use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CellPos, CullCamera,
     CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LuminanceMeter, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, PlanetView, Residency, SkyBody, SkyBodyView, SkyBox,
-    SkyBoxPlanet, SkyParams, Starfield, StartView, StreamingConfig, SwRaster, Taa, Tonemap,
-    sky_from_body,
+    MeshletScene, PlanetView, Residency, SkyBody, SkyBodyView, SkyBox, SkyBoxPlanet, SkyParams,
+    Starfield, StartView, StreamingConfig, SwRaster, Taa, Tonemap, sky_from_body,
 };
 use forge_task::TaskPool;
-use forge_terrain::planet::{SkyBodyParams, TourStop, tile_mesh, tile_name, tile_origin};
+use forge_terrain::planet::{SkyBodyParams, TourStop};
 use forge_terrain::{Planet, PlanetWorld};
 use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
+use stream::{SceneParts, TileStream, needs_new_cut};
 use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
@@ -208,27 +212,49 @@ enum Shot {
 /// How far over the target's ground it ends, metres.
 const LOW: f64 = 60.0;
 
-/// The planet's tiles, cooked behind the loading screen.
+/// The planet's first tiles, cooked behind the loading screen, and where the run starts.
 struct Tiles {
-    planet: Planet,
-    /// The point the cut is finest around (a direction from the planet's centre).
+    planet: Arc<Planet>,
+    /// Its name in the cache (`earth`, `moon`).
+    body: String,
+    /// The point the descent ends over (a direction from the planet's centre) and its ground's
+    /// height, metres; the planet's frame in the world around it.
     target: DVec3,
+    target_height: f64,
+    placement: Placement,
+    /// The first frame's camera, and the cut around it and where the run is heading.
+    camera: FlyCamera,
     cells: Vec<CellId>,
-    meshes: Vec<MeshletMesh>,
+    meshes: Vec<Arc<MeshletMesh>>,
     cooked: usize,
     ms: f64,
 }
 
-/// Cooks the tiles of the cut around the world's target in parallel; a tile in the cache under
-/// the planet's key loads instead. `body` names them in the cache.
-fn cook_tiles(planet: Planet, body: &str, streamed: bool) -> Result<Tiles> {
+/// The first frame's camera and the cut around it, its tiles loaded from the cache under the
+/// planet's key or made and cooked in parallel. `body` names them in the cache.
+fn cook_tiles(planet: Planet, body: String, args: &Args) -> Result<Tiles> {
     let start = Instant::now();
+    let planet = Arc::new(planet);
     let world = &planet.world;
     let fine = world.min_wavelength(world.tiles.finest);
     let Some(target) = planet.target(50.0) else {
         bail!("no coast within a quarter of the planet from the equator: name a [view] target");
     };
-    let cells = world.tile_cut(target);
+    let target_height = planet.ground(target, fine);
+    let placement = Placement::new(world, target);
+    let mut camera = FlyCamera::default();
+    pose(&planet, &placement, target_height, args, 0.0, &mut camera);
+    let points = focus(
+        &planet,
+        &placement,
+        target,
+        target_height,
+        args,
+        0.0,
+        &camera,
+        false,
+    );
+    let cells = world.tile_cut_around(&points);
     let mut per_level = [0u32; 21];
     for c in &cells {
         per_level[usize::from(c.level())] += 1;
@@ -236,53 +262,32 @@ fn cook_tiles(planet: Planet, body: &str, streamed: bool) -> Result<Tiles> {
     tracing::info!(
         tiles = cells.len(),
         per_level = ?&per_level[..=usize::from(world.tiles.finest)],
-        target_height_m = %format_args!("{:.1}", planet.height(target, fine)),
+        target_height_m = %format_args!("{target_height:.1}"),
         "the planet's cut"
     );
-    let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
-    let key = planet.tile_key();
-    let pool = TaskPool::client();
-    let mut slots: Vec<Option<(MeshletMesh, bool)>> = cells.iter().map(|_| None).collect();
-    pool.scope(|s| {
-        for (&cell, slot) in cells.iter().zip(slots.iter_mut()) {
-            let (cache, key, planet) = (&cache, &key, &planet);
-            s.spawn(move |_| {
-                let name = tile_name(body, cell);
-                let (done, stored) = forge_geom::cache::cook_cached(
-                    cache,
-                    &name,
-                    key,
-                    CookOptions { normal_weight: 0.0 },
-                    !streamed,
-                    || tile_mesh(planet, cell),
-                );
-                if let Err(error) = stored {
-                    tracing::warn!(tile = %name, %error, "cooked tile not cached");
-                }
-                *slot = Some((done.mesh, done.from_cache));
-            });
-        }
-    });
-    let mut cooked = 0;
-    let meshes = slots
-        .into_iter()
-        .map(|slot| {
-            let (mesh, from_cache) = slot.expect("every tile cooked");
-            cooked += usize::from(!from_cache);
-            mesh
-        })
-        .collect();
+    let (meshes, cooked, loaded) = stream::cook_cells(
+        &planet,
+        &body,
+        args.resident,
+        &cells,
+        &HashMap::new(),
+        &TaskPool::client(),
+    );
     let ms = start.elapsed().as_secs_f64() * 1e3;
     tracing::info!(
         tiles = cells.len(),
         cooked,
-        loaded = cells.len() - cooked,
+        loaded,
         ms = %format_args!("{ms:.0}"),
         "the planet's tiles"
     );
     Ok(Tiles {
         planet,
+        body,
         target,
+        target_height,
+        placement,
+        camera,
         cells,
         meshes,
         cooked,
@@ -460,9 +465,11 @@ impl Placement {
 
 struct PlanetDemo {
     args: Args,
-    planet: Planet,
+    planet: Arc<Planet>,
     placement: Placement,
-    /// The target's ground, metres over the sea.
+    /// The point the descent ends over (a direction from the planet's centre) and its ground,
+    /// metres over the sea.
+    target: DVec3,
     target_height: f64,
     /// The body's colour map's and sea mask's sampled indices, if any.
     colour_map: Option<u32>,
@@ -470,6 +477,14 @@ struct PlanetDemo {
     tiles: usize,
     renderer: MeshletRenderer,
     scene: MeshletScene,
+    /// The worker making the cut again as the camera flies, and whether it failed (the cut then
+    /// stays).
+    stream: TileStream,
+    stream_failed: bool,
+    /// The longest frame since the last swap, seconds, for its log.
+    longest_frame: f32,
+    /// The textures every scene's materials sample, kept alive across the swaps.
+    _textures: TextureSet,
     /// The air and its sky (the Earth's), or none (the Moon's: space's black and the stars).
     air: Option<(Atmosphere, GroundSky)>,
     /// The same air seen from the ground under the camera, whose sky lights and is reflected by
@@ -509,15 +524,17 @@ impl PlanetDemo {
     fn new(ctx: &Setup, args: Args, tiles: Tiles) -> Result<Self> {
         let Tiles {
             planet,
+            body,
             target,
+            target_height,
+            placement,
+            camera,
             cells,
             meshes,
             cooked,
             ms,
         } = tiles;
-        let start = Instant::now();
         let world = planet.world.clone();
-        let placement = Placement::new(&world, target);
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         // The sun over the coast, through the air (the coast's sunlight lights every tile).
         let elevation = world.view.sun.1.to_radians();
@@ -600,7 +617,6 @@ impl PlanetDemo {
             * glam::DMat3::from_quat(placement.rotation.inverse()))
         .as_mat3();
 
-        let mut builder = MeshletSceneBuilder::new();
         let PlanetMaterials {
             table,
             set,
@@ -608,29 +624,6 @@ impl PlanetDemo {
             colour_map,
             sea_mask,
         } = planet_materials(ctx, &world)?;
-        builder.set_materials(&table, Some(set));
-        builder.set_ray_traced(!args.no_shadows);
-        let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
-        // Every tile is ground to the rays, the finest under a kilometre across too.
-        builder.set_ray_terrain(&ids);
-        // The rays cut each level's tiles as one surface: a tile far from the coast is coarse
-        // anyway, and its level's budget keeps the structures bounded.
-        for level in 0..=world.tiles.finest {
-            let members: Vec<_> = cells
-                .iter()
-                .zip(&ids)
-                .filter(|(c, _)| c.level() == level)
-                .map(|(_, &id)| id)
-                .collect();
-            if !members.is_empty() {
-                builder.set_ray_group(&members, 120_000);
-            }
-        }
-        let rotation = placement.rotation.as_quat();
-        for (&cell, &id) in cells.iter().zip(&ids) {
-            let at = placement.world_point(tile_origin(&world, cell));
-            builder.add_instance_at(id, CellPos::from_f64(at), rotation, 1.0, ground);
-        }
         let residency = if args.resident {
             Residency::All
         } else {
@@ -639,30 +632,27 @@ impl PlanetDemo {
                 args.stream_upload,
             ))
         };
-        // The descent's first view: a streamed scene loads its pages before the first frame (#121),
+        let parts = SceneParts {
+            planet: Arc::clone(&planet),
+            body,
+            placement,
+            rows: gpu_rows(&table, Some(&set)),
+            ground,
+            ray_traced: !args.no_shadows,
+            residency,
+        };
+        let built = Instant::now();
+        // The first frame's view: a streamed scene loads its pages before the first frame (#121),
         // so a shot's frames are the same every run.
-        let fine = world.min_wavelength(world.tiles.finest);
-        let target_height = planet.ground(target, fine);
-        let mut camera = FlyCamera::default();
-        place(
-            args.shot,
-            0.0,
-            args.duration,
-            &planet,
-            &placement,
-            target_height,
-            &mut camera,
-        );
-        builder.set_start_view(StartView {
-            position: CellPos::from_f64(camera.position.as_dvec3()),
-            p11: camera.projection(ctx.aspect()).y_axis.y,
-            near: camera.near,
-            viewport_height: ctx.extent().height,
-            lod_threshold_px: args.lod_error,
-        });
-        let mut scene = builder.build_with(&ctx.device, residency)?;
-        scene.build_tlas(&ctx.device, &ctx.shaders)?;
-        scene.load_start_view(&ctx.device)?;
+        let scene = stream::build_scene(
+            &ctx.device,
+            &ctx.shaders,
+            &parts,
+            &cells,
+            &meshes,
+            start_view(&camera, ctx.aspect(), ctx.extent().height, args.lod_error),
+        )?;
+        let build = built.elapsed().as_secs_f64();
         if let Some(rays) = scene.rays() {
             tracing::info!(
                 blas_triangles = rays.triangles,
@@ -676,9 +666,18 @@ impl PlanetDemo {
             cook_ms = %format_args!("{ms:.0}"),
             pages = scene.page_count,
             triangles = scene.total_triangles,
-            build_ms = start.elapsed().as_millis(),
+            build_ms = %format_args!("{:.0}", build * 1e3),
             "the planet's scene"
         );
+        let tiles = cells.len();
+        let stream = TileStream::new(
+            Arc::clone(&ctx.device),
+            ctx.shaders.clone(),
+            parts,
+            cells,
+            meshes,
+            build,
+        )?;
         let mut flags = CullFlags::DEFAULT;
         if !args.no_shadows {
             flags.0 |= CullFlags::SHADOWS;
@@ -714,12 +713,17 @@ impl PlanetDemo {
             tonemap: args.tonemap,
             planet,
             placement,
+            target,
             target_height,
             colour_map,
             sea_mask,
-            tiles: cells.len(),
+            tiles,
             renderer,
             scene,
+            stream,
+            stream_failed: false,
+            longest_frame: 0.0,
+            _textures: set,
             air,
             ground_air,
             starfield,
@@ -749,35 +753,85 @@ impl PlanetDemo {
 
     /// Places the camera on the tour where it is now (`--tour`, `--tour-stop`), or on the descent.
     fn place_camera(&mut self) {
-        let stops = &self.planet.world.view.tour;
-        if (self.args.tour || self.args.tour_stop.is_some()) && !stops.is_empty() {
-            let time = match self.args.tour_stop {
-                // Held a second into its stay, as a capture wants.
-                Some(n) => {
-                    let n = n.min(stops.len() - 1);
-                    stops[..=n].iter().map(|s| s.travel).sum::<f64>()
-                        + stops[..n].iter().map(|s| s.hold).sum::<f64>()
-                        + 1.0
-                }
-                None => f64::from(self.time),
-            };
-            if let Some(name) = tour(stops, time, &self.planet, &self.placement, &mut self.camera)
-                && self.tour_stop.as_deref() != Some(name)
-            {
-                tracing::info!(stop = name, time = %format_args!("{time:.1}"), "tour");
-                self.tour_stop = Some(name.to_owned());
-            }
-            return;
-        }
-        place(
-            self.args.shot,
-            self.time,
-            self.args.duration,
+        let held = pose(
             &self.planet,
             &self.placement,
             self.target_height,
+            &self.args,
+            f64::from(self.time),
             &mut self.camera,
         );
+        if let Some(name) = held
+            && self.tour_stop.as_deref() != Some(name)
+        {
+            tracing::info!(stop = name, time = %format_args!("{:.1}", self.time), "tour");
+            self.tour_stop = Some(name.to_owned());
+        }
+    }
+
+    /// Swaps in the scene of a new cut when the worker has one ready, and asks for the cut
+    /// around where the camera will be when the next one is ready (`stream`).
+    fn stream_tiles(&mut self, ctx: &mut Context) {
+        if let Some(result) = self.stream.take() {
+            match result {
+                Ok(built) => {
+                    let old = std::mem::replace(&mut self.scene, built.scene);
+                    ctx.frames.destroy_later(old);
+                    self.tiles = built.cells.len();
+                    tracing::info!(
+                        tiles = built.cells.len(),
+                        cooked = built.cooked,
+                        loaded = built.loaded,
+                        ms = %format_args!("{:.0}", built.seconds * 1e3),
+                        cook_ms = %format_args!("{:.0}", built.cook_seconds * 1e3),
+                        build_ms = %format_args!("{:.0}", built.build_seconds * 1e3),
+                        longest_frame_ms = %format_args!("{:.1}", self.longest_frame * 1e3),
+                        "a new cut of the tiles swapped in"
+                    );
+                    self.longest_frame = 0.0;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "a new cut of the tiles failed: the cut stays");
+                    self.stream_failed = true;
+                }
+            }
+        }
+        if self.stream_failed {
+            return;
+        }
+        // Where the camera will be once a scene asked for now is ready.
+        let time = f64::from(self.time) + self.stream.latency.clamp(0.25, 4.0);
+        let mut camera = self.camera.clone();
+        if !self.paused {
+            pose(
+                &self.planet,
+                &self.placement,
+                self.target_height,
+                &self.args,
+                time,
+                &mut camera,
+            );
+        }
+        let points = focus(
+            &self.planet,
+            &self.placement,
+            self.target,
+            self.target_height,
+            &self.args,
+            time,
+            &camera,
+            self.paused,
+        );
+        let cells = self.planet.world.tile_cut_around(&points);
+        if needs_new_cut(&self.stream.current, &cells) {
+            let start = start_view(
+                &camera,
+                ctx.aspect(),
+                ctx.extent().height,
+                self.args.lod_error,
+            );
+            self.stream.ask(cells, start);
+        }
     }
 
     /// The camera's height over the sea and over the ground under it, metres.
@@ -791,6 +845,121 @@ impl PlanetDemo {
         let ground = self.planet.ground(self.placement.direction(p), fine);
         (over_sea, over_sea - ground)
     }
+}
+
+/// The view a scene's pages are loaded for before its first frame (#121): `camera`'s.
+fn start_view(camera: &FlyCamera, aspect: f32, height: u32, lod_error: f32) -> StartView {
+    StartView {
+        position: CellPos::from_f64(camera.position.as_dvec3()),
+        p11: camera.projection(aspect).y_axis.y,
+        near: camera.near,
+        viewport_height: height,
+        lod_threshold_px: lod_error,
+    }
+}
+
+/// Whether the run flies the world's tour (`--tour`, `--tour-stop`).
+fn on_tour(args: &Args, stops: &[TourStop]) -> bool {
+    (args.tour || args.tour_stop.is_some()) && !stops.is_empty()
+}
+
+/// The tour's time `time` seconds into the run: with `--tour-stop N`, a second into stop N's
+/// stay, as a capture wants.
+fn tour_time(args: &Args, stops: &[TourStop], time: f64) -> f64 {
+    match args.tour_stop {
+        Some(n) => {
+            let n = n.min(stops.len() - 1);
+            stops[..=n].iter().map(|s| s.travel).sum::<f64>()
+                + stops[..n].iter().map(|s| s.hold).sum::<f64>()
+                + 1.0
+        }
+        None => time,
+    }
+}
+
+/// `camera` `time` seconds into the run: on the world's tour, or on the descent. Returns the
+/// tour's stop it holds at.
+fn pose<'a>(
+    planet: &'a Planet,
+    placement: &Placement,
+    target_height: f64,
+    args: &Args,
+    time: f64,
+    camera: &mut FlyCamera,
+) -> Option<&'a str> {
+    let stops = &planet.world.view.tour;
+    if on_tour(args, stops) {
+        return tour(
+            stops,
+            tour_time(args, stops, time),
+            planet,
+            placement,
+            camera,
+        );
+    }
+    place(
+        args.shot,
+        time as f32,
+        args.duration,
+        planet,
+        placement,
+        target_height,
+        camera,
+    );
+    None
+}
+
+/// The stop of `stops` the tour heads for `time` seconds in: the one it travels to, or the one
+/// after the one it holds at.
+fn tour_next(stops: &[TourStop], time: f64) -> Option<usize> {
+    let mut start = 0.0;
+    for (i, stop) in stops.iter().enumerate() {
+        let arrive = start + stop.travel;
+        let leave = arrive + stop.hold;
+        if time < arrive && i > 0 {
+            return Some(i);
+        }
+        if time < leave {
+            return (i + 1 < stops.len()).then_some(i + 1);
+        }
+        start = leave;
+    }
+    None
+}
+
+/// The points the cut is finest around (the planet's frame, metres from its centre): `camera`,
+/// and unless it flies free, where the run heads: the tour's next stop, or the descent's target.
+/// Their tiles are made before the camera gets there.
+#[allow(clippy::too_many_arguments)]
+fn focus(
+    planet: &Planet,
+    placement: &Placement,
+    target: DVec3,
+    target_height: f64,
+    args: &Args,
+    time: f64,
+    camera: &FlyCamera,
+    flying: bool,
+) -> Vec<DVec3> {
+    let radius = placement.radius;
+    let mut points =
+        vec![placement.rotation.inverse() * (camera.position.as_dvec3() - placement.centre)];
+    if flying {
+        return points;
+    }
+    let stops = &planet.world.view.tour;
+    if on_tour(args, stops) {
+        if let Some(next) = tour_next(stops, tour_time(args, stops, time)) {
+            let stop = &stops[next];
+            let direction = forge_terrain::planet::direction(stop.at.0, stop.at.1);
+            let fine = planet.world.min_wavelength(planet.world.tiles.finest);
+            let ground = planet.ground(direction, fine);
+            points.push(direction * (radius + ground + stop.height.max(30.0)));
+        }
+    } else {
+        points.push(target * (radius + target_height));
+    }
+    points
 }
 
 /// `camera` `time` seconds into the tour of `stops`: travelling from one stop to the next along
@@ -979,6 +1148,7 @@ impl Demo for PlanetDemo {
     }
 
     fn update(&mut self, _ctx: &mut Context, input: &Input, dt: f32) {
+        self.longest_frame = self.longest_frame.max(dt);
         self.step = if self.args.fixed_step {
             1.0 / 120.0
         } else {
@@ -998,6 +1168,7 @@ impl Demo for PlanetDemo {
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        self.stream_tiles(ctx);
         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
@@ -1380,7 +1551,7 @@ fn main() -> Result<()> {
     // The map loads and the tiles cook behind the loading screen (or load from the cache); the
     // uploads follow.
     forge_app::run_loading(config, move || {
-        let tiles = cook_tiles(Planet::new(world)?, &body, !args.resident)?;
+        let tiles = cook_tiles(Planet::new(world)?, body, &args)?;
         let finish: Finish<PlanetDemo> = Box::new(move |ctx| PlanetDemo::new(ctx, args, tiles));
         Ok(finish)
     })

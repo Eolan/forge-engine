@@ -1705,6 +1705,7 @@ dependencies = [
  "forge-app",
  "forge-core",
  "forge-geom",
+ "forge-gpu",
  "forge-render",
  "forge-task",
  "forge-terrain",

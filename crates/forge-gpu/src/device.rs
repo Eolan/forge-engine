@@ -1112,11 +1112,24 @@ impl Device {
         self.queue_lock.lock()
     }
 
-    /// Records `f` into a one-shot command buffer, submits it and waits. Initialisation only:
-    /// never call this inside a frame.
+    /// Records `f` into a one-shot command buffer, submits it to the graphics queue and waits.
+    /// Initialisation only: never call this inside a frame.
     pub fn execute_transient(&self, f: impl FnOnce(&ash::Device, vk::CommandBuffer)) -> Result<()> {
+        self.execute_transient_on(QueueKind::Graphics, f)
+    }
+
+    /// [`Self::execute_transient`] on the queue that runs work of `kind` ([`Self::resolve_queue`]):
+    /// `f` records only what that queue's family supports. A copy on the transfer queue, or a
+    /// structure built on the compute queue, runs beside the frames rather than between them,
+    /// when a worker prepares a scene while they run (#220). Not inside a frame.
+    pub fn execute_transient_on(
+        &self,
+        kind: QueueKind,
+        f: impl FnOnce(&ash::Device, vk::CommandBuffer),
+    ) -> Result<()> {
+        let (family, queue) = (self.queue_family(kind), self.queue(kind));
         let pool_info = vk::CommandPoolCreateInfo::default()
-            .queue_family_index(self.graphics_family)
+            .queue_family_index(family)
             .flags(vk::CommandPoolCreateFlags::TRANSIENT);
         // SAFETY: standard one-shot command buffer lifecycle; everything created here is
         // destroyed before returning and the fence wait orders the destruction after use.
@@ -1141,8 +1154,7 @@ impl Device {
             let submit = vk::SubmitInfo2::default().command_buffer_infos(&cbs);
             {
                 let _queues = self.queue_lock.lock();
-                self.raw
-                    .queue_submit2(self.graphics_queue, &[submit], fence)?;
+                self.raw.queue_submit2(queue, &[submit], fence)?;
             }
             self.raw.wait_for_fences(&[fence], true, u64::MAX)?;
             self.raw.destroy_fence(fence, None);

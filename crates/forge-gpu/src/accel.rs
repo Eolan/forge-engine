@@ -9,7 +9,7 @@ use std::sync::Arc;
 use ash::vk;
 use gpu_allocator::MemoryLocation;
 
-use crate::device::Device;
+use crate::device::{Device, QueueKind};
 use crate::error::{GpuError, Result};
 use crate::graph::GraphBuffer;
 use crate::memory::{Buffer, BufferDesc};
@@ -183,7 +183,9 @@ impl Device {
             .src_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR)
             .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .dst_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR)];
-        self.execute_transient(|raw, cb| {
+        // On the compute queue: beside the frames when a worker builds a scene (#220). What the
+        // builds read was written by submissions already waited for.
+        self.execute_transient_on(QueueKind::Compute, |raw, cb| {
             // SAFETY: recorded into the transient command buffer; every buffer the builds
             // read or write outlives the call (`execute_transient` waits for the fence).
             unsafe {
@@ -208,21 +210,29 @@ impl Device {
         name: &str,
     ) -> Result<Vec<AccelerationStructure>> {
         let input = vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
-        let mut inputs = Vec::with_capacity(meshes.len());
+        // Every mesh's positions in one buffer and its indices in another: two uploads, not
+        // two a mesh. Each upload waits for its submission, which queues behind the frames in
+        // flight when a worker builds a scene while they run (#220: 400 waits took half a
+        // second for the planet's 200 tiles).
+        let positions: Vec<[f32; 3]> = meshes
+            .iter()
+            .flat_map(|m| m.positions.iter().copied())
+            .collect();
+        let indices: Vec<u32> = meshes
+            .iter()
+            .flat_map(|m| m.indices.iter().copied())
+            .collect();
+        let position_buffer =
+            self.create_buffer_with_data(&positions, input, MemoryCategory::Transfer, name)?;
+        let index_buffer =
+            self.create_buffer_with_data(&indices, input, MemoryCategory::Transfer, name)?;
         let mut builds = Vec::with_capacity(meshes.len());
+        let (mut first_position, mut first_index) = (0_u64, 0_u64);
         for mesh in meshes {
-            let positions = self.create_buffer_with_data(
-                mesh.positions,
-                input,
-                MemoryCategory::Transfer,
-                name,
-            )?;
-            let indices =
-                self.create_buffer_with_data(mesh.indices, input, MemoryCategory::Transfer, name)?;
             let geometry = triangle_geometry(
-                positions.address(),
+                position_buffer.address() + first_position * 12,
                 mesh.positions.len() as u32,
-                indices.address(),
+                index_buffer.address() + first_index * 4,
             );
             builds.push(self.prepare_build(
                 geometry,
@@ -230,10 +240,11 @@ impl Device {
                 (mesh.indices.len() / 3) as u32,
                 name,
             )?);
-            inputs.push((positions, indices));
+            first_position += mesh.positions.len() as u64;
+            first_index += mesh.indices.len() as u64;
         }
         self.run_builds(&builds)?;
-        drop(inputs);
+        drop((position_buffer, index_buffer));
         Ok(builds.into_iter().map(|b| b.structure).collect())
     }
 

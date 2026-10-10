@@ -813,6 +813,18 @@ const DEFERRED_GRID_START: [u32; 8] = [0, 0, 1, 0, 0, 0, 0, 0];
 /// deferred, instance cull 2's work, then the cell culls': cell cull 1's listed and deferred
 /// cells, the cells cell cull 2 opens (issue #38).
 const LOOKBACK_RUNS: u64 = 5;
+
+/// The instances a frame's per-instance transients (the instance culls' status words, the
+/// deferred instances) are sized for: the scene's, rounded up to a multiple of this.
+const TRANSIENT_INSTANCES_STEP: u32 = 1024;
+
+/// Instances the frame's per-instance transients hold room for: the scene's rounded up, so a
+/// scene swapped for one a few instances larger or smaller keeps the graph's layout (#220: the
+/// planet's tiles, cut again as the camera flies, relaid the transient heap at every swap).
+fn transient_instances(count: u32) -> u64 {
+    u64::from(count.max(1).next_multiple_of(TRANSIENT_INSTANCES_STEP))
+}
+
 /// `Frame::cell_list` at the start of a frame (issue #38): instance cull 1's grid (x, y, 1,
 /// listed cells), cell cull 2's grid over the deferred cells, the two cell culls' tickets, two
 /// spare words; the lists follow (`CELL_LIST` in the shader).
@@ -1176,6 +1188,14 @@ impl MeshletSceneBuilder {
     pub fn set_materials(&mut self, table: &MaterialTable, textures: Option<TextureSet>) {
         self.materials = gpu_rows(table, textures.as_ref());
         self.textures = textures;
+    }
+
+    /// Sets the material rows ([`gpu_rows`]) of a table whose textures the caller keeps alive:
+    /// scenes built one after another over the same textures (#220: the planet's, made again as
+    /// the camera flies) share one [`TextureSet`] that outlives them.
+    pub fn set_material_rows(&mut self, rows: Vec<GpuMaterial>) {
+        self.materials = rows;
+        self.textures = None;
     }
 
     /// Asks for acceleration structures (issue #45): one per mesh at [`MeshletSceneBuilder::build_with`]
@@ -1595,7 +1615,7 @@ impl MeshletSceneBuilder {
                 })
                 .collect::<Result<Vec<_>>>()?,
             deferred_bytes: std::mem::size_of_val(&DEFERRED_GRID_START) as u64
-                + 4 * self.instances.len().max(1) as u64,
+                + 4 * transient_instances(self.instances.len() as u32),
             // `CellBounds` in the shader: 32 bytes a cell (issue #93).
             cells: GraphBuffer::new(device.create_buffer(BufferDesc {
                 size: 32 * cell_count.max(1),
@@ -3525,7 +3545,7 @@ impl MeshletRenderer {
             clusters: graph.import_buffer(&scene.clusters[slot.index]),
             lookback: graph.transient_buffer(TransientBufferDesc {
                 name: "instance cull status words",
-                size: LOOKBACK_RUNS * u64::from(scene.instance_count.div_ceil(64).max(1)) * 8,
+                size: LOOKBACK_RUNS * transient_instances(scene.instance_count).div_ceil(64) * 8,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             }),
             deferred: graph.transient_buffer(TransientBufferDesc {

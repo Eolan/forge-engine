@@ -305,13 +305,20 @@ impl PlanetWorld {
         4.0 * self.spacing(level)
     }
 
-    /// The tiles around `target` (a direction from the planet's centre): every cell whose centre
-    /// lies within [`TileParams::rings`] of its sides (plus half its diagonal) of the target's
-    /// point on the sphere splits into its four children, down to [`TileParams::finest`]. The
-    /// cells that don't split cover the sphere once, in id order.
+    /// The tiles around `target` (a direction from the planet's centre): the cut around its
+    /// point on the sphere ([`PlanetWorld::tile_cut_around`]).
     pub fn tile_cut(&self, target: DVec3) -> Vec<CellId> {
+        self.tile_cut_around(&[self.sphere().surface_point(target, 0.0)])
+    }
+
+    /// The tiles around `points` (in the planet's frame, metres from its centre: a camera, a
+    /// place it heads for): every cell whose centre lies within [`TileParams::rings`] of its
+    /// sides (plus half its diagonal) of one of them splits into its four children, down to
+    /// [`TileParams::finest`]. A point high over the ground splits no cell much smaller than its
+    /// height, whose detail would be under its pixels. The cells that don't split cover the
+    /// sphere once, in id order.
+    pub fn tile_cut_around(&self, points: &[DVec3]) -> Vec<CellId> {
         let sphere = self.sphere();
-        let point = sphere.surface_point(target, 0.0);
         let mut stack: Vec<CellId> = Face::ALL
             .iter()
             .map(|f| CellId::cube(f.index(), 0, 0, 0))
@@ -319,9 +326,10 @@ impl PlanetWorld {
         let mut cut = Vec::new();
         while let Some(cell) = stack.pop() {
             let level = cell.level();
-            let size = sphere.cell_size(level);
-            let near = (sphere.cell_center(cell) - point).length()
-                < (self.tiles.rings + std::f64::consts::FRAC_1_SQRT_2) * size;
+            let reach =
+                (self.tiles.rings + std::f64::consts::FRAC_1_SQRT_2) * sphere.cell_size(level);
+            let centre = sphere.cell_center(cell);
+            let near = points.iter().any(|&p| (centre - p).length() < reach);
             match cell.children() {
                 Some(children) if near && level < self.tiles.finest => stack.extend(children),
                 _ => cut.push(cell),
@@ -940,6 +948,39 @@ mod tests {
         let sphere = world.sphere();
         let under = sphere.cell_of(sphere.surface_point(target, 0.0), world.tiles.finest);
         assert!(cut.contains(&under));
+    }
+
+    #[test]
+    fn a_cut_around_points_holds_each_ones_and_coarsens_with_height() {
+        let planet = small();
+        let world = &planet.world;
+        let sphere = world.sphere();
+        let radius = world.planet.radius;
+        let (a, b) = (
+            DVec3::new(0.3, 1.0, 0.2).normalize(),
+            DVec3::new(-0.6, 0.2, 0.7).normalize(),
+        );
+        let cut = world.tile_cut_around(&[a * radius, b * radius]);
+        let area: f64 = cut
+            .iter()
+            .map(|c| 1.0 / f64::from(1_u32 << (2 * c.level())))
+            .sum();
+        assert!((area - 6.0).abs() < 1e-9, "{area}");
+        for p in [a, b] {
+            let under = sphere.cell_of(sphere.surface_point(p, 0.0), world.tiles.finest);
+            assert!(cut.contains(&under));
+        }
+        // From high over `a`, no cell is much smaller than the height: its parent didn't reach.
+        let height = 0.05 * radius;
+        let high = world.tile_cut_around(&[a * (radius + height)]);
+        let reach = world.tiles.rings + std::f64::consts::FRAC_1_SQRT_2;
+        for c in &high {
+            assert!(
+                c.level() == 0 || 2.0 * reach * sphere.cell_size(c.level()) >= height,
+                "{c:?}"
+            );
+        }
+        assert!(high.len() < cut.len());
     }
 
     #[test]
