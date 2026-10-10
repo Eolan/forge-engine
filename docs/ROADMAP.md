@@ -657,6 +657,15 @@ The items below are the phase's original outline; the plan above orders them.
    - **Still to find:** how to generate whole worlds, planets included, so that their chunks
      can be made or loaded alone. Erosion and rivers are global today. Each needs its own
      research and decision when its phase comes.
+   - **A galaxy's sky** (#223, researched 2026-10-10 in
+     [research/galaxy-sky.md](research/galaxy-sky.md)): every star seen is a system to point at
+     and jump to.
+     - A magnitude-limited query over a tree of cells sorted by brightness gives the sky in
+       milliseconds a jump.
+     - A bridge telescope and the galaxy map are the same query, run with another field and
+       limit.
+     - A coarse volume holds the light too faint to draw.
+     - Its decision comes with the galaxy, after D-057.
 
 ## Later — Smart systems: prediction, importance and budgets (#222)
 

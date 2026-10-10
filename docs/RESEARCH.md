@@ -39,6 +39,7 @@ the system you are about to touch.
 | [research/civilisations-styles.md](research/civilisations-styles.md) | civilisations and styles: vernacular form as parameters (climate, materials, culture), style grammars per culture and era (Palladio to CGA's Pompeii and Puuc Maya, Islamic patterns and muqarnas, Gothic tracery, skyscrapers, brutalism, greebles, space habitats), decor and props (Infinigen Indoors, ShapeAssembly, layout solvers, set dressing), materials by mathematics and by example, weathering and ageing, the games' culture sets, the `Civilisation` record over D-039's style sets | 46 | done (the owner's brief behind #81–#91; five READMEs read on GitHub, the rest confirmed by search only, #99) |
 | [research/game-ai-ecosystems.md](research/game-ai-ecosystems.md) | game AI and ecosystems: decision architectures (behaviour trees, utility over needs, GOAP and HTN planners, schedules and packages, smart objects, the director and barks, where learned policies stand), navigation (Recast's tiles rebuilt where the terrain changes, Polyanya, flow fields, ORCA, Reynolds' steering, sparse voxel octrees for flight, lanes for traffic), crowds and the simulation LOD (AC Unity's 40/120/10 000, A-Life and Stalker 2's lesson, Census), animals and their populations (needs, senses, herds, territories, Wolf Sheep Predation and ODD), ship AI in 6 DoF (Elite, FreeSpace, Isaacs, formations, convex landing), the planet-scale layers with their hand-offs and digests, the Rust crates | 41 (+ a table of 16 projects) | done (the owner's brief behind #84, #87, #90 and #80; Phase 3's `forge-sim`; thirteen repositories read on GitHub, the rest confirmed by search only, #99) |
 | [research/smart-systems.md](research/smart-systems.md) | smart systems: predictive streaming and prefetching (Unreal's streaming sources and cinematic prestreaming, DirectStorage and the PS5's priorities, learned viewport prediction against extrapolation), importance for what is drawn and what is updated (screen-space error budgets, dynamic resolution, VRS, the Significance Manager, the Animation Budget Allocator, Mass, population budgets), scheduling under a frame budget, what is public about GTA VI and Rockstar, learned models on the client (DLSS 5, NTC, neural caches, ML deformers, learned motion) and their hardware path (cooperative matrices and vectors), learned prediction and control (directors, test bots), the server (interest management, server meshing, autoscaling, VACnet), determinism and trust under D-016 | 41 sources (+ earlier files') | done (#222, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
+| [research/galaxy-sky.md](research/galaxy-sky.md) | a galaxy's sky: how many stars an eye sees (the counts per limiting magnitude, Crumey's threshold model, about 8 in space against 6.5 on Earth, where the naked-eye stars lie), how Elite Dangerous, SpaceEngine, Celestia, Gaia Sky, OpenSpace, No Man's Sky, Star Citizen, KSP and Starfield build their skies, the magnitude-limited query over a brightness-sorted tree, points near and a volume far, one sky per system, integer ids and positions under D-016, and the eye, a bridge telescope and the galaxy map as one query | 38 sources, a toy galaxy | done (#223, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
 
 ## Verdicts
 
@@ -345,6 +346,20 @@ what client and server must agree on stays heuristic, server-only or integer. Fo
 free-flight lead and a speed cap for the planet's tile cut, two classes of page request, sliced
 edits and a spike recorder to name its worst frames; later a significance service with budgets in
 `forge-sim`, an optional frame-time governor, and test bots before any learned predictor.
+
+**A galaxy's sky.** An eye sees about 9 100 stars to magnitude 6.5 on a dark night on Earth, and
+about 8 with no air (about 42 000 stars). The limit follows the eye's adaptation, which in a
+renderer is the exposure: 0.753 magnitude a stop. The limit does not make the sky a neighbourhood:
+one naked-eye star in seven is over 1 000 light-years away. What it allows is a tree of cells sorted
+by brightness, each level 1.505 magnitudes fainter in cells half the size, so a visit costs a
+constant number of cells a level. Celestia stores its stars that way, SpaceEngine too, and
+Elite Dangerous as far as players have reverse-engineered it. A toy galaxy gives the sky to 6.5 from
+any place in about 600 cells and 10⁵ generated stars, milliseconds once per jump, whatever the
+galaxy's size. A star's id is its level, cell and index, so a point of light names a system to jump
+to. One sky per system is exact to half a pixel. The light fainter than the limit (the Milky Way
+band) and the dust belong in a coarse volume, which is what voxels are for. The eye, a bridge
+telescope and the galaxy map are the same query with a field, a limit and a centre. Nothing is
+needed before the galaxy phase; its decision comes after D-057.
 
 ## Still to research
 
