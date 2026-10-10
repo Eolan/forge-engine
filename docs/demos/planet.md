@@ -1,13 +1,14 @@
 # Demo: planet
 
 Phase 2's planet (D-056, #220): a planet of Earth's size from orbit down to its ground. The
-Earth comes from NOAA's real elevation and NASA's Blue Marble, the Moon from NASA's elevation and
-colour maps, and noise adds the detail under their resolution. The sky is NASA's map of the real
-stars. It is the island demo's second step. The owner wanted it as a demo of its own
+Earth comes from NOAA's real elevation and NASA's Blue Marble, with the Copernicus DEM at 90 m
+over the tour's region (the Alps, the Côte d'Azur, Corsica). The Moon comes from NASA's elevation
+and colour maps, and noise adds the detail under their resolution. The sky is NASA's map of the
+real stars. It is the island demo's second step. The owner wanted it as a demo of its own
 (2026-10-09), so that planets, moons and later suns stay apart from the island.
 
 ```
-tools/fetch-planets.sh                                    # the maps, once: about 750 MB
+tools/fetch-planets.sh                                    # the maps, once: about 850 MB
 cargo run --release -p planet                             # the Earth: a 60 s descent to Èze
 cargo run --release -p planet -- --shot orbit             # held at a golden shot: orbit, high, ground, top
 cargo run --release -p planet -- --target 42.15,9.1 --heading 0 --shot top   # Corsica from the station
@@ -50,6 +51,7 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
   | The Earth's elevation | NOAA's ETOPO 2022, 60 arc-seconds (about 1.85 km), public domain | `i16` metres |
   | The Earth's colour | NASA's Blue Marble Next Generation, July 2004, without its relief shaded | 16 384 × 8 192 JPEG (a power of two, AMD's widest image) |
   | The Earth's sea | the elevation under 0 m | 8 192 × 4 096 grey PNG |
+  | The tour's region | the Copernicus DEM GLO-90, 3 arc-seconds (about 90 m), 25 one-degree tiles from 41° to 47° N and 5° to 10° E, free under the Copernicus licence ("produced using Copernicus WorldDEM-90 …") | one 6 000 × 7 200 grid of `i16` metres, no data over open sea (`assets/blender/planet_region.py`) |
   | The Moon's elevation | NASA's CGI Moon Kit, 16 samples a degree (about 1.9 km) | `i16` metres |
   | The Moon's colour | the CGI Moon Kit's 2025 colour map at 4K | PNG |
   | The sky | NASA's Deep Star Maps 2020 at 8K (Gaia, Hipparcos) | sRGB PNG |
@@ -58,8 +60,20 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
     holds nothing narrower than the tile's samples allow (bilinear left flat facets a texel
     wide: Tycho's central peak was a square pyramid);
   - then band-limited 3-D gradient noise (Perlin's improved gradients) for the octaves under the
-    map's resolution, a quarter as strong at the sea's level as on the high ground.
+    map's resolution, a quarter as strong at the sea's level as on the high ground;
+  - over the tour's region, the 90 m heights read the same way (`[[map.regions]]` in the world
+    file, `RegionParams`):
+    - faded in over a quarter of a degree from the region's edges;
+    - their own noise from 180 m down at 10 m (ETOPO's starts at 4 km, at 90 m);
+    - at or under half a metre, the Copernicus DEM's sea, which takes ETOPO's depths two metres
+      deeper at least and no noise, which had raised islands of sand along the coasts.
+
+    Where the region has no tile (open sea), ETOPO alone.
   The Earth's ground under 0 m is sea, flattened at its level. The Moon has none.
+
+  From 6 km up over the Alps, before (ETOPO alone) and after (the 90 m region):
+
+  ![the Alps from 6 km up before and after the Copernicus DEM](images/planet-glo90.png)
 - **The tiles:** a cell of D-037's equi-angular cube sphere each.
   - 257² samples in the planet's axes, relative to the cell's centre.
   - Normals from a ring of samples beyond the edge, so neighbours of one level share their
@@ -298,13 +312,11 @@ air is a rim of blue light at its limb.
   new cut, with the stall that brings. Also a tile cooked in milliseconds rather than a quarter of
   a second (a regular grid's DAG built directly).
 - **Clouds for the Earth seen from afar,** as the Moon and orbit see it.
-- **The Alps look like rolling hills from the Mont Blanc stop,** 6 km up, though their normal
-  maps give them ridges from orbit.
-  - ETOPO's samples are 1.85 km apart, so peaks and valleys narrower than that are smoothed
-    away.
-  - The noise under them adds ±90 m at most, and no ridges.
-  - They need a finer elevation for the mountains (Copernicus GLO-30, 30 m, free, a download to
-    ask for) or ridged detail where the map stands high.
+- **Outside the tour's region the land is ETOPO's,** 1.85 km samples with smooth noise under
+  them: rolling hills from a few kilometres up. More regions of the Copernicus DEM go the same
+  way, a download each (the owner's go for the tour's, 2026-10-10).
+- **Rock and snow over the Alps:** grey rock on slopes over 44°, snow over a line by latitude.
+  Glaciers, scree and forest lines come with the material rules, not the elevation.
 - **Steps where levels meet:** a tile next to a coarser one meets it with a step its skirt fills.
   The research's swap rule (a level only where its parent errs under a pixel) comes with
   streaming.

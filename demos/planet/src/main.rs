@@ -368,7 +368,8 @@ fn planet_materials(ctx: &Setup, world: &PlanetWorld) -> Result<PlanetMaterials>
             ),
             (
                 "planet: rock",
-                layer(Some(rock), [1.0, 0.97, 0.94], 8.0, 20.0, 0.04),
+                // Grey, as the Alps' cliffs are: the island's granite tinted warm read pink-beige.
+                layer(Some(rock), [0.8, 0.8, 0.82], 8.0, 20.0, 0.04),
             ),
             (
                 "planet: snow",

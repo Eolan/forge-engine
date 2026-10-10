@@ -215,8 +215,9 @@ cargo run --release -p planet -- --tour
 cargo run --release -p planet -- --world assets/worlds/moon.toml --shot orbit
 ```
 
-The Earth from NOAA's ETOPO 2022 elevation and the Moon from NASA's CGI Moon Kit, fetched by
-`tools/fetch-planets.sh` (about 560 MB, not in the repository), with noise for the detail under
+The Earth from NOAA's ETOPO 2022 elevation, with the Copernicus DEM at 90 m over the Alps, the
+Côte d'Azur and Corsica, and the Moon from NASA's CGI Moon Kit, fetched by
+`tools/fetch-planets.sh` (about 850 MB, not in the repository), with noise for the detail under
 their resolution. Cube-sphere tiles of cluster DAGs are cooked through the cache and drawn from
 orbit down to 2.4 m samples, and they follow the camera: a worker cuts them again around where it
 is going and the scene is swapped in. A 60 s descent ends over Èze on the Côte d'Azur (the Moon's at

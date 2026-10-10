@@ -110,7 +110,36 @@ pub struct MapParams {
     /// coarse tile's triangles.
     #[serde(with = "forge_core::switch")]
     pub sea_mask: Option<String>,
+    /// Finer elevations over regions of the body, read over this map: the Earth's tour region
+    /// from the Copernicus DEM at 90 m (#220).
+    #[serde(default)]
+    pub regions: Vec<RegionParams>,
 }
+
+/// A finer elevation over a region of the body (#220): an equirectangular grid of `i16` metres
+/// over the sea's level, the north row first, west to east, [`NO_DATA`] where it has none (open
+/// sea), read over the whole map ([`MapParams`]) and blended into it at its edges
+/// (`assets/blender/planet_region.py` makes it from the downloaded tiles).
+///
+/// At or under half a metre its samples are sea: the Copernicus DEM's sea lies at about 0, so
+/// there the whole map's depths go on, a metre deeper at least.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegionParams {
+    /// The grid's file, relative to the workspace.
+    pub file: String,
+    /// Its samples across (longitude) and down (latitude).
+    pub size: (u32, u32),
+    /// The bounds of its samples' cells, degrees: west, east, south and north.
+    pub bounds: (f64, f64, f64, f64),
+    /// Degrees inside its bounds over which it fades into the whole map.
+    pub blend: f64,
+    /// The noise under its resolution, as [`MapParams::detail`]: narrower than the whole map's.
+    pub detail: (f64, u32, f64, f64),
+}
+
+/// A region's sample with no height ([`RegionParams`]).
+pub const NO_DATA: i16 = i16::MIN;
 
 /// How a planet is cut into tiles.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -359,6 +388,39 @@ fn lat_lon(direction: DVec3) -> (f64, f64) {
     (dmath::asin(d.y.clamp(-1.0, 1.0)), dmath::atan2(d.x, d.z))
 }
 
+/// Where an elevation grid lies, radians: the bounds of its samples' cells, and whether it is a
+/// map of the whole body, wrapping round the longitude, or a region with nothing outside it.
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    west: f64,
+    east: f64,
+    south: f64,
+    north: f64,
+    whole: bool,
+}
+
+impl Window {
+    /// The whole body.
+    const WHOLE: Self = Self {
+        west: -std::f64::consts::PI,
+        east: std::f64::consts::PI,
+        south: -std::f64::consts::FRAC_PI_2,
+        north: std::f64::consts::FRAC_PI_2,
+        whole: true,
+    };
+
+    /// A region's, from its bounds in degrees: west, east, south and north.
+    fn region((west, east, south, north): (f64, f64, f64, f64)) -> Self {
+        Self {
+            west: west.to_radians(),
+            east: east.to_radians(),
+            south: south.to_radians(),
+            north: north.to_radians(),
+            whole: false,
+        }
+    }
+}
+
 /// An elevation map, loaded: its grid and the levels of its mip pyramid, each half the last's
 /// samples a side (a box filter), as `i16` metres.
 pub struct Elevation {
@@ -366,19 +428,22 @@ pub struct Elevation {
     levels: Vec<(u32, u32, Vec<i16>)>,
     /// A digest of the full grid's bytes, for the tiles' keys.
     pub digest: u64,
+    /// Where it lies.
+    window: Window,
 }
 
 impl Elevation {
-    /// Reads `map`'s file and builds its pyramid.
-    pub fn load(map: &MapParams) -> Result<Self> {
-        let path = crate::workspace_root().join(&map.file);
+    /// Reads the grid `file` of `size` samples lying over `window` and builds its pyramid. A
+    /// level's sample is [`NO_DATA`] where any of the four under it is.
+    fn load(file: &str, size: (u32, u32), window: Window) -> Result<Self> {
+        let path = crate::workspace_root().join(file);
         let bytes = std::fs::read(&path).with_context(|| {
             format!(
                 "the elevation map {} (tools/fetch-planets.sh fetches and converts it)",
                 path.display()
             )
         })?;
-        let (width, height) = map.size;
+        let (width, height) = size;
         let count = width as usize * height as usize;
         if bytes.len() != 2 * count {
             bail!(
@@ -405,33 +470,60 @@ impl Elevation {
             let next = (0..nh)
                 .flat_map(|y| (0..nw).map(move |x| (x, y)))
                 .map(|(x, y)| {
-                    let sum = at(2 * x, 2 * y)
-                        + at(2 * x + 1, 2 * y)
-                        + at(2 * x, 2 * y + 1)
-                        + at(2 * x + 1, 2 * y + 1);
+                    let four = [
+                        at(2 * x, 2 * y),
+                        at(2 * x + 1, 2 * y),
+                        at(2 * x, 2 * y + 1),
+                        at(2 * x + 1, 2 * y + 1),
+                    ];
+                    if four.contains(&i32::from(NO_DATA)) {
+                        return NO_DATA;
+                    }
+                    let sum: i32 = four.iter().sum();
                     // Rounded to the nearest metre, halves away from zero: the same everywhere.
                     (if sum >= 0 { sum + 2 } else { sum - 2 } / 4) as i16
                 })
                 .collect();
             levels.push((nw, nh, next));
         }
-        Ok(Self { levels, digest })
+        Ok(Self {
+            levels,
+            digest,
+            window,
+        })
     }
 
-    /// The height at latitude `lat` and longitude `lon` (radians) on `level`, Catmull-Rom,
-    /// wrapping round the longitude.
-    fn sample(&self, level: usize, lat: f64, lon: f64) -> f64 {
+    /// The height at latitude `lat` and longitude `lon` (radians) on `level`, Catmull-Rom: a
+    /// whole map wraps round the longitude; a region has none outside its window or where any
+    /// of the sixteen samples read has no data.
+    fn sample(&self, level: usize, lat: f64, lon: f64) -> Option<f64> {
         let (w, h, grid) = &self.levels[level];
         let (w, h) = (*w as i64, *h as i64);
-        let u = (lon / std::f64::consts::TAU + 0.5) * w as f64 - 0.5;
-        let v = (0.5 - lat / std::f64::consts::PI) * h as f64 - 0.5;
+        let window = &self.window;
+        let (u, v) = if window.whole {
+            (
+                (lon / std::f64::consts::TAU + 0.5) * w as f64 - 0.5,
+                (0.5 - lat / std::f64::consts::PI) * h as f64 - 0.5,
+            )
+        } else {
+            (
+                (lon - window.west) / (window.east - window.west) * w as f64 - 0.5,
+                (window.north - lat) / (window.north - window.south) * h as f64 - 0.5,
+            )
+        };
         let (x0, y0) = (u.floor(), v.floor());
         let (fx, fy) = (u - x0, v - y0);
         let (x0, y0) = (x0 as i64, y0 as i64);
-        let at = |x: i64, y: i64| {
+        if !window.whole && (x0 < 1 || y0 < 1 || x0 + 2 >= w || y0 + 2 >= h) {
+            return None;
+        }
+        let mut no_data = false;
+        let mut at = |x: i64, y: i64| {
             let x = x.rem_euclid(w);
             let y = y.clamp(0, h - 1);
-            f64::from(grid[(y * w + x) as usize])
+            let value = grid[(y * w + x) as usize];
+            no_data |= !window.whole && value == NO_DATA;
+            f64::from(value)
         };
         // Catmull-Rom across four samples each way (#220): through the samples as bilinear is,
         // but smooth across them, where bilinear left flat facets a map's texel wide (a peak a
@@ -455,15 +547,21 @@ impl Elevation {
                 .sum();
             sum += wy * row;
         }
-        sum
+        (!no_data).then_some(sum)
     }
 
     /// The height in `direction` holding no detail narrower than `min_wavelength` metres on a
-    /// body of `radius`: the levels whose samples are half that apart, blended.
-    pub fn height(&self, direction: DVec3, radius: f64, min_wavelength: f64) -> f64 {
+    /// body of `radius`: the levels whose samples are half that apart, blended. None where a
+    /// region has none ([`Self::sample`]).
+    pub fn height(&self, direction: DVec3, radius: f64, min_wavelength: f64) -> Option<f64> {
         let (lat, lon) = lat_lon(direction);
-        // The full grid's spacing along the equator; each level doubles it.
-        let spacing = std::f64::consts::TAU * radius / f64::from(self.levels[0].0);
+        // The full grid's spacing: along the equator for a whole map, from south to north for
+        // a region (its longitudes are closer away from the equator); each level doubles it.
+        let spacing = if self.window.whole {
+            std::f64::consts::TAU * radius / f64::from(self.levels[0].0)
+        } else {
+            (self.window.north - self.window.south) * radius / f64::from(self.levels[0].1)
+        };
         let wanted = 0.5 * min_wavelength;
         let mut level = 0;
         let mut at = spacing;
@@ -471,13 +569,28 @@ impl Elevation {
             at *= 2.0;
             level += 1;
         }
-        let here = self.sample(level, lat, lon);
+        let here = self.sample(level, lat, lon)?;
         if wanted <= at || level + 1 == self.levels.len() {
-            return here;
+            return Some(here);
         }
         // Between this level and the next, by where the wanted spacing falls.
         let t = (wanted - at) / at;
-        here + (self.sample(level + 1, lat, lon) - here) * t
+        Some(here + (self.sample(level + 1, lat, lon)? - here) * t)
+    }
+
+    /// How far into a region's window `direction` lies, faded over `blend` degrees from its
+    /// edges: 0 outside, 1 deep inside. Always 1 for a whole map.
+    fn inside(&self, direction: DVec3, blend: f64) -> f64 {
+        let window = &self.window;
+        if window.whole {
+            return 1.0;
+        }
+        let (lat, lon) = lat_lon(direction);
+        let edge = (lon - window.west)
+            .min(window.east - lon)
+            .min(lat - window.south)
+            .min(window.north - lat);
+        smooth(edge / blend.to_radians().max(1e-9))
     }
 }
 
@@ -485,39 +598,55 @@ impl Elevation {
 /// The maps loaded so far, by file.
 type Loaded = Mutex<Vec<(String, Arc<Elevation>)>>;
 
-fn elevation(map: &MapParams) -> Result<Arc<Elevation>> {
+fn elevation(file: &str, size: (u32, u32), window: Window) -> Result<Arc<Elevation>> {
     static MAPS: OnceLock<Loaded> = OnceLock::new();
     let maps = MAPS.get_or_init(|| Mutex::new(Vec::new()));
     let mut maps = maps.lock().expect("the maps' lock");
-    if let Some((_, loaded)) = maps.iter().find(|(file, _)| *file == map.file) {
+    if let Some((_, loaded)) = maps.iter().find(|(loaded, _)| loaded == file) {
         return Ok(loaded.clone());
     }
     let start = std::time::Instant::now();
-    let loaded = Arc::new(Elevation::load(map)?);
+    let loaded = Arc::new(Elevation::load(file, size, window)?);
     tracing::info!(
-        file = %map.file,
+        file,
         levels = loaded.levels.len(),
         ms = start.elapsed().as_millis(),
         "elevation map"
     );
-    maps.push((map.file.clone(), loaded.clone()));
+    maps.push((file.to_owned(), loaded.clone()));
     Ok(loaded)
 }
 
-/// A planet ready to make tiles: its world and its map, loaded.
+/// A planet ready to make tiles: its world and its maps, loaded.
 #[derive(Clone)]
 pub struct Planet {
     /// Its world.
     pub world: PlanetWorld,
     /// Its elevation map, when the world names one.
     pub map: Option<Arc<Elevation>>,
+    /// Its regions' finer elevations, in the order of the map's `regions`.
+    pub regions: Vec<Arc<Elevation>>,
 }
 
 impl Planet {
-    /// `world` with its map loaded (once a process).
+    /// `world` with its maps loaded (once a process).
     pub fn new(world: PlanetWorld) -> Result<Self> {
-        let map = world.map.as_ref().map(elevation).transpose()?;
-        Ok(Self { world, map })
+        let map = world
+            .map
+            .as_ref()
+            .map(|m| elevation(&m.file, m.size, Window::WHOLE))
+            .transpose()?;
+        let regions = world
+            .map
+            .iter()
+            .flat_map(|m| &m.regions)
+            .map(|r| elevation(&r.file, r.size, Window::region(r.bounds)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            world,
+            map,
+            regions,
+        })
     }
 
     /// The ground's height over the sea's level (the map's reference) in `direction` (from the
@@ -527,18 +656,45 @@ impl Planet {
         let planet = &self.world.planet;
         match (&self.map, &self.world.map) {
             (Some(map), Some(params)) => {
-                let base = map.height(direction, planet.radius, min_wavelength);
+                // A whole map has a height everywhere.
+                let whole = map
+                    .height(direction, planet.radius, min_wavelength)
+                    .unwrap_or(0.0);
                 let p = direction.normalize() * planet.radius;
-                let (width, count, strength, gain) = params.detail;
-                let rough = 0.25 + 0.75 * smooth(base / params.rough_above);
-                let detail = octaves(
-                    Seed::new(planet.seed).derive_str("detail"),
-                    p,
-                    (width, count, gain),
-                    min_wavelength,
-                    |n| n,
-                );
-                base + strength * rough * detail
+                // The map's height and the noise under its resolution, rougher where it stands
+                // high.
+                let with_detail = |base: f64, (width, count, strength, gain), seed: &str| {
+                    let rough = 0.25 + 0.75 * smooth(base / params.rough_above);
+                    let detail = octaves(
+                        Seed::new(planet.seed).derive_str(seed),
+                        p,
+                        (width, count, gain),
+                        min_wavelength,
+                        |n| n,
+                    );
+                    base + strength * rough * detail
+                };
+                let mut height = with_detail(whole, params.detail, "detail");
+                // The regions' finer heights over it, faded in from their edges. Their sea (at
+                // or under half a metre) takes the whole map's depths, two metres deeper at
+                // least, without noise: the sea flattens it anyway, and noise there raised
+                // islands of sand along the coasts.
+                for (region, grid) in params.regions.iter().zip(&self.regions) {
+                    let weight = grid.inside(direction, region.blend);
+                    if weight <= 0.0 {
+                        continue;
+                    }
+                    let Some(fine) = grid.height(direction, planet.radius, min_wavelength) else {
+                        continue;
+                    };
+                    let regional = if fine > 0.5 {
+                        with_detail(fine, region.detail, "region detail")
+                    } else {
+                        whole.min(0.0) - 2.0
+                    };
+                    height += (regional - height) * weight;
+                }
+                height
             }
             _ => planet.height(direction, min_wavelength),
         }
@@ -595,14 +751,20 @@ impl Planet {
             .map
             .as_ref()
             .map(|m| (&m.file, m.size, m.detail, m.rough_above, m.sea));
-        format!(
+        let mut key = format!(
             "{:?}, map {:?} {:016x}, {} samples, made and cooked by {:016x}",
             self.world.planet,
             map,
             self.map.as_ref().map_or(0, |m| m.digest),
             self.world.tiles.samples,
             code_digests::CODE_PLANET_TILES
-        )
+        );
+        // The regions, when there are any: a world without keeps its tiles' key.
+        let regions = self.world.map.iter().flat_map(|m| &m.regions);
+        for (region, grid) in regions.zip(&self.regions) {
+            key += &format!(", region {region:?} {:016x}", grid.digest);
+        }
+        key
     }
 }
 
@@ -1010,7 +1172,11 @@ mod tests {
             4,
             (0..32).map(|i| (i % 8) as i16 * 100).collect::<Vec<_>>(),
         )];
-        let mut map = Elevation { levels, digest: 0 };
+        let mut map = Elevation {
+            levels,
+            digest: 0,
+            window: Window::WHOLE,
+        };
         let mut pyramid = vec![];
         let (w, h, grid) = &map.levels[0];
         let at = |x: u32, y: u32| i32::from(grid[(y * w + x) as usize]);
@@ -1032,8 +1198,8 @@ mod tests {
         map.levels.extend(pyramid);
         // At a sample's centre: its value; halfway between two: their mean.
         let lon = |x: f64| ((x + 0.5) / 8.0 - 0.5) * std::f64::consts::TAU;
-        assert!((map.sample(0, 0.3, lon(2.0)) - 200.0).abs() < 1e-9);
-        assert!((map.sample(0, 0.3, lon(2.5)) - 250.0).abs() < 1e-9);
+        assert!((map.sample(0, 0.3, lon(2.0)).unwrap() - 200.0).abs() < 1e-9);
+        assert!((map.sample(0, 0.3, lon(2.5)).unwrap() - 250.0).abs() < 1e-9);
         // A wavelength under two of the grid's samples reads the full grid; a wider one blends
         // towards the next level.
         let radius = 1000.0;
@@ -1043,10 +1209,10 @@ mod tests {
             map.height(d, radius, spacing),
             map.sample(0, lat_lon(d).0, lat_lon(d).1)
         );
-        let blended = map.height(d, radius, 3.0 * spacing);
+        let blended = map.height(d, radius, 3.0 * spacing).unwrap();
         let (a, b) = (
-            map.sample(0, lat_lon(d).0, lat_lon(d).1),
-            map.sample(1, lat_lon(d).0, lat_lon(d).1),
+            map.sample(0, lat_lon(d).0, lat_lon(d).1).unwrap(),
+            map.sample(1, lat_lon(d).0, lat_lon(d).1).unwrap(),
         );
         assert!((blended - (a + b) / 2.0).abs() < 1e-6, "{blended} {a} {b}");
     }
@@ -1072,6 +1238,28 @@ mod tests {
         let sphere = world.sphere();
         let under = sphere.cell_of(sphere.surface_point(target, 0.0), world.tiles.finest);
         assert!(cut.contains(&under));
+    }
+
+    #[test]
+    fn a_region_reads_inside_its_window_but_not_by_its_holes_and_fades_in_from_its_edges() {
+        // 16 × 8 samples over 10°–18° E and 40°–44° N, 300 m but for a hole of no data at
+        // column 12 (16.25° E) and row 2 (42.75° N).
+        let (w, h) = (16_u32, 8_u32);
+        let mut grid = vec![300_i16; (w * h) as usize];
+        grid[(2 * w + 12) as usize] = NO_DATA;
+        let region = Elevation {
+            levels: vec![(w, h, grid)],
+            digest: 0,
+            window: Window::region((10.0, 18.0, 40.0, 44.0)),
+        };
+        let at = |lat: f64, lon: f64| region.sample(0, lat.to_radians(), lon.to_radians());
+        assert!((at(42.0, 13.0).unwrap() - 300.0).abs() < 1e-9);
+        assert!(at(42.0, 9.0).is_none(), "outside");
+        assert!(at(42.5, 16.25).is_none(), "by the hole");
+        assert_eq!(region.inside(direction(42.0, 9.0), 0.5), 0.0);
+        assert_eq!(region.inside(direction(42.0, 14.0), 0.5), 1.0);
+        let edge = region.inside(direction(42.0, 10.25), 0.5);
+        assert!(edge > 0.0 && edge < 1.0, "{edge}");
     }
 
     #[test]

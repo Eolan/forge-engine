@@ -23,6 +23,18 @@ colour = "assets/planets/earth/earth-colour-16k.jpg"
 colour_albedo = true
 sea_mask = "assets/planets/earth/earth-sea-8k.png"
 
+# The tour's region at 90 m: the Copernicus DEM GLO-90 from 41° to 47° N and 5° to 10° E, the Alps,
+# the Côte d'Azur and Corsica (tools/fetch-planets.sh). Its bounds are its samples' cells', as
+# assets/blender/planet_region.py prints them (the tiles' first samples sit on the whole degrees).
+# It fades into ETOPO over a quarter of a degree. Its noise starts at 180 m, the narrowest the
+# 90 m samples hold, and stays gentle: stronger, its slopes laid rock over meadows.
+[[map.regions]]
+file = "assets/planets/earth/glo90-alps.i16"
+size = [6000, 7200]
+bounds = [4.9995833, 9.9995833, 41.0004167, 47.0004167]
+blend = 0.25
+detail = [180.0, 6, 10.0, 0.55]
+
 [tiles]
 samples = 257
 finest = 14

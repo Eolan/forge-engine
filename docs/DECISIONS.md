@@ -3415,6 +3415,16 @@ Marble, the Deep Star Maps):
     triangles' height: the owner's "very geometric non natural shapes" are gone from 10 km up
     and at Èze.
   - It costs 341 KB a tile, and cooking goes from 28 tiles a second to 19.
+- **The tour's region at 90 m** (the owner's go, 2026-10-10: "download GLO-90 for the tour's
+  region"): 25 tiles of the Copernicus DEM GLO-90 over 41°–47° N and 5°–10° E.
+  - They're mosaicked into one grid. The world file names it as a region read over ETOPO
+    (`[[map.regions]]`), faded in over a quarter of a degree, with its own noise from 180 m.
+  - Its sea takes ETOPO's depths.
+  - The Alps from the Mont Blanc stop gained their ridges, valleys and cliffs, and Èze its hills
+    and Cap Ferrat.
+  - Credit: "produced using Copernicus WorldDEM-90 © DLR e.V. 2010-2014 and © Airbus Defence and
+    Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights
+    reserved" (`CREDITS.md`).
 - **Next:** the scene taking and freeing tiles in place, rather than whole scenes built again.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the

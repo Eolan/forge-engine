@@ -110,9 +110,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
     flies, its scene swapped in; each swap checked with ꟻLIP (`--check-swaps`).
   - **A normal map per tile ✅** (2026-10-10): the swaps' patches mostly gone, the Alps' ridges
     from orbit.
-  - **Next:**
-    - the scene taking and freeing tiles in place, rather than whole-scene builds;
-    - a finer elevation for the mountains (a download to ask for).
+  - **The tour's region at 90 m ✅** (2026-10-10, the owner's go): the Copernicus DEM GLO-90 over
+    the Alps, the Côte d'Azur and Corsica, read over ETOPO.
+  - **Next:** the scene taking and freeing tiles in place, rather than whole-scene builds.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's
