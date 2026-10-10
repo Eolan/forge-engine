@@ -3731,7 +3731,21 @@ D-016's amendment of the same day:
   against 83 MiB) and the tiles (822 against 369).
 - **So the CPU's DAG stays,** 35 ms of a new tile's 45 waited. The swaps' check on the tour was
   not run: the frames decide it already.
+- **Then the tile's coarser levels made from its grid,** measured and set aside the same day
+  (the owner's "try the coarser levels made from the grid", then "set it aside as a patch";
+  `reports/2026-10-10-220/grid-dag.patch`):
+  - **How:** level `k` keeps every `2^k`-th sample inside groups of 16 × 16 cells, each group's
+    border as its children drew it (the border's cells fanned), the groups shifted half a group
+    each level so that the borders coarsen at the next; level 0 in blocks of 8 × 4 quads; the
+    errors exact against the tile's samples. A unit test found every cut watertight.
+  - **It cooked a tile's DAG in 16 ms rather than 36–38,** in 5 levels and 23–24 pages.
+  - **But the frames drew 1.6–5 times the triangles,** the grid's levels erring 3–4 times
+    meshoptimizer's at as many triangles: the GPU frame 1.00, 1.32, 1.43 and 1.27 ms (Èze, 10
+    km, orbit, Mont Blanc) against 0.94, 1.12, 1.21 and 1.10, the clusters' culls most of it.
+    The rays started further off the ground, their errors larger, and some near shadows shrank.
+  - **Set aside:** the frames pay all the time, for 20 ms of a cut that waits about 0.4 s on a
+    cold tour. Levels that halve (one axis at a time) would draw fewer triangles, not likely as
+    few as meshoptimizer's.
 - **Left, if a cut's wait matters again:** the DAG template set aside earlier (23 ms), shown
-  while the tile's own DAG cooks and checked with `--check-swaps` at the second swap; or a
-  tile's coarser levels made from its grid itself (every other sample, the group's borders
-  kept), which meshoptimizer would no longer need. Neither is proposed yet.
+  while the tile's own DAG cooks and checked with `--check-swaps` at the second swap. Not
+  proposed yet.

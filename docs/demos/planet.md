@@ -538,6 +538,15 @@ than 37, but the frames draw 12 to 100 times the triangles:
   than 369 and twice the rays' structures.
 - **So the DAG stays** (D-058). The demo now logs, as it exits, the clusters and triangles a
   frame drew on average.
+- **The coarser levels made from the grid,** set aside too (`reports/2026-10-10-220/grid-dag.patch`):
+  each level kept every `2^k`-th sample inside groups whose borders shift by half a group a
+  level, with no simplifier. The DAG cooked in 16 ms rather than 36–38, every cut watertight,
+  but the frames drew 1.6–5 times the triangles:
+
+  | GPU frame, best of 3 | Èze | 10 km | Orbit | Mont Blanc |
+  |---|---|---|---|---|
+  | meshoptimizer's DAG | 0.94 ms, 133 k | 1.12 ms, 331 k | 1.21 ms, 383 k | 1.10 ms, 332 k |
+  | The grid's | 1.00 ms, 207 k | 1.32 ms, 767 k | 1.43 ms, 871 k | 1.27 ms, 1.7 M |
 
 ### The heights in integers
 

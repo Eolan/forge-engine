@@ -1,0 +1,825 @@
+diff --git a/crates/forge-geom/src/lib.rs b/crates/forge-geom/src/lib.rs
+index 990a345..68672c8 100644
+--- a/crates/forge-geom/src/lib.rs
++++ b/crates/forge-geom/src/lib.rs
+@@ -14,7 +14,9 @@ pub mod procedural;
+ pub mod skin;
+ pub mod stone;
+ 
+-pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag, build_dag_clustered};
++pub use lod::{
++    ClusterDag, GRID_BLOCK, GROUP_SIZE, MAX_LEVELS, build_dag, build_dag_clustered, build_dag_grid,
++};
+ pub use meshlet::{
+     CookOptions, DagStats, GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES,
+     MeshletMesh, PackedPage, PageFile,
+diff --git a/crates/forge-geom/src/lod.rs b/crates/forge-geom/src/lod.rs
+index 08069d0..2d6b0b3 100644
+--- a/crates/forge-geom/src/lod.rs
++++ b/crates/forge-geom/src/lod.rs
+@@ -25,6 +25,10 @@ use meshopt::{PositionDataAdapter, RadiusDataAdapter, SimplifyOptions, VertexDat
+ 
+ use crate::meshlet::{GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES};
+ 
++mod grid;
++
++pub use grid::BLOCK as GRID_BLOCK;
++
+ /// Clusters per simplification group.
+ pub const GROUP_SIZE: usize = 8;
+ /// Upper bound on DAG levels (a mesh halves per level; 16 levels are a 65 536× reduction), also
+@@ -103,6 +107,7 @@ pub fn build_dag(
+         vertex_section,
+         normal_weight,
+         levels,
++        None,
+     )
+ }
+ 
+@@ -126,10 +131,35 @@ pub fn build_dag_clustered(
+         vertex_section,
+         normal_weight,
+         levels,
++        None,
++    )
++}
++
++/// [`build_dag_clustered`] over a grid of `samples`² samples (the mesh's first vertices, row-major),
++/// its coarser levels made from the grid itself rather than by meshoptimizer (D-058, #220; see
++/// `grid`'s notes): level 0's `clusters` must each lie in one block of [`GRID_BLOCK`] quads from
++/// the grid's corner. The clusters using other vertices (a tile's skirt) stay roots.
++pub fn build_dag_grid(
++    indices: &[u32],
++    clusters: &[Vec<u32>],
++    vertices: &[GpuVertex],
++    vertex_section: &[u8],
++    samples: usize,
++    levels: u32,
++) -> ClusterDag {
++    build_dag_from(
++        indices,
++        Some(clusters),
++        vertices,
++        vertex_section,
++        0.0,
++        levels,
++        Some(samples),
+     )
+ }
+ 
+-/// [`build_dag`], level 0 cut into `clusters` when they are given.
++/// [`build_dag`], level 0 cut into `clusters` when they are given, the levels above made from
++/// the grid of `grid`² samples when it is given.
+ fn build_dag_from(
+     indices: &[u32],
+     clusters: Option<&[Vec<u32>]>,
+@@ -137,6 +167,7 @@ fn build_dag_from(
+     vertex_section: &[u8],
+     normal_weight: f32,
+     levels: u32,
++    grid: Option<usize>,
+ ) -> ClusterDag {
+     let mut dag = ClusterDag {
+         meshlets: Vec::new(),
+@@ -152,15 +183,19 @@ fn build_dag_from(
+     let mut compactor = Compactor::new(vertices.len());
+     let mut locked = vec![false; vertices.len()];
+     // Vertices at one position (the copies on a section border) are one vertex for grouping
+-    // and locking: a border shared by two groups is locked in both of its copies.
+-    let remap = meshopt::generate_position_remap(
+-        &VertexDataAdapter::new(
+-            bytemuck::cast_slice(vertices),
+-            std::mem::size_of::<GpuVertex>(),
+-            0,
+-        )
+-        .expect("vertex adapter"),
+-    );
++    // and locking: a border shared by two groups is locked in both of its copies. A grid's
++    // levels need neither.
++    let remap = match grid {
++        Some(_) => Vec::new(),
++        None => meshopt::generate_position_remap(
++            &VertexDataAdapter::new(
++                bytemuck::cast_slice(vertices),
++                std::mem::size_of::<GpuVertex>(),
++                0,
++            )
++            .expect("vertex adapter"),
++        ),
++    };
+     let sections = Sections {
+         of_vertex: vertex_section,
+     };
+@@ -179,7 +214,19 @@ fn build_dag_from(
+ 
+     let mut level = 1;
+     let mut group_id = 0_u32;
+-    while current.len() > 1 && level < levels.min(MAX_LEVELS) {
++    if let Some(samples) = grid {
++        grid::coarser_levels(
++            &mut dag,
++            &mut records,
++            &current,
++            vertices,
++            &sections,
++            samples,
++            levels.min(MAX_LEVELS),
++            &mut group_id,
++        );
++    }
++    while grid.is_none() && current.len() > 1 && level < levels.min(MAX_LEVELS) {
+         // Partition the level's clusters into spatial groups.
+         let cluster_indices: Vec<u32> = current
+             .iter()
+diff --git a/crates/forge-geom/src/meshlet.rs b/crates/forge-geom/src/meshlet.rs
+index da3d5cc..ac9e686 100644
+--- a/crates/forge-geom/src/meshlet.rs
++++ b/crates/forge-geom/src/meshlet.rs
+@@ -182,6 +182,28 @@ impl MeshletMesh {
+         Self::packed(mesh, &vertices, dag, grid)
+     }
+ 
++    /// [`MeshletMesh::build_clustered`] over a grid of `samples`² samples (the mesh's first
++    /// vertices, row-major, its quads split as a planet's tile splits them), its coarser levels made
++    /// from the grid itself rather than by meshoptimizer ([`lod::build_dag_grid`], D-058, #220).
++    pub fn build_grid(mesh: &TriMesh, clusters: &[Vec<u32>], samples: usize) -> Self {
++        let (mut vertices, indices, vertex_section, _) = split_sections(mesh);
++        assert_eq!(
++            vertices.len(),
++            mesh.positions.len(),
++            "a grid has no sections"
++        );
++        let grid = snap_to_grid(&mut vertices);
++        let dag = lod::build_dag_grid(
++            &indices,
++            clusters,
++            &vertices,
++            &vertex_section,
++            samples,
++            lod::MAX_LEVELS,
++        );
++        Self::packed(mesh, &vertices, dag, grid)
++    }
++
+     /// `mesh` with its `dag` over its `vertices` (snapped to the grid `grid`) packed into pages.
+     fn packed(mesh: &TriMesh, vertices: &[GpuVertex], mut dag: lod::ClusterDag, grid: i32) -> Self {
+         let indices = &mesh.indices;
+diff --git a/crates/forge-terrain/src/planet.rs b/crates/forge-terrain/src/planet.rs
+index 15be63e..f23857d 100644
+--- a/crates/forge-terrain/src/planet.rs
++++ b/crates/forge-terrain/src/planet.rs
+@@ -1299,13 +1299,26 @@ const SKIRT_CLUSTER_QUADS: usize = 31;
+ /// [`SKIRT_CLUSTER_QUADS`] quads. meshoptimizer clustered a tile's 133 000 triangles in 50 ms,
+ /// a third of its DAG's time, into clusters of about the same size.
+ pub fn tile_clusters(samples: u32) -> Vec<Vec<u32>> {
++    clusters_of(samples, (TILE_CLUSTER_QUADS, TILE_CLUSTER_QUADS))
++}
++
++/// [`tile_clusters`] for a DAG whose coarser levels are made from the grid
++/// (`MeshletMesh::build_grid`, D-058): the grid's blocks of `forge_geom::GRID_BLOCK` quads (8 × 4:
++/// 45 vertices, 64 triangles), which its groups line up with, then the skirt's runs.
++pub fn tile_grid_clusters(samples: u32) -> Vec<Vec<u32>> {
++    let (across, down) = forge_geom::GRID_BLOCK;
++    clusters_of(samples, (across as usize, down as usize))
++}
++
++/// The grid of `samples`² samples cut into cells of `across` × `down` quads, then the skirt's runs.
++fn clusters_of(samples: u32, (across, down): (usize, usize)) -> Vec<Vec<u32>> {
+     let quads = samples as usize - 1;
+     let mut clusters = Vec::new();
+-    for top in (0..quads).step_by(TILE_CLUSTER_QUADS) {
+-        for left in (0..quads).step_by(TILE_CLUSTER_QUADS) {
+-            let mut triangles = Vec::with_capacity(2 * TILE_CLUSTER_QUADS * TILE_CLUSTER_QUADS);
+-            for j in top..(top + TILE_CLUSTER_QUADS).min(quads) {
+-                for i in left..(left + TILE_CLUSTER_QUADS).min(quads) {
++    for top in (0..quads).step_by(down) {
++        for left in (0..quads).step_by(across) {
++            let mut triangles = Vec::with_capacity(2 * across * down);
++            for j in top..(top + down).min(quads) {
++                for i in left..(left + across).min(quads) {
+                     let quad = (j * quads + i) as u32;
+                     triangles.extend_from_slice(&[2 * quad, 2 * quad + 1]);
+                 }
+@@ -2491,6 +2504,33 @@ mod calibration {
+                 by_cells.levels(),
+                 by_cells.dag_triangle_count
+             );
++            // D-058: the coarser levels made from the grid itself.
++            let t = Instant::now();
++            let by_grid = MeshletMesh::build_grid(
++                &mesh,
++                &tile_grid_clusters(world.tiles.samples),
++                world.tiles.samples as usize,
++            );
++            let grid_ms = ms(t);
++            let errors = |m: &MeshletMesh| -> Vec<String> {
++                let mut by_level = vec![0.0_f32; m.levels()];
++                for c in &m.meshlets {
++                    let l = c.lod_level as usize;
++                    by_level[l] = by_level[l].max(c.self_error);
++                }
++                by_level.iter().map(|e| format!("{e:.2}")).collect()
++            };
++            println!(
++                "  by the grid: {grid_ms:.1} ms, {} clusters, {} pages, {} levels {:?}, {} triangles, errors {:?} (the DAG's {:?}, {:?})",
++                by_grid.meshlets.len(),
++                by_grid.page_count,
++                by_grid.levels(),
++                by_grid.clusters_per_level,
++                by_grid.dag_triangle_count,
++                errors(&by_grid),
++                by_cells.clusters_per_level,
++                errors(&by_cells)
++            );
+             // The cook's steps: the DAG alone, then its pages.
+             let vertices: Vec<GpuVertex> = (0..mesh.positions.len())
+                 .map(|i| GpuVertex {
+diff --git a/demos/planet/src/main.rs b/demos/planet/src/main.rs
+index c5e07cc..940c51b 100644
+--- a/demos/planet/src/main.rs
++++ b/demos/planet/src/main.rs
+@@ -127,6 +127,10 @@ struct Args {
+     /// GPU (the same bits; D-058's step 2).
+     #[arg(long)]
+     cpu_heights: bool,
++    /// The tiles' DAGs take their coarser levels from the grid itself rather than from
++    /// meshoptimizer (D-058).
++    #[arg(long)]
++    grid_dag: bool,
+     /// The streamed pool, MiB.
+     #[arg(long, default_value_t = 512)]
+     stream_pool: u32,
+@@ -1805,6 +1809,7 @@ impl Demo for PlanetDemo {
+ 
+ fn main() -> Result<()> {
+     let args = Args::parse();
++    stream::GRID_DAG.store(args.grid_dag, std::sync::atomic::Ordering::Relaxed);
+     let path = args
+         .world
+         .clone()
+diff --git a/demos/planet/src/stream.rs b/demos/planet/src/stream.rs
+index 72c9ad2..aabbee6 100644
+--- a/demos/planet/src/stream.rs
++++ b/demos/planet/src/stream.rs
+@@ -21,6 +21,7 @@
+ //! `docs/demos/planet.md` has the numbers.
+ 
+ use std::collections::{HashMap, HashSet};
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::{Arc, mpsc};
+ use std::thread;
+ use std::time::Instant;
+@@ -40,7 +41,7 @@ use forge_task::{PoolConfig, TaskPool};
+ use forge_terrain::Planet;
+ use forge_terrain::planet::{
+     NORMAL_MAP_SIZE, normal_map_levels, tile_clusters, tile_mesh, tile_mesh_from, tile_name,
+-    tile_normal_map_cached, tile_origin,
++    tile_grid_clusters, tile_normal_map_cached, tile_origin,
+ };
+ use forge_world::CellId;
+ 
+@@ -53,6 +54,10 @@ use crate::Placement;
+ /// place is cut as in a scene built whole, whichever tiles stand beside it.
+ const TILE_RAY_BUDGET: u32 = 4_000;
+ 
++/// Whether the tiles' DAGs take their coarser levels from the grid rather than from
++/// meshoptimizer (`--grid-dag`, D-058), cached under names of their own.
++pub(crate) static GRID_DAG: AtomicBool = AtomicBool::new(false);
++
+ /// Seconds between two asks for the cut: the worker makes it again (a millisecond of its time)
+ /// at most this often.
+ const ASK_EVERY: f64 = 0.05;
+@@ -138,7 +143,13 @@ pub(crate) fn cook_cells(
+ ) -> (Vec<Tile>, usize, usize) {
+     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
+     let key = planet.tile_key();
+-    let clusters = &tile_clusters(planet.world.tiles.samples);
++    let samples = planet.world.tiles.samples;
++    let grid = GRID_DAG.load(Ordering::Relaxed);
++    let clusters = &if grid {
++        tile_grid_clusters(samples)
++    } else {
++        tile_clusters(samples)
++    };
+     let mut slots: Vec<Option<(Tile, Source)>> = cells
+         .iter()
+         .map(|c| have.get(c).map(|t| (t.clone(), Source::Kept)))
+@@ -151,6 +162,7 @@ pub(crate) fn cook_cells(
+             let (cache, key) = (&cache, &key);
+             s.spawn(move |_| {
+                 let name = tile_name(body, cell);
++                let name = if grid { format!("{name}~grid") } else { name };
+                 // Its first level cut into its grid's cells, its DAG over them.
+                 let (done, stored) =
+                     forge_geom::cache::cook_cached_with(cache, &name, key, in_memory, || {
+@@ -161,11 +173,15 @@ pub(crate) fn cook_cells(
+                             Some(h) => tile_mesh_from(planet, cell, &h),
+                             None => tile_mesh(planet, cell),
+                         };
+-                        MeshletMesh::build_clustered(
+-                            &mesh,
+-                            clusters,
+-                            CookOptions { normal_weight: 0.0 },
+-                        )
++                        if grid {
++                            MeshletMesh::build_grid(&mesh, clusters, samples as usize)
++                        } else {
++                            MeshletMesh::build_clustered(
++                                &mesh,
++                                clusters,
++                                CookOptions { normal_weight: 0.0 },
++                            )
++                        }
+                     });
+                 if let Err(error) = stored {
+                     tracing::warn!(tile = %name, %error, "cooked tile not cached");
+diff --git a/crates/forge-geom/src/lod/grid.rs b/crates/forge-geom/src/lod/grid.rs
+new file mode 100644
+index 0000000..79f82fa
+--- /dev/null
++++ b/crates/forge-geom/src/lod/grid.rs
+@@ -0,0 +1,484 @@
++//! A grid's coarser levels made from the grid itself (D-058, #220): a planet's tile is a regular
++//! grid of samples, so its DAG's levels need no simplifier. Level `k` keeps every `2^k`-th sample
++//! inside each group and the group's border as its children drew it; each level's groups are
++//! shifted by half a group, so the borders a level keeps lie inside the next level's groups and
++//! coarsen there (Nanite's alternating groups, on a grid).
++//!
++//! - **The grid:** the mesh's first `samples`² vertices, row-major; its quads split as
++//!   `forge_terrain::planet::tile_mesh` splits them. Other vertices (a tile's skirt) and the
++//!   clusters that use them take no part: they stay roots.
++//! - **Level 0:** the given clusters, each inside one block of [`BLOCK`] quads from the grid's
++//!   corner.
++//! - **Level `k` ≥ 1:** groups of [`GROUP_CELLS`]² cells of `2^k` quads, from `offset_k`
++//!   (`offset_1` = 0, `offset_k+1` = `offset_k` + half a group), clipped to the grid. A cell
++//!   inside its group is two triangles; a cell on the group's border fans from its corner away
++//!   from the border, over the border's samples. The group's clusters are its triangles cut by
++//!   blocks of [`BLOCK`] cells from `offset_k`, which the next level's borders never cross.
++//! - **The error:** the farthest any of the grid's samples in the group stands from the group's
++//!   new surface, and at least its children's: exact, where meshoptimizer's is its estimate.
++//! - **It stops** when a level's offset no longer falls on its cells (four levels over a tile of
++//!   256 quads), or when a level keeps more than [`STALL_RATIO`] of its triangles.
++
++use std::collections::BTreeMap;
++
++use super::{
++    ClusterDag, Compactor, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES, Prepared,
++    Record, STALL_RATIO, Sections, Simplified, append, enclosing_sphere, par_map, prepare,
++};
++
++/// Cells a side of a group.
++const GROUP_CELLS: i64 = 16;
++/// Cells (quads at level 0) across and down a block, which a cluster stays inside.
++pub const BLOCK: (i64, i64) = (8, 4);
++
++/// A cell of a group's surface: its corner in samples and its triangles, as the grid's vertices.
++struct Cell {
++    corner: (i64, i64),
++    /// Whether it is the two triangles of an inner cell (the others fan).
++    plain: bool,
++    triangles: Vec<[u32; 3]>,
++}
++
++/// The grid levels over level 0's clusters `current`, appended to `dag` and `records` up to
++/// `levels` levels in all; `group_id` numbers the groups on from where it is.
++#[allow(clippy::too_many_arguments)]
++pub(super) fn coarser_levels(
++    dag: &mut ClusterDag,
++    records: &mut Vec<Record>,
++    current: &[usize],
++    vertices: &[GpuVertex],
++    sections: &Sections<'_>,
++    samples: usize,
++    levels: u32,
++    group_id: &mut u32,
++) {
++    let n = samples as i64;
++    let in_grid = |v: u32| i64::from(v) < n * n;
++    let mut current: Vec<usize> = current
++        .iter()
++        .copied()
++        .filter(|&c| records[c].indices.iter().all(|&v| in_grid(v)))
++        .collect();
++    let unlocked = vec![false; vertices.len()];
++    let mut offset = 0_i64;
++    let mut level = 1_u32;
++    while current.len() > 1 && level < levels {
++        let step = 1_i64 << level;
++        if offset % step != 0 || (n - 1) % step != 0 {
++            break;
++        }
++        let size = GROUP_CELLS * step;
++        // Each cluster in the group its middle lies in.
++        let mut groups: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
++        for &c in &current {
++            let indices = &records[c].indices;
++            let (mut si, mut sj) = (0_i64, 0_i64);
++            for &v in indices {
++                si += i64::from(v) % n;
++                sj += i64::from(v) / n;
++            }
++            let count = indices.len() as i64;
++            let key = (
++                (2 * si - 2 * offset * count).div_euclid(2 * size * count),
++                (2 * sj - 2 * offset * count).div_euclid(2 * size * count),
++            );
++            groups.entry(key).or_default().push(c);
++        }
++        let list: Vec<((i64, i64), Vec<usize>)> = groups.into_iter().collect();
++        let shape = Shape {
++            n,
++            step,
++            offset,
++            size,
++        };
++        let read: &[Record] = records;
++        let made = par_map(
++            list.len(),
++            || Compactor::new(vertices.len()),
++            |compactor, i| {
++                let (key, members) = &list[i];
++                group(
++                    *key, members, &shape, read, vertices, sections, &unlocked, compactor,
++                )
++            },
++        );
++        let mut next = Vec::new();
++        let mut progressed = false;
++        for ((_, members), made) in list.iter().zip(made) {
++            let group = *group_id;
++            *group_id += 1;
++            for &c in members {
++                records[c].group = group;
++            }
++            let Some(made) = made else {
++                continue;
++            };
++            progressed = true;
++            for &c in members {
++                records[c].gpu.parent_center = made.sphere.0;
++                records[c].gpu.parent_radius = made.sphere.1;
++                records[c].gpu.parent_error = made.error;
++            }
++            for cluster in made.clusters {
++                let c = append(dag, records, cluster, (level, made.sphere, made.error));
++                records[c].source = group;
++                next.push(c);
++            }
++        }
++        if !progressed {
++            break;
++        }
++        dag.clusters_per_level.push(next.len() as u32);
++        current = next;
++        offset += size / 2;
++        level += 1;
++    }
++}
++
++/// One level's groups: the grid's samples a side `n`, the level's cell `step` in quads, its
++/// groups' `offset` and `size` in quads.
++struct Shape {
++    n: i64,
++    step: i64,
++    offset: i64,
++    size: i64,
++}
++
++/// The group `key` of `shape` over its `members`, made again at the level's step and cut into
++/// clusters; `None` when it would keep too many of its triangles.
++#[allow(clippy::too_many_arguments)]
++fn group(
++    key: (i64, i64),
++    members: &[usize],
++    shape: &Shape,
++    records: &[Record],
++    vertices: &[GpuVertex],
++    sections: &Sections<'_>,
++    unlocked: &[bool],
++    compactor: &mut Compactor,
++) -> Option<Simplified> {
++    let Shape {
++        n,
++        step,
++        offset,
++        size,
++    } = *shape;
++    let last = n - 1;
++    let (x0, y0) = (
++        (offset + key.0 * size).clamp(0, last),
++        (offset + key.1 * size).clamp(0, last),
++    );
++    let (x1, y1) = (
++        (offset + (key.0 + 1) * size).clamp(0, last),
++        (offset + (key.1 + 1) * size).clamp(0, last),
++    );
++    let id = |i: i64, j: i64| (j * n + i) as u32;
++    // The border's samples as the children have them, along each of its four sides.
++    let (mut top, mut bottom, mut left, mut right) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
++    let mut children_triangles = 0;
++    for &c in members {
++        children_triangles += records[c].indices.len() / 3;
++        for &v in &records[c].indices {
++            let (i, j) = (i64::from(v) % n, i64::from(v) / n);
++            if j == y0 {
++                top.push(i);
++            }
++            if j == y1 {
++                bottom.push(i);
++            }
++            if i == x0 {
++                left.push(j);
++            }
++            if i == x1 {
++                right.push(j);
++            }
++        }
++    }
++    for side in [&mut top, &mut bottom, &mut left, &mut right] {
++        side.sort_unstable();
++        side.dedup();
++    }
++    let between = |side: &[i64], from: i64, to: i64| -> Vec<i64> {
++        let start = side.partition_point(|&p| p <= from);
++        let end = side.partition_point(|&p| p < to);
++        side[start..end].to_vec()
++    };
++    // The cells: two triangles inside, a fan on the border.
++    let mut cells = Vec::new();
++    let mut triangle_count = 0;
++    for cy in (y0..y1).step_by(step as usize) {
++        for cx in (x0..x1).step_by(step as usize) {
++            let (a, b, d, c) = ((cx, cy), (cx + step, cy), (cx + step, cy + step), (cx, cy + step));
++            let on_top = if cy == y0 { between(&top, cx, cx + step) } else { Vec::new() };
++            let on_right = if cx + step == x1 { between(&right, cy, cy + step) } else { Vec::new() };
++            let on_bottom = if cy + step == y1 { between(&bottom, cx, cx + step) } else { Vec::new() };
++            let on_left = if cx == x0 { between(&left, cy, cy + step) } else { Vec::new() };
++            let plain = on_top.is_empty() && on_right.is_empty() && on_bottom.is_empty() && on_left.is_empty();
++            let triangles = if plain {
++                vec![
++                    [id(a.0, a.1), id(b.0, b.1), id(c.0, c.1)],
++                    [id(b.0, b.1), id(d.0, d.1), id(c.0, c.1)],
++                ]
++            } else {
++                // The cell's outline a, b, d, c, the border's samples on its sides.
++                let mut outline = vec![a];
++                outline.extend(on_top.iter().map(|&i| (i, cy)));
++                outline.push(b);
++                outline.extend(on_right.iter().map(|&j| (cx + step, j)));
++                outline.push(d);
++                outline.extend(on_bottom.iter().rev().map(|&i| (i, cy + step)));
++                outline.push(c);
++                outline.extend(on_left.iter().rev().map(|&j| (cx, j)));
++                // The fan's corner: one whose two sides hold no border samples.
++                let clear = [
++                    on_top.is_empty() && on_left.is_empty(),
++                    on_top.is_empty() && on_right.is_empty(),
++                    on_right.is_empty() && on_bottom.is_empty(),
++                    on_bottom.is_empty() && on_left.is_empty(),
++                ];
++                let corner = [a, b, d, c][clear.iter().position(|&c| c).expect(
++                    "a group's cell has border samples on two facing sides: the group is one cell wide",
++                )];
++                let at = outline.iter().position(|&p| p == corner).expect("its corner");
++                outline.rotate_left(at);
++                (1..outline.len() - 1)
++                    .map(|k| {
++                        let (p, q) = (outline[k], outline[k + 1]);
++                        [id(corner.0, corner.1), id(p.0, p.1), id(q.0, q.1)]
++                    })
++                    .collect()
++            };
++            triangle_count += triangles.len();
++            cells.push(Cell {
++                corner: (cx, cy),
++                plain,
++                triangles,
++            });
++        }
++    }
++    if triangle_count as f32 > children_triangles as f32 * STALL_RATIO {
++        return None;
++    }
++    // The error: the farthest sample from the new surface.
++    let position = |v: u32| glam::Vec3::from(vertices[v as usize].position);
++    let grid_point = |v: u32| (i64::from(v) % n, i64::from(v) / n);
++    let columns = (x1 - x0) / step;
++    let rows = (y1 - y0) / step;
++    let mut error = 0.0_f32;
++    for j in y0..=y1 {
++        for i in x0..=x1 {
++            let cx = ((i - x0) / step).min(columns - 1);
++            let cy = ((j - y0) / step).min(rows - 1);
++            let cell = &cells[(cy * columns + cx) as usize];
++            let (s, t) = (
++                (i - cell.corner.0) as f32 / step as f32,
++                (j - cell.corner.1) as f32 / step as f32,
++            );
++            let on = if cell.plain {
++                let [a, b, c] = cell.triangles[0];
++                let d = cell.triangles[1][1];
++                if s + t <= 1.0 {
++                    position(a) + s * (position(b) - position(a)) + t * (position(c) - position(a))
++                } else {
++                    position(d)
++                        + (1.0 - s) * (position(c) - position(d))
++                        + (1.0 - t) * (position(b) - position(d))
++                }
++            } else {
++                cell.triangles
++                    .iter()
++                    .find_map(|&t| barycentric(t.map(grid_point), (i, j)).map(|w| (t, w)))
++                    .map(|(t, w)| w[0] * position(t[0]) + w[1] * position(t[1]) + w[2] * position(t[2]))
++                    .expect("a sample in its cell's fan")
++            };
++            error = error.max(position(id(i, j)).distance(on));
++        }
++    }
++    let error = members
++        .iter()
++        .map(|&c| records[c].gpu.self_error)
++        .fold(error, f32::max);
++    // The clusters: the triangles block by block, as many to a cluster as it holds.
++    let mut blocks: BTreeMap<(i64, i64), Vec<[u32; 3]>> = BTreeMap::new();
++    for cell in &cells {
++        let key = (
++            (cell.corner.0 - offset).div_euclid(BLOCK.0 * step),
++            (cell.corner.1 - offset).div_euclid(BLOCK.1 * step),
++        );
++        blocks.entry(key).or_default().extend(&cell.triangles);
++    }
++    let all: Vec<u32> = cells
++        .iter()
++        .flat_map(|c| c.triangles.iter().flatten().copied())
++        .collect();
++    let subset = compactor.subset(&all, vertices, unlocked);
++    let adapter = subset.adapter();
++    let local = |g: u32| subset.global.binary_search(&g).expect("in the subset") as u32;
++    let mut clusters: Vec<Prepared> = Vec::new();
++    for triangles in blocks.values() {
++        let mut members: Vec<u32> = Vec::new();
++        let mut corners: Vec<u8> = Vec::new();
++        for t in triangles {
++            let new = t.iter().filter(|&&v| !members.contains(&v)).count();
++            if members.len() + new > MESHLET_MAX_VERTICES
++                || corners.len() / 3 + 1 > MESHLET_MAX_TRIANGLES
++            {
++                let locals: Vec<u32> = members.iter().map(|&g| local(g)).collect();
++                clusters.push(prepare(&subset, &adapter, sections, &locals, &corners));
++                members.clear();
++                corners.clear();
++            }
++            for &v in t {
++                let at = match members.iter().position(|&m| m == v) {
++                    Some(at) => at,
++                    None => {
++                        members.push(v);
++                        members.len() - 1
++                    }
++                };
++                corners.push(at as u8);
++            }
++        }
++        if !corners.is_empty() {
++            let locals: Vec<u32> = members.iter().map(|&g| local(g)).collect();
++            clusters.push(prepare(&subset, &adapter, sections, &locals, &corners));
++        }
++    }
++    let children_spheres: Vec<[f32; 4]> = members
++        .iter()
++        .map(|&c| {
++            let g = &records[c].gpu;
++            [g.self_center[0], g.self_center[1], g.self_center[2], g.self_radius]
++        })
++        .collect();
++    Some(Simplified {
++        sphere: enclosing_sphere(&children_spheres),
++        error,
++        clusters,
++    })
++}
++
++/// The weights of `p` in the triangle `t` (grid points), when it lies in it (its edges too).
++fn barycentric(t: [(i64, i64); 3], p: (i64, i64)) -> Option<[f32; 3]> {
++    let cross = |a: (i64, i64), b: (i64, i64), c: (i64, i64)| {
++        (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
++    };
++    let area = cross(t[0], t[1], t[2]);
++    if area == 0 {
++        return None;
++    }
++    let w0 = cross(t[1], t[2], p);
++    let w1 = cross(t[2], t[0], p);
++    let w2 = cross(t[0], t[1], p);
++    let inside = if area > 0 {
++        w0 >= 0 && w1 >= 0 && w2 >= 0
++    } else {
++        w0 <= 0 && w1 <= 0 && w2 <= 0
++    };
++    inside.then(|| {
++        let area = area as f32;
++        [w0 as f32 / area, w1 as f32 / area, w2 as f32 / area]
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use std::collections::HashMap;
++
++    use super::super::build_dag_grid;
++    use super::*;
++
++    /// Every cut of a grid's DAG covers the grid once: its triangles' areas sum to the grid's,
++    /// each inner edge is two triangles' (opposite ways round), and each outer edge lies on the
++    /// grid's border. No crack, no overlap.
++    #[test]
++    fn every_cut_of_a_grid_s_dag_is_watertight() {
++        let n = 65_usize;
++        let q = n - 1;
++        let height = |i: usize, j: usize| {
++            let (x, y) = (i as f32 * 0.37, j as f32 * 0.21);
++            3.0 * x.sin() * y.cos() + (0.13 * (i * j) as f32).sin()
++        };
++        let vertices: Vec<GpuVertex> = (0..n * n)
++            .map(|v| GpuVertex {
++                position: [(v % n) as f32, height(v % n, v / n), (v / n) as f32],
++                pad0: 0.0,
++                normal: [0.0, 1.0, 0.0],
++                section: 0.0,
++                uv: [0.0; 2],
++            })
++            .collect();
++        let mut indices = Vec::new();
++        for j in 0..q {
++            for i in 0..q {
++                let id = |i: usize, j: usize| (j * n + i) as u32;
++                let (a, b, c, d) = (id(i, j), id(i + 1, j), id(i, j + 1), id(i + 1, j + 1));
++                indices.extend_from_slice(&[a, b, c, b, d, c]);
++            }
++        }
++        let (across, down) = (BLOCK.0 as usize, BLOCK.1 as usize);
++        let mut clusters = Vec::new();
++        for top in (0..q).step_by(down) {
++            for left in (0..q).step_by(across) {
++                let mut triangles = Vec::new();
++                for j in top..top + down {
++                    for i in left..left + across {
++                        let quad = (j * q + i) as u32;
++                        triangles.extend_from_slice(&[2 * quad, 2 * quad + 1]);
++                    }
++                }
++                clusters.push(triangles);
++            }
++        }
++        let dag = build_dag_grid(&indices, &clusters, &vertices, &vec![0; n * n], n, 16);
++        assert!(dag.clusters_per_level.len() >= 4, "{:?}", dag.clusters_per_level);
++        let mut errors: Vec<f32> = dag.meshlets.iter().map(|m| m.self_error).collect();
++        errors.sort_by(f32::total_cmp);
++        errors.dedup();
++        for m in &dag.meshlets {
++            assert!(m.parent_error >= m.self_error);
++        }
++        let point = |v: u32| ((v as usize % n) as i64, (v as usize / n) as i64);
++        for &e in &errors {
++            let mut area = 0_i64;
++            let mut edges: HashMap<(u32, u32), i32> = HashMap::new();
++            for (m, range) in dag.meshlets.iter().zip(&dag.ranges) {
++                if !(m.self_error <= e && e < m.parent_error) {
++                    continue;
++                }
++                let local = &dag.meshlet_vertices[range.vertex_offset as usize..];
++                let corners = &dag.meshlet_triangles[range.triangle_offset as usize..]
++                    [..3 * m.triangle_count as usize];
++                for t in corners.chunks(3) {
++                    let v = [0, 1, 2].map(|k| local[t[k] as usize]);
++                    let p = v.map(point);
++                    let doubled = (p[1].0 - p[0].0) * (p[2].1 - p[0].1)
++                        - (p[1].1 - p[0].1) * (p[2].0 - p[0].0);
++                    assert!(doubled > 0, "a triangle turned over or flat at error {e}");
++                    area += doubled;
++                    for k in 0..3 {
++                        let (a, b) = (v[k], v[(k + 1) % 3]);
++                        *edges.entry((a.min(b), a.max(b))).or_default() +=
++                            if a < b { 1 } else { -1 };
++                    }
++                }
++            }
++            assert_eq!(area, 2 * (q * q) as i64, "the cut at {e} covers the grid");
++            for (&(a, b), &count) in &edges {
++                if count != 0 {
++                    let (pa, pb) = (point(a), point(b));
++                    let on_border = |c: fn((i64, i64)) -> i64, at: i64| c(pa) == at && c(pb) == at;
++                    let last = q as i64;
++                    assert!(
++                        count.abs() == 1
++                            && (on_border(|p| p.0, 0)
++                                || on_border(|p| p.0, last)
++                                || on_border(|p| p.1, 0)
++                                || on_border(|p| p.1, last)),
++                        "an open edge {pa:?}–{pb:?} inside the grid at error {e}"
++                    );
++                }
++            }
++        }
++    }
++}

@@ -138,8 +138,9 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   - **The tiles' meshes from the GPU's heights ✅:** a cold tour's cuts wait 0.39 s rather than 0.48.
   - **One level a tile, measured (D-058's step 3):** cooked in 9 ms rather than 37, but the
     frames drew 12–100 times the triangles (1.2–2.5 ms rather than 0.9–1.2): the DAG stays, 35 ms
-    of a new tile's 45 waited. The children sharing their parent's samples and a DAG template
-    were measured and set aside too. A longer blend over a split (the parent dithered into its
+    of a new tile's 45 waited. The children sharing their parent's samples, a DAG template and
+    the coarser levels made from the grid (16 ms rather than 37, but 5–20 % more GPU frame) were
+    measured and set aside too. A longer blend over a split (the parent dithered into its
     children) if a view shows it: no frame of a change jumps over 0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by

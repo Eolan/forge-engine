@@ -12,3 +12,7 @@
   tile, measured" in `docs/demos/planet.md`): tiles of one level, every cluster a root, the rays
   given each tile's grid at 45 × 45 samples (`RayMesh`, `set_ray_mesh`, `add_mesh_with`). A tile
   cooked in 9 ms rather than 37, but the frames drew 12–100 times the triangles: set aside.
+- `grid-dag.patch`: a tile's coarser levels made from its grid (`lod/grid.rs`,
+  `MeshletMesh::build_grid`, `planet --grid-dag`), with a test that every cut is watertight. A
+  tile's DAG cooked in 16 ms rather than 36–38, but the frames drew 1.6–5 times the triangles,
+  0.05–0.22 ms more of the GPU: set aside (the owner's call). Apply with `git apply`.
