@@ -3462,7 +3462,9 @@ Marble, the Deep Star Maps):
   `[view] haze`, the air between the camera and the ground that many times as dense (its
   transmittance raised to it, its light scaled to match); the Earth at 0.5. The air is
   Hillaire's Earth, yet from 6 km over the Alps it laid as much blue over the grass as the sky's
-  own. At Èze the fog is mostly AgX's greyish sky (D-045's curve, the owner's to change).
+  own. At Èze the fog was mostly AgX's greyish sky: shown AgX's punchy look at EV 14 beside it,
+  the owner chose it ("the one on the right is way better"), the planet's default since. The
+  other demos keep D-045's AgX.
 - **Faster new tiles** (2026-10-10, `docs/demos/planet.md`, "A new tile"): a fine tile waits
   0.09 s rather than 0.46 (0.27 s of one core; its heights and its DAG's groups spread over the
   threads); the caches' stores no longer scan their directories; the normal map's unread samples

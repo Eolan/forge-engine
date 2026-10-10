@@ -170,13 +170,14 @@ struct Args {
     /// Bloom strength, the share of the shown image that is bloom (0 for none).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
-    /// Tone curve: agx, agx-punchy, aces, aces2 or neutral (G cycles them).
-    #[arg(long, default_value = "agx")]
+    /// Tone curve: agx, agx-punchy, aces, aces2 or neutral (G cycles them). AgX's punchy look by
+    /// default: the owner's pick for the planet (2026-10-10), the blue sky deep rather than greyish.
+    #[arg(long, default_value = "agx-punchy")]
     tonemap: Tonemap,
-    /// The exposure value at ISO 100: 15 by default, sunny 16, as a camera takes anything the sun
-    /// lights, in space as on the ground (a metered exposure, over a frame of black sky, burns a
-    /// sunlit body white).
-    #[arg(long, default_value_t = 15.0)]
+    /// The exposure value at ISO 100: 14 by default, a stop over sunny 16, as a camera takes
+    /// anything the sun lights, in space as on the ground (a metered exposure, over a frame of
+    /// black sky, burns a sunlit body white); the punchy look's contrast wants the stop.
+    #[arg(long, default_value_t = 14.0)]
     ev100: f32,
     /// Meter the exposure from the frame instead, starting from `--ev100`.
     #[arg(long)]

@@ -26,7 +26,7 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | `--shot orbit\|high\|ground\|top` | holds the descent at a golden shot; `top` looks straight down from the orbit's height |
 | `--target LAT,LON`, `--heading DEG` | where the descent ends and the way it looks, over the world's |
 | `--sun-elevation`, `--sun-azimuth` | the sun over the target, degrees (25° and 240° by default) |
-| `--ev100 EV`, `--auto-exposure` | the exposure: sunny 16 (EV 15) by default, as a camera takes anything sunlit; or metered |
+| `--ev100 EV`, `--auto-exposure` | the exposure: EV 14 by default, a stop over sunny 16, as a camera takes anything sunlit; or metered |
 | `--stars STOPS` | the stars' brightness: a map value of 1 at 2^STOPS cd/m² (12) |
 | `--radius KM`, `--seed N` | over the world's |
 | `--tour`, `--tour-stop N` | flies the world's tour, or holds its stop N |
@@ -142,7 +142,9 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
       - The sky keeps its light.
       - At Èze (120 m up) the change is small: the hills 2 km away go from blue 25 to 16. What
         reads as fog there is mostly the tone curve: AgX keeps the blue sky greyish, where its
-        punchy look shows it deep blue (`--tonemap agx-punchy --ev100 14`, G in the demo).
+        punchy look shows it deep blue. The owner, shown both (2026-10-10): "the one on the right
+        is way better". The planet now draws with AgX's punchy look at EV 14 by default
+        (`--tonemap agx` `--ev100 15` for the old look, G cycles the curves).
 
       Below, Mont Blanc from 6 km up and Corsica from 400 km, the physical air on the left and
       the half on the right:
