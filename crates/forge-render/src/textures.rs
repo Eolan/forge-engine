@@ -7,6 +7,7 @@
 //! vectors and renormalise them).
 
 use forge_core::hash::{hash_cell2, unit_f32};
+use forge_core::pack::par_chunks_mut;
 
 /// A texture's pixels: RGBA8 level after level, level 0 first, down to 1 × 1.
 #[derive(Clone, Debug)]
@@ -744,21 +745,33 @@ pub enum ImageUse {
     Data,
 }
 
+/// Texels a chunk of [`decode_image`]'s parallel work.
+const DECODE_CHUNK: usize = 1 << 16;
+/// The fewest rows of a mip a thread takes (a thread costs tens of microseconds to start).
+const MIP_ROWS_PER_THREAD: usize = 16;
+
 /// A model's encoded image (PNG or JPEG) as a texture with its mips, for `use`. A side that is
 /// not a power of two is resampled up to the next one first, so every level halves exactly.
 pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageResult<TextureData> {
     let rgba = image::load_from_memory(bytes)?.to_rgba8();
     let (w, h) = rgba.dimensions();
     let (pw, ph) = (w.next_power_of_two(), h.next_power_of_two());
-    let mut texels: Vec<[f32; 4]> = rgba
-        .pixels()
-        .map(|p| {
-            let c = p.0.map(|b| f32::from(b) / 255.0);
-            match usage {
+    // Every texel, every level's encoding and every mip texel stands on its own, so they are
+    // worked out in parallel, in chunks the threads share (#220: the planet's 16K colour map took
+    // 7 s of one thread at every start), and each byte's value in linear light once. The same
+    // bits as one thread texel by texel.
+    let linear: [f32; 256] = std::array::from_fn(|b| srgb_to_linear(b as f32 / 255.0));
+    let raw = rgba.as_raw();
+    let mut texels = vec![[0.0_f32; 4]; raw.len() / 4];
+    par_chunks_mut(&mut texels, DECODE_CHUNK, 1, |i, chunk| {
+        let first = 4 * i * DECODE_CHUNK;
+        for (texel, p) in chunk.iter_mut().zip(raw[first..].as_chunks::<4>().0) {
+            let c = [p[0], p[1], p[2], p[3]].map(|b| f32::from(b) / 255.0);
+            *texel = match usage {
                 ImageUse::Color => [
-                    srgb_to_linear(c[0]),
-                    srgb_to_linear(c[1]),
-                    srgb_to_linear(c[2]),
+                    linear[usize::from(p[0])],
+                    linear[usize::from(p[1])],
+                    linear[usize::from(p[2])],
                     c[3],
                 ],
                 ImageUse::Normal => {
@@ -766,9 +779,9 @@ pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageRe
                     [n[0], n[1], n[2], c[3]]
                 }
                 ImageUse::Data => c,
-            }
-        })
-        .collect();
+            };
+        }
+    });
     // Resampled in linear light (or as vectors), as the mips are averaged.
     if (pw, ph) != (w, h) {
         let linear =
@@ -787,32 +800,38 @@ pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageRe
             .collect();
     }
     let encode = |level: &[[f32; 4]]| -> Vec<u8> {
-        level
-            .iter()
-            .flat_map(|c| match usage {
-                ImageUse::Color => [
-                    to_byte(linear_to_srgb(c[0])),
-                    to_byte(linear_to_srgb(c[1])),
-                    to_byte(linear_to_srgb(c[2])),
-                    to_byte(c[3]),
-                ],
-                ImageUse::Normal => [
-                    to_byte(c[0] * 0.5 + 0.5),
-                    to_byte(c[1] * 0.5 + 0.5),
-                    to_byte(c[2] * 0.5 + 0.5),
-                    to_byte(c[3]),
-                ],
-                ImageUse::Data => c.map(to_byte),
-            })
-            .collect()
+        let mut bytes = vec![0_u8; 4 * level.len()];
+        par_chunks_mut(&mut bytes, 4 * DECODE_CHUNK, 1, |i, chunk| {
+            let first = i * DECODE_CHUNK;
+            for (out, c) in chunk.as_chunks_mut::<4>().0.iter_mut().zip(&level[first..]) {
+                *out = match usage {
+                    ImageUse::Color => [
+                        to_byte(linear_to_srgb(c[0])),
+                        to_byte(linear_to_srgb(c[1])),
+                        to_byte(linear_to_srgb(c[2])),
+                        to_byte(c[3]),
+                    ],
+                    ImageUse::Normal => [
+                        to_byte(c[0] * 0.5 + 0.5),
+                        to_byte(c[1] * 0.5 + 0.5),
+                        to_byte(c[2] * 0.5 + 0.5),
+                        to_byte(c[3]),
+                    ],
+                    ImageUse::Data => c.map(to_byte),
+                };
+            }
+        });
+        bytes
     };
     let mut levels = vec![encode(&texels)];
     let (mut current, mut width, mut height) = (texels, pw, ph);
     while width > 1 || height > 1 {
         let (nw, nh) = ((width / 2).max(1), (height / 2).max(1));
-        let mut next = Vec::with_capacity((nw * nh) as usize);
-        for y in 0..nh {
-            for x in 0..nw {
+        let mut next = vec![[0.0_f32; 4]; (nw * nh) as usize];
+        // A row a chunk.
+        par_chunks_mut(&mut next, nw as usize, MIP_ROWS_PER_THREAD, |y, row| {
+            let y = y as u32;
+            for (x, texel) in (0..nw).zip(row.iter_mut()) {
                 let at = |dx: u32, dy: u32| {
                     let (sx, sy) = ((2 * x + dx).min(width - 1), (2 * y + dy).min(height - 1));
                     current[(sy * width + sx) as usize]
@@ -823,9 +842,9 @@ pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageRe
                     let n = normalize([mean[0], mean[1], mean[2]]);
                     mean = [n[0], n[1], n[2], mean[3]];
                 }
-                next.push(mean);
+                *texel = mean;
             }
-        }
+        });
         (current, width, height) = (next, nw, nh);
         levels.push(encode(&current));
     }
