@@ -842,6 +842,42 @@ Kept so the bibliography is auditable: things looked for and not above, with the
 
 ---
 
+## After the first build: the swaps measured (2026-10-10, #220)
+
+The demo's swap check (`planet --check-swaps`, `tools/swap-check.sh`) holds each swap of the
+tiles still and compares the frames before and after with ꟻLIP. The research's criterion, on the
+height's error, did not catch what it found.
+
+- **The numbers.**
+  - 14 swaps on the Earth's tour, every mean at most 0.0027.
+  - Three peaked at 0.15–0.24 on a patch: the snow's shading near the camera over Mont Blanc.
+- **The heights hold.** Where a level-13 cell splits (1.7 cells out, about 2 km), its children
+  add the noise's octave of 10–20 m. Its amplitude is about 0.3 m × the roughness, 0.13 px from
+  there.
+- **The slopes don't.** The same octave tilts the surface by about 8°.
+  - With the detail's gain of 0.55 an octave, every octave's slope is 1.1 times the one before:
+    the slopes never settle as the levels go finer.
+  - The cluster DAG keeps its vertices' own normals as it simplifies (`normal_weight` 0 for
+    terrain), so a fine tile's coarse clusters show samples of its finest slopes, where its
+    parent's normals are smooth.
+- **Splitting by distance alone** would have to wait until the children's finest wavelength,
+  two of the parent's samples, falls under a pixel. That is about 5.4 cells out instead of 1.7,
+  some three times the tiles. Rings of 2.3 moved the patches to the horizon at twice the tiles.
+- **Normal maps per tile**, mip-mapped, as terrain engines carry them:
+  - The instance record's spare word can name the tile's map (a sampled index). The tile
+    meshes would take UVs. The layered ground then reads its normal from the map, stored in the
+    planet's frame and turned by the instance's rotation.
+  - **257² from the next level's heights** holds exactly the band the children's vertices add:
+    their finest wavelength, 2 samples of the parent's, is the map's Nyquist. About 0.18 MB a
+    tile with mips, 120 MB for 700 tiles. A swap then still adds the next octave at the
+    children's own map, about 2–4 px wide at the split.
+  - **513²** pushes that to about a pixel, at about 490 MB.
+  - Either way the mips filter what a coarse cluster's vertices only sample, which also
+    steadies the shading of far tiles.
+- **A blend over the swap** (both scenes drawn for a few frames, dithered) would hide any
+  octave. It costs a second geometry pass during the blend and needs the cut-outs' raster for
+  the dither, and the normal maps make it unneeded.
+
 ## Verification notes
 
 Checked on 2026-09-26 with WebSearch and WebFetch only, no browser pane. The session's egress
