@@ -3318,10 +3318,12 @@ void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, o
             body = float4(colour, far);
     }
     // The layers' textures are laid on the scene's frame, one surface over every tile: a tile's own
-    // frame is its cell's, so they would jump at its edges.
+    // frame is its cell's, so they would jump at its edges. One instance too, for the hex tiling's
+    // offset, which is an instance's own.
     s.object_position = s.world;
     s.object_normal = s.n;
     s.frame = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+    s.instance_id = 0u;
 }
 
 // A layered row's layers from its layer map (issue #42): the two heaviest of the four texels

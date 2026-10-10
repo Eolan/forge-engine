@@ -316,6 +316,9 @@ fn layer(
         roughness: RenderLayer::roughness_for_power(power),
         specular,
         cavity: 0.0,
+        // Hex tiling (#66) on every textured row, as on the island: the grass's 12 m repeat
+        // showed as a grid of stripes over the slopes at Èze.
+        hex_tiling: texture.is_some(),
         ..RenderLayer::default()
     }
 }

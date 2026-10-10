@@ -89,6 +89,11 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
     coasts were kilometre-wide shapes. Water is shaded flat, and on the planet the layers'
     highlights blend in strength and power alike, so no bright line follows the coasts.
   - The textures lie on the scene's frame, one surface over every tile.
+  - **Hex tiling** (#66, as on the island) on every textured row: the grass's 12 m repeat showed
+    as a grid of stripes over the slopes at Èze (below, before and after). The planet's tiles
+    count as one instance for its offset, so it is continuous across them.
+
+    ![the grass at Èze before and after hex tiling](images/planet-hex-tiling.png)
 - **The sky:**
   - **The Earth:** Hillaire's atmosphere at the planet's radius.
     - The aerial volume reaches up to 64 km. Each pixel beyond it is marched on its own in 32
