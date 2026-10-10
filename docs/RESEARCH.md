@@ -42,6 +42,7 @@ the system you are about to touch.
 | [research/galaxy-sky.md](research/galaxy-sky.md) | a galaxy's sky: how many stars an eye sees (the counts per limiting magnitude, Crumey's threshold model, about 8 in space against 6.5 on Earth, where the naked-eye stars lie), how Elite Dangerous, SpaceEngine, Celestia, Gaia Sky, OpenSpace, No Man's Sky, Star Citizen, KSP and Starfield build their skies, the magnitude-limited query over a brightness-sorted tree, points near and a volume far, one sky per system, integer ids and positions under D-016, and the eye, a bridge telescope and the galaxy map as one query | 38 sources, a toy galaxy | done (#223, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
 | [research/assets-and-licences.md](research/assets-and-licences.md) | assets and their licences: four licence classes (redistributable, shippable only, engine-locked, non-commercial) and the clauses that decide them; humans (MetaHuman outside Unreal and its MIT face-rig runtime, MPFB, NAVER's Anny, Meta's MHR, NVIDIA's SOMA, the SMPL family, Character Creator, Daz, Rocketbox, clothing); what a Forge human generator would need; building kits (Quaternius's 2026 licence, Kenney, KayKit, Poly Haven, ambientCG, Sketchfab, BlendKit, Fab and Megascans, Synty, KitBash3D, TurboSquid, CGTrader); interiors, vegetation (SpeedTree's rights ending with the subscription, The Grove), vehicles, PBR textures; a paid shortlist with prices | 42 | done (2026-10-10: the owner's showcase brief, answers part of #231; sources read, read through a reader proxy or search-recorded, graded per entry) |
 | [research/population-simulation.md](research/population-simulation.md) | a persistent population of millions: tiers by what a person is doing (records advanced by events for everyone, coarse agents near players, full agents close, the drawn crowd) and hand-offs without inconsistency; events against ticks, time warp; published throughput (MATSim's Hermes, SUMO, FLAME GPU 2, MANTA, LPSim, Mass, DOTS); bytes per person and totals at 1 M and 4 M; day plans, appointments, needs and personalities; Vuntra City, Cities: Skylines II, SimCity 2013, Census, X4, EVE, Nivalis Nights and others; the server and clients (interest, bandwidth, persistence, a second server); what an 8-thread server with an RTX 3080 holds; patents (Improbable, Take-Two, Activision) | 31 | done (2026-10-10: the owner's showcase brief; sources read or search-recorded, graded per entry) |
+| [research/procedural-content.md](research/procedural-content.md) | procedural content: what Forge generates today and why it looks primitive; materials (Substance Designer, Material Maker, ArmorPaint, wear from geometry, example-based and neural synthesis, trims and decals, cooked against run time); models (Blender Geometry Nodes headless, Houdini Indie and SideFX Labs, Infinigen and the papers it lists, part programs for furniture and vehicles, SDFs, trees and rocks, cleanup and UVs into the cluster DAG); structures (buildings with interiors, streets, bridges, quays, green roofs and planted facades); generative 3D AI and its licences (TRELLIS.2, SPAR3D, Hunyuan3D's EU exclusion, the services); a quality ladder; patents (Adobe's Substance and PatchMatch, Imagination's patch synthesis; image quilting and marching cubes expired) | 38 | done (2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
 
 ## Verdicts
 
@@ -389,6 +390,23 @@ everything (D-016), the GPU generates offline and draws the crowd on the client,
 cost 10–20 KB/s per client. Improbable's interest and hand-off patents (to 2036–2037) and Take-Two's
 coarse-graph routing patent (to 2039) each have an alternative that was checked against their
 titles and summaries; their claims were not read in full.
+
+**Procedural content.** Procedural methods take a small team from blockout to a consistent AA look
+for everything man-made, and to AAA for the materials of man-made surfaces. They fall short where
+the eye reads nature or authorship. Forge's terrain and water generators are research-grade. Its
+objects are displaced boxes and bevelled primitives in flat colours, and its twelve textures are
+albedo and normal at 512². No algorithm is missing. Three layers every studio pipeline has are
+missing:
+1. full PBR materials with wear derived from the geometry, plus trims and decals (Material Maker,
+   MIT, scriptable from the command line);
+2. objects as part programs (Infinigen, BSD-3, is the largest open corpus of such generators);
+3. a cook stage that cleans, unwraps and bakes into the D-053 cache.
+
+Scans stay for bark, leaves, ground and stone; hand art for landmarks, signage, hero vehicles and
+faces. Generative 3D AI is not an engine path: it breaks D-016 and gives triangle soup with baked
+shading, and Hunyuan3D's licence excludes the EU. Live patents sit on Adobe's Substance engine,
+particle-trace texturing and PatchMatch method, so Forge cooks offline and derives wear from
+geometry. Image quilting, shape-grammar interpreters and marching cubes have expired.
 
 ## Still to research
 
