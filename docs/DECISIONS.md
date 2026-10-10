@@ -2167,9 +2167,13 @@ together'."
 - **SSAA for screenshots** (2 × 2), not for play.
 - **The tone curve:** AgX by default; neutral, ACES and AgX with more contrast are selectable at
   run time, for now by key and flag, later in the settings and the dev console (#160).
+  - **Changed 2026-10-10 (#220):** shown the planet under AgX and under its punchy look a stop
+    brighter, the owner chose the second ("the one on the right is way better"), then asked for
+    it in the other demos too. Every demo but the ballad (ACES, for space's black) draws with
+    AgX's punchy look, the fixed exposure at EV 14 and the metered one a stop up; the punchy
+    curve alone darkened the mid-tones. That settles the exposure's stop below.
 - **Still open:**
   - bloom's strength;
-  - the exposure's half to whole stop;
   - a history at twice the resolution;
   - FSR 3 at native resolution, to measure when the AMD work starts (#67).
 

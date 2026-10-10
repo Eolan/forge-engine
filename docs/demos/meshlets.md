@@ -505,9 +505,9 @@ the default row at 1 049 k clusters; since #27 it draws all 1 140 k again, in 6.
   image + 4 memory barriers, three transients in a 19.2 MB heap (the colour image aliases
   the depth buffer). Occlusion on vs off while orbiting: still 0 pixels.
 - Since issue #7 (same day) the rocks are lit in physical units (the sun at 128 klux) and
-  drawn at a fixed EV100 of 15 (`--ev100`), and the display pass (AgX by default, **G**
-  cycles the curves) replaces the blit: 17 passes, 32 image + 3 memory barriers, GPU
-  0.18 ms unchanged. Occlusion on vs off while orbiting: 0 pixels.
+  drawn at a fixed EV100 of 14 (`--ev100`; 15 before 2026-10-10), and the display pass (AgX's
+  punchy look by default since then, **G** cycles the curves) replaces the blit: 17 passes,
+  32 image + 3 memory barriers, GPU 0.18 ms unchanged. Occlusion on vs off while orbiting: 0 pixels.
 
 ## Textures and the mip check (issue #20, 2026-09-25)
 

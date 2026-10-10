@@ -76,11 +76,12 @@ struct Args {
     /// Which frame to capture.
     #[arg(long, default_value_t = 60)]
     capture_frame: u64,
-    /// Fixed exposure value at ISO 100 (15: sunny 16).
-    #[arg(long, default_value_t = 15.0)]
+    /// Fixed exposure value at ISO 100: 14, a stop over sunny 16, for AgX's punchy look.
+    #[arg(long, default_value_t = 14.0)]
     ev100: f32,
-    /// Tone curve: agx, aces or neutral (G cycles them).
-    #[arg(long, default_value = "agx")]
+    /// Tone curve: agx, agx-punchy, aces, aces2 or neutral (G cycles them). AgX's punchy look by
+    /// default, a stop brighter: the owner's pick (2026-10-10).
+    #[arg(long, default_value = "agx-punchy")]
     tonemap: Tonemap,
     /// HDR output: off, hdr10, scrgb or offscreen (F2 switches it at run time, F3 steps the
     /// peak, F5 opens the calibration pages). HDR10 and scRGB need the OS to show the display in

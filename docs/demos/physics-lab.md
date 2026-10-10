@@ -1704,7 +1704,10 @@ TAA and the sharpening still run, at the larger size.
 **AgX with more contrast** (`--tonemap agx-punchy`, in G's cycle after AgX): Wrensch's "punchy"
 look, a power of 1.35 and saturation 1.4 between AgX's sigmoid and its outset. The black squares
 show at sRGB 0.055–0.08, against AgX's 0.20–0.23 and ACES's 0.07–0.09. The sunlit white wall
-shows at 0.55, against 0.67. AgX stays the default (the owner's answer 3).
+shows at 0.55, against 0.67. AgX stayed the default (the owner's answer 3) until 2026-10-10:
+shown the planet under both, the owner chose the punchy look a stop brighter, and every demo but
+the ballad draws with it since (`--tonemap agx --ev100 15 --exposure-compensation 0` for the old
+look).
 
 ![The sharpness room from its start view; below, the board square's left edge enlarged four times: TAA still, TAA panning at 2 m/s, DLAA panning at 2 m/s, TAA panning with RCAS at half a stop](images/physics-lab-room.png)
 
