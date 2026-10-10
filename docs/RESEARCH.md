@@ -43,6 +43,7 @@ the system you are about to touch.
 | [research/assets-and-licences.md](research/assets-and-licences.md) | assets and their licences: four licence classes (redistributable, shippable only, engine-locked, non-commercial) and the clauses that decide them; humans (MetaHuman outside Unreal and its MIT face-rig runtime, MPFB, NAVER's Anny, Meta's MHR, NVIDIA's SOMA, the SMPL family, Character Creator, Daz, Rocketbox, clothing); what a Forge human generator would need; building kits (Quaternius's 2026 licence, Kenney, KayKit, Poly Haven, ambientCG, Sketchfab, BlendKit, Fab and Megascans, Synty, KitBash3D, TurboSquid, CGTrader); interiors, vegetation (SpeedTree's rights ending with the subscription, The Grove), vehicles, PBR textures; a paid shortlist with prices | 42 | done (2026-10-10: the owner's showcase brief, answers part of #231; sources read, read through a reader proxy or search-recorded, graded per entry) |
 | [research/population-simulation.md](research/population-simulation.md) | a persistent population of millions: tiers by what a person is doing (records advanced by events for everyone, coarse agents near players, full agents close, the drawn crowd) and hand-offs without inconsistency; events against ticks, time warp; published throughput (MATSim's Hermes, SUMO, FLAME GPU 2, MANTA, LPSim, Mass, DOTS); bytes per person and totals at 1 M and 4 M; day plans, appointments, needs and personalities; Vuntra City, Cities: Skylines II, SimCity 2013, Census, X4, EVE, Nivalis Nights and others; the server and clients (interest, bandwidth, persistence, a second server); what an 8-thread server with an RTX 3080 holds; patents (Improbable, Take-Two, Activision) | 31 | done (2026-10-10: the owner's showcase brief; sources read or search-recorded, graded per entry) |
 | [research/procedural-content.md](research/procedural-content.md) | procedural content: what Forge generates today and why it looks primitive; materials (Substance Designer, Material Maker, ArmorPaint, wear from geometry, example-based and neural synthesis, trims and decals, cooked against run time); models (Blender Geometry Nodes headless, Houdini Indie and SideFX Labs, Infinigen and the papers it lists, part programs for furniture and vehicles, SDFs, trees and rocks, cleanup and UVs into the cluster DAG); structures (buildings with interiors, streets, bridges, quays, green roofs and planted facades); generative 3D AI and its licences (TRELLIS.2, SPAR3D, Hunyuan3D's EU exclusion, the services); a quality ladder; patents (Adobe's Substance and PatchMatch, Imagination's patch synthesis; image quilting and marching cubes expired) | 38 | done (2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
+| [research/people.md](research/people.md) | people: the human runtime (MetaHuman DNA and RigLogic, now MIT; skinning at scale for #168; skin, eyes, teeth, hair cards and strands), LODs from hero to crowd (skeletal near, bone-animation textures and pre-posed shadows for thousands, impostors to 1.5 km), what AC Unity, Hitman, Watch Dogs: Legion and the Matrix Awakens did; the authoring pipeline and variety for a million (seeds, face archetypes); clothing in layers by offline binding and morphs; animation (locomotion, smart objects, walking together, F-formations, first-person body, budget); staged dialogue, barks, a line-id format, hooks for language models, visemes later; the in-world device; relationships and memory; netcode by parameters; patents (EA, Nintendo, Tencent, JALI, NVIDIA, Meta, Warner Bros.' Nemesis, Sony, Roblox) | 42 | done (2026-10-10: the owner's showcase brief; sources read or search-recorded, graded per entry) |
 
 ## Verdicts
 
@@ -422,6 +423,28 @@ faces. Generative 3D AI is not an engine path: it breaks D-016 and gives triangl
 shading, and Hunyuan3D's licence excludes the EU. Live patents sit on Adobe's Substance engine,
 particle-trace texturing and PatchMatch method, so Forge cooks offline and derives wear from
 geometry. Image quilting, shape-grammar interpreters and marching cubes have expired.
+
+**People.** The people a player looks at and the people a player sees are two systems joined by one
+identity.
+- **Up close:** a MetaHuman-class asset (a DNA file evaluated by RigLogic, MIT since 2026; up to 713
+  face joints and 669 blend shapes at the top LOD), with screen-space subsurface skin, a refractive
+  eye, hair cards and fitted clothes.
+- **At a distance:** beyond about 15 m a face is under 20 pixels, and beyond about 150 m a whole
+  person is under 15. So:
+  - a skeletal path for the ~150 people near a player;
+  - baked bone-animation-texture meshes with pre-posed shadows for the next few thousand;
+  - impostor cards out to 1.5 km.
+
+  Unreal 5.8's MetaHuman Crowds makes the same swap.
+- **Variety:** a million people need a million seeds, a few dozen face archetypes, a few hundred
+  garments and a colour system.
+- **Clothes:** bound to the body offline with per-garment morphs, which steers clear of Roblox's
+  cage and EA's deformation-map patents.
+- **Dialogue:** staged like The Witcher 3's systemic dialogues and carried as line ids, with
+  language models later as a recorded input.
+- **Relationships:** a few bytes per pair that ever met.
+- **Patents:** Warner Bros.' Nemesis family (to 2036) is the one to discuss before building gossip
+  or memories that spread between people.
 
 ## Still to research
 
