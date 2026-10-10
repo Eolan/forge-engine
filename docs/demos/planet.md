@@ -261,18 +261,20 @@ air is a rim of blue light at its limb.
 
 | | Earth (Èze) | Moon (Tycho) |
 |---|---|---|
-| Tiles in the cut | 492 (14–48 a level) | 423 |
-| Triangles in the tiles' finest levels | 65.5 M | 56.3 M |
-| Cluster pages (128 KiB) | 12 848 | 10 834 |
-| The rays' cuts | 1.68 M triangles, 101 MiB | 1.44 M, 86 MiB |
-| First start (the maps, then every tile made and cooked) | about 26 s | about 18 s |
-| Later starts (tiles from the cache) | 7.9 s (the 16K colour map 7 s, the elevation 0.5 s) | 2.3 s |
-| GPU frame from orbit | 1.09 ms (`sky/compose`'s march 0.31) | 0.68 ms (4 000 km; `sky/box` 0.06) |
-| GPU frame straight down over Corsica | 1.88 ms (the march 0.47 over the whole frame) | — |
-| GPU frame over the ground | 0.78 ms | 0.77 ms |
+| Tiles in the cut (camera and target) | 498 over the ground, 522 from orbit (14–56 a level) | 363–369 |
+| Triangles in the tiles' finest levels | 66.3 M | 49.1 M |
+| Cluster pages (128 KiB, with the tiles' UVs) | 16 298 | 12 098 |
+| The rays' cuts | 1.92 M triangles, 115 MiB (from orbit) | 1.32 M, 79 MiB |
+| First start (the maps, then every tile made and cooked with its normal map) | about 35 s for 669 tiles (19 a second) | about 20 s (369 tiles at that rate) |
+| Later starts (tiles from the cache) | 8.1 s (the 16K colour map 7 s; the scene 0.6 s with its 522 normal maps) | 7.9 s (the Earth's 16K map, for the Earth in its sky) |
+| GPU frame from orbit | 1.20 ms (`sky/compose`'s march 0.30, `shading/layered` 0.28) | 0.74 ms (4 000 km; `sky/box` 0.06) |
+| GPU frame straight down over Corsica | 1.46 ms (the march 0.46 over the whole frame) | — |
+| GPU frame over the ground | 0.91 ms (`shading/layered` 0.29) | 1.26 ms (`shading/layered` 0.66: hex-tiled regolith over the whole frame) |
+| GPU memory | 2.2 GiB allocated: textures 1.25 GiB (the 16K colour map and its mips, 0.18 GiB of normal maps), geometry 0.86 GiB | 1.9 GiB |
 
-- **A tile:** made in about 0.1 s and cooked in 0.16 s on one core (133 000 triangles, 23 pages),
-  about 28 a second over the machine's cores (492 in 17.6 s).
+- **A tile:** made in about 0.1 s and cooked in 0.16 s on one core (133 000 triangles, about 33
+  pages with its UVs), its normal map's 263 000 heights on top: about 19 a second over the
+  machine's cores (669 in 35 s; 28 without the maps).
 
 ## Left for later (#220 and D-056's steps)
 

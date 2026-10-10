@@ -1334,13 +1334,19 @@ scene.
 
 | | Earth from orbit (400 km) | Corsica straight down (400 km) | Earth over Èze | Moon from 4 000 km | Moon on Tycho |
 |---|---|---|---|---|---|
-| GPU frame | 1.09 ms | 1.88 ms | 0.78 ms | 0.68 ms | 0.77 ms |
-| `shading/layered` (the planet's layers and maps) | 0.22 | 0.38 | 0.19 | 0.06 | 0.22 |
-| `sky/compose` (each far pixel marched) | 0.31 | 0.47 | 0.03 | — | — |
+| GPU frame | 1.20 ms | 1.46 ms | 0.91 ms | 0.74 ms | 1.26 ms |
+| `shading/layered` (the planet's layers and maps) | 0.28 | 0.35 | 0.29 | 0.12 | 0.66 |
+| `sky/compose` (each far pixel marched) | 0.30 | 0.46 | 0.03 | — | — |
 | `sky/sky-view table` + `sky/irradiance` (the camera's and the ground's) | 0.09 | 0.23 | 0.05 | — | — |
 | `sky/box` (the real stars) | 0.02 | — | — | 0.06 | — |
 | `sky/body` (the Moon, the Earth: a disc) | 0.01 | — | — | — | 0.02 (the Earth over Tycho) |
 
+- **The layers since the tiles' normal maps and hex tiling** (2026-10-10, the GPU frame and
+  `shading/layered` rows above): the normal map adds a fetch a pixel. The hex tiling samples
+  each textured row in three hexagons per projection, the island's price for no repeats.
+  - On Tycho, with hex-tiled regolith over the whole frame, `shading/layered` went from 0.22 to
+    0.66 ms.
+  - Over Èze it went from 0.19 to 0.29 ms, and from orbit from 0.22 to 0.28 ms.
 - **The sky from high up:** the per-pixel march beyond the aerial volume (`march_beyond`, 32
   steps) costs 0.3–0.5 ms where the planet fills the frame; the ground's own tables (its sky
   light from 2 m over the ground under the camera, above 1.5 km) about 0.1 ms more. The volume's
