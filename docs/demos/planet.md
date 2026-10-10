@@ -498,6 +498,21 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
     noise and over a sphere alike. In the one run timed, it slowed Mont Blanc's frame from 1.0 to
     1.9 ms. It could still serve for latency: the template's DAG shown at once, the tile's own
     cooked behind it and swapped in.
+- **Cooking beside the frames** (measured 2026-10-10 on the real-time tour; the planet's tiles
+  moved out of the cache before each run, so all of them were cooked):
+  - **The longest frame between two swaps:** 1.9 ms on average from the cache. With tiles
+    cooked, 3.7–4.8 ms, with peaks of 7.7 and 12 ms.
+  - **Why:** each of the four tile workers spreads a tile's loops over every thread of the
+    machine, which works against D-005's free cores.
+  - **One thread per worker:** the cuts waited 5.7 s instead of 0.7 and the tour outran its
+    tiles (7 swaps instead of 61).
+  - **Three threads per worker:** the same wait (0.62 s) and frames no better (one run).
+  - **Still to try:**
+    - the cooking threads below the frames' priority, which needs `forge-task` and the parallel
+      loops to set it;
+    - #222's frame-time governor.
+  - **The measure itself,** the longest frame per swap from one run, is too coarse; a
+    histogram of frame times would settle it.
 - **The splits under the camera** still change a patch once settled (`--check-swaps` on the tour:
   4 of 21 changes peaked at 0.15–0.21; with the tiles' DAGs cut by their cells, 1 of 18 at 0.20),
   though no frame jumps (first frames under 0.15): TAA takes them in over several frames. A
