@@ -15,9 +15,11 @@
 //! A file that does not match (another key, version or size) is ignored and cooked again. A new
 //! file is written beside the old name and renamed into place.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -271,29 +273,56 @@ pub fn load_hierarchy(path: &Path, key: u64) -> Option<MeshletMesh> {
     Some(mesh)
 }
 
+/// What each mesh cache directory held when this process first stored into it, by mesh, kept up
+/// to date with the process's own stores (#220). Files of other keys can only come from earlier
+/// processes, so one listing finds them all and a store reads no directory: a planet's tiles keep
+/// thousands of meshes.
+static LISTINGS: Mutex<Vec<(PathBuf, MeshFiles)>> = Mutex::new(Vec::new());
+
+/// A directory's cache files, by the mesh they hold.
+type MeshFiles = HashMap<String, Vec<String>>;
+
 /// Removes the files of mesh `name` cached under another key than `key` (earlier parameters
 /// or cook versions), so the cache holds one file per mesh.
 fn remove_stale(dir: &Path, name: &str, key: u64) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let keep = format!("{key:016x}");
-    for entry in entries.flatten() {
-        let file = entry.file_name();
-        let Some(rest) = file.to_str().and_then(|f| f.strip_prefix(name)) else {
-            continue;
-        };
-        // `-<16 hex digits>.fmesh`, exactly: `boulder-1` must not take `boulder-10`'s files.
-        let stale = rest
-            .strip_prefix('-')
-            .and_then(|r| r.strip_suffix(".fmesh"))
-            .is_some_and(|k| {
-                k.len() == 16 && k.chars().all(|c| c.is_ascii_hexdigit()) && k != keep
-            });
-        if stale {
-            let _ = fs::remove_file(entry.path());
+    let keep = format!("{name}-{key:016x}.fmesh");
+    let mut listings = LISTINGS.lock().unwrap_or_else(|e| e.into_inner());
+    let at = match listings.iter().position(|(listed, _)| listed == dir) {
+        Some(at) => at,
+        None => {
+            let mut by_mesh = MeshFiles::new();
+            for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+                if let Some(file) = entry.file_name().to_str()
+                    && let Some(mesh) = mesh_of(file)
+                {
+                    by_mesh
+                        .entry(mesh.to_owned())
+                        .or_default()
+                        .push(file.to_owned());
+                }
+            }
+            listings.push((dir.to_path_buf(), by_mesh));
+            listings.len() - 1
         }
+    };
+    let files = listings[at].1.entry(name.to_owned()).or_default();
+    files.retain(|file| {
+        let current = *file == keep;
+        if !current {
+            let _ = fs::remove_file(dir.join(file));
+        }
+        current
+    });
+    if files.is_empty() {
+        files.push(keep);
     }
+}
+
+/// The mesh a cache file holds, from its name `<mesh>-<16 hex digits>.fmesh`, exactly:
+/// `boulder-1` must not take `boulder-10`'s files.
+fn mesh_of(file: &str) -> Option<&str> {
+    let (mesh, key) = file.strip_suffix(".fmesh")?.rsplit_once('-')?;
+    (key.len() == 16 && key.chars().all(|c| c.is_ascii_hexdigit())).then_some(mesh)
 }
 
 /// A mesh and how it was obtained.

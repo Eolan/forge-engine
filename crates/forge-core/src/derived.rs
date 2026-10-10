@@ -45,6 +45,35 @@ const MAGIC: &[u8; 4] = b"FDD1";
 const EXTENSION: &str = "fdd";
 /// The payload's bytes per packed frame: frames unpack on their own, in parallel.
 const FRAME: usize = 1 << 20;
+/// A process checks a directory against its cap at its first store, then again each time it has
+/// stored this share of the cap: the check reads every entry's size and age.
+const CAP_EVERY: u64 = 32;
+
+/// What a cache directory held when this process first stored into it, by product, kept up to
+/// date with the process's own stores (#220). Entries of other code can only come from earlier
+/// processes, so one listing finds them all: a store then reads no directory. A planet's tiles
+/// keep thousands of entries, and two scans a store made storing a tile's normal map three
+/// times as long as making it.
+#[derive(Default)]
+struct Listing {
+    /// The entries' file names, by product.
+    by_product: std::collections::HashMap<String, Vec<String>>,
+    /// Whether the directory was checked against the cap in this process.
+    capped: bool,
+    /// Bytes stored since that check.
+    since_cap: u64,
+}
+
+/// The listings of the directories this process has stored into.
+static LISTINGS: Mutex<Vec<(PathBuf, Listing)>> = Mutex::new(Vec::new());
+
+/// The product of an entry's file name, `{product}@{code}@{inputs}.{EXTENSION}`.
+fn product_of(name: &str) -> Option<&str> {
+    let rest = name.strip_suffix(&format!(".{EXTENSION}"))?;
+    let (rest, inputs) = rest.rsplit_once('@')?;
+    let (product, code) = rest.rsplit_once('@')?;
+    (inputs.len() == 16 && code.len() == 16).then_some(product)
+}
 
 /// What a stored product is written into: its payload, in memory until it is packed.
 pub struct Sink<'a> {
@@ -573,19 +602,60 @@ impl DerivedCache {
             let _ = fs::remove_file(&partial);
             return Err(error);
         }
-        self.remove_other_code(product, key);
-        self.cap(path);
+        let stored = fs::metadata(path).map_or(0, |m| m.len());
+        let due = {
+            let mut listings = LISTINGS.lock().unwrap_or_else(|e| e.into_inner());
+            let listing = self.listing(&mut listings);
+            self.remove_other_code(listing, product, key, path);
+            listing.since_cap += stored;
+            let due = !listing.capped || listing.since_cap >= self.cap_bytes / CAP_EVERY;
+            if due {
+                listing.capped = true;
+                listing.since_cap = 0;
+            }
+            due
+        };
+        if due {
+            self.cap(path);
+        }
         Ok(())
     }
 
-    /// Removes `product`'s entries of other code: no key can match them again.
-    fn remove_other_code(&self, product: &str, key: Key) {
-        let prefix = format!("{product}@");
-        let keep = format!("{product}@{:016x}@", key.code);
-        for (path, name) in self.entries() {
-            if name.starts_with(&prefix) && !name.starts_with(&keep) {
-                let _ = fs::remove_file(path);
+    /// This directory's listing in `listings`, read when the process first stores into it.
+    fn listing<'l>(&self, listings: &'l mut Vec<(PathBuf, Listing)>) -> &'l mut Listing {
+        let at = match listings.iter().position(|(dir, _)| *dir == self.dir) {
+            Some(at) => at,
+            None => {
+                let mut listing = Listing::default();
+                for (_, name) in self.entries() {
+                    if let Some(product) = product_of(&name) {
+                        let product = product.to_owned();
+                        listing.by_product.entry(product).or_default().push(name);
+                    }
+                }
+                listings.push((self.dir.clone(), listing));
+                listings.len() - 1
             }
+        };
+        &mut listings[at].1
+    }
+
+    /// Removes `product`'s entries of other code, as `listing` knows them: no key can match them
+    /// again. Then lists `path`, the entry just stored.
+    fn remove_other_code(&self, listing: &mut Listing, product: &str, key: Key, path: &Path) {
+        let keep = format!("{product}@{:016x}@", key.code);
+        let names = listing.by_product.entry(product.to_owned()).or_default();
+        names.retain(|name| {
+            let current = name.starts_with(&keep);
+            if !current {
+                let _ = fs::remove_file(self.dir.join(name));
+            }
+            current
+        });
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
         }
     }
 

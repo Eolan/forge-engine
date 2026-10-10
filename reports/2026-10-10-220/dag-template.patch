@@ -1,0 +1,1086 @@
+diff --git a/crates/forge-geom/src/lib.rs b/crates/forge-geom/src/lib.rs
+index 18898da..a39d5ee 100644
+--- a/crates/forge-geom/src/lib.rs
++++ b/crates/forge-geom/src/lib.rs
+@@ -13,6 +13,7 @@ pub mod page;
+ pub mod procedural;
+ pub mod skin;
+ pub mod stone;
++pub mod template;
+ 
+ pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag};
+ pub use meshlet::{
+@@ -22,3 +23,4 @@ pub use meshlet::{
+ pub use page::{PAGE_NONE, PAGE_SIZE, PagedVertex};
+ pub use procedural::TriMesh;
+ pub use skin::{MorphDelta, MorphTarget, Morphs, SkinMore, SkinVertex, SkinnedMesh, VertexSkin};
++pub use template::DagTemplate;
+diff --git a/crates/forge-geom/src/lod.rs b/crates/forge-geom/src/lod.rs
+index 0d8aa9d..8e00aa7 100644
+--- a/crates/forge-geom/src/lod.rs
++++ b/crates/forge-geom/src/lod.rs
+@@ -40,6 +40,7 @@ const STALL_RATIO: f32 = 0.85;
+ /// The DAG's clusters: their GPU records (without their page placement, see
+ /// [`crate::page`]), where their vertices and triangles lie in the two index tables, and
+ /// the groups they belong to.
++#[derive(Clone)]
+ pub struct ClusterDag {
+     /// Every cluster of every level.
+     pub meshlets: Vec<GpuMeshlet>,
+@@ -526,7 +527,7 @@ struct Sections<'a> {
+ }
+ 
+ /// A sphere containing every sphere of `spheres` (`[x, y, z, r]`).
+-fn enclosing_sphere(spheres: &[[f32; 4]]) -> ([f32; 3], f32) {
++pub(crate) fn enclosing_sphere(spheres: &[[f32; 4]]) -> ([f32; 3], f32) {
+     if spheres.is_empty() {
+         return ([0.0; 3], 0.0);
+     }
+diff --git a/crates/forge-geom/src/meshlet.rs b/crates/forge-geom/src/meshlet.rs
+index 0e97748..fa7fc1e 100644
+--- a/crates/forge-geom/src/meshlet.rs
++++ b/crates/forge-geom/src/meshlet.rs
+@@ -7,9 +7,10 @@
+ 
+ use bytemuck::{Pod, Zeroable};
+ 
+-use crate::lod;
++use crate::lod::{self, ClusterDag};
+ use crate::page::{self, PAGE_SIZE, PagedVertex};
+ use crate::procedural::TriMesh;
++use crate::template::DagTemplate;
+ 
+ /// Maximum vertices per meshlet.
+ pub const MESHLET_MAX_VERTICES: usize = 64;
+@@ -147,26 +148,36 @@ impl MeshletMesh {
+     /// [`MeshletMesh::build`] with explicit options.
+     pub fn build_with(mesh: &TriMesh, options: CookOptions) -> Self {
+         let (mut vertices, indices, vertex_section, _) = split_sections(mesh);
+-        // The positions on the mesh's grid (#218), before the DAG: its bounds, cones and errors
+-        // are those of the positions the packed pages hold, to the bit.
+-        let reach = vertices
+-            .iter()
+-            .flat_map(|v| v.position)
+-            .fold(0.0_f32, |r, c| r.max(c.abs()));
+-        let grid = page::grid_exponent(reach);
+-        for v in &mut vertices {
+-            v.position = page::snap(v.position, grid);
+-        }
++        let grid = snap_to_grid(&mut vertices);
+         let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
+-        let mut dag = lod::build_dag(
++        let dag = lod::build_dag(
+             &indices,
+             &vertices,
+             &vertex_section,
+             options.normal_weight,
+             lod::MAX_LEVELS,
+         );
++        Self::packed(mesh, &vertices, dag, grid)
++    }
++
++    /// [`MeshletMesh::build`] for a mesh with `template`'s triangles (#220): the template's DAG
++    /// with the bounds, cones and errors of this mesh's positions ([`DagTemplate`]), a tenth of
++    /// the time of a DAG of its own. Panics when the mesh's triangles are not the template's.
++    pub fn build_from(mesh: &TriMesh, template: &DagTemplate) -> Self {
++        let (mut vertices, indices, _, _) = split_sections(mesh);
++        assert!(
++            template.fits(&indices, vertices.len()),
++            "the mesh's triangles are not its template's"
++        );
++        let grid = snap_to_grid(&mut vertices);
++        let dag = template.dag_for(&vertices);
++        Self::packed(mesh, &vertices, dag, grid)
++    }
++
++    /// `mesh` with its `dag` over its `vertices` (snapped to the grid `grid`) packed into pages.
++    fn packed(mesh: &TriMesh, vertices: &[GpuVertex], mut dag: ClusterDag, grid: i32) -> Self {
+         let uvs = !mesh.uvs.is_empty();
+-        let pages = page::pack(&mut dag, &vertices, uvs, Some(grid));
++        let pages = page::pack(&mut dag, vertices, uvs, Some(grid));
+         let (center, radius) = bounding_sphere(&mesh.positions);
+         Self {
+             meshlets: dag.meshlets,
+@@ -174,7 +185,7 @@ impl MeshletMesh {
+             pages: pages.bytes,
+             root_pages: pages.root_pages,
+             page_file: None,
+-            triangle_count: indices.len() / 3,
++            triangle_count: mesh.indices.len() / 3,
+             dag_triangle_count: dag.triangle_count,
+             clusters_per_level: dag.clusters_per_level,
+             center,
+@@ -309,6 +320,21 @@ pub(crate) fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u
+     (vertices, indices, vertex_section, source)
+ }
+ 
++/// Snaps `vertices`' positions to the mesh's grid (#218), before its DAG: its bounds, cones and
++/// errors are then those of the positions the packed pages hold, to the bit. Returns the grid's
++/// exponent.
++fn snap_to_grid(vertices: &mut [GpuVertex]) -> i32 {
++    let reach = vertices
++        .iter()
++        .flat_map(|v| v.position)
++        .fold(0.0_f32, |r, c| r.max(c.abs()));
++    let grid = page::grid_exponent(reach);
++    for v in vertices {
++        v.position = page::snap(v.position, grid);
++    }
++    grid
++}
++
+ /// The section of triangle `t` of a cluster whose packed sections are `packed`
+ /// ([`GpuMeshlet::section`]).
+ pub fn triangle_section(packed: u32, t: u32) -> u32 {
+diff --git a/crates/forge-terrain/build.rs b/crates/forge-terrain/build.rs
+index e0dc62f..9ac7b13 100644
+--- a/crates/forge-terrain/build.rs
++++ b/crates/forge-terrain/build.rs
+@@ -93,6 +93,7 @@ const PRODUCTS: &[(&str, &[&str], bool, &[&str])] = &[
+             "crates/forge-geom/src/meshlet.rs",
+             "crates/forge-geom/src/page.rs",
+             "crates/forge-geom/src/procedural.rs",
++            "crates/forge-geom/src/template.rs",
+         ],
+     ),
+ ];
+diff --git a/demos/planet/src/stream.rs b/demos/planet/src/stream.rs
+index 4ad32c4..1f02836 100644
+--- a/demos/planet/src/stream.rs
++++ b/demos/planet/src/stream.rs
+@@ -27,7 +27,7 @@ use std::time::Instant;
+ 
+ use anyhow::Result;
+ use forge_core::MaterialId;
+-use forge_geom::{CookOptions, MeshletMesh};
++use forge_geom::MeshletMesh;
+ use forge_gpu::{Device, ShaderCompiler};
+ use forge_render::material::GpuMaterial;
+ use forge_render::material::{TextureSet, upload_textures};
+@@ -135,14 +135,11 @@ pub(crate) fn cook_cells(
+             let (cache, key) = (&cache, &key);
+             s.spawn(move |_| {
+                 let name = tile_name(body, cell);
+-                let (done, stored) = forge_geom::cache::cook_cached(
+-                    cache,
+-                    &name,
+-                    key,
+-                    CookOptions { normal_weight: 0.0 },
+-                    in_memory,
+-                    || tile_mesh(planet, cell),
+-                );
++                // Its DAG filled in from the planet's template: a tenth of a cook of its own.
++                let (done, stored) =
++                    forge_geom::cache::cook_cached_with(cache, &name, key, in_memory, || {
++                        MeshletMesh::build_from(&tile_mesh(planet, cell), planet.dag_template())
++                    });
+                 if let Err(error) = stored {
+                     tracing::warn!(tile = %name, %error, "cooked tile not cached");
+                 }
+diff --git a/crates/forge-geom/src/template.rs b/crates/forge-geom/src/template.rs
+new file mode 100644
+index 0000000..8ceb907
+--- /dev/null
++++ b/crates/forge-geom/src/template.rs
+@@ -0,0 +1,446 @@
++//! A cluster DAG for every mesh of one connectivity (#220): the planet's tiles, all a grid of the
++//! same triangles over different ground.
++//!
++//! [`crate::build_dag`] simplifies and clusters a mesh level by level, a fifth of a second for a
++//! tile's 133 000 triangles: most of it meshoptimizer's clustering, the rest its simplifier. Both
++//! only decide *which* triangles each level keeps and how they are grouped. A [`DagTemplate`]
++//! makes those decisions once, on a stand-in mesh, and a mesh with the same triangles takes them
++//! over ([`crate::MeshletMesh::build_from`]). Only what depends on the positions is computed for
++//! it: each cluster's bounds and normal cone, each group's sphere and its error.
++//!
++//! - **Watertight whatever the positions.** A group's simplification keeps the vertices its
++//!   border shares with other groups, and that is a matter of which vertices, not where they
++//!   lie: every cut through the DAG closes as the template's does.
++//! - **A group's error is measured:** each vertex its simplification removed is a probe, paired
++//!   in the template with the produced triangle over it (in the plane the mesh lies over). The
++//!   error is the probes' largest distance from their triangles, at least the members' own:
++//!   monotonic up the DAG, as [`crate::build_dag`]'s.
++//! - **The levels are as fine everywhere as the stand-in's ground was rough there.** Over even
++//!   noise, each level is even. A mesh flat in places then keeps more triangles there than a DAG
++//!   of its own would, and draws them only where its errors ask for them.
++
++use glam::{Vec2, Vec3};
++use meshopt::VertexDataAdapter;
++
++use crate::lod::{self, ClusterDag, MAX_LEVELS};
++use crate::meshlet::{GpuVertex, split_sections};
++use crate::procedural::TriMesh;
++
++/// A DAG's decisions for every mesh with one mesh's triangles (see the module notes).
++#[derive(Clone)]
++pub struct DagTemplate {
++    /// The stand-in's DAG: its tables, groups and levels. Its bounds and errors are replaced.
++    dag: ClusterDag,
++    /// The stand-in's triangle list before the DAG's reordering, which a mesh must repeat.
++    triangles: Vec<u32>,
++    /// Vertices of the stand-in.
++    vertex_count: usize,
++    /// Every group, in the order of its number.
++    groups: Vec<Group>,
++}
++
++/// A group of the template's DAG.
++#[derive(Clone)]
++struct Group {
++    /// The clusters it consumed.
++    members: Vec<u32>,
++    /// The clusters its simplification produced (none when it stalled: its members are roots).
++    produced: Vec<u32>,
++    /// The vertices its simplification removed, each with the produced triangle over it: the
++    /// vertex, then the triangle's three vertices.
++    probes: Vec<[u32; 4]>,
++}
++
++impl DagTemplate {
++    /// The template of `mesh`'s triangles, simplified over its positions. `flat` places every
++    /// vertex in the plane the mesh lies over (a grid's sample coordinates), where a removed
++    /// vertex is paired with the produced triangle over it. The mesh must have no sections.
++    pub fn new(mesh: &TriMesh, flat: &[[f32; 2]]) -> Self {
++        let (vertices, indices, sections, _) = split_sections(mesh);
++        assert_eq!(
++            vertices.len(),
++            mesh.positions.len(),
++            "a template's mesh has no sections"
++        );
++        assert_eq!(flat.len(), vertices.len(), "a flat place for every vertex");
++        let reordered = meshopt::optimize_vertex_cache(&indices, vertices.len());
++        let dag = lod::build_dag(&reordered, &vertices, &sections, 0.0, MAX_LEVELS);
++        let group_count = dag
++            .cluster_group
++            .iter()
++            .chain(&dag.cluster_source)
++            .filter(|&&g| g != lod::NO_GROUP)
++            .map(|&g| g as usize + 1)
++            .max()
++            .unwrap_or(0);
++        let mut groups = vec![
++            Group {
++                members: Vec::new(),
++                produced: Vec::new(),
++                probes: Vec::new(),
++            };
++            group_count
++        ];
++        for c in 0..dag.meshlets.len() {
++            if dag.cluster_group[c] != lod::NO_GROUP {
++                groups[dag.cluster_group[c] as usize].members.push(c as u32);
++            }
++            if dag.cluster_source[c] != lod::NO_GROUP {
++                groups[dag.cluster_source[c] as usize]
++                    .produced
++                    .push(c as u32);
++            }
++        }
++        let mut kept = vec![false; vertices.len()];
++        for group in &mut groups {
++            if group.produced.is_empty() {
++                continue;
++            }
++            let triangles: Vec<[u32; 3]> = group
++                .produced
++                .iter()
++                .flat_map(|&c| cluster_triangles(&dag, c as usize))
++                .collect();
++            for t in &triangles {
++                for &v in t {
++                    kept[v as usize] = true;
++                }
++            }
++            let mut removed: Vec<u32> = group
++                .members
++                .iter()
++                .flat_map(|&c| cluster_vertices(&dag, c as usize).iter().copied())
++                .filter(|&v| !kept[v as usize])
++                .collect();
++            removed.sort_unstable();
++            removed.dedup();
++            let place = |v: u32| Vec2::from(flat[v as usize]);
++            for v in removed {
++                // The produced triangle over the vertex: the one it lies deepest in.
++                let p = place(v);
++                let mut best = (f32::NEG_INFINITY, [0; 3]);
++                for t in &triangles {
++                    let depth = depth_in(p, t.map(place));
++                    if depth > best.0 {
++                        best = (depth, *t);
++                    }
++                }
++                let [a, b, c] = best.1;
++                group.probes.push([v, a, b, c]);
++            }
++            for t in &triangles {
++                for &v in t {
++                    kept[v as usize] = false;
++                }
++            }
++        }
++        Self {
++            dag,
++            triangles: indices,
++            vertex_count: vertices.len(),
++            groups,
++        }
++    }
++
++    /// Whether a mesh with `triangles` over `vertex_count` vertices has the template's
++    /// triangles.
++    pub fn fits(&self, triangles: &[u32], vertex_count: usize) -> bool {
++        vertex_count == self.vertex_count && triangles == self.triangles
++    }
++
++    /// The DAG of a mesh with the template's triangles at `vertices`: the template's clusters
++    /// and groups, with the bounds, cones, spheres and errors of these positions.
++    pub fn dag_for(&self, vertices: &[GpuVertex]) -> ClusterDag {
++        assert_eq!(vertices.len(), self.vertex_count, "the template's vertices");
++        let mut dag = self.dag.clone();
++        let adapter = VertexDataAdapter::new(
++            bytemuck::cast_slice(vertices),
++            std::mem::size_of::<GpuVertex>(),
++            0,
++        )
++        .expect("vertex adapter");
++        let roots: Vec<bool> = dag
++            .meshlets
++            .iter()
++            .map(|m| m.parent_error.is_infinite())
++            .collect();
++        for (c, m) in dag.meshlets.iter_mut().enumerate() {
++            let range = dag.ranges[c];
++            let first = range.vertex_offset as usize;
++            let local = &dag.meshlet_vertices[first..first + m.vertex_count as usize];
++            let first = range.triangle_offset as usize;
++            let triangles = &dag.meshlet_triangles[first..first + 3 * m.triangle_count as usize];
++            let bounds = meshopt::compute_meshlet_bounds(
++                meshopt::Meshlet {
++                    vertices: local,
++                    triangles,
++                },
++                &adapter,
++            );
++            m.center = bounds.center;
++            m.radius = bounds.radius;
++            m.cone_apex = bounds.cone_apex;
++            m.cone_axis = bounds.cone_axis;
++            m.cone_cutoff = bounds.cone_cutoff;
++            if m.lod_level == 0 {
++                m.self_center = bounds.center;
++                m.self_radius = bounds.radius;
++                m.self_error = 0.0;
++            }
++        }
++        let position = |v: u32| Vec3::from(vertices[v as usize].position);
++        // Group by group in the order they were made: a group's members were produced by
++        // groups made before it, so their own values are final.
++        for group in &self.groups {
++            if group.produced.is_empty() {
++                continue;
++            }
++            let spheres: Vec<[f32; 4]> = group
++                .members
++                .iter()
++                .map(|&c| {
++                    let m = &dag.meshlets[c as usize];
++                    [
++                        m.self_center[0],
++                        m.self_center[1],
++                        m.self_center[2],
++                        m.self_radius,
++                    ]
++                })
++                .collect();
++            let sphere = lod::enclosing_sphere(&spheres);
++            let measured = group
++                .probes
++                .iter()
++                .map(|&[v, a, b, c]| {
++                    distance_to_triangle(position(v), [position(a), position(b), position(c)])
++                })
++                .fold(0.0_f32, f32::max);
++            let error = group
++                .members
++                .iter()
++                .map(|&c| dag.meshlets[c as usize].self_error)
++                .fold(measured, f32::max);
++            for &c in &group.members {
++                let m = &mut dag.meshlets[c as usize];
++                m.parent_center = sphere.0;
++                m.parent_radius = sphere.1;
++                m.parent_error = error;
++            }
++            for &c in &group.produced {
++                let m = &mut dag.meshlets[c as usize];
++                m.self_center = sphere.0;
++                m.self_radius = sphere.1;
++                m.self_error = error;
++            }
++        }
++        // The roots, as `build_dag` leaves them: never too coarse.
++        for (m, root) in dag.meshlets.iter_mut().zip(roots) {
++            if root {
++                m.parent_error = f32::INFINITY;
++                m.parent_center = m.self_center;
++                m.parent_radius = m.self_radius;
++            }
++        }
++        dag
++    }
++}
++
++/// Cluster `c`'s vertices (indices into the mesh's).
++fn cluster_vertices(dag: &ClusterDag, c: usize) -> &[u32] {
++    let first = dag.ranges[c].vertex_offset as usize;
++    &dag.meshlet_vertices[first..first + dag.meshlets[c].vertex_count as usize]
++}
++
++/// Cluster `c`'s triangles, in the mesh's vertex indices.
++fn cluster_triangles(dag: &ClusterDag, c: usize) -> impl Iterator<Item = [u32; 3]> + '_ {
++    let vertices = cluster_vertices(dag, c);
++    let first = dag.ranges[c].triangle_offset as usize;
++    let count = dag.meshlets[c].triangle_count as usize;
++    dag.meshlet_triangles[first..first + 3 * count]
++        .as_chunks::<3>()
++        .0
++        .iter()
++        .map(move |t| t.map(|l| vertices[l as usize]))
++}
++
++/// How deep `p` lies in the triangle `t` of the plane: its least barycentric coordinate,
++/// negative outside; minus infinity for a triangle with no area (a skirt's, seen from above).
++fn depth_in(p: Vec2, [a, b, c]: [Vec2; 3]) -> f32 {
++    let area = (b - a).perp_dot(c - a);
++    if area.abs() < 1e-9 {
++        return f32::NEG_INFINITY;
++    }
++    let u = (b - p).perp_dot(c - p) / area;
++    let v = (c - p).perp_dot(a - p) / area;
++    let w = 1.0 - u - v;
++    u.min(v).min(w)
++}
++
++/// The distance from `p` to the triangle `t` (Ericson, "Real-Time Collision Detection" §5.1.5).
++fn distance_to_triangle(p: Vec3, [a, b, c]: [Vec3; 3]) -> f32 {
++    let (ab, ac, ap) = (b - a, c - a, p - a);
++    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
++    if d1 <= 0.0 && d2 <= 0.0 {
++        return p.distance(a);
++    }
++    let bp = p - b;
++    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
++    if d3 >= 0.0 && d4 <= d3 {
++        return p.distance(b);
++    }
++    let vc = d1 * d4 - d3 * d2;
++    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
++        let v = d1 / (d1 - d3);
++        return p.distance(a + ab * v);
++    }
++    let cp = p - c;
++    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
++    if d6 >= 0.0 && d5 <= d6 {
++        return p.distance(c);
++    }
++    let vb = d5 * d2 - d1 * d6;
++    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
++        let w = d2 / (d2 - d6);
++        return p.distance(a + ac * w);
++    }
++    let va = d3 * d6 - d5 * d4;
++    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
++        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
++        return p.distance(b + (c - b) * w);
++    }
++    let denom = 1.0 / (va + vb + vc);
++    let (v, w) = (vb * denom, vc * denom);
++    p.distance(a + ab * v + ac * w)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::MeshletMesh;
++
++    /// A grid of `n`² samples a unit apart with heights `h`, two triangles a cell, and its
++    /// samples' places in the plane.
++    fn grid(n: u32, h: impl Fn(u32, u32) -> f32) -> (TriMesh, Vec<[f32; 2]>) {
++        let mut mesh = TriMesh::default();
++        let mut flat = Vec::new();
++        for j in 0..n {
++            for i in 0..n {
++                mesh.positions.push([i as f32, h(i, j), j as f32]);
++                mesh.normals.push([0.0, 1.0, 0.0]);
++                mesh.uvs
++                    .push([i as f32 / (n - 1) as f32, j as f32 / (n - 1) as f32]);
++                flat.push([i as f32, j as f32]);
++            }
++        }
++        for j in 0..n - 1 {
++            for i in 0..n - 1 {
++                let (a, b, c, d) = (
++                    j * n + i,
++                    j * n + i + 1,
++                    (j + 1) * n + i,
++                    (j + 1) * n + i + 1,
++                );
++                mesh.indices.extend_from_slice(&[a, c, b, b, c, d]);
++            }
++        }
++        (mesh, flat)
++    }
++
++    fn noise(i: u32, j: u32, seed: u32) -> f32 {
++        let mut h = i.wrapping_mul(0x9E37_79B1) ^ j.wrapping_mul(0x85EB_CA77) ^ seed;
++        h ^= h >> 15;
++        h = h.wrapping_mul(0x2C1B_3C6D);
++        h ^= h >> 12;
++        (h & 0xFFFF) as f32 / 65535.0 - 0.5
++    }
++
++    #[test]
++    fn the_template_s_own_mesh_gets_the_bounds_its_own_dag_has() {
++        let (mesh, flat) = grid(65, |i, j| noise(i, j, 1));
++        let template = DagTemplate::new(&mesh, &flat);
++        let vertices: Vec<GpuVertex> = split_sections(&mesh).0;
++        let dag = template.dag_for(&vertices);
++        for (a, b) in dag.meshlets.iter().zip(&template.dag.meshlets) {
++            assert_eq!(a.center, b.center);
++            assert_eq!(a.radius, b.radius);
++            assert_eq!(a.cone_axis, b.cone_axis);
++            assert_eq!(a.lod_level, b.lod_level);
++            assert_eq!(a.parent_error.is_infinite(), b.parent_error.is_infinite());
++        }
++        assert!(
++            dag.clusters_per_level.len() > 3,
++            "{:?}",
++            dag.clusters_per_level
++        );
++    }
++
++    #[test]
++    fn another_ground_s_errors_rise_up_the_dag_and_its_groups_decide_together() {
++        let (stand_in, flat) = grid(65, |i, j| noise(i, j, 1));
++        let template = DagTemplate::new(&stand_in, &flat);
++        // A ridge and a flat plain: other heights over the same triangles.
++        let (mesh, _) = grid(65, |i, j| {
++            let x = i as f32 - 20.0;
++            (8.0 - x.abs()).max(0.0) + 0.3 * (j as f32 * 0.7).sin()
++        });
++        let dag = template.dag_for(&split_sections(&mesh).0);
++        let mut by_group: std::collections::HashMap<u32, (f32, [f32; 3], f32)> = Default::default();
++        for m in &dag.meshlets {
++            assert!(
++                m.parent_error >= m.self_error,
++                "{} < {}",
++                m.parent_error,
++                m.self_error
++            );
++            assert!(m.parent_radius >= m.self_radius * 0.999);
++        }
++        for (c, m) in dag.meshlets.iter().enumerate() {
++            let g = dag.cluster_group[c];
++            if g == lod::NO_GROUP || m.parent_error.is_infinite() {
++                continue;
++            }
++            let entry =
++                by_group
++                    .entry(g)
++                    .or_insert((m.parent_error, m.parent_center, m.parent_radius));
++            assert_eq!(*entry, (m.parent_error, m.parent_center, m.parent_radius));
++        }
++        // The plain's coarse clusters err less than the ridge's.
++        let top = dag.clusters_per_level.len() as u32 - 1;
++        let errors: Vec<(f32, f32)> = dag
++            .meshlets
++            .iter()
++            .filter(|m| m.lod_level + 1 == top)
++            .map(|m| (m.center[0], m.self_error))
++            .collect();
++        let near = errors
++            .iter()
++            .filter(|e| e.0 < 30.0)
++            .map(|e| e.1)
++            .fold(0.0, f32::max);
++        let far = errors
++            .iter()
++            .filter(|e| e.0 > 45.0)
++            .map(|e| e.1)
++            .fold(0.0, f32::max);
++        assert!(near > far, "ridge {near}, plain {far}");
++    }
++
++    #[test]
++    fn a_mesh_built_from_the_template_has_the_template_s_shape() {
++        let (stand_in, flat) = grid(65, |i, j| noise(i, j, 1));
++        let template = DagTemplate::new(&stand_in, &flat);
++        let (mesh, _) = grid(65, |i, j| noise(i, j, 2) * 3.0);
++        let built = MeshletMesh::build_from(&mesh, &template);
++        let own = MeshletMesh::build(&mesh);
++        assert_eq!(built.triangle_count, own.triangle_count);
++        assert_eq!(
++            built.clusters_per_level.len(),
++            template.dag.clusters_per_level.len()
++        );
++        assert!(built.page_count > 0);
++        let stats = built.dag_stats();
++        assert!(stats.fill > 0.5, "{stats:?}");
++    }
++}
+diff --git a/crates/forge-geom/src/cache.rs b/crates/forge-geom/src/cache.rs
+index 35d2ddf..d4d0c29 100644
+--- a/crates/forge-geom/src/cache.rs
++++ b/crates/forge-geom/src/cache.rs
+@@ -15,9 +15,11 @@
+ //! A file that does not match (another key, version or size) is ignored and cooked again. A new
+ //! file is written beside the old name and renamed into place.
+ 
++use std::collections::HashMap;
+ use std::fs;
+ use std::io;
+ use std::path::{Path, PathBuf};
++use std::sync::Mutex;
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::time::Instant;
+ 
+@@ -271,31 +273,55 @@ pub fn load_hierarchy(path: &Path, key: u64) -> Option<MeshletMesh> {
+     Some(mesh)
+ }
+ 
++/// What each mesh cache directory held when this process first stored into it, by mesh, kept up
++/// to date with the process's own stores (#220). Files of other keys can only come from earlier
++/// processes, so one listing finds them all and a store reads no directory: a planet's tiles keep
++/// thousands of meshes.
++static LISTINGS: Mutex<Vec<(PathBuf, HashMap<String, Vec<String>>)>> = Mutex::new(Vec::new());
++
+ /// Removes the files of mesh `name` cached under another key than `key` (earlier parameters
+ /// or cook versions), so the cache holds one file per mesh.
+ fn remove_stale(dir: &Path, name: &str, key: u64) {
+-    let Ok(entries) = fs::read_dir(dir) else {
+-        return;
++    let keep = format!("{name}-{key:016x}.fmesh");
++    let mut listings = LISTINGS.lock().unwrap_or_else(|e| e.into_inner());
++    let at = match listings.iter().position(|(listed, _)| listed == dir) {
++        Some(at) => at,
++        None => {
++            let mut by_mesh: HashMap<String, Vec<String>> = HashMap::new();
++            for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
++                if let Some(file) = entry.file_name().to_str()
++                    && let Some(mesh) = mesh_of(file)
++                {
++                    by_mesh
++                        .entry(mesh.to_owned())
++                        .or_default()
++                        .push(file.to_owned());
++                }
++            }
++            listings.push((dir.to_path_buf(), by_mesh));
++            listings.len() - 1
++        }
+     };
+-    let keep = format!("{key:016x}");
+-    for entry in entries.flatten() {
+-        let file = entry.file_name();
+-        let Some(rest) = file.to_str().and_then(|f| f.strip_prefix(name)) else {
+-            continue;
+-        };
+-        // `-<16 hex digits>.fmesh`, exactly: `boulder-1` must not take `boulder-10`'s files.
+-        let stale = rest
+-            .strip_prefix('-')
+-            .and_then(|r| r.strip_suffix(".fmesh"))
+-            .is_some_and(|k| {
+-                k.len() == 16 && k.chars().all(|c| c.is_ascii_hexdigit()) && k != keep
+-            });
+-        if stale {
+-            let _ = fs::remove_file(entry.path());
++    let files = listings[at].1.entry(name.to_owned()).or_default();
++    files.retain(|file| {
++        let current = *file == keep;
++        if !current {
++            let _ = fs::remove_file(dir.join(file));
+         }
++        current
++    });
++    if files.is_empty() {
++        files.push(keep);
+     }
+ }
+ 
++/// The mesh a cache file holds, from its name `<mesh>-<16 hex digits>.fmesh`, exactly:
++/// `boulder-1` must not take `boulder-10`'s files.
++fn mesh_of(file: &str) -> Option<&str> {
++    let (mesh, key) = file.strip_suffix(".fmesh")?.rsplit_once('-')?;
++    (key.len() == 16 && key.chars().all(|c| c.is_ascii_hexdigit())).then_some(mesh)
++}
++
+ /// A mesh and how it was obtained.
+ pub struct Cooked {
+     /// The cooked mesh.
+@@ -319,6 +345,21 @@ pub fn cook_cached(
+     options: CookOptions,
+     pages_in_memory: bool,
+     generate: impl FnOnce() -> TriMesh,
++) -> (Cooked, io::Result<()>) {
++    cook_cached_with(dir, name, key_text, pages_in_memory, || {
++        MeshletMesh::build_with(&generate(), options)
++    })
++}
++
++/// [`cook_cached`] with the caller's own cook: `cook` makes and cooks the mesh when the cache
++/// lacks it (a planet's tile from its DAG template, [`MeshletMesh::build_from`]). How it cooks
++/// belongs in `key_text`.
++pub fn cook_cached_with(
++    dir: &Path,
++    name: &str,
++    key_text: &str,
++    pages_in_memory: bool,
++    cook: impl FnOnce() -> MeshletMesh,
+ ) -> (Cooked, io::Result<()>) {
+     let start = Instant::now();
+     let key = key(key_text);
+@@ -343,7 +384,7 @@ pub fn cook_cached(
+             Ok(()),
+         );
+     }
+-    let mut mesh = MeshletMesh::build_with(&generate(), options);
++    let mut mesh = cook();
+     let ms = start.elapsed().as_secs_f64() * 1e3;
+     let stored = save(&file, &mesh, key).map(|()| remove_stale(dir, name, key));
+     if stored.is_ok() && !pages_in_memory {
+diff --git a/crates/forge-terrain/src/planet.rs b/crates/forge-terrain/src/planet.rs
+index 7c7541f..218b8f7 100644
+--- a/crates/forge-terrain/src/planet.rs
++++ b/crates/forge-terrain/src/planet.rs
+@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock};
+ 
+ use anyhow::{Context, Result, bail};
+ use forge_core::{Seed, dmath};
++use forge_geom::DagTemplate;
+ use forge_geom::procedural::TriMesh;
+ use forge_procgen::noise::gradient3;
+ use forge_world::{CellId, CubeSphere, Face, Partition};
+@@ -698,6 +699,8 @@ pub struct Planet {
+     pub map: Option<Arc<Elevation>>,
+     /// Its regions' finer elevations, in the order of the map's `regions`.
+     pub regions: Vec<Arc<Elevation>>,
++    /// Its tiles' DAG template, made on first use ([`Planet::dag_template`]).
++    template: Arc<OnceLock<DagTemplate>>,
+ }
+ 
+ impl Planet {
+@@ -718,9 +721,17 @@ impl Planet {
+             world,
+             map,
+             regions,
++            template: Arc::default(),
+         })
+     }
+ 
++    /// The template its tiles' cluster DAGs are filled in from ([`tile_dag_template`]), made
++    /// on first use and shared by its clones.
++    pub fn dag_template(&self) -> &DagTemplate {
++        self.template
++            .get_or_init(|| tile_dag_template(self.world.tiles.samples))
++    }
++
+     /// The ground's height over the sea's level (the map's reference) in `direction` (from the
+     /// planet's centre), metres, holding nothing narrower than `min_wavelength`; negative under
+     /// the sea.
+@@ -803,7 +814,12 @@ impl Planet {
+     /// The ground as the tiles draw it: [`Self::height`], the sea's floor flattened at its level
+     /// where the world has a sea.
+     pub fn ground(&self, direction: DVec3, min_wavelength: f64) -> f64 {
+-        let height = self.height(direction, min_wavelength);
++        self.ground_of(self.height(direction, min_wavelength))
++    }
++
++    /// The ground where the height is `height` ([`Planet::height`]): the sea's level over it
++    /// where the world has a sea.
++    fn ground_of(&self, height: f64) -> f64 {
+         let sea = self.world.map.as_ref().is_none_or(|m| m.sea);
+         if sea { height.max(0.0) } else { height }
+     }
+@@ -1052,33 +1068,12 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
+             mesh.uvs.push(uv(i, j));
+         }
+     }
+-    let index = |i: i64, j: i64| (j * n + i) as u32;
+-    mesh.indices
+-        .reserve(((n - 1) * (n - 1) * 6 + 4 * (n - 1) * 6) as usize);
+-    for j in 0..n - 1 {
+-        for i in 0..n - 1 {
+-            let (a, b, c, d) = (
+-                index(i, j),
+-                index(i + 1, j),
+-                index(i, j + 1),
+-                index(i + 1, j + 1),
+-            );
+-            mesh.indices.extend_from_slice(&[a, b, c, b, d, c]);
+-        }
+-    }
+     // The skirt: the edge's samples copied (their own vertices, so the surface's edge stays
+-    // an open border the simplifier locks), and again lowered towards the centre, joined by
+-    // quads facing out of the tile. The edge walked counter-clockwise seen from outside.
++    // an open border the simplifier locks), and again lowered towards the centre.
+     let depth = skirt_depth(world, level);
+-    let mut edge: Vec<(i64, i64)> = Vec::with_capacity(4 * (n - 1) as usize + 1);
+-    edge.extend((0..n - 1).map(|i| (i, 0)));
+-    edge.extend((0..n - 1).map(|j| (n - 1, j)));
+-    edge.extend((0..n - 1).map(|i| (n - 1 - i, n - 1)));
+-    edge.extend((0..n - 1).map(|j| (0, n - 1 - j)));
+-    let first = mesh.positions.len() as u32;
+-    for &(i, j) in &edge {
++    for (i, j) in tile_edge(n) {
+         let p = at(i, j);
+-        let normal = mesh.normals[index(i, j) as usize];
++        let normal = mesh.normals[(j * n + i) as usize];
+         let down = p - p.normalize() * depth;
+         mesh.positions.push((p - origin).as_vec3().to_array());
+         mesh.positions.push((down - origin).as_vec3().to_array());
+@@ -1087,17 +1082,82 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
+         mesh.uvs.push(uv(i, j));
+         mesh.uvs.push(uv(i, j));
+     }
+-    let ring = edge.len() as u32;
++    mesh.indices = tile_triangles(n);
++    mesh
++}
++
++/// The samples along the edge of a tile of `n`² samples, walked counter-clockwise seen from
++/// outside from (0, 0): where its skirt hangs.
++fn tile_edge(n: i64) -> Vec<(i64, i64)> {
++    let mut edge: Vec<(i64, i64)> = Vec::with_capacity(4 * (n - 1) as usize + 1);
++    edge.extend((0..n - 1).map(|i| (i, 0)));
++    edge.extend((0..n - 1).map(|j| (n - 1, j)));
++    edge.extend((0..n - 1).map(|i| (n - 1 - i, n - 1)));
++    edge.extend((0..n - 1).map(|j| (0, n - 1 - j)));
++    edge
++}
++
++/// The triangles of every tile of `n`² samples ([`tile_mesh`]): two a cell over the samples,
++/// row-major, then the skirt's quads, facing out of the tile, over the edge's samples
++/// ([`tile_edge`]), which follow in pairs from vertex `n`²: on the edge, then lowered.
++fn tile_triangles(n: i64) -> Vec<u32> {
++    let index = |i: i64, j: i64| (j * n + i) as u32;
++    let mut indices = Vec::with_capacity(((n - 1) * (n - 1) * 6 + 4 * (n - 1) * 6) as usize);
++    for j in 0..n - 1 {
++        for i in 0..n - 1 {
++            let (a, b, c, d) = (
++                index(i, j),
++                index(i + 1, j),
++                index(i, j + 1),
++                index(i + 1, j + 1),
++            );
++            indices.extend_from_slice(&[a, b, c, b, d, c]);
++        }
++    }
++    let first = (n * n) as u32;
++    let ring = 4 * (n - 1) as u32;
+     for k in 0..ring {
+         let (top, bottom) = (first + 2 * k, first + 2 * k + 1);
+         let next = (k + 1) % ring;
+         let (next_top, next_bottom) = (first + 2 * next, first + 2 * next + 1);
+         // Walking the edge counter-clockwise seen from outside, the tile lies to the left:
+         // the quad (top, bottom, next bottom, next top) faces away from it.
+-        mesh.indices
+-            .extend_from_slice(&[top, bottom, next_top, next_top, bottom, next_bottom]);
++        indices.extend_from_slice(&[top, bottom, next_top, next_top, bottom, next_bottom]);
+     }
+-    mesh
++    indices
++}
++
++/// The template every tile's cluster DAG is filled in from (#220, [`DagTemplate`]): a tile's
++/// triangles over a stand-in ground of white noise, its samples a unit apart and up to half a
++/// unit high, its skirt two units deep. Even noise leaves each level of the DAG as fine all
++/// over; each tile's own errors then decide where it is drawn finer.
++pub fn tile_dag_template(samples: u32) -> DagTemplate {
++    let n = i64::from(samples);
++    let height = |i: i64, j: i64| {
++        let c = (n - 1) as f32 * 0.5;
++        let (x, z) = (i as f32 - c, j as f32 - c);
++        -(x * x + z * z) / (2.0 * 128.0)
++    };
++    let uv = |i: i64, j: i64| [i as f32 / (n - 1) as f32, j as f32 / (n - 1) as f32];
++    let mut mesh = TriMesh::default();
++    let mut flat = Vec::new();
++    let mut push = |mesh: &mut TriMesh, i: i64, j: i64, y: f32| {
++        mesh.positions.push([i as f32, y, j as f32]);
++        mesh.normals.push([0.0, 1.0, 0.0]);
++        mesh.uvs.push(uv(i, j));
++        flat.push([i as f32, j as f32]);
++    };
++    for j in 0..n {
++        for i in 0..n {
++            push(&mut mesh, i, j, height(i, j));
++        }
++    }
++    for (i, j) in tile_edge(n) {
++        push(&mut mesh, i, j, height(i, j));
++        push(&mut mesh, i, j, height(i, j) - 2.0);
++    }
++    mesh.indices = tile_triangles(n);
++    DagTemplate::new(&mesh, &flat)
+ }
+ 
+ /// The cache name of `cell`'s tile on the planet called `body`: `body@face-level-x-y`.
+@@ -1141,12 +1201,24 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
+     let min_wavelength = world.min_wavelength(level + 1);
+     let radius = world.planet.radius;
+     let side = 2 * size + 1;
++    let place = |i: usize, j: usize| {
++        CubeSphere::direction(face, start + DVec2::new(i as f64, j as f64) * half)
++    };
++    // Only the samples a texel reads: its neighbours (one coordinate odd, the other even) and
++    // its centre (both odd), not the corners (both even). A centre's height is kept for its
++    // coast.
+     let mut points = vec![DVec3::ZERO; side * side];
++    let mut centres = vec![0.0; size * size];
+     for j in 0..side {
+-        for i in 0..side {
+-            let st = start + DVec2::new(i as f64, j as f64) * half;
+-            let direction = CubeSphere::direction(face, st);
+-            points[j * side + i] = direction * (radius + planet.ground(direction, min_wavelength));
++        // An even row holds neighbours at its odd places only; an odd row is all read.
++        let (first, step) = if j % 2 == 0 { (1, 2) } else { (0, 1) };
++        for i in (first..side).step_by(step) {
++            let direction = place(i, j);
++            let height = planet.height(direction, min_wavelength);
++            if i % 2 == 1 && j % 2 == 1 {
++                centres[j / 2 * size + i / 2] = height;
++            }
++            points[j * side + i] = direction * (radius + planet.ground_of(height));
+         }
+     }
+     let at = |i: usize, j: usize| points[j * side + i];
+@@ -1159,10 +1231,8 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
+             let normal = (at(ci + 1, cj) - at(ci - 1, cj))
+                 .cross(at(ci, cj + 1) - at(ci, cj - 1))
+                 .normalize_or(at(ci, cj).normalize());
+-            // The coast: the height before the sea flattens it.
+-            let direction = at(ci, cj).normalize();
+-            let coast =
+-                0.5 + 0.5 * (planet.height(direction, min_wavelength) / range).clamp(-1.0, 1.0);
++            // The coast: the centre's height, before the sea flattens it.
++            let coast = 0.5 + 0.5 * (centres[j * size + i] / range).clamp(-1.0, 1.0);
+             texels.extend_from_slice(&encode_normal(normal, coast));
+         }
+     }
+@@ -1517,6 +1587,23 @@ mod tests {
+         assert!(lo < -1000.0 && hi > 500.0, "{lo} {hi}");
+     }
+ 
++    #[test]
++    fn every_tile_takes_its_dag_from_the_planet_s_template() {
++        let planet = small();
++        for cell in [CellId::cube(2, 4, 5, 7), CellId::cube(0, 1, 0, 1)] {
++            let mesh = tile_mesh(&planet, cell);
++            let built = forge_geom::MeshletMesh::build_from(&mesh, planet.dag_template());
++            assert_eq!(built.triangle_count, mesh.indices.len() / 3);
++            assert!(built.meshlets.iter().any(|m| m.parent_error.is_infinite()));
++            assert!(
++                built
++                    .meshlets
++                    .iter()
++                    .all(|m| m.parent_error >= m.self_error)
++            );
++        }
++    }
++
+     #[test]
+     fn neighbouring_tiles_share_their_edge_and_its_normals() {
+         let planet = small();
+@@ -1672,4 +1759,91 @@ mod calibration {
+             }
+         }
+     }
++
++    /// Where a new tile's time goes (#220, "tiles cooked in milliseconds"): a tile of each of
++    /// the four finest levels of the cut 6 km over Mont Blanc, made, cooked, stored, and its
++    /// normal map made, on one core.
++    #[test]
++    #[ignore = "needs the Earth's maps"]
++    fn a_new_tile_s_time() {
++        use forge_geom::{CookOptions, GpuVertex, MeshletMesh};
++        use std::time::Instant;
++        let world = PlanetWorld::load(&planet_file()).unwrap();
++        let planet = Planet::new(world).unwrap();
++        let world = &planet.world;
++        let sphere = world.sphere();
++        let d = direction(45.55, 6.55);
++        let ground = planet.ground(d, world.min_wavelength(world.tiles.finest));
++        let camera = sphere.surface_point(d, ground + 6000.0);
++        let cut = world.tile_cut_around(&[camera]);
++        let mut cells: Vec<CellId> = Vec::new();
++        for &cell in &cut {
++            if !cells.iter().any(|c| c.level() == cell.level()) {
++                cells.push(cell);
++            }
++        }
++        cells.sort_by_key(|c| std::cmp::Reverse(c.level()));
++        let dir = std::env::temp_dir().join("forge-tile-timing");
++        std::fs::create_dir_all(&dir).unwrap();
++        let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
++        let t = Instant::now();
++        let template = planet.dag_template();
++        println!("the DAG template: {:.0} ms", ms(t));
++        for cell in cells.into_iter().take(4) {
++            let t = Instant::now();
++            let mesh = tile_mesh(&planet, cell);
++            let made = ms(t);
++            let t = Instant::now();
++            let cooked = MeshletMesh::build_with(&mesh, CookOptions { normal_weight: 0.0 });
++            let cook = ms(t);
++            let t = Instant::now();
++            let from = MeshletMesh::build_from(&mesh, template);
++            let templated = ms(t);
++            // The cook's steps: the DAG alone, then its pages.
++            let vertices: Vec<GpuVertex> = (0..mesh.positions.len())
++                .map(|i| GpuVertex {
++                    position: mesh.positions[i],
++                    pad0: 0.0,
++                    normal: mesh.normals[i],
++                    section: 0.0,
++                    uv: mesh.uvs[i],
++                })
++                .collect();
++            let t = Instant::now();
++            let mut dag = forge_geom::build_dag(
++                &mesh.indices,
++                &vertices,
++                &vec![0; vertices.len()],
++                0.0,
++                forge_geom::MAX_LEVELS,
++            );
++            let dag_ms = ms(t);
++            let t = Instant::now();
++            let pages = forge_geom::page::pack(&mut dag, &vertices, true, None);
++            let pack = ms(t);
++            let t = Instant::now();
++            forge_geom::cache::save(&dir.join("tile.fmesh"), &cooked, 1).unwrap();
++            let save = ms(t);
++            let t = Instant::now();
++            let normals = tile_normal_map(&planet, cell);
++            let map = ms(t);
++            let t = Instant::now();
++            let levels = normal_map_levels(normals, NORMAL_MAP_SIZE);
++            let mips = ms(t);
++            println!(
++                "level {:2}: made {made:6.1} ms, cooked {cook:6.1} (DAG {dag_ms:6.1}, pages {pack:5.1}), from the template {templated:5.1}, stored {save:5.1}, normal map {map:6.1} + mips {mips:4.1}; {} triangles; its own DAG {} clusters, {} pages, {} levels, {} triangles; the template's {} clusters, {} pages, {} levels, {} triangles; {} map levels",
++                cell.level(),
++                mesh.indices.len() / 3,
++                cooked.meshlets.len(),
++                pages.count(),
++                cooked.levels(),
++                cooked.dag_triangle_count,
++                from.meshlets.len(),
++                from.page_count,
++                from.levels(),
++                from.dag_triangle_count,
++                levels.len(),
++            );
++        }
++    }
+ }

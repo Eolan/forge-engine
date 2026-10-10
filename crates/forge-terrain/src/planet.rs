@@ -803,7 +803,12 @@ impl Planet {
     /// The ground as the tiles draw it: [`Self::height`], the sea's floor flattened at its level
     /// where the world has a sea.
     pub fn ground(&self, direction: DVec3, min_wavelength: f64) -> f64 {
-        let height = self.height(direction, min_wavelength);
+        self.ground_of(self.height(direction, min_wavelength))
+    }
+
+    /// The ground where the height is `height` ([`Planet::height`]): the sea's level over it
+    /// where the world has a sea.
+    fn ground_of(&self, height: f64) -> f64 {
         let sea = self.world.map.as_ref().is_none_or(|m| m.sea);
         if sea { height.max(0.0) } else { height }
     }
@@ -1141,12 +1146,24 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
     let min_wavelength = world.min_wavelength(level + 1);
     let radius = world.planet.radius;
     let side = 2 * size + 1;
+    let place = |i: usize, j: usize| {
+        CubeSphere::direction(face, start + DVec2::new(i as f64, j as f64) * half)
+    };
+    // Only the samples a texel reads: its neighbours (one coordinate odd, the other even) and
+    // its centre (both odd), not the corners (both even). A centre's height is kept for its
+    // coast.
     let mut points = vec![DVec3::ZERO; side * side];
+    let mut centres = vec![0.0; size * size];
     for j in 0..side {
-        for i in 0..side {
-            let st = start + DVec2::new(i as f64, j as f64) * half;
-            let direction = CubeSphere::direction(face, st);
-            points[j * side + i] = direction * (radius + planet.ground(direction, min_wavelength));
+        // An even row holds neighbours at its odd places only; an odd row is all read.
+        let (first, step) = if j % 2 == 0 { (1, 2) } else { (0, 1) };
+        for i in (first..side).step_by(step) {
+            let direction = place(i, j);
+            let height = planet.height(direction, min_wavelength);
+            if i % 2 == 1 && j % 2 == 1 {
+                centres[j / 2 * size + i / 2] = height;
+            }
+            points[j * side + i] = direction * (radius + planet.ground_of(height));
         }
     }
     let at = |i: usize, j: usize| points[j * side + i];
@@ -1159,10 +1176,8 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
             let normal = (at(ci + 1, cj) - at(ci - 1, cj))
                 .cross(at(ci, cj + 1) - at(ci, cj - 1))
                 .normalize_or(at(ci, cj).normalize());
-            // The coast: the height before the sea flattens it.
-            let direction = at(ci, cj).normalize();
-            let coast =
-                0.5 + 0.5 * (planet.height(direction, min_wavelength) / range).clamp(-1.0, 1.0);
+            // The coast: the centre's height, before the sea flattens it.
+            let coast = 0.5 + 0.5 * (centres[j * size + i] / range).clamp(-1.0, 1.0);
             texels.extend_from_slice(&encode_normal(normal, coast));
         }
     }
@@ -1670,6 +1685,83 @@ mod calibration {
                     levels
                 );
             }
+        }
+    }
+
+    /// Where a new tile's time goes (#220, "tiles cooked in milliseconds"): a tile of each of
+    /// the four finest levels of the cut 6 km over Mont Blanc, made, cooked, stored, and its
+    /// normal map made, on one core.
+    #[test]
+    #[ignore = "needs the Earth's maps"]
+    fn a_new_tile_s_time() {
+        use forge_geom::{CookOptions, GpuVertex, MeshletMesh};
+        use std::time::Instant;
+        let world = PlanetWorld::load(&planet_file()).unwrap();
+        let planet = Planet::new(world).unwrap();
+        let world = &planet.world;
+        let sphere = world.sphere();
+        let d = direction(45.55, 6.55);
+        let ground = planet.ground(d, world.min_wavelength(world.tiles.finest));
+        let camera = sphere.surface_point(d, ground + 6000.0);
+        let cut = world.tile_cut_around(&[camera]);
+        let mut cells: Vec<CellId> = Vec::new();
+        for &cell in &cut {
+            if !cells.iter().any(|c| c.level() == cell.level()) {
+                cells.push(cell);
+            }
+        }
+        cells.sort_by_key(|c| std::cmp::Reverse(c.level()));
+        let dir = std::env::temp_dir().join("forge-tile-timing");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+        for cell in cells.into_iter().take(4) {
+            let t = Instant::now();
+            let mesh = tile_mesh(&planet, cell);
+            let made = ms(t);
+            let t = Instant::now();
+            let cooked = MeshletMesh::build_with(&mesh, CookOptions { normal_weight: 0.0 });
+            let cook = ms(t);
+            // The cook's steps: the DAG alone, then its pages.
+            let vertices: Vec<GpuVertex> = (0..mesh.positions.len())
+                .map(|i| GpuVertex {
+                    position: mesh.positions[i],
+                    pad0: 0.0,
+                    normal: mesh.normals[i],
+                    section: 0.0,
+                    uv: mesh.uvs[i],
+                })
+                .collect();
+            let t = Instant::now();
+            let mut dag = forge_geom::build_dag(
+                &mesh.indices,
+                &vertices,
+                &vec![0; vertices.len()],
+                0.0,
+                forge_geom::MAX_LEVELS,
+            );
+            let dag_ms = ms(t);
+            let t = Instant::now();
+            let pages = forge_geom::page::pack(&mut dag, &vertices, true, None);
+            let pack = ms(t);
+            let t = Instant::now();
+            forge_geom::cache::save(&dir.join("tile.fmesh"), &cooked, 1).unwrap();
+            let save = ms(t);
+            let t = Instant::now();
+            let normals = tile_normal_map(&planet, cell);
+            let map = ms(t);
+            let t = Instant::now();
+            let levels = normal_map_levels(normals, NORMAL_MAP_SIZE);
+            let mips = ms(t);
+            println!(
+                "level {:2}: made {made:6.1} ms, cooked {cook:6.1} (DAG {dag_ms:6.1}, pages {pack:5.1}), stored {save:5.1}, normal map {map:6.1} + mips {mips:4.1}; {} triangles; its DAG {} clusters, {} pages, {} levels, {} triangles; {} map levels",
+                cell.level(),
+                mesh.indices.len() / 3,
+                cooked.meshlets.len(),
+                pages.count(),
+                cooked.levels(),
+                cooked.dag_triangle_count,
+                levels.len(),
+            );
         }
     }
 }
