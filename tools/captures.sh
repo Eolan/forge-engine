@@ -227,14 +227,16 @@ for path in $paths; do
   fi
   # The planet (#220, D-056), when tools/fetch-planets.sh has fetched its maps (never in CI): the
   # Earth's descent held at its three golden shots, from orbit over the Mediterranean, 10 km over
-  # the Côte d'Azur and over Èze, the ground's with the occlusion off and every page resident
-  # for the A/B harness; the Moon from orbit and on Tycho's floor.
+  # the Côte d'Azur and over Èze, the ground's with the occlusion off, every page resident and
+  # reached by an edit in place for the A/B harness; the Moon from orbit and on Tycho's floor.
   if [ -f "$planet" ] && [ -f "$root/assets/planets/earth/etopo-60s.i16" ]; then
     for shot in orbit high ground; do
       capture "$path-planet-$shot" 120 "$planet" --shot "$shot" --fixed-step "${flag[@]}"
     done
     capture "$path-planet-ground-noocc" 120 "$planet" --shot ground --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-planet-ground-resident" 120 "$planet" --shot ground --fixed-step --resident "${flag[@]}"
+    # The ground's scene reached by an edit in place from a coarser cut (#220), for the same A/B.
+    capture "$path-planet-ground-edited" 120 "$planet" --shot ground --fixed-step --edited "${flag[@]}"
     # Corsica straight down from 400 km at the sun's 55°, north up: the station's view, to
     # compare with its photographs.
     capture "$path-planet-corsica-top" 120 "$planet" --target 42.15,9.1 --heading 0 --shot top \

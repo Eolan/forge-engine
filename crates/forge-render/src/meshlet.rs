@@ -36,6 +36,9 @@ use forge_gpu::{
 };
 use glam::{DQuat, DVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
+mod dynamic;
+pub use dynamic::{DynamicCapacity, MeshRays, SceneEdit, SceneEditor};
+
 /// Culling flags, mirrored in `meshlet.slang`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CullFlags(pub u32);
@@ -104,6 +107,9 @@ const MESH_SCENE_SHADED: u32 = 2;
 /// `INSTANCE_STILL` in the shader: a mover with no motion of its own this frame
 /// ([`MeshletScene::set_movers_still`], #197).
 const INSTANCE_STILL: u32 = 1;
+/// `Instance::flags`: a dynamic scene's slot no instance holds (#220, `INSTANCE_VACANT` in the
+/// shader).
+const INSTANCE_VACANT: u32 = 2;
 
 /// No ground window: its least corner past its greatest.
 const NO_GROUND_WINDOW: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
@@ -952,9 +958,10 @@ impl MeshId {
         self.0
     }
 
-    /// The handle of mesh `index` (for tests of the tables that hold handles).
-    #[cfg(test)]
-    pub(crate) fn from_index(index: u32) -> Self {
+    /// The handle of mesh `index`: the `index`th mesh added to a builder (a dynamic scene's
+    /// editor names the meshes a scene was built with by it, #220), or for tests of the tables
+    /// that hold handles.
+    pub fn from_index(index: u32) -> Self {
         Self(index)
     }
 }
@@ -965,6 +972,8 @@ pub struct MeshletSceneBuilder {
     meshlets: Vec<GpuMeshlet>,
     /// Every mesh's cluster pages, one after the other: where to read each.
     store: PageStore,
+    /// Per mesh: its first page in the store.
+    mesh_pages: Vec<u32>,
     /// The pages that hold roots (always resident).
     root_pages: Vec<u32>,
     meshes: Vec<GpuMesh>,
@@ -994,6 +1003,12 @@ pub struct MeshletSceneBuilder {
     ray_groups: Vec<(Vec<u32>, u32)>,
     /// Meshes the rays take as ground whatever their size ([`MeshletSceneBuilder::set_ray_terrain`]).
     ray_terrain: Vec<u32>,
+    /// Meshes the rays cut to a budget of their own ([`MeshletSceneBuilder::set_ray_budget`]).
+    ray_budgets: HashMap<u32, u32>,
+    /// The room a dynamic scene reserves ([`MeshletSceneBuilder::reserve_dynamic`], #220).
+    dynamic: Option<DynamicCapacity>,
+    /// What the scene keeps alive for one instance each ([`MeshletSceneBuilder::keep_for`]).
+    instance_kept: Vec<(usize, Box<dyn std::any::Any + Send>)>,
     /// The view whose pages a streamed scene loads first
     /// ([`MeshletSceneBuilder::set_start_view`]).
     start_view: Option<StartView>,
@@ -1010,6 +1025,114 @@ pub struct MeshletSceneBuilder {
 /// cluster by cluster (`start_needs`); the others take the bound of the nearest of them.
 const START_EXACT_INSTANCES: usize = 1024;
 
+/// A table holding `data` with room for `room` entries in all: more than `data` holds for a
+/// dynamic scene's (#220), as many for others.
+fn table_with_room<T: Pod>(
+    device: &Arc<Device>,
+    data: &[T],
+    room: usize,
+    usage: vk::BufferUsageFlags,
+    name: &str,
+) -> Result<Buffer> {
+    let buffer = device.create_buffer(BufferDesc {
+        size: (room.max(data.len()) * std::mem::size_of::<T>()).max(4) as u64,
+        usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
+        location: MemoryLocation::GpuOnly,
+        category: MemoryCategory::Geometry,
+        name,
+    })?;
+    device.write_buffer_staged(&buffer, 0, bytemuck::cast_slice(data))?;
+    Ok(buffer)
+}
+
+/// `meshlets` (one mesh's clusters) with their pages numbered from `page_base`, the scene's
+/// numbering.
+fn rebased(meshlets: &[GpuMeshlet], page_base: u32) -> impl Iterator<Item = GpuMeshlet> + '_ {
+    meshlets.iter().map(move |m| GpuMeshlet {
+        page: m.page + page_base,
+        child_page: if m.child_page == PAGE_NONE {
+            PAGE_NONE
+        } else {
+            m.child_page + page_base
+        },
+        ..*m
+    })
+}
+
+/// `mesh`'s record, its clusters from `meshlet_offset` in the scene's table, with its
+/// finest-level clusters and its highest material section (a builder's mesh, or a dynamic
+/// scene's, #220).
+fn mesh_record(mesh: &MeshletMesh, meshlet_offset: u32) -> (GpuMesh, u32, u32) {
+    // Per-level tables for the culls' LOD windows: clusters are stored level by level.
+    let level_count = mesh.clusters_per_level.len().min(LOD_LEVELS);
+    let mut level_offset = [0_u32; LOD_LEVELS + 1];
+    let mut self_error_min = [f32::INFINITY; LOD_LEVELS];
+    let mut parent_error_max = [0.0_f32; LOD_LEVELS];
+    let mut self_reach_max = [0.0_f32; LOD_LEVELS];
+    let mut parent_reach_max = [0.0_f32; LOD_LEVELS];
+    for level in 0..level_count {
+        level_offset[level + 1] = level_offset[level] + mesh.clusters_per_level[level];
+    }
+    let reach = |c: [f32; 3], r: f32| (Vec3::from(c) - Vec3::from(mesh.center)).length() + r;
+    let mut roots = [0_u32; MAX_SHORTCUT_ROOTS];
+    let mut root_count = 0;
+    let mut root_error_max = 0.0_f32;
+    let mut root_reach_max = 0.0_f32;
+    for (index, m) in mesh.meshlets.iter().enumerate() {
+        if m.parent_error.is_infinite() {
+            if root_count < MAX_SHORTCUT_ROOTS {
+                roots[root_count] = index as u32;
+            }
+            root_count += 1;
+            root_error_max = root_error_max.max(m.self_error);
+            root_reach_max = root_reach_max.max(reach(m.self_center, m.self_radius));
+        }
+    }
+    if root_count > MAX_SHORTCUT_ROOTS {
+        root_count = 0;
+    }
+    for m in &mesh.meshlets {
+        let level = (m.lod_level as usize).min(level_count.saturating_sub(1));
+        self_error_min[level] = self_error_min[level].min(m.self_error);
+        parent_error_max[level] = parent_error_max[level].max(m.parent_error);
+        self_reach_max[level] = self_reach_max[level].max(reach(m.self_center, m.self_radius));
+        parent_reach_max[level] =
+            parent_reach_max[level].max(reach(m.parent_center, m.parent_radius));
+    }
+    for value in self_error_min.iter_mut().skip(level_count) {
+        *value = 0.0;
+    }
+    let record = GpuMesh {
+        meshlet_offset,
+        meshlet_count: mesh.meshlets.len() as u32,
+        triangle_count: mesh.triangle_count as u32,
+        level_count: level_count as u32,
+        center: mesh.center,
+        radius: mesh.radius,
+        level_offset,
+        skin: u32::MAX,
+        uvs: u32::from(mesh.uvs),
+        flags: 0,
+        self_error_min,
+        parent_error_max,
+        self_reach_max,
+        parent_reach_max,
+        roots,
+        root_count: root_count as u32,
+        root_error_max,
+        root_reach_max,
+        material: MaterialTable::DEFAULT.0,
+    };
+    let finest = mesh.meshlets.iter().filter(|m| m.lod_level == 0).count() as u32;
+    let sections = mesh
+        .meshlets
+        .iter()
+        .map(|m| (m.section & 0xFF).max((m.section >> 8) & 0xFF))
+        .max()
+        .unwrap_or(0);
+    (record, finest, sections)
+}
+
 impl MeshletSceneBuilder {
     /// An empty builder.
     pub fn new() -> Self {
@@ -1021,106 +1144,21 @@ impl MeshletSceneBuilder {
     pub fn add_mesh(&mut self, mesh: &MeshletMesh) -> MeshId {
         let page_base = self.store.sources.len() as u32;
         let meshlet_offset = self.meshlets.len() as u32;
-        match &mesh.page_file {
-            Some(file) if mesh.pages.is_empty() => {
-                let index = self.store.files.len() as u32;
-                self.store.files.push(file.path.clone());
-                self.store.sources.extend(
-                    file.pages
-                        .iter()
-                        .map(|&page| PageSource::File { file: index, page }),
-                );
-            }
-            _ => {
-                let at = self.store.memory.len();
-                self.store.memory.extend_from_slice(&mesh.pages);
-                self.store.sources.extend(
-                    (0..mesh.page_count as usize).map(|p| PageSource::Memory(at + p * PAGE_SIZE)),
-                );
-            }
+        let at = self.store.memory.len();
+        let sources = PageSource::of_mesh(mesh, |offset| PageSource::Memory(at + offset));
+        if matches!(sources.first(), Some(PageSource::Memory(_))) {
+            Arc::make_mut(&mut self.store.memory).extend_from_slice(&mesh.pages);
         }
+        self.store.sources.extend(sources);
+        self.mesh_pages.push(page_base);
         self.root_pages
             .extend((0..mesh.root_pages).map(|p| page_base + p));
-        self.meshlets
-            .extend(mesh.meshlets.iter().map(|m| GpuMeshlet {
-                page: m.page + page_base,
-                child_page: if m.child_page == PAGE_NONE {
-                    PAGE_NONE
-                } else {
-                    m.child_page + page_base
-                },
-                ..*m
-            }));
+        self.meshlets.extend(rebased(&mesh.meshlets, page_base));
         let id = MeshId(self.meshes.len() as u32);
-        // Per-level tables for the culls' LOD windows: clusters are stored level by level.
-        let level_count = mesh.clusters_per_level.len().min(LOD_LEVELS);
-        let mut level_offset = [0_u32; LOD_LEVELS + 1];
-        let mut self_error_min = [f32::INFINITY; LOD_LEVELS];
-        let mut parent_error_max = [0.0_f32; LOD_LEVELS];
-        let mut self_reach_max = [0.0_f32; LOD_LEVELS];
-        let mut parent_reach_max = [0.0_f32; LOD_LEVELS];
-        for level in 0..level_count {
-            level_offset[level + 1] = level_offset[level] + mesh.clusters_per_level[level];
-        }
-        let reach = |c: [f32; 3], r: f32| (Vec3::from(c) - Vec3::from(mesh.center)).length() + r;
-        let mut roots = [0_u32; MAX_SHORTCUT_ROOTS];
-        let mut root_count = 0;
-        let mut root_error_max = 0.0_f32;
-        let mut root_reach_max = 0.0_f32;
-        for (index, m) in mesh.meshlets.iter().enumerate() {
-            if m.parent_error.is_infinite() {
-                if root_count < MAX_SHORTCUT_ROOTS {
-                    roots[root_count] = index as u32;
-                }
-                root_count += 1;
-                root_error_max = root_error_max.max(m.self_error);
-                root_reach_max = root_reach_max.max(reach(m.self_center, m.self_radius));
-            }
-        }
-        if root_count > MAX_SHORTCUT_ROOTS {
-            root_count = 0;
-        }
-        for m in &mesh.meshlets {
-            let level = (m.lod_level as usize).min(level_count.saturating_sub(1));
-            self_error_min[level] = self_error_min[level].min(m.self_error);
-            parent_error_max[level] = parent_error_max[level].max(m.parent_error);
-            self_reach_max[level] = self_reach_max[level].max(reach(m.self_center, m.self_radius));
-            parent_reach_max[level] =
-                parent_reach_max[level].max(reach(m.parent_center, m.parent_radius));
-        }
-        for value in self_error_min.iter_mut().skip(level_count) {
-            *value = 0.0;
-        }
-        self.meshes.push(GpuMesh {
-            meshlet_offset,
-            meshlet_count: mesh.meshlets.len() as u32,
-            triangle_count: mesh.triangle_count as u32,
-            level_count: level_count as u32,
-            center: mesh.center,
-            radius: mesh.radius,
-            level_offset,
-            skin: u32::MAX,
-            uvs: u32::from(mesh.uvs),
-            flags: 0,
-            self_error_min,
-            parent_error_max,
-            self_reach_max,
-            parent_reach_max,
-            roots,
-            root_count: root_count as u32,
-            root_error_max,
-            root_reach_max,
-            material: MaterialTable::DEFAULT.0,
-        });
-        self.mesh_finest
-            .push(mesh.meshlets.iter().filter(|m| m.lod_level == 0).count() as u32);
-        self.mesh_sections.push(
-            mesh.meshlets
-                .iter()
-                .map(|m| (m.section & 0xFF).max((m.section >> 8) & 0xFF))
-                .max()
-                .unwrap_or(0),
-        );
+        let (record, finest, sections) = mesh_record(mesh, meshlet_offset);
+        self.meshes.push(record);
+        self.mesh_finest.push(finest);
+        self.mesh_sections.push(sections);
         id
     }
 
@@ -1223,6 +1261,29 @@ impl MeshletSceneBuilder {
     /// drawn ground stands under it.
     pub fn set_ray_terrain(&mut self, meshes: &[MeshId]) {
         self.ray_terrain.extend(meshes.iter().map(|m| m.0));
+    }
+
+    /// Cuts `meshes` for the rays each to the finest cut of at most `budget` triangles, whatever
+    /// their size (#220: a planet's tiles, cut each on its own, so that a dynamic scene's tile
+    /// is cut the same whichever tiles stand beside it).
+    pub fn set_ray_budget(&mut self, meshes: &[MeshId], budget: u32) {
+        self.ray_budgets
+            .extend(meshes.iter().map(|m| (m.0, budget)));
+    }
+
+    /// Reserves `capacity` for a scene that takes and frees meshes and instances as it runs
+    /// (#220, [`MeshletScene::editor`]): its tables are made at that size. Such a scene streams
+    /// its pages ([`Residency::Streamed`]) and has no movers, skinned meshes or GPU-placed
+    /// instances.
+    pub fn reserve_dynamic(&mut self, capacity: DynamicCapacity) {
+        self.dynamic = Some(capacity);
+    }
+
+    /// Has the scene keep `item` alive for instance `instance` (in the order added): until the
+    /// scene is dropped, or in a dynamic scene until the instance leaves it (#220: a planet's
+    /// tile's normal map, [`MeshletSceneBuilder::set_instance_texture`]).
+    pub fn keep_for(&mut self, instance: usize, item: impl std::any::Any + Send) {
+        self.instance_kept.push((instance, Box::new(item)));
     }
 
     /// Has a streamed scene ([`Residency::Streamed`]) load, before its first frame, the pages
@@ -1375,7 +1436,12 @@ impl MeshletSceneBuilder {
         residency: Residency,
     ) -> Result<MeshletScene> {
         let page_count = self.store.sources.len() as u32;
+        if let Some(capacity) = self.dynamic {
+            self.check_dynamic(capacity, residency)?;
+        }
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        // Per mesh, its vertices' and triangles' ranges in the rays' tables (first, count each).
+        let mut ray_ranges: Vec<(u32, u32, u32, u32)> = Vec::new();
         // The meshes' cuts for the shadow rays, read while the page store is still here.
         let rays = if self.ray_traced && device.features().ray_query {
             let start = std::time::Instant::now();
@@ -1404,10 +1470,10 @@ impl MeshletSceneBuilder {
                     let meshlets = clusters(mesh);
                     let uvs = mesh.uvs != 0;
                     let terrain = mesh.radius > 1000.0 || self.ray_terrain.contains(&(m as u32));
-                    let budget = if terrain {
-                        raytrace::TERRAIN_BUDGET
-                    } else {
-                        raytrace::TRIANGLE_BUDGET
+                    let budget = match self.ray_budgets.get(&(m as u32)) {
+                        Some(&budget) => budget,
+                        None if terrain => raytrace::TERRAIN_BUDGET,
+                        None => raytrace::TRIANGLE_BUDGET,
                     };
                     let mut cut = match grouped.get(&m) {
                         Some(&(error, budget)) => {
@@ -1435,7 +1501,19 @@ impl MeshletSceneBuilder {
                 }
             }
             let ms = start.elapsed().as_secs_f64() * 1e3;
-            Some(SceneRays::new(device, &cuts, ms)?)
+            let capacity = self.dynamic.map(|c| raytrace::RayCapacity {
+                meshes: c.meshes,
+                vertices: c.ray_vertices,
+                triangles: c.ray_triangles,
+            });
+            // A dynamic scene's meshes' places in the rays' tables, one after the other.
+            let mut at = (0, 0);
+            for cut in &cuts {
+                let size = (cut.positions.len() as u32, cut.indices.len() as u32 / 3);
+                ray_ranges.push((at.0, size.0, at.1, size.1));
+                at = (at.0 + size.0, at.1 + size.1);
+            }
+            Some(SceneRays::new(device, &cuts, ms, capacity)?)
         } else {
             None
         };
@@ -1492,7 +1570,13 @@ impl MeshletSceneBuilder {
                     0,
                     &self.store.read_pages(pinned.iter().copied())?,
                 )?;
-                let mut table = vec![PAGE_NONE; page_count.max(1) as usize];
+                // A dynamic scene's numbers no page holds yet (#220).
+                if let Some(capacity) = self.dynamic {
+                    self.store
+                        .sources
+                        .resize(capacity.pages as usize, PageSource::Absent);
+                }
+                let mut table = vec![PAGE_NONE; self.store.sources.len().max(1)];
                 for (slot, &page) in pinned.iter().enumerate() {
                     table[page as usize] = slot as u32;
                 }
@@ -1502,7 +1586,7 @@ impl MeshletSceneBuilder {
                     MemoryCategory::Geometry,
                     "page table",
                 )?;
-                let store = Arc::new(std::mem::take(&mut self.store));
+                let store = std::mem::take(&mut self.store);
                 let streamer = PageStreamer::new(device, config, store, &self.meshlets, &pinned)?;
                 tracing::info!(
                     pages = page_count,
@@ -1554,7 +1638,33 @@ impl MeshletSceneBuilder {
             .map(|m| m.meshlet_count)
             .max()
             .unwrap_or(0);
-        let cell_count = (self.instances.len() as u64).div_ceil(64);
+        // A dynamic scene's tables are made at their capacity (#220).
+        let room = |used: usize, capacity: fn(&DynamicCapacity) -> u32| {
+            self.dynamic
+                .as_ref()
+                .map_or(used, |c| (capacity(c) as usize).max(used))
+        };
+        let instance_room = room(self.instances.len(), |c| c.instances);
+        let cell_count = (instance_room as u64).div_ceil(64);
+        let dynamic = self.dynamic.map(|capacity| {
+            Box::new(dynamic::SceneDynamic::new(dynamic::DynamicSeed {
+                capacity,
+                meshes: &self.meshes,
+                mesh_finest: &self.mesh_finest,
+                mesh_sections: &self.mesh_sections,
+                mesh_pages: &self.mesh_pages,
+                page_count,
+                ray_ranges: &ray_ranges,
+                instances: &self.instances,
+                kept: std::mem::take(&mut self.instance_kept),
+            }))
+        });
+        // A scene built whole keeps what its instances need as long as it lives.
+        self.kept.extend(
+            std::mem::take(&mut self.instance_kept)
+                .into_iter()
+                .map(|(_, item)| item),
+        );
         // The rows the instances draw with: their own and their meshes' sections after it. A
         // table shared by several scenes holds rows a scene never shows, and the flags they
         // raise must not cost it anything: the slimes' jelly, in every scene of the city
@@ -1569,26 +1679,30 @@ impl MeshletSceneBuilder {
         let (cutouts, jelly) = (shown(GpuMaterial::cut_out), shown(GpuMaterial::jelly));
         Ok(MeshletScene {
             pool: GraphBuffer::new(pool),
-            meshlets: device.create_buffer_with_data(
+            meshlets: Arc::new(table_with_room(
+                device,
                 &self.meshlets,
+                room(self.meshlets.len(), |c| c.meshlets),
                 usage,
-                MemoryCategory::Geometry,
                 "meshlets",
-            )?,
+            )?),
             page_table: GraphBuffer::new(page_table),
             streamer,
             page_count,
-            meshes: device.create_buffer_with_data(
+            meshes: Arc::new(table_with_room(
+                device,
                 &self.meshes,
+                room(self.meshes.len(), |c| c.meshes),
                 usage,
-                MemoryCategory::Geometry,
                 "meshes",
-            )?,
+            )?),
+            dynamic,
             // Written by GPU placement (`crate::placement`) and read back once for its checksum.
-            instances: GraphBuffer::new(device.create_buffer_with_data(
+            instances: GraphBuffer::new(table_with_room(
+                device,
                 &self.instances,
+                instance_room,
                 usage | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
-                MemoryCategory::Geometry,
                 "instances",
             )?),
             movers: self
@@ -1633,7 +1747,7 @@ impl MeshletSceneBuilder {
                 })
                 .collect::<Result<Vec<_>>>()?,
             deferred_bytes: std::mem::size_of_val(&DEFERRED_GRID_START) as u64
-                + 4 * transient_instances(self.instances.len() as u32),
+                + 4 * transient_instances(instance_room as u32),
             // `CellBounds` in the shader: 32 bytes a cell (issue #93).
             cells: GraphBuffer::new(device.create_buffer(BufferDesc {
                 size: 32 * cell_count.max(1),
@@ -1705,13 +1819,39 @@ struct StartPrep {
 
 /// Per scene page, the pixels of error its clusters' parents would show from the start view
 /// past [`streaming::START_MARGIN`] of the threshold (0 when none would): the cull's metric
-/// (`lod_error_pixels` in `meshlet.slang`) in `f64`. Each mesh's [`START_EXACT_INSTANCES`]
-/// nearest instances are worked out cluster by cluster; the others at the bound of the
-/// nearest of them, no cluster nearer than its instance's centre less the reach of its
-/// clusters' parents' spheres (`parent_reach_max`).
+/// (`lod_error_pixels` in `meshlet.slang`) in `f64`, mesh by mesh ([`mesh_start_needs`]).
 fn start_needs(prep: &StartPrep, instances: &[GpuInstance], page_count: usize) -> Vec<f32> {
-    let view = &prep.view;
     let mut need = vec![0.0_f32; page_count];
+    let mut of_mesh: Vec<Vec<&GpuInstance>> = vec![Vec::new(); prep.meshes.len()];
+    for instance in instances {
+        of_mesh[instance.mesh as usize].push(instance);
+    }
+    for (mesh, list) in prep.meshes.iter().zip(&of_mesh) {
+        let first = mesh.meshlet_offset as usize;
+        let clusters = &prep.meshlets[first..first + mesh.meshlet_count as usize];
+        mesh_start_needs(&prep.view, mesh, clusters, list, |page, px| {
+            need[page as usize] = need[page as usize].max(px);
+        });
+    }
+    need
+}
+
+/// Gives `raise` (page, pixels) for each page of `mesh` (its clusters `clusters`) whose
+/// clusters' parents would show past [`streaming::START_MARGIN`] of the threshold from `view`
+/// on `instances`, its instances (#121; a dynamic scene's new mesh too, #220). Its
+/// [`START_EXACT_INSTANCES`] nearest instances are worked out cluster by cluster; the others at
+/// the bound of the nearest of them, no cluster nearer than its instance's centre less the
+/// reach of its clusters' parents' spheres (`parent_reach_max`).
+fn mesh_start_needs(
+    view: &StartView,
+    mesh: &GpuMesh,
+    clusters: &[GpuMeshlet],
+    instances: &[&GpuInstance],
+    mut raise: impl FnMut(u32, f32),
+) {
+    if instances.is_empty() {
+        return;
+    }
     let k = f64::from(view.p11) * 0.5 * f64::from(view.viewport_height);
     let near = f64::from(view.near);
     let threshold = f64::from(view.lod_threshold_px * streaming::START_MARGIN);
@@ -1720,79 +1860,70 @@ fn start_needs(prep: &StartPrep, instances: &[GpuInstance], page_count: usize) -
         (glam::IVec3::from(cell) - view.position.cell).as_dvec3() * f64::from(crate::CELL_SIZE)
             + (Vec3::from(local) - view.position.local).as_dvec3()
     };
-    let mut of_mesh: Vec<Vec<usize>> = vec![Vec::new(); prep.meshes.len()];
-    for (i, instance) in instances.iter().enumerate() {
-        of_mesh[instance.mesh as usize].push(i);
+    let reach = f64::from(
+        mesh.parent_reach_max
+            .iter()
+            .copied()
+            .filter(|r| r.is_finite())
+            .fold(0.0_f32, f32::max),
+    );
+    // How near an instance may bring a cluster: its scale over its least distance.
+    let bound = |instance: &GpuInstance| {
+        let scale = f64::from(instance.scale);
+        let centre = relative(instance.cell, instance.center);
+        scale / (centre.length() - reach * scale).max(near)
+    };
+    let mut bounds: Vec<(f64, usize)> = instances
+        .iter()
+        .enumerate()
+        .map(|(i, instance)| (bound(instance), i))
+        .collect();
+    let exact = bounds.len().min(START_EXACT_INSTANCES);
+    if bounds.len() > exact {
+        bounds.select_nth_unstable_by(exact, |a, b| b.0.total_cmp(&a.0));
     }
-    for (mesh, list) in prep.meshes.iter().zip(&mut of_mesh) {
-        if list.is_empty() {
-            continue;
-        }
-        let first = mesh.meshlet_offset as usize;
-        let clusters = &prep.meshlets[first..first + mesh.meshlet_count as usize];
-        let reach = f64::from(
-            mesh.parent_reach_max
+    let levels = (mesh.level_count as usize).max(1);
+    for &(nearest, i) in &bounds[..exact] {
+        let instance = instances[i];
+        let rotation = DQuat::from_array(instance.rotation.map(f64::from));
+        let scale = f64::from(instance.scale);
+        let origin = relative(instance.cell, instance.local);
+        for level in 0..levels {
+            // A level whose largest parent error cannot show at the instance's least
+            // distance is skipped whole: a far instance costs its coarse levels only.
+            let largest = f64::from(mesh.parent_error_max[level]);
+            if largest.is_finite() && largest * k * nearest <= threshold {
+                continue;
+            }
+            let begin = mesh.level_offset[level] as usize;
+            let end = if level + 1 == levels {
+                clusters.len()
+            } else {
+                mesh.level_offset[level + 1] as usize
+            };
+            for c in clusters[begin..end]
                 .iter()
-                .copied()
-                .filter(|r| r.is_finite())
-                .fold(0.0_f32, f32::max),
-        );
-        // How near an instance may bring a cluster: its scale over its least distance.
-        let bound = |i: usize| {
-            let instance = &instances[i];
-            let scale = f64::from(instance.scale);
-            let centre = relative(instance.cell, instance.center);
-            scale / (centre.length() - reach * scale).max(near)
-        };
-        let mut bounds: Vec<(f64, usize)> = list.iter().map(|&i| (bound(i), i)).collect();
-        let exact = bounds.len().min(START_EXACT_INSTANCES);
-        if bounds.len() > exact {
-            bounds.select_nth_unstable_by(exact, |a, b| b.0.total_cmp(&a.0));
-        }
-        let levels = (mesh.level_count as usize).max(1);
-        for &(nearest, i) in &bounds[..exact] {
-            let instance = &instances[i];
-            let rotation = DQuat::from_array(instance.rotation.map(f64::from));
-            let scale = f64::from(instance.scale);
-            let origin = relative(instance.cell, instance.local);
-            for level in 0..levels {
-                // A level whose largest parent error cannot show at the instance's least
-                // distance is skipped whole: a far instance costs its coarse levels only.
-                let largest = f64::from(mesh.parent_error_max[level]);
-                if largest.is_finite() && largest * k * nearest <= threshold {
-                    continue;
-                }
-                let begin = mesh.level_offset[level] as usize;
-                let end = if level + 1 == levels {
-                    clusters.len()
-                } else {
-                    mesh.level_offset[level + 1] as usize
-                };
-                for c in clusters[begin..end]
-                    .iter()
-                    .filter(|c| c.parent_error.is_finite())
-                {
-                    let centre =
-                        rotation * (DVec3::from(c.parent_center.map(f64::from)) * scale) + origin;
-                    let d = (centre.length() - f64::from(c.parent_radius) * scale).max(near);
-                    let px = f64::from(c.parent_error) * scale * k / d;
-                    if px > threshold {
-                        need[c.page as usize] = need[c.page as usize].max(px as f32);
-                    }
-                }
-            }
-        }
-        // The rest: the nearest of them, `select_nth` having put it at `exact`.
-        if let Some(&(nearest, _)) = bounds.get(exact) {
-            for c in clusters.iter().filter(|c| c.parent_error.is_finite()) {
-                let px = f64::from(c.parent_error) * k * nearest;
+                .filter(|c| c.parent_error.is_finite())
+            {
+                let centre =
+                    rotation * (DVec3::from(c.parent_center.map(f64::from)) * scale) + origin;
+                let d = (centre.length() - f64::from(c.parent_radius) * scale).max(near);
+                let px = f64::from(c.parent_error) * scale * k / d;
                 if px > threshold {
-                    need[c.page as usize] = need[c.page as usize].max(px as f32);
+                    raise(c.page, px as f32);
                 }
             }
         }
     }
-    need
+    // The rest: the nearest of them, `select_nth` having put it at `exact`.
+    if let Some(&(nearest, _)) = bounds.get(exact) {
+        for c in clusters.iter().filter(|c| c.parent_error.is_finite()) {
+            let px = f64::from(c.parent_error) * k * nearest;
+            if px > threshold {
+                raise(c.page, px as f32);
+            }
+        }
+    }
 }
 
 /// The uploaded scene tables.
@@ -1800,7 +1931,9 @@ pub struct MeshletScene {
     /// The resident cluster pages: all of them in the slot of their index, or a streamed
     /// pool (`streamer`).
     pool: GraphBuffer,
-    meshlets: Buffer,
+    /// The cluster records (shared with a dynamic scene's editor, which writes its new
+    /// meshes' where no frame reads, #220).
+    meshlets: Arc<Buffer>,
     /// Per page, its slot in `pool` (`PAGE_NONE` when absent).
     page_table: GraphBuffer,
     /// A streamed scene's residency.
@@ -1808,9 +1941,12 @@ pub struct MeshletScene {
     /// The start view and the tables its needs are worked out from, until
     /// [`MeshletScene::load_start_view`] loads its pages (#121).
     start: Option<Box<StartPrep>>,
-    /// Pages over all meshes.
+    /// Pages over all meshes (a dynamic scene's highest page number in use, plus one).
     pub page_count: u32,
-    meshes: Buffer,
+    /// The mesh records (shared with a dynamic scene's editor, #220).
+    meshes: Arc<Buffer>,
+    /// A dynamic scene's own state (#220, [`MeshletSceneBuilder::reserve_dynamic`]).
+    dynamic: Option<Box<dynamic::SceneDynamic>>,
     /// Written once (and by GPU placement), and its movers' range every frame (#79).
     instances: GraphBuffer,
     /// The movers (#79), when the scene has them.
@@ -3217,6 +3353,9 @@ impl MeshletRenderer {
         slot: FrameSlot,
         scene: &mut MeshletScene,
     ) -> Result<Option<FrameStats>> {
+        // A dynamic scene's edits applied since the last frame, before the streamer plans this
+        // frame's pages over the residency they changed (#220).
+        scene.begin_dynamic_frame(slot.frame_number);
         if let Some(streamer) = scene.streamer.as_mut() {
             streamer.begin_frame(slot.index, slot.frame_number);
         }
@@ -3625,10 +3764,8 @@ impl MeshletRenderer {
                 .streamer
                 .as_ref()
                 .map(|s| graph.import_buffer(&s.readback[slot.index])),
-            instances: scene
-                .movers
-                .as_ref()
-                .map(|_| graph.import_buffer(&scene.instances)),
+            instances: (scene.movers.is_some() || scene.dynamic.is_some())
+                .then(|| graph.import_buffer(&scene.instances)),
             cells: scene
                 .movers
                 .as_ref()
@@ -3741,6 +3878,31 @@ impl MeshletRenderer {
                     &skin_blases,
                 )
             });
+        }
+
+        // A dynamic scene's edits published this frame (#220): their pages, page-table entries
+        // and instance records, before the streaming's copies (which follow the residency they
+        // left) and before anything reads them.
+        if let (Some(dynamic), Some(instances)) = (scene.dynamic.as_ref(), io.instances)
+            && !dynamic.this_frame.is_empty()
+        {
+            let edits = &dynamic.this_frame;
+            let (pool, table, records): (&'f Buffer, &'f Buffer, &'f Buffer) =
+                (&scene.pool, &scene.page_table, &scene.instances);
+            graph
+                .pass("scene/edit")
+                .queue(QueueKind::Transfer)
+                .buffer(io.pool, BufferAccess::TransferDst)
+                .buffer(io.page_table, BufferAccess::TransferDst)
+                .buffer(instances, BufferAccess::TransferDst)
+                .run(move |_, commands| {
+                    for edit in edits {
+                        commands.copy_buffer_regions(&edit.staging, pool, &edit.pool);
+                        commands.copy_buffer_regions(&edit.staging, table, &edit.table);
+                        commands.copy_buffer_regions(&edit.staging, records, &edit.instances);
+                    }
+                    Ok(())
+                });
         }
 
         // Streaming: this frame's pages and page-table entries, before anything reads them, on
@@ -3981,10 +4143,8 @@ impl MeshletRenderer {
             visible_list: io.visible,
             pages: io.pool,
             page_table: io.page_table,
-            movers: io
-                .instances
-                .zip(scene.movers.as_ref())
-                .map(|(instances, movers)| MoversFrame {
+            movers: match (io.instances, scene.movers.as_ref()) {
+                (Some(instances), Some(movers)) => Some(MoversFrame {
                     instances,
                     tlas: movers_tlas,
                     records: scene.instances.address()
@@ -3994,6 +4154,18 @@ impl MeshletRenderer {
                     origin: scene.origin,
                     ray_positions,
                 }),
+                // A dynamic scene's (#220): the table its edits write, no mover.
+                (Some(instances), None) => Some(MoversFrame {
+                    instances,
+                    tlas: None,
+                    records: 0,
+                    previous: 0,
+                    count: 0,
+                    origin: scene.origin,
+                    ray_positions: None,
+                }),
+                _ => None,
+            },
         })
     }
 

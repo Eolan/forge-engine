@@ -426,8 +426,18 @@ impl Device {
     /// submitted later, submits it and waits: a compute pass that prepares data before the
     /// first frame (GPU placement). Initialisation only.
     pub fn execute_compute_once(&self, record: impl FnOnce(&crate::Commands<'_>)) -> Result<()> {
+        self.execute_compute_once_on(QueueKind::Graphics, record)
+    }
+
+    /// [`Self::execute_compute_once`] on the queue that runs work of `kind`: a worker preparing
+    /// a dynamic scene's edit on the compute queue, beside the frames (#220).
+    pub fn execute_compute_once_on(
+        &self,
+        kind: QueueKind,
+        record: impl FnOnce(&crate::Commands<'_>),
+    ) -> Result<()> {
         use vk::PipelineStageFlags2 as S;
-        self.execute_transient(|_, cb| {
+        self.execute_transient_on(kind, |_, cb| {
             let commands = crate::Commands::new(self, cb);
             record(&commands);
             commands.memory_barrier(
@@ -529,6 +539,62 @@ impl Device {
             })?;
         }
         Ok(())
+    }
+
+    /// Copies each of `writes` (a buffer, a byte offset in it, the bytes) through one staging
+    /// buffer of at most [`STAGING_CHUNK`] bytes, in one submission per chunk, and waits: a
+    /// worker writing a dynamic scene's tables (#220) waits once for them all, not once a table.
+    /// Each buffer needs `TRANSFER_DST` usage and its ranges must not be in use.
+    pub fn write_buffers_staged(self: &Arc<Self>, writes: &[(&Buffer, u64, &[u8])]) -> Result<()> {
+        let total: usize = writes.iter().map(|w| w.2.len()).sum();
+        if total == 0 {
+            return Ok(());
+        }
+        let staging = self.create_buffer(BufferDesc {
+            size: total.min(STAGING_CHUNK) as u64,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            location: MemoryLocation::CpuToGpu,
+            category: MemoryCategory::Transfer,
+            name: "staging",
+        })?;
+        let flush = |regions: &mut Vec<(vk::Buffer, vk::BufferCopy)>| -> Result<()> {
+            if regions.is_empty() {
+                return Ok(());
+            }
+            self.execute_transient_on(QueueKind::Transfer, |device, cb| {
+                for (dst, region) in regions.iter() {
+                    // SAFETY: both buffers are live, every region lies inside them (the caller
+                    // keeps each write inside its buffer) and the destinations are not in use.
+                    unsafe { device.cmd_copy_buffer(cb, staging.raw(), *dst, &[*region]) };
+                }
+            })?;
+            regions.clear();
+            Ok(())
+        };
+        let mut regions = Vec::new();
+        let mut filled = 0;
+        for &(dst, offset, data) in writes {
+            let mut done = 0;
+            while done < data.len() {
+                if filled == STAGING_CHUNK {
+                    // The copies before have completed: the staging buffer is free again.
+                    flush(&mut regions)?;
+                    filled = 0;
+                }
+                let n = (STAGING_CHUNK - filled).min(data.len() - done);
+                staging.write(filled as u64, &data[done..done + n]);
+                regions.push((
+                    dst.raw(),
+                    vk::BufferCopy::default()
+                        .src_offset(filled as u64)
+                        .dst_offset(offset + done as u64)
+                        .size(n as u64),
+                ));
+                filled += n;
+                done += n;
+            }
+        }
+        flush(&mut regions)
     }
 
     /// Creates a single-level colour image filled with `data` (tightly packed rows of the

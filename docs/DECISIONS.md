@@ -3425,7 +3425,24 @@ Marble, the Deep Star Maps):
   - Credit: "produced using Copernicus WorldDEM-90 © DLR e.V. 2010-2014 and © Airbus Defence and
     Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights
     reserved" (`CREDITS.md`).
-- **Next:** the scene taking and freeing tiles in place, rather than whole scenes built again.
+- **The scene takes and frees tiles in place** (2026-10-10, the owner's "go on with the in-place
+  scene"; `docs/research/planet-terrain.md`'s design, built): a streamed scene reserves its
+  tables at a capacity (`MeshletSceneBuilder::reserve_dynamic`), and the demo's worker edits it
+  (`forge_render::SceneEditor`): a new tile's records and rays' cut into free ranges no frame
+  reads, its structure and the next top-level one built beside the frames, its pages read; the
+  frame takes the edit in at its start (`MeshletScene::apply`) and copies the rest in a
+  `scene/edit` pass. A removed tile's slot is vacant, and what it held is freed three frames
+  later.
+  - An edit of up to 10 tiles is ready 11 ms after it is asked for, where a whole scene took
+    0.39 s; the longest frame between changes is 2.4 ms on average, against 9.4.
+  - The ground shot reached by an edit draws what the scene built whole draws, 0 pixels apart
+    (`planet --edited`, a pair of the capture batch).
+  - The rays cut each tile on its own (4 000 triangles) rather than each level's tiles as one
+    surface, so a tile's cut does not depend on its neighbours. The planet's shadows moved a
+    little: the planet's captures were accepted again.
+  - `--resident` and a cut an edit has no room for still build a whole scene.
+- **Next:** the swap rule (a cell split where its error would show), and tiles cooked in
+  milliseconds.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

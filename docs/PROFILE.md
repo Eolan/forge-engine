@@ -1358,10 +1358,16 @@ scene.
   to build (the maps upload together, as many to a submission as 16 MiB holds), and the maps take
   341 KB a tile. A swapped-in scene with 317 new maps: 0.58 s, 0.98 with a submission a map.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
-  a new scene takes 0.23–0.39 s on a worker for 400–675 tiles. The longest frame between two
-  swaps is 7.7 ms on average, 14.7 ms at most, against 2 ms uncapped. It reached 23–50 ms while
-  each upload's staging buffer was host memory of its own; staged uploads now go through one
-  buffer of at most 16 MiB (`STAGING_CHUNK` in `crates/forge-gpu/src/memory.rs`).
+  - **Edited in place** (#220): an edit of up to 10 tiles is ready on the worker 11 ms after it
+    is asked for (18 ms at most), the two of 210 and 314 tiles on arriving at a stop 0.30 and
+    0.47 s. The longest frame between changes is 2.4 ms on average; the frames that publish the
+    two large edits 5–10 ms. Its `scene/edit` pass (transfer queue) runs only on the frames
+    that publish an edit: 0.000 ms averaged over the tour's 40 000 frames.
+  - **Whole scenes, before:** a new scene took 0.23–0.65 s on a worker for 400–675 tiles, and
+    the longest frame between two swaps was 7.7–9.4 ms on average, 14.9 ms at most. It reached
+    23–50 ms while each upload's staging buffer was host memory of its own; staged uploads now
+    go through one buffer of at most 16 MiB (`STAGING_CHUNK` in
+    `crates/forge-gpu/src/memory.rs`).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

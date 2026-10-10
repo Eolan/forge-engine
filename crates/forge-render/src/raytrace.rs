@@ -9,6 +9,7 @@
 //! records written from the scene's instance table by a compute pass
 //! (`tlas_instances_main`), since the city places its instances on the GPU.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -173,10 +174,34 @@ pub(crate) fn mesh_cut_at(
     Ok(cut)
 }
 
+/// The push constants' size of `tlas_instances_main` ([`tlas_push`]).
+pub(crate) const TLAS_PUSH_BYTES: u32 = std::mem::size_of::<TlasPush>() as u32;
+
+/// `tlas_instances_main`'s push constants over the `count` first instances of the table at
+/// `instances`, their meshes' structures' addresses at `blas`, into the records at `records`,
+/// the structure in the frame whose zero is `origin` (#220: a dynamic scene's editor's).
+pub(crate) fn tlas_push(
+    instances: u64,
+    blas: u64,
+    records: u64,
+    count: u32,
+    origin: CellPos,
+) -> TlasPush {
+    TlasPush {
+        instances,
+        blas,
+        records,
+        count,
+        first: 0,
+        origin_cell: origin.cell.extend(0).to_array(),
+        origin_local: origin.local.extend(0.0).to_array(),
+    }
+}
+
 /// Mirrors `TlasPush` in `meshlet.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct TlasPush {
+pub(crate) struct TlasPush {
     instances: u64,
     blas: u64,
     records: u64,
@@ -219,10 +244,112 @@ struct GpuRtScene {
     pad: u64,
 }
 
+/// What a dynamic scene's rays reserve room for (#220): its meshes, and their cuts' vertices and
+/// triangles over all of them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RayCapacity {
+    pub meshes: u32,
+    pub vertices: u32,
+    pub triangles: u32,
+}
+
+/// A dynamic scene's ray tables (#220), which a worker writes a new mesh's cut into
+/// ([`write_cut`]) where no frame reads: a mesh's vertices at its first vertex in the positions
+/// and the UVs alike, its triangles at its first triangle in the indices and the sections, its
+/// record and its structure's address at its slot.
+#[derive(Clone)]
+pub(crate) struct RayTables {
+    pub positions: Arc<Buffer>,
+    pub indices: Arc<Buffer>,
+    pub sections: Arc<Buffer>,
+    pub meshes: Arc<Buffer>,
+    pub uvs: Arc<Buffer>,
+    pub blas_addresses: Arc<Buffer>,
+}
+
+/// The writes that put `cut`, mesh slot `mesh`'s, into `tables` from vertex `first_vertex` and
+/// triangle `first_triangle`, with its structure's address `blas` (#220: a worker adding a mesh
+/// to a dynamic scene, into ranges no frame reads): (buffer, byte offset, bytes) for
+/// [`Device::write_buffers_staged`]. Its UVs, when it has them, take the same place as its
+/// vertices.
+pub(crate) fn cut_writes<'a>(
+    tables: &'a RayTables,
+    mesh: u32,
+    cut: &'a Cut,
+    first_vertex: u32,
+    first_triangle: u32,
+    blas: u64,
+) -> Vec<(&'a Buffer, u64, Cow<'a, [u8]>)> {
+    let record = GpuRtMesh {
+        first_vertex,
+        first_triangle,
+        cut_error: cut.error,
+        shadow_start: cut.shadow_start,
+        first_uv: if cut.uvs.is_empty() {
+            NO_UVS
+        } else {
+            first_vertex
+        },
+        pad: [0; 3],
+    };
+    let (v, t) = (u64::from(first_vertex), u64::from(first_triangle));
+    let size = std::mem::size_of::<GpuRtMesh>() as u64;
+    vec![
+        (
+            &*tables.positions,
+            v * 12,
+            Cow::Borrowed(bytemuck::cast_slice(&cut.positions)),
+        ),
+        (
+            &*tables.indices,
+            t * 12,
+            Cow::Borrowed(bytemuck::cast_slice(&cut.indices)),
+        ),
+        (
+            &*tables.sections,
+            t * 4,
+            Cow::Borrowed(bytemuck::cast_slice(&cut.sections)),
+        ),
+        (
+            &*tables.uvs,
+            v * 8,
+            Cow::Borrowed(bytemuck::cast_slice(&cut.uvs)),
+        ),
+        (
+            &*tables.meshes,
+            u64::from(mesh) * size,
+            Cow::Owned(bytemuck::bytes_of(&record).to_vec()),
+        ),
+        (
+            &*tables.blas_addresses,
+            u64::from(mesh) * 8,
+            Cow::Owned(blas.to_ne_bytes().to_vec()),
+        ),
+    ]
+}
+
+/// The cuts' positions: in the frame's graph, where a skin pass rewrites them, or shared with the
+/// worker that writes a dynamic scene's new meshes' (#220), which has no skinned mesh.
+enum HitPositions {
+    Graph(GraphBuffer),
+    Shared(Arc<Buffer>),
+}
+
+impl HitPositions {
+    fn buffer(&self) -> &Buffer {
+        match self {
+            Self::Graph(b) => b,
+            Self::Shared(b) => b,
+        }
+    }
+}
+
 /// The scene's structures.
 pub struct SceneRays {
     /// The static meshes' structures.
     blases: Vec<AccelerationStructure>,
+    /// A dynamic scene's (#220): per mesh slot, its structure and its triangles.
+    slots: Vec<Option<(AccelerationStructure, u64)>>,
     /// The skinned meshes', refitted every frame (#165) and rebuilt every `rebuild_every`
     /// frames, one mesh a frame in turn (#169).
     dynamic: Vec<DynamicBlas>,
@@ -230,19 +357,19 @@ pub struct SceneRays {
     /// Frames the skinned structures were updated in (their rebuilds' turn).
     skin_frames: AtomicU64,
     /// The cuts' positions (three floats a vertex): the skin pass rewrites a skinned mesh's.
-    hit_positions: GraphBuffer,
+    hit_positions: HitPositions,
     /// Per mesh, its first vertex in `hit_positions`.
     first_vertices: Vec<u32>,
     /// The rest of the cuts' geometry for shading hits (held for `hit_record`, which points
     /// into it: indices, then sections, the per-mesh offsets and the UVs), and the record
     /// (`GpuRtScene`).
-    _hit_indices: Buffer,
-    _hit_data: [Buffer; 3],
+    hit_indices: Arc<Buffer>,
+    hit_data: [Arc<Buffer>; 3],
     hit_record: Buffer,
     /// Bytes of the hit data.
     pub hit_bytes: u64,
     /// Per mesh, its bottom-level structure's address (read by the instance pass).
-    blas_addresses: Buffer,
+    blas_addresses: Arc<Buffer>,
     tlas: Option<AccelerationStructure>,
     /// Triangles over the bottom-level structures.
     pub triangles: u64,
@@ -260,10 +387,22 @@ pub struct SceneRays {
 
 impl SceneRays {
     /// Builds one bottom-level structure per cut: a static one, or for a skinned mesh's cut
-    /// ([`Cut::dynamic`]) one refitted every frame over the hit positions.
-    pub(crate) fn new(device: &Arc<Device>, cuts: &[Cut], ms: f64) -> Result<Self> {
+    /// ([`Cut::dynamic`]) one refitted every frame over the hit positions. With `capacity` (a
+    /// dynamic scene, #220, which has no skinned mesh) the tables have room for the meshes it
+    /// will take, each mesh's UVs at its first vertex, and each mesh's structure is kept by its
+    /// slot, to leave with it.
+    pub(crate) fn new(
+        device: &Arc<Device>,
+        cuts: &[Cut],
+        ms: f64,
+        capacity: Option<RayCapacity>,
+    ) -> Result<Self> {
         let start = std::time::Instant::now();
-        let meshes: Vec<BlasTriangles<'_>> = cuts
+        assert!(
+            capacity.is_none() || cuts.iter().all(|c| !c.dynamic),
+            "a dynamic scene has no skinned mesh"
+        );
+        let statics: Vec<BlasTriangles<'_>> = cuts
             .iter()
             .filter(|c| !c.dynamic)
             .map(|c| BlasTriangles {
@@ -271,7 +410,7 @@ impl SceneRays {
                 indices: &c.indices,
             })
             .collect();
-        let blases = device.build_blases(&meshes, "mesh BLAS")?;
+        let blases = device.build_blases(&statics, "mesh BLAS")?;
         // The cuts again, for the shaders: one buffer each, the meshes one after another.
         let mut positions: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
@@ -279,16 +418,22 @@ impl SceneRays {
         let mut uvs: Vec<[f32; 2]> = Vec::new();
         let mut meshes = Vec::with_capacity(cuts.len());
         for c in cuts {
+            let first_vertex = (positions.len() / 3) as u32;
+            let first_uv = match (c.uvs.is_empty(), capacity) {
+                (true, _) => NO_UVS,
+                // A dynamic scene's UVs stand where its vertices do: a mesh's range frees both.
+                (false, Some(_)) => {
+                    uvs.resize(first_vertex as usize, [0.0; 2]);
+                    first_vertex
+                }
+                (false, None) => uvs.len() as u32,
+            };
             meshes.push(GpuRtMesh {
-                first_vertex: (positions.len() / 3) as u32,
+                first_vertex,
                 first_triangle: sections.len() as u32,
                 cut_error: c.error,
                 shadow_start: c.shadow_start,
-                first_uv: if c.uvs.is_empty() {
-                    NO_UVS
-                } else {
-                    uvs.len() as u32
-                },
+                first_uv,
                 pad: [0; 3],
             });
             uvs.extend_from_slice(&c.uvs);
@@ -296,29 +441,64 @@ impl SceneRays {
             indices.extend_from_slice(&c.indices);
             sections.extend_from_slice(&c.sections);
         }
+        let (vertex_room, triangle_room, mesh_room) = match capacity {
+            Some(c) => {
+                let (vertices, triangles) = (positions.len() / 3, sections.len());
+                if vertices > c.vertices as usize
+                    || triangles > c.triangles as usize
+                    || cuts.len() > c.meshes as usize
+                {
+                    return Err(forge_gpu::GpuError::Unsupported(format!(
+                        "the rays' cuts ({} meshes, {vertices} vertices, {triangles} triangles) \
+                         exceed the room reserved ({c:?})",
+                        cuts.len()
+                    )));
+                }
+                (c.vertices as u64, c.triangles as u64, c.meshes as u64)
+            }
+            None => (
+                (positions.len() / 3) as u64,
+                sections.len() as u64,
+                cuts.len() as u64,
+            ),
+        };
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
         // The skinned meshes' structures are built over the positions and indices themselves.
         let input =
             storage | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
-        let hit_positions = GraphBuffer::new(device.create_buffer_with_data(
-            &positions,
+        // A table holding `bytes` with room for `room` bytes in all.
+        let table = |bytes: &[u8], room: u64, usage, name| -> Result<Buffer> {
+            let buffer = device.create_buffer(BufferDesc {
+                size: room.max(bytes.len() as u64).max(4),
+                usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Geometry,
+                name,
+            })?;
+            device.write_buffer_staged(&buffer, 0, bytes)?;
+            Ok(buffer)
+        };
+        let positions_buffer = table(
+            bytemuck::cast_slice(&positions),
+            vertex_room * 12,
             input,
-            MemoryCategory::Geometry,
             "ray hit positions",
-        )?);
-        let hit_indices = device.create_buffer_with_data(
-            &indices,
+        )?;
+        let hit_indices = table(
+            bytemuck::cast_slice(&indices),
+            triangle_room * 12,
             input,
-            MemoryCategory::Geometry,
             "ray hit indices",
         )?;
         let mut dynamic = Vec::new();
-        let mut statics = blases.iter();
+        let mut built = blases.into_iter();
         let mut addresses = Vec::with_capacity(cuts.len());
+        let mut kept = Vec::new();
+        let mut slots = Vec::new();
         for (c, mesh) in cuts.iter().zip(&meshes) {
             if c.dynamic {
                 let blas = device.create_dynamic_blas(
-                    hit_positions.address() + u64::from(mesh.first_vertex) * 12,
+                    positions_buffer.address() + u64::from(mesh.first_vertex) * 12,
                     c.positions.len() as u32,
                     hit_indices.address() + u64::from(mesh.first_triangle) * 12,
                     (c.indices.len() / 3) as u32,
@@ -327,40 +507,50 @@ impl SceneRays {
                 addresses.push(blas.address());
                 dynamic.push(blas);
             } else {
-                let blas = statics.next().expect("a static structure per static cut");
+                let blas = built.next().expect("a static structure per static cut");
                 addresses.push(blas.address());
+                if capacity.is_some() {
+                    slots.push(Some((blas, c.indices.len() as u64 / 3)));
+                } else {
+                    kept.push(blas);
+                }
             }
         }
-        let blas_addresses = device.create_buffer_with_data(
-            &addresses,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryCategory::Geometry,
+        let blases = kept;
+        let blas_addresses = table(
+            bytemuck::cast_slice(&addresses),
+            mesh_room * 8,
+            storage,
             "BLAS addresses",
         )?;
         let hit_data = [
-            device.create_buffer_with_data(
-                &sections,
+            table(
+                bytemuck::cast_slice(&sections),
+                triangle_room * 4,
                 storage,
-                MemoryCategory::Geometry,
                 "ray hit sections",
             )?,
-            device.create_buffer_with_data(
-                &meshes,
+            table(
+                bytemuck::cast_slice(&meshes),
+                mesh_room * std::mem::size_of::<GpuRtMesh>() as u64,
                 storage,
-                MemoryCategory::Geometry,
                 "ray hit meshes",
             )?,
             // At least one: an empty buffer has no address.
-            device.create_buffer_with_data(
-                if uvs.is_empty() { &[[0.0; 2]] } else { &uvs },
+            table(
+                bytemuck::cast_slice(if uvs.is_empty() { &[[0.0; 2]] } else { &uvs }),
+                if capacity.is_some() {
+                    vertex_room * 8
+                } else {
+                    0
+                },
                 storage,
-                MemoryCategory::Geometry,
                 "ray hit UVs",
             )?,
         ];
         let hit_record = device.create_buffer_with_data(
             &[GpuRtScene {
-                positions: hit_positions.address(),
+                positions: positions_buffer.address(),
                 indices: hit_indices.address(),
                 sections: hit_data[0].address(),
                 meshes: hit_data[1].address(),
@@ -371,27 +561,77 @@ impl SceneRays {
             MemoryCategory::Geometry,
             "ray hit record",
         )?;
+        let hit_positions = if capacity.is_some() {
+            HitPositions::Shared(Arc::new(positions_buffer))
+        } else {
+            HitPositions::Graph(GraphBuffer::new(positions_buffer))
+        };
         Ok(Self {
-            hit_bytes: hit_positions.size()
+            hit_bytes: hit_positions.buffer().size()
                 + hit_indices.size()
-                + hit_data.iter().map(Buffer::size).sum::<u64>(),
+                + hit_data.iter().map(|b| b.size()).sum::<u64>(),
             first_vertices: meshes.iter().map(|m| m.first_vertex).collect(),
             hit_positions,
-            _hit_data: hit_data,
-            _hit_indices: hit_indices,
+            hit_data: hit_data.map(Arc::new),
+            hit_indices: Arc::new(hit_indices),
             hit_record,
             triangles: cuts.iter().map(|c| c.indices.len() as u64 / 3).sum(),
             max_cut_error: cuts.iter().map(|c| c.error).fold(0.0, f32::max),
             blases,
+            slots,
             dynamic,
             rebuild_every: rebuild_every(),
             skin_frames: AtomicU64::new(0),
-            blas_addresses,
+            blas_addresses: Arc::new(blas_addresses),
             tlas: None,
             blas_ms: ms + start.elapsed().as_secs_f64() * 1e3,
             tlas_ms: 0.0,
             movers: None,
         })
+    }
+
+    /// A dynamic scene's tables (#220), for the worker that writes its new meshes' cuts;
+    /// `None` for a scene built whole.
+    pub(crate) fn tables(&self) -> Option<RayTables> {
+        let HitPositions::Shared(positions) = &self.hit_positions else {
+            return None;
+        };
+        Some(RayTables {
+            positions: Arc::clone(positions),
+            indices: Arc::clone(&self.hit_indices),
+            sections: Arc::clone(&self.hit_data[0]),
+            meshes: Arc::clone(&self.hit_data[1]),
+            uvs: Arc::clone(&self.hit_data[2]),
+            blas_addresses: Arc::clone(&self.blas_addresses),
+        })
+    }
+
+    /// A dynamic scene's new mesh's structure (#220), over `triangles` triangles, kept by its
+    /// slot `mesh` until it leaves ([`SceneRays::take_blas`]).
+    pub(crate) fn set_blas(&mut self, mesh: u32, blas: AccelerationStructure, triangles: u64) {
+        let slot = mesh as usize;
+        if self.slots.len() <= slot {
+            self.slots.resize_with(slot + 1, || None);
+        }
+        self.triangles += triangles;
+        self.slots[slot] = Some((blas, triangles));
+    }
+
+    /// A dynamic scene's leaving mesh's structure (#220).
+    pub(crate) fn take_blas(&mut self, mesh: u32) -> Option<AccelerationStructure> {
+        let (blas, triangles) = self.slots.get_mut(mesh as usize)?.take()?;
+        self.triangles -= triangles;
+        Some(blas)
+    }
+
+    /// Puts `tlas` in the place of the top-level structure (#220: a dynamic scene's, which its
+    /// worker built over the instances an edit leaves) and returns the one it replaces, which the
+    /// frames in flight still trace.
+    pub(crate) fn replace_tlas(
+        &mut self,
+        tlas: AccelerationStructure,
+    ) -> Option<AccelerationStructure> {
+        self.tlas.replace(tlas)
     }
 
     /// Makes the movers' structure (#79) for `count` of them: a top-level structure of its own
@@ -420,7 +660,10 @@ impl SceneRays {
 
     /// The cuts' positions, which the skin pass rewrites for the skinned meshes (#165).
     pub(crate) fn hit_positions(&self) -> &GraphBuffer {
-        &self.hit_positions
+        match &self.hit_positions {
+            HitPositions::Graph(b) => b,
+            HitPositions::Shared(_) => unreachable!("a dynamic scene has no skinned mesh"),
+        }
     }
 
     /// Mesh `mesh`'s first vertex in [`SceneRays::hit_positions`].
@@ -605,6 +848,7 @@ impl SceneRays {
     pub fn bytes(&self) -> u64 {
         self.blases
             .iter()
+            .chain(self.slots.iter().flatten().map(|(b, _)| b))
             .map(AccelerationStructure::size)
             .sum::<u64>()
             + self.dynamic.iter().map(DynamicBlas::size).sum::<u64>()

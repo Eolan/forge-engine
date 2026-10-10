@@ -30,8 +30,9 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | `--stars STOPS` | the stars' brightness: a map value of 1 at 2^STOPS cd/m² (12) |
 | `--radius KM`, `--seed N` | over the world's |
 | `--tour`, `--tour-stop N` | flies the world's tour, or holds its stop N |
-| `--check-swaps DIR` | holds still at each swap of the tiles and saves the frames before and after it, for `tools/swap-check.sh` |
-| `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B) |
+| `--check-swaps DIR` | holds still at each change of the tiles and saves the frames before and after it, for `tools/swap-check.sh` |
+| `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B); its scenes are built whole |
+| `--edited` | reaches the first scene by an edit in place, from a coarser cut (the A/B against the scene built whole) |
 
 ## How it is made
 
@@ -133,43 +134,62 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
     lowest 40 km. On an airless body it draws the sun's disc too. The map is made for display (its
     bright stars clipped), so the stars carry no photometry: at sunny 16 they are faint dots,
     where an eye beside a sunlit body would see none, and `--stars` sets them.
-- **Shadows:** the sun's rays against each level's tiles cut as one surface (120 000 triangles a
-  level). Every tile is ground to the rays (`set_ray_terrain`), so the finest tiles' shadows
-  start clear of the rays' cut, as the island's do.
+- **Shadows:** the sun's rays against each tile cut on its own, to at most 4 000 triangles
+  (`set_ray_budget`), so that a tile added in place is cut as in a scene built whole, whichever
+  tiles stand beside it. Every tile is ground to the rays (`set_ray_terrain`), so the finest
+  tiles' shadows start clear of the rays' cut, as the island's do. Until #220's in-place scene
+  each level's tiles were cut as one surface (120 000 triangles a level), which a tile coming or
+  going changes for its whole level.
 
 ## The tiles as the camera flies
 
 The cut follows the camera (`demos/planet/src/stream.rs`). Every frame the demo works out the cut
-around where the camera will be once a new scene is ready (the last scene's build time ahead, on
-the tour and the descent) and where the run heads. When that cut is finer somewhere than the one
-drawn, or the one drawn holds half as many tiles again, a worker builds its scene:
+around where the camera will be once a change is ready (the last one's latency ahead, on the
+tour and the descent) and where the run heads. When that cut is finer somewhere than the one
+drawn, or the one drawn holds half as many tiles again, a worker makes it:
 - **The tiles:** it keeps those of the scene drawn, loads the ones it lacks from the cache, or
   makes and cooks them on a quarter of the hardware threads (half the cores), so the frames keep
   theirs.
-- **The scene:** it builds a whole one, with its tables, its rays' structures and the pages its
-  first view wants.
-- **The swap:** the demo swaps it in at the start of a frame, and the old one goes to the frames'
-  deferred deletion, freed once no frame in flight reads it. The tiles keep their places in the
-  world, so TAA keeps its history and the sky stays the same.
+- **In place** (`forge_render::SceneEditor`, #220): the worker removes from the drawn scene the
+  tiles the new cut drops and adds the ones it brings. A new tile's cluster records, its record
+  and its rays' cut go into free ranges of the scene's tables, which no frame reads; its
+  structure is built on the compute queue; its root pages and the pages its first view wants are
+  read; the next top-level structure is built over the tiles the edit leaves. The demo takes the
+  edit in at the start of a frame (`MeshletScene::apply`): that frame's `scene/edit` pass copies
+  the pages, their page-table entries and the tiles' records before the culls, and a removed
+  tile's slot reads as vacant. What a removed tile held (its pages, its ranges, its structure,
+  its normal map) is freed three frames later, once no frame reads it.
+- **Whole:** the first scene, a scene with every page resident (`--resident`), and a cut whose
+  tiles an edit would not find room for are built whole and swapped in, the old scene freed once
+  no frame in flight reads it. The tiles keep their places in the world either way, so TAA
+  keeps its history and the sky stays the same.
 
-A cut that would only coarsen waits for the next one that refines: finer tiles where they are no
-longer needed cost little. The tour asks for its next stop's tiles while it holds at the one
-before, so they are there when it arrives. They are made once, then loaded from the cache.
+The scene reserves room for twice the first cut's tiles, a thousand at least, each with as many
+clusters as its largest tile and twice its pages, and their rays' cuts. On the Earth's tour this
+holds 1.20 GiB of geometry against 0.95 GiB for the whole scenes, and the uploads fall from 249
+to 23 KiB a frame on average. A cut that would only coarsen waits for the next one that refines:
+finer tiles where they are no longer needed cost little. The tour asks for its next stop's tiles
+while it holds at the one before, so they are there when it arrives. They are made once, then
+loaded from the cache.
 
-| The Earth's tour, uncapped (2026-10-10) | Tiles | A new scene | Swaps |
+| The Earth's tour, uncapped (2026-10-10) | Changes | Ask to ready | Longest frame between changes |
 |---|---|---|---|
-| The Alps from 400 km, then on to Corsica | 204 | none: the cut only coarsens | 0 |
-| Corsica to Mont Blanc (17 s) | 393–423 | 0.23–0.25 s | 24 |
-| Over Mont Blanc, then towards Èze | 525–675 | 0.37–0.39 s | 29 in its first 20 s |
+| Whole scenes, before #220's edits in place | 17 | 0.39 s on average, 0.65 s at most | 9.4 ms on average, 14.9 ms at most |
+| In place, up to 10 tiles added (68 of 74) | 74 | 11 ms on average, 18 ms at most | 2.4 ms on average |
+| In place, arriving over Corsica (210 tiles added) and Mont Blanc (314) | | 0.30 and 0.47 s | 5–10 ms for the frame that publishes them |
 
 - **A tile not in the cache** adds 0.26 s on a worker thread. The tour's tiles are made once.
 - **The first scene,** behind the loading screen: 0.15 s for 204 tiles.
-- **A swap's cost to the frames:** the longest frame between two swaps is 7.7 ms on average over
-  28 swaps, 14.7 ms at most, against 2 ms uncapped; frames of 6–8 ms come without swaps too.
-  A new scene uploads 50–300 MB (its clusters' table, its tiles' root pages, the pages of its
-  first view).
-  - **Before the fix** these frames reached 23–50 ms, in proportion to the upload. A Tracy
-    capture showed the GPU idle after a present while the CPU waited for its frame slot.
+- **One frame of 22.5 ms** came on the way to Mont Blanc with an edit of 7 tiles, unexplained;
+  frames of 6–8 ms come without changes too.
+- **The A/B:** `--edited` builds the ground shot's scene from a coarser cut (each finest tile's
+  parent in its place) and edits it in place to the shot's cut before the first frame: 52 tiles
+  added, 13 removed. Its image matches the scene built whole, 0 pixels apart (`tools/compare.sh`'s
+  pair "edited in place against built whole").
+- **A whole scene's cost to the frames,** before the edits: a new scene uploaded 50–300 MB (its
+  clusters' table, its tiles' root pages, the pages of its first view).
+  - **Before the staging fix** those frames reached 23–50 ms, in proportion to the upload. A
+    Tracy capture showed the GPU idle after a present while the CPU waited for its frame slot.
   - **The cause:** each upload's staging buffer, larger than the allocator's blocks, was host
     memory of its own, allocated and freed every time.
   - **The fix:** staged uploads (`Device::write_buffer_staged`) now go through one buffer of at
@@ -177,13 +197,20 @@ before, so they are there when it arrives. They are made once, then loaded from 
   - **No difference:** the pool's size, the rays' structures (`--no-shadows`) and the queue the
     copies took.
 
-**Checking the swaps** (D-056's swap rule): `planet --check-swaps DIR` holds the camera still at
-each swap. It saves the frame before it and the frame after, a whole number of TAA's jitter
-periods apart, once each has settled. `tools/swap-check.sh DIR` compares the two with ꟻLIP
-against D-017's class 2.
-- **The tour at a fixed step:** 14 swaps, every mean between 0.0002 and 0.0027, far under 0.02.
-  11 swaps peak under 0.15.
-- **Three peak at 0.15–0.24** on a patch rather than isolated pixels: the snow's shading on the
+**Checking the changes** (D-056's swap rule): `planet --check-swaps DIR` holds the camera still at
+each change of the tiles. It saves the frame before it and the frame after, a whole number of
+TAA's jitter periods apart, once each has settled. `tools/swap-check.sh DIR` compares the two
+with ꟻLIP against D-017's class 2.
+- **In place, the tour at a fixed step:** 43 changes, every mean under 0.0066, far under 0.02;
+  31 peak under 0.15. Twelve peak at 0.21–0.70 on the patch of a tile that splits under the
+  camera, over Mont Blanc and on the way to Èze. Without shadows the same twelve peak at
+  0.21–0.47: most of it is the split itself (the coarse parent's depth and ambient occlusion
+  giving way to its children's), the rest the children's finer cut for the rays. An edit draws
+  what a scene built whole draws (the A/B above), so a split shows the same either way; the
+  edits are only sampled four times as often, each smaller.
+- **Whole scenes, before:** 14 swaps, every mean between 0.0002 and 0.0027. 11 swaps peaked under
+  0.15.
+- **Three peaked at 0.15–0.24** on a patch rather than isolated pixels: the snow's shading on the
   slopes near the camera over Mont Blanc, up to 30 levels, as one cell gives way to its four
   children. Side by side the two frames look alike, but such a patch would show as a faint pop.
   The swap rule, splitting a cell where its error would show rather than at a distance, is the
@@ -221,6 +248,22 @@ What the engine gained for it:
 - **The frame's per-instance transients** (the instance culls' status words, the deferred
   instances) are sized for the instances rounded up to 1 024. A scene a few tiles larger or
   smaller keeps the graph's layout, where before the 46 MB heap was laid out again at every swap.
+- **The scene that takes and frees meshes in place** (`crates/forge-render/src/meshlet/dynamic.rs`):
+  - `MeshletSceneBuilder::reserve_dynamic` makes the tables at a capacity; a shared room hands
+    out their free ranges, first fit;
+  - `MeshletScene::editor` gives the worker's side, `SceneEditor` (`add_mesh`,
+    `add_instance_at`, `keep`, `remove_instance`, `remove_mesh`, `finish`);
+  - `MeshletScene::apply` takes an edit in; the next frame's start publishes it, and its
+    `scene/edit` pass (transfer queue) copies its pages, page-table entries and instance records;
+  - an instance slot no instance holds is vacant (`INSTANCE_VACANT`): the culls skip it and its
+    record in the top-level structure is inactive;
+  - the streamer's pages come and go (`PageStreamer::apply`, `release`): a new mesh's roots are
+    pinned over the least needed pages, and a page number's generation tells a read still in
+    flight for a released page from one for the mesh that took its number since.
+- **`MeshletSceneBuilder::set_ray_budget`** cuts each mesh for the rays on its own budget;
+  **`keep_for`** keeps an item alive with one instance.
+- **`Device::write_buffers_staged`** writes several tables through one staging buffer and one
+  submission; **`Device::execute_compute_once_on`** runs a one-shot dispatch on the compute queue.
 
 ## The tiles' normal maps
 
@@ -308,9 +351,16 @@ air is a rim of blue light at its limb.
 
 ## Left for later (#220 and D-056's steps)
 
-- **A scene that takes and frees tiles in place,** rather than a whole scene built again for each
-  new cut, with the stall that brings. Also a tile cooked in milliseconds rather than a quarter of
-  a second (a regular grid's DAG built directly).
+- **A tile cooked in milliseconds** rather than a quarter of a second (a regular grid's DAG built
+  directly): with the scene edited in place, cooking is what a new tile not in the cache waits
+  for.
+- **The splits under the camera** still show on a patch (`--check-swaps`: 12 of 43 changes peak
+  at 0.21–0.70): the coarse parent's depth and ambient occlusion giving way to its children's.
+  The swap rule (a cell split where its error would show, not at a distance) is the remedy to
+  come.
+- **The room's ranges** are taken first fit and leave gaps as tiles come and go: the page numbers
+  in use reached 37 000 for about 26 000 pages on the tour, and the needs read back every frame
+  cover them all (149 KiB).
 - **Clouds for the Earth seen from afar,** as the Moon and orbit see it.
 - **Outside the tour's region the land is ETOPO's,** 1.85 km samples with smooth noise under
   them: rolling hills from a few kilometres up. More regions of the Copernicus DEM go the same

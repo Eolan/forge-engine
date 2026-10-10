@@ -1,19 +1,22 @@
 //! The planet's tiles as the camera flies (#220): the cut made again around where the camera is
-//! going, its scene built on a worker and swapped in at a frame's start.
+//! going, and the drawn scene edited in place to it, on a worker.
 //!
 //! - **The cut** follows the points the demo gives ([`PlanetWorld::tile_cut_around`]): the
-//!   camera where it will be when the scene is ready, and the place it is heading for (the tour's
-//!   next stop, the descent's target), so a stop's tiles are made before the camera gets there.
-//! - **The worker** keeps the meshes of the last cut it built; a new cut reuses them and cooks or
-//!   loads the tiles it lacks from the cache, on a pool of half the cores, so the frames keep
-//!   theirs. It then builds a whole scene: its tables, its rays' structures and the pages its
-//!   start view wants, through the device's own one-shot submits.
-//! - **The swap:** the new scene takes over at the start of a frame and the old one goes to the
-//!   frames' deferred deletion, freed once no frame in flight reads it. The tiles keep their
-//!   places in the world, so nothing else changes: no TAA reset, the same sky.
+//!   camera where it will be when the change is ready, and the place it is heading for (the
+//!   tour's next stop, the descent's target), so a stop's tiles are made before the camera gets
+//!   there.
+//! - **The worker** keeps the tiles of the drawn cut; a new cut reuses them and cooks or loads
+//!   the tiles it lacks from the cache, on a pool of a quarter of the hardware threads, so the
+//!   frames keep theirs.
+//! - **In place** (a streamed scene, [`forge_render::SceneEditor`]): the worker removes the
+//!   tiles the new cut drops and adds the ones it brings, each with its own cut for the rays,
+//!   its structure, its normal map and the pages its first view wants; the frame takes the edit
+//!   in at its start ([`MeshletScene::apply`]). Nothing else changes: no TAA reset, the same sky.
+//! - **Whole:** the first scene, a scene with every page resident (`--resident`), and a scene
+//!   whose room an edit would overflow are built whole and swapped in, the old one freed once no
+//!   frame in flight reads it.
 //!
-//! A scene rebuilt whole costs about a second (`docs/demos/planet.md` has the numbers); the
-//! renderer taking and freeing meshes at run time is the step after.
+//! `docs/demos/planet.md` has the numbers.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, mpsc};
@@ -27,7 +30,10 @@ use forge_gpu::{Device, ShaderCompiler};
 use forge_render::material::GpuMaterial;
 use forge_render::material::{TextureSet, upload_textures};
 use forge_render::textures::TextureData;
-use forge_render::{CellPos, MeshletScene, MeshletSceneBuilder, Residency, StartView};
+use forge_render::{
+    CellPos, DynamicCapacity, MeshId, MeshRays, MeshletScene, MeshletSceneBuilder, Residency,
+    SceneEdit, SceneEditor, StartView,
+};
 use forge_task::{PoolConfig, TaskPool};
 use forge_terrain::Planet;
 use forge_terrain::planet::{
@@ -36,6 +42,13 @@ use forge_terrain::planet::{
 use forge_world::CellId;
 
 use crate::Placement;
+
+/// Triangles of a tile's cut for the rays. Each tile is cut on its own, so that a tile added in
+/// place is cut as in a scene built whole, whichever tiles stand beside it.
+const TILE_RAY_BUDGET: u32 = 4_000;
+
+/// Tiles a scene has room for at least: the tour's cuts hold up to about 700.
+const TILE_ROOM: usize = 1_024;
 
 /// What every scene of the run is built from.
 #[derive(Clone)]
@@ -51,6 +64,13 @@ pub(crate) struct SceneParts {
     /// Whether the scenes have rays (the sun's shadows).
     pub ray_traced: bool,
     pub residency: Residency,
+}
+
+impl SceneParts {
+    /// Whether the scenes are edited in place: when they stream their pages.
+    pub(crate) fn in_place(&self) -> bool {
+        matches!(self.residency, Residency::Streamed(_))
+    }
 }
 
 /// Where a tile of a new cut came from.
@@ -75,8 +95,8 @@ enum NormalMap {
     Texture(Arc<TileTexture>),
 }
 
-/// A tile's normal map on the GPU: a texture set of its own, which every scene drawing the tile
-/// keeps alive ([`MeshletSceneBuilder::keep`]).
+/// A tile's normal map on the GPU: a texture set of its own, which the scenes drawing the tile
+/// keep alive as long as its instance stands in them.
 pub(crate) struct TileTexture {
     _set: TextureSet,
     sampled: u32,
@@ -147,18 +167,14 @@ pub(crate) fn cook_cells(
     (tiles, cooked, loaded)
 }
 
-/// The scene of `cells` (their tiles in `tiles`, in the same order), its pages for `start`
-/// loaded when it streams them. The tiles' normal maps not on the GPU yet go there.
-pub(crate) fn build_scene(
+/// Puts the normal maps of `tiles` (the tiles of `cells`) not on the GPU yet there, together: a
+/// few submissions, not one a map.
+fn upload_normal_maps(
     device: &Arc<Device>,
-    shaders: &ShaderCompiler,
     parts: &SceneParts,
     cells: &[CellId],
     tiles: &mut [Tile],
-    start: StartView,
-) -> Result<MeshletScene> {
-    let world = &parts.planet.world;
-    // The new tiles' normal maps, uploaded together: a few submissions, not one a map.
+) -> Result<()> {
     let new: Vec<usize> = tiles
         .iter()
         .enumerate()
@@ -186,34 +202,60 @@ pub(crate) fn build_scene(
         let sampled = set.sampled(id);
         tiles[i].normals = NormalMap::Texture(Arc::new(TileTexture { _set: set, sampled }));
     }
+    Ok(())
+}
+
+/// The room a scene reserves for tiles like `tiles`: twice as many tiles as they are, a
+/// thousand at least, each with as many clusters as the largest of them and twice its pages
+/// (page numbers cost a few bytes each, and tiles coming and going leave gaps between those in
+/// use), and its rays' cut.
+pub(crate) fn capacity_for(tiles: &[Tile]) -> DynamicCapacity {
+    let room = (2 * tiles.len()).max(TILE_ROOM) as u32;
+    let largest =
+        |size: fn(&MeshletMesh) -> u32| tiles.iter().map(|t| size(&t.mesh)).max().unwrap_or(0);
+    DynamicCapacity {
+        meshes: room,
+        instances: room,
+        meshlets: room * largest(|m| m.meshlets.len() as u32),
+        pages: 2 * room * largest(|m| m.page_count),
+        // A cut's vertices are about as many as its triangles; twice for room.
+        ray_vertices: room * 2 * TILE_RAY_BUDGET,
+        ray_triangles: room * TILE_RAY_BUDGET,
+    }
+}
+
+/// The scene of `cells` (their tiles in `tiles`, in the same order), its pages for `start`
+/// loaded when it streams them, with room for `capacity` when it is to be edited in place. The
+/// tiles' normal maps not on the GPU yet go there.
+pub(crate) fn build_scene(
+    device: &Arc<Device>,
+    shaders: &ShaderCompiler,
+    parts: &SceneParts,
+    cells: &[CellId],
+    tiles: &mut [Tile],
+    start: StartView,
+    capacity: Option<DynamicCapacity>,
+) -> Result<MeshletScene> {
+    let world = &parts.planet.world;
+    upload_normal_maps(device, parts, cells, tiles)?;
     let mut builder = MeshletSceneBuilder::new();
     builder.set_material_rows(parts.rows.clone());
     builder.set_ray_traced(parts.ray_traced);
-    let ids: Vec<_> = tiles.iter().map(|t| builder.add_mesh(&t.mesh)).collect();
-    // Every tile is ground to the rays, the finest under a kilometre across too.
-    builder.set_ray_terrain(&ids);
-    // The rays cut each level's tiles as one surface: a tile far from the camera is coarse
-    // anyway, and its level's budget keeps the structures bounded: 120 000 triangles for every
-    // 48 tiles or fewer, the most a level holds around one point.
-    for level in 0..=world.tiles.finest {
-        let members: Vec<_> = cells
-            .iter()
-            .zip(&ids)
-            .filter(|(c, _)| c.level() == level)
-            .map(|(_, &id)| id)
-            .collect();
-        if !members.is_empty() {
-            let budget = 120_000 * members.len().div_ceil(48) as u32;
-            builder.set_ray_group(&members, budget);
-        }
+    if let Some(capacity) = capacity {
+        builder.reserve_dynamic(capacity);
     }
+    let ids: Vec<_> = tiles.iter().map(|t| builder.add_mesh(&t.mesh)).collect();
+    // Every tile is ground to the rays, the finest under a kilometre across too, each cut on its
+    // own (`TILE_RAY_BUDGET`).
+    builder.set_ray_terrain(&ids);
+    builder.set_ray_budget(&ids, TILE_RAY_BUDGET);
     let rotation = parts.placement.rotation.as_quat();
     for (i, ((&cell, &id), tile)) in cells.iter().zip(&ids).zip(tiles.iter()).enumerate() {
         let at = parts.placement.world_point(tile_origin(world, cell));
         builder.add_instance_at(id, CellPos::from_f64(at), rotation, 1.0, parts.ground);
         if let NormalMap::Texture(texture) = &tile.normals {
             builder.set_instance_texture(i, texture.sampled);
-            builder.keep(Arc::clone(texture));
+            builder.keep_for(i, Arc::clone(texture));
         }
     }
     // A streamed scene loads its start view's pages before its first frame (#121): the shots'
@@ -234,10 +276,94 @@ pub(crate) fn build_scene(
     Ok(scene)
 }
 
+/// A tile standing in the drawn scene, as the worker knows it.
+pub(crate) struct LiveTile {
+    tile: Tile,
+    mesh: MeshId,
+    instance: u32,
+}
+
+/// The tiles of a scene built whole from `cells` (their tiles `tiles`): mesh and instance `i`
+/// the tile of `cells[i]`.
+pub(crate) fn live_tiles(cells: &[CellId], tiles: Vec<Tile>) -> HashMap<CellId, LiveTile> {
+    cells
+        .iter()
+        .zip(tiles)
+        .enumerate()
+        .map(|(i, (&cell, tile))| {
+            (
+                cell,
+                LiveTile {
+                    tile,
+                    mesh: MeshId::from_index(i as u32),
+                    instance: i as u32,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Edits the scene `editor` draws, whose tiles are `live`, to the cut `cells` (their tiles
+/// `tiles`, in the same order): the tiles it drops removed, the ones it brings added with the
+/// pages `start` wants of them. `live` follows. Returns the edit and how many tiles it adds and
+/// removes.
+pub(crate) fn edit_scene(
+    device: &Arc<Device>,
+    parts: &SceneParts,
+    editor: &mut SceneEditor,
+    live: &mut HashMap<CellId, LiveTile>,
+    cells: &[CellId],
+    tiles: &[Tile],
+    start: &StartView,
+) -> Result<(SceneEdit, usize, usize)> {
+    let world = &parts.planet.world;
+    let wanted: HashSet<CellId> = cells.iter().copied().collect();
+    let mut removed = 0;
+    live.retain(|cell, tile| {
+        let keep = wanted.contains(cell);
+        if !keep {
+            editor.remove_instance(tile.instance);
+            editor.remove_mesh(tile.mesh);
+            removed += 1;
+        }
+        keep
+    });
+    let new: Vec<usize> = (0..cells.len())
+        .filter(|&i| !live.contains_key(&cells[i]))
+        .collect();
+    let new_cells: Vec<CellId> = new.iter().map(|&i| cells[i]).collect();
+    let mut new_tiles: Vec<Tile> = new.iter().map(|&i| tiles[i].clone()).collect();
+    upload_normal_maps(device, parts, &new_cells, &mut new_tiles)?;
+    let rotation = parts.placement.rotation.as_quat();
+    let rays = MeshRays {
+        budget: TILE_RAY_BUDGET,
+        terrain: true,
+    };
+    for (&cell, tile) in new_cells.iter().zip(new_tiles) {
+        let mesh = editor.add_mesh(&tile.mesh, rays)?;
+        let at = parts.placement.world_point(tile_origin(world, cell));
+        let instance =
+            editor.add_instance_at(mesh, CellPos::from_f64(at), rotation, 1.0, parts.ground)?;
+        if let NormalMap::Texture(texture) = &tile.normals {
+            editor.set_instance_texture(instance, texture.sampled);
+            editor.keep(instance, Arc::clone(texture));
+        }
+        live.insert(
+            cell,
+            LiveTile {
+                tile,
+                mesh,
+                instance,
+            },
+        );
+    }
+    let edit = editor.finish(Some(start))?;
+    Ok((edit, new_cells.len(), removed))
+}
+
 /// Whether the drawn cut `current` should give way to `wanted`: somewhere it is coarser, or it
 /// holds half as many tiles again. Finer tiles where they are no longer needed cost little (their
-/// DAGs coarsen with distance), so a cut that would only coarsen waits for the next that refines:
-/// fewer scenes built, each a few frames' work for the GPU.
+/// DAGs coarsen with distance), so a cut that would only coarsen waits for the next that refines.
 pub(crate) fn needs_new_cut(current: &[CellId], wanted: &[CellId]) -> bool {
     if current == wanted {
         return false;
@@ -259,53 +385,74 @@ pub(crate) fn needs_new_cut(current: &[CellId], wanted: &[CellId]) -> bool {
     })
 }
 
-/// A scene the worker built.
+/// What the worker made of a new cut: a scene built whole, or an edit of the drawn one.
+pub(crate) enum Change {
+    Scene(Box<MeshletScene>),
+    Edit {
+        edit: Box<SceneEdit>,
+        added: usize,
+        removed: usize,
+    },
+}
+
+/// A new cut the worker made ready.
 pub(crate) struct Built {
-    pub scene: MeshletScene,
+    pub change: Change,
     pub cells: Vec<CellId>,
     /// Tiles cooked and loaded from the cache for it; the rest it kept from the scene before.
     pub cooked: usize,
     pub loaded: usize,
-    /// Seconds from the ask to the scene ready, and of them the tiles' and the scene's.
+    /// Seconds from the ask to the change ready, and of them the tiles' and the change's.
     pub seconds: f64,
     pub cook_seconds: f64,
     pub build_seconds: f64,
 }
 
-/// A cut to build, and the view its pages are loaded for.
+/// A cut to make, and the view its pages are loaded for.
 struct Request {
     cells: Vec<CellId>,
     start: StartView,
     asked: Instant,
+    /// Build the scene whole, whatever the room: the drawn scene refused the last edit.
+    whole: bool,
 }
 
-/// The worker that builds the scenes of new cuts (see the module notes).
+/// The worker that makes the new cuts (see the module notes).
 pub(crate) struct TileStream {
     requests: Option<mpsc::Sender<Request>>,
     built: mpsc::Receiver<Result<Built>>,
     worker: Option<thread::JoinHandle<()>>,
-    /// The cut of the scene drawn, and the one being built.
+    /// The cut of the scene drawn, and the one being made.
     pub current: Vec<CellId>,
     pending: Option<Vec<CellId>>,
-    /// How long the last scene took, seconds: how far ahead to ask for the next.
+    /// The next ask builds the scene whole.
+    whole: bool,
+    /// How long the last change took, seconds: how far ahead to ask for the next.
     pub latency: f64,
-    /// Scenes swapped in so far.
+    /// Changes taken in so far.
     pub swaps: u32,
 }
 
+/// The worker's state: the drawn scene's editor (a scene edited in place), and its tiles.
+struct WorkerScene {
+    editor: Option<SceneEditor>,
+    live: HashMap<CellId, LiveTile>,
+}
+
 impl TileStream {
-    /// Starts the worker, which holds the tiles `tiles` of the drawn scene's cut `cells`.
+    /// Starts the worker, which holds the tiles `live` of the drawn scene and its `editor` (one
+    /// edited in place).
     pub fn new(
         device: Arc<Device>,
         shaders: ShaderCompiler,
         parts: SceneParts,
-        cells: Vec<CellId>,
-        tiles: Vec<Tile>,
+        current: Vec<CellId>,
+        live: HashMap<CellId, LiveTile>,
+        editor: Option<SceneEditor>,
         latency: f64,
     ) -> Result<Self> {
         let (requests, asked) = mpsc::channel::<Request>();
         let (done, built) = mpsc::channel::<Result<Built>>();
-        let current = cells.clone();
         let worker = thread::Builder::new()
             .name("planet tiles".into())
             .spawn(move || {
@@ -317,42 +464,15 @@ impl TileStream {
                     thread_name: "planet-tile".to_owned(),
                     ..PoolConfig::with_workers(workers)
                 });
-                let mut have: HashMap<CellId, Tile> = cells.into_iter().zip(tiles).collect();
+                let mut drawn = WorkerScene { editor, live };
                 while let Ok(mut request) = asked.recv() {
                     // Only the latest ask counts.
                     while let Ok(newer) = asked.try_recv() {
-                        request = newer;
+                        request.whole |= newer.whole;
+                        request.cells = newer.cells;
+                        request.start = newer.start;
                     }
-                    let result = (|| {
-                        let started = Instant::now();
-                        let (mut tiles, cooked, loaded) = cook_cells(
-                            &parts.planet,
-                            &parts.body,
-                            matches!(parts.residency, Residency::All),
-                            &request.cells,
-                            &have,
-                            &pool,
-                        );
-                        let cook_seconds = started.elapsed().as_secs_f64();
-                        let scene = build_scene(
-                            &device,
-                            &shaders,
-                            &parts,
-                            &request.cells,
-                            &mut tiles,
-                            request.start,
-                        )?;
-                        have = request.cells.iter().copied().zip(tiles).collect();
-                        Ok(Built {
-                            scene,
-                            cells: request.cells,
-                            cooked,
-                            loaded,
-                            seconds: request.asked.elapsed().as_secs_f64(),
-                            cook_seconds,
-                            build_seconds: started.elapsed().as_secs_f64() - cook_seconds,
-                        })
-                    })();
+                    let result = make_cut(&device, &shaders, &parts, &pool, &mut drawn, request);
                     if done.send(result).is_err() {
                         break;
                     }
@@ -364,13 +484,14 @@ impl TileStream {
             worker: Some(worker),
             current,
             pending: None,
+            whole: false,
             latency,
             swaps: 0,
         })
     }
 
-    /// Asks for the scene of `cells`, its pages loaded for `start`, unless it is the drawn one's
-    /// cut or a scene is being built (the next ask after it lands then counts).
+    /// Asks for the cut `cells`, its pages loaded for `start`, unless it is the drawn one or a
+    /// cut is being made (the next ask after it lands then counts).
     pub fn ask(&mut self, cells: Vec<CellId>, start: StartView) {
         if self.pending.is_some() || cells == self.current {
             return;
@@ -381,11 +502,19 @@ impl TileStream {
                 cells,
                 start,
                 asked: Instant::now(),
+                whole: std::mem::take(&mut self.whole),
             });
         }
     }
 
-    /// The scene built since the last call, if one is ready.
+    /// Has the next ask build its scene whole: the drawn scene refused an edit, after which the
+    /// worker's view of it is wrong.
+    pub fn rebuild(&mut self) {
+        self.whole = true;
+        self.current.clear();
+    }
+
+    /// The change made since the last call, if one is ready.
     pub fn take(&mut self) -> Option<Result<Built>> {
         let result = self.built.try_recv().ok()?;
         self.pending = None;
@@ -396,6 +525,80 @@ impl TileStream {
         }
         Some(result)
     }
+}
+
+/// The worker's answer to `request`: an edit of the drawn scene when it is edited in place and
+/// the edit fits, its scene built whole otherwise.
+fn make_cut(
+    device: &Arc<Device>,
+    shaders: &ShaderCompiler,
+    parts: &SceneParts,
+    pool: &TaskPool,
+    drawn: &mut WorkerScene,
+    request: Request,
+) -> Result<Built> {
+    let started = Instant::now();
+    let have: HashMap<CellId, Tile> = drawn
+        .live
+        .iter()
+        .map(|(&cell, live)| (cell, live.tile.clone()))
+        .collect();
+    let (tiles, cooked, loaded) = cook_cells(
+        &parts.planet,
+        &parts.body,
+        !parts.in_place(),
+        &request.cells,
+        &have,
+        pool,
+    );
+    drop(have);
+    let cook_seconds = started.elapsed().as_secs_f64();
+    let built = |change| Built {
+        change,
+        cells: request.cells.clone(),
+        cooked,
+        loaded,
+        seconds: request.asked.elapsed().as_secs_f64(),
+        cook_seconds,
+        build_seconds: started.elapsed().as_secs_f64() - cook_seconds,
+    };
+    if let (Some(editor), false) = (drawn.editor.as_mut(), request.whole) {
+        match edit_scene(
+            device,
+            parts,
+            editor,
+            &mut drawn.live,
+            &request.cells,
+            &tiles,
+            &request.start,
+        ) {
+            Ok((edit, added, removed)) => {
+                return Ok(built(Change::Edit {
+                    edit: Box::new(edit),
+                    added,
+                    removed,
+                }));
+            }
+            // Out of room: the scene is built whole, with room for this cut.
+            Err(error) => {
+                tracing::info!(%error, "an edit of the tiles failed: the scene is built whole")
+            }
+        }
+    }
+    let mut tiles = tiles;
+    let capacity = parts.in_place().then(|| capacity_for(&tiles));
+    let mut scene = build_scene(
+        device,
+        shaders,
+        parts,
+        &request.cells,
+        &mut tiles,
+        request.start,
+        capacity,
+    )?;
+    drawn.editor = scene.editor(device, shaders)?;
+    drawn.live = live_tiles(&request.cells, tiles);
+    Ok(built(Change::Scene(Box::new(scene))))
 }
 
 impl Drop for TileStream {

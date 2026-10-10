@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
@@ -100,7 +100,7 @@ pub struct StartView {
 pub(crate) const START_MARGIN: f32 = 0.9;
 
 /// Per page, the longest chain of pages above it (0 for a page that needs none).
-fn page_depths(parents: &[Vec<u32>]) -> Vec<u32> {
+pub(crate) fn page_depths(parents: &[Vec<u32>]) -> Vec<u32> {
     const UNSET: u32 = u32::MAX;
     const VISITING: u32 = u32::MAX - 1;
     let mut depth = vec![UNSET; parents.len()];
@@ -139,77 +139,107 @@ fn page_depths(parents: &[Vec<u32>]) -> Vec<u32> {
 }
 
 /// Where a page's bytes are.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum PageSource {
     /// At this byte offset of [`PageStore::memory`].
     Memory(usize),
-    /// Packed in file `file` of [`PageStore::files`] (#215).
-    File { file: u32, page: PackedPage },
+    /// Packed in this file (#215).
+    File { file: Arc<Path>, page: PackedPage },
+    /// At this byte offset of the pages a dynamic scene's mesh brought in memory (#220).
+    Shared { bytes: Arc<Vec<u8>>, at: usize },
+    /// No page: a dynamic scene's page number no mesh holds (#220).
+    Absent,
+}
+
+impl PageSource {
+    /// The sources of `mesh`'s pages: in its page file, or in memory, `memory` giving the source
+    /// of the page at a byte offset of its pages when they are not in a file.
+    pub fn of_mesh(mesh: &forge_geom::MeshletMesh, memory: impl Fn(usize) -> Self) -> Vec<Self> {
+        match &mesh.page_file {
+            Some(pages) if mesh.pages.is_empty() => {
+                let file: Arc<Path> = Arc::from(pages.path.as_path());
+                pages
+                    .pages
+                    .iter()
+                    .map(|&page| Self::File {
+                        file: Arc::clone(&file),
+                        page,
+                    })
+                    .collect()
+            }
+            _ => (0..mesh.page_count as usize)
+                .map(|p| memory(p * PAGE_SIZE))
+                .collect(),
+        }
+    }
 }
 
 /// Every page of a scene and where to read it.
 #[derive(Default)]
 pub(crate) struct PageStore {
-    /// The pages of meshes that keep them in memory.
-    pub memory: Vec<u8>,
-    /// The files the others' pages lie in.
-    pub files: Vec<PathBuf>,
+    /// The pages of meshes that keep them in memory, one after the other.
+    pub memory: Arc<Vec<u8>>,
     /// Per scene page.
     pub sources: Vec<PageSource>,
 }
 
-impl PageStore {
-    /// Page `page`'s bytes as they are stored, and how they are packed; `open` keeps the files
-    /// open between calls.
-    fn read_packed(
-        &self,
-        page: u32,
-        open: &mut HashMap<u32, File>,
-    ) -> io::Result<(Codec, Cow<'_, [u8]>)> {
-        match self.sources[page as usize] {
-            PageSource::Memory(at) => {
-                Ok((Codec::Raw, Cow::Borrowed(&self.memory[at..at + PAGE_SIZE])))
-            }
-            PageSource::File { file, page } => {
-                let handle = match open.entry(file) {
-                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(File::open(&self.files[file as usize])?)
-                    }
-                };
-                handle.seek(SeekFrom::Start(page.offset))?;
-                let mut packed = vec![0; page.len as usize];
-                handle.read_exact(&mut packed)?;
-                Ok((page.codec, Cow::Owned(packed)))
-            }
+/// Page `source`'s bytes as they are stored, and how they are packed, `memory` holding the
+/// [`PageSource::Memory`] pages; `open` keeps the files open between calls.
+fn read_packed<'a>(
+    source: &'a PageSource,
+    memory: &'a [u8],
+    open: &mut HashMap<Arc<Path>, File>,
+) -> io::Result<(Codec, Cow<'a, [u8]>)> {
+    match source {
+        &PageSource::Memory(at) => Ok((Codec::Raw, Cow::Borrowed(&memory[at..at + PAGE_SIZE]))),
+        PageSource::Shared { bytes, at } => {
+            Ok((Codec::Raw, Cow::Borrowed(&bytes[*at..*at + PAGE_SIZE])))
         }
+        PageSource::File { file, page } => {
+            let handle = match open.entry(Arc::clone(file)) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => e.insert(File::open(file)?),
+            };
+            handle.seek(SeekFrom::Start(page.offset))?;
+            let mut packed = vec![0; page.len as usize];
+            handle.read_exact(&mut packed)?;
+            Ok((page.codec, Cow::Owned(packed)))
+        }
+        PageSource::Absent => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no page at this number",
+        )),
     }
+}
 
-    /// Reads page `page` into `out` (`PAGE_SIZE` bytes); `open` keeps the files open between
-    /// calls.
-    fn read(&self, page: u32, open: &mut HashMap<u32, File>, out: &mut [u8]) -> io::Result<()> {
-        let (codec, packed) = self.read_packed(page, open)?;
-        unpack(codec, &packed, out)
+/// The bytes of `sources`' pages, one after the other, `memory` holding the
+/// [`PageSource::Memory`] pages: read in order, unpacked in parallel (#215).
+pub(crate) fn read_sources<'a>(
+    sources: impl Iterator<Item = &'a PageSource>,
+    memory: &[u8],
+) -> io::Result<Vec<u8>> {
+    let mut open = HashMap::new();
+    let packed = sources
+        .map(|source| read_packed(source, memory, &mut open))
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut bytes = vec![0; packed.len() * PAGE_SIZE];
+    let failed = Mutex::new(None);
+    par_chunks_mut(&mut bytes, PAGE_SIZE, 8, |i, out| {
+        let (codec, page) = &packed[i];
+        if let Err(error) = unpack(*codec, page, out) {
+            *failed.lock().unwrap() = Some(error);
+        }
+    });
+    match failed.into_inner().unwrap() {
+        Some(error) => Err(error),
+        None => Ok(bytes),
     }
+}
 
+impl PageStore {
     /// The bytes of `pages`, one after the other: read in order, unpacked in parallel (#215).
     pub fn read_pages(&self, pages: impl Iterator<Item = u32>) -> io::Result<Vec<u8>> {
-        let mut open = HashMap::new();
-        let packed = pages
-            .map(|page| self.read_packed(page, &mut open))
-            .collect::<io::Result<Vec<_>>>()?;
-        let mut bytes = vec![0; packed.len() * PAGE_SIZE];
-        let failed = Mutex::new(None);
-        par_chunks_mut(&mut bytes, PAGE_SIZE, 8, |i, out| {
-            let (codec, page) = &packed[i];
-            if let Err(error) = unpack(*codec, page, out) {
-                *failed.lock().unwrap() = Some(error);
-            }
-        });
-        match failed.into_inner().unwrap() {
-            Some(error) => Err(error),
-            None => Ok(bytes),
-        }
+        read_sources(pages.map(|page| &self.sources[page as usize]), &self.memory)
     }
 }
 
@@ -265,8 +295,12 @@ pub(crate) struct UploadPlan {
     pub table: Vec<(u64, u64, u64)>,
 }
 
-/// A page read from its source (or the error that stopped it).
-type Loaded = (u32, io::Result<Vec<u8>>);
+/// A page read from its source (or the error that stopped it), with the generation of its
+/// number it was asked for under.
+type Loaded = (u32, u32, io::Result<Vec<u8>>);
+
+/// A read for the I/O thread: the page, its number's generation, where its bytes are.
+type ReadRequest = (u32, u32, PageSource);
 
 /// What [`ResidentSet::place`] decided for a frame's loaded pages.
 pub(crate) struct Placement<T> {
@@ -297,6 +331,9 @@ pub(crate) struct ResidentSet {
     parents: Vec<Vec<u32>>,
     /// Per page: how many pages whose `parents` include it are resident.
     resident_children: Vec<u32>,
+    /// Per page number: how many times it was released (#220). A read asked for under an
+    /// earlier generation brings another mesh's page and is dropped.
+    generation: Vec<u32>,
 }
 
 impl ResidentSet {
@@ -313,6 +350,7 @@ impl ResidentSet {
             last_needed: vec![0; page_count],
             parents,
             resident_children: vec![0; page_count],
+            generation: vec![0; page_count],
         };
         for (slot, &page) in pinned.iter().enumerate() {
             residency.pinned[page as usize] = true;
@@ -501,6 +539,96 @@ impl ResidentSet {
         self.pending[page as usize] = false;
     }
 
+    /// Page `page`'s generation (see [`ResidentSet::generation`]).
+    pub fn generation(&self, page: u32) -> u32 {
+        self.generation[page as usize]
+    }
+
+    /// Gives pages `first..` the dependencies `parents` lists, one per page (a dynamic scene's
+    /// new mesh, #220): numbers no page held, or released ones.
+    pub fn add_pages(&mut self, first: u32, parents: Vec<Vec<u32>>) {
+        for (k, list) in parents.into_iter().enumerate() {
+            let p = first as usize + k;
+            debug_assert!(self.slot_of[p] == PAGE_NONE && !self.pinned[p] && !self.pending[p]);
+            self.parents[p] = list;
+            self.need[p] = 0.0;
+            self.last_needed[p] = 0;
+        }
+    }
+
+    /// How many pages [`ResidentSet::pin`] can still make resident: the free slots, and those
+    /// of the pages not pinned, which can all leave, leaves first.
+    pub fn pin_room(&self) -> usize {
+        self.free_slots.len()
+            + self
+                .page_in_slot
+                .iter()
+                .filter(|&&p| p != PAGE_NONE && !self.pinned[p as usize])
+                .count()
+    }
+
+    /// The evictable page with the lowest need, the least recently needed among equals.
+    fn least_needed_leaf(&self) -> Option<u32> {
+        self.page_in_slot
+            .iter()
+            .copied()
+            .filter(|&p| p != PAGE_NONE && self.evictable(p))
+            .min_by(|&a, &b| {
+                let (a, b) = (a as usize, b as usize);
+                self.need[a]
+                    .total_cmp(&self.need[b])
+                    .then(self.last_needed[a].cmp(&self.last_needed[b]))
+            })
+    }
+
+    /// Makes `page` resident for good (a dynamic scene's new root page, #220): in a free slot,
+    /// or in the slot of the least needed evictable page, whatever its need. Returns the slot
+    /// and the page evicted for it; `None` when every resident page is pinned or holds others'
+    /// parents ([`ResidentSet::pin_room`] says how many fit).
+    pub fn pin(&mut self, page: u32) -> Option<(u32, Option<u32>)> {
+        let (slot, evicted) = match self.free_slots.pop() {
+            Some(slot) => (slot, None),
+            None => {
+                let victim = self.least_needed_leaf()?;
+                (self.vacate(victim), Some(victim))
+            }
+        };
+        self.pinned[page as usize] = true;
+        self.occupy(page, slot);
+        Some((slot, evicted))
+    }
+
+    /// Takes `page` as wanted by `need` pixels from frame `frame` on, until the frames' own needs
+    /// replace it: a dynamic scene's new page loaded for its first view (#220), which the next
+    /// pages placed then evict last.
+    pub fn want(&mut self, page: u32, need: f32, frame: u64) {
+        self.need[page as usize] = need;
+        self.last_needed[page as usize] = frame;
+    }
+
+    /// Releases pages `pages` (a dynamic scene's mesh removed, #220): every one leaves its
+    /// slot, pinned or not, and is no longer wanted or requested; their numbers' generation
+    /// moves on, so that a read of them still in flight is dropped when it lands. The pages
+    /// must hold all their children: none outside them may stay resident.
+    pub fn release_pages(&mut self, pages: std::ops::Range<u32>) {
+        for page in pages.clone() {
+            if self.resident(page) {
+                let slot = self.vacate(page);
+                self.free_slots.push(slot);
+            }
+        }
+        for page in pages {
+            let p = page as usize;
+            debug_assert_eq!(self.resident_children[p], 0, "a child of page {page} stays");
+            self.pinned[p] = false;
+            self.pending[p] = false;
+            self.need[p] = 0.0;
+            self.last_needed[p] = 0;
+            self.parents[p].clear();
+            self.generation[p] = self.generation[p].wrapping_add(1);
+        }
+    }
+
     /// The pages a start view loads (#121), given each page's need from the view (0 for
     /// none): the absent wanted pages and every page holding a parent of their clusters, the
     /// neediest first and a parent before its children, as many as the free slots hold.
@@ -603,7 +731,7 @@ pub(crate) struct PageStreamer {
     /// Pages read and waiting for an upload budget.
     ready: Vec<(u32, Vec<u8>)>,
     need_bits: Vec<u32>,
-    reads: Option<mpsc::Sender<u32>>,
+    reads: Option<mpsc::Sender<ReadRequest>>,
     loaded: mpsc::Receiver<Loaded>,
     io_thread: Option<thread::JoinHandle<()>>,
     in_flight: u32,
@@ -616,11 +744,34 @@ pub(crate) struct PageStreamer {
     /// The needs the culls write (a float's bits per page).
     pub need_buffer: GraphBuffer,
     stats: StreamingStats,
-    /// The pages, also read by the I/O thread.
-    store: Arc<PageStore>,
+    /// The pages: each read sends the I/O thread its page's source.
+    store: PageStore,
     /// The pages a start view loaded (#121), and whether a read past them was logged.
     preloaded: u32,
     read_logged: bool,
+}
+
+/// What a dynamic scene's edit brings a streamed scene's pages (#220,
+/// [`PageStreamer::apply`]).
+#[derive(Default)]
+pub(crate) struct PageEdit {
+    /// Per new mesh: its first page, and each of its pages' source and the pages holding a
+    /// parent of its clusters.
+    pub meshes: Vec<(u32, Vec<PageSource>, Vec<Vec<u32>>)>,
+    /// The new meshes' root pages, made resident for good, each with where its bytes lie in the
+    /// edit's staging.
+    pub roots: Vec<(u32, u64)>,
+    /// Pages the new meshes' first view wants, loaded with them as room allows: the neediest
+    /// first and a parent before its children, each with its need and where its bytes lie.
+    pub preload: Vec<(u32, f32, u64)>,
+}
+
+/// The copies an edit's pages need ([`PageStreamer::apply`]): (staging offset, pool offset,
+/// bytes) per page loaded, and the page-table entries it changed, in page order.
+#[derive(Default)]
+pub(crate) struct PagePlan {
+    pub pages: Vec<(u64, u64, u64)>,
+    pub table: Vec<(u32, u32)>,
 }
 
 impl PageStreamer {
@@ -630,7 +781,7 @@ impl PageStreamer {
     pub fn new(
         device: &Arc<Device>,
         config: StreamingConfig,
-        store: Arc<PageStore>,
+        store: PageStore,
         meshlets: &[GpuMeshlet],
         pinned_pages: &[u32],
     ) -> Result<Self> {
@@ -659,17 +810,19 @@ impl PageStreamer {
             buffer.write(0, &vec![0_u32; page_count.max(1)]);
             readback.push(GraphBuffer::new(buffer));
         }
-        let (reads, requests) = mpsc::channel::<u32>();
+        let (reads, requests) = mpsc::channel::<ReadRequest>();
         let (done, loaded) = mpsc::channel::<Loaded>();
-        let io_store = Arc::clone(&store);
+        let memory = Arc::clone(&store.memory);
         let io_thread = thread::Builder::new()
             .name("forge page reads".into())
             .spawn(move || {
                 let mut open = HashMap::new();
-                for page in requests {
+                for (page, generation, source) in requests {
                     let mut bytes = vec![0; PAGE_SIZE];
-                    let result = io_store.read(page, &mut open, &mut bytes).map(|()| bytes);
-                    if done.send((page, result)).is_err() {
+                    let result = read_packed(&source, &memory, &mut open)
+                        .and_then(|(codec, packed)| unpack(codec, &packed, &mut bytes))
+                        .map(|()| bytes);
+                    if done.send((page, generation, result)).is_err() {
                         break;
                     }
                 }
@@ -755,6 +908,72 @@ impl PageStreamer {
         Ok(())
     }
 
+    /// Takes in a dynamic scene's new meshes' pages (#220) at frame `frame`: their sources and
+    /// dependencies, their roots made resident for good and their first view's pages loaded as
+    /// room allows (pages no longer wanted giving way). Returns the copies to make; nothing
+    /// changes when the roots don't fit.
+    pub fn apply(&mut self, edit: PageEdit, frame: u64) -> std::result::Result<PagePlan, String> {
+        if self.residency.pin_room() < edit.roots.len() {
+            return Err(format!(
+                "{} root pages for a pool of {} pages with {} it can give up",
+                edit.roots.len(),
+                self.config.pool_pages,
+                self.residency.pin_room()
+            ));
+        }
+        let mut table = std::collections::BTreeMap::new();
+        for (first, sources, parents) in edit.meshes {
+            for (k, source) in sources.into_iter().enumerate() {
+                let page = first + k as u32;
+                self.store.sources[page as usize] = source;
+                table.insert(page, PAGE_NONE);
+            }
+            self.residency.add_pages(first, parents);
+        }
+        let mut plan = PagePlan::default();
+        let load = |plan: &mut PagePlan,
+                    table: &mut std::collections::BTreeMap<u32, u32>,
+                    page: u32,
+                    slot: u32,
+                    at: u64| {
+            plan.pages
+                .push((at, u64::from(slot) * PAGE_SIZE as u64, PAGE_SIZE as u64));
+            table.insert(page, slot);
+        };
+        for &(page, at) in &edit.roots {
+            let (slot, evicted) = self.residency.pin(page).expect("pin_room said it fits");
+            if let Some(evicted) = evicted {
+                table.insert(evicted, PAGE_NONE);
+            }
+            load(&mut plan, &mut table, page, slot, at);
+        }
+        for &(page, need, _) in &edit.preload {
+            self.residency.want(page, need, frame);
+        }
+        let loaded: Vec<(u32, u64)> = edit.preload.iter().map(|&(p, _, at)| (p, at)).collect();
+        let budget = loaded.len() as u32;
+        let (placement, _) = self.residency.place(loaded, budget);
+        for &evicted in &placement.evicted {
+            table.insert(evicted, PAGE_NONE);
+        }
+        for (page, slot, at) in placement.placed {
+            load(&mut plan, &mut table, page, slot, at);
+        }
+        plan.table = table.into_iter().collect();
+        Ok(plan)
+    }
+
+    /// Releases a dynamic scene's removed mesh's pages `pages` (#220): their slots freed, their
+    /// reads in flight dropped when they land, their numbers free for another mesh's. No frame
+    /// may read them any more.
+    pub fn release(&mut self, pages: std::ops::Range<u32>) {
+        self.residency.release_pages(pages.clone());
+        self.ready.retain(|(page, _)| !pages.contains(page));
+        for page in pages {
+            self.store.sources[page as usize] = PageSource::Absent;
+        }
+    }
+
     /// The staging buffer of frame slot `slot`.
     pub fn staging(&self, slot: usize) -> &Buffer {
         &self.staging[slot]
@@ -780,8 +999,12 @@ impl PageStreamer {
             frame_number,
             self.need_bits.iter().map(|&b| f32::from_bits(b)),
         );
-        while let Ok((page, result)) = self.loaded.try_recv() {
+        while let Ok((page, generation, result)) = self.loaded.try_recv() {
             self.in_flight -= 1;
+            // Released since it was asked for (#220): another mesh's page now, or none.
+            if generation != self.residency.generation(page) {
+                continue;
+            }
             match result {
                 Ok(bytes) => self.ready.push((page, bytes)),
                 Err(error) => {
@@ -822,7 +1045,12 @@ impl PageStreamer {
         let room = self.config.reads_in_flight.saturating_sub(self.in_flight) as usize;
         if let Some(reads) = &self.reads {
             for page in self.residency.requests(room) {
-                if reads.send(page).is_err() {
+                let request = (
+                    page,
+                    self.residency.generation(page),
+                    self.store.sources[page as usize].clone(),
+                );
+                if reads.send(request).is_err() {
                     self.residency.abandon(page);
                     continue;
                 }
@@ -973,6 +1201,44 @@ mod tests {
         r.set_needs(4, needs(&[(1, 3.0), (2, 3.0), (5, 4.0), (3, 0.5)]));
         let (placement, _) = r.place(vec![(3, ())], 8);
         assert!(placement.placed.is_empty() && placement.evicted.is_empty());
+        r.check();
+    }
+
+    #[test]
+    fn a_new_mesh_pins_its_roots_over_the_least_needed_leaves_and_leaves_whole() {
+        // The small set's pages and three numbers free for a dynamic scene's mesh (#220).
+        let mut parents = small_parents();
+        parents.resize(9, Vec::new());
+        let mut r = ResidentSet::new(9, 4, parents, &[0]);
+        assert_eq!(round(&mut r, 1, &[(1, 3.0), (2, 2.0)]), vec![1, 2]);
+        // A mesh comes: its root 6 over 7 and 8.
+        r.add_pages(6, vec![vec![], vec![6], vec![6]]);
+        assert_eq!(
+            r.pin_room(),
+            3,
+            "the free slot, and pages 1 and 2 may leave"
+        );
+        assert_eq!(r.pin(6), Some((3, None)), "the free slot");
+        // The pool full: page 2, the least needed leaf, gives way to 7, wanted by the mesh's
+        // first view.
+        r.want(7, 4.0, 2);
+        let (placement, _) = r.place(vec![(7, ())], 1);
+        assert_eq!(placement.evicted, vec![2]);
+        assert_eq!(placement.placed.len(), 1);
+        r.check();
+        // The mesh leaves whole; a read of its pages still in flight is told apart.
+        let generation = r.generation(7);
+        r.release_pages(6..9);
+        assert_ne!(r.generation(7), generation);
+        assert_eq!(r.resident_count(), 2, "the root 0 and page 1");
+        r.check();
+        // Another mesh takes the numbers: three roots, the third over page 1, the only page
+        // that may leave.
+        r.add_pages(6, vec![vec![], vec![], vec![]]);
+        assert!(r.pin(6).is_some() && r.pin(7).is_some());
+        assert_eq!(r.pin(8), Some((1, Some(1))));
+        assert_eq!(r.pin_room(), 0);
+        assert_eq!(r.pin(5), None, "every resident page pinned");
         r.check();
     }
 

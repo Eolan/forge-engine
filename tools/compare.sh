@@ -196,6 +196,7 @@ main() {
     pair "$new/$path-lab-tank90.png" "$new/$path-lab-tank90-noocc.png" "$path lab's glass tank, occlusion off"
     pair "$new/$path-planet-ground.png" "$new/$path-planet-ground-noocc.png" "$path planet over Èze, occlusion off"
     pair "$new/$path-planet-ground.png" "$new/$path-planet-ground-resident.png" "$path planet over Èze, streamed against resident"
+    pair "$new/$path-planet-ground.png" "$new/$path-planet-ground-edited.png" "$path planet over Èze, edited in place against built whole"
   done
   for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60 clouds60 \
     shot-mouth shot-lake shot-island shot-valley lab-drop90 lab-drop600 lab-net300 lab-sea300 lab-sea-steer600 lab-walk150 lab-walk-crates240 \

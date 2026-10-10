@@ -63,9 +63,10 @@ pub use liquid::{
     LiquidStep, LiquidTank,
 };
 pub use meshlet::{
-    AmbientLight, CullCamera, CullFlags, DrawTargets, FrameStats, GeometryPath, InstanceOcclusion,
-    MeshId, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame,
-    PlanetView, RayRequests, SunShadowRays, SwRaster,
+    AmbientLight, CullCamera, CullFlags, DrawTargets, DynamicCapacity, FrameStats, GeometryPath,
+    InstanceOcclusion, MeshId, MeshRays, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
+    MoverTransform, MoversFrame, PlanetView, RayRequests, SceneEdit, SceneEditor, SunShadowRays,
+    SwRaster,
 };
 pub use probes::{ProbeLight, ProbeParams, Probes};
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};

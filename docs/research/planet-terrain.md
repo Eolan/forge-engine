@@ -946,6 +946,28 @@ The demo builds a whole `MeshletScene` for every new cut on a worker and swaps i
 scenes, plus a test that adds and removes meshes against a scene built whole from the same set
 (the same image, 0 px).
 
+**Built the same day** (`crates/forge-render/src/meshlet/dynamic.rs`; the numbers in
+`docs/demos/planet.md`, "The tiles as the camera flies"). Where it differs from the design:
+- **The worker writes what no frame reads:** a new mesh's cluster records, its record and its
+  rays' cut go into free ranges by staged copies on the transfer queue, in one submission an
+  edit. The frame's own copies (the pages, their page-table entries, the instance records) run
+  in a `scene/edit` pass of the frame's graph, before the culls.
+- **The top-level structure is built whole by the worker** for every edit, over its own copy of
+  the instance table, and takes over at the frame that publishes the edit; the one it replaces
+  is freed once the frames in flight are done with it. No double buffer, and nothing for the
+  passes that trace rays to declare.
+- **A vacant slot's record is inactive** (no structure, mask 0). With the mask alone the build
+  still read the removed mesh's freed structure and lost the device.
+- **A page number's generation** moves on when its mesh leaves: a read still in flight for it
+  is dropped when it lands, rather than placed for the mesh that took the number since.
+- **The rays cut each tile on its own** (4 000 triangles), not each level's tiles as one surface,
+  so that a tile's cut does not depend on the tiles beside it.
+- **The check:** the ground shot's scene reached by an edit from a coarser cut (52 tiles added,
+  13 removed) matches the one built whole, 0 pixels apart (`planet --edited`).
+- **The numbers:** an edit of up to 10 tiles is ready 11 ms after it is asked for (18 ms at most)
+  where a whole scene took 0.39 s; the longest frame between changes is 2.4 ms on average,
+  against 9.4. The room costs 0.25 GiB of geometry more on the tour.
+
 ## Verification notes
 
 Checked on 2026-09-26 with WebSearch and WebFetch only, no browser pane. The session's egress

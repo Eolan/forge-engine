@@ -145,6 +145,7 @@ static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowe
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
 static const uint INSTANCE_STILL = 1;          // Instance::flags: a mover with no motion of its own this frame (#197)
+static const uint INSTANCE_VACANT = 2;         // Instance::flags: a dynamic scene's slot no instance holds (#220)
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
 public static const uint MATERIAL_CLASS_ICE = 1;
@@ -169,7 +170,7 @@ public struct Instance
     public float radius;
     public uint id;
     public uint material;   // its row in `Frame::materials`
-    public uint flags;      // INSTANCE_STILL (#197)
+    public uint flags;      // INSTANCE_STILL (#197), INSTANCE_VACANT (#220)
     public uint texture;    // its own texture's sampled index plus one, 0 for none: a planet tile's normal map (#220)
 };
 
@@ -1700,7 +1701,8 @@ void cull_main(uint thread : SV_GroupThreadID)
         sphere_center = instance_center_relative(f, inst);
         sphere_radius = inst.radius;
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        visible = !frustum || sphere_in_frustum(f, sphere_center, sphere_radius);
+        visible = (inst.flags & INSTANCE_VACANT) == 0
+            && (!frustum || sphere_in_frustum(f, sphere_center, sphere_radius));
     }
     uint in_frustum = WaveActiveCountBits(visible);
     if (WaveIsFirstLane() && in_frustum > 0)
@@ -1914,7 +1916,7 @@ void cell_bounds_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     CellBoundsPush p = cell_bounds_push;
     uint cell = p.first_cell + group.x;
     uint index = cell * 64 + thread;
-    bool valid = index < p.count;
+    bool valid = index < p.count && (p.instances[index].flags & INSTANCE_VACANT) == 0;
     int3 reference = p.instances[cell * 64].cell;
     float3 c = 0.0;
     float r = 0.0;
@@ -1995,7 +1997,8 @@ void cull_deferred_main(uint thread : SV_GroupThreadID)
         {
             Instance inst = f[0].instances[instance_index];
             bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-            candidate = !frustum || sphere_in_frustum(f, instance_center_relative(f, inst), inst.radius);
+            candidate = (inst.flags & INSTANCE_VACANT) == 0
+                && (!frustum || sphere_in_frustum(f, instance_center_relative(f, inst), inst.radius));
         }
     }
     bool visible = false;
@@ -5160,8 +5163,8 @@ void resolve_jelly_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThre
 
 // The top-level acceleration structure's records (issue #45, crates/forge-render/src/raytrace.rs):
 // a thread per instance writes its VkAccelerationStructureInstanceKHR, 64 bytes: the model's
-// top three rows, the instance index (24 bits) and a full mask, no SBT offset, back faces
-// traced too, and the address of its mesh's bottom-level structure.
+// top three rows, the instance index (24 bits) and a full mask (none for a vacant slot, #220), no
+// SBT offset, back faces traced too, and the address of its mesh's bottom-level structure.
 struct TlasPush
 {
     Instance* instances;
@@ -5196,9 +5199,13 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
             r[row * 4 + column] = asuint(m[row][column]);
         r[row * 4 + 3] = asuint(t[row]);
     }
-    r[12] = (index & 0xFFFFFFu) | (0xFFu << 24);
+    // A vacant slot (#220) is inactive: no structure, which the build would read (its mesh's
+    // may be freed), and no mask bit a ray could meet.
+    bool vacant = (inst.flags & INSTANCE_VACANT) != 0;
+    uint mask = vacant ? 0u : 0xFFu;
+    r[12] = (index & 0xFFFFFFu) | (mask << 24);
     r[13] = 0x1u << 24; // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
-    uint64_t blas = tlas_push.blas[inst.mesh];
+    uint64_t blas = vacant ? 0 : tlas_push.blas[inst.mesh];
     r[14] = uint(blas);
     r[15] = uint(blas >> 32);
 }

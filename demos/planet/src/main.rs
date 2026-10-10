@@ -40,7 +40,7 @@ use forge_terrain::planet::{SkyBodyParams, TourStop};
 use forge_terrain::{Planet, PlanetWorld};
 use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
-use stream::{Built, SceneParts, Tile, TileStream, needs_new_cut};
+use stream::{Built, Change, SceneParts, Tile, TileStream, needs_new_cut};
 use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
@@ -98,6 +98,11 @@ struct Args {
     /// Leave the sky's light unoccluded: no ambient occlusion (N toggles it).
     #[arg(long)]
     no_ao: bool,
+    /// Reach the first scene by an edit in place (#220): built whole from a coarser cut (each
+    /// of the finest tiles' parents in their place), then edited to the first frame's cut before
+    /// that frame. The A/B against the scene built whole.
+    #[arg(long)]
+    edited: bool,
     /// Every page resident instead of a streamed pool (the A/B against streaming).
     #[arg(long)]
     resident: bool,
@@ -492,11 +497,12 @@ struct PlanetDemo {
     sea_mask: Option<u32>,
     tiles: usize,
     renderer: MeshletRenderer,
-    scene: MeshletScene,
     /// The worker making the cut again as the camera flies, and whether it failed (the cut then
-    /// stays).
+    /// stays). Dropped before the scene: an edit it is making builds structures over the
+    /// scene's tiles' (fields drop in their order).
     stream: TileStream,
     stream_failed: bool,
+    scene: MeshletScene,
     /// A swap held still to be saved either side (`--check-swaps`).
     hold: Option<SwapHold>,
     /// The longest frame since the last swap, seconds, for its log.
@@ -662,14 +668,54 @@ impl PlanetDemo {
         let built = Instant::now();
         // The first frame's view: a streamed scene loads its pages before the first frame (#121),
         // so a shot's frames are the same every run.
-        let scene = stream::build_scene(
+        let start = start_view(&camera, ctx.aspect(), ctx.extent().height, args.lod_error);
+        let capacity = parts.in_place().then(|| stream::capacity_for(&tiles));
+        // With `--edited`, the scene of a coarser cut, edited in place to this one below.
+        let first_cells = if args.edited && parts.in_place() {
+            coarser_cut(&cells)
+        } else {
+            cells.clone()
+        };
+        let mut first_tiles = if first_cells == cells {
+            std::mem::take(&mut tiles)
+        } else {
+            let have: HashMap<CellId, Tile> = cells.iter().copied().zip(tiles.clone()).collect();
+            let (coarse, _, _) = stream::cook_cells(
+                &planet,
+                &parts.body,
+                false,
+                &first_cells,
+                &have,
+                &TaskPool::client(),
+            );
+            coarse
+        };
+        let mut scene = stream::build_scene(
             &ctx.device,
             &ctx.shaders,
             &parts,
-            &cells,
-            &mut tiles,
-            start_view(&camera, ctx.aspect(), ctx.extent().height, args.lod_error),
+            &first_cells,
+            &mut first_tiles,
+            start,
+            capacity,
         )?;
+        let mut editor = scene.editor(&ctx.device, &ctx.shaders)?;
+        let mut live = stream::live_tiles(&first_cells, first_tiles);
+        if let Some(editor) = editor.as_mut()
+            && first_cells != cells
+        {
+            let (edit, added, removed) = stream::edit_scene(
+                &ctx.device,
+                &parts,
+                editor,
+                &mut live,
+                &cells,
+                &tiles,
+                &start,
+            )?;
+            scene.apply(edit)?;
+            tracing::info!(added, removed, "the first scene edited in place (--edited)");
+        }
         let build = built.elapsed().as_secs_f64();
         if let Some(rays) = scene.rays() {
             tracing::info!(
@@ -688,12 +734,16 @@ impl PlanetDemo {
             "the planet's scene"
         );
         let tile_count = cells.len();
+        if let Some(capacity) = capacity {
+            tracing::info!(?capacity, "the planet's scene's room for tiles in place");
+        }
         let stream = TileStream::new(
             Arc::clone(&ctx.device),
             ctx.shaders.clone(),
             parts,
             cells,
-            tiles,
+            live,
+            editor,
             build,
         )?;
         let mut flags = CullFlags::DEFAULT;
@@ -849,21 +899,42 @@ impl PlanetDemo {
         }
     }
 
-    /// Swaps the worker's scene in at the start of this frame; the old one goes to the frames'
+    /// Takes the worker's new cut in at the start of this frame: an edit of the drawn scene,
+    /// which this frame publishes, or a scene built whole, the old one going to the frames'
     /// deferred deletion, freed once no frame in flight reads it.
     fn swap(&mut self, ctx: &mut Context, built: Built) {
-        let old = std::mem::replace(&mut self.scene, built.scene);
-        ctx.frames.destroy_later(old);
+        let (how, added, removed) = match built.change {
+            Change::Scene(scene) => {
+                let old = std::mem::replace(&mut self.scene, *scene);
+                ctx.frames.destroy_later(old);
+                ("whole", built.cells.len(), self.tiles)
+            }
+            Change::Edit {
+                edit,
+                added,
+                removed,
+            } => {
+                if let Err(error) = self.scene.apply(*edit) {
+                    tracing::warn!(%error, "an edit of the tiles refused: the next cut is built whole");
+                    self.stream.rebuild();
+                    return;
+                }
+                ("in place", added, removed)
+            }
+        };
         self.tiles = built.cells.len();
         tracing::info!(
+            how,
             tiles = built.cells.len(),
+            added,
+            removed,
             cooked = built.cooked,
             loaded = built.loaded,
             ms = %format_args!("{:.0}", built.seconds * 1e3),
             cook_ms = %format_args!("{:.0}", built.cook_seconds * 1e3),
             build_ms = %format_args!("{:.0}", built.build_seconds * 1e3),
             longest_frame_ms = %format_args!("{:.1}", self.longest_frame * 1e3),
-            "a new cut of the tiles swapped in"
+            "a new cut of the tiles taken in"
         );
         self.longest_frame = 0.0;
     }
@@ -919,6 +990,22 @@ impl PlanetDemo {
         let ground = self.planet.ground(self.placement.direction(p), fine);
         (over_sea, over_sea - ground)
     }
+}
+
+/// `cells` with each of its finest cells' parents in their place (`--edited`, #220): a cut the
+/// first frame's takes many tiles from and gives many back.
+fn coarser_cut(cells: &[CellId]) -> Vec<CellId> {
+    let finest = cells.iter().map(|c| c.level()).max().unwrap_or(0);
+    let mut coarse: Vec<CellId> = cells
+        .iter()
+        .map(|&c| match c.parent() {
+            Some(parent) if c.level() == finest => parent,
+            _ => c,
+        })
+        .collect();
+    coarse.sort_unstable();
+    coarse.dedup();
+    coarse
 }
 
 /// The view a scene's pages are loaded for before its first frame (#121): `camera`'s.
