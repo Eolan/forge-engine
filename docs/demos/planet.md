@@ -203,8 +203,10 @@ loaded from the cache.
 
 **Checking the changes** (D-056's swap rule): `planet --check-swaps DIR` holds the camera still at
 each change of the tiles. It saves the frame before it and the frame after, a whole number of
-TAA's jitter periods apart, once each has settled. `tools/swap-check.sh DIR` compares the two
-with ꟻLIP against D-017's class 2.
+TAA's jitter periods apart, once each has settled, and the change's own first frame, a jitter
+period after the one before. `tools/swap-check.sh DIR` compares the settled two with ꟻLIP
+against D-017's class 2, and the first frame with the one before: what jumps from one frame to
+the next, where the settled difference may come in over several.
 - **In place, the tour at a fixed step:** 43 changes, every mean under 0.0066, far under 0.02;
   31 peak under 0.15. Twelve peak at 0.21–0.70 on the patch of a tile that splits under the
   camera, over Mont Blanc and on the way to Èze. Without shadows the same twelve peak at
@@ -275,14 +277,19 @@ shading of its normal maps, which the spacing measures.
   fewer over the sea and the plains. The held shots differ from `rings` by a ꟻLIP mean of
   0.0003–0.0033 on the Earth and 0.008 on the Moon's floor; the tour's cuts hold 393–675 tiles, as
   before.
-- **The pops it leaves.** The tour's swap check (fixed step, the tiles cached) finds 4 of 14
-  changes peaking at 0.17–0.79 at 2.5 px and 6 of 26 at 0.18–0.69 at 1.8 px: the share `rings`
-  had (12 of 43). Without ambient occlusion and shadows, 10 of 35 still peak at 0.19–0.44. The
-  flip maps show the split tiles' whole patches: the children's normal maps bring the band the
-  parent's, magnified 2.5 times, could not. Splitting at a pixel would hide it at three times the
-  tiles; wider rings (2.3) still left peaks. The remedy to come is a blend over the swap: the
-  parent and its children drawn together for a few frames, dithered from one to the other, which
-  the in-place scene allows.
+- **What a split still changes, settled.** The tour's swap check (fixed step, the tiles cached)
+  finds 4 of 14 changes peaking at 0.17–0.79 at 2.5 px, and 6 of 26 at 0.18–0.69 at 1.8 px: the
+  share `rings` had (12 of 43). Without ambient occlusion and shadows, 10 of 35 still peak at
+  0.19–0.44. The flip maps show the split tiles' whole patches: the children's normal maps bring
+  the band the parent's, magnified 2.5 times, could not. Splitting at a pixel would hide it at
+  three times the tiles; wider rings (2.3) still left peaks.
+- **But no frame jumps.** With the change's first frame saved too: of 21 changes on the tour, 4
+  peak at 0.15–0.21 settled, and no first frame peaks over 0.13 (means 0.0002–0.0018). TAA's
+  history takes a change in over several frames (the settled frame is five jitter periods on),
+  so a split is a short blend already rather than a one-frame jump. A longer one (the parent
+  dithered into its children over a fraction of a second, which the in-place scene allows) would
+  cost a dithered raster for the fading tiles and a second structure for the rays: left until a
+  view shows it is needed.
 
 What the engine gained for it:
 - **`MeshletSceneBuilder::set_material_rows`:** scenes built in turn over one texture set, which
@@ -402,10 +409,9 @@ air is a rim of blue light at its limb.
 - **A tile cooked in milliseconds** rather than a quarter of a second (a regular grid's DAG built
   directly): with the scene edited in place, cooking is what a new tile not in the cache waits
   for.
-- **The splits under the camera** still show on a patch (`--check-swaps`: 4 of 14 changes peak
-  at 0.17–0.79 under the swap rule): the children's normal maps bring a band the parent's,
-  magnified, could not. A blend over the swap, the parent dithered into its children over a few
-  frames, is the remedy to come.
+- **The splits under the camera** still change a patch once settled (`--check-swaps`: 4 of 21
+  changes peak at 0.15–0.21), though no frame jumps (first frames under 0.13): TAA takes them in
+  over several frames. A longer blend, the parent dithered into its children, if a view shows it.
 - **The room's ranges** are taken first fit and leave gaps as tiles come and go: the page numbers
   in use reached 37 000 for about 26 000 pages on the tour, and the needs read back every frame
   cover them all (149 KiB).

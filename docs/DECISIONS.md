@@ -3454,8 +3454,11 @@ Marble, the Deep Star Maps):
     `rings` had, and 10 of 35 without ambient occlusion and shadows. A split brings its
     children's normal maps' finer band, magnified 2.5 times in the parent's; splitting at a
     pixel would take three times the tiles.
-- **Next:** a blend over the swap (the parent dithered into its children over a few frames, in
-  the in-place scene), and tiles cooked in milliseconds.
+- **The first frame of a change** (`--check-swaps` saves it, a jitter period after the one
+  before): of 21 changes on the tour none jumps over 0.13, where 4 peak at 0.15–0.21 settled. TAA
+  takes a split in over several frames, so it is a short blend already; a longer one (the parent
+  dithered into its children) is left until a view shows it is needed.
+- **Next:** tiles cooked in milliseconds.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

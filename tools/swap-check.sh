@@ -7,14 +7,17 @@
 #   tools/swap-check.sh DIR
 #
 # Prints a line a swap (the pixels that differ, ꟻLIP's mean and largest value) and how many
-# passed outright; exits 1 when a mean reaches 0.02.
+# passed outright; exits 1 when a mean reaches 0.02. When the change's own first frame was saved
+# too (swap-NNN-next.png, in the same phase of TAA's jitter as the frame before), the line adds
+# how far that frame jumps from the one before: what the eye sees pop, where the settled
+# difference may have come in over many frames.
 set -euo pipefail
 dir=${1:?usage: tools/swap-check.sh DIR}
 root=$(cd "$(dirname "$0")/.." && pwd)
 imgdiff=$root/target/release/imgdiff
 [ -f "$imgdiff.exe" ] && imgdiff=$imgdiff.exe
 [ -f "$imgdiff" ] || { echo "missing $imgdiff: build with cargo build --release" >&2; exit 1; }
-total=0 under=0 failed=0
+total=0 under=0 failed=0 jumps=0
 for before in "$dir"/swap-*-before.png; do
   [ -e "$before" ] || { echo "no swaps saved in $dir" >&2; exit 1; }
   after=${before%-before.png}-after.png
@@ -39,7 +42,20 @@ for before in "$dir"/swap-*-before.png; do
   else
     under=$((under + 1))
   fi
-  echo "$name: $count px differ, FLIP mean $mean, max $peak$verdict"
+  # The change's own frame, a jitter period after the one before (when saved): what jumps.
+  jump=
+  next=${before%-before.png}-next.png
+  if [ -f "$next" ]; then
+    out=$("$imgdiff" "$before" "$next" 2>&1 || true)
+    jmean=$(sed -n 's/^LDR-FLIP.*: mean \([0-9.]*\),.*/\1/p' <<< "$out")
+    jpeak=$(sed -n 's/^LDR-FLIP.* max \([0-9.]*\) at .*/\1/p' <<< "$out")
+    jump="; its first frame: FLIP mean ${jmean:-0}, max ${jpeak:-0}"
+    if awk -v p="${jpeak:-0}" 'BEGIN { exit !(p >= 0.15) }'; then
+      jumps=$((jumps + 1))
+    fi
+  fi
+  echo "$name: $count px differ, FLIP mean $mean, max $peak$verdict$jump"
 done
-echo "$total swaps: $under under both thresholds, $failed with a mean of 0.02 or more"
+echo "$total swaps: $under under both thresholds, $failed with a mean of 0.02 or more," \
+  "$jumps whose first frame peaks at 0.15 or more"
 [ "$failed" = 0 ]

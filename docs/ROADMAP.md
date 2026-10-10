@@ -119,8 +119,8 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
     2.5 px apart on ground rough enough, or its children's height over a pixel): the same tiles
     on rough ground, fewer over the sea. The pops it leaves come from the children's finer
     normal maps.
-  - **Next:** a blend over the swap (the parent dithered into its children over a few frames),
-    tiles cooked in milliseconds.
+  - **Next:** tiles cooked in milliseconds. A longer blend over a split (the parent dithered
+    into its children) if a view shows it: no frame of a change jumps over 0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

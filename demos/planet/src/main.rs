@@ -948,22 +948,30 @@ impl PlanetDemo {
     }
 
     /// A frame of a held swap (`--check-swaps`): the old scene settles for a whole number of
-    /// TAA's jitter periods and its last frame is saved, then the new one settles as long and
-    /// its frame is saved, the two `settle` frames apart so their jitter is the same.
+    /// TAA's jitter periods and its last frame is saved; a jitter period later the change comes
+    /// and its first frame is saved too, in the same phase of the jitter, which shows what the
+    /// eye sees jump; then the new scene settles and its frame is saved `settle` frames after the
+    /// first, so their jitter is the same.
     fn step_hold(&mut self, ctx: &mut Context) {
         let Some(dir) = self.args.check_swaps.clone() else {
             return;
         };
-        let settle = 6 * self.taa.jitter_phases;
+        let period = self.taa.jitter_phases;
+        let settle = 6 * period;
         let swaps = self.stream.swaps;
         let name = |side: &str| dir.join(format!("swap-{swaps:03}-{side}.png"));
+        // A request is served by the frame after the one that makes it.
         match self.hold.take() {
             Some(SwapHold::Before { built, frame }) => {
                 if frame == settle {
-                    // Saved next frame, still drawn with the old scene.
+                    // Drawn with the old scene.
                     ctx.capture_request = Some(name("before"));
                 }
-                if frame > settle + 1 {
+                if frame == settle + period {
+                    // The change's own frame, a period after the one saved before.
+                    ctx.capture_request = Some(name("next"));
+                }
+                if frame > settle + period {
                     self.swap(ctx, *built);
                     self.hold = Some(SwapHold::After { frame: 0 });
                 } else {
@@ -974,12 +982,12 @@ impl PlanetDemo {
                 }
             }
             Some(SwapHold::After { frame }) => {
-                // The swap's frame came before `After` 0: this request's frame is `settle`
-                // after the one saved before.
-                if frame + 3 == settle {
+                // The change's frame came before `After` 0, `period` after the one saved before:
+                // this request's frame is `settle` after that one.
+                if frame + 2 + period == settle {
                     ctx.capture_request = Some(name("after"));
                 }
-                if frame + 2 < settle {
+                if frame + 1 + period < settle {
                     self.hold = Some(SwapHold::After { frame: frame + 1 });
                 }
             }
