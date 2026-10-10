@@ -42,6 +42,57 @@ pub(crate) struct MapJob {
     pub cell: CellId,
 }
 
+/// An ask for a tile's heights: its cell and where the answer goes ([`HeightsQueue`]).
+type Ask = (CellId, std::sync::mpsc::Sender<Vec<i64>>);
+
+/// Tiles' heights the worker asks the GPU for (D-058's step 2): each answered a frame slot
+/// later, or dropped with its frame's passes (the worker then makes them on the CPU).
+#[derive(Default)]
+pub(crate) struct HeightsQueue {
+    /// The asks, and whether the frames stopped answering ([`Self::close`]).
+    asked: Mutex<(Vec<Ask>, bool)>,
+}
+
+impl HeightsQueue {
+    /// Asks for `cell`'s heights ([`forge_terrain::planet::tile_mesh_from`]'s): the answer
+    /// comes on the receiver, or it hangs up.
+    pub(crate) fn ask(&self, cell: CellId) -> std::sync::mpsc::Receiver<Vec<i64>> {
+        let (send, receive) = std::sync::mpsc::channel();
+        let mut asked = self.asked.lock().expect("the heights queue's lock");
+        // Closed: the sender drops here and the asker hears the hang-up at once.
+        if !asked.1 {
+            asked.0.push((cell, send));
+        }
+        receive
+    }
+
+    fn take(&self, most: usize) -> Vec<Ask> {
+        let mut asked = self.asked.lock().expect("the heights queue's lock");
+        let n = most.min(asked.0.len());
+        asked.0.drain(..n).collect()
+    }
+
+    /// No more answers: every ask waiting and every later one hangs up, so a worker waiting on
+    /// one makes its heights on the CPU and can end.
+    fn close(&self) {
+        let mut asked = self.asked.lock().expect("the heights queue's lock");
+        asked.1 = true;
+        asked.0.clear();
+    }
+}
+
+/// Tiles' heights the GPU makes a frame: about 0.6 ms of the RTX 5070 Ti.
+const HEIGHTS_PER_FRAME: usize = 8;
+
+/// A frame slot's heights in flight: the asks it answers once the slot comes round again, its
+/// jobs and its results.
+#[derive(Default)]
+struct HeightsInFlight {
+    asked: Vec<std::sync::mpsc::Sender<Vec<i64>>>,
+    jobs: Option<GraphBuffer>,
+    out: Option<GraphBuffer>,
+}
+
 /// The maps the worker made images for and the frame has yet to make.
 #[derive(Default)]
 pub(crate) struct MapQueue {
@@ -491,6 +542,9 @@ pub(crate) struct NormalMaps {
     /// `--check-normal-maps`: compare the first maps with the CPU's.
     pub check: bool,
     checking: Option<Check>,
+    /// The heights the worker asks for, and each frame slot's in flight.
+    pub heights_queue: Arc<HeightsQueue>,
+    heights_in_flight: Vec<HeightsInFlight>,
     /// The tiles' heights in integers (D-058's step 2): its pass and the CORDIC's constants.
     heights: Pipeline,
     cordic: forge_gpu::Buffer,
@@ -685,6 +739,10 @@ impl NormalMaps {
             check_heights: false,
             check_cells: Vec::new(),
             heights_check: None,
+            heights_queue: Arc::default(),
+            heights_in_flight: (0..forge_gpu::FRAMES_IN_FLIGHT)
+                .map(|_| HeightsInFlight::default())
+                .collect(),
         }))
     }
 
@@ -698,6 +756,7 @@ impl NormalMaps {
     ) -> Result<()> {
         self.compare_checked();
         self.compare_heights();
+        let asked = self.prepare_heights(slot)?;
         // The first frame makes every map of the first scene, which it draws.
         let most = if self.made == 0 {
             usize::MAX
@@ -756,6 +815,9 @@ impl NormalMaps {
         // `--check-heights`: the first tiles' heights in integers on the GPU, read back.
         if let Some(check) = this.heights_check.as_ref().filter(|c| !c.declared.get()) {
             this.declare_heights_check(graph, check);
+        }
+        if asked > 0 {
+            this.declare_heights(graph, slot, asked);
         }
         if count == 0 {
             return Ok(());
@@ -1042,6 +1104,113 @@ impl NormalMaps {
         }
     }
 
+    /// The heights `slot`'s last frame made, sent to who asked; then this frame's asks, at most
+    /// [`HEIGHTS_PER_FRAME`], their jobs written. Returns how many.
+    fn prepare_heights(&mut self, slot: FrameSlot) -> Result<usize> {
+        let side = (self.planet.world.tiles.samples + 2) as usize;
+        let tile = side * side;
+        let in_flight = &mut self.heights_in_flight[slot.index];
+        if let Some(out) = in_flight.out.as_ref() {
+            for (k, send) in in_flight.asked.drain(..).enumerate() {
+                let mut heights = vec![0_i64; tile];
+                out.read((k * tile * 8) as u64, &mut heights);
+                // A worker that stopped waiting has hung up: nothing to do.
+                let _ = send.send(heights);
+            }
+        }
+        let asks = self.heights_queue.take(HEIGHTS_PER_FRAME);
+        if asks.is_empty() {
+            return Ok(0);
+        }
+        let count = asks.len();
+        let job_bytes = std::mem::size_of::<GpuHeightsJob>() as u64;
+        let tables = side as u64 * 2 * 8;
+        let jobs_size = count as u64 * (job_bytes + 2 * tables);
+        let out_size = (count * tile * 8) as u64;
+        let device = Arc::clone(&self.device);
+        let grow =
+            |buffer: &mut Option<GraphBuffer>, size: u64, location, name: &str| -> Result<()> {
+                if buffer.as_ref().is_none_or(|b| b.size() < size) {
+                    *buffer = Some(GraphBuffer::new(device.create_buffer(BufferDesc {
+                        size: size.next_power_of_two(),
+                        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                        location,
+                        category: MemoryCategory::Frame,
+                        name,
+                    })?));
+                }
+                Ok(())
+            };
+        let in_flight = &mut self.heights_in_flight[slot.index];
+        grow(
+            &mut in_flight.jobs,
+            jobs_size,
+            MemoryLocation::CpuToGpu,
+            "planet heights jobs",
+        )?;
+        grow(
+            &mut in_flight.out,
+            out_size,
+            MemoryLocation::GpuToCpu,
+            "planet heights",
+        )?;
+        let (jobs, out) = (
+            in_flight.jobs.as_ref().expect("made above"),
+            in_flight.out.as_ref().expect("made above"),
+        );
+        let base = jobs.address();
+        let warps = base + count as u64 * job_bytes;
+        for (k, (cell, send)) in asks.into_iter().enumerate() {
+            let heights = self
+                .planet
+                .fixed_heights(self.planet.world.min_wavelength(cell.level()))
+                .expect("a planet with a map");
+            let (mut job, columns, rows) = heights_job(&self.planet, &heights, cell, side as u32);
+            let at = warps + k as u64 * 2 * tables;
+            job.columns = at;
+            job.rows = at + tables;
+            job.out = out.address() + (k * tile * 8) as u64;
+            jobs.write(k as u64 * job_bytes, &[job]);
+            jobs.write(at - base, &columns);
+            jobs.write(at + tables - base, &rows);
+            in_flight.asked.push(send);
+        }
+        Ok(count)
+    }
+
+    /// The pass making this frame's `count` asked heights into `slot`'s results.
+    fn declare_heights<'f>(&'f self, graph: &mut FrameGraph<'f>, slot: FrameSlot, count: usize) {
+        let in_flight = &self.heights_in_flight[slot.index];
+        let (jobs, out) = (
+            in_flight.jobs.as_ref().expect("prepared"),
+            in_flight.out.as_ref().expect("prepared"),
+        );
+        let side = self.planet.world.tiles.samples + 2;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let (jobs_handle, out_handle) = (graph.import_buffer(jobs), graph.import_buffer(out));
+        let push = HeightsPush {
+            jobs: jobs.address(),
+            elevation: self.grids.address(),
+            samples: self.samples.address(),
+            cordic: self.cordic.address(),
+        };
+        let pipeline = &self.heights;
+        graph
+            .pass("planet/tile heights")
+            .buffer(jobs_handle, BufferAccess::ShaderRead(compute))
+            .buffer(out_handle, BufferAccess::ShaderReadWrite(compute))
+            .run(move |_, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &push);
+                commands.dispatch(side.div_ceil(8), side.div_ceil(8), count as u32);
+                Ok(())
+            });
+        graph
+            .pass("planet/tile heights")
+            .buffer(out_handle, BufferAccess::HostRead)
+            .run(|_, _| Ok(()));
+    }
+
     /// Maps queued and not made yet: a new cut waits for them before it is drawn.
     pub(crate) fn pending(&self) -> usize {
         self.queue.len()
@@ -1090,5 +1259,12 @@ impl NormalMaps {
                 "a normal map made on the GPU against the CPU's (--check-normal-maps)"
             );
         }
+    }
+}
+
+impl Drop for NormalMaps {
+    fn drop(&mut self) {
+        // The tile worker may be waiting on heights the frames will no longer make.
+        self.heights_queue.close();
     }
 }

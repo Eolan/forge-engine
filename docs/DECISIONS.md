@@ -3687,5 +3687,13 @@ D-016's amendment of the same day:
     iGPU.
 - **Integrated GPUs keep the CPU's normal maps** (a new `discrete` device feature). The iGPU's
   first scene of 378 maps outlasted Windows' 2 s timeout.
-- **Left:** the tiles' meshes made from the GPU's heights, read back for the DAG; and the normal
-  maps' heights in integers on the GPU.
+- **The tiles' meshes from the GPU's heights ✅** (the same day):
+  - the tile worker asks the frame for a cooked tile's heights;
+  - a frame makes at most 8 tiles' heights (`planet/tile heights`), and they come back when
+    its slot comes round again;
+  - the worker builds the mesh from them (`tile_mesh_from`), the same bits as its own;
+  - before any frame (the first start) or once the frames stop, it makes them on the CPU.
+  On the cold tour, a cut waits 0.39 s against 0.48 with the CPU's integer heights (one run each).
+  `--cpu-heights` keeps them on the CPU.
+- **Left:** the normal maps' heights in integers on the GPU, so that a map and its tile come from
+  the same function there too.

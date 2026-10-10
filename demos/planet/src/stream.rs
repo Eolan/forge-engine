@@ -39,12 +39,12 @@ use forge_render::{
 use forge_task::{PoolConfig, TaskPool};
 use forge_terrain::Planet;
 use forge_terrain::planet::{
-    NORMAL_MAP_SIZE, normal_map_levels, tile_clusters, tile_mesh, tile_name,
+    NORMAL_MAP_SIZE, normal_map_levels, tile_clusters, tile_mesh, tile_mesh_from, tile_name,
     tile_normal_map_cached, tile_origin,
 };
 use forge_world::CellId;
 
-use crate::normal_maps::MapQueue;
+use crate::normal_maps::{HeightsQueue, MapQueue};
 use glam::DVec3;
 
 use crate::Placement;
@@ -77,6 +77,8 @@ pub(crate) struct SceneParts {
     pub residency: Residency,
     /// Where new tiles' normal maps are queued for the GPU to make (D-058); None: on the CPU.
     pub maps: Option<Arc<MapQueue>>,
+    /// Where new tiles' heights are asked of the GPU (D-058's step 2); None: made on the CPU.
+    pub heights: Option<Arc<HeightsQueue>>,
 }
 
 impl SceneParts {
@@ -120,7 +122,10 @@ pub(crate) struct TileTexture {
 
 /// The tiles of `cells`: those in `have` as they are, the others loaded from the cache under
 /// `body`'s name or made and cooked on `pool`, their pages in memory or left in the cache's file,
-/// with their normal maps. Also how many were cooked, and how many loaded.
+/// with their normal maps. Also how many were cooked, and how many loaded. The maps are left to
+/// the GPU when `gpu_maps`, and the cooked tiles' heights asked of it when `heights` is given
+/// (D-058).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cook_cells(
     planet: &Planet,
     body: &str,
@@ -129,6 +134,7 @@ pub(crate) fn cook_cells(
     have: &HashMap<CellId, Tile>,
     pool: &TaskPool,
     gpu_maps: bool,
+    heights: Option<&HeightsQueue>,
 ) -> (Vec<Tile>, usize, usize) {
     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
     let key = planet.tile_key();
@@ -148,8 +154,15 @@ pub(crate) fn cook_cells(
                 // Its first level cut into its grid's cells, its DAG over them.
                 let (done, stored) =
                     forge_geom::cache::cook_cached_with(cache, &name, key, in_memory, || {
+                        // Its heights from the GPU when it makes them, the same bits as the
+                        // CPU's (D-058's step 2); from the CPU when the frame hangs up.
+                        let from_gpu = heights.and_then(|q| q.ask(cell).recv().ok());
+                        let mesh = match from_gpu {
+                            Some(h) => tile_mesh_from(planet, cell, &h),
+                            None => tile_mesh(planet, cell),
+                        };
                         MeshletMesh::build_clustered(
-                            &tile_mesh(planet, cell),
+                            &mesh,
                             clusters,
                             CookOptions { normal_weight: 0.0 },
                         )
@@ -691,6 +704,7 @@ fn make_cut(
         &have,
         pool,
         parts.maps.is_some(),
+        parts.heights.as_deref(),
     );
     drop(have);
     let cook_seconds = started.elapsed().as_secs_f64();

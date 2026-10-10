@@ -1375,7 +1375,9 @@ scene.
   - a fine tile's heights take 5.2 ms waited, against 3.6;
   - the first start's tiles cook in 8.2 s, against 8.0;
   - on the GPU, a tile's heights take about 0.07 ms on the RTX 5070 Ti and 8.5 ms on the AMD
-    iGPU, the same bits as the CPU's.
+    iGPU, the same bits as the CPU's;
+  - the tiles cooked in flight take their heights from the GPU, at most 8 a frame: the cold
+    tour's cuts wait 0.39 s, against 0.48 with the CPU's integer heights.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
   - **Edited in place** (#220): an edit of up to 10 tiles is ready on the worker 11 ms after it
     is asked for (18 ms at most), the two of 210 and 314 tiles on arriving at a stop 0.30 and

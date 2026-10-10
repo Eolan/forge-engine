@@ -1131,6 +1131,17 @@ impl<'a> GridSampler<'a> {
         }
     }
 
+    /// Sample (i, j)'s point on the ground (the planet's frame, metres) at `height` (Q32 metres,
+    /// before the sea flattens it), made elsewhere ([`tile_mesh_from`]); in integers only.
+    fn point(&self, i: i64, j: i64, height: i64) -> DVec3 {
+        let (heights, columns, rows) = self.fixed.as_ref().expect("heights in integers");
+        let (ci, rj) = ((i - self.first) as usize, (j - self.first) as usize);
+        let d = fixed_direction(self.face, columns[ci], rows[rj]);
+        let direction = DVec3::from_array(d.map(|c| c as f64 / ONE as f64));
+        let ground = heights.ground(height) as f64 / METRE as f64;
+        direction * (self.planet.world.planet.radius + ground)
+    }
+
     /// Sample (i, j): its point on the ground (the planet's frame, metres) and its height before
     /// the sea flattens it.
     fn sample(&self, i: i64, j: i64) -> (DVec3, f64) {
@@ -1159,6 +1170,22 @@ impl<'a> GridSampler<'a> {
 /// beyond the edge, so neighbours of a level share their edge's normals), two triangles per cell
 /// facing out, and the skirt ([`skirt_depth`]) under the edge.
 pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
+    tile_mesh_with(planet, cell, None)
+}
+
+/// [`tile_mesh`] from the tile's heights made elsewhere, the GPU's (D-058's step 2): `heights`
+/// in Q32 metres before the sea flattens them, `samples + 2` a side from (−1, −1), rows first,
+/// as `shaders/planet_heights.slang` makes them. The same mesh, to the bit, as [`tile_mesh`]'s
+/// from the planet's heights in integers.
+///
+/// # Panics
+/// If the planet has no heights in integers ([`Planet::fixed_heights`]) or `heights` is not the
+/// grid's size.
+pub fn tile_mesh_from(planet: &Planet, cell: CellId, heights: &[i64]) -> TriMesh {
+    tile_mesh_with(planet, cell, Some(heights))
+}
+
+fn tile_mesh_with(planet: &Planet, cell: CellId, heights: Option<&[i64]>) -> TriMesh {
     let world = &planet.world;
     let n = world.tiles.samples as i64;
     let level = cell.level();
@@ -1173,12 +1200,22 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
     );
     // The samples and a ring beyond, row-major from (−1, −1).
     let side = (n + 2) as usize;
+    if let Some(heights) = heights {
+        assert!(
+            sampler.fixed.is_some(),
+            "heights in integers for a planet without them"
+        );
+        assert_eq!(heights.len(), side * side, "a tile's heights");
+    }
     let mut points = vec![DVec3::ZERO; side * side];
     // A row a chunk, the rows over the machine's threads: what one new tile waits for.
     par_chunks_mut(&mut points, side, ROWS_PER_THREAD, |row, out| {
         let j = row as i64 - 1;
         for (point, i) in out.iter_mut().zip(-1..=n) {
-            *point = sampler.sample(i, j).0;
+            *point = match heights {
+                Some(h) => sampler.point(i, j, h[row * side + (i + 1) as usize]),
+                None => sampler.sample(i, j).0,
+            };
         }
     });
     let at = |i: i64, j: i64| points[(j + 1) as usize * side + (i + 1) as usize];

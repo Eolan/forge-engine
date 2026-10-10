@@ -135,11 +135,11 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
     0.40 s rather than 0.66–0.77.
   - **The heights in integers ✅** (D-058's step 2 and D-016's amendment, the owner's go): the same
     bits on the CPU, the RTX 5070 Ti and the AMD iGPU, within 0.06 mm of the floats.
-  - **Next:** a tile in milliseconds still: its meshes from the GPU's heights (step 2's last
-    part), and its DAG (35 ms waited, meshoptimizer's simplifying and clustering), D-058's step 3
-    to measure first (the children sharing their parent's samples was measured and set
-    aside). A longer blend over a split (the parent dithered into its children) if a view shows
-    it: no frame of a change jumps over 0.13 today.
+  - **The tiles' meshes from the GPU's heights ✅:** a cold tour's cuts wait 0.39 s rather than 0.48.
+  - **Next:** a tile in milliseconds still: its DAG (35 ms waited, meshoptimizer's simplifying and
+    clustering), D-058's step 3 to measure first (the children sharing their parent's samples
+    was measured and set aside). A longer blend over a split (the parent dithered into its
+    children) if a view shows it: no frame of a change jumps over 0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

@@ -123,6 +123,10 @@ struct Args {
     /// bit, in the log (D-058's step 2).
     #[arg(long)]
     check_heights: bool,
+    /// The tiles' heights made on the CPU as they are cooked in flight, rather than asked of the
+    /// GPU (the same bits; D-058's step 2).
+    #[arg(long)]
+    cpu_heights: bool,
     /// The streamed pool, MiB.
     #[arg(long, default_value_t = 512)]
     stream_pool: u32,
@@ -313,6 +317,7 @@ fn cook_tiles(planet: Planet, body: String, args: &Args) -> Result<Tiles> {
         &HashMap::new(),
         &TaskPool::client(),
         gpu_maps(args, &planet),
+        None,
     );
     let ms = start.elapsed().as_secs_f64() * 1e3;
     tracing::info!(
@@ -727,6 +732,10 @@ impl PlanetDemo {
             ray_traced: !args.no_shadows,
             residency,
             maps: normal_maps.as_ref().filter(|_| gpu_made).map(|_| map_queue),
+            heights: normal_maps
+                .as_ref()
+                .filter(|_| gpu_made && !args.cpu_heights)
+                .map(|m| Arc::clone(&m.heights_queue)),
         };
         let built = Instant::now();
         // The first frame's view: a streamed scene loads its pages before the first frame (#121),
@@ -751,6 +760,7 @@ impl PlanetDemo {
                 &have,
                 &TaskPool::client(),
                 gpu_maps(&args, &planet),
+                None,
             );
             coarse
         };

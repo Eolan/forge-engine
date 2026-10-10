@@ -33,6 +33,7 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | `--check-swaps DIR` | holds still at each change of the tiles and saves the frames before and after it, for `tools/swap-check.sh` |
 | `--cpu-normal-maps` | the tiles' normal maps made on the CPU and cached, as before D-058: the reference |
 | `--check-normal-maps` | the first maps made on the GPU read back and compared with the CPU's, in the log |
+| `--cpu-heights` | the tiles cooked in flight take their heights from the CPU rather than the GPU: the same bits, D-058's step 2 |
 | `--check-heights` | a few of the first scene's tiles' heights made in integers on the GPU and compared with the CPU's, bit for bit, with their digests (D-016's amendment) |
 | `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B); its scenes are built whole |
 | `--edited` | reaches the first scene by an edit in place, from a coarser cut (the A/B against the scene built whole) |
@@ -542,8 +543,16 @@ the CPU, on the GPU and on a server.
 | A tile's heights on the GPU | — | about 0.07 ms on the RTX 5070 Ti, 8.5 ms on the AMD iGPU |
 | GPU against CPU (`--check-heights`, 4 tiles × 67 081 samples, levels 8–14) | — | the same bits and digests on the 5070 Ti and the iGPU |
 
-- **On an integrated GPU** the normal maps stay on the CPU: the iGPU's first scene, 378 maps in
-  one frame, outlasted Windows' 2 s timeout.
+- **The tiles cooked in flight take their heights from the GPU:**
+  - the worker asks the frame;
+  - a frame makes at most 8 tiles' heights, about 0.6 ms of the 5070 Ti;
+  - the answer comes back when its frame slot comes round again;
+  - the mesh is built from it (`tile_mesh_from`), the same bits as from the CPU's heights.
+
+  On the cold tour, a cut waits 0.39 s, against 0.48 with the CPU's integer heights. The first
+  start, before any frame, keeps the CPU's.
+- **On an integrated GPU** the normal maps and the heights stay on the CPU: the iGPU's first
+  scene, 378 maps in one frame, outlasted Windows' 2 s timeout.
 
 ## Left for later (#220 and D-056's steps)
 
@@ -564,8 +573,9 @@ the CPU, on the GPU and on a server.
       skips levels or cooks the parent long before, so the gain is too rare for the memory.
   - **On the GPU** (D-058): the normal maps ✅ ([The normal maps on the GPU](#the-normal-maps-on-the-gpu)); the
     heights in integers ✅ ([The heights in integers](#the-heights-in-integers)), their meshes made
-    from the GPU's next, and the DAG for step 3's measure.
-  - **The heights** cost 0.25–0.33 µs each, mostly the noise's octaves.
+    from the GPU's ✅, and the DAG for step 3's measure.
+  - **The heights** cost 0.25–0.33 µs each in floats and about 0.57 µs in integers on the CPU,
+    mostly the noise's octaves; the GPU makes them for the tiles cooked in flight.
   - **A DAG template, set aside** (2026-10-10; the code in
     `reports/2026-10-10-220/dag-template.patch`). Every tile's DAG was taken from one stand-in with
     the same triangles, simplified once, with only the bounds and errors worked out per tile: 23 ms
