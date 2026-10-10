@@ -20,6 +20,7 @@
 //! the page packer (`crate::page`) keeps each group in one page and points a cluster at the
 //! page of its children.
 
+use forge_core::pack::par_chunks_mut;
 use meshopt::{PositionDataAdapter, RadiusDataAdapter, SimplifyOptions, VertexDataAdapter};
 
 use crate::meshlet::{GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES};
@@ -229,98 +230,52 @@ fn build_dag_from(
             locked[v] = locked[canonical as usize];
         }
 
+        // Each group simplified and cut into clusters on its own, the groups spread over the
+        // machine's threads (#220: a planet tile's DAG waited 0.1 s on one); then appended in
+        // their order, the same records as one thread made.
+        let members: Vec<&Vec<usize>> = groups.iter().filter(|m| !m.is_empty()).collect();
+        let mut simplified: Vec<Option<Simplified>> = (0..members.len()).map(|_| None).collect();
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let per = members.len().div_ceil(threads).max(1);
+        let shared = GroupInputs {
+            records: &records,
+            vertices,
+            locked: &locked,
+            sections: &sections,
+            has_sections,
+            normal_weight,
+        };
+        par_chunks_mut(&mut simplified, per, 1, |chunk, slots| {
+            let mut compactor = Compactor::new(vertices.len());
+            for (k, slot) in slots.iter_mut().enumerate() {
+                *slot = simplify_group(members[chunk * per + k], &shared, &mut compactor);
+            }
+        });
         let mut next = Vec::new();
         let mut progressed = false;
-        for members in groups.iter().filter(|m| !m.is_empty()) {
+        for (members, simplified) in members.into_iter().zip(simplified) {
             let group = group_id;
             group_id += 1;
             for &c in members {
                 records[c].group = group;
             }
-            let merged: Vec<u32> = members
-                .iter()
-                .flat_map(|&c| records[c].indices.iter().copied())
-                .collect();
-            let subset = compactor.subset(&merged, vertices, &locked);
-            let target = (merged.len() / 3).div_ceil(2).max(1) * 3;
-            let mut simplify_error = 0.0_f32;
-            let mut options = SimplifyOptions::LockBorder | SimplifyOptions::ErrorAbsolute;
-            if has_sections {
-                options |= SimplifyOptions::Permissive;
-            }
-            // The normals are the vertex's floats 4..7 and its section float 7: read in place.
-            let floats: &[f32] = bytemuck::cast_slice(&subset.vertices);
-            let (attributes, weights): (&[f32], &[f32]) = match (normal_weight > 0.0, has_sections)
-            {
-                (true, true) => (
-                    &floats[4..],
-                    &[normal_weight, normal_weight, normal_weight, SECTION_WEIGHT],
-                ),
-                (true, false) => (&floats[4..], &[normal_weight; 3]),
-                (false, true) => (&floats[7..], &[SECTION_WEIGHT]),
-                (false, false) => (&[], &[]),
-            };
-            let simplified = if !weights.is_empty() {
-                meshopt::simplify_with_attributes_and_locks(
-                    &subset.indices,
-                    &subset.adapter(),
-                    attributes,
-                    weights,
-                    std::mem::size_of::<GpuVertex>(),
-                    &subset.locked,
-                    target,
-                    f32::MAX,
-                    options,
-                    Some(&mut simplify_error),
-                )
-            } else {
-                meshopt::simplify_with_locks(
-                    &subset.indices,
-                    &subset.adapter(),
-                    &subset.locked,
-                    target,
-                    f32::MAX,
-                    options,
-                    Some(&mut simplify_error),
-                )
-            };
-            if simplified.is_empty() || simplified.len() as f32 > merged.len() as f32 * STALL_RATIO
-            {
+            let Some(made) = simplified else {
                 // Could not simplify: these clusters are roots of their branch.
                 continue;
-            }
+            };
             progressed = true;
-            // The group's bounds and error: monotonic over the children.
-            let children_spheres: Vec<[f32; 4]> = members
-                .iter()
-                .map(|&c| {
-                    [
-                        records[c].gpu.self_center[0],
-                        records[c].gpu.self_center[1],
-                        records[c].gpu.self_center[2],
-                        records[c].gpu.self_radius,
-                    ]
-                })
-                .collect();
-            let sphere = enclosing_sphere(&children_spheres);
-            let error = members
-                .iter()
-                .map(|&c| records[c].gpu.self_error)
-                .fold(simplify_error, f32::max);
             for &c in members {
-                records[c].gpu.parent_center = sphere.0;
-                records[c].gpu.parent_radius = sphere.1;
-                records[c].gpu.parent_error = error;
+                records[c].gpu.parent_center = made.sphere.0;
+                records[c].gpu.parent_radius = made.sphere.1;
+                records[c].gpu.parent_error = made.error;
             }
-            let produced = emit_clusters(
+            let produced = emit_pieces(
                 &mut dag,
                 &mut records,
-                &subset,
-                &simplified,
+                &made.subset,
+                &made.pieces,
                 &sections,
-                level,
-                sphere,
-                error,
+                (level, made.sphere, made.error),
             );
             for &c in &produced {
                 records[c].source = group;
@@ -435,6 +390,23 @@ fn emit_clusters(
     self_sphere: ([f32; 3], f32),
     self_error: f32,
 ) -> Vec<usize> {
+    let pieces = cut_clusters(subset, indices, sections);
+    emit_pieces(
+        dag,
+        records,
+        subset,
+        &pieces,
+        sections,
+        (level, self_sphere, self_error),
+    )
+}
+
+/// A cluster cut out of a subset: its vertices (the subset's indices) and its triangles
+/// (indices into those).
+type Piece = (Vec<u32>, Vec<u8>);
+
+/// The clusters `indices` (local to `subset`) are cut into, at most two sections each.
+fn cut_clusters(subset: &Subset, indices: &[u32], sections: &Sections<'_>) -> Vec<Piece> {
     let adapter = subset.adapter();
     let build = |indices: &[u32]| {
         meshopt::build_meshlets(
@@ -445,10 +417,8 @@ fn emit_clusters(
             0.5,
         )
     };
-    let producer = (level, self_sphere, self_error);
-    let mut ids = Vec::new();
-    let built = build(indices);
-    for meshlet in built.iter() {
+    let mut pieces = Vec::new();
+    for meshlet in build(indices).iter() {
         let mut present: Vec<u8> = meshlet
             .triangles
             .as_chunks::<3>()
@@ -459,16 +429,7 @@ fn emit_clusters(
         present.sort_unstable();
         present.dedup();
         if present.len() <= 2 {
-            ids.push(emit_one(
-                dag,
-                records,
-                subset,
-                &adapter,
-                sections,
-                producer,
-                meshlet.vertices,
-                meshlet.triangles,
-            ));
+            pieces.push((meshlet.vertices.to_vec(), meshlet.triangles.to_vec()));
             continue;
         }
         // More than two sections met in one cluster: cluster its triangles again, section by
@@ -483,20 +444,135 @@ fn emit_clusters(
                 .flat_map(|t| t.iter().map(|&l| meshlet.vertices[l as usize]))
                 .collect();
             for piece in build(&part).iter() {
-                ids.push(emit_one(
-                    dag,
-                    records,
-                    subset,
-                    &adapter,
-                    sections,
-                    producer,
-                    piece.vertices,
-                    piece.triangles,
-                ));
+                pieces.push((piece.vertices.to_vec(), piece.triangles.to_vec()));
             }
         }
     }
-    ids
+    pieces
+}
+
+/// Appends `pieces`, cut out of `subset`, to the tables and the records ([`emit_one`]), and
+/// returns the new records' ids.
+fn emit_pieces(
+    dag: &mut ClusterDag,
+    records: &mut Vec<Record>,
+    subset: &Subset,
+    pieces: &[Piece],
+    sections: &Sections<'_>,
+    producer: (u32, ([f32; 3], f32), f32),
+) -> Vec<usize> {
+    let adapter = subset.adapter();
+    pieces
+        .iter()
+        .map(|(vertices, triangles)| {
+            emit_one(
+                dag, records, subset, &adapter, sections, producer, vertices, triangles,
+            )
+        })
+        .collect()
+}
+
+/// What one level's groups read, shared by the threads that simplify them.
+struct GroupInputs<'a> {
+    records: &'a [Record],
+    vertices: &'a [GpuVertex],
+    locked: &'a [bool],
+    sections: &'a Sections<'a>,
+    has_sections: bool,
+    normal_weight: f32,
+}
+
+/// What a group's simplification made: its triangles' subset, the group's sphere and error, and
+/// the clusters its simplified triangles are cut into.
+struct Simplified {
+    subset: Subset,
+    sphere: ([f32; 3], f32),
+    error: f32,
+    pieces: Vec<Piece>,
+}
+
+/// The group `members` simplified to half its triangles and cut into clusters, or `None` when
+/// it stalled (its members are then roots).
+fn simplify_group(
+    members: &[usize],
+    inputs: &GroupInputs<'_>,
+    compactor: &mut Compactor,
+) -> Option<Simplified> {
+    let records = inputs.records;
+    let (normal_weight, has_sections) = (inputs.normal_weight, inputs.has_sections);
+    let merged: Vec<u32> = members
+        .iter()
+        .flat_map(|&c| records[c].indices.iter().copied())
+        .collect();
+    let subset = compactor.subset(&merged, inputs.vertices, inputs.locked);
+    let target = (merged.len() / 3).div_ceil(2).max(1) * 3;
+    let mut simplify_error = 0.0_f32;
+    let mut options = SimplifyOptions::LockBorder | SimplifyOptions::ErrorAbsolute;
+    if has_sections {
+        options |= SimplifyOptions::Permissive;
+    }
+    // The normals are the vertex's floats 4..7 and its section float 7: read in place.
+    let floats: &[f32] = bytemuck::cast_slice(&subset.vertices);
+    let (attributes, weights): (&[f32], &[f32]) = match (normal_weight > 0.0, has_sections) {
+        (true, true) => (
+            &floats[4..],
+            &[normal_weight, normal_weight, normal_weight, SECTION_WEIGHT],
+        ),
+        (true, false) => (&floats[4..], &[normal_weight; 3]),
+        (false, true) => (&floats[7..], &[SECTION_WEIGHT]),
+        (false, false) => (&[], &[]),
+    };
+    let simplified = if !weights.is_empty() {
+        meshopt::simplify_with_attributes_and_locks(
+            &subset.indices,
+            &subset.adapter(),
+            attributes,
+            weights,
+            std::mem::size_of::<GpuVertex>(),
+            &subset.locked,
+            target,
+            f32::MAX,
+            options,
+            Some(&mut simplify_error),
+        )
+    } else {
+        meshopt::simplify_with_locks(
+            &subset.indices,
+            &subset.adapter(),
+            &subset.locked,
+            target,
+            f32::MAX,
+            options,
+            Some(&mut simplify_error),
+        )
+    };
+    if simplified.is_empty() || simplified.len() as f32 > merged.len() as f32 * STALL_RATIO {
+        return None;
+    }
+    // The group's bounds and error: monotonic over the children.
+    let children_spheres: Vec<[f32; 4]> = members
+        .iter()
+        .map(|&c| {
+            [
+                records[c].gpu.self_center[0],
+                records[c].gpu.self_center[1],
+                records[c].gpu.self_center[2],
+                records[c].gpu.self_radius,
+            ]
+        })
+        .collect();
+    let sphere = enclosing_sphere(&children_spheres);
+    let error = members
+        .iter()
+        .map(|&c| records[c].gpu.self_error)
+        .fold(simplify_error, f32::max);
+    let pieces = cut_clusters(&subset, &simplified, inputs.sections);
+    Some(Simplified {
+        subset,
+        sphere,
+        error,
+        pieces,
+    })
 }
 
 /// Level 0 cut into the given `clusters` ([`build_dag_clustered`]), each the places of its

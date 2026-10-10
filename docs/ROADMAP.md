@@ -122,13 +122,14 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   - **The haze at half the air's density ✅** (2026-10-10, the owner's "light fog" near the
     ground): the air between the camera and the ground counts half; the sky is unchanged.
   - **Faster new tiles ✅** (2026-10-10, the owner's "go on with tiles cooked in milliseconds"):
-    a new fine tile waits 0.14 s rather than 0.46 (0.27 s of one core). The caches no longer
+    a new fine tile waits 0.09 s rather than 0.46 (0.27 s of one core). The caches no longer
     scan their directories at every store; the normal maps skip the samples no texel reads; the
-    noise's seeds are kept; the DAG's first level is cut into the grid's cells; the heights are
-    spread over the threads. The planet's colour map decodes in 1 s rather than 4.3. A DAG
-    template shared by every tile, measured, lost the tiles' ridges and was set aside.
-  - **Next:** a tile in milliseconds still: its DAG (0.11 s on one thread) and its normal map
-    (0.12 s of one core), whose heights the children could share. A longer blend over a split
+    noise's seeds are kept; the DAG's first level is cut into the grid's cells; the heights and
+    the DAG's groups are spread over the threads. The planet's colour map decodes in 1 s rather
+    than 4.3. A DAG template shared by every tile, measured, lost the tiles' ridges and was set
+    aside.
+  - **Next:** a tile in milliseconds still: its DAG (0.06 s, partly on one thread) and its normal
+    map (0.12 s of one core), whose heights the children could share. A longer blend over a split
     (the parent dithered into its children) if a view shows it: no frame of a change jumps over
     0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,

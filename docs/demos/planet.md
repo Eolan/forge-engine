@@ -430,7 +430,7 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
 | Stored | 7 ms, and the caches scanned | 7 ms |
 | Its normal map | 0.24 s (328 000 heights) | 0.12 s (197 000: the samples no texel reads left out; the same map, bit for bit) |
 | In all | about 0.46 s | about 0.27 s |
-| What one new tile waits for, the machine otherwise idle | about 0.46 s | about 0.14 s: its heights and its map's samples spread over the threads by rows (7 ms and 20 ms), its DAG still on one |
+| What one new tile waits for, the machine otherwise idle | about 0.46 s | about 0.09 s: its heights and its map's samples spread over the threads by rows (6 ms and 16 ms), its DAG's groups simplified over them (0.06 s) |
 
 - **The caches' scans:** at every store, the derived cache listed `cache/world`'s 7 200 entries
   twice and read every entry's size and age, about 80 ms a tile, more than making its map. The
@@ -448,10 +448,11 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
 
 ## Left for later (#220 and D-056's steps)
 
-- **A tile in milliseconds** is still to come: a new fine tile waits about 0.14 s, 0.27 s of one
+- **A tile in milliseconds** is still to come: a new fine tile waits about 0.09 s, 0.27 s of one
   core ([A new tile](#a-new-tile)). What the next steps are:
-  - **Its DAG** (0.11 s, on one thread): meshoptimizer's simplifier and its clustering of the
-    levels above the first. A template shared by every tile was measured and set aside (below).
+  - **Its DAG** (0.06 s, its groups over the threads): what is left on one thread is the first
+    level's clusters' bounds, each level's partition and the records' appending. A template
+    shared by every tile was measured and set aside (below).
   - **Its normal map** (0.12 s of one core): 197 000 heights. They are the next level's, as the
     four children would make them; kept, a split's children could take theirs from the parent's
     map.

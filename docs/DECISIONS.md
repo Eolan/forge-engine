@@ -3464,13 +3464,12 @@ Marble, the Deep Star Maps):
   Hillaire's Earth, yet from 6 km over the Alps it laid as much blue over the grass as the sky's
   own. At Èze the fog is mostly AgX's greyish sky (D-045's curve, the owner's to change).
 - **Faster new tiles** (2026-10-10, `docs/demos/planet.md`, "A new tile"): a fine tile waits
-  0.14 s rather than 0.46 (0.27 s of one core; its heights spread over the threads); the caches'
-  stores no longer scan their directories; the normal map's unread samples left out and the
-  noise's seeds kept (the same bits); the DAG's first level cut into the grid's 7 × 7 cells (the
-  same errors and GPU frame, other clusters). A DAG template shared by every tile cooked in 23 ms
-  but erred 7–10 times as much: set aside.
-- **Next:** a tile in milliseconds still (its DAG 0.11 s on one thread, its normal map 0.12 s of
-  one core).
+  0.09 s rather than 0.46 (0.27 s of one core; its heights and its DAG's groups spread over the
+  threads); the caches' stores no longer scan their directories; the normal map's unread samples
+  left out and the noise's seeds kept (the same bits); the DAG's first level cut into the grid's
+  7 × 7 cells (the same errors and GPU frame, other clusters). A DAG template shared by every
+  tile cooked in 23 ms but erred 7–10 times as much: set aside.
+- **Next:** a tile in milliseconds still (its DAG 0.06 s, its normal map 0.12 s of one core).
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):
