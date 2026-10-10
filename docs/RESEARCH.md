@@ -38,6 +38,7 @@ the system you are about to touch.
 | [research/worlds-at-every-scale.md](research/worlds-at-every-scale.md) | worlds at every scale: No Man's Sky (Worlds Part I/II), Elite's Stellar Forge and Odyssey, Star Citizen's Planet Tech and Genesis, Space Engineers, KSP2, SpaceEngine, Starfield, Enshrouded, Valheim, Minecraft, MSFS 2024; large maps (the Witcher 4 demo's Nanite Foliage and PCG, Battlefield 6, Horizon, Tsushima, Far Cry 5, Zelda); tectonic planets, diffusion on a quad sphere, erosion-consistent amplification, ecosystems; voxel meshing, sparse storage and edit logs; GPU generation under D-016; a recommendation per scale (a planet atlas, biomes as rules, places, edits as a log) | 34 | done (#220, 2026-10-10: the owner's question of 2026-10-09; sources read or search-recorded, graded per entry) |
 | [research/civilisations-styles.md](research/civilisations-styles.md) | civilisations and styles: vernacular form as parameters (climate, materials, culture), style grammars per culture and era (Palladio to CGA's Pompeii and Puuc Maya, Islamic patterns and muqarnas, Gothic tracery, skyscrapers, brutalism, greebles, space habitats), decor and props (Infinigen Indoors, ShapeAssembly, layout solvers, set dressing), materials by mathematics and by example, weathering and ageing, the games' culture sets, the `Civilisation` record over D-039's style sets | 46 | done (the owner's brief behind #81–#91; five READMEs read on GitHub, the rest confirmed by search only, #99) |
 | [research/game-ai-ecosystems.md](research/game-ai-ecosystems.md) | game AI and ecosystems: decision architectures (behaviour trees, utility over needs, GOAP and HTN planners, schedules and packages, smart objects, the director and barks, where learned policies stand), navigation (Recast's tiles rebuilt where the terrain changes, Polyanya, flow fields, ORCA, Reynolds' steering, sparse voxel octrees for flight, lanes for traffic), crowds and the simulation LOD (AC Unity's 40/120/10 000, A-Life and Stalker 2's lesson, Census), animals and their populations (needs, senses, herds, territories, Wolf Sheep Predation and ODD), ship AI in 6 DoF (Elite, FreeSpace, Isaacs, formations, convex landing), the planet-scale layers with their hand-offs and digests, the Rust crates | 41 (+ a table of 16 projects) | done (the owner's brief behind #84, #87, #90 and #80; Phase 3's `forge-sim`; thirteen repositories read on GitHub, the rest confirmed by search only, #99) |
+| [research/smart-systems.md](research/smart-systems.md) | smart systems: predictive streaming and prefetching (Unreal's streaming sources and cinematic prestreaming, DirectStorage and the PS5's priorities, learned viewport prediction against extrapolation), importance for what is drawn and what is updated (screen-space error budgets, dynamic resolution, VRS, the Significance Manager, the Animation Budget Allocator, Mass, population budgets), scheduling under a frame budget, what is public about GTA VI and Rockstar, learned models on the client (DLSS 5, NTC, neural caches, ML deformers, learned motion) and their hardware path (cooperative matrices and vectors), learned prediction and control (directors, test bots), the server (interest management, server meshing, autoscaling, VACnet), determinism and trust under D-016 | 41 sources (+ earlier files') | done (#222, 2026-10-10: the owner's question of that day; sources read or search-recorded, graded per entry) |
 
 ## Verdicts
 
@@ -326,6 +327,24 @@ the reconstruction planner, the ships for the ballad, and only then the planet's
 to measure is about 20–50 full agents per millisecond per core, thousands of regional records, and
 a few hundred nanoseconds per species per cell per game-day, all estimates until the overlay says
 otherwise.
+
+**Smart systems.** What keeps shipped games fluid is heuristics with budgets, not trained
+models: need measured every frame from the view (screen-space error, distance, screen size,
+visibility, the last frames' GPU time), prediction that is short-range and kinematic or scripted
+(streaming sources weighted by heading and velocity, known cameras and transitions, I/O queues with
+priorities), and controllers with hysteresis holding budgets (Unreal's animation budget, dynamic
+resolution, population caps with spawns out of sight, per-client byte budgets filled by priority).
+Nothing public describes a GTA VI system that "optimises every scene"; what is on record for
+Rockstar is GTA V's separate budgets for distance, population and variety, and less streaming
+detail while the player flies. Learned models win where their errors show only as pixels
+(upscaling, frame generation, denoising, radiance caches, texture compression, deformers) or where
+a decision is made offline or on a server with a person in the loop (VACnet, test bots); learned
+movement prediction has not beaten trajectory extrapolation at the few seconds streaming needs.
+Shader inference in Vulkan is still vendor-split, and float networks are not bit-reproducible, so
+what client and server must agree on stays heuristic, server-only or integer. For Forge now: a
+free-flight lead and a speed cap for the planet's tile cut, two classes of page request, sliced
+edits and a spike recorder to name its worst frames; later a significance service with budgets in
+`forge-sim`, an optional frame-time governor, and test bots before any learned predictor.
 
 ## Still to research
 

@@ -645,6 +645,23 @@ The items below are the phase's original outline; the plan above orders them.
      can be made or loaded alone. Erosion and rivers are global today. Each needs its own
      research and decision when its phase comes.
 
+## Later — Smart systems: prediction, importance and budgets (#222)
+
+The owner's idea of 2026-10-10: load what the game will most likely need next, draw and update
+precisely only what matters for the view and the game, keep every scene fluid, on the client and on
+a networked game's server, with heuristics first and trained models where they fit. The research is
+[research/smart-systems.md](research/smart-systems.md). In order:
+1. **For the planet's streaming, no new decision needed:** a lead along the velocity in free
+   flight, a speed cap on the finest level, speculative page requests in a queue of their own,
+   edits sliced by error, stale cooks dropped, and a spike recorder that names the worst frames.
+2. **With Phase 3's `forge-sim`:** a significance service, one score per entity and millisecond
+   budgets per category; population spawned out of sight; a frame-time governor, off by default.
+   A decision proposal (D-057) first, with the research's table of what may be learned under D-016.
+3. **Learned models:** test bots before predictors; vendor upscalers stay optional; neural texture
+   compression tried as a cache codec; nothing learned on the simulation's tick.
+4. **The server (Phase 5):** interest by cells and accumulated priority plus each client's view,
+   server-side significance, models off the tick on recorded replays.
+
 ## Later, low priority — Graphics settings and a dev console (#160)
 
 The owner's request of 2026-10-03: a graphics menu as games have, its preset fitted to the

@@ -672,7 +672,7 @@ introduced Multi Frame Generation (up to three generated frames per rendered fra
 adds a second-generation SR transformer (about five times the compute of the first; RTX 20/30 lack FP8
 and pay more for the larger models) and, on RTX 50 from 31 March 2026, Dynamic Multi Frame Generation up
 to 6×. Ray Reconstruction (2023) is the AI denoiser that replaced NRD in Cyberpunk, Alan Wake 2 and
-Doom. No "DLSS 5" has been announced as of this writing.
+Doom. DLSS 5 shipped on 1 September 2026 after this was written: a final neural pass adding lighting and material detail on RTX 50 only (`smart-systems.md` §6).
 *Bearing:* target DLSS 4.5's SR/RR/MFG feature set through Streamline; RR changes the renderer
 contract (it consumes noisy diffuse/specular radiance and guide buffers, not a denoised image), so
 plan the RT tiers' outputs for it.
@@ -857,7 +857,7 @@ Kept, because a bibliography that lists only what it found is not auditable.
   Illumination Based on Surfels"** (both SIGGRAPH 2021 Advances) — confirmed on the course index but
   the slides were not fetched, so no summary is offered; both are leads for the T1/T2 tiers, the surfel
   one especially.
-- **DLSS 5** — nothing announced by NVIDIA as of September 2026; DLSS 4.5 is current.
+- **DLSS 5** — nothing announced by NVIDIA when this was written; it shipped on 1 September 2026 (`smart-systems.md` §6).
 - **Which shipped games use NRC versus SHaRC** — could not be verified; not claimed.
 - **FSR 4 "accidental" source release** and **"trailer 2 captured on PS5"** — press only.
 - **Ray Tracing Gems II** (2021) chapter details — not fetched; mentioned as existing only.
