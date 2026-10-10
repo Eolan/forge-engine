@@ -33,6 +33,7 @@
 "assets/worlds/moon.toml" = ["planet"]
 "demos/planet/**" = ["planet"]
 "tools/fetch-planets.sh" = []
+"tools/swap-check.sh" = []
 "crates/forge-terrain/**" = ["island"]
 "assets/worlds/**" = ["island"]
 "demos/island/**" = ["island"]

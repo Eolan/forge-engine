@@ -148,6 +148,10 @@ pub struct Context {
     pub profile: Profile,
     /// The render graph's persistent side (transient heap, statistics).
     pub graph: RenderGraph,
+    /// A capture the demo asks for: the next frame is saved to this path as `--capture` saves
+    /// its frame (and its HDR codes beside it when offscreen), then the request clears. The
+    /// planet's swap check saves the frames either side of a swap this way (#220).
+    pub capture_request: Option<PathBuf>,
     /// While a demo started with [`run_loading`] prepares on its thread (issue #25): the loading
     /// screen shows, and its frames do not count (`frames_rendered`, captures, the frame limit,
     /// the profile, the memory counters).
@@ -759,6 +763,7 @@ impl<D: Demo> State<D> {
             frames_rendered: 0,
             profile: Profile::new(overlay_mode),
             graph,
+            capture_request: None,
             loading: false,
             ssaa: 1,
             counted_from: 0,
@@ -1010,6 +1015,11 @@ impl<D: Demo> State<D> {
                 Some(path.with_file_name(format!("{stem}-{frame_number:05}.png")))
             }
             _ => None,
+        };
+        // The demo's own request, taken by this frame.
+        let capture_path = match capture_path {
+            None if !self.ctx.loading => self.ctx.capture_request.take(),
+            path => path,
         };
         // Four times per second, and on a captured frame so that a scripted capture shows
         // current counters however fast the frames went by.

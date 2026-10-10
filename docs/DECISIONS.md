@@ -3390,11 +3390,15 @@ Marble, the Deep Star Maps):
   worker builds its whole scene, which the demo swaps in at a frame's start. The engine gained
   scenes over one shared texture set, one-shot copies on the transfer queue and structure builds
   on the compute queue, BLAS uploads in two copies, and per-instance transients that keep the
-  graph's layout across scenes of a few tiles more or less. A swap still stalls the frames, in
-  proportion to what the whole new scene uploads: 11 ms at 200 tiles, up to 50 ms at 670,
-  against 2 ms uncapped.
-- **Next:** the scene taking and freeing tiles in place, which ends the whole-scene builds and
-  their stall.
+  graph's layout across scenes of a few tiles more or less. Staged uploads go through one
+  buffer of at most 16 MiB: whole-buffer staging allocated host memory for each upload and stalled
+  the frames by up to 50 ms a swap, now 7.7 ms on average.
+- **The swaps checked** (`planet --check-swaps`, `tools/swap-check.sh`): each swap held still and
+  its frames before and after compared with ꟻLIP. On the tour, every mean is at most 0.0027.
+  Three swaps of 14 peak at 0.15–0.24 on a patch: the snow's shading near the camera over Mont
+  Blanc as a cell splits.
+- **Next:** the swap rule (a cell split where its error would show), then the scene taking and
+  freeing tiles in place, rather than whole scenes built again.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

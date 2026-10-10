@@ -10,6 +10,11 @@ use crate::device::{Device, QueueKind};
 use crate::error::Result;
 use crate::memory_report::MemoryCategory;
 
+/// The most a staged upload ([`Device::write_buffer_staged`]) copies at once: its staging buffer
+/// fits the allocator's blocks, so an upload of hundreds of megabytes needs no host memory of
+/// its own (#220).
+pub const STAGING_CHUNK: usize = 16 << 20;
+
 /// Description of a buffer to create.
 #[derive(Clone, Copy, Debug)]
 pub struct BufferDesc<'a> {
@@ -479,33 +484,20 @@ impl Device {
         name: &str,
     ) -> Result<Buffer> {
         let bytes: &[u8] = bytemuck::cast_slice(data);
-        let size = bytes.len().max(4) as u64;
-        let staging = self.create_buffer(BufferDesc {
-            size,
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
-            location: MemoryLocation::CpuToGpu,
-            category: MemoryCategory::Transfer,
-            name: "staging",
-        })?;
-        staging.write(0, bytes);
         let buffer = self.create_buffer(BufferDesc {
-            size,
+            size: bytes.len().max(4) as u64,
             usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
             location: MemoryLocation::GpuOnly,
             category,
             name,
         })?;
-        // On the transfer queue: beside the frames when a worker uploads (#220).
-        self.execute_transient_on(QueueKind::Transfer, |device, cb| {
-            let region = vk::BufferCopy::default().size(size);
-            // SAFETY: both buffers are live and the copy is within bounds.
-            unsafe { device.cmd_copy_buffer(cb, staging.raw(), buffer.raw(), &[region]) };
-        })?;
+        self.write_buffer_staged(&buffer, 0, bytes)?;
         Ok(buffer)
     }
 
     /// Copies `data` into `dst` from byte `offset` through a staging copy and waits for it
-    /// (`dst` needs `TRANSFER_DST` usage and must not be in use).
+    /// (`dst` needs `TRANSFER_DST` usage and must not be in use). The staging buffer holds at
+    /// most [`STAGING_CHUNK`] bytes, reused chunk after chunk.
     pub fn write_buffer_staged(
         self: &Arc<Self>,
         dst: &Buffer,
@@ -516,21 +508,26 @@ impl Device {
             return Ok(());
         }
         let staging = self.create_buffer(BufferDesc {
-            size: data.len() as u64,
+            size: data.len().min(STAGING_CHUNK) as u64,
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             location: MemoryLocation::CpuToGpu,
             category: MemoryCategory::Transfer,
             name: "staging",
         })?;
-        staging.write(0, data);
-        self.execute_transient_on(QueueKind::Transfer, |device, cb| {
-            let region = vk::BufferCopy::default()
-                .dst_offset(offset)
-                .size(data.len() as u64);
-            // SAFETY: both buffers are live, the copy is within bounds (the caller keeps
-            // `offset + data.len()` inside `dst`) and `dst` is not in use.
-            unsafe { device.cmd_copy_buffer(cb, staging.raw(), dst.raw(), &[region]) };
-        })?;
+        for (i, part) in data.chunks(STAGING_CHUNK).enumerate() {
+            // The copy before has completed: the staging buffer is free again.
+            staging.write(0, part);
+            let at = offset + (i * STAGING_CHUNK) as u64;
+            // On the transfer queue: beside the frames when a worker uploads (#220).
+            self.execute_transient_on(QueueKind::Transfer, |device, cb| {
+                let region = vk::BufferCopy::default()
+                    .dst_offset(at)
+                    .size(part.len() as u64);
+                // SAFETY: both buffers are live, the copy is within bounds (the caller keeps
+                // `offset + data.len()` inside `dst`) and `dst` is not in use.
+                unsafe { device.cmd_copy_buffer(cb, staging.raw(), dst.raw(), &[region]) };
+            })?;
+        }
         Ok(())
     }
 

@@ -1349,9 +1349,10 @@ scene.
   about 7 s (decoded and its mips made on the finishing thread, every start). The 492 tiles take
   17.6 s to make and cook the first time, then load from the cache in under 0.1 s.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
-  a new scene takes 0.26–0.47 s on a worker for 400–675 tiles, and each swap stalls the frames:
-  the longest frame between swaps reaches 23–50 ms against 2 ms uncapped, in proportion to what
-  the new scene uploads. The scene taking and freeing tiles in place is the fix to come.
+  a new scene takes 0.23–0.39 s on a worker for 400–675 tiles. The longest frame between two
+  swaps is 7.7 ms on average, 14.7 ms at most, against 2 ms uncapped. It reached 23–50 ms while
+  each upload's staging buffer was host memory of its own; staged uploads now go through one
+  buffer of at most 16 MiB (`STAGING_CHUNK` in `crates/forge-gpu/src/memory.rs`).
 
 ## `meshlets` — the culling bench (static view, occlusion on, LOD 1 px)
 

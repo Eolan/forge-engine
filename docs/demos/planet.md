@@ -29,6 +29,7 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | `--stars STOPS` | the stars' brightness: a map value of 1 at 2^STOPS cd/m² (12) |
 | `--radius KM`, `--seed N` | over the world's |
 | `--tour`, `--tour-stop N` | flies the world's tour, or holds its stop N |
+| `--check-swaps DIR` | holds still at each swap of the tiles and saves the frames before and after it, for `tools/swap-check.sh` |
 | `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B) |
 
 ## How it is made
@@ -125,18 +126,35 @@ before, so they are there when it arrives. They are made once, then loaded from 
 | The Earth's tour, uncapped (2026-10-10) | Tiles | A new scene | Swaps |
 |---|---|---|---|
 | The Alps from 400 km, then on to Corsica | 204 | none: the cut only coarsens | 0 |
-| Corsica to Mont Blanc (17 s) | 393–423 | 0.26–0.31 s | 24 |
-| Over Mont Blanc, then towards Èze | 525–675 | 0.34–0.47 s | 29 in its first 20 s |
+| Corsica to Mont Blanc (17 s) | 393–423 | 0.23–0.25 s | 24 |
+| Over Mont Blanc, then towards Èze | 525–675 | 0.37–0.39 s | 29 in its first 20 s |
 
 - **A tile not in the cache** adds 0.26 s on a worker thread. The tour's tiles are made once.
 - **The first scene,** behind the loading screen: 0.15 s for 204 tiles.
-- **The stall:** a new scene moves 50–300 MB (its clusters' table, its tiles' root pages, the
-  pages of its first view) and allocates a pool of 512 MiB. While it does, the GPU stops
-  between two frames. The longest frame between two swaps is 11 ms at 200 tiles, 23–28 ms at 400
-  and 30–50 ms at 550–670, against 2 ms uncapped. A Tracy capture shows the GPU idle after a
-  present while the CPU waits for its frame slot. The pool's size, the rays' structures
-  (`--no-shadows`) and the queue the copies take each made no difference; the amount each swap
-  moves did. The next step moves only the tiles that change.
+- **A swap's cost to the frames:** the longest frame between two swaps is 7.7 ms on average over
+  28 swaps, 14.7 ms at most, against 2 ms uncapped; frames of 6–8 ms come without swaps too.
+  A new scene uploads 50–300 MB (its clusters' table, its tiles' root pages, the pages of its
+  first view).
+  - **Before the fix** these frames reached 23–50 ms, in proportion to the upload. A Tracy
+    capture showed the GPU idle after a present while the CPU waited for its frame slot.
+  - **The cause:** each upload's staging buffer, larger than the allocator's blocks, was host
+    memory of its own, allocated and freed every time.
+  - **The fix:** staged uploads (`Device::write_buffer_staged`) now go through one buffer of at
+    most 16 MiB, reused chunk by chunk.
+  - **No difference:** the pool's size, the rays' structures (`--no-shadows`) and the queue the
+    copies took.
+
+**Checking the swaps** (D-056's swap rule): `planet --check-swaps DIR` holds the camera still at
+each swap. It saves the frame before it and the frame after, a whole number of TAA's jitter
+periods apart, once each has settled. `tools/swap-check.sh DIR` compares the two with ꟻLIP
+against D-017's class 2.
+- **The tour at a fixed step:** 14 swaps, every mean between 0.0002 and 0.0027, far under 0.02.
+  11 swaps peak under 0.15.
+- **Three peak at 0.15–0.24** on a patch rather than isolated pixels: the snow's shading on the
+  slopes near the camera over Mont Blanc, up to 30 levels, as one cell gives way to its four
+  children. Side by side the two frames look alike, but such a patch would show as a faint pop.
+  The swap rule, splitting a cell where its error would show rather than at a distance, is the
+  remedy to come.
 
 What the engine gained for it:
 - **`MeshletSceneBuilder::set_material_rows`:** scenes built in turn over one texture set, which

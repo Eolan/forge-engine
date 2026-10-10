@@ -41,7 +41,7 @@ use forge_terrain::planet::{SkyBodyParams, TourStop};
 use forge_terrain::{Planet, PlanetWorld};
 use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
-use stream::{SceneParts, TileStream, needs_new_cut};
+use stream::{Built, SceneParts, TileStream, needs_new_cut};
 use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
@@ -76,6 +76,11 @@ struct Args {
     /// Hold the tour at its stop N (from 0), for a capture.
     #[arg(long, value_name = "N")]
     tour_stop: Option<usize>,
+    /// Holds the camera still at each swap of the tiles' scene and saves the frames just before
+    /// and after it into DIR (`swap-NNN-before.png`, `-after.png`): how visible each swap is,
+    /// for `tools/swap-check.sh` (D-056's swap rule).
+    #[arg(long, value_name = "DIR")]
+    check_swaps: Option<PathBuf>,
     /// Seconds from orbit to the ground.
     #[arg(long, default_value_t = 60.0)]
     duration: f32,
@@ -463,6 +468,14 @@ impl Placement {
     }
 }
 
+/// `--check-swaps`: a swap of the tiles' scene held still, and saved before and after.
+enum SwapHold {
+    /// The new scene waits while the old one settles: frame `frame` of the hold.
+    Before { built: Box<Built>, frame: u32 },
+    /// The new scene settles: frame `frame` after the swap's.
+    After { frame: u32 },
+}
+
 struct PlanetDemo {
     args: Args,
     planet: Arc<Planet>,
@@ -481,6 +494,8 @@ struct PlanetDemo {
     /// stays).
     stream: TileStream,
     stream_failed: bool,
+    /// A swap held still to be saved either side (`--check-swaps`).
+    hold: Option<SwapHold>,
     /// The longest frame since the last swap, seconds, for its log.
     longest_frame: f32,
     /// The textures every scene's materials sample, kept alive across the swaps.
@@ -722,6 +737,7 @@ impl PlanetDemo {
             scene,
             stream,
             stream_failed: false,
+            hold: None,
             longest_frame: 0.0,
             _textures: set,
             air,
@@ -774,27 +790,23 @@ impl PlanetDemo {
     fn stream_tiles(&mut self, ctx: &mut Context) {
         if let Some(result) = self.stream.take() {
             match result {
-                Ok(built) => {
-                    let old = std::mem::replace(&mut self.scene, built.scene);
-                    ctx.frames.destroy_later(old);
-                    self.tiles = built.cells.len();
-                    tracing::info!(
-                        tiles = built.cells.len(),
-                        cooked = built.cooked,
-                        loaded = built.loaded,
-                        ms = %format_args!("{:.0}", built.seconds * 1e3),
-                        cook_ms = %format_args!("{:.0}", built.cook_seconds * 1e3),
-                        build_ms = %format_args!("{:.0}", built.build_seconds * 1e3),
-                        longest_frame_ms = %format_args!("{:.1}", self.longest_frame * 1e3),
-                        "a new cut of the tiles swapped in"
-                    );
-                    self.longest_frame = 0.0;
+                // Held still and saved either side (`--check-swaps`).
+                Ok(built) if self.args.check_swaps.is_some() => {
+                    self.hold = Some(SwapHold::Before {
+                        built: Box::new(built),
+                        frame: 0,
+                    });
                 }
+                Ok(built) => self.swap(ctx, built),
                 Err(error) => {
                     tracing::warn!(%error, "a new cut of the tiles failed: the cut stays");
                     self.stream_failed = true;
                 }
             }
+        }
+        if self.hold.is_some() {
+            self.step_hold(ctx);
+            return;
         }
         if self.stream_failed {
             return;
@@ -831,6 +843,65 @@ impl PlanetDemo {
                 self.args.lod_error,
             );
             self.stream.ask(cells, start);
+        }
+    }
+
+    /// Swaps the worker's scene in at the start of this frame; the old one goes to the frames'
+    /// deferred deletion, freed once no frame in flight reads it.
+    fn swap(&mut self, ctx: &mut Context, built: Built) {
+        let old = std::mem::replace(&mut self.scene, built.scene);
+        ctx.frames.destroy_later(old);
+        self.tiles = built.cells.len();
+        tracing::info!(
+            tiles = built.cells.len(),
+            cooked = built.cooked,
+            loaded = built.loaded,
+            ms = %format_args!("{:.0}", built.seconds * 1e3),
+            cook_ms = %format_args!("{:.0}", built.cook_seconds * 1e3),
+            build_ms = %format_args!("{:.0}", built.build_seconds * 1e3),
+            longest_frame_ms = %format_args!("{:.1}", self.longest_frame * 1e3),
+            "a new cut of the tiles swapped in"
+        );
+        self.longest_frame = 0.0;
+    }
+
+    /// A frame of a held swap (`--check-swaps`): the old scene settles for a whole number of
+    /// TAA's jitter periods and its last frame is saved, then the new one settles as long and
+    /// its frame is saved, the two `settle` frames apart so their jitter is the same.
+    fn step_hold(&mut self, ctx: &mut Context) {
+        let Some(dir) = self.args.check_swaps.clone() else {
+            return;
+        };
+        let settle = 6 * self.taa.jitter_phases;
+        let swaps = self.stream.swaps;
+        let name = |side: &str| dir.join(format!("swap-{swaps:03}-{side}.png"));
+        match self.hold.take() {
+            Some(SwapHold::Before { built, frame }) => {
+                if frame == settle {
+                    // Saved next frame, still drawn with the old scene.
+                    ctx.capture_request = Some(name("before"));
+                }
+                if frame > settle + 1 {
+                    self.swap(ctx, *built);
+                    self.hold = Some(SwapHold::After { frame: 0 });
+                } else {
+                    self.hold = Some(SwapHold::Before {
+                        built,
+                        frame: frame + 1,
+                    });
+                }
+            }
+            Some(SwapHold::After { frame }) => {
+                // The swap's frame came before `After` 0: this request's frame is `settle`
+                // after the one saved before.
+                if frame + 3 == settle {
+                    ctx.capture_request = Some(name("after"));
+                }
+                if frame + 2 < settle {
+                    self.hold = Some(SwapHold::After { frame: frame + 1 });
+                }
+            }
+            None => {}
         }
     }
 
@@ -1161,7 +1232,10 @@ impl Demo for PlanetDemo {
             self.camera.update(input, dt);
             return;
         }
-        self.time += self.step;
+        // Held still while a swap is checked (`--check-swaps`).
+        if self.hold.is_none() {
+            self.time += self.step;
+        }
         self.place_camera();
     }
 
