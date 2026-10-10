@@ -3404,9 +3404,14 @@ Marble, the Deep Star Maps):
   - **Wider rings** (2.3) moved the patches to the horizon at twice the tiles.
 - **The horizon test** of step 1 is left out: the planet's whole instance cull takes 0.014 ms
   a frame, and the depth pyramid culls the far side.
-- **Next:** a mip-mapped normal map per tile, at twice its vertices' resolution and from the
-  next level's height, so a swap changes no slope that shows. Then the scene taking and freeing
-  tiles in place, rather than whole scenes built again.
+- **A normal map per tile** (2026-10-10): 256² texels from the next level's height, mip-mapped,
+  named by the tile's instance (the record's spare word) and read by the layered ground through
+  the tile's UVs.
+  - Of 11 swaps on the tour, 9 now pass both thresholds. The two that peak are the coarse
+    geometry showing through the ambient occlusion and the shadows.
+  - From orbit the Alps gained their ridges, and the snow lies on them instead of in blobs.
+  - It costs 341 KB a tile, and cooking goes from 28 tiles a second to 19.
+- **Next:** the scene taking and freeing tiles in place, rather than whole scenes built again.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

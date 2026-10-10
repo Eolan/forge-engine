@@ -170,7 +170,7 @@ public struct Instance
     public uint id;
     public uint material;   // its row in `Frame::materials`
     public uint flags;      // INSTANCE_STILL (#197)
-    public uint pad;
+    public uint texture;    // its own texture's sampled index plus one, 0 for none: a planet tile's normal map (#220)
 };
 
 // Side of a cell, metres (forge_render::cells::CELL_SIZE): a power of two, so the product with
@@ -4507,6 +4507,15 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         s.uv = b.lambda.x * t0 + b.lambda.y * t1 + b.lambda.z * t2;
         s.duvdx = b.ddx.x * t0 + b.ddx.y * t1 + b.ddx.z * t2;
         s.duvdy = b.ddy.x * t0 + b.ddy.y * t1 + b.ddy.z * t2;
+        // A planet's tile carries its normal map (#220): the next level's slopes, filtered by
+        // its mips, so a tile swapped for its children changes no slope that shows and a coarse
+        // cluster shows its slopes filtered rather than its vertices' samples of them.
+        if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u && inst.texture != 0u)
+        {
+            float3 o = sample_image_grad(inst.texture - 1u, SAMPLER_LINEAR_CLAMP, s.uv, s.duvdx, s.duvdy).rgb * 2.0 - 1.0;
+            s.object_normal = normalize(o);
+            s.n = normalize(mul(frame, s.object_normal));
+        }
     }
     // A skinned mesh's projected textures are projected from its bind pose, or they swim over
     // the body as it bends (#166); its UV-mapped ones take their tangent frame from it. A ground
@@ -5306,7 +5315,7 @@ void place_turned(Placement* p, uint slot, uint mesh, float3 position, float4 q,
     inst.id = p[0].first + slot;
     inst.material = m[0].material;
     inst.flags = 0u;
-    inst.pad = 0u;
+    inst.texture = 0u;
     p[0].instances[p[0].first + slot] = inst;
 }
 

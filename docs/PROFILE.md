@@ -1346,8 +1346,10 @@ scene.
   light from 2 m over the ground under the camera, above 1.5 km) about 0.1 ms more. The volume's
   sub-steps for slices longer than 2 km cost nothing on the island, whose slices are all shorter.
 - **Start:** the Earth's elevation loads in 0.5 s (466 MB and its pyramid), its 16K colour map in
-  about 7 s (decoded and its mips made on the finishing thread, every start). The 492 tiles take
-  17.6 s to make and cook the first time, then load from the cache in under 0.1 s.
+  about 7 s (decoded and its mips made on the finishing thread, every start). The tiles cook
+  about 19 a second the first time with their normal maps (28 without): 669 over Mont Blanc in
+  35 s. From the cache they load in under 0.1 s. A first scene with 669 normal maps takes 1.0 s
+  to build, the maps' uploads, and the maps take 341 KB a tile.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
   a new scene takes 0.23–0.39 s on a worker for 400–675 tiles. The longest frame between two
   swaps is 7.7 ms on average, 14.7 ms at most, against 2 ms uncapped. It reached 23–50 ms while

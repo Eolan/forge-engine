@@ -774,6 +774,9 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
     let count = (n * n) as usize;
     mesh.positions.reserve(count + 4 * n as usize);
     mesh.normals.reserve(count + 4 * n as usize);
+    mesh.uvs.reserve(count + 4 * n as usize);
+    // Over the tile 0 to 1, for its normal map ([`tile_normal_map`]).
+    let uv = |i: i64, j: i64| [i as f32 / (n - 1) as f32, j as f32 / (n - 1) as f32];
     for j in 0..n {
         for i in 0..n {
             let p = at(i, j);
@@ -784,6 +787,7 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
                 .normalize_or(p.normalize());
             mesh.positions.push((p - origin).as_vec3().to_array());
             mesh.normals.push(normal.as_vec3().to_array());
+            mesh.uvs.push(uv(i, j));
         }
     }
     let index = |i: i64, j: i64| (j * n + i) as u32;
@@ -818,6 +822,8 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
         mesh.positions.push((down - origin).as_vec3().to_array());
         mesh.normals.push(normal);
         mesh.normals.push(normal);
+        mesh.uvs.push(uv(i, j));
+        mesh.uvs.push(uv(i, j));
     }
     let ring = edge.len() as u32;
     for k in 0..ring {
@@ -836,6 +842,103 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
 pub fn tile_name(body: &str, cell: CellId) -> String {
     let (x, y) = cell.xy();
     format!("{body}@{}-{}-{x}-{y}", cell.face(), cell.level())
+}
+
+/// Texels a side of a tile's normal map ([`tile_normal_map`]).
+pub const NORMAL_MAP_SIZE: u32 = 256;
+
+/// The normal map of `cell`'s tile (#220): [`NORMAL_MAP_SIZE`]² texels over the tile (its
+/// UVs), each the ground's normal at its centre in the planet's frame, from the height of the
+/// next level down.
+///
+/// It holds the slopes the tile's children add: their finest wavelength, two of the tile's
+/// samples, is the map's Nyquist. A tile swapped for its children then changes no slope that
+/// shows, and the map's mips filter the slopes a coarse cluster's vertices only sample (the
+/// cluster DAG keeps each vertex's own normal). RGBA8 with `(n + 1) / 2` in RGB, rows of
+/// increasing `v` first, level 0 only ([`normal_map_levels`] makes the mips).
+pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
+    let world = &planet.world;
+    let size = NORMAL_MAP_SIZE as usize;
+    let level = cell.level();
+    let face = Face::from_index(cell.face());
+    let cells = f64::from(1_u32 << level);
+    let (x, y) = cell.xy();
+    let start = DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0;
+    // Samples half a texel apart: the texels' centres are the odd ones, their neighbours the
+    // even ones either side.
+    let half = 2.0 / cells / (2 * size) as f64;
+    let min_wavelength = world.min_wavelength(level + 1);
+    let radius = world.planet.radius;
+    let side = 2 * size + 1;
+    let mut points = vec![DVec3::ZERO; side * side];
+    for j in 0..side {
+        for i in 0..side {
+            let st = start + DVec2::new(i as f64, j as f64) * half;
+            let direction = CubeSphere::direction(face, st);
+            points[j * side + i] = direction * (radius + planet.ground(direction, min_wavelength));
+        }
+    }
+    let at = |i: usize, j: usize| points[j * side + i];
+    let mut texels = Vec::with_capacity(size * size * 4);
+    for j in 0..size {
+        for i in 0..size {
+            let (ci, cj) = (2 * i + 1, 2 * j + 1);
+            // Along u, then along v, as the tile's own normals.
+            let normal = (at(ci + 1, cj) - at(ci - 1, cj))
+                .cross(at(ci, cj + 1) - at(ci, cj - 1))
+                .normalize_or(at(ci, cj).normalize());
+            texels.extend_from_slice(&encode_normal(normal));
+        }
+    }
+    texels
+}
+
+/// A unit normal as RGBA8: `(n + 1) / 2` in RGB, alpha 255.
+fn encode_normal(n: DVec3) -> [u8; 4] {
+    let byte = |v: f64| ((v * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
+    [byte(n.x), byte(n.y), byte(n.z), 255]
+}
+
+/// A normal map's every level from its first ([`tile_normal_map`], `size`² texels, a power of
+/// two): each texel of a level the mean of its four below, normalised.
+pub fn normal_map_levels(first: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
+    let decode = |t: &[u8]| {
+        DVec3::new(f64::from(t[0]), f64::from(t[1]), f64::from(t[2])) / 127.5 - DVec3::ONE
+    };
+    let mut levels = vec![first];
+    let mut side = size as usize;
+    while side > 1 {
+        let below = levels.last().expect("a level");
+        let half = side / 2;
+        let mut level = Vec::with_capacity(half * half * 4);
+        for j in 0..half {
+            for i in 0..half {
+                let texel = |di: usize, dj: usize| {
+                    let at = ((2 * j + dj) * side + 2 * i + di) * 4;
+                    decode(&below[at..at + 4])
+                };
+                let sum = texel(0, 0) + texel(1, 0) + texel(0, 1) + texel(1, 1);
+                level.extend_from_slice(&encode_normal(sum.normalize_or(DVec3::Z)));
+            }
+        }
+        levels.push(level);
+        side = half;
+    }
+    levels
+}
+
+/// [`tile_normal_map`] of `cell` on the planet called `body`, kept in the world cache by the
+/// tiles' key: made once, then loaded.
+pub fn tile_normal_map_cached(planet: &Planet, body: &str, cell: CellId) -> Vec<u8> {
+    let key = forge_core::derived::KeyHasher::new()
+        .debug(&planet.tile_key())
+        .number(cell.0)
+        .key(code_digests::CODE_PLANET_TILES);
+    crate::keys::derived_cache()
+        .get_or_make(&format!("{}-normals", tile_name(body, cell)), key, || {
+            tile_normal_map(planet, cell)
+        })
+        .value
 }
 
 #[cfg(test)]
@@ -948,6 +1051,31 @@ mod tests {
         let sphere = world.sphere();
         let under = sphere.cell_of(sphere.surface_point(target, 0.0), world.tiles.finest);
         assert!(cut.contains(&under));
+    }
+
+    #[test]
+    fn a_tiles_normal_map_points_out_of_the_planet_and_its_mips_end_at_a_texel() {
+        let planet = small();
+        let world = &planet.world;
+        let sphere = world.sphere();
+        let cell = sphere.cell_of(
+            sphere.surface_point(DVec3::new(0.3, 1.0, 0.2).normalize(), 0.0),
+            6,
+        );
+        let map = tile_normal_map(&planet, cell);
+        let size = NORMAL_MAP_SIZE as usize;
+        assert_eq!(map.len(), size * size * 4);
+        // Every texel within a right angle of the way up at the tile's centre.
+        let up = tile_origin(world, cell).normalize();
+        for t in map.as_chunks::<4>().0 {
+            let n =
+                DVec3::new(f64::from(t[0]), f64::from(t[1]), f64::from(t[2])) / 127.5 - DVec3::ONE;
+            assert!(n.dot(up) > 0.0, "{n} against {up}");
+            assert_eq!(t[3], 255);
+        }
+        let levels = normal_map_levels(map, NORMAL_MAP_SIZE);
+        assert_eq!(levels.len(), 9);
+        assert_eq!(levels.last().unwrap().len(), 4);
     }
 
     #[test]

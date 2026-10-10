@@ -386,7 +386,9 @@ struct GpuInstance {
     material: u32,
     /// `INSTANCE_STILL` (#197).
     flags: u32,
-    pad: u32,
+    /// Its own texture's sampled index plus one, 0 for none: a planet's tile's normal map
+    /// ([`MeshletSceneBuilder::set_instance_texture`], #220).
+    texture: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuInstance>() == 80);
@@ -1000,6 +1002,8 @@ pub struct MeshletSceneBuilder {
     movers: Option<u32>,
     /// The skinned meshes ([`MeshletSceneBuilder::add_skinned_mesh`], #165).
     skins: Vec<SkinSource>,
+    /// What the scene keeps alive ([`MeshletSceneBuilder::keep`]).
+    kept: Vec<Box<dyn std::any::Any + Send>>,
 }
 
 /// How many of a mesh's instances, the nearest, have their start view's needs worked out
@@ -1284,8 +1288,22 @@ impl MeshletSceneBuilder {
             id: self.instances.len() as u32,
             material: material.0,
             flags: 0,
-            pad: 0,
+            texture: 0,
         });
+    }
+
+    /// Gives instance `instance` (in the order added) a texture of its own, by its sampled
+    /// index: a planet's tile's normal map, which its layered rows read through the mesh's UVs
+    /// (`MATERIAL_FLAG_PLANET`, #220). The caller keeps the texture alive as long as the scene
+    /// ([`MeshletSceneBuilder::keep`]).
+    pub fn set_instance_texture(&mut self, instance: usize, sampled: u32) {
+        self.instances[instance].texture = sampled + 1;
+    }
+
+    /// Has the scene keep `item` alive until it is dropped: the textures its instances name
+    /// ([`MeshletSceneBuilder::set_instance_texture`]) when several scenes in turn share them.
+    pub fn keep(&mut self, item: impl std::any::Any + Send) {
+        self.kept.push(Box::new(item));
     }
 
     /// Number of instances so far.
@@ -1322,7 +1340,7 @@ impl MeshletSceneBuilder {
                     id: 0,
                     material: info.material,
                     flags: 0,
-                    pad: 0,
+                    texture: 0,
                 },
                 count as usize,
             ));
@@ -1652,6 +1670,7 @@ impl MeshletSceneBuilder {
             cutouts,
             jelly,
             ground_window: Cell::new(NO_GROUND_WINDOW),
+            _kept: std::mem::take(&mut self.kept),
             planet: Cell::new(GpuPlanet::default()),
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
@@ -1838,6 +1857,8 @@ pub struct MeshletScene {
     /// The planet ([`Self::set_planet`]), as the frame block holds it.
     planet: Cell<GpuPlanet>,
     textures: Option<TextureSet>,
+    /// What it keeps alive for its instances ([`MeshletSceneBuilder::keep`]).
+    _kept: Vec<Box<dyn std::any::Any + Send>>,
     /// Instances.
     pub instance_count: u32,
     /// Work items if every instance were visible with every LOD level possible (groups of 32

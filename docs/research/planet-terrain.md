@@ -877,6 +877,11 @@ height's error, did not catch what it found.
 - **A blend over the swap** (both scenes drawn for a few frames, dithered) would hide any
   octave. It costs a second geometry pass during the blend and needs the cut-outs' raster for
   the dither, and the normal maps make it unneeded.
+- **Built the same day** at 256² (`docs/demos/planet.md`, "The tiles' normal maps").
+  - **The swaps:** of 11 on the tour, 9 now pass both of class 2's thresholds. The two that peak
+    (0.21, 0.28) are the coarse geometry showing through what follows it rather than its normals:
+    the ambient occlusion from the depth and the shadows.
+  - **From orbit**, the Alps' ridges appear, and the snow lies on them.
 
 ## Verification notes
 

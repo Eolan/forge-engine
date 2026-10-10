@@ -66,6 +66,8 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
     edges' normals.
   - A skirt on vertices of their own hangs from the edge, so the simplifier keeps the edge
     locked.
+  - UVs over the tile, for its normal map: 256² texels from the next level's height, mip-mapped,
+    which the shading reads instead of the vertices' normals ("The tiles' normal maps" below).
   - Each is cooked into a cluster DAG through the cache (`cache/meshes/earth@face-level-x-y`),
     keyed by the world's shape, the map's digest and the code (not by its colours).
 - **The cut** (`PlanetWorld::tile_cut_around`): a quadtree of cells around a few points, the
@@ -169,9 +171,9 @@ against D-017's class 2.
     where its parent's normals are smooth.
   - Each level adds an octave of slope, and a swap reveals it, until the children's finest
     wavelength falls under a pixel: about 5 rings, three times the tiles.
-- **The remedy to come:** a normal map per tile, mip-mapped, at twice its vertices' resolution
-  and from the next level's height. The parent then already shows its children's slopes, and
-  the mips filter the slopes a coarse cluster's vertices only sample.
+- **The remedy:** a normal map per tile, mip-mapped, from the next level's height. The parent then
+  already shows its children's slopes, and the mips filter the slopes a coarse cluster's vertices
+  only sample. See the next section.
 - **The horizon test** D-056 planned for the instance cull is left out. The whole instance cull
   takes 0.014 ms a frame for the planet's 400–700 tiles (Tracy, the tour), and the depth pyramid
   already culls the far side's tiles.
@@ -188,6 +190,34 @@ What the engine gained for it:
 - **The frame's per-instance transients** (the instance culls' status words, the deferred
   instances) are sized for the instances rounded up to 1 024. A scene a few tiles larger or
   smaller keeps the graph's layout, where before the 46 MB heap was laid out again at every swap.
+
+## The tiles' normal maps
+
+Each tile carries a normal map (`forge_terrain::planet::tile_normal_map`).
+- **What it holds:** 256² texels over the tile, each the ground's normal at its centre in the
+  planet's frame, from the height of the next level down. Its mips are each the mean of the four
+  texels below. It is made with the tile and kept in the world cache (`cache/world/`).
+- **How it is drawn:** the tile's instance names the map (`set_instance_texture`, in the instance
+  record's spare word). The layered ground reads its normal there through the tile's UVs, with
+  the pixel's derivatives choosing the mip, and turns it by the instance's rotation.
+- **What it changes:**
+  - **The swaps:** a tile's map already holds the slopes its children's vertices add, so a
+    split changes no slope that shows.
+  - **From afar:** the mips filter the slopes a coarse cluster's vertices only sample. The DAG
+    keeps each vertex's own normal.
+  - **The Alps from orbit**, below, before and after: ridges and valleys where the snow was soft
+    blobs that read as cloud, since the layers' slope rule now sees the next level's slopes.
+- **Cost:**
+  - 341 KB a tile with its mips, 228 MB for the 669 tiles over Mont Blanc.
+  - Cooking slows from about 28 tiles a second to 19, for the map's 263 000 heights.
+  - A scene with 318 new maps takes 1.0 s to build (their uploads), otherwise 0.4 s.
+- **The swaps with the maps** (`--check-swaps`, the tour at a fixed step): 11 swaps, 9 under
+  both thresholds, most with under 300 pixels changed. Two still peak:
+  - 0.21 on 83 pixels;
+  - 0.28 on a patch of snow, where the coarse tile's triangles showed through the ambient
+    occlusion (from the depth) and the shadows, which follow the geometry, not its normals.
+
+![the Alps from orbit before and after the tiles' normal maps](images/planet-normal-maps.png)
 
 ## The tour and the bodies in the sky
 
@@ -245,11 +275,13 @@ air is a rim of blue light at its limb.
   new cut, with the stall that brings. Also a tile cooked in milliseconds rather than a quarter of
   a second (a regular grid's DAG built directly).
 - **Clouds for the Earth seen from afar,** as the Moon and orbit see it.
-- **The Alps look like rolling hills** from the Mont Blanc stop. ETOPO's samples are 1.85 km
-  apart, so peaks and valleys narrower than that are smoothed away, and the noise under them adds
-  no ridges. They need a finer elevation for the mountains (Copernicus GLO-30, 30 m, free, a
-  download to ask for) or ridged detail where the map stands high. The snow layer on them reads
-  as cloud.
+- **The Alps look like rolling hills from the Mont Blanc stop,** 6 km up, though their normal
+  maps give them ridges from orbit.
+  - ETOPO's samples are 1.85 km apart, so peaks and valleys narrower than that are smoothed
+    away.
+  - The noise under them adds ±90 m at most, and no ridges.
+  - They need a finer elevation for the mountains (Copernicus GLO-30, 30 m, free, a download to
+    ask for) or ridged detail where the map stands high.
 - **Steps where levels meet:** a tile next to a coarser one meets it with a step its skirt fills.
   The research's swap rule (a level only where its parent errs under a pixel) comes with
   streaming.

@@ -25,10 +25,14 @@ use forge_core::MaterialId;
 use forge_geom::{CookOptions, MeshletMesh};
 use forge_gpu::{Device, ShaderCompiler};
 use forge_render::material::GpuMaterial;
+use forge_render::material::TextureSet;
+use forge_render::textures::TextureData;
 use forge_render::{CellPos, MeshletScene, MeshletSceneBuilder, Residency, StartView};
 use forge_task::{PoolConfig, TaskPool};
 use forge_terrain::Planet;
-use forge_terrain::planet::{tile_mesh, tile_name, tile_origin};
+use forge_terrain::planet::{
+    NORMAL_MAP_SIZE, normal_map_levels, tile_mesh, tile_name, tile_normal_map_cached, tile_origin,
+};
 use forge_world::CellId;
 
 use crate::Placement;
@@ -57,22 +61,43 @@ enum Source {
     Cooked,
 }
 
+/// A tile of a cut: its cooked mesh and its normal map ([`tile_normal_map`]).
+#[derive(Clone)]
+pub(crate) struct Tile {
+    pub mesh: Arc<MeshletMesh>,
+    normals: NormalMap,
+}
+
+/// A tile's normal map: its first level until a scene puts it on the GPU, then its texture.
+#[derive(Clone)]
+enum NormalMap {
+    Texels(Arc<Vec<u8>>),
+    Texture(Arc<TileTexture>),
+}
+
+/// A tile's normal map on the GPU: a texture set of its own, which every scene drawing the tile
+/// keeps alive ([`MeshletSceneBuilder::keep`]).
+pub(crate) struct TileTexture {
+    _set: TextureSet,
+    sampled: u32,
+}
+
 /// The tiles of `cells`: those in `have` as they are, the others loaded from the cache under
-/// `body`'s name or made and cooked on `pool`, their pages in memory or left in the cache's file.
-/// Also how many were cooked, and how many loaded.
+/// `body`'s name or made and cooked on `pool`, their pages in memory or left in the cache's file,
+/// with their normal maps. Also how many were cooked, and how many loaded.
 pub(crate) fn cook_cells(
     planet: &Planet,
     body: &str,
     in_memory: bool,
     cells: &[CellId],
-    have: &HashMap<CellId, Arc<MeshletMesh>>,
+    have: &HashMap<CellId, Tile>,
     pool: &TaskPool,
-) -> (Vec<Arc<MeshletMesh>>, usize, usize) {
+) -> (Vec<Tile>, usize, usize) {
     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
     let key = planet.tile_key();
-    let mut slots: Vec<Option<(Arc<MeshletMesh>, Source)>> = cells
+    let mut slots: Vec<Option<(Tile, Source)>> = cells
         .iter()
-        .map(|c| have.get(c).map(|m| (Arc::clone(m), Source::Kept)))
+        .map(|c| have.get(c).map(|t| (t.clone(), Source::Kept)))
         .collect();
     pool.scope(|s| {
         for (&cell, slot) in cells.iter().zip(slots.iter_mut()) {
@@ -98,38 +123,59 @@ pub(crate) fn cook_cells(
                 } else {
                     Source::Cooked
                 };
-                *slot = Some((Arc::new(done.mesh), source));
+                let normals = tile_normal_map_cached(planet, body, cell);
+                *slot = Some((
+                    Tile {
+                        mesh: Arc::new(done.mesh),
+                        normals: NormalMap::Texels(Arc::new(normals)),
+                    },
+                    source,
+                ));
             });
         }
     });
     let (mut cooked, mut loaded) = (0, 0);
-    let meshes = slots
+    let tiles = slots
         .into_iter()
         .map(|slot| {
-            let (mesh, source) = slot.expect("every tile cooked");
+            let (tile, source) = slot.expect("every tile cooked");
             cooked += usize::from(source == Source::Cooked);
             loaded += usize::from(source == Source::Loaded);
-            mesh
+            tile
         })
         .collect();
-    (meshes, cooked, loaded)
+    (tiles, cooked, loaded)
 }
 
-/// The scene of `cells` (their tiles in `meshes`, in the same order), its pages for `start`
-/// loaded when it streams them.
+/// The scene of `cells` (their tiles in `tiles`, in the same order), its pages for `start`
+/// loaded when it streams them. The tiles' normal maps not on the GPU yet go there.
 pub(crate) fn build_scene(
     device: &Arc<Device>,
     shaders: &ShaderCompiler,
     parts: &SceneParts,
     cells: &[CellId],
-    meshes: &[Arc<MeshletMesh>],
+    tiles: &mut [Tile],
     start: StartView,
 ) -> Result<MeshletScene> {
     let world = &parts.planet.world;
+    for (cell, tile) in cells.iter().zip(tiles.iter_mut()) {
+        if let NormalMap::Texels(texels) = &tile.normals {
+            let mut set = TextureSet::new(device);
+            let id = set.add(&TextureData {
+                name: format!("{} normals", tile_name(&parts.body, *cell)).into(),
+                size: NORMAL_MAP_SIZE,
+                height: NORMAL_MAP_SIZE,
+                srgb: false,
+                levels: normal_map_levels(texels.as_ref().clone(), NORMAL_MAP_SIZE),
+            })?;
+            let sampled = set.sampled(id);
+            tile.normals = NormalMap::Texture(Arc::new(TileTexture { _set: set, sampled }));
+        }
+    }
     let mut builder = MeshletSceneBuilder::new();
     builder.set_material_rows(parts.rows.clone());
     builder.set_ray_traced(parts.ray_traced);
-    let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
+    let ids: Vec<_> = tiles.iter().map(|t| builder.add_mesh(&t.mesh)).collect();
     // Every tile is ground to the rays, the finest under a kilometre across too.
     builder.set_ray_terrain(&ids);
     // The rays cut each level's tiles as one surface: a tile far from the camera is coarse
@@ -148,9 +194,13 @@ pub(crate) fn build_scene(
         }
     }
     let rotation = parts.placement.rotation.as_quat();
-    for (&cell, &id) in cells.iter().zip(&ids) {
+    for (i, ((&cell, &id), tile)) in cells.iter().zip(&ids).zip(tiles.iter()).enumerate() {
         let at = parts.placement.world_point(tile_origin(world, cell));
         builder.add_instance_at(id, CellPos::from_f64(at), rotation, 1.0, parts.ground);
+        if let NormalMap::Texture(texture) = &tile.normals {
+            builder.set_instance_texture(i, texture.sampled);
+            builder.keep(Arc::clone(texture));
+        }
     }
     // A streamed scene loads its start view's pages before its first frame (#121): the shots'
     // frames are the same every run, and a swapped-in scene shows no coarser ground.
@@ -230,13 +280,13 @@ pub(crate) struct TileStream {
 }
 
 impl TileStream {
-    /// Starts the worker, which holds the tiles `meshes` of the drawn scene's cut `cells`.
+    /// Starts the worker, which holds the tiles `tiles` of the drawn scene's cut `cells`.
     pub fn new(
         device: Arc<Device>,
         shaders: ShaderCompiler,
         parts: SceneParts,
         cells: Vec<CellId>,
-        meshes: Vec<Arc<MeshletMesh>>,
+        tiles: Vec<Tile>,
         latency: f64,
     ) -> Result<Self> {
         let (requests, asked) = mpsc::channel::<Request>();
@@ -253,8 +303,7 @@ impl TileStream {
                     thread_name: "planet-tile".to_owned(),
                     ..PoolConfig::with_workers(workers)
                 });
-                let mut have: HashMap<CellId, Arc<MeshletMesh>> =
-                    cells.into_iter().zip(meshes).collect();
+                let mut have: HashMap<CellId, Tile> = cells.into_iter().zip(tiles).collect();
                 while let Ok(mut request) = asked.recv() {
                     // Only the latest ask counts.
                     while let Ok(newer) = asked.try_recv() {
@@ -262,7 +311,7 @@ impl TileStream {
                     }
                     let result = (|| {
                         let started = Instant::now();
-                        let (meshes, cooked, loaded) = cook_cells(
+                        let (mut tiles, cooked, loaded) = cook_cells(
                             &parts.planet,
                             &parts.body,
                             matches!(parts.residency, Residency::All),
@@ -276,10 +325,10 @@ impl TileStream {
                             &shaders,
                             &parts,
                             &request.cells,
-                            &meshes,
+                            &mut tiles,
                             request.start,
                         )?;
-                        have = request.cells.iter().copied().zip(meshes).collect();
+                        have = request.cells.iter().copied().zip(tiles).collect();
                         Ok(Built {
                             scene,
                             cells: request.cells,

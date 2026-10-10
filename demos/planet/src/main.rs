@@ -26,7 +26,6 @@ use clap::{Parser, ValueEnum};
 use forge_app::{AppConfig, Context, Demo, Finish, FlyCamera, FrameInfo, HdrMode, Input, Setup};
 use forge_core::MaterialTable;
 use forge_core::material::{Material, RenderLayer, ShadingClass, TextureId};
-use forge_geom::MeshletMesh;
 use forge_render::material::{TextureSet, gpu_rows};
 use forge_render::meshlet::DrawParams;
 use forge_render::textures::{self, TextureData};
@@ -41,7 +40,7 @@ use forge_terrain::planet::{SkyBodyParams, TourStop};
 use forge_terrain::{Planet, PlanetWorld};
 use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
-use stream::{Built, SceneParts, TileStream, needs_new_cut};
+use stream::{Built, SceneParts, Tile, TileStream, needs_new_cut};
 use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
@@ -230,7 +229,7 @@ struct Tiles {
     /// The first frame's camera, and the cut around it and where the run is heading.
     camera: FlyCamera,
     cells: Vec<CellId>,
-    meshes: Vec<Arc<MeshletMesh>>,
+    tiles: Vec<Tile>,
     cooked: usize,
     ms: f64,
 }
@@ -270,7 +269,7 @@ fn cook_tiles(planet: Planet, body: String, args: &Args) -> Result<Tiles> {
         target_height_m = %format_args!("{target_height:.1}"),
         "the planet's cut"
     );
-    let (meshes, cooked, loaded) = stream::cook_cells(
+    let (tiles, cooked, loaded) = stream::cook_cells(
         &planet,
         &body,
         args.resident,
@@ -294,7 +293,7 @@ fn cook_tiles(planet: Planet, body: String, args: &Args) -> Result<Tiles> {
         placement,
         camera,
         cells,
-        meshes,
+        tiles,
         cooked,
         ms,
     })
@@ -545,7 +544,7 @@ impl PlanetDemo {
             placement,
             camera,
             cells,
-            meshes,
+            mut tiles,
             cooked,
             ms,
         } = tiles;
@@ -664,7 +663,7 @@ impl PlanetDemo {
             &ctx.shaders,
             &parts,
             &cells,
-            &meshes,
+            &mut tiles,
             start_view(&camera, ctx.aspect(), ctx.extent().height, args.lod_error),
         )?;
         let build = built.elapsed().as_secs_f64();
@@ -684,13 +683,13 @@ impl PlanetDemo {
             build_ms = %format_args!("{:.0}", build * 1e3),
             "the planet's scene"
         );
-        let tiles = cells.len();
+        let tile_count = cells.len();
         let stream = TileStream::new(
             Arc::clone(&ctx.device),
             ctx.shaders.clone(),
             parts,
             cells,
-            meshes,
+            tiles,
             build,
         )?;
         let mut flags = CullFlags::DEFAULT;
@@ -732,7 +731,7 @@ impl PlanetDemo {
             target_height,
             colour_map,
             sea_mask,
-            tiles,
+            tiles: tile_count,
             renderer,
             scene,
             stream,

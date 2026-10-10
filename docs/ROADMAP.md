@@ -108,10 +108,10 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
     Moon and the Earth in each other's sky, and a tour of both.
   - **The tiles follow the camera ✅** (2026-10-10): a new cut built on a worker as the camera
     flies, its scene swapped in; each swap checked with ꟻLIP (`--check-swaps`).
+  - **A normal map per tile ✅** (2026-10-10): the swaps' patches mostly gone, the Alps' ridges
+    from orbit.
   - **Next:**
-    - a mip-mapped normal map per tile, so a swap changes no slope that shows: the swaps'
-      remaining patches are the finer tiles' normals;
-    - then the scene taking and freeing tiles in place, rather than whole-scene builds;
+    - the scene taking and freeing tiles in place, rather than whole-scene builds;
     - a finer elevation for the mountains (a download to ask for).
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
