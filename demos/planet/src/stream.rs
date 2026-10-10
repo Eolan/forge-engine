@@ -25,7 +25,7 @@ use forge_core::MaterialId;
 use forge_geom::{CookOptions, MeshletMesh};
 use forge_gpu::{Device, ShaderCompiler};
 use forge_render::material::GpuMaterial;
-use forge_render::material::TextureSet;
+use forge_render::material::{TextureSet, upload_textures};
 use forge_render::textures::TextureData;
 use forge_render::{CellPos, MeshletScene, MeshletSceneBuilder, Residency, StartView};
 use forge_task::{PoolConfig, TaskPool};
@@ -158,19 +158,33 @@ pub(crate) fn build_scene(
     start: StartView,
 ) -> Result<MeshletScene> {
     let world = &parts.planet.world;
-    for (cell, tile) in cells.iter().zip(tiles.iter_mut()) {
-        if let NormalMap::Texels(texels) = &tile.normals {
-            let mut set = TextureSet::new(device);
-            let id = set.add(&TextureData {
-                name: format!("{} normals", tile_name(&parts.body, *cell)).into(),
+    // The new tiles' normal maps, uploaded together: a few submissions, not one a map.
+    let new: Vec<usize> = tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| matches!(t.normals, NormalMap::Texels(_)))
+        .map(|(i, _)| i)
+        .collect();
+    let data: Vec<TextureData> = new
+        .iter()
+        .map(|&i| {
+            let NormalMap::Texels(texels) = &tiles[i].normals else {
+                unreachable!("a new tile's map is its texels")
+            };
+            TextureData {
+                name: format!("{} normals", tile_name(&parts.body, cells[i])).into(),
                 size: NORMAL_MAP_SIZE,
                 height: NORMAL_MAP_SIZE,
                 srgb: false,
                 levels: normal_map_levels(texels.as_ref().clone(), NORMAL_MAP_SIZE),
-            })?;
-            let sampled = set.sampled(id);
-            tile.normals = NormalMap::Texture(Arc::new(TileTexture { _set: set, sampled }));
-        }
+            }
+        })
+        .collect();
+    for (&i, (image, bytes)) in new.iter().zip(upload_textures(device, &data)?) {
+        let mut set = TextureSet::new(device);
+        let id = set.add_uploaded(image, bytes);
+        let sampled = set.sampled(id);
+        tiles[i].normals = NormalMap::Texture(Arc::new(TileTexture { _set: set, sampled }));
     }
     let mut builder = MeshletSceneBuilder::new();
     builder.set_material_rows(parts.rows.clone());

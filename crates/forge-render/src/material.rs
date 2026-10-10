@@ -146,6 +146,17 @@ impl TextureSet {
         Ok(TextureId(self.textures.len() as u32 - 1))
     }
 
+    /// Adds a texture [`upload_textures`] uploaded, of `bytes` over its levels, and returns
+    /// its id for a material row.
+    pub fn add_uploaded(&mut self, image: Image, bytes: u64) -> TextureId {
+        let sampled = self
+            .device
+            .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        self.bytes += bytes;
+        self.textures.push((image, sampled));
+        TextureId(self.textures.len() as u32 - 1)
+    }
+
     /// Uploads a layer map for a [`ShadingClass::Layered`] row: `width × height` layer ids,
     /// one byte each, rows top to bottom (`R8_UINT`, one level: the resolve reads texels, it
     /// does not filter them).
@@ -206,6 +217,59 @@ impl Drop for TextureSet {
             self.device.release_sampled_image(*sampled);
         }
     }
+}
+
+/// Uploads every texture of `data` (RGBA8, every level) as [`TextureSet::add`] would, as many
+/// to a submission as [`forge_gpu::STAGING_CHUNK`] holds: a worker adding hundreds of the
+/// planet's tiles' normal maps while frames run waits a few times, not once a map (#220).
+/// Each image with its bytes, for [`TextureSet::add_uploaded`].
+pub fn upload_textures(device: &Arc<Device>, data: &[TextureData]) -> Result<Vec<(Image, u64)>> {
+    let bytes = |d: &TextureData| d.levels.iter().map(Vec::len).sum::<usize>();
+    let mut uploaded = Vec::with_capacity(data.len());
+    let mut start = 0;
+    while start < data.len() {
+        // At least one, then as many more as fit.
+        let mut end = start + 1;
+        let mut total = bytes(&data[start]);
+        while end < data.len() && total + bytes(&data[end]) <= forge_gpu::STAGING_CHUNK {
+            total += bytes(&data[end]);
+            end += 1;
+        }
+        let levels: Vec<Vec<&[u8]>> = data[start..end]
+            .iter()
+            .map(|d| d.levels.iter().map(Vec::as_slice).collect())
+            .collect();
+        let images: Vec<(ImageDesc<'_>, &[&[u8]])> = data[start..end]
+            .iter()
+            .zip(&levels)
+            .map(|(d, levels)| {
+                (
+                    ImageDesc {
+                        width: d.size,
+                        height: d.height,
+                        format: if d.srgb {
+                            vk::Format::R8G8B8A8_SRGB
+                        } else {
+                            vk::Format::R8G8B8A8_UNORM
+                        },
+                        usage: vk::ImageUsageFlags::SAMPLED,
+                        aspect: vk::ImageAspectFlags::COLOR,
+                        mip_levels: levels.len() as u32,
+                        name: &d.name,
+                    },
+                    levels.as_slice(),
+                )
+            })
+            .collect();
+        let made = device.create_images_with_mips(&images)?;
+        uploaded.extend(
+            made.into_iter()
+                .zip(&data[start..end])
+                .map(|(image, d)| (image, bytes(d) as u64)),
+        );
+        start = end;
+    }
+    Ok(uploaded)
 }
 
 /// A model's materials as rows (#138, D-047), its images decoded into a [`TextureSet`] once

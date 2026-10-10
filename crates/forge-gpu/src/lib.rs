@@ -54,7 +54,7 @@ pub use graph::{
     TransientBufferDesc, TransientDesc,
 };
 pub use instance::{Instance, Surface};
-pub use memory::{Buffer, BufferDesc, Image, ImageDesc, TransientHeap};
+pub use memory::{Buffer, BufferDesc, Image, ImageDesc, STAGING_CHUNK, TransientHeap};
 pub use memory_report::{BUDGET_WARNING, HeapReport, MemoryCategory, MemoryReport};
 pub use pipeline::{
     ComputePipelineDesc, FullscreenPipelineDesc, MeshPipelineDesc, Pipeline, VertexPipelineDesc,

@@ -215,7 +215,9 @@ Each tile carries a normal map (`forge_terrain::planet::tile_normal_map`).
 - **Cost:**
   - 341 KB a tile with its mips, 228 MB for the 669 tiles over Mont Blanc.
   - Cooking slows from about 28 tiles a second to 19, for the map's 263 000 heights.
-  - A scene with 318 new maps takes 1.0 s to build (their uploads), otherwise 0.4 s.
+  - A scene with 317 new maps takes 0.58 s to build while frames run, otherwise 0.4 s: the maps
+    upload together, as many to a submission as 16 MiB of staging holds (`upload_textures`), not
+    one a map (0.98 s).
 - **The swaps with the maps** (`--check-swaps`, the tour at a fixed step): 11 swaps, 9 under
   both thresholds, most with under 300 pixels changed. Two still peak:
   - 0.21 on 83 pixels;

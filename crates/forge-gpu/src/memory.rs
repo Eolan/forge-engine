@@ -556,13 +556,22 @@ impl Device {
         desc: ImageDesc<'_>,
         levels: &[&[u8]],
     ) -> Result<Image> {
-        let desc = ImageDesc {
-            usage: desc.usage | vk::ImageUsageFlags::TRANSFER_DST,
-            mip_levels: levels.len().max(1) as u32,
-            ..desc
-        };
-        let image = self.allocate_image(&desc, MemoryCategory::Textures)?;
-        let total: usize = levels.iter().map(|l| l.len()).sum();
+        let mut images = self.create_images_with_mips(&[(desc, levels)])?;
+        Ok(images.pop().expect("one image"))
+    }
+
+    /// [`Self::create_image_with_mips`] for each of `images`, uploaded through one staging
+    /// buffer in one submission: a worker adding the planet's tiles' normal maps while frames
+    /// run waits once for them all, not once each (#220). The caller keeps their bytes over all
+    /// within [`STAGING_CHUNK`] or so: the staging buffer holds them all.
+    pub fn create_images_with_mips(
+        self: &Arc<Self>,
+        images: &[(ImageDesc<'_>, &[&[u8]])],
+    ) -> Result<Vec<Image>> {
+        let total: usize = images
+            .iter()
+            .flat_map(|(_, levels)| levels.iter().map(|l| l.len()))
+            .sum();
         let staging = self.create_buffer(BufferDesc {
             size: total.max(4) as u64,
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
@@ -570,64 +579,92 @@ impl Device {
             category: MemoryCategory::Transfer,
             name: "image upload staging",
         })?;
-        let mut regions = Vec::with_capacity(levels.len());
+        let mut made = Vec::with_capacity(images.len());
+        let mut copies = Vec::with_capacity(images.len());
         let mut offset = 0_u64;
-        for (level, data) in levels.iter().enumerate() {
-            staging.write(offset, data);
-            let extent = image.mip_extent(level as u32);
-            regions.push(
-                vk::BufferImageCopy::default()
-                    .buffer_offset(offset)
-                    .image_subresource(vk::ImageSubresourceLayers {
+        for (desc, levels) in images {
+            let desc = ImageDesc {
+                usage: desc.usage | vk::ImageUsageFlags::TRANSFER_DST,
+                mip_levels: levels.len().max(1) as u32,
+                ..*desc
+            };
+            let image = self.allocate_image(&desc, MemoryCategory::Textures)?;
+            let mut regions = Vec::with_capacity(levels.len());
+            for (level, data) in levels.iter().enumerate() {
+                staging.write(offset, data);
+                let extent = image.mip_extent(level as u32);
+                regions.push(
+                    vk::BufferImageCopy::default()
+                        .buffer_offset(offset)
+                        .image_subresource(vk::ImageSubresourceLayers {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            mip_level: level as u32,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        })
+                        .image_extent(vk::Extent3D {
+                            width: extent.width,
+                            height: extent.height,
+                            depth: 1,
+                        }),
+                );
+                offset += data.len() as u64;
+            }
+            copies.push((desc.mip_levels, regions));
+            made.push(image);
+        }
+        let barrier =
+            |image: &Image, levels, src_stage, src_access, dst_stage, dst_access, old, new| {
+                vk::ImageMemoryBarrier2::default()
+                    .src_stage_mask(src_stage)
+                    .src_access_mask(src_access)
+                    .dst_stage_mask(dst_stage)
+                    .dst_access_mask(dst_access)
+                    .old_layout(old)
+                    .new_layout(new)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image.raw())
+                    .subresource_range(vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
-                        mip_level: level as u32,
+                        base_mip_level: 0,
+                        level_count: levels,
                         base_array_layer: 0,
                         layer_count: 1,
                     })
-                    .image_extent(vk::Extent3D {
-                        width: extent.width,
-                        height: extent.height,
-                        depth: 1,
-                    }),
-            );
-            offset += data.len() as u64;
-        }
-        let range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: desc.mip_levels,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        let barrier = |src_stage, src_access, dst_stage, dst_access, old, new| {
-            vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(src_stage)
-                .src_access_mask(src_access)
-                .dst_stage_mask(dst_stage)
-                .dst_access_mask(dst_access)
-                .old_layout(old)
-                .new_layout(new)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(image.raw())
-                .subresource_range(range)
-        };
-        let to_transfer = [barrier(
-            vk::PipelineStageFlags2::NONE,
-            vk::AccessFlags2::NONE,
-            vk::PipelineStageFlags2::TRANSFER,
-            vk::AccessFlags2::TRANSFER_WRITE,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        )];
-        let to_sampled = [barrier(
-            vk::PipelineStageFlags2::TRANSFER,
-            vk::AccessFlags2::TRANSFER_WRITE,
-            vk::PipelineStageFlags2::ALL_COMMANDS,
-            vk::AccessFlags2::SHADER_SAMPLED_READ,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        )];
+            };
+        let to_transfer: Vec<_> = made
+            .iter()
+            .zip(&copies)
+            .map(|(image, (levels, _))| {
+                barrier(
+                    image,
+                    *levels,
+                    vk::PipelineStageFlags2::NONE,
+                    vk::AccessFlags2::NONE,
+                    vk::PipelineStageFlags2::TRANSFER,
+                    vk::AccessFlags2::TRANSFER_WRITE,
+                    vk::ImageLayout::UNDEFINED,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                )
+            })
+            .collect();
+        let to_sampled: Vec<_> = made
+            .iter()
+            .zip(&copies)
+            .map(|(image, (levels, _))| {
+                barrier(
+                    image,
+                    *levels,
+                    vk::PipelineStageFlags2::TRANSFER,
+                    vk::AccessFlags2::TRANSFER_WRITE,
+                    vk::PipelineStageFlags2::ALL_COMMANDS,
+                    vk::AccessFlags2::SHADER_SAMPLED_READ,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                )
+            })
+            .collect();
         self.execute_transient(|raw, cb| {
             // SAFETY: recorded into the transient command buffer; the staging buffer outlives
             // the call (it is dropped after the fence wait inside `execute_transient` returns).
@@ -636,13 +673,15 @@ impl Device {
                     cb,
                     &vk::DependencyInfo::default().image_memory_barriers(&to_transfer),
                 );
-                raw.cmd_copy_buffer_to_image(
-                    cb,
-                    staging.raw(),
-                    image.raw(),
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &regions,
-                );
+                for (image, (_, regions)) in made.iter().zip(&copies) {
+                    raw.cmd_copy_buffer_to_image(
+                        cb,
+                        staging.raw(),
+                        image.raw(),
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        regions,
+                    );
+                }
                 raw.cmd_pipeline_barrier2(
                     cb,
                     &vk::DependencyInfo::default().image_memory_barriers(&to_sampled),
@@ -650,7 +689,7 @@ impl Device {
             }
         })?;
         drop(staging);
-        Ok(image)
+        Ok(made)
     }
 
     /// Moves every level of `image` from `UNDEFINED` to `layout` in a one-shot submission.
