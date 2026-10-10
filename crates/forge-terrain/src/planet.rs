@@ -183,6 +183,10 @@ pub struct ViewParams {
     pub orbit: f64,
     /// Whether it has an atmosphere (the Earth's), or space's black sky (the Moon's).
     pub atmosphere: bool,
+    /// How much the air hazes what lies behind it: the air between the camera and the ground is
+    /// this many times as dense. 1 is the physical air; below it, the ground stays clearer, and
+    /// the sky itself doesn't change.
+    pub haze: f64,
     /// The sun over the target, degrees: its azimuth from north towards east, and its elevation.
     pub sun: (f64, f64),
     /// The sky's map (an equirectangular PNG relative to the workspace: NASA's Deep Star Maps,
@@ -276,6 +280,7 @@ impl Default for PlanetWorld {
                 heading: 0.0,
                 orbit: 400_000.0,
                 atmosphere: true,
+                haze: 1.0,
                 sun: (240.0, 25.0),
                 stars: None,
                 sky_pole: (0.0, 90.0),

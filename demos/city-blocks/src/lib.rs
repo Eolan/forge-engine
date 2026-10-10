@@ -1992,6 +1992,7 @@ impl Demo for Gallery {
                 luminance_scale: self.renderer.sun_illuminance * exposure,
                 aerial_far_km: 8.0,
                 march_beyond: false,
+                haze: 1.0,
                 night,
             },
             targets.depth,

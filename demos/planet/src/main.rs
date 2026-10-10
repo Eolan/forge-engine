@@ -92,6 +92,9 @@ struct Args {
     /// The sun's azimuth over the target, degrees from north towards east, over the world's.
     #[arg(long)]
     sun_azimuth: Option<f64>,
+    /// How much the air hazes the ground (1: the physical air), over the world's.
+    #[arg(long)]
+    haze: Option<f64>,
     /// Draw without the sun's ray-traced shadows (J toggles them).
     #[arg(long)]
     no_shadows: bool,
@@ -531,6 +534,8 @@ struct PlanetDemo {
     tour_stop: Option<String>,
     /// The air's settings, for the light reaching a body through it.
     air_params: Option<AtmosphereParams>,
+    /// How much the air hazes the ground (the world's `haze`).
+    haze: f32,
     sky_from_world: glam::Mat3,
     taa: Taa,
     taa_enabled: bool,
@@ -809,6 +814,7 @@ impl PlanetDemo {
             sky_from_world,
             bodies,
             air_params,
+            haze: world.view.haze as f32,
             tour_stop: None,
             taa,
             bloom: Bloom::new(&ctx.device, &ctx.shaders)?,
@@ -1449,6 +1455,7 @@ impl Demo for PlanetDemo {
         let horizon_km = ((2.0 * self.placement.radius * over_sea.max(1.0)).sqrt() * 1e-3) as f32;
         let sun_dir = self.renderer.sun_dir;
         let luminance_scale = self.renderer.sun_illuminance * exposure;
+        let haze = self.haze;
         let sky = self.air.as_mut().map(|(atmosphere, ground)| {
             let air = atmosphere.frame(&mut frame.graph, frame.slot, view_km, sun_dir);
             let ground: &'f GroundSky = ground;
@@ -1464,6 +1471,7 @@ impl Demo for PlanetDemo {
                     luminance_scale,
                     aerial_far_km: horizon_km.clamp(8.0, 64.0),
                     march_beyond: true,
+                    haze,
                     night: None,
                 },
                 targets.depth,
@@ -1496,6 +1504,7 @@ impl Demo for PlanetDemo {
                             luminance_scale,
                             aerial_far_km: 8.0,
                             march_beyond: false,
+                            haze,
                             night: None,
                         },
                         targets.depth,
@@ -1705,6 +1714,9 @@ fn main() -> Result<()> {
     }
     if let Some(elevation) = args.sun_elevation {
         world.view.sun.1 = elevation;
+    }
+    if let Some(haze) = args.haze {
+        world.view.haze = haze;
     }
     if args.print_world {
         print!("{}", world.to_toml()?);

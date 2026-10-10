@@ -404,12 +404,13 @@ void compose_main(uint3 id : SV_DispatchThreadID)
     {
         // Beyond the volume (#220): its light to its far end, then the rest of the way marched
         // for this pixel alone, dimmed by what the volume let through.
-        float4 near = aerial_at(s, uv, far);
+        float4 near = aerial_over(s, uv, far);
         float4 rest = march_air(s, p, view_direction(s, uv), far, distance);
         air = float4(near.rgb + near.a * rest.rgb, near.a * rest.a);
     }
     else
-        air = aerial_at(s, uv, distance);
+        air = aerial_over(s, uv, distance);
+    air = thinned(air, s[0].haze);
     float4 c = color[id.xy];
     color[id.xy] = float4(c.rgb * air.a + air.rgb * s[0].scale.x, c.a);
 }

@@ -53,6 +53,11 @@ target = [43.728, 7.362]
 heading = 180.0
 orbit = 400000.0
 atmosphere = true
+# The air between the camera and the ground at half its density (the owner, 2026-10-10: "even
+# close to the ground it still gives the impression to be in a light fog"). The physical air
+# veiled the Alps from 6 km up by as much blue as the sky's, and the land from orbit more than
+# the station's processed photographs show. The sky itself is unchanged.
+haze = 0.5
 sun = [240.0, 25.0]
 # The stars: NASA's Deep Star Maps 2020 (tools/fetch-planets.sh), turned by the Earth's pole and
 # its rotation at J2000.0 (W = 280.46°).

@@ -72,7 +72,8 @@ struct GpuSky {
     stars: u64,
     star_cells: u64,
     moon_albedo: u32,
-    pad1: [u32; 3],
+    haze: f32,
+    pad1: [u32; 2],
 }
 
 const _: () = assert!(std::mem::size_of::<GpuSky>() == 320);
@@ -136,6 +137,10 @@ pub struct SkyParams {
     /// March each pixel beyond `aerial_far_km` on its own instead of giving it the volume's
     /// last slice (#220): a planet seen from high up, its ground hundreds of kilometres away.
     pub march_beyond: bool,
+    /// How much the air hazes what lies behind it: the air between the camera and a surface is
+    /// this many times as dense (`thinned` in `skyframe.slang`). 1 is the physical air; the
+    /// sky's own light doesn't change.
+    pub haze: f32,
     /// The night's lights and sky (D-046): `sun_dir` is then the key light's and
     /// `luminance_scale` per unit of the reference illuminance.
     pub night: Option<SkyNight>,
@@ -417,7 +422,8 @@ impl GroundSky {
                         stars: night.addresses.0,
                         star_cells: night.addresses.1,
                         moon_albedo: night.moon_albedo,
-                        pad1: [0; 3],
+                        haze: params.haze,
+                        pad1: [0; 2],
                     }],
                 );
                 commands.bind_pipeline(pipeline);

@@ -45,7 +45,8 @@ public struct Sky
     public float4* stars;            // the night's stars, two float4 each (`Star` in sky.slang), or null
     public uint* star_cells;         // their cells (crates/forge-render/src/night.rs, `bin_stars`)
     public uint moon_albedo;         // sampled: the Moon's albedo map, or ~0: a plain disc
-    public uint pad1;
+    public float haze;               // the air between the camera and what it hazes is this many
+                                     // times as dense (1: the physical air; `thinned`)
     public uint pad2;
     public uint pad3;
 };
@@ -76,10 +77,33 @@ public float slice_distance(Sky* s, float k)
 // 100 m of a clear day's air at sea level dim what lies beyond by about 0.2 %.
 static const float AERIAL_START_KM = 0.1;
 
-// The aerial perspective at screen `uv` and `distance` km, over the air beyond
-// `AERIAL_START_KM`: the volume's light and transmittance from there, so the haze grows from
-// nothing at that depth with no edge.
+// The aerial perspective at screen `uv` over a surface `distance` km away, through air the
+// sky's `haze` times as dense (`thinned`).
 public float4 aerial_at(Sky* s, float2 uv, float distance)
+{
+    return thinned(aerial_over(s, uv, distance), s[0].haze);
+}
+
+// `air` (the light gathered, pre-exposure, and the mean transmittance) through air `haze` times
+// as dense, between the camera and what it hazes; the sky's own light stays as it was. The
+// transmittance is raised to `haze`, and the light scaled by the share of it the thinner air
+// gathers, exact where each unit of depth gathers the same light. Scaling the distances instead
+// (Unreal's aerial perspective view distance scale) would cut the air off from orbit, where a
+// ray crosses hundreds of kilometres of space before it.
+public float4 thinned(float4 air, float haze)
+{
+    if (haze == 1.0)
+        return air;
+    float t = saturate(air.a);
+    float through = pow(max(t, 1e-6), haze);
+    float share = 1.0 - t > 1e-5 ? (1.0 - through) / (1.0 - t) : haze;
+    return float4(air.rgb * share, through);
+}
+
+// The aerial perspective at screen `uv` over `distance` km of air, beyond `AERIAL_START_KM`:
+// the volume's light and transmittance from there, so the haze grows from nothing at that
+// depth with no edge.
+public float4 aerial_over(Sky* s, float2 uv, float distance)
 {
     if (distance <= AERIAL_START_KM)
         return float4(0.0, 0.0, 0.0, 1.0);

@@ -130,6 +130,24 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
     - When the camera is over 1.5 km up, the ground's sky light and the reflections it takes
       come from a second set of tables at 2 m over the ground under the camera: from orbit, the
       camera's own sky is space's black.
+    - **The haze is the air at half its density** (`[view] haze = 0.5`, `--haze`): the owner saw
+      "a light fog" even near the ground (2026-10-10).
+      - The air's coefficients are Hillaire's Earth, the same as Unreal's defaults: a clear day,
+        over 200 km of visibility. Even so, from 6 km over the Alps, the physical air laid as
+        much blue over the grass as the sky's own (sRGB 19 to 109 at the foot of the frame).
+      - The air between the camera and the ground now counts half: its transmittance becomes its
+        square root and its light is scaled to match (`thinned` in `skyframe.slang`). The same spot
+        reads 82. Scaling the distances instead, as Unreal's view distance scale does, would cut
+        the air off from orbit, where a ray crosses 300 km of space first.
+      - The sky keeps its light.
+      - At Èze (120 m up) the change is small: the hills 2 km away go from blue 25 to 16. What
+        reads as fog there is mostly the tone curve: AgX keeps the blue sky greyish, where its
+        punchy look shows it deep blue (`--tonemap agx-punchy --ev100 14`, G in the demo).
+
+      Below, Mont Blanc from 6 km up and Corsica from 400 km, the physical air on the left and
+      the half on the right:
+
+      ![the haze at 1 and 0.5](images/planet-haze.png)
   - **The stars** (`forge_render::SkyBox`): NASA's map, turned by the body's pole and prime
     meridian (the IAU's, the Moon's at J2000) and added over the air's sky, fading through its
     lowest 40 km. On an airless body it draws the sun's disc too. The map is made for display (its
@@ -422,10 +440,11 @@ air is a rim of blue light at its limb.
 - **Rock and snow over the Alps:** grey rock on slopes over 44°, snow over a line by latitude.
   Glaciers, scree and forest lines come with the material rules, not the elevation.
 - **Steps where levels meet:** a tile next to a coarser one meets it with a step its skirt fills.
-  The research's swap rule (a level only where its parent errs under a pixel) comes with
-  streaming.
-- **The haze from orbit:** a light veil over the land that the station's processed photographs
-  don't show; to compare with raw ones.
+  Since the swap rule, a coarser tile stays only where its height errs under about a pixel
+  (`error_px`), so the steps are that small where they are seen.
+- **The haze from orbit:** lighter since the air counts half (the sky above), still to
+  compare with the station's raw photographs. The air in a mountain's shadow is lit as if in the
+  sun (the aerial volume has no shadows), so a shaded slope far away is veiled a little too much.
 - **The Earth's land under the sea's level** (the Netherlands, the Caspian's shores) floods, and
   the Blue Marble is July's: no seasons, no clouds.
 - **The 16K colour map's start:** 7 s to decode it and make its mips, every start; to cache.
