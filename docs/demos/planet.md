@@ -84,6 +84,11 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
   - **Near the ground:** on the Earth, sea, sand (where a pixel spans under 40 m), grass, rock on
     slopes over about 0.3, and snow over a line falling from 4 200 m at the equator to 300 m at
     the poles. On the Moon, regolith of a few kinds under its colour map.
+  - **The layers' edges** wander over noise 700 m and 6 m wide. The narrow noise fades to its
+    mean where a pixel spans 1.5–6 m. Unfiltered, it speckled the snow from a few kilometres up
+    and would have shimmered as the camera moved. Below, Mont Blanc's snow before and after:
+
+    ![the snow's edges over Mont Blanc before and after filtering their noise](images/planet-snow-edges.png)
   - **From afar** (a pixel spanning 30 m to 400 m and more), the maps stand for the ground: the
     Blue Marble's colour, and the sea from the mask rather than the coarse tiles' triangles, whose
     coasts were kilometre-wide shapes. Water is shaded flat, and on the planet the layers'

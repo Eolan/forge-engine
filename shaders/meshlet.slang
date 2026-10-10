@@ -3248,9 +3248,12 @@ void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, o
     float3 up = out_of_centre / distance;
     float slope = 1.0 - saturate(dot(s.n, up));
     float latitude = abs(dot(up, f[0].planet_axis.xyz));
-    // The edges wander over noise a few hundred metres and a few metres wide.
-    float wander = value_noise3(s.world / 700.0) + 0.5 * value_noise3(s.world / 6.0) - 0.75;
     float footprint = length(s.dpdx) + length(s.dpdy);
+    // The edges wander over noise a few hundred metres and a few metres wide. The narrow one
+    // fades to its mean where a pixel spans its width: unfiltered, it speckled the snow's edges
+    // from a few kilometres up, and would shimmer as the camera moves.
+    float narrow = lerp(0.5 * value_noise3(s.world / 6.0), 0.25, smoothstep(1.5, 6.0, footprint));
+    float wander = value_noise3(s.world / 700.0) + narrow - 0.75;
     // Where a pixel spans more than the layers' textures show (from orbit and high up), the
     // body's maps stand for the ground (#220): its colour and its sea, which follow the maps' own
     // texels rather than a coarse tile's triangles, kilometres wide.
