@@ -698,6 +698,15 @@ pub struct Planet {
     pub map: Option<Arc<Elevation>>,
     /// Its regions' finer elevations, in the order of the map's `regions`.
     pub regions: Vec<Arc<Elevation>>,
+    /// The seeds of its map detail's octaves, worked out once.
+    seeds: Arc<DetailSeeds>,
+}
+
+/// The seeds of a planet's map detail's octaves ([`Planet::height`]): the whole map's and the
+/// regions'. Hashed again for every octave of every sample, they took a fifth of a height's time.
+struct DetailSeeds {
+    detail: Vec<u64>,
+    region: Vec<u64>,
 }
 
 impl Planet {
@@ -714,10 +723,29 @@ impl Planet {
             .flat_map(|m| &m.regions)
             .map(|r| elevation(&r.file, r.size, Window::region(r.bounds)))
             .collect::<Result<Vec<_>>>()?;
+        let octave_seeds = |name: &str, count: u32| -> Vec<u64> {
+            let seed = Seed::new(world.planet.seed).derive_str(name);
+            (0..count)
+                .map(|k| seed.derive(u64::from(k)).value())
+                .collect()
+        };
+        let detail = world.map.as_ref().map_or(0, |m| m.detail.1);
+        let region = world
+            .map
+            .iter()
+            .flat_map(|m| &m.regions)
+            .map(|r| r.detail.1)
+            .max()
+            .unwrap_or(0);
+        let seeds = Arc::new(DetailSeeds {
+            detail: octave_seeds("detail", detail),
+            region: octave_seeds("region detail", region),
+        });
         Ok(Self {
             world,
             map,
             regions,
+            seeds,
         })
     }
 
@@ -735,10 +763,10 @@ impl Planet {
                 let p = direction.normalize() * planet.radius;
                 // The map's height and the noise under its resolution, rougher where it stands
                 // high.
-                let with_detail = |base: f64, (width, count, strength, gain), seed: &str| {
+                let with_detail = |base: f64, (width, count, strength, gain), seeds: &[u64]| {
                     let rough = 0.25 + 0.75 * smooth(base / params.rough_above);
-                    let detail = octaves(
-                        Seed::new(planet.seed).derive_str(seed),
+                    let detail = octaves_by(
+                        |octave| seeds[octave as usize],
                         p,
                         (width, count, gain),
                         min_wavelength,
@@ -746,7 +774,7 @@ impl Planet {
                     );
                     base + strength * rough * detail
                 };
-                let mut height = with_detail(whole, params.detail, "detail");
+                let mut height = with_detail(whole, params.detail, &self.seeds.detail);
                 // The regions' finer heights over it, faded in from their edges. Their sea (at
                 // or under half a metre) takes the whole map's depths, two metres deeper at
                 // least, without noise: the sea flattens it anyway, and noise there raised
@@ -760,7 +788,7 @@ impl Planet {
                         continue;
                     };
                     let regional = if fine > 0.5 {
-                        with_detail(fine, region.detail, "region detail")
+                        with_detail(fine, region.detail, &self.seeds.region)
                     } else {
                         whole.min(0.0) - 2.0
                     };
@@ -886,6 +914,24 @@ fn smooth(t: f64) -> f64 {
 fn octaves(
     seed: Seed,
     p: DVec3,
+    spec: (f64, u32, f64),
+    min_wavelength: f64,
+    shape: impl Fn(f64) -> f64,
+) -> f64 {
+    octaves_by(
+        |octave| seed.derive(u64::from(octave)).value(),
+        p,
+        spec,
+        min_wavelength,
+        shape,
+    )
+}
+
+/// [`octaves`] with octave `k`'s seed `seed_of(k)`: a planet's map detail keeps its octaves'
+/// seeds ([`DetailSeeds`]) rather than hash them again at every sample.
+fn octaves_by(
+    seed_of: impl Fn(u32) -> u64,
+    p: DVec3,
     (wavelength, count, gain): (f64, u32, f64),
     min_wavelength: f64,
     shape: impl Fn(f64) -> f64,
@@ -897,7 +943,7 @@ fn octaves(
         if fade > 0.0 {
             // Each octave's lattice is offset, so no point is a lattice point of them all.
             let q = p / width + DVec3::new(0.371, 0.613, 0.229) * f64::from(octave);
-            let n = gradient3(seed.derive(u64::from(octave)).value(), q.x, q.y, q.z);
+            let n = gradient3(seed_of(octave), q.x, q.y, q.z);
             sum += strength * fade * shape(n);
         }
         strength *= gain;
