@@ -105,7 +105,12 @@ this file.
   - AMD's RX 9070 XT must work (the cross-vendor rules above), but there is no card to test
     on, so AMD-only work waits (#67, #28).
 - **Third-party code, SDKs and techniques** are fine when free and royalty-free. Credit them
-  (`CREDITS.md`). No third-party splash screen before the public release.
+  (`CREDITS.md`). No third-party splash screen before the public release. If a sold product
+  leaned on a free open-source project, part of the profits goes back to it (`CREDITS.md`,
+  "Giving back").
+- **Patents.** Research notes flag the patents they meet on a technique: number, holder,
+  jurisdiction, status and expiry, and whether there is an alternative. Decisions prefer
+  unpatented or expired methods. Ask the owner before building on a live patent.
 - **Profiling.** Every new pass shows in the F1 overlay (a graph pass gets its zone
   automatically) and in `docs/PROFILE.md`. The overlay stays compact and off the scene.
 - **After a push and green CI,** post a short summary on the issue: what changed, the

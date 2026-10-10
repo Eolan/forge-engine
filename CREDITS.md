@@ -33,6 +33,14 @@ in. CI checks the crate list.
   metadata as the crate list.
 - **JetBrains Mono** ships with its `OFL.txt` and is never sold on its own.
 
+## Giving back
+
+The owner's commitment (2026-10-10): if something built with Forge is sold, and it relied
+heavily on a free, open-source tool, library or asset, part of the profits goes to that project's
+authors, where they accept money (a donation, sponsorship or their foundation), as far as the
+profits allow. The projects in this file that a release leaned on most are the first to check.
+This is a promise of intent, not a licence term.
+
 ## Libraries and tools
 
 | Project | People | What Forge uses it for | Licence |
