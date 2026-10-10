@@ -1709,8 +1709,6 @@ impl Demo for PlanetDemo {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    // The frames first: tiles are cooked on every other thread as the camera flies (#220).
-    forge_task::raise_current_thread_priority();
     let path = args
         .world
         .clone()

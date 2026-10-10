@@ -288,6 +288,10 @@ pub fn run<D: Demo>(
             )
             .init();
     }
+    // The frames first: work beside them (a planet's tiles cooked as the camera flies, the
+    // city's streaming) takes the cores they leave. The cooking threads below normal measured
+    // worse, the frame thread above normal half the slow frames (#220, `forge_task::priority`).
+    forge_task::raise_current_thread_priority();
     #[cfg(feature = "profiling")]
     let _tracy = {
         let client = tracy_client::Client::start();

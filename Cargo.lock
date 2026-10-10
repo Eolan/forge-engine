@@ -680,6 +680,7 @@ dependencies = [
  "bytemuck",
  "forge-core",
  "forge-gpu",
+ "forge-task",
  "glam",
  "image",
  "raw-window-handle",

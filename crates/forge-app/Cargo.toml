@@ -24,6 +24,7 @@ bytemuck = { workspace = true }
 ab_glyph = { workspace = true }
 forge-core = { workspace = true }
 forge-gpu = { workspace = true }
+forge-task = { workspace = true }
 tracy-client = { workspace = true, optional = true }
 glam = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }

@@ -518,8 +518,8 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
 
     - **Below normal, worse:** the frame thread then waits on what a preempted cooking thread
       holds (the heap, a lock).
-    - **Above normal, kept:** `forge_task::raise_current_thread_priority` at the planet's start,
-      Windows only (Linux needs a privilege to raise a thread).
+    - **Above normal, kept:** `forge_task::raise_current_thread_priority`, called by `forge-app`
+      for every demo's frame thread, Windows only (Linux needs a privilege to raise a thread).
   - **Still to try:** #222's frame-time governor, which would slow the cooking while the frames
     run late.
 - **The splits under the camera** still change a patch once settled (`--check-swaps` on the tour:
