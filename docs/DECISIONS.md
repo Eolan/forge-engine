@@ -3479,7 +3479,8 @@ Marble, the Deep Star Maps):
   the whole map's noise left out where a region replaces it, the noise's corners hashed side by
   side. The first start's 378 tiles cook in 10.9 s rather than 14–16.
 - **Next:** a tile in milliseconds still (its DAG 35 ms waited, 0.11 s of one core; its normal map
-  about 50 ms of one core).
+  about 50 ms of one core): proposed as D-058 🟡, the normal maps and heights on the GPU and the
+  DAG measured.
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):
@@ -3508,3 +3509,84 @@ owner's yes, nothing built on it):
   or transcendental, checked by digests on two vendors.
 - **For a galaxy:** a 64-bit body id in Elite's shape first (sector, layer, system, body), with
   each body's record made top-down. Voxels only if the game digs.
+
+## D-058 — A planet's tiles made on the GPU: the normal maps first, the heights under D-016's GPU rule, the DAG measured 🟡 (proposed 2026-10-10, #220)
+
+D-057 is kept for #222's smart systems.
+
+**The question:** the owner asked for "tiles cooked in milliseconds" (2026-10-10). The CPU work
+has gone as far as it cheaply goes (`docs/demos/planet.md`, "A new tile"):
+- a new fine tile waits about 55 ms (0.46 s that morning), 0.18 s of one core;
+- its DAG takes 35 ms waited, about 0.14 s of CPU: meshoptimizer's simplifying and clustering,
+  each level's partition on one thread;
+- its normal map takes 9 ms waited, about 50 ms of one core: 197 000 heights;
+- its heights take 3.6 ms waited, about 16 ms: 67 000 heights at 0.25–0.33 µs, mostly the noise;
+- storing takes 6 ms.
+
+Two cheaper ideas were measured and set aside the same day:
+- the children taking their parent's samples, exact to the bit: only 1–13 % of the tour's tiles
+  found them;
+- the cooking threads below normal priority: the frames got worse, and the frame thread above
+  normal was kept instead.
+
+**What the research says** (`docs/research/planet-terrain.md`, `worlds-at-every-scale.md` §9 B):
+- **The engines that make a planet as it is flown generate its terrain on the GPU:**
+  - SpaceEngine writes elevation in a shader and reads it back, and reported the move at 100–200×
+    the CPU;
+  - Elite's compute shaders evaluate the noise per patch, with 64-bit and emulated dual-float
+    libraries for its coordinates;
+  - Outerra refines 90 m data per tile on the GPU.
+- **Forge keeps its authoritative data on the CPU (D-016),** so the server's collision heights are
+  the client's bytes.
+- **What it takes for the GPU to give the same bits on every vendor:** Vulkan's 32-bit add,
+  subtract and multiply are correctly rounded, but:
+  - the rounding mode is the implementation's unless the entry point declares `RoundingModeRTE`;
+  - denormals may be flushed;
+  - a multiply and an add may fuse unless decorated `NoContraction`;
+  - division is only within 2.5 ULP.
+
+  So it takes either integer noise, or controlled float (RTE, a fixed denorm mode, no
+  contraction, no division or transcendental). That is the GPU rule the worlds research
+  proposed for D-016, not yet taken.
+
+**Proposed, in three steps, each its own go:**
+
+1. **The normal maps on the GPU.**
+   - **No determinism question:** the map is shading only, and nothing else reads it.
+   - **The pass:** a compute pass on the async compute queue (D-020, #77) writes a tile's 256²
+     map and its mips straight into the tile's texture. There is then no upload, and no map in
+     the world cache (most of its 1.1 GB today).
+   - **Its inputs on the GPU:** the Earth's ETOPO pyramid (467 MB at its finest level, about 620
+     with the levels above) and the regions (86 MB for the Alps at 90 m). Either all of it, or only
+     the levels and windows near the camera; the owner's call on memory.
+   - **Precision:** the directions and the octaves' coordinates in `f64` (`shaderFloat64`, on the
+     5070 Ti and RDNA; Forge does not enable it yet), or tile-local `f32` offsets; the rest in
+     `f32`. A double at 1/64 rate costs little at 197 000 samples.
+   - **The check:** each map against the CPU's map, with ꟻLIP under D-017's class thresholds,
+     not to the bit.
+   - **Expected:** well under a millisecond of GPU a tile (to measure); 50 ms of CPU less a tile,
+     the wait about 45 ms.
+
+2. **The heights on the GPU, only under D-016's GPU rule.**
+   - **Why the rule:** the physics' height fields and a server need the same bytes.
+   - **The code:** the GPU version in integer noise or controlled float, checked by digests
+     against the CPU's `dmath` on the 5070 Ti and the AMD iGPU (`FORGE_GPU=amd`).
+   - **The use:** the heights are read back for the DAG and the physics.
+   - **What it saves:** about 16 ms of CPU a tile. Without the rule, the CPU keeps the heights.
+
+3. **The DAG, the last 35 ms: measured before it is decided.**
+   - **The measure:** a tile of one level, its grid's 7 × 7-quad clusters with no simplification
+     inside the tile, the quadtree as its only LOD, on a cut one level finer. Measure the GPU
+     frame, the triangles drawn, the rays' cut and the swaps' ꟻLIP against today's.
+   - **If it holds:** cooking a tile becomes making its clusters and their bounds, a few
+     milliseconds on the CPU, or on the GPU behind step 2. That is the "milliseconds".
+   - **If it does not:** the CPU DAG stays. The DAG template set aside earlier (23 ms) could still
+     be shown while the tile's own DAG cooks, checked with `--check-swaps` for the second swap.
+
+**What the owner decides:**
+- the go for step 1 (and how much elevation data the GPU keeps);
+- whether D-016 takes the GPU rule, for step 2;
+- the go for step 3's measure.
+
+**What it does not change:** D-056's tiles, cut and swap rule; the meshes' cache; the island; the
+CPU path's determinism.

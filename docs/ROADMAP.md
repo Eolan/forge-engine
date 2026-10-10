@@ -131,9 +131,10 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
     whole map's noise left out inside a region, the noise's corners hashed together; the first
     start's 378 tiles cook in 10.9 s rather than 14–16.
   - **Next:** a tile in milliseconds still: its DAG (35 ms waited, meshoptimizer's simplifying and
-    clustering) and its normal map (about 50 ms of one core), whose heights the children could
-    share. A longer blend over a split (the parent dithered into its children) if a view shows
-    it: no frame of a change jumps over 0.13 today.
+    clustering) and its normal map (about 50 ms of one core): D-058 🟡 proposes them on the GPU (the
+    children sharing their parent's samples was measured and set aside). A longer blend over a
+    split (the parent dithered into its children) if a view shows it: no frame of a change jumps
+    over 0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

@@ -487,8 +487,15 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
     clustering of the groups, over the threads, and each level's partition on one. A template
     shared by every tile was measured and set aside (below).
   - **Its normal map** (9 ms waited, about 50 ms of one core): 197 000 heights. They are the
-    children's own samples, three of each four of their vertices; kept, a split's children could
-    take theirs from the parent's map.
+    children's own samples, three of each four of their vertices.
+  - **The children taking their parent's samples, built and set aside** (2026-10-10):
+    - **Exact:** the map placed each sample as its child places it, and the child took what
+      matched, to the bit; a test checked every ground and both meshes.
+    - **The gain where it applies:** a fine child's heights went from 4 to 2.6 ms waited.
+    - **How often it applies:** on the cold tour, 1 % of the cooked tiles found their parent's
+      grounds with 24 maps kept (50 MB), and 13 % with 256 (540 MB). A cut in flight mostly
+      skips levels or cooks the parent long before, so the gain is too rare for the memory.
+  - **On the GPU** (the proposal D-058): the heights and the normal map in a compute pass.
   - **The heights** cost 0.25–0.33 µs each, mostly the noise's octaves.
   - **A DAG template, set aside** (2026-10-10; the code in
     `reports/2026-10-10-220/dag-template.patch`). Every tile's DAG was taken from one stand-in with
