@@ -21,7 +21,7 @@ use forge_gpu::{
 };
 use forge_terrain::Planet;
 use forge_terrain::planet::{
-    FixedHeights, NORMAL_MAP_SIZE, fixed_direction, fixed_warp, gpu_tile_map, tile_normal_map,
+    COAST_RANGE, FixedHeights, NORMAL_MAP_SIZE, fixed_direction, fixed_warp, tile_normal_map,
 };
 use forge_world::CellId;
 
@@ -170,74 +170,27 @@ struct GpuGridRecord {
     levels: [GpuLevel; MAX_GRID_LEVELS],
 }
 
-/// An octave's lattice at a map's centre: its cell and the centre's place in it (the shader's
-/// `Lattice`).
+/// One map for the normal pass (`shaders/planet_normals.slang`'s `MapRecord`): its samples'
+/// warp, heights and face, and its images.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuLattice {
-    cell: [i32; 3],
-    frac: [f32; 3],
-    fade: f32,
-    inv_width: f32,
-}
-
-/// A grid as a map reads it (the shader's `GridJob`): the level `Elevation::height` picks for the
-/// map's narrowest wavelength and the next, and the map's centre's place in each.
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuGridJob {
-    level: u32,
-    blended: u32,
-    t: f32,
-    blend: f32,
-    u_cell: [i32; 2],
-    v_cell: [i32; 2],
-    u_frac: [f32; 2],
-    v_frac: [f32; 2],
-    u_scale: [f32; 2],
-    v_scale: [f32; 2],
-    edge: [f32; 4],
-}
-
-/// What a job needs of a grid, kept from [`forge_terrain::planet::GpuHeights`].
-struct GridMeta {
-    whole: bool,
-    bounds: [f64; 4],
-    blend: f64,
-    levels: Vec<(u32, u32)>,
-    detail: (f64, u32),
-}
-
-/// A map to make (the shader's `MapJob`).
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuJob {
-    axes: [f64; 9],
-    min_wavelength: f64,
-    coast_range: f64,
+struct GpuMapRecord {
     columns: u64,
     rows: u64,
-    lattice: u64,
-    grids: u64,
-    centre: [f64; 3],
-    lat0: f64,
-    lon0: f64,
-    relative: u32,
+    heights: u64,
+    radius: f64,
+    coast_range: f64,
+    sea: u32,
+    side: u32,
+    axes: [i32; 9],
     storage: [u32; LEVELS as usize],
 }
 
-/// The passes' push constants (the shader's `Push`).
+/// The normal passes' push constants (`planet_normals.slang`'s `Push`).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Push {
-    grids: u64,
-    samples: u64,
-    seeds: u64,
-    jobs: u64,
-    rough_above: f64,
-    radius: f64,
-    grid_count: u32,
-    sea: u32,
+struct MapPush {
+    maps: u64,
     level: u32,
     size: u32,
 }
@@ -333,15 +286,14 @@ fn heights_job(
     planet: &Planet,
     heights: &FixedHeights,
     cell: CellId,
-    side: u32,
+    (side, steps, first): (u32, i64, i64),
 ) -> (GpuHeightsJob, Vec<i64>, Vec<i64>) {
-    let n = i64::from(planet.world.tiles.samples);
-    let bits = u32::from(cell.level()) + (n - 1).trailing_zeros();
+    let bits = u32::from(cell.level()) + steps.trailing_zeros();
     let (x, y) = cell.xy();
     let warp = |base: i64| -> Vec<i64> {
         (0..i64::from(side))
             .flat_map(|k| {
-                let (c, s) = fixed_warp(planet.cordic(), base * (n - 1) - 1 + k, bits);
+                let (c, s) = fixed_warp(planet.cordic(), base * steps + first + k, bits);
                 [c, s]
             })
             .collect()
@@ -435,86 +387,17 @@ struct Check {
     frames: usize,
 }
 
-/// A job's bytes in a frame's buffer: its record, then its columns' and rows' tangents, its
-/// lattice table and its grids'.
-const JOB_BYTES: u64 = (std::mem::size_of::<GpuJob>()
-    + 2 * SIDE * 8
-    + MAX_GRIDS * MAX_OCTAVES * std::mem::size_of::<GpuLattice>()
-    + MAX_GRIDS * std::mem::size_of::<GpuGridJob>()) as u64;
+/// Maps whose heights a frame keeps at once: their heights pass, then their normal pass, then
+/// the next group's in the same buffer (16 maps' samples, 34 MB).
+const MAP_GROUP: usize = 16;
 
-/// Tiles at least this fine take their latitude and longitude from their centre's in floats.
-const RELATIVE_FROM_LEVEL: u8 = 3;
-/// ... unless their centre is nearer a pole than this (the sine of its latitude).
-const RELATIVE_BELOW: f64 = 0.9;
+/// A map's samples' heights, bytes.
+const MAP_HEIGHT_BYTES: u64 = (SIDE * SIDE * 8) as u64;
 
-/// `t` clamped to 0..1 and eased, as `forge_terrain::planet`'s.
-fn smooth(t: f64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-/// `meta` as a map centred at `lat0`, `lon0` (radians) reads it: the level `Elevation::height`
-/// picks for the narrowest wavelength `min_wavelength` on a body of `radius` and the next, and
-/// the centre's place in each, as `Elevation::sample` finds it.
-fn grid_job(meta: &GridMeta, lat0: f64, lon0: f64, min_wavelength: f64, radius: f64) -> GpuGridJob {
-    use std::f64::consts::{PI, TAU};
-    let [west, east, south, north] = meta.bounds;
-    let spacing = if meta.whole {
-        TAU * radius / f64::from(meta.levels[0].0)
-    } else {
-        (north - south) * radius / f64::from(meta.levels[0].1)
-    };
-    let wanted = 0.5 * min_wavelength;
-    let (mut level, mut at) = (0, spacing);
-    while at * 2.0 <= wanted && level + 1 < meta.levels.len() {
-        at *= 2.0;
-        level += 1;
-    }
-    let blended = !(wanted <= at || level + 1 == meta.levels.len());
-    let mut job = GpuGridJob {
-        level: level as u32,
-        blended: u32::from(blended),
-        t: if blended {
-            ((wanted - at) / at) as f32
-        } else {
-            0.0
-        },
-        blend: meta.blend as f32,
-        edge: [
-            (lon0 - west) as f32,
-            (east - lon0) as f32,
-            (lat0 - south) as f32,
-            (north - lat0) as f32,
-        ],
-        ..GpuGridJob::zeroed()
-    };
-    for k in 0..=usize::from(blended) {
-        let (w, h) = meta.levels[level + k];
-        let (w, h) = (f64::from(w), f64::from(h));
-        let (u, v, u_scale, v_scale) = if meta.whole {
-            (
-                (lon0 / TAU + 0.5) * w - 0.5,
-                (0.5 - lat0 / PI) * h - 0.5,
-                w / TAU,
-                -h / PI,
-            )
-        } else {
-            (
-                (lon0 - west) / (east - west) * w - 0.5,
-                (north - lat0) / (north - south) * h - 0.5,
-                w / (east - west),
-                -h / (north - south),
-            )
-        };
-        job.u_cell[k] = u.floor() as i32;
-        job.v_cell[k] = v.floor() as i32;
-        job.u_frac[k] = (u - u.floor()) as f32;
-        job.v_frac[k] = (v - v.floor()) as f32;
-        job.u_scale[k] = u_scale as f32;
-        job.v_scale[k] = v_scale as f32;
-    }
-    job
-}
+/// A map's bytes in a frame's jobs: its heights job, its warp's columns and rows, its record.
+const MAP_JOB_BYTES: u64 = (std::mem::size_of::<GpuHeightsJob>()
+    + 2 * SIDE * 16
+    + std::mem::size_of::<GpuMapRecord>()) as u64;
 
 /// The planet's maps made on the GPU.
 pub(crate) struct NormalMaps {
@@ -524,17 +407,12 @@ pub(crate) struct NormalMaps {
     /// Every level of every grid, `i16` metres.
     samples: forge_gpu::Buffer,
     grids: forge_gpu::Buffer,
-    seeds: forge_gpu::Buffer,
-    grid_count: u32,
-    /// What the jobs need of each grid.
-    meta: Vec<GridMeta>,
-    rough_above: f64,
-    radius: f64,
-    sea: bool,
     planet: Arc<Planet>,
     queue: Arc<MapQueue>,
-    /// Per frame slot: its jobs' records and tangents, grown as a frame needs.
+    /// Per frame slot: its maps' jobs, warps and records, grown as a frame needs.
     jobs: Vec<Option<GraphBuffer>>,
+    /// Per frame slot: a group of maps' samples' heights ([`MAP_GROUP`]).
+    map_heights: Vec<Option<GraphBuffer>>,
     /// The maps this frame makes, borrowed by its passes.
     making: Vec<MapJob>,
     /// Maps made so far, for the log.
@@ -579,7 +457,7 @@ impl NormalMaps {
             )?;
             let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
                 shader: (module, entry),
-                push_constant_bytes: std::mem::size_of::<Push>() as u32,
+                push_constant_bytes: std::mem::size_of::<MapPush>() as u32,
                 name: entry,
             })?;
             device.destroy_shader_module(module);
@@ -679,24 +557,12 @@ impl NormalMaps {
         let uploading = std::time::Instant::now();
         device.write_buffers_staged(&writes)?;
         let upload_ms = uploading.elapsed().as_millis();
-        let seeds: Vec<u64> = heights
-            .detail_seeds
-            .iter()
-            .chain(heights.region_seeds)
-            .copied()
-            .collect();
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
         let grids = device.create_buffer_with_data(
             &records,
             storage,
             MemoryCategory::Geometry,
             "planet elevation grids",
-        )?;
-        let seeds = device.create_buffer_with_data(
-            &seeds,
-            storage,
-            MemoryCategory::Geometry,
-            "planet detail seeds",
         )?;
         tracing::info!(
             grids = records.len(),
@@ -711,25 +577,10 @@ impl NormalMaps {
             mip,
             samples,
             grids,
-            seeds,
-            grid_count: records.len() as u32,
-            meta: heights
-                .grids
-                .iter()
-                .map(|g| GridMeta {
-                    whole: g.whole,
-                    bounds: g.bounds,
-                    blend: g.blend,
-                    levels: g.levels.iter().map(|(w, h, _)| (*w, *h)).collect(),
-                    detail: (g.detail.0, g.detail.1),
-                })
-                .collect(),
-            rough_above: heights.rough_above,
-            radius: heights.radius,
-            sea: heights.sea,
             planet: Arc::clone(planet),
             queue,
             jobs: (0..forge_gpu::FRAMES_IN_FLIGHT).map(|_| None).collect(),
+            map_heights: (0..forge_gpu::FRAMES_IN_FLIGHT).map(|_| None).collect(),
             making: Vec::new(),
             made: 0,
             check: false,
@@ -769,16 +620,26 @@ impl NormalMaps {
         if self.check_heights && self.heights_check.is_none() && !self.check_cells.is_empty() {
             self.prepare_heights_check()?;
         }
-        // This slot's buffer, grown to the frame's jobs: the frame that last used it is done.
-        let needed = JOB_BYTES * count as u64;
+        // This slot's buffers, grown to the frame's maps: the frame that last used them is done.
+        let needed = MAP_JOB_BYTES * count as u64;
         let buffer = &mut self.jobs[slot.index];
         if count > 0 && buffer.as_ref().is_none_or(|b| b.size() < needed) {
             *buffer = Some(GraphBuffer::new(self.device.create_buffer(BufferDesc {
-                size: needed.next_power_of_two().max(JOB_BYTES * 16),
+                size: needed.next_power_of_two().max(MAP_JOB_BYTES * 16),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                 location: MemoryLocation::CpuToGpu,
                 category: MemoryCategory::Frame,
                 name: "planet normal map jobs",
+            })?));
+        }
+        let heights_buffer = &mut self.map_heights[slot.index];
+        if count > 0 && heights_buffer.is_none() {
+            *heights_buffer = Some(GraphBuffer::new(self.device.create_buffer(BufferDesc {
+                size: MAP_HEIGHT_BYTES * MAP_GROUP as u64,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Work,
+                name: "planet normal map heights",
             })?));
         }
         // `--check-normal-maps`: the finest maps, which take their angles from their centre in
@@ -823,106 +684,115 @@ impl NormalMaps {
             return Ok(());
         }
         let buffer = this.jobs[slot.index].as_ref().expect("made above");
+        let heights_buffer = this.map_heights[slot.index].as_ref().expect("made above");
         let base = buffer.address();
-        let tangents = base + std::mem::size_of::<GpuJob>() as u64 * count as u64;
-        let lattices = tangents + (count * 2 * SIDE * 8) as u64;
-        let lattice_bytes = (MAX_GRIDS * MAX_OCTAVES * std::mem::size_of::<GpuLattice>()) as u64;
-        let grid_tables = lattices + count as u64 * lattice_bytes;
-        let grid_bytes = (MAX_GRIDS * std::mem::size_of::<GpuGridJob>()) as u64;
+        let job_bytes = std::mem::size_of::<GpuHeightsJob>() as u64;
+        let record_bytes = std::mem::size_of::<GpuMapRecord>() as u64;
+        let tables = (SIDE * 16) as u64;
+        let warps = base + count as u64 * job_bytes;
+        let records = warps + count as u64 * 2 * tables;
+        let world = &this.planet.world;
         for (k, job) in this.making.iter().enumerate() {
-            let tile = gpu_tile_map(&this.planet.world, job.cell);
-            let at = tangents + (k * 2 * SIDE * 8) as u64;
-            let [n, u, v] = tile.axes;
-            // The middle sample, from which the shader takes every other in floats.
-            let middle = SIDE / 2;
-            let centre = (n + u * tile.columns[middle] + v * tile.rows[middle]).normalize();
-            let lat0 = centre
-                .y
-                .atan2((centre.x * centre.x + centre.z * centre.z).sqrt());
-            let lon0 = centre.x.atan2(centre.z);
-            let relative =
-                job.cell.level() >= RELATIVE_FROM_LEVEL && centre.y.abs() < RELATIVE_BELOW;
-            let mut table = [GpuLattice::zeroed(); MAX_GRIDS * MAX_OCTAVES];
-            let mut grid_table = [GpuGridJob::zeroed(); MAX_GRIDS];
-            let p = centre * this.radius;
-            for (g, meta) in this.meta.iter().enumerate() {
-                // Its octaves at the centre (octaves_by).
-                let mut width = meta.detail.0;
-                for octave in 0..meta.detail.1 as usize {
-                    let q = p / width + glam::DVec3::new(0.371, 0.613, 0.229) * octave as f64;
-                    let cell = q.floor();
-                    table[g * MAX_OCTAVES + octave] = GpuLattice {
-                        cell: [cell.x as i32, cell.y as i32, cell.z as i32],
-                        frac: (q - cell).as_vec3().to_array(),
-                        fade: smooth(width / tile.min_wavelength - 1.0) as f32,
-                        inv_width: (1.0 / width) as f32,
-                    };
-                    width *= 0.5;
-                }
-                grid_table[g] = grid_job(meta, lat0, lon0, tile.min_wavelength, this.radius);
-            }
-            let lattice = lattices + k as u64 * lattice_bytes;
-            buffer.write(lattice - base, &table);
-            let grids = grid_tables + k as u64 * grid_bytes;
-            buffer.write(grids - base, &grid_table);
+            // The map's samples: the next level's heights, half a texel apart.
+            let level = job.cell.level();
+            let heights = this
+                .planet
+                .fixed_heights(world.min_wavelength(level + 1))
+                .expect("a planet with a map");
+            let grid = (SIDE as u32, 2 * i64::from(NORMAL_MAP_SIZE), 0);
+            let (mut heights_job, columns, rows) =
+                heights_job(&this.planet, &heights, job.cell, grid);
+            let at = warps + k as u64 * 2 * tables;
+            let out = heights_buffer.address() + (k % MAP_GROUP) as u64 * MAP_HEIGHT_BYTES;
+            heights_job.columns = at;
+            heights_job.rows = at + tables;
+            heights_job.out = out;
+            buffer.write(k as u64 * job_bytes, &[heights_job]);
+            buffer.write(at - base, &columns);
+            buffer.write(at + tables - base, &rows);
             let mut storage = [0_u32; LEVELS as usize];
-            for (level, id) in storage.iter_mut().enumerate() {
-                *id = job.image.storage(level as u32).0;
+            for (l, id) in storage.iter_mut().enumerate() {
+                *id = job.image.storage(l as u32).0;
             }
-            let record = GpuJob {
-                axes: [n.x, n.y, n.z, u.x, u.y, u.z, v.x, v.y, v.z],
-                min_wavelength: tile.min_wavelength,
-                coast_range: tile.coast_range,
+            let record = GpuMapRecord {
                 columns: at,
-                rows: at + (SIDE * 8) as u64,
-                lattice,
-                grids,
-                centre: centre.to_array(),
-                lat0,
-                lon0,
-                relative: u32::from(relative),
+                rows: at + tables,
+                heights: out,
+                radius: world.planet.radius,
+                coast_range: COAST_RANGE * world.spacing(level),
+                sea: heights_job.sea,
+                side: SIDE as u32,
+                axes: heights_job.axes,
                 storage,
             };
-            buffer.write((k * std::mem::size_of::<GpuJob>()) as u64, &[record]);
-            let written = at - base;
-            buffer.write(written, &tile.columns);
-            buffer.write(written + (SIDE * 8) as u64, &tile.rows);
+            buffer.write(records - base + k as u64 * record_bytes, &[record]);
         }
-        let push = Push {
-            grids: this.grids.address(),
-            samples: this.samples.address(),
-            seeds: this.seeds.address(),
-            jobs: base,
-            rough_above: this.rough_above,
-            radius: this.radius,
-            grid_count: this.grid_count,
-            sea: u32::from(this.sea),
-            level: 0,
-            size: NORMAL_MAP_SIZE,
-        };
         let jobs = graph.import_buffer(buffer);
+        let heights_handle = graph.import_buffer(heights_buffer);
         let images: Vec<_> = this.making.iter().map(|j| graph.import(&j.image)).collect();
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        for level in 0..LEVELS {
-            let label = if level == 0 {
-                "planet/normal maps"
-            } else {
-                "planet/normal map mips"
+        // A group of maps at a time: their heights, then their first level from them.
+        for group in 0..count.div_ceil(MAP_GROUP) {
+            let first = group * MAP_GROUP;
+            let n = (count - first).min(MAP_GROUP);
+            let heights_push = HeightsPush {
+                jobs: base + first as u64 * job_bytes,
+                elevation: this.grids.address(),
+                samples: this.samples.address(),
+                cordic: this.cordic.address(),
+            };
+            let pipeline = &this.heights;
+            graph
+                .pass("planet/normal map heights")
+                .buffer(jobs, BufferAccess::ShaderRead(compute))
+                .buffer(heights_handle, BufferAccess::ShaderReadWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &heights_push);
+                    let side = SIDE as u32;
+                    commands.dispatch(side.div_ceil(8), side.div_ceil(8), n as u32);
+                    Ok(())
+                });
+            let map_push = MapPush {
+                maps: records + first as u64 * record_bytes,
+                level: 0,
+                size: NORMAL_MAP_SIZE,
             };
             let mut pass = graph
-                .pass(label)
+                .pass("planet/normal maps")
+                .buffer(jobs, BufferAccess::ShaderRead(compute))
+                .buffer(heights_handle, BufferAccess::ShaderRead(compute));
+            for &image in &images[first..first + n] {
+                pass = pass.image_mip(image, 0, ImageAccess::StorageWrite(compute));
+            }
+            let map = &this.map;
+            pass.run(move |_, commands| {
+                commands.bind_pipeline(map);
+                commands.push_constants(map, &map_push);
+                let side = NORMAL_MAP_SIZE.div_ceil(8);
+                commands.dispatch(side, side, n as u32);
+                Ok(())
+            });
+        }
+        for level in 1..LEVELS {
+            let mut pass = graph
+                .pass("planet/normal map mips")
                 .buffer(jobs, BufferAccess::ShaderRead(compute));
             for &image in &images {
-                if level > 0 {
-                    pass = pass.image_mip(image, level - 1, ImageAccess::StorageRead(compute));
-                }
-                pass = pass.image_mip(image, level, ImageAccess::StorageWrite(compute));
+                pass = pass
+                    .image_mip(image, level - 1, ImageAccess::StorageRead(compute))
+                    .image_mip(image, level, ImageAccess::StorageWrite(compute));
             }
-            let pipeline = if level == 0 { &this.map } else { &this.mip };
+            let mip = &this.mip;
+            let mip_push = MapPush {
+                maps: records,
+                level,
+                size: NORMAL_MAP_SIZE,
+            };
             let side = (NORMAL_MAP_SIZE >> level).max(1);
             pass.run(move |_, commands| {
-                commands.bind_pipeline(pipeline);
-                commands.push_constants(pipeline, &Push { level, ..push });
+                commands.bind_pipeline(mip);
+                commands.push_constants(mip, &mip_push);
                 commands.dispatch(side.div_ceil(8), side.div_ceil(8), count as u32);
                 Ok(())
             });
@@ -1000,7 +870,12 @@ impl NormalMaps {
                 .planet
                 .fixed_heights(self.planet.world.min_wavelength(cell.level()))
                 .expect("a planet with a map");
-            let (mut job, columns, rows) = heights_job(&self.planet, &heights, cell, side);
+            let (mut job, columns, rows) = heights_job(
+                &self.planet,
+                &heights,
+                cell,
+                (side, i64::from(side) - 3, -1),
+            );
             let at = warps + k as u64 * 2 * tables;
             job.columns = at;
             job.rows = at + tables;
@@ -1073,7 +948,8 @@ impl NormalMaps {
             let heights = planet
                 .fixed_heights(planet.world.min_wavelength(cell.level()))
                 .expect("a planet with a map");
-            let (_, columns, rows) = heights_job(planet, &heights, *cell, side as u32);
+            let (_, columns, rows) =
+                heights_job(planet, &heights, *cell, (side as u32, side as i64 - 3, -1));
             let face = forge_world::Face::from_index(cell.face());
             let (mut differ, mut digest_cpu, mut digest_gpu, mut worst) = (0, 0_u64, 0_u64, 0_i64);
             for j in 0..side {
@@ -1165,7 +1041,12 @@ impl NormalMaps {
                 .planet
                 .fixed_heights(self.planet.world.min_wavelength(cell.level()))
                 .expect("a planet with a map");
-            let (mut job, columns, rows) = heights_job(&self.planet, &heights, cell, side as u32);
+            let (mut job, columns, rows) = heights_job(
+                &self.planet,
+                &heights,
+                cell,
+                (side as u32, side as i64 - 3, -1),
+            );
             let at = warps + k as u64 * 2 * tables;
             job.columns = at;
             job.rows = at + tables;

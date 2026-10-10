@@ -3695,5 +3695,9 @@ D-016's amendment of the same day:
   - before any frame (the first start) or once the frames stop, it makes them on the CPU.
   On the cold tour, a cut waits 0.39 s against 0.48 with the CPU's integer heights (one run each).
   `--cpu-heights` keeps them on the CPU.
-- **Left:** the normal maps' heights in integers on the GPU, so that a map and its tile come from
-  the same function there too.
+- **The normal maps from the heights in integers ✅** (the same day):
+  - a map's 513² samples come from the heights pass (16 maps at a time), their directions are
+    made again in integers, their points in doubles;
+  - the float version of step 1 is gone (its centre-relative angles and noise, its double `atan`);
+  - against the CPU's maps, from levels 7 to 14: within one 8-bit level, as before;
+  - 0.25 ms of the GPU a map, against 0.21 in floats.

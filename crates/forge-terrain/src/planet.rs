@@ -1884,47 +1884,6 @@ impl Planet {
     }
 }
 
-/// Where a tile's normal map samples ([`tile_normal_map`]), for the GPU (D-058): sample (i, j) of
-/// its `2 size + 1` a side lies in direction `normal + u columns[i] + v rows[j]`, normalised,
-/// the equi-angular warp's tangents worked out here, where `f64` has them.
-pub struct GpuTileMap {
-    /// The cube face's outward normal and in-face axes.
-    pub axes: [DVec3; 3],
-    /// The warp's tangent at each column and row of samples.
-    pub columns: Vec<f64>,
-    /// See `columns`.
-    pub rows: Vec<f64>,
-    /// The narrowest wavelength its heights hold: the next level's.
-    pub min_wavelength: f64,
-    /// The heights over which its coast runs from the sea's floor to the land ([`COAST_RANGE`]
-    /// samples).
-    pub coast_range: f64,
-}
-
-/// `cell`'s normal map's samples for the GPU ([`GpuTileMap`]): the same places as
-/// [`tile_normal_map`]'s.
-pub fn gpu_tile_map(world: &PlanetWorld, cell: CellId) -> GpuTileMap {
-    let size = NORMAL_MAP_SIZE as usize;
-    let level = cell.level();
-    let cells = f64::from(1_u32 << level);
-    let (x, y) = cell.xy();
-    let start = DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0;
-    let half = 2.0 / cells / (2 * size) as f64;
-    let (normal, u, v) = Face::from_index(cell.face()).axes();
-    let warp = |s: f64| dmath::tan(s * std::f64::consts::FRAC_PI_4);
-    GpuTileMap {
-        axes: [normal, u, v],
-        columns: (0..=2 * size)
-            .map(|i| warp(start.x + i as f64 * half))
-            .collect(),
-        rows: (0..=2 * size)
-            .map(|j| warp(start.y + j as f64 * half))
-            .collect(),
-        min_wavelength: world.min_wavelength(level + 1),
-        coast_range: COAST_RANGE * world.spacing(level),
-    }
-}
-
 /// [`tile_normal_map`] of `cell` on the planet called `body`, kept in the world cache by the
 /// tiles' key: made once, then loaded.
 pub fn tile_normal_map_cached(planet: &Planet, body: &str, cell: CellId) -> Vec<u8> {

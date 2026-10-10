@@ -493,22 +493,23 @@ D-058's first step (2026-10-10):
   - A frame makes at most 8 maps, except the first, which makes the whole first scene's.
   - A new cut waits for its maps before it is taken in.
 - **Each map is the CPU's map, remade:**
-  - each sample's height, as `Planet::height` makes it;
+  - its samples' heights in integers (`planet_heights.slang`, the same bits as the CPU's,
+    [The heights in integers](#the-heights-in-integers)), 16 maps' at a time;
+  - their directions in integers again, their points in doubles;
   - each texel's normal from the four samples around its centre;
   - its coast in alpha.
 
-  The doubles are kept to the samples' directions and positions. Everything else runs in
-  floats, from what the CPU works out once a map at its centre. Coarse tiles and tiles near a
-  pole take their latitude and longitude in doubles, through musl's `atan`.
+  The float version of the first step, its angles and noise taken from each map's centre, was
+  replaced the same day.
 - **The elevation is on the GPU for the whole run:** every level of the Earth's ETOPO pyramid and
   the Alps' 90 m region, 703 MiB, uploaded in 53 ms.
 
 | | On the CPU (before) | On the GPU |
 |---|---|---|
-| A map | about 50 ms of a core (9 ms waited) | 0.21 ms of the GPU |
+| A map | about 50 ms of a core (9 ms waited) | 0.25 ms of the GPU (0.21 in floats, the first version) |
 | The first scene's 378 maps | made with the tiles; the tiles in 10.9 s | 80 ms of the first frame; the tiles in 8.0 s |
 | A cut on the cold tour | waited 0.66–0.77 s; 55–62 swaps | 0.40 s; 80 swaps |
-| Against the CPU's map (`--check-normal-maps`, levels 0–14) | the reference | every channel within one 8-bit level, the normals within 0.6–0.8°, the coast within one level |
+| Against the CPU's map (`--check-normal-maps`, levels 7–14) | the reference | every channel within one 8-bit level (the GPU's float cross product and its rounding into 8 bits), the normals within 0.6–0.7°, the coast within one level |
 
 - **Without doubles in shaders, or for a planet of noise alone,** the maps are made on the CPU as
   before; so they are with `--cpu-normal-maps`.
@@ -561,7 +562,7 @@ the CPU, on the GPU and on a server.
   - **Its DAG** (35 ms waited, 0.11 s of one core): meshoptimizer's simplification and
     clustering of the groups, over the threads, and each level's partition on one. A template
     shared by every tile was measured and set aside (below).
-  - **Its normal map,** made on the GPU since D-058's first step: 0.21 ms of the GPU where it took
+  - **Its normal map,** made on the GPU since D-058's first step: 0.25 ms of the GPU where it took
     about 50 ms of a core (9 ms waited). Its 197 000 heights are the children's own samples, three
     of each four of their vertices.
   - **The children taking their parent's samples, built and set aside** (2026-10-10):

@@ -495,10 +495,6 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **The far air marched per pixel:** the aerial-perspective volume of Sébastien Hillaire, "A
     Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020, with the
     pixels beyond its far end marched on their own (Forge's, for the view from orbit).
-  - **The tiles' normal maps on the GPU** (D-058, `shaders/planet_normals.slang`): the double
-    `atan` follows musl's `s_atan.c` (from FreeBSD's msun, after Sun's fdlibm; MIT and the
-    fdlibm notice), its range reduction and coefficients, since shaders have no double
-    trigonometry.
   - **The heights in integers** (D-058's step 2, `forge_core::fixed`, `shaders/fixed.slang`):
     the CORDIC, Jack E. Volder, "The CORDIC Trigonometric Computing Technique", IRE
     Transactions on Electronic Computers, 1959, for the sines, cosines and angles in shifts and

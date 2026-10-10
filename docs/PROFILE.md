@@ -1362,7 +1362,8 @@ scene.
   submission a map.
 - **The normal maps on the GPU** (D-058, 2026-10-10; `docs/demos/planet.md`, "The normal maps on
   the GPU"):
-  - `planet/normal maps` and `planet/normal map mips` cost 0.21 ms of the GPU a map, against
+  - `planet/normal map heights`, `planet/normal maps` and `planet/normal map mips` cost 0.25 ms of
+    the GPU a map from the heights in integers (0.21 in floats at first), against
     about 50 ms of a CPU core before.
   - A frame makes at most 8 maps (about 1.7 ms). The first frame makes the first scene's 378
     (80 ms).
