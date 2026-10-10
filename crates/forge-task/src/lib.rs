@@ -32,7 +32,8 @@
 
 // `unsafe` is confined to `scope.rs`, where borrowed closures are lifetime-extended under the
 // guarantee that the scope waits for every job before returning (the `rayon` / `std::thread::scope`
-// pattern). Every block carries a `SAFETY:` comment.
+// pattern), and to `priority.rs`'s call to the operating system. Every block carries a `SAFETY:`
+// comment.
 #![allow(unsafe_code)]
 
 mod blocking;
@@ -41,6 +42,7 @@ mod graph;
 mod job;
 mod par;
 mod pool;
+mod priority;
 mod scope;
 mod task;
 
@@ -48,6 +50,7 @@ pub use blocking::BlockingPool;
 pub use counter::Counter;
 pub use graph::{GraphError, GraphRun, NodeId, TaskGraph};
 pub use pool::{PoolConfig, PoolStats, TaskPool, WorkerStatsSnapshot};
+pub use priority::raise_current_thread_priority;
 pub use scope::Scope;
 pub use task::Task;
 

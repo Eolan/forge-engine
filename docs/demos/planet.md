@@ -507,12 +507,21 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
   - **One thread per worker:** the cuts waited 5.7 s instead of 0.7 and the tour outran its
     tiles (7 swaps instead of 61).
   - **Three threads per worker:** the same wait (0.62 s) and frames no better (one run).
-  - **Still to try:**
-    - the cooking threads below the frames' priority, which needs `forge-task` and the parallel
-      loops to set it;
-    - #222's frame-time governor.
-  - **The measure itself,** the longest frame per swap from one run, is too coarse; a
-    histogram of frame times would settle it.
+  - **Thread priorities, frames over 4 and 8 ms over the whole tour** (two runs each, every tile
+    cooked):
+
+    | Priorities | Over 4 ms | Over 8 ms | A cut waited |
+    |---|---|---|---|
+    | All normal | 55 and 78 | 5 and 6 | 0.65–0.68 s |
+    | The cooking threads below normal | 142 and 134 | 42 and 39 (5 over 16 ms) | 0.72–0.81 s |
+    | **The frame thread above normal** | **30 and 33** | **4 and 5** | 0.66–0.77 s |
+
+    - **Below normal, worse:** the frame thread then waits on what a preempted cooking thread
+      holds (the heap, a lock).
+    - **Above normal, kept:** `forge_task::raise_current_thread_priority` at the planet's start,
+      Windows only (Linux needs a privilege to raise a thread).
+  - **Still to try:** #222's frame-time governor, which would slow the cooking while the frames
+    run late.
 - **The splits under the camera** still change a patch once settled (`--check-swaps` on the tour:
   4 of 21 changes peaked at 0.15–0.21; with the tiles' DAGs cut by their cells, 1 of 18 at 0.20),
   though no frame jumps (first frames under 0.15): TAA takes them in over several frames. A
