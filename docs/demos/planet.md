@@ -412,7 +412,7 @@ air is a rim of blue light at its limb.
 | Cluster pages (128 KiB, with the tiles' UVs) | 16 298 | 12 098 |
 | The rays' cuts | 1.92 M triangles, 115 MiB (from orbit) | 1.32 M, 79 MiB |
 | First start (the maps, then every tile made and cooked with its normal map) | 16 s for 375 tiles (24 a second; 19 a second before #220's faster tiles, 669 in 35 s) | 6 s for 192 tiles (31 a second) |
-| Later starts (tiles from the cache) | 8.1 s (the 16K colour map 7 s; the scene 0.6 s with its 522 normal maps) | 7.9 s (the Earth's 16K map, for the Earth in its sky) |
+| Later starts (tiles from the cache) | 3.6–3.9 s (the 16K colour map 1.0 s, 4.3 on one thread; the scene about 0.6 s) | 2.6 s (the Earth's 16K map, for the Earth in its sky) |
 | GPU frame from orbit | 1.20 ms (`sky/compose`'s march 0.30, `shading/layered` 0.28) | 0.74 ms (4 000 km; `sky/box` 0.06) |
 | GPU frame straight down over Corsica | 1.46 ms (the march 0.46 over the whole frame) | — |
 | GPU frame over the ground | 0.91 ms (`shading/layered` 0.29) | 1.26 ms (`shading/layered` 0.66: hex-tiled regolith over the whole frame) |
@@ -430,14 +430,16 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
 | Stored | 7 ms, and the caches scanned | 7 ms |
 | Its normal map | 0.24 s (328 000 heights) | 0.12 s (197 000: the samples no texel reads left out; the same map, bit for bit) |
 | In all | about 0.46 s | about 0.27 s |
+| What one new tile waits for, the machine otherwise idle | about 0.46 s | about 0.14 s: its heights and its map's samples spread over the threads by rows (7 ms and 20 ms), its DAG still on one |
 
 - **The caches' scans:** at every store, the derived cache listed `cache/world`'s 7 200 entries
   twice and read every entry's size and age, about 80 ms a tile, more than making its map. The
   mesh cache listed `cache/meshes`' 8 400 files at every save. Each now lists a directory once a
   process and keeps the listing.
 - **On the demo's six workers,** made, cooked and cached, the old path replayed in the same
-  process: the first start's fine tiles (levels 11–14 by Èze) went from 10 a second to 21.6,
-  coarser ones from 31 to 67 (that step with the listings alone).
+  process: the first start's fine tiles (levels 11–14 by Èze) went from 10 a second to 29
+  (21.6 before the rows were spread over the threads), coarser ones from 31 to 67 (that step
+  with the listings alone).
 - **The cells' DAG** has the errors of meshoptimizer's clusters level by level (0.34, 0.73, 1.46
   and 2.62 m at the first four levels, against 0.34, 0.72, 1.42 and 2.71) and smaller spheres. A
   tile packs into 30–32 pages rather than 39. The GPU frame at the tour's stops is the same: the
@@ -446,12 +448,13 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
 
 ## Left for later (#220 and D-056's steps)
 
-- **A tile in milliseconds** is still to come: a new fine tile takes about 0.27 s of one core
-  ([A new tile](#a-new-tile)). What the next steps are:
-  - **Its DAG** (0.11 s): meshoptimizer's simplifier and its clustering of the levels above the
-    first. A template shared by every tile was measured and set aside (below).
-  - **Its normal map** (0.12 s): 197 000 heights. They are the next level's, as the four children
-    would make them; kept, a split's children could take theirs from the parent's map.
+- **A tile in milliseconds** is still to come: a new fine tile waits about 0.14 s, 0.27 s of one
+  core ([A new tile](#a-new-tile)). What the next steps are:
+  - **Its DAG** (0.11 s, on one thread): meshoptimizer's simplifier and its clustering of the
+    levels above the first. A template shared by every tile was measured and set aside (below).
+  - **Its normal map** (0.12 s of one core): 197 000 heights. They are the next level's, as the
+    four children would make them; kept, a split's children could take theirs from the parent's
+    map.
   - **The heights** cost 0.5–0.6 µs each, mostly the noise's octaves.
   - **A DAG template, set aside** (2026-10-10; the code in
     `reports/2026-10-10-220/dag-template.patch`). Every tile's DAG was taken from one stand-in with
@@ -481,7 +484,9 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
   sun (the aerial volume has no shadows), so a shaded slope far away is veiled a little too much.
 - **The Earth's land under the sea's level** (the Netherlands, the Caspian's shores) floods, and
   the Blue Marble is July's: no seasons, no clouds.
-- **The 16K colour map's start:** 7 s to decode it and make its mips, every start; to cache.
+- **The 16K colour map's start:** 1.0 s to decode it and make its mips at every start, its
+  texels and mips worked out on every thread. Most of what is left is the JPEG decoder's, on
+  one thread.
 - **The island on the planet** (D-056's step 2), the sea's waves on the sphere (step 3), the
   genesis across the faces (step 4), the descent's checks (step 5).
 

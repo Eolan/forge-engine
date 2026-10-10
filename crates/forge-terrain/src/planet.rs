@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, bail};
+use forge_core::pack::par_chunks_mut;
 use forge_core::{Seed, dmath};
 use forge_geom::procedural::TriMesh;
 use forge_procgen::noise::gradient3;
@@ -1012,6 +1013,10 @@ impl PlanetParams {
     }
 }
 
+/// The fewest rows of samples a thread takes when a tile's heights are spread over the machine's
+/// threads (a thread costs tens of microseconds to start).
+const ROWS_PER_THREAD: usize = 8;
+
 /// A tile's place: its cell's centre on the sphere at the sea's level, in the planet's axes,
 /// metres from its centre. The tile's vertices are relative to it.
 pub fn tile_origin(world: &PlanetWorld, cell: CellId) -> DVec3 {
@@ -1074,14 +1079,16 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
     // The samples and a ring beyond, row-major from (−1, −1).
     let side = (n + 2) as usize;
     let mut points = vec![DVec3::ZERO; side * side];
-    for j in -1..=n {
-        for i in -1..=n {
+    // A row a chunk, the rows over the machine's threads: what one new tile waits for.
+    par_chunks_mut(&mut points, side, ROWS_PER_THREAD, |row, out| {
+        let j = row as i64 - 1;
+        for (point, i) in out.iter_mut().zip(-1..=n) {
             let st = start + DVec2::new(i as f64, j as f64) * step;
             let direction = CubeSphere::direction(face, st);
             let height = planet.ground(direction, min_wavelength);
-            points[(j + 1) as usize * side + (i + 1) as usize] = direction * (radius + height);
+            *point = direction * (radius + height);
         }
-    }
+    });
     let at = |i: i64, j: i64| points[(j + 1) as usize * side + (i + 1) as usize];
     let mut mesh = TriMesh::default();
     let count = (n * n) as usize;
@@ -1234,23 +1241,19 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
         CubeSphere::direction(face, start + DVec2::new(i as f64, j as f64) * half)
     };
     // Only the samples a texel reads: its neighbours (one coordinate odd, the other even) and
-    // its centre (both odd), not the corners (both even). A centre's height is kept for its
-    // coast.
-    let mut points = vec![DVec3::ZERO; side * side];
-    let mut centres = vec![0.0; size * size];
-    for j in 0..side {
+    // its centre (both odd), not the corners (both even), each with its height, kept for a
+    // centre's coast. A row a chunk, the rows over the machine's threads.
+    let mut samples = vec![(DVec3::ZERO, 0.0); side * side];
+    par_chunks_mut(&mut samples, side, ROWS_PER_THREAD, |j, row| {
         // An even row holds neighbours at its odd places only; an odd row is all read.
         let (first, step) = if j % 2 == 0 { (1, 2) } else { (0, 1) };
         for i in (first..side).step_by(step) {
             let direction = place(i, j);
             let height = planet.height(direction, min_wavelength);
-            if i % 2 == 1 && j % 2 == 1 {
-                centres[j / 2 * size + i / 2] = height;
-            }
-            points[j * side + i] = direction * (radius + planet.ground_of(height));
+            row[i] = (direction * (radius + planet.ground_of(height)), height);
         }
-    }
-    let at = |i: usize, j: usize| points[j * side + i];
+    });
+    let at = |i: usize, j: usize| samples[j * side + i].0;
     let range = COAST_RANGE * world.spacing(level);
     let mut texels = Vec::with_capacity(size * size * 4);
     for j in 0..size {
@@ -1261,7 +1264,7 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
                 .cross(at(ci, cj + 1) - at(ci, cj - 1))
                 .normalize_or(at(ci, cj).normalize());
             // The coast: the centre's height, before the sea flattens it.
-            let coast = 0.5 + 0.5 * (centres[j * size + i] / range).clamp(-1.0, 1.0);
+            let coast = 0.5 + 0.5 * (samples[cj * side + ci].1 / range).clamp(-1.0, 1.0);
             texels.extend_from_slice(&encode_normal(normal, coast));
         }
     }

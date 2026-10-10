@@ -1352,7 +1352,8 @@ scene.
   light from 2 m over the ground under the camera, above 1.5 km) about 0.1 ms more. The volume's
   sub-steps for slices longer than 2 km cost nothing on the island, whose slices are all shorter.
 - **Start:** the Earth's elevation loads in 0.5 s (466 MB and its pyramid), its 16K colour map in
-  about 7 s (decoded and its mips made on the finishing thread, every start). The tiles cook
+  1.0 s (decoded at every start, its texels and mips on every thread: 4.3 s on one, #220). A
+  later start takes 3.6–3.9 s, the Moon's 2.6 (8.1 and 7.9 before). The tiles cook
   about 24 a second the first time with their normal maps: 375 by Èze in 16 s (19 a second
   before #220's faster tiles; `docs/demos/planet.md`, "A new tile"). From the cache they load
   in under 0.1 s. A first scene with 669 normal maps takes 0.84 s to build (the maps upload
