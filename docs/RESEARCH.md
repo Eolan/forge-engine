@@ -31,7 +31,7 @@ the system you are about to touch.
 | [research/data-driven.md](research/data-driven.md) | data model, reflection, asset ids, packages and load order, scripting, Wasm, hot reload, modding | 49 | done |
 | [research/water.md](research/water.md) | ocean spectra and FFT cascades, shores and shallow water, rivers and lakes, water shading, the genesis hand-off, engines' water systems; §7 splashes and spray (2026-10-02, #107: emission physics, particles under TAA, coupling back) | 34 + 30 | done (Phase 2 item 3, `island`) |
 | [research/rivers.md](research/rivers.md) | rivers integrated into terrain: engines' and games' river tools, procedural river research 2013–2026, the geomorphologists' channel and floodplain numbers, shallow-water simulation and its cost, a recommendation for the island's rivers | 52 | done (#112, 2026-10-01; D-040 pending) |
-| [research/city-generation.md](research/city-generation.md) | road networks and hierarchy, blocks and lots, districts and landmarks, buildings from grammars and kits, interiors, a city through the cluster DAG, engines' city pipelines | 44 | done (issues #85, #86; the decision for #86 proposed 🟡) |
+| [research/city-generation.md](research/city-generation.md) | road networks and hierarchy, blocks and lots, districts and landmarks, buildings from grammars and kits, interiors, a city through the cluster DAG, engines' city pipelines; extended 2026-10-10 (§7–§19): the real coast and river from elevation and hydrography data, waterfronts and rivers, parks and green infrastructure, squares and play streets, transit-first streets (Nantes, Strasbourg, Bordeaux, Pontevedra, Ghent), the vehicles a car-free city still needs, block types and mixed use, the style bible as data, the near-future city (integrated technology, well-being, no fossil fuels), interiors by building use at game rates, the city in numbers, reference cities and games, patents | 44 + 69 | done (issues #85, #86; D-039 ✅; the extension for the owner's city question of 2026-10-10) |
 | [research/hdr-output.md](research/hdr-output.md) | HDR display output: Vulkan's swapchain colour spaces and metadata, Windows' composition and reference white, PQ and 10-bit dithering, ACES 2.0's HDR presets and OCIO's builtins, the engines' display mappers, UI at paper white, calibration, verification without an HDR monitor | 27 | done (issue #94; sources on GitHub read, the rest confirmed by search only, #99) |
 | [research/render-graph-next.md](research/render-graph-next.md) | render graph, next: transient buffers (lifetimes, aliasing rules, heap packing bounds, device addresses and what validation cannot see), parallel recording of pass bodies (pools per worker, chunks, barriers per command buffer, one submit per queue), split barriers and events against the queues, when it pays and how to measure it | 22 | done (issue #78; Granite, the spec sources, the samples and the layers read on GitHub, the vendor and engine pages confirmed by search only, #99) |
 | [research/planet-terrain.md](research/planet-terrain.md) | planet terrain from orbit to the ground: the cube sphere and its alternatives (S2, Cesium's quadtree, HEALPix), LOD on the sphere (spherical clipmaps, CDLOD, concurrent binary trees, Nanite's landscape, Forge's DAG per tile), precision, horizon culling, skirts and pops, tiles generated on demand and streamed through the page pool, the planet games and the open source, the atmosphere from orbit, what to measure | 32 | done (Phase 2's planet variant of `island`, D-037 ✅; the Cesium formats, the CBT demos and the Godot planets read on GitHub, the rest confirmed by search only, #99) |
@@ -196,6 +196,21 @@ style set per district with its regional trim sheets, a merged proxy per far bui
 portals as records for the interiors; the kits themselves generated at cook time, since there is
 no art team. A `CityPlan` of typed records (roads, blocks, lots, districts, landmarks, buildings as
 module instances) is the point cloud the City Sample's rules processor consumes.
+*Extended 2026-10-10 (§7–§19):* a green, transit-first European city by the sea needs no new kind of
+generator. It needs:
+- more records in the `CityPlan`: the coast and river taken from elevation and hydrography data,
+  green, transit lines and stops, and uses;
+- one style-bible file that every stage reads and checks itself against: heights by street width,
+  cornice lines, the rhythm of openings, the 3-30-300 tree rule, Berlin's green-area factor;
+- street profiles with vehicle filters by class and hour, as Ghent and Pontevedra do;
+- interiors in tiers that copy a shipped method (Shadows of Doubt's scored greedy room placement
+  on D-039's bay grid, with partition walls only on the piers between windows), not a research
+  solver.
+
+Learned floor-plan generators are research-only by licence. A city of a million has about half a
+million dwellings and 20–30 thousand shopfronts, so interiors come from seeds on demand. A tram
+line carries 3 000–11 000 people an hour each way, so a dense city of a million needs many lines or
+an underground trunk.
 
 **HDR display output.** On Windows the game presents 10-bit PQ over Rec.2020 or linear fp16 scRGB
 (1.0 = 80 nits), the compositor converts both, and the one OS value to read is the user's SDR white
