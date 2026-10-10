@@ -377,7 +377,12 @@ Each tile carries a normal map (`forge_terrain::planet::tile_normal_map`).
 `planet --tour` flies the world's `[[view.tour]]` stops in turn, and `--tour-stop N` holds stop N
 for a capture. The camera travels along the great circle between stops, its height eased in its
 logarithm and raised over long hops, so it clears the mountains between. Heading, pitch and field
-of view ease too. A stop looking up narrows the field of view, because the Moon is half a degree
+of view ease too.
+
+The height is measured over a ground blended from one stop's to the next's, not over the ground
+below. Over the ground below, the camera rose and fell with every ridge of the Alps (the owner's
+note, 2026-10-10). It keeps 40 m over the ground under it, a smoothed ground with no detail under
+a kilometre, so a hill on the way lifts it gently. A stop looking up narrows the field of view, because the Moon is half a degree
 across.
 
 | The Earth's tour (`earth.toml`) | The Moon's tour (`moon.toml`) |

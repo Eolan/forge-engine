@@ -225,6 +225,13 @@ enum Shot {
 /// How far over the target's ground it ends, metres.
 const LOW: f64 = 60.0;
 
+/// The tour's least height over the ground under it, metres, over the ground's shape without
+/// the detail narrower than [`TOUR_CLEARANCE_WAVELENGTH`].
+const TOUR_CLEARANCE: f64 = 40.0;
+
+/// The narrowest wavelength of the ground the tour keeps clear of, metres.
+const TOUR_CLEARANCE_WAVELENGTH: f64 = 1000.0;
+
 /// The planet's first tiles, cooked behind the loading screen, and where the run starts.
 struct Tiles {
     planet: Arc<Planet>,
@@ -1175,9 +1182,15 @@ fn tour<'a>(
             s.fov,
         )
     };
+    let fine = planet.world.min_wavelength(planet.world.tiles.finest);
+    let ground_at = |s: &TourStop| planet.ground(pose(s).0, fine);
     let mut start = 0.0;
     let mut held = None;
     let mut at = pose(&stops[0]);
+    // The ground the height is over: a stop's own, and between two stops theirs blended, not the
+    // ground below. Over the ground below, the camera rose and fell with every ridge it flew over
+    // (the owner's note of 2026-10-10).
+    let mut base = ground_at(&stops[0]);
     for (i, stop) in stops.iter().enumerate() {
         let arrive = start + stop.travel;
         let leave = arrive + stop.hold;
@@ -1206,9 +1219,12 @@ fn tour<'a>(
                 from.3 + (to.3 - from.3) * s,
                 from.4 + (to.4 - from.4) * s,
             );
+            let (below, above) = (ground_at(&stops[i - 1]), ground_at(stop));
+            base = below + (above - below) * s;
             break;
         }
         at = pose(stop);
+        base = ground_at(stop);
         if time < leave {
             held = Some(stop.name.as_str());
             break;
@@ -1216,10 +1232,11 @@ fn tour<'a>(
         start = leave;
     }
     let (direction, height, heading, pitch, fov) = at;
-    let fine = planet.world.min_wavelength(planet.world.tiles.finest);
-    let ground = planet.ground(direction, fine);
-    let position =
-        placement.world_point(direction * (placement.radius + ground + height.max(30.0)));
+    // Still clear of the ground under it: over its shape without the detail under a kilometre,
+    // so a hill on the way lifts the camera smoothly rather than every rock of it.
+    let clear = planet.ground(direction, TOUR_CLEARANCE_WAVELENGTH) + TOUR_CLEARANCE;
+    let altitude = (base + height.max(30.0)).max(clear);
+    let position = placement.world_point(direction * (placement.radius + altitude));
     // The view in the place's own frame: north, east and up there, turned into the world.
     let up = direction.normalize();
     let north = (DVec3::Y - up * up.y).try_normalize().unwrap_or(DVec3::Z);
