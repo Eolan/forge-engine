@@ -1,0 +1,500 @@
+diff --git a/crates/forge-geom/src/meshlet.rs b/crates/forge-geom/src/meshlet.rs
+index da3d5cc..f30afc5 100644
+--- a/crates/forge-geom/src/meshlet.rs
++++ b/crates/forge-geom/src/meshlet.rs
+@@ -164,6 +164,18 @@ impl MeshletMesh {
+     /// (#220), where meshoptimizer's clustering took a third of a planet tile's DAG. The mesh must
+     /// have no sections; its triangles keep their order.
+     pub fn build_clustered(mesh: &TriMesh, clusters: &[Vec<u32>], options: CookOptions) -> Self {
++        Self::build_clustered_levels(mesh, clusters, options, lod::MAX_LEVELS)
++    }
++
++    /// [`MeshletMesh::build_clustered`] with at most `levels` levels: 1 leaves the given clusters
++    /// the only level, every one a root, with nothing simplified (D-058's step 3: a planet's tile
++    /// whose only LOD is the quadtree's).
++    pub fn build_clustered_levels(
++        mesh: &TriMesh,
++        clusters: &[Vec<u32>],
++        options: CookOptions,
++        levels: u32,
++    ) -> Self {
+         let (mut vertices, indices, vertex_section, _) = split_sections(mesh);
+         assert_eq!(
+             vertices.len(),
+@@ -177,7 +189,7 @@ impl MeshletMesh {
+             &vertices,
+             &vertex_section,
+             options.normal_weight,
+-            lod::MAX_LEVELS,
++            levels,
+         );
+         Self::packed(mesh, &vertices, dag, grid)
+     }
+diff --git a/crates/forge-render/src/lib.rs b/crates/forge-render/src/lib.rs
+index 7d2cc06..01c7a6f 100644
+--- a/crates/forge-render/src/lib.rs
++++ b/crates/forge-render/src/lib.rs
+@@ -69,6 +69,7 @@ pub use meshlet::{
+     SwRaster,
+ };
+ pub use probes::{ProbeLight, ProbeParams, Probes};
++pub use raytrace::RayMesh;
+ pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
+ pub use shallow::{
+     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
+diff --git a/crates/forge-render/src/meshlet.rs b/crates/forge-render/src/meshlet.rs
+index a043ed7..99ae54e 100644
+--- a/crates/forge-render/src/meshlet.rs
++++ b/crates/forge-render/src/meshlet.rs
+@@ -1005,6 +1005,8 @@ pub struct MeshletSceneBuilder {
+     ray_terrain: Vec<u32>,
+     /// Meshes the rays cut to a budget of their own ([`MeshletSceneBuilder::set_ray_budget`]).
+     ray_budgets: HashMap<u32, u32>,
++    /// Meshes whose surface for the rays is given ([`MeshletSceneBuilder::set_ray_mesh`]).
++    ray_meshes: HashMap<u32, Arc<raytrace::RayMesh>>,
+     /// The room a dynamic scene reserves ([`MeshletSceneBuilder::reserve_dynamic`], #220).
+     dynamic: Option<DynamicCapacity>,
+     /// What the scene keeps alive for one instance each ([`MeshletSceneBuilder::keep_for`]).
+@@ -1271,6 +1273,12 @@ impl MeshletSceneBuilder {
+             .extend(meshes.iter().map(|m| (m.0, budget)));
+     }
+ 
++    /// Has the rays take `rays` for `mesh` rather than a cut of its DAG (D-058's step 3: a tile
++    /// of one level has no coarser level to cut).
++    pub fn set_ray_mesh(&mut self, mesh: MeshId, rays: Arc<raytrace::RayMesh>) {
++        self.ray_meshes.insert(mesh.0, rays);
++    }
++
+     /// Reserves `capacity` for a scene that takes and frees meshes and instances as it runs
+     /// (#220, [`MeshletScene::editor`]): its tables are made at that size. Such a scene streams
+     /// its pages ([`Residency::Streamed`]) and has no movers, skinned meshes or GPU-placed
+@@ -1475,11 +1483,13 @@ impl MeshletSceneBuilder {
+                         None if terrain => raytrace::TERRAIN_BUDGET,
+                         None => raytrace::TRIANGLE_BUDGET,
+                     };
+-                    let mut cut = match grouped.get(&m) {
+-                        Some(&(error, budget)) => {
++                    let given = self.ray_meshes.get(&(m as u32));
++                    let mut cut = match (given, grouped.get(&m)) {
++                        (Some(given), _) => raytrace::Cut::from(&**given),
++                        (None, Some(&(error, budget))) => {
+                             raytrace::mesh_cut_at(meshlets, &self.store, error, budget, uvs)?
+                         }
+-                        None => raytrace::mesh_cut(meshlets, &self.store, budget, uvs)?,
++                        (None, None) => raytrace::mesh_cut(meshlets, &self.store, budget, uvs)?,
+                     };
+                     if terrain {
+                         cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
+diff --git a/crates/forge-render/src/meshlet/dynamic.rs b/crates/forge-render/src/meshlet/dynamic.rs
+index 38e1411..39139f5 100644
+--- a/crates/forge-render/src/meshlet/dynamic.rs
++++ b/crates/forge-render/src/meshlet/dynamic.rs
+@@ -489,6 +489,17 @@ impl SceneEditor {
+     /// Adds `mesh`, its rays cut as `rays` says: its records and its cut go into free ranges of
+     /// the scene's tables. Fails when a table has no room for it.
+     pub fn add_mesh(&mut self, mesh: &MeshletMesh, rays: MeshRays) -> Result<MeshId> {
++        self.add_mesh_with(mesh, rays, None)
++    }
++
++    /// [`SceneEditor::add_mesh`], the rays taking `given` rather than a cut of its DAG when it is
++    /// there ([`MeshletSceneBuilder::set_ray_mesh`]).
++    pub fn add_mesh_with(
++        &mut self,
++        mesh: &MeshletMesh,
++        rays: MeshRays,
++        given: Option<&raytrace::RayMesh>,
++    ) -> Result<MeshId> {
+         // Its pages as a store of their own, numbered from 0, for its cut.
+         let shared = (mesh.page_file.is_none() || !mesh.pages.is_empty())
+             .then(|| Arc::new(mesh.pages.clone()));
+@@ -502,7 +513,10 @@ impl SceneEditor {
+                     memory: Arc::default(),
+                     sources: sources.clone(),
+                 };
+-                let mut cut = raytrace::mesh_cut(&mesh.meshlets, &store, rays.budget, mesh.uvs)?;
++                let mut cut = match given {
++                    Some(given) => Cut::from(given),
++                    None => raytrace::mesh_cut(&mesh.meshlets, &store, rays.budget, mesh.uvs)?,
++                };
+                 if rays.terrain {
+                     cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
+                 }
+diff --git a/crates/forge-render/src/raytrace.rs b/crates/forge-render/src/raytrace.rs
+index 4243005..6eb98c7 100644
+--- a/crates/forge-render/src/raytrace.rs
++++ b/crates/forge-render/src/raytrace.rs
+@@ -74,6 +74,34 @@ pub(crate) struct Cut {
+     pub dynamic: bool,
+ }
+ 
++/// A mesh's surface for the rays, given rather than cut from its DAG (D-058's step 3: a planet's
++/// tile of one level has no coarser level to cut, so its grid is taken at every few samples).
++#[derive(Clone, Debug, Default)]
++pub struct RayMesh {
++    /// Its vertices, in the mesh's space.
++    pub positions: Vec<[f32; 3]>,
++    /// Its triangle list.
++    pub indices: Vec<u32>,
++    /// Per vertex, its UV when the mesh has them; empty otherwise.
++    pub uvs: Vec<[f32; 2]>,
++    /// How far it stands from the drawn surface, at most: what a cut's error is.
++    pub error: f32,
++}
++
++impl From<&RayMesh> for Cut {
++    fn from(mesh: &RayMesh) -> Self {
++        Cut {
++            positions: mesh.positions.clone(),
++            indices: mesh.indices.clone(),
++            sections: vec![0; mesh.indices.len() / 3],
++            uvs: mesh.uvs.clone(),
++            error: mesh.error,
++            shadow_start: 0.0,
++            dynamic: false,
++        }
++    }
++}
++
+ /// Triangles of the cut of `meshlets` (one mesh's clusters) at error `e`.
+ fn cut_triangles(meshlets: &[GpuMeshlet], e: f32) -> u64 {
+     meshlets
+diff --git a/crates/forge-terrain/src/planet.rs b/crates/forge-terrain/src/planet.rs
+index 15be63e..0b46c43 100644
+--- a/crates/forge-terrain/src/planet.rs
++++ b/crates/forge-terrain/src/planet.rs
+@@ -1325,6 +1325,68 @@ pub fn tile_clusters(samples: u32) -> Vec<Vec<u32>> {
+     clusters
+ }
+ 
++/// Quads a side of a tile's surface for the rays when its DAG has one level ([`tile_ray_grid`]):
++/// 3 872 triangles, within the 4 000 a tile's cut takes from its DAG.
++pub const TILE_RAY_QUADS: u32 = 44;
++
++/// The surface of [`tile_mesh`]'s `mesh` (a tile of `samples`² samples) for the rays when its DAG
++/// has one level (D-058's step 3): its grid at [`TILE_RAY_QUADS`] + 1 samples a side, the nearest
++/// to even steps, the skirt left out. Also how far it stands from the tile's samples at most,
++/// metres: what a DAG cut's error is.
++pub fn tile_ray_grid(mesh: &TriMesh, samples: u32) -> (TriMesh, f32) {
++    let n = samples as usize;
++    let quads = (TILE_RAY_QUADS as usize).min(n - 1);
++    // The samples kept along each side, and the quad of the coarse grid each sample lies in.
++    let kept: Vec<usize> = (0..=quads)
++        .map(|k| (k * (n - 1) + quads / 2) / quads)
++        .collect();
++    let mut over = vec![0; n];
++    for (k, pair) in kept.windows(2).enumerate() {
++        over[pair[0]..=pair[1]].fill(k);
++    }
++    let side = quads + 1;
++    let fine = |i: usize, j: usize| glam::Vec3::from(mesh.positions[j * n + i]);
++    let mut grid = TriMesh::default();
++    for &j in &kept {
++        for &i in &kept {
++            grid.positions.push(mesh.positions[j * n + i]);
++            grid.uvs.push(mesh.uvs[j * n + i]);
++        }
++    }
++    let index = |i: usize, j: usize| (j * side + i) as u32;
++    for j in 0..quads {
++        for i in 0..quads {
++            let (a, b, c, d) = (
++                index(i, j),
++                index(i + 1, j),
++                index(i, j + 1),
++                index(i + 1, j + 1),
++            );
++            // As `tile_mesh` splits its quads: a b c, then b d c.
++            grid.indices.extend_from_slice(&[a, b, c, b, d, c]);
++        }
++    }
++    // Each sample against the coarse triangle over it.
++    let mut error = 0.0_f32;
++    for j in 0..n {
++        for i in 0..n {
++            let (ci, cj) = (over[i], over[j]);
++            let (i0, i1, j0, j1) = (kept[ci], kept[ci + 1], kept[cj], kept[cj + 1]);
++            let s = (i - i0) as f32 / (i1 - i0) as f32;
++            let t = (j - j0) as f32 / (j1 - j0) as f32;
++            let on = if s + t <= 1.0 {
++                fine(i0, j0) + s * (fine(i1, j0) - fine(i0, j0)) + t * (fine(i0, j1) - fine(i0, j0))
++            } else {
++                fine(i1, j1)
++                    + (1.0 - s) * (fine(i0, j1) - fine(i1, j1))
++                    + (1.0 - t) * (fine(i1, j0) - fine(i1, j1))
++            };
++            error = error.max(fine(i, j).distance(on));
++        }
++    }
++    (grid, error)
++}
++
+ /// The cache name of `cell`'s tile on the planet called `body`: `body@face-level-x-y`.
+ pub fn tile_name(body: &str, cell: CellId) -> String {
+     let (x, y) = cell.xy();
+@@ -2491,6 +2553,41 @@ mod calibration {
+                 by_cells.levels(),
+                 by_cells.dag_triangle_count
+             );
++            // D-058's step 3: one level, nothing simplified, and the rays' grid.
++            let t = Instant::now();
++            let one = MeshletMesh::build_clustered_levels(
++                &mesh,
++                &tile_clusters(world.tiles.samples),
++                CookOptions { normal_weight: 0.0 },
++                1,
++            );
++            let one_ms = ms(t);
++            let t = Instant::now();
++            let (rays, ray_error) = tile_ray_grid(&mesh, world.tiles.samples);
++            let rays_ms = ms(t);
++            // The DAG's cut for the rays at 4 000 triangles, as `raytrace::cut_error` takes it.
++            let mut errors: Vec<f32> = by_cells.meshlets.iter().map(|m| m.self_error).collect();
++            errors.sort_by(f32::total_cmp);
++            let cut_of = |e: f32| -> u32 {
++                by_cells
++                    .meshlets
++                    .iter()
++                    .filter(|m| m.self_error <= e && e < m.parent_error)
++                    .map(|m| m.triangle_count)
++                    .sum()
++            };
++            let dag_error = errors
++                .iter()
++                .copied()
++                .find(|&e| cut_of(e) <= 4_000)
++                .unwrap_or(f32::INFINITY);
++            println!(
++                "  one level: {one_ms:.1} ms, {} clusters, {} pages; the rays' grid {rays_ms:.2} ms, {} triangles, {ray_error:.2} m (the DAG's cut: {} triangles, {dag_error:.2} m)",
++                one.meshlets.len(),
++                one.page_count,
++                rays.indices.len() / 3,
++                cut_of(dag_error)
++            );
+             // The cook's steps: the DAG alone, then its pages.
+             let vertices: Vec<GpuVertex> = (0..mesh.positions.len())
+                 .map(|i| GpuVertex {
+diff --git a/demos/planet/src/main.rs b/demos/planet/src/main.rs
+index 7e65c9d..2f00ae9 100644
+--- a/demos/planet/src/main.rs
++++ b/demos/planet/src/main.rs
+@@ -127,6 +127,11 @@ struct Args {
+     /// GPU (the same bits; D-058's step 2).
+     #[arg(long)]
+     cpu_heights: bool,
++    /// The tiles cooked with one level, nothing simplified inside them, the quadtree their only
++    /// LOD, and the rays given a grid of each; cooked every time, never cached (D-058's step 3's
++    /// measure).
++    #[arg(long)]
++    one_level_tiles: bool,
+     /// The streamed pool, MiB.
+     #[arg(long, default_value_t = 512)]
+     stream_pool: u32,
+@@ -586,6 +591,22 @@ struct PlanetDemo {
+     step: f32,
+     stats: Vec<FrameStats>,
+     gpu_ms: Vec<f64>,
++    /// What the frames drew over the run: frames, clusters and triangles, logged at the end.
++    drawn: (u64, u64, u64),
++}
++
++impl Drop for PlanetDemo {
++    fn drop(&mut self) {
++        let (frames, clusters, triangles) = self.drawn;
++        if frames > 0 {
++            tracing::info!(
++                frames,
++                clusters = clusters / frames,
++                triangles = triangles / frames,
++                "drawn a frame on average"
++            );
++        }
++    }
+ }
+ 
+ impl PlanetDemo {
+@@ -892,6 +913,7 @@ impl PlanetDemo {
+             step: 0.0,
+             stats: Vec::new(),
+             gpu_ms: Vec::new(),
++            drawn: (0, 0, 0),
+             args,
+         };
+         demo.place_camera();
+@@ -1458,6 +1480,9 @@ impl Demo for PlanetDemo {
+         self.stream_tiles(ctx);
+         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
+             self.stats.push(stats);
++            self.drawn.0 += 1;
++            self.drawn.1 += u64::from(stats.meshlets_pass1 + stats.meshlets_pass2);
++            self.drawn.2 += u64::from(stats.triangles);
+             if let Some(ms) = frame.slot.previous_gpu_ms {
+                 self.gpu_ms.push(ms);
+             }
+@@ -1788,6 +1813,7 @@ impl Demo for PlanetDemo {
+ 
+ fn main() -> Result<()> {
+     let args = Args::parse();
++    stream::ONE_LEVEL.store(args.one_level_tiles, std::sync::atomic::Ordering::Relaxed);
+     let path = args
+         .world
+         .clone()
+diff --git a/demos/planet/src/stream.rs b/demos/planet/src/stream.rs
+index 72c9ad2..0a1bd9f 100644
+--- a/demos/planet/src/stream.rs
++++ b/demos/planet/src/stream.rs
+@@ -21,6 +21,7 @@
+ //! `docs/demos/planet.md` has the numbers.
+ 
+ use std::collections::{HashMap, HashSet};
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::{Arc, mpsc};
+ use std::thread;
+ use std::time::Instant;
+@@ -33,14 +34,14 @@ use forge_render::material::GpuMaterial;
+ use forge_render::material::{TextureSet, upload_textures};
+ use forge_render::textures::TextureData;
+ use forge_render::{
+-    CellPos, DynamicCapacity, MeshId, MeshRays, MeshletScene, MeshletSceneBuilder, Residency,
+-    SceneEdit, SceneEditor, StartView,
++    CellPos, DynamicCapacity, MeshId, MeshRays, MeshletScene, MeshletSceneBuilder, RayMesh,
++    Residency, SceneEdit, SceneEditor, StartView,
+ };
+ use forge_task::{PoolConfig, TaskPool};
+ use forge_terrain::Planet;
+ use forge_terrain::planet::{
+     NORMAL_MAP_SIZE, normal_map_levels, tile_clusters, tile_mesh, tile_mesh_from, tile_name,
+-    tile_normal_map_cached, tile_origin,
++    tile_normal_map_cached, tile_origin, tile_ray_grid,
+ };
+ use forge_world::CellId;
+ 
+@@ -53,6 +54,11 @@ use crate::Placement;
+ /// place is cut as in a scene built whole, whichever tiles stand beside it.
+ const TILE_RAY_BUDGET: u32 = 4_000;
+ 
++/// Whether the tiles are cooked with one level, nothing simplified, the quadtree their only LOD,
++/// and the rays given a grid of each (`--one-level-tiles`, D-058's step 3's measure). They are
++/// cooked every time, never cached.
++pub(crate) static ONE_LEVEL: AtomicBool = AtomicBool::new(false);
++
+ /// Seconds between two asks for the cut: the worker makes it again (a millisecond of its time)
+ /// at most this often.
+ const ASK_EVERY: f64 = 0.05;
+@@ -101,6 +107,8 @@ enum Source {
+ pub(crate) struct Tile {
+     pub mesh: Arc<MeshletMesh>,
+     normals: NormalMap,
++    /// Its surface for the rays when its DAG has one level ([`ONE_LEVEL`]).
++    rays: Option<Arc<RayMesh>>,
+ }
+ 
+ /// A tile's normal map: its first level until a scene puts it on the GPU, then its texture; or
+@@ -138,7 +146,9 @@ pub(crate) fn cook_cells(
+ ) -> (Vec<Tile>, usize, usize) {
+     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
+     let key = planet.tile_key();
+-    let clusters = &tile_clusters(planet.world.tiles.samples);
++    let samples = planet.world.tiles.samples;
++    let clusters = &tile_clusters(samples);
++    let one_level = ONE_LEVEL.load(Ordering::Relaxed);
+     let mut slots: Vec<Option<(Tile, Source)>> = cells
+         .iter()
+         .map(|c| have.get(c).map(|t| (t.clone(), Source::Kept)))
+@@ -151,29 +161,43 @@ pub(crate) fn cook_cells(
+             let (cache, key) = (&cache, &key);
+             s.spawn(move |_| {
+                 let name = tile_name(body, cell);
+-                // Its first level cut into its grid's cells, its DAG over them.
+-                let (done, stored) =
+-                    forge_geom::cache::cook_cached_with(cache, &name, key, in_memory, || {
+-                        // Its heights from the GPU when it makes them, the same bits as the
+-                        // CPU's (D-058's step 2); from the CPU when the frame hangs up.
+-                        let from_gpu = heights.and_then(|q| q.ask(cell).recv().ok());
+-                        let mesh = match from_gpu {
+-                            Some(h) => tile_mesh_from(planet, cell, &h),
+-                            None => tile_mesh(planet, cell),
+-                        };
+-                        MeshletMesh::build_clustered(
+-                            &mesh,
+-                            clusters,
+-                            CookOptions { normal_weight: 0.0 },
+-                        )
+-                    });
+-                if let Err(error) = stored {
+-                    tracing::warn!(tile = %name, %error, "cooked tile not cached");
+-                }
+-                let source = if done.from_cache {
+-                    Source::Loaded
++                // Its heights from the GPU when it makes them, the same bits as the CPU's
++                // (D-058's step 2); from the CPU when the frame hangs up.
++                let made = || {
++                    let from_gpu = heights.and_then(|q| q.ask(cell).recv().ok());
++                    match from_gpu {
++                        Some(h) => tile_mesh_from(planet, cell, &h),
++                        None => tile_mesh(planet, cell),
++                    }
++                };
++                let options = CookOptions { normal_weight: 0.0 };
++                let (mesh, rays, source) = if one_level {
++                    // One level of its grid's cells, nothing simplified, never cached.
++                    let mesh = made();
++                    let (grid, error) = tile_ray_grid(&mesh, samples);
++                    let rays = RayMesh {
++                        positions: grid.positions,
++                        indices: grid.indices,
++                        uvs: grid.uvs,
++                        error,
++                    };
++                    let cooked = MeshletMesh::build_clustered_levels(&mesh, clusters, options, 1);
++                    (cooked, Some(Arc::new(rays)), Source::Cooked)
+                 } else {
+-                    Source::Cooked
++                    // Its first level cut into its grid's cells, its DAG over them.
++                    let (done, stored) =
++                        forge_geom::cache::cook_cached_with(cache, &name, key, in_memory, || {
++                            MeshletMesh::build_clustered(&made(), clusters, options)
++                        });
++                    if let Err(error) = stored {
++                        tracing::warn!(tile = %name, %error, "cooked tile not cached");
++                    }
++                    let source = if done.from_cache {
++                        Source::Loaded
++                    } else {
++                        Source::Cooked
++                    };
++                    (done.mesh, None, source)
+                 };
+                 let normals = if gpu_maps {
+                     NormalMap::Gpu
+@@ -182,8 +206,9 @@ pub(crate) fn cook_cells(
+                 };
+                 *slot = Some((
+                     Tile {
+-                        mesh: Arc::new(done.mesh),
++                        mesh: Arc::new(mesh),
+                         normals,
++                        rays,
+                     },
+                     source,
+                 ));
+@@ -312,6 +337,11 @@ pub(crate) fn build_scene(
+     // own (`TILE_RAY_BUDGET`).
+     builder.set_ray_terrain(&ids);
+     builder.set_ray_budget(&ids, TILE_RAY_BUDGET);
++    for (&id, tile) in ids.iter().zip(tiles.iter()) {
++        if let Some(rays) = &tile.rays {
++            builder.set_ray_mesh(id, Arc::clone(rays));
++        }
++    }
+     let rotation = parts.placement.rotation.as_quat();
+     for (i, ((&cell, &id), tile)) in cells.iter().zip(&ids).zip(tiles.iter()).enumerate() {
+         let at = parts.placement.world_point(tile_origin(world, cell));
+@@ -403,7 +433,7 @@ pub(crate) fn edit_scene(
+         terrain: true,
+     };
+     for (&cell, tile) in new_cells.iter().zip(new_tiles) {
+-        let mesh = editor.add_mesh(&tile.mesh, rays)?;
++        let mesh = editor.add_mesh_with(&tile.mesh, rays, tile.rays.as_deref())?;
+         let at = parts.placement.world_point(tile_origin(world, cell));
+         let instance =
+             editor.add_instance_at(mesh, CellPos::from_f64(at), rotation, 1.0, parts.ground)?;

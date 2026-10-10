@@ -586,6 +586,19 @@ struct PlanetDemo {
     step: f32,
     stats: Vec<FrameStats>,
     gpu_ms: Vec<f64>,
+    /// What the frames drew over the run: frames, clusters and triangles, logged at the end.
+    drawn: (u64, u64, u64),
+}
+
+impl Drop for PlanetDemo {
+    fn drop(&mut self) {
+        let (frames, clusters, triangles) = self.drawn;
+        if let (Some(clusters), Some(triangles)) =
+            (clusters.checked_div(frames), triangles.checked_div(frames))
+        {
+            tracing::info!(frames, clusters, triangles, "drawn a frame on average");
+        }
+    }
 }
 
 impl PlanetDemo {
@@ -892,6 +905,7 @@ impl PlanetDemo {
             step: 0.0,
             stats: Vec::new(),
             gpu_ms: Vec::new(),
+            drawn: (0, 0, 0),
             args,
         };
         demo.place_camera();
@@ -1458,6 +1472,9 @@ impl Demo for PlanetDemo {
         self.stream_tiles(ctx);
         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
+            self.drawn.0 += 1;
+            self.drawn.1 += u64::from(stats.meshlets_pass1 + stats.meshlets_pass2);
+            self.drawn.2 += u64::from(stats.triangles);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);
             }

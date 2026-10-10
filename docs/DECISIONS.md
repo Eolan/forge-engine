@@ -3532,7 +3532,7 @@ owner's yes, nothing built on it):
 - **For a galaxy:** a 64-bit body id in Elite's shape first (sector, layer, system, body), with
   each body's record made top-down. Voxels only if the game digs.
 
-## D-058 — A planet's tiles made on the GPU: the normal maps first, the heights under D-016's GPU rule, the DAG measured 🟡 (proposed 2026-10-10, #220; step 1 ✅, step 2 accepted and half built the same day)
+## D-058 — A planet's tiles made on the GPU: the normal maps first, the heights under D-016's GPU rule, the DAG measured ✅ (proposed 2026-10-10, #220; steps 1 and 2 built, step 3 measured the same day: the DAG stays)
 
 D-057 is kept for #222's smart systems.
 
@@ -3701,3 +3701,37 @@ D-016's amendment of the same day:
   - the float version of step 1 is gone (its centre-relative angles and noise, its double `atan`);
   - against the CPU's maps, from levels 7 to 14: within one 8-bit level, as before;
   - 0.25 ms of the GPU a map, against 0.21 in floats.
+
+**Step 3 measured: the DAG stays ✅** (2026-10-10, the owner's "go with step 3";
+`docs/demos/planet.md`, "One level a tile, measured"; the code in
+`reports/2026-10-10-220/one-level-tiles.patch`):
+- **What was built for the measure** (`planet --one-level-tiles`):
+  - each tile's grid cells as its only level, every cluster a root, nothing simplified;
+  - for the rays, the tile's grid at 45 × 45 samples (3 872 triangles, within the 4 000 a tile's
+    DAG cut takes), handed to the scene rather than cut from a DAG;
+  - never cached.
+- **A tile cooks in about 9 ms waited** rather than 37 (its heights apart), 1 403 clusters in
+  14 pages rather than about 3 170 in 30. The first scene's 369 tiles cook in 2.0 s rather
+  than 8.3.
+- **But the frames draw 12 to 100 times the triangles.** The GPU frame, best of three runs:
+
+  | View | The DAG (today) | One level, the same cut | One level, 129 samples a tile, the cut one level finer |
+  |---|---|---|---|
+  | Èze from the ground | 0.94 ms, 133 k triangles | 1.19 ms, 3.8 M | 1.15 ms, 1.6 M |
+  | 10 km up | 1.12 ms, 331 k | 1.96 ms, 21 M | 1.76 ms, 12 M |
+  | Orbit | 1.21 ms, 383 k | 2.53 ms, 40 M | 2.15 ms, 24 M |
+  | Mont Blanc from 6 km | 1.10 ms, 332 k | 1.54 ms, 8.9 M | 1.63 ms, 6.0 M |
+
+  The software rasteriser takes most of it: 0.55 ms at 10 km and 1.06 ms from orbit with one
+  level, where the DAG's frame has none. The quadtree places a tile's samples about 2.5 px
+  apart at its nearest point. The DAG then removes most of them where the ground is gentle and
+  the tile is far, which the quadtree cannot do inside a tile.
+- **The rays' grid errs 2–3.5 times the DAG's cut** (5.9 m against 2.9 at level 14), so their
+  rays would start further off the ground. The smaller tiles double the rays' structures (193
+  against 83 MiB) and the tiles (822 against 369).
+- **So the CPU's DAG stays,** 35 ms of a new tile's 45 waited. The swaps' check on the tour was
+  not run: the frames decide it already.
+- **Left, if a cut's wait matters again:** the DAG template set aside earlier (23 ms), shown
+  while the tile's own DAG cooks and checked with `--check-swaps` at the second swap; or a
+  tile's coarser levels made from its grid itself (every other sample, the group's borders
+  kept), which meshoptimizer would no longer need. Neither is proposed yet.

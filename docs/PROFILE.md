@@ -1379,6 +1379,9 @@ scene.
     iGPU, the same bits as the CPU's;
   - the tiles cooked in flight take their heights from the GPU, at most 8 a frame: the cold
     tour's cuts wait 0.39 s, against 0.48 with the CPU's integer heights.
+- **One level a tile** (D-058's step 3, measured and set aside; `docs/demos/planet.md`, "One level
+  a tile, measured"): the GPU frame at 1.15–2.53 ms rather than 0.94–1.21, the software
+  rasteriser 0.55–1.06 ms of it from 10 km and orbit, for a tile cooked in 9 ms rather than 37.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
   - **Edited in place** (#220): an edit of up to 10 tiles is ready on the worker 11 ms after it
     is asked for (18 ms at most), the two of 210 and 314 tiles on arriving at a stop 0.30 and

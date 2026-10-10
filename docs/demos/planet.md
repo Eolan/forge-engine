@@ -514,6 +514,31 @@ D-058's first step (2026-10-10):
 - **Without doubles in shaders, or for a planet of noise alone,** the maps are made on the CPU as
   before; so they are with `--cpu-normal-maps`.
 
+### One level a tile, measured
+
+D-058's step 3 (2026-10-10): what a tile with no LOD inside it would cost the frames, its
+quadtree its only LOD. Built for the measure (`--one-level-tiles`, kept as
+`reports/2026-10-10-220/one-level-tiles.patch`): each tile's grid cells as its only level, every
+one a root, and for the rays its grid at 45 × 45 samples. It cooks in about 9 ms waited rather
+than 37, but the frames draw 12 to 100 times the triangles:
+
+| GPU frame, best of 3 | The DAG | One level, the same cut | One level, 129 samples a tile, finest level 15 |
+|---|---|---|---|
+| Èze from the ground | 0.94 ms, 133 k triangles | 1.19 ms, 3.8 M | 1.15 ms, 1.6 M |
+| 10 km up | 1.12 ms, 331 k | 1.96 ms, 21 M | 1.76 ms, 12 M |
+| Orbit | 1.21 ms, 383 k | 2.53 ms, 40 M | 2.15 ms, 24 M |
+| Mont Blanc from 6 km | 1.10 ms, 332 k | 1.54 ms, 8.9 M | 1.63 ms, 6.0 M |
+
+- **Why:** the cut keeps a tile's samples about 2.5 px apart at its nearest point, and the DAG
+  drops most of them where the ground is gentle and the tile far. The software rasteriser
+  takes 0.55 ms at 10 km and 1.06 ms from orbit with one level.
+- **The rays' grid** (3 872 triangles a tile) errs 2–3.5 times the DAG's 4 000-triangle cut.
+- **Smaller tiles** (129 samples, the cut one level finer by itself) draw half to two
+  thirds of the one-level tiles' triangles, still 12–62 times the DAG's, with 822 tiles rather
+  than 369 and twice the rays' structures.
+- **So the DAG stays** (D-058). The demo now logs, as it exits, the clusters and triangles a
+  frame drew on average.
+
 ### The heights in integers
 
 D-058's step 2 (2026-10-10), under D-016's amendment: the planet's heights are the same bits on
@@ -574,7 +599,9 @@ the CPU, on the GPU and on a server.
       skips levels or cooks the parent long before, so the gain is too rare for the memory.
   - **On the GPU** (D-058): the normal maps ✅ ([The normal maps on the GPU](#the-normal-maps-on-the-gpu)); the
     heights in integers ✅ ([The heights in integers](#the-heights-in-integers)), their meshes made
-    from the GPU's ✅, and the DAG for step 3's measure.
+    from the GPU's ✅. Step 3, tiles of one level with the quadtree their only LOD, cooked in
+    9 ms but drew 12–100 times the triangles: the DAG stays
+    ([One level a tile, measured](#one-level-a-tile-measured)).
   - **The heights** cost 0.25–0.33 µs each in floats and about 0.57 µs in integers on the CPU,
     mostly the noise's octaves; the GPU makes them for the tiles cooked in flight.
   - **A DAG template, set aside** (2026-10-10; the code in

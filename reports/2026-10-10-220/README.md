@@ -8,3 +8,7 @@
   later"), measured and set aside: it cooked a tile's DAG in 23 ms against 0.16 s, but its errors
   were 7–10 times a tile's own. Kept for a later try at a template shown first, with the tile's own
   DAG cooked behind it.
+- `one-level-tiles.patch`: D-058's step 3's measure (`planet --one-level-tiles`, "One level a
+  tile, measured" in `docs/demos/planet.md`): tiles of one level, every cluster a root, the rays
+  given each tile's grid at 45 × 45 samples (`RayMesh`, `set_ray_mesh`, `add_mesh_with`). A tile
+  cooked in 9 ms rather than 37, but the frames drew 12–100 times the triangles: set aside.
