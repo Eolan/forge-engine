@@ -127,11 +127,13 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
     noise's seeds are kept; the DAG's first level is cut into the grid's cells; the heights and
     the DAG's groups are spread over the threads. The planet's colour map decodes in 1 s rather
     than 4.3. A DAG template shared by every tile, measured, lost the tiles' ridges and was set
-    aside.
-  - **Next:** a tile in milliseconds still: its DAG (0.06 s, partly on one thread) and its normal
-    map (0.12 s of one core), whose heights the children could share. A longer blend over a split
-    (the parent dithered into its children) if a view shows it: no frame of a change jumps over
-    0.13 today.
+    aside. Then 0.055 s (0.18 s of one core): the DAG's clusters' bounds on the threads, the
+    whole map's noise left out inside a region, the noise's corners hashed together; the first
+    start's 378 tiles cook in 10.9 s rather than 14–16.
+  - **Next:** a tile in milliseconds still: its DAG (35 ms waited, meshoptimizer's simplifying and
+    clustering) and its normal map (about 50 ms of one core), whose heights the children could
+    share. A longer blend over a split (the parent dithered into its children) if a view shows
+    it: no frame of a change jumps over 0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

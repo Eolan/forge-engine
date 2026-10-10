@@ -1354,11 +1354,12 @@ scene.
 - **Start:** the Earth's elevation loads in 0.5 s (466 MB and its pyramid), its 16K colour map in
   1.0 s (decoded at every start, its texels and mips on every thread: 4.3 s on one, #220). A
   later start takes 3.6–3.9 s, the Moon's 2.6 (8.1 and 7.9 before). The tiles cook
-  about 24 a second the first time with their normal maps: 375 by Èze in 16 s (19 a second
-  before #220's faster tiles; `docs/demos/planet.md`, "A new tile"). From the cache they load
-  in under 0.1 s. A first scene with 669 normal maps takes 0.84 s to build (the maps upload
-  together, as many to a submission as 16 MiB holds), and the maps take
-  341 KB a tile. A swapped-in scene with 317 new maps: 0.58 s, 0.98 with a submission a map.
+  about 35 a second the first time with their normal maps: 378 by Èze in 10.9 s, the whole start
+  15.4 s (24 a second at midday, 19 before #220's faster tiles; `docs/demos/planet.md`, "A new
+  tile"). From the cache they load in under 0.1 s. A first scene with 669 normal maps
+  takes 0.84 s to build (the maps upload together, as many to a submission as 16 MiB holds), and
+  the maps take 341 KB a tile. A swapped-in scene with 317 new maps: 0.58 s, 0.98 with a
+  submission a map.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
   - **Edited in place** (#220): an edit of up to 10 tiles is ready on the worker 11 ms after it
     is asked for (18 ms at most), the two of 210 and 314 tiles on arriving at a stop 0.30 and

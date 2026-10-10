@@ -139,7 +139,8 @@ pub fn unpack(codec: Codec, packed: &[u8], out: &mut [u8]) -> io::Result<()> {
 }
 
 /// Threads the parallel loops use: the machine's, less two for the main and render threads.
-fn threads() -> usize {
+/// [`par_chunks_mut`] spreads its chunks over this many.
+pub fn threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())
         .saturating_sub(2)

@@ -20,7 +20,7 @@
 //! the page packer (`crate::page`) keeps each group in one page and points a cluster at the
 //! page of its children.
 
-use forge_core::pack::par_chunks_mut;
+use forge_core::pack::{par_chunks_mut, threads};
 use meshopt::{PositionDataAdapter, RadiusDataAdapter, SimplifyOptions, VertexDataAdapter};
 
 use crate::meshlet::{GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES};
@@ -172,16 +172,7 @@ fn build_dag_from(
     // Level 0.
     let whole = compactor.subset(indices, vertices, &locked);
     let mut current = match clusters {
-        None => emit_clusters(
-            &mut dag,
-            &mut records,
-            &whole,
-            &whole.indices,
-            &sections,
-            0,
-            ([0.0; 3], 0.0),
-            0.0,
-        ),
+        None => emit_cut(&mut dag, &mut records, &whole, &sections),
         Some(clusters) => emit_given(&mut dag, &mut records, &whole, clusters, &sections),
     };
     dag.clusters_per_level.push(current.len() as u32);
@@ -234,9 +225,6 @@ fn build_dag_from(
         // machine's threads (#220: a planet tile's DAG waited 0.1 s on one); then appended in
         // their order, the same records as one thread made.
         let members: Vec<&Vec<usize>> = groups.iter().filter(|m| !m.is_empty()).collect();
-        let mut simplified: Vec<Option<Simplified>> = (0..members.len()).map(|_| None).collect();
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-        let per = members.len().div_ceil(threads).max(1);
         let shared = GroupInputs {
             records: &records,
             vertices,
@@ -245,12 +233,11 @@ fn build_dag_from(
             has_sections,
             normal_weight,
         };
-        par_chunks_mut(&mut simplified, per, 1, |chunk, slots| {
-            let mut compactor = Compactor::new(vertices.len());
-            for (k, slot) in slots.iter_mut().enumerate() {
-                *slot = simplify_group(members[chunk * per + k], &shared, &mut compactor);
-            }
-        });
+        let simplified = par_map(
+            members.len(),
+            || Compactor::new(vertices.len()),
+            |compactor, i| simplify_group(members[i], &shared, compactor),
+        );
         let mut next = Vec::new();
         let mut progressed = false;
         for (members, simplified) in members.into_iter().zip(simplified) {
@@ -269,18 +256,16 @@ fn build_dag_from(
                 records[c].gpu.parent_radius = made.sphere.1;
                 records[c].gpu.parent_error = made.error;
             }
-            let produced = emit_pieces(
-                &mut dag,
-                &mut records,
-                &made.subset,
-                &made.pieces,
-                &sections,
-                (level, made.sphere, made.error),
-            );
-            for &c in &produced {
+            for cluster in made.clusters {
+                let c = append(
+                    &mut dag,
+                    &mut records,
+                    cluster,
+                    (level, made.sphere, made.error),
+                );
                 records[c].source = group;
+                next.push(c);
             }
-            next.extend(produced);
         }
         if !progressed {
             break;
@@ -376,29 +361,24 @@ impl Compactor {
     }
 }
 
-/// Cuts `indices` (local to `subset`) into clusters, appends them to the tables and the
-/// records in mesh indices, and returns the new records' ids. `self_sphere` / `self_error`
-/// are the producing group's values.
-#[allow(clippy::too_many_arguments)]
-fn emit_clusters(
+/// Level 0: `subset` (the whole mesh) cut into clusters by meshoptimizer, appended to the tables
+/// and the records; returns the new records' ids.
+fn emit_cut(
     dag: &mut ClusterDag,
     records: &mut Vec<Record>,
     subset: &Subset,
-    indices: &[u32],
     sections: &Sections<'_>,
-    level: u32,
-    self_sphere: ([f32; 3], f32),
-    self_error: f32,
 ) -> Vec<usize> {
-    let pieces = cut_clusters(subset, indices, sections);
-    emit_pieces(
-        dag,
-        records,
-        subset,
-        &pieces,
-        sections,
-        (level, self_sphere, self_error),
-    )
+    let pieces = cut_clusters(subset, &subset.indices, sections);
+    let prepared = par_map(
+        pieces.len(),
+        || subset.adapter(),
+        |adapter, i| prepare(subset, adapter, sections, &pieces[i].0, &pieces[i].1),
+    );
+    prepared
+        .into_iter()
+        .map(|cluster| append(dag, records, cluster, (0, ([0.0; 3], 0.0), 0.0)))
+        .collect()
 }
 
 /// A cluster cut out of a subset: its vertices (the subset's indices) and its triangles
@@ -451,27 +431,6 @@ fn cut_clusters(subset: &Subset, indices: &[u32], sections: &Sections<'_>) -> Ve
     pieces
 }
 
-/// Appends `pieces`, cut out of `subset`, to the tables and the records ([`emit_one`]), and
-/// returns the new records' ids.
-fn emit_pieces(
-    dag: &mut ClusterDag,
-    records: &mut Vec<Record>,
-    subset: &Subset,
-    pieces: &[Piece],
-    sections: &Sections<'_>,
-    producer: (u32, ([f32; 3], f32), f32),
-) -> Vec<usize> {
-    let adapter = subset.adapter();
-    pieces
-        .iter()
-        .map(|(vertices, triangles)| {
-            emit_one(
-                dag, records, subset, &adapter, sections, producer, vertices, triangles,
-            )
-        })
-        .collect()
-}
-
 /// What one level's groups read, shared by the threads that simplify them.
 struct GroupInputs<'a> {
     records: &'a [Record],
@@ -482,13 +441,12 @@ struct GroupInputs<'a> {
     normal_weight: f32,
 }
 
-/// What a group's simplification made: its triangles' subset, the group's sphere and error, and
-/// the clusters its simplified triangles are cut into.
+/// What a group's simplification made: the group's sphere and error, and the clusters its
+/// simplified triangles are cut into, ready to append.
 struct Simplified {
-    subset: Subset,
     sphere: ([f32; 3], f32),
     error: f32,
-    pieces: Vec<Piece>,
+    clusters: Vec<Prepared>,
 }
 
 /// The group `members` simplified to half its triangles and cut into clusters, or `None` when
@@ -566,12 +524,17 @@ fn simplify_group(
         .iter()
         .map(|&c| records[c].gpu.self_error)
         .fold(simplify_error, f32::max);
-    let pieces = cut_clusters(&subset, &simplified, inputs.sections);
+    let adapter = subset.adapter();
+    let clusters = cut_clusters(&subset, &simplified, inputs.sections)
+        .iter()
+        .map(|(vertices, triangles)| {
+            prepare(&subset, &adapter, inputs.sections, vertices, triangles)
+        })
+        .collect();
     Some(Simplified {
-        subset,
         sphere,
         error,
-        pieces,
+        clusters,
     })
 }
 
@@ -585,60 +548,64 @@ fn emit_given(
     clusters: &[Vec<u32>],
     sections: &Sections<'_>,
 ) -> Vec<usize> {
-    let adapter = subset.adapter();
-    let mut local = vec![u32::MAX; subset.vertices.len()];
-    clusters
-        .iter()
-        .map(|cluster| {
-            let mut vertices: Vec<u32> = Vec::new();
-            let mut triangles: Vec<u8> = Vec::with_capacity(3 * cluster.len());
-            for &t in cluster {
-                let first = 3 * t as usize;
-                for &v in &subset.indices[first..first + 3] {
-                    if local[v as usize] == u32::MAX {
-                        local[v as usize] = vertices.len() as u32;
-                        vertices.push(v);
-                    }
-                    triangles.push(local[v as usize] as u8);
+    // Each thread with the adapter and a table of the subset's vertices to local ones.
+    let scratch = || (subset.adapter(), vec![u32::MAX; subset.vertices.len()]);
+    let prepared = par_map(clusters.len(), scratch, |(adapter, local), i| {
+        let cluster = &clusters[i];
+        let mut vertices: Vec<u32> = Vec::new();
+        let mut triangles: Vec<u8> = Vec::with_capacity(3 * cluster.len());
+        for &t in cluster {
+            let first = 3 * t as usize;
+            for &v in &subset.indices[first..first + 3] {
+                if local[v as usize] == u32::MAX {
+                    local[v as usize] = vertices.len() as u32;
+                    vertices.push(v);
                 }
+                triangles.push(local[v as usize] as u8);
             }
-            for &v in &vertices {
-                local[v as usize] = u32::MAX;
-            }
-            assert!(
-                vertices.len() <= MESHLET_MAX_VERTICES && cluster.len() <= MESHLET_MAX_TRIANGLES,
-                "a given cluster of {} vertices and {} triangles",
-                vertices.len(),
-                cluster.len()
-            );
-            emit_one(
-                dag,
-                records,
-                subset,
-                &adapter,
-                sections,
-                (0, ([0.0; 3], 0.0), 0.0),
-                &vertices,
-                &triangles,
-            )
-        })
+        }
+        for &v in &vertices {
+            local[v as usize] = u32::MAX;
+        }
+        assert!(
+            vertices.len() <= MESHLET_MAX_VERTICES && cluster.len() <= MESHLET_MAX_TRIANGLES,
+            "a given cluster of {} vertices and {} triangles",
+            vertices.len(),
+            cluster.len()
+        );
+        prepare(subset, adapter, sections, &vertices, &triangles)
+    });
+    prepared
+        .into_iter()
+        .map(|cluster| append(dag, records, cluster, (0, ([0.0; 3], 0.0), 0.0)))
         .collect()
 }
 
-/// Appends a cluster to the tables and `records` and returns its record's id: `triangles` index
-/// `vertices`, which index `subset`'s. `producer` is its level and its producing group's sphere
-/// and error.
-#[allow(clippy::too_many_arguments)]
-fn emit_one(
-    dag: &mut ClusterDag,
-    records: &mut Vec<Record>,
+/// A cluster made ready to append ([`prepare`]), apart from the tables, so that threads can
+/// make a level's clusters together (#220: their bounds took a planet tile's DAG 14 ms on one
+/// thread).
+struct Prepared {
+    /// Its vertices, as the mesh's indices.
+    vertices: Vec<u32>,
+    /// Its triangles (indices into `vertices`), sorted by section.
+    triangles: Vec<u8>,
+    /// Its triangles' vertices, as the mesh's indices (`Record::indices`).
+    indices: Vec<u32>,
+    /// Its sections, packed as `GpuMeshlet::section`.
+    section: u32,
+    /// Its sphere and normal cone.
+    bounds: meshopt::Bounds,
+}
+
+/// The cluster of `triangles`, which index `vertices`, which index `subset`'s, made ready to
+/// append: its triangles sorted by section, its bounds, its indices in the mesh's.
+fn prepare(
     subset: &Subset,
     adapter: &VertexDataAdapter<'_>,
     sections: &Sections<'_>,
-    (level, self_sphere, self_error): (u32, ([f32; 3], f32), f32),
     vertices: &[u32],
     triangles: &[u8],
-) -> usize {
+) -> Prepared {
     // A cluster holds at most two sections, its triangles sorted by section: the record packs
     // both and where the second starts (`GpuMeshlet::section`).
     let section = |t: &[u8; 3]| triangle_section(subset, sections, vertices, t);
@@ -658,16 +625,41 @@ fn emit_one(
         triangles: &sorted,
     };
     let bounds = meshopt::compute_meshlet_bounds(meshlet, adapter);
+    Prepared {
+        vertices: vertices
+            .iter()
+            .map(|&v| subset.global[v as usize])
+            .collect(),
+        indices: sorted
+            .iter()
+            .map(|&local| subset.global[vertices[local as usize] as usize])
+            .collect(),
+        triangles: sorted,
+        section: packed,
+        bounds,
+    }
+}
+
+/// Appends `cluster` to the tables and `records` and returns its record's id. `producer` is its
+/// level and its producing group's sphere and error.
+fn append(
+    dag: &mut ClusterDag,
+    records: &mut Vec<Record>,
+    cluster: Prepared,
+    (level, self_sphere, self_error): (u32, ([f32; 3], f32), f32),
+) -> usize {
+    let Prepared {
+        vertices,
+        triangles,
+        indices,
+        section,
+        bounds,
+    } = cluster;
     let vertex_offset = dag.meshlet_vertices.len() as u32;
     let triangle_offset = dag.meshlet_triangles.len() as u32;
-    dag.meshlet_vertices
-        .extend(vertices.iter().map(|&v| subset.global[v as usize]));
-    dag.meshlet_triangles.extend_from_slice(&sorted);
-    let global: Vec<u32> = sorted
-        .iter()
-        .map(|&local| subset.global[vertices[local as usize] as usize])
-        .collect();
-    let triangle_count = (sorted.len() / 3) as u32;
+    dag.meshlet_vertices.extend_from_slice(&vertices);
+    dag.meshlet_triangles.extend_from_slice(&triangles);
+    let triangle_count = (triangles.len() / 3) as u32;
     dag.triangle_count += triangle_count as usize;
     // Level 0 clusters use their own sphere as `self` (error 0, always fine enough).
     let (self_center, self_radius) = if level == 0 {
@@ -693,7 +685,7 @@ fn emit_one(
         self_error,
         parent_error: 0.0,
         lod_level: level,
-        section: packed,
+        section,
     };
     records.push(Record {
         gpu,
@@ -703,9 +695,30 @@ fn emit_one(
         },
         group: NO_GROUP,
         source: NO_GROUP,
-        indices: global,
+        indices,
     });
     records.len() - 1
+}
+
+/// `f(scratch, i)` for every `i` in `0..n`, spread over the machine's threads in runs of
+/// consecutive `i`, each thread with the scratch `init` makes; the results in order, the same
+/// whatever the threads.
+fn par_map<S, T: Send>(
+    n: usize,
+    init: impl Fn() -> S + Sync,
+    f: impl Fn(&mut S, usize) -> T + Sync,
+) -> Vec<T> {
+    let mut made: Vec<Option<T>> = (0..n).map(|_| None).collect();
+    let per = n.div_ceil(threads()).max(1);
+    par_chunks_mut(&mut made, per, 1, |chunk, slots| {
+        let mut scratch = init();
+        for (k, slot) in slots.iter_mut().enumerate() {
+            *slot = Some(f(&mut scratch, chunk * per + k));
+        }
+    });
+    made.into_iter()
+        .map(|t| t.expect("every index made"))
+        .collect()
 }
 
 /// A triangle's section (`t` indexes `vertices`, which index `subset`'s): its vertices'

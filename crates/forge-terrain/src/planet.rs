@@ -775,11 +775,12 @@ impl Planet {
                     );
                     base + strength * rough * detail
                 };
-                let mut height = with_detail(whole, params.detail, &self.seeds.detail);
                 // The regions' finer heights over it, faded in from their edges. Their sea (at
                 // or under half a metre) takes the whole map's depths, two metres deeper at
                 // least, without noise: the sea flattens it anyway, and noise there raised
-                // islands of sand along the coasts.
+                // islands of sand along the coasts. Deep inside a region its height alone
+                // counts: the whole map's noise, half a height's time, is not made there (#220).
+                let mut height = None;
                 for (region, grid) in params.regions.iter().zip(&self.regions) {
                     let weight = grid.inside(direction, region.blend);
                     if weight <= 0.0 {
@@ -793,9 +794,16 @@ impl Planet {
                     } else {
                         whole.min(0.0) - 2.0
                     };
-                    height += (regional - height) * weight;
+                    height = Some(if weight >= 1.0 {
+                        regional
+                    } else {
+                        let under = height.unwrap_or_else(|| {
+                            with_detail(whole, params.detail, &self.seeds.detail)
+                        });
+                        under + (regional - under) * weight
+                    });
                 }
-                height
+                height.unwrap_or_else(|| with_detail(whole, params.detail, &self.seeds.detail))
             }
             _ => planet.height(direction, min_wavelength),
         }

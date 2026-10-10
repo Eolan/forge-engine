@@ -3467,15 +3467,19 @@ Marble, the Deep Star Maps):
   transmittance raised to it, its light scaled to match); the Earth at 0.5. The air is
   Hillaire's Earth, yet from 6 km over the Alps it laid as much blue over the grass as the sky's
   own. At Èze the fog was mostly AgX's greyish sky: shown AgX's punchy look at EV 14 beside it,
-  the owner chose it ("the one on the right is way better"), the planet's default since. The
-  other demos keep D-045's AgX.
+  the owner chose it ("the one on the right is way better"), the planet's default since, and
+  every other demo's but the ballad's (D-045).
 - **Faster new tiles** (2026-10-10, `docs/demos/planet.md`, "A new tile"): a fine tile waits
   0.09 s rather than 0.46 (0.27 s of one core; its heights and its DAG's groups spread over the
   threads); the caches' stores no longer scan their directories; the normal map's unread samples
   left out and the noise's seeds kept (the same bits); the DAG's first level cut into the grid's
   7 × 7 cells (the same errors and GPU frame, other clusters). A DAG template shared by every
-  tile cooked in 23 ms but erred 7–10 times as much: set aside.
-- **Next:** a tile in milliseconds still (its DAG 0.06 s, its normal map 0.12 s of one core).
+  tile cooked in 23 ms but erred 7–10 times as much: set aside. Then (evening) 0.055 s, 0.18 s of
+  one core: the DAG's clusters' bounds made on the threads with the clusters (the same bits),
+  the whole map's noise left out where a region replaces it, the noise's corners hashed side by
+  side. The first start's 378 tiles cook in 10.9 s rather than 14–16.
+- **Next:** a tile in milliseconds still (its DAG 35 ms waited, 0.11 s of one core; its normal map
+  about 50 ms of one core).
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

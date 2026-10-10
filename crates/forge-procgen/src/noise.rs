@@ -4,7 +4,7 @@
 //! the same bits on a client and a server (D-016). Values lie in about `[−1, 1]`. In 3-D (a
 //! planet's surface, #220) the gradients are Perlin's twelve edge directions, by `hash_cell3`.
 
-use forge_core::hash::{hash_cell2, hash_cell3};
+use forge_core::hash::hash_cell2;
 
 /// The eight gradient directions (the diagonals scaled to unit length).
 const GRADIENTS: [(f64, f64); 8] = [
@@ -116,8 +116,9 @@ pub fn gradient3(seed: u64, x: f64, y: f64, z: f64) -> f64 {
     let (x0, y0, z0) = (x.floor(), y.floor(), z.floor());
     let (fx, fy, fz) = (x - x0, y - y0, z - z0);
     let (ix, iy, iz) = (x0 as i32, y0 as i32, z0 as i32);
+    let hashes = corner_hashes(seed, ix, iy, iz);
     let dot = |dx: i32, dy: i32, dz: i32| {
-        let h = hash_cell3(seed, ix + dx, iy + dy, iz + dz);
+        let h = hashes[(dx + 2 * dy + 4 * dz) as usize];
         let (gx, gy, gz) = GRADIENTS3[(h % 12) as usize];
         gx * (fx - f64::from(dx)) + gy * (fy - f64::from(dy)) + gz * (fz - f64::from(dz))
     };
@@ -136,9 +137,64 @@ pub fn gradient3(seed: u64, x: f64, y: f64, z: f64) -> f64 {
     lerp(near, far, w)
 }
 
+/// [`hash_cell3`] at the eight corners of the lattice cell at (x, y, z), corner `dx + 2 dy +
+/// 4 dz`: the same bits, the corners' PCG4D steps side by side so they run together (#220: the
+/// planet's heights spent most of their time in these hashes, one corner after another).
+#[inline]
+fn corner_hashes(seed: u64, x: i32, y: i32, z: i32) -> [u64; 8] {
+    let w = (seed as u32 ^ (seed >> 32) as u32)
+        .wrapping_mul(1_664_525)
+        .wrapping_add(1_013_904_223);
+    let lcg = |v: u32| v.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    let (mut a, mut b, mut c, mut d) = ([0_u32; 8], [0_u32; 8], [0_u32; 8], [w; 8]);
+    for k in 0..8 {
+        a[k] = lcg((x as u32).wrapping_add(k as u32 & 1));
+        b[k] = lcg((y as u32).wrapping_add(k as u32 >> 1 & 1));
+        c[k] = lcg((z as u32).wrapping_add(k as u32 >> 2));
+    }
+    // `forge_core::hash::pcg4d`'s two rounds, lane by lane.
+    for round in 0..2 {
+        if round == 1 {
+            for k in 0..8 {
+                a[k] ^= a[k] >> 16;
+                b[k] ^= b[k] >> 16;
+                c[k] ^= c[k] >> 16;
+                d[k] ^= d[k] >> 16;
+            }
+        }
+        for k in 0..8 {
+            a[k] = a[k].wrapping_add(b[k].wrapping_mul(d[k]));
+            b[k] = b[k].wrapping_add(c[k].wrapping_mul(a[k]));
+            c[k] = c[k].wrapping_add(a[k].wrapping_mul(b[k]));
+            d[k] = d[k].wrapping_add(b[k].wrapping_mul(c[k]));
+        }
+    }
+    std::array::from_fn(|k| {
+        forge_core::hash::mix64((u64::from(a[k]) << 32) | u64::from(b[k]) ^ (u64::from(c[k]) << 7))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_core::hash::hash_cell3;
+
+    #[test]
+    fn the_corner_hashes_are_hash_cell3_s() {
+        for (n, seed) in [0, 7, u64::MAX, 0x9E37_79B9_7F4A_7C15]
+            .into_iter()
+            .enumerate()
+        {
+            for i in -40..40 {
+                let (x, y, z) = (i * 7919 + n as i32, -i * 104_729, i * i * 31 - 5);
+                let corners = corner_hashes(seed, x, y, z);
+                for (k, &h) in corners.iter().enumerate() {
+                    let (dx, dy, dz) = (k as i32 & 1, k as i32 >> 1 & 1, k as i32 >> 2);
+                    assert_eq!(h, hash_cell3(seed, x + dx, y + dy, z + dz));
+                }
+            }
+        }
+    }
 
     #[test]
     fn noise_in_3d_is_zero_on_the_lattice_bounded_and_continuous() {

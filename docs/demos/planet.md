@@ -413,7 +413,7 @@ air is a rim of blue light at its limb.
 | Triangles in the tiles' finest levels | 66.3 M | 49.1 M |
 | Cluster pages (128 KiB, with the tiles' UVs) | 16 298 | 12 098 |
 | The rays' cuts | 1.92 M triangles, 115 MiB (from orbit) | 1.32 M, 79 MiB |
-| First start (the maps, then every tile made and cooked with its normal map) | 16 s for 375 tiles (24 a second; 19 a second before #220's faster tiles, 669 in 35 s) | 6 s for 192 tiles (31 a second) |
+| First start (the maps, then every tile made and cooked with its normal map) | 15.4 s, the 378 tiles in 10.9 s (35 a second; 24 a second at midday, 19 before #220's faster tiles, 669 in 35 s) | 6 s for 192 tiles (31 a second) |
 | Later starts (tiles from the cache) | 3.6–3.9 s (the 16K colour map 1.0 s, 4.3 on one thread; the scene about 0.6 s) | 2.6 s (the Earth's 16K map, for the Earth in its sky) |
 | GPU frame from orbit | 1.20 ms (`sky/compose`'s march 0.30, `shading/layered` 0.28) | 0.74 ms (4 000 km; `sky/box` 0.06) |
 | GPU frame straight down over Corsica | 1.46 ms (the march 0.46 over the whole frame) | — |
@@ -425,14 +425,15 @@ air is a rim of blue light at its limb.
 On one core, for the finest tile of the cut 6 km over Mont Blanc (133 000 triangles; the ignored
 test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
 
-| | Morning of 2026-10-10 | Now |
-|---|---|---|
-| Its heights (67 000) | 44 ms | 35 ms (the noise's octave seeds kept, not hashed again at every sample) |
-| Its DAG | 0.16 s (meshoptimizer clustered the first level in 0.05 s) | 0.11 s (the first level cut into the grid's cells of 7 × 7 quads, the levels above as before) |
-| Stored | 7 ms, and the caches scanned | 7 ms |
-| Its normal map | 0.24 s (328 000 heights) | 0.12 s (197 000: the samples no texel reads left out; the same map, bit for bit) |
-| In all | about 0.46 s | about 0.27 s |
-| What one new tile waits for, the machine otherwise idle | about 0.46 s | about 0.09 s: its heights and its map's samples spread over the threads by rows (6 ms and 16 ms), its DAG's groups simplified over them (0.06 s) |
+| | Morning of 2026-10-10 | Midday | Evening |
+|---|---|---|---|
+| A height | about 0.65 µs | 0.54 µs | 0.25 µs inside a region, about 0.33 outside (the whole map's noise not made where a region's replaces it; the noise's eight corners hashed side by side) |
+| Its heights (67 000) | 44 ms | 35 ms (the noise's octave seeds kept, not hashed again at every sample) | about 16 ms |
+| Its DAG | 0.16 s (meshoptimizer clustered the first level in 0.05 s) | 0.11 s (the first level cut into the grid's cells of 7 × 7 quads, the levels above as before) | 0.11 s |
+| Stored | 7 ms, and the caches scanned | 7 ms | 6 ms |
+| Its normal map | 0.24 s (328 000 heights) | 0.12 s (197 000: the samples no texel reads left out; the same map, bit for bit) | about 50 ms |
+| In all | about 0.46 s | about 0.27 s | about 0.18 s |
+| What one new tile waits for, the machine otherwise idle | about 0.46 s | about 0.09 s: its heights and its map's samples spread over the threads by rows (6 ms and 16 ms), its DAG's groups simplified over them (0.06 s) | about 0.055 s: its heights 3.6 ms, its DAG 35 ms, its map 9 ms |
 
 - **The caches' scans:** at every store, the derived cache listed `cache/world`'s 7 200 entries
   twice and read every entry's size and age, about 80 ms a tile, more than making its map. The
@@ -447,18 +448,43 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
   tile packs into 30–32 pages rather than 39. The GPU frame at the tour's stops is the same: the
   best of three runs is 0.996 ms over Mont Blanc against 0.995, and single runs on this machine
   vary by up to half.
+- **The DAG's steps on one thread** (evening): each cluster's bounds (meshoptimizer's
+  `computeMeshletBounds`, 4.5 µs a cluster, 14 ms a tile) and its triangles' order by section
+  were worked out as it was appended. They are now made with the cluster: on the threads for
+  level 0's cells and for each group's clusters, and only the appending stays in order. The
+  groups were also cut into as many chunks as the machine has threads, but the parallel loops run
+  two fewer, so most threads took two chunks and only 8 of 16 worked. The tile's DAG went from
+  56 to 35 ms waited. The clusters are the same, bit for bit: the four finest tiles' pages and
+  records hashed alike before and after, by both cooks.
+- **What is left of the DAG** (35 ms waited, about 0.14 s of CPU over the threads):
+  - each level's partition, on one thread, 6 ms in all;
+  - meshoptimizer's simplification and its clustering of each group's triangles, about 55 ms
+    of CPU each;
+  - the bounds, 18 ms of CPU.
+- **A height** (one thread, the map's samples over Mont Blanc), in ns:
+  - 545 before: the whole map's sample 48, its noise 283, the region's sample 48, its noise
+    140, the rest under 40.
+  - Deep inside a region its height replaces the whole map's, so the whole map's noise is no
+    longer made there: 281.
+  - The noise's eight corners hashed side by side (the same bits as `hash_cell3`; 32 → 28 ns
+    a call): 245.
+  - Hashing them with vector multiplies would need AVX2 enabled for the whole build, a
+    decision of its own.
+- **The first start by Èze** (the demo's four tile workers): the 378 tiles were made, cooked and
+  stored with their normal maps in 10.9 s rather than 14–16 (35 a second). The whole start took
+  15.4 s.
 
 ## Left for later (#220 and D-056's steps)
 
-- **A tile in milliseconds** is still to come: a new fine tile waits about 0.09 s, 0.27 s of one
+- **A tile in milliseconds** is still to come: a new fine tile waits about 0.055 s, 0.18 s of one
   core ([A new tile](#a-new-tile)). What the next steps are:
-  - **Its DAG** (0.06 s, its groups over the threads): what is left on one thread is the first
-    level's clusters' bounds, each level's partition and the records' appending. A template
+  - **Its DAG** (35 ms waited, 0.11 s of one core): meshoptimizer's simplification and
+    clustering of the groups, over the threads, and each level's partition on one. A template
     shared by every tile was measured and set aside (below).
-  - **Its normal map** (0.12 s of one core): 197 000 heights. They are the next level's, as the
-    four children would make them; kept, a split's children could take theirs from the parent's
-    map.
-  - **The heights** cost 0.5–0.6 µs each, mostly the noise's octaves.
+  - **Its normal map** (9 ms waited, about 50 ms of one core): 197 000 heights. They are the
+    children's own samples, three of each four of their vertices; kept, a split's children could
+    take theirs from the parent's map.
+  - **The heights** cost 0.25–0.33 µs each, mostly the noise's octaves.
   - **A DAG template, set aside** (2026-10-10; the code in
     `reports/2026-10-10-220/dag-template.patch`). Every tile's DAG was taken from one stand-in with
     the same triangles, simplified once, with only the bounds and errors worked out per tile: 23 ms
