@@ -465,9 +465,10 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
     noise and over a sphere alike. In the one run timed, it slowed Mont Blanc's frame from 1.0 to
     1.9 ms. It could still serve for latency: the template's DAG shown at once, the tile's own
     cooked behind it and swapped in.
-- **The splits under the camera** still change a patch once settled (`--check-swaps`: 4 of 21
-  changes peak at 0.15–0.21), though no frame jumps (first frames under 0.13): TAA takes them in
-  over several frames. A longer blend, the parent dithered into its children, if a view shows it.
+- **The splits under the camera** still change a patch once settled (`--check-swaps` on the tour:
+  4 of 21 changes peaked at 0.15–0.21; with the tiles' DAGs cut by their cells, 1 of 18 at 0.20),
+  though no frame jumps (first frames under 0.15): TAA takes them in over several frames. A
+  longer blend, the parent dithered into its children, if a view shows it.
 - **The room's ranges** are taken first fit and leave gaps as tiles come and go: the page numbers
   in use reached 37 000 for about 26 000 pages on the tour, and the needs read back every frame
   cover them all (149 KiB).
