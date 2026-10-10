@@ -2819,6 +2819,7 @@ struct Surface
     float2 uv;              // they, interpolated
     float2 duvdx;           // their change per pixel to the right and down
     float2 duvdy;
+    float coast;            // a planet tile's coast from its normal map's alpha (#220): the sea under 0.5; -1 without
 };
 
 // Smooth value noise in [0, 1) over lattice cells of size 1.
@@ -3262,7 +3263,12 @@ void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, o
     float latitude_angle = asin(clamp(dot(up, axis), -1.0, 1.0));
     float longitude = atan2(dot(up, cross(axis, meridian)), dot(up, meridian));
     float2 uv = float2(longitude / TAU + 0.5, 0.5 - latitude_angle / (0.5 * TAU));
-    float sea = f[0].planet_map.y != 0u ? 1.0 - smoothstep(0.02, 0.4, height) : 0.0;
+    // The sea's edge: the tile's map's coast where it has one, a bilinear contour at its texels
+    // (#220); otherwise the triangles' height, whose contour runs straight across each of them,
+    // kilometres on a coarse tile.
+    float sea = 0.0;
+    if (f[0].planet_map.y != 0u)
+        sea = s.coast >= 0.0 ? 1.0 - smoothstep(0.49, 0.51, s.coast) : 1.0 - smoothstep(0.02, 0.4, height);
     uint sea_mask = f[0].planet_map.w;
     if (sea_mask != 0xFFFFFFFFu && far > 0.0)
     {
@@ -4497,6 +4503,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // A mesh with texture coordinates (D-047): interpolated as the position is.
     Mesh mesh = f[0].meshes[inst.mesh];
     s.has_uv = mesh.uvs != 0;
+    s.coast = -1.0;
     s.uv = float2(0.0);
     s.duvdx = float2(0.0);
     s.duvdy = float2(0.0);
@@ -4514,9 +4521,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         // cluster shows its slopes filtered rather than its vertices' samples of them.
         if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u && inst.texture != 0u)
         {
-            float3 o = sample_image_grad(inst.texture - 1u, SAMPLER_LINEAR_CLAMP, s.uv, s.duvdx, s.duvdy).rgb * 2.0 - 1.0;
-            s.object_normal = normalize(o);
+            float4 texel = sample_image_grad(inst.texture - 1u, SAMPLER_LINEAR_CLAMP, s.uv, s.duvdx, s.duvdy);
+            s.object_normal = normalize(texel.rgb * 2.0 - 1.0);
             s.n = normalize(mul(frame, s.object_normal));
+            s.coast = texel.a;
         }
     }
     // A skinned mesh's projected textures are projected from its bind pose, or they swim over

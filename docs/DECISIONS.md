@@ -3410,6 +3410,10 @@ Marble, the Deep Star Maps):
   - Of 11 swaps on the tour, 9 now pass both thresholds. The two that peak are the coarse
     geometry showing through the ambient occlusion and the shadows.
   - From orbit the Alps gained their ridges, and the snow lies on them instead of in blobs.
+  - Its alpha carries the tile's coast, the height before the sea flattens it. Nearer than the
+    sea mask reaches, the sea starts at that contour, read per pixel, rather than at the
+    triangles' height: the owner's "very geometric non natural shapes" are gone from 10 km up
+    and at Èze.
   - It costs 341 KB a tile, and cooking goes from 28 tiles a second to 19.
 - **Next:** the scene taking and freeing tiles in place, rather than whole scenes built again.
 

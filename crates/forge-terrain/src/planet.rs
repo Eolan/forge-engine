@@ -847,6 +847,10 @@ pub fn tile_name(body: &str, cell: CellId) -> String {
 /// Texels a side of a tile's normal map ([`tile_normal_map`]).
 pub const NORMAL_MAP_SIZE: u32 = 256;
 
+/// Samples of a tile over which its normal map's coast (its alpha) runs from the sea's floor to
+/// the land ([`tile_normal_map`]): beyond, it is clamped.
+pub const COAST_RANGE: f64 = 4.0;
+
 /// The normal map of `cell`'s tile (#220): [`NORMAL_MAP_SIZE`]² texels over the tile (its
 /// UVs), each the ground's normal at its centre in the planet's frame, from the height of the
 /// next level down.
@@ -856,6 +860,11 @@ pub const NORMAL_MAP_SIZE: u32 = 256;
 /// shows, and the map's mips filter the slopes a coarse cluster's vertices only sample (the
 /// cluster DAG keeps each vertex's own normal). RGBA8 with `(n + 1) / 2` in RGB, rows of
 /// increasing `v` first, level 0 only ([`normal_map_levels`] makes the mips).
+///
+/// Alpha is the coast: the height before the sea flattens it, `0.5 + 0.5 h / r` clamped, with
+/// `r` [`COAST_RANGE`] of the tile's samples. Its 0.5 contour, read bilinearly per pixel, is
+/// where the sea starts. A coarse tile's triangles drew the coast in straight runs kilometres
+/// long; the map draws it at its texels.
 pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
     let world = &planet.world;
     let size = NORMAL_MAP_SIZE as usize;
@@ -879,6 +888,7 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
         }
     }
     let at = |i: usize, j: usize| points[j * side + i];
+    let range = COAST_RANGE * world.spacing(level);
     let mut texels = Vec::with_capacity(size * size * 4);
     for j in 0..size {
         for i in 0..size {
@@ -887,20 +897,29 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
             let normal = (at(ci + 1, cj) - at(ci - 1, cj))
                 .cross(at(ci, cj + 1) - at(ci, cj - 1))
                 .normalize_or(at(ci, cj).normalize());
-            texels.extend_from_slice(&encode_normal(normal));
+            // The coast: the height before the sea flattens it.
+            let direction = at(ci, cj).normalize();
+            let coast =
+                0.5 + 0.5 * (planet.height(direction, min_wavelength) / range).clamp(-1.0, 1.0);
+            texels.extend_from_slice(&encode_normal(normal, coast));
         }
     }
     texels
 }
 
-/// A unit normal as RGBA8: `(n + 1) / 2` in RGB, alpha 255.
-fn encode_normal(n: DVec3) -> [u8; 4] {
-    let byte = |v: f64| ((v * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
-    [byte(n.x), byte(n.y), byte(n.z), 255]
+/// A unit normal as RGBA8: `(n + 1) / 2` in RGB, `alpha` (0 to 1) in alpha.
+fn encode_normal(n: DVec3, alpha: f64) -> [u8; 4] {
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    [
+        byte(n.x * 0.5 + 0.5),
+        byte(n.y * 0.5 + 0.5),
+        byte(n.z * 0.5 + 0.5),
+        byte(alpha),
+    ]
 }
 
 /// A normal map's every level from its first ([`tile_normal_map`], `size`² texels, a power of
-/// two): each texel of a level the mean of its four below, normalised.
+/// two): each texel of a level the mean of its four below, normalised, and their coasts' mean.
 pub fn normal_map_levels(first: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
     let decode = |t: &[u8]| {
         DVec3::new(f64::from(t[0]), f64::from(t[1]), f64::from(t[2])) / 127.5 - DVec3::ONE
@@ -915,10 +934,12 @@ pub fn normal_map_levels(first: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
             for i in 0..half {
                 let texel = |di: usize, dj: usize| {
                     let at = ((2 * j + dj) * side + 2 * i + di) * 4;
-                    decode(&below[at..at + 4])
+                    (decode(&below[at..at + 4]), f64::from(below[at + 3]) / 255.0)
                 };
-                let sum = texel(0, 0) + texel(1, 0) + texel(0, 1) + texel(1, 1);
-                level.extend_from_slice(&encode_normal(sum.normalize_or(DVec3::Z)));
+                let quad = [texel(0, 0), texel(1, 0), texel(0, 1), texel(1, 1)];
+                let normal = quad.iter().map(|t| t.0).sum::<DVec3>();
+                let coast = quad.iter().map(|t| t.1).sum::<f64>() / 4.0;
+                level.extend_from_slice(&encode_normal(normal.normalize_or(DVec3::Z), coast));
             }
         }
         levels.push(level);
@@ -1071,8 +1092,22 @@ mod tests {
             let n =
                 DVec3::new(f64::from(t[0]), f64::from(t[1]), f64::from(t[2])) / 127.5 - DVec3::ONE;
             assert!(n.dot(up) > 0.0, "{n} against {up}");
-            assert_eq!(t[3], 255);
         }
+        // The coast at the centre texel: the height there before the sea flattens it.
+        let half = size / 2;
+        let cells = f64::from(1_u32 << cell.level());
+        let (x, y) = cell.xy();
+        let st = DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0
+            + DVec2::splat((2 * half + 1) as f64) * (2.0 / cells / (2 * size) as f64);
+        let direction = CubeSphere::direction(Face::from_index(cell.face()), st);
+        let height = planet.height(direction, world.min_wavelength(cell.level() + 1));
+        let range = COAST_RANGE * world.spacing(cell.level());
+        let expected = 0.5 + 0.5 * (height / range).clamp(-1.0, 1.0);
+        let alpha = f64::from(map[(half * size + half) * 4 + 3]) / 255.0;
+        assert!(
+            (alpha - expected).abs() < 0.003,
+            "{alpha} against {expected}"
+        );
         let levels = normal_map_levels(map, NORMAL_MAP_SIZE);
         assert_eq!(levels.len(), 9);
         assert_eq!(levels.last().unwrap().len(), 4);

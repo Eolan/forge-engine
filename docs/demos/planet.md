@@ -88,6 +88,13 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
     Blue Marble's colour, and the sea from the mask rather than the coarse tiles' triangles, whose
     coasts were kilometre-wide shapes. Water is shaded flat, and on the planet the layers'
     highlights blend in strength and power alike, so no bright line follows the coasts.
+  - **Nearer, the sea starts at each tile's own coast:** its normal map's alpha, the height
+    before the sea flattens it. The contour is read bilinearly per pixel at the map's texels,
+    2.4 m on the finest tiles, whatever cluster the DAG draws. The triangles' height drew the
+    coast in straight runs and wedges across a coarse tile's triangles, still kilometres long
+    from 10 km up. Below, the 10 km shot before and after:
+
+    ![the coast from 10 km up before and after the tiles' coasts](images/planet-coast.png)
   - The textures lie on the scene's frame, one surface over every tile.
   - **Hex tiling** (#66, as on the island) on every textured row: the grass's 12 m repeat showed
     as a grid of stripes over the slopes at Èze (below, before and after). The planet's tiles
@@ -200,8 +207,10 @@ What the engine gained for it:
 
 Each tile carries a normal map (`forge_terrain::planet::tile_normal_map`).
 - **What it holds:** 256² texels over the tile, each the ground's normal at its centre in the
-  planet's frame, from the height of the next level down. Its mips are each the mean of the four
-  texels below. It is made with the tile and kept in the world cache (`cache/world/`).
+  planet's frame, from the height of the next level down. Its alpha is the coast: that height
+  before the sea flattens it, linear over four of the tile's samples either side of the sea's
+  level (`COAST_RANGE`). Its mips are each the mean of the four texels below. It is made with the
+  tile and kept in the world cache (`cache/world/`).
 - **How it is drawn:** the tile's instance names the map (`set_instance_texture`, in the instance
   record's spare word). The layered ground reads its normal there through the tile's UVs, with
   the pixel's derivatives choosing the mip, and turns it by the instance's rotation.
