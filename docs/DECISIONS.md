@@ -3532,7 +3532,7 @@ owner's yes, nothing built on it):
 - **For a galaxy:** a 64-bit body id in Elite's shape first (sector, layer, system, body), with
   each body's record made top-down. Voxels only if the game digs.
 
-## D-058 — A planet's tiles made on the GPU: the normal maps first, the heights under D-016's GPU rule, the DAG measured 🟡 (proposed 2026-10-10, #220; step 1 ✅ and step 2 accepted the same day)
+## D-058 — A planet's tiles made on the GPU: the normal maps first, the heights under D-016's GPU rule, the DAG measured 🟡 (proposed 2026-10-10, #220; step 1 ✅, step 2 accepted and half built the same day)
 
 D-057 is kept for #222's smart systems.
 
@@ -3665,3 +3665,27 @@ D-016's amendment of the same day:
   - how far the integer heights stand from today's floats (under a millimetre is the aim);
   - the CPU's cost a height against today's 0.25–0.33 µs;
   - the GPU's cost a tile and the read-back's wait.
+
+**Step 2's first two parts built ✅** (2026-10-10):
+- **The heights in integers** (`forge_core::fixed`, `Planet::fixed_height`):
+  - the CORDIC (56 steps) for the warp's sines and cosines and for the latitude and longitude;
+  - Newton's iteration for the directions' length;
+  - Q61 for the angles and directions, Q32 metres for the positions and heights;
+  - the tiles' constants fixed once a tile from the world's floats (`FixedHeights`).
+- **Against today's floats,** 5 600 samples on every face at levels 4 to 14: the directions within
+  2.7e-16 and the heights within 0.058 mm. A height takes 571 ns on one core, against 485 in
+  floats.
+- **The tiles' meshes and the CPU's normal maps are made from them:**
+  - a fine tile's heights take 5.2 ms waited, against 3.6;
+  - the first start's tiles cook in 8.2 s, against 8.0.
+- **On the GPU** (`shaders/fixed.slang`, `shaders/planet_heights.slang`), checked by
+  `planet --check-heights`:
+  - four tiles of 67 081 samples each, from level 14 by Èze to level 8;
+  - every height the same bits as the CPU's, with the same digests, on the RTX 5070 Ti and on
+    the AMD iGPU;
+  - about 0.07 ms a tile on the 5070 Ti against about 38 ms of a CPU core, and 8.5 ms on the
+    iGPU.
+- **Integrated GPUs keep the CPU's normal maps** (a new `discrete` device feature). The iGPU's
+  first scene of 378 maps outlasted Windows' 2 s timeout.
+- **Left:** the tiles' meshes made from the GPU's heights, read back for the DAG; and the normal
+  maps' heights in integers on the GPU.

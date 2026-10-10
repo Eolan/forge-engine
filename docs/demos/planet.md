@@ -33,6 +33,7 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | `--check-swaps DIR` | holds still at each change of the tiles and saves the frames before and after it, for `tools/swap-check.sh` |
 | `--cpu-normal-maps` | the tiles' normal maps made on the CPU and cached, as before D-058: the reference |
 | `--check-normal-maps` | the first maps made on the GPU read back and compared with the CPU's, in the log |
+| `--check-heights` | a few of the first scene's tiles' heights made in integers on the GPU and compared with the CPU's, bit for bit, with their digests (D-016's amendment) |
 | `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B); its scenes are built whole |
 | `--edited` | reaches the first scene by an edit in place, from a coarser cut (the A/B against the scene built whole) |
 
@@ -511,6 +512,39 @@ D-058's first step (2026-10-10):
 - **Without doubles in shaders, or for a planet of noise alone,** the maps are made on the CPU as
   before; so they are with `--cpu-normal-maps`.
 
+### The heights in integers
+
+D-058's step 2 (2026-10-10), under D-016's amendment: the planet's heights are the same bits on
+the CPU, on the GPU and on a server.
+- **The arithmetic** (`forge_core::fixed`, `shaders/fixed.slang`):
+  - 64-bit integers with a fixed number of fraction bits: Q61 for the angles and directions, Q32
+    metres for the positions and heights;
+  - products through 128 bits, made of four 32-bit ones on the GPU;
+  - the sines, cosines and angles by the CORDIC (shifts and adds, 56 steps);
+  - the directions' length by Newton's iteration.
+- **The height function** (`Planet::fixed_height`): `Planet::height` made again, step by step:
+  - the warp's tangents as sines and cosines (`N cos a cos b + U sin a cos b + V cos a sin b`,
+    no division);
+  - the latitude and longitude;
+  - the elevation's Catmull-Rom taps;
+  - the octaves' lattice, fade and gradients on the same hash;
+  - the regions' blend.
+
+  What does not depend on the sample is worked out once a tile from the world's floats and
+  fixed (`FixedHeights`).
+- **The tiles' meshes and the CPU's normal maps** are made from it.
+
+| | Floats (before) | Integers |
+|---|---|---|
+| Against the floats (5 600 samples, every face, levels 4–14) | — | directions within 2.7e-16, heights within 0.058 mm |
+| A height on one core | 485 ns | 571 ns |
+| A fine tile's heights, waited | 3.6 ms | 5.2 ms |
+| A tile's heights on the GPU | — | about 0.07 ms on the RTX 5070 Ti, 8.5 ms on the AMD iGPU |
+| GPU against CPU (`--check-heights`, 4 tiles × 67 081 samples, levels 8–14) | — | the same bits and digests on the 5070 Ti and the iGPU |
+
+- **On an integrated GPU** the normal maps stay on the CPU: the iGPU's first scene, 378 maps in
+  one frame, outlasted Windows' 2 s timeout.
+
 ## Left for later (#220 and D-056's steps)
 
 - **A tile in milliseconds** is still to come: a new fine tile waits about 0.045 s, 0.13 s of one
@@ -529,7 +563,8 @@ D-058's first step (2026-10-10):
       grounds with 24 maps kept (50 MB), and 13 % with 256 (540 MB). A cut in flight mostly
       skips levels or cooks the parent long before, so the gain is too rare for the memory.
   - **On the GPU** (D-058): the normal maps ✅ ([The normal maps on the GPU](#the-normal-maps-on-the-gpu)); the
-    heights wait for D-016's GPU rule (step 2), and the DAG for step 3's measure.
+    heights in integers ✅ ([The heights in integers](#the-heights-in-integers)), their meshes made
+    from the GPU's next, and the DAG for step 3's measure.
   - **The heights** cost 0.25–0.33 µs each, mostly the noise's octaves.
   - **A DAG template, set aside** (2026-10-10; the code in
     `reports/2026-10-10-220/dag-template.patch`). Every tile's DAG was taken from one stand-in with

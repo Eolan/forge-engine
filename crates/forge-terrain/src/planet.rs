@@ -28,6 +28,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, bail};
+use forge_core::fixed::{
+    Cordic, METRE, ONE, Q32, Q61, fade32, fixed, mul_shr, mul32, mul61, rsqrt61, smooth32,
+};
 use forge_core::pack::par_chunks_mut;
 use forge_core::{Seed, dmath};
 use forge_geom::procedural::TriMesh;
@@ -701,6 +704,8 @@ pub struct Planet {
     pub regions: Vec<Arc<Elevation>>,
     /// The seeds of its map detail's octaves, worked out once.
     seeds: Arc<DetailSeeds>,
+    /// The CORDIC's constants, for the heights in integers ([`FixedHeights`]).
+    cordic: Arc<Cordic>,
 }
 
 /// The seeds of a planet's map detail's octaves ([`Planet::height`]): the whole map's and the
@@ -747,6 +752,7 @@ impl Planet {
             map,
             regions,
             seeds,
+            cordic: Arc::new(Cordic::new()),
         })
     }
 
@@ -1068,6 +1074,86 @@ pub fn skirt_depth(world: &PlanetWorld, level: u8) -> f64 {
     2.0 * noise + 0.25 * world.spacing(level)
 }
 
+/// The `(cos, sin)` of the equi-angular warp at each column or row of a grid, Q61
+/// ([`fixed_warp`]).
+type Warp = Vec<(i64, i64)>;
+
+/// The samples of a grid over a tile, on the ground: sample (i, j) at global step
+/// `x steps + i`, `y steps + j` of its face cut into `steps << level` (D-058's step 2). In
+/// integers where the planet has a map and `steps` is a power of two ([`FixedHeights`]: the
+/// same bits on every machine, and on the GPU), in floats otherwise.
+struct GridSampler<'a> {
+    planet: &'a Planet,
+    face: Face,
+    min_wavelength: f64,
+    /// The tile's constants and its columns' and rows' warp from `first`, in integers.
+    fixed: Option<(FixedHeights, Warp, Warp)>,
+    first: i64,
+    /// The face's coordinates of sample (0, 0) and a step, in floats.
+    start: DVec2,
+    step: f64,
+}
+
+impl<'a> GridSampler<'a> {
+    /// For `cell`'s grid of `steps` a tile, its samples from `first` to `first + count − 1`
+    /// along each way, its heights holding nothing narrower than `min_wavelength`.
+    fn new(
+        planet: &'a Planet,
+        cell: CellId,
+        steps: i64,
+        first: i64,
+        count: usize,
+        min_wavelength: f64,
+    ) -> Self {
+        let level = cell.level();
+        let cells = f64::from(1_u32 << level);
+        let (x, y) = cell.xy();
+        let fixed = (steps > 0 && (steps as u64).is_power_of_two())
+            .then(|| planet.fixed_heights(min_wavelength))
+            .flatten()
+            .map(|heights| {
+                let bits = u32::from(level) + steps.trailing_zeros();
+                let warp = |base: i64| -> Vec<(i64, i64)> {
+                    (0..count as i64)
+                        .map(|k| fixed_warp(&planet.cordic, base * steps + first + k, bits))
+                        .collect()
+                };
+                (heights, warp(x), warp(y))
+            });
+        Self {
+            planet,
+            face: Face::from_index(cell.face()),
+            min_wavelength,
+            fixed,
+            first,
+            start: DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0,
+            step: 2.0 / cells / steps as f64,
+        }
+    }
+
+    /// Sample (i, j): its point on the ground (the planet's frame, metres) and its height before
+    /// the sea flattens it.
+    fn sample(&self, i: i64, j: i64) -> (DVec3, f64) {
+        let radius = self.planet.world.planet.radius;
+        match &self.fixed {
+            Some((heights, columns, rows)) => {
+                let (ci, rj) = ((i - self.first) as usize, (j - self.first) as usize);
+                let d = fixed_direction(self.face, columns[ci], rows[rj]);
+                let height = self.planet.fixed_height(heights, &self.planet.cordic, d);
+                let direction = DVec3::from_array(d.map(|c| c as f64 / ONE as f64));
+                let ground = heights.ground(height) as f64 / METRE as f64;
+                (direction * (radius + ground), height as f64 / METRE as f64)
+            }
+            None => {
+                let st = self.start + DVec2::new(i as f64, j as f64) * self.step;
+                let direction = CubeSphere::direction(self.face, st);
+                let height = self.planet.height(direction, self.min_wavelength);
+                (direction * (radius + self.planet.ground_of(height)), height)
+            }
+        }
+    }
+}
+
 /// The ground's mesh over `cell`: its samples on the sphere at their heights
 /// ([`Planet::ground`]), relative to [`tile_origin`], normals from the samples around each (one
 /// beyond the edge, so neighbours of a level share their edge's normals), two triangles per cell
@@ -1076,14 +1162,15 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
     let world = &planet.world;
     let n = world.tiles.samples as i64;
     let level = cell.level();
-    let face = Face::from_index(cell.face());
-    let cells = f64::from(1_u32 << level);
-    let (x, y) = cell.xy();
-    let start = DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0;
-    let step = 2.0 / cells / (n - 1) as f64;
-    let min_wavelength = world.min_wavelength(level);
-    let radius = world.planet.radius;
     let origin = tile_origin(world, cell);
+    let sampler = GridSampler::new(
+        planet,
+        cell,
+        n - 1,
+        -1,
+        (n + 2) as usize,
+        world.min_wavelength(level),
+    );
     // The samples and a ring beyond, row-major from (−1, −1).
     let side = (n + 2) as usize;
     let mut points = vec![DVec3::ZERO; side * side];
@@ -1091,10 +1178,7 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
     par_chunks_mut(&mut points, side, ROWS_PER_THREAD, |row, out| {
         let j = row as i64 - 1;
         for (point, i) in out.iter_mut().zip(-1..=n) {
-            let st = start + DVec2::new(i as f64, j as f64) * step;
-            let direction = CubeSphere::direction(face, st);
-            let height = planet.ground(direction, min_wavelength);
-            *point = direction * (radius + height);
+            *point = sampler.sample(i, j).0;
         }
     });
     let at = |i: i64, j: i64| points[(j + 1) as usize * side + (i + 1) as usize];
@@ -1235,19 +1319,11 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
     let world = &planet.world;
     let size = NORMAL_MAP_SIZE as usize;
     let level = cell.level();
-    let face = Face::from_index(cell.face());
-    let cells = f64::from(1_u32 << level);
-    let (x, y) = cell.xy();
-    let start = DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0;
+    let min_wavelength = world.min_wavelength(level + 1);
     // Samples half a texel apart: the texels' centres are the odd ones, their neighbours the
     // even ones either side.
-    let half = 2.0 / cells / (2 * size) as f64;
-    let min_wavelength = world.min_wavelength(level + 1);
-    let radius = world.planet.radius;
     let side = 2 * size + 1;
-    let place = |i: usize, j: usize| {
-        CubeSphere::direction(face, start + DVec2::new(i as f64, j as f64) * half)
-    };
+    let sampler = GridSampler::new(planet, cell, (2 * size) as i64, 0, side, min_wavelength);
     // Only the samples a texel reads: its neighbours (one coordinate odd, the other even) and
     // its centre (both odd), not the corners (both even), each with its height, kept for a
     // centre's coast. A row a chunk, the rows over the machine's threads.
@@ -1256,9 +1332,7 @@ pub fn tile_normal_map(planet: &Planet, cell: CellId) -> Vec<u8> {
         // An even row holds neighbours at its odd places only; an odd row is all read.
         let (first, step) = if j % 2 == 0 { (1, 2) } else { (0, 1) };
         for i in (first..side).step_by(step) {
-            let direction = place(i, j);
-            let height = planet.height(direction, min_wavelength);
-            row[i] = (direction * (radius + planet.ground_of(height)), height);
+            row[i] = sampler.sample(i as i64, j as i64);
         }
     });
     let at = |i: usize, j: usize| samples[j * side + i].0;
@@ -1318,6 +1392,387 @@ pub fn normal_map_levels(first: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
         side = half;
     }
     levels
+}
+
+// ---------------------------------------------------------------- heights in integers ---
+
+/// A grid's level as a tile reads it in integers ([`FixedHeights`]): where it lies in the
+/// samples, and a sample's column and row from its longitude and latitude, `u = lon × u_scale +
+/// u_offset` (Q32 texels; Q61 radians times Q32 texels a radian, shifted by 61).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FixedLevel {
+    /// Its index in the grid's levels.
+    pub level: u32,
+    /// Columns a radian of longitude, Q32.
+    pub u_scale: i64,
+    /// The column at longitude 0, Q32.
+    pub u_offset: i64,
+    /// Rows a radian of latitude, Q32 (negative: the rows run south).
+    pub v_scale: i64,
+    /// The row at latitude 0, Q32.
+    pub v_offset: i64,
+}
+
+/// An elevation grid as a tile reads it in integers ([`FixedHeights`]).
+#[derive(Clone, Debug)]
+pub struct FixedGrid {
+    /// A map of the whole body (wrapping round the longitude).
+    pub whole: bool,
+    /// Its window, Q61 radians: west, east, south, north.
+    pub bounds: [i64; 4],
+    /// The inverse of its fade from its edges, Q32 per radian (0 for the whole map).
+    pub inv_blend: i64,
+    /// The level `Elevation::height` picks for the tile's narrowest wavelength, and the next.
+    pub levels: [FixedLevel; 2],
+    /// Whether the height blends toward the next level.
+    pub blended: bool,
+    /// How far it blends toward it, Q32.
+    pub t: i64,
+    /// Its detail's strength, Q32 metres.
+    pub strength: i64,
+    /// The inverse of its octaves' strengths' sum, Q32.
+    pub inv_norm: i64,
+    /// Its octaves.
+    pub octaves: Vec<FixedOctave>,
+}
+
+/// An octave of a grid's detail as a tile reads it ([`FixedGrid`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FixedOctave {
+    /// The inverse of its width, Q40 per metre ([`INV_WIDTH_BITS`]).
+    pub inv_width: i64,
+    /// Its lattice's offset, Q32 lattice steps.
+    pub offset: [i64; 3],
+    /// Its fade at the tile's narrowest wavelength, Q32.
+    pub fade: i64,
+    /// Its strength, Q32.
+    pub strength: i64,
+    /// Its seed.
+    pub seed: u64,
+}
+
+/// Fraction bits of an octave's inverse width.
+pub const INV_WIDTH_BITS: u32 = 40;
+
+/// Everything a tile's heights need that does not depend on the sample, worked out once a tile
+/// from the world's floats (arithmetic only, the same on every machine) and fixed: D-058's step
+/// 2, D-016's amendment. [`FixedHeights::height`] is the planet's height in integers; the GPU's
+/// pass (`shaders/planet_heights.slang`) reads the same constants and gives the same bits.
+#[derive(Clone, Debug)]
+pub struct FixedHeights {
+    /// The grids: the whole map first, then the regions.
+    pub grids: Vec<FixedGrid>,
+    /// The planet's radius, Q32 metres.
+    pub radius: i64,
+    /// The inverse of the height over which the detail is at its roughest, Q32 per metre.
+    pub inv_rough: i64,
+    /// Whether the sea flattens the ground at its level.
+    pub sea: bool,
+}
+
+impl Planet {
+    /// The CORDIC's constants its heights in integers use ([`FixedHeights`]).
+    pub fn cordic(&self) -> &Cordic {
+        &self.cordic
+    }
+}
+
+impl Planet {
+    /// The constants of the heights of a tile whose narrowest wavelength is `min_wavelength`
+    /// ([`FixedHeights`]), or None for a planet of noise alone.
+    pub fn fixed_heights(&self, min_wavelength: f64) -> Option<FixedHeights> {
+        let (map, params) = (self.map.as_ref()?, self.world.map.as_ref()?);
+        let radius = self.world.planet.radius;
+        let grid =
+            |elevation: &Elevation, blend: f64, detail: (f64, u32, f64, f64), seeds: &[u64]| {
+                let w = &elevation.window;
+                // Elevation::height's choice of levels.
+                let spacing = if w.whole {
+                    std::f64::consts::TAU * radius / f64::from(elevation.levels[0].0)
+                } else {
+                    (w.north - w.south) * radius / f64::from(elevation.levels[0].1)
+                };
+                let wanted = 0.5 * min_wavelength;
+                let (mut level, mut at) = (0, spacing);
+                while at * 2.0 <= wanted && level + 1 < elevation.levels.len() {
+                    at *= 2.0;
+                    level += 1;
+                }
+                let blended = !(wanted <= at || level + 1 == elevation.levels.len());
+                let mut levels = [FixedLevel::default(); 2];
+                for (k, slot) in levels.iter_mut().enumerate().take(1 + usize::from(blended)) {
+                    let (gw, gh, _) = &elevation.levels[level + k];
+                    let (gw, gh) = (f64::from(*gw), f64::from(*gh));
+                    // Elevation::sample's columns and rows from the longitude and latitude.
+                    let (u_scale, u_offset, v_scale, v_offset) = if w.whole {
+                        (
+                            gw / std::f64::consts::TAU,
+                            0.5 * gw - 0.5,
+                            -gh / std::f64::consts::PI,
+                            0.5 * gh - 0.5,
+                        )
+                    } else {
+                        (
+                            gw / (w.east - w.west),
+                            -w.west * gw / (w.east - w.west) - 0.5,
+                            -gh / (w.north - w.south),
+                            w.north * gh / (w.north - w.south) - 0.5,
+                        )
+                    };
+                    *slot = FixedLevel {
+                        level: (level + k) as u32,
+                        u_scale: fixed(u_scale, Q32),
+                        u_offset: fixed(u_offset, Q32),
+                        v_scale: fixed(v_scale, Q32),
+                        v_offset: fixed(v_offset, Q32),
+                    };
+                }
+                // Its octaves (octaves_by): the same widths, offsets and fades.
+                let (width, count, strength, gain) = detail;
+                let (mut width, mut octave_strength, mut norm) = (width, 1.0, 0.0);
+                let mut octaves = Vec::with_capacity(count as usize);
+                for octave in 0..count {
+                    norm += octave_strength;
+                    let offset = [0.371, 0.613, 0.229].map(|o| fixed(o * f64::from(octave), Q32));
+                    octaves.push(FixedOctave {
+                        inv_width: fixed(1.0 / width, INV_WIDTH_BITS),
+                        offset,
+                        fade: fixed(smooth(width / min_wavelength - 1.0), Q32),
+                        strength: fixed(octave_strength, Q32),
+                        seed: seeds[octave as usize],
+                    });
+                    octave_strength *= gain;
+                    width *= 0.5;
+                }
+                FixedGrid {
+                    whole: w.whole,
+                    bounds: [w.west, w.east, w.south, w.north].map(|b| fixed(b, Q61)),
+                    inv_blend: if blend > 0.0 {
+                        fixed(1.0 / blend, Q32)
+                    } else {
+                        0
+                    },
+                    levels,
+                    blended,
+                    t: if blended {
+                        fixed((wanted - at) / at, Q32)
+                    } else {
+                        0
+                    },
+                    strength: fixed(strength, Q32),
+                    inv_norm: fixed(1.0 / norm, Q32),
+                    octaves,
+                }
+            };
+        let mut grids = vec![grid(map, 0.0, params.detail, &self.seeds.detail)];
+        for (region, elevation) in params.regions.iter().zip(&self.regions) {
+            grids.push(grid(
+                elevation,
+                region.blend.to_radians().max(1e-9),
+                region.detail,
+                &self.seeds.region,
+            ));
+        }
+        Some(FixedHeights {
+            grids,
+            radius: fixed(radius, Q32),
+            inv_rough: fixed(1.0 / params.rough_above, Q32),
+            sea: params.sea,
+        })
+    }
+
+    /// The ground's height in `direction` (a unit vector, Q61) in integers, Q32 metres, as the
+    /// tile of `heights` reads it: [`Self::height`] made again in fixed point (D-058's step 2).
+    /// Without the sea flattening it; [`FixedHeights::ground`] does.
+    pub fn fixed_height(
+        &self,
+        heights: &FixedHeights,
+        cordic: &Cordic,
+        direction: [i64; 3],
+    ) -> i64 {
+        let [x, y, z] = direction;
+        let (lon, horizontal) = cordic.atan2(x, z);
+        // The vertical times the CORDIC's gain, as the horizontal came out of it.
+        let (lat, _) = cordic.atan2(mul61(y, cordic.gain), horizontal);
+        let p = direction.map(|c| mul_shr(c, heights.radius, Q61));
+        let whole_grid = &heights.grids[0];
+        let map = self
+            .map
+            .as_deref()
+            .expect("a planet with fixed heights has a map");
+        let whole = fixed_grid_height(map, whole_grid, lat, lon).unwrap_or(0);
+        let detail = |g: &FixedGrid, base: i64| {
+            let rough = METRE / 4 + mul32(3 * METRE / 4, smooth32(mul32(base, heights.inv_rough)));
+            base + mul32(mul32(g.strength, rough), fixed_octaves(g, p))
+        };
+        let mut height = None;
+        for (g, elevation) in heights.grids.iter().skip(1).zip(&self.regions) {
+            let [west, east, south, north] = g.bounds;
+            let edge = (lon - west)
+                .min(east - lon)
+                .min(lat - south)
+                .min(north - lat);
+            let weight = smooth32(mul_shr(edge, g.inv_blend, Q61));
+            if weight <= 0 {
+                continue;
+            }
+            let Some(fine) = fixed_grid_height(elevation, g, lat, lon) else {
+                continue;
+            };
+            let regional = if fine > METRE / 2 {
+                detail(g, fine)
+            } else {
+                whole.min(0) - 2 * METRE
+            };
+            height = Some(if weight >= METRE {
+                regional
+            } else {
+                let under = height.unwrap_or_else(|| detail(whole_grid, whole));
+                under + mul32(regional - under, weight)
+            });
+        }
+        height.unwrap_or_else(|| detail(whole_grid, whole))
+    }
+}
+
+impl FixedHeights {
+    /// The ground at `height` (Q32 metres): the sea's level over it where the planet has a sea.
+    pub fn ground(&self, height: i64) -> i64 {
+        if self.sea { height.max(0) } else { height }
+    }
+}
+
+/// A grid's height at `lat`, `lon` (Q61 radians) at the levels `g` picked, blended (Q32
+/// metres): Elevation::height and sample in integers; None where a region has no sample.
+fn fixed_grid_height(elevation: &Elevation, g: &FixedGrid, lat: i64, lon: i64) -> Option<i64> {
+    let mut here = 0;
+    for k in 0..1 + usize::from(g.blended) {
+        let l = &g.levels[k];
+        let u = mul_shr(lon, l.u_scale, Q61) + l.u_offset;
+        let v = mul_shr(lat, l.v_scale, Q61) + l.v_offset;
+        let h = fixed_taps(elevation, l.level as usize, g.whole, u, v)?;
+        here = if k == 0 {
+            h
+        } else {
+            here + mul32(h - here, g.t)
+        };
+    }
+    Some(here)
+}
+
+/// Catmull-Rom across the four samples each way around column `u` and row `v` (Q32 texels) of
+/// `level`, in integers (Q32 metres).
+fn fixed_taps(elevation: &Elevation, level: usize, whole: bool, u: i64, v: i64) -> Option<i64> {
+    let (w, h, grid) = &elevation.levels[level];
+    let (w, h) = (i64::from(*w), i64::from(*h));
+    let (x0, y0) = (u >> Q32, v >> Q32);
+    if !whole && (x0 < 1 || y0 < 1 || x0 + 2 >= w || y0 + 2 >= h) {
+        return None;
+    }
+    let weights = |t: i64| {
+        let t2 = mul32(t, t);
+        let t3 = mul32(t2, t);
+        [
+            (-t3 + 2 * t2 - t) >> 1,
+            (3 * t3 - 5 * t2 + 2 * METRE) >> 1,
+            (-3 * t3 + 4 * t2 + t) >> 1,
+            (t3 - t2) >> 1,
+        ]
+    };
+    let mask = METRE - 1;
+    let (wx, wy) = (weights(u & mask), weights(v & mask));
+    let mut sum = 0_i64;
+    for (j, wy) in wy.iter().enumerate() {
+        let mut row = 0_i64;
+        for (i, wx) in wx.iter().enumerate() {
+            let x = (x0 + i as i64 - 1).rem_euclid(w);
+            let y = (y0 + j as i64 - 1).clamp(0, h - 1);
+            let value = grid[(y * w + x) as usize];
+            if !whole && value == NO_DATA {
+                return None;
+            }
+            row += wx * i64::from(value);
+        }
+        sum += mul32(row, *wy);
+    }
+    Some(sum)
+}
+
+/// A grid's octaves of detail at `p` (Q32 metres from the planet's centre), Q32: octaves_by in
+/// integers.
+fn fixed_octaves(g: &FixedGrid, p: [i64; 3]) -> i64 {
+    let mut sum = 0_i64;
+    for o in &g.octaves {
+        if o.fade <= 0 {
+            continue;
+        }
+        let q = [0, 1, 2].map(|c| mul_shr(p[c], o.inv_width, INV_WIDTH_BITS) + o.offset[c]);
+        sum += mul32(mul32(o.strength, o.fade), fixed_gradient3(o.seed, q));
+    }
+    mul32(sum, g.inv_norm)
+}
+
+/// forge_procgen::noise::gradient3 in integers at lattice point `q` (Q32): the same hash and
+/// gradients, the fade and the blends in fixed point.
+fn fixed_gradient3(seed: u64, q: [i64; 3]) -> i64 {
+    let mask = METRE - 1;
+    let cell = q.map(|c| (c >> Q32) as i32);
+    let f = q.map(|c| c & mask);
+    let corner = |k: usize| {
+        let d = [k & 1, (k >> 1) & 1, k >> 2].map(|b| b as i64 * METRE);
+        let h = forge_core::hash::hash_cell3(
+            seed,
+            cell[0] + (k & 1) as i32,
+            cell[1] + ((k >> 1) & 1) as i32,
+            cell[2] + (k >> 2) as i32,
+        );
+        let (gx, gy, gz) = forge_procgen::noise::GRADIENTS3_INT[(h % 12) as usize];
+        i64::from(gx) * (f[0] - d[0])
+            + i64::from(gy) * (f[1] - d[1])
+            + i64::from(gz) * (f[2] - d[2])
+    };
+    let t = f.map(fade32);
+    let lerp = |a: i64, b: i64, t: i64| a + mul32(b - a, t);
+    let near = lerp(
+        lerp(corner(0), corner(1), t[0]),
+        lerp(corner(2), corner(3), t[0]),
+        t[1],
+    );
+    let far = lerp(
+        lerp(corner(4), corner(5), t[0]),
+        lerp(corner(6), corner(7), t[0]),
+        t[1],
+    );
+    lerp(near, far, t[2])
+}
+
+/// The unit direction of a tile's sample in Q61 from its column's and row's `(cos, sin)` of the
+/// equi-angular warp ([`fixed_warp`]): `N cos a cos b + U sin a cos b + V cos a sin b`,
+/// normalised; the face's axes are ±1 along one coordinate each.
+pub fn fixed_direction(face: Face, column: (i64, i64), row: (i64, i64)) -> [i64; 3] {
+    let (normal, u, v) = face.axes();
+    let terms = [
+        (normal, mul61(column.0, row.0)),
+        (u, mul61(column.1, row.0)),
+        (v, mul61(column.0, row.1)),
+    ];
+    let mut d = [0_i64; 3];
+    for (axis, value) in terms {
+        for (c, a) in d.iter_mut().zip(axis.to_array()) {
+            *c += a as i64 * value;
+        }
+    }
+    let r2 = d.iter().map(|&c| mul61(c, c)).sum();
+    let y = rsqrt61(r2);
+    d.map(|c| mul61(c, y))
+}
+
+/// `(cos, sin)` of the equi-angular warp's angle at global sample `index` of a face cut into
+/// `1 << bits` steps (Q61): the angle `π/4 (2 index / 2^bits − 1)`, for [`fixed_direction`].
+pub fn fixed_warp(cordic: &Cordic, index: i64, bits: u32) -> (i64, i64) {
+    let quarter_pi = fixed(std::f64::consts::FRAC_PI_4, Q61);
+    let angle = mul_shr(2 * index - (1_i64 << bits), quarter_pi, bits);
+    cordic.cos_sin(angle)
 }
 
 /// What a GPU pass needs to make [`Planet::height`] (D-058): the elevation grids' levels, where
@@ -1820,6 +2275,74 @@ mod tests {
 mod calibration {
     use super::*;
     use std::collections::HashMap;
+
+    /// D-058's step 2: the heights in integers against the floats they replace, over samples of
+    /// every face at four levels (the region over the Alps included), and their time on one core.
+    #[test]
+    #[ignore = "needs the Earth's maps"]
+    fn the_heights_in_integers_stand_by_the_floats() {
+        use std::time::Instant;
+        let planet = Planet::new(PlanetWorld::load(&planet_file()).unwrap()).unwrap();
+        let world = &planet.world;
+        let cordic = Cordic::new();
+        let (mut worst_direction, mut worst_height, mut count) = (0.0_f64, 0.0_f64, 0);
+        let (mut float_s, mut fixed_s) = (0.0, 0.0);
+        for level in [4_u8, 8, 12, 14] {
+            let heights = planet.fixed_heights(world.min_wavelength(level)).unwrap();
+            let bits = u32::from(level) + 8;
+            for face in 0..6_u8 {
+                let face_enum = Face::from_index(face);
+                for k in 0..400_u64 {
+                    // Samples spread over the face, and some by Mont Blanc on the face it lies on.
+                    let h =
+                        forge_core::hash::mix64(k * 6 + u64::from(face) + 1000 * u64::from(level));
+                    let (mut i, mut j) = ((h & 0xFFFF_FFFF) as i64, (h >> 32) as i64);
+                    let span = 1_i64 << bits;
+                    if k % 2 == 0 {
+                        let (f, st) = CubeSphere::face_coords(direction(45.83, 6.86));
+                        if f != face_enum {
+                            continue;
+                        }
+                        let at = |s: f64| ((s + 1.0) * 0.5 * span as f64) as i64;
+                        (i, j) = (at(st.x) + (i % 4096) - 2048, at(st.y) + (j % 4096) - 2048);
+                    }
+                    let (i, j) = (i.rem_euclid(span + 1), j.rem_euclid(span + 1));
+                    let d = fixed_direction(
+                        face_enum,
+                        fixed_warp(&cordic, i, bits),
+                        fixed_warp(&cordic, j, bits),
+                    );
+                    let st = DVec2::new(i as f64, j as f64) / span as f64 * 2.0 - DVec2::ONE;
+                    let float_direction = CubeSphere::direction(face_enum, st);
+                    let fixed_d = DVec3::from_array(d.map(to_f64_q61));
+                    worst_direction = worst_direction.max((fixed_d - float_direction).length());
+                    let t = Instant::now();
+                    let float_height = planet.height(float_direction, world.min_wavelength(level));
+                    float_s += t.elapsed().as_secs_f64();
+                    let t = Instant::now();
+                    let fixed_height = planet.fixed_height(&heights, &cordic, d);
+                    fixed_s += t.elapsed().as_secs_f64();
+                    worst_height =
+                        worst_height.max((fixed_height as f64 / METRE as f64 - float_height).abs());
+                    count += 1;
+                }
+            }
+        }
+        println!(
+            "{count} samples: directions within {worst_direction:.2e}, heights within {:.3} mm; a height {:.0} ns in floats, {:.0} ns in integers",
+            worst_height * 1e3,
+            float_s / f64::from(count) * 1e9,
+            fixed_s / f64::from(count) * 1e9,
+        );
+        assert!(worst_direction < 1e-14, "directions {worst_direction}");
+        assert!(worst_height < 1e-3, "heights {worst_height} m");
+    }
+
+    fn to_f64_q61(c: i64) -> f64 {
+        c as f64 / ONE_Q61 as f64
+    }
+
+    const ONE_Q61: i64 = forge_core::fixed::ONE;
 
     #[test]
     #[ignore = "needs the Earth's maps"]

@@ -41,6 +41,10 @@ pub struct DeviceFeatures {
     /// `shaderFloat64`: doubles in shaders, for positions on a planet whose `f32` steps are
     /// half a metre (D-058: its tiles' normal maps made on the GPU).
     pub float64: bool,
+    /// A discrete GPU (not an integrated one sharing the system's memory): work too heavy for an
+    /// integrated GPU's frame stays on the CPU there (D-058: the planet's normal maps, whose
+    /// first scene outlasted Windows' 2 s timeout on the dev machine's Radeon iGPU).
+    pub discrete: bool,
 }
 
 /// The queues a render-graph pass can run on (issue #77).
@@ -799,6 +803,7 @@ impl Device {
                 && on(robustness.pipeline_robustness)
                 && on(v13.robust_image_access),
             float64: on(base.shader_float64),
+            discrete: props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU,
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,

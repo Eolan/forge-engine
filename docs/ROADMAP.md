@@ -133,9 +133,11 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   - **The normal maps on the GPU ✅** (D-058's step 1, 2026-10-10, the owner's go): 0.21 ms of the GPU
     a map rather than 50 ms of a core; within one 8-bit level of the CPU's; a cold tour's cuts wait
     0.40 s rather than 0.66–0.77.
-  - **Next:** a tile in milliseconds still: its DAG (35 ms waited, meshoptimizer's simplifying and
-    clustering), D-058's step 3 to measure first; its heights on the GPU (step 2) under D-016's
-    GPU rule, the owner's call (the children sharing their parent's samples was measured and set
+  - **The heights in integers ✅** (D-058's step 2 and D-016's amendment, the owner's go): the same
+    bits on the CPU, the RTX 5070 Ti and the AMD iGPU, within 0.06 mm of the floats.
+  - **Next:** a tile in milliseconds still: its meshes from the GPU's heights (step 2's last
+    part), and its DAG (35 ms waited, meshoptimizer's simplifying and clustering), D-058's step 3
+    to measure first (the children sharing their parent's samples was measured and set
     aside). A longer blend over a split (the parent dithered into its children) if a view shows
     it: no frame of a change jumps over 0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,

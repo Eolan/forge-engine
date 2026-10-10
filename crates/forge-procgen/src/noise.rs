@@ -110,6 +110,22 @@ const GRADIENTS3: [(f64, f64, f64); 12] = [
     (0.0, -1.0, -1.0),
 ];
 
+/// [`GRADIENTS3`] as integers, for the planet's heights in fixed point (D-058's step 2).
+pub const GRADIENTS3_INT: [(i8, i8, i8); 12] = [
+    (1, 1, 0),
+    (-1, 1, 0),
+    (1, -1, 0),
+    (-1, -1, 0),
+    (1, 0, 1),
+    (-1, 0, 1),
+    (1, 0, -1),
+    (-1, 0, -1),
+    (0, 1, 1),
+    (0, -1, 1),
+    (0, 1, -1),
+    (0, -1, -1),
+];
+
 /// Gradient noise at (x, y, z), lattice points at the integers, in about `[−1, 1]`: the noise of
 /// a planet's surface, sampled at points on its sphere (#220).
 pub fn gradient3(seed: u64, x: f64, y: f64, z: f64) -> f64 {

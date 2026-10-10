@@ -119,6 +119,10 @@ struct Args {
     /// log (D-058).
     #[arg(long)]
     check_normal_maps: bool,
+    /// The first tiles' heights made in integers on the GPU and compared with the CPU's, bit for
+    /// bit, in the log (D-058's step 2).
+    #[arg(long)]
+    check_heights: bool,
     /// The streamed pool, MiB.
     #[arg(long, default_value_t = 512)]
     stream_pool: u32,
@@ -694,10 +698,20 @@ impl PlanetDemo {
         };
         // The tiles' normal maps on the GPU (D-058), unless asked on the CPU or impossible.
         let map_queue = Arc::new(normal_maps::MapQueue::default());
-        let normal_maps = if gpu_maps(&args, &planet) {
+        // `--check-heights` makes the GPU's passes even when the maps are made on the CPU.
+        let gpu_made = gpu_maps(&args, &planet) && {
+            let discrete = ctx.device.features().discrete;
+            if !discrete {
+                tracing::info!("an integrated GPU: the tiles' normal maps are made on the CPU");
+            }
+            discrete
+        };
+        let normal_maps = if gpu_made || (args.check_heights && planet.gpu_heights().is_some()) {
             NormalMaps::new(&ctx.device, &ctx.shaders, &planet, Arc::clone(&map_queue))?.map(
                 |mut maps| {
                     maps.check = args.check_normal_maps;
+                    maps.check_heights = args.check_heights;
+                    maps.check_cells.clone_from(&cells);
                     maps
                 },
             )
@@ -712,7 +726,7 @@ impl PlanetDemo {
             ground,
             ray_traced: !args.no_shadows,
             residency,
-            maps: normal_maps.as_ref().map(|_| map_queue),
+            maps: normal_maps.as_ref().filter(|_| gpu_made).map(|_| map_queue),
         };
         let built = Instant::now();
         // The first frame's view: a streamed scene loads its pages before the first frame (#121),

@@ -1370,6 +1370,12 @@ scene.
   - The elevation on the GPU, 703 MiB, uploads in 53 ms, and a later start's loading takes
     about 4.2 s.
   - The cold tour's cuts wait 0.40 s rather than 0.66–0.77.
+- **The heights in integers** (D-058's step 2; `docs/demos/planet.md`, "The heights in integers"):
+  - a height takes 571 ns on one core, against 485 in floats;
+  - a fine tile's heights take 5.2 ms waited, against 3.6;
+  - the first start's tiles cook in 8.2 s, against 8.0;
+  - on the GPU, a tile's heights take about 0.07 ms on the RTX 5070 Ti and 8.5 ms on the AMD
+    iGPU, the same bits as the CPU's.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
   - **Edited in place** (#220): an edit of up to 10 tiles is ready on the worker 11 ms after it
     is asked for (18 ms at most), the two of 210 and 314 tiles on arriving at a stop 0.30 and

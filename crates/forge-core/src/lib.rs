@@ -9,6 +9,7 @@
 
 pub mod derived;
 pub mod dmath;
+pub mod fixed;
 pub mod hash;
 pub mod id;
 pub mod material;

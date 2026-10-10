@@ -20,7 +20,9 @@ use forge_gpu::{
     ShaderStage, vk,
 };
 use forge_terrain::Planet;
-use forge_terrain::planet::{NORMAL_MAP_SIZE, gpu_tile_map, tile_normal_map};
+use forge_terrain::planet::{
+    FixedHeights, NORMAL_MAP_SIZE, fixed_direction, fixed_warp, gpu_tile_map, tile_normal_map,
+};
 use forge_world::CellId;
 
 /// Mip levels of a tile's map: 256² down to 1².
@@ -194,12 +196,189 @@ struct Push {
 /// its maps before it is taken in ([`NormalMaps::pending`]).
 const MAPS_PER_FRAME: usize = 8;
 
+/// A level of a grid as a tile reads it in integers (the heights shader's `FixedLevel`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuFixedLevel {
+    level: u32,
+    pad: u32,
+    u_scale: i64,
+    u_offset: i64,
+    v_scale: i64,
+    v_offset: i64,
+}
+
+/// An octave in integers (the heights shader's `FixedOctave`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuFixedOctave {
+    inv_width: i64,
+    offset: [i64; 3],
+    fade: i64,
+    strength: i64,
+    seed: u64,
+}
+
+/// A grid in integers (the heights shader's `FixedGrid`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuFixedGrid {
+    bounds: [i64; 4],
+    inv_blend: i64,
+    t: i64,
+    strength: i64,
+    inv_norm: i64,
+    whole: u32,
+    blended: u32,
+    octave_count: u32,
+    pad: u32,
+    levels: [GpuFixedLevel; 2],
+    octaves: [GpuFixedOctave; MAX_OCTAVES],
+}
+
+/// A tile's heights to make in integers (the heights shader's `HeightsJob`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuHeightsJob {
+    columns: u64,
+    rows: u64,
+    out: u64,
+    radius: i64,
+    inv_rough: i64,
+    grid_count: u32,
+    sea: u32,
+    side: u32,
+    pad: u32,
+    axes: [i32; 9],
+    pad2: u32,
+    grids: [GpuFixedGrid; MAX_GRIDS],
+}
+
+/// The CORDIC's constants (`forge_core::fixed::Cordic`, the shaders' `Cordic`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuCordic {
+    /// The angles, eight to a row (`bytemuck` has no `Pod` for 56).
+    angles: [[i64; 8]; forge_core::fixed::CORDIC_STEPS / 8],
+    inverse_gain: i64,
+    gain: i64,
+    half_pi: i64,
+    pi: i64,
+}
+
+/// The heights pass's push constants (the shader's `Push`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct HeightsPush {
+    jobs: u64,
+    elevation: u64,
+    samples: u64,
+    cordic: u64,
+}
+
+/// `heights` and `cell`'s grid of `side` samples a side from `first`, with `steps` a tile, as the
+/// heights shader reads them; `columns`, `rows` and `out` are set by the caller.
+fn heights_job(
+    planet: &Planet,
+    heights: &FixedHeights,
+    cell: CellId,
+    side: u32,
+) -> (GpuHeightsJob, Vec<i64>, Vec<i64>) {
+    let n = i64::from(planet.world.tiles.samples);
+    let bits = u32::from(cell.level()) + (n - 1).trailing_zeros();
+    let (x, y) = cell.xy();
+    let warp = |base: i64| -> Vec<i64> {
+        (0..i64::from(side))
+            .flat_map(|k| {
+                let (c, s) = fixed_warp(planet.cordic(), base * (n - 1) - 1 + k, bits);
+                [c, s]
+            })
+            .collect()
+    };
+    let (normal, u, v) = forge_world::Face::from_index(cell.face()).axes();
+    let mut axes = [0_i32; 9];
+    for (k, a) in [normal, u, v].iter().flat_map(|a| a.to_array()).enumerate() {
+        axes[k] = a as i32;
+    }
+    let mut grids = [GpuFixedGrid::zeroed(); MAX_GRIDS];
+    for (slot, g) in grids.iter_mut().zip(&heights.grids) {
+        let mut levels = [GpuFixedLevel::zeroed(); 2];
+        for (l, fl) in levels.iter_mut().zip(&g.levels) {
+            *l = GpuFixedLevel {
+                level: fl.level,
+                pad: 0,
+                u_scale: fl.u_scale,
+                u_offset: fl.u_offset,
+                v_scale: fl.v_scale,
+                v_offset: fl.v_offset,
+            };
+        }
+        let mut octaves = [GpuFixedOctave::zeroed(); MAX_OCTAVES];
+        for (o, fo) in octaves.iter_mut().zip(&g.octaves) {
+            *o = GpuFixedOctave {
+                inv_width: fo.inv_width,
+                offset: fo.offset,
+                fade: fo.fade,
+                strength: fo.strength,
+                seed: fo.seed,
+            };
+        }
+        *slot = GpuFixedGrid {
+            bounds: g.bounds,
+            inv_blend: g.inv_blend,
+            t: g.t,
+            strength: g.strength,
+            inv_norm: g.inv_norm,
+            whole: u32::from(g.whole),
+            blended: u32::from(g.blended),
+            octave_count: g.octaves.len() as u32,
+            pad: 0,
+            levels,
+            octaves,
+        };
+    }
+    let job = GpuHeightsJob {
+        columns: 0,
+        rows: 0,
+        out: 0,
+        radius: heights.radius,
+        inv_rough: heights.inv_rough,
+        grid_count: heights.grids.len() as u32,
+        sea: u32::from(heights.sea),
+        side,
+        pad: 0,
+        axes,
+        pad2: 0,
+        grids,
+    };
+    (job, warp(x), warp(y))
+}
+
+/// Tiles `--check-heights` makes on the GPU and compares with the CPU's, bit for bit.
+const HEIGHTS_CHECKED: usize = 4;
+
+/// The tiles' heights made on the GPU at the first frame, read back (`--check-heights`).
+struct HeightsCheck {
+    cells: Vec<CellId>,
+    out: Vec<GraphBuffer>,
+    /// The jobs' address, and the buffer holding them.
+    jobs: u64,
+    _jobs: GraphBuffer,
+    frames: usize,
+    /// Whether its passes were declared (once).
+    declared: std::cell::Cell<bool>,
+}
+
 /// Maps `--check-normal-maps` compares with the CPU's.
 const CHECKED: usize = 6;
 
 /// The first maps made, read back to be compared with the CPU's (`--check-normal-maps`).
 struct Check {
     cells: Vec<CellId>,
+    /// Their places among the frame's maps.
+    picked: Vec<usize>,
+    /// Whether its passes were declared (once).
+    declared: std::cell::Cell<bool>,
     readback: Vec<GraphBuffer>,
     /// Frames until the copies are surely done.
     frames: usize,
@@ -312,6 +491,14 @@ pub(crate) struct NormalMaps {
     /// `--check-normal-maps`: compare the first maps with the CPU's.
     pub check: bool,
     checking: Option<Check>,
+    /// The tiles' heights in integers (D-058's step 2): its pass and the CORDIC's constants.
+    heights: Pipeline,
+    cordic: forge_gpu::Buffer,
+    /// `--check-heights`: the first tiles' heights made on the GPU against the CPU's, from
+    /// `check_cells` (the first scene's).
+    pub check_heights: bool,
+    pub check_cells: Vec<CellId>,
+    heights_check: Option<HeightsCheck>,
 }
 
 impl NormalMaps {
@@ -345,6 +532,32 @@ impl NormalMaps {
             Ok(pipeline)
         };
         let (map, mip) = (pipeline("normal_map")?, pipeline("normal_mip")?);
+        let heights_pipeline = {
+            let module = device.create_shader_module(
+                &shaders.compile("planet_heights.slang", "tile_heights", ShaderStage::Compute)?,
+                "tile_heights",
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, "tile_heights"),
+                push_constant_bytes: std::mem::size_of::<HeightsPush>() as u32,
+                name: "tile_heights",
+            })?;
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let c = planet.cordic();
+        let cordic = device.create_buffer_with_data(
+            &[GpuCordic {
+                angles: std::array::from_fn(|r| std::array::from_fn(|k| c.angles[r * 8 + k])),
+                inverse_gain: c.inverse_gain,
+                gain: c.gain,
+                half_pi: c.half_pi,
+                pi: c.pi,
+            }],
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryCategory::Geometry,
+            "cordic constants",
+        )?;
         // Every level of every grid in one buffer, one after another.
         let mut records = Vec::with_capacity(heights.grids.len());
         let mut pieces: Vec<&[i16]> = Vec::new();
@@ -467,6 +680,11 @@ impl NormalMaps {
             made: 0,
             check: false,
             checking: None,
+            heights: heights_pipeline,
+            cordic,
+            check_heights: false,
+            check_cells: Vec::new(),
+            heights_check: None,
         }))
     }
 
@@ -479,6 +697,7 @@ impl NormalMaps {
         slot: FrameSlot,
     ) -> Result<()> {
         self.compare_checked();
+        self.compare_heights();
         // The first frame makes every map of the first scene, which it draws.
         let most = if self.made == 0 {
             usize::MAX
@@ -486,15 +705,15 @@ impl NormalMaps {
             MAPS_PER_FRAME
         };
         self.making = self.queue.take(most);
-        if self.making.is_empty() {
-            return Ok(());
-        }
         let count = self.making.len();
         self.made += count;
+        if self.check_heights && self.heights_check.is_none() && !self.check_cells.is_empty() {
+            self.prepare_heights_check()?;
+        }
         // This slot's buffer, grown to the frame's jobs: the frame that last used it is done.
         let needed = JOB_BYTES * count as u64;
         let buffer = &mut self.jobs[slot.index];
-        if buffer.as_ref().is_none_or(|b| b.size() < needed) {
+        if count > 0 && buffer.as_ref().is_none_or(|b| b.size() < needed) {
             *buffer = Some(GraphBuffer::new(self.device.create_buffer(BufferDesc {
                 size: needed.next_power_of_two().max(JOB_BYTES * 16),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -503,15 +722,53 @@ impl NormalMaps {
                 name: "planet normal map jobs",
             })?));
         }
-        let buffer = self.jobs[slot.index].as_ref().expect("made above");
+        // `--check-normal-maps`: the finest maps, which take their angles from their centre in
+        // floats, and some others spread over the rest, copied back to compare a few frames later.
+        if self.check && self.checking.is_none() && count > 0 {
+            let mut order: Vec<usize> = (0..count).collect();
+            order.sort_by_key(|&k| std::cmp::Reverse(self.making[k].cell.level()));
+            let mut picked: Vec<usize> = order.iter().take(CHECKED / 2).copied().collect();
+            let rest = &order[picked.len()..];
+            for i in 0..(CHECKED - picked.len()).min(rest.len()) {
+                picked.push(rest[i * rest.len() / (CHECKED - CHECKED / 2)]);
+            }
+            let readback = (0..picked.len())
+                .map(|k| -> Result<GraphBuffer> {
+                    Ok(GraphBuffer::new(self.device.create_buffer(BufferDesc {
+                        size: u64::from(NORMAL_MAP_SIZE * NORMAL_MAP_SIZE * 4),
+                        usage: vk::BufferUsageFlags::TRANSFER_DST,
+                        location: MemoryLocation::GpuToCpu,
+                        category: MemoryCategory::Transfer,
+                        name: &format!("planet normal map check {k}"),
+                    })?))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            self.checking = Some(Check {
+                cells: picked.iter().map(|&k| self.making[k].cell).collect(),
+                picked,
+                readback,
+                frames: forge_gpu::FRAMES_IN_FLIGHT + 1,
+                declared: std::cell::Cell::new(false),
+            });
+        }
+        // Nothing changes from here: the passes borrow the maps for the frame.
+        let this: &'f Self = self;
+        // `--check-heights`: the first tiles' heights in integers on the GPU, read back.
+        if let Some(check) = this.heights_check.as_ref().filter(|c| !c.declared.get()) {
+            this.declare_heights_check(graph, check);
+        }
+        if count == 0 {
+            return Ok(());
+        }
+        let buffer = this.jobs[slot.index].as_ref().expect("made above");
         let base = buffer.address();
         let tangents = base + std::mem::size_of::<GpuJob>() as u64 * count as u64;
         let lattices = tangents + (count * 2 * SIDE * 8) as u64;
         let lattice_bytes = (MAX_GRIDS * MAX_OCTAVES * std::mem::size_of::<GpuLattice>()) as u64;
         let grid_tables = lattices + count as u64 * lattice_bytes;
         let grid_bytes = (MAX_GRIDS * std::mem::size_of::<GpuGridJob>()) as u64;
-        for (k, job) in self.making.iter().enumerate() {
-            let tile = gpu_tile_map(&self.planet.world, job.cell);
+        for (k, job) in this.making.iter().enumerate() {
+            let tile = gpu_tile_map(&this.planet.world, job.cell);
             let at = tangents + (k * 2 * SIDE * 8) as u64;
             let [n, u, v] = tile.axes;
             // The middle sample, from which the shader takes every other in floats.
@@ -525,8 +782,8 @@ impl NormalMaps {
                 job.cell.level() >= RELATIVE_FROM_LEVEL && centre.y.abs() < RELATIVE_BELOW;
             let mut table = [GpuLattice::zeroed(); MAX_GRIDS * MAX_OCTAVES];
             let mut grid_table = [GpuGridJob::zeroed(); MAX_GRIDS];
-            let p = centre * self.radius;
-            for (g, meta) in self.meta.iter().enumerate() {
+            let p = centre * this.radius;
+            for (g, meta) in this.meta.iter().enumerate() {
                 // Its octaves at the centre (octaves_by).
                 let mut width = meta.detail.0;
                 for octave in 0..meta.detail.1 as usize {
@@ -540,7 +797,7 @@ impl NormalMaps {
                     };
                     width *= 0.5;
                 }
-                grid_table[g] = grid_job(meta, lat0, lon0, tile.min_wavelength, self.radius);
+                grid_table[g] = grid_job(meta, lat0, lon0, tile.min_wavelength, this.radius);
             }
             let lattice = lattices + k as u64 * lattice_bytes;
             buffer.write(lattice - base, &table);
@@ -570,19 +827,19 @@ impl NormalMaps {
             buffer.write(written + (SIDE * 8) as u64, &tile.rows);
         }
         let push = Push {
-            grids: self.grids.address(),
-            samples: self.samples.address(),
-            seeds: self.seeds.address(),
+            grids: this.grids.address(),
+            samples: this.samples.address(),
+            seeds: this.seeds.address(),
             jobs: base,
-            rough_above: self.rough_above,
-            radius: self.radius,
-            grid_count: self.grid_count,
-            sea: u32::from(self.sea),
+            rough_above: this.rough_above,
+            radius: this.radius,
+            grid_count: this.grid_count,
+            sea: u32::from(this.sea),
             level: 0,
             size: NORMAL_MAP_SIZE,
         };
         let jobs = graph.import_buffer(buffer);
-        let images: Vec<_> = self.making.iter().map(|j| graph.import(&j.image)).collect();
+        let images: Vec<_> = this.making.iter().map(|j| graph.import(&j.image)).collect();
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         for level in 0..LEVELS {
             let label = if level == 0 {
@@ -599,7 +856,7 @@ impl NormalMaps {
                 }
                 pass = pass.image_mip(image, level, ImageAccess::StorageWrite(compute));
             }
-            let pipeline = if level == 0 { &self.map } else { &self.mip };
+            let pipeline = if level == 0 { &this.map } else { &this.mip };
             let side = (NORMAL_MAP_SIZE >> level).max(1);
             pass.run(move |_, commands| {
                 commands.bind_pipeline(pipeline);
@@ -609,40 +866,14 @@ impl NormalMaps {
             });
         }
         // `--check-normal-maps`: the first maps copied back, to compare a few frames later.
-        if self.check && self.checking.is_none() {
-            // The finest maps, which take their angles from their centre in floats, and some
-            // others spread over the rest.
-            let mut order: Vec<usize> = (0..count).collect();
-            order.sort_by_key(|&k| std::cmp::Reverse(self.making[k].cell.level()));
-            let mut picked: Vec<usize> = order.iter().take(CHECKED / 2).copied().collect();
-            let rest = &order[picked.len()..];
-            for i in 0..(CHECKED - picked.len()).min(rest.len()) {
-                picked.push(rest[i * rest.len() / (CHECKED - CHECKED / 2)]);
-            }
-            let checked = picked.len();
-            let readback = (0..checked)
-                .map(|k| -> Result<GraphBuffer> {
-                    Ok(GraphBuffer::new(self.device.create_buffer(BufferDesc {
-                        size: u64::from(NORMAL_MAP_SIZE * NORMAL_MAP_SIZE * 4),
-                        usage: vk::BufferUsageFlags::TRANSFER_DST,
-                        location: MemoryLocation::GpuToCpu,
-                        category: MemoryCategory::Transfer,
-                        name: &format!("planet normal map check {k}"),
-                    })?))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            self.checking = Some(Check {
-                cells: picked.iter().map(|&k| self.making[k].cell).collect(),
-                readback,
-                frames: forge_gpu::FRAMES_IN_FLIGHT + 1,
-            });
-            let check = self.checking.as_ref().expect("made above");
+        if let Some(check) = this.checking.as_ref().filter(|c| !c.declared.get()) {
+            check.declared.set(true);
             for (k, buffer) in check.readback.iter().enumerate() {
                 let handle = graph.import_buffer(buffer);
-                let image = &self.making[picked[k]].image;
+                let image = &this.making[check.picked[k]].image;
                 graph
                     .pass("planet/normal maps check")
-                    .image_mip(images[picked[k]], 0, ImageAccess::TransferSrc)
+                    .image_mip(images[check.picked[k]], 0, ImageAccess::TransferSrc)
                     .buffer(handle, BufferAccess::TransferDst)
                     .run(move |_, commands| {
                         let extent = vk::Extent2D {
@@ -665,6 +896,150 @@ impl NormalMaps {
         }
         ready.run(|_, _| Ok(()));
         Ok(())
+    }
+
+    /// `--check-heights`: the heights of a few of this frame's tiles (the finest, and coarser
+    /// ones) made in integers on the GPU into buffers the CPU reads a few frames later.
+    fn prepare_heights_check(&mut self) -> Result<()> {
+        let mut cells = self.check_cells.clone();
+        cells.sort_by_key(|c| std::cmp::Reverse(c.level()));
+        let mut picked: Vec<CellId> = cells.iter().take(HEIGHTS_CHECKED / 2).copied().collect();
+        let rest = &cells[picked.len()..];
+        for i in 0..(HEIGHTS_CHECKED - picked.len()).min(rest.len()) {
+            picked.push(rest[i * rest.len() / (HEIGHTS_CHECKED - HEIGHTS_CHECKED / 2)]);
+        }
+        let side = self.planet.world.tiles.samples + 2;
+        let cells_bytes = (side * side) as u64 * 8;
+        let out = picked
+            .iter()
+            .map(|_| -> Result<GraphBuffer> {
+                Ok(GraphBuffer::new(self.device.create_buffer(BufferDesc {
+                    size: cells_bytes,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::GpuToCpu,
+                    category: MemoryCategory::Transfer,
+                    name: "planet heights check",
+                })?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let job_bytes = std::mem::size_of::<GpuHeightsJob>() as u64;
+        let tables = u64::from(side) * 2 * 8;
+        let jobs = GraphBuffer::new(self.device.create_buffer(BufferDesc {
+            size: picked.len() as u64 * (job_bytes + 2 * tables),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            location: MemoryLocation::CpuToGpu,
+            category: MemoryCategory::Frame,
+            name: "planet heights check jobs",
+        })?);
+        let base = jobs.address();
+        let warps = base + picked.len() as u64 * job_bytes;
+        for (k, (&cell, out)) in picked.iter().zip(&out).enumerate() {
+            let heights = self
+                .planet
+                .fixed_heights(self.planet.world.min_wavelength(cell.level()))
+                .expect("a planet with a map");
+            let (mut job, columns, rows) = heights_job(&self.planet, &heights, cell, side);
+            let at = warps + k as u64 * 2 * tables;
+            job.columns = at;
+            job.rows = at + tables;
+            job.out = out.address();
+            jobs.write(k as u64 * job_bytes, &[job]);
+            jobs.write(at - base, &columns);
+            jobs.write(at + tables - base, &rows);
+        }
+        self.heights_check = Some(HeightsCheck {
+            cells: picked,
+            out,
+            jobs: base,
+            _jobs: jobs,
+            frames: forge_gpu::FRAMES_IN_FLIGHT + 1,
+            declared: std::cell::Cell::new(false),
+        });
+        Ok(())
+    }
+
+    /// The passes of `--check-heights`, this frame.
+    fn declare_heights_check<'f>(&'f self, graph: &mut FrameGraph<'f>, check: &'f HeightsCheck) {
+        check.declared.set(true);
+        let side = self.planet.world.tiles.samples + 2;
+        let base = check.jobs;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let handles: Vec<_> = check.out.iter().map(|b| graph.import_buffer(b)).collect();
+        let mut pass = graph.pass("planet/tile heights check");
+        for &h in &handles {
+            pass = pass.buffer(h, BufferAccess::ShaderReadWrite(compute));
+        }
+        let push = HeightsPush {
+            jobs: base,
+            elevation: self.grids.address(),
+            samples: self.samples.address(),
+            cordic: self.cordic.address(),
+        };
+        let (pipeline, count) = (&self.heights, check.cells.len() as u32);
+        pass.run(move |_, commands| {
+            commands.bind_pipeline(pipeline);
+            commands.push_constants(pipeline, &push);
+            commands.dispatch(side.div_ceil(8), side.div_ceil(8), count);
+            Ok(())
+        });
+        let mut read = graph.pass("planet/tile heights check");
+        for &h in &handles {
+            read = read.buffer(h, BufferAccess::HostRead);
+        }
+        read.run(|_, _| Ok(()));
+    }
+
+    /// `--check-heights`, once the GPU is done: each tile's heights against the CPU's, bit for
+    /// bit, in the log.
+    fn compare_heights(&mut self) {
+        let Some(check) = self.heights_check.as_mut() else {
+            return;
+        };
+        if check.frames == 0 {
+            return;
+        }
+        check.frames -= 1;
+        if check.frames > 0 {
+            return;
+        }
+        let planet = &self.planet;
+        let n = i64::from(planet.world.tiles.samples);
+        let side = (n + 2) as usize;
+        for (cell, out) in check.cells.iter().zip(&check.out) {
+            let mut gpu = vec![0_i64; side * side];
+            out.read(0, &mut gpu);
+            let heights = planet
+                .fixed_heights(planet.world.min_wavelength(cell.level()))
+                .expect("a planet with a map");
+            let (_, columns, rows) = heights_job(planet, &heights, *cell, side as u32);
+            let face = forge_world::Face::from_index(cell.face());
+            let (mut differ, mut digest_cpu, mut digest_gpu, mut worst) = (0, 0_u64, 0_u64, 0_i64);
+            for j in 0..side {
+                for i in 0..side {
+                    let d = fixed_direction(
+                        face,
+                        (columns[2 * i], columns[2 * i + 1]),
+                        (rows[2 * j], rows[2 * j + 1]),
+                    );
+                    let cpu = planet.fixed_height(&heights, planet.cordic(), d);
+                    let g = gpu[j * side + i];
+                    differ += usize::from(cpu != g);
+                    worst = worst.max((cpu - g).abs());
+                    digest_cpu = forge_core::hash::mix64(digest_cpu ^ cpu as u64);
+                    digest_gpu = forge_core::hash::mix64(digest_gpu ^ g as u64);
+                }
+            }
+            tracing::info!(
+                tile = ?cell,
+                level = cell.level(),
+                samples = side * side,
+                differ,
+                worst_q32 = worst,
+                digest_cpu = %format_args!("{digest_cpu:016x}"),
+                digest_gpu = %format_args!("{digest_gpu:016x}"),
+                "a tile's heights in integers on the GPU against the CPU's (--check-heights)"
+            );
+        }
     }
 
     /// Maps queued and not made yet: a new cut waits for them before it is drawn.

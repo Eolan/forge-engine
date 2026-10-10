@@ -499,3 +499,7 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     `atan` follows musl's `s_atan.c` (from FreeBSD's msun, after Sun's fdlibm; MIT and the
     fdlibm notice), its range reduction and coefficients, since shaders have no double
     trigonometry.
+  - **The heights in integers** (D-058's step 2, `forge_core::fixed`, `shaders/fixed.slang`):
+    the CORDIC, Jack E. Volder, "The CORDIC Trigonometric Computing Technique", IRE
+    Transactions on Electronic Computers, 1959, for the sines, cosines and angles in shifts and
+    adds.
