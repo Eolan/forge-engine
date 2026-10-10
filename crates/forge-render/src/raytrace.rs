@@ -331,7 +331,7 @@ pub(crate) fn cut_writes<'a>(
 /// The cuts' positions: in the frame's graph, where a skin pass rewrites them, or shared with the
 /// worker that writes a dynamic scene's new meshes' (#220), which has no skinned mesh.
 enum HitPositions {
-    Graph(GraphBuffer),
+    Graph(Box<GraphBuffer>),
     Shared(Arc<Buffer>),
 }
 
@@ -564,7 +564,7 @@ impl SceneRays {
         let hit_positions = if capacity.is_some() {
             HitPositions::Shared(Arc::new(positions_buffer))
         } else {
-            HitPositions::Graph(GraphBuffer::new(positions_buffer))
+            HitPositions::Graph(Box::new(GraphBuffer::new(positions_buffer)))
         };
         Ok(Self {
             hit_bytes: hit_positions.buffer().size()

@@ -31,6 +31,8 @@ the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** c
 | `--radius KM`, `--seed N` | over the world's |
 | `--tour`, `--tour-stop N` | flies the world's tour, or holds its stop N |
 | `--check-swaps DIR` | holds still at each change of the tiles and saves the frames before and after it, for `tools/swap-check.sh` |
+| `--cpu-normal-maps` | the tiles' normal maps made on the CPU and cached, as before D-058: the reference |
+| `--check-normal-maps` | the first maps made on the GPU read back and compared with the CPU's, in the log |
 | `--resident` | every page resident instead of the 512 MiB streamed pool (the A/B); its scenes are built whole |
 | `--edited` | reaches the first scene by an edit in place, from a coarser cut (the A/B against the scene built whole) |
 
@@ -479,15 +481,46 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
   stored with their normal maps in 10.9 s rather than 14–16 (35 a second). The whole start took
   15.4 s.
 
+### The normal maps on the GPU
+
+D-058's first step (2026-10-10):
+- **The passes:** a compute pass of the frame makes each new tile's normal map, and one pass per
+  mip makes its mips (`shaders/planet_normals.slang`, `src/normal_maps.rs`).
+  - The tile worker makes the map's image and queues its job.
+  - The frame declares the passes before the scene's.
+  - A frame makes at most 8 maps, except the first, which makes the whole first scene's.
+  - A new cut waits for its maps before it is taken in.
+- **Each map is the CPU's map, remade:**
+  - each sample's height, as `Planet::height` makes it;
+  - each texel's normal from the four samples around its centre;
+  - its coast in alpha.
+
+  The doubles are kept to the samples' directions and positions. Everything else runs in
+  floats, from what the CPU works out once a map at its centre. Coarse tiles and tiles near a
+  pole take their latitude and longitude in doubles, through musl's `atan`.
+- **The elevation is on the GPU for the whole run:** every level of the Earth's ETOPO pyramid and
+  the Alps' 90 m region, 703 MiB, uploaded in 53 ms.
+
+| | On the CPU (before) | On the GPU |
+|---|---|---|
+| A map | about 50 ms of a core (9 ms waited) | 0.21 ms of the GPU |
+| The first scene's 378 maps | made with the tiles; the tiles in 10.9 s | 80 ms of the first frame; the tiles in 8.0 s |
+| A cut on the cold tour | waited 0.66–0.77 s; 55–62 swaps | 0.40 s; 80 swaps |
+| Against the CPU's map (`--check-normal-maps`, levels 0–14) | the reference | every channel within one 8-bit level, the normals within 0.6–0.8°, the coast within one level |
+
+- **Without doubles in shaders, or for a planet of noise alone,** the maps are made on the CPU as
+  before; so they are with `--cpu-normal-maps`.
+
 ## Left for later (#220 and D-056's steps)
 
-- **A tile in milliseconds** is still to come: a new fine tile waits about 0.055 s, 0.18 s of one
-  core ([A new tile](#a-new-tile)). What the next steps are:
+- **A tile in milliseconds** is still to come: a new fine tile waits about 0.045 s, 0.13 s of one
+  core, its normal map now on the GPU ([A new tile](#a-new-tile)). What the next steps are:
   - **Its DAG** (35 ms waited, 0.11 s of one core): meshoptimizer's simplification and
     clustering of the groups, over the threads, and each level's partition on one. A template
     shared by every tile was measured and set aside (below).
-  - **Its normal map** (9 ms waited, about 50 ms of one core): 197 000 heights. They are the
-    children's own samples, three of each four of their vertices.
+  - **Its normal map,** made on the GPU since D-058's first step: 0.21 ms of the GPU where it took
+    about 50 ms of a core (9 ms waited). Its 197 000 heights are the children's own samples, three
+    of each four of their vertices.
   - **The children taking their parent's samples, built and set aside** (2026-10-10):
     - **Exact:** the map placed each sample as its child places it, and the child took what
       matched, to the bit; a test checked every ground and both meshes.
@@ -495,7 +528,8 @@ test `a_new_tile_s_time` in `crates/forge-terrain/src/planet.rs`):
     - **How often it applies:** on the cold tour, 1 % of the cooked tiles found their parent's
       grounds with 24 maps kept (50 MB), and 13 % with 256 (540 MB). A cut in flight mostly
       skips levels or cooks the parent long before, so the gain is too rare for the memory.
-  - **On the GPU** (the proposal D-058): the heights and the normal map in a compute pass.
+  - **On the GPU** (D-058): the normal maps ✅ ([The normal maps on the GPU](#the-normal-maps-on-the-gpu)); the
+    heights wait for D-016's GPU rule (step 2), and the DAG for step 3's measure.
   - **The heights** cost 0.25–0.33 µs each, mostly the noise's octaves.
   - **A DAG template, set aside** (2026-10-10; the code in
     `reports/2026-10-10-220/dag-template.patch`). Every tile's DAG was taken from one stand-in with

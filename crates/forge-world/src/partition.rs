@@ -97,7 +97,7 @@ impl Face {
     }
 
     /// The face's outward normal and its two in-face axes, right-handed (`u × v = normal`).
-    fn axes(self) -> (DVec3, DVec3, DVec3) {
+    pub fn axes(self) -> (DVec3, DVec3, DVec3) {
         match self {
             Face::PosX => (DVec3::X, DVec3::Y, DVec3::Z),
             Face::NegX => (DVec3::NEG_X, DVec3::Z, DVec3::Y),

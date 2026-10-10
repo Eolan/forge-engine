@@ -38,6 +38,9 @@ pub struct DeviceFeatures {
     /// `VK_EXT_pipeline_robustness` with `robustImageAccess` supported: a pipeline may ask
     /// that its writes outside an image be dropped, as D3D12 does (NRD's shaders, #172).
     pub pipeline_robustness: bool,
+    /// `shaderFloat64`: doubles in shaders, for positions on a planet whose `f32` steps are
+    /// half a metre (D-058: its tiles' normal maps made on the GPU).
+    pub float64: bool,
 }
 
 /// The queues a render-graph pass can run on (issue #77).
@@ -254,6 +257,7 @@ impl Device {
         let base = vk::PhysicalDeviceFeatures::default()
             .shader_int64(true)
             .shader_int16(true)
+            .shader_float64(best.features.float64)
             .sampler_anisotropy(true)
             .multi_draw_indirect(true)
             // The meshlet fallback's indirect draws carry the visible-list slot in firstInstance.
@@ -794,6 +798,7 @@ impl Device {
             pipeline_robustness: robustness_ext
                 && on(robustness.pipeline_robustness)
                 && on(v13.robust_image_access),
+            float64: on(base.shader_float64),
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,

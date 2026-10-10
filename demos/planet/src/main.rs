@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+mod normal_maps;
 mod stream;
 
 use std::collections::HashMap;
@@ -40,6 +41,7 @@ use forge_terrain::planet::{SkyBodyParams, TourStop};
 use forge_terrain::{Planet, PlanetWorld};
 use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
+use normal_maps::NormalMaps;
 use stream::{Built, Change, SceneParts, Tile, TileStream};
 use winit::keyboard::KeyCode;
 
@@ -109,6 +111,14 @@ struct Args {
     /// Every page resident instead of a streamed pool (the A/B against streaming).
     #[arg(long)]
     resident: bool,
+    /// The tiles' normal maps made on the CPU (and cached) instead of on the GPU (D-058): the
+    /// reference, and the fallback without doubles in shaders.
+    #[arg(long)]
+    cpu_normal_maps: bool,
+    /// The first tiles' normal maps made on the GPU read back and compared with the CPU's, in the
+    /// log (D-058).
+    #[arg(long)]
+    check_normal_maps: bool,
     /// The streamed pool, MiB.
     #[arg(long, default_value_t = 512)]
     stream_pool: u32,
@@ -298,6 +308,7 @@ fn cook_tiles(planet: Planet, body: String, args: &Args) -> Result<Tiles> {
         &cells,
         &HashMap::new(),
         &TaskPool::client(),
+        gpu_maps(args, &planet),
     );
     let ms = start.elapsed().as_secs_f64() * 1e3;
     tracing::info!(
@@ -504,6 +515,8 @@ enum SwapHold {
 
 struct PlanetDemo {
     args: Args,
+    /// The tiles' normal maps made on the GPU (D-058); None: on the CPU.
+    normal_maps: Option<NormalMaps>,
     planet: Arc<Planet>,
     placement: Placement,
     /// The point the descent ends over (a direction from the planet's centre) and its ground,
@@ -523,6 +536,8 @@ struct PlanetDemo {
     scene: MeshletScene,
     /// A swap held still to be saved either side (`--check-swaps`).
     hold: Option<SwapHold>,
+    /// A new cut waiting for its normal maps to be made (D-058).
+    waiting: Option<Box<Built>>,
     /// The longest frame since the last swap, seconds, for its log.
     longest_frame: f32,
     /// The textures every scene's materials sample, kept alive across the swaps.
@@ -677,6 +692,18 @@ impl PlanetDemo {
                 args.stream_upload,
             ))
         };
+        // The tiles' normal maps on the GPU (D-058), unless asked on the CPU or impossible.
+        let map_queue = Arc::new(normal_maps::MapQueue::default());
+        let normal_maps = if gpu_maps(&args, &planet) {
+            NormalMaps::new(&ctx.device, &ctx.shaders, &planet, Arc::clone(&map_queue))?.map(
+                |mut maps| {
+                    maps.check = args.check_normal_maps;
+                    maps
+                },
+            )
+        } else {
+            None
+        };
         let parts = SceneParts {
             planet: Arc::clone(&planet),
             body,
@@ -685,6 +712,7 @@ impl PlanetDemo {
             ground,
             ray_traced: !args.no_shadows,
             residency,
+            maps: normal_maps.as_ref().map(|_| map_queue),
         };
         let built = Instant::now();
         // The first frame's view: a streamed scene loads its pages before the first frame (#121),
@@ -708,6 +736,7 @@ impl PlanetDemo {
                 &first_cells,
                 &have,
                 &TaskPool::client(),
+                gpu_maps(&args, &planet),
             );
             coarse
         };
@@ -813,6 +842,7 @@ impl PlanetDemo {
             stream,
             stream_failed: false,
             hold: None,
+            waiting: None,
             longest_frame: 0.0,
             _textures: set,
             air,
@@ -824,6 +854,7 @@ impl PlanetDemo {
             air_params,
             haze: world.view.haze as f32,
             tour_stop: None,
+            normal_maps,
             taa,
             bloom: Bloom::new(&ctx.device, &ctx.shaders)?,
             gtao: Gtao::new(&ctx.device, &ctx.shaders)?,
@@ -864,7 +895,20 @@ impl PlanetDemo {
     /// Swaps in the scene of a new cut when the worker has one ready, and asks for the cut
     /// around where the camera will be when the next one is ready (`stream`).
     fn stream_tiles(&mut self, ctx: &mut Context) {
-        if let Some(result) = self.stream.take() {
+        // A new cut whose normal maps are still being made waits for them (D-058).
+        let maps_pending = self.normal_maps.as_ref().is_some_and(|m| m.pending() > 0);
+        let next = match self.waiting.take() {
+            Some(built) => Some(Ok(*built)),
+            None => self.stream.take(),
+        };
+        let next = match next {
+            Some(Ok(built)) if maps_pending => {
+                self.waiting = Some(Box::new(built));
+                None
+            }
+            next => next,
+        };
+        if let Some(result) = next {
             match result {
                 // Held still and saved either side (`--check-swaps`).
                 Ok(built) if self.args.check_swaps.is_some() => {
@@ -1254,6 +1298,13 @@ fn tour<'a>(
     held
 }
 
+/// Whether the tiles' normal maps are made on the GPU (D-058): unless asked on the CPU, for a
+/// planet with an elevation map; the device may still refuse ([`NormalMaps::new`]), and the
+/// maps are then made on the CPU as the tiles are put in a scene.
+fn gpu_maps(args: &Args, planet: &Planet) -> bool {
+    !args.cpu_normal_maps && planet.gpu_heights().is_some()
+}
+
 /// How far along the descent, 0 (orbit) to 1 (the ground): eased at both ends `time` seconds
 /// into a descent of `duration`, or `shot`'s.
 fn progress(shot: Option<Shot>, time: f32, duration: f32, orbit: f64) -> f64 {
@@ -1439,6 +1490,10 @@ impl Demo for PlanetDemo {
         self.taa.enabled = self.taa_enabled;
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
+        // The new tiles' normal maps, made before the scene's passes sample them (D-058).
+        if let Some(maps) = self.normal_maps.as_mut() {
+            maps.record(&mut frame.graph, frame.slot)?;
+        }
         let taa_frame = self.taa.begin(
             &mut frame.graph,
             self.camera.projection(aspect),

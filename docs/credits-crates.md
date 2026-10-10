@@ -46,7 +46,7 @@ Where Forge uses them:
 - `anyhow`: asteroids, city-blocks, contact-sheet, credits, forge-app, forge-terrain, genesis, imgdiff, island, meshlets, physics-lab, planet, sharpness
 - `ash`: forge-gpu
 - `ash-window`: forge-gpu
-- `bytemuck`: forge-app, forge-core, forge-geom, forge-gpu, forge-render
+- `bytemuck`: forge-app, forge-core, forge-geom, forge-gpu, forge-render, planet
 - `cc`: forge-physics
 - `clap`: asteroids, city-blocks, contact-sheet, credits, genesis, imgdiff, meshlets, physics-lab, planet, sharpness, task-bench
 - `core_affinity`: forge-task

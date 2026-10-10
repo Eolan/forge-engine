@@ -15,6 +15,7 @@ workspace = true
 profiling = ["forge-app/profiling"]
 
 [dependencies]
+bytemuck = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 forge-app = { workspace = true }

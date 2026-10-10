@@ -28,7 +28,7 @@ use std::time::Instant;
 use anyhow::Result;
 use forge_core::MaterialId;
 use forge_geom::{CookOptions, MeshletMesh};
-use forge_gpu::{Device, ShaderCompiler};
+use forge_gpu::{Device, GraphImage, ShaderCompiler};
 use forge_render::material::GpuMaterial;
 use forge_render::material::{TextureSet, upload_textures};
 use forge_render::textures::TextureData;
@@ -43,6 +43,8 @@ use forge_terrain::planet::{
     tile_normal_map_cached, tile_origin,
 };
 use forge_world::CellId;
+
+use crate::normal_maps::MapQueue;
 use glam::DVec3;
 
 use crate::Placement;
@@ -73,6 +75,8 @@ pub(crate) struct SceneParts {
     /// Whether the scenes have rays (the sun's shadows).
     pub ray_traced: bool,
     pub residency: Residency,
+    /// Where new tiles' normal maps are queued for the GPU to make (D-058); None: on the CPU.
+    pub maps: Option<Arc<MapQueue>>,
 }
 
 impl SceneParts {
@@ -97,17 +101,20 @@ pub(crate) struct Tile {
     normals: NormalMap,
 }
 
-/// A tile's normal map: its first level until a scene puts it on the GPU, then its texture.
+/// A tile's normal map: its first level until a scene puts it on the GPU, then its texture; or
+/// none yet, for the GPU to make (D-058).
 #[derive(Clone)]
 enum NormalMap {
     Texels(Arc<Vec<u8>>),
+    Gpu,
     Texture(Arc<TileTexture>),
 }
 
 /// A tile's normal map on the GPU: a texture set of its own, which the scenes drawing the tile
 /// keep alive as long as its instance stands in them.
 pub(crate) struct TileTexture {
-    _set: TextureSet,
+    _set: Option<TextureSet>,
+    _image: Option<Arc<GraphImage>>,
     sampled: u32,
 }
 
@@ -121,6 +128,7 @@ pub(crate) fn cook_cells(
     cells: &[CellId],
     have: &HashMap<CellId, Tile>,
     pool: &TaskPool,
+    gpu_maps: bool,
 ) -> (Vec<Tile>, usize, usize) {
     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
     let key = planet.tile_key();
@@ -154,11 +162,15 @@ pub(crate) fn cook_cells(
                 } else {
                     Source::Cooked
                 };
-                let normals = tile_normal_map_cached(planet, body, cell);
+                let normals = if gpu_maps {
+                    NormalMap::Gpu
+                } else {
+                    NormalMap::Texels(Arc::new(tile_normal_map_cached(planet, body, cell)))
+                };
                 *slot = Some((
                     Tile {
                         mesh: Arc::new(done.mesh),
-                        normals: NormalMap::Texels(Arc::new(normals)),
+                        normals,
                     },
                     source,
                 ));
@@ -186,6 +198,29 @@ fn upload_normal_maps(
     cells: &[CellId],
     tiles: &mut [Tile],
 ) -> Result<()> {
+    // The maps the GPU makes: their images, their jobs queued for the frame (D-058); without a
+    // queue, made here on the CPU instead.
+    for (tile, &cell) in tiles.iter_mut().zip(cells) {
+        if !matches!(tile.normals, NormalMap::Gpu) {
+            continue;
+        }
+        tile.normals = match &parts.maps {
+            Some(queue) => {
+                let name = format!("{} normals", tile_name(&parts.body, cell));
+                let image = queue.add(device, cell, &name)?;
+                NormalMap::Texture(Arc::new(TileTexture {
+                    _set: None,
+                    sampled: image.sampled().0,
+                    _image: Some(image),
+                }))
+            }
+            None => NormalMap::Texels(Arc::new(tile_normal_map_cached(
+                &parts.planet,
+                &parts.body,
+                cell,
+            ))),
+        };
+    }
     let new: Vec<usize> = tiles
         .iter()
         .enumerate()
@@ -211,7 +246,11 @@ fn upload_normal_maps(
         let mut set = TextureSet::new(device);
         let id = set.add_uploaded(image, bytes);
         let sampled = set.sampled(id);
-        tiles[i].normals = NormalMap::Texture(Arc::new(TileTexture { _set: set, sampled }));
+        tiles[i].normals = NormalMap::Texture(Arc::new(TileTexture {
+            _set: Some(set),
+            _image: None,
+            sampled,
+        }));
     }
     Ok(())
 }
@@ -651,6 +690,7 @@ fn make_cut(
         &cells,
         &have,
         pool,
+        parts.maps.is_some(),
     );
     drop(have);
     let cook_seconds = started.elapsed().as_secs_f64();

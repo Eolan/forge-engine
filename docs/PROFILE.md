@@ -1360,6 +1360,16 @@ scene.
   takes 0.84 s to build (the maps upload together, as many to a submission as 16 MiB holds), and
   the maps take 341 KB a tile. A swapped-in scene with 317 new maps: 0.58 s, 0.98 with a
   submission a map.
+- **The normal maps on the GPU** (D-058, 2026-10-10; `docs/demos/planet.md`, "The normal maps on
+  the GPU"):
+  - `planet/normal maps` and `planet/normal map mips` cost 0.21 ms of the GPU a map, against
+    about 50 ms of a CPU core before.
+  - A frame makes at most 8 maps (about 1.7 ms). The first frame makes the first scene's 378
+    (80 ms).
+  - The first start's tiles now cook in 8.0 s rather than 10.9.
+  - The elevation on the GPU, 703 MiB, uploads in 53 ms, and a later start's loading takes
+    about 4.2 s.
+  - The cold tour's cuts wait 0.40 s rather than 0.66–0.77.
 - **The tiles following the camera** (`docs/demos/planet.md`, "The tiles as the camera flies"):
   - **Edited in place** (#220): an edit of up to 10 tiles is ready on the worker 11 ms after it
     is asked for (18 ms at most), the two of 210 and 314 tiles on arriving at a stop 0.30 and

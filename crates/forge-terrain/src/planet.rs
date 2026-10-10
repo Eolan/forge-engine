@@ -1320,6 +1320,119 @@ pub fn normal_map_levels(first: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
     levels
 }
 
+/// What a GPU pass needs to make [`Planet::height`] (D-058): the elevation grids' levels, where
+/// they lie, their detail and its octaves' seeds. Borrowed from the planet: the levels are
+/// hundreds of megabytes.
+pub struct GpuHeights<'a> {
+    /// The grids: the whole map first, then the regions in the world's order.
+    pub grids: Vec<GpuGrid<'a>>,
+    /// The seeds of the whole map's detail octaves, then of the regions' (every region shares
+    /// them).
+    pub detail_seeds: &'a [u64],
+    /// The seeds of the regions' detail octaves.
+    pub region_seeds: &'a [u64],
+    /// Heights over which the detail is at its roughest, metres ([`MapParams::rough_above`]).
+    pub rough_above: f64,
+    /// Whether the sea flattens the ground at its level.
+    pub sea: bool,
+    /// The planet's radius, metres.
+    pub radius: f64,
+}
+
+/// An elevation grid for the GPU ([`GpuHeights`]).
+pub struct GpuGrid<'a> {
+    /// Its levels, the full grid first: width, height, `i16` metres in rows ([`NO_DATA`] where
+    /// a region has none).
+    pub levels: Vec<(u32, u32, &'a [i16])>,
+    /// A map of the whole body, wrapping round the longitude.
+    pub whole: bool,
+    /// Its bounds, radians: west, east, south, north.
+    pub bounds: [f64; 4],
+    /// A region's blend from its edges, radians (0 for the whole map).
+    pub blend: f64,
+    /// Its detail: the widest wavelength, octaves, strength (metres) and gain.
+    pub detail: (f64, u32, f64, f64),
+}
+
+impl Planet {
+    /// Its heights for the GPU ([`GpuHeights`]), or None for a planet of noise alone, which
+    /// keeps its normal maps on the CPU.
+    pub fn gpu_heights(&self) -> Option<GpuHeights<'_>> {
+        let (map, params) = (self.map.as_ref()?, self.world.map.as_ref()?);
+        fn grid(elevation: &Elevation, blend: f64, detail: (f64, u32, f64, f64)) -> GpuGrid<'_> {
+            let w = &elevation.window;
+            GpuGrid {
+                levels: elevation
+                    .levels
+                    .iter()
+                    .map(|(w, h, s)| (*w, *h, s.as_slice()))
+                    .collect(),
+                whole: w.whole,
+                bounds: [w.west, w.east, w.south, w.north],
+                blend,
+                detail,
+            }
+        }
+        let mut grids = vec![grid(map.as_ref(), 0.0, params.detail)];
+        for (region, elevation) in params.regions.iter().zip(&self.regions) {
+            grids.push(grid(
+                elevation.as_ref(),
+                region.blend.to_radians(),
+                region.detail,
+            ));
+        }
+        Some(GpuHeights {
+            grids,
+            detail_seeds: &self.seeds.detail,
+            region_seeds: &self.seeds.region,
+            rough_above: params.rough_above,
+            sea: params.sea,
+            radius: self.world.planet.radius,
+        })
+    }
+}
+
+/// Where a tile's normal map samples ([`tile_normal_map`]), for the GPU (D-058): sample (i, j) of
+/// its `2 size + 1` a side lies in direction `normal + u columns[i] + v rows[j]`, normalised,
+/// the equi-angular warp's tangents worked out here, where `f64` has them.
+pub struct GpuTileMap {
+    /// The cube face's outward normal and in-face axes.
+    pub axes: [DVec3; 3],
+    /// The warp's tangent at each column and row of samples.
+    pub columns: Vec<f64>,
+    /// See `columns`.
+    pub rows: Vec<f64>,
+    /// The narrowest wavelength its heights hold: the next level's.
+    pub min_wavelength: f64,
+    /// The heights over which its coast runs from the sea's floor to the land ([`COAST_RANGE`]
+    /// samples).
+    pub coast_range: f64,
+}
+
+/// `cell`'s normal map's samples for the GPU ([`GpuTileMap`]): the same places as
+/// [`tile_normal_map`]'s.
+pub fn gpu_tile_map(world: &PlanetWorld, cell: CellId) -> GpuTileMap {
+    let size = NORMAL_MAP_SIZE as usize;
+    let level = cell.level();
+    let cells = f64::from(1_u32 << level);
+    let (x, y) = cell.xy();
+    let start = DVec2::new(x as f64, y as f64) / cells * 2.0 - 1.0;
+    let half = 2.0 / cells / (2 * size) as f64;
+    let (normal, u, v) = Face::from_index(cell.face()).axes();
+    let warp = |s: f64| dmath::tan(s * std::f64::consts::FRAC_PI_4);
+    GpuTileMap {
+        axes: [normal, u, v],
+        columns: (0..=2 * size)
+            .map(|i| warp(start.x + i as f64 * half))
+            .collect(),
+        rows: (0..=2 * size)
+            .map(|j| warp(start.y + j as f64 * half))
+            .collect(),
+        min_wavelength: world.min_wavelength(level + 1),
+        coast_range: COAST_RANGE * world.spacing(level),
+    }
+}
+
 /// [`tile_normal_map`] of `cell` on the planet called `body`, kept in the world cache by the
 /// tiles' key: made once, then loaded.
 pub fn tile_normal_map_cached(planet: &Planet, body: &str, cell: CellId) -> Vec<u8> {

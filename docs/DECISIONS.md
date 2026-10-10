@@ -424,6 +424,28 @@ with `forge-sim`); seeds derived per item (`Seed::derive`), never shared generat
 results merged by index; CI digests at 1 and 6 workers, debug and release. Lifted from the
 previous project's harness.
 
+**Amendment ✅ (2026-10-10, the owner's go on D-058's step 2): a generator on the GPU may be
+authoritative, in integers.**
+- **What may decide:** what the CPU, the GPU and a server must agree on (the ground's heights, a
+  physics height field) is made in integers only. That means fixed-point arithmetic on 64-bit
+  integers, with the same code in Rust and in Slang. Every operation is exact by both languages'
+  definitions: wrapping add and multiply, shifts, integer division.
+- **Floats on the GPU only shade** (D-058's normal maps). Vulkan's precision rules
+  (`docs.vulkan.org`, "Precision and Operation of SPIR-V Instructions") don't make them the same
+  bits everywhere:
+  - 32-bit add, subtract and multiply are correctly rounded, but in the implementation's rounding
+    mode unless the entry point declares `RoundingModeRTE`;
+  - denormals "may be flushed to zero" unless `DenormPreserve` is declared, which not every device
+    supports;
+  - a multiply and an add may fuse unless decorated `NoContraction`;
+  - for doubles, "the precision of double-precision instructions is at least that of single
+    precision", and nothing more.
+- **One definition:** the CPU runs the same integer code, as the reference, the fallback and the
+  server's. It is not a float original that the GPU approximates.
+- **Checked by digests:** each authoritative GPU generator comes with a test that runs its kernel
+  on the device and compares its bits with the CPU's. It runs on the RTX 5070 Ti and on the AMD
+  iGPU (`FORGE_GPU=amd`).
+
 ## D-017 — Demos are milestones; golden images ✅ (2026-09-24)
 
 A system is done when its demo runs on both machines with numbers in `docs/demos/`. Every
@@ -3510,7 +3532,7 @@ owner's yes, nothing built on it):
 - **For a galaxy:** a 64-bit body id in Elite's shape first (sector, layer, system, body), with
   each body's record made top-down. Voxels only if the game digs.
 
-## D-058 — A planet's tiles made on the GPU: the normal maps first, the heights under D-016's GPU rule, the DAG measured 🟡 (proposed 2026-10-10, #220)
+## D-058 — A planet's tiles made on the GPU: the normal maps first, the heights under D-016's GPU rule, the DAG measured 🟡 (proposed 2026-10-10, #220; step 1 ✅ and step 2 accepted the same day)
 
 D-057 is kept for #222's smart systems.
 
@@ -3590,3 +3612,56 @@ Two cheaper ideas were measured and set aside the same day:
 
 **What it does not change:** D-056's tiles, cut and swap rule; the meshes' cache; the island; the
 CPU path's determinism.
+
+**Step 1 built ✅** (2026-10-10, the owner's "let's start that first"; `docs/demos/planet.md`, "The
+normal maps on the GPU"):
+- **The passes:** `shaders/planet_normals.slang` makes a new tile's map and its mips in passes of
+  the frame (`planet/normal maps`, `planet/normal map mips`), declared before the scene's.
+  - The tile worker makes the map's image and queues its job.
+  - A frame makes at most 8 maps, except the first, which makes the whole first scene's.
+  - A new cut waits until its maps are made.
+- **On the GPU for the whole run:** the elevation, 703 MiB (the Earth's pyramid and the Alps' at
+  90 m), uploaded in 53 ms. The owner's memory choice was the whole pyramid.
+- **Precision:**
+  - In doubles: the samples' directions and positions, and the coarse and polar tiles'
+    latitude and longitude (musl's `atan`).
+  - Everything else in floats, from what the CPU works out once a map at its centre: the
+    offsets in metres, the angles, each elevation level's place and each octave's lattice.
+  - `shaderFloat64` is a new optional device feature. Without it, the maps stay on the CPU.
+  - `GraphImage` now keeps its state in a thread-safe cell, so the worker can make an image the
+    frames import.
+- **Checked against the CPU's maps** (`planet --check-normal-maps`): from level-0 tiles (a pole
+  included) to level-14 tiles by Èze, every channel within one 8-bit level, the coast too, and
+  the normals within 0.6–0.8°: the encoding's step.
+- **The cost:**
+  - **GPU:** 0.21 ms a map; the first scene's 378 maps take 80 ms in its first frame.
+  - **CPU:** 50 ms a tile less.
+  - **The first start by Èze:** its tiles cook in 8.0 s rather than 10.9.
+  - **The cold tour:** a cut waits 0.40 s rather than 0.66–0.77, and the tour makes 80 swaps
+    rather than 55–62.
+- **Kept:** the CPU's maps, as the reference, the fallback and `--cpu-normal-maps`. Their
+  entries in the world cache are no longer made and age out with its sweep.
+
+**Step 2 accepted ✅** (2026-10-10, the owner's go: "we will need step 2 sooner or later"), under
+D-016's amendment of the same day:
+- **The planet's height function is made again in integers,** one definition for the CPU and the
+  GPU (`forge_core::fixed`):
+  - **The samples' directions:** the equi-angular warp's tangents become sines and cosines, with
+    no division: `N cos a cos b + U sin a cos b + V cos a sin b`. They come from integer CORDIC
+    rotations once per tile column and row, and are normalised by Newton's iteration in fixed
+    point.
+  - **Latitude and longitude:** by CORDIC vectoring (shifts and adds).
+  - **The elevation's taps, Catmull-Rom, the noise and the blends:** the octaves' lattice, fade
+    and gradients, the detail and the regions' blend, all in fixed point. The hash is already
+    integer.
+  - **The heights:** in fixed-point metres.
+- **The CPU makes the tiles' meshes from it,** as a server or the physics will. The GPU makes a
+  tile's heights in a pass and reads them back for the DAG, where the CPU spent about 16 ms of a
+  core a tile.
+- **Its digest test** compares a tile's heights made on the GPU with the CPU's, bit for bit, on
+  both GPUs of the dev machine.
+- **The normal maps** take their heights from the same integers.
+- **To measure as it is built:**
+  - how far the integer heights stand from today's floats (under a millimetre is the aim);
+  - the CPU's cost a height against today's 0.25–0.33 µs;
+  - the GPU's cost a tile and the read-back's wait.
