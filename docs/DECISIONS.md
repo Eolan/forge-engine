@@ -3458,7 +3458,17 @@ Marble, the Deep Star Maps):
   before): of 21 changes on the tour none jumps over 0.13, where 4 peak at 0.15–0.21 settled. TAA
   takes a split in over several frames, so it is a short blend already; a longer one (the parent
   dithered into its children) is left until a view shows it is needed.
-- **Next:** tiles cooked in milliseconds.
+- **The haze** (2026-10-10, the owner's "a light fog" even near the ground): the world file's
+  `[view] haze`, the air between the camera and the ground that many times as dense (its
+  transmittance raised to it, its light scaled to match); the Earth at 0.5. The air is
+  Hillaire's Earth, yet from 6 km over the Alps it laid as much blue over the grass as the sky's
+  own. At Èze the fog is mostly AgX's greyish sky (D-045's curve, the owner's to change).
+- **Faster new tiles** (2026-10-10, `docs/demos/planet.md`, "A new tile"): 0.27 s of one core
+  rather than 0.46 for a fine tile; the caches' stores no longer scan their directories; the
+  normal map's unread samples left out and the noise's seeds kept (the same bits); the DAG's
+  first level cut into the grid's 7 × 7 cells (the same errors and GPU frame, other clusters).
+  A DAG template shared by every tile cooked in 23 ms but erred 7–10 times as much: set aside.
+- **Next:** a tile in milliseconds still (its DAG 0.11 s, its normal map 0.12 s).
 
 **Proposed from the research 🟡** (`docs/research/worlds-at-every-scale.md`, 2026-10-10; for the
 owner's yes, nothing built on it):

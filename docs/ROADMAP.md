@@ -119,8 +119,16 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
     2.5 px apart on ground rough enough, or its children's height over a pixel): the same tiles
     on rough ground, fewer over the sea. The pops it leaves come from the children's finer
     normal maps.
-  - **Next:** tiles cooked in milliseconds. A longer blend over a split (the parent dithered
-    into its children) if a view shows it: no frame of a change jumps over 0.13 today.
+  - **The haze at half the air's density ✅** (2026-10-10, the owner's "light fog" near the
+    ground): the air between the camera and the ground counts half; the sky is unchanged.
+  - **Faster new tiles ✅** (2026-10-10, the owner's "go on with tiles cooked in milliseconds"):
+    a new fine tile takes 0.27 s of one core rather than 0.46. The caches no longer scan their
+    directories at every store; the normal maps skip the samples no texel reads; the noise's
+    seeds are kept; the DAG's first level is cut into the grid's cells. A DAG template shared by
+    every tile, measured, lost the tiles' ridges and was set aside.
+  - **Next:** a tile in milliseconds still: its DAG (0.11 s) and its normal map (0.12 s), whose
+    heights the children could share. A longer blend over a split (the parent dithered into its
+    children) if a view shows it: no frame of a change jumps over 0.13 today.
 - **More of stage 6's materials,** biomes as rules (D-041). The beach types ✅ (#128,
   2026-10-02): shingle on the headlands and under steep land, pale sand in the bays and by
   the rivers' mouths (black sand left out: the island's hard rock is no basalt, the owner's

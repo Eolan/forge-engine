@@ -1151,6 +1151,44 @@ pub fn tile_mesh(planet: &Planet, cell: CellId) -> TriMesh {
     mesh
 }
 
+/// Quads a side of the cells a tile's first level is cut into ([`tile_clusters`]): 8 × 8
+/// samples, a cluster's 64 vertices, and 98 triangles.
+const TILE_CLUSTER_QUADS: usize = 7;
+/// Quads of a tile's skirt in one of its clusters: 32 samples along the edge and 32 under them.
+const SKIRT_CLUSTER_QUADS: usize = 31;
+
+/// The clusters of the first level of every tile of `samples`² samples (#220,
+/// `MeshletMesh::build_clustered`), each the places of its triangles in [`tile_mesh`]'s: the
+/// grid's cells of [`TILE_CLUSTER_QUADS`]² quads, then the skirt's runs of
+/// [`SKIRT_CLUSTER_QUADS`] quads. meshoptimizer clustered a tile's 133 000 triangles in 50 ms,
+/// a third of its DAG's time, into clusters of about the same size.
+pub fn tile_clusters(samples: u32) -> Vec<Vec<u32>> {
+    let quads = samples as usize - 1;
+    let mut clusters = Vec::new();
+    for top in (0..quads).step_by(TILE_CLUSTER_QUADS) {
+        for left in (0..quads).step_by(TILE_CLUSTER_QUADS) {
+            let mut triangles = Vec::with_capacity(2 * TILE_CLUSTER_QUADS * TILE_CLUSTER_QUADS);
+            for j in top..(top + TILE_CLUSTER_QUADS).min(quads) {
+                for i in left..(left + TILE_CLUSTER_QUADS).min(quads) {
+                    let quad = (j * quads + i) as u32;
+                    triangles.extend_from_slice(&[2 * quad, 2 * quad + 1]);
+                }
+            }
+            clusters.push(triangles);
+        }
+    }
+    let first = (2 * quads * quads) as u32;
+    let ring = 4 * quads;
+    for start in (0..ring).step_by(SKIRT_CLUSTER_QUADS) {
+        clusters.push(
+            (start..(start + SKIRT_CLUSTER_QUADS).min(ring))
+                .flat_map(|k| [first + 2 * k as u32, first + 2 * k as u32 + 1])
+                .collect(),
+        );
+    }
+    clusters
+}
+
 /// The cache name of `cell`'s tile on the planet called `body`: `body@face-level-x-y`.
 pub fn tile_name(body: &str, cell: CellId) -> String {
     let (x, y) = cell.xy();
@@ -1579,6 +1617,35 @@ mod tests {
     }
 
     #[test]
+    fn a_tile_s_clusters_take_each_triangle_once() {
+        for samples in [9_u32, 257] {
+            let n = samples as usize;
+            let mut seen = vec![0_u8; 2 * (n - 1) * (n - 1) + 8 * (n - 1)];
+            for cluster in tile_clusters(samples) {
+                assert!(cluster.len() <= forge_geom::MESHLET_MAX_TRIANGLES);
+                for t in cluster {
+                    seen[t as usize] += 1;
+                }
+            }
+            assert!(seen.iter().all(|&s| s == 1), "{samples} samples");
+        }
+        let planet = small();
+        let mesh = tile_mesh(&planet, CellId::cube(2, 4, 5, 7));
+        let built = forge_geom::MeshletMesh::build_clustered(
+            &mesh,
+            &tile_clusters(planet.world.tiles.samples),
+            forge_geom::CookOptions::default(),
+        );
+        assert_eq!(built.triangle_count, mesh.indices.len() / 3);
+        assert!(
+            built
+                .meshlets
+                .iter()
+                .all(|m| m.parent_error >= m.self_error)
+        );
+    }
+
+    #[test]
     fn neighbouring_tiles_share_their_edge_and_its_normals() {
         let planet = small();
         let world = &planet.world;
@@ -1767,6 +1834,20 @@ mod calibration {
             let t = Instant::now();
             let cooked = MeshletMesh::build_with(&mesh, CookOptions { normal_weight: 0.0 });
             let cook = ms(t);
+            let t = Instant::now();
+            let by_cells = MeshletMesh::build_clustered(
+                &mesh,
+                &tile_clusters(world.tiles.samples),
+                CookOptions { normal_weight: 0.0 },
+            );
+            let clustered = ms(t);
+            println!(
+                "  by its cells: {clustered:.1} ms, {} clusters, {} pages, {} levels, {} triangles",
+                by_cells.meshlets.len(),
+                by_cells.page_count,
+                by_cells.levels(),
+                by_cells.dag_triangle_count
+            );
             // The cook's steps: the DAG alone, then its pages.
             let vertices: Vec<GpuVertex> = (0..mesh.positions.len())
                 .map(|i| GpuVertex {

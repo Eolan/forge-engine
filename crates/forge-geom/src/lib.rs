@@ -14,7 +14,7 @@ pub mod procedural;
 pub mod skin;
 pub mod stone;
 
-pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag};
+pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag, build_dag_clustered};
 pub use meshlet::{
     CookOptions, DagStats, GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES,
     MeshletMesh, PackedPage, PageFile,

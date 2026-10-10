@@ -349,6 +349,21 @@ pub fn cook_cached(
     pages_in_memory: bool,
     generate: impl FnOnce() -> TriMesh,
 ) -> (Cooked, io::Result<()>) {
+    cook_cached_with(dir, name, key_text, pages_in_memory, || {
+        MeshletMesh::build_with(&generate(), options)
+    })
+}
+
+/// [`cook_cached`] with the caller's own cook: `cook` makes and cooks the mesh when the cache
+/// lacks it (a planet's tile clustered by its cells, [`MeshletMesh::build_clustered`]). How it
+/// cooks belongs in `key_text`.
+pub fn cook_cached_with(
+    dir: &Path,
+    name: &str,
+    key_text: &str,
+    pages_in_memory: bool,
+    cook: impl FnOnce() -> MeshletMesh,
+) -> (Cooked, io::Result<()>) {
     let start = Instant::now();
     let key = key(key_text);
     let file = path(dir, name, key);
@@ -372,7 +387,7 @@ pub fn cook_cached(
             Ok(()),
         );
     }
-    let mut mesh = MeshletMesh::build_with(&generate(), options);
+    let mut mesh = cook();
     let ms = start.elapsed().as_secs_f64() * 1e3;
     let stored = save(&file, &mesh, key).map(|()| remove_stale(dir, name, key));
     if stored.is_ok() && !pages_in_memory {

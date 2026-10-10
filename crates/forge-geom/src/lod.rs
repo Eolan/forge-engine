@@ -95,6 +95,48 @@ pub fn build_dag(
     normal_weight: f32,
     levels: u32,
 ) -> ClusterDag {
+    build_dag_from(
+        indices,
+        None,
+        vertices,
+        vertex_section,
+        normal_weight,
+        levels,
+    )
+}
+
+/// [`build_dag`] with level 0's clusters given (#220): each a list of `indices`' triangles (by
+/// their place in it) that fits a cluster, at most [`MESHLET_MAX_VERTICES`] vertices and
+/// [`MESHLET_MAX_TRIANGLES`] triangles of at most two sections. A grid's own cells cluster it
+/// at once, where meshoptimizer's clustering of a planet's tile took a third of its DAG's time;
+/// the levels above simplify and cluster as in [`build_dag`].
+pub fn build_dag_clustered(
+    indices: &[u32],
+    clusters: &[Vec<u32>],
+    vertices: &[GpuVertex],
+    vertex_section: &[u8],
+    normal_weight: f32,
+    levels: u32,
+) -> ClusterDag {
+    build_dag_from(
+        indices,
+        Some(clusters),
+        vertices,
+        vertex_section,
+        normal_weight,
+        levels,
+    )
+}
+
+/// [`build_dag`], level 0 cut into `clusters` when they are given.
+fn build_dag_from(
+    indices: &[u32],
+    clusters: Option<&[Vec<u32>]>,
+    vertices: &[GpuVertex],
+    vertex_section: &[u8],
+    normal_weight: f32,
+    levels: u32,
+) -> ClusterDag {
     let mut dag = ClusterDag {
         meshlets: Vec::new(),
         ranges: Vec::new(),
@@ -128,16 +170,19 @@ pub fn build_dag(
 
     // Level 0.
     let whole = compactor.subset(indices, vertices, &locked);
-    let mut current = emit_clusters(
-        &mut dag,
-        &mut records,
-        &whole,
-        &whole.indices,
-        &sections,
-        0,
-        ([0.0; 3], 0.0),
-        0.0,
-    );
+    let mut current = match clusters {
+        None => emit_clusters(
+            &mut dag,
+            &mut records,
+            &whole,
+            &whole.indices,
+            &sections,
+            0,
+            ([0.0; 3], 0.0),
+            0.0,
+        ),
+        Some(clusters) => emit_given(&mut dag, &mut records, &whole, clusters, &sections),
+    };
     dag.clusters_per_level.push(current.len() as u32);
 
     let mut level = 1;
@@ -391,12 +436,6 @@ fn emit_clusters(
     self_error: f32,
 ) -> Vec<usize> {
     let adapter = subset.adapter();
-    let section_of = |local: u32| sections.of_vertex[subset.global[local as usize] as usize];
-    // A triangle's section is its vertices' majority (issue #51): at coarse levels, permissive
-    // simplification can move a pane's corner onto the facade's copy of a border vertex.
-    let triangle_section = |vertices: &[u32], t: &[u8; 3]| {
-        majority_section(t.map(|l| section_of(vertices[l as usize])))
-    };
     let build = |indices: &[u32]| {
         meshopt::build_meshlets(
             indices,
@@ -406,76 +445,8 @@ fn emit_clusters(
             0.5,
         )
     };
+    let producer = (level, self_sphere, self_error);
     let mut ids = Vec::new();
-    let mut emit = |vertices: &[u32], triangles: &[u8], dag: &mut ClusterDag| {
-        // A cluster holds at most two sections, its triangles sorted by section: the
-        // record packs both and where the second starts (`GpuMeshlet::section`).
-        let section = |t: &[u8; 3]| triangle_section(vertices, t);
-        let mut order: Vec<&[u8; 3]> = triangles.as_chunks::<3>().0.iter().collect();
-        order.sort_by_key(|t| section(t));
-        let first = section(order[0]);
-        let last = section(order[order.len() - 1]);
-        let split = order.iter().take_while(|t| section(t) == first).count();
-        let packed = if first == last {
-            u32::from(first) | u32::from(first) << 8
-        } else {
-            u32::from(first) | u32::from(last) << 8 | (split as u32) << 16
-        };
-        let sorted: Vec<u8> = order.iter().flat_map(|t| t.iter().copied()).collect();
-        let meshlet = meshopt::Meshlet {
-            vertices,
-            triangles: &sorted,
-        };
-        let bounds = meshopt::compute_meshlet_bounds(meshlet, &adapter);
-        let vertex_offset = dag.meshlet_vertices.len() as u32;
-        let triangle_offset = dag.meshlet_triangles.len() as u32;
-        dag.meshlet_vertices
-            .extend(vertices.iter().map(|&v| subset.global[v as usize]));
-        dag.meshlet_triangles.extend_from_slice(&sorted);
-        let global: Vec<u32> = sorted
-            .iter()
-            .map(|&local| subset.global[vertices[local as usize] as usize])
-            .collect();
-        let triangle_count = (sorted.len() / 3) as u32;
-        dag.triangle_count += triangle_count as usize;
-        // Level 0 clusters use their own sphere as `self` (error 0, always fine enough).
-        let (self_center, self_radius) = if level == 0 {
-            (bounds.center, bounds.radius)
-        } else {
-            self_sphere
-        };
-        let gpu = GpuMeshlet {
-            center: bounds.center,
-            radius: bounds.radius,
-            cone_apex: bounds.cone_apex,
-            cone_cutoff: bounds.cone_cutoff,
-            cone_axis: bounds.cone_axis,
-            page: 0,
-            payload: 0,
-            vertex_count: vertices.len() as u32,
-            triangle_count,
-            child_page: crate::page::PAGE_NONE,
-            self_center,
-            self_radius,
-            parent_center: [0.0; 3],
-            parent_radius: 0.0,
-            self_error,
-            parent_error: 0.0,
-            lod_level: level,
-            section: packed,
-        };
-        ids.push(records.len());
-        records.push(Record {
-            gpu,
-            range: ClusterRange {
-                vertex_offset,
-                triangle_offset,
-            },
-            group: NO_GROUP,
-            source: NO_GROUP,
-            indices: global,
-        });
-    };
     let built = build(indices);
     for meshlet in built.iter() {
         let mut present: Vec<u8> = meshlet
@@ -483,12 +454,21 @@ fn emit_clusters(
             .as_chunks::<3>()
             .0
             .iter()
-            .map(|t| triangle_section(meshlet.vertices, t))
+            .map(|t| triangle_section(subset, sections, meshlet.vertices, t))
             .collect();
         present.sort_unstable();
         present.dedup();
         if present.len() <= 2 {
-            emit(meshlet.vertices, meshlet.triangles, dag);
+            ids.push(emit_one(
+                dag,
+                records,
+                subset,
+                &adapter,
+                sections,
+                producer,
+                meshlet.vertices,
+                meshlet.triangles,
+            ));
             continue;
         }
         // More than two sections met in one cluster: cluster its triangles again, section by
@@ -499,15 +479,166 @@ fn emit_clusters(
                 .as_chunks::<3>()
                 .0
                 .iter()
-                .filter(|t| triangle_section(meshlet.vertices, t) == s)
+                .filter(|t| triangle_section(subset, sections, meshlet.vertices, t) == s)
                 .flat_map(|t| t.iter().map(|&l| meshlet.vertices[l as usize]))
                 .collect();
             for piece in build(&part).iter() {
-                emit(piece.vertices, piece.triangles, dag);
+                ids.push(emit_one(
+                    dag,
+                    records,
+                    subset,
+                    &adapter,
+                    sections,
+                    producer,
+                    piece.vertices,
+                    piece.triangles,
+                ));
             }
         }
     }
     ids
+}
+
+/// Level 0 cut into the given `clusters` ([`build_dag_clustered`]), each the places of its
+/// triangles in `subset`'s: appends them to the tables and the records, and returns the new
+/// records' ids.
+fn emit_given(
+    dag: &mut ClusterDag,
+    records: &mut Vec<Record>,
+    subset: &Subset,
+    clusters: &[Vec<u32>],
+    sections: &Sections<'_>,
+) -> Vec<usize> {
+    let adapter = subset.adapter();
+    let mut local = vec![u32::MAX; subset.vertices.len()];
+    clusters
+        .iter()
+        .map(|cluster| {
+            let mut vertices: Vec<u32> = Vec::new();
+            let mut triangles: Vec<u8> = Vec::with_capacity(3 * cluster.len());
+            for &t in cluster {
+                let first = 3 * t as usize;
+                for &v in &subset.indices[first..first + 3] {
+                    if local[v as usize] == u32::MAX {
+                        local[v as usize] = vertices.len() as u32;
+                        vertices.push(v);
+                    }
+                    triangles.push(local[v as usize] as u8);
+                }
+            }
+            for &v in &vertices {
+                local[v as usize] = u32::MAX;
+            }
+            assert!(
+                vertices.len() <= MESHLET_MAX_VERTICES && cluster.len() <= MESHLET_MAX_TRIANGLES,
+                "a given cluster of {} vertices and {} triangles",
+                vertices.len(),
+                cluster.len()
+            );
+            emit_one(
+                dag,
+                records,
+                subset,
+                &adapter,
+                sections,
+                (0, ([0.0; 3], 0.0), 0.0),
+                &vertices,
+                &triangles,
+            )
+        })
+        .collect()
+}
+
+/// Appends a cluster to the tables and `records` and returns its record's id: `triangles` index
+/// `vertices`, which index `subset`'s. `producer` is its level and its producing group's sphere
+/// and error.
+#[allow(clippy::too_many_arguments)]
+fn emit_one(
+    dag: &mut ClusterDag,
+    records: &mut Vec<Record>,
+    subset: &Subset,
+    adapter: &VertexDataAdapter<'_>,
+    sections: &Sections<'_>,
+    (level, self_sphere, self_error): (u32, ([f32; 3], f32), f32),
+    vertices: &[u32],
+    triangles: &[u8],
+) -> usize {
+    // A cluster holds at most two sections, its triangles sorted by section: the record packs
+    // both and where the second starts (`GpuMeshlet::section`).
+    let section = |t: &[u8; 3]| triangle_section(subset, sections, vertices, t);
+    let mut order: Vec<&[u8; 3]> = triangles.as_chunks::<3>().0.iter().collect();
+    order.sort_by_key(|t| section(t));
+    let first = section(order[0]);
+    let last = section(order[order.len() - 1]);
+    let split = order.iter().take_while(|t| section(t) == first).count();
+    let packed = if first == last {
+        u32::from(first) | u32::from(first) << 8
+    } else {
+        u32::from(first) | u32::from(last) << 8 | (split as u32) << 16
+    };
+    let sorted: Vec<u8> = order.iter().flat_map(|t| t.iter().copied()).collect();
+    let meshlet = meshopt::Meshlet {
+        vertices,
+        triangles: &sorted,
+    };
+    let bounds = meshopt::compute_meshlet_bounds(meshlet, adapter);
+    let vertex_offset = dag.meshlet_vertices.len() as u32;
+    let triangle_offset = dag.meshlet_triangles.len() as u32;
+    dag.meshlet_vertices
+        .extend(vertices.iter().map(|&v| subset.global[v as usize]));
+    dag.meshlet_triangles.extend_from_slice(&sorted);
+    let global: Vec<u32> = sorted
+        .iter()
+        .map(|&local| subset.global[vertices[local as usize] as usize])
+        .collect();
+    let triangle_count = (sorted.len() / 3) as u32;
+    dag.triangle_count += triangle_count as usize;
+    // Level 0 clusters use their own sphere as `self` (error 0, always fine enough).
+    let (self_center, self_radius) = if level == 0 {
+        (bounds.center, bounds.radius)
+    } else {
+        self_sphere
+    };
+    let gpu = GpuMeshlet {
+        center: bounds.center,
+        radius: bounds.radius,
+        cone_apex: bounds.cone_apex,
+        cone_cutoff: bounds.cone_cutoff,
+        cone_axis: bounds.cone_axis,
+        page: 0,
+        payload: 0,
+        vertex_count: vertices.len() as u32,
+        triangle_count,
+        child_page: crate::page::PAGE_NONE,
+        self_center,
+        self_radius,
+        parent_center: [0.0; 3],
+        parent_radius: 0.0,
+        self_error,
+        parent_error: 0.0,
+        lod_level: level,
+        section: packed,
+    };
+    records.push(Record {
+        gpu,
+        range: ClusterRange {
+            vertex_offset,
+            triangle_offset,
+        },
+        group: NO_GROUP,
+        source: NO_GROUP,
+        indices: global,
+    });
+    records.len() - 1
+}
+
+/// A triangle's section (`t` indexes `vertices`, which index `subset`'s): its vertices'
+/// majority (issue #51). At coarse levels, permissive simplification can move a pane's corner
+/// onto the facade's copy of a border vertex.
+fn triangle_section(subset: &Subset, sections: &Sections<'_>, vertices: &[u32], t: &[u8; 3]) -> u8 {
+    majority_section(
+        t.map(|l| sections.of_vertex[subset.global[vertices[l as usize] as usize] as usize]),
+    )
 }
 
 /// The section two or three of a triangle's vertices share (the second vertex's when all

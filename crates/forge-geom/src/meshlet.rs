@@ -147,26 +147,46 @@ impl MeshletMesh {
     /// [`MeshletMesh::build`] with explicit options.
     pub fn build_with(mesh: &TriMesh, options: CookOptions) -> Self {
         let (mut vertices, indices, vertex_section, _) = split_sections(mesh);
-        // The positions on the mesh's grid (#218), before the DAG: its bounds, cones and errors
-        // are those of the positions the packed pages hold, to the bit.
-        let reach = vertices
-            .iter()
-            .flat_map(|v| v.position)
-            .fold(0.0_f32, |r, c| r.max(c.abs()));
-        let grid = page::grid_exponent(reach);
-        for v in &mut vertices {
-            v.position = page::snap(v.position, grid);
-        }
+        let grid = snap_to_grid(&mut vertices);
         let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
-        let mut dag = lod::build_dag(
+        let dag = lod::build_dag(
             &indices,
             &vertices,
             &vertex_section,
             options.normal_weight,
             lod::MAX_LEVELS,
         );
+        Self::packed(mesh, &vertices, dag, grid)
+    }
+
+    /// [`MeshletMesh::build_with`] with level 0's clusters given, each the places of its
+    /// triangles in `mesh.indices` ([`lod::build_dag_clustered`]): a grid cut into its own cells
+    /// (#220), where meshoptimizer's clustering took a third of a planet tile's DAG. The mesh must
+    /// have no sections; its triangles keep their order.
+    pub fn build_clustered(mesh: &TriMesh, clusters: &[Vec<u32>], options: CookOptions) -> Self {
+        let (mut vertices, indices, vertex_section, _) = split_sections(mesh);
+        assert_eq!(
+            vertices.len(),
+            mesh.positions.len(),
+            "a mesh clustered in advance has no sections"
+        );
+        let grid = snap_to_grid(&mut vertices);
+        let dag = lod::build_dag_clustered(
+            &indices,
+            clusters,
+            &vertices,
+            &vertex_section,
+            options.normal_weight,
+            lod::MAX_LEVELS,
+        );
+        Self::packed(mesh, &vertices, dag, grid)
+    }
+
+    /// `mesh` with its `dag` over its `vertices` (snapped to the grid `grid`) packed into pages.
+    fn packed(mesh: &TriMesh, vertices: &[GpuVertex], mut dag: lod::ClusterDag, grid: i32) -> Self {
+        let indices = &mesh.indices;
         let uvs = !mesh.uvs.is_empty();
-        let pages = page::pack(&mut dag, &vertices, uvs, Some(grid));
+        let pages = page::pack(&mut dag, vertices, uvs, Some(grid));
         let (center, radius) = bounding_sphere(&mesh.positions);
         Self {
             meshlets: dag.meshlets,
@@ -307,6 +327,21 @@ pub(crate) fn split_sections(mesh: &TriMesh) -> (Vec<GpuVertex>, Vec<u32>, Vec<u
         vertices[v].section = f32::from(*s);
     }
     (vertices, indices, vertex_section, source)
+}
+
+/// Snaps `vertices`' positions to the mesh's grid (#218), before its DAG: its bounds, cones and
+/// errors are then those of the positions the packed pages hold, to the bit. Returns the grid's
+/// exponent.
+fn snap_to_grid(vertices: &mut [GpuVertex]) -> i32 {
+    let reach = vertices
+        .iter()
+        .flat_map(|v| v.position)
+        .fold(0.0_f32, |r, c| r.max(c.abs()));
+    let grid = page::grid_exponent(reach);
+    for v in vertices {
+        v.position = page::snap(v.position, grid);
+    }
+    grid
 }
 
 /// The section of triangle `t` of a cluster whose packed sections are `packed`

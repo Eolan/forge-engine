@@ -39,7 +39,8 @@ use forge_render::{
 use forge_task::{PoolConfig, TaskPool};
 use forge_terrain::Planet;
 use forge_terrain::planet::{
-    NORMAL_MAP_SIZE, normal_map_levels, tile_mesh, tile_name, tile_normal_map_cached, tile_origin,
+    NORMAL_MAP_SIZE, normal_map_levels, tile_clusters, tile_mesh, tile_name,
+    tile_normal_map_cached, tile_origin,
 };
 use forge_world::CellId;
 use glam::DVec3;
@@ -123,6 +124,7 @@ pub(crate) fn cook_cells(
 ) -> (Vec<Tile>, usize, usize) {
     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
     let key = planet.tile_key();
+    let clusters = &tile_clusters(planet.world.tiles.samples);
     let mut slots: Vec<Option<(Tile, Source)>> = cells
         .iter()
         .map(|c| have.get(c).map(|t| (t.clone(), Source::Kept)))
@@ -135,14 +137,15 @@ pub(crate) fn cook_cells(
             let (cache, key) = (&cache, &key);
             s.spawn(move |_| {
                 let name = tile_name(body, cell);
-                let (done, stored) = forge_geom::cache::cook_cached(
-                    cache,
-                    &name,
-                    key,
-                    CookOptions { normal_weight: 0.0 },
-                    in_memory,
-                    || tile_mesh(planet, cell),
-                );
+                // Its first level cut into its grid's cells, its DAG over them.
+                let (done, stored) =
+                    forge_geom::cache::cook_cached_with(cache, &name, key, in_memory, || {
+                        MeshletMesh::build_clustered(
+                            &tile_mesh(planet, cell),
+                            clusters,
+                            CookOptions { normal_weight: 0.0 },
+                        )
+                    });
                 if let Err(error) = stored {
                     tracing::warn!(tile = %name, %error, "cooked tile not cached");
                 }
