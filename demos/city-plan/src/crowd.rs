@@ -51,6 +51,14 @@ const SEATED: u32 = 1 << 31;
 /// An empty slot.
 const EMPTY: u32 = u32::MAX;
 
+/// A park people stand about in.
+struct Park {
+    /// Where they stand: inside the streets round it.
+    inside: Vec<DVec2>,
+    /// How far they spread from its middle, metres.
+    spread: f64,
+}
+
 /// A figure in a mesh's slot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Figure {
@@ -215,8 +223,10 @@ pub struct Crowd {
     graph: Graph,
     plan_edges: Vec<(Vec<DVec2>, f64, f64, f64)>,
     routes: HashMap<u32, Option<Route>>,
-    /// The parks' outlines: their visitors stand inside them.
-    parks: Vec<Vec<DVec2>>,
+    /// The parks visitors stand about in, in the order of their places from
+    /// `first_park` on.
+    parks: Vec<Park>,
+    first_park: usize,
     size: f64,
     /// The terraces' seats (the world's place, the sitter's turn), and each seat's
     /// neighbourhood: the cafés within [`NEIGHBOURHOOD`] and how many seats.
@@ -284,6 +294,18 @@ impl Crowd {
                 }
             })
             .collect();
+        // The parks people go out to and stand about in: inside the streets round each, spread
+        // over its extent from its middle.
+        let open: Vec<Park> = plan
+            .blocks
+            .iter()
+            .filter(|b| b.use_ == BlockUse::Park)
+            .map(|b| {
+                let inside = geom::inset(&b.polygon, 9.0).unwrap_or_else(|| b.polygon.clone());
+                let spread = (geom::signed_area(&inside).abs().sqrt() * 0.5).min(70.0);
+                Park { inside, spread }
+            })
+            .collect();
         let parks: Vec<[f32; 2]> = plan
             .blocks
             .iter()
@@ -291,6 +313,8 @@ impl Crowd {
             .map(|b| [b.centre.x as f32, b.centre.y as f32])
             .collect();
         let places = population::places_from_buildings(&buildings, &parks, &Uses::default());
+        // The parks' places come last, in that order.
+        let first_park = places.len() - parks.len();
         // The demo's lifetime: the places live as long as the app.
         let world: &'static World =
             Box::leak(Box::new(World::new(places, plan.size as f32, 250.0)));
@@ -358,13 +382,8 @@ impl Crowd {
             graph: Graph { nodes, adj, near },
             plan_edges,
             routes: HashMap::new(),
-            parks: plan
-                .blocks
-                .iter()
-                .filter(|b| b.use_ == BlockUse::Park)
-                // Inside the streets round them: a park's outline runs along their centrelines.
-                .map(|b| geom::inset(&b.polygon, 9.0).unwrap_or_else(|| b.polygon.clone()))
-                .collect(),
+            parks: open,
+            first_park,
             size: plan.size,
             seats,
             neighbourhoods,
@@ -524,19 +543,25 @@ impl Crowd {
         for &p in &near {
             let p = p as usize;
             let Some(trip) = self.sim.trip(p) else {
-                // In a park: standing about it, scattered by their seed as the maps show them.
+                // In a park: standing about it, scattered by their seed over its extent (the
+                // place stands at its middle).
                 let at = self.sim.pop.at[p] as usize;
-                if places.get(at).is_some_and(|q| q.kind == PlaceKind::Park) {
+                let park = at
+                    .checked_sub(self.first_park)
+                    .and_then(|k| self.parks.get(k));
+                if let Some(park) =
+                    park.filter(|_| places.get(at).is_some_and(|q| q.kind == PlaceKind::Park))
+                {
                     let s = self.sim.pop.seed[p];
-                    // Over a park's extent, about: the place stands at its centre.
-                    let jitter = |bits: u32| (f64::from(bits & 0xFF) / 255.0 - 0.5) * 140.0;
+                    let jitter =
+                        |bits: u32| (f64::from(bits & 0xFF) / 255.0 - 0.5) * 2.0 * park.spread;
                     let q = places[at].pos;
                     let q = DVec2::new(
                         f64::from(q[0]) + jitter(s),
                         f64::from(q[1]) + jitter(s >> 8),
                     );
                     let mesh = (s as usize % GROUPS) * POSES + 1;
-                    if q.distance(c) <= REACH && self.parks.iter().any(|p| geom::contains(p, q)) {
+                    if q.distance(c) <= REACH && geom::contains(&park.inside, q) {
                         let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
                         out[mesh].push((
                             p as u32,

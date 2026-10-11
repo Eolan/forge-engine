@@ -15,7 +15,7 @@ cargo run --release -p population-bench -- --days 2
 | Places | from a city plan's masses: homes and jobs by floor area (two thirds homes at 40 m² a person, jobs at 30 m²), a school in every 120 buildings, active ground floors (on the avenues and the lanes, and facing a square, a park or a quay: `Mass::lively`) as shops, cafés and bars in turn, the parks (`places_from_buildings`) |
 | People | everyone the homes hold; roles by a mix (45 % day workers, 3 % night workers, 9 % students, 15 % children, 28 % retired or at home); five personality traits of four bits; work at a distance drawn from an exponential of mean 2.5 km in a random direction (drawn again when it falls outside the city), school the nearest (`generate`) |
 | Records | a structure of arrays, 36 bytes a person: home, anchor, role, personality, seed, where (a place or a trip, its origin and destination), since when, day, step |
-| Days | never stored: each person's plan for a day is made again from their seed, role, personality and the day's number whenever an event needs it; weekdays and weekends differ; the conscientious rise earlier, the extraverted go out more and later |
+| Days | never stored: each person's plan for a day is made again from their seed, role, personality and the day's number whenever an event needs it; weekdays and weekends differ; the conscientious rise earlier, the extraverted go out more and later; an afternoon out goes mostly to the cafés and tea rooms, the shops and the pubs, a park now and then (the parks took everyone out before; the owner, 2026-10-11) |
 | Events | a calendar ordered by (game second, person): an activity ends, a trip arrives; nobody is updated in between |
 | Trips | timed by distance and mode: on foot under 1.2 km, by bike under 4 km for the open, by tram beyond (with a 5-minute wait); free flow, no congestion yet |
 
@@ -26,9 +26,9 @@ cargo run --release -p population-bench -- --days 2
 | Places | 28 520 |
 | People | 307 283, 36 bytes each (11.1 MB) |
 | Generation | 2.0 s |
-| Events | 6.4 a person a day; 0.68 µs each |
+| Events | 6.6 a person a day; 0.68 µs each |
 | Two game days | 2.7 s |
-| A game hour of 20 real minutes asks | 69 events a real second: 0.004 % of one core |
+| A game hour of 20 real minutes asks | 70 events a real second: 0.004 % of one core |
 | Six workers (`population::Shards`) | the two days in 0.51 s, 5.2 times one, the same digest to the bit |
 | A snapshot (`Sim::snapshot`, `Sim::restore`) | 7.1 MB, 23 bytes a person, saved in 2 ms, restored in 9 ms, the same digest |
 
@@ -40,10 +40,11 @@ Where everyone is, by game hour (weekday, %):
 | 08 | 42.3 | 43.8 | 0.0 | 0.0 | 0.0 | 0.0 | 13.9 |
 | 11 | 26.1 | 68.9 | 4.6 | 0.0 | 0.0 | 0.0 | 0.4 |
 | 13 | 31.1 | 55.5 | 0.0 | 13.4 | 0.0 | 0.0 | 0.0 |
-| 16 | 18.5 | 68.9 | 1.0 | 2.1 | 0.0 | 8.2 | 1.2 |
-| 18 | 60.7 | 15.0 | 4.3 | 5.3 | 4.1 | 5.5 | 5.2 |
+| 16 | 16.8 | 68.9 | 4.7 | 5.6 | 1.8 | 1.7 | 0.6 |
+| 17 | 29.3 | 44.8 | 6.0 | 8.0 | 3.7 | 3.9 | 4.3 |
+| 18 | 58.5 | 15.0 | 7.0 | 8.1 | 4.1 | 2.7 | 4.7 |
 | 20 | 87.5 | 0.0 | 0.0 | 7.0 | 5.5 | 0.0 | 0.0 |
-| 22 | 88.0 | 3.0 | 0.0 | 3.3 | 5.3 | 0.0 | 0.4 |
+| 22 | 88.1 | 3.0 | 0.0 | 3.3 | 5.3 | 0.0 | 0.3 |
 
 Night workers (3 %) are at work at night. The same seed gives the same day to the bit (a test
 compares the digests).

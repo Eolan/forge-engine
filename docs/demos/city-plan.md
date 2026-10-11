@@ -486,7 +486,11 @@ evening's walkers.* `--people HOUR` builds the plan's population from the masses
   - by tram: waiting on the platform nearest their start for the trip's first five minutes,
     until a tram of that platform's line stands there going its way: then they board.
     Aboard, they are not drawn yet (the trams' windows show no one).
-- **those in a park:** they stand about it, kept 9 m inside its streets.
+- **those in a park or a square:** they stand about it, a park's visitors 9 m inside its streets, a
+  square's inside its building lines, 6 m clear of its fountain, round a landmark that stands on
+  it, spread over its extent (`CityPlan::outdoor_places`: the parks and the squares of 0.15 ha or
+  more; the owner wanted the large squares lively). The population goes to the squares as to
+  the parks.
 
 The drawn crowd runs on the real clock, a game second a second: at the game's three (an hour
 in 20 real minutes, `population::GAME_SPEED`), its walkers would cross the screen at 4 m/s.

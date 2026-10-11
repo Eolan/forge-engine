@@ -641,10 +641,54 @@ impl PlanScenario {
                     })
             })
             .collect();
+        let bench_spots: Vec<Vec3> = benches.iter().map(|m| m.w_axis.truncate()).collect();
         if !benches.is_empty() {
             kit_meshes.push(forge_geom::furniture::bench());
             let id = (kit_meshes.len() - 1) as u32;
             kit_instances.extend(benches.into_iter().map(|at| (id, at, 0)));
+        }
+        // Chess tables round the fountain of each square of 0.15 ha or more without a landmark,
+        // four 9 m from its middle on the diagonals, where they stand clear of the trunks and the
+        // benches and inside the building lines; their players sit as the terraces' guests do,
+        // in the share of the people out round them (the owner: give people something to do in
+        // the squares rather than stand there).
+        let held: Vec<usize> = plan.landmarks.iter().filter_map(|l| l.square).collect();
+        let mut chess = Vec::new();
+        for (_, b) in
+            plan.blocks.iter().enumerate().filter(|(i, b)| {
+                b.use_ == BlockUse::Square && b.area >= 1500.0 && !held.contains(i)
+            })
+        {
+            let middle = geom::centroid(&b.buildable);
+            let (axis, _, _) = geom::oriented_extent(&b.buildable);
+            let spots = (0..4)
+                .map(|k| {
+                    let a = std::f64::consts::FRAC_PI_4 + k as f64 * std::f64::consts::FRAC_PI_2;
+                    let (s, c) = a.sin_cos();
+                    middle + (axis * c + DVec2::new(-axis.y, axis.x) * s) * 9.0
+                })
+                .filter(|&p| {
+                    let w = world(size, p, 0.0);
+                    geom::contains(&b.buildable, p)
+                        && !trunks.any_within(p, 2.0, |_| false)
+                        && bench_spots.iter().all(|s| s.with_y(0.0).distance(w) > 3.0)
+                });
+            for p in spots {
+                let face = (middle - p).normalize_or_zero();
+                let turn = glam::Quat::from_rotation_y((face.x as f32).atan2(face.y as f32));
+                chess.push(Mat4::from_rotation_translation(turn, world(size, p, 0.08)));
+            }
+        }
+        if !chess.is_empty() {
+            kit_meshes.push(forge_geom::furniture::chess_table());
+            let id = (kit_meshes.len() - 1) as u32;
+            for at in chess {
+                kit_instances.push((id, at, 0));
+                for (p, d) in forge_geom::furniture::chess_seats() {
+                    let (p, d) = (at.transform_point3(p), at.transform_vector3(d));
+                    seats.push((p, (-d.z).atan2(d.x)));
+                }
+            }
         }
         // A fountain in the middle of each other square of 0.15 ha or more.
         let fountains: Vec<Mat4> = plan

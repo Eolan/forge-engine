@@ -323,6 +323,64 @@ pub fn bench() -> TriMesh {
     m
 }
 
+/// A chess table round the origin for a square: a stone pedestal table 0.8 m across, its top
+/// inlaid with a board of 8 × 8 squares in stone and wood (close in tone, so the board does not
+/// shimmer from afar), and two stools facing each other along z (the owner, 2026-10-11: give
+/// people something to do in the squares).
+pub fn chess_table() -> TriMesh {
+    let mut m = TriMesh::default();
+    let top = 0.74;
+    cuboid(
+        &mut m,
+        Vec3::new(-0.12, 0.0, -0.12),
+        Vec3::new(0.12, top - 0.06, 0.12),
+        STONE,
+        ALL & !NEG_Y,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-0.4, top - 0.06, -0.4),
+        Vec3::new(0.4, top, 0.4),
+        STONE,
+        ALL,
+    );
+    let cell = 0.07;
+    for i in 0..8 {
+        for k in 0..8 {
+            let (x, z) = (-0.28 + i as f32 * cell, -0.28 + k as f32 * cell);
+            let section = if (i + k) % 2 == 0 { STONE } else { WOOD };
+            quad(
+                &mut m,
+                [
+                    Vec3::new(x, top + 0.002, z),
+                    Vec3::new(x, top + 0.002, z + cell),
+                    Vec3::new(x + cell, top + 0.002, z + cell),
+                    Vec3::new(x + cell, top + 0.002, z),
+                ],
+                section,
+            );
+        }
+    }
+    for (p, _) in chess_seats() {
+        cuboid(
+            &mut m,
+            Vec3::new(p.x - 0.18, 0.0, p.z - 0.18),
+            Vec3::new(p.x + 0.18, 0.45, p.z + 0.18),
+            STONE,
+            ALL & !NEG_Y,
+        );
+    }
+    m
+}
+
+/// A chess table's two seats ([`chess_table`]): where each player sits and the way they face.
+pub fn chess_seats() -> [(Vec3, Vec3); 2] {
+    [
+        (Vec3::new(0.0, 0.0, 0.62), Vec3::NEG_Z),
+        (Vec3::new(0.0, 0.0, -0.62), Vec3::Z),
+    ]
+}
+
 /// A square's fountain round the origin: an octagonal stone basin 6.4 m across, brimming with
 /// water ([`GLASS`]'s section), a column in its middle carrying a bowl.
 pub fn fountain() -> TriMesh {
@@ -335,7 +393,7 @@ pub fn fountain() -> TriMesh {
     m
 }
 
-/// A tram stop's platform `length` metres along its track, 2.6 m deep and 28 cm high (level with
+/// A tram stop's platform `length` metres along its track, 2.3 m deep and 28 cm high (level with
 /// a low-floor tram's floor), its edge on the track's side at `z = 0`. In its middle a shelter of
 /// glass on a steel frame with a bench, and a totem with the next trams' times.
 pub fn tram_stop(length: f32) -> TriMesh {

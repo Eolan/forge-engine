@@ -561,8 +561,17 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
             plan.push(anchor, hm(16, 30) + j(0, 1800));
             if pop.role[p] == Role::Student && j(0, 31) < out {
                 plan.push(near(PlaceKind::Leisure, pick), hm(22, 0) + j(0, 7200));
-            } else if j(0, 3) == 0 {
-                plan.push(near(PlaceKind::Park, pick), hm(18, 30) + j(0, 1800));
+            } else {
+                // After school or classes, now and then: a café, a park or the shops.
+                let kind = match j(0, 7) {
+                    0 => Some(PlaceKind::Food),
+                    1 => Some(PlaceKind::Park),
+                    2 => Some(PlaceKind::Shop),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    plan.push(near(kind, pick), hm(18, 30) + j(0, 1800));
+                }
             }
         }
         _ => {
@@ -575,8 +584,18 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
                 plan.push(near(PlaceKind::Shop, pick), leave + 1800 + j(0, 2700));
             }
             plan.push(home, hm(15, 0) + j(0, 3600));
-            if j(0, 2) == 0 {
-                plan.push(near(PlaceKind::Park, pick ^ 1), hm(17, 0) + j(0, 3600));
+            // The afternoon out on two days in five: a café or a tea room, the shops, a pub, a
+            // park. The parks took everyone out before (the owner, 2026-10-11: people would be
+            // at the cafés, pubs and tea rooms, or shopping, more than standing in a square).
+            let afternoon = match j(0, 14) {
+                0 => Some(PlaceKind::Park),
+                1 | 2 => Some(PlaceKind::Food),
+                3 | 4 => Some(PlaceKind::Shop),
+                5 => Some(PlaceKind::Leisure),
+                _ => None,
+            };
+            if let Some(kind) = afternoon {
+                plan.push(near(kind, pick ^ 1), hm(17, 0) + j(0, 3600));
             }
             if j(0, 63) < out {
                 plan.push(near(PlaceKind::Food, pick ^ 2), hm(22, 0) + j(0, 3600));
