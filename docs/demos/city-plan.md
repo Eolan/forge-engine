@@ -234,6 +234,10 @@ across and its height up. The one model is a trunk forking into three limbs unde
 of seven smooth lumps (about 620 triangles), so the crowns no longer hide the facades from
 the pavement.
 
+**The riverbanks.** A quay's land is lawn under its trees, laid cell by cell over the site's
+land (a quay's face holds water). Along each bank a stone promenade 8 m wide follows the river;
+where a street runs by the river, the street lies over it.
+
 ## Trams on their timetables (#253)
 
 ```

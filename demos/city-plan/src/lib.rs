@@ -259,8 +259,13 @@ impl PlanScenario {
             };
             tiles.flat(&block.polygon, 0.08, section, false);
         }
+        // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
+        for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
+            lawn(site, &mut tiles, &block.polygon);
+        }
         // The rivers as smooth strips over the ground, their beds drawn as land: the cells'
-        // staircase would show along the quays.
+        // staircase would show along the quays. Along each bank a stone promenade 8 m wide
+        // (where a street runs by the river the street lies over it).
         for river in &site.rivers {
             let line = geom::resample(&river.centreline, 15.0);
             let half = river.width * 0.5;
@@ -271,6 +276,15 @@ impl PlanScenario {
                 0.04,
                 WATER,
             );
+            for side in [1.0, -1.0] {
+                strip(
+                    &mut tiles,
+                    &offset_line(&line, side * (half + 8.0)),
+                    &offset_line(&line, side * half),
+                    0.05,
+                    PAVING,
+                );
+            }
         }
         for e in &plan.roads.edges {
             // Asphalt on the avenues' carriageways; stone on shared streets, lanes and paths.
@@ -1850,6 +1864,45 @@ impl Running for PlanRunning {
 /// strips).
 fn is_open_water(code: u8) -> bool {
     code == SEA || code == LAGOON
+}
+
+/// The land of a polygon as lawn: runs of the site's land cells inside it along each row, 3 cm
+/// over the ground (the rivers' strips lie over it).
+fn lawn(site: &Site, tiles: &mut Tiles, polygon: &[DVec2]) {
+    let water = &site.water;
+    let s = water.spacing;
+    let (lo, hi) = polygon.iter().fold(
+        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+        |(lo, hi), &p| (lo.min(p), hi.max(p)),
+    );
+    let cell = |v: f64| ((v / s).floor().max(0.0) as u32).min(water.size - 1);
+    let (x0, x1) = (cell(lo.x), cell(hi.x));
+    for y in cell(lo.y)..=cell(hi.y) {
+        let mut x = x0;
+        while x <= x1 {
+            let inside = |x: u32| {
+                let c = DVec2::new((f64::from(x) + 0.5) * s, (f64::from(y) + 0.5) * s);
+                water.get(x, y) == forge_procgen::city::LAND && geom::contains(polygon, c)
+            };
+            if !inside(x) {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x <= x1 && inside(x) {
+                x += 1;
+            }
+            let (a, b) = (f64::from(start) * s, f64::from(x) * s);
+            let (c, d) = (f64::from(y) * s, f64::from(y + 1) * s);
+            let quad = [
+                DVec2::new(a, c),
+                DVec2::new(b, c),
+                DVec2::new(b, d),
+                DVec2::new(a, d),
+            ];
+            tiles.flat(&quad, 0.03, PARK, false);
+        }
+    }
 }
 
 /// A flat strip between two polylines of the same length, a quad between each pair of points,
