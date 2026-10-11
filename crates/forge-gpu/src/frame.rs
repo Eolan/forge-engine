@@ -91,8 +91,8 @@ fn timeline_semaphore(device: &Device, name: &str) -> Result<vk::Semaphore> {
 }
 
 impl Frames {
-    /// Creates the per-slot command pools (one per queue), the semaphores and the timestamp
-    /// query pool.
+    /// Creates the per-slot command pools (one per queue), the semaphores and the per-slot
+    /// timestamp query pools.
     pub fn new(device: Arc<Device>, swapchain_image_count: usize) -> Result<Self> {
         let raw = device.raw();
         let timeline = timeline_semaphore(&device, "frame timeline")?;

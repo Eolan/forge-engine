@@ -1,6 +1,8 @@
 //! Named GPU timing zones from timestamp queries.
 //!
-//! Every frame slot owns a range of timestamps, reset from the host when the slot is reused.
+//! Every frame slot owns a query pool of timestamps, reset from the host when the slot is
+//! reused. A pool per slot, not a range of a shared one: resetting a pool that another slot's
+//! frame in flight still uses is what the validation layer checks (issue #244).
 //! Each batch of the frame (one per submission, issue #77) starts with a timestamp
 //! ([`GpuTimerSlot::start`]); every [`GpuTimerSlot::mark`] writes one more at the bottom of the
 //! pipe and names the work since the previous one; [`GpuTimers::end`] closes the frame. When
@@ -47,12 +49,11 @@ struct Entry {
     start: bool,
 }
 
-/// The timestamp range of one frame slot; [`crate::Commands::mark`] writes into it. Main
-/// thread only (interior mutability without locks), like command recording.
+/// The timestamps of one frame slot, in a pool of its own; [`crate::Commands::mark`] writes
+/// into it. Main thread only (interior mutability without locks), like command recording.
 pub struct GpuTimerSlot {
     device: Arc<Device>,
     pool: vk::QueryPool,
-    base: u32,
     count: Cell<u32>,
     entries: RefCell<Vec<Entry>>,
     /// The queue of the batch being recorded, and whether its family writes timestamps.
@@ -86,11 +87,11 @@ impl GpuTimerSlot {
             return;
         }
         // SAFETY: the command buffer is recording and the query index is inside the slot's
-        // range, which `GpuTimers::reset` reset for this frame.
+        // pool, which `GpuTimers::reset` reset for this frame.
         unsafe {
             self.device
                 .raw()
-                .cmd_write_timestamp2(cb, stage, self.pool, self.base + count)
+                .cmd_write_timestamp2(cb, stage, self.pool, count)
         };
         self.entries.borrow_mut().push(Entry {
             label,
@@ -101,46 +102,42 @@ impl GpuTimerSlot {
     }
 }
 
-/// The timestamp pool of all frame slots.
+/// The timestamp pools of all frame slots, one each.
 pub struct GpuTimers {
     device: Arc<Device>,
-    pool: vk::QueryPool,
     slots: Vec<Rc<GpuTimerSlot>>,
     submitted: Vec<u32>,
 }
 
 impl GpuTimers {
-    /// A pool with [`MAX_MARKS_PER_FRAME`] timestamps per slot.
+    /// A pool of [`MAX_MARKS_PER_FRAME`] timestamps per slot.
     pub fn new(device: &Arc<Device>, slot_count: usize) -> Result<Self> {
-        let total = slot_count as u32 * MAX_MARKS_PER_FRAME;
+        let mut timers = Self {
+            device: Arc::clone(device),
+            slots: Vec::with_capacity(slot_count),
+            submitted: vec![0; slot_count],
+        };
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
-            .query_count(total);
-        // SAFETY: valid create info on a live device.
-        let pool = unsafe { device.raw().create_query_pool(&info, None)? };
-        device.set_name(pool, "gpu timers");
-        // Queries must be reset before first use; host reset is core since Vulkan 1.2.
-        // SAFETY: the pool is live and unused.
-        unsafe { device.raw().reset_query_pool(pool, 0, total) };
-        let slots = (0..slot_count)
-            .map(|i| {
-                Rc::new(GpuTimerSlot {
-                    device: Arc::clone(device),
-                    pool,
-                    base: i as u32 * MAX_MARKS_PER_FRAME,
-                    count: Cell::new(0),
-                    entries: RefCell::new(Vec::with_capacity(MAX_MARKS_PER_FRAME as usize)),
-                    queue: Cell::new(QueueKind::Graphics),
-                    enabled: Cell::new(false),
-                })
-            })
-            .collect();
-        Ok(Self {
-            device: Arc::clone(device),
-            pool,
-            slots,
-            submitted: vec![0; slot_count],
-        })
+            .query_count(MAX_MARKS_PER_FRAME);
+        for i in 0..slot_count {
+            // SAFETY: valid create info on a live device. On an error, the pools made so far
+            // are destroyed with `timers`.
+            let pool = unsafe { device.raw().create_query_pool(&info, None)? };
+            device.set_name(pool, &format!("gpu timers {i}"));
+            // Queries must be reset before first use; host reset is core since Vulkan 1.2.
+            // SAFETY: the pool is live and unused.
+            unsafe { device.raw().reset_query_pool(pool, 0, MAX_MARKS_PER_FRAME) };
+            timers.slots.push(Rc::new(GpuTimerSlot {
+                device: Arc::clone(device),
+                pool,
+                count: Cell::new(0),
+                entries: RefCell::new(Vec::with_capacity(MAX_MARKS_PER_FRAME as usize)),
+                queue: Cell::new(QueueKind::Graphics),
+                enabled: Cell::new(false),
+            }));
+        }
+        Ok(timers)
     }
 
     /// The slot's marker, to hand to [`crate::Commands::with_timers`].
@@ -148,16 +145,16 @@ impl GpuTimers {
         Rc::clone(&self.slots[index])
     }
 
-    /// Resets `slot`'s range from the host before its frame is recorded: every queue can
-    /// then write into it, whatever order the batches run in. The slot's previous frame has
-    /// completed (the caller waited).
+    /// Resets `slot`'s pool from the host before its frame is recorded: every queue can then
+    /// write into it, whatever order the batches run in. The slot's previous frame has
+    /// completed (the caller waited), and no other slot's frame uses the pool.
     pub fn reset(&self, slot: usize) {
         let s = &self.slots[slot];
-        // SAFETY: the pool is live and no pending work uses the slot's range.
+        // SAFETY: the pool is live and no pending work uses it.
         unsafe {
             self.device
                 .raw()
-                .reset_query_pool(self.pool, s.base, MAX_MARKS_PER_FRAME)
+                .reset_query_pool(s.pool, 0, MAX_MARKS_PER_FRAME)
         };
         s.count.set(0);
         s.entries.borrow_mut().clear();
@@ -189,12 +186,7 @@ impl GpuTimers {
         let ok = unsafe {
             self.device
                 .raw()
-                .get_query_pool_results(
-                    self.pool,
-                    s.base,
-                    &mut stamps,
-                    vk::QueryResultFlags::TYPE_64,
-                )
+                .get_query_pool_results(s.pool, 0, &mut stamps, vk::QueryResultFlags::TYPE_64)
                 .is_ok()
         };
         if !ok {
@@ -235,8 +227,10 @@ impl GpuTimers {
 
 impl Drop for GpuTimers {
     fn drop(&mut self) {
-        // SAFETY: the frames that used the pool have completed (`Frames` drops after idling),
-        // and every slot handle only stores the raw pool handle.
-        unsafe { self.device.raw().destroy_query_pool(self.pool, None) };
+        for slot in &self.slots {
+            // SAFETY: the frames that used the pools have completed (`Frames` drops after
+            // idling), and every slot handle only stores its raw pool handle.
+            unsafe { self.device.raw().destroy_query_pool(slot.pool, None) };
+        }
     }
 }
